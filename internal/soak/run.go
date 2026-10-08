@@ -132,10 +132,10 @@ func (r *Run) now() time.Time { return time.Now() }
 
 func (r *Run) emit(rec Record) {
 	rec.T = r.now()
+	r.mu.Lock()
 	if rec.Phase == "" {
 		rec.Phase = r.phase
 	}
-	r.mu.Lock()
 	r.records = append(r.records, rec)
 	if rec.Kind == "check" && rec.OK != nil && !*rec.OK {
 		r.failed++
@@ -254,6 +254,28 @@ func (r *Run) snapshotCounters() Sample {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.counters
+}
+
+// setPhase names the phase every record emitted from now on belongs to (the sampler
+// goroutine reads it).
+func (r *Run) setPhase(name string) {
+	r.mu.Lock()
+	r.phase = name
+	r.mu.Unlock()
+}
+
+// recordsSince copies the records appended at or after index from (the sampler appends
+// concurrently).
+func (r *Run) recordsSince(from int) []Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]Record(nil), r.records[from:]...)
+}
+
+func (r *Run) recordCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.records)
 }
 
 // anyStatus returns the leader's status report when the leader answers (it carries the
@@ -382,6 +404,13 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	}
 	r.nodes = nodes
 	r.started = r.now()
+	if r.Profile.ChunkSize == 0 { // the corpus straddles the cluster's real chunk size
+		rep, _, err := r.anyStatus(ctx)
+		if err != nil || rep.Volume.ChunkSize == 0 {
+			return Summary{}, fmt.Errorf("soak: chunk size from status (%d): %w", rep.Volume.ChunkSize, err)
+		}
+		r.Profile.ChunkSize = int(rep.Volume.ChunkSize)
+	}
 	if len(r.gateways()) == 0 {
 		return Summary{}, fmt.Errorf("soak: no gateway reachable in %s", r.Env.Name())
 	}
@@ -401,8 +430,8 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	r.startSampler(ctx)
 	var results []PhaseResult
 	for _, ph := range phases {
-		r.phase = ph.name
-		before := len(r.records)
+		r.setPhase(ph.name)
+		before := r.recordCount()
 		t := r.now()
 		r.emit(Record{Kind: "phase", Name: ph.name, Text: "start"})
 		r.sample(ctx, 0)
@@ -411,8 +440,9 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 		}
 		r.sample(ctx, 0)
 		pr := PhaseResult{Name: ph.name, Took: r.now().Sub(t)}
-		for i := before; i < len(r.records); i++ {
-			rec := &r.records[i]
+		recs := r.recordsSince(before)
+		for i := range recs {
+			rec := &recs[i]
 			switch {
 			case rec.Kind == "check":
 				pr.Checks = append(pr.Checks, *rec)
@@ -428,11 +458,13 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 			break
 		}
 	}
-	r.phase = "cleanup"
+	r.setPhase("cleanup")
 	r.cleanup(ctx)
 	r.stopSampler()
-	sum := Summary{Env: r.Env.Name(), Profile: r.Profile.Name, Started: r.started, Duration: r.now().Sub(r.started), Phases: results, Failed: r.failed, Records: r.records, Nodes: r.nodes}
 	r.emit(Record{Kind: "summary", Text: fmt.Sprintf("%d failed checks", r.failed)})
+	r.mu.Lock()
+	sum := Summary{Env: r.Env.Name(), Profile: r.Profile.Name, Started: r.started, Duration: r.now().Sub(r.started), Phases: results, Failed: r.failed, Records: append([]Record(nil), r.records...), Nodes: r.nodes}
+	r.mu.Unlock()
 	return sum, nil
 }
 

@@ -456,7 +456,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() {
 		t.Fatalf("health %+v %v", h, err)
 	}
-	st, err := c.Status(ctx, e.addr)
+	st, err := c.Call(ctx, e.addr, http.MethodGet, "/v1/status", nil)
 	if err != nil || !bytes.Contains(st, []byte(`"members"`)) {
 		t.Fatalf("status %s %v", st, err)
 	}

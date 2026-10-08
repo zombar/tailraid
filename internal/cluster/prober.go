@@ -246,9 +246,13 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	}
 	p.mu.Lock()
 	pr, ok := p.probes[idx]
+	var lastOK time.Time
+	if ok {
+		lastOK = pr.LastOK // copied under the lock: record rewrites the probe in place
+	}
 	p.mu.Unlock()
-	if ok && !pr.LastOK.IsZero() {
-		return p.clk.Now().Sub(pr.LastOK) < LiveThreshold
+	if ok && !lastOK.IsZero() {
+		return p.clk.Now().Sub(lastOK) < LiveThreshold
 	}
 	if nd, found := p.node.nodeByIdx(idx); found && nd.JoinedAt > 0 {
 		return p.clk.Now().Sub(time.Unix(0, nd.JoinedAt)) < LiveThreshold

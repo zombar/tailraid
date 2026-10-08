@@ -215,7 +215,8 @@ func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) erro
 func harnessProfile() soak.Profile {
 	cs := int(testharness.ChunkSize)
 	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
-		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second}
+		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second,
+		SampleEvery: 50 * time.Millisecond} // the sampler runs concurrently with the phases, as it does in production
 }
 
 // The whole scenario sequence runs green against the in-process cluster, every phase

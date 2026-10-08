@@ -320,19 +320,6 @@ func (c *Client) ReportBadSlot(ctx context.Context, addr string, key chunk.Shard
 	return nil
 }
 
-// Status fetches the admin report from a node.
-func (c *Client) Status(ctx context.Context, addr string) (json.RawMessage, error) {
-	resp, err := c.do(ctx, http.MethodGet, addr, "/v1/status", nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errFromStatus(resp)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-}
-
 // Admin sends a maintenance operation and returns the raw JSON reply.
 // Call sends an arbitrary member request (status, admin, /dev/*) and returns the body of a
 // 2xx reply; other statuses become errors as for every other method.

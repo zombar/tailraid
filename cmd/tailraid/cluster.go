@@ -51,13 +51,9 @@ func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Cl
 	if err != nil {
 		return admin.Report{}, nil, "", err
 	}
-	raw, err := c.Status(ctx, addr)
+	rep, err := admin.FetchStatus(ctx, c, addr)
 	if err != nil {
 		return admin.Report{}, nil, "", fmt.Errorf("status from %s (is `tailraid serve` running?): %w", addr, err)
-	}
-	var rep admin.Report
-	if err := json.Unmarshal(raw, &rep); err != nil {
-		return admin.Report{}, nil, "", err
 	}
 	return rep, c, addr, nil
 }
@@ -275,11 +271,10 @@ func nodeCmd() *cobra.Command {
 	return c
 }
 
+// leaderOr is the leader's RPC address, or addr when the report names no leader.
 func leaderOr(rep admin.Report, addr string) string {
-	for i := range rep.Nodes {
-		if n := &rep.Nodes[i]; n.Leader && n.Addr != "" {
-			return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort)))
-		}
+	if l := rep.LeaderRPC(); l != "" {
+		return l
 	}
 	return addr
 }

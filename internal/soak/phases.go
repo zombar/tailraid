@@ -524,6 +524,28 @@ func (r *Run) nodeByIdx(idx int) (NodeRef, bool) {
 	return NodeRef{}, false
 }
 
+// storedDelta is how many bytes the volume grew by between two status samples; negative
+// when GC or a migration shrank it meanwhile (an unsigned subtraction would wrap).
+func storedDelta(before, after uint64) int64 { return int64(after) - int64(before) }
+
+// corruptionVerdict judges the m+1 corruption read. With fewer than m+1 shards corrupted
+// the check is void and fails loudly instead of passing by accident. A reader without
+// the chunk in its cache must get an error; a reader that may have it cached may also
+// serve the exact bytes. Wrong bytes are never acceptable.
+func corruptionVerdict(corrupted, m int, coldReader bool, err error, exact bool) (bool, string) {
+	switch {
+	case corrupted <= m:
+		return false, fmt.Sprintf("only %d of the required m+1=%d shards could be corrupted", corrupted, m+1)
+	case err != nil:
+		return true, fmt.Sprintf("read failed cleanly: %v", err)
+	case !exact:
+		return false, "read returned wrong bytes"
+	case coldReader:
+		return false, "a gateway without the chunk cached served it with m+1 shards corrupt"
+	}
+	return true, "served exact from the gateway's cache"
+}
+
 func phaseCorruption(ctx context.Context, r *Run) error {
 	if !r.Env.Caps().Corrupt {
 		r.skip("environment cannot corrupt shards")
@@ -613,10 +635,8 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	}
 	rv, _ := r.volume(reader)
 	got, err = rv.ReadAll(p)
-	r.checkAt(fmt.Sprintf("m+1=%d corrupt shards: error or exact, never garbage", corrupted), err != nil || bytes.Equal(got, data), fmt.Sprintf("err=%v", err), p, c.Hash, reader.Name)
-	if err == nil {
-		r.event("note", "read served exact (cached or a surviving shard): corruption count may not have reached m+1")
-	}
+	ok, text := corruptionVerdict(corrupted, int(c.M), reader.Idx != gw.Idx, err, bytes.Equal(got, data))
+	r.checkAt(fmt.Sprintf("m+1=%d corrupt shards: error, never garbage", int(c.M)+1), ok, text, p, c.Hash, reader.Name)
 	if err := v.Remove(p); err != nil {
 		return err
 	}
@@ -806,8 +826,8 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	if rep, _, err = r.anyStatus(ctx); err != nil {
 		return err
 	}
-	grew := rep.Volume.StoredBytes - before
-	r.check("second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < before, fmt.Sprintf("+%d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
+	grew := storedDelta(before, rep.Volume.StoredBytes)
+	r.check("second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < int64(before), fmt.Sprintf("%+d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
 	for p, d := range copyM {
 		m[p] = d
 	}

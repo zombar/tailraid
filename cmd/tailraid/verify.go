@@ -53,10 +53,11 @@ the cluster's repair.grace.`,
 			}
 			p := soak.Quick()
 			p.Name, p.Grace, p.FillAfter = "live", grace, fillAfter
+			p.ChunkSize = 0 // taken from the cluster's status unless --chunk overrides it
 			if cs, _ := cmd.Flags().GetInt("chunk"); cs > 0 {
 				p.ChunkSize = cs
 			}
-			env := &soak.LiveEnv{Client: cl, SelfAddr: addr, MountPath: cfg.Mount.Path, ClusterID: fmt.Sprintf("%x", cid[:4]), Destructive: destructive, Restarts: restarts}
+			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), destructive, restarts)
 			rf, err := os.Create(resultsPath)
 			if err != nil {
 				return err
