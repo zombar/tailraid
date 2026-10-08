@@ -209,7 +209,7 @@ th{background:#f6f6f6} .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font
 .title{font:600 13px sans-serif;fill:#222}.tick{font:11px sans-serif;fill:#555}.grid{stroke:#eee}.marker{stroke:#999;stroke-dasharray:3 3}.marklabel{font:9px sans-serif;fill:#777}
 details summary{cursor:pointer} .checks td:first-child{width:38%}
 </style></head><body>
-<h1>{{.Mark}} tail<span style="color:#2563eb">raid</span> soak report</h1>
+<h1>{{.Mark}}<span>tail<span style="color:#2563eb">raid</span> soak report</span></h1>
 <div class="meta">target: <b>{{.Env}}</b> · profile <b>{{.Profile}}</b> · started {{.Started}} · duration {{.Duration}} · generated {{.Generated}}</div>
 <div class="banner {{if .Pass}}pass{{else}}fail{{end}}">{{if .Pass}}PASS{{else}}FAIL{{end}} — {{.Checks}} checks, {{.Failed}} failed, {{.Skipped}} phases skipped · {{.Throughput}}</div>
 <h2>Phases</h2>
