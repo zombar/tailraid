@@ -107,11 +107,14 @@ verified.
 
 ## Development endpoints
 
-`/dev/fault`, `/dev/corrupt`, `/dev/exit`, `/dev/metrics`, `/dev/fsm-hash` exist for the
-soak suite (`docs/09`). They are registered only when `dev.enabled: true` is set in the
-node's config or `serve --dev` is passed; otherwise the routes do not exist (404). When
-enabled they go through the same WhoIs member authorization as every other endpoint, and
-`tailraid status` prints a warning line for every node that has them enabled.
+`/dev/fsm-hash` (applied index and SHA-256 of the encoded FSM state), `/dev/corrupt?key=`
+(flips a byte of a shard file's payload), `/dev/exit` (process exit 3 after the reply, for
+a service manager to restart) and, with M4, `/dev/fault` (per-peer drop rules on the node
+RPC client) exist for the soak suite (`docs/09`); metrics come from `/v1/status`. They are
+registered only when `dev.enabled: true` is set in the node's config; otherwise the routes
+do not exist (404). When enabled they go through the same WhoIs member authorization as
+every other endpoint, every node's `/health` carries `dev: true`, and `tailraid status`
+prints a warning line for every node that has them enabled.
 
 ## Credentials and secrets
 

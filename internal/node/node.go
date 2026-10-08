@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/dev"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/nfsgw"
@@ -140,11 +142,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	prober := cluster.NewProber(node, client, clk)
 	prober.SelfHealth = func() rpc.Health {
 		used, capacity := store.Used(), store.Capacity()
-		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0)}
+		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled}
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
+	var devHandler http.Handler
 	if cfg.Dev.Enabled {
 		ring = meta.NewEventRing(clk, selfIdx)
+		devHandler = dev.Handler(node.FSM, store, log)
 	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
 	rd.Events = ring
@@ -157,16 +161,20 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
 
 	rcfg := repair.DefaultConfig()
+	if rcfg.Grace, rcfg.FillAfter, err = cfg.RepairDurations(); err != nil {
+		return err
+	}
+	client.SetGrace(rcfg.Grace)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, ring: ring, self: selfIdx, clk: clk, log: log}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Members: node.FSM.Nodes, Clk: clk}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: func() any { return admin.Build(node, prober, clusterID, clk, repairer) }, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
-		BadSlot: repairer.ReportBad})
+		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler})
 	if err != nil {
 		return err
 	}
@@ -190,6 +198,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		_ = rl.Close()
 		return err
 	}
+	nfsgw.UseLogger(log) // one log stream, one format (the library logs client noise)
 	log.Info("tailraid serving", "version", version, "node", id, "idx", selfIdx, "tailnet", ident.IP, "rpc", rl.Addr(), "raft", raftAddr,
 		"nfs", nl.Addr(), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
 	prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
@@ -225,6 +234,7 @@ type adminOps struct {
 	gc       *repair.GC
 	store    *chunk.Store
 	client   *rpc.Client
+	rd       *vfs.Reader
 	ring     *meta.EventRing
 	self     meta.NodeIdx
 	clk      clock.Clock
@@ -346,7 +356,9 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		var st repair.Stats
 		var err error
 		if op.Scrub {
-			st, err = repair.New(a.node.FSM, a.node, a.prober, nil, nil, a.clk, cfg, a.log).Scan(ctx)
+			scrubber := repair.New(a.node.FSM, a.node, a.prober, a.client, a.rd, a.clk, cfg, a.log)
+			scrubber.Events = a.ring
+			st, err = scrubber.Scan(ctx)
 		} else {
 			st, _ = a.repairer.Last()
 		}

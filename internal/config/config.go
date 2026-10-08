@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 )
@@ -37,10 +38,37 @@ type Config struct {
 		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
 		Format string `yaml:"format"` // text | json (env TAILRAID_LOG_FORMAT overrides)
 	} `yaml:"log"`
+	Repair struct {
+		Grace     string `yaml:"grace"`      // GC grace and shard DELETE fence age (default 10m)
+		FillAfter string `yaml:"fill_after"` // dead-node hold-down before re-placing its slots (default 10m)
+	} `yaml:"repair"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
+}
+
+// RepairDurations parses the repair knobs (empty = default).
+func (c Config) RepairDurations() (grace, fillAfter time.Duration, err error) {
+	grace, fillAfter = 10*time.Minute, 10*time.Minute
+	if c.Repair.Grace != "" {
+		if grace, err = time.ParseDuration(c.Repair.Grace); err != nil || grace <= 0 {
+			return 0, 0, fmt.Errorf("config: repair.grace %q: %w", c.Repair.Grace, errBadDuration(err))
+		}
+	}
+	if c.Repair.FillAfter != "" {
+		if fillAfter, err = time.ParseDuration(c.Repair.FillAfter); err != nil || fillAfter <= 0 {
+			return 0, 0, fmt.Errorf("config: repair.fill_after %q: %w", c.Repair.FillAfter, errBadDuration(err))
+		}
+	}
+	return grace, fillAfter, nil
+}
+
+func errBadDuration(err error) error {
+	if err != nil {
+		return err
+	}
+	return errors.New("must be positive")
 }
 
 // Home returns the per-OS configuration directory, or $TAILRAID_HOME.

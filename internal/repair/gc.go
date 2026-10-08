@@ -2,6 +2,7 @@ package repair
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 )
 
 // GC is the leader-only tombstone collector (docs/06 §2).
@@ -65,7 +67,15 @@ func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 			if n == 0 || nodes[n].Kind != meta.KindDevice || !g.live.IsLive(n) {
 				continue
 			}
-			if err := g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index); err != nil {
+			err := g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index)
+			if errors.Is(err, rpc.ErrFenced) { // a follower still applying the GC entry: once more shortly
+				select {
+				case <-time.After(200 * time.Millisecond):
+				case <-ctx.Done():
+				}
+				err = g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index)
+			}
+			if err != nil {
 				res.Refused++
 				continue
 			}

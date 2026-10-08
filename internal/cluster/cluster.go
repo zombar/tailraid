@@ -178,8 +178,8 @@ type slogWriter struct{ l *slog.Logger }
 func (w slogWriter) Write(p []byte) (int, error) {
 	line := strings.TrimSpace(string(p))
 	msg := line
-	if i := strings.Index(line, "] "); i > 0 && strings.HasPrefix(line[i+2:], "raft: ") {
-		msg = line[i+2+len("raft: "):]
+	if i := strings.Index(line, "] "); i > 0 { // hclog: "2006-01-02T15:04:05.000Z [INFO]  raft: msg"
+		msg = strings.TrimPrefix(strings.TrimSpace(line[i+2:]), "raft: ")
 	}
 	switch {
 	case strings.Contains(line, "[ERROR]"):

@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -16,9 +17,18 @@ func main() {
 		Short:         "One erasure-coded, deduplicated volume across your tailnet",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// every command logs in the configured format (log.level/log.format, env overrides)
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			slog.SetDefault(cfg.Logger())
+			return nil
+		},
 	}
 	root.PersistentFlags().String("config", "", "config file (default: per-OS tailraid/config.yaml)")
-	root.AddCommand(initCmd(), joinCmd(), serveCmd(), statusCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), fsckCmd(), chunkCmd(), mountCmd(), umountCmd(), versionCmd())
+	root.AddCommand(initCmd(), joinCmd(), serveCmd(), statusCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), fsckCmd(), chunkCmd(), verifyCmd(), mountCmd(), umountCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "tailraid:", err)
 		os.Exit(1)

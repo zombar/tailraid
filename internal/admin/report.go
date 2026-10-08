@@ -32,6 +32,7 @@ type NodeReport struct {
 	Applied  uint64         `json:"applied"`
 	Slots    int            `json:"slots"`
 	Missing  int            `json:"missing_slots"` // slots this node should hold but is dead for
+	Dev      bool           `json:"dev,omitempty"` // /dev/* endpoints enabled
 	TSStable string         `json:"ts_stable_id,omitempty"`
 	JoinedAt time.Time      `json:"joined_at"`
 	rawState meta.NodeState // for sorting
@@ -149,7 +150,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: nd.ID == n.ID, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
 			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State}
 		if pr, ok := probes[nd.Idx]; ok {
-			r.Free, r.Applied = pr.Free, pr.Applied
+			r.Free, r.Applied, r.Dev = pr.Free, pr.Applied, pr.Dev
 			if !pr.LastOK.IsZero() {
 				r.RTT = pr.RTT.Round(time.Millisecond).String()
 			}
@@ -195,6 +196,11 @@ func warnings(r Report) []string {
 	}
 	if r.Volume.Unreadable > 0 {
 		w = append(w, "some chunks have fewer than k live shards and cannot be read right now")
+	}
+	for i := range r.Nodes {
+		if r.Nodes[i].Dev {
+			w = append(w, "node "+r.Nodes[i].Name+" has the /dev/* endpoints enabled (dev.enabled): test rigs only")
+		}
 	}
 	if r.Volume.Degraded > 0 {
 		w = append(w, "some chunks are under-replicated; repair fills them once a live spare exists")

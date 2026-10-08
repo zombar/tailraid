@@ -324,6 +324,24 @@ func (c *Client) Status(ctx context.Context, addr string) (json.RawMessage, erro
 }
 
 // Admin sends a maintenance operation and returns the raw JSON reply.
+// Call sends an arbitrary member request (status, admin, /dev/*) and returns the body of a
+// 2xx reply; other statuses become errors as for every other method.
+func (c *Client) Call(ctx context.Context, addr, method, path string, body []byte) ([]byte, error) {
+	hdr := map[string]string{}
+	if body != nil {
+		hdr["Content-Type"] = "application/json"
+	}
+	resp, err := c.do(ctx, method, addr, path, body, hdr)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, errFromStatus(resp)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+}
+
 func (c *Client) Admin(ctx context.Context, addr string, op AdminOp) (json.RawMessage, error) {
 	body, _ := json.Marshal(op)
 	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/admin", body, map[string]string{"Content-Type": "application/json"})

@@ -1,0 +1,192 @@
+package soak
+
+import (
+	"fmt"
+	"html"
+	"math"
+	"strings"
+)
+
+// Small SVG chart helpers: everything is inline, no scripts, no external assets.
+
+type series struct {
+	name   string
+	color  string
+	points [][2]float64 // x (seconds), y
+}
+
+type marker struct {
+	x     float64
+	label string
+}
+
+const (
+	chartW, chartH = 760, 220
+	padL, padR     = 56, 16
+	padT, padB     = 28, 36
+)
+
+var palette = []string{"#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#be185d", "#4d7c0f"}
+
+func fmtNum(v float64) string {
+	switch {
+	case v == 0:
+		return "0"
+	case math.Abs(v) >= 1e9:
+		return fmt.Sprintf("%.1fG", v/1e9)
+	case math.Abs(v) >= 1e6:
+		return fmt.Sprintf("%.1fM", v/1e6)
+	case math.Abs(v) >= 1e3:
+		return fmt.Sprintf("%.1fk", v/1e3)
+	case math.Abs(v) < 10:
+		return fmt.Sprintf("%.2g", v)
+	default:
+		return fmt.Sprintf("%.0f", v)
+	}
+}
+
+// lineChart draws series over a shared time axis with vertical event markers.
+func lineChart(title, yLabel string, ss []series, marks []marker) string {
+	var maxX, maxY float64
+	for _, s := range ss {
+		for _, p := range s.points {
+			maxX = math.Max(maxX, p[0])
+			maxY = math.Max(maxY, p[1])
+		}
+	}
+	for _, m := range marks {
+		maxX = math.Max(maxX, m.x)
+	}
+	if maxX == 0 {
+		maxX = 1
+	}
+	if maxY == 0 {
+		maxY = 1
+	}
+	maxY *= 1.1
+	iw, ih := float64(chartW-padL-padR), float64(chartH-padT-padB)
+	sx := func(x float64) float64 { return float64(padL) + x/maxX*iw }
+	sy := func(y float64) float64 { return float64(padT) + ih - y/maxY*ih }
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH, html.EscapeString(title))
+	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
+	// grid and axes
+	for i := 0; i <= 4; i++ {
+		y := float64(padT) + ih*float64(i)/4
+		v := maxY * float64(4-i) / 4
+		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
+			padL, y, chartW-padR, y, padL-6, y+4, fmtNum(v))
+	}
+	for i := 0; i <= 6; i++ {
+		x := float64(padL) + iw*float64(i)/6
+		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, chartH-padB+16, fmtNum(maxX*float64(i)/6))
+	}
+	fmt.Fprintf(&b, `<text x="12" y="%.1f" class="tick" transform="rotate(-90 12 %.1f)" text-anchor="middle">%s</text>`, float64(padT)+ih/2, float64(padT)+ih/2, html.EscapeString(yLabel))
+	// markers
+	for _, m := range marks {
+		x := sx(m.x)
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"/><text x="%.1f" y="%d" class="marklabel" transform="rotate(-90 %.1f %d)">%s</text>`,
+			x, padT, x, chartH-padB, x+3, chartH-padB-4, x+3, chartH-padB-4, html.EscapeString(m.label))
+	}
+	// series
+	for i, s := range ss {
+		color := s.color
+		if color == "" {
+			color = palette[i%len(palette)]
+		}
+		var d strings.Builder
+		for j, p := range s.points {
+			cmd := "L"
+			if j == 0 {
+				cmd = "M"
+			}
+			fmt.Fprintf(&d, "%s%.1f %.1f ", cmd, sx(p[0]), sy(p[1]))
+		}
+		if len(s.points) == 1 {
+			p := s.points[0]
+			fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>`, sx(p[0]), sy(p[1]), color)
+		}
+		fmt.Fprintf(&b, `<path d="%s" fill="none" stroke="%s" stroke-width="1.8"/>`, strings.TrimSpace(d.String()), color)
+		fmt.Fprintf(&b, `<rect x="%d" y="%d" width="10" height="10" fill="%s"/><text x="%d" y="%d" class="tick">%s</text>`,
+			chartW-padR-150, padT+2+i*14, color, chartW-padR-136, padT+11+i*14, html.EscapeString(s.name))
+	}
+	b.WriteString("</svg>")
+	return b.String()
+}
+
+// barChart draws grouped bars: one group per label, one bar per series.
+func barChart(title string, labels []string, ss []series) string {
+	var maxY float64
+	for _, s := range ss {
+		for _, p := range s.points {
+			maxY = math.Max(maxY, p[1])
+		}
+	}
+	if maxY == 0 {
+		maxY = 1
+	}
+	maxY *= 1.1
+	iw, ih := float64(chartW-padL-padR), float64(chartH-padT-padB)
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH, html.EscapeString(title))
+	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
+	for i := 0; i <= 4; i++ {
+		y := float64(padT) + ih*float64(i)/4
+		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
+			padL, y, chartW-padR, y, padL-6, y+4, fmtNum(maxY*float64(4-i)/4))
+	}
+	if len(labels) == 0 {
+		b.WriteString("</svg>")
+		return b.String()
+	}
+	gw := iw / float64(len(labels))
+	bw := gw * 0.8 / float64(max(len(ss), 1))
+	for li, label := range labels {
+		gx := float64(padL) + gw*float64(li) + gw*0.1
+		for si, s := range ss {
+			if li >= len(s.points) {
+				continue
+			}
+			color := s.color
+			if color == "" {
+				color = palette[si%len(palette)]
+			}
+			h := s.points[li][1] / maxY * ih
+			fmt.Fprintf(&b, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="%s"><title>%s %s: %s</title></rect>`,
+				gx+bw*float64(si), float64(padT)+ih-h, bw-1, h, color, html.EscapeString(s.name), html.EscapeString(label), fmtNum(s.points[li][1]))
+		}
+		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%s</text>`, gx+gw*0.4, chartH-padB+16, html.EscapeString(label))
+	}
+	for i, s := range ss {
+		color := s.color
+		if color == "" {
+			color = palette[i%len(palette)]
+		}
+		fmt.Fprintf(&b, `<rect x="%d" y="%d" width="10" height="10" fill="%s"/><text x="%d" y="%d" class="tick">%s</text>`,
+			chartW-padR-150, padT+2+i*14, color, chartW-padR-136, padT+11+i*14, html.EscapeString(s.name))
+	}
+	b.WriteString("</svg>")
+	return b.String()
+}
+
+// strip draws a row of coloured cells along the time axis (FSM-hash agreement).
+func strip(title string, maxX float64, cells [][2]float64, colors []string) string {
+	const h = 70
+	iw := float64(chartW - padL - padR)
+	if maxX == 0 {
+		maxX = 1
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, h, html.EscapeString(title))
+	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
+	for i, c := range cells {
+		x := float64(padL) + c[0]/maxX*iw
+		fmt.Fprintf(&b, `<rect x="%.1f" y="28" width="6" height="20" fill="%s"/>`, x-3, colors[i])
+	}
+	for i := 0; i <= 6; i++ {
+		x := float64(padL) + iw*float64(i)/6
+		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, h-6, fmtNum(maxX*float64(i)/6))
+	}
+	b.WriteString("</svg>")
+	return b.String()
+}

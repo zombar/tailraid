@@ -34,9 +34,10 @@ test-long:
 test-mount:
 	TAILRAID_MOUNT_TEST=1 go test -v -count=1 -run 'TestMount' -timeout 20m ./test/mount/
 
-## soak: three-node docker-compose cluster, write through n1, verify through n2 (needs Docker)
+## soak: four-node docker-compose cluster, scenario driver, report.html + results.jsonl (needs Docker)
 soak: soak-binary
-	cd test/soak && docker compose up -d n1 n2 n3 && docker compose up --exit-code-from client2 client1 client2; \
+	cd test/soak && docker compose up -d --build
+	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
 	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose down -v >/dev/null; exit $$status
 
 ## soak-binary: static linux binaries for the compose images (arch follows the Docker engine)
@@ -44,8 +45,11 @@ soak-binary:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$$(docker version --format '{{.Server.Arch}}') go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o test/soak/tailraid-linux-arm64 ./cmd/tailraid
 	CGO_ENABLED=0 GOOS=linux GOARCH=$$(docker version --format '{{.Server.Arch}}') go build -trimpath -ldflags "-s -w" -o test/soak/soak-client-linux-arm64 ./test/soak/client
 
-## soak-full: placeholder until the M3b scenario driver and HTML report land
-soak-full: soak
+## soak-full: the long profile (~1 h)
+soak-full: soak-binary
+	cd test/soak && docker compose up -d --build
+	go run ./cmd/soak --profile full --out report.html --results results.jsonl; \
+	status=$$?; cd test/soak && docker compose down -v >/dev/null; exit $$status
 
 ## fuzz: run every Fuzz* target for 30 s each
 fuzz:

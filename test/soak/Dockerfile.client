@@ -1,4 +1,6 @@
+# Worker sidecar: the pure-Go NFS client + RPC proxy, with iptables for partitions.
 FROM alpine:3.20
+RUN apk add --no-cache iptables
 COPY soak-client-linux-arm64 /usr/local/bin/soak-client
 RUN chmod +x /usr/local/bin/soak-client
 ENTRYPOINT ["/usr/local/bin/soak-client"]

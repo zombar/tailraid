@@ -1,78 +1,81 @@
-# Three tailraid nodes on a private network with fake tailnet identities, plus clients
-# that share a node's network namespace so they can reach its loopback NFS gateway.
-# Build the binary first: make soak-binary (or `make soak`, which does everything).
+# Four tailraid nodes (n1–n3 voters, n4 non-voter) on a private network with fake tailnet
+# identities, each with a worker sidecar sharing its network namespace: the sidecar reaches
+# the node's loopback NFS gateway and its RPC, and exposes both to the host driver
+# (cmd/soak) on a published port. Build the binaries first: make soak-binary.
 x-node: &node
   build: .
   cap_add: [NET_ADMIN]
   environment: &env
-    IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3"
+    IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3,172.30.0.14=n4"
     TOKEN: compose-token
-    TAILRAID_LOG_LEVEL: debug
+    TAILRAID_LOG_LEVEL: info
     TAILRAID_LOG_FORMAT: json
     K: "2"
     M: "1"
     CHUNK: 256K
     CAPACITY: 2G
+    REPAIR_GRACE: 20s
+    FILL_AFTER: 20s
   healthcheck:
     test: ["CMD-SHELL", "curl -fsS http://$$SELF_IP:20481/health"]
     interval: 2s
     timeout: 2s
     retries: 30
 
+x-worker: &worker
+  build: {context: ., dockerfile: Dockerfile.client}
+  cap_add: [NET_ADMIN]
+  environment: {TAILRAID_LOG_LEVEL: info, TAILRAID_LOG_FORMAT: json}
+
 services:
   n1:
     <<: *node
-    environment:
-      <<: *env
-      ROLE: init
-      SELF_IP: 172.30.0.11
-      NODE_NAME: n1
-    networks:
-      tailraid: {ipv4_address: 172.30.0.11}
+    environment: {<<: *env, ROLE: init, SELF_IP: 172.30.0.11, NODE_NAME: n1}
+    networks: {tailraid: {ipv4_address: 172.30.0.11}}
+    ports: ["127.0.0.1:20501:20495"]
     volumes: [n1:/var/lib/tailraid]
   n2:
     <<: *node
-    environment:
-      <<: *env
-      ROLE: join
-      LEADER: 172.30.0.11
-      SELF_IP: 172.30.0.12
-      NODE_NAME: n2
-    networks:
-      tailraid: {ipv4_address: 172.30.0.12}
+    environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2}
+    networks: {tailraid: {ipv4_address: 172.30.0.12}}
+    ports: ["127.0.0.1:20502:20495"]
     volumes: [n2:/var/lib/tailraid]
     depends_on: [n1]
   n3:
     <<: *node
-    environment:
-      <<: *env
-      ROLE: join
-      LEADER: 172.30.0.11
-      SELF_IP: 172.30.0.13
-      NODE_NAME: n3
-    networks:
-      tailraid: {ipv4_address: 172.30.0.13}
+    environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3}
+    networks: {tailraid: {ipv4_address: 172.30.0.13}}
+    ports: ["127.0.0.1:20503:20495"]
     volumes: [n3:/var/lib/tailraid]
     depends_on: [n2]
+  n4:
+    <<: *node
+    environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.14, NODE_NAME: n4, VOTER: "false"}
+    networks: {tailraid: {ipv4_address: 172.30.0.14}}
+    ports: ["127.0.0.1:20504:20495"]
+    volumes: [n4:/var/lib/tailraid]
+    depends_on: [n3]
 
-  # client1 drives n1's gateway over the pure-Go NFSv3 client (same network namespace →
-  # 127.0.0.1:20490); client2 verifies the same files through n2's gateway.
-  client1:
-    build: {context: ., dockerfile: Dockerfile.client}
+  w1:
+    <<: *worker
     network_mode: "service:n1"
-    volumes: [shared:/shared]
-    command: ["write", "127.0.0.1:20490", "/shared"]
-    depends_on:
-      n1: {condition: service_healthy}
-      n2: {condition: service_healthy}
-      n3: {condition: service_healthy}
-  client2:
-    build: {context: ., dockerfile: Dockerfile.client}
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.11:20481"]
+    depends_on: [n1]
+  w2:
+    <<: *worker
     network_mode: "service:n2"
-    volumes: [shared:/shared]
-    command: ["verify", "127.0.0.1:20490", "/shared"]
-    depends_on:
-      client1: {condition: service_completed_successfully}
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.12:20481"]
+    depends_on: [n2]
+  w3:
+    <<: *worker
+    network_mode: "service:n3"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.13:20481"]
+    depends_on: [n3]
+  w4:
+    <<: *worker
+    network_mode: "service:n4"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.14:20481"]
+    depends_on: [n4]
 
 networks:
   tailraid:
@@ -83,4 +86,4 @@ volumes:
   n1: {}
   n2: {}
   n3: {}
-  shared: {}
+  n4: {}

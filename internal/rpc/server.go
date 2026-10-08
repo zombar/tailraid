@@ -72,6 +72,7 @@ type Options struct {
 	JoinToken func() string
 	Status    func() any // GET /v1/status body (admin report)
 	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
+	Dev       http.Handler // /dev/* (docs/08): nil unless dev.enabled
 	Clk       clock.Clock
 	Logger    *slog.Logger
 	MaxShard  int64         // PUT body cap; default 2 MiB
@@ -122,6 +123,9 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
 	mux.Handle("POST /v1/join", http.HandlerFunc(s.join)) // token + claimed identity, not membership
+	if o.Dev != nil {
+		mux.Handle("/dev/", s.clusterCheck(s.member(o.Dev)))
+	}
 	s.handler = mux
 	return s, nil
 }

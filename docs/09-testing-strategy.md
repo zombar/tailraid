@@ -200,40 +200,67 @@ write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, r
 
 ## 6. Soak suite and live verification
 
-`internal/soak` runs the same scenario sequence against two environments through one
-interface and renders one report:
+`internal/soak` runs one scenario sequence against two environments through one interface
+and renders one report. The driver never touches a kernel NFS client: Docker Desktop's VM
+has none, and a live run already has the OS mount.
 
 ```go
 type Env interface {
-    Nodes(ctx) ([]NodeRef, error)
-    Kill(ctx, node) error; Start(ctx, node) error
+    Nodes(ctx) ([]NodeRef, error)                  // name, idx, RPC address
+    Volume(node NodeRef) (Volume, bool)            // file IO through that node's gateway
+    Call(ctx, node, method, path string, body []byte) ([]byte, error) // node RPC as a member
+    Kill(ctx, node) error; Start(ctx, node) error; Restart(ctx, node) error
     Partition(ctx, a, b []NodeRef) error; Heal(ctx) error
-    Corrupt(ctx, node, key) error
-    Mount(ctx, node) (path string, cleanup func(), err error)
-    Capabilities() Caps
+    Wait(ctx, d time.Duration) error               // real time, or the fake clock in tests
+    Caps() Caps                                    // Kill, Partition, Corrupt, MultiGateway
 }
+type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size }
 ```
 
-- `composeEnv` (`cmd/soak`, `test/soak/docker-compose.yml`): 5 `tailraid` containers with
-  `serve --dev`, a privileged client container with the kernel NFS client and rclone, a
-  driver container. Kill/start via the Docker API, partitions via `docker network
-  disconnect`, corruption via `/dev/corrupt`.
-- `liveEnv` (`tailraid verify`): runs on one of the user's devices against the real cluster.
-  Non-destructive by default; `--destructive` adds kill/partition/corrupt through `/dev/*`,
-  which requires `dev.enabled` on the targets and a restarting service manager. All IO is
-  confined to a fresh `/_soak/<timestamp>/` directory that is deleted at the end.
-- Phases: baseline transfer; cross-view integrity (NFS on two gateways, S3, `fsck
-  --verify-data`, FSM hash agreement, shard inventory vs chunk table); random-access churn;
-  parity (kill m, then m+1); corruption (m, then m+1 shards); consensus (leader kills,
-  partitions); membership (drain, remove, join, `set-redundancy` under load); dedup & GC;
-  restart storm. Phases an environment cannot run are recorded as *skipped (capability)*.
-- Report: one self-contained `report.html` from `results.jsonl` (1 s metric samples plus
-  the event timeline) with inline SVG charts rendered in Go: pass/fail banner and invariant
-  matrix, throughput with event markers, under-replicated and repair backlog over time,
-  shard distribution per node, latency histograms, dedup ratio, FSM-hash agreement, and a
-  table of every inconsistency with file, chunk, node and phase.
-- `make soak` (quick, ~10 min) and `make soak-full` (~1 h). Acceptance for M3b includes
-  injecting one deliberate bug and watching the suite go red.
+- **Compose** (`cmd/soak`, `test/soak/docker-compose.yml`): four `tailraid` containers
+  (n1–n3 voters, n4 non-voter) with `dev.enabled`, `repair.grace` and `repair.fill_after`
+  of 20 s, and one **worker** sidecar per node sharing the node's network namespace
+  (`soak-client worker`). The worker reaches the node's loopback NFS gateway through the
+  pure-Go NFSv3 client and the node's RPC from the node's own tailnet IP (so WhoIs sees a
+  member); it exposes both over a small HTTP API on a published port. The driver runs on the
+  host: `Volume` and `Call` go through the worker, kills, restarts and partitions through
+  `docker compose kill|start|restart` and `docker network disconnect|connect`, corruption
+  through `/dev/corrupt`.
+- **Live** (`tailraid verify [--report out.html] [--destructive]`): runs on one device of
+  the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
+  uses the device's tailnet IP. Non-destructive by default: transfer, integrity across every
+  node's FSM hash, churn, dedup and GC, repair backlog. `--destructive` adds corruption
+  (`/dev/corrupt`, needs `dev.enabled` on the targets); kills and partitions need a
+  restarting service manager and the `/dev/fault` seam, which land with M4 and are reported
+  as *skipped (capability)* until then. All IO is confined to `/_soak/<timestamp>/`, deleted
+  at the end.
+- **In-process** (`internal/soak` tests): the same phases run against the `testharness`
+  cluster with a billy-backed `Volume`, the fake clock behind `Wait`, and tiny sizes, so the
+  scenario code and the report are unit-tested in seconds.
+- **Phases** (quick profile in parentheses): 1 baseline transfer (corpus of 0 B … 3 MiB,
+  sparse, 150 small files; throughput and latency histograms); 2 cross-view integrity
+  (every reachable gateway reads the manifest, `fsck`, FSM hashes agree at one applied
+  index); 3 random-access churn (writes at random offsets, truncates, renames through two
+  gateways on disjoint files against a model; 20 s); 4 parity (kill m: reads and writes
+  continue, `degraded` drains to 0 after `fill_after`; kill m+1: every read is either exact
+  or an error, never garbage); 5 corruption (m shards: read exact, scrub repairs; m+1:
+  error, never garbage); 6 consensus (kill the leader under writes ×3; acknowledged writes
+  persist; FSM hashes agree); 7 membership (`set-redundancy` 2+1→1+2→2+1 under load with
+  `stale_policy_chunks` draining to 0; drain and re-activate n4); 8 dedup and GC (second
+  copy of the corpus adds < 1 % stored bytes; removing a unique file reclaims after grace,
+  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity). A phase
+  the environment cannot run is recorded as *skipped (capability)*, never passed.
+- **Results and report**: the driver appends one JSON line per event, check and 1 s
+  sample (bytes moved, write/read latency, `degraded_chunks`, `stored_bytes`,
+  `logical_bytes`, slots per node, FSM-hash agreement) to `results.jsonl`, then renders a
+  self-contained `report.html` with inline SVG charts drawn in Go: pass/fail banner and the
+  phase × check matrix, throughput with event markers, degraded chunks over time, stored
+  vs logical bytes, slots per node before and after membership changes, latency
+  histograms, the FSM-hash agreement strip, and a table of every inconsistency with file,
+  chunk, node and phase. The report header names the target (compose topology or live
+  cluster) and the node versions.
+- `make soak` (quick, ~10 min) runs the compose profile; `make soak-full` the long one.
+  Acceptance for M3b includes injecting one deliberate bug and watching the suite go red.
 
 ## 7. CI
 

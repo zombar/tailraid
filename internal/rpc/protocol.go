@@ -46,6 +46,7 @@ type Health struct {
 	Used      int64  `json:"used"`
 	Capacity  int64  `json:"capacity"`
 	Free      int64  `json:"free"`
+	Dev       bool   `json:"dev,omitempty"` // /dev/* endpoints enabled on this node
 }
 
 // JoinRequest is POST /v1/join.

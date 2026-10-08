@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	nfs "github.com/willscott/go-nfs"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -385,5 +388,21 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The NFS library's own log lines go through the daemon logger: errors (client protocol
+// noise) at debug, warnings kept, so the log stream has one format.
+func TestUseLogger_RoutesLibraryLogs(t *testing.T) {
+	var buf bytes.Buffer
+	nfsgw.UseLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	nfs.Log.Errorf("bad handle %d", 7)
+	nfs.Log.Warn("slow client")
+	out := buf.String()
+	if !strings.Contains(out, `"level":"DEBUG","msg":"bad handle 7","src":"nfs"`) || !strings.Contains(out, `"level":"WARN","msg":"slow client"`) {
+		t.Fatalf("library logs not routed: %s", out)
+	}
+	if lvl, err := nfs.Log.ParseLevel("warn"); err != nil || lvl != nfs.WarnLevel {
+		t.Fatalf("ParseLevel: %v %v", lvl, err)
 	}
 }
