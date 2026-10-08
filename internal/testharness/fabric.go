@@ -194,6 +194,19 @@ func (f *Fabric) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	return out
 }
 
+// --- meta.Liveness ---
+
+// IsLive reports whether node n is up (not SetDown).
+func (f *Fabric) IsLive(n meta.NodeIdx) bool { return !f.IsDown(n) }
+
+// DeadFor is zero for a live node and a day for a down one: past every hold-down.
+func (f *Fabric) DeadFor(n meta.NodeIdx) time.Duration {
+	if f.IsDown(n) {
+		return 24 * time.Hour
+	}
+	return 0
+}
+
 // --- chunk.ShardClient ---
 
 var errNodeDown = errors.New("fabric: node down")

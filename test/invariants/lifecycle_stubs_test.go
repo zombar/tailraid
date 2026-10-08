@@ -18,18 +18,6 @@ func TestStubLifecycle_L_25(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-25")
 }
 
-// Lifecycle: L-28
-// Dirty --[E-23 total ≥ 256 MiB]--> Assembled (largest inodes first)
-func TestStubLifecycle_L_28(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-28")
-}
-
-// Lifecycle: L-31
-// Dirty (partial) --[E-25 base unreadable (< k)]--> Dirty
-func TestStubLifecycle_L_31(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-31")
-}
-
 // Lifecycle: L-43
 // Uploading --[E-35 PUT timeout]--> as E-34
 func TestStubLifecycle_L_43(t *testing.T) {
@@ -90,22 +78,10 @@ func TestStubLifecycle_L_112(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-112")
 }
 
-// Lifecycle: L-124
-// Committed --[E-111 raft.db unopenable on one node]--> Committed
-func TestStubLifecycle_L_124(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-124")
-}
-
 // Lifecycle: L-139
 // Durable (S3) --[object deleted externally]--> (missing)
 func TestStubLifecycle_L_139(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-139")
-}
-
-// Lifecycle: L-149
-// (none) --[WRITE]--> FILE_SYNC before WAL fsync
-func TestStubLifecycle_L_149(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-149")
 }
 
 // Lifecycle: L-165

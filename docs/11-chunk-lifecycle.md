@@ -216,7 +216,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-25 | Committed (parts) | E-20 multipart Complete | Committed (spliced chunk list) | no data copy; ETag `md5(md5s)-N`; parts dir removed | `TestS3_MultipartComplete_SplicesChunks` |
 | L-26 | Dirty | E-21 idle 2 s | Assembled | flush begins; WRITEs continue into a fresh extent set | `TestFlusher_IdleTrigger` |
 | L-27 | Dirty | E-22 inode ≥ 32 MiB | Assembled (full chunks only) | only entirely dirty full-size chunks are committed; every dirty byte outside a committed chunk (the partial tail, a partially dirty head chunk, any partially dirty chunk between extents) stays Dirty as the residual; `NewSize = max(base.Size, end of last fully flushed chunk)`, never ahead of committed data | `TestFlusher_FileDirtyHiTrigger`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks` |
-| L-28 | Dirty | E-23 total ≥ 256 MiB | Assembled (largest inodes first) | total dirty falls below threshold | `TestFlusher_TotalDirtyHiTrigger` |
+| L-28 | Dirty | E-23 total ≥ 256 MiB | Assembled (largest inodes first) | total dirty falls below threshold; smaller inodes wait for their own trigger | `TestFlusher_TotalDirtyHiTrigger` |
 | L-29 | Dirty | E-24 shutdown | Committed before exit | `FlushAll` blocks shutdown until committed or deadline; residual stays in WAL | `TestFlusher_ShutdownFlushesAll` |
 | L-30 | Dirty (partial) | E-25 assemble needs base | Assembled | base chunk fetched via `Reader.ReadChunk` and overlaid | `TestFlusher_AssembleRMW` |
 | L-31 | Dirty (partial) | E-25 base unreadable (< k) | Dirty | flush error, backoff 1–60 s; WRITEs still FILE_SYNC | `TestFlusher_AssembleFails_BaseUnreadable_StaysDirty` |
@@ -229,7 +229,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-38 | Assembled | E-32 tail rewrite needed | Uploading (tail included) | tail chunk hashed and included in `Writes` | `TestFlusher_TailRewriteIncluded` |
 | L-39 | Uploading | E-33 all k+m acks | Placed(k+m) | ready to Commit with full placement | `TestCluster_WriteReadAllNodes` |
 | L-40 | Uploading | E-34 one PUT fails, re-place succeeds | Placed(k+m) | second `Place` excluding failed node; k+m distinct | `TestFlusher_PutRetryReplaces` |
-| L-41 | Uploading | E-34 PUT fails after retry, acks ≥ k | Placed(n<k+m) | slot recorded 0; Commit yields Degraded; `status` under-replicated +1 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy` |
+| L-41 | Uploading | E-34 PUT fails after retry, acks ≥ k | Placed(n<k+m) | slot recorded 0; Commit yields Degraded; `status` under-replicated +1 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy`, `TestFlusher_LiveEqualsK_CommitsDegraded` |
 | L-42 | Uploading | E-34 acks < k | Dirty | flush error; landed shards are Orphan (young); retry with backoff | `TestFlusher_FewerThanKAcks_StaysDirty` |
 | L-43 | Uploading | E-35 PUT timeout | as E-34 | timeout counted as failure; slot re-placed or 0 | `TestFlusher_PutTimeout_TreatedAsFailure` |
 | L-44 | Uploading | E-36 507 ENOSPC | as E-34 (node excluded this flush) | `ErrFull`; node marked full for placement until free bytes recover | `TestRPC_PutENOSPC_507`, `TestFlusher_ENOSPC_ReplacesSlot` |
@@ -312,7 +312,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-121 | Dirty | E-108 gateway restart | Dirty | WAL replayed in order; truncate records honoured | `TestVFS_RestartWithDirtyWAL_Replays` |
 | L-122 | Dirty | E-109 torn WAL tail | Dirty (prefix) | replay stops at first bad crc; earlier records intact | `TestWAL_ReplayStopsAtTornTail` |
 | L-123 | Uploading | E-110 disk full on one node | as E-36 | 507; no partial shard file left | `TestStore_DiskFull_NoPartialShard` |
-| L-124 | Committed | E-111 raft.db unopenable on one node | Committed | that node fails to start with a clear error; others unaffected | `TestCluster_NodeRaftDBCorrupt_FailsClearly` |
+| L-124 | Committed | E-111 raft.db unopenable on one node | Committed | that node fails to start with a clear error naming the file; others unaffected | `TestOpen_CorruptRaftDB_FailsClearly` |
 | L-125 | (shard none) | PUT begins | Temp | `.tmp-*` in target dir; not listed by `Walk` | `TestStore_PutGetRoundTrip` |
 | L-126 | Temp | fsync + rename | Durable | visible; `Has` true; `Used` += size | `TestStore_PutGetRoundTrip` |
 | L-127 | Temp | process crash | (removed) | `Store.Open` deletes `.tmp-*` | `TestStore_OpenSweepsTemps` |
@@ -363,7 +363,7 @@ event ring or the final state).
 | L-146 | Tombstoned (≥ k slots on live nodes) | Commit referencing hash | Uploading | forbidden: a Revived chunk with ≥ k live slots never requires re-upload (with < k live slots the flusher fills the missing slots first, L-167) | `TestVFS_DedupRevivesTombstone_NoUpload` |
 | L-147 | Committed | membership change (join/remove/IP/capacity) | placement changed | forbidden: placement changes only via `SetPlacement` | `TestFSM_PlacementOnlyChangedBySetPlacement`, `TestPlace_StabilityOnMembershipChange` |
 | L-148 | Placed | Commit proposed | visible on any gateway before Raft commit | forbidden (I-7) | `TestCluster_StaleReadPreviousVersion`, `TestCluster_SplitBrain_OnlyMajorityCommits` |
-| L-149 | (none) | WRITE | FILE_SYNC before WAL fsync | forbidden (I-7) | `TestCrash_AtEveryPoint` |
+| L-149 | (none) | WRITE | FILE_SYNC before WAL fsync | forbidden (I-7): a WRITE whose record did not fsync is an error, holds no byte and replays nothing | `TestOverlay_WriteNotAckedWhenFsyncFails`, `TestCrash_AtEveryPoint` |
 | L-150 | Committed | any | Refs > 0 with no inode referencing the hash | forbidden: Σ inode references == Refs | `TestFSM_InvariantChecker_RefsMatchReferences` |
 | L-151 | Committed | any | len(Chunks) ≠ ceil(Size/CS) | forbidden (I-1) | `TestFSM_SetChunks_SizeAndChunkListConsistent` |
 | L-152 | Assembled | all zero | shards stored for HashZero | forbidden (I-2) | `TestFlusher_AllZeroChunk_BecomesHashZero` |

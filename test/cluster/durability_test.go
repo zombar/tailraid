@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -28,6 +29,8 @@ var crashPoints = []crashPoint{
 
 // The two-outcome rule (I-38): after a crash at any point, the file is either exactly
 // the old content with no visible orphans, or exactly the new content on every gateway.
+// The write starts mid-chunk, so the flush reads the base chunk back (read-modify-write)
+// before it crashes.
 // Invariant: I-7, I-12, I-38
 // Lifecycle: L-115, L-116, L-118, L-119, L-121
 func TestCrash_AtEveryPoint(t *testing.T) {
@@ -40,10 +43,15 @@ func TestCrash_AtEveryPoint(t *testing.T) {
 			c.WriteFile(0, path, old)
 			c.Settle()
 			gw := c.Nodes[0]
-			newData := testharness.Pattern(int(testharness.ChunkSize)+10, byte(2+2*round))
+			const at = int64(testharness.ChunkSize / 2)
+			patch := testharness.Pattern(int(testharness.ChunkSize)+10, byte(2+2*round))
+			newData := append(bytes.Clone(old[:at]), patch...) // chunk 0 is rewritten (RMW), chunk 1 and a new chunk 2 land
 			fh, err := gw.FS.OpenFile(path, os.O_RDWR, 0)
 			must(t, err)
-			_, _ = fh.Write(newData)
+			if _, err := fh.Seek(at, io.SeekStart); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = fh.Write(patch)
 			_ = fh.Close()
 			// the WRITE was acknowledged (fsynced WAL); now crash the gateway at the hook
 			killed := make(chan struct{})
