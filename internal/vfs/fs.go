@@ -89,6 +89,8 @@ func mapErr(op, name string, err error) error {
 		e = syscall.EIO
 	case errors.Is(err, ErrWALFull):
 		e = syscall.EAGAIN
+	case errors.Is(err, ErrFileTooLarge):
+		e = syscall.EFBIG
 	default:
 		e = err
 	}

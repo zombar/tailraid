@@ -558,6 +558,9 @@ func (a *applier) commit(c *Commit) error {
 	if !c.HasTruncate && c.NewSize < in.Size {
 		return ErrBadCommand // a file shrinks only through an explicit truncate (L-175)
 	}
+	if c.NewSize > MaxFileSize(st.Vol.ChunkSize) {
+		return ErrBadCommand // bounded chunk list; checked before anything is sized by NewSize (I-64, L-182)
+	}
 	// Validate NewChunks before touching anything (a failing commit registers nothing).
 	type newEntry struct {
 		d ChunkDesc

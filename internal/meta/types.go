@@ -8,6 +8,7 @@ package meta
 
 import (
 	"encoding/binary"
+	"math"
 )
 
 // Hash is the SHA-256 of the logical bytes of a chunk.
@@ -194,14 +195,26 @@ func (s *State) Clone() *State {
 	return c
 }
 
+// MaxChunksPerFile bounds a file's chunk list (I-64): the FSM holds every chunk hash of
+// every file in memory and a Commit rebuilds the whole list, so no command may ask for
+// more. With 1 MiB chunks this is a 1 TiB file (a 32 MiB list on every node).
+const MaxChunksPerFile = 1 << 20
+
+// MaxFileSize is the largest size a file may have under chunkSize.
+func MaxFileSize(chunkSize uint32) uint64 { return uint64(chunkSize) * MaxChunksPerFile }
+
 // ChunkCount returns ceil(size/chunkSize), the number of chunk slots a file of the given
-// size occupies (I-1).
+// size occupies (I-1). It never overflows: the result saturates at math.MaxInt.
 func ChunkCount(size uint64, chunkSize uint32) int {
-	if size == 0 {
-		return 0
-	}
 	cs := uint64(chunkSize)
-	return int((size + cs - 1) / cs)
+	q := size / cs
+	if size%cs != 0 {
+		q++
+	}
+	if q > uint64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(q)
 }
 
 // HandleMagic is the first four bytes of every NFS file handle ("TRHD").

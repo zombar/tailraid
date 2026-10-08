@@ -21,6 +21,10 @@ import (
 // must flush the inode before writing more (docs/04 §WAL cap).
 var ErrWALFull = errors.New("vfs: wal cap reached, flush required")
 
+// ErrFileTooLarge is returned by Write and Truncate when the file would exceed
+// meta.MaxFileSize for the volume's chunk size (EFBIG to the client, I-64).
+var ErrFileTooLarge = errors.New("vfs: file would exceed the maximum size")
+
 // DefaultWALCap is 4 × FileDirtyHi (docs/04).
 const DefaultWALCap int64 = 4 * 32 << 20
 
@@ -301,6 +305,9 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
+	if limit := meta.MaxFileSize(o.chunkSize); off > limit || uint64(len(p)) > limit-off {
+		return ErrFileTooLarge
+	}
 	d, err := o.get(ino, baseSize, true)
 	if err != nil {
 		return err
@@ -321,6 +328,9 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 
 // Truncate sets the overlay size and records the truncation point (review #2).
 func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
+	if size > meta.MaxFileSize(o.chunkSize) {
+		return ErrFileTooLarge
+	}
 	d, err := o.get(ino, baseSize, true)
 	if err != nil {
 		return err

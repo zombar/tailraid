@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"syscall"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	nfsfile "github.com/willscott/go-nfs/file"
 	check "gopkg.in/check.v1"
 
+	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
@@ -374,5 +376,44 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 		if !bytes.Equal(got, model[name]) {
 			t.Fatalf("cold read %s differs at %d", name, testharness.FirstDiff(got, model[name]))
 		}
+	}
+}
+
+// A write or truncate that would take the file past meta.MaxFileSize is refused with
+// EFBIG before anything reaches the WAL or the FSM.
+// Invariant: I-64
+// Lifecycle: L-182
+func TestVFS_SizeBeyondMax_EFBIG(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fh, err := fs.Create("/big")
+	must(t, err)
+	limit := int64(meta.MaxFileSize(testharness.ChunkSize))
+	if _, err := fh.Seek(4096, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Write([]byte("ten  bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Seek(limit-1, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Write([]byte("x")); err != nil {
+		t.Fatalf("write of the last allowed byte: %v", err)
+	}
+	if _, err := fh.Write([]byte("y")); !errors.Is(err, syscall.EFBIG) {
+		t.Fatalf("write past the limit: err=%v, want EFBIG", err)
+	}
+	if err := fh.Truncate(limit); err != nil {
+		t.Fatalf("truncate to the limit: %v", err)
+	}
+	if err := fh.Truncate(limit + 1); !errors.Is(err, syscall.EFBIG) {
+		t.Fatalf("truncate past the limit: err=%v, want EFBIG", err)
+	}
+	must(t, fh.Close())
+	st, err := fs.Stat("/big")
+	must(t, err)
+	if st.Size() != limit {
+		t.Fatalf("size %d want %d", st.Size(), limit)
 	}
 }

@@ -15,10 +15,10 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 
 | NFS procedure | go-nfs calls on the billy filesystem |
 |---|---|
-| WRITE (every RPC, ≤ wsize, typically 64 KiB–1 MiB) | `Stat(path)` → `OpenFile(path, O_RDWR, 0)` → `file.Seek(offset, 0)` → `file.Write(data)` → `file.Close()`; replies **FILE_SYNC** unconditionally |
+| WRITE (every RPC, ≤ wsize, typically 64 KiB–1 MiB) | `Stat(path)` → `OpenFile(path, O_RDWR, 0)` → `file.Seek(offset, 0)` → `file.Write(data)` → `file.Close()`; replies **FILE_SYNC** unconditionally; a write past `MaxFileSize` (I-64) fails with `EFBIG` → `NFS3ERR_FBIG` |
 | COMMIT | no-op; never touches billy |
 | READ | `Open(path)` → `file.ReadAt(buf, offset)` → `file.Close()` |
-| SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()` |
+| SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()`; a size past `MaxFileSize` (I-64) fails with `EFBIG` |
 | SETATTR mode/uid/gid/times | `Handler.Change(fs)` → `Chmod`/`Lchown`/`Chtimes`; if `Change` returns nil every such call fails with NFS3ERR_NOTSUPP |
 | CREATE | `fs.Create(path)` → `Close()` (then SETATTR for mode) |
 | MKDIR / RMDIR / REMOVE / RENAME | `MkdirAll`, `Remove`, `Remove`, `Rename` |

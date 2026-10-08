@@ -375,6 +375,7 @@ event ring or the final state).
 | L-176 | Degraded/Tombstoned (< k live slots) | dedup hit | Committed (no upload) | forbidden: an acknowledged write is never committed against a chunk with fewer than k live slots | `TestFlusher_DedupHitWithFewerThanKLiveSlots_Fills` |
 | L-177 | Orphan | Sweep while not `Healthy` | Swept | forbidden: a node whose chunk table may be behind never deletes shards | `TestSweep_SkippedWhenNotHealthy` |
 | L-179 | Dirty (chunk partly dirty, below the last committed chunk) | E-22 partial flush | dirty bytes dropped | forbidden (I-7): a partial flush commits only entirely dirty chunks and keeps every other dirty byte as residual; acknowledged bytes are never neither committed nor dirty | `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks` |
+| L-182 | Committed | Commit with `NewSize` > `MaxFileSize(ChunkSize)` | Committed (unbounded chunk list) | forbidden (I-64): `ErrBadCommand` before anything is sized by `NewSize`; the gateway refuses the WRITE or SETATTR with `EFBIG` first, so no replica ever allocates per a hostile size | `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 
 ## 7. How the matrix is tested
 

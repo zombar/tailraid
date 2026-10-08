@@ -288,12 +288,6 @@ func TestStubLifecycle_L_174(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-174")
 }
 
-// Lifecycle: L-175
-// Committed --[Commit without `HasTruncate` and `NewSize` < `Size`]--> Committed (shrunk)
-func TestStubLifecycle_L_175(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-175")
-}
-
 // Lifecycle: L-176
 // Degraded/Tombstoned (< k live slots) --[dedup hit]--> Committed (no upload)
 func TestStubLifecycle_L_176(t *testing.T) {

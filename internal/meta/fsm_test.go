@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"math"
 	"math/rand"
 	"sync"
 	"testing"
@@ -481,6 +482,103 @@ func TestFSM_Commit_RejectsStaleBaseVersion(t *testing.T) {
 		t.Fatal("conflicting commit registered a chunk")
 	}
 	tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 5, NewSize: testCS, Now: 2}}, ErrConflict)
+}
+
+// A Commit without HasTruncate may keep or grow a file but never shrink it; the flusher
+// always sends an explicit truncation point when the file got shorter.
+// Invariant: I-26
+// Lifecycle: L-175
+func TestFSM_Commit_RejectsImplicitShrink(t *testing.T) {
+	tf := newTFSM(t)
+	f := tf.create(RootIno, "f")
+	a := sha("a")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS + 10, Writes: []ChunkWrite{{0, a}}, NewChunks: []ChunkDesc{desc(a)}, Now: 1}})
+	size := uint64(testCS + 10)
+	cases := []struct {
+		name    string
+		newSize uint64
+		want    error
+	}{
+		{"shrink by one", size - 1, ErrBadCommand},
+		{"shrink to zero", 0, ErrBadCommand},
+		{"same size", size, nil},
+		{"grow by one", size + 1, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before := tf.inode(f)
+			cmd := Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: before.Version, NewSize: c.newSize, Now: 2}}
+			if c.want != nil {
+				tf.fails(cmd, c.want)
+				if in := tf.inode(f); in.Size != before.Size || in.Version != before.Version {
+					t.Fatalf("rejected commit changed the inode: %+v", in)
+				}
+				if ch := tf.chunk(a); ch.Refs != 1 {
+					t.Fatalf("refs %d", ch.Refs)
+				}
+				return
+			}
+			tf.ok(cmd)
+			if in := tf.inode(f); in.Size != c.newSize {
+				t.Fatalf("size %d want %d", in.Size, c.newSize)
+			}
+		})
+	}
+	// the same shrink is fine with an explicit truncate
+	in := tf.inode(f)
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: in.Version, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 3}})
+	if ch := tf.chunk(a); ch.Refs != 0 {
+		t.Fatalf("refs after truncate %d", ch.Refs)
+	}
+}
+
+// The chunk list of every file lives in memory on every node and a Commit rebuilds it, so
+// NewSize is bounded; beyond the bound the command is malformed and nothing is allocated.
+// Invariant: I-26, I-64
+// Lifecycle: L-182
+func TestFSM_Commit_NewSizeBounds(t *testing.T) {
+	maxSize := MaxFileSize(testCS)
+	cases := []struct {
+		name    string
+		newSize uint64
+		ok      bool
+	}{
+		{"0", 0, true}, {"1", 1, true}, {"CS-1", testCS - 1, true}, {"CS", testCS, true}, {"CS+1", testCS + 1, true},
+		{"max-1", maxSize - 1, true}, {"max", maxSize, true}, {"max+1", maxSize + 1, false}, {"MaxUint64", math.MaxUint64, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tf := newTFSM(t)
+			f := tf.create(RootIno, "f")
+			cmd := Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: c.newSize, Now: 1}}
+			if !c.ok {
+				tf.fails(cmd, ErrBadCommand)
+				return
+			}
+			tf.ok(cmd)
+			if in := tf.inode(f); in.Size != c.newSize || len(in.Chunks) != ChunkCount(c.newSize, testCS) {
+				t.Fatalf("size %d chunks %d", in.Size, len(in.Chunks))
+			}
+		})
+	}
+}
+
+// Invariant: I-1, I-64
+func TestChunkCount_NoOverflow(t *testing.T) {
+	cases := []struct {
+		size uint64
+		cs   uint32
+		want int
+	}{
+		{0, 1 << 20, 0}, {1, 1 << 20, 1}, {1 << 20, 1 << 20, 1}, {1<<20 + 1, 1 << 20, 2},
+		{math.MaxUint64, 1 << 20, 1 << 44}, {math.MaxUint64 - 5, 1 << 20, 1 << 44},
+		{math.MaxUint64, 1, math.MaxInt}, {math.MaxUint64, 2, math.MaxInt},
+	}
+	for _, c := range cases {
+		if got := ChunkCount(c.size, c.cs); got != c.want {
+			t.Fatalf("ChunkCount(%d, %d) = %d, want %d", c.size, c.cs, got, c.want)
+		}
+	}
 }
 
 // Lifecycle: L-54, L-160

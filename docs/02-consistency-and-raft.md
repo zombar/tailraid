@@ -146,7 +146,9 @@ settable here; truncation is a `Commit`.
    (the FSM cannot trim bytes out of a chunk; the flusher always rewrites the straddling
    chunk, see 04). Without `HasTruncate`, `cur = old` and `NewSize >= inode.Size` is
    required (`ErrBadCommand`): a file can only shrink through an explicit truncate.
-6. **Then grow.** `n = ceil(NewSize/ChunkSize)`; `NewSize >= TruncateTo` when
+6. **Then grow.** `NewSize` must not exceed `MaxFileSize(ChunkSize) = ChunkSize × 2^20`
+   (`ErrBadCommand`, checked before anything is sized by it: the chunk list of every file
+   lives in memory on every node, I-64). `n = ceil(NewSize/ChunkSize)`; `NewSize >= TruncateTo` when
    `HasTruncate`. `newChunks = copy(cur[:min(len(cur), n)])`, extended with `HashZero` to
    length `n`. Every `Writes[i].Idx` must be `< n` (`ErrBadCommand`).
 7. **Then write.** Apply `Writes`. For each position whose hash changed (including positions
@@ -294,6 +296,7 @@ no divergent state to merge because it never applied uncommitted entries.
   rejected without side effects, so two gateways cannot interleave partial updates to one
   file.
 - **I-62** — A node ID has at most one record that is not `Removed` in the node table: a `NodeUpsert` with `Idx == 0` for a known ID updates that record and never allocates a new index, so a retried join is idempotent whichever leader serves it.
+- **I-64** — No command makes a file larger than `MaxFileSize(ChunkSize)` (`ChunkSize × 2^20` chunks): a `Commit` beyond it is `ErrBadCommand` before anything is allocated from its size, the gateway refuses the WRITE or SETATTR with `EFBIG` first, and `Apply` never panics on a decodable command.
 - **I-29** — The leader-forwarding layer never applies a command twice: a forwarded command
   is handed to Raft at most once per proposal, and the forwarding layer itself retries only
   after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
@@ -310,4 +313,5 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-27 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Invariants_RandomCommands`, `TestFSM_Tombstone_OnRefsZero`, `TestFSM_Commit_RevivesTombstonedChunk` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion`, `TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestVFS_ConcurrentGateways_SameChunkOneWins` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
+| I-64 | `TestFSM_Commit_NewSizeBounds`, `TestChunkCount_NoOverflow`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestCluster_ForwardRetriesOnlyOnNotLeader`, `TestFSM_RefcountUnderflow_IsBadCommand` |
