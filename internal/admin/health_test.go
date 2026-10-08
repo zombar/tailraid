@@ -53,3 +53,21 @@ func TestCheck_MPlusOneCorrupt_NotOK(t *testing.T) {
 		t.Fatalf("degraded: %+v", deg)
 	}
 }
+
+// set-redundancy needs k+m live Active nodes at the moment it is set.
+func TestAdmin_SetPolicy_LiveCountBoundary(t *testing.T) {
+	nodes := []meta.Node{{Idx: 1, State: meta.Active}, {Idx: 2, State: meta.Active}, {Idx: 3, State: meta.Active}, {Idx: 4, State: meta.Draining}}
+	live := allLive{}
+	cases := []struct {
+		k, m uint8
+		ok   bool
+	}{
+		{1, 1, true}, {2, 0, true}, {2, 1, true}, {3, 0, true}, {2, 2, false}, {4, 0, false}, {0, 1, false}, {200, 57, false},
+	}
+	for _, c := range cases {
+		err := admin.PolicyAllowed(nodes, live, c.k, c.m)
+		if (err == nil) != c.ok {
+			t.Fatalf("policy %d+%d with 3 live active nodes: err=%v, want ok=%v", c.k, c.m, err, c.ok)
+		}
+	}
+}

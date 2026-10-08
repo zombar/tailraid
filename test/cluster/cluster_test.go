@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -328,13 +329,49 @@ func TestCluster_JoinDrainRemove(t *testing.T) {
 			}
 		}
 	}
-	// remove is refused while it holds slots, allowed with force
+	// remove is refused while it holds slots (the FSM's rule, L-95); with --force every
+	// slot on the node is zeroed first (L-96)
 	err := leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Idx()})
-	if !errors.Is(err, cluster.ErrHoldsShards) {
+	if !errors.Is(err, meta.ErrNodeNotEmpty) {
 		t.Fatalf("remove with slots: %v", err)
 	}
+	held := leader.Node.SlotsHeldBy(c.Nodes[2].Idx())
+	if held == 0 {
+		t.Fatal("test needs the node to hold slots")
+	}
+	zeroSlots := func() int {
+		n := 0
+		for _, path := range []string{"/f", "/g"} {
+			for _, ch := range c.ChunksOf(leader.I, path) {
+				for _, s := range ch.Placement {
+					if s == 0 {
+						n++
+					}
+				}
+			}
+		}
+		return n
+	}
+	before := zeroSlots() // /g was written with two candidates for three slots
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Idx(), Force: true}))
 	c.Settle()
+	if n := leader.Node.SlotsHeldBy(c.Nodes[2].Idx()); n != 0 {
+		t.Fatalf("%d slots still name the removed node", n)
+	}
+	if zeroed := zeroSlots() - before; zeroed != held {
+		t.Fatalf("%d slots zeroed by --force, want %d", zeroed, held)
+	}
+	// the removed node cannot join again until it is reset
+	removedID := ""
+	for _, nd := range leader.Node.FSM.Nodes() {
+		if nd.Idx == c.Nodes[2].Idx() {
+			removedID = nd.ID
+		}
+	}
+	_, err = leader.Node.Join(ctx, rpc.JoinRequest{NodeID: removedID, Name: "again", Addr: "1.1.1.1", RaftPort: 1, RPCPort: 2, Capacity: 1})
+	if !errors.Is(err, cluster.ErrBadMemberOp) {
+		t.Fatalf("rejoin of a removed node: %v", err)
+	}
 	cfg := leader.Node.Raft.GetConfiguration()
 	must(t, cfg.Error())
 	if len(cfg.Configuration().Servers) != 2 {
@@ -386,4 +423,33 @@ func mkdirRetryOn(t *testing.T, nd *testharness.ClusterNode, path string) {
 		<-time.After(20 * time.Millisecond)
 	}
 	t.Fatalf("mkdir %s on n%d: %v", path, nd.I, err)
+}
+
+// An address change is a node-table update: placements are by NodeIdx and untouched, and
+// every peer resolves the node to its new RPC address at once.
+// Lifecycle: L-99
+func TestCluster_UpdateAddr_ChangesRPCAddr(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	data := testharness.Pattern(int(testharness.ChunkSize), 6)
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	before := c.ChunksOf(0, "/f")[0].Placement
+	leader := c.Leader()
+	mover := (leader.I + 1) % 3
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "update_addr", NodeIdx: c.Nodes[mover].Idx(), Addr: "100.64.9.9"}))
+	c.Settle()
+	for _, nd := range c.Nodes {
+		if !c.Alive(nd.I) {
+			continue
+		}
+		addr, _, ok := nd.Node.RPCAddrOf(c.Nodes[mover].Idx())
+		if !ok || !strings.HasPrefix(addr, "100.64.9.9:") {
+			t.Fatalf("n%d resolves the moved node to %q", nd.I, addr)
+		}
+	}
+	after := c.ChunksOf(0, "/f")[0].Placement
+	if !equalPlacement(after, before) {
+		t.Fatalf("placement changed on an address change: %v -> %v", before, after)
+	}
 }

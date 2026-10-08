@@ -560,6 +560,35 @@ func TestFSM_SetVolume_ChunkSizeBounds(t *testing.T) {
 	}
 }
 
+// The FSM, not the leader, refuses to remove a node that still holds a placement slot
+// (live or tombstoned chunk); once the slots are zeroed the removal applies, and a removed
+// node can neither change state again nor be removed twice.
+// Invariant: I-9, I-26
+// Lifecycle: L-95, L-96
+func TestFSM_NodeRemove_RefusedWhileHoldingSlots(t *testing.T) {
+	tf := newTFSM(t)
+	for i := 1; i <= 3; i++ {
+		tf.ok(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: fmt.Sprintf("n%d", i), Kind: KindDevice, Capacity: 1, Addr: "1.1.1.1"}}})
+	}
+	f := tf.create(RootIno, "f")
+	h := sha("h")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS, Writes: []ChunkWrite{{0, h}}, NewChunks: []ChunkDesc{desc(h)}, Now: 1}})
+	remove := Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 2, State: Removed, Now: 2}}
+	tf.fails(remove, ErrNodeNotEmpty)
+	// a tombstoned chunk still pins the slot
+	tf.ok(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 3}})
+	tf.fails(remove, ErrNodeNotEmpty)
+	// draining is allowed while holding slots; removal only once the slot is zeroed
+	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 2, State: Draining, Now: 4}})
+	tf.ok(Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: h, K: 2, M: 1, Placement: []NodeIdx{1, 0, 3}}})
+	tf.ok(remove)
+	tf.fails(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 2, State: Active, Now: 5}}, ErrBadCommand)
+	tf.fails(remove, ErrBadCommand)
+	// an empty node leaves straight from Active
+	tf.ok(Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: h, K: 2, M: 1, Placement: []NodeIdx{1, 0, 0}}})
+	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 3, State: Removed, Now: 6}})
+}
+
 // A Commit without HasTruncate may keep or grow a file but never shrink it; the flusher
 // always sends an explicit truncation point when the file got shorter.
 // Invariant: I-26

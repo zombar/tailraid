@@ -98,13 +98,24 @@ type Prober struct {
 	mu     sync.Mutex
 	probes map[meta.NodeIdx]*Probe
 	events chan Event
+
+	fillAfter, evictAfter time.Duration
 }
 
 var _ meta.Peers = (*Prober)(nil)
 
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
-	return &Prober{node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64)}
+	return &Prober{node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
+		fillAfter: FillAfter, evictAfter: EvictAfter}
+}
+
+// SetHoldDowns overrides the MemberDown and MemberLost hold-downs (the configured
+// repair.fill_after and evict_after), so the prober's events agree with the repairer.
+func (p *Prober) SetHoldDowns(fillAfter, evictAfter time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fillAfter, p.evictAfter = fillAfter, evictAfter
 }
 
 // Events delivers MemberUp/Down/Lost; the buffer is bounded and events are dropped,
@@ -203,11 +214,11 @@ func (p *Prober) holdDowns(now time.Time) {
 		if pr.DeadSince.IsZero() {
 			continue
 		}
-		if !pr.Down && now.Sub(pr.DeadSince) >= FillAfter {
+		if !pr.Down && now.Sub(pr.DeadSince) >= p.fillAfter {
 			pr.Down = true
 			p.emit(Event{Kind: MemberDown, Idx: idx, Since: pr.DeadSince})
 		}
-		if !pr.Lost && now.Sub(pr.DeadSince) >= EvictAfter {
+		if !pr.Lost && now.Sub(pr.DeadSince) >= p.evictAfter {
 			pr.Lost = true
 			p.emit(Event{Kind: MemberLost, Idx: idx, Since: pr.DeadSince})
 		}

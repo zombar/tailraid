@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,4 +78,38 @@ func TestReport_ReflectsClusterState(t *testing.T) {
 	if rep.Volume.Degraded != 2 || rep.Volume.RepairPending != 2 || rep.Volume.Unreadable != 0 {
 		t.Fatalf("past fill_after %+v", rep.Volume)
 	}
+}
+
+// Past evict_after the node is marked lost and the warning names the command that drops
+// its slots so repair can re-place them.
+// Lifecycle: L-92
+func TestStatus_SuggestsRemoveAfterEvict(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	c.WriteFile(0, "/f", testharness.Pattern(int(testharness.ChunkSize), 2))
+	c.Settle()
+	leader := c.Leader()
+	victim := (leader.I + 1) % 3
+	c.Kill(victim)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.Clk.Advance(cluster.EvictAfter)
+	c.Probe()
+	rep := admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, nil)
+	var lost *admin.NodeReport
+	for i := range rep.Nodes {
+		if rep.Nodes[i].Idx == c.Nodes[victim].Idx() {
+			lost = &rep.Nodes[i]
+		}
+	}
+	if lost == nil || !lost.Lost || lost.Live {
+		t.Fatalf("victim not marked lost: %+v", lost)
+	}
+	want := "node remove " + strconv.Itoa(int(c.Nodes[victim].Idx())) + " --force"
+	for _, w := range rep.Warnings {
+		if strings.Contains(w, want) {
+			return
+		}
+	}
+	t.Fatalf("no warning naming %q: %v", want, rep.Warnings)
 }

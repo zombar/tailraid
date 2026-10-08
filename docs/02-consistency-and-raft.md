@@ -97,14 +97,15 @@ Otherwise updates mutable fields (Name, TSStableID, Addr, RaftPort, RPCPort, Cap
 Version, S3Endpoint, S3Bucket, S3Prefix, S3Region, S3PathStyle — the `Node` struct of 01) of
 an existing node; `ErrNoSuchNode` if absent. `Kind` and `ID` cannot change.
 
-**NodeSetState.** `Active → Draining → Removed` or `Draining → Active`. `Removed` is terminal.
-Transition to `Removed` is refused with `ErrNodeNotEmpty` while *any* live chunk still has a
-non-zero placement slot on this node (every slot is a sole copy of its shard index, I-9). The
-CLI flow is `node drain` → wait for the repairer to re-place every slot → `node remove`;
-`--force` first proposes `SetPlacement` with slot 0 for the remaining shards, making the
-degradation explicit, then removes. Order on the leader: `NodeSetState{Removed}` is committed
-first, then `raft.RemoveServer`, so the node table never lists a server that Raft has
-forgotten.
+**NodeSetState.** `Active ↔ Draining`, and `Active | Draining → Removed`. `Removed` is
+terminal. The FSM refuses the transition to `Removed` with `ErrNodeNotEmpty` while *any*
+chunk entry (live or tombstoned) still has a non-zero placement slot on this node (every
+slot is a sole copy of its shard index, I-9). The CLI flow is `node drain` → wait for the
+repairer to re-place every slot → `node remove`; `--force` first proposes `SetPlacement`
+with slot 0 for every remaining slot, making the degradation explicit, then removes. Order
+on the leader: `NodeSetState{Removed}` is committed first, then `raft.RemoveServer`, so the
+node table never lists a server that Raft has forgotten. A removed node is refused when it
+tries to join again until it has been `reset`.
 
 **Create / Mkdir.** `Parent` must exist and be `TDir` (`ErrNotExist`/`ErrNotDir`). `Name`
 must be non-empty, not `.` or `..`, contain no `/`, and be ≤ 255 bytes (`ErrBadCommand`).

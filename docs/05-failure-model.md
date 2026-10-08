@@ -96,7 +96,7 @@ What the user sees:
 | live threshold | 15 s | a node is *live* if a probe succeeded within this window |
 | `Stale` threshold | 30 s | gateway with no leader contact → metadata mutations `EROFS` |
 | `fill_after` | 10 min | leader waits this long after a node goes dead before re-placing its slots (laptop sleep); `0` slots have no hold-down |
-| `evict_after` | 7 d | `MemberLost` event; `status` suggests `node remove` |
+| `evict_after` | 7 d | `MemberLost` event; `status` marks the node `lost` and its warning names the `node remove --force` command |
 | Raft heartbeat / election / lease / commit | 2 s / 2 s / 1 s / 50 ms | — |
 | GC grace | 10 min | see 06 |
 

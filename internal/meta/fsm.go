@@ -225,6 +225,17 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 	if n.State == Removed {
 		return ErrBadCommand
 	}
+	if c.State == Removed {
+		// Every slot is the sole copy of its shard index (I-9): a node that still holds
+		// one cannot leave the table (docs/02). `node remove --force` zeroes the slots first.
+		for _, ch := range a.st.Chunks {
+			for _, s := range ch.Placement {
+				if s == c.Idx {
+					return ErrNodeNotEmpty
+				}
+			}
+		}
+	}
 	a.clock(c.Now)
 	n.State = c.State
 	return nil

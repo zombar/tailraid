@@ -31,6 +31,12 @@ Mounting stays a user action (`tailraid mount`) on every OS: the LaunchAgent and
 systemd unit only serve. The mount survives service restarts because handles are stable
 (I-16) and the mounts are `soft`.
 
+**Address changes.** When the device's Tailscale IP changes, `serve` re-registers the new
+address in the node table (every peer dials it from then on) and exits with a non-zero
+status, because its Raft and RPC listeners are bound to the old address; the service unit's
+restart policy brings it back on the new one within seconds. Without a service manager,
+restart `tailraid serve` by hand.
+
 ## 2. Windows portmap stub
 
 `mount.exe` has no port option: it asks the portmapper on 111 where MOUNT (100005 v3)

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -173,6 +174,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	client.SetGrace(rcfg.Grace)
+	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
@@ -226,9 +228,20 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	bg, cancelBg := context.WithCancel(context.Background())
 	const loops = 6
 	done := make(chan struct{}, loops)
+	// an address change re-registers the node, then ends this process: the RPC and Raft
+	// listeners are bound to the old address and the service manager restarts us
+	sctx, stop := context.WithCancel(ctx)
+	defer stop()
+	var addrChanged atomic.Bool
 	go func() { _ = srv.Serve(bg, rl); done <- struct{}{} }()
 	go func() { prober.Run(bg); done <- struct{}{} }()
-	go func() { watchAddress(bg, ts, node, client, selfIdx, ident.IP, log); done <- struct{}{} }()
+	go func() {
+		if watchAddress(bg, ts, node, client, selfIdx, ident.IP, log) {
+			addrChanged.Store(true)
+			stop()
+		}
+		done <- struct{}{}
+	}()
 	go func() { fl.Run(bg); done <- struct{}{} }()
 	go func() {
 		repairer.Run(bg, func() bool { return node.IsLeader() && node.Health(clk, prober).State == cluster.Healthy })
@@ -236,13 +249,21 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}()
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
 
-	err = nfsgw.Serve(ctx, nl, nfsgw.New(fs, node.FSM))
+	err = nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM))
 	cancelBg()
 	for i := 0; i < loops; i++ {
 		<-done
 	}
+	if addrChanged.Load() {
+		return ErrAddressChanged
+	}
 	return err
 }
+
+// ErrAddressChanged is returned by Serve after the node's Tailscale address changed and
+// was re-registered: the listeners are bound to the old address, so the process exits for
+// the service manager to restart it (docs/05, L-99).
+var ErrAddressChanged = errors.New("node: tailscale address changed and re-registered; restart to bind the new address")
 
 // adminOps implements rpc.Admin and runs the periodic GC and sweep.
 type adminOps struct {
@@ -326,18 +347,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	case "gc_now":
 		return a.gc.RunOnce(ctx)
 	case "set_policy":
-		if op.K < 1 || int(op.K)+int(op.M) > 256 {
-			return nil, fmt.Errorf("bad policy %d+%d", op.K, op.M)
-		}
-		live := 0
-		nodes := a.node.FSM.Nodes()
-		for i := range nodes {
-			if nodes[i].State == meta.Active && a.prober.IsLive(nodes[i].Idx) {
-				live++
-			}
-		}
-		if int(op.K)+int(op.M) > live {
-			return nil, fmt.Errorf("policy %d+%d needs %d live active nodes, have %d", op.K, op.M, int(op.K)+int(op.M), live)
+		if err := admin.PolicyAllowed(a.node.FSM.Nodes(), a.prober, op.K, op.M); err != nil {
+			return nil, err
 		}
 		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: op.K, M: op.M, Now: a.clk.Now().UnixNano()}})
 		if err == nil {
@@ -412,14 +423,15 @@ func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) {
 	return c.Placement[idx] == f.self, true
 }
 
-// watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change).
-func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, self meta.NodeIdx, current netip.Addr, log *slog.Logger) {
+// watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change)
+// and returns true once the new address is in the node table, so the caller can restart.
+func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, self meta.NodeIdx, current netip.Addr, log *slog.Logger) bool {
 	t := time.NewTicker(cluster.ProbeInterval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-t.C:
 		}
 		st, err := ts.Status(ctx)
@@ -443,7 +455,8 @@ func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, 
 			log.Warn("address update failed, will retry", "err", err)
 			continue
 		}
-		current = ip
+		log.Warn("address re-registered; exiting so the service manager restarts the listeners on it", "addr", ip)
+		return true
 	}
 }
 

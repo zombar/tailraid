@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -25,6 +26,7 @@ type NodeReport struct {
 	Self     bool           `json:"self"`
 	Live     bool           `json:"live"`
 	DeadFor  string         `json:"dead_for,omitempty"`
+	Lost     bool           `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT      string         `json:"rtt,omitempty"`
 	Free     int64          `json:"free"`
 	Capacity uint64         `json:"capacity"`
@@ -137,6 +139,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 			}
 			if !pr.DeadSince.IsZero() {
 				r.DeadFor = now.Sub(pr.DeadSince).Round(time.Second).String()
+				r.Lost = pr.Lost
 			}
 		}
 		if nd.State == meta.Active {
@@ -191,7 +194,10 @@ func warnings(r Report) []string {
 		if n.State == "removed" {
 			continue
 		}
-		if !n.Live && n.DeadFor != "" {
+		switch {
+		case n.Lost:
+			w = append(w, fmt.Sprintf("node %s has been unreachable for %s, longer than evict_after: `tailraid node remove %d --force` drops its slots so repair can re-place them", n.Name, n.DeadFor, n.Idx))
+		case !n.Live && n.DeadFor != "":
 			w = append(w, "node "+n.Name+" has been unreachable for "+n.DeadFor)
 		}
 	}
