@@ -28,8 +28,12 @@ type Config struct {
 	Mount struct {
 		Path string `yaml:"path"`
 	} `yaml:"mount"`
+	Tailscale struct {
+		CLI string `yaml:"cli"` // path override for the tailscale binary
+	} `yaml:"tailscale"`
 	Dev struct {
-		Enabled bool `yaml:"enabled"`
+		Enabled       bool   `yaml:"enabled"`
+		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
 }
 

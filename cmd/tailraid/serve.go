@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -67,16 +69,22 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			_, ident, err := node.Tailnet(cmd.Context(), cfg)
+			if err != nil {
+				return err
+			}
 			token := randomToken()
-			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: fmt.Sprintf("127.0.0.1:%d", cfg.Listen.Raft)},
-				meta.Node{Name: cfg.Node.Name, Kind: meta.KindDevice, Voter: true, Capacity: capBytes, RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano()},
+			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
+			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
+				meta.Node{Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: capBytes,
+					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano()},
 				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, token)
 			if err != nil {
 				return err
 			}
 			defer n.Close()
-			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s, policy %d+%d, chunk %s)\nconfig: %s\njoin token: %s\n",
-				cfg.Node.DataDir, id, k, m, chunkSize, path, token)
+			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d, chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
+				cfg.Node.DataDir, id, ident.IP, k, m, chunkSize, path, ident.IP, token)
 			return nil
 		},
 	}

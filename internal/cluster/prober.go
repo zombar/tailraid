@@ -91,6 +91,8 @@ type Prober struct {
 	client  HealthClient
 	clk     clock.Clock
 	timeout time.Duration
+	// SelfHealth supplies this node's own health row (free bytes, version); optional.
+	SelfHealth func() rpc.Health
 
 	mu     sync.Mutex
 	probes map[meta.NodeIdx]*Probe
@@ -142,7 +144,11 @@ func (p *Prober) Tick(ctx context.Context) {
 			continue
 		}
 		if nd.ID == p.node.ID {
-			p.record(nd.Idx, now, 0, true, rpc.Health{Applied: p.node.AppliedIndex()})
+			h := rpc.Health{Applied: p.node.AppliedIndex()}
+			if p.SelfHealth != nil {
+				h = p.SelfHealth()
+			}
+			p.record(nd.Idx, now, 0, true, h)
 			continue
 		}
 		if p.client == nil {

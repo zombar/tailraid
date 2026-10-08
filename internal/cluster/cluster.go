@@ -261,11 +261,14 @@ func Open(o Options) (*Node, error) {
 func (o *Options) raftConfig(logOutput io.Writer) *raft.Config {
 	c := RaftConfig(o.NodeID, logOutput)
 	if o.Fast {
-		c.HeartbeatTimeout = 50 * time.Millisecond
-		c.ElectionTimeout = 50 * time.Millisecond
-		c.LeaderLeaseTimeout = 25 * time.Millisecond
-		c.CommitTimeout = 5 * time.Millisecond
-		c.SnapshotInterval = 100 * time.Millisecond
+		// Short enough for quick elections in tests, long enough that a leader under the
+		// race detector's load does not lose its lease to a slow follower (CI showed
+		// 25 ms contact times stepping a 25 ms lease down into permanent churn).
+		c.HeartbeatTimeout = 300 * time.Millisecond
+		c.ElectionTimeout = 300 * time.Millisecond
+		c.LeaderLeaseTimeout = 150 * time.Millisecond
+		c.CommitTimeout = 10 * time.Millisecond
+		c.SnapshotInterval = 200 * time.Millisecond
 	}
 	if o.SnapshotThreshold != 0 {
 		c.SnapshotThreshold = o.SnapshotThreshold
