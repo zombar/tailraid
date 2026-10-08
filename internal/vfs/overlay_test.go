@@ -829,3 +829,24 @@ func TestOverlay_StaleEntry_FollowsCommittedSize(t *testing.T) {
 		t.Fatalf("Size after the other gateway shrank = %d want 120", sz)
 	}
 }
+
+// A crash during Compact can leave `<ino>.wal.new`; the old log is a superset of it and
+// replays correctly, and the temp file is removed on open rather than left forever.
+// Invariant: I-37
+func TestOverlay_StaleCompactTempRemoved(t *testing.T) {
+	dir := t.TempDir()
+	ov, _ := newOverlay(t, dir)
+	ino := meta.Ino(41)
+	must(t, ov.Write(ino, 0, 300, []byte("live")))
+	must(t, ov.Close())
+	stale := filepath.Join(dir, "41.wal.new")
+	must(t, os.WriteFile(stale, []byte("half-written compaction"), 0o600))
+	ov2, _ := newOverlay(t, dir)
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale compaction temp still present: %v", err)
+	}
+	want := append(make([]byte, 300), "live"...)
+	if got := readFrom(t, ov2, ino, 0, baseOf(nil), 400); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", firstDiff(got, want))
+	}
+}

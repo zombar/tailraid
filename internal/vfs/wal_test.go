@@ -287,3 +287,64 @@ func TestWAL_SyncFailure_ReturnsError(t *testing.T) {
 		t.Fatalf("replayed %+v, want base + write@8192", recs)
 	}
 }
+
+// A new WAL file's directory entry is fsynced before the first record is appended, so an
+// acknowledged WRITE never depends on an entry that power loss could drop. Reopening an
+// existing log does not sync the directory.
+// Invariant: I-7, I-63
+func TestWAL_CreateFsyncsDirectory(t *testing.T) {
+	ff := sysfstest.New(sysfs.OS{})
+	path := filepath.Join(t.TempDir(), "1.wal")
+	boom := errors.New("boom")
+	ff.FailAt(sysfstest.StepSyncDir, boom)
+	if _, err := openWAL(ff, path); !errors.Is(err, boom) {
+		t.Fatalf("openWAL of a new file without a directory fsync: err=%v, want %v", err, boom)
+	}
+	w, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.AppendWrite(4096, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.Close())
+	ff.FailAt(sysfstest.StepSyncDir, boom) // must stay armed: reopen does not sync the dir
+	w2, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer w2.Close()
+	if recs := replayAll(t, w2); len(recs) != 1 || recs[0].off != 4096 {
+		t.Fatalf("replayed %+v", recs)
+	}
+	if err := ff.SyncDir(filepath.Dir(path)); !errors.Is(err, boom) {
+		t.Fatal("reopening an existing WAL synced the directory")
+	}
+}
+
+// After a failed fsync the record is not acknowledged; a crash right after must not
+// replay it (its bytes may still have reached the disk).
+// Invariant: I-37
+func TestWAL_AppendAfterFailedSync_NoResurrectedRecord(t *testing.T) {
+	ff := sysfstest.New(sysfs.OS{})
+	path := filepath.Join(t.TempDir(), "1.wal")
+	w, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.AppendBase(0))
+	boom := errors.New("boom")
+	ff.FailAt(sysfstest.StepSync, boom)
+	if _, err := w.AppendWrite(4096, []byte("never acknowledged")); !errors.Is(err, boom) {
+		t.Fatalf("err=%v want %v", err, boom)
+	}
+	must(t, w.Close()) // the process dies here
+	w2, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+	if recs := replayAll(t, w2); len(recs) != 1 || recs[0].typ != recBase {
+		t.Fatalf("replayed %+v, want the base record only", recs)
+	}
+}

@@ -55,6 +55,14 @@ func openWAL(fsys sysfs.FS, path string) (*WAL, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("vfs: stat wal: %w", err)
 	}
+	if st.Size() == 0 {
+		// A new (or still empty) log: its directory entry must be durable before any
+		// record it holds is acknowledged (I-63).
+		if err := fsys.SyncDir(filepath.Dir(path)); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("vfs: fsync wal dir: %w", err)
+		}
+	}
 	return &WAL{fs: fsys, path: path, f: f, size: st.Size()}, nil
 }
 
@@ -83,6 +91,10 @@ func (w *WAL) append(typ uint8, off uint64, data []byte) (int64, error) {
 		return 0, fmt.Errorf("vfs: wal write: %w", err)
 	}
 	if err := w.f.Sync(); err != nil {
+		// Not acknowledged: cut the record back off so a crash cannot replay it (I-37).
+		// Best effort; the next append overwrites the same offset anyway.
+		_ = w.f.Truncate(w.size)
+		_ = w.f.Sync()
 		return 0, fmt.Errorf("vfs: wal fsync: %w", err)
 	}
 	dataOff := w.size + recHeaderLen

@@ -91,8 +91,8 @@ type    := 1 = write (data follows), 2 = truncate (len = 0, off = new size)
 `crc32c` covers `type|off|len|data`. All integers little-endian.
 
 ```go
-type WAL struct { f *os.File; off int64 }
-func openWAL(path string) (*WAL, error)
+type WAL struct { fs sysfs.FS; f sysfs.File; off int64 }
+func openWAL(fs sysfs.FS, path string) (*WAL, error)                       // a new file's directory entry is fsynced before it is used
 func (w *WAL) AppendWrite(off uint64, p []byte) (walOff int64, err error)   // write + f.Sync()
 func (w *WAL) AppendTruncate(size uint64) error                             // + f.Sync()
 func (w *WAL) ReadAt(p []byte, walOff int64) error
@@ -105,7 +105,14 @@ Rules:
 
 - `AppendWrite` and `AppendTruncate` return only after `f.Sync()` succeeds. There is no
   "no-sync" mode: the struct has no such field, and tests that want speed put the staging
-  directory on a tmpfs or accept the cost.
+  directory on a tmpfs or accept the cost. All file access goes through the `sysfs.FS`
+  seam so tests can inject a failed fsync or a crash at any step.
+- A WAL file is created on the first write to an inode, and its directory is fsynced before
+  the first record is appended: an acknowledged record never depends on a directory entry
+  that power loss could drop (I-63). After a failed fsync the un-synced record is cut back
+  off the file so a later crash cannot replay bytes that were never acknowledged (I-37).
+- A crash during `Compact` may leave `<ino>.wal.new`; `OpenOverlay` removes it (the old
+  log is a superset and replays correctly).
 - `Replay` reads records in order and **stops at the first record whose CRC fails or whose
   length runs past EOF** (the torn tail from a crash mid-append). Everything before it is
   replayed into the extent set; the file is then truncated to that point.
@@ -281,7 +288,7 @@ Degraded writes (user's choice) hold < m parity until repair.
 
 | Component | What is fsynced | When |
 |---|---|---|
-| WAL (`staging/<ino>.wal`) | the file | after every appended record, before the WRITE reply |
+| WAL (`staging/<ino>.wal`) | the file; the directory when the file is created | after every appended record, before the WRITE reply; the directory before the first record |
 | shard store (`shards/hh/<key>`) | temp file, rename, directory | `write → f.Sync() → Close → Rename → fsync(dir)`; `Put` returns (and the PUT is acked) only after the directory fsync |
 | raft log/stable (`raft/raft.db`) | bbolt | `NoSync = false` (every Raft append) |
 | snapshots | `FileSnapshotStore` | fsync on `Close` |
@@ -306,6 +313,7 @@ It is deliberately not in the barebones scope; the seam is `WAL.AppendWrite`.
 - **I-35** — A flush never drops dirty extents or a truncation point: on `ErrConflict`, `ErrUnknownChunk` or PUT failure the same plan (extents, `minSize`, `sizeSet`) is retried against the newer base with `NewSize` recomputed so that no other gateway's committed bytes are cut off except by an explicit truncate; extents are removed only after `WaitApplied` of the Commit that carries them.
 - **I-36** — Other gateways observe either the previous committed chunk list or the new one, never a mixture.
 - **I-37** — WAL replay after a crash restores exactly the records whose CRC verifies, in order, and discards the torn tail; replayed bytes equal the acknowledged bytes.
+- **I-63** — A WRITE is acknowledged only when every file its durability depends on has a durable directory entry: a newly created WAL file's directory is fsynced before its first record is appended.
 
 ## Tests
 
@@ -316,4 +324,5 @@ It is deliberately not in the barebones scope; the seam is `WAL.AppendWrite`.
 | I-34 | `TestVFS_OracleRandomOps`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`, `TestNFS_WriteSequence_MultiRPC` |
 | I-35 | `TestFlusher_ConflictRebase_KeepsAllExtents`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_ConflictRebase_TruncateWins`, `TestFlusher_UnknownChunk_ReUpload`, `TestFlusher_PutFailureRetriesSamePlan`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestFlusher_PartialFlush_SizeNeverAheadOfData` |
 | I-36 | `TestCluster_ReaderSeesWholeVersions`, `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` |
-| I-37 | `TestWAL_ReplayStopsAtTornTail`, `TestVFS_RestartWithDirtyWAL_Replays`, `TestWAL_CompactKeepsLiveExtents` |
+| I-37 | `TestWAL_ReplayStopsAtTornTail`, `TestVFS_RestartWithDirtyWAL_Replays`, `TestWAL_CompactKeepsLiveExtents`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestOverlay_StaleCompactTempRemoved` |
+| I-63 | `TestWAL_CreateFsyncsDirectory` |

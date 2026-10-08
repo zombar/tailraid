@@ -143,6 +143,12 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 	}
 	for _, e := range ents {
 		name := e.Name()
+		if strings.HasSuffix(name, ".wal.new") { // a crash mid-Compact; the old log is a superset
+			if err := o.fs.Remove(filepath.Join(dir, name)); err != nil {
+				return nil, fmt.Errorf("vfs: remove stale compaction temp: %w", err)
+			}
+			continue
+		}
 		if e.IsDir() || !strings.HasSuffix(name, ".wal") {
 			continue
 		}
