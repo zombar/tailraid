@@ -198,7 +198,9 @@ func upper(s string) string {
 
 // Logger builds the process logger from config and environment. Output goes to stderr,
 // which service managers and Docker capture.
-func (c Config) Logger() *slog.Logger {
+// OpenLogger builds the logger from log.level/log.format/log.file and the TAILRAID_LOG_*
+// overrides; the closer releases the log file (serve calls it on exit).
+func (c Config) OpenLogger() (*slog.Logger, func() error) {
 	level, format := c.Log.Level, c.Log.Format
 	if v := os.Getenv("TAILRAID_LOG_LEVEL"); v != "" {
 		level = v
@@ -219,21 +221,24 @@ func (c Config) Logger() *slog.Logger {
 	}
 	opts := &slog.HandlerOptions{Level: lvl}
 	var out io.Writer = os.Stderr
-	file := c.Log.File
-	if v := os.Getenv("TAILRAID_LOG_FILE"); v != "" {
-		file = v
-	}
-	if file != "" {
+	closer := func() error { return nil }
+	if file := c.LogFile(); file != "" {
 		if f, err := openLogFile(file); err == nil {
-			out = f
+			out, closer = f, f.Close
 		} else {
 			fmt.Fprintf(os.Stderr, "tailraid: log file %s: %v; logging to stderr\n", file, err)
 		}
 	}
 	if strings.EqualFold(format, "json") {
-		return slog.New(slog.NewJSONHandler(out, opts))
+		return slog.New(slog.NewJSONHandler(out, opts)), closer
 	}
-	return slog.New(slog.NewTextHandler(out, opts))
+	return slog.New(slog.NewTextHandler(out, opts)), closer
+}
+
+// Logger is OpenLogger without the closer: the log file stays open for the process.
+func (c Config) Logger() *slog.Logger {
+	l, _ := c.OpenLogger()
+	return l
 }
 
 // LogFile returns the effective log file path ("" = stderr).

@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,7 +24,7 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 			t.Errorf("plist lacks %q", want)
 		}
 	}
-	if !strings.HasSuffix(pl.Files[0].Path, "/Users/u/Library/LaunchAgents/app.tailraid.serve.plist") {
+	if !strings.HasSuffix(filepath.ToSlash(pl.Files[0].Path), "/Users/u/Library/LaunchAgents/app.tailraid.serve.plist") {
 		t.Errorf("plist path %s", pl.Files[0].Path)
 	}
 	if got := strings.Join(pl.Commands[1], " "); got != "launchctl bootstrap gui/501 "+pl.Files[0].Path {

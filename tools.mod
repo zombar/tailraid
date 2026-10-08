@@ -18,6 +18,7 @@ require (
 	github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/goleak v1.3.0
+	golang.org/x/sys v0.48.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 )
 
@@ -231,7 +232,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260908163034-4bcc4b2ee518 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect

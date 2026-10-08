@@ -131,7 +131,8 @@ func serveCmd() *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			log := cfg.Logger()
+			log, closeLog := cfg.OpenLogger()
+			defer closeLog()
 			slog.SetDefault(log)
 			run := func(ctx context.Context) error { return node.Serve(ctx, cfg, log, version) }
 			if asService, _ := cmd.Flags().GetBool("service"); asService {

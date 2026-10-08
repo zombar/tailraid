@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,7 +73,7 @@ func TestUpdate_AppliesVerifiedRelease(t *testing.T) {
 	if !bytes.Equal(got, newBin) || verified != "v1.2.0" {
 		t.Fatalf("binary not replaced (verified %q)", verified)
 	}
-	if st, err := os.Stat(exe); err != nil || st.Mode()&0o100 == 0 {
+	if st, err := os.Stat(exe); err != nil || (runtime.GOOS != "windows" && st.Mode()&0o100 == 0) {
 		t.Fatal("new binary not executable")
 	}
 	ents, _ := os.ReadDir(dir)
