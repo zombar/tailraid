@@ -234,3 +234,41 @@ func TestFSM_NodeLookups(t *testing.T) {
 		t.Fatalf("ForEachNode did not stop: %d", n)
 	}
 }
+
+// The read API never runs a caller's callback under the FSM lock: ForEachNode and
+// ForEachChunk hand out copies and call fn with the lock free, so fn may read the FSM
+// again. A queued Apply (writer) between an outer and a nested read lock would
+// otherwise block the node for good; this is what the liveness scan did once.
+func TestFSM_Callbacks_RunWithLockFree(t *testing.T) {
+	tf := newTFSM(t)
+	tf.ok(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "n1", Name: "n1", Kind: KindDevice, State: Active}}})
+	h := hashN(1)
+	ino := tf.create(RootIno, "f")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: ino, NewSize: testCS, Writes: []ChunkWrite{{0, h}}, NewChunks: []ChunkDesc{desc(h)}, Now: 2}})
+	calls := 0
+	tf.f.ForEachNode(func(n Node) bool {
+		calls++
+		if !tf.f.mu.TryLock() { // a writer could not get in: the callback holds the lock
+			t.Fatal("ForEachNode runs its callback under the FSM lock")
+		}
+		tf.f.mu.Unlock()
+		if _, ok := tf.f.NodeByID(n.ID); !ok { // a nested read must work
+			t.Fatal("nested read failed")
+		}
+		return true
+	})
+	tf.f.ForEachChunk(func(c Chunk) bool {
+		calls++
+		if !tf.f.mu.TryLock() {
+			t.Fatal("ForEachChunk runs its callback under the FSM lock")
+		}
+		tf.f.mu.Unlock()
+		if _, ok := tf.f.GetChunk(c.Hash); !ok {
+			t.Fatal("nested read failed")
+		}
+		return true
+	})
+	if calls != 2 {
+		t.Fatalf("%d callbacks", calls)
+	}
+}

@@ -203,13 +203,20 @@ func (f *FSM) Node(idx NodeIdx) (Node, bool) {
 	return *n, true
 }
 
-// ForEachNode calls fn for every node record, in no particular order, until fn returns
-// false. Unlike Nodes it copies nothing but the record handed to fn.
+// ForEachNode calls fn for every node record, in index order, until fn returns false.
+// The records are copied under the read lock and fn runs with the lock released: a
+// callback is free to read the FSM again (a nested read lock behind a queued Apply would
+// otherwise deadlock the node, as the liveness scan once did).
 func (f *FSM) ForEachNode(fn func(Node) bool) {
 	f.mu.RLock()
-	defer f.mu.RUnlock()
+	nodes := make([]Node, 0, len(f.st.Nodes))
 	for _, n := range f.st.Nodes {
-		if !fn(*n) {
+		nodes = append(nodes, *n)
+	}
+	f.mu.RUnlock()
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Idx < nodes[j].Idx })
+	for i := range nodes {
+		if !fn(nodes[i]) {
 			return
 		}
 	}
