@@ -69,7 +69,9 @@ Two endpoints (docs/08) turn a real node into a soak target:
 
 `tailraid verify --destructive --restarts` declares that every target runs with
 `dev.enabled` under a restarting service manager: the parity, consensus, restart-storm
-and partition steps then run against the real cluster through those endpoints.
+and partition steps then run against the real cluster through those endpoints. Because
+the service manager restarts an exited node within seconds, `verify` holds a killed node
+down with drop rules on it and on its peers until the phase restarts it (docs/09 §6).
 
 ## 4. Releases
 

@@ -221,7 +221,11 @@ func harnessProfile() soak.Profile {
 
 // The whole scenario sequence runs green against the in-process cluster, every phase
 // reports checks (none skipped), the results stream has samples and events, and the
-// report renders with the phase matrix and charts.
+// report renders with the phase matrix and charts. The partition phase is the only
+// end-to-end exercise of a cut-off gateway: metadata refused, WRITEs buffered and
+// committed after the heal, the majority committing throughout.
+// Invariant: I-29
+// Lifecycle: L-59, L-148
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
@@ -245,7 +249,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 9 {
+	if sum.Failed != 0 || len(sum.Phases) != 10 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -268,7 +272,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	if path := os.Getenv("SOAK_REPORT_OUT"); path != "" { // for eyeballing the report
 		_ = os.WriteFile(path, html.Bytes(), 0o600)
 	}
-	for _, want := range []string{"<svg", "9 restart storm", "PASS", "FSM-hash agreement", "Throughput"} {
+	for _, want := range []string{"<svg", "9 restart storm", "10 partition", "PASS", "FSM-hash agreement", "Throughput"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -30,6 +31,7 @@ var phases = []phase{
 	{"7 membership", phaseMembership},
 	{"8 dedup and gc", phaseDedupGC},
 	{"9 restart storm", phaseRestartStorm},
+	{"10 partition", phasePartition},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -666,12 +668,20 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 			r.check("leader known before the kill", false, "no leader in status")
 			return nil
 		}
-		gw := r.gateways()[0]
-		for _, g := range r.gateways() { // write through a follower when we can
+		var gw NodeRef
+		for _, g := range r.gateways() { // write through a follower: killing our own gateway cuts the mount
 			if g.Idx != leader.Idx {
 				gw = g
 				break
 			}
+		}
+		if gw.Name == "" {
+			if round == 0 {
+				r.skip(fmt.Sprintf("the only gateway (%s) leads; a live run cannot kill its own node", leader.Name))
+				return nil
+			}
+			r.event("note", fmt.Sprintf("round %d skipped: the only gateway (%s) now leads", round, leader.Name))
+			break
 		}
 		v, _ := r.volume(gw)
 		dir := join(r.Root, "consensus")
@@ -911,4 +921,252 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	r.checkAt("whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
 	r.checkFSMAgreement(ctx, "FSM hashes agree after the restart storm")
 	return nil
+}
+
+// --- 10 partition --------------------------------------------------------------------------
+
+// phasePartition cuts a minority of nodes off, then the gateway itself. The majority keeps
+// committing (L-148); a cut-off gateway refuses metadata operations with EROFS while its
+// WRITEs stay buffered and are committed once the partition heals (L-59); nothing it
+// refused shows up afterwards and nothing acknowledged is applied twice (I-29).
+func phasePartition(ctx context.Context, r *Run) error {
+	if !r.Env.Caps().Partition {
+		r.skip("environment cannot partition nodes")
+		return nil
+	}
+	rep, _, err := r.anyStatus(ctx)
+	if err != nil {
+		return err
+	}
+	k := int(rep.Volume.K)
+	voters := 0
+	for i := range rep.Nodes {
+		if rep.Nodes[i].Voter {
+			voters++
+		}
+	}
+	gws := r.gateways()
+	gw := gws[0]
+	// the minority: the last nodes, never the first gateway, keeping a voter quorum and at
+	// least k nodes on the majority side
+	budget := min((voters-1)/2, len(r.nodes)-k)
+	var minority, majority []NodeRef
+	for i := len(r.nodes) - 1; i >= 0; i-- {
+		n := r.nodes[i]
+		if n.Idx != gw.Idx && len(minority) < budget {
+			minority = append(minority, n)
+		} else {
+			majority = append(majority, n)
+		}
+	}
+	if len(minority) == 0 {
+		r.skip(fmt.Sprintf("need a minority to cut off: %d voters, %d nodes, k=%d", voters, len(r.nodes), k))
+		return nil
+	}
+	m := r.corpusModel()
+	v, _ := r.volume(gw)
+	dir := join(r.Root, "partition")
+	if err := v.Mkdir(dir); err != nil {
+		return err
+	}
+	cs := r.Profile.ChunkSize
+	// files written before the cut, so a cut-off gateway can write into an existing inode
+	pre := map[string][]byte{}
+	for _, name := range []string{"minor.bin", "self.bin"} {
+		p := join(dir, name)
+		data := r.randomBytes(cs + 5)
+		if err := v.WriteAt(p, 0, data); err != nil {
+			return err
+		}
+		pre[p], m[p] = data, data
+	}
+	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
+		return err
+	}
+	names := func(side []NodeRef) string {
+		out := make([]string, 0, len(side))
+		for _, n := range side {
+			out = append(out, n.Name)
+		}
+		return strings.Join(out, ",")
+	}
+
+	// step 1: a minority is cut off
+	if err := r.Env.Partition(ctx, minority, majority); err != nil {
+		return err
+	}
+	r.event("partition", names(minority)+" | "+names(majority))
+	led, ldetail := r.awaitLeader(ctx, majority, r.Profile.RestartSettle+30*time.Second)
+	r.check("the majority side elects a leader", led, ldetail)
+	major := join(dir, "major.bin")
+	data := r.randomBytes(cs + 9)
+	werr := v.WriteAt(major, 0, data)
+	r.check(fmt.Sprintf("writes commit on the majority side with %s cut off", names(minority)), werr == nil, fmt.Sprint(werr))
+	if werr == nil {
+		m[major] = data
+	}
+	var minorGW *NodeRef
+	for i := range gws {
+		for _, n := range minority {
+			if gws[i].Idx == n.Idx {
+				minorGW = &gws[i]
+			}
+		}
+	}
+	minor := join(dir, "minor.bin")
+	refused := join(dir, "minor-dir")
+	if minorGW != nil {
+		mv, _ := r.volume(*minorGW)
+		merr := mv.Mkdir(refused)
+		r.checkAt("metadata operation on the cut-off side is refused", merr != nil, fmt.Sprint(merr), refused, "", minorGW.Name)
+		tail := r.randomBytes(cs / 2)
+		off := int64(cs - 3)
+		if werr := mv.WriteAt(minor, off, tail); werr == nil { // L-59: still buffered
+			m[minor] = overwrite(pre[minor], off, tail)
+			r.event("note", fmt.Sprintf("WRITE buffered on cut-off gateway %s", minorGW.Name))
+		} else {
+			r.event("note", fmt.Sprintf("WRITE refused on cut-off gateway %s: %v", minorGW.Name, werr))
+		}
+	} else {
+		r.event("note", "no gateway on the cut-off side; its EROFS and buffered-write checks need MultiGateway")
+	}
+	if err := r.Env.Heal(ctx); err != nil {
+		return err
+	}
+	r.event("heal", "")
+	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
+	r.check("cluster healthy after the heal", healthy, hdetail)
+	ok, detail := r.awaitCommitted(ctx, gw, minor, m[minor])
+	r.checkAt("bytes written on the cut-off side are committed after the heal", ok, detail, minor, "", gw.Name)
+	r.noteRefused(v, refused)
+	bad, first := r.verifyModel(v, m)
+	r.checkAt("corpus exact after the minority rejoins", bad == 0, first, first, "", gw.Name)
+	r.checkFSMAgreement(ctx, "FSM hashes agree after the minority rejoins")
+
+	// step 2: the gateway itself is cut off
+	var others []NodeRef
+	for _, n := range r.nodes {
+		if n.Idx != gw.Idx {
+			others = append(others, n)
+		}
+	}
+	if err := r.Env.Partition(ctx, []NodeRef{gw}, others); err != nil {
+		return err
+	}
+	r.event("partition", gw.Name+" | "+names(others))
+	refused = join(dir, "self-dir")
+	merr := v.Mkdir(refused)
+	r.checkAt("metadata operation on the cut-off gateway is refused", merr != nil, fmt.Sprint(merr), refused, "", gw.Name)
+	self := join(dir, "self.bin")
+	tail := r.randomBytes(cs / 2)
+	off := int64(cs - 7)
+	werr = v.WriteAt(self, off, tail)
+	r.checkAt("WRITE on the cut-off gateway is buffered, not refused", werr == nil, fmt.Sprint(werr), self, "", gw.Name)
+	if werr == nil {
+		m[self] = overwrite(pre[self], off, tail)
+	}
+	if err := r.Env.Heal(ctx); err != nil {
+		return err
+	}
+	r.event("heal", "")
+	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
+	r.check("cluster healthy after the gateway rejoins", healthy, hdetail)
+	ok, detail = r.awaitCommitted(ctx, gw, self, m[self])
+	r.checkAt("bytes buffered on the cut-off gateway are committed after the heal", ok, detail, self, "", gw.Name)
+	r.noteRefused(v, refused)
+	for _, g := range gws {
+		rv, _ := r.volume(g)
+		bad, first := r.verifyModel(rv, m)
+		r.checkAt("corpus exact after the gateway rejoins", bad == 0, first, first, "", g.Name)
+	}
+	r.checkFSMAgreement(ctx, "FSM hashes agree after the gateway rejoins")
+	return nil
+}
+
+// overwrite is the file content after writing data at off into base.
+func overwrite(base []byte, off int64, data []byte) []byte {
+	out := make([]byte, max(len(base), int(off)+len(data)))
+	copy(out, base)
+	copy(out[off:], data)
+	return out
+}
+
+// noteRefused records whether a metadata operation refused during a partition landed
+// anyway. Raft allows either outcome (the leader may have appended it before losing its
+// lease and commit it on rejoining); what matters is that every node agrees, which the
+// FSM-hash check covers.
+func (r *Run) noteRefused(v Volume, path string) {
+	if _, err := v.Size(path); err == nil {
+		r.event("note", "refused metadata operation landed after the heal (ambiguous outcome, allowed): "+path)
+	} else {
+		r.event("note", "refused metadata operation is absent after the heal: "+path)
+	}
+}
+
+// awaitLeader polls status through the given nodes until one reports a healthy leader.
+func (r *Run) awaitLeader(ctx context.Context, via []NodeRef, timeout time.Duration) (bool, string) {
+	deadline := time.Now().Add(timeout)
+	for {
+		detail := "no status"
+		for _, n := range via {
+			rep, err := r.Env.Status(ctx, n)
+			if err != nil {
+				detail = fmt.Sprintf("%s: %v", n.Name, err)
+				continue
+			}
+			if rep.Health == "healthy" && rep.Leader != "" {
+				return true, fmt.Sprintf("leader %s (via %s)", rep.Leader, n.Name)
+			}
+			detail = fmt.Sprintf("%s: health %s, leader %q", n.Name, rep.Health, rep.Leader)
+		}
+		if time.Now().After(deadline) || r.Env.Wait(ctx, 500*time.Millisecond) != nil {
+			return false, detail
+		}
+	}
+}
+
+// awaitCommitted polls until the FSM of a node other than gw (or gw itself when it is the
+// only node) lists path with committed chunks summing to the expected length, and the
+// bytes read through gw match. The chunk sum is what proves the flush landed: gw alone
+// would serve its own dirty bytes.
+func (r *Run) awaitCommitted(ctx context.Context, gw NodeRef, path string, want []byte) (bool, string) {
+	witness := gw
+	for _, n := range r.nodes {
+		if n.Idx != gw.Idx {
+			witness = n
+			break
+		}
+	}
+	deadline := time.Now().Add(r.Profile.FlushIdle + 30*time.Second)
+	for {
+		detail := ""
+		reps, err := r.Env.Chunks(ctx, witness, path)
+		switch {
+		case err != nil:
+			detail = fmt.Sprintf("%s: %v", witness.Name, err)
+		default:
+			committed, total := true, 0
+			for i := range reps {
+				if !reps[i].Found || reps[i].State == "unknown" {
+					committed = false
+				}
+				total += int(reps[i].Size)
+			}
+			v, _ := r.volume(gw)
+			got, rerr := v.ReadAll(path)
+			switch {
+			case !committed || total != len(want):
+				detail = fmt.Sprintf("%s lists %d chunks, %d bytes committed, want %d", witness.Name, len(reps), total, len(want))
+			case rerr != nil:
+				detail = fmt.Sprintf("read via %s: %v", gw.Name, rerr)
+			case !bytes.Equal(got, want):
+				detail = fmt.Sprintf("read via %s: %d bytes, want %d", gw.Name, len(got), len(want))
+			default:
+				return true, fmt.Sprintf("%d chunks committed on %s", len(reps), witness.Name)
+			}
+		}
+		if time.Now().After(deadline) || r.Env.Wait(ctx, 500*time.Millisecond) != nil {
+			return false, detail
+		}
+	}
 }

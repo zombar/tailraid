@@ -249,8 +249,17 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   persist; FSM hashes agree); 7 membership (`set-redundancy` 2+1→1+2→2+1 under load with
   `stale_policy_chunks` draining to 0; drain and re-activate n4); 8 dedup and GC (second
   copy of the corpus adds < 1 % stored bytes; removing a unique file reclaims after grace,
-  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity). A phase
-  the environment cannot run is recorded as *skipped (capability)*, never passed.
+  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity); 10
+  partition (a minority is cut off: the majority elects and keeps committing, a cut-off
+  gateway refuses metadata operations and buffers WRITEs that commit after the heal; then
+  the gateway itself is cut off and rejoins; a refused operation may land after the heal,
+  which Raft allows, so the check is FSM agreement, not absence; I-29, L-59, L-148). A
+  phase the environment cannot run is recorded as *skipped (capability)*, never passed.
+  On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
+  it, and once the service manager has it back it drops every peer until the phase's
+  `Start`, so "m nodes dead" holds for as long as the phase needs rather than for the
+  service manager's restart delay. The device running `verify` is never killed (its mount
+  is the run's only volume); when it leads, the consensus phase is skipped.
 - **Results and report**: the driver appends one JSON line per event, check and 1 s
   sample (bytes moved, write/read latency, `degraded_chunks`, `stored_bytes`,
   `logical_bytes`, slots per node, FSM-hash agreement) to `results.jsonl`, then renders a
