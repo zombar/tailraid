@@ -31,6 +31,9 @@ Mounting stays a user action (`tailraid mount`) on every OS: the LaunchAgent and
 systemd unit only serve. The mount survives service restarts because handles are stable
 (I-16) and the mounts are `soft`.
 
+The service log prints the browser UI address (`http://<tsIP>:20482/`, docs/13) at start,
+and `tailraid status` shows it on its `web` line; `listen.web: 0` turns the UI off.
+
 **Address changes.** When the device's Tailscale IP changes, `serve` re-registers the new
 address in the node table (every peer dials it from then on) and exits with a non-zero
 status, because its Raft and RPC listeners are bound to the old address; the service unit's

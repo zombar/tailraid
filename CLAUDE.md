@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M0–M4 built. Pending validation outside this machine: the Windows checklist on real hardware and the multi-device run on the real tailnet (`install`, then `verify --destructive --restarts`). M5 (S3 gateway, S3 storage nodes) is deferred as of 2026-10-08: the volume is complete without it; docs/10 keeps the design and its invariants stay as stubs.
+**Milestone status:** M0–M4 built. Pending validation outside this machine: the Windows checklist on real hardware and the multi-device run on the real tailnet (`install`, then `verify --destructive --restarts`). M5 (S3 gateway, S3 storage nodes) is deferred as of 2026-10-08: the volume is complete without it; docs/10 keeps the design and its invariants stay as stubs. The browser UI (docs/13: dashboard and file browser on `<tsIP>:20482`) is in progress; its lookdev in `docs/assets/lookdev/` is signed off and is the markup the TypeScript must render.
 
 ## Layout
 
@@ -23,6 +23,7 @@ internal/rpc        node HTTP RPC + WhoIs authorizer   internal/tailscale  CLI s
 internal/config     YAML config           internal/mount    per-OS mount helpers, PMAP stub
 internal/svc        service install       internal/admin    status/check/describe reports
 internal/dev        /dev/* endpoints, only with dev.enabled
+internal/webui      browser UI: Go handler over vfs + admin; src/ TypeScript (no framework), src/app.css, dist/app.js (esbuild, committed)
 internal/soak       Env interface, scenarios, HTML report (shared by cmd/soak and `tailraid verify`)
 internal/testharness  in-process Cluster, FaultNet, Hooks (test only)
 test/invariants     skipped stubs that cite not-yet-implemented I-n / L-n (S3 only now)
@@ -41,6 +42,7 @@ make lint         golangci-lint + check-invariants      make invariants  regener
 make fmt-check    gofmt                                 make vuln        govulncheck
 make check        fmt-check + lint + test-race          make release     6 static binaries + sha256sums
 make test-mount   real NFS mount (sudo -E)              make soak        docker-compose soak → report.html
+make web          esbuild → internal/webui/dist/app.js  make web-check   fails when dist is stale (part of check)
 ```
 
 Lint and vuln tools are Go tools pinned in `tools.mod` (`go tool -modfile=tools.mod …`), so
@@ -87,11 +89,15 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
 - Prefer deleting over abstracting. Production code is ≈ 18.1k lines through M4 (measured 2026-10-08 after the review and hot-path work; the plan's 8k was optimistic,
   see docs/00). If a feature needs far more than its row in docs/00, the design is wrong.
 - Logging with `log/slog`; no metrics library (`tailraid status --json` instead).
+- Browser UI: TypeScript in `internal/webui/src`, no framework, no node/npm; esbuild is a Go
+  tool in `tools.mod`. Run `make web` after touching `src/`; `make web-check` fails the commit
+  otherwise. The markup is `docs/assets/lookdev/`; a visual change edits `src/app.css` and the
+  lookdev page together, never the TS alone.
 
 ## CLI (target surface; see the plan for details)
 
 `init`, `join`, `serve`, `token`, `reset` (wipes local Raft state only, never shards) ·
-`status`, `node ls|describe|promote|demote|
+`status` (also prints the web UI URL), `node ls|describe|promote|demote|
 set-capacity|drain|remove` · `check`, `repair`, `gc`, `fsck` · `volume
 describe|grow|set-redundancy` · `chunk describe <hash>`
 (lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report) · `update [--check]`
@@ -101,7 +107,8 @@ describe|grow|set-redundancy` · `chunk describe <hash>`
 ## Out of scope (keep it small)
 
 S3 beyond the implemented subset (versioning, ACLs, policies, lifecycle, tagging, SSE,
-object lock, presigned POST), web UI, metrics stack, encryption at rest, quotas,
+object lock, presigned POST), web UI beyond docs/13 (user management, mutating admin ops
+from the browser), metrics stack, encryption at rest, quotas,
 versioning/recycle bin, xattrs, NLM locking, snapshots, hard links, NFSv4, multiple
 independent volumes, content-defined chunking, compression (hook left), tiering,
 fsck-from-shards metadata reconstruction, WAL mirroring.

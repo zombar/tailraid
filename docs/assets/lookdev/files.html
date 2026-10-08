@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid files</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a class="active" href="#/browse/">Files</a></nav>
+  <span class="pill warn" title="leader reachable, k ≤ live < k+m">degraded</span>
+  <span class="who">pike · leader atlas · 2/3 voters live</span>
+</header>
+<div id="warnings"></div>
+<main>
+  <section>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span></div>
+    <div class="toolbar">
+      <label class="btn">Upload<input type="file" multiple></label>
+      <button type="button" aria-pressed="true">New folder</button>
+      <span class="spacer"></span>
+      <span class="small dim">8 items · 2.2 GiB</span>
+    </div>
+    <div class="uploads">
+      <div class="upload"><span class="name">04 - Crowd.mov</span><span class="state">412.0 MiB / 660.3 MiB <button type="button">cancel</button></span><div class="bar"><i style="width:62%"></i></div></div>
+      <div class="upload"><span class="name">05 - Soundcheck.wav</span><span class="state">queued <button type="button">cancel</button></span></div>
+      <div class="upload"><span class="name">Day 1.zip</span><span class="state bad">failed: no space left on the volume (507)</span></div>
+    </div>
+    <form class="inline-form"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg><input type="text" placeholder="folder name" value="photos" aria-label="folder name" autofocus><button type="submit">Create</button><button type="button">Cancel</button></form>
+    <table class="files">
+      <thead><tr><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="#/browse/media/Concerts%202024/Day%201%20(soundboard)"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)</a></td><td class="size"></td><td class="mtime">2 h ago</td></tr>
+        <tr><td class="name"><a href="#/browse/media/Concerts%202024/photos"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>photos</a></td><td class="size"></td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr><td class="name"><a href="#/file/media/Concerts%202024/01%20-%20Opening%20%231.mp4"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Opening #1.mp4</a></td><td class="size">1.9 GiB</td><td class="mtime">2026-10-02 21:14</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>02 - Encore?.m4a</a></td><td class="size">48.0 MiB</td><td class="mtime">2026-10-02 21:16</td></tr>
+        <tr class="dirty"><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>03 - Jam.flac</a></td><td class="size">212.4 MiB</td><td class="mtime">12 s ago</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"/><circle cx="11" cy="5.5" r="1"/></svg>cover 100%.jpg</a></td><td class="size">3.4 MiB</td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>README.md</a></td><td class="size">2.1 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>setlist — final (v2).txt</a></td><td class="size">1.3 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr><td class="name"><span style="display:flex;gap:8px;align-items:center;min-height:44px"><svg class="icon" viewBox="0 0 16 16"><path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2.5-2.5a2.5 2.5 0 0 0-3.5-3.5L8 4.5 M9.5 6.5a2.5 2.5 0 0 0-3.5 0L3.5 9a2.5 2.5 0 0 0 3.5 3.5L8 11.5"/></svg>notes <span class="target">→ ../notes.txt</span></span></td><td class="size"></td><td class="mtime">2026-09-30 09:02</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<div id="toasts" aria-live="polite"><div class="toast bad">mkdir photos: already exists (409)</div></div>
+</body>
+</html>
