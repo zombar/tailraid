@@ -168,6 +168,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		uid, gid = 0, 0
 	}
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
+	fs.SetHealth(func() bool { return staleFor(node, prober, clk) })
 
 	rcfg := repair.DefaultConfig()
 	if rcfg.Grace, rcfg.FillAfter, err = cfg.RepairDurations(); err != nil {
@@ -258,6 +259,19 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return ErrAddressChanged
 	}
 	return err
+}
+
+// staleFor reports whether the gateway has had no leader contact for the Stale threshold
+// (docs/02 §Health): the Stale state, or no leader at all for that long. A short election
+// is not stale, so metadata mutations wait for it instead of failing.
+func staleFor(node *cluster.Node, prober *cluster.Prober, clk clock.Clock) bool {
+	switch h := node.Health(clk, prober); h.State {
+	case cluster.Stale:
+		return true
+	case cluster.NoLeader:
+		return clk.Now().Sub(node.Raft.LastContact()) >= cluster.StaleThreshold
+	}
+	return false
 }
 
 // ErrAddressChanged is returned by Serve after the node's Tailscale address changed and

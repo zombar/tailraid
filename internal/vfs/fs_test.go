@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -482,4 +483,61 @@ func TestVFS_NameTooLong_ENAMETOOLONG(t *testing.T) {
 	if err := fs.Rename(long, long+"n"); !errors.Is(err, syscall.ENAMETOOLONG) {
 		t.Fatalf("rename to a 256-byte name: err=%v", err)
 	}
+}
+
+// A failed proposal is retried while the gateway still had leader contact within the
+// Stale threshold (a leader change takes seconds), and fails with EROFS once stale.
+// Invariant: I-39
+// Lifecycle: L-187
+func TestVFS_ProposeFails_RetriesUntilStale(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	// drive the fake clock while a mutation blocks in its retry loop
+	drive := func(done <-chan struct{}) {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				f.Clk.Advance(250 * time.Millisecond)
+				runtime.Gosched()
+			}
+		}
+	}
+	t.Run("transient failure, not stale: retried and succeeds", func(t *testing.T) {
+		f.SetStale(false)
+		f.ProposeErrOnce(errors.New("leadership lost"))
+		done := make(chan struct{})
+		go drive(done)
+		err := fs.MkdirAll("/retried", 0o755)
+		close(done)
+		must(t, err)
+		if _, err := fs.Stat("/retried"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("persistent failure, becomes stale: EROFS", func(t *testing.T) {
+		f.SetStale(false)
+		f.ProposeDown(errors.New("no leader"))
+		defer f.ProposeDown(nil)
+		done := make(chan struct{})
+		go drive(done)
+		go func() {
+			f.Clk.Advance(time.Second) // a few retries first...
+			f.SetStale(true)           // ...then the 30 s threshold passes
+		}()
+		err := fs.MkdirAll("/never", 0o755)
+		close(done)
+		if !errors.Is(err, syscall.EROFS) {
+			t.Fatalf("mkdir once stale: err=%v, want EROFS", err)
+		}
+	})
+	t.Run("already stale: EROFS at once", func(t *testing.T) {
+		f.SetStale(true)
+		f.ProposeDown(errors.New("no leader"))
+		defer f.ProposeDown(nil)
+		if err := fs.MkdirAll("/now", 0o755); !errors.Is(err, syscall.EROFS) {
+			t.Fatalf("mkdir while stale: err=%v, want EROFS", err)
+		}
+	})
 }

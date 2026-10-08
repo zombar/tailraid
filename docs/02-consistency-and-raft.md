@@ -221,7 +221,7 @@ Health, computed locally:
 | `Health` | Condition | Gateway behaviour |
 |---|---|---|
 | `Healthy` | leader known, last contact < 30 s | normal |
-| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `NFS3ERR_ROFS`; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
+| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `EROFS` (`NFS3ERR_ROFS`); before the threshold a failed proposal is retried with backoff, since a leader change takes seconds; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
 | `NoLeader` | Raft has no leader (quorum lost) | same as `Stale`; `status` reports which voters are unreachable |
 
 ## Proposing and leader forwarding

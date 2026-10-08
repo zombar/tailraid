@@ -101,6 +101,8 @@ type Cluster struct {
 	CID   [16]byte
 	mu    sync.Mutex
 	snap  uint64
+
+	retryUntilStale bool
 }
 
 // Idx is the node's FSM index (1-based, same as creation order).
@@ -131,6 +133,15 @@ type ClusterOption func(*clusterOpts)
 type clusterOpts struct {
 	snapshotThreshold uint64
 	chunkSize         uint32
+	retryUntilStale   bool
+}
+
+// RetryUntilStale gives every node's filesystem the production health view: a failed
+// metadata proposal is retried on the fake clock until the node is stale (L-187). Tests
+// that use it must drive c.Clk while a mutation is in flight; without it a failed
+// proposal is EROFS at once, so fault tests fail fast.
+func RetryUntilStale() ClusterOption {
+	return func(o *clusterOpts) { o.retryUntilStale = true }
 }
 
 // SnapshotThreshold lowers Raft's snapshot threshold (tests of snapshot install).
@@ -146,7 +157,7 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 	for _, f := range opts {
 		f(&o)
 	}
-	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold}
+	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale}
 	for i := 0; i < n; i++ {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
@@ -244,6 +255,17 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, nd.Cache, c.Clk, cfg, nil)
 	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
+	if c.retryUntilStale {
+		nd.FS.SetHealth(func() bool {
+			switch h := nd.Node.Health(c.Clk, nd.Prober); h.State {
+			case cluster.Stale:
+				return true
+			case cluster.NoLeader:
+				return c.Clk.Now().Sub(nd.Node.Raft.LastContact()) >= cluster.StaleThreshold
+			}
+			return false
+		})
+	}
 	nd.RPC, err = rpc.NewServer(rpc.Options{NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,
 		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute})

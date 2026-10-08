@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -253,8 +254,9 @@ func TestCluster_RejoinAfterLongAbsence_SnapshotInstall(t *testing.T) {
 }
 
 // Invariant: I-39
+// Lifecycle: L-187
 func TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed(t *testing.T) {
-	c := testharness.NewCluster(t, 3, 2, 1)
+	c := testharness.NewCluster(t, 3, 2, 1, testharness.RetryUntilStale())
 	defer c.Close()
 	c.WriteFile(0, "/before", []byte("hello"))
 	c.Settle()
@@ -271,13 +273,27 @@ func TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed(t *testing.T) {
 		h := c.Nodes[iso].Node.Health(c.Clk, c.Nodes[iso].Prober)
 		return h.State != cluster.Healthy
 	}, "isolated node leaves Healthy")
-	c.Clk.Advance(cluster.StaleThreshold + time.Second)
+	// a mutation issued before the Stale threshold waits for a leader; the clock passes
+	// the threshold meanwhile and the mutation fails with exactly EROFS (L-187)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				c.Clk.Advance(time.Second)
+				runtime.Gosched()
+			}
+		}
+	}()
+	err := c.Nodes[iso].FS.MkdirAll("/nope", 0o755)
+	close(done)
+	if !isReadOnly(err) {
+		t.Fatalf("isolated mkdir: %v, want EROFS", err)
+	}
 	if h := c.Nodes[iso].Node.Health(c.Clk, c.Nodes[iso].Prober); h.State == cluster.Healthy {
 		t.Fatalf("health %+v", h)
-	}
-	err := c.Nodes[iso].FS.MkdirAll("/nope", 0o755)
-	if !errors.Is(err, rpc.ErrUnavailable) && !errors.Is(err, cluster.ErrNoLeader) && !isReadOnly(err) {
-		t.Fatalf("isolated mkdir: %v", err)
 	}
 	// local metadata reads still work; data held locally is still readable
 	if _, err := c.Nodes[iso].FS.Stat("/before"); err != nil {

@@ -55,6 +55,8 @@ type Fabric struct {
 	putCount    int
 	gets        map[meta.NodeIdx]int
 	proposeErr  error // returned once by Propose as a transport failure
+	proposeDown error // returned by every Propose while set
+	stale       bool  // the gateway's health view given to vfs.FS
 	proposed    []meta.Op
 }
 
@@ -150,6 +152,9 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 		err := f.proposeErr
 		f.proposeErr = nil
 		return meta.Result{}, 0, err
+	}
+	if f.proposeDown != nil {
+		return meta.Result{}, 0, f.proposeDown
 	}
 	res := f.applyLocked(c)
 	return res, f.idx, nil
@@ -286,7 +291,11 @@ func (f *Fabric) ReaderNoCache() *vfs.Reader {
 }
 
 // FS returns a billy filesystem over the fabric.
-func (f *Fabric) FS() *vfs.FS { return vfs.New(f.FSM, f, f.Ov, f.Reader(), f.Clk, 501, 20) }
+func (f *Fabric) FS() *vfs.FS {
+	fs := vfs.New(f.FSM, f, f.Ov, f.Reader(), f.Clk, 501, 20)
+	fs.SetHealth(f.isStale)
+	return fs
+}
 
 // Flusher returns a flusher with the test chunk policy.
 func (f *Fabric) Flusher(opts ...func(*vfs.Config)) *vfs.Flusher {
@@ -435,6 +444,26 @@ func (f *Fabric) ProposeErrOnce(err error) {
 	f.mu.Lock()
 	f.proposeErr = err
 	f.mu.Unlock()
+}
+
+// ProposeDown makes every Propose fail with err (nil restores service).
+func (f *Fabric) ProposeDown(err error) {
+	f.mu.Lock()
+	f.proposeDown = err
+	f.mu.Unlock()
+}
+
+// SetStale sets the health view the filesystem consults after a failed proposal.
+func (f *Fabric) SetStale(stale bool) {
+	f.mu.Lock()
+	f.stale = stale
+	f.mu.Unlock()
+}
+
+func (f *Fabric) isStale() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stale
 }
 
 // InodeOf resolves a path through the filesystem's fileid.

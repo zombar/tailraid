@@ -24,19 +24,32 @@ import (
 // metadata mutation is a Raft proposal followed by WaitApplied, so a gateway is
 // linearizable with itself; reads come from the local FSM copy with the overlay on top.
 type FS struct {
-	st   *meta.Store
-	prop meta.Proposer
-	ov   *Overlay
-	rd   *Reader
-	clk  clock.Clock
-	uid  uint32
-	gid  uint32
+	st    *meta.Store
+	prop  meta.Proposer
+	ov    *Overlay
+	rd    *Reader
+	clk   clock.Clock
+	uid   uint32
+	gid   uint32
+	stale func() bool // no leader contact for the Stale threshold (docs/02 §Health); nil = always
 }
 
 // New wires a filesystem. uid/gid are stamped on created inodes.
 func New(st *meta.Store, prop meta.Proposer, ov *Overlay, rd *Reader, clk clock.Clock, uid, gid uint32) *FS {
 	return &FS{st: st, prop: prop, ov: ov, rd: rd, clk: clk, uid: uid, gid: gid}
 }
+
+// SetHealth gives the filesystem the gateway's health view: while stale reports false a
+// failed proposal (no leader, leader lost) is retried, because the leader is usually back
+// within seconds; once stale (no leader contact for 30 s, docs/02) the mutation fails
+// with EROFS (L-187). Without a view every failure is EROFS at once.
+func (f *FS) SetHealth(stale func() bool) { f.stale = stale }
+
+// Proposal retry backoff while the gateway is not yet stale.
+const (
+	proposeRetryMin = 200 * time.Millisecond
+	proposeRetryMax = 2 * time.Second
+)
 
 var (
 	_ billy.Filesystem = (*FS)(nil)
@@ -101,17 +114,28 @@ func mapErr(op, name string, err error) error {
 
 // propose applies a metadata mutation and waits for it locally.
 func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error) {
-	res, index, err := f.prop.Propose(ctx, cmd)
-	if err != nil {
-		return meta.Result{}, ErrReadOnly
+	delay := proposeRetryMin
+	for {
+		res, index, err := f.prop.Propose(ctx, cmd)
+		if err == nil {
+			if res.Err != nil {
+				return res, res.Err
+			}
+			if err := f.st.WaitApplied(ctx, index); err != nil {
+				return res, err
+			}
+			return res, nil
+		}
+		if f.stale == nil || f.stale() {
+			return meta.Result{}, ErrReadOnly
+		}
+		select {
+		case <-ctx.Done():
+			return meta.Result{}, ErrReadOnly
+		case <-f.clk.After(delay):
+		}
+		delay = min(delay*2, proposeRetryMax)
 	}
-	if res.Err != nil {
-		return res, res.Err
-	}
-	if err := f.st.WaitApplied(ctx, index); err != nil {
-		return res, err
-	}
-	return res, nil
 }
 
 func (f *FS) now() int64 { return f.clk.Now().UnixNano() }
