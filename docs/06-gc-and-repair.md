@@ -207,6 +207,14 @@ projected stored bytes and refuses if projected > Σ capacity unless `--force`.
 
 ## 8. fsck
 
+`tailraid chunk describe <hash|/path>` answers from the node asked (no forwarding): the
+state derived from its FSM copy and liveness (`committed`, `degraded`, `unreadable`,
+`tombstoned`, `zero`, `unknown`), `(k,m)` with a policy-stale flag, refs, every slot with
+its node, liveness and a `HEAD` of the shard on live nodes, the referencing files, and the
+node's chunk event ring (docs/11 §7; `(event ring disabled)` unless `dev.enabled`). A hash
+prefix of at least 8 hex digits is accepted when it is unique; a path describes every chunk
+of that file in order.
+
 `tailraid fsck [--fix] [--verify-data]` checks, from any node's FSM copy: refcount sums;
 `len(Chunks) == ceil(Size/CS)` for every file; every parent chain reaches root and every
 `Children` entry points to an inode whose `Parent`/`Name` agree; `Tombs ⇔ Refs == 0`;

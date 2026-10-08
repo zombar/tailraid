@@ -83,6 +83,7 @@ type ClusterNode struct {
 	FS     *vfs.FS
 	Flush  *vfs.Flusher
 	Reader *vfs.Reader
+	Events *meta.EventRing // chunk history (always on in the harness)
 	RPC    *rpc.Server
 	srv    *httptest.Server
 	port   int
@@ -235,11 +236,14 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Client.SetTransport(nd.Net)
 	nd.Node.SetForwarder(nd.Client)
 	nd.Prober = cluster.NewProber(nd.Node, nd.Client, c.Clk)
+	nd.Events = meta.NewEventRing(c.Clk, nd.Idx())
 	nd.Reader = vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nd.Cache, nil)
+	nd.Reader.Events = nd.Events
 	cfg := vfs.DefaultConfig()
 	cfg.SmallChunk = SmallChunk
 	cfg.PutDeadline = 2 * time.Second
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, nd.Cache, c.Clk, cfg, nil)
+	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
 	nd.RPC, err = rpc.NewServer(rpc.Options{NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,

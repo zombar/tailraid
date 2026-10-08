@@ -13,6 +13,7 @@ import (
 
 // GC is the leader-only tombstone collector (docs/06 §2).
 type GC struct {
+	Events *meta.EventRing // chunk history (nil unless dev.enabled)
 	st     *meta.Store
 	prop   meta.Proposer
 	shards Shards
@@ -59,6 +60,7 @@ func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 		nodes[all[i].Idx] = all[i]
 	}
 	for _, v := range r.Victims {
+		g.Events.Record(v.Hash, meta.EvCollected, fmt.Sprintf("gc index %d", index))
 		for i, n := range v.Placement {
 			if n == 0 || nodes[n].Kind != meta.KindDevice || !g.live.IsLive(n) {
 				continue

@@ -52,7 +52,16 @@ func TestMount_Workload(t *testing.T) {
 	cfg.Node.Capacity = "20G"
 	cfg.Listen.NFS = "127.0.0.1:20491"
 	cfg.Listen.Raft = 20482
+	cfg.Listen.RPC = 20483
 	cfg.Mount.Path = filepath.Join(home, "mnt")
+	// no tailscale CLI on CI runners: the dev fake makes loopback this node's tailnet IP
+	fake := filepath.Join(home, "ts.json")
+	if err := os.WriteFile(fake, []byte(`{"status":{"BackendState":"Running","TailscaleIPs":["127.0.0.1"],
+		"Self":{"ID":"ts-mounttest","HostName":"mounttest","TailscaleIPs":["127.0.0.1"],"Online":true},"Peer":{}},
+		"whois":{"127.0.0.1":{"Node":{"StableID":"ts-mounttest","Name":"mounttest.","Addresses":["127.0.0.1/32"]}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Dev.Enabled, cfg.Dev.TailscaleFake = true, fake
 	id, err := cluster.LoadOrCreateNodeID(cfg.Node.DataDir)
 	if err != nil {
 		t.Fatal(err)

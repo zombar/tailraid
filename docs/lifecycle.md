@@ -38,7 +38,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-30 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 assemble needs base | Assembled | `TestStubLifecycle_L_30` |
 | L-31 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 base unreadable (< k) | Dirty | `TestStubLifecycle_L_31` |
 | L-32 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-26 all zero | (HashZero, no entry) | `TestFlusher_HoleChunksAreHashZero` |
-| L-33 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-27 hash exists live | DedupHit | `TestFSM_Commit_NewFileAndOverwrite`, `TestFlusher_DedupLiveAndTombstoned_NoUpload` |
+| L-33 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-27 hash exists live | DedupHit | `TestChunkDescribe_StateFilesAndEvents`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFlusher_DedupLiveAndTombstoned_NoUpload` |
 | L-34 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-28 hash exists tombstoned | DedupHit → Revived | `TestFSM_Revive`, `TestFlusher_DedupLiveAndTombstoned_NoUpload` |
 | L-35 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-29 ≤ 64 KiB | Uploading (k=1, m) | `TestFlusher_SmallAndLargeChunksCommit` |
 | L-36 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-30 > 64 KiB | Uploading (K, M) | `TestFlusher_SmallAndLargeChunksCommit` |
@@ -145,7 +145,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-137 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (placed on self) | E-44 DELETE for a placed key | Durable | `TestChunkRPC_DeleteFence` |
 | L-138 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | PUT with capacity exceeded | Durable (new one rejected) | `TestStore_CapacityEnforced` |
 | L-139 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (S3) | object deleted externally | (missing) | `TestStubLifecycle_L_139` |
-| L-140 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | scrub sample | Verified | `TestStubLifecycle_L_140` |
+| L-140 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | scrub sample | Verified | `TestChunkDescribe_StateFilesAndEvents` |
 | L-141 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | GCDelete | Collected | `TestFSM_GCDelete_Boundary` |
 | L-142 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | Get/Open by a reader | served | `TestStore_TempNeverServed` |
 | L-143 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed/Tombstoned | Unlink/Commit | Refs < 0 | `TestFSM_RefCountNeverUnderflows` |

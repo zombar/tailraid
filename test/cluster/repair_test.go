@@ -17,7 +17,9 @@ import (
 )
 
 func newRepairer(c *testharness.Cluster, nd *testharness.ClusterNode, cfg repair.Config) *repair.Repairer {
-	return repair.New(nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
+	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
+	r.Events = nd.Events
+	return r
 }
 
 func repairCfg() repair.Config {

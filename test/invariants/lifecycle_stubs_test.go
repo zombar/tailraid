@@ -216,12 +216,6 @@ func TestStubLifecycle_L_139(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-139")
 }
 
-// Lifecycle: L-140
-// Durable --[scrub sample]--> Verified
-func TestStubLifecycle_L_140(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-140")
-}
-
 // Lifecycle: L-148
 // Placed --[Commit proposed]--> visible on any gateway before Raft commit
 func TestStubLifecycle_L_148(t *testing.T) {
@@ -315,9 +309,4 @@ func TestStubLifecycle_L_177(t *testing.T) {
 // Invariant: I-56
 func TestStubLifecycle_I_56_ChunkStateDerivation(t *testing.T) {
 	t.Skip("stub until M3; see docs/11-chunk-lifecycle.md I-56")
-}
-
-// Invariant: I-57
-func TestStubLifecycle_I_57_NoForbiddenTransitions(t *testing.T) {
-	t.Skip("stub until M3; see docs/11-chunk-lifecycle.md I-57")
 }

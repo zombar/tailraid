@@ -82,6 +82,7 @@ type Repairer struct {
 	log    *slog.Logger
 	codecs *ec.Pool
 	limit  *limiter
+	Events *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	mu       sync.Mutex
 	reported map[chunk.ShardKey]time.Time // reader bad-slot reports
@@ -264,9 +265,11 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 					continue
 				}
 				if len(corrupt) == 0 {
+					r.Events.Record(c.Hash, meta.EvScrubOK, "")
 					continue
 				}
 				st.ScrubBad += len(corrupt)
+				r.Events.Record(c.Hash, meta.EvScrubBad, fmt.Sprintf("slots %v", corrupt))
 				for _, i := range corrupt {
 					bad = append(bad, badSlot{i, "scrub"})
 					kept[i] = 0
@@ -280,6 +283,7 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 		}
 		if r.goodLive(kept) < int(c.K) {
 			st.Unrepairable++
+			r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d live good slots < k=%d", r.goodLive(kept), c.K))
 			continue
 		}
 		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
@@ -297,12 +301,15 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 		case migrate && outcome.full:
 			st.Migrated++
 			st.PolicyStale--
+			r.Events.Record(c.Hash, meta.EvMigrated, fmt.Sprintf("%d+%d -> %d+%d", c.K, c.M, vol.K, vol.M))
 		case migrate:
 			st.Deferred++
 		case outcome.full:
 			st.Repaired++
+			r.Events.Record(c.Hash, meta.EvRepaired, fmt.Sprintf("%d bad slots", len(bad)))
 		default:
 			st.Partial++
+			r.Events.Record(c.Hash, meta.EvPartial, fmt.Sprintf("%d bad slots", len(bad)))
 		}
 	}
 	r.mu.Lock()

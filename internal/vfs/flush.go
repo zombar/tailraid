@@ -62,6 +62,7 @@ type Flusher struct {
 	log    *slog.Logger
 	codecs *ec.Pool
 	Hooks  Hooks
+	Events *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	mu      sync.Mutex
 	backoff map[meta.Ino]backoffState
@@ -266,12 +267,22 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 			if err := f.st.WaitApplied(ctx, index); err != nil {
 				return 0, err
 			}
+			for _, w := range works {
+				if w.data != nil {
+					f.Events.Record(w.hash, meta.EvCommitted, fmt.Sprintf("ino %d idx %d index %d", plan.Ino, w.idx, index))
+				}
+			}
 			return cmd.NewSize, nil
 		case errors.Is(res.Err, meta.ErrConflict):
 			f.log.Info("commit conflict, rebasing", "ino", plan.Ino)
 			continue
 		case errors.Is(res.Err, meta.ErrUnknownChunk):
 			f.log.Info("dedup'd chunk vanished, re-uploading", "ino", plan.Ino)
+			for _, w := range works {
+				if w.data != nil && !w.uploaded {
+					f.Events.Record(w.hash, meta.EvUnknownChunk, "")
+				}
+			}
 			forceUpload = true
 			continue
 		case errors.Is(res.Err, meta.ErrNeedTailRewrite):
@@ -360,9 +371,11 @@ func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forc
 			if c, ok := f.st.GetChunk(w.hash); ok {
 				if f.liveSlots(c.Placement) >= int(c.K) {
 					w.k, w.m, w.place = c.K, c.M, c.Placement
+					f.Events.Record(w.hash, meta.EvDedupHit, fmt.Sprintf("refs %d", c.Refs))
 					continue // dedup hit, no upload (L-33, L-34)
 				}
 				// degraded or dead-holder entry: fill its slots with the bytes in hand (review #6)
+				f.Events.Record(w.hash, meta.EvFill, fmt.Sprintf("%d live of %d", f.liveSlots(c.Placement), int(c.K)+int(c.M)))
 				if err := f.fillSlots(ctx, w, c); err != nil {
 					return err
 				}
@@ -495,6 +508,10 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 	w.place = place
 	w.putTime = f.clk.Now()
 	w.uploaded = true
+	f.Events.Record(w.hash, meta.EvUploaded, fmt.Sprintf("%d+%d acks %d placement %v", w.k, w.m, acks, place))
+	if acks < total {
+		f.Events.Record(w.hash, meta.EvDegraded, fmt.Sprintf("%d of %d slots", acks, total))
+	}
 	return nil
 }
 
@@ -544,6 +561,7 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 				f.mu.Unlock()
 			}
 			f.log.Warn("shard put failed", "node", place[r.slot], "slot", r.slot, "err", r.err)
+			f.Events.Record(w.hash, meta.EvPutFailed, fmt.Sprintf("slot %d node %d: %v", r.slot, place[r.slot], r.err))
 			continue
 		}
 		acked[r.slot] = true

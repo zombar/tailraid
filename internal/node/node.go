@@ -142,8 +142,14 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		used, capacity := store.Used(), store.Capacity()
 		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0)}
 	}
+	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
+	if cfg.Dev.Enabled {
+		ring = meta.NewEventRing(clk, selfIdx)
+	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
+	rd.Events = ring
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, cache, clk, vfs.DefaultConfig(), log)
+	fl.Events = ring
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
 	if runtime.GOOS == "windows" {
 		uid, gid = 0, 0
@@ -152,8 +158,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	rcfg := repair.DefaultConfig()
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
+	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, self: selfIdx, clk: clk, log: log}
+	gc.Events = ring
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, ring: ring, self: selfIdx, clk: clk, log: log}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Members: node.FSM.Nodes, Clk: clk}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
@@ -216,6 +224,8 @@ type adminOps struct {
 	repairer *repair.Repairer
 	gc       *repair.GC
 	store    *chunk.Store
+	client   *rpc.Client
+	ring     *meta.EventRing
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
@@ -297,6 +307,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 	}
 	switch op.Op {
+	case "chunk":
+		return admin.DescribeChunks(ctx, a.node.FSM, a.prober, a.client, a.ring, op.Chunk)
 	case "repair_now":
 		return a.repairer.Scan(ctx)
 	case "gc_now":

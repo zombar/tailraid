@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M3 in progress: repair scanner (fill, dead-node hold-down, drain, policy migration, scrub, reported slots), GC with the delete fence, gated sweep, check/repair/gc/fsck/set-redundancy, crash-at-every-point, ack-implies-readable and the 600-step model checker (candidate worlds for unknown-outcome proposals, sticky per-file gateways, readiness-gated restarts) all green; validated on the compose cluster. The model checker found and we fixed a stale-overlay bug (L-178). Remaining: chunk describe, test-time trim. Then M3b soak report.
+**Milestone status:** M3 in progress: repair scanner (fill, dead-node hold-down, drain, policy migration, scrub, reported slots), GC with the delete fence, gated sweep, check/repair/gc/fsck/set-redundancy, crash-at-every-point, ack-implies-readable and the 600-step model checker (candidate worlds for unknown-outcome proposals, sticky per-file gateways, readiness-gated restarts) all green; validated on the compose cluster. The model checker found and we fixed a stale-overlay bug (L-178). `chunk describe` with the dev-mode event ring is in. Remaining: test-time trim. Then M3b soak report.
 
 ## Layout
 

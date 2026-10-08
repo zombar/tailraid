@@ -31,6 +31,7 @@ type Reader struct {
 	// BadSlot, when set, is called for every slot that returned a missing or corrupt
 	// shard so the leader can queue a repair (docs/06 §4 case 5). Must not block.
 	BadSlot func(key chunk.ShardKey, node meta.NodeIdx)
+	Events  *meta.EventRing // chunk history (nil unless dev.enabled)
 }
 
 // NewReader wires a reader. cache may be nil.
@@ -119,8 +120,11 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 		close(out)
 		for x := range out {
 			if x.err != nil {
-				if r.BadSlot != nil && (errors.Is(x.err, chunk.ErrNotFound) || errors.Is(x.err, chunk.ErrCorrupt)) {
-					r.BadSlot(chunk.Key(c.Hash, c.K, c.M, x.slot), c.Placement[x.slot])
+				if errors.Is(x.err, chunk.ErrNotFound) || errors.Is(x.err, chunk.ErrCorrupt) {
+					r.Events.Record(c.Hash, meta.EvReadBadSlot, fmt.Sprintf("slot %d node %d: %v", x.slot, c.Placement[x.slot], x.err))
+					if r.BadSlot != nil {
+						r.BadSlot(chunk.Key(c.Hash, c.K, c.M, x.slot), c.Placement[x.slot])
+					}
 				}
 				continue
 			}
