@@ -48,6 +48,8 @@ h3 { font-size: 15px; }
 .mono, .num, .name, .path, code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
 .small { font-size: 13px; }
+.text-bad { color: var(--bad); }
+.text-warn { color: var(--warn); }
 button, .btn { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; min-height: 40px; cursor: pointer; }
 button:hover, .btn:hover { background: var(--surface); text-decoration: none; }
 button:disabled { opacity: .5; cursor: default; }
@@ -155,6 +157,7 @@ table.files td.name a { color: var(--text); display: flex; align-items: center; 
 table.files td.name a:hover { text-decoration: none; color: var(--accent); }
 table.files td.name .icon { color: var(--dim); }
 table.files td.name .target { color: var(--dim); }
+table.files td.name .linkname { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 table.files td.size, table.files td.mtime { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
 table.files tr.dirty td.name a::after { content: "syncing"; font: 500 11px/16px var(--mono); color: var(--warn); margin-left: 8px; }
 table.files.drop { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: var(--radius); }

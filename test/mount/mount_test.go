@@ -53,6 +53,7 @@ func TestMount_Workload(t *testing.T) {
 	cfg.Listen.NFS = "127.0.0.1:20491"
 	cfg.Listen.Raft = 20482
 	cfg.Listen.RPC = 20483
+	cfg.Listen.Web = 20484 // the default web port is this test's Raft port
 	cfg.Mount.Path = filepath.Join(home, "mnt")
 	// no tailscale CLI on CI runners: the dev fake makes loopback this node's tailnet IP
 	fake := filepath.Join(home, "ts.json")
