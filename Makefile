@@ -11,12 +11,17 @@ BIN := tailraid
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: build test test-race test-long test-mount soak soak-full fuzz lint fmt fmt-check vuln \
+.PHONY: build install test test-race test-long test-mount soak soak-full fuzz lint fmt fmt-check vuln \
         release tag check invariants tidy clean help
 
 ## build: static binary for the current OS/arch into ./dist
 build:
 	CGO_ENABLED=0 go build $(GOFLAGS_BUILD) -ldflags "$(LDFLAGS)" -o dist/$(BIN) ./cmd/tailraid
+
+## install: build and copy the binary to INSTALL_DIR (default ~/.local/bin)
+INSTALL_DIR ?= $(HOME)/.local/bin
+install: build
+	@mkdir -p "$(INSTALL_DIR)" && cp dist/$(BIN) "$(INSTALL_DIR)/$(BIN)" && echo "installed $(INSTALL_DIR)/$(BIN) ($(VERSION))"
 
 ## test: fast suite with per-package coverage (what CI runs on every platform, minus -race)
 test:
