@@ -21,7 +21,6 @@ type Config struct {
 	IdleFlush      time.Duration // flush an inode untouched this long
 	FileDirtyHi    uint64        // partial flush of an inode's full chunks
 	TotalDirtyHi   uint64        // flush the largest inodes
-	SmallChunk     uint32        // chunks ≤ this use k=1
 	PutDeadline    time.Duration // step 9: wait for stragglers at most this long
 	ProposeTimeout time.Duration
 	Workers        int
@@ -33,7 +32,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20,
-		SmallChunk: 64 << 10, PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second,
+		PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second,
 		Workers: 4, RetryMin: time.Second, RetryMax: 60 * time.Second,
 	}
 }
@@ -384,8 +383,8 @@ func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forc
 			}
 		}
 		w.k, w.m = vol.K, vol.M
-		if uint32(len(w.data)) <= f.cfg.SmallChunk {
-			w.k = 1
+		if meta.IsSmallChunk(uint32(len(w.data)), vol.ChunkSize) {
+			w.k = 1 // replication for small chunks (docs/03)
 		}
 		if err := f.upload(ctx, w, nil); err != nil {
 			return err

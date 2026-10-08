@@ -143,70 +143,20 @@ func (r *Repairer) Run(ctx context.Context, isLeader func() bool) {
 	}
 }
 
-// badSlot explains why a slot needs re-placing. readable marks a slot whose shard is
-// still served by a live node (a draining holder): it counts toward readability and is
-// kept in the placement until a replacement is placed (I-65).
-type badSlot struct {
-	idx      int
-	reason   string
-	readable bool
+// classify derives the chunk's state with the shared meta.ChunkState (docs/06 §4 cases
+// 1–5, I-56) and returns the bad slots, the kept slots (0 where bad), whether a policy
+// migration is due and how many slots a read can use right now.
+func (r *Repairer) classify(c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reported map[int]bool) (bad []meta.SlotIssue, kept []meta.NodeIdx, migrate bool, readable int) {
+	h := meta.ChunkState(c, vol, meta.HealthInput{Nodes: nodes, Live: r.live, FillAfter: r.cfg.FillAfter, Reported: reported})
+	kept = append([]meta.NodeIdx(nil), c.Placement...)
+	for _, b := range h.Bad {
+		kept[b.Idx] = 0
+	}
+	return h.Bad, kept, h.PolicyStale, h.Readable
 }
 
-// classify returns the bad slots of c, the kept good slots and whether a policy migration
-// is due (docs/06 §4 cases 1–5).
-func (r *Repairer) classify(c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reported map[int]bool) (bad []badSlot, kept []meta.NodeIdx, migrate bool) {
-	target := targetPolicy(c, vol)
-	migrate = target[0] != c.K || target[1] != c.M
-	kept = make([]meta.NodeIdx, len(c.Placement))
-	for i, n := range c.Placement {
-		switch {
-		case n == 0:
-			bad = append(bad, badSlot{i, "missing", false})
-		case nodes[n].State == meta.Draining:
-			bad = append(bad, badSlot{i, "node draining", r.live.IsLive(n)})
-		case nodes[n].State == meta.Removed:
-			bad = append(bad, badSlot{i, "node removed", false})
-		case !r.live.IsLive(n) && r.live.DeadFor(n) >= r.cfg.FillAfter:
-			bad = append(bad, badSlot{i, "node dead", false})
-		case reported[i]:
-			bad = append(bad, badSlot{i, "reported", false})
-		default:
-			kept[i] = n
-		}
-	}
-	return bad, kept, migrate
-}
-
-// targetPolicy is the (k,m) the chunk should have under the current volume policy.
-func targetPolicy(c meta.Chunk, vol meta.Volume) [2]uint8 {
-	if c.K == 1 && c.Size <= 64<<10 {
-		return [2]uint8{1, vol.M}
-	}
-	return [2]uint8{vol.K, vol.M}
-}
-
-// goodLive counts kept slots on live nodes.
-func (r *Repairer) goodLive(kept []meta.NodeIdx) int {
-	n := 0
-	for _, idx := range kept {
-		if idx != 0 && r.live.IsLive(idx) {
-			n++
-		}
-	}
-	return n
-}
-
-// readable counts the slots a read can use right now: kept slots on live nodes plus bad
-// slots whose shard is still served (I-65).
-func (r *Repairer) readable(kept []meta.NodeIdx, bad []badSlot) int {
-	n := r.goodLive(kept)
-	for _, b := range bad {
-		if b.readable {
-			n++
-		}
-	}
-	return n
-}
+// Config returns the repairer's configuration (status derives states with its fill_after).
+func (r *Repairer) Config() Config { return r.cfg }
 
 // Scan performs one pass: repair, migrate, scrub (docs/06 §4–5).
 func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
@@ -265,7 +215,7 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 				reported[idx] = true
 			}
 		}
-		bad, kept, migrate := r.classify(c, vol, nodes, reported)
+		bad, kept, migrate, readable := r.classify(c, vol, nodes, reported)
 		if len(bad) == 0 && !migrate {
 			if r.cfg.ScrubShare > 0 && int(c.Hash[0])%r.cfg.ScrubShare == pass%r.cfg.ScrubShare {
 				st.Scrubbed++
@@ -281,7 +231,10 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 				st.ScrubBad += len(corrupt)
 				r.Events.Record(c.Hash, meta.EvScrubBad, fmt.Sprintf("slots %v", corrupt))
 				for _, i := range corrupt {
-					bad = append(bad, badSlot{i, "scrub", false})
+					bad = append(bad, meta.SlotIssue{Idx: i, Reason: "scrub"})
+					if kept[i] != 0 && r.live.IsLive(kept[i]) {
+						readable--
+					}
 					kept[i] = 0
 				}
 			} else {
@@ -291,9 +244,9 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 		if migrate {
 			st.PolicyStale++
 		}
-		if n := r.readable(kept, bad); n < int(c.K) {
+		if readable < int(c.K) {
 			st.Unrepairable++
-			r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d readable slots < k=%d", n, c.K))
+			r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d readable slots < k=%d", readable, c.K))
 			continue
 		}
 		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
@@ -336,15 +289,14 @@ type outcome struct {
 
 // repairOne re-places the bad slots (or every slot for a migration), commits the new
 // placement and only then deletes superseded shards (docs/06 §4 steps 1–6).
-func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []badSlot, kept []meta.NodeIdx, migrate bool, vol meta.Volume) (outcome, error) {
+func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotIssue, kept []meta.NodeIdx, migrate bool, vol meta.Volume) (outcome, error) {
 	data, err := r.rd.ReadChunk(ctx, c.Hash)
 	if err != nil {
 		return outcome{}, fmt.Errorf("read: %w", err)
 	}
 	k, m := c.K, c.M
 	if migrate {
-		t := targetPolicy(c, vol)
-		k, m = t[0], t[1]
+		k, m = meta.TargetPolicy(c, vol)
 	}
 	codec, err := r.codecs.Get(k, m)
 	if err != nil {
@@ -393,9 +345,9 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []badSlot, k
 	}
 	if !migrate {
 		for _, b := range bad {
-			if b.readable && newPlace[b.idx] == 0 {
-				newPlace[b.idx] = c.Placement[b.idx]
-				unchanged[b.idx] = true
+			if b.Readable && newPlace[b.Idx] == 0 {
+				newPlace[b.Idx] = c.Placement[b.Idx]
+				unchanged[b.Idx] = true
 			}
 		}
 	}

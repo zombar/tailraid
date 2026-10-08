@@ -45,9 +45,13 @@ friendly and bounds padding at `64*k` bytes per chunk.
 **Policy selection per chunk** (in the flusher):
 
 ```
-if size <= 64 KiB:  k = 1, m = Vol.M
-else:               k = Vol.K, m = Vol.M
+if size < ChunkSize and size <= 64 KiB (meta.SmallChunkMax):  k = 1, m = Vol.M
+else:                                                          k = Vol.K, m = Vol.M
 ```
+
+A full chunk is never "small", however small the chunk size (test harnesses use 64 KiB
+chunks). `meta.IsSmallChunk` and `meta.TargetPolicy` are the only places this rule lives:
+the flusher, the repair scanner and every report read them.
 
 Small files thus cost `(m+1)×` their size with a single RPC per replica instead of `k+m`
 RPCs for a few kilobytes. Space overhead of a full 1 MiB chunk at 2+1 is 1.5× plus ≤128 B.

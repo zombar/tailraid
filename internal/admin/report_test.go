@@ -53,16 +53,28 @@ func TestReport_ReflectsClusterState(t *testing.T) {
 	c.Probe()
 	leader = c.Leader()
 	rep = admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, nil)
-	if rep.LiveVoters != 2 || rep.Volume.Degraded != 2 || rep.Volume.Unreadable != 0 {
+	// inside fill_after the chunks are under-replicated (degraded for the operator) but
+	// nothing is repair-pending yet (docs/11 L-86); the node shows its missing slots
+	if rep.LiveVoters != 2 || rep.Volume.Degraded != 2 || rep.Volume.RepairPending != 0 || rep.Volume.Unreadable != 0 {
 		t.Fatalf("after kill %+v", rep.Volume)
 	}
 	found := false
 	for _, n := range rep.Nodes {
 		if n.Idx == c.Nodes[victim].Idx() && !n.Live {
 			found = true
+			if n.Missing != 2 {
+				t.Fatalf("dead node missing slots %d, want 2", n.Missing)
+			}
 		}
 	}
 	if !found || len(rep.Warnings) == 0 {
 		t.Fatalf("dead node not reported: %+v", rep)
+	}
+	// past fill_after the slots are bad (L-87): repair pending as well
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe()
+	rep = admin.Build(c.Leader().Node, c.Leader().Prober, c.CID, c.Clk, nil)
+	if rep.Volume.Degraded != 2 || rep.Volume.RepairPending != 2 || rep.Volume.Unreadable != 0 {
+		t.Fatalf("past fill_after %+v", rep.Volume)
 	}
 }

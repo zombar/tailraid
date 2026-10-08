@@ -84,12 +84,6 @@ func TestStubLifecycle_L_104(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-104")
 }
 
-// Lifecycle: L-106
-// Committed --[E-92 m+1 corrupt]--> Degraded
-func TestStubLifecycle_L_106(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-106")
-}
-
 // Lifecycle: L-112
 // Committed (S3 slot) --[E-98 object missing]--> Degraded
 func TestStubLifecycle_L_112(t *testing.T) {
@@ -136,9 +130,4 @@ func TestStubLifecycle_L_171(t *testing.T) {
 // Orphan --[Sweep while not `Healthy`]--> Swept
 func TestStubLifecycle_L_177(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-177")
-}
-
-// Invariant: I-56
-func TestStubLifecycle_I_56_ChunkStateDerivation(t *testing.T) {
-	t.Skip("stub until M3; see docs/11-chunk-lifecycle.md I-56")
 }

@@ -240,7 +240,6 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Reader = vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nd.Cache, nil)
 	nd.Reader.Events = nd.Events
 	cfg := vfs.DefaultConfig()
-	cfg.SmallChunk = SmallChunk
 	cfg.PutDeadline = 2 * time.Second
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, nd.Cache, c.Clk, cfg, nil)
 	nd.Flush.Events = nd.Events

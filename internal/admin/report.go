@@ -54,6 +54,7 @@ type VolumeReport struct {
 	UsableCapacity uint64  `json:"usable_capacity"`
 	Free           uint64  `json:"free"`
 	Degraded       int     `json:"degraded_chunks"`   // chunks with < k+m good slots
+	RepairPending  int     `json:"repair_pending"`    // chunks with a slot to re-place (after fill_after)
 	Unreadable     int     `json:"unreadable_chunks"` // chunks with < k live slots
 	StalePolicy    int     `json:"stale_policy_chunks"`
 }
@@ -104,45 +105,25 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	if p != nil {
 		probes = p.Snapshot()
 	}
-	live := map[meta.NodeIdx]bool{}
-	slots := map[meta.NodeIdx]int{}
-	missing := map[meta.NodeIdx]int{}
-	for i := range nodes {
-		if p != nil {
-			live[nodes[i].Idx] = p.IsLive(nodes[i].Idx)
-		} else {
-			live[nodes[i].Idx] = nodes[i].ID == n.ID
-		}
+	// Chunk states come from the one derivation (meta.ChunkState, I-56) with the
+	// repairer's fill_after, so status, check and the scanner agree.
+	var lv meta.Liveness
+	if p != nil {
+		lv = p
+	} else {
+		lv = selfLiveness{self: n.ID, nodes: nodes}
 	}
-	st.ForEachChunk(func(c meta.Chunk) bool {
-		if c.Refs == 0 {
-			return true
-		}
-		good, liveSlots := 0, 0
-		for _, s := range c.Placement {
-			if s == 0 {
-				continue
-			}
-			slots[s]++
-			good++
-			if live[s] {
-				liveSlots++
-			} else {
-				missing[s]++
-			}
-		}
-		if good < int(c.K)+int(c.M) || liveSlots < int(c.K)+int(c.M) {
-			rep.Volume.Degraded++
-		}
-		if liveSlots < int(c.K) {
-			rep.Volume.Unreadable++
-		}
-		// small chunks use k=1 by design; anything else on a different (k,m) awaits migration
-		if (c.K != vol.K || c.M != vol.M) && (c.K != 1 || c.Size > 64<<10) {
-			rep.Volume.StalePolicy++
-		}
-		return true
-	})
+	fillAfter := cluster.FillAfter
+	if rp != nil {
+		fillAfter = rp.Config().FillAfter
+	}
+	health := ScanHealth(st, lv, fillAfter)
+	rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy = health.Degraded, health.RepairPending, health.Unreadable, health.StalePolicy
+	slots, missing := health.Slots, health.Missing
+	live := map[meta.NodeIdx]bool{}
+	for i := range nodes {
+		live[nodes[i].Idx] = lv.IsLive(nodes[i].Idx)
+	}
 	_, leaderID := n.Raft.LeaderWithID()
 	for i := range nodes {
 		nd := nodes[i]
@@ -216,6 +197,23 @@ func warnings(r Report) []string {
 	}
 	return w
 }
+
+// selfLiveness is the view of a node without a prober: only this node is live.
+type selfLiveness struct {
+	self  string
+	nodes []meta.Node
+}
+
+func (s selfLiveness) IsLive(idx meta.NodeIdx) bool {
+	for i := range s.nodes {
+		if s.nodes[i].Idx == idx {
+			return s.nodes[i].ID == s.self
+		}
+	}
+	return false
+}
+
+func (selfLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
 
 func kindName(k meta.NodeKind) string {
 	if k == meta.KindS3 {

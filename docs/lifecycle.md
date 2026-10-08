@@ -105,13 +105,13 @@ exactly one design doc transition table and cited by at least one test via
 | L-97 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-83 join | Committed | `TestFSM_NodeStates` |
 | L-98 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-84 set-capacity | Committed | `TestStubLifecycle_L_98` |
 | L-99 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-85 IP change | Committed | `TestStubLifecycle_L_99` |
-| L-100 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-86 set-redundancy | Degraded (policy) | `TestFSM_SetPlacement` |
+| L-100 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-86 set-redundancy | Degraded (policy) | `TestFSM_SetPlacement`, `TestRepair_SmallChunk_SetRedundancy_Migrates` |
 | L-101 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (policy) | migration step | Repairing → Committed | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | L-102 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing (policy) | leader crash mid-migration | Degraded (policy) | `TestStubLifecycle_L_102` |
 | L-103 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | E-87 live < k+m | Degraded (fewer 0 slots) | `TestRepair_FillsDegradedSlotsWhenSpareAppears` |
 | L-104 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-88 S3 slow/unreachable | Committed / Degraded after fill_after | `TestStubLifecycle_L_104` |
 | L-105 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-91 1..m shards corrupt | Degraded | `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
-| L-106 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-92 m+1 corrupt | Degraded | `TestStubLifecycle_L_106` |
+| L-106 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-92 m+1 corrupt | Degraded | `TestCheck_MPlusOneCorrupt_NotOK` |
 | L-107 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-93 header mismatch | Degraded | `TestStore_GetVerifiesHash_Corrupted` |
 | L-108 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-94 truncated shard | Degraded | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
 | L-109 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-95 scrub OK | Committed | `TestChunkDescribe_StateFilesAndEvents` |

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -127,72 +126,49 @@ func DescribeChunk(ctx context.Context, st *meta.Store, p *cluster.Prober, hc Sh
 	rep.Found = true
 	rep.Size, rep.K, rep.M, rep.Refs = c.Size, c.K, c.M, c.Refs
 	vol := st.Volume()
-	rep.PolicyStale = c.K != 1 && (c.K != vol.K || c.M != vol.M)
 	if c.TombstonedAt != 0 {
 		rep.TombstonedAt = time.Unix(0, c.TombstonedAt).UTC().Format(time.RFC3339)
 	}
 	names := map[meta.NodeIdx]string{}
+	nodeByIdx := map[meta.NodeIdx]meta.Node{}
 	nodes := st.Nodes()
 	for i := range nodes {
 		names[nodes[i].Idx] = nodes[i].Name
+		nodeByIdx[nodes[i].Idx] = nodes[i]
 	}
+	var lv meta.Liveness = noLiveness{}
+	if p != nil {
+		lv = p
+	}
+	present := map[int]bool{}
 	for i, n := range c.Placement {
 		s := SlotReport{Idx: i, Node: int(n), Name: names[n]}
 		if n != 0 {
-			s.Live = p != nil && p.IsLive(n)
+			s.Live = lv.IsLive(n)
 			if s.Live && hc != nil {
 				hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 				has, err := hc.Has(hctx, n, chunk.Key(h, c.K, c.M, i))
 				cancel()
 				if err == nil {
 					s.Present = &has
+					present[i] = has
 				}
-			}
-			if s.Live && (s.Present == nil || *s.Present) {
-				rep.LiveSlots++
 			}
 		}
 		rep.Slots = append(rep.Slots, s)
 	}
-	switch {
-	case c.Refs == 0:
-		rep.State = "tombstoned"
-	case rep.LiveSlots < int(c.K):
-		rep.State = "unreadable"
-	case rep.LiveSlots < int(c.K)+int(c.M):
-		rep.State = "degraded"
-	default:
-		rep.State = "committed"
-	}
-	rep.Files = filesReferencing(st, h)
+	// the same derivation status, check and the repairer use (I-56), with the presence
+	// answers folded in
+	health := meta.ChunkState(c, vol, meta.HealthInput{Nodes: nodeByIdx, Live: lv, FillAfter: cluster.FillAfter, Present: present})
+	rep.LiveSlots = health.Readable
+	rep.PolicyStale = health.PolicyStale
+	rep.State = health.State(c.K, c.M)
+	rep.Files = FilesReferencing(st, map[meta.Hash]bool{h: true})
 	return rep
 }
 
-// filesReferencing lists every path whose chunk list contains h.
-func filesReferencing(st *meta.Store, h meta.Hash) []string {
-	var out []string
-	var walk func(ino meta.Ino, prefix string)
-	walk = func(ino meta.Ino, prefix string) {
-		ents, err := st.ReadDir(ino)
-		if err != nil {
-			return
-		}
-		for i := range ents {
-			path := prefix + "/" + ents[i].Name
-			switch ents[i].Type {
-			case meta.TDir:
-				walk(ents[i].Ino, path)
-			case meta.TFile:
-				for _, ch := range ents[i].Chunks {
-					if ch == h {
-						out = append(out, path)
-						break
-					}
-				}
-			}
-		}
-	}
-	walk(meta.RootIno, "")
-	sort.Strings(out)
-	return out
-}
+// noLiveness is the view without a prober: nothing is live.
+type noLiveness struct{}
+
+func (noLiveness) IsLive(meta.NodeIdx) bool           { return false }
+func (noLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }

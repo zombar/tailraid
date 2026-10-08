@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -309,22 +308,6 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	}
 }
 
-// CheckReport is the `check` reply.
-type CheckReport struct {
-	Scan       repair.Stats `json:"scan"`
-	Degraded   int          `json:"degraded_chunks"`
-	Unreadable int          `json:"unreadable_chunks"`
-	Files      []string     `json:"files,omitempty"` // paths touching degraded/unreadable chunks
-	OK         bool         `json:"ok"`
-}
-
-// FsckReport is the `fsck` reply.
-type FsckReport struct {
-	Violations   []string `json:"violations"`
-	OrphanShards int      `json:"orphan_shards_on_this_node"`
-	OK           bool     `json:"ok"`
-}
-
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
 	case "repair_now", "check", "set_policy", "gc_now":
@@ -384,42 +367,14 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		rep := CheckReport{Scan: st}
-		degraded := map[meta.Hash]bool{}
-		a.node.FSM.ForEachChunk(func(c meta.Chunk) bool {
-			if c.Refs == 0 {
-				return true
-			}
-			good, liveSlots := 0, 0
-			for _, s := range c.Placement {
-				if s != 0 {
-					good++
-					if a.prober.IsLive(s) {
-						liveSlots++
-					}
-				}
-			}
-			if liveSlots < int(c.K)+int(c.M) {
-				rep.Degraded++
-				degraded[c.Hash] = true
-			}
-			if liveSlots < int(c.K) {
-				rep.Unreadable++
-			}
-			return true
-		})
-		if op.Files && len(degraded) > 0 {
-			rep.Files = a.filesReferencing(degraded)
-		}
-		rep.OK = rep.Unreadable == 0 && rep.Degraded == 0
-		return rep, nil
+		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, op.Files), nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
 		if err != nil {
 			return nil, err
 		}
 		fs := snap.(interface{ State() *meta.State })
-		rep := FsckReport{Violations: meta.CheckInvariants(fs.State())}
+		rep := admin.FsckReport{Violations: meta.CheckInvariants(fs.State())}
 		_ = a.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
 			h, kk, mm, idx, err := chunk.ParseKey(k)
 			if err != nil {
@@ -438,33 +393,6 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 }
 
 // filesReferencing walks the tree once and returns the paths whose chunks are in set.
-func (a *adminOps) filesReferencing(set map[meta.Hash]bool) []string {
-	var out []string
-	var walk func(ino meta.Ino, prefix string)
-	walk = func(ino meta.Ino, prefix string) {
-		ents, err := a.node.FSM.ReadDir(ino)
-		if err != nil {
-			return
-		}
-		for i := range ents {
-			p := prefix + "/" + ents[i].Name
-			switch ents[i].Type {
-			case meta.TDir:
-				walk(ents[i].Ino, p)
-			case meta.TFile:
-				for _, h := range ents[i].Chunks {
-					if set[h] {
-						out = append(out, p)
-						break
-					}
-				}
-			}
-		}
-	}
-	walk(meta.RootIno, "")
-	sort.Strings(out)
-	return out
-}
 
 // fence answers the DELETE fence from the local FSM.
 type fence struct {

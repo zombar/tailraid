@@ -36,6 +36,12 @@ and derivable from (gateway Overlay/WAL, FSM `State`, node shard stores, node li
 | **Orphan** | A node holds a shard whose `Hash` has no `State.Chunks` entry (upload never committed, Collected but DELETE failed), whose `(k,m)` in the key differs from the entry's, or whose placement no longer names this node (Relocated). Chunk-level view of orphan shards. |
 | **Swept** | Terminal: the node `Sweep` deleted Orphan shards older than the grace period. |
 
+Two readings of "degraded" come out of the same derivation (`meta.ChunkState`): `status`,
+`check` and `chunk describe` call a chunk *degraded* as soon as fewer than `k+m` copies are
+reachable, because an operator wants to know at once; the **Degraded** state above, which
+the repair scanner acts on, additionally requires a bad slot (a dead holder only after
+`fill_after`), and `status` reports that count as `repair_pending`.
+
 ```
                  WRITE/truncate                flush trigger
    (nothing) ────────────────▶ Dirty ────────────────────▶ Assembled
@@ -268,7 +274,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-83 | Committed | E-74 Sweep, placed on self | Committed | kept regardless of age | `TestSweep_KeepsPlacedShard` |
 | L-84 | Tombstoned | E-75 Sweep | Tombstoned | kept (entry exists); only GCDelete may remove | `TestSweep_KeepsTombstonedShard` |
 | L-85 | Uploading | E-71 Sweep runs concurrently | Uploading | young shards kept; Commit succeeds | `TestCluster_GCDoesNotDeleteInflightUpload` |
-| L-86 | Committed | E-76 node dead < fill_after | Committed | reads skip the slot; `status` shows node unreachable; no repair | `TestProber_DeadNodeHoldDown` |
+| L-86 | Committed | E-76 node dead < fill_after | Committed | reads skip the slot; `status` shows the node unreachable with its missing slots and the chunk as degraded (under-replicated now) but not repair-pending; no repair | `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestReport_ReflectsClusterState` |
 | L-87 | Committed | E-77 node dead > fill_after | Degraded | repair queued; `check` lists affected chunks/files | `TestRepair_FillAfterTriggers` |
 | L-88 | Degraded (dead node) | E-79 node returns before repair | Committed | no work; slot reachable again | `TestRepair_NodeReturns_CancelsRepair` |
 | L-89 | Degraded | repair run (read k, encode, PUT, SetPlacement) | Repairing → Committed | k+m slots on distinct live nodes; under-replicated −1 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy` |
@@ -282,13 +288,13 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-97 | Committed | E-83 join | Committed | no data moves (placements and shard inventories unchanged); new node is a placement candidate | `TestCluster_JoinDoesNotMoveData` |
 | L-98 | Committed | E-84 set-capacity | Committed | no data moves; weight changes future placements; ErrFull threshold changes | `TestCluster_SetCapacityDoesNotMoveData` |
 | L-99 | Committed | E-85 IP change | Committed | placement by `NodeIdx` unaffected; RPC reaches new address | `TestCluster_IPChange_UpdateAddr` |
-| L-100 | Committed | E-86 set-redundancy | Degraded (policy) | chunk (K,M) ≠ Vol; migration progress in `volume describe` | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
+| L-100 | Committed | E-86 set-redundancy | Degraded (policy) | chunk (K,M) ≠ `meta.TargetPolicy` (small chunks follow M only); migration progress in `volume describe` | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_SmallChunk_SetRedundancy_Migrates` |
 | L-101 | Degraded (policy) | migration step | Repairing → Committed | read k old, encode new, PUT new slots, SetPlacement, DELETE old after commit; never < k available | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | L-102 | Repairing (policy) | leader crash mid-migration | Degraded (policy) | old placement still committed; new leader redoes; orphans swept | `TestRepair_MigrationCrash_Resumes` |
 | L-103 | Degraded | E-87 live < k+m | Degraded (fewer 0 slots) | repair fills what it can (partial fill), keeps scanning; `status` warns insufficient nodes | `TestRepair_PartialFillThenComplete` |
 | L-104 | Committed (S3 slot) | E-88 S3 slow/unreachable | Committed / Degraded after fill_after | reads rank devices first; S3 used only when needed | `TestS3Node_DeviceLost_ReadsFromBucket` |
 | L-105 | Committed | E-91 1..m shards corrupt | Degraded | read decodes; Quarantined; repair rewrites | `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs` |
-| L-106 | Committed | E-92 m+1 corrupt | Degraded | EIO (never garbage); `check` lists the chunk and files | `TestLifecycle_Committed_CorruptMPlusOne_EIO` |
+| L-106 | Committed | E-92 m+1 corrupt | Degraded | EIO (never garbage); the scrub counts the chunk unrepairable and `check` is not OK and lists the files | `TestCheck_MPlusOneCorrupt_NotOK`, `TestReader_DecodedHashMismatch_EIO` |
 | L-107 | Committed | E-93 header mismatch | Degraded | `ErrCorrupt`; file quarantined; slot repaired | `TestStore_Get_CorruptedBitFlip`, `TestStore_Get_ZeroFilled` |
 | L-108 | Committed | E-94 truncated shard | Degraded | `ErrCorrupt` (not short read) | `TestStore_Get_Truncated`, `TestStore_TornWrite_DetectedOnRead` |
 | L-109 | Committed | E-95 scrub OK | Committed | shards Verified; `scrub_ok` metric | `TestScrub_VerifyOK` |
@@ -426,12 +432,12 @@ test is written, then the fix.
 
 ## Invariants
 
-- **I-56** — Every chunk referenced by an inode is in exactly one chunk state of §2, excluding the observational states Repairing, Revived and Quarantined, and that state is derivable from the FSM state plus the shard stores and liveness alone (no hidden gateway-only state except Dirty/Assembled/Uploading/Placed, which are confined to the issuing gateway and never affect what other gateways read).
+- **I-56** — Every chunk referenced by an inode is in exactly one chunk state of §2, excluding the observational states Repairing, Revived and Quarantined, and that state is derivable from the FSM state plus the shard stores and liveness alone (no hidden gateway-only state except Dirty/Assembled/Uploading/Placed, which are confined to the issuing gateway and never affect what other gateways read). `meta.ChunkState` is that derivation and the only one in the code: `status`, `check`, `chunk describe` and the repair scanner all call it.
 - **I-57** — Every transition observed in the chunk event ring matches a cell of the transition table; no forbidden transition is ever observed in any test, model-check or soak run.
 
 ## Tests
 
 | Invariant | Tests |
 |---|---|
-| I-56 | `TestLifecycle`, `TestHarness_ChunkStateDerivation`, `TestCLI_ChunkDescribe_MatchesHarness` |
+| I-56 | `TestChunkState_Table`, `TestSmallChunkRule`, `TestCheck_MPlusOneCorrupt_NotOK`, `TestRepair_SmallChunk_SetRedundancy_Migrates`, `TestChunkDescribe_StateFilesAndEvents`, `TestReport_ReflectsClusterState` |
 | I-57 | `TestModelCheck_Long`, `TestLifecycle_NoForbiddenTransitions`, `TestCrash_AtEveryPoint` |

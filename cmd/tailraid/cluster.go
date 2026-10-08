@@ -135,8 +135,8 @@ func printStatus(w io.Writer, r admin.Report) {
 	v := r.Volume
 	fmt.Fprintf(w, "volume  %d+%d, chunk %s  files: %d  logical: %s  stored: %s  free: %s  dedup: %.2fx\n",
 		v.K, v.M, bytesStr(uint64(v.ChunkSize)), v.Inodes, bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), bytesStr(v.Free), v.DedupRatio)
-	if v.Degraded > 0 || v.Unreadable > 0 {
-		fmt.Fprintf(w, "chunks  degraded: %d  unreadable: %d  policy-stale: %d\n", v.Degraded, v.Unreadable, v.StalePolicy)
+	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 {
+		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
 	}
 	printNodes(w, r.Nodes)
 	for _, warn := range r.Warnings {
@@ -309,7 +309,7 @@ func volumeCmd() *cobra.Command {
 			v := rep.Volume
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "policy        %d+%d (version %d), chunk %s\n", v.K, v.M, v.PolicyVersion, bytesStr(uint64(v.ChunkSize)))
-			fmt.Fprintf(w, "inodes        %d\nchunks        %d (%d tombstoned, %d degraded, %d unreadable, %d on an older policy)\n", v.Inodes, v.Chunks, v.Tombstoned, v.Degraded, v.Unreadable, v.StalePolicy)
+			fmt.Fprintf(w, "inodes        %d\nchunks        %d (%d tombstoned, %d degraded, %d repair-pending, %d unreadable, %d on an older policy)\n", v.Inodes, v.Chunks, v.Tombstoned, v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
 			fmt.Fprintf(w, "logical       %s\nstored        %s (dedup %.2fx)\n", bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), v.DedupRatio)
 			fmt.Fprintf(w, "capacity      %s raw, %s usable, %s free\n", bytesStr(v.Capacity), bytesStr(v.UsableCapacity), bytesStr(v.Free))
 			return nil

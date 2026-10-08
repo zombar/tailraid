@@ -379,6 +379,44 @@ func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	}
 }
 
+// A full-size chunk written while the policy was k=1 is not a "small chunk": after
+// set-redundancy it must migrate to the new (k, m), while a genuinely small chunk keeps
+// k=1 and follows only M. Before the shared derivation the scanner treated every k=1
+// chunk of at most 64 KiB as small by design and never migrated it.
+// Invariant: I-15, I-56
+// Lifecycle: L-100
+func TestRepair_SmallChunk_SetRedundancy_Migrates(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 1, 1)
+	defer c.Close()
+	data := testharness.Pattern(int(testharness.ChunkSize)+100, 35) // one full chunk + a 100-byte tail
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	chunks := c.ChunksOf(0, "/f")
+	if len(chunks) != 2 || chunks[0].K != 1 || chunks[1].K != 1 {
+		t.Fatalf("chunks %+v", chunks)
+	}
+	leader := c.Leader()
+	res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: 2, M: 1, Now: c.Clk.Now().UnixNano()}})
+	must(t, err)
+	must(t, res.Err)
+	c.Settle()
+	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Migrated != 1 || st.PolicyStale != 0 {
+		t.Fatalf("scan %+v, want the full chunk migrated and nothing stale", st)
+	}
+	after := c.ChunksOf(0, "/f")
+	if after[0].K != 2 || after[0].M != 1 {
+		t.Fatalf("full chunk still on %d+%d", after[0].K, after[0].M)
+	}
+	if after[1].K != 1 || after[1].M != 1 {
+		t.Fatalf("small chunk moved to %d+%d", after[1].K, after[1].M)
+	}
+	if got, err := c.ReadFileCold(1, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after migration: %v", err)
+	}
+}
+
 // Invariant: I-15, I-32
 // Lifecycle: L-37, L-101, L-157, L-173
 func TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK(t *testing.T) {

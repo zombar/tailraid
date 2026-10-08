@@ -59,8 +59,7 @@ type Fabric struct {
 }
 
 const (
-	ChunkSize  = uint32(64 << 10) // 64 KiB chunks keep the tests small
-	SmallChunk = uint32(4 << 10)  // chunks ≤ 4 KiB use k=1
+	ChunkSize = uint32(64 << 10) // 64 KiB chunks keep the tests small
 )
 
 // NewFabric builds a fabric with the given node count and (k,m) policy.
@@ -292,7 +291,6 @@ func (f *Fabric) FS() *vfs.FS { return vfs.New(f.FSM, f, f.Ov, f.Reader(), f.Clk
 // Flusher returns a flusher with the test chunk policy.
 func (f *Fabric) Flusher(opts ...func(*vfs.Config)) *vfs.Flusher {
 	cfg := vfs.DefaultConfig()
-	cfg.SmallChunk = SmallChunk
 	for _, o := range opts {
 		o(&cfg)
 	}
