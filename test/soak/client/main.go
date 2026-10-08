@@ -67,20 +67,33 @@ type worker struct {
 	mu     sync.Mutex
 	tgt    *nfsc.Target
 	closeT func()
+	gen    uint64 // bumped on every dropTarget: a request that outran its client must not drop the next one
 	client *rpc.Client
 }
 
+// opDeadline bounds one gateway operation. The pure-Go NFS client times a call out after
+// DefaultReadTimeout and forgets its reply channel, but a reply that lands after that
+// blocks the client's receive loop for good (unbuffered channel, nobody reading), after
+// which every call on that connection hangs. Two defences: the call timeout is raised
+// well above the gateway's longest legitimate stall (a metadata operation retries for up
+// to the 30 s Stale threshold during a leader election), and a request that still
+// overruns opDeadline answers with an error and drops the connection so the next request
+// dials a fresh client, leaving the stuck goroutine behind.
+const opDeadline = 75 * time.Second
+
+func init() { nfsrpc.DefaultReadTimeout = 60 * time.Second }
+
 // --- NFS target ------------------------------------------------------------------------
 
-func (w *worker) target() (*nfsc.Target, error) {
+func (w *worker) target() (*nfsc.Target, uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.tgt != nil {
-		return w.tgt, nil
+		return w.tgt, w.gen, nil
 	}
 	cl, err := nfsrpc.DialTCP("tcp", w.nfsAddr, false)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	type mountArgs struct {
 		nfsrpc.Header
@@ -89,34 +102,48 @@ func (w *worker) target() (*nfsc.Target, error) {
 	res, err := cl.Call(&mountArgs{Header: nfsrpc.Header{Rpcvers: 2, Prog: nfsc.MountProg, Vers: nfsc.MountVers, Proc: nfsc.MountProc3MNT, Cred: nfsrpc.AuthNull, Verf: nfsrpc.AuthNull}, Dirpath: "/"})
 	if err != nil {
 		cl.Close()
-		return nil, err
+		return nil, 0, err
 	}
 	if status, _ := xdr.ReadUint32(res); status != nfsc.MNT3Ok {
 		cl.Close()
-		return nil, fmt.Errorf("mount status %d", status)
+		return nil, 0, fmt.Errorf("mount status %d", status)
 	}
 	fh, err := xdr.ReadOpaque(res)
 	if err != nil {
 		cl.Close()
-		return nil, err
+		return nil, 0, err
 	}
 	tgt, err := nfsc.NewTargetWithClient(cl, nfsrpc.NewAuthUnix("soak", 0, 0).Auth(), fh, "/", 0)
 	if err != nil {
 		cl.Close()
-		return nil, err
+		return nil, 0, err
 	}
 	w.tgt, w.closeT = tgt, cl.Close
-	return tgt, nil
+	return tgt, w.gen, nil
 }
 
-// dropTarget forgets the connection after a transport error (the node may have restarted).
-func (w *worker) dropTarget() {
+// dropCurrent drops whatever connection is current.
+func (w *worker) dropCurrent() {
+	w.mu.Lock()
+	gen := w.gen
+	w.mu.Unlock()
+	w.dropTarget(gen)
+}
+
+// dropTarget forgets the connection of generation gen after a transport error or an
+// overrun (the node may have restarted, or the client wedged); a later generation is
+// left alone.
+func (w *worker) dropTarget(gen uint64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.gen != gen {
+		return
+	}
 	if w.closeT != nil {
 		w.closeT()
 	}
 	w.tgt, w.closeT = nil, nil
+	w.gen++
 }
 
 type fsReq struct {
@@ -146,16 +173,28 @@ func (w *worker) fs(rw http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(rw).Encode(resp)
 }
 
-func (w *worker) doFS(req fsReq) (resp fsResp) {
-	t, err := w.target()
+func (w *worker) doFS(req fsReq) fsResp {
+	t, gen, err := w.target()
 	if err != nil {
 		return fsResp{Error: "gateway: " + err.Error()}
 	}
-	defer func() {
+	done := make(chan fsResp, 1)
+	go func() { done <- w.doFSOn(t, req) }()
+	select {
+	case resp := <-done:
 		if resp.Error != "" && (strings.Contains(resp.Error, "EOF") || strings.Contains(resp.Error, "connection")) {
-			w.dropTarget()
+			w.dropTarget(gen)
 		}
-	}()
+		return resp
+	case <-time.After(opDeadline):
+		slog.Warn("gateway operation overran; dropping the NFS client", "op", req.Op, "path", req.Path, "deadline", opDeadline)
+		w.dropTarget(gen)
+		return fsResp{Error: fmt.Sprintf("gateway: %s %s overran %s", req.Op, req.Path, opDeadline)}
+	}
+}
+
+// doFSOn runs one operation on a target.
+func (w *worker) doFSOn(t *nfsc.Target, req fsReq) (resp fsResp) {
 	fail := func(err error) fsResp {
 		if err == nil {
 			return fsResp{}
@@ -365,7 +404,7 @@ func (w *worker) ready(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "rpc: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if _, err := w.target(); err != nil {
+	if _, _, err := w.target(); err != nil {
 		http.Error(rw, "nfs: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -413,7 +452,7 @@ func (w *worker) partition(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	w.dropTarget()
+	w.dropCurrent() // a partition rule set: the next request dials afresh
 	rw.WriteHeader(http.StatusNoContent)
 }
 

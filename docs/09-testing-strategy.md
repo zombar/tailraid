@@ -227,7 +227,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   (n1–n3 voters, n4 non-voter) with `dev.enabled`, `repair.grace` and `repair.fill_after`
   of 20 s, and one **worker** sidecar per node sharing the node's network namespace
   (`soak-client worker`). The worker reaches the node's loopback NFS gateway through the
-  pure-Go NFSv3 client and the node's RPC from the node's own tailnet IP (so WhoIs sees a
+  pure-Go NFSv3 client (with a 60 s call timeout and a fresh connection after any
+  operation that overruns 75 s: a reply landing after that client's own timeout wedges its
+  receive loop for good, and a follower gateway legitimately holds a metadata operation
+  for up to the 30 s Stale threshold during an election) and the node's RPC from the node's own tailnet IP (so WhoIs sees a
   member); it exposes both over a small HTTP API on a published port. The driver runs on the
   host: `Volume` and `Call` go through the worker, kills, restarts and partitions through
   `docker compose kill|start|restart` and `docker network disconnect|connect`, corruption
