@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/soak"
 )
@@ -47,7 +48,17 @@ func newComposeEnv(dir string, n int) *composeEnv {
 
 func (e *composeEnv) Name() string { return fmt.Sprintf("docker compose, %d nodes", len(e.nodes)) }
 
-func (e *composeEnv) Nodes(context.Context) ([]soak.NodeRef, error) {
+// Nodes returns the compose nodes with the indices the cluster gave them. The containers
+// join in whatever order they come up, so n2 may well be node 4: the index is read from
+// the cluster's status by name, never assumed from the container number.
+func (e *composeEnv) Nodes(ctx context.Context) ([]soak.NodeRef, error) {
+	rep, err := e.SeedStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolveIndices(e.nodes, rep.Nodes); err != nil {
+		return nil, err
+	}
 	out := make([]soak.NodeRef, 0, len(e.nodes))
 	for _, n := range e.nodes {
 		out = append(out, n.ref)
@@ -55,7 +66,31 @@ func (e *composeEnv) Nodes(context.Context) ([]soak.NodeRef, error) {
 	return out, nil
 }
 
-func (e *composeEnv) node(ref soak.NodeRef) composeNode { return e.nodes[int(ref.Idx)-1] }
+// resolveIndices sets each compose node's index from the status report, matched by name.
+func resolveIndices(nodes []composeNode, members []admin.NodeReport) error {
+	for i := range nodes {
+		found := false
+		for j := range members {
+			if members[j].Name == nodes[i].ref.Name {
+				nodes[i].ref.Idx, found = members[j].Idx, true
+			}
+		}
+		if !found {
+			return fmt.Errorf("compose node %s is not in the cluster's node table", nodes[i].ref.Name)
+		}
+	}
+	return nil
+}
+
+// node finds the compose node behind a ref by name (indices are assigned by the cluster).
+func (e *composeEnv) node(ref soak.NodeRef) composeNode {
+	for _, n := range e.nodes {
+		if n.ref.Name == ref.Name {
+			return n
+		}
+	}
+	panic("compose: unknown node " + ref.Name)
+}
 
 func (e *composeEnv) Caps() soak.Caps {
 	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true}
