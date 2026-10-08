@@ -231,6 +231,8 @@ func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, b
 	stall := f.stallPut[node]
 	f.mu.Unlock()
 	if stall != nil {
+		stall.inflight.Add(1)
+		defer stall.inflight.Done()
 		stall.enteredOnce.Do(func() { close(stall.entered) })
 		<-stall.release
 	}
@@ -474,10 +476,12 @@ type putStall struct {
 	entered     chan struct{}
 	enteredOnce sync.Once
 	release     chan struct{}
+	inflight    sync.WaitGroup // PUTs that entered the stall and have not finished
 }
 
 // StallPut makes every PUT to node block until release is called; entered closes when the
-// first one is waiting.
+// first one is waiting. release returns only once every stalled PUT has run to completion,
+// so a test's temp dir is not written to after the test ends.
 func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
 	s := &putStall{entered: make(chan struct{}), release: make(chan struct{})}
 	f.mu.Lock()
@@ -494,6 +498,7 @@ func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release f
 			f.mu.Unlock()
 			close(s.release)
 		})
+		s.inflight.Wait()
 	}
 }
 

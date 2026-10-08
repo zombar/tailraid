@@ -45,6 +45,7 @@ func TestFlusher_PutTimeout_SlotReplaced(t *testing.T) {
 		}
 	}, "flush past the PUT deadline")
 	must(t, err)
+	release() // let the stalled PUT finish before the test's temp dir goes away
 	c, ok := f.FSM.GetChunk(h)
 	if !ok {
 		t.Fatal("chunk not committed")
