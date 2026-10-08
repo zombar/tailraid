@@ -171,6 +171,7 @@ these numbers.
 - E-117 Sweep attempted while the node is not `Healthy` / behind the leader's commit index
 - E-118 flush completes while new extents arrived (WAL compaction)
 - E-119 policy migration PUTs the new encoding under keys `hex.k'-m'.idx` while old `hex.k-m.idx` files exist
+- E-120 a gateway writes or truncates through an overlay entry that predates another gateway's Commit (its recorded base size is stale)
 
 **5. Transition table.**
 
@@ -330,6 +331,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-171 | Orphan | E-117 Sweep while not `Healthy` / behind leader index | Orphan | sweep skipped entirely; `sweep_skipped_unhealthy` +1 | `TestSweep_SkippedWhenNotHealthy` |
 | L-172 | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | WAL rewritten to live extents, fsynced, renamed; acknowledged bytes unchanged; replay after crash yields the same overlay | `TestWAL_CompactKeepsLiveExtents`, `TestVFS_RestartWithDirtyWAL_Replays` |
 | L-173 | Degraded (`(k,m)` ≠ policy) | E-119 migration PUTs under new keys | Repairing → Committed | new `hex.k'-m'.idx` files coexist with old `hex.k-m.idx`; `SetPlacement` switches; old keys deleted with the fence; at no instant < k decodable shards | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestStore_KeysWithDifferentEncodingCoexist` |
+| L-178 | Committed | E-120 write/truncate via a gateway whose overlay entry is stale | Dirty → Committed | the overlay never pins a base size: a clean entry is dropped after its flush and a dirty one treats the committed size as current, so base bytes stay valid up to the committed size unless an explicit truncate cuts them, rewritten chunks keep their full length, `TruncateTo` is the requested point (never the stale base), and GETATTR reports the committed size while the entry has no truncate | `TestOverlay_StaleEntry_FollowsCommittedSize`, `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes` |
 
 **6. Forbidden transitions.**
 

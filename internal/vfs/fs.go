@@ -191,7 +191,7 @@ func (f *FS) Lstat(filename string) (os.FileInfo, error) { return f.Stat(filenam
 func (f *FS) info(in meta.Inode) *fileInfo {
 	fi := &fileInfo{in: in}
 	if in.Type == meta.TFile {
-		if sz, ok := f.ov.Size(in.Ino); ok {
+		if sz, ok := f.ov.Size(in.Ino, in.Size); ok {
 			fi.size = sz
 			fi.dirty = true
 		} else {

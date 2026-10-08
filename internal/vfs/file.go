@@ -47,12 +47,12 @@ func (f *File) inode() (meta.Inode, error) {
 
 // size is the client-visible size: the overlay's while dirty, else the committed size.
 func (f *File) size() uint64 {
-	if sz, ok := f.fs.ov.Size(f.ino); ok {
-		return sz
-	}
 	in, ok := f.fs.st.GetInode(f.ino)
 	if !ok {
 		return 0
+	}
+	if sz, ok := f.fs.ov.Size(f.ino, in.Size); ok {
+		return sz
 	}
 	return in.Size
 }
@@ -107,8 +107,8 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 		}
 		return err
 	}
-	if _, dirty := f.fs.ov.Size(f.ino); dirty {
-		n, err := f.fs.ov.Read(f.ino, uint64(off), p, base)
+	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
+		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, base)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return n, mapErr("read", f.name, err)
 		}

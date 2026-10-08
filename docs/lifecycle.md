@@ -167,8 +167,8 @@ exactly one design doc transition table and cited by at least one test via
 | L-159 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | any FSM state | Apply | result depends on wall clock, disk, or map iteration order | `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas` |
 | L-160 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Collected | Commit referencing hash | Committed without upload | `TestFSM_Commit_UnknownChunkRejected` |
 | L-161 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (any slot on node) | node remove without --force | Degraded | `TestStubLifecycle_L_161` |
-| L-162 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | ErrConflict rebase | dirty extents lost | `TestStubLifecycle_L_162` |
-| L-163 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (two versions) | stale read | bytes from two versions in one chunk | `TestStubLifecycle_L_163` |
+| L-162 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | ErrConflict rebase | dirty extents lost | `TestModelCheck_Long` |
+| L-163 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (two versions) | stale read | bytes from two versions in one chunk | `TestModelCheck_Long` |
 | L-164 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | Sweep | shards deleted before GCDelete | `TestSweep_OldPlacedHereKept` |
 | L-165 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | repair | chunk bytes differ from original Hash after repair | `TestStubLifecycle_L_165` |
 | L-166 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-112 reader reports a bad slot | Degraded | `TestStubLifecycle_L_166` |
@@ -183,3 +183,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-175 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | Commit without `HasTruncate` and `NewSize` < `Size` | Committed (shrunk) | `TestStubLifecycle_L_175` |
 | L-176 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded/Tombstoned (< k live slots) | dedup hit | Committed (no upload) | `TestStubLifecycle_L_176` |
 | L-177 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | Sweep while not `Healthy` | Swept | `TestStubLifecycle_L_177` |
+| L-178 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-120 write/truncate via a gateway whose overlay entry is stale | Dirty → Committed | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestOverlay_StaleEntry_FollowsCommittedSize` |

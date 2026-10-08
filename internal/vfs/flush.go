@@ -235,6 +235,9 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		if !ok || base.Type != meta.TFile {
 			return 0, meta.ErrNotExist
 		}
+		// the size this flush works against follows the base of this attempt: another
+		// gateway may have grown or shrunk the file since the entry was created (L-178)
+		plan.Size = plan.sizeAgainst(base.Size)
 		works, err := f.assemble(ctx, plan, base, partial)
 		if err != nil {
 			return 0, err

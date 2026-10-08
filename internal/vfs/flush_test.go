@@ -384,7 +384,7 @@ func TestFlusher_UnlinkedBeforeFlush_Dropped(t *testing.T) {
 	if f.Puts() != before {
 		t.Fatal("uploaded for a dead inode")
 	}
-	if _, ok := f.Ov.Size(ino); ok {
+	if _, ok := f.Ov.Size(ino, 0); ok {
 		t.Fatal("overlay still tracks the inode")
 	}
 	if st := f.FSM.Stats(); st.Chunks != 0 {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,8 +44,8 @@ type DirtyInfo struct {
 // extents unflushed by listing them in Residual before CommitFlushed.
 type FlushPlan struct {
 	Ino      meta.Ino
-	Size     uint64 // overlay size at capture
-	MinSize  uint64 // lowest size since the last successful flush (truncate point)
+	Size     uint64 // overlay size at capture; see sizeAgainst for the size a flush uses
+	MinSize  uint64 // the truncation point (valid only with SizeSet)
 	SizeSet  bool   // a truncate happened since the last successful flush
 	Extents  extents
 	Residual extents // subset of Extents the flusher did not commit (partial flush)
@@ -55,11 +56,11 @@ type dirtyFile struct {
 	mu        sync.Mutex
 	ino       meta.Ino
 	wal       *WAL
-	known     bool   // size/base initialised (from a caller or a WAL base record)
-	base      uint64 // committed size the WAL records apply to
-	size      uint64 // overlay (client-visible) size
-	minSize   uint64 // lowest size since the last successful flush
+	known     bool   // initialised (from a caller or a WAL base record)
+	size      uint64 // overlay size: extents' end, or the truncate point and later extents; see effSize
+	minSize   uint64 // the truncation point (valid only with sizeSet)
 	sizeSet   bool   // truncate since the last successful flush
+	dead      bool   // evicted from the map; a waiter must look the inode up again
 	ext       extents
 	plan      *FlushPlan
 	planMin   uint64 // lowest size since the plan was captured
@@ -68,6 +69,44 @@ type dirtyFile struct {
 }
 
 func (d *dirtyFile) dirty() bool { return len(d.ext) > 0 || d.sizeSet || d.plan != nil }
+
+// effSize is the client-visible size given the current committed size: without a
+// truncate the overlay has no size of its own, so other gateways' Commits show through
+// (L-178); with one, the truncate point and the extents written since decide.
+func (d *dirtyFile) effSize(committed uint64) uint64 {
+	if d.sizeSet {
+		return d.size
+	}
+	return max(committed, d.extEnd())
+}
+
+// extEnd is the end of the last dirty byte, in the plan or fresh.
+func (d *dirtyFile) extEnd() uint64 {
+	end := d.ext.maxEnd()
+	if d.plan != nil {
+		end = max(end, d.plan.Extents.maxEnd())
+	}
+	return end
+}
+
+// baseLimit is the offset below which base bytes are valid for a view with the given
+// truncate state.
+func baseLimit(sizeSet bool, minSize uint64) uint64 {
+	if sizeSet {
+		return minSize
+	}
+	return math.MaxUint64
+}
+
+// sizeAgainst is the size a flush of this plan commits to when the inode currently
+// holds committed bytes: the plan's own size after a truncate, else the larger of the
+// committed size and the plan's extents.
+func (p *FlushPlan) sizeAgainst(committed uint64) uint64 {
+	if p.SizeSet {
+		return p.Size
+	}
+	return max(committed, p.Extents.maxEnd())
+}
 
 // Overlay holds the dirty extents and per-inode WALs of one gateway (docs/04 §4–7).
 type Overlay struct {
@@ -123,7 +162,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 	err = w.Replay(func(typ uint8, off uint64, n uint32, walOff int64, _ []byte) error {
 		switch typ {
 		case recBase:
-			d.known, d.base, d.size, d.minSize, d.sizeSet, d.ext = true, off, off, off, false, nil
+			d.known, d.size, d.minSize, d.sizeSet, d.ext = true, off, 0, false, nil
 		case recWrite:
 			if !d.known {
 				return nil // records before a base are from a corrupt log; ignore
@@ -136,8 +175,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 			}
 			d.ext.truncate(off)
 			d.size = off
-			d.minSize = min(d.minSize, off)
-			d.sizeSet = true
+			d.setTrunc(off)
 		}
 		return nil
 	})
@@ -145,10 +183,11 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		_ = w.Close()
 		return err
 	}
-	if !d.known {
-		// An empty log (crash between Reset and AppendBase) carries no state.
+	if !d.known || !d.dirty() {
+		// An empty log (crash between Reset and AppendBase) or a base record alone
+		// (crash between a clean Commit and the removal) carries no state.
 		_ = w.Close()
-		return nil
+		return os.Remove(path)
 	}
 	o.files[ino] = d
 	return nil
@@ -157,21 +196,34 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 // Close closes every WAL. Dirty state stays on disk for the next OpenOverlay.
 func (o *Overlay) Close() error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
+	entries := o.entries()
+	o.files = map[meta.Ino]*dirtyFile{}
+	o.mu.Unlock()
 	var first error
-	for ino, d := range o.files {
+	for _, d := range entries {
 		d.mu.Lock()
 		if err := d.wal.Close(); err != nil && first == nil {
 			first = err
 		}
+		d.dead = true
 		d.mu.Unlock()
-		delete(o.files, ino)
 	}
 	return first
 }
 
+// entries snapshots the map (caller holds o.mu). Entry locks are taken only after o.mu
+// is released: evict takes them in the opposite order.
+func (o *Overlay) entries() []*dirtyFile {
+	out := make([]*dirtyFile, 0, len(o.files))
+	for _, d := range o.files {
+		out = append(out, d)
+	}
+	return out
+}
+
 // get returns the locked file entry for ino, creating it (with a base record) on first touch.
 func (o *Overlay) get(ino meta.Ino, baseSize uint64, create bool) (*dirtyFile, error) {
+again:
 	o.mu.RLock()
 	d, ok := o.files[ino]
 	o.mu.RUnlock()
@@ -193,14 +245,44 @@ func (o *Overlay) get(ino meta.Ino, baseSize uint64, create bool) (*dirtyFile, e
 		o.mu.Unlock()
 	}
 	d.mu.Lock()
+	if d.dead { // evicted between the lookup and the lock
+		d.mu.Unlock()
+		goto again
+	}
 	if !d.known {
 		if err := d.wal.AppendBase(baseSize); err != nil {
 			d.mu.Unlock()
 			return nil, err
 		}
-		d.known, d.base, d.size, d.minSize = true, baseSize, baseSize, baseSize
+		d.known, d.size = true, baseSize
 	}
 	return d, nil
+}
+
+// setTrunc records a truncate to size.
+func (d *dirtyFile) setTrunc(size uint64) {
+	if !d.sizeSet {
+		d.minSize = size
+	} else {
+		d.minSize = min(d.minSize, size)
+	}
+	d.sizeSet = true
+}
+
+// evict closes and removes the WAL of an entry with nothing to flush. Called with d.mu
+// held; the caller must hold no other entry.
+func (o *Overlay) evict(d *dirtyFile) error {
+	o.mu.Lock()
+	if o.files[d.ino] == d {
+		delete(o.files, d.ino)
+	}
+	o.mu.Unlock()
+	d.dead = true
+	err := d.wal.Close()
+	if rerr := os.Remove(d.wal.path); rerr != nil && err == nil {
+		err = rerr
+	}
+	return err
 }
 
 // Write records p at off. baseSize is the inode's committed size (used on first touch).
@@ -238,8 +320,7 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 	}
 	d.ext.truncate(size)
 	d.size = size
-	d.minSize = min(d.minSize, size)
-	d.sizeSet = true
+	d.setTrunc(size)
 	if d.plan != nil {
 		d.planMin = min(d.planMin, size)
 		d.planTrunc = true
@@ -248,18 +329,19 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 	return nil
 }
 
-// Size returns the overlay size of a tracked inode.
-func (o *Overlay) Size(ino meta.Ino) (uint64, bool) {
+// Size returns the client-visible size of a dirty inode given its committed size, or
+// false when the inode has nothing unflushed.
+func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	d, _ := o.get(ino, 0, false)
 	if d == nil {
 		return 0, false
 	}
 	defer d.mu.Unlock()
-	return d.size, true
+	return d.effSize(committed), true
 }
 
-// MinSize returns the lowest size since the last flush (bytes at or beyond it that no
-// extent covers read as zero).
+// MinSize returns the truncation point when a truncate is pending (bytes at or beyond it
+// that no extent covers read as zero); without one it returns 0.
 func (o *Overlay) MinSize(ino meta.Ino) (uint64, bool) {
 	d, _ := o.get(ino, 0, false)
 	if d == nil {
@@ -269,28 +351,28 @@ func (o *Overlay) MinSize(ino meta.Ino) (uint64, bool) {
 	return d.minSize, true
 }
 
-// Read fills p from the overlay view: base bytes below MinSize, zeros above it, and WAL
-// extents (both the in-flight plan's and fresh ones) on top. Returns io.EOF on a short read.
-func (o *Overlay) Read(ino meta.Ino, off uint64, p []byte, base func(off uint64, p []byte) error) (int, error) {
+// Read fills p from the overlay view of an inode whose committed size is committed:
+// base bytes below the truncation point (everywhere without one), zeros above it, and
+// WAL extents (both the in-flight plan's and fresh ones) on top. base may return fewer
+// bytes than asked past the committed size; the rest reads as zero. Returns io.EOF on a
+// short read.
+func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(off uint64, p []byte) error) (int, error) {
 	d, _ := o.get(ino, 0, false)
 	if d == nil {
 		return 0, meta.ErrNotExist
 	}
 	defer d.mu.Unlock()
-	if off >= d.size {
+	size := d.effSize(committed)
+	if off >= size {
 		return 0, io.EOF
 	}
-	n := min(uint64(len(p)), d.size-off)
+	n := min(uint64(len(p)), size-off)
 	buf := p[:n]
-	// Base bytes are valid only below minSize.
-	if off < d.minSize {
-		bn := min(n, d.minSize-off)
-		if err := base(off, buf[:bn]); err != nil {
+	clear(buf)
+	if limit := baseLimit(d.sizeSet, d.minSize); off < limit {
+		if err := base(off, buf[:min(n, limit-off)]); err != nil {
 			return 0, err
 		}
-		clear(buf[bn:])
-	} else {
-		clear(buf)
 	}
 	// Plan extents first, then fresh ones (fresh are newer and win).
 	if d.plan != nil {
@@ -342,11 +424,12 @@ func (o *Overlay) Drop(ino meta.Ino) {
 // Dirty lists every inode with unflushed state, sorted by Ino.
 func (o *Overlay) Dirty() []DirtyInfo {
 	o.mu.RLock()
-	defer o.mu.RUnlock()
-	out := make([]DirtyInfo, 0, len(o.files))
-	for _, d := range o.files {
+	entries := o.entries()
+	o.mu.RUnlock()
+	out := make([]DirtyInfo, 0, len(entries))
+	for _, d := range entries {
 		d.mu.Lock()
-		if d.dirty() {
+		if !d.dead && d.dirty() {
 			out = append(out, DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil})
 		}
 		d.mu.Unlock()
@@ -358,11 +441,14 @@ func (o *Overlay) Dirty() []DirtyInfo {
 // TotalDirty is the number of bytes in fresh extents across all inodes.
 func (o *Overlay) TotalDirty() uint64 {
 	o.mu.RLock()
-	defer o.mu.RUnlock()
+	entries := o.entries()
+	o.mu.RUnlock()
 	var n uint64
-	for _, d := range o.files {
+	for _, d := range entries {
 		d.mu.Lock()
-		n += d.ext.bytes()
+		if !d.dead {
+			n += d.ext.bytes()
+		}
 		d.mu.Unlock()
 	}
 	return n
@@ -396,14 +482,11 @@ func (o *Overlay) ReadPlanRange(plan *FlushPlan, off uint64, p []byte, base func
 		return meta.ErrNotExist
 	}
 	defer d.mu.Unlock()
-	if off < plan.MinSize {
-		bn := min(uint64(len(p)), plan.MinSize-off)
-		if err := base(off, p[:bn]); err != nil {
+	clear(p)
+	if limit := baseLimit(plan.SizeSet, plan.MinSize); off < limit {
+		if err := base(off, p[:min(uint64(len(p)), limit-off)]); err != nil {
 			return err
 		}
-		clear(p[bn:])
-	} else {
-		clear(p)
 	}
 	return d.applyExtents(plan.Extents, off, p)
 }
@@ -430,8 +513,10 @@ func (o *Overlay) AbortFlush(plan *FlushPlan) {
 		return
 	}
 	d.mergeBack(plan.Extents)
-	d.minSize = min(d.minSize, plan.MinSize)
-	d.sizeSet = d.sizeSet || plan.SizeSet
+	if plan.SizeSet {
+		d.setTrunc(plan.MinSize)
+	}
+	d.size = max(d.size, d.ext.maxEnd())
 	d.plan = nil
 }
 
@@ -458,20 +543,18 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		return errors.New("vfs: plan is not outstanding")
 	}
 	d.mergeBack(plan.Residual)
-	d.base = committedSize
 	d.sizeSet = d.planTrunc
 	if d.planTrunc {
 		d.minSize = min(d.planMin, committedSize)
 	} else {
-		d.minSize = committedSize
+		d.minSize = 0
 	}
 	d.size = max(d.size, d.ext.maxEnd())
 	d.plan = nil
 	if len(d.ext) == 0 && !d.sizeSet {
-		if err := d.wal.Reset(); err != nil {
-			return err
-		}
-		return d.wal.AppendBase(committedSize)
+		// nothing left: drop the entry so the next touch starts from the then-committed
+		// size instead of pinning this one (L-178)
+		return o.evict(d)
 	}
 	// Compact: base, optional truncate, then the live extents' data.
 	recs := []walRec{{typ: recBase, off: committedSize}}
@@ -492,9 +575,6 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 	first := len(recs) - len(d.ext)
 	for i := range d.ext {
 		d.ext[i].walOff = offs[first+i]
-	}
-	if d.size < d.minSize {
-		d.minSize = d.size
 	}
 	return nil
 }

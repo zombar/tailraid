@@ -199,6 +199,17 @@ metadata; this is accepted NFS behaviour and lets a disconnected laptop browse t
 A gateway that just proposed a command calls `WaitApplied(index)` before answering, which
 gives read-your-writes on the issuing node.
 
+The **stale window** this creates is one replication round in normal operation and the
+whole partition on a minority side: a gateway that has not yet applied another gateway's
+unlink, rename or create resolves the *old* name table. A client there may open an inode
+that is already unlinked (its later WRITEs are accepted into the WAL and dropped when the
+Commit answers `ErrNotExist`, docs/04), see `ENOENT` for a file that exists elsewhere, or
+create a name that the leader then reports as `ErrExist`. These are the NFS close-to-open
+anomalies of any multi-server filesystem with asynchronous metadata; what never happens is
+a committed byte changing because of them (I-12, I-35). The model checker encodes exactly
+this rule: after a remove or rename nobody writes the affected names until every node has
+caught up, and a definite answer from a stale gateway counts as "nothing happened".
+
 Health, computed locally:
 
 | `Health` | Condition | Gateway behaviour |

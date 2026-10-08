@@ -332,16 +332,19 @@ func (f *Fabric) ReadFile(ino meta.Ino) []byte {
 	rd := f.Reader()
 	in := f.Inode(ino)
 	size := in.Size
-	if sz, ok := f.Ov.Size(ino); ok {
+	if sz, ok := f.Ov.Size(ino, in.Size); ok {
 		size = sz
 	}
 	out := make([]byte, size)
 	base := func(off uint64, p []byte) error {
 		_, err := rd.ReadAt(ctx, in, p, int64(off))
+		if errors.Is(err, io.EOF) {
+			return nil // past the committed size: the overlay zero-fills
+		}
 		return err
 	}
-	if _, ok := f.Ov.Size(ino); ok {
-		n, err := f.Ov.Read(ino, 0, out, base)
+	if _, ok := f.Ov.Size(ino, in.Size); ok {
+		n, err := f.Ov.Read(ino, in.Size, 0, out, base)
 		if err != nil && !errors.Is(err, io.EOF) {
 			f.TB.Fatal(err)
 		}

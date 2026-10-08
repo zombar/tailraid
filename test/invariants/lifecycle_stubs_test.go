@@ -246,18 +246,6 @@ func TestStubLifecycle_L_161(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-161")
 }
 
-// Lifecycle: L-162
-// Dirty --[ErrConflict rebase]--> dirty extents lost
-func TestStubLifecycle_L_162(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-162")
-}
-
-// Lifecycle: L-163
-// Committed (two versions) --[stale read]--> bytes from two versions in one chunk
-func TestStubLifecycle_L_163(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-163")
-}
-
 // Lifecycle: L-165
 // Degraded --[repair]--> chunk bytes differ from original Hash after repair
 func TestStubLifecycle_L_165(t *testing.T) {

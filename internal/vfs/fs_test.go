@@ -189,7 +189,7 @@ func TestVFS_RemoveDirtyFile_DropsOverlay(t *testing.T) {
 	_ = fh.Close()
 	ino := f.InodeOf(fs, "/a")
 	must(t, fs.Remove("/a"))
-	if _, ok := f.Ov.Size(ino); ok {
+	if _, ok := f.Ov.Size(ino, 0); ok {
 		t.Fatal("overlay still tracks removed inode")
 	}
 	if _, err := fh.Write([]byte("x")); err == nil {

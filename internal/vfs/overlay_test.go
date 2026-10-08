@@ -56,7 +56,7 @@ func pattern(n int, seed byte) []byte {
 func readAll(t *testing.T, ov *Overlay, ino meta.Ino, base func(uint64, []byte) error, size uint64) []byte {
 	t.Helper()
 	out := make([]byte, size)
-	n, err := ov.Read(ino, 0, out, base)
+	n, err := ov.Read(ino, size, 0, out, base)
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("Read: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestOverlay_WriteAtNonZeroOffset_PreservesBase(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("content differs at %d", firstDiff(got, want))
 	}
-	if sz, ok := ov.Size(ino); !ok || sz != 10000 {
+	if sz, ok := ov.Size(ino, 10000); !ok || sz != 10000 {
 		t.Fatalf("Size = %d,%v", sz, ok)
 	}
 }
@@ -111,17 +111,17 @@ func TestOverlay_ReadMergesExtentsOverBase(t *testing.T) {
 	}
 	// partial read in the middle, spanning base/extent boundaries
 	buf := make([]byte, 30)
-	n, err := ov.Read(ino, 20, buf, baseOf(base))
+	n, err := ov.Read(ino, uint64(len(base)), 20, buf, baseOf(base))
 	if err != nil || n != 30 || !bytes.Equal(buf, want[20:50]) {
 		t.Fatalf("mid read n=%d err=%v got %q want %q", n, err, buf, want[20:50])
 	}
 	// read at EOF
-	n, err = ov.Read(ino, 110, buf, baseOf(base))
+	n, err = ov.Read(ino, uint64(len(base)), 110, buf, baseOf(base))
 	if n != 0 || !errors.Is(err, io.EOF) {
 		t.Fatalf("read at EOF: n=%d err=%v", n, err)
 	}
 	// short read crossing EOF returns io.EOF with the bytes
-	n, err = ov.Read(ino, 100, buf, baseOf(base))
+	n, err = ov.Read(ino, uint64(len(base)), 100, buf, baseOf(base))
 	if n != 10 || !errors.Is(err, io.EOF) || !bytes.Equal(buf[:10], want[100:]) {
 		t.Fatalf("read crossing EOF: n=%d err=%v", n, err)
 	}
@@ -185,7 +185,7 @@ func TestOverlay_TruncateDownThenUp(t *testing.T) {
 	if ms, _ := ov.MinSize(ino); ms != 300 {
 		t.Fatalf("MinSize = %d", ms)
 	}
-	if sz, _ := ov.Size(ino); sz != 800 {
+	if sz, _ := ov.Size(ino, 1000); sz != 800 {
 		t.Fatalf("Size = %d", sz)
 	}
 }
@@ -272,11 +272,11 @@ func TestOverlay_AbortFlush_MergesBackNewerWins(t *testing.T) {
 	if string(got) != "aaBBaa" {
 		t.Fatalf("after abort %q", got)
 	}
-	if sz, _ := ov.Size(ino); sz != 6 {
+	if sz, _ := ov.Size(ino, 0); sz != 6 {
 		t.Fatalf("Size %d", sz)
 	}
-	if ms, _ := ov.MinSize(ino); ms != 0 {
-		t.Fatalf("MinSize %d (plan base 0 must be kept)", ms)
+	if ms, _ := ov.MinSize(ino); ms != 6 {
+		t.Fatalf("MinSize %d (the fresh truncate point must be kept)", ms)
 	}
 	d := ov.Dirty()
 	if len(d) != 1 || d[0].Flushing || d[0].DirtyBytes != 6 {
@@ -284,7 +284,7 @@ func TestOverlay_AbortFlush_MergesBackNewerWins(t *testing.T) {
 	}
 	// a second snapshot now contains everything, and the WAL still holds all live bytes
 	plan2, ok := ov.SnapshotForFlush(ino)
-	if !ok || plan2.Extents.bytes() != 6 || !plan2.SizeSet || plan2.MinSize != 0 {
+	if !ok || plan2.Extents.bytes() != 6 || !plan2.SizeSet || plan2.MinSize != 6 {
 		t.Fatalf("plan2 = %+v", plan2)
 	}
 }
@@ -298,20 +298,15 @@ func TestOverlay_CommitFlushed_ResetsOrCompacts(t *testing.T) {
 	must(t, ov.Write(ino, 0, 0, big))
 	plan, _ := ov.SnapshotForFlush(ino)
 	must(t, ov.CommitFlushed(plan, 50000))
-	st, err := os.Stat(filepath.Join(dir, "8.wal"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Size() > 2*recHeaderLen { // only the base record
-		t.Fatalf("WAL not reset: %d bytes", st.Size())
+	// nothing left to flush: the entry and its WAL are gone (L-178), reads go to the base
+	if _, err := os.Stat(filepath.Join(dir, "8.wal")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("WAL not removed after a clean commit: %v", err)
 	}
 	if len(ov.Dirty()) != 0 || ov.TotalDirty() != 0 {
 		t.Fatalf("still dirty: %+v total=%d", ov.Dirty(), ov.TotalDirty())
 	}
-	// read after commit sees base (the committed data) through the base callback
-	got := readAll(t, ov, ino, baseOf(big), 50000)
-	if !bytes.Equal(got, big) {
-		t.Fatal("read after commit differs")
+	if _, ok := ov.Size(ino, 50000); ok {
+		t.Fatal("clean inode still tracked")
 	}
 
 	// now a flush with concurrent fresh writes: WAL is compacted to the fresh bytes only
@@ -319,14 +314,17 @@ func TestOverlay_CommitFlushed_ResetsOrCompacts(t *testing.T) {
 	plan, _ = ov.SnapshotForFlush(ino)
 	must(t, ov.Write(ino, 50000, 10, []byte("fresh")))
 	must(t, ov.CommitFlushed(plan, 50000))
-	st, _ = os.Stat(filepath.Join(dir, "8.wal"))
+	st, err := os.Stat(filepath.Join(dir, "8.wal"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if st.Size() > 1000 {
 		t.Fatalf("WAL not compacted: %d bytes", st.Size())
 	}
 	want := bytes.Clone(big)
 	copy(want[100:], bytes.Repeat([]byte("y"), 40000)) // committed → delivered by base
 	copy(want[10:], "fresh")
-	got = readAll(t, ov, ino, baseOf(want), 50000)
+	got := readAll(t, ov, ino, baseOf(want), 50000)
 	// base callback already includes the y's (committed); the overlay must add "fresh" only
 	if !bytes.Equal(got, want) {
 		t.Fatalf("after compaction differs at %d", firstDiff(got, want))
@@ -420,7 +418,7 @@ func TestOverlay_RestartReplaysDirtyWALs(t *testing.T) {
 	if ms, _ := ov2.MinSize(a); ms != 3000 {
 		t.Fatalf("a MinSize after restart %d", ms)
 	}
-	if sz, _ := ov2.Size(a); sz != 4005 {
+	if sz, _ := ov2.Size(a, 0); sz != 4005 {
 		t.Fatalf("a Size after restart %d", sz)
 	}
 	d := ov2.Dirty()
@@ -447,7 +445,7 @@ func TestOverlay_DropRemovesWAL(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "30.wal")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("WAL still exists: %v", err)
 	}
-	if _, ok := ov.Size(ino); ok {
+	if _, ok := ov.Size(ino, 0); ok {
 		t.Fatal("inode still tracked")
 	}
 	if ov.TotalDirty() != 0 || len(ov.Dirty()) != 0 {
@@ -484,7 +482,7 @@ func TestOverlay_ConcurrentWritersDifferentInodes(t *testing.T) {
 					return
 				}
 				buf := make([]byte, 10)
-				if _, err := ov.Read(ino, uint64(j*10), buf, baseOf(nil)); err != nil && !errors.Is(err, io.EOF) {
+				if _, err := ov.Read(ino, 0, uint64(j*10), buf, baseOf(nil)); err != nil && !errors.Is(err, io.EOF) {
 					t.Error(err)
 				}
 			}
@@ -595,7 +593,7 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 			off := pick(f)
 			n := 1 + rng.Intn(int(cs))
 			buf := make([]byte, n)
-			got, err := ov.Read(ino, off, buf, baseOf(f.base))
+			got, err := ov.Read(ino, uint64(len(f.base)), off, buf, baseOf(f.base))
 			wantN := 0
 			if off < uint64(len(f.model)) {
 				wantN = min(n, len(f.model)-int(off))
@@ -614,7 +612,7 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 				if !bytes.Equal(got, f.model) {
 					t.Fatalf("op %d ino %d: full content differs at %d (len got %d want %d)", i, ino, firstDiff(got, f.model), len(got), len(f.model))
 				}
-				if sz, ok := ov.Size(ino); ok && sz != uint64(len(f.model)) {
+				if sz, ok := ov.Size(ino, uint64(len(f.base))); ok && sz != uint64(len(f.model)) {
 					t.Fatalf("op %d ino %d: Size %d want %d", i, ino, sz, len(f.model))
 				}
 			}
@@ -630,4 +628,61 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 		}
 	}
 	_ = rand.Int
+}
+
+// An overlay entry must never pin the committed size it first saw: after its flush the
+// entry is dropped, and while dirty it treats the size passed by the caller (the current
+// committed size) as the base, so another gateway's growth is visible and a truncate
+// records the requested point rather than the stale base.
+// Invariant: I-35
+// Lifecycle: L-178
+func TestOverlay_StaleEntry_FollowsCommittedSize(t *testing.T) {
+	ov, _ := newOverlay(t, t.TempDir())
+	ino := meta.Ino(9)
+	grown := pattern(300, 7) // what another gateway committed meanwhile
+
+	// clean entry left behind by a flush at size 100
+	must(t, ov.Write(ino, 100, 0, []byte("0123456789")))
+	plan, ok := ov.SnapshotForFlush(ino)
+	if !ok {
+		t.Fatal("no plan")
+	}
+	must(t, ov.CommitFlushed(plan, 100))
+	if _, ok := ov.Size(ino, 100); ok {
+		t.Fatal("a clean entry must not report a size (it is dropped after its flush)")
+	}
+	// the file grew to 300 through another gateway; this gateway writes 5 bytes at 0
+	must(t, ov.Write(ino, 300, 0, []byte("abcde")))
+	if sz, ok := ov.Size(ino, 300); !ok || sz != 300 {
+		t.Fatalf("Size = %d,%v want 300 (committed size, no truncate)", sz, ok)
+	}
+	buf := make([]byte, 50)
+	n, err := ov.Read(ino, 300, 200, buf, baseOf(grown))
+	if err != nil || n != 50 || !bytes.Equal(buf, grown[200:250]) {
+		t.Fatalf("read above the stale base: n=%d err=%v differs at %d", n, err, firstDiff(buf, grown[200:250]))
+	}
+	plan, ok = ov.SnapshotForFlush(ino)
+	if !ok || plan.SizeSet || plan.sizeAgainst(300) != 300 {
+		t.Fatalf("plan = %+v (size against committed 300 must be 300)", plan)
+	}
+	ov.AbortFlush(plan)
+	// a truncate records the requested point, not the stale base
+	must(t, ov.Truncate(ino, 300, 250))
+	plan, ok = ov.SnapshotForFlush(ino)
+	if !ok || !plan.SizeSet || plan.MinSize != 250 || plan.Size != 250 {
+		t.Fatalf("plan after truncate = %+v want MinSize 250", plan)
+	}
+	n, err = ov.Read(ino, 300, 200, buf, baseOf(grown))
+	if err != nil || n != 50 || !bytes.Equal(buf, grown[200:250]) {
+		t.Fatalf("read below the truncate point: n=%d err=%v", n, err)
+	}
+	if n, err = ov.Read(ino, 300, 250, buf, baseOf(grown)); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("read at the truncate point: n=%d err=%v want EOF", n, err)
+	}
+	// the dirty entry also follows a shrink by another gateway: committed 120, no truncate here
+	must(t, ov.CommitFlushed(plan, 250))
+	must(t, ov.Write(ino, 120, 0, []byte("zz")))
+	if sz, _ := ov.Size(ino, 120); sz != 120 {
+		t.Fatalf("Size after the other gateway shrank = %d want 120", sz)
+	}
 }

@@ -41,7 +41,7 @@ type dirtyFile struct {
     mu       sync.Mutex
     ino      meta.Ino
     size     uint64   // overlay size, authoritative for GETATTR while dirty
-    minSize  uint64   // lowest size seen since the last flush (the truncation point)
+    minSize  uint64   // the truncation point: lowest truncate since the last flush (valid only with sizeSet)
     sizeSet  bool     // a truncate happened since the last flush
     ext      extents
     wal      *WAL
@@ -68,8 +68,16 @@ Extent-set semantics (all O(log n + k) on the sorted slice):
   as zeros (no extent is created for it).
 - `Read(off, p)`: WAL extents first; base bytes only for offsets `< minSize` (or all base
   bytes when `!sizeSet`); everything else zero. This is the read-your-writes view (I-34).
-- `minSize` starts at `base.Size` when the dirty file is created and is reset to the new
-  committed size after each flush.
+- `minSize` is set by the first truncate since the last flush and lowered by later ones;
+  without a truncate the overlay has no size of its own: the client-visible size is
+  `max(committed size, end of the dirty extents)` and base bytes are valid up to the
+  committed size *as of the read or flush*, never as of the entry's creation. A dirty
+  entry therefore follows other gateways' Commits (they may grow or shrink the file
+  between this gateway's touches, L-178) and an entry with nothing left to flush is
+  dropped after its Commit, so the next touch starts from the current committed size.
+  Every byte assembled for a flush comes from the plan's extents or from the base chunk
+  as it is at flush time; a rewritten chunk is always `min(ChunkSize, size − idx·ChunkSize)`
+  long for the size the Commit will carry.
 
 ### 2.1 WAL record layout
 
