@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // ErrWALFull is returned by Write when the inode's WAL has reached its cap; the caller
@@ -29,6 +29,10 @@ type Option func(*Overlay)
 
 // WithWALCap sets the per-inode WAL size cap in bytes.
 func WithWALCap(n int64) Option { return func(o *Overlay) { o.walCap = n } }
+
+// WithFS routes every WAL file operation through fsys (tests inject faults); the
+// default is the real filesystem.
+func WithFS(fsys sysfs.FS) Option { return func(o *Overlay) { o.fs = fsys } }
 
 // DirtyInfo describes one inode with unflushed state (docs/04 §flush triggers).
 type DirtyInfo struct {
@@ -114,6 +118,7 @@ type Overlay struct {
 	chunkSize uint32
 	clk       clock.Clock
 	walCap    int64
+	fs        sysfs.FS
 
 	mu    sync.RWMutex
 	files map[meta.Ino]*dirtyFile
@@ -125,14 +130,14 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 	if chunkSize == 0 {
 		return nil, errors.New("vfs: chunk size must be > 0")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
-	}
-	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, files: map[meta.Ino]*dirtyFile{}}
+	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}}
 	for _, opt := range opts {
 		opt(o)
 	}
-	ents, err := os.ReadDir(dir)
+	if err := o.fs.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
+	}
+	ents, err := o.fs.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
 	}
@@ -154,7 +159,7 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 }
 
 func (o *Overlay) replay(ino meta.Ino, path string) error {
-	w, err := openWAL(path)
+	w, err := openWAL(o.fs, path)
 	if err != nil {
 		return err
 	}
@@ -187,7 +192,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		// An empty log (crash between Reset and AppendBase) or a base record alone
 		// (crash between a clean Commit and the removal) carries no state.
 		_ = w.Close()
-		return os.Remove(path)
+		return o.fs.Remove(path)
 	}
 	o.files[ino] = d
 	return nil
@@ -234,7 +239,7 @@ again:
 		o.mu.Lock()
 		d, ok = o.files[ino]
 		if !ok {
-			w, err := openWAL(filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
+			w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
 			if err != nil {
 				o.mu.Unlock()
 				return nil, err
@@ -279,7 +284,7 @@ func (o *Overlay) evict(d *dirtyFile) error {
 	o.mu.Unlock()
 	d.dead = true
 	err := d.wal.Close()
-	if rerr := os.Remove(d.wal.path); rerr != nil && err == nil {
+	if rerr := o.fs.Remove(d.wal.path); rerr != nil && err == nil {
 		err = rerr
 	}
 	return err
@@ -417,7 +422,7 @@ func (o *Overlay) Drop(ino meta.Ino) {
 	}
 	d.mu.Lock()
 	_ = d.wal.Close()
-	_ = os.Remove(d.wal.path)
+	_ = o.fs.Remove(d.wal.path)
 	d.mu.Unlock()
 }
 

@@ -59,7 +59,7 @@ Rules that keep it honest:
 | Seam | Where | Why |
 |---|---|---|
 | `clock.Clock` (`Now`, `NewTimer`, `After`, `Since`) + `clock.Fake{Advance, Set}` | every tailraid timer: GC grace, repair hold-down, flush idle, attr TTL, HTTP timeouts | no sleeps in tests; ~80 lines. Raft keeps its own real clock; raft tests use 20 ms timeouts and condition polling |
-| `sysfs.FS` (`CreateTemp, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, Sync, Close`) + `sysfstest.Fault` | `internal/chunk` only | ENOSPC, torn writes, crash at each fsync step (`SyncDir` is on the ack path: a PUT is acked only after it) |
+| `sysfs.FS` (`CreateTemp, OpenFile, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, WriteAt, Sync, Close, Truncate`) + `sysfstest.Fault` | `internal/chunk` and the `internal/vfs` WAL only | ENOSPC, torn writes, failed fsync, crash at each fsync step (`SyncDir` is on the ack path: a PUT is acked only after it; a WAL append is acked only after its fsync) |
 | `FaultNet` (`http.RoundTripper` wrapper keyed src→dst: `Drop`, `Delay`, `Partition`, `ErrorOnce`) | RPC client in tests and under `--dev` | production HTTP code runs in every multi-node test |
 | `cluster.Hooks` (nil-checked func fields, one per crash point C1..C7 of `docs/05`: `BeforeWALSync`, `BeforeClientAck`, `AfterShardTempWritten`, `AfterShardFsync`, `AfterShardRename`, `AfterAllShardsAcked`, `AfterRaftCommit`) | write path | crash injection at every durability point; nil in production, no behaviour change |
 | `tailscale.Client` interface + `tailscale.Fake` | WhoIs authorizer, prober | tailscaled is not available in CI |

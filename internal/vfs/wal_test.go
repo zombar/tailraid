@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs/sysfstest"
 )
 
 type rec struct {
@@ -32,7 +35,7 @@ func replayAll(t *testing.T, w *WAL) []rec {
 // Invariant: I-7, I-37
 func TestWAL_AppendReplayRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "7.wal")
-	w, err := openWAL(path)
+	w, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +64,7 @@ func TestWAL_AppendReplayRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w2, err := openWAL(path)
+	w2, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +100,7 @@ func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 	for _, mode := range []string{"truncate-mid-record", "flip-crc", "flip-data", "truncate-mid-header"} {
 		t.Run(mode, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "1.wal")
-			w, err := openWAL(path)
+			w, err := openWAL(sysfs.OS{}, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +131,7 @@ func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 			if err := os.WriteFile(path, raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			w2, err := openWAL(path)
+			w2, err := openWAL(sysfs.OS{}, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +160,7 @@ func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 
 func TestWAL_Reset(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "9.wal")
-	w, err := openWAL(path)
+	w, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +186,7 @@ func TestWAL_Reset(t *testing.T) {
 // Invariant: I-35, I-37
 func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "3.wal")
-	w, err := openWAL(path)
+	w, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +224,7 @@ func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w2, err := openWAL(path)
+	w2, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +249,7 @@ func readWAL(t *testing.T, w *WAL, off int64, n int) []byte {
 }
 
 func TestWAL_ReadAtBeyondEnd(t *testing.T) {
-	w, err := openWAL(filepath.Join(t.TempDir(), "2.wal"))
+	w, err := openWAL(sysfs.OS{}, filepath.Join(t.TempDir(), "2.wal"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,5 +257,33 @@ func TestWAL_ReadAtBeyondEnd(t *testing.T) {
 	o, _ := w.AppendWrite(0, []byte("ab"))
 	if err := w.ReadAt(make([]byte, 5), o); err == nil {
 		t.Fatal("ReadAt past end succeeded")
+	}
+}
+
+// The WAL runs on the sysfs.FS seam so fsync failures and crashes can be injected. A
+// failed fsync must surface from the append: the WRITE is then not acknowledged (I-7).
+// Invariant: I-7
+func TestWAL_SyncFailure_ReturnsError(t *testing.T) {
+	ff := sysfstest.New(sysfs.OS{})
+	w, err := openWAL(ff, filepath.Join(t.TempDir(), "1.wal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.AppendBase(0); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+	ff.FailAt(sysfstest.StepSync, boom)
+	if _, err := w.AppendWrite(4096, []byte("x")); !errors.Is(err, boom) {
+		t.Fatalf("AppendWrite after fsync failure: err=%v, want %v", err, boom)
+	}
+	// The next append must not report a size that includes the un-synced record.
+	if _, err := w.AppendWrite(8192, []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	recs := replayAll(t, w)
+	if len(recs) != 2 || recs[1].off != 8192 {
+		t.Fatalf("replayed %+v, want base + write@8192", recs)
 	}
 }

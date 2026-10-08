@@ -13,7 +13,7 @@ first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 ```
 cmd/tailraid/       the binary: node daemon, gateways, management CLI (cobra from M1)
 cmd/soak/           docker-compose soak driver (test tooling)
-internal/clock      Clock seam            internal/sysfs    FS seam (shard store only)
+internal/clock      Clock seam            internal/sysfs    FS seam (shard store + WAL)
 internal/ec         Reed-Solomon codec    internal/chunk    shard store, cache, sweep
 internal/meta       FSM, commands, codec, placement, read API
 internal/vfs        overlay+WAL, flusher, reader, billy.Filesystem
@@ -74,7 +74,7 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
   chunk with < k+m good slots, "orphan shard" for an uploaded-but-uncommitted or unplaced
   shard, "re-place" for `SetPlacement` work, `ErrFull` for the 507 condition, wire names
   (`NFS3ERR_ROFS`) in tables and errno names (`EROFS`) in prose, `(k,m)` for a policy.
-- The only seams: `clock.Clock`, `sysfs.FS` (shard store only), `FaultNet`, `cluster.Hooks`,
+- The only seams: `clock.Clock`, `sysfs.FS` (shard store and WAL only), `FaultNet`, `cluster.Hooks`,
   `tailscale.Client`. Raft is not wrapped.
 - No `time.Sleep` for synchronization (forbidigo). Wait on channels, futures or an
   `Eventually` helper driven by the fake clock.

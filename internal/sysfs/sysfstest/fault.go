@@ -24,6 +24,7 @@ const (
 	StepRename
 	StepSyncDir
 	StepRemove
+	StepOpenFile
 )
 
 func (s Step) String() string {
@@ -42,6 +43,8 @@ func (s Step) String() string {
 		return "SyncDir"
 	case StepRemove:
 		return "Remove"
+	case StepOpenFile:
+		return "OpenFile"
 	}
 	return fmt.Sprintf("Step(%d)", int(s))
 }
@@ -162,6 +165,19 @@ func (f *Fault) Open(name string) (sysfs.File, error) {
 	return f.inner.Open(name)
 }
 
+// OpenFile gates StepOpenFile; the returned file gates Write/WriteAt/Sync/Close like a
+// temp file so WAL appends can fail or crash at each step.
+func (f *Fault) OpenFile(name string, flag int, perm fs.FileMode) (sysfs.File, error) {
+	if err := f.check(StepOpenFile, nil); err != nil {
+		return nil, err
+	}
+	inner, err := f.inner.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	return &faultFile{File: inner, f: f, path: name}, nil
+}
+
 func (f *Fault) Rename(oldpath, newpath string) error {
 	if err := f.check(StepRename, nil); err != nil {
 		return err
@@ -242,6 +258,31 @@ func (ff *faultFile) Write(p []byte) (int, error) {
 	}
 	wrote, err := ff.File.Write(p[:n])
 	ff.buf = append(ff.buf, p[:wrote]...)
+	ff.f.mu.Lock()
+	ff.f.writtenByFD[ff] = written + int64(wrote)
+	ff.f.mu.Unlock()
+	if err != nil {
+		return wrote, err
+	}
+	return wrote, short
+}
+
+// WriteAt is gated like Write (same step, same short-write limit).
+func (ff *faultFile) WriteAt(p []byte, off int64) (int, error) {
+	if err := ff.f.check(StepWrite, ff); err != nil {
+		return 0, err
+	}
+	ff.f.mu.Lock()
+	limit, werr := ff.f.writeLimit, ff.f.writeErr
+	written := ff.f.writtenByFD[ff]
+	ff.f.mu.Unlock()
+	n := len(p)
+	var short error
+	if limit >= 0 && written+int64(n) > limit {
+		n = int(max(limit-written, 0))
+		short = werr
+	}
+	wrote, err := ff.File.WriteAt(p[:n], off)
 	ff.f.mu.Lock()
 	ff.f.writtenByFD[ff] = written + int64(wrote)
 	ff.f.mu.Unlock()
