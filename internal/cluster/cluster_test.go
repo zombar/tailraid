@@ -9,7 +9,7 @@ import (
 	"github.com/hashicorp/raft"
 	"go.uber.org/goleak"
 
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 func TestMain(m *testing.M) {

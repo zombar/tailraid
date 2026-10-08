@@ -13,14 +13,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/chunk"
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/cluster"
-	"github.com/gurgeh/tailraid/internal/config"
-	"github.com/gurgeh/tailraid/internal/mount"
-	"github.com/gurgeh/tailraid/internal/nfsgw"
-	"github.com/gurgeh/tailraid/internal/sysfs"
-	"github.com/gurgeh/tailraid/internal/vfs"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/cluster"
+	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/mount"
+	"github.com/zombar/tailraid/internal/nfsgw"
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // Serve wires the M1 single-node stack and runs it until ctx is done. The M2 cluster

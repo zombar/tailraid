@@ -3,7 +3,7 @@ package chunk
 import (
 	"context"
 
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // ShardClient moves shards to and from storage nodes, including this node (docs/04 §9,

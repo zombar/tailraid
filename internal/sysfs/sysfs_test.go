@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // The OS implementation is thin; these tests pin the semantics the shard store relies on:

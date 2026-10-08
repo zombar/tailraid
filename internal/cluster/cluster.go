@@ -22,8 +22,8 @@ import (
 	"go.etcd.io/bbolt"
 	bolterrors "go.etcd.io/bbolt/errors"
 
-	"github.com/gurgeh/tailraid/internal/chunk"
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // Errors.

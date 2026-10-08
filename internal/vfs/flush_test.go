@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/chunk"
-	"github.com/gurgeh/tailraid/internal/meta"
-	"github.com/gurgeh/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // Invariant: I-7

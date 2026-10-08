@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // Cache is a bounded LRU of decoded chunks under root/cache/<hh>/<hex>, keyed by chunk

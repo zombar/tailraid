@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/gurgeh/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/ec"
 )
 
 // Store is the read API of the FSM (docs/02 §"meta.Store"). All methods take the

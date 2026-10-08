@@ -11,7 +11,7 @@ import (
 	"github.com/go-git/go-billy/v5"
 	nfsfile "github.com/willscott/go-nfs/file"
 
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // File is an open handle on an inode. go-nfs opens, seeks, writes and closes a File for

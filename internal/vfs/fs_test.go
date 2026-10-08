@@ -13,7 +13,7 @@ import (
 	nfsfile "github.com/willscott/go-nfs/file"
 	check "gopkg.in/check.v1"
 
-	"github.com/gurgeh/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // --- go-billy conformance suites via a gocheck shim ------------------------------------

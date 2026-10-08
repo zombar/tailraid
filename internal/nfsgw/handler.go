@@ -10,8 +10,8 @@ import (
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
 
-	"github.com/gurgeh/tailraid/internal/meta"
-	"github.com/gurgeh/tailraid/internal/vfs"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // Handler implements nfs.Handler over a vfs.FS. Handles are 16-byte (magic, gen, ino)

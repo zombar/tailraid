@@ -7,8 +7,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/gurgeh/tailraid/internal/sysfs"
-	"github.com/gurgeh/tailraid/internal/sysfs/sysfstest"
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs/sysfstest"
 )
 
 func writeViaFault(t *testing.T, fsys sysfs.FS, dir string, data []byte) (tmpName string, err error) {

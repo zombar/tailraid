@@ -12,11 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/gurgeh/tailraid/internal/cluster"
-	"github.com/gurgeh/tailraid/internal/config"
-	"github.com/gurgeh/tailraid/internal/meta"
-	"github.com/gurgeh/tailraid/internal/mount"
-	"github.com/gurgeh/tailraid/internal/node"
+	"github.com/zombar/tailraid/internal/cluster"
+	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/mount"
+	"github.com/zombar/tailraid/internal/node"
 )
 
 func loadConfig(cmd *cobra.Command) (config.Config, string, error) {

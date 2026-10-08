@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/chunk"
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/ec"
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // Config holds the flush policy (docs/04 §3, §4).

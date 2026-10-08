@@ -8,10 +8,10 @@ import (
 	"io"
 	"testing"
 
-	"github.com/gurgeh/tailraid/internal/chunk"
-	"github.com/gurgeh/tailraid/internal/meta"
-	"github.com/gurgeh/tailraid/internal/testharness"
-	"github.com/gurgeh/tailraid/internal/vfs"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // writeAndFlush creates a file holding data and flushes it through the real flusher.

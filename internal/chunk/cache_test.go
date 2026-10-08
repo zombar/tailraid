@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 func TestCache_PutGetAndMiss(t *testing.T) {

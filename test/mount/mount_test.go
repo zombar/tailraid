@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/cluster"
-	"github.com/gurgeh/tailraid/internal/config"
-	"github.com/gurgeh/tailraid/internal/meta"
-	mnt "github.com/gurgeh/tailraid/internal/mount"
-	"github.com/gurgeh/tailraid/internal/node"
+	"github.com/zombar/tailraid/internal/cluster"
+	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/meta"
+	mnt "github.com/zombar/tailraid/internal/mount"
+	"github.com/zombar/tailraid/internal/node"
 )
 
 func sh(t *testing.T, dir, script string) string {

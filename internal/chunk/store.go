@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // On-disk shard file: magic | payloadLen u32 LE | sha256(payload) | payload.

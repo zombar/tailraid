@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/sysfs"
-	"github.com/gurgeh/tailraid/internal/sysfs/sysfstest"
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs/sysfstest"
 )
 
 func payload(n int, seed int64) []byte {

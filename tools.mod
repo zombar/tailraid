@@ -1,4 +1,4 @@
-module github.com/gurgeh/tailraid
+module github.com/zombar/tailraid
 
 go 1.27
 

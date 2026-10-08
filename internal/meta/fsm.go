@@ -11,7 +11,7 @@ import (
 
 	"github.com/hashicorp/raft"
 
-	"github.com/gurgeh/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/ec"
 )
 
 // FSM is the replicated metadata state machine (docs/02). Apply is deterministic:

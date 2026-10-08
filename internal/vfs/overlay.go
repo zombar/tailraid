@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // ErrWALFull is returned by Write when the inode's WAL has reached its cap; the caller

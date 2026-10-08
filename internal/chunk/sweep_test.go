@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 type placement map[ShardKey]bool // key → placed here; absent → unknown

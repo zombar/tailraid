@@ -15,8 +15,8 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/helper/chroot"
 
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // FS is the billy.Filesystem the NFS and S3 gateways serve (docs/04, docs/07). Every

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // Step identifies a point in the temp → write → sync → close → rename → syncdir sequence.

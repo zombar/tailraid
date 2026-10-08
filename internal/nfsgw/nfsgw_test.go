@@ -15,9 +15,9 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 	"go.uber.org/goleak"
 
-	"github.com/gurgeh/tailraid/internal/meta"
-	"github.com/gurgeh/tailraid/internal/nfsgw"
-	"github.com/gurgeh/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/nfsgw"
+	"github.com/zombar/tailraid/internal/testharness"
 )
 
 func TestMain(m *testing.M) {

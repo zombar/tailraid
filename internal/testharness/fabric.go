@@ -18,12 +18,12 @@ import (
 	"github.com/hashicorp/raft"
 	nfsfile "github.com/willscott/go-nfs/file"
 
-	"github.com/gurgeh/tailraid/internal/chunk"
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/ec"
-	"github.com/gurgeh/tailraid/internal/meta"
-	"github.com/gurgeh/tailraid/internal/sysfs"
-	"github.com/gurgeh/tailraid/internal/vfs"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // TB is the subset of testing.TB the fabric needs, so gocheck suites can build one too.

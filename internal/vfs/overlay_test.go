@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gurgeh/tailraid/internal/clock"
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 const testCS = uint32(4096)
