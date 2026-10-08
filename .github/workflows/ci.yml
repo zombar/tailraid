@@ -110,8 +110,10 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: true }
       - run: make release VERSION=${GITHUB_REF_NAME}
+      - run: scripts/changelog.sh notes ${GITHUB_REF_NAME} > dist/release-notes.md && cat dist/release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: dist/release-notes.md
           files: |
             dist/tailraid_*
             dist/sha256sums.txt

@@ -70,11 +70,15 @@ and partition steps then run against the real cluster through those endpoints.
 A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
 
 1. `make tag VERSION=v0.1.0` refuses a dirty tree or a tag that exists, runs `make check`,
-   creates an annotated tag and pushes it.
+   regenerates `CHANGELOG.md` from the commit log (`scripts/changelog.sh`: one section per
+   tag, entries grouped into Changes / Documentation / Tooling by the subject's `scope:`
+   prefix, so commit subjects are the changelog), commits it, then creates an annotated
+   tag and pushes it.
 2. CI (`release` job, after `checks`, `lint` and `test`) runs `make release
    VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
    built with `-trimpath -ldflags "-s -w -X main.version=<tag>"`, plus `sha256sums.txt`
-   over them, attached to a GitHub release named after the tag.
+   over them, attached to a GitHub release named after the tag whose notes are that tag's
+   `CHANGELOG.md` section.
 3. Every artifact answers `tailraid version` with the tag, which is what the updater and
    `status` (`VERSION` column) show.
 
