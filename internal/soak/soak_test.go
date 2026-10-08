@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"github.com/zombar/tailraid/internal/testseed"
 	"os"
 	"strings"
 	"testing"
@@ -226,7 +226,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	defer c.Close()
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
-	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rand.New(rand.NewSource(1))} //nolint:gosec // seeded workload
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: testseed.Seed(t)}
 	sum, err := run.Execute(context.Background())
 	if err != nil {
 		t.Fatal(err)

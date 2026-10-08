@@ -2,7 +2,12 @@ package meta
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"flag"
+	"github.com/zombar/tailraid/internal/testseed"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -29,8 +34,7 @@ func shuffled(r *rand.Rand, c []Candidate) []Candidate {
 
 // Invariant: I-8
 func TestPlace_DeterministicAcrossNodes(t *testing.T) {
-	seed := int64(1)
-	r := rand.New(rand.NewSource(seed))
+	r := testseed.Seed(t)
 	base := cands(1, 1, 2, 3, 5, 8, 13)
 	for i := uint64(0); i < 10000; i++ {
 		h := hashN(i)
@@ -38,8 +42,60 @@ func TestPlace_DeterministicAcrossNodes(t *testing.T) {
 		for node := 0; node < 7; node++ {
 			got := Place(h, shuffled(r, base), 3)
 			if !equalIdx(got, want) {
-				t.Fatalf("seed %d hash %d node %d: %v != %v", seed, i, node, got, want)
+				t.Fatalf("hash %d node %d: %v != %v", i, node, got, want)
 			}
+		}
+	}
+}
+
+var updateGolden = flag.Bool("update-golden", false, "rewrite testdata/place_golden.json from the current implementation")
+
+// Place must give the same answer on every platform, not only in one process: math.Log
+// is assembly on amd64 and pure Go on arm64, so the vectors in testdata were generated on
+// one architecture and are checked on every CI leg.
+// Invariant: I-8
+func TestPlace_GoldenVectors(t *testing.T) {
+	type vec struct {
+		Hash    uint64    `json:"hash"`
+		Weights []uint64  `json:"weights"`
+		N       int       `json:"n"`
+		Want    []NodeIdx `json:"want"`
+	}
+	path := filepath.Join("testdata", "place_golden.json")
+	if *updateGolden {
+		r := rand.New(rand.NewSource(20261008)) //nolint:gosec // fixed: the vectors are the point
+		var vecs []vec
+		for i := 0; i < 96; i++ {
+			ws := make([]uint64, 2+r.Intn(12))
+			for j := range ws {
+				ws[j] = uint64(1 + r.Intn(64))
+			}
+			n := 1 + r.Intn(len(ws)+1)
+			h := uint64(r.Int63())
+			vecs = append(vecs, vec{Hash: h, Weights: ws, N: n, Want: Place(hashN(h), cands(ws...), n)})
+		}
+		b, err := json.MarshalIndent(vecs, "", " ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update-golden to generate)", err)
+	}
+	var vecs []vec
+	if err := json.Unmarshal(b, &vecs); err != nil {
+		t.Fatal(err)
+	}
+	if len(vecs) < 50 {
+		t.Fatalf("only %d vectors", len(vecs))
+	}
+	for i, v := range vecs {
+		if got := Place(hashN(v.Hash), cands(v.Weights...), v.N); !equalIdx(got, v.Want) {
+			t.Fatalf("vector %d: Place(%d, %v, %d) = %v, golden %v", i, v.Hash, v.Weights, v.N, got, v.Want)
 		}
 	}
 }

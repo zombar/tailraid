@@ -187,7 +187,7 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 
 | Invariant | Tests |
 |---|---|
-| I-8 | `TestPlace_DeterministicAcrossNodes`, `FuzzPlace_Determinism`, `TestCluster_PlacementAgreesOnAllNodes` |
+| I-8 | `TestPlace_DeterministicAcrossNodes`, `TestPlace_GoldenVectors`, `FuzzPlace_Determinism`, `TestCluster_PlacementAgreesOnAllNodes` |
 | I-9 | `TestPlace_DistinctNodes`, `TestFSM_Commit_RejectsDuplicatePlacement`, `TestCluster_WriteReadAllNodes`, `TestModelCheck_Long` |
 | I-10 | `TestDecode_EverySubsetOfKShards`, `TestDecode_FewerThanK_Fails`, `TestEncodeDecode_Sizes`, `TestTailPadding_NotLeaked`, `FuzzRoundTrip`, `TestCluster_KillMNodes_AllDataReadable` |
 | I-30 | `TestShardSizesEqual_AndDeterministic`, `TestEncode_DoesNotAliasInput`, `TestVerify_EncodedIsConsistent` |

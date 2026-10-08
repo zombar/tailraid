@@ -1,23 +1,10 @@
 package vfs
 
 import (
-	"flag"
-	"math/rand"
 	"testing"
-	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 )
-
-var seedFlag = flag.Int64("seed", 0, "seed for randomized tests (0 = time-based)")
-
-func seed(t *testing.T) *rand.Rand {
-	t.Helper()
-	s := *seedFlag
-	if s == 0 {
-		s = time.Now().UnixNano()
-	}
-	t.Logf("seed=%d (re-run with -seed=%d)", s, s)
-	return rand.New(rand.NewSource(s))
-}
 
 // oracle is a byte-array model of a dirty file: each byte records which write (by sequence
 // number) last touched it, 0 meaning "base".
@@ -86,7 +73,7 @@ func checkAgainstOracle(t *testing.T, e extents, o *oracle, origOff map[uint32]u
 // Invariant: I-34
 // Lifecycle: L-6, L-12
 func TestExtents_InsertOverlap_Property(t *testing.T) {
-	rng := seed(t)
+	rng := testseed.Seed(t)
 	iters := 300
 	if testing.Short() {
 		iters = 100

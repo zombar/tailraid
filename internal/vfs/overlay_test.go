@@ -3,6 +3,7 @@ package vfs
 import (
 	"bytes"
 	"errors"
+	"github.com/zombar/tailraid/internal/testseed"
 	"io"
 	"math/rand"
 	"os"
@@ -584,7 +585,7 @@ func TestOverlay_DirtyListing(t *testing.T) {
 // Invariant: I-34, I-37
 // Lifecycle: L-1, L-2, L-3, L-4, L-5, L-6, L-8, L-11, L-12, L-172, L-180, L-181
 func TestOverlay_OracleRandomOps(t *testing.T) {
-	rng := seed(t)
+	rng := testseed.Seed(t)
 	ops := 600
 	if !testing.Short() {
 		ops = 20000

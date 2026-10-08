@@ -3,23 +3,11 @@ package ec
 import (
 	"bytes"
 	"errors"
-	"flag"
+	"github.com/zombar/tailraid/internal/testseed"
 	"math/rand"
 	"testing"
 	"time"
 )
-
-var seedFlag = flag.Int64("seed", 0, "seed for randomized tests (0 = time-based)")
-
-func seed(t *testing.T) *rand.Rand {
-	t.Helper()
-	s := *seedFlag
-	if s == 0 {
-		s = time.Now().UnixNano()
-	}
-	t.Logf("seed=%d (re-run with -seed=%d)", s, s)
-	return rand.New(rand.NewSource(s)) //nolint:gosec // test randomness
-}
 
 func randBytes(r *rand.Rand, n int) []byte {
 	b := make([]byte, n)
@@ -44,7 +32,7 @@ func mustNew(t *testing.T, k, m int) *Codec {
 
 // Invariant: I-10, I-30
 func TestEncodeDecode_Sizes(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range codecs {
 		k, m := km[0], km[1]
 		c := mustNew(t, k, m)
@@ -96,7 +84,7 @@ func subsets(total, n int) [][]int {
 
 // Invariant: I-10
 func TestDecode_EverySubsetOfKShards(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range [][2]int{{2, 1}, {4, 2}, {3, 2}} {
 		k, m := km[0], km[1]
 		c := mustNew(t, k, m)
@@ -131,7 +119,7 @@ func TestDecode_EverySubsetOfKShards(t *testing.T) {
 
 // Invariant: I-10
 func TestDecode_FewerThanK_Fails(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range codecs {
 		k, m := km[0], km[1]
 		c := mustNew(t, k, m)
@@ -192,7 +180,7 @@ func TestTailPadding_NotLeaked(t *testing.T) {
 
 // Invariant: I-30
 func TestShardSizesEqual_AndDeterministic(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range codecs {
 		k, m := km[0], km[1]
 		c := mustNew(t, k, m)
@@ -229,7 +217,7 @@ func TestShardSizesEqual_AndDeterministic(t *testing.T) {
 
 // Invariant: I-30
 func TestEncode_DoesNotAliasInput(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range codecs {
 		k, m := km[0], km[1]
 		c := mustNew(t, k, m)
@@ -262,7 +250,7 @@ func TestEncode_DoesNotAliasInput(t *testing.T) {
 
 // Invariant: I-30
 func TestVerify_EncodedIsConsistent(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range codecs {
 		k, m := km[0], km[1]
 		c := mustNew(t, k, m)
@@ -281,7 +269,7 @@ func TestVerify_EncodedIsConsistent(t *testing.T) {
 
 // Invariant: I-30
 func TestVerify_DetectsCorruption(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	for _, km := range codecs {
 		k, m := km[0], km[1]
 		if m == 0 {
@@ -385,7 +373,7 @@ func TestPool_ReusesCodec(t *testing.T) {
 
 // Invariant: I-10, I-30
 func TestRoundTrip_Property(t *testing.T) {
-	r := seed(t)
+	r := testseed.Seed(t)
 	deadline := time.Now().Add(2 * time.Second)
 	var pool Pool
 	iters := 0

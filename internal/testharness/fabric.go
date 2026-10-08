@@ -4,13 +4,12 @@ package testharness
 import (
 	"context"
 	"errors"
-	"flag"
+	"github.com/zombar/tailraid/internal/testseed"
 	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -469,23 +468,5 @@ func FirstDiff(a, b []byte) int {
 	return len(a)
 }
 
-func init() {
-	// Test packages may define their own -seed; share it rather than redefine it.
-	if flag.Lookup("seed") == nil {
-		flag.Int64("seed", 0, "seed for randomized tests (0 = time-based)")
-	}
-}
-
 // Seed returns a seeded RNG, logging the seed so a failure can be replayed with -seed.
-func Seed(t *testing.T) *rand.Rand {
-	t.Helper()
-	var s int64
-	if f := flag.Lookup("seed"); f != nil {
-		s, _ = strconv.ParseInt(f.Value.String(), 10, 64)
-	}
-	if s == 0 {
-		s = time.Now().UnixNano()
-	}
-	t.Logf("seed=%d (re-run with -seed=%d)", s, s)
-	return rand.New(rand.NewSource(s))
-}
+func Seed(t *testing.T) *rand.Rand { return testseed.Seed(t) }

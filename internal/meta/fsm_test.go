@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"github.com/zombar/tailraid/internal/testseed"
 	"math"
 	"math/rand"
 	"sync"
@@ -121,7 +122,7 @@ func TestFSM_BadCommandLeavesStateUnchanged(t *testing.T) {
 	tf := newTFSM(t)
 	tf.create(RootIno, "a")
 	before := encodeState(t, tf.f.state())
-	rng := rand.New(rand.NewSource(7))
+	rng := testseed.Seed(t)
 	for i := 0; i < 500; i++ {
 		b := make([]byte, rng.Intn(64))
 		rng.Read(b)
@@ -1031,7 +1032,7 @@ func applyAll(t *testing.T, f *FSM, logs []*raft.Log) {
 // Lifecycle: L-60, L-159
 func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	const n = 5000
-	rng := rand.New(rand.NewSource(42))
+	rng := testseed.Seed(t)
 	ref := NewFSM()
 	gen := &cmdGen{rng: rng, f: ref, now: 1000}
 	cur := NewFSM() // snapshot/restore path
@@ -1096,7 +1097,7 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 // Invariant: I-4
 // Lifecycle: L-159
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
-	rng := rand.New(rand.NewSource(99))
+	rng := testseed.Seed(t)
 	gen := &cmdGen{rng: rng, f: NewFSM(), now: 5}
 	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})}}
 	gen.f.Apply(logs[0])
@@ -1119,7 +1120,7 @@ func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 func TestFSM_Persist_ConcurrentWithApply(t *testing.T) {
 	f := NewFSM()
 	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
-	gen := &cmdGen{rng: rand.New(rand.NewSource(3)), f: f, now: 10}
+	gen := &cmdGen{rng: testseed.Seed(t), f: f, now: 10}
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 	wg.Add(1)
