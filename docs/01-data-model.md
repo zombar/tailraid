@@ -24,7 +24,8 @@ type Inode struct {
     Size     uint64
     Atime, Mtime, Ctime int64 // unix nanoseconds, supplied by the proposer (never the FSM)
     Nlink    uint16           // 1 for files/symlinks; 2 + number of subdirectories for dirs
-    Version  uint64           // bumps on every Commit (data change); Commit's optimistic check
+    Version  uint64           // files: bumps on every Commit (data change), Commit's optimistic check;
+                              // directories: bumps on every change of the name table (READDIR cookie verifier)
     Parent   Ino              // 0 for root; single parent (no hard links)
     Name     string           // name within Parent; "" for root
     Chunks   []Hash           // TFile only; len == ceil(Size/ChunkSize); copy-on-write slice

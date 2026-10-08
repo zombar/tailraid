@@ -99,7 +99,7 @@ func RaftConfig(id string, logOutput io.Writer) *raft.Config {
 	c.HeartbeatTimeout = 2 * time.Second
 	c.ElectionTimeout = 2 * time.Second
 	c.LeaderLeaseTimeout = time.Second
-	c.CommitTimeout = 50 * time.Millisecond
+	c.CommitTimeout = 10 * time.Millisecond // followers learn the commit index this soon after a quiet apply
 	c.SnapshotInterval = 2 * time.Minute
 	c.SnapshotThreshold = 8192
 	c.TrailingLogs = 10240

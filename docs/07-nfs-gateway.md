@@ -75,8 +75,13 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **FSStat**: `Total = Σ Node.Capacity · K/(K+M)` over Active nodes, `Free = Total − stored·K/(K+M)`,
   `Files = inodes`, `FreeFiles = 1<<32 − inodes`. Degraded chunks count at their nominal size.
 - **READDIR / READDIRPLUS**: go-nfs pages with cookies over the `[]os.FileInfo` returned by
-  `ReadDir`, which the FSM returns sorted by name. The cookie verifier is go-nfs's default
-  hash of the name list. Directories of 10k+ entries are tested (`TestNFS_ReadDirPlusLargeDirectory`).
+  `ReadDir`, which the FSM returns sorted by name. The handler implements go-nfs's
+  `CachingHandler` verifier hooks only: the cookie verifier is a hash of the directory
+  inode's identity and `Version` (bumped by every name-table change), and the listing is kept (64 most recent)
+  so the following pages reuse it instead of listing and sorting the directory again; a
+  change to the directory changes the verifier, so a stale cookie gets
+  `NFS3ERR_BAD_COOKIE` (I-47, `TestNFS_ReadDirPlus_RemoveBetweenPages`). Directories of
+  10k+ entries are tested (`TestNFS_ReadDirPlusLargeDirectory`).
 - **Attribute caching**: the gateway sets no special attribute TTL; clients use their
   defaults (`actimeo` 3–60 s). Another device's writes become visible on this device within
   the client's attribute cache window after the Raft commit replicates. Stat of a dirty file

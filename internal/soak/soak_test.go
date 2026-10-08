@@ -8,6 +8,7 @@ import (
 	"github.com/zombar/tailraid/internal/testseed"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,10 @@ type harnessEnv struct {
 	t           *testing.T
 	c           *testharness.Cluster
 	partitioned bool // Settle would wait for cut-off nodes to catch up, which they cannot
+
+	// a restart rebuilds a node's overlay and FSM handles while the sampler goroutine
+	// reads them: faults take the write side, the sampler's reads the read side
+	mu sync.RWMutex
 }
 
 func (e *harnessEnv) Name() string { return "in-process harness" }
@@ -84,6 +89,8 @@ func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 }
 
 func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
 		return admin.Report{}, errors.New("node is down")
@@ -158,6 +165,8 @@ func (e *harnessEnv) Chunks(ctx context.Context, n soak.NodeRef, path string) ([
 }
 
 func (e *harnessEnv) FSMHash(_ context.Context, n soak.NodeRef) (uint64, string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
 		return 0, "", errors.New("node is down")
@@ -167,6 +176,8 @@ func (e *harnessEnv) FSMHash(_ context.Context, n soak.NodeRef) (uint64, string,
 }
 
 func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.c.Kill(e.node(n).I)
 	e.c.Clk.Advance(cluster.LiveThreshold + time.Second)
 	e.c.Probe()
@@ -174,6 +185,8 @@ func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
 }
 
 func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.c.Restart(e.node(n).I)
 	if e.quorum() {
 		e.c.Settle()
@@ -182,6 +195,8 @@ func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
 }
 
 func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, n := range nodes {
 		e.c.Kill(e.node(n).I)
 	}

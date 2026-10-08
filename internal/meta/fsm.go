@@ -24,16 +24,14 @@ type FSM struct {
 	stats   Stats // volume totals, kept in step with every apply (Inodes filled on read)
 	applied atomic.Uint64
 
-	waitMu   sync.Mutex
-	waitCond *sync.Cond
-	closed   bool // set by Close: no further index will ever be applied
+	waitMu sync.Mutex
+	waitCh chan struct{} // closed and replaced on every applied index: one broadcast, no goroutine per waiter
+	closed bool          // set by Close: no further index will ever be applied
 }
 
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
-	f := &FSM{st: NewState()}
-	f.waitCond = sync.NewCond(&f.waitMu)
-	return f
+	return &FSM{st: NewState(), waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Tests use it directly.
@@ -55,7 +53,8 @@ func (f *FSM) Apply(l *raft.Log) interface{} {
 func (f *FSM) setApplied(idx uint64) {
 	f.waitMu.Lock()
 	f.applied.Store(idx)
-	f.waitCond.Broadcast()
+	close(f.waitCh)
+	f.waitCh = make(chan struct{})
 	f.waitMu.Unlock()
 }
 
@@ -278,6 +277,7 @@ func (a *applier) newInode(typ FileType, parent *Inode, name string, mode, uid, 
 	st.Inodes[in.Ino] = in
 	parent.Children[name] = in.Ino
 	parent.Mtime, parent.Ctime = now, now
+	parent.Version++ // the name table changed (docs/01)
 	return in
 }
 
@@ -414,6 +414,7 @@ func (a *applier) unlink(c *Unlink) error {
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	p.Mtime, p.Ctime = now, now
+	p.Version++ // the name table changed (docs/01)
 	return nil
 }
 
@@ -445,6 +446,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	delete(st.Inodes, ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
+	p.Version++ // the name table changed (docs/01)
 	return nil
 }
 
@@ -530,7 +532,9 @@ func (a *applier) rename(c *Rename) error {
 	}
 	src.Parent, src.Name, src.Ctime = c.NewParent, c.NewName, now
 	op.Mtime, op.Ctime = now, now
+	op.Version++ // the name table changed (docs/01)
 	np.Mtime, np.Ctime = now, now
+	np.Version++ // the name table changed (docs/01)
 	return nil
 }
 
@@ -815,37 +819,26 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 // closed (ErrClosed: the node shut down with the entry in flight, so the outcome is
 // unknown to this caller).
 func (f *FSM) WaitApplied(ctx context.Context, index uint64) error {
-	if f.applied.Load() >= index {
-		return nil
-	}
-	done := make(chan error, 1)
-	go func() {
-		f.waitMu.Lock()
-		for f.applied.Load() < index {
-			if f.closed {
-				f.waitMu.Unlock()
-				done <- ErrClosed
-				return
-			}
-			select {
-			case <-ctx.Done():
-				f.waitMu.Unlock()
-				return
-			default:
-			}
-			f.waitCond.Wait()
+	for {
+		if f.applied.Load() >= index {
+			return nil
 		}
-		f.waitMu.Unlock()
-		done <- nil
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
 		f.waitMu.Lock()
-		f.waitCond.Broadcast()
+		if f.closed {
+			f.waitMu.Unlock()
+			return ErrClosed
+		}
+		if f.applied.Load() >= index {
+			f.waitMu.Unlock()
+			return nil
+		}
+		ch := f.waitCh
 		f.waitMu.Unlock()
-		return ctx.Err()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -854,6 +847,7 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error {
 func (f *FSM) Close() {
 	f.waitMu.Lock()
 	f.closed = true
-	f.waitCond.Broadcast()
+	close(f.waitCh)
+	f.waitCh = make(chan struct{})
 	f.waitMu.Unlock()
 }
