@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/zombar/tailraid/internal/meta"
-	"hash/fnv"
 	"io"
 	"io/fs"
 	"path/filepath"
@@ -44,8 +43,15 @@ type Store struct {
 	root     string
 	capacity int64
 	used     atomic.Int64
-	locks    [64]sync.Mutex // striped per-key locks: Put/Delete/quarantine of one key serialize
+	lmu      sync.Mutex
+	locks    map[ShardKey]*keyLock // Put/Delete/quarantine of one key serialize; other keys never wait
+	dirs     sync.Map              // prefix directories known to exist (created once per process)
 	qmu      sync.Mutex
+}
+
+type keyLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // Open prepares root/shards and root/quarantine, deletes every leftover temp file regardless
@@ -53,7 +59,7 @@ type Store struct {
 // from disk.
 // capacity 0 means unlimited.
 func Open(fsys sysfs.FS, root string, capacity int64) (*Store, error) {
-	s := &Store{fsys: fsys, root: root, capacity: capacity}
+	s := &Store{fsys: fsys, root: root, capacity: capacity, locks: map[ShardKey]*keyLock{}}
 	for _, d := range []string{s.shardsDir(), s.quarantineDir()} {
 		if err := fsys.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("chunk: open %s: %w", d, err)
@@ -86,10 +92,39 @@ func (s *Store) path(k ShardKey) string {
 	return filepath.Join(s.shardsDir(), string(k[:2]), string(k))
 }
 
-func (s *Store) lock(k ShardKey) *sync.Mutex {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(k))
-	return &s.locks[h.Sum32()%uint32(len(s.locks))]
+// lock serializes operations on one key and returns the unlock. Keys never share a lock,
+// so a PUT's two fsyncs never hold up a PUT of another shard.
+func (s *Store) lock(k ShardKey) func() {
+	s.lmu.Lock()
+	l := s.locks[k]
+	if l == nil {
+		l = &keyLock{}
+		s.locks[k] = l
+	}
+	l.refs++
+	s.lmu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.lmu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(s.locks, k)
+		}
+		s.lmu.Unlock()
+	}
+}
+
+// mkdirOnce creates a prefix directory the first time a shard lands in it.
+func (s *Store) mkdirOnce(dir string) error {
+	if _, ok := s.dirs.Load(dir); ok {
+		return nil
+	}
+	if err := s.fsys.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	s.dirs.Store(dir, struct{}{})
+	return nil
 }
 
 // Used returns the bytes of visible shard files; Capacity the configured budget (0 = none).
@@ -113,19 +148,23 @@ func (s *Store) Has(k ShardKey) bool {
 // mtime is refreshed (sweep grace) and added is 0. Over capacity returns ErrFull before any
 // byte is written. On any failure no partial file remains visible.
 func (s *Store) Put(k ShardKey, payload []byte) (added int64, err error) {
+	return s.PutVerified(k, payload, sha256.Sum256(payload))
+}
+
+// PutVerified is Put for a caller that already holds sha256(payload): the RPC server
+// verified it against the sender's header, the local client computed it for that header.
+// The shard is hashed once per hop; a wrong sum makes every later Get report ErrCorrupt.
+func (s *Store) PutVerified(k ShardKey, payload []byte, sum [32]byte) (added int64, err error) {
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return 0, err
 	}
 	if len(payload) > MaxPayload {
 		return 0, fmt.Errorf("chunk: payload of %d bytes exceeds MaxPayload %d", len(payload), MaxPayload)
 	}
-	mu := s.lock(k)
-	mu.Lock()
-	defer mu.Unlock()
+	defer s.lock(k)()
 
 	final := s.path(k)
 	size := int64(HeaderSize + len(payload))
-	sum := sha256.Sum256(payload)
 	var oldSize int64 // size of an existing file with this key that will be replaced
 	if fi, err := s.fsys.Stat(final); err == nil && !fi.IsDir() {
 		if hdr, err := s.readHeader(final); err == nil && bytes.Equal(hdr[8:40], sum[:]) {
@@ -155,7 +194,7 @@ func (s *Store) Put(k ShardKey, payload []byte) (added int64, err error) {
 	}
 	release := func() { s.used.Add(-size) }
 	dir := filepath.Dir(final)
-	if err := s.fsys.MkdirAll(dir, 0o755); err != nil {
+	if err := s.mkdirOnce(dir); err != nil {
 		release()
 		return 0, fmt.Errorf("chunk: mkdir %s: %w", dir, err)
 	}
@@ -225,9 +264,7 @@ func (s *Store) DeleteIfOlder(k ShardKey, minAge time.Duration, now time.Time) (
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return false, 0, err
 	}
-	mu := s.lock(k)
-	mu.Lock()
-	defer mu.Unlock()
+	defer s.lock(k)()
 	fi, err := s.fsys.Stat(s.path(k))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -277,9 +314,7 @@ func (s *Store) Delete(k ShardKey) (int64, error) {
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return 0, err
 	}
-	mu := s.lock(k)
-	mu.Lock()
-	defer mu.Unlock()
+	defer s.lock(k)()
 	return s.deleteLocked(k)
 }
 
@@ -378,9 +413,7 @@ func verify(raw []byte) ([]byte, error) {
 // quarantine moves a corrupt shard out of the serving path, keeping at most QuarantineMax
 // files for inspection (oldest removed first). Never deletes silently.
 func (s *Store) quarantine(k ShardKey) {
-	mu := s.lock(k)
-	mu.Lock()
-	defer mu.Unlock()
+	defer s.lock(k)()
 	src := s.path(k)
 	fi, err := s.fsys.Stat(src)
 	if err != nil {

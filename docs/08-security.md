@@ -141,7 +141,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Removed member keeps using a warm authorizer cache | cache purged on membership change |
 | Accidental join to the wrong cluster | join token |
 | Rogue "leader" overwrites a follower's log | handshake; Raft traffic only on Tailscale IPs |
-| Corrupt or forged shard body | receiver verifies `X-Shard-SHA256`; reader verifies decoded chunk hash |
+| Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | LAN host reaches NFS or RPC | NFS bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |

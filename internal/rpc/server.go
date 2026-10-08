@@ -26,7 +26,7 @@ import (
 // ShardStore is what the shard endpoints need from chunk.Store.
 type ShardStore interface {
 	Open(k chunk.ShardKey) (io.ReadCloser, int64, error)
-	Put(k chunk.ShardKey, payload []byte) (int64, error)
+	PutVerified(k chunk.ShardKey, payload []byte, sum [32]byte) (int64, error) // sum = sha256(payload), verified by the caller
 	Has(k chunk.ShardKey) bool
 	DeleteIfOlder(k chunk.ShardKey, minAge time.Duration, now time.Time) (bool, int64, error)
 	Used() int64
@@ -297,14 +297,12 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 			return
 		}
-		if want := r.Header.Get(HeaderShardSum); want != "" {
-			sum := sha256.Sum256(body)
-			if !strings.EqualFold(want, hex.EncodeToString(sum[:])) {
-				writeErr(w, http.StatusBadRequest, "shard hash mismatch")
-				return
-			}
+		sum := sha256.Sum256(body) // once per hop: verified against the header, then handed to the store
+		if want := r.Header.Get(HeaderShardSum); want != "" && !strings.EqualFold(want, hex.EncodeToString(sum[:])) {
+			writeErr(w, http.StatusBadRequest, "shard hash mismatch")
+			return
 		}
-		if _, err := s.o.Store.Put(key, body); err != nil {
+		if _, err := s.o.Store.PutVerified(key, body, sum); err != nil {
 			if errors.Is(err, chunk.ErrFull) {
 				writeErr(w, http.StatusInsufficientStorage, "no space")
 				return

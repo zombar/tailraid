@@ -123,11 +123,11 @@ func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 	if err != nil {
 		return err
 	}
+	sum := sha256.Sum256(body)
 	if self && c.local != nil {
-		_, err := c.local.Put(key, body)
+		_, err := c.local.PutVerified(key, body, sum)
 		return err
 	}
-	sum := sha256.Sum256(body)
 	resp, err := c.do(ctx, http.MethodPut, addr, "/v1/shards/"+string(key), body, map[string]string{HeaderShardSum: hex.EncodeToString(sum[:])})
 	if err != nil {
 		return err
