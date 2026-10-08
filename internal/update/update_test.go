@@ -77,7 +77,11 @@ func TestUpdate_AppliesVerifiedRelease(t *testing.T) {
 		t.Fatal("new binary not executable")
 	}
 	ents, _ := os.ReadDir(dir)
-	if len(ents) != 1 {
+	want := 1
+	if runtime.GOOS == "windows" { // the running image cannot be deleted: .old stays until the next update
+		want = 2
+	}
+	if len(ents) != want {
 		t.Fatalf("leftovers in %s: %v", dir, ents)
 	}
 	// same version: nothing to do; explicit tag resolves too
