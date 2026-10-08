@@ -51,7 +51,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod, cache: true }
-      - run: go test -short -race -cover ./...
+      # the race detector makes the Windows runner too slow for the 1 s Raft election
+      # timeouts of the cluster tests; ubuntu and macos keep -race
+      - run: go test -short ${{ matrix.os != 'windows-latest' && '-race' || '' }} -cover ./...
         shell: bash
 
   long:

@@ -387,7 +387,15 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	}
 	gw := r.gateways()[0]
 	v, _ := r.volume(gw)
-	if err := v.Mkdir(r.Root); err != nil {
+	for attempt := 0; attempt < 30; attempt++ { // a fresh cluster may still be electing (EROFS)
+		if err = v.Mkdir(r.Root); err == nil {
+			break
+		}
+		if werr := r.Env.Wait(ctx, time.Second); werr != nil {
+			break
+		}
+	}
+	if err != nil {
 		return Summary{}, fmt.Errorf("soak: mkdir %s: %w", r.Root, err)
 	}
 	r.startSampler(ctx)
