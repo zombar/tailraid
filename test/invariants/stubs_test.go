@@ -14,10 +14,6 @@ func TestStub_I_1(t *testing.T) { t.Skip("stub until M1; see docs/01-data-model.
 // Becomes: TestStore_PutRejectsHashMismatch, TestVFS_DedupeIdenticalChunks (M1).
 func TestStub_I_2(t *testing.T) { t.Skip("stub until M1; see docs/01-data-model.md") }
 
-// Invariant: I-3
-// Becomes: TestFSM_InoGenNotReusedAfterUnlink (M1).
-func TestStub_I_3(t *testing.T) { t.Skip("stub until M1; see docs/01-data-model.md") }
-
 // Invariant: I-4
 // Becomes: TestFSM_DeterministicAcrossReplicas, TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits (M1/M2).
 func TestStub_I_4(t *testing.T) { t.Skip("stub until M1; see docs/02-consistency-and-raft.md") }
@@ -33,20 +29,6 @@ func TestStub_I_6(t *testing.T) { t.Skip("stub until M2; see docs/02-consistency
 // Invariant: I-7
 // Becomes: TestVFS_CloseFlushIsDurable, TestNFS_WriteSequence_MultiRPC, TestCrash_AtEveryPoint (M1/M2).
 func TestStub_I_7(t *testing.T) { t.Skip("stub until M1; see docs/04-write-path-and-durability.md") }
-
-// Invariant: I-8
-// Becomes: TestPlace_DeterministicAcrossNodes, TestCluster_PlacementAgreesOnAllNodes (M1/M2).
-func TestStub_I_8(t *testing.T) { t.Skip("stub until M1; see docs/03-erasure-coding-and-placement.md") }
-
-// Invariant: I-9
-// Becomes: TestPlace_DistinctNodesPerStripe, TestCluster_WriteReadAllNodes (M1/M2).
-func TestStub_I_9(t *testing.T) { t.Skip("stub until M1; see docs/03-erasure-coding-and-placement.md") }
-
-// Invariant: I-10
-// Becomes: TestDecode_EverySubsetOfKShards, TestEncodeDecode_Sizes (M1).
-func TestStub_I_10(t *testing.T) {
-	t.Skip("stub until M1; see docs/03-erasure-coding-and-placement.md")
-}
 
 // Invariant: I-11
 // Becomes: TestStore_Get_CorruptedBitFlip, TestStore_CrashBeforeRename_LeavesNoVisibleShard, TestStore_TornWrite_DetectedOnRead (M1).

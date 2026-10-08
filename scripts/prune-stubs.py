@@ -14,7 +14,7 @@ for f in glob.glob('test/invariants/*_test.go'):
     blocks = re.split(r'(?=\n// (?:Invariant|Lifecycle): )', src)
     keep = [blocks[0]]
     for b in blocks[1:]:
-        ids = set(re.findall(r'\b[IL]-\d+\b', b.split('\n', 1)[0] if b.startswith('\n//') else b.split('\n', 2)[1]))
+        ids = set(re.findall(r'\b[IL]-\d+\b', b.lstrip('\n').split('\n', 1)[0]))
         if ids and ids <= real:
             removed += sorted(ids)
         else:
