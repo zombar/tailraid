@@ -38,7 +38,7 @@ checksum. The repository is private: set `GITHUB_TOKEN` or be logged in with `gh
 On the always-on device that will hold the first metadata copy:
 
 ```sh
-tailraid init --k 2 --m 1 --name studio --capacity 500G    # creates the volume, prints the join token
+tailraid init                                              # creates the volume, prints the join token
 tailraid install                                           # runs `serve` under launchd / systemd / SCM
 tailraid mount                                             # ~/TailRAID (T: on Windows)
 ```
@@ -46,19 +46,21 @@ tailraid mount                                             # ~/TailRAID (T: on W
 On every other device:
 
 ```sh
-tailraid join 100.64.0.11 <token> --capacity 200G          # --voter on other always-on boxes
+tailraid join 100.64.0.11 <token>                          # --voter on other always-on boxes
 tailraid install
 tailraid mount
 ```
 
 Write on one device, read on any other. `tailraid status` shows the cluster.
 
-Choosing `k` and `m`: `2+1` survives one lost device at 1.5× storage, `3+2` survives two
-at 1.67×, `1+2` is three plain copies. You need at least `k+m` live devices to write at
-full redundancy; below that, writes still succeed and are brought back to full redundancy
-when devices return. The policy can be changed any time with `tailraid volume
-set-redundancy`; existing data migrates in the background. The chunk size (1 MiB by
-default) is fixed at `init`.
+Redundancy is automatic: the volume starts as a single copy and the leader raises the
+policy as devices join, from the count of always-on devices (voters) and laptops, so the
+data shards sit on the always-on devices and a closed laptop never blocks a write (see
+docs/03). Each device's storage budget follows the free space of its data disk. `tailraid
+volume set-redundancy --k 3 --m 2` pins a policy by hand (`2+1` survives one lost device
+at 1.5× storage, `3+2` survives two at 1.67×); `--auto` hands it back. Existing data
+migrates in the background either way. The chunk size (1 MiB by default) is fixed at
+`init`.
 
 ## Configuration
 
@@ -68,7 +70,7 @@ on Windows (`$TAILRAID_HOME` overrides the directory). The keys you may want to 
 
 ```yaml
 node:
-  capacity: 500G          # shard-byte budget on this device, also its placement weight
+  capacity: 500G          # pins this device's shard budget; delete the line to derive it from free disk space
   voter: true             # always-on devices only
 listen:
   raft: 20480             # tailnet TCP
@@ -96,7 +98,7 @@ tailraid check                         # replication health; exit 1 if anything 
 tailraid repair                        # repair pass now (it also runs every minute on the leader)
 tailraid chunk describe /path/or/hash  # state, placement and history of a file's chunks
 tailraid volume describe               # k+m, chunk size, stored vs logical bytes, dedup, headroom
-tailraid volume set-redundancy --k 3 --m 2
+tailraid volume set-redundancy --k 3 --m 2   # or --auto to let the cluster choose
 tailraid node drain oldbox && tailraid node remove oldbox
 tailraid logs -f                       # the service log
 ```

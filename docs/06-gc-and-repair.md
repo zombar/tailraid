@@ -193,7 +193,11 @@ placements stay interpretable.
 chunks at once. No data moves toward it until the repairer has a reason to (no rebalancing
 in barebones; capacity weighting in `Place` biases new writes).
 
-## 7. Policy change: `volume set-redundancy --k K --m M`
+## 7. Policy change: automatic, or `volume set-redundancy --k K --m M`
+
+In auto mode (the default from `init`) the leader proposes `SetVolume` at the start of a
+repair pass when the rule of 03 gives a different policy than the volume has; the steps
+below are the same as for a manual change.
 
 1. Refused unless `K + M ≤ live Active nodes (devices or S3)` and `K ≥ 1, M ≥ 0, K + M ≤
    256`.

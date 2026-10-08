@@ -61,7 +61,7 @@ RPCs for a few kilobytes. Space overhead of a full 1 MiB chunk at 2+1 is 1.5× p
 ### Candidates
 
 ```go
-type Candidate struct { Idx meta.NodeIdx; Weight uint64 }   // Weight = Node.Capacity
+type Candidate struct { Idx meta.NodeIdx; Weight uint64; Voter bool }   // Weight = Node.Capacity; Voter = Node.Voter
 ```
 
 At write time the flusher builds the candidate list from `State.Nodes` filtered to
@@ -70,6 +70,27 @@ that are `Draining` or `Removed`, dead, or that reported `ErrFull` (HTTP 507) on
 PUT are excluded. S3 nodes (`Kind == KindS3`) are candidates when their bucket probe is
 live. The candidate list is built by the gateway doing the flush from its *own* prober
 view; no node is asked for permission.
+
+### Voter-first slots
+
+```go
+func PlaceKM(h meta.Hash, cands []Candidate, k, m int) []meta.NodeIdx
+```
+
+Voters are the always-on devices; non-voters are the laptops that sleep (00 glossary).
+`PlaceKM` draws the `k` **data** slots by rendezvous from the voter candidates when at
+least `k` of them are present, otherwise from all candidates, and then the `m` **parity**
+slots by rendezvous from the candidates not yet used, voters and non-voters alike. The
+result is still a pure function of `(h, candidate set, k, m)` (I-8, I-9 hold), and when no
+candidate is a voter it equals `Place(h, cands, k+m)`. `FillPlacement(h, place, cands, k)`
+refills a zero data slot from voters first and a zero parity slot from anyone.
+
+What this buys: a chunk is readable from the live voters alone whenever `k ≤` live
+voters (I-77), and a flush collects its `k` durable acks (I-7) from always-on devices, so
+a closed laptop costs a parity slot, never a write; the repairer fills that slot when the
+laptop wakes (06). Voters receive the data shards and fill faster; the derived capacity
+weight (01) leans new placements toward the emptier disks. Existing placements never
+move because the rule changed.
 
 ### Rendezvous (HRW) hashing
 
@@ -151,10 +172,38 @@ Fewer than `k` reachable shards ⇒ `EIO` for that chunk only.
 S3 nodes rank last so that bulk reads never touch a bucket while enough device shards are
 reachable; a bucket is the shard source of last resort and the off-site copy.
 
-## Changing the policy: `volume set-redundancy --k K --m M`
+## Choosing the policy: automatic, or `volume set-redundancy --k K --m M`
 
-Proposes `SetVolume{K, M}`; refused by the CLI if `K+M` exceeds the number of **live
-Active nodes** (devices or S3). The FSM increments `PolicyVersion` itself. From the next flush, new chunks use the new `(K, M)`. Existing
+`tailraid init` creates the volume with `Vol.Auto` set and `1+0`. In auto mode the leader
+derives the policy from the member table with `meta.AutoPolicy(nodes)`, a pure function
+of the counts of Active devices that are voters (`v`) and non-voters (`s`), `n = v + s`:
+
+- `m = 0` for `n = 1`, `1` for `n` of 2 or 3, `2` for `n ≥ 4`
+- `k = clamp(v, 1, n − m)`, capped at 6
+
+| voters | non-voters | policy | readable with every laptop asleep |
+|---|---|---|---|
+| 1 | 0 | 1+0 | yes |
+| 1 | 1 | 1+1 | yes |
+| 1 | 3 | 1+2 | yes |
+| 2 | 1 | 2+1 | yes |
+| 3 | 0 | 2+1 | yes |
+| 3 | 2 | 3+2 | yes |
+| 2 | 4 | 2+2 | yes |
+
+`k` follows the voters so the data shards fit on always-on devices (voter-first slots
+above); `m` follows the cluster size. The leader evaluates the rule at the start of every
+repair pass (06, leader only, once a minute) and proposes `SetVolume{K, M}` when `Auto` is
+set, the rule's answer differs from `Vol.(K, M)`, and `K+M ≤` live Active devices; if a
+join makes a larger policy desirable while a device is asleep the change waits for a
+later pass, never forced. Membership is the only input, never liveness: the policy grows
+after a join or promotion and shrinks only after a removal or demotion, so a dead laptop
+never shrinks it. A node's budget plays no part.
+
+`volume set-redundancy --k K --m M` clears `Auto` (`SetVolumeMode{Auto: false}`) and
+proposes `SetVolume{K, M}`; `volume set-redundancy --auto` sets `Auto` again and the next
+pass applies the rule. Either way the CLI refuses a policy whose `K+M` exceeds the number
+of **live Active nodes** (devices or S3). The FSM increments `PolicyVersion` itself. From the next flush, new chunks use the new `(K, M)`. Existing
 chunks keep their recorded `(K, M)` and remain fully readable. The repairer treats
 `chunk.(K,M) != Vol.(K,M)` as repair work: read `k_old` shards, decode, re-encode with the
 new policy, PUT to a fresh placement under the new keys (`hex.K-M.idx`, which never collide
@@ -186,6 +235,15 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 - **I-67** — The chunk size is bounded once: `init`, `SetVolume` and the shard store all
   enforce `ChunkSize ≤ meta.MaxChunkSize` (64 MiB), so a k=1 shard of the largest chunk
   always fits `chunk.MaxPayload` and no shard is stored that cannot be read back.
+- **I-75** — `AutoPolicy(nodes)` is a pure function of the Active device voter and
+  non-voter counts (the table above), identical on every node; the leader proposes it
+  only while `Vol.Auto` is set, when it differs from the current policy and `K+M` does not
+  exceed the live Active devices; it grows after a join or promotion and shrinks only after
+  a removal or demotion, never because of liveness.
+- **I-77** — `PlaceKM(h, cands, k, m)` is a pure function of `(h, candidate set, k, m)`
+  whose data slots are drawn from voter candidates whenever at least `k` voters are
+  candidates, so a chunk is readable from live voters alone when `k ≤` live voters; with
+  no voter candidate it equals `Place(h, cands, k+m)`.
 - **I-33** — Weighted placement is proportional: over many hashes a candidate receives
   shards in proportion to its weight within ±10 %, and removing a candidate relocates only
   the shards it held.
@@ -201,3 +259,5 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-32 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_MigrationCrash_Resumes`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnAdd`, `TestPlace_StabilityOnMembershipChange`, `TestPlace_StabilityOnRemove` |
 | I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |
+| I-75 | `TestStub_I_75` |
+| I-77 | `TestStub_I_77` |

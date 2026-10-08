@@ -65,6 +65,7 @@ const (
     OpCommit                  // {Ino, BaseVersion, HasTruncate, TruncateTo, NewSize, Writes []ChunkWrite, NewChunks []ChunkDesc, Now}
     OpSetPlacement            // {Hash, Placement []NodeIdx, K, M}   (repair / migration)
     OpGCDelete                // {Before int64} → Result.Victims
+    OpSetVolumeMode           // {Auto bool, Now}   (03: automatic redundancy)
 )
 type ChunkWrite struct { Idx uint32; Hash Hash }                         // Hash may be HashZero
 type ChunkDesc  struct { Hash Hash; Size uint32; K, M uint8; Placement []NodeIdx }
@@ -84,6 +85,10 @@ later commands must repeat the existing value or get `ErrPolicy`. `K >= 1`, `M >
 `K+M <= 256`. If `K` or `M` changes, `PolicyVersion++`. Existing chunks are untouched; the
 repairer migrates them ([06](06-gc-and-repair.md)). This is a day-zero feature: the FSM
 accepts it from the first log entry.
+
+**SetVolumeMode.** Sets `Vol.Auto`; `PolicyVersion` is untouched. A node older than the
+op rejects the entry (`ErrBadCommand`), so every node is upgraded before the mode is
+used (12 §6).
 
 **MetaSet.** Sets `Meta`. `ClusterID` may be set once; later `MetaSet` commands must carry
 the same `ClusterID` or the zero value (meaning "unchanged"), else `ErrPolicy`. `token
@@ -252,11 +257,13 @@ when leader, otherwise forwards the encoded command to the current leader with
 
 **Bootstrap** (`tailraid init`): refuses if `<data_dir>/raft` has state. Generates
 `node_id`, `cluster_id`; `raft.BootstrapCluster` with self as the only voter; applies
-`MetaSet`, `NodeUpsert(self)`, `SetVolume{ChunkSize, K, M}`.
+`MetaSet`, `SetVolume{ChunkSize, 1, 0}`, `SetVolumeMode{Auto: true}`, `NodeUpsert(self)`
+with the budget derived from the data directory's free space (01). The node is named after
+the host; `--name`, `--chunk` and `--token` are the only options.
 
 **Join** (`tailraid join <host> <token> [--voter]`): refuses if local Raft state exists.
 Generates `node_id`; `POST /v1/join` with `{token, node_id, name, ts_stable_id, addr, ports,
-voter, capacity, version}`. The receiver requires `WhoIs(srcIP).StableID == ts_stable_id`
+voter, capacity (derived, 01), version}`. The receiver requires `WhoIs(srcIP).StableID == ts_stable_id`
 and `token == Meta.JoinToken`, then forwards to the leader, which calls
 `raft.AddNonvoter` or `AddVoter` and proposes `NodeUpsert`. The joiner then starts `serve`
 and receives the state by snapshot.
@@ -267,9 +274,11 @@ toward quorum, so sleeping laptops never stall the cluster. `status` warns when 
 count is 1 or even.
 
 **Lifecycle commands** (all day-zero): `node promote|demote` (`AddVoter`/`AddNonvoter` on the
-same ID), `node set-capacity` (`NodeUpsert`), `node drain` (`NodeSetState Draining`:
+same ID), a node's own budget (`set_capacity` → `NodeUpsert`, proposed by the node itself
+as its free disk changes, 01), `node drain` (`NodeSetState Draining`:
 excluded from new placement; repairer re-places its slots), `node remove`
-(`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`),
+(`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`
+after `SetVolumeMode{false}`; `--auto` is `SetVolumeMode{true}`),
 `tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
 the device can `join` afresh; never touches `shards/`, which the sweep reconciles later; it
 refuses while `serve` runs and while `staging/` holds unflushed writes, unless
