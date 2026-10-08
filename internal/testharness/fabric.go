@@ -222,6 +222,17 @@ func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (
 	return st.Get(key)
 }
 
+func (f *Fabric) Has(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error) {
+	f.mu.Lock()
+	st, ok := f.Stores[node]
+	down := f.down[node]
+	f.mu.Unlock()
+	if !ok || down {
+		return false, errNodeDown
+	}
+	return st.Has(key), nil
+}
+
 func (f *Fabric) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) error {
 	f.mu.Lock()
 	st, ok := f.Stores[node]

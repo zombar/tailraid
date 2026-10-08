@@ -25,7 +25,6 @@ type Config struct {
 	SmallChunk     uint32        // chunks ≤ this use k=1
 	PutDeadline    time.Duration // step 9: wait for stragglers at most this long
 	ProposeTimeout time.Duration
-	Grace          time.Duration // GC grace; PUTs older than Grace/2 are repeated before a retried Commit
 	Workers        int
 	RetryMin       time.Duration
 	RetryMax       time.Duration
@@ -36,7 +35,7 @@ func DefaultConfig() Config {
 	return Config{
 		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20, MaxDirty: 1 << 30,
 		SmallChunk: 64 << 10, PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second,
-		Grace: 10 * time.Minute, Workers: 4, RetryMin: time.Second, RetryMax: 60 * time.Second,
+		Workers: 4, RetryMin: time.Second, RetryMax: 60 * time.Second,
 	}
 }
 
@@ -224,7 +223,6 @@ type chunkWork struct {
 	hash     meta.Hash
 	k, m     uint8
 	place    []meta.NodeIdx
-	putTime  time.Time
 	uploaded bool
 }
 
@@ -369,14 +367,15 @@ func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forc
 		}
 		if !forceUpload {
 			if c, ok := f.st.GetChunk(w.hash); ok {
-				if f.liveSlots(c.Placement) >= int(c.K) {
+				keep, present := f.presentSlots(ctx, c)
+				if present >= int(c.K) {
 					w.k, w.m, w.place = c.K, c.M, c.Placement
 					f.Events.Record(w.hash, meta.EvDedupHit, fmt.Sprintf("refs %d", c.Refs))
 					continue // dedup hit, no upload (L-33, L-34)
 				}
-				// degraded or dead-holder entry: fill its slots with the bytes in hand (review #6)
-				f.Events.Record(w.hash, meta.EvFill, fmt.Sprintf("%d live of %d", f.liveSlots(c.Placement), int(c.K)+int(c.M)))
-				if err := f.fillSlots(ctx, w, c); err != nil {
+				// degraded, dead-holder or shard-less entry: fill its slots with the bytes in hand
+				f.Events.Record(w.hash, meta.EvFill, fmt.Sprintf("%d present of %d", present, int(c.K)+int(c.M)))
+				if err := f.fillSlots(ctx, w, c, keep); err != nil {
 					return err
 				}
 				continue
@@ -393,18 +392,41 @@ func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forc
 	return nil
 }
 
-func (f *Flusher) liveSlots(p []meta.NodeIdx) int {
+// presentSlots returns c's placement with every slot that is not both on a live node and
+// actually holding the shard zeroed, and the count of the slots that are. Presence is
+// checked with HEAD rather than assumed from liveness: a live node may have lost the
+// file (L-183), and a dedup'd Commit must never point at an unreadable chunk (L-176).
+func (f *Flusher) presentSlots(ctx context.Context, c meta.Chunk) ([]meta.NodeIdx, int) {
 	live := map[meta.NodeIdx]bool{}
 	for _, n := range f.peers.Live() {
 		live[n] = true
 	}
-	c := 0
-	for _, n := range p {
-		if n != 0 && live[n] {
-			c++
+	keep := make([]meta.NodeIdx, len(c.Placement))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	present := 0
+	for i, n := range c.Placement {
+		if n == 0 || !live[n] {
+			continue
 		}
+		wg.Add(1)
+		go func(i int, n meta.NodeIdx) {
+			defer wg.Done()
+			ok, err := f.shards.Has(ctx, n, chunk.Key(c.Hash, c.K, c.M, i))
+			if err != nil {
+				f.log.Debug("shard presence check failed; treating as absent", "node", n, "slot", i, "err", err)
+			}
+			if err != nil || !ok {
+				return
+			}
+			mu.Lock()
+			keep[i] = n
+			present++
+			mu.Unlock()
+		}(i, n)
 	}
-	return c
+	wg.Wait()
+	return keep, present
 }
 
 // candidates returns the live, Active, non-full nodes minus excluded ones.
@@ -506,7 +528,6 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 		return fmt.Errorf("%w: chunk %x: %d < %d", ErrTooFewAcks, w.hash[:8], acks, w.k)
 	}
 	w.place = place
-	w.putTime = f.clk.Now()
 	w.uploaded = true
 	f.Events.Record(w.hash, meta.EvUploaded, fmt.Sprintf("%d+%d acks %d placement %v", w.k, w.m, acks, place))
 	if acks < total {
@@ -570,20 +591,11 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 	return failed
 }
 
-// fillSlots re-encodes with the entry's (k,m), PUTs the missing/dead slots to fresh nodes
-// and proposes SetPlacement, so a dedup'd commit never points at an unreadable chunk.
-func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, c meta.Chunk) error {
+// fillSlots re-encodes with the entry's (k,m), PUTs every slot not in keep (missing,
+// dead or shard-less) to fresh nodes and proposes SetPlacement, so a dedup'd commit
+// never points at an unreadable chunk.
+func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, c meta.Chunk, keep []meta.NodeIdx) error {
 	w.k, w.m = c.K, c.M
-	live := map[meta.NodeIdx]bool{}
-	for _, n := range f.peers.Live() {
-		live[n] = true
-	}
-	keep := make([]meta.NodeIdx, len(c.Placement))
-	for i, n := range c.Placement {
-		if n != 0 && live[n] {
-			keep[i] = n
-		}
-	}
 	if err := f.upload(ctx, w, keep); err != nil {
 		return err
 	}

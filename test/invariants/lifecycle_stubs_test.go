@@ -252,12 +252,6 @@ func TestStubLifecycle_L_166(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-166")
 }
 
-// Lifecycle: L-167
-// Tombstoned/Degraded (< k live slots) --[E-113 dedup hit]--> Uploading (fill) → Committed
-func TestStubLifecycle_L_167(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-167")
-}
-
 // Lifecycle: L-168
 // Committed --[E-114 truncate down then write past the truncation point]--> Dirty (`minSize` < `size`) → Committed
 func TestStubLifecycle_L_168(t *testing.T) {
@@ -286,12 +280,6 @@ func TestStubLifecycle_L_172(t *testing.T) {
 // Durable (device) --[DELETE accepted with applied index < fence, or file younger than grace, or slot placed on self]--> Deleted
 func TestStubLifecycle_L_174(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-174")
-}
-
-// Lifecycle: L-176
-// Degraded/Tombstoned (< k live slots) --[dedup hit]--> Committed (no upload)
-func TestStubLifecycle_L_176(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-176")
 }
 
 // Lifecycle: L-177

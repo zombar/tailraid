@@ -172,13 +172,15 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    `plan.sizeSet`, and overlay the WAL extents. Clip to `eff`.
 5. **Holes.** If the assembled chunk is all zero → `ChunkWrite{i, HashZero}`; no upload.
 6. **Hash and dedup.** `h = sha256(chunk)`. If `st.GetChunk(h)` exists (live or tombstoned)
-   and **at least `k` of its placement slots are on live nodes** → `ChunkWrite{i, h}` with
-   no upload; the Commit revives a tombstone. If the entry exists but has fewer than `k`
-   live slots (degraded beyond readability, or a tombstone whose holders died — tombstones
-   are never repaired), the flusher has the bytes in hand: it re-encodes with the entry's
-   recorded `(k, m)`, PUTs the missing slots to fresh nodes (re-place excluding current
-   holders), and proposes `SetPlacement` for the filled slots before the Commit. An
-   acknowledged write is never committed against an unreadable chunk.
+   and **at least `k` of its placement slots are present** (on a live node that answers
+   `HEAD` for the shard; liveness alone is not trusted, a live node may have lost the
+   file) → `ChunkWrite{i, h}` with no upload; the Commit revives a tombstone. If the entry
+   exists but has fewer than `k` present slots (degraded beyond readability, a tombstone
+   whose holders died — tombstones are never repaired — or holders that lost their shards),
+   the flusher has the bytes in hand: it re-encodes with the entry's recorded `(k, m)`,
+   PUTs every slot that is not present to fresh nodes (re-place excluding current holders),
+   and proposes `SetPlacement` for the filled slots before the Commit. An acknowledged
+   write is never committed against an unreadable chunk.
 7. **Policy.** `(k, m) = len(chunk) ≤ SmallChunk ? (1, Vol.M) : (Vol.K, Vol.M)`.
 8. **Place.** `placement = Place(h, liveCandidates(peers.Live(), nodes), k+m)` where
    candidates exclude `Draining`/`Removed` nodes and nodes that answered `ErrFull`, built
@@ -205,10 +207,11 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
       conflict (I-35).
     - `ErrUnknownChunk`: a dedup'd chunk was GC'd between step 6 and commit. Upload it (steps
       7–9 for that chunk) and propose again.
-    - Any retry of the Commit (conflict, unknown chunk, `ErrLeadershipLost`, timeout) that
-      happens more than `grace/2` (5 min) after the PUTs of step 9 first re-runs step 9 for
-      every new chunk: PUTs are idempotent and this guarantees the orphan-shard sweep (06)
-      cannot have removed them in the meantime.
+    - Any retry of the Commit (conflict, unknown chunk, `ErrLeadershipLost`, timeout)
+      re-runs steps 6–9 for every chunk of the plan: a chunk is registered only by the
+      Commit that applies, so the dedup lookup misses and the PUTs are repeated. PUTs are
+      idempotent and refresh the shards' mtime, which guarantees the orphan-shard sweep
+      (06) cannot have removed them in the meantime however late the retry.
     - `ErrNotExist`: inode gone → `ov.Drop(ino)`, return nil.
     - `ErrNeedTailRewrite`: programming error in step 3; log at error level and retry with
       the tail chunk included.

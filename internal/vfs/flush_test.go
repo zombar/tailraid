@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -205,7 +206,7 @@ func TestFlusher_DedupLiveAndTombstoned_NoUpload(t *testing.T) {
 }
 
 // Review #6: a dedup hit against an entry with < k live slots fills the slots first.
-// Lifecycle: L-146
+// Lifecycle: L-146, L-167, L-176
 func TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 7)
@@ -241,6 +242,98 @@ func TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit(t *testing.T) {
 	}
 	if got := f.ReadFile(b); !bytes.Equal(got, data) {
 		t.Fatal("unreadable after fill")
+	}
+}
+
+// A live holder may have lost its shard file (disk restored from backup, data dir wiped).
+// Liveness alone is not trusted on a dedup hit: with fewer than k slots actually present
+// the flusher re-PUTs the absent ones from its own bytes before the Commit; with k or
+// more present it dedups as usual.
+// Invariant: I-12
+// Lifecycle: L-167, L-176, L-183
+func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	data := testharness.Pattern(int(testharness.ChunkSize), 21)
+	a := f.Create("a")
+	must(t, f.Ov.Write(a, 0, 0, data))
+	must(t, f.Flusher().FlushInode(ctx, a))
+	h := f.Inode(a).Chunks[0]
+	c, _ := f.FSM.GetChunk(h)
+	key := func(slot int) chunk.ShardKey { return chunk.Key(h, c.K, c.M, slot) }
+
+	// one holder lost its file: still k present → dedup, no PUT
+	if _, err := f.Stores[c.Placement[0]].Delete(key(0)); err != nil {
+		t.Fatal(err)
+	}
+	before := f.Puts()
+	cs := uint64(testharness.ChunkSize)
+	b := f.Create("b")
+	must(t, f.Ov.Write(b, 0, cs, data)) // chunk 1 is the dedup'd chunk; chunk 0 a hole
+	must(t, f.Flusher().FlushInode(ctx, b))
+	if f.Puts() != before {
+		t.Fatalf("dedup with k present slots uploaded %d shards", f.Puts()-before)
+	}
+
+	// a second holder lost its file: fewer than k present → fill before the commit
+	if _, err := f.Stores[c.Placement[1]].Delete(key(1)); err != nil {
+		t.Fatal(err)
+	}
+	before = f.Puts()
+	d := f.Create("d")
+	must(t, f.Ov.Write(d, 0, cs, data))
+	must(t, f.Flusher().FlushInode(ctx, d))
+	if f.Puts()-before != 2 {
+		t.Fatalf("fill PUT %d shards, want the 2 absent slots", f.Puts()-before)
+	}
+	ops := f.Ops()
+	if ops[len(ops)-2] != meta.OpSetPlacement || ops[len(ops)-1] != meta.OpCommit {
+		t.Fatalf("ops %v, want SetPlacement then Commit", ops[len(ops)-3:])
+	}
+	c2, _ := f.FSM.GetChunk(h)
+	for i, n := range c2.Placement {
+		if n == 0 || !f.Stores[n].Has(chunk.Key(h, c2.K, c2.M, i)) {
+			t.Fatalf("slot %d node %d not present after fill: %v", i, n, c2.Placement)
+		}
+	}
+	in := f.Inode(d)
+	out := make([]byte, len(data))
+	if _, err := f.ReaderNoCache().ReadAt(ctx, in, out, int64(cs)); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out, data) {
+		t.Fatalf("other-gateway read differs at %d", testharness.FirstDiff(out, data))
+	}
+}
+
+// A retried Commit (here after a transport failure of the proposal) re-runs the PUTs:
+// the chunk is registered only by the Commit that applies, so the shards are PUT again,
+// which refreshes their mtime and keeps the orphan sweep away however late the retry.
+// Invariant: I-7, I-14
+// Lifecycle: L-58
+func TestFlusher_LateRetry_RePutsBeforeCommit(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	ino := f.Create("a")
+	data := testharness.Pattern(int(testharness.ChunkSize), 22)
+	must(t, f.Ov.Write(ino, 0, 8192, data))
+	f.ProposeErrOnce(errors.New("leadership lost"))
+	if err := f.Flusher().FlushInode(ctx, ino); err == nil {
+		t.Fatal("expected the proposal to fail")
+	}
+	first := f.Puts()
+	if first != 3 { // k+m shards of the one non-hole chunk... plus the straddling one
+		t.Logf("first attempt PUT %d shards", first)
+	}
+	f.Clk.Advance(6 * time.Minute) // well past grace/2
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	if f.Puts() <= first {
+		t.Fatalf("retry did not re-PUT: %d PUTs before, %d after", first, f.Puts())
+	}
+	if f.Puts() != 2*first {
+		t.Fatalf("retry PUT %d shards, want every shard again (%d)", f.Puts()-first, first)
+	}
+	want := append(make([]byte, 8192), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
 	}
 }
 

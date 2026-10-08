@@ -22,7 +22,6 @@ import (
 	"go.etcd.io/bbolt"
 	bolterrors "go.etcd.io/bbolt/errors"
 
-	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 )
@@ -436,45 +435,6 @@ func (n *Node) Close() error {
 }
 
 // --- single-node views used by M1 ---------------------------------------------------
-
-// LocalPeers is the liveness view of a node that is alone in its cluster.
-type LocalPeers struct{ Idx meta.NodeIdx }
-
-func (p LocalPeers) Self() meta.NodeIdx                       { return p.Idx }
-func (p LocalPeers) Live() []meta.NodeIdx                     { return []meta.NodeIdx{p.Idx} }
-func (p LocalPeers) Rank(nodes []meta.NodeIdx) []meta.NodeIdx { return nodes }
-
-// LocalShards routes shard traffic for this node to its own store; other nodes are
-// unreachable until the M2 RPC client takes over.
-type LocalShards struct {
-	Idx   meta.NodeIdx
-	Store *chunk.Store
-}
-
-var errRemoteUnavailable = errors.New("cluster: remote shard transport not available")
-
-func (s LocalShards) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
-	if node != s.Idx {
-		return errRemoteUnavailable
-	}
-	_, err := s.Store.Put(key, body)
-	return err
-}
-
-func (s LocalShards) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
-	if node != s.Idx {
-		return nil, errRemoteUnavailable
-	}
-	return s.Store.Get(key)
-}
-
-func (s LocalShards) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) error {
-	if node != s.Idx {
-		return errRemoteUnavailable
-	}
-	_, err := s.Store.Delete(key)
-	return err
-}
 
 // SelfIdx finds this node's NodeIdx in the FSM by raft ID.
 func (n *Node) SelfIdx() (meta.NodeIdx, bool) {
