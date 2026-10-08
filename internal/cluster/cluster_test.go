@@ -1,0 +1,126 @@
+package cluster
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/hashicorp/raft"
+	"go.uber.org/goleak"
+
+	"github.com/gurgeh/tailraid/internal/meta"
+)
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
+
+var ctx = context.Background()
+
+func opts(t *testing.T, dir string) Options {
+	t.Helper()
+	id, err := LoadOrCreateNodeID(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, trans := raft.NewInmemTransport(raft.ServerAddress(id))
+	return Options{DataDir: dir, NodeID: id, Transport: trans}
+}
+
+func bootstrap(t *testing.T, dir string) *Node {
+	t.Helper()
+	n, err := Bootstrap(ctx, opts(t, dir), meta.Node{Name: "solo", Kind: meta.KindDevice, Capacity: 1 << 30},
+		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: 1}, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Invariant: I-5
+// Lifecycle: L-120
+func TestSingleNode_BootstrapProposeRestart(t *testing.T) {
+	dir := t.TempDir()
+	n := bootstrap(t, dir)
+	if !n.IsLeader() {
+		t.Fatal("single voter is not leader")
+	}
+	if v := n.FSM.Volume(); v.K != 1 || v.ChunkSize != 1<<20 {
+		t.Fatalf("volume %+v", v)
+	}
+	if idx, ok := n.SelfIdx(); !ok || idx != 1 {
+		t.Fatalf("self idx %d %v", idx, ok)
+	}
+	if m := n.FSM.Meta(); m.JoinToken != "token" || m.ClusterID == [16]byte{} {
+		t.Fatalf("meta %+v", m)
+	}
+	res, index, err := n.Propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: meta.RootIno, Name: "f", Type: meta.TFile, Mode: 0o644, Now: 2}})
+	if err != nil || res.Err != nil || index == 0 {
+		t.Fatalf("propose: %v %v %d", err, res.Err, index)
+	}
+	if err := n.FSM.WaitApplied(ctx, index); err != nil {
+		t.Fatal(err)
+	}
+	ino := res.Ino
+	// a rejected command comes back in Result.Err, not err
+	res, _, err = n.Propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: meta.RootIno, Name: "f", Type: meta.TFile, Now: 3}})
+	if err != nil || !errors.Is(res.Err, meta.ErrExist) {
+		t.Fatalf("dup create: %v %v", err, res.Err)
+	}
+	if _, err := Bootstrap(ctx, opts(t, dir), meta.Node{}, meta.SetVolume{}, ""); !errors.Is(err, ErrAlreadyInit) {
+		t.Fatalf("second bootstrap: %v", err)
+	}
+	if err := n.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// restart from disk: the log replays into a fresh FSM
+	n2, err := Open(opts(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n2.Close()
+	if err := n2.WaitLeader(ctx, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := n2.FSM.WaitApplied(ctx, index); err != nil {
+		t.Fatal(err)
+	}
+	in, ok := n2.FSM.GetInode(ino)
+	if !ok || in.Name != "f" {
+		t.Fatalf("inode after restart: %+v %v", in, ok)
+	}
+	if n2.ID != n.ID {
+		t.Fatal("node id changed")
+	}
+}
+
+func TestOpen_RequiresInit(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Open(opts(t, dir)); !errors.Is(err, ErrNotInit) {
+		t.Fatalf("open uninitialised: %v", err)
+	}
+}
+
+func TestSecondOpen_IsRefused(t *testing.T) {
+	dir := t.TempDir()
+	n := bootstrap(t, dir)
+	defer n.Close()
+	o := opts(t, dir)
+	if _, err := Open(o); !errors.Is(err, ErrAlreadyOpen) {
+		t.Fatalf("second open: %v", err)
+	}
+}
+
+func TestLoadOrCreateNodeID_Stable(t *testing.T) {
+	dir := t.TempDir()
+	a, err := LoadOrCreateNodeID(dir)
+	if err != nil || len(a) != 16 {
+		t.Fatalf("%q %v", a, err)
+	}
+	b, _ := LoadOrCreateNodeID(dir)
+	if a != b {
+		t.Fatal("node id not stable")
+	}
+}
