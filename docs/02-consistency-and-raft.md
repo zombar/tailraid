@@ -27,7 +27,10 @@ small: Raft carries ~100 bytes per metadata operation; bulk bytes go point to po
   not MagicDNS names (DNS can be down when tailscaled is down). On every probe cycle a node
   compares `tailscale status` Self IP with its own `Node.Addr`; if different it asks the
   leader to update both the Raft configuration (`AddVoter`/`AddNonvoter` with the same ID and
-  the new address updates in place) and the node table.
+  the new address updates in place) and the node table. Because the source IP is by
+  definition unknown to the member table at that moment, this one request (`POST
+  /v1/members {update_addr}`) is authorized by `WhoIs(srcIP).StableID == Node.TSStableID`
+  of the claimed node ID, not by IP lookup ([08](08-security.md)).
 - **Cluster ID**: 16 random bytes created at `init`, stored in `Meta.ClusterID` and in
   `<data_dir>/cluster_id`. Every Raft stream exchanges it in a 16-byte handshake on dial and
   accept (a wrapper around `raft.StreamLayer`); mismatch closes the connection. Every RPC
@@ -38,7 +41,11 @@ small: Raft carries ~100 bytes per metadata operation; bulk bytes go point to po
 
 Every command is proposed through `meta.Proposer` and applied by `meta.FSM.Apply`. Every
 command carries `Now int64` (unix nanos) from the proposer; the FSM never reads a clock, the
-disk, or iteration order of a map when deciding anything (I-4). Results are returned in
+disk, or iteration order of a map when deciding anything (I-4). The FSM keeps
+`State.LastNow` and uses `now = max(cmd.Now, State.LastNow)` (then `LastNow = now`) wherever
+a timestamp is recorded, so a proposer with a slow clock cannot back-date a tombstone or an
+mtime; the FSM clock is monotonic across proposers (`TombstonedAt`, `Mtime`, `Ctime`,
+`JoinedAt` all use it). Results are returned in
 `Result{Ino, Gen, Victims, Err}` with `Err` one of the sentinel errors below — never a Go
 panic or a non-deterministic error string.
 
@@ -55,7 +62,7 @@ const (
     OpRmdir                   // {Parent, Name, Now}
     OpRename                  // {OldParent, OldName, NewParent, NewName, Now}
     OpSetAttr                 // {Ino, Mask, Mode, Uid, Gid, Atime, Mtime, Now}
-    OpCommit                  // {Ino, BaseVersion, NewSize, Writes []ChunkWrite, NewChunks []ChunkDesc, Now}
+    OpCommit                  // {Ino, BaseVersion, HasTruncate, TruncateTo, NewSize, Writes []ChunkWrite, NewChunks []ChunkDesc, Now}
     OpSetPlacement            // {Hash, Placement []NodeIdx, K, M}   (repair / migration)
     OpGCDelete                // {Before int64} → Result.Victims
 )
@@ -78,17 +85,23 @@ later commands must repeat the existing value or get `ErrPolicy`. `K >= 1`, `M >
 repairer migrates them ([06](06-gc-and-repair.md)). This is a day-zero feature: the FSM
 accepts it from the first log entry.
 
-**MetaSet.** Sets `Meta`. `ClusterID` may only be set once.
+**MetaSet.** Sets `Meta`. `ClusterID` may be set once; later `MetaSet` commands must carry
+the same `ClusterID` or the zero value (meaning "unchanged"), else `ErrPolicy`. `token
+rotate` is `MetaSet{ClusterID: zero, JoinToken: new}`.
 
 **NodeUpsert.** `Idx == 0` allocates `NextNode` (never reused) and sets `State = Active`.
-Otherwise updates mutable fields (Name, Addr, ports, Capacity, Voter, Version, S3 fields)
-of an existing node; `ErrNoSuchNode` if absent. Kind cannot change.
+Otherwise updates mutable fields (Name, TSStableID, Addr, RaftPort, RPCPort, Capacity, Voter,
+Version, S3Endpoint, S3Bucket, S3Prefix, S3Region, S3PathStyle — the `Node` struct of 01) of
+an existing node; `ErrNoSuchNode` if absent. `Kind` and `ID` cannot change.
 
 **NodeSetState.** `Active → Draining → Removed` or `Draining → Active`. `Removed` is terminal.
-Transition to `Removed` is refused with `ErrNodeNotEmpty` if any live chunk has this node as
-its *only* holder of some shard index while `len(nonzero placement) <= K` — i.e. removing it
-would drop a chunk below `K` reachable shards. (The CLI `--force` flag bypasses this by first
-proposing `SetPlacement` with slot 0 for those shards, making the degradation explicit.)
+Transition to `Removed` is refused with `ErrNodeNotEmpty` while *any* live chunk still has a
+non-zero placement slot on this node (every slot is a sole copy of its shard index, I-9). The
+CLI flow is `node drain` → wait for the repairer to re-place every slot → `node remove`;
+`--force` first proposes `SetPlacement` with slot 0 for the remaining shards, making the
+degradation explicit, then removes. Order on the leader: `NodeSetState{Removed}` is committed
+first, then `raft.RemoveServer`, so the node table never lists a server that Raft has
+forgotten.
 
 **Create / Mkdir.** `Parent` must exist and be `TDir` (`ErrNotExist`/`ErrNotDir`). `Name`
 must be non-empty, not `.` or `..`, contain no `/`, and be ≤ 255 bytes (`ErrBadCommand`).
@@ -124,19 +137,26 @@ settable here; truncation is a `Commit`.
    present, the existing entry is kept (dedup); the command's placement is ignored.
 4. Each `Writes[i].Hash` must be `HashZero` or present in `State.Chunks` (after step 3),
    else `ErrUnknownChunk`. Tombstoned chunks are valid targets (they get revived).
-5. `NewSize` rules: `n = ceil(NewSize/ChunkSize)`. If `NewSize < inode.Size` and
-   `NewSize % ChunkSize != 0` and chunk `n-1` is neither in `Writes` nor currently
-   `HashZero` ⇒ `ErrNeedTailRewrite` (the FSM cannot trim bytes out of a chunk). Every
-   `Writes[i].Idx` must be `< n` (`ErrBadCommand`).
-6. Build `newChunks = copy(old[:min(len(old), n)])`, extend with `HashZero` to length `n`,
-   apply `Writes`. For each position whose hash changed: old hash (if not `HashZero`)
-   `Refs--` with tombstone on zero; new hash (if not `HashZero`) `Refs++` and, if it was
-   tombstoned, `TombstonedAt = 0` and remove from `Tombs`.
-7. `inode.Chunks = newChunks; Size = NewSize; Version++; Mtime = Ctime = Now`.
+5. **Truncate first.** If `HasTruncate`: `t = ceil(TruncateTo/ChunkSize)`; `cur =
+   old[:min(len(old), t)]`. If `TruncateTo < inode.Size`, `TruncateTo % ChunkSize != 0`
+   and chunk `t-1` is neither in `Writes` nor currently `HashZero` ⇒ `ErrNeedTailRewrite`
+   (the FSM cannot trim bytes out of a chunk; the flusher always rewrites the straddling
+   chunk, see 04). Without `HasTruncate`, `cur = old` and `NewSize >= inode.Size` is
+   required (`ErrBadCommand`): a file can only shrink through an explicit truncate.
+6. **Then grow.** `n = ceil(NewSize/ChunkSize)`; `NewSize >= TruncateTo` when
+   `HasTruncate`. `newChunks = copy(cur[:min(len(cur), n)])`, extended with `HashZero` to
+   length `n`. Every `Writes[i].Idx` must be `< n` (`ErrBadCommand`).
+7. **Then write.** Apply `Writes`. For each position whose hash changed (including positions
+   dropped by the truncate): old hash (if not `HashZero`) `Refs--` with tombstone on zero;
+   new hash (if not `HashZero`) `Refs++` and, if it was tombstoned, `TombstonedAt = 0` and
+   remove from `Tombs`. A `Refs--` that would underflow is `ErrBadCommand` (never a panic).
+8. `inode.Chunks = newChunks; Size = NewSize; Version++; Mtime = Ctime = now`.
 
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
-to fill slots, move slots off draining/removed nodes, and migrate to a new policy.
+to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy. The
+Raft index of the applied `SetPlacement` (or `GCDelete`) is the fence carried by the shard
+`DELETE` RPC ([06](06-gc-and-repair.md)).
 
 **GCDelete.** For every chunk in `Tombs` with `TombstonedAt < Before` (and `Refs == 0`,
 which `Tombs` guarantees): delete it from `Chunks` and `Tombs` and append
@@ -171,8 +191,10 @@ Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
 
 ## Reads
 
-Every read (`GetInode`, `Lookup`, `ReadDir`, `GetChunk`, `Nodes`, `Stats`, …) is served from
-the local FSM under `RLock`, returning copies. Followers may therefore serve slightly stale
+`meta.Store` is the read API of the FSM (`type Store = FSM`); the vfs, gateways, repairer
+and CLI reports hold a `*meta.Store`. Every read (`GetInode`, `Lookup`, `Resolve`, `PathOf`,
+`ReadDir`, `GetChunk`, `ForEachChunk`, `Nodes`, `Volume`, `Stats`, `Applied`,
+`WaitApplied`) is served from the local FSM under `RLock`, returning copies. Followers may therefore serve slightly stale
 metadata; this is accepted NFS behaviour and lets a disconnected laptop browse the tree.
 A gateway that just proposed a command calls `WaitApplied(index)` before answering, which
 gives read-your-writes on the issuing node.
@@ -182,7 +204,7 @@ Health, computed locally:
 | `Health` | Condition | Gateway behaviour |
 |---|---|---|
 | `Healthy` | leader known, last contact < 30 s | normal |
-| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata writes return `EROFS` |
+| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `NFS3ERR_ROFS`; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
 | `NoLeader` | Raft has no leader (quorum lost) | same as `Stale`; `status` reports which voters are unreachable |
 
 ## Proposing and leader forwarding
@@ -194,10 +216,12 @@ when leader, otherwise forwards the encoded command to the current leader with
 - `ErrNotLeader` (the target was not leader when it received the command): the command was
   **not** applied; the caller retries against the new leader (bounded, with backoff).
 - `ErrLeadershipLost`, timeout, or transport error after the command was handed to Raft: the
-  outcome is **unknown**; the error is returned to the caller. For `Commit` this is safe
-  because `BaseVersion` makes a blind retry either succeed once or fail with `ErrConflict`;
-  the gateway then reloads the inode and re-plans. For `Create`/`Mkdir` a retry may hit
-  `ErrExist`, which the gateway maps to success if the existing child matches.
+  outcome is **unknown**; the forwarding layer returns the error and never retries by
+  itself (I-29). *Callers* may retry commands that are idempotent by construction: for
+  `Commit`, `BaseVersion` makes a blind retry either succeed once or fail with
+  `ErrConflict`, after which the gateway reloads the inode and re-plans; for
+  `Create`/`Mkdir` a retry may hit `ErrExist`, which the gateway maps to success if the
+  existing child matches.
 - A leader with no quorum eventually steps down; proposers see `ErrNoLeader` and the flusher
   backs off (data stays in the WAL, see 04).
 
@@ -221,15 +245,18 @@ count is 1 or even.
 
 **Lifecycle commands** (all day-zero): `node promote|demote` (`AddVoter`/`AddNonvoter` on the
 same ID), `node set-capacity` (`NodeUpsert`), `node drain` (`NodeSetState Draining`:
-excluded from new placement; repairer moves its slots off), `node remove`
-(`NodeSetState Removed` + `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`).
+excluded from new placement; repairer re-places its slots), `node remove`
+(`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`),
+`tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
+the device can `join` afresh; never touches `shards/`, which the sweep reconciles later).
 
 ## Partitions and quorum
 
 Raft guarantees that only a partition containing a majority of voters elects a leader and
 commits entries (I-6). The minority side's gateways move to `Stale`/`NoLeader`: reads
-continue from the local FSM and from any reachable shard holders; metadata writes return
-`EROFS`; NFS WRITEs already accepted sit in the WAL until the flusher can propose again.
+continue from the local FSM and from any reachable shard holders; metadata mutations return
+`NFS3ERR_ROFS`; data WRITEs are still accepted into the WAL until the dirty caps, and
+everything in the WAL sits there until the flusher can propose again.
 When the partition heals, the minority's Raft log is reconciled by Raft itself; our FSM has
 no divergent state to merge because it never applied uncommitted entries.
 
@@ -252,8 +279,10 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-28** — A `Commit` whose `BaseVersion` does not match the inode's current `Version` is
   rejected without side effects, so two gateways cannot interleave partial updates to one
   file.
-- **I-29** — Leader forwarding never applies a command twice: a forwarded command is applied
-  at most once per proposal, and a retry happens only after an explicit `ErrNotLeader`.
+- **I-29** — The leader-forwarding layer never applies a command twice: a forwarded command
+  is handed to Raft at most once per proposal, and the forwarding layer itself retries only
+  after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
+  above; that is outside this invariant.)
 
 ## Tests
 
@@ -263,6 +292,6 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-5 | `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_SnapshotPersistConcurrentWithApply`, `TestCluster_RejoinAfterLongAbsence_SnapshotInstall` |
 | I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_MinorityGatewayReturnsEROFS`, `TestModelCheck_Long` |
 | I-26 | `TestFSM_ApplyRules_Table`, `TestFSM_FailedCommandLeavesStateUnchanged`, `FuzzDecodeCommand` |
-| I-27 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Invariants_RandomCommands`, `TestFSM_Unlink_TombstonesAtZeroRefs`, `TestFSM_Commit_RevivesTombstonedChunk` |
-| I-28 | `TestFSM_Commit_BaseVersionMismatchIsConflict`, `TestVFS_ConcurrentGateways_DisjointChunksBothCommit`, `TestVFS_ConcurrentGateways_SameChunkOneWins` |
-| I-29 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestCluster_ForwardRetriesOnlyOnNotLeader` |
+| I-27 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Invariants_RandomCommands`, `TestFSM_Tombstone_OnRefsZero`, `TestFSM_Commit_RevivesTombstonedChunk` |
+| I-28 | `TestFSM_Commit_RejectsStaleBaseVersion`, `TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestVFS_ConcurrentGateways_SameChunkOneWins` |
+| I-29 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestCluster_ForwardRetriesOnlyOnNotLeader`, `TestFSM_RefcountUnderflow_IsBadCommand` |

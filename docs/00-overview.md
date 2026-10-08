@@ -89,28 +89,35 @@ for a member. No TLS of our own.
 
 ## Durability contract
 
-> "No data loss" means every byte whose WRITE was acknowledged and every metadata op that
-> returned OK is returned unchanged by any later READ on any live gateway, under these failures:
+> "No data loss" means: every byte whose WRITE was acknowledged is durable at once (fsynced
+> to the issuing gateway's WAL) and is returned unchanged by any later READ on the issuing
+> gateway immediately; it is returned unchanged by any later READ on **every** live gateway
+> once it has been flushed to the cluster, which happens within the idle timer (2 s) after
+> writes to that file pause, and otherwise within the dirty-byte thresholds (32 MiB per file,
+> 256 MiB total, or a 128 MiB WAL) while writes continue. Every metadata op that returned OK
+> is visible on every live gateway once its Raft entry is applied there. This holds under:
 > (a) permanent loss of any **m** nodes' disks; (b) gateway process crash or power loss at any
 > instant, including right after an ack (WAL replay); (c) leader crash or partition at any
 > point in Apply; (d) corruption of up to m shards per stripe (detected by hash, repaired);
-> (e) kill -9 at any fsync step of a shard write (temp files swept, never served); (f) loss of
-> a Raft minority. **Not covered:** > m nodes lost before repair; permanent loss of Raft
-> majority; storage that lies about fsync; > m corrupt shards in one stripe; destruction of
-> the gateway's own disk within the ≤ 2 s WAL→flush window (option for later: WAL mirroring
-> to one peer before ack). Degraded writes (user's choice) hold < m parity until repair.
-> fsync policy: WAL per record; shard file `write → Sync → Close → Rename`; raft-boltdb
-> `NoSync=false`; snapshots fsync on close. **No production path skips fsync; no test-mode
-> env var.** Tests needing speed use in-memory stores; durability tests use real temp dirs.
+> (e) kill -9 or power loss at any fsync step of a shard write (temp files swept, never
+> served; an acknowledged shard is fsynced with its directory); (f) loss of a Raft minority.
+> **Not covered:** > m nodes lost before repair; permanent loss of Raft majority; storage that
+> lies about fsync; > m corrupt shards in one stripe; destruction of the issuing gateway's
+> disk before its WAL has flushed (option for later: WAL mirroring to one peer before ack).
+> Degraded writes (user's choice) hold < m parity until repair.
+> fsync policy: WAL per record; shard file `write → Sync → Close → Rename → fsync(dir)`;
+> raft-boltdb `NoSync=false`; snapshots fsync on close. **No production path skips fsync; no
+> test-mode env var.** Tests needing speed use in-memory stores; durability tests use real
+> temp dirs.
 
 ## Degraded operation (user-visible)
 
 | Condition | Metadata | Reads | Writes |
 |---|---|---|---|
 | leader reachable, live ≥ k+m | normal | normal | full placement |
-| leader reachable, k ≤ live < k+m | normal | OK if k holders live | degraded (≥ k shards), repaired after `fill_after` |
+| leader reachable, k ≤ live < k+m | normal | OK if k holders live | degraded (≥ k shards); `0` slots filled as soon as a spare is live, slots on dead nodes re-placed after `fill_after` |
 | leader reachable, live < k | normal | EIO for affected chunks | flush fails; WAL buffers up to 1 GiB then EIO |
-| no leader contact > 30 s / no quorum | stale local copy | served | EROFS |
+| no leader contact > 30 s / no quorum | stale local copy | served | data WRITEs buffered in the WAL until the caps, then EIO; metadata mutations EROFS |
 
 ## Size budget
 
@@ -146,14 +153,18 @@ Tests are not budget-limited but each must cite the invariant it defends.
 
 | Doc | Defines |
 |---|---|
-| [01-data-model](01-data-model.md) | Types, chunking, hashing, on-disk formats, handles. I-1..I-3 (+I-22..I-25) |
-| [02-consistency-and-raft](02-consistency-and-raft.md) | FSM commands and apply rules, Raft wiring, membership, forwarding, reads. I-4..I-6 (+I-26..I-29) |
-| [03-erasure-coding-and-placement](03-erasure-coding-and-placement.md) | `ec.Codec`, rendezvous placement, degraded writes, policy migration. I-8..I-10 (+I-30..I-33) |
-| [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy. I-7, I-11, I-12 |
-| [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived |
-| [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, sweep, repair scanner, scrub, drain, migration. I-13..I-15 |
-| [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, per-OS mount. I-16, I-17 |
-| [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys. I-18 |
-| [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite |
-| [10-s3-nodes](10-s3-nodes.md) | Own S3 server and client, S3 storage nodes. I-19..I-21 |
-| [invariants.md](invariants.md) | Generated table of every I-n with its tests |
+| [01-data-model](01-data-model.md) | Types, chunking, hashing, on-disk formats, handles. I-1..I-3, I-22 |
+| [02-consistency-and-raft](02-consistency-and-raft.md) | FSM commands and apply rules, Raft wiring, membership, forwarding, reads. I-4..I-6, I-26..I-29 |
+| [03-erasure-coding-and-placement](03-erasure-coding-and-placement.md) | `ec.Codec`, rendezvous placement, degraded writes, policy migration. I-8..I-10, I-30, I-32, I-33 |
+| [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy. I-7, I-11, I-34..I-37 |
+| [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived. I-12, I-38..I-40 |
+| [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, DELETE fence, sweep, repair scanner, scrub, drain, migration. I-13..I-15, I-41..I-44 |
+| [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, per-OS mount. I-16, I-17, I-45..I-47 |
+| [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys. I-18, I-48..I-50 |
+| [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
+| [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
+| [11-chunk-lifecycle](11-chunk-lifecycle.md) | Chunk and shard state machines, event catalogue, transition cells L-n. I-56, I-57 |
+| [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
+
+Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged
+into I-11 and I-7 during review); numbers are never reused.

@@ -36,7 +36,23 @@ implements:
    its very next request even with a warm cache.
 5. The `X-Tailraid-Cluster` header must equal this node's cluster ID → otherwise **409**.
    This stops two clusters that were separately `init`ed on one tailnet from exchanging
-   shards or metadata.
+   shards or metadata. `409` is reserved for this; a refused shard `DELETE` (fence, `docs/06`)
+   is `412`.
+6. Exception for address changes: `POST /v1/members {update_addr}` arrives from an IP that
+   is, by definition, not yet in the member table. It is authorized by `WhoIs(srcIP).StableID
+   == TSStableID` of the member named in the body (step 3 without step 2), and may change
+   nothing but that member's `Addr`.
+
+Endpoints and who may call them:
+
+| Endpoint | Caller | Note |
+|---|---|---|
+| `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body |
+| `GET/HEAD/PUT/DELETE /v1/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412` |
+| `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
+| `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
+| `GET /v1/status` | members | |
+| `/dev/*` | members, only with `dev.enabled` | |
 
 Authorization is checked before any request body is consumed (`http.MaxBytesReader` is
 installed after the check). A rejected PUT therefore costs the attacker's bandwidth, not
@@ -82,8 +98,8 @@ The S3 API server listens on the node's Tailscale IP (and loopback). It requires
   (keys are stored only in the local config file with mode 0600 or the OS keyring; the
   secret never enters Raft), and
 - a WhoIs check that the source IP is a tailnet node (not necessarily a cluster member, so
-  phones and Windows Home machines can use rclone), unless the key was created with
-  `--members-only`.
+  phones and Windows Home machines can use rclone). The config key `s3.members_only: true`
+  tightens this to cluster members through the same `rpc.Authorizer`.
 
 Clock skew tolerance is 15 minutes, as in AWS. `UNSIGNED-PAYLOAD` is accepted because the
 transport is already authenticated and encrypted; when a payload hash is supplied it is
@@ -115,6 +131,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Threat | Mitigation |
 |---|---|
 | Unrelated tailnet device reads or writes shards | member table + WhoIs StableID check (I-18) |
+| Stale or replayed shard `DELETE` removes a live shard | DELETE fence: log index, placement and file age checked by the receiver (`docs/06`) |
 | Two clusters on one tailnet cross-talk | cluster-ID handshake on Raft, `X-Tailraid-Cluster` header on RPC |
 | Tailscale IP reassigned to another device | WhoIs StableID mismatch → 403 + cache purge |
 | Removed member keeps using a warm authorizer cache | cache purged on membership change |

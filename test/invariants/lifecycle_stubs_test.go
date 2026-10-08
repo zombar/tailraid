@@ -49,7 +49,7 @@ func TestStubLifecycle_L_7(t *testing.T) {
 }
 
 // Lifecycle: L-8
-// Committed --[E-8 truncate down mid-chunk]--> Dirty (tail rewrite pending, `sizeSet`)
+// Committed --[E-8 truncate down mid-chunk]--> Dirty (tail rewrite pending, `sizeSet`, `minSize`)
 func TestStubLifecycle_L_8(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-8")
 }
@@ -133,7 +133,7 @@ func TestStubLifecycle_L_21(t *testing.T) {
 }
 
 // Lifecycle: L-22
-// Committed --[E-18 two gateways, same chunk]--> Committed (winner); loser's new chunk Tombstoned or never committed
+// Committed --[E-18 two gateways, same chunk]--> Committed (second committer's version); the first committer's chunk is Tombstoned when its last ref is replaced
 func TestStubLifecycle_L_22(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-22")
 }
@@ -493,7 +493,7 @@ func TestStubLifecycle_L_81(t *testing.T) {
 }
 
 // Lifecycle: L-82
-// Committed (stale copy on old node) --[E-73 Sweep, placement names another node]--> Committed; stale shard Swept
+// Committed (orphan shard on old node) --[E-73 Sweep, placement names another node]--> Committed; orphan shard Swept
 func TestStubLifecycle_L_82(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-82")
 }
@@ -553,7 +553,7 @@ func TestStubLifecycle_L_91(t *testing.T) {
 }
 
 // Lifecycle: L-92
-// Committed --[E-78 node dead > evict_after]--> Degraded
+// Degraded --[E-78 node dead > evict_after]--> Degraded
 func TestStubLifecycle_L_92(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-92")
 }
@@ -571,7 +571,7 @@ func TestStubLifecycle_L_94(t *testing.T) {
 }
 
 // Lifecycle: L-95
-// Committed (sole slot on node) --[E-81 node remove]--> Committed
+// Committed (any slot on node) --[E-81 node remove]--> Committed
 func TestStubLifecycle_L_95(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-95")
 }
@@ -619,7 +619,7 @@ func TestStubLifecycle_L_102(t *testing.T) {
 }
 
 // Lifecycle: L-103
-// Degraded --[E-87 live < k+m]--> Degraded
+// Degraded --[E-87 live < k+m]--> Degraded (fewer 0 slots)
 func TestStubLifecycle_L_103(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-103")
 }
@@ -703,7 +703,7 @@ func TestStubLifecycle_L_116(t *testing.T) {
 }
 
 // Lifecycle: L-117
-// Placed/Committed --[E-104 C5 power loss after rename before dir sync]--> Degraded (if entry lost)
+// Uploading --[E-104 C5 power loss after rename before dir sync]--> Uploading (slot not acked)
 func TestStubLifecycle_L_117(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-117")
 }
@@ -805,7 +805,7 @@ func TestStubLifecycle_L_133(t *testing.T) {
 }
 
 // Lifecycle: L-134
-// Durable --[GCDelete DELETE]--> Deleted
+// Durable --[GCDelete DELETE with valid fence (applied index ≥ header, not placed on self, file older than grace)]--> Deleted
 func TestStubLifecycle_L_134(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-134")
 }
@@ -877,7 +877,7 @@ func TestStubLifecycle_L_145(t *testing.T) {
 }
 
 // Lifecycle: L-146
-// Tombstoned --[Commit referencing hash]--> Uploading
+// Tombstoned (≥ k slots on live nodes) --[Commit referencing hash]--> Uploading
 func TestStubLifecycle_L_146(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-146")
 }
@@ -967,7 +967,7 @@ func TestStubLifecycle_L_160(t *testing.T) {
 }
 
 // Lifecycle: L-161
-// Committed (sole slot on node) --[node remove without --force]--> Degraded
+// Committed (any slot on node) --[node remove without --force]--> Degraded
 func TestStubLifecycle_L_161(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-161")
 }
@@ -994,6 +994,78 @@ func TestStubLifecycle_L_164(t *testing.T) {
 // Degraded --[repair]--> chunk bytes differ from original Hash after repair
 func TestStubLifecycle_L_165(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-165")
+}
+
+// Lifecycle: L-166
+// Committed --[E-112 reader reports a bad slot]--> Degraded
+func TestStubLifecycle_L_166(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-166")
+}
+
+// Lifecycle: L-167
+// Tombstoned/Degraded (< k live slots) --[E-113 dedup hit]--> Uploading (fill) → Committed
+func TestStubLifecycle_L_167(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-167")
+}
+
+// Lifecycle: L-168
+// Committed --[E-114 truncate down then write past the truncation point]--> Dirty (`minSize` < `size`) → Committed
+func TestStubLifecycle_L_168(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-168")
+}
+
+// Lifecycle: L-169
+// Durable (device) --[E-115 DELETE with stale fence]--> Durable
+func TestStubLifecycle_L_169(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-169")
+}
+
+// Lifecycle: L-170
+// Orphan (S3 object) --[E-116 leader S3 sweep]--> Swept
+func TestStubLifecycle_L_170(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-170")
+}
+
+// Lifecycle: L-171
+// Orphan --[E-117 Sweep while not `Healthy` / behind leader index]--> Orphan
+func TestStubLifecycle_L_171(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-171")
+}
+
+// Lifecycle: L-172
+// Dirty (fresh extents during flush) --[E-118 flush completes]--> Dirty (compacted WAL)
+func TestStubLifecycle_L_172(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-172")
+}
+
+// Lifecycle: L-173
+// Degraded (`(k,m)` ≠ policy) --[E-119 migration PUTs under new keys]--> Repairing → Committed
+func TestStubLifecycle_L_173(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-173")
+}
+
+// Lifecycle: L-174
+// Durable (device) --[DELETE accepted with applied index < fence, or file younger than grace, or slot placed on self]--> Deleted
+func TestStubLifecycle_L_174(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-174")
+}
+
+// Lifecycle: L-175
+// Committed --[Commit without `HasTruncate` and `NewSize` < `Size`]--> Committed (shrunk)
+func TestStubLifecycle_L_175(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-175")
+}
+
+// Lifecycle: L-176
+// Degraded/Tombstoned (< k live slots) --[dedup hit]--> Committed (no upload)
+func TestStubLifecycle_L_176(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-176")
+}
+
+// Lifecycle: L-177
+// Orphan --[Sweep while not `Healthy`]--> Swept
+func TestStubLifecycle_L_177(t *testing.T) {
+	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-177")
 }
 
 // Invariant: I-56

@@ -62,8 +62,10 @@ type Candidate struct { Idx meta.NodeIdx; Weight uint64 }   // Weight = Node.Cap
 
 At write time the flusher builds the candidate list from `State.Nodes` filtered to
 `State == Active` **and** currently live (`Peers.Live()`), with `Weight = Capacity`. Nodes
-that are `Draining` or `Removed`, dead, or that reported `ErrNoSpace` on their last PUT are
-excluded. S3 nodes (`Kind == KindS3`) are candidates when their bucket probe is live.
+that are `Draining` or `Removed`, dead, or that reported `ErrFull` (HTTP 507) on their last
+PUT are excluded. S3 nodes (`Kind == KindS3`) are candidates when their bucket probe is
+live. The candidate list is built by the gateway doing the flush from its *own* prober
+view; no node is asked for permission.
 
 ### Rendezvous (HRW) hashing
 
@@ -72,17 +74,21 @@ func Place(h meta.Hash, cands []Candidate, n int) []meta.NodeIdx
 ```
 
 For each candidate compute
-`u = fnv64a(h[:] ‖ u16(idx)) / 2^64` in `(0, 1)` and `score = -Weight / ln(u)`
-(weighted rendezvous hashing; a node with twice the weight receives twice the shards in
-expectation). Sort candidates by `score` descending, ties broken by `idx` ascending, and take
+`u = fmix64(fnv64a(h[:] ‖ u16le(idx))) / 2^64` mapped into the open interval `(0, 1)` (a
+result of 0 or 1 is nudged by one ulp), and `score = -Weight / ln(u)` (weighted rendezvous
+hashing; a node with twice the weight receives twice the shards in expectation). `fmix64` is
+the MurmurHash3 64-bit finalizer; it is required because plain FNV-1a has no avalanche over
+the two trailing `idx` bytes, so the `u` values of different candidates for the same hash
+were nearly equal and the weights were effectively ignored (a 2:1 weighting measured
+99984:16 before the mix). Sort candidates by `score` descending, ties broken by `idx` ascending, and take
 the first `n`. Shard `i` goes to the `i`-th selected node. Properties:
 
 - Pure function of `(h, candidate set, n)` (I-8): every node computes the same answer from
   the same inputs, which the predecessor got wrong by sorting its own name among peer IPs.
 - Minimal disruption: adding a candidate moves only the shards that now hash highest onto
   it; removing one moves only that node's shards.
-- With fewer than `n` candidates the result is shorter; the caller fills the remaining slots
-  with 0 (degraded) or refuses, per the rules below.
+- With fewer than `n` candidates the result is shorter (`TestPlace_FewerCandidatesThanN`);
+  the caller fills the remaining slots with 0 (degraded) or refuses, per the rules below.
 
 The placement is **stored** in `Chunk.Placement` by `Commit`/`SetPlacement`. Membership or
 liveness changes never move data implicitly; only the repairer, through `SetPlacement`,
@@ -105,13 +111,18 @@ The flusher ([04](04-write-path-and-durability.md)) for a new chunk hash:
    `X-Shard-SHA256`; the receiver verifies before the shard becomes visible.
 3. Wait until **at least `k` slots are acknowledged** and either all PUTs finished or a
    10 s deadline passed. Failed or late slots: retry once with `Place` over candidates minus
-   the failed nodes for those slot positions; still failed ⇒ slot `0`.
+   the failed nodes **and minus every node already holding an acknowledged slot of this
+   stripe** (I-9); slot `i` keeps its index and takes the `i`-th entry of the new list that
+   is not already used; still failed ⇒ slot `0`. An ack is a `200` from `PUT`, which the
+   receiver returns only after the shard file and its directory are fsynced (I-7).
 4. Fewer than `k` acknowledged slots ⇒ the flush fails (`ErrDegraded`), nothing is committed,
    the data remains in the WAL, and the flusher backs off and retries.
 5. Otherwise `Commit` carries `ChunkDesc{Hash, Size, K, M, Placement}`.
 
-A chunk committed with any slot `0` is **under-replicated**. `status`/`check` count these;
-the repairer fills them when nodes return ([06](06-gc-and-repair.md)). This is the
+A chunk committed with any slot `0` is **degraded** (fewer than `k+m` good slots).
+`status`/`check` count these; the repairer fills a `0` slot as soon as any live spare node
+exists — no hold-down applies to `0` slots, only to slots on dead nodes
+([06](06-gc-and-repair.md)). This is the
 "degraded writes allowed" decision: the volume stays writable while `k ≤ live < k+m`, and
 freshly written chunks carry less than `m` parity until repair completes.
 
@@ -136,12 +147,13 @@ reachable; a bucket is the shard source of last resort and the off-site copy.
 
 ## Changing the policy: `volume set-redundancy --k K --m M`
 
-Proposes `SetVolume{K, M}`; refused by the CLI if `K+M` exceeds the number of Active
-devices plus S3 nodes. From the next flush, new chunks use the new `(K, M)`. Existing
+Proposes `SetVolume{K, M}`; refused by the CLI if `K+M` exceeds the number of **live
+Active nodes** (devices or S3). The FSM increments `PolicyVersion` itself. From the next flush, new chunks use the new `(K, M)`. Existing
 chunks keep their recorded `(K, M)` and remain fully readable. The repairer treats
 `chunk.(K,M) != Vol.(K,M)` as repair work: read `k_old` shards, decode, re-encode with the
-new policy, PUT to a fresh placement, `SetPlacement{Hash, Placement, K, M}`, and only then
-delete the old shards (after the commit is applied). At no instant does a chunk have fewer
+new policy, PUT to a fresh placement under the new keys (`hex.K-M.idx`, which never collide
+with the old `hex.k-m.idx` files), `SetPlacement{Hash, Placement, K, M}`, and only then
+delete the old shards (after the commit is applied, with the DELETE fence of 06). At no instant does a chunk have fewer
 than `k_old` reachable shards (I-32). `volume describe` shows `migrated / total`.
 
 The same mechanism handles `node drain`: a draining node is excluded from candidates, the
@@ -174,8 +186,8 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | Invariant | Tests |
 |---|---|
 | I-8 | `TestPlace_DeterministicAcrossNodes`, `FuzzPlace_Determinism`, `TestCluster_PlacementAgreesOnAllNodes` |
-| I-9 | `TestPlace_DistinctNodesPerStripe`, `TestFSM_Commit_RejectsDuplicatePlacement`, `TestCluster_WriteReadAllNodes`, `TestModelCheck_Long` |
+| I-9 | `TestPlace_DistinctNodes`, `TestFSM_Commit_RejectsDuplicatePlacement`, `TestCluster_WriteReadAllNodes`, `TestModelCheck_Long` |
 | I-10 | `TestDecode_EverySubsetOfKShards`, `TestDecode_FewerThanK_Fails`, `TestEncodeDecode_Sizes`, `TestTailPadding_NotLeaked`, `FuzzRoundTrip`, `TestCluster_KillMNodes_AllDataReadable` |
 | I-30 | `TestShardSizesEqual_AndDeterministic`, `TestEncode_DoesNotAliasInput`, `TestVerify_EncodedIsConsistent` |
 | I-32 | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DeletesOldShardsOnlyAfterCommit` |
-| I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnMembershipChange` |
+| I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnRemove` |

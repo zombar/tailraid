@@ -11,16 +11,17 @@ later S3) gateway and the management CLI.
 
 ## Durability contract (excerpt from `docs/05-failure-model.md`)
 
-"No data loss" means every byte whose write was acknowledged, and every metadata operation
-that returned OK, is returned unchanged by any later read on any live gateway under these
-failures: permanent loss of any **m** nodes' disks; crash or power loss of a gateway at any
-instant, including right after an acknowledgement; leader crash or partition at any point;
-corruption of up to m shards per stripe; kill -9 at any fsync step; loss of a Raft minority.
+"No data loss" means: every byte whose write was acknowledged is durable at once (fsynced
+to the issuing gateway's write-ahead log) and readable there immediately; it is readable
+from every live gateway once flushed to the cluster, which happens within 2 s after writes
+to that file pause (or at the dirty-byte thresholds while they continue). This holds under
+the loss of any m nodes' disks, a gateway crash or power loss at any instant, a leader
+crash or partition at any point, corruption of up to m shards per stripe, and a crash at any
+fsync step of a shard write.
 
 Not covered: more than m nodes lost before repair completes; permanent loss of the Raft
 majority; storage that lies about fsync; more than m corrupt shards in one stripe;
-destruction of a gateway's own disk inside the ≤ 2 s window between a write's local WAL
-fsync and its cluster flush. No production code path ever skips fsync.
+destruction of the issuing gateway's own disk before its write-ahead log has flushed.
 
 ## Where to look
 

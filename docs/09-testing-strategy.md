@@ -59,9 +59,9 @@ Rules that keep it honest:
 | Seam | Where | Why |
 |---|---|---|
 | `clock.Clock` (`Now`, `NewTimer`, `After`, `Since`) + `clock.Fake{Advance, Set}` | every tailraid timer: GC grace, repair hold-down, flush idle, attr TTL, HTTP timeouts | no sleeps in tests; ~80 lines. Raft keeps its own real clock; raft tests use 20 ms timeouts and condition polling |
-| `sysfs.FS` (`CreateTemp, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, Sync, Close`) + `sysfstest.Fault` | `internal/chunk` only | ENOSPC, torn writes, crash at each fsync step |
+| `sysfs.FS` (`CreateTemp, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, Sync, Close`) + `sysfstest.Fault` | `internal/chunk` only | ENOSPC, torn writes, crash at each fsync step (`SyncDir` is on the ack path: a PUT is acked only after it) |
 | `FaultNet` (`http.RoundTripper` wrapper keyed src→dst: `Drop`, `Delay`, `Partition`, `ErrorOnce`) | RPC client in tests and under `--dev` | production HTTP code runs in every multi-node test |
-| `cluster.Hooks` (nil-checked func fields: `BeforeWALSync, AfterShardTempWritten`, `AfterShardFsync`, `AfterShardRename`, `AfterAllShardsAcked`, `AfterRaftCommit`, `BeforeClientAck`) | write path | crash injection at every durability point; nil in production, no behaviour change |
+| `cluster.Hooks` (nil-checked func fields, one per crash point C1..C7 of `docs/05`: `BeforeWALSync`, `BeforeClientAck`, `AfterShardTempWritten`, `AfterShardFsync`, `AfterShardRename`, `AfterAllShardsAcked`, `AfterRaftCommit`) | write path | crash injection at every durability point; nil in production, no behaviour change |
 | `tailscale.Client` interface + `tailscale.Fake` | WhoIs authorizer, prober | tailscaled is not available in CI |
 | Raft: `raft.NewInmemTransport`, `raft.NewInmemStore`, `raft.NewInmemSnapshotStore` | cluster tests | raft is not wrapped; its own fakes are used |
 
@@ -75,15 +75,16 @@ Named tests below are the acceptance set; each cites its invariants in code.
 **`internal/ec`** — `TestEncodeDecode_Sizes` over {0, 1, k−1, k, k+1, stripe−1, stripe,
 stripe+1, 2·stripe−1} × (1,0), (1,2), (2,1), (4,2), (8,3); `TestDecode_EverySubsetOfKShards`
 (all C(k+m,k) subsets); `TestDecode_FewerThanK_Fails`; `TestTailPadding_NotLeaked`;
-`TestEncode_Deterministic` (byte-identical shards on re-encode, required for content
+`TestShardSizesEqual_AndDeterministic` (byte-identical shards on re-encode, required for content
 addressing); `FuzzRoundTrip`.
 
-**`internal/chunk`** — `TestStore_PutGetRoundTrip` size table; `TestStore_Get_CorruptedBitFlip`,
-`_Truncated`, `_ZeroFilled` → `ErrCorrupt` and the file is quarantined;
+**`internal/chunk`** — `TestStore_PutGetRoundTrip` size table; `TestStore_GetVerifiesHash_Corrupted`
+(table: bit flip, truncated, zero-filled, bad magic → `ErrCorrupt` and the file is quarantined);
 `TestStore_PutRejectsHashMismatch`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
-`TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`; `TestStore_TornWrite_DetectedOnRead`;
-`TestStore_ConcurrentPutSameHash` (32 goroutines, `-race`); `TestStore_DiskFull_NoPartialShard`;
-`TestCache_EvictsBySize`; `FuzzStore_PutGet`.
+`TestStore_CrashAfterRenameBeforeDirSync_NotAcked`; `TestStore_OpenSweepsTemps`;
+`TestStore_TornWrite_DetectedOnRead`; `TestStore_ConcurrentPutSameHash` (32 goroutines,
+`-race`); `TestStore_DiskFull_NoPartialShard`; `TestStore_DupPutDifferentPayload_Overwrites`;
+`TestStore_DeleteIfOlder_KeepsYoung`; `TestCache_LRUEvictsBySize`; `FuzzStore_PutGet`.
 
 **`internal/meta`** — `TestFSM_ApplySnapshotRestoreEquivalence` (5k random commands;
 snapshot; restore; compare; also restore-then-replay-tail); `TestFSM_DeterministicAcrossReplicas`
@@ -92,14 +93,17 @@ rename table (`over file`, `over empty dir`, `over non-empty dir`, `into own sub
 `same path`, `cross-dir keeps ino+gen`); `TestFSM_HandleStableAcrossRestart`;
 `TestFSM_InoGenNotReusedAfterUnlink`; `TestFSM_RefCount_SharedChunkAcrossFiles`;
 `TestFSM_Commit_RejectsStaleBaseVersion`; `TestFSM_Commit_ErrNeedTailRewrite`;
+`TestFSM_Commit_TruncateThenGrow_DropsOldChunks`; `TestFSM_NowIsMonotonic`;
+`TestFSM_RefcountUnderflow_IsBadCommand`;
 `TestFSM_SetVolume_NewPolicyAppliesToNewChunksOnly`; invariant checker used by every FSM test
 (Σrefs = references from inodes, `len(Chunks) == ceil(Size/CS)`, parent chains reach root,
 `Tombs ⇔ Refs==0`); `FuzzDecodeCommand`.
 
 **`internal/meta` placement** — `TestPlace_DeterministicAcrossNodes` (7 instances, shuffled
-candidate order, 10k hashes → identical); `TestPlace_DistinctNodesPerStripe`;
-`TestPlace_RefusesWhenMembersFewerThanKPlusM`; `TestPlace_CapacityWeighting` (±10 % over
-100k); `TestPlace_StabilityOnMembershipChange` (adding one node moves ≤ 1/N + ε of shards);
+candidate order, 10k hashes → identical); `TestPlace_DistinctNodes`;
+`TestPlace_FewerCandidatesThanN` (shorter result; caller fills 0); `TestPlace_CapacityWeighting`
+(±10 % over 100k); `TestPlace_StabilityOnRemove` and `TestPlace_StabilityOnAdd` (adding one
+node moves ≤ 1/N + ε of shards);
 `FuzzPlace_Determinism`.
 
 **`internal/vfs`** — go-billy's `BasicSuite` and `DirSuite` through a gocheck shim;
@@ -112,9 +116,12 @@ Plus the deliberately simple `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`,
 `TestVFS_PerRPCOpenCloseSequence` (the exact go-nfs per-WRITE sequence),
 `TestVFS_WriteSpanningChunkBoundary`, `TestVFS_WritePastEOF_CreatesHole_ReadsZeros`,
 `TestVFS_TruncateDown_DropsChunkRefs`, `TestVFS_TruncateUp_Zeros`,
-`TestVFS_CloseFlushIsDurable`, `TestVFS_DedupeIdenticalChunks`,
-`TestVFS_ConflictRebase_DisjointChunksBothLand`, `TestVFS_UnknownChunk_Reuploads`,
-`TestVFS_DegradedCommit_RecordsMissingSlots`, `TestWAL_ReplayStopsAtTornTail`,
+`TestVFS_CloseFlushIsDurable`, `TestVFS_DedupIdenticalChunks`,
+`TestVFS_TruncateThenGrow_OldBytesDoNotResurface`,
+`TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestFlusher_UnknownChunk_ReUpload`,
+`TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_ConflictRebase_KeepsAllExtents`,
+`TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`,
+`TestWAL_ReplayStopsAtTornTail`, `TestWAL_CompactKeepsLiveExtents`,
 `TestVFS_UnlinkDirtyFile_DropsWAL`, `TestVFS_ConcurrentWritersDifferentFiles`.
 
 **`internal/nfsgw`** — in-process over `willscott/go-nfs-client` against `nfs.Serve` on
@@ -126,7 +133,9 @@ offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrModeOwnerTimes`,
 
 **`internal/rpc`** — `TestChunkRPC_SizeBoundaries` {0, 1, max−1, max, max+1 → 413} with client
 and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_GetMissing404`;
-`TestChunkRPC_ContextCancelAbortsUpload`; `TestWhoIs_DeniesUnknownPeer`,
+`TestChunkRPC_ContextCancelAbortsUpload`; `TestRPC_DeleteFence_RefusesStaleIndex`,
+`TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesPlacedShard412`;
+`TestWhoIs_DeniesUnknownPeer`,
 `TestWhoIs_DeniesStableIDMismatch`, `TestWhoIs_AllowsMember`, `TestWhoIs_PurgeOnMembershipChange`;
 `TestChunkRPC_ReadsAuthBeforeBody`; `TestRPC_ClusterIDMismatch409`;
 `TestRPC_ListenRefusesNonLoopbackWithoutAuth`.
@@ -155,8 +164,9 @@ Scenarios: `TestCluster_WriteReadAllNodes`, `TestCluster_KillMNodes_AllDataReada
 payload, kill the gateway at the hook, restart, and require exactly one of two outcomes:
 not acknowledged ⇒ old content and no visible orphan shards, or acknowledged ⇒ new content
 readable from every live gateway. `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`.
-`TestDurability_AckImpliesReadableFromKSurvivors` (`Durable()`, rotate the gateway, 20
-iterations short / 200 long). **`TestModelCheck_Long`** (skipped under `-short`; `make
+`TestDurability_AckImpliesReadableFromKSurvivors` (`Durable()`; after each ack: kill and
+restart the gateway, let the WAL replay and flush, then kill m nodes and read elsewhere;
+rotate the gateway; 20 iterations short / 200 long). **`TestModelCheck_Long`** (skipped under `-short`; `make
 test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`, `Restart`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
@@ -173,6 +183,8 @@ write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, r
   chunk, meta < 3 s; vfs < 8 s; nfsgw < 5 s; cluster < 25 s; e2e < 8 s.
 - Behind `-short`: the model checker, long durability iterations, the 50k-op oracle, fuzz
   beyond seeds, the real-mount workload, every `Durable()` cluster test except one smoke.
+- `make test-long` also records which lifecycle cells (`L-n`) the model checker hit; the
+  soak report shows the same coverage table.
 - No `time.Sleep` for synchronization in tests (forbidigo, `//nolint` only in the raft
   timeout helper with a comment). Waiting is `Eventually(cond, 5s, 1ms)` or channels; Raft
   apply completion is observed via `ApplyFuture.Error()` and `Cluster.Quiesce`.

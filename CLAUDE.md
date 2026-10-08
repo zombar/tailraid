@@ -68,8 +68,12 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
 - Small consumer-defined interfaces (`Proposer`, `Peers`, `ShardClient`, `Cluster`,
   `tailscale.Client`, `Authorizer`); hand-written fakes, never `testify/mock`.
 - Table-driven tests; stdlib `testing` plus small local helpers, no assertion frameworks.
-- **No test-mode switches in production code** (no `TAILRAID_TEST`, no skip-fsync flags).
-  Speed comes from in-memory stores; durability tests use real temp dirs.
+- **No test-mode switches in production code** (no `TAILRAID_TEST`, no skip-fsync flags, no
+  `sync bool` on the WAL). Speed comes from in-memory stores; durability tests use real temp dirs.
+- Terminology: "shard store" (`internal/chunk`), "dead"/"live" for liveness, "degraded" for a
+  chunk with < k+m good slots, "orphan shard" for an uploaded-but-uncommitted or unplaced
+  shard, "re-place" for `SetPlacement` work, `ErrFull` for the 507 condition, wire names
+  (`NFS3ERR_ROFS`) in tables and errno names (`EROFS`) in prose, `(k,m)` for a policy.
 - The only seams: `clock.Clock`, `sysfs.FS` (shard store only), `FaultNet`, `cluster.Hooks`,
   `tailscale.Client`. Raft is not wrapped.
 - No `time.Sleep` for synchronization (forbidigo). Wait on channels, futures or an
@@ -84,10 +88,11 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
 
 ## CLI (target surface; see the plan for details)
 
-`init`, `join`, `serve`, `token`, `reset` · `status`, `node ls|describe|promote|demote|
+`init`, `join`, `serve`, `token`, `reset` (wipes local Raft state only, never shards) ·
+`status`, `node ls|describe|promote|demote|
 set-capacity|drain|remove|add-s3|keys` · `check`, `repair`, `gc`, `fsck` · `volume
 describe|grow|set-redundancy` · `bucket ls|describe|create|rm` · `chunk describe <hash>`
-(lifecycle state, placement, refs, history) · `s3 keys` · `verify` (live soak + HTML report)
+(lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `s3 keys` · `verify` (live soak + HTML report)
 · `mount`, `umount`, `install`, `uninstall`, `start`, `stop`, `logs` · `version`.
 
 ## Out of scope (keep it small)

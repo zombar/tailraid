@@ -44,22 +44,22 @@ type Chunk struct {
 type NodeKind  uint8          // KindDevice = 1, KindS3 = 2
 type NodeState uint8          // Active = 1, Draining = 2, Removed = 3
 
-type Node struct {
+type Node struct {           // the ONE node struct; 02 and 10 refer to it, never redefine it
     Idx        NodeIdx
     ID         string         // cluster node ID: random 16 hex chars; = raft.ServerID for devices
     Name       string
     Kind       NodeKind
     State      NodeState
+    TSStableID string         // device: Tailscale stable node ID, used for RPC authorization
+    Addr       string         // device: current Tailscale IPv4 (string form)
+    RaftPort, RPCPort uint16  // device only
+    Voter      bool           // device only
     Capacity   uint64         // shard-byte budget; also the placement weight
-    Voter      bool           // devices only
-    // device only
-    TSStableID string         // Tailscale stable node ID, used for RPC authorization
-    Addr       string         // current Tailscale IPv4
-    RaftPort, RPCPort uint16
-    // s3 only (credentials are NOT here; see 10-s3-nodes)
-    Endpoint, Bucket, Prefix, Region string
-    Version    string         // software version last reported
+    Version    string         // software version last reported (device only)
     JoinedAt   int64
+    // s3 only (credentials are NOT here; see 10-s3.md)
+    S3Endpoint, S3Bucket, S3Prefix, S3Region string
+    S3PathStyle bool
 }
 
 type Volume struct {
@@ -126,9 +126,12 @@ Rules:
 
 ## Shards
 
-- **Key.** `ShardKey = hex(Hash) + "." + strconv.Itoa(idx)`, e.g.
-  `3f2a…9c.0` … `3f2a…9c.5` for a 4+2 chunk. At most 70 characters. Used as the RPC path
-  element, the S3 object key suffix, and the local file name.
+- **Key.** `ShardKey = hex(Hash) + "." + K + "-" + M + "." + idx`, e.g.
+  `3f2a…9c.4-2.0` … `3f2a…9c.4-2.5` for a 4+2 chunk. At most 76 characters. Used as the
+  RPC path element, the S3 object key suffix, and the local file name. The encoding is part
+  of the key so that shards of the same chunk under two policies (during a
+  `volume set-redundancy` migration) never collide; `3f2a…9c.2-1.0` and `3f2a…9c.3-2.0`
+  are different files.
 - **Length.** All `K+M` shards of a chunk have the same length
   `ShardLen(Size, K) = roundUp(ceil(Size/K), 64)`; the data shards are the chunk zero-padded
   to `K*ShardLen` and split. Padding is never stored in metadata; decoding trims to `Size`.
@@ -136,6 +139,10 @@ Rules:
   of ~50 B). Instead each shard file carries a header with `SHA-256(payload)`, verified on
   every read, and `PUT /v1/shards/{key}` carries `X-Shard-SHA256`, verified by the receiver
   before the file becomes visible. The decoded chunk is then verified against `Hash`.
+- **Duplicate PUT.** If the key already exists, the receiver compares `X-Shard-SHA256` with
+  the existing header hash: equal ⇒ `200`, mtime refreshed, no rewrite; different ⇒ the new
+  payload replaces the file atomically (temp + rename) and `200` is returned. A duplicate PUT
+  therefore always leaves the file equal to the payload the sender holds.
 
 ### Shard file format (`internal/chunk`)
 
@@ -147,13 +154,30 @@ offset  size  field
 40      n     payload (the shard bytes)
 ```
 
-Path: `<data_dir>/shards/<hh>/<hex>.<idx>` where `hh` = first two hex characters of the
-chunk hash. Written as `<dir>/.tmp-<random>` → `write` → `fsync` → `close` → `rename`.
-Temp files older than the GC grace are swept at startup and by the hourly sweep. A header
-or hash mismatch on read returns `ErrCorrupt`; the file is unlinked and the reader falls back
-to other shards. The same layout is the object layout used for S3 storage nodes
-(`<prefix>/shards/<hh>/<hex>.<idx>`), so a bucket and a local shard directory are the same
-"volume format".
+Path: `<data_dir>/shards/<hh>/<hex>.<k>-<m>.<idx>` where `hh` = first two hex characters
+of the chunk hash. Written as `<dir>/.tmp-<random>` → `write` → `fsync` → `close` →
+`rename` → `fsync(dir)`; `Put` returns only after the directory fsync, so a PUT ack means the
+shard survives power loss. `Store.Open` deletes every `.tmp-*` file it finds, regardless of
+age (a temp file can only be an interrupted write). A header or hash mismatch on read returns
+`ErrCorrupt`; the file is moved to `quarantine/` and the reader falls back to other shards.
+The same layout is the object layout used for S3 storage nodes
+(`<prefix>/shards/<hh>/<hex>.<k>-<m>.<idx>`), so a bucket and a local shard directory are
+the same "volume format".
+
+### Shard store API (`internal/chunk`)
+
+```go
+func Open(fsys sysfs.FS, root string, capacity int64) (*Store, error) // sweeps temps, seeds Used
+func (s *Store) Put(key ShardKey, payload []byte) (added int64, err error) // ErrFull before writing
+func (s *Store) Get(key ShardKey) ([]byte, error)                        // verifies header; ErrCorrupt quarantines
+func (s *Store) Open(key ShardKey) (io.ReadCloser, int64, error)         // verified reader for the RPC server
+func (s *Store) Has(key ShardKey) bool
+func (s *Store) Delete(key ShardKey) (int64, error)                      // idempotent
+func (s *Store) DeleteIfOlder(key ShardKey, than time.Time) (int64, error) // GC/sweep fence (06)
+func (s *Store) Used() int64
+func (s *Store) Capacity() int64
+func (s *Store) Walk(fn func(key ShardKey, size int64, mtime time.Time) error) error
+```
 
 ### Local chunk cache
 
@@ -224,12 +248,12 @@ Snapshot clone (for `raft.FSM.Snapshot`) of 1 M inodes takes roughly 100–300 m
 
 ```
 offset  size  field
-0       4     magic 0x54524844 ("TRHD")
-4       4     Gen uint32 LE
-8       8     Ino uint64 LE
+0       4     magic 0x54524844 ("TRHD"), big-endian
+4       4     Gen uint32 big-endian
+8       8     Ino uint64 big-endian
 ```
 
-16 bytes, fixed. `FromHandle` looks up `Ino`; a missing inode or a `Gen` mismatch returns
+16 bytes, fixed, big-endian throughout (network order; it is an opaque wire value). `FromHandle` looks up `Ino`; a missing inode or a `Gen` mismatch returns
 `NFS3ERR_STALE`. Handles are therefore stable across renames, gateway restarts, and across
 gateways on different devices (they encode cluster-wide identity, not a path).
 
@@ -254,6 +278,6 @@ defined in `04-write-path-and-durability.md`.
 | Invariant | Tests |
 |---|---|
 | I-1 | `TestFSM_SetChunks_SizeAndChunkListConsistent`, `TestFSM_Invariants_RandomCommands`, `TestVFS_OracleRandomOps`, `TestVFS_WritePastEOF_CreatesHole_ReadsZeros`, `TestVFS_TruncateUp_Zeros` |
-| I-2 | `TestFSM_RejectsHashZeroChunkEntry`, `TestVFS_DedupeIdenticalChunks`, `TestVFS_AllZeroChunkBecomesHashZero`, `TestReader_VerifiesDecodedHash` |
+| I-2 | `TestFSM_RejectsHashZeroChunkEntry`, `TestVFS_DedupIdenticalChunks`, `TestVFS_AllZeroChunkBecomesHashZero`, `TestReader_VerifiesDecodedHash` |
 | I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestFSM_Rename_KeepsInoGen`, `TestNFS_RemovedHandleIsStale` |
 | I-22 | `TestCodec_StateRoundTrip`, `TestCodec_CanonicalOrdering`, `TestFSM_DeterministicAcrossReplicas`, `FuzzDecodeCommand`, `FuzzDecodeState` |
