@@ -418,6 +418,7 @@ func (n *Node) Close() error {
 	if err := n.Raft.Shutdown().Error(); err != nil {
 		first = err
 	}
+	n.FSM.Close() // wake WaitApplied callers whose entry was in flight (I-29: outcome unknown)
 	if c, ok := n.trans.(io.Closer); ok {
 		_ = c.Close()
 	}

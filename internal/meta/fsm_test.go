@@ -1292,3 +1292,28 @@ func findIno(s *State, name string) Ino {
 func containsFold(s, sub string) bool {
 	return bytes.Contains(bytes.ToLower([]byte(s)), bytes.ToLower([]byte(sub)))
 }
+
+// A node that shuts down with a proposal in flight must not leave the proposer waiting
+// forever: WaitApplied returns ErrClosed (the Windows CI run of TestCrash_AtEveryPoint
+// hung here for ten minutes).
+// Invariant: I-29
+func TestFSM_WaitApplied_ReturnsOnClose(t *testing.T) {
+	f := NewFSM()
+	done := make(chan error, 1)
+	go func() { done <- f.WaitApplied(context.Background(), 5) }()
+	f.Close()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitApplied did not return after Close")
+	}
+	if err := f.WaitApplied(context.Background(), 5); !errors.Is(err, ErrClosed) {
+		t.Fatalf("after close: %v", err)
+	}
+	if err := f.WaitApplied(context.Background(), 0); err != nil {
+		t.Fatalf("already applied index must still succeed: %v", err)
+	}
+}

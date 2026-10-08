@@ -25,6 +25,7 @@ type FSM struct {
 
 	waitMu   sync.Mutex
 	waitCond *sync.Cond
+	closed   bool // set by Close: no further index will ever be applied
 }
 
 // NewFSM returns an empty FSM holding only the root directory.
@@ -723,15 +724,22 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	return nil
 }
 
-// WaitApplied blocks until the applied index reaches index or ctx is done.
+// WaitApplied blocks until the applied index reaches index, ctx is done, or the FSM is
+// closed (ErrClosed: the node shut down with the entry in flight, so the outcome is
+// unknown to this caller).
 func (f *FSM) WaitApplied(ctx context.Context, index uint64) error {
 	if f.applied.Load() >= index {
 		return nil
 	}
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
 		f.waitMu.Lock()
 		for f.applied.Load() < index {
+			if f.closed {
+				f.waitMu.Unlock()
+				done <- ErrClosed
+				return
+			}
 			select {
 			case <-ctx.Done():
 				f.waitMu.Unlock()
@@ -741,15 +749,24 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error {
 			f.waitCond.Wait()
 		}
 		f.waitMu.Unlock()
-		close(done)
+		done <- nil
 	}()
 	select {
-	case <-done:
-		return nil
+	case err := <-done:
+		return err
 	case <-ctx.Done():
 		f.waitMu.Lock()
 		f.waitCond.Broadcast()
 		f.waitMu.Unlock()
 		return ctx.Err()
 	}
+}
+
+// Close wakes every waiter with ErrClosed; the FSM applies nothing afterwards (the node's
+// Raft instance has shut down). Reads keep working on the last applied state.
+func (f *FSM) Close() {
+	f.waitMu.Lock()
+	f.closed = true
+	f.waitCond.Broadcast()
+	f.waitMu.Unlock()
 }

@@ -7,6 +7,7 @@ import "errors"
 var (
 	ErrExist           = errors.New("meta: entry exists")
 	ErrNotExist        = errors.New("meta: no such entry")
+	ErrClosed          = errors.New("meta: fsm closed")
 	ErrNotEmpty        = errors.New("meta: directory not empty")
 	ErrIsDir           = errors.New("meta: is a directory")
 	ErrNotDir          = errors.New("meta: not a directory")
