@@ -12,6 +12,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // Invariant: I-7
@@ -654,6 +655,38 @@ func TestFlusher_RunIdleTriggerAndShutdownFlush(t *testing.T) {
 	if in := f.Inode(ino); in.Version != 2 || in.Size != 5004 {
 		t.Fatalf("shutdown flush: %+v", in)
 	}
+}
+
+// A region rewritten over and over keeps the dirty bytes small while the WAL grows with
+// every record; at the WAL cap the run loop flushes the inode in full (so the WAL
+// compacts) without waiting for the idle timer or the dirty-byte thresholds.
+// Lifecycle: L-186
+func TestFlusher_WALCapTriggersFlush(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := int(testharness.ChunkSize)
+	f.RestartOverlay(vfs.WithWALCap(int64(3*cs - 1)))
+	fl := f.Flusher(func(c *vfs.Config) { c.IdleFlush = time.Hour; c.FileDirtyHi = 1 << 40; c.TotalDirtyHi = 1 << 40 })
+	rctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { fl.Run(rctx); close(done) }()
+	ino := f.Create("a")
+	data := testharness.Pattern(cs, 23)
+	must(t, f.Ov.Write(ino, 0, uint64(cs), data)) // the same chunk, three times
+	must(t, f.Ov.Write(ino, 0, uint64(cs), data))
+	f.Clk.Advance(250 * time.Millisecond)
+	if v := f.Inode(ino).Version; v != 0 {
+		t.Fatalf("flushed below the WAL cap (version %d)", v)
+	}
+	must(t, f.Ov.Write(ino, 0, uint64(cs), data)) // WAL now ≥ cap, dirty bytes still one chunk
+	f.Clk.Advance(250 * time.Millisecond)
+	testharness.Eventually(t, func() bool { return f.Inode(ino).Version == 1 }, "WAL cap flush")
+	testharness.Eventually(t, func() bool { return len(f.Ov.Dirty()) == 0 }, "WAL released")
+	want := append(make([]byte, cs), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
+	}
+	cancel()
+	<-done
 }
 
 func sha256Of(b []byte) meta.Hash { return sha256.Sum256(b) }

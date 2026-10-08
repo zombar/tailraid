@@ -21,7 +21,6 @@ type Config struct {
 	IdleFlush      time.Duration // flush an inode untouched this long
 	FileDirtyHi    uint64        // partial flush of an inode's full chunks
 	TotalDirtyHi   uint64        // flush the largest inodes
-	MaxDirty       uint64        // beyond this the gateway rejects WRITEs
 	SmallChunk     uint32        // chunks ≤ this use k=1
 	PutDeadline    time.Duration // step 9: wait for stragglers at most this long
 	ProposeTimeout time.Duration
@@ -33,7 +32,7 @@ type Config struct {
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20, MaxDirty: 1 << 30,
+		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20,
 		SmallChunk: 64 << 10, PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second,
 		Workers: 4, RetryMin: time.Second, RetryMax: 60 * time.Second,
 	}
@@ -139,6 +138,9 @@ func (f *Flusher) Run(ctx context.Context) {
 			switch {
 			case total >= f.cfg.TotalDirtyHi:
 				total -= d.DirtyBytes
+			case d.WALBytes >= f.ov.WALCap():
+				// a rewritten region keeps dirty bytes small while the WAL grows: flush
+				// the inode in full so the WAL compacts (docs/04 §3, L-186)
 			case d.DirtyBytes >= f.cfg.FileDirtyHi:
 				partial = true
 			case now.Sub(d.LastWrite) >= f.cfg.IdleFlush:

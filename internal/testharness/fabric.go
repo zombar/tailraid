@@ -92,12 +92,13 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 
 // RestartOverlay closes the overlay and reopens it from its WALs, as a gateway restart
 // does; dirty state must survive. Flushers and filesystems built before must be rebuilt.
-func (f *Fabric) RestartOverlay() {
+// Options (caps) apply to the reopened overlay.
+func (f *Fabric) RestartOverlay(opts ...vfs.Option) {
 	f.TB.Helper()
 	if err := f.Ov.Close(); err != nil {
 		f.TB.Fatal(err)
 	}
-	ov, err := vfs.OpenOverlay(f.staging, ChunkSize, f.Clk)
+	ov, err := vfs.OpenOverlay(f.staging, ChunkSize, f.Clk, opts...)
 	if err != nil {
 		f.TB.Fatal(err)
 	}

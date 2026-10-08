@@ -16,6 +16,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // --- go-billy conformance suites via a gocheck shim ------------------------------------
@@ -415,5 +416,47 @@ func TestVFS_SizeBeyondMax_EFBIG(t *testing.T) {
 	must(t, err)
 	if st.Size() != limit {
 		t.Fatalf("size %d want %d", st.Size(), limit)
+	}
+}
+
+// At or above MaxDirty every WRITE on the gateway fails with EIO (NFS3ERR_IO) regardless
+// of the file, existing dirty data stays intact, and writes resume once a flush drains the
+// overlay. The cap is a threshold on the total: the write that reaches it succeeds, the
+// next one fails.
+// Invariant: I-34
+// Lifecycle: L-23
+func TestVFS_MaxDirty_ReturnsEIO(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	const maxDirty = 3000
+	f.RestartOverlay(vfs.WithMaxDirty(maxDirty))
+	fs := f.FS()
+	write := func(name string, off int64, n int) error {
+		fh, err := fs.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o644)
+		if err != nil {
+			return err
+		}
+		defer fh.Close()
+		if _, err := fh.Seek(off, io.SeekStart); err != nil {
+			return err
+		}
+		_, err = fh.Write(testharness.Pattern(n, byte(n)))
+		return err
+	}
+	must(t, write("/a", 4096, maxDirty-1)) // total max-1: below the cap
+	must(t, write("/a", 8192, 1))          // total == max: this write is accepted...
+	if err := write("/a", 9000, 1); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("write at the cap: err=%v, want EIO", err)
+	}
+	if err := write("/b", 0, 1); !errors.Is(err, syscall.EIO) { // ...the cap is gateway-wide
+		t.Fatalf("write to another file at the cap: err=%v, want EIO", err)
+	}
+	first := maxDirty - 1
+	if got := f.ReadFile(f.InodeOf(fs, "/a")); len(got) != 8193 || !bytes.Equal(got[4096:4096+first], testharness.Pattern(first, byte(first))) {
+		t.Fatalf("dirty data damaged by the rejected writes: len %d", len(got))
+	}
+	must(t, f.Flusher().FlushAll(ctx))
+	must(t, write("/b", 0, 1))
+	if _, err := fs.Stat("/b"); err != nil {
+		t.Fatal(err)
 	}
 }

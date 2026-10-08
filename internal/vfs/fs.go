@@ -87,8 +87,8 @@ func mapErr(op, name string, err error) error {
 		e = syscall.EINVAL
 	case errors.Is(err, ErrIO):
 		e = syscall.EIO
-	case errors.Is(err, ErrWALFull):
-		e = syscall.EAGAIN
+	case errors.Is(err, ErrWALFull), errors.Is(err, ErrDirtyFull):
+		e = syscall.EIO // NFS3ERR_IO; the client retries once the flush drains (docs/04 §3)
 	case errors.Is(err, ErrFileTooLarge):
 		e = syscall.EFBIG
 	default:

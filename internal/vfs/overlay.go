@@ -28,11 +28,22 @@ var ErrFileTooLarge = errors.New("vfs: file would exceed the maximum size")
 // DefaultWALCap is 4 × FileDirtyHi (docs/04).
 const DefaultWALCap int64 = 4 * 32 << 20
 
+// DefaultMaxDirty is the gateway-wide dirty-byte cap (docs/04 §3): at or above it every
+// WRITE fails with EIO until flushes drain the overlay.
+const DefaultMaxDirty uint64 = 1 << 30
+
+// ErrDirtyFull is returned by Write while the gateway holds MaxDirty or more dirty bytes
+// (EIO to the client, L-23).
+var ErrDirtyFull = errors.New("vfs: gateway dirty-byte cap reached")
+
 // Option configures an Overlay.
 type Option func(*Overlay)
 
 // WithWALCap sets the per-inode WAL size cap in bytes.
 func WithWALCap(n int64) Option { return func(o *Overlay) { o.walCap = n } }
+
+// WithMaxDirty sets the gateway-wide dirty-byte cap.
+func WithMaxDirty(n uint64) Option { return func(o *Overlay) { o.maxDirty = n } }
 
 // WithFS routes every WAL file operation through fsys (tests inject faults); the
 // default is the real filesystem.
@@ -42,6 +53,7 @@ func WithFS(fsys sysfs.FS) Option { return func(o *Overlay) { o.fs = fsys } }
 type DirtyInfo struct {
 	Ino        meta.Ino
 	DirtyBytes uint64 // bytes in extents not yet captured by a flush plan
+	WALBytes   int64  // size of the inode's WAL file (every record since the last compaction)
 	Size       uint64
 	LastWrite  time.Time
 	Flushing   bool // a flush plan is outstanding
@@ -122,6 +134,7 @@ type Overlay struct {
 	chunkSize uint32
 	clk       clock.Clock
 	walCap    int64
+	maxDirty  uint64
 	fs        sysfs.FS
 
 	mu    sync.RWMutex
@@ -134,7 +147,7 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 	if chunkSize == 0 {
 		return nil, errors.New("vfs: chunk size must be > 0")
 	}
-	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}}
+	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, maxDirty: DefaultMaxDirty, fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -308,12 +321,18 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	if limit := meta.MaxFileSize(o.chunkSize); off > limit || uint64(len(p)) > limit-off {
 		return ErrFileTooLarge
 	}
+	if o.TotalDirty() >= o.maxDirty {
+		return ErrDirtyFull // L-23: nothing is accepted until flushes drain the overlay
+	}
 	d, err := o.get(ino, baseSize, true)
 	if err != nil {
 		return err
 	}
 	defer d.mu.Unlock()
-	if d.wal.Size()+recHeaderLen+int64(len(p)) > o.walCap {
+	if d.wal.Size() >= o.walCap {
+		// The flusher flushes this inode in full at the cap (L-186); until that drains
+		// the WAL nothing more is accepted. One record may cross the line, so the cap is
+		// a trigger the run loop can observe, not a size the WAL can never reach.
 		return ErrWALFull
 	}
 	walOff, err := d.wal.AppendWrite(off, p)
@@ -454,7 +473,7 @@ func (o *Overlay) Dirty() []DirtyInfo {
 	for _, d := range entries {
 		d.mu.Lock()
 		if !d.dead && d.dirty() {
-			out = append(out, DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil})
+			out = append(out, DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), WALBytes: d.wal.Size(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil})
 		}
 		d.mu.Unlock()
 	}
@@ -477,6 +496,9 @@ func (o *Overlay) TotalDirty() uint64 {
 	}
 	return n
 }
+
+// WALCap is the per-inode WAL size at which the flusher flushes the inode in full.
+func (o *Overlay) WALCap() int64 { return o.walCap }
 
 // SnapshotForFlush atomically captures the dirty state as a plan and starts a fresh
 // extent set. It returns false when nothing is dirty or a plan is already outstanding.

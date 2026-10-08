@@ -28,7 +28,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-20 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-16 identical content before GC | Revived → Committed | `TestFSM_Revive` |
 | L-21 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-17 two gateways, disjoint chunks | Committed (both) | `TestFlusher_ConflictRebase_PreservesConcurrentAppend` |
 | L-22 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-18 two gateways, same chunk | Committed (second committer's version); the first committer's chunk is Tombstoned when its last ref is replaced | `TestFlusher_ConflictRebase_TruncateWins` |
-| L-23 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-19 MaxDirty exceeded | Dirty | `TestOverlay_WALCapForcesFlush` |
+| L-23 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-19 MaxDirty reached | Dirty | `TestVFS_MaxDirty_ReturnsEIO` |
 | L-24 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (none) | E-20 S3 PUT | Dirty → … → Committed | `TestStubLifecycle_L_24` |
 | L-25 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (parts) | E-20 multipart Complete | Committed (spliced chunk list) | `TestStubLifecycle_L_25` |
 | L-26 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-21 idle 2 s | Assembled | `TestFlusher_RunIdleTriggerAndShutdownFlush`, `TestFlusher_SmallAndLargeChunksCommit` |
@@ -191,3 +191,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-183 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (holders live, shard files lost on some) | E-113 dedup hit | Uploading (fill) → Committed | `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
 | L-184 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (slot on a live draining node, no replacement available) | repair pass that improves another slot | slot zeroed and the draining node's shard deleted | `TestRepair_DrainNoReplacement_KeepsShard` |
 | L-185 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (a missing slot, or a slot on a node dead inside `fill_after`) | repair pass with no live spare | Degraded | `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |
+| L-186 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-121 per-inode WAL ≥ 128 MiB | Assembled (full flush) | `TestFlusher_WALCapTriggersFlush`, `TestOverlay_WALCap_Boundaries`, `TestOverlay_WALCap_RejectsAtCap` |

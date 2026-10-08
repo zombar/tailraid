@@ -108,7 +108,7 @@ these numbers.
 - E-20 S3 PUT (streamed), S3 multipart Complete (chunk-aligned splice)
 
 **Flush**
-- E-21 Idle trigger (2 s), E-22 per-inode dirty ≥ 32 MiB, E-23 total dirty ≥ 256 MiB, E-24 shutdown `FlushAll`
+- E-21 Idle trigger (2 s), E-22 per-inode dirty ≥ 32 MiB, E-23 total dirty ≥ 256 MiB, E-24 shutdown `FlushAll`, E-121 per-inode WAL ≥ 128 MiB
 - E-25 Assemble needs base chunk bytes (RMW)
 - E-26 Assembled bytes are all zero
 - E-27 Hash exists live (dedup), E-28 hash exists tombstoned (revive)
@@ -205,7 +205,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-20 | Tombstoned | E-16 identical content before GC | Revived → Committed | no upload; `TombstonedAt = 0`; removed from Tombs | `TestVFS_DedupRevivesTombstone_NoUpload`, `TestFSM_Revive` |
 | L-21 | Committed | E-17 two gateways, disjoint chunks | Committed (both) | both Commits land; the second rebases on ErrConflict with `NewSize = max(newBase.Size, maxExtentEnd)`, so a concurrent append is preserved; file correct | `TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend` |
 | L-22 | Committed | E-18 two gateways, same chunk | Committed (second committer's version); the first committer's chunk is Tombstoned when its last ref is replaced | exactly one whole version visible; size correct; no torn mix; a rebased truncate wins over a concurrent append | `TestVFS_ConcurrentGateways_SameChunkOneWins`, `TestFlusher_ConflictRebase_TruncateWins` |
-| L-23 | Dirty | E-19 MaxDirty exceeded | Dirty | WRITE returns NFS3ERR_IO; existing dirty data intact; drains later | `TestVFS_MaxDirty_ReturnsEIO` |
+| L-23 | Dirty | E-19 MaxDirty reached | Dirty | every WRITE returns NFS3ERR_IO (`EIO`) while total dirty bytes ≥ `MaxDirty`; existing dirty data intact; drains through the flush triggers | `TestVFS_MaxDirty_ReturnsEIO` |
 | L-24 | (none) | E-20 S3 PUT | Dirty → … → Committed | 200 only after `Close` (WAL fsync); readable via NFS identically | `TestS3_PutThenNFSRead_Identical`, `TestS3_PutAckAfterClose` |
 | L-25 | Committed (parts) | E-20 multipart Complete | Committed (spliced chunk list) | no data copy; ETag `md5(md5s)-N`; parts dir removed | `TestS3_MultipartComplete_SplicesChunks` |
 | L-26 | Dirty | E-21 idle 2 s | Assembled | flush begins; WRITEs continue into a fresh extent set | `TestFlusher_IdleTrigger` |
@@ -336,6 +336,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-181 | Dirty (flush plan outstanding) | E-12 truncate below the plan's extents | Dirty (plan bytes beyond the point dead) | SETATTR OK; reads never return plan bytes at or beyond the lowest truncation point since the snapshot; the commit still carries them and `minSize` hides them afterwards; an abort trims them | `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_OracleRandomOps` |
 | L-183 | Committed (holders live, shard files lost on some) | E-113 dedup hit | Uploading (fill) → Committed | the flusher checks presence with `HEAD` per live slot; with fewer than k present it PUTs the absent slots from its own bytes and proposes `SetPlacement` before the Commit; with k or more present it dedups and leaves the rest to scrub and repair | `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
 | L-185 | Degraded (a missing slot, or a slot on a node dead inside `fill_after`) | repair pass with no live spare | Degraded | nothing is placeable, so nothing is proposed: no `SetPlacement`, no `partial` count, no event (I-65); the next pass retries | `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |
+| L-186 | Dirty | E-121 per-inode WAL ≥ 128 MiB | Assembled (full flush) | the flusher flushes the inode in full regardless of the idle timer so its WAL compacts (a rewritten region keeps dirty bytes small while the WAL grows); a WRITE that still arrives at the cap fails with `EIO`, never `EAGAIN`, and succeeds once the flush has drained the WAL | `TestFlusher_WALCapTriggersFlush`, `TestOverlay_WALCap_RejectsAtCap`, `TestOverlay_WALCap_Boundaries` |
 
 **6. Forbidden transitions.**
 

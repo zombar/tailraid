@@ -477,19 +477,53 @@ func TestOverlay_DropRemovesWAL(t *testing.T) {
 	ov.Drop(ino) // idempotent
 }
 
-// Lifecycle: L-23
-func TestOverlay_WALCapForcesFlush(t *testing.T) {
+// Lifecycle: L-186
+func TestOverlay_WALCap_RejectsAtCap(t *testing.T) {
 	ov, _ := newOverlay(t, t.TempDir(), WithWALCap(1000))
 	ino := meta.Ino(31)
-	must(t, ov.Write(ino, 0, 0, bytes.Repeat([]byte("w"), 900)))
-	err := ov.Write(ino, 0, 0, bytes.Repeat([]byte("w"), 900))
+	must(t, ov.Write(ino, 0, 100, bytes.Repeat([]byte("w"), 900))) // WAL below the cap
+	must(t, ov.Write(ino, 0, 100, bytes.Repeat([]byte("w"), 900))) // crosses it: accepted
+	err := ov.Write(ino, 0, 100, bytes.Repeat([]byte("w"), 900))   // at the cap: refused
 	if !errors.Is(err, ErrWALFull) {
-		t.Fatalf("second write err = %v", err)
+		t.Fatalf("third write err = %v", err)
 	}
 	// after a flush the cap is released
 	plan, _ := ov.SnapshotForFlush(ino)
-	must(t, ov.CommitFlushed(plan, 900))
-	must(t, ov.Write(ino, 900, 0, bytes.Repeat([]byte("w"), 900)))
+	must(t, ov.CommitFlushed(plan, 1000))
+	must(t, ov.Write(ino, 1000, 100, bytes.Repeat([]byte("w"), 900)))
+}
+
+// The cap is on the WAL file size before the write (base record, record headers and
+// data): below it a write of any size is accepted, at or above it every write is refused.
+// Lifecycle: L-186
+func TestOverlay_WALCap_Boundaries(t *testing.T) {
+	const capBytes = 1000
+	// the base record (recHeaderLen) is written on first touch, then the write record
+	cases := []struct {
+		name string
+		wal  int64 // WAL size to reach before the probe write
+		ok   bool
+	}{
+		{"cap-1", capBytes - 1, true}, {"cap", capBytes, false}, {"cap+1", capBytes + 1, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ov, _ := newOverlay(t, t.TempDir(), WithWALCap(capBytes))
+			ino := meta.Ino(32)
+			n := int(c.wal) - 2*recHeaderLen
+			must(t, ov.Write(ino, 0, 4096, bytes.Repeat([]byte("b"), n)))
+			if d := ov.Dirty(); len(d) != 1 || d[0].WALBytes != c.wal {
+				t.Fatalf("WALBytes %+v, want %d", d, c.wal)
+			}
+			err := ov.Write(ino, 0, 8192, []byte("x"))
+			if c.ok && err != nil {
+				t.Fatalf("probe write with WAL at %d: %v", c.wal, err)
+			}
+			if !c.ok && !errors.Is(err, ErrWALFull) {
+				t.Fatalf("probe write with WAL at %d: err=%v, want ErrWALFull", c.wal, err)
+			}
+		})
+	}
 }
 
 func TestOverlay_ConcurrentWritersDifferentInodes(t *testing.T) {
