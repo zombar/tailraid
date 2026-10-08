@@ -9,7 +9,12 @@ import (
 
 var stateMagic = []byte("TRM1")
 
-const stateVersion = 1
+// stateVersion 2 adds Volume.Auto; a version-1 snapshot is still read (Auto = false) so
+// a cluster upgrades without a format break (docs/12 §6).
+const (
+	stateVersion   = 2
+	stateVersionV1 = 1
+)
 
 // EncodeState writes a canonical snapshot of s: maps in sorted key order, so equal states
 // produce byte-identical output (I-22). Tombs is not written; it is rebuilt on decode.
@@ -23,6 +28,7 @@ func EncodeState(wr io.Writer, s *State) error {
 	w.u8(s.Vol.K)
 	w.u8(s.Vol.M)
 	w.u32(s.Vol.PolicyVersion)
+	w.bool(s.Vol.Auto)
 	w.b = append(w.b, s.Meta.ClusterID[:]...)
 	w.str(s.Meta.JoinToken)
 	w.i64(s.Meta.CreatedAt)
@@ -117,8 +123,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 	if !bytes.Equal(r.take(4), stateMagic) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
-	if v := r.u8(); r.err == nil && v != stateVersion {
-		return nil, fmt.Errorf("meta: unsupported snapshot version %d", v)
+	version := r.u8()
+	if r.err == nil && version != stateVersion && version != stateVersionV1 {
+		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
 		Inodes: map[Ino]*Inode{},
@@ -129,6 +136,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 	s.Applied = r.u64()
 	s.LastNow = r.i64()
 	s.Vol = Volume{ChunkSize: r.u32(), K: r.u8(), M: r.u8(), PolicyVersion: r.u32()}
+	if version >= stateVersion {
+		s.Vol.Auto = r.bool()
+	}
 	copy(s.Meta.ClusterID[:], r.take(16))
 	s.Meta.JoinToken = r.str()
 	s.Meta.CreatedAt = r.i64()

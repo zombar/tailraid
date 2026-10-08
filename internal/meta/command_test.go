@@ -41,6 +41,8 @@ var goldenCommands = []struct {
 		"01 05 0100000000000000 01 66 01 a4010000 f5010000 14000000 00 0900000000000000"},
 	{"Mkdir", Command{Op: OpMkdir, Mkdir: &Mkdir{Parent: 1, Name: "d", Mode: 0o755, Now: 3}},
 		"01 06 0100000000000000 01 64 ed010000 00000000 00000000 0300000000000000"},
+	{"SetVolumeMode", Command{Op: OpSetVolumeMode, SetVolumeMode: &SetVolumeMode{Auto: true, Now: 5}},
+		"01 0e 01 0500000000000000"},
 	{"Unlink", Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}},
 		"01 07 0100000000000000 01 61 0200000000000000"},
 	{"Rmdir", Command{Op: OpRmdir, Rmdir: &Rmdir{Parent: 1, Name: "d", Now: 4}},
@@ -111,7 +113,7 @@ func TestEncodeCommand_AllOpsCovered(t *testing.T) {
 	for _, g := range goldenCommands {
 		seen[g.cmd.Op] = true
 	}
-	for op := OpSetVolume; op <= OpGCDelete; op++ {
+	for op := OpSetVolume; op <= OpSetVolumeMode; op++ {
 		if !seen[op] {
 			t.Errorf("op %d has no golden", op)
 		}

@@ -123,8 +123,21 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.setPlacement(c.SetPlacement)
 	case OpGCDelete:
 		return a.gcDelete(c.GCDelete)
+	case OpSetVolumeMode:
+		return Result{}, a.setVolumeMode(c.SetVolumeMode)
 	}
 	return Result{}, ErrBadCommand
+}
+
+// setVolumeMode flips automatic redundancy (docs/03); the policy itself and its version
+// are untouched, the next repair pass applies the rule.
+func (a *applier) setVolumeMode(c *SetVolumeMode) error {
+	if c == nil {
+		return ErrBadCommand
+	}
+	a.clock(c.Now)
+	a.st.Vol.Auto = c.Auto
+	return nil
 }
 
 // --- volume, meta, nodes -----------------------------------------------------

@@ -87,7 +87,7 @@ func TestChunkIndex(t *testing.T) {
 // sampleState builds a small but complete state used across tests.
 func sampleState() *State {
 	s := NewState()
-	s.Vol = Volume{ChunkSize: 1 << 20, K: 2, M: 1, PolicyVersion: 1}
+	s.Vol = Volume{ChunkSize: 1 << 20, K: 2, M: 1, PolicyVersion: 1, Auto: true}
 	s.Meta = Meta{ClusterID: [16]byte{1, 2, 3}, JoinToken: "abcdefgh", CreatedAt: 100}
 	s.Applied = 7
 	s.LastNow = 99

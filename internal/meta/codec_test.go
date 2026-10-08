@@ -13,7 +13,7 @@ func TestCodec_StateRoundTrip(t *testing.T) {
 	if err := EncodeState(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x01")) {
+	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x02")) {
 		t.Fatalf("bad header %x", buf.Bytes()[:5])
 	}
 	got, err := DecodeState(bytes.NewReader(buf.Bytes()))
@@ -110,7 +110,7 @@ func TestDecodeState_Rejects(t *testing.T) {
 	bad := map[string][]byte{
 		"empty":       {},
 		"bad magic":   append([]byte("TRMX"), good[4:]...),
-		"bad version": append([]byte("TRM1\x02"), good[5:]...),
+		"bad version": append([]byte("TRM1\x03"), good[5:]...),
 		"truncated":   good[:len(good)/2],
 		"trailing":    append(append([]byte{}, good...), 0),
 	}

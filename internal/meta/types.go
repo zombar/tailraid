@@ -170,6 +170,7 @@ type Volume struct {
 	ChunkSize     uint32
 	K, M          uint8
 	PolicyVersion uint32
+	Auto          bool // the leader picks K, M from the member table (docs/03); set by init
 }
 
 // Meta is the cluster identity.
