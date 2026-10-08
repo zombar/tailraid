@@ -35,9 +35,3 @@ func TestStub_I_75(t *testing.T) {
 func TestStub_I_76(t *testing.T) {
 	t.Skip("stub until init-without-flags lands; see docs/12")
 }
-
-// Invariant: I-77
-// Becomes: TestPlaceKM_VoterFirst_DataSlots (docs/03).
-func TestStub_I_77(t *testing.T) {
-	t.Skip("stub until init-without-flags lands; see docs/03")
-}

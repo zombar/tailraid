@@ -115,7 +115,11 @@ type Cluster struct {
 	snap  uint64
 
 	retryUntilStale bool
+	nonVoters       map[int]bool
 }
+
+// Voter reports whether node i joins as a Raft voter (all do unless NonVoters says otherwise).
+func (c *Cluster) Voter(i int) bool { return !c.nonVoters[i] }
 
 // Idx is the node's FSM index (1-based, same as creation order).
 func (n *ClusterNode) Idx() meta.NodeIdx { return meta.NodeIdx(n.I + 1) }
@@ -146,6 +150,7 @@ type clusterOpts struct {
 	snapshotThreshold uint64
 	chunkSize         uint32
 	retryUntilStale   bool
+	nonVoters         map[int]bool
 }
 
 // RetryUntilStale gives every node's filesystem the production health view: a failed
@@ -161,6 +166,19 @@ func SnapshotThreshold(n uint64) ClusterOption {
 	return func(o *clusterOpts) { o.snapshotThreshold = n }
 }
 
+// NonVoters makes the listed nodes (by creation index) join as Raft non-voters: the
+// laptops of docs/00, which placement keeps off the data slots (docs/03).
+func NonVoters(idx ...int) ClusterOption {
+	return func(o *clusterOpts) {
+		if o.nonVoters == nil {
+			o.nonVoters = map[int]bool{}
+		}
+		for _, i := range idx {
+			o.nonVoters[i] = true
+		}
+	}
+}
+
 // NewCluster bootstraps node 0 and joins n-1 more through the real RPC join; all are
 // voters. Returns once every node sees the same leader and membership.
 func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster {
@@ -169,7 +187,7 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 	for _, f := range opts {
 		f(&o)
 	}
-	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale}
+	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters}
 	for i := 0; i < n; i++ {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
@@ -206,7 +224,7 @@ func (c *Cluster) newNode(i int) *ClusterNode {
 
 func (nd *ClusterNode) record(c *Cluster) meta.Node {
 	return meta.Node{ID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), Kind: meta.KindDevice, TSStableID: harnessStableID, Addr: "127.0.0.1",
-		RaftPort: 1, RPCPort: uint16(nd.port), Voter: true, Capacity: 1 << 40}
+		RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40}
 }
 
 // start opens stores and raft (bootstrap or fresh/reopen) and brings up the stack.
@@ -332,7 +350,7 @@ func (c *Cluster) join(nd *ClusterNode) {
 	c.T.Helper()
 	leader := c.Leader()
 	req := rpc.JoinRequest{Token: "harness-token", NodeID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), TSStableID: harnessStableID,
-		Addr: "127.0.0.1", RaftPort: 1, RPCPort: uint16(nd.port), Voter: true, Capacity: 1 << 40, Version: "harness"}
+		Addr: "127.0.0.1", RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40, Version: "harness"}
 	var last error
 	for attempt := 0; attempt < 50; attempt++ {
 		_, last = nd.Client.Join(context.Background(), leader.RPCAddr(), req)

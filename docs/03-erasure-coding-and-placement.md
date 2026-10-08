@@ -252,7 +252,7 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 
 | Invariant | Tests |
 |---|---|
-| I-8 | `FuzzPlace_Determinism`, `TestPlace_DeterministicAcrossNodes`, `TestPlace_GoldenVectors` |
+| I-8 | `FuzzPlace_Determinism`, `TestPlace_DeterministicAcrossNodes`, `TestPlace_GoldenVectors`, `TestPlaceKM_VoterFirst_NNodeDeterminism` |
 | I-9 | `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestExcludeIdx`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestModelCheck_Long`, `TestPlace_DistinctNodes` |
 | I-10 | `FuzzRoundTrip`, `TestDecode_EverySubsetOfKShards`, `TestDecode_FewerThanK_Fails`, `TestEncodeDecode_Sizes`, `TestRoundTrip_Property`, `TestTailPadding_NotLeaked` |
 | I-30 | `FuzzRoundTrip`, `TestEncodeDecode_Sizes`, `TestEncode_DoesNotAliasInput`, `TestRoundTrip_Property`, `TestShardSizesEqual_AndDeterministic`, `TestVerify_DetectsCorruption`, `TestVerify_EncodedIsConsistent` |
@@ -260,4 +260,4 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnAdd`, `TestPlace_StabilityOnMembershipChange`, `TestPlace_StabilityOnRemove` |
 | I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |
 | I-75 | `TestStub_I_75` |
-| I-77 | `TestStub_I_77` |
+| I-77 | `TestPlaceKM_VoterFirst_DataSlots`, `TestPlaceKM_VoterFirst_NNodeDeterminism`, `TestFillPlacement_KeepsSlotClass`, `TestCandidates_VoterBit`, `TestCluster_ReadableWithNonVotersAsleep` |

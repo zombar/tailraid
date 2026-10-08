@@ -160,26 +160,6 @@ func LiveSet(live []NodeIdx) map[NodeIdx]bool {
 	return out
 }
 
-// FillPlacement places every zero slot of place on a fresh candidate chosen by Place for
-// h; slots for which no candidate is left stay 0. Placement by hash keeps it the same
-// answer on every node (I-8).
-func FillPlacement(h Hash, place []NodeIdx, cands []Candidate) {
-	needed := 0
-	for _, n := range place {
-		if n == 0 {
-			needed++
-		}
-	}
-	fresh := Place(h, cands, needed)
-	fi := 0
-	for i := range place {
-		if place[i] == 0 && fi < len(fresh) {
-			place[i] = fresh[fi]
-			fi++
-		}
-	}
-}
-
 // RPCAddr is the node's host:port for member RPC; RaftAddr the Raft stream's.
 func (n Node) RPCAddr() string  { return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort))) }
 func (n Node) RaftAddr() string { return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RaftPort))) }
