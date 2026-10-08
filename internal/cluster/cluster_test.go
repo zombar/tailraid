@@ -25,7 +25,7 @@ func opts(t *testing.T, dir string) Options {
 		t.Fatal(err)
 	}
 	_, trans := raft.NewInmemTransport(raft.ServerAddress(id))
-	return Options{DataDir: dir, NodeID: id, Transport: trans}
+	return Options{DataDir: dir, NodeID: id, Transport: trans, Fast: true}
 }
 
 func bootstrap(t *testing.T, dir string) *Node {

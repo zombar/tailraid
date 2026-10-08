@@ -179,8 +179,13 @@ write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, r
 
 ## 5. Speed and determinism
 
-- `go test -short -race ./...` ≤ 60 s on the dev laptop. Per-package caps: ec, placement,
-  chunk, meta < 3 s; vfs < 8 s; nfsgw < 5 s; cluster < 25 s; e2e < 8 s.
+- `go test -short -race ./...` ≈ 2 min on the dev laptop (`make check`). Measured caps:
+  ec, chunk, meta, rpc, admin < 10 s; vfs < 12 s (WAL fsyncs); nfsgw < 8 s; cluster < 20 s;
+  test/cluster < 90 s. The last one is dominated by Raft elections after kills: the harness
+  runs 1 s heartbeat/election timeouts because shorter ones churned leadership under
+  `-race` load, so every kill or bootstrap costs one to two seconds. Short runs cut the
+  oracle op counts and iteration counts, never the fault coverage; `make test-long` runs
+  the full counts.
 - Behind `-short`: the model checker, long durability iterations, the 50k-op oracle, fuzz
   beyond seeds, the real-mount workload, every `Durable()` cluster test except one smoke.
 - `make test-long` also records which lifecycle cells (`L-n`) the model checker hit; the

@@ -237,7 +237,7 @@ func TestVFS_SymlinkAndChange(t *testing.T) {
 // Lifecycle: L-1, L-2, L-3, L-4, L-5, L-6, L-8, L-11, L-12, L-14, L-16, L-17
 func TestVFS_OracleRandomOps(t *testing.T) {
 	rng := testharness.Seed(t)
-	ops := 400
+	ops := 200
 	if !testing.Short() {
 		ops = 4000
 	}

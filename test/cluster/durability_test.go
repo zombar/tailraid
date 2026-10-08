@@ -31,16 +31,17 @@ var crashPoints = []crashPoint{
 // Invariant: I-7, I-12, I-38
 // Lifecycle: L-115, L-116, L-118, L-119, L-121
 func TestCrash_AtEveryPoint(t *testing.T) {
-	for _, cp := range crashPoints {
+	c := testharness.NewCluster(t, 3, 2, 1) // one cluster: every round restarts the gateway
+	defer c.Close()
+	for round, cp := range crashPoints {
 		t.Run(cp.name, func(t *testing.T) {
-			c := testharness.NewCluster(t, 3, 2, 1)
-			defer c.Close()
-			old := testharness.Pattern(int(testharness.ChunkSize)+10, 1)
-			c.WriteFile(0, "/f", old)
+			path := fmt.Sprintf("/f%d", round)
+			old := testharness.Pattern(int(testharness.ChunkSize)+10, byte(1+2*round))
+			c.WriteFile(0, path, old)
 			c.Settle()
 			gw := c.Nodes[0]
-			newData := testharness.Pattern(int(testharness.ChunkSize)+10, 2)
-			fh, err := gw.FS.OpenFile("/f", os.O_RDWR, 0)
+			newData := testharness.Pattern(int(testharness.ChunkSize)+10, byte(2+2*round))
+			fh, err := gw.FS.OpenFile(path, os.O_RDWR, 0)
 			must(t, err)
 			_, _ = fh.Write(newData)
 			_ = fh.Close()
@@ -60,7 +61,7 @@ func TestCrash_AtEveryPoint(t *testing.T) {
 			c.Settle()
 			seen := map[string]bool{}
 			for i := 1; i < 3; i++ {
-				got, err := c.ReadFileCold(i, "/f")
+				got, err := c.ReadFileCold(i, path)
 				must(t, err)
 				switch {
 				case bytes.Equal(got, old):
@@ -80,7 +81,7 @@ func TestCrash_AtEveryPoint(t *testing.T) {
 			must(t, c.Nodes[0].Flush.FlushAll(ctx))
 			c.Settle()
 			for i := range c.Nodes {
-				got, err := c.ReadFileCold(i, "/f")
+				got, err := c.ReadFileCold(i, path)
 				if err != nil || !bytes.Equal(got, newData) {
 					t.Fatalf("after restart n%d: %v (acknowledged write lost)", i, err)
 				}
@@ -94,7 +95,7 @@ func TestCrash_AtEveryPoint(t *testing.T) {
 // Invariant: I-12
 // Lifecycle: L-74, L-120
 func TestDurability_AckImpliesReadableFromKSurvivors(t *testing.T) {
-	iters := 6
+	iters := 4
 	if !testing.Short() {
 		iters = 40
 	}

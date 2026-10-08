@@ -313,8 +313,8 @@ func TestNFS_ReadDirPlusLargeDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The client library re-reads the whole directory on every lookup, so keep the short
-	// run small; 600 entries still spans several READDIRPLUS pages.
-	n := 600
+	// run small; 300 entries still spans several READDIRPLUS pages.
+	n := 300
 	if !testing.Short() {
 		n = 5000
 	}

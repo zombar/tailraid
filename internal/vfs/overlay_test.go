@@ -527,7 +527,7 @@ func TestOverlay_DirtyListing(t *testing.T) {
 // Lifecycle: L-1, L-2, L-3, L-4, L-5, L-6, L-8, L-11, L-12
 func TestOverlay_OracleRandomOps(t *testing.T) {
 	rng := seed(t)
-	ops := 2000
+	ops := 600
 	if !testing.Short() {
 		ops = 20000
 	}
