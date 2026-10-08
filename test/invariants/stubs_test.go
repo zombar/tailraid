@@ -22,10 +22,6 @@ func TestStub_I_12(t *testing.T) { t.Skip("stub until M2; see docs/05-failure-mo
 // Becomes: TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy, TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK (M3).
 func TestStub_I_15(t *testing.T) { t.Skip("stub until M3; see docs/06-gc-and-repair.md") }
 
-// Invariant: I-17
-// Becomes: TestNFS_RemovedHandleIsStale, TestNFS_BogusHandleIsStaleNotPanic (M1).
-func TestStub_I_17(t *testing.T) { t.Skip("stub until M1; see docs/07-nfs-gateway.md") }
-
 // Invariant: I-18
 // Becomes: TestWhoIs_DeniesUnknownPeer, TestChunkRPC_ReadsAuthBeforeBody, TestRPC_ClusterIDMismatch409 (M2).
 func TestStub_I_18(t *testing.T) { t.Skip("stub until M2; see docs/08-security.md") }
