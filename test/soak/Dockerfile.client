@@ -1,0 +1,4 @@
+FROM alpine:3.20
+COPY soak-client-linux-arm64 /usr/local/bin/soak-client
+RUN chmod +x /usr/local/bin/soak-client
+ENTRYPOINT ["/usr/local/bin/soak-client"]

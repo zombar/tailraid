@@ -4,3 +4,4 @@
 *.test
 /.idea/
 .DS_Store
+test/soak/*-linux-*

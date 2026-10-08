@@ -1,0 +1,84 @@
+# Three tailraid nodes on a private network with fake tailnet identities, plus clients
+# that share a node's network namespace so they can reach its loopback NFS gateway.
+# Build the binary first: make soak-binary (or `make soak`, which does everything).
+x-node: &node
+  build: .
+  cap_add: [NET_ADMIN]
+  environment: &env
+    IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3"
+    TOKEN: compose-token
+    K: "2"
+    M: "1"
+    CHUNK: 256K
+    CAPACITY: 2G
+  healthcheck:
+    test: ["CMD-SHELL", "curl -fsS http://$$SELF_IP:20481/health"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+
+services:
+  n1:
+    <<: *node
+    environment:
+      <<: *env
+      ROLE: init
+      SELF_IP: 172.30.0.11
+      NODE_NAME: n1
+    networks:
+      tailraid: {ipv4_address: 172.30.0.11}
+    volumes: [n1:/var/lib/tailraid]
+  n2:
+    <<: *node
+    environment:
+      <<: *env
+      ROLE: join
+      LEADER: 172.30.0.11
+      SELF_IP: 172.30.0.12
+      NODE_NAME: n2
+    networks:
+      tailraid: {ipv4_address: 172.30.0.12}
+    volumes: [n2:/var/lib/tailraid]
+    depends_on: [n1]
+  n3:
+    <<: *node
+    environment:
+      <<: *env
+      ROLE: join
+      LEADER: 172.30.0.11
+      SELF_IP: 172.30.0.13
+      NODE_NAME: n3
+    networks:
+      tailraid: {ipv4_address: 172.30.0.13}
+    volumes: [n3:/var/lib/tailraid]
+    depends_on: [n2]
+
+  # client1 drives n1's gateway over the pure-Go NFSv3 client (same network namespace →
+  # 127.0.0.1:20490); client2 verifies the same files through n2's gateway.
+  client1:
+    build: {context: ., dockerfile: Dockerfile.client}
+    network_mode: "service:n1"
+    volumes: [shared:/shared]
+    command: ["write", "127.0.0.1:20490", "/shared"]
+    depends_on:
+      n1: {condition: service_healthy}
+      n2: {condition: service_healthy}
+      n3: {condition: service_healthy}
+  client2:
+    build: {context: ., dockerfile: Dockerfile.client}
+    network_mode: "service:n2"
+    volumes: [shared:/shared]
+    command: ["verify", "127.0.0.1:20490", "/shared"]
+    depends_on:
+      client1: {condition: service_completed_successfully}
+
+networks:
+  tailraid:
+    ipam:
+      config: [{subnet: 172.30.0.0/24}]
+
+volumes:
+  n1: {}
+  n2: {}
+  n3: {}
+  shared: {}

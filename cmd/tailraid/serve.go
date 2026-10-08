@@ -35,7 +35,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
 
 func initCmd() *cobra.Command {
 	var k, m int
-	var chunkSize, capacity, name string
+	var chunkSize, capacity, name, tokenFlag string
 	c := &cobra.Command{
 		Use:   "init",
 		Short: "Bootstrap a new cluster on this node",
@@ -73,7 +73,10 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token := randomToken()
+			token := tokenFlag
+			if token == "" {
+				token = randomToken()
+			}
 			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
 				meta.Node{Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: capBytes,
@@ -93,6 +96,7 @@ func initCmd() *cobra.Command {
 	c.Flags().StringVar(&chunkSize, "chunk", "1M", "chunk size (fixed for the volume's life)")
 	c.Flags().StringVar(&capacity, "capacity", "", "shard-byte budget for this node (default from config)")
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
+	c.Flags().StringVar(&tokenFlag, "token", "", "join token (default: random; set for automation)")
 	return c
 }
 
