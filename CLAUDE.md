@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M1 single node code complete (serve, NFS gateway, mount helpers); real-mount validation on macOS pending (`sudo -E make test-mount`). Next: M2 cluster (raft membership, RPC, tailscale).
+**Milestone status:** M1 single node complete and validated with a real macOS NFS mount (2026-10-08). Next: M2 cluster (raft membership and join, tailnet RPC with WhoIs auth, liveness, node/status commands).
 
 ## Layout
 
