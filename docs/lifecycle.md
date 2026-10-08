@@ -177,7 +177,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-169 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | E-115 DELETE with stale fence | Durable | `TestChunkRPC_DeleteFence` |
 | L-170 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (S3 object) | E-116 leader S3 sweep | Swept | `TestStubLifecycle_L_170` |
 | L-171 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | E-117 Sweep while not `Healthy` / behind leader index | Orphan | `TestStubLifecycle_L_171` |
-| L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestStubLifecycle_L_172` |
+| L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestStubLifecycle_L_172` |
 | L-173 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (`(k,m)` ≠ policy) | E-119 migration PUTs under new keys | Repairing → Committed | `TestModelCheck_Long`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | L-174 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | DELETE accepted with applied index < fence, or file younger than grace, or slot placed on self | Deleted | `TestStubLifecycle_L_174` |
 | L-175 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | Commit without `HasTruncate` and `NewSize` < `Size` | Committed (shrunk) | `TestStubLifecycle_L_175` |
@@ -185,3 +185,5 @@ exactly one design doc transition table and cited by at least one test via
 | L-177 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | Sweep while not `Healthy` | Swept | `TestStubLifecycle_L_177` |
 | L-178 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-120 write/truncate via a gateway whose overlay entry is stale | Dirty → Committed | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestOverlay_StaleEntry_FollowsCommittedSize` |
 | L-179 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (chunk partly dirty, below the last committed chunk) | E-22 partial flush | dirty bytes dropped | `TestExtents_Without`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk` |
+| L-180 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (size raised by a truncate while a flush plan is outstanding) | E-118 flush completes | Dirty (compacted WAL, size kept) | `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen` |
+| L-181 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (flush plan outstanding) | E-12 truncate below the plan's extents | Dirty (plan bytes beyond the point dead) | `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes` |

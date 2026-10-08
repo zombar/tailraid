@@ -53,6 +53,29 @@ func pattern(n int, seed byte) []byte {
 	return b
 }
 
+// readFrom reads up to n bytes from offset 0 with the given committed size (what the FSM
+// holds); the overlay decides the visible size from it and its own state.
+// A clean entry is dropped after its flush, so the read falls back to the committed bytes
+// alone, as the filesystem layer does.
+func readFrom(t *testing.T, ov *Overlay, ino meta.Ino, committed uint64, base func(uint64, []byte) error, n uint64) []byte {
+	t.Helper()
+	out := make([]byte, n)
+	got, err := ov.Read(ino, committed, 0, out, base)
+	if errors.Is(err, meta.ErrNotExist) {
+		out = out[:min(n, committed)]
+		if err := base(0, out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Read: %v", err)
+	}
+	return out[:got]
+}
+
+// readAll is readFrom with the committed size equal to the read length (fine while the
+// entry has a truncate recorded, which pins the size).
 func readAll(t *testing.T, ov *Overlay, ino meta.Ino, base func(uint64, []byte) error, size uint64) []byte {
 	t.Helper()
 	out := make([]byte, size)
@@ -522,9 +545,10 @@ func TestOverlay_DirtyListing(t *testing.T) {
 	}
 }
 
-// Model-vs-overlay randomized oracle.
-// Invariant: I-34
-// Lifecycle: L-1, L-2, L-3, L-4, L-5, L-6, L-8, L-11, L-12
+// Model-vs-overlay randomized oracle, including the flush lifecycle (snapshot, commit
+// with the plan's bytes becoming the base, abort) and periodic restarts.
+// Invariant: I-34, I-37
+// Lifecycle: L-1, L-2, L-3, L-4, L-5, L-6, L-8, L-11, L-12, L-172, L-180, L-181
 func TestOverlay_OracleRandomOps(t *testing.T) {
 	rng := seed(t)
 	ops := 600
@@ -535,8 +559,10 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 	ov, _ := newOverlay(t, dir)
 	cs := uint64(testCS)
 	type file struct {
-		base  []byte // committed bytes (fixed for the test)
-		model []byte
+		base      []byte // committed bytes; replaced by a committed plan's bytes
+		model     []byte
+		plan      *FlushPlan
+		planModel []byte // the model at snapshot time: what a full flush commits
 	}
 	files := map[meta.Ino]*file{}
 	for i := 1; i <= 4; i++ {
@@ -545,6 +571,24 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 		// The overlay only knows a file's size once it has been touched; a same-size
 		// truncate is how a gateway opens a file for writing without changing it.
 		must(t, ov.Truncate(meta.Ino(i), uint64(n), uint64(n)))
+	}
+	visibleSize := func(ino meta.Ino, f *file) uint64 {
+		if sz, ok := ov.Size(ino, uint64(len(f.base))); ok {
+			return sz
+		}
+		return uint64(len(f.base))
+	}
+	checkAll := func(i int, when string) {
+		t.Helper()
+		for ino, f := range files {
+			got := readFrom(t, ov, ino, uint64(len(f.base)), baseOf(f.base), uint64(len(f.model))+10)
+			if !bytes.Equal(got, f.model) {
+				t.Fatalf("op %d %s ino %d: full content differs at %d (len got %d want %d)", i, when, ino, firstDiff(got, f.model), len(got), len(f.model))
+			}
+			if sz := visibleSize(ino, f); sz != uint64(len(f.model)) {
+				t.Fatalf("op %d %s ino %d: Size %d want %d", i, when, ino, sz, len(f.model))
+			}
+		}
 	}
 	pick := func(f *file) uint64 {
 		size := uint64(len(f.model))
@@ -571,7 +615,23 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 	for i := 0; i < ops; i++ {
 		ino := meta.Ino(1 + rng.Intn(4))
 		f := files[ino]
-		switch r := rng.Intn(10); {
+		switch r := rng.Intn(13); {
+		case r == 10: // snapshot for flush
+			if f.plan == nil {
+				if p, ok := ov.SnapshotForFlush(ino); ok {
+					f.plan, f.planModel = p, bytes.Clone(f.model)
+				}
+			}
+		case r == 11: // the flush commits: the plan's bytes become the base
+			if f.plan != nil {
+				must(t, ov.CommitFlushed(f.plan, uint64(len(f.planModel))))
+				f.base, f.plan, f.planModel = f.planModel, nil, nil
+			}
+		case r == 12: // the flush fails: everything stays dirty
+			if f.plan != nil {
+				ov.AbortFlush(f.plan)
+				f.plan, f.planModel = nil, nil
+			}
 		case r < 6: // write
 			off := pick(f)
 			n := 1 + rng.Intn(int(cs/2))
@@ -594,6 +654,13 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 			n := 1 + rng.Intn(int(cs))
 			buf := make([]byte, n)
 			got, err := ov.Read(ino, uint64(len(f.base)), off, buf, baseOf(f.base))
+			if errors.Is(err, meta.ErrNotExist) { // clean entry dropped: committed bytes only
+				got, err = 0, nil
+				if off < uint64(len(f.base)) {
+					got = min(n, len(f.base)-int(off))
+					must(t, baseOf(f.base)(off, buf[:got]))
+				}
+			}
 			wantN := 0
 			if off < uint64(len(f.model)) {
 				wantN = min(n, len(f.model)-int(off))
@@ -605,29 +672,105 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 				t.Fatalf("op %d: Read(%d,%d) differs at %d", i, off, n, firstDiff(buf[:got], f.model[off:off+uint64(got)]))
 			}
 		}
-		if i%500 == 499 {
-			// full compare of every file
-			for ino, f := range files {
-				got := readAll(t, ov, ino, baseOf(f.base), uint64(len(f.model))+10)
-				if !bytes.Equal(got, f.model) {
-					t.Fatalf("op %d ino %d: full content differs at %d (len got %d want %d)", i, ino, firstDiff(got, f.model), len(got), len(f.model))
-				}
-				if sz, ok := ov.Size(ino, uint64(len(f.base))); ok && sz != uint64(len(f.model)) {
-					t.Fatalf("op %d ino %d: Size %d want %d", i, ino, sz, len(f.model))
+		if i%250 == 249 {
+			checkAll(i, "periodic")
+		}
+		if i%300 == 299 {
+			// restart equivalence: a plan does not survive (its bytes are still in the WAL)
+			for _, f := range files {
+				if f.plan != nil {
+					ov.AbortFlush(f.plan)
+					f.plan, f.planModel = nil, nil
 				}
 			}
+			must(t, ov.Close())
+			ov, _ = newOverlay(t, dir)
+			checkAll(i, "after restart")
 		}
 	}
-	// restart equivalence
+	for _, f := range files {
+		if f.plan != nil {
+			ov.AbortFlush(f.plan)
+			f.plan, f.planModel = nil, nil
+		}
+	}
+	must(t, ov.Close())
+	ov, _ = newOverlay(t, dir)
+	checkAll(ops, "final restart")
+	_ = rand.Int
+}
+
+// A truncate below the plan's extents while the flush is in progress: reads must not show
+// the plan's bytes at or beyond the truncation point, before or after the commit, and a
+// later write past that point reads back with zeros in the gap.
+// Invariant: I-34
+// Lifecycle: L-172, L-181
+func TestOverlay_TruncateDuringFlush_HidesPlanBytes(t *testing.T) {
+	dir := t.TempDir()
+	ov, _ := newOverlay(t, dir)
+	ino := meta.Ino(32)
+	planned := pattern(3000, 11)
+	must(t, ov.Write(ino, 0, 0, planned))
+	plan, ok := ov.SnapshotForFlush(ino)
+	if !ok {
+		t.Fatal("no plan")
+	}
+	must(t, ov.Truncate(ino, 0, 500))
+	must(t, ov.Write(ino, 0, 2000, []byte("fresh")))
+	want := make([]byte, 2005)
+	copy(want, planned[:500])
+	copy(want[2000:], "fresh")
+	if got := readFrom(t, ov, ino, 0, baseOf(nil), 2100); !bytes.Equal(got, want) {
+		t.Fatalf("during flush: differs at %d (len %d)", firstDiff(got, want), len(got))
+	}
+	// the commit carries the whole plan; minSize hides the bytes beyond 500 afterwards
+	must(t, ov.CommitFlushed(plan, 3000))
+	if got := readFrom(t, ov, ino, 3000, baseOf(planned), 2100); !bytes.Equal(got, want) {
+		t.Fatalf("after commit: differs at %d (len %d)", firstDiff(got, want), len(got))
+	}
 	must(t, ov.Close())
 	ov2, _ := newOverlay(t, dir)
-	for ino, f := range files {
-		got := readAll(t, ov2, ino, baseOf(f.base), uint64(len(f.model))+10)
-		if !bytes.Equal(got, f.model) {
-			t.Fatalf("after restart ino %d differs at %d", ino, firstDiff(got, f.model))
-		}
+	if got := readFrom(t, ov2, ino, 3000, baseOf(planned), 2100); !bytes.Equal(got, want) {
+		t.Fatalf("after restart: differs at %d (len %d)", firstDiff(got, want), len(got))
 	}
-	_ = rand.Int
+}
+
+// A truncate that raises the size while a flush plan is outstanding is acknowledged
+// (SETATTR) and must survive the compaction that follows the commit and a restart.
+// Invariant: I-7, I-37
+// Lifecycle: L-172, L-180
+func TestOverlay_TruncateUpDuringFlush_SurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	ov, _ := newOverlay(t, dir)
+	ino := meta.Ino(31)
+	data := pattern(1000, 9)
+	must(t, ov.Write(ino, 0, 0, data))
+	plan, ok := ov.SnapshotForFlush(ino)
+	if !ok {
+		t.Fatal("no plan")
+	}
+	must(t, ov.Truncate(ino, 0, 5000)) // raised while the flush is in progress
+	must(t, ov.CommitFlushed(plan, 1000))
+	want := append(bytes.Clone(data), make([]byte, 4000)...)
+	if sz, ok := ov.Size(ino, 1000); !ok || sz != 5000 {
+		t.Fatalf("Size before restart = %d,%v want 5000", sz, ok)
+	}
+	if got := readFrom(t, ov, ino, 1000, baseOf(data), 5010); !bytes.Equal(got, want) {
+		t.Fatalf("before restart differs at %d (len %d)", firstDiff(got, want), len(got))
+	}
+	must(t, ov.Close())
+	ov2, _ := newOverlay(t, dir)
+	if sz, ok := ov2.Size(ino, 1000); !ok || sz != 5000 {
+		t.Fatalf("Size after restart = %d,%v want 5000", sz, ok)
+	}
+	if got := readFrom(t, ov2, ino, 1000, baseOf(data), 5010); !bytes.Equal(got, want) {
+		t.Fatalf("after restart differs at %d (len %d)", firstDiff(got, want), len(got))
+	}
+	// a later shrink below the committed size still records the truncation point
+	must(t, ov2.Truncate(ino, 1000, 300))
+	if ms, ok := ov2.MinSize(ino); !ok || ms != 300 {
+		t.Fatalf("MinSize = %d,%v want 300", ms, ok)
+	}
 }
 
 // An overlay entry must never pin the committed size it first saw: after its flush the

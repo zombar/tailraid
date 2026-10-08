@@ -379,13 +379,15 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 			return 0, err
 		}
 	}
-	// Plan extents first, then fresh ones (fresh are newer and win).
+	// Plan extents first, then fresh ones (fresh are newer and win). Plan bytes at or
+	// beyond the lowest truncation point since the snapshot are dead (L-181): the commit
+	// still carries them, but minSize hides them afterwards and reads must not show them.
 	if d.plan != nil {
-		if err := d.applyExtents(d.plan.Extents, off, buf); err != nil {
+		if err := d.applyExtents(d.plan.Extents, off, buf, d.planMin); err != nil {
 			return 0, err
 		}
 	}
-	if err := d.applyExtents(d.ext, off, buf); err != nil {
+	if err := d.applyExtents(d.ext, off, buf, math.MaxUint64); err != nil {
 		return 0, err
 	}
 	if uint64(len(p)) > n {
@@ -394,8 +396,9 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 	return int(n), nil
 }
 
-func (d *dirtyFile) applyExtents(ext extents, off uint64, buf []byte) error {
-	end := off + uint64(len(buf))
+// applyExtents copies the bytes of ext within [off, off+len(buf)) and below limit into buf.
+func (d *dirtyFile) applyExtents(ext extents, off uint64, buf []byte, limit uint64) error {
+	end := min(off+uint64(len(buf)), limit)
 	for _, x := range ext.overlapping(off, uint64(len(buf))) {
 		s := max(x.off, off)
 		e := min(x.end(), end)
@@ -493,7 +496,7 @@ func (o *Overlay) ReadPlanRange(plan *FlushPlan, off uint64, p []byte, base func
 			return err
 		}
 	}
-	return d.applyExtents(plan.Extents, off, p)
+	return d.applyExtents(plan.Extents, off, p, math.MaxUint64)
 }
 
 // ReadPlan fills p with the plan extent's bytes starting at x.off+skip.
@@ -561,10 +564,15 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		// size instead of pinning this one (L-178)
 		return o.evict(d)
 	}
-	// Compact: base, optional truncate, then the live extents' data.
+	// Compact: base, the truncation point, the raised size if a truncate-up happened
+	// while the plan was outstanding (L-180), then the live extents' data (last, so the
+	// record offsets below line up).
 	recs := []walRec{{typ: recBase, off: committedSize}}
 	if d.sizeSet {
 		recs = append(recs, walRec{typ: recTruncate, off: d.minSize})
+		if d.size > d.minSize {
+			recs = append(recs, walRec{typ: recTruncate, off: d.size})
+		}
 	}
 	for _, x := range d.ext {
 		data := make([]byte, x.n)
