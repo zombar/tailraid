@@ -74,27 +74,10 @@ func attrStatus(err error) error {
 	return &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusIO, WrappedErr: err}
 }
 
-// FSStat reports capacity: Total = Σ Active capacity · K/(K+M); Free = Total − stored·K/(K+M).
+// FSStat reports capacity through meta.Usage (the same formula as `status`).
 func (h *Handler) FSStat(_ context.Context, _ billy.Filesystem, s *nfs.FSStat) error {
-	vol := h.st.Volume()
-	var capacity uint64
-	nodes := h.st.Nodes()
-	for i := range nodes {
-		if nodes[i].State == meta.Active {
-			capacity += nodes[i].Capacity
-		}
-	}
 	st := h.st.Stats()
-	k, km := uint64(vol.K), uint64(vol.K)+uint64(vol.M)
-	if km == 0 {
-		km, k = 1, 1
-	}
-	total := capacity * k / km
-	used := st.StoredBytes * k / km
-	free := uint64(0)
-	if total > used {
-		free = total - used
-	}
+	total, _, free := meta.Usage(h.st.Volume(), h.st.Nodes(), st)
 	s.TotalSize, s.FreeSize, s.AvailableSize = total, free, free
 	s.TotalFiles = uint64(st.Inodes)
 	s.FreeFiles = (1 << 32) - uint64(st.Inodes)

@@ -1,6 +1,9 @@
 package meta
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"testing"
 
 	"github.com/hashicorp/raft"
@@ -79,5 +82,101 @@ func TestFSM_InodeCopies_OmitChildren(t *testing.T) {
 	}
 	if tf.child(d, "f") == 0 {
 		t.Fatal("Lookup of the file failed")
+	}
+}
+
+// The volume statistics kept by the applier equal a full walk after every random command
+// (commits with truncates, holes, dedup and re-registration; unlinks; renames over files;
+// placement and policy changes; GC) and after a snapshot/restore round trip.
+func TestFSM_Stats_IncrementalMatchesRecompute(t *testing.T) {
+	f := NewFSM()
+	gen := &cmdGen{rng: testseed.Seed(t), f: f, now: 5}
+	var idx uint64
+	apply := func(c Command) Result {
+		idx++
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+	}
+	if res := apply(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}); res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	for i := 0; i < 3000; i++ {
+		c := gen.next()
+		apply(c)
+		got := f.Stats()
+		f.mu.RLock()
+		want := computeStats(f.st)
+		f.mu.RUnlock()
+		if got != want {
+			t.Fatalf("after command %d (op %d): stats %+v, recount %+v", i, c.Op, got, want)
+		}
+	}
+	snap, err := f.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := EncodeState(&buf, snap.(*snapshot).st); err != nil {
+		t.Fatal(err)
+	}
+	g := NewFSM()
+	if err := g.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := g.Stats(), f.Stats(); got != want {
+		t.Fatalf("after restore: %+v, want %+v", got, want)
+	}
+	if got := f.Stats(); got.Chunks == 0 || got.LogicalBytes == 0 {
+		t.Fatalf("workload too thin: %+v", got)
+	}
+}
+
+// One usage formula for FSSTAT and status (X5): only Active capacity counts, scaled by
+// k/(k+m); free never underflows; a volume without a policy is treated as 1+0.
+func TestUsage_Formula(t *testing.T) {
+	nodes := []Node{{State: Active, Capacity: 300}, {State: Draining, Capacity: 1000}, {State: Active, Capacity: 300}, {State: Removed, Capacity: 5000}}
+	cases := []struct {
+		vol               Volume
+		stored            uint64
+		total, used, free uint64
+	}{
+		{Volume{K: 2, M: 1}, 0, 400, 0, 400},
+		{Volume{K: 2, M: 1}, 300, 400, 200, 200},
+		{Volume{K: 2, M: 1}, 900, 400, 600, 0},
+		{Volume{K: 1, M: 0}, 100, 600, 100, 500},
+		{Volume{}, 100, 600, 100, 500},
+	}
+	for _, c := range cases {
+		total, used, free := Usage(c.vol, nodes, Stats{StoredBytes: c.stored})
+		if total != c.total || used != c.used || free != c.free {
+			t.Errorf("%d+%d stored %d: got %d/%d/%d, want %d/%d/%d", c.vol.K, c.vol.M, c.stored, total, used, free, c.total, c.used, c.free)
+		}
+	}
+}
+
+// The chunk walk visits every entry present at the start exactly once, in hash order,
+// and stops when told to.
+func TestFSM_ForEachChunk_OrderAndStop(t *testing.T) {
+	bf := newTFSM(t)
+	var hs []Hash
+	for i := 0; i < 2500; i++ {
+		h := hashN(uint64(i) + 1)
+		hs = append(hs, h)
+		ino := bf.create(RootIno, fmt.Sprintf("f%d", i))
+		bf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: ino, NewSize: testCS, Writes: []ChunkWrite{{0, h}}, NewChunks: []ChunkDesc{desc(h)}, Now: 2}})
+	}
+	var seen []Hash
+	bf.f.ForEachChunk(func(c Chunk) bool { seen = append(seen, c.Hash); return true })
+	if len(seen) != len(hs) {
+		t.Fatalf("visited %d of %d", len(seen), len(hs))
+	}
+	for i := 1; i < len(seen); i++ {
+		if bytes.Compare(seen[i-1][:], seen[i][:]) >= 0 {
+			t.Fatalf("out of order at %d", i)
+		}
+	}
+	n := 0
+	bf.f.ForEachChunk(func(Chunk) bool { n++; return n < 1500 })
+	if n != 1500 {
+		t.Fatalf("stopped after %d", n)
 	}
 }

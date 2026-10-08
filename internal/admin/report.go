@@ -171,16 +171,10 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		rep.Nodes = append(rep.Nodes, r)
 	}
 	sort.Slice(rep.Nodes, func(i, j int) bool { return rep.Nodes[i].Idx < rep.Nodes[j].Idx })
-	k, km := uint64(vol.K), uint64(vol.K)+uint64(vol.M)
-	if km > 0 {
-		rep.Volume.UsableCapacity = rep.Volume.Capacity * k / km
-		used := stats.StoredBytes * k / km
-		if rep.Volume.UsableCapacity > used {
-			rep.Volume.Free = rep.Volume.UsableCapacity - used
-		}
-		if used > 0 {
-			rep.Volume.DedupRatio = float64(stats.LogicalBytes) / float64(used)
-		}
+	var used uint64
+	rep.Volume.UsableCapacity, used, rep.Volume.Free = meta.Usage(vol, nodes, stats)
+	if used > 0 {
+		rep.Volume.DedupRatio = float64(stats.LogicalBytes) / float64(used)
 	}
 	if rp != nil && n.IsLeader() {
 		st, at := rp.Last()

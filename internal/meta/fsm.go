@@ -21,6 +21,7 @@ import (
 type FSM struct {
 	mu      sync.RWMutex
 	st      *State
+	stats   Stats // volume totals, kept in step with every apply (Inodes filled on read)
 	applied atomic.Uint64
 
 	waitMu   sync.Mutex
@@ -63,7 +64,7 @@ func (f *FSM) applyLocked(l *raft.Log) Result {
 	if err != nil {
 		return Result{Err: ErrBadCommand}
 	}
-	a := &applier{st: f.st, index: l.Index}
+	a := &applier{st: f.st, stats: &f.stats, index: l.Index}
 	res, err := a.apply(cmd)
 	if err != nil {
 		return Result{Err: err}
@@ -77,6 +78,7 @@ func (f *FSM) applyLocked(l *raft.Log) Result {
 // applier carries one command's context. Every op validates fully before mutating.
 type applier struct {
 	st    *State
+	stats *Stats
 	index uint64
 	now   int64 // clamped command clock; 0 when the op carries no Now
 }
@@ -355,10 +357,13 @@ func (d refDelta) check(st *State) error {
 	return nil
 }
 
-// commit applies the deltas and fixes tombstone bookkeeping. Call only after check.
-func (d refDelta) commit(st *State, now int64) {
+// commit applies the deltas, fixes tombstone bookkeeping and keeps the chunk totals.
+// Call only after check.
+func (d refDelta) commit(st *State, stats *Stats, now int64) {
 	for h, n := range d {
 		c := st.Chunks[h]
+		fresh := c.Refs == 0 && c.TombstonedAt == 0 // registered by this command, not counted yet
+		wasLive := c.Refs > 0
 		c.Refs = uint32(int(c.Refs) + n)
 		if c.Refs == 0 {
 			if c.TombstonedAt == 0 {
@@ -369,6 +374,10 @@ func (d refDelta) commit(st *State, now int64) {
 			c.TombstonedAt = 0
 			delete(st.Tombs, h)
 		}
+		if !fresh {
+			stats.chunkOut(c, wasLive)
+		}
+		stats.chunkIn(c)
 	}
 }
 
@@ -398,7 +407,10 @@ func (a *applier) unlink(c *Unlink) error {
 		return err
 	}
 	now := a.clock(c.Now)
-	d.commit(st, now)
+	d.commit(st, a.stats, now)
+	if in.Type == TFile {
+		a.stats.LogicalBytes -= in.Size
+	}
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	p.Mtime, p.Ctime = now, now
@@ -501,7 +513,10 @@ func (a *applier) rename(c *Rename) error {
 	}
 	now := a.clock(c.Now)
 	if dst != nil {
-		d.commit(st, now)
+		d.commit(st, a.stats, now)
+		if dst.Type == TFile {
+			a.stats.LogicalBytes -= dst.Size
+		}
 		delete(st.Inodes, dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
@@ -703,8 +718,9 @@ func (a *applier) commit(c *Commit) error {
 		return err
 	}
 	now := a.clock(c.Now)
-	delta.commit(st, now)
+	delta.commit(st, a.stats, now)
 	in.Chunks = newList
+	a.stats.LogicalBytes += c.NewSize - in.Size // unsigned: wraps and unwraps exactly
 	in.Size = c.NewSize
 	in.Version++
 	in.Mtime, in.Ctime = now, now
@@ -722,8 +738,14 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	if !validPlacement(c.K, c.M, c.Placement) {
 		return ErrBadCommand
 	}
+	if ch.Refs > 0 {
+		a.stats.StoredBytes -= storedBytes(ch)
+	}
 	ch.K, ch.M = c.K, c.M
 	ch.Placement = append([]NodeIdx(nil), c.Placement...)
+	if ch.Refs > 0 {
+		a.stats.StoredBytes += storedBytes(ch)
+	}
 	return nil
 }
 
@@ -744,6 +766,7 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 		delete(st.Chunks, v.Hash)
 		delete(st.Tombs, v.Hash)
 	}
+	a.stats.Tombstoned -= len(victims)
 	return Result{Victims: victims}, nil
 }
 
@@ -782,6 +805,7 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	}
 	f.mu.Lock()
 	f.st = st
+	f.stats = computeStats(st)
 	f.mu.Unlock()
 	f.setApplied(st.Applied)
 	return nil

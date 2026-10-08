@@ -161,37 +161,34 @@ func (f *FSM) GetChunk(h Hash) (Chunk, bool) {
 	return copyChunk(c), true
 }
 
-// ForEachChunk calls fn for every chunk in hash order until fn returns false.
-// The read lock is held per batch of 1000 so Apply is never starved.
+// ForEachChunk calls fn for every chunk present when the walk starts, in hash order,
+// until fn returns false. The keys are sorted once; entries are copied under the read
+// lock in batches of 1000 so Apply is never starved (an entry deleted meanwhile is
+// skipped, one added meanwhile is not visited).
 func (f *FSM) ForEachChunk(fn func(Chunk) bool) {
-	var after *Hash
-	for {
+	f.mu.RLock()
+	keys := make([]Hash, 0, len(f.st.Chunks))
+	for h := range f.st.Chunks {
+		keys = append(keys, h)
+	}
+	f.mu.RUnlock()
+	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
+	const batchSize = 1000
+	for start := 0; start < len(keys); start += batchSize {
+		end := min(start+batchSize, len(keys))
+		batch := make([]Chunk, 0, end-start)
 		f.mu.RLock()
-		keys := make([]Hash, 0, len(f.st.Chunks))
-		for h := range f.st.Chunks {
-			if after == nil || bytes.Compare(h[:], after[:]) > 0 {
-				keys = append(keys, h)
+		for _, h := range keys[start:end] {
+			if c, ok := f.st.Chunks[h]; ok {
+				batch = append(batch, copyChunk(c))
 			}
 		}
-		sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
-		if len(keys) > 1000 {
-			keys = keys[:1000]
-		}
-		batch := make([]Chunk, len(keys))
-		for i, h := range keys {
-			batch[i] = copyChunk(f.st.Chunks[h])
-		}
 		f.mu.RUnlock()
-		if len(batch) == 0 {
-			return
-		}
 		for i := range batch {
 			if !fn(batch[i]) {
 				return
 			}
 		}
-		last := keys[len(keys)-1]
-		after = &last
 	}
 }
 
@@ -207,24 +204,79 @@ func (f *FSM) Nodes() []Node {
 	return out
 }
 
-// Stats computes volume statistics.
+// Stats returns the volume statistics. They are kept in step with every apply, so FSSTAT
+// (which macOS issues constantly) costs O(1) rather than a walk of every inode and chunk.
 func (f *FSM) Stats() Stats {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	var s Stats
+	s := f.stats
 	s.Inodes = len(f.st.Inodes)
-	for _, in := range f.st.Inodes {
+	return s
+}
+
+// computeStats walks the state (Restore, tests); the applier keeps the same totals
+// incrementally.
+func computeStats(st *State) Stats {
+	var s Stats
+	s.Inodes = len(st.Inodes)
+	for _, in := range st.Inodes {
 		if in.Type == TFile {
 			s.LogicalBytes += in.Size
 		}
 	}
-	for _, c := range f.st.Chunks {
+	for _, c := range st.Chunks {
 		if c.Refs == 0 {
 			s.Tombstoned++
 			continue
 		}
 		s.Chunks++
-		s.StoredBytes += uint64(ec.ShardLen(int(c.Size), int(c.K))) * uint64(int(c.K)+int(c.M))
+		s.StoredBytes += storedBytes(c)
 	}
 	return s
+}
+
+// storedBytes is what a live chunk occupies across its shards.
+func storedBytes(c *Chunk) uint64 {
+	return uint64(ec.ShardLen(int(c.Size), int(c.K))) * uint64(int(c.K)+int(c.M))
+}
+
+// chunkIn counts a chunk entry in its current state; chunkOut removes it from the state
+// it was in (live or tombstoned).
+func (s *Stats) chunkIn(c *Chunk) {
+	if c.Refs == 0 {
+		s.Tombstoned++
+		return
+	}
+	s.Chunks++
+	s.StoredBytes += storedBytes(c)
+}
+
+func (s *Stats) chunkOut(c *Chunk, wasLive bool) {
+	if !wasLive {
+		s.Tombstoned--
+		return
+	}
+	s.Chunks--
+	s.StoredBytes -= storedBytes(c)
+}
+
+// Usage is the one capacity formula behind FSSTAT and `status`: total = Σ Active capacity
+// · k/(k+m), used = stored bytes · k/(k+m), free = total − used (0 when over).
+func Usage(vol Volume, nodes []Node, st Stats) (total, used, free uint64) {
+	var capacity uint64
+	for i := range nodes {
+		if nodes[i].State == Active {
+			capacity += nodes[i].Capacity
+		}
+	}
+	k, km := uint64(vol.K), uint64(vol.K)+uint64(vol.M)
+	if km == 0 {
+		k, km = 1, 1
+	}
+	total = capacity * k / km
+	used = st.StoredBytes * k / km
+	if total > used {
+		free = total - used
+	}
+	return total, used, free
 }
