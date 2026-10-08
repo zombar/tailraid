@@ -491,7 +491,7 @@ func TestFSM_Commit_UnknownChunkRejected(t *testing.T) {
 	// tombstoned is fine (revive), collected is not
 	g := sha("g")
 	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS, Writes: []ChunkWrite{{0, g}}, NewChunks: []ChunkDesc{desc(g)}, Now: 1}})
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 0, Now: 2}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 2}})
 	if ch := tf.chunk(g); ch.Refs != 0 || ch.TombstonedAt != 2 {
 		t.Fatalf("g %+v", ch)
 	}
@@ -535,7 +535,8 @@ func TestFSM_Commit_TruncateDown(t *testing.T) {
 	}
 	t.Run("mid-chunk without tail rewrite", func(t *testing.T) {
 		tf, f, _ := setup(t)
-		tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS + 10, Now: 2}}, ErrNeedTailRewrite)
+		// without HasTruncate a shrink is malformed outright (L-175); with it the tail rule applies
+		tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS + 10, Now: 2}}, ErrBadCommand)
 		tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS + 10, NewSize: testCS + 10, Now: 2}}, ErrNeedTailRewrite)
 	})
 	t.Run("mid-chunk with tail rewrite", func(t *testing.T) {
@@ -552,21 +553,21 @@ func TestFSM_Commit_TruncateDown(t *testing.T) {
 	})
 	t.Run("mid-chunk with HashZero tail", func(t *testing.T) {
 		tf, f, _ := setup(t)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS + 10, Writes: []ChunkWrite{{1, HashZero}}, Now: 2}})
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS + 10, NewSize: testCS + 10, Writes: []ChunkWrite{{1, HashZero}}, Now: 2}})
 		if in := tf.inode(f); len(in.Chunks) != 2 || in.Chunks[1] != HashZero {
 			t.Fatalf("%+v", in)
 		}
 	})
 	t.Run("aligned", func(t *testing.T) {
 		tf, f, hs := setup(t)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 2 * testCS, Now: 2}})
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 2 * testCS, NewSize: 2 * testCS, Now: 2}})
 		if in := tf.inode(f); len(in.Chunks) != 2 || tf.chunk(hs[2]).Refs != 0 {
 			t.Fatalf("%+v", in)
 		}
 	})
 	t.Run("to zero", func(t *testing.T) {
 		tf, f, hs := setup(t)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 0, Now: 2}})
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 2}})
 		if in := tf.inode(f); len(in.Chunks) != 0 || in.Size != 0 {
 			t.Fatalf("%+v", in)
 		}
@@ -672,8 +673,8 @@ func TestFSM_GCDelete_Boundary(t *testing.T) {
 	f := tf.create(RootIno, "f")
 	live, t1, t2 := sha("live"), sha("t1"), sha("t2")
 	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: 3 * testCS, Writes: []ChunkWrite{{0, live}, {1, t1}, {2, t2}}, NewChunks: []ChunkDesc{desc(live), desc(t1), desc(t2)}, Now: 1}})
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 2 * testCS, Now: 10}}) // t2 tombstoned at 10
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 2, NewSize: testCS, Now: 20}})     // t1 tombstoned at 20
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 2 * testCS, NewSize: 2 * testCS, Now: 10}}) // t2 tombstoned at 10
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 2, HasTruncate: true, TruncateTo: testCS, NewSize: testCS, Now: 20}})         // t1 tombstoned at 20
 	r := tf.ok(Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: 10}})
 	if len(r.Victims) != 0 {
 		t.Fatalf("Before == TombstonedAt collected: %+v", r.Victims)
@@ -696,7 +697,7 @@ func TestFSM_GCDelete_Boundary(t *testing.T) {
 		t.Fatal("referenced chunk collected")
 	}
 	// victims are sorted by hash for determinism
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 3, NewSize: 0, Now: 30}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 3, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 30}})
 	g := tf.create(RootIno, "g")
 	var ws []ChunkWrite
 	var ds []ChunkDesc
@@ -778,7 +779,7 @@ func TestFSM_LastNowMonotonic(t *testing.T) {
 	// tombstone time uses the clamped clock so GC grace cannot be defeated by skew
 	a := sha("a")
 	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS, Writes: []ChunkWrite{{0, a}}, NewChunks: []ChunkDesc{desc(a)}, Now: 1}})
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 0, Now: 1}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 1}})
 	if c := tf.chunk(a); c.TombstonedAt != 1000 {
 		t.Fatalf("TombstonedAt %d", c.TombstonedAt)
 	}
@@ -1224,8 +1225,8 @@ func TestCheckInvariants_DetectsEachViolation(t *testing.T) {
 		a, b := sha("a"), sha("b")
 		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: 2 * testCS, Writes: []ChunkWrite{{0, a}, {1, b}}, NewChunks: []ChunkDesc{desc(a), desc(b)}, Now: 1}})
 		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, NewSize: testCS, Writes: []ChunkWrite{{0, a}}, Now: 2}})
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, BaseVersion: 1, NewSize: 0, Now: 3}})      // nothing tombstoned (a still ref'd by f)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS, Now: 4}}) // b tombstoned
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 3}})           // nothing tombstoned (a still ref'd by f)
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS, NewSize: testCS, Now: 4}}) // b tombstoned
 		return tf.f.state().Clone()
 	}
 	if v := CheckInvariants(build()); len(v) != 0 {
