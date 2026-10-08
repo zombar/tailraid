@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ type Config struct {
 	Log struct {
 		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
 		Format string `yaml:"format"` // text | json (env TAILRAID_LOG_FORMAT overrides)
+		File   string `yaml:"file"`   // append here instead of stderr (env TAILRAID_LOG_FILE overrides)
 	} `yaml:"log"`
 	Repair struct {
 		Grace     string `yaml:"grace"`      // GC grace and shard DELETE fence age (default 10m)
@@ -216,8 +218,35 @@ func (c Config) Logger() *slog.Logger {
 		lvl = slog.LevelInfo
 	}
 	opts := &slog.HandlerOptions{Level: lvl}
-	if strings.EqualFold(format, "json") {
-		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	var out io.Writer = os.Stderr
+	file := c.Log.File
+	if v := os.Getenv("TAILRAID_LOG_FILE"); v != "" {
+		file = v
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, opts))
+	if file != "" {
+		if f, err := openLogFile(file); err == nil {
+			out = f
+		} else {
+			fmt.Fprintf(os.Stderr, "tailraid: log file %s: %v; logging to stderr\n", file, err)
+		}
+	}
+	if strings.EqualFold(format, "json") {
+		return slog.New(slog.NewJSONHandler(out, opts))
+	}
+	return slog.New(slog.NewTextHandler(out, opts))
+}
+
+// LogFile returns the effective log file path ("" = stderr).
+func (c Config) LogFile() string {
+	if v := os.Getenv("TAILRAID_LOG_FILE"); v != "" {
+		return v
+	}
+	return c.Log.File
+}
+
+func openLogFile(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 }

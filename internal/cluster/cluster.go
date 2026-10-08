@@ -50,6 +50,8 @@ type Options struct {
 	Fast bool
 	// SnapshotThreshold overrides the documented 8192 (tests of snapshot install).
 	SnapshotThreshold uint64
+	// Faults, when set, lets /dev/fault rules cut Raft traffic to and from peers.
+	Faults Faults
 }
 
 // Node is an open Raft member.
@@ -145,7 +147,7 @@ func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
 	if o.Transport != nil {
 		return o.Transport, nil
 	}
-	return NewTransport(o.RaftAddr, o.ClusterID, logOutput)
+	return NewTransport(o.RaftAddr, o.ClusterID, logOutput, o.Faults)
 }
 
 // LoadClusterID reads <data_dir>/cluster_id.

@@ -13,6 +13,7 @@ require (
 	github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886
 	go.etcd.io/bbolt v1.4.1
 	go.uber.org/goleak v1.3.0
+	golang.org/x/sys v0.48.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 )
 
@@ -33,5 +34,4 @@ require (
 	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 )

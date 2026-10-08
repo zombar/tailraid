@@ -72,7 +72,8 @@ type Options struct {
 	JoinToken func() string
 	Status    func() any // GET /v1/status body (admin report)
 	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
-	Dev       http.Handler // /dev/* (docs/08): nil unless dev.enabled
+	Dev       http.Handler           // /dev/* (docs/08): nil unless dev.enabled
+	Blocked   func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
 	Clk       clock.Clock
 	Logger    *slog.Logger
 	MaxShard  int64         // PUT body cap; default 2 MiB
@@ -126,7 +127,18 @@ func NewServer(o Options) (*Server, error) {
 	if o.Dev != nil {
 		mux.Handle("/dev/", s.clusterCheck(s.member(o.Dev)))
 	}
-	s.handler = mux
+	var h http.Handler = mux
+	if o.Blocked != nil { // a /dev/fault rule cuts inbound traffic too
+		inner := h
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if o.Blocked(r.RemoteAddr) {
+				writeErr(w, http.StatusServiceUnavailable, "dropped by a fault rule")
+				return
+			}
+			inner.ServeHTTP(w, r)
+		})
+	}
+	s.handler = h
 	return s, nil
 }
 

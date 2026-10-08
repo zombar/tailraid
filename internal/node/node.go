@@ -105,7 +105,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 	rpcAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.RPC))
-	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log})
+	var faults *dev.Faults // /dev/fault rules, dev.enabled only (docs/12 §3)
+	var raftFaults cluster.Faults
+	if cfg.Dev.Enabled {
+		faults = dev.NewFaults()
+		raftFaults = faults
+	}
+	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log, Faults: raftFaults})
 	if err != nil {
 		return err
 	}
@@ -146,9 +152,12 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
+	var blocked func(string) bool
 	if cfg.Dev.Enabled {
 		ring = meta.NewEventRing(clk, selfIdx)
-		devHandler = dev.Handler(node.FSM, store, log)
+		devHandler = dev.Handler(node.FSM, store, faults, log)
+		client.WrapTransport(faults.Transport)
+		blocked = faults.Blocked
 	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
 	rd.Events = ring
@@ -174,7 +183,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: func() any { return admin.Build(node, prober, clusterID, clk, repairer) }, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
-		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler})
+		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
 	if err != nil {
 		return err
 	}
@@ -198,7 +207,17 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		_ = rl.Close()
 		return err
 	}
-	nfsgw.UseLogger(log) // one log stream, one format (the library logs client noise)
+	nfsgw.UseLogger(log)           // one log stream, one format (the library logs client noise)
+	if runtime.GOOS == "windows" { // mount.exe finds the gateway through the portmapper (docs/12 §2)
+		_, nfsPort, _ := net.SplitHostPort(nl.Addr().String())
+		port, _ := strconv.Atoi(nfsPort)
+		pm := &mount.Portmap{Port: uint32(port), Log: log}
+		go func() {
+			if err := pm.Serve(ctx, "127.0.0.1:111"); err != nil {
+				log.Error("portmap stub failed; Windows mount.exe cannot find the gateway", "err", err)
+			}
+		}()
+	}
 	log.Info("tailraid serving", "version", version, "node", id, "idx", selfIdx, "tailnet", ident.IP, "rpc", rl.Addr(), "raft", raftAddr,
 		"nfs", nl.Addr(), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
 	prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)

@@ -26,13 +26,16 @@ type LiveEnv struct {
 	MountPath   string
 	ClusterID   string
 	Destructive bool
+	Restarts    bool // every target runs with dev.enabled under a restarting service manager
 
 	selfID string
 }
 
 func (e *LiveEnv) Name() string { return "live cluster " + e.ClusterID }
 
-func (e *LiveEnv) Caps() Caps { return Caps{Corrupt: e.Destructive} }
+func (e *LiveEnv) Caps() Caps {
+	return Caps{Corrupt: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts}
+}
 
 func (e *LiveEnv) Wait(ctx context.Context, d time.Duration) error {
 	select {
@@ -213,10 +216,108 @@ func (e *LiveEnv) Corrupt(ctx context.Context, n NodeRef, key string) error {
 	return err
 }
 
-var errNoFaults = errors.New("live environment cannot kill, restart or partition nodes (needs a service manager, M4)")
+var errNoFaults = errors.New("live environment cannot kill, restart or partition nodes without --destructive --restarts (docs/12 §3)")
 
-func (e *LiveEnv) Kill(context.Context, NodeRef) error                   { return errNoFaults }
-func (e *LiveEnv) Start(context.Context, NodeRef) error                  { return errNoFaults }
-func (e *LiveEnv) Restart(context.Context, []NodeRef) error              { return errNoFaults }
-func (e *LiveEnv) Partition(context.Context, []NodeRef, []NodeRef) error { return errNoFaults }
-func (e *LiveEnv) Heal(context.Context) error                            { return nil }
+// Kill asks the node to exit; its service manager restarts it (docs/12 §3).
+func (e *LiveEnv) Kill(ctx context.Context, n NodeRef) error {
+	if !e.Caps().Kill {
+		return errNoFaults
+	}
+	_, err := e.Client.Call(ctx, n.RPC, http.MethodPost, "/dev/exit", nil)
+	return err
+}
+
+// Start waits for the service manager's restart to answer /health.
+func (e *LiveEnv) Start(ctx context.Context, n NodeRef) error {
+	if !e.Caps().Kill {
+		return errNoFaults
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		hctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err := e.Client.Health(hctx, n.RPC)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s did not come back: %w", n.Name, err)
+		}
+		if err := e.Wait(ctx, 2*time.Second); err != nil {
+			return err
+		}
+	}
+}
+
+func (e *LiveEnv) Restart(ctx context.Context, nodes []NodeRef) error {
+	for _, n := range nodes {
+		if err := e.Kill(ctx, n); err != nil {
+			return err
+		}
+	}
+	if err := e.Wait(ctx, 2*time.Second); err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		if err := e.Start(ctx, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hostOf(rpcAddr string) string {
+	if h, _, err := net.SplitHostPort(rpcAddr); err == nil {
+		return h
+	}
+	return rpcAddr
+}
+
+func (e *LiveEnv) setFault(ctx context.Context, n NodeRef, drop []string) error {
+	body, _ := json.Marshal(map[string]any{"drop": drop})
+	_, err := e.Client.Call(ctx, n.RPC, http.MethodPost, "/dev/fault", body)
+	return err
+}
+
+// Partition installs drop rules on every node of each side for the other side.
+func (e *LiveEnv) Partition(ctx context.Context, a, b []NodeRef) error {
+	if !e.Caps().Partition {
+		return errNoFaults
+	}
+	ips := func(side []NodeRef) []string {
+		out := make([]string, 0, len(side))
+		for _, n := range side {
+			out = append(out, hostOf(n.RPC))
+		}
+		return out
+	}
+	for _, n := range a {
+		if err := e.setFault(ctx, n, ips(b)); err != nil {
+			return err
+		}
+	}
+	for _, n := range b {
+		if err := e.setFault(ctx, n, ips(a)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Heal clears every node's rules (best effort: a node mid-restart is retried by Start).
+func (e *LiveEnv) Heal(ctx context.Context) error {
+	if !e.Caps().Partition {
+		return nil
+	}
+	nodes, err := e.Nodes(ctx)
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, n := range nodes {
+		if err := e.setFault(ctx, n, nil); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}

@@ -48,6 +48,8 @@ tailraid mount                                 # mounts via the OS NFS client (~
 tailraid status                                # health, members, slots, warnings
 tailraid check / repair / fsck / gc            # replication health and maintenance
 tailraid verify --report out.html              # soak scenarios against the live cluster
+tailraid install                               # run serve under launchd / systemd / the Windows SCM
+tailraid logs -f                               # follow the service log
 ```
 
 ## Building

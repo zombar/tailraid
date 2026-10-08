@@ -49,6 +49,11 @@ func (c *Client) SetGrace(d time.Duration) { c.grace = d }
 // SetTransport replaces the HTTP transport (tests inject FaultNet).
 func (c *Client) SetTransport(rt http.RoundTripper) { c.http.Transport = rt }
 
+// WrapTransport replaces the transport with wrap(current) (dev fault rules).
+func (c *Client) WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) {
+	c.http.Transport = wrap(c.http.Transport)
+}
+
 func (c *Client) do(ctx context.Context, method, addr, path string, body []byte, hdr map[string]string) (*http.Response, error) {
 	var rd io.Reader
 	if body != nil {

@@ -56,8 +56,9 @@ ticking.
 
 ## 4. Service mode
 
-- [ ] `tailraid.exe install --print` — eyeball the `sc.exe` lines (`binPath`, `depend=
-      Tailscale`, `start= delayed-auto`, failure actions, firewall rule)
+- [ ] `tailraid.exe install --print` — eyeball the `sc.exe` lines (`binPath … serve --config …
+      --service`, `depend= Tailscale`, `start= delayed-auto`, failure actions); `install`
+      also writes `log.file: %ProgramData%\tailraid\serve.log` into the config
 - [ ] `tailraid.exe install` (elevated) → `sc.exe query tailraid` RUNNING
 - [ ] **Service account**: the service runs as LocalSystem with home `%ProgramData%\tailraid`;
       confirm the config/keyring paths it reads are the ones `join` wrote, or document the
@@ -67,8 +68,9 @@ ticking.
 - [ ] Kill `tailraid.exe` in Task Manager → SCM restarts it within ~5 s; the mount survives
       (handles are stable, `mtype=soft`)
 - [ ] `sc.exe stop tailraid` → clean stop; `T:` reports disconnected, no hang in Explorer
-- [ ] Service logs: confirm stderr reaches the configured log file (Windows services drop
-      stderr; errol's pitfall)
+- [ ] Service logs: `tailraid.exe logs -f` follows `%ProgramData%\tailraid\serve.log` and
+      shows the JSON/text lines of the running service (Windows services drop stderr;
+      errol's pitfall)
 
 ## 5. Endurance
 

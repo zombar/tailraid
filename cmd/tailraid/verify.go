@@ -41,6 +41,10 @@ the cluster's repair.grace.`,
 				return err
 			}
 			destructive, _ := cmd.Flags().GetBool("destructive")
+			restarts, _ := cmd.Flags().GetBool("restarts")
+			if restarts && !destructive {
+				return fmt.Errorf("--restarts needs --destructive")
+			}
 			out, _ := cmd.Flags().GetString("report")
 			resultsPath, _ := cmd.Flags().GetString("results")
 			seed, _ := cmd.Flags().GetInt64("seed")
@@ -52,7 +56,7 @@ the cluster's repair.grace.`,
 			if cs, _ := cmd.Flags().GetInt("chunk"); cs > 0 {
 				p.ChunkSize = cs
 			}
-			env := &soak.LiveEnv{Client: cl, SelfAddr: addr, MountPath: cfg.Mount.Path, ClusterID: fmt.Sprintf("%x", cid[:4]), Destructive: destructive}
+			env := &soak.LiveEnv{Client: cl, SelfAddr: addr, MountPath: cfg.Mount.Path, ClusterID: fmt.Sprintf("%x", cid[:4]), Destructive: destructive, Restarts: restarts}
 			rf, err := os.Create(resultsPath)
 			if err != nil {
 				return err
@@ -60,7 +64,7 @@ the cluster's repair.grace.`,
 			defer rf.Close()
 			log := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
 			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed))} //nolint:gosec // workload
-			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive)
+			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive, "restarts", restarts)
 			sum, err := run.Execute(ctx)
 			if err != nil {
 				return err
@@ -97,6 +101,7 @@ the cluster's repair.grace.`,
 	c.Flags().String("report", "report.html", "HTML report path")
 	c.Flags().String("results", "results.jsonl", "results stream path")
 	c.Flags().Bool("destructive", false, "also corrupt shards (targets need dev.enabled)")
+	c.Flags().Bool("restarts", false, "with --destructive: every target runs under a restarting service manager, so kill, restart and partition phases run through /dev/exit and /dev/fault")
 	c.Flags().Int64("seed", 0, "workload seed (0 = time)")
 	c.Flags().Int("chunk", 0, "the volume's chunk size in bytes (default: the quick profile's 256 KiB)")
 	return c

@@ -30,16 +30,34 @@ type Store interface {
 	Has(k chunk.ShardKey) bool
 }
 
-// Handler returns the /dev/* mux. exit, when nil, is os.Exit.
-func Handler(st *meta.Store, store Store, log *slog.Logger) http.Handler {
-	return handler(st, store, log, os.Exit)
+// Handler returns the /dev/* mux; faults may be nil (no /dev/fault). exit defaults to os.Exit.
+func Handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger) http.Handler {
+	return handler(st, store, faults, log, os.Exit)
 }
 
-func handler(st *meta.Store, store Store, log *slog.Logger, exit func(int)) http.Handler {
+func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit func(int)) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
 	mux := http.NewServeMux()
+	if faults != nil {
+		mux.HandleFunc("GET /dev/fault", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"drop": faults.List()})
+		})
+		mux.HandleFunc("POST /dev/fault", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Drop []string `json:"drop"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			faults.Set(req.Drop)
+			log.Warn("dev: fault rules set", "drop", faults.List())
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
 	mux.HandleFunc("GET /dev/fsm-hash", func(w http.ResponseWriter, _ *http.Request) {
 		h, err := Hash(st)
 		if err != nil {

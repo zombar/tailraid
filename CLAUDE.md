@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M3 and M3b done. M3: repair/GC/sweep/check/fsck/set-redundancy, 600-step model checker, `chunk describe` with the dev-mode event ring, stale-overlay fix L-178. M3b: `internal/soak` scenario engine (9 phases, results.jsonl, HTML report with Go-rendered SVG charts) runs against the in-process harness (`TestSoak_AllPhasesAgainstHarness`, 22 s), the four-node compose cluster through worker sidecars (`make soak`, all phases green, deliberate bug caught) and the live cluster (`tailraid verify`); `/dev/fsm-hash|corrupt|exit`; `repair.grace`/`repair.fill_after`; one JSON log stream per container. Next: M4 ops (service install, Windows validation, release), then M5 S3.
+**Milestone status:** M0–M3b done. M4 in progress: `install|uninstall|start|stop|logs` (launchd agent, systemd unit, Windows SCM with `serve --service`), `log.file`, the Windows portmap stub (unit-tested, unvalidated on hardware), `/dev/fault` drop rules on Raft and RPC, `verify --destructive --restarts`, `make release` (6 binaries). Remaining M4: Windows checklist on real hardware, real-device validation. Then M5 S3.
 
 ## Layout
 

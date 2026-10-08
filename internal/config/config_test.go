@@ -63,3 +63,29 @@ func TestHome_RespectsEnv(t *testing.T) {
 		t.Fatal(Home(), DefaultPath())
 	}
 }
+
+// Invariant: I-60
+func TestConfig_LogFile(t *testing.T) {
+	t.Setenv("TAILRAID_LOG_FORMAT", "")
+	t.Setenv("TAILRAID_LOG_LEVEL", "")
+	t.Setenv("TAILRAID_LOG_FILE", "")
+	c := Default()
+	c.Log.Format = "json"
+	c.Log.File = filepath.Join(t.TempDir(), "logs", "serve.log")
+	c.Logger().Info("hello", "k", 1)
+	b, err := os.ReadFile(c.Log.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"msg":"hello","k":1`) {
+		t.Fatalf("log file: %q", b)
+	}
+	c.Logger().Info("again")
+	if b, _ = os.ReadFile(c.Log.File); strings.Count(string(b), "\n") != 2 {
+		t.Fatalf("not appended: %q", b)
+	}
+	t.Setenv("TAILRAID_LOG_FILE", filepath.Join(t.TempDir(), "env.log"))
+	if c.LogFile() != os.Getenv("TAILRAID_LOG_FILE") {
+		t.Fatal("env override ignored")
+	}
+}

@@ -230,9 +230,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
   uses the device's tailnet IP. Non-destructive by default: transfer, integrity across every
   node's FSM hash, churn, dedup and GC, repair backlog. `--destructive` adds corruption
-  (`/dev/corrupt`, needs `dev.enabled` on the targets); kills and partitions need a
-  restarting service manager and the `/dev/fault` seam, which land with M4 and are reported
-  as *skipped (capability)* until then. All IO is confined to `/_soak/<timestamp>/`, deleted
+  (`/dev/corrupt`, needs `dev.enabled` on the targets); `--destructive --restarts` declares
+  that every target runs under a restarting service manager (docs/12 §1) and adds kills,
+  restarts and partitions through `/dev/exit` and `/dev/fault`; without it those phases
+  are reported as *skipped (capability)*. All IO is confined to `/_soak/<timestamp>/`, deleted
   at the end.
 - **In-process** (`internal/soak` tests): the same phases run against the `testharness`
   cluster with a billy-backed `Volume`, the fake clock behind `Wait`, and tiny sizes, so the

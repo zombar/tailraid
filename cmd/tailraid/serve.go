@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/node"
+	"github.com/zombar/tailraid/internal/svc"
 )
 
 func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
@@ -119,7 +121,7 @@ func randomToken() string {
 }
 
 func serveCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the node: metadata, shard store and NFS gateway",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -131,9 +133,15 @@ func serveCmd() *cobra.Command {
 			defer stop()
 			log := cfg.Logger()
 			slog.SetDefault(log)
-			return node.Serve(ctx, cfg, log, version)
+			run := func(ctx context.Context) error { return node.Serve(ctx, cfg, log, version) }
+			if asService, _ := cmd.Flags().GetBool("service"); asService {
+				return runAsService(ctx, svc.Name, run)
+			}
+			return run(ctx)
 		},
 	}
+	c.Flags().Bool("service", false, "run under the Windows service control manager (set by `tailraid install`)")
+	return c
 }
 
 func mountCmd() *cobra.Command {

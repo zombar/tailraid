@@ -16,6 +16,7 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [08-security.md](08-security.md) | Trust model, WhoIs authorization, join token, cluster-ID handshake, secrets, threats, non-goals |
 | [09-testing-strategy.md](09-testing-strategy.md) | Invariant discipline, TDD workflow, seams, test pyramid, soak suite, CI |
 | [10-s3.md](10-s3.md) | Our S3 implementation: API gateway over the vfs and remote S3 buckets as storage nodes |
+| [12-operations.md](12-operations.md) | Service install per OS, log files, the Windows portmap stub, /dev fault injection for live soak runs, releases |
 | [invariants.md](invariants.md) | Generated table: every invariant, its doc, statement and tests |
 | [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows mount path (M4) |
 

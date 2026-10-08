@@ -33,8 +33,15 @@ func (s *tcpStream) Addr() net.Addr            { return s.advertise }
 // Raft traffic.
 type idStream struct {
 	raft.StreamLayer
-	id [16]byte
+	id     [16]byte
+	faults Faults // nil: no rules
 }
+
+// Faults is the /dev/fault rule set (internal/dev.Faults): peers to refuse.
+type Faults interface{ Blocked(addr string) bool }
+
+// errDropped is a dial refused by a fault rule.
+var errDropped = errors.New("cluster: raft dial dropped by a fault rule")
 
 func (s *idStream) handshake(c net.Conn) (net.Conn, error) {
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
@@ -56,6 +63,9 @@ func (s *idStream) handshake(c net.Conn) (net.Conn, error) {
 }
 
 func (s *idStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
+	if s.faults != nil && s.faults.Blocked(string(addr)) {
+		return nil, errDropped
+	}
 	c, err := s.StreamLayer.Dial(addr, timeout)
 	if err != nil {
 		return nil, err
@@ -71,14 +81,19 @@ func (s *idStream) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+		if s.faults != nil && s.faults.Blocked(c.RemoteAddr().String()) {
+			_ = c.Close()
+			continue
+		}
 		if hc, err := s.handshake(c); err == nil {
 			return hc, nil
 		}
 	}
 }
 
-// NewTransport builds the Raft TCP transport with the cluster-ID handshake.
-func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer) (raft.Transport, error) {
+// NewTransport builds the Raft TCP transport with the cluster-ID handshake; faults (may
+// be nil) refuses peers under a /dev/fault rule in both directions.
+func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults Faults) (raft.Transport, error) {
 	l, err := net.Listen("tcp", bind)
 	if err != nil {
 		return nil, fmt.Errorf("cluster: raft listen %s: %w", bind, err)
@@ -89,6 +104,6 @@ func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer) (raft.Tr
 			adv = tcp
 		}
 	}
-	stream := &idStream{StreamLayer: &tcpStream{l: l, advertise: adv}, id: clusterID}
+	stream := &idStream{StreamLayer: &tcpStream{l: l, advertise: adv}, id: clusterID, faults: faults}
 	return raft.NewNetworkTransport(stream, 3, 10*time.Second, logOutput), nil
 }
