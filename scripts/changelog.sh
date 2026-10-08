@@ -6,8 +6,9 @@
 #   scripts/changelog.sh notes TAG    print the section for TAG (release notes body)
 #
 # Entries are commit subjects. A "scope: subject" prefix sorts an entry into a group:
-# docs → Documentation, ci/tests/test → Tooling, everything else → Changes. Milestone
-# subjects ("M3: …") lead their section. Merge commits and "changelog:" commits are skipped.
+# docs → Documentation, ci/tests/test → Tooling, everything else → Changes. Merge
+# commits and the "changelog: vX.Y.Z" commits that make tag creates are skipped; a tag
+# with nothing else gets a one-line section so its release still has a body.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo_url=$(git remote get-url origin 2>/dev/null | sed -E 's#^git@github.com:#https://github.com/#; s#\.git$##')
@@ -18,7 +19,7 @@ section() { # section TITLE RANGE DATE
   while IFS=$'\t' read -r sha subject; do
     [ -z "$sha" ] && continue
     case "$subject" in
-      changelog:*|Merge\ *) continue ;;
+      "changelog: v"[0-9]*|Merge\ *) continue ;; # the auto-commit of make tag, merges
     esac
     local entry="- ${subject} ([${sha}](${repo_url}/commit/${sha}))"
     case "$subject" in
@@ -28,6 +29,13 @@ section() { # section TITLE RANGE DATE
     esac
   done < <(git log --no-merges --format='%h%x09%s' $range)
   if [ ${#changes[@]} -eq 0 ] && [ ${#tooling[@]} -eq 0 ] && [ ${#docs[@]} -eq 0 ]; then
+    if [ "$title" = Unreleased ]; then
+      return
+    fi
+    echo "## ${title} (${date})"
+    echo
+    echo "No changes recorded since the previous release."
+    echo
     return
   fi
   echo "## ${title} (${date})"

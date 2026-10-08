@@ -2,6 +2,12 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.1.2 (2026-10-08)
+
+### Changes
+
+- changelog: generated from the commit log; make tag commits it and CI uses it as release notes ([d714a37](https://github.com/zombar/tailraid/commit/d714a37))
+
 ## v0.1.1 (2026-10-08)
 
 ### Changes
