@@ -129,9 +129,11 @@ verified.
 `/dev/fsm-hash` (applied index and SHA-256 of the encoded FSM state), `/dev/corrupt?key=`
 (flips a byte of a shard file's payload), `/dev/exit` (process exit 3 after the reply, for
 a service manager to restart), `/dev/fault` (per-peer drop rules on the Raft stream and
-the node RPC, both directions; docs/12 §3) and `/dev/goroutines` (the stack of every
-goroutine, as a crash dump prints it, so a hung node is diagnosed without killing it)
-exist for the soak suite (`docs/09`); metrics come from `/v1/status`. They are
+the node RPC, both directions; docs/12 §3), `/dev/goroutines` (the stack of every
+goroutine, as a crash dump prints it, so a hung node is diagnosed without killing it),
+`/dev/disk` and `/dev/fill` (the data disk as the budget sees it, and a scratch file that
+consumes it; docs/12 §3) exist for the soak suite (`docs/09`); metrics come from
+`/v1/status`. They are
 registered only when `dev.enabled: true` is set in the node's config; otherwise the routes
 do not exist (404). When enabled they go through the same WhoIs member authorization as
 every other endpoint, every node's `/health` carries `dev: true`, and `tailraid status`

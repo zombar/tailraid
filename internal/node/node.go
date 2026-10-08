@@ -152,7 +152,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	var blocked func(string) bool
 	if cfg.Dev.Enabled {
 		ring = meta.NewEventRing(clk, selfIdx)
-		devHandler = dev.Handler(node.FSM, store, faults, log)
+		devHandler = dev.Handler(node.FSM, store, cfg.Node.DataDir, faults, log)
 		client.WrapTransport(faults.Transport)
 		blocked = faults.Blocked
 	}
@@ -455,7 +455,7 @@ func (a *adminOps) leaderApplied() (uint64, bool) {
 func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	gcT := a.clk.NewTimer(cfg.GCInterval)
 	sweepT := a.clk.NewTimer(time.Hour)
-	budgetT := a.clk.NewTimer(cfg.GCInterval)
+	budgetT := a.clk.NewTimer(cfg.ScanInterval) // once a minute (docs/01 §Node budget)
 	defer gcT.Stop()
 	defer sweepT.Stop()
 	defer budgetT.Stop()
@@ -467,7 +467,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 			if !a.pinned {
 				a.rebudget(ctx)
 			}
-			budgetT.Reset(cfg.GCInterval)
+			budgetT.Reset(cfg.ScanInterval)
 		case <-gcT.C():
 			if a.node.IsLeader() && a.healthy() {
 				if res, err := a.gc.RunOnce(ctx); err != nil {

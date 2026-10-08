@@ -33,7 +33,49 @@ type harnessEnv struct {
 
 	// a restart rebuilds a node's overlay and FSM handles while the sampler goroutine
 	// reads them: faults take the write side, the sampler's reads the read side
-	mu sync.RWMutex
+	mu   sync.RWMutex
+	fill map[int]uint64 // scratch bytes "on" each node's fake disk (Fill)
+}
+
+// The harness pins every budget at 1 TiB, so its fake disk is sized to derive exactly
+// that: a 20 TiB filesystem (2 TiB reserve) with 3 TiB free minus what is held or filled.
+const harnessDiskTotal = uint64(20) << 40
+
+func (e *harnessEnv) Disk(_ context.Context, n soak.NodeRef) (soak.DiskInfo, error) {
+	nd := e.node(n)
+	e.mu.RLock()
+	fill := e.fill[nd.I]
+	e.mu.RUnlock()
+	used := uint64(max(nd.Store.Used(), 0))
+	return soak.DiskInfo{Used: used, Free: uint64(3)<<40 - used - fill, Total: harnessDiskTotal}, nil
+}
+
+// Fill does on the fake disk what a scratch file and serve's next budget tick do on a real
+// one: the free space moves, the store's cap follows, and a change past the hysteresis is
+// registered through the leader.
+func (e *harnessEnv) Fill(ctx context.Context, n soak.NodeRef, size uint64) error {
+	nd := e.node(n)
+	e.mu.Lock()
+	if e.fill == nil {
+		e.fill = map[int]uint64{}
+	}
+	e.fill[nd.I] = size
+	e.mu.Unlock()
+	d, _ := e.Disk(ctx, n)
+	b := chunk.Budget(d.Used, d.Free, d.Total)
+	nd.Store.SetCapacity(int64(b))
+	if cur, ok := nd.Node.FSM.Node(n.Idx); ok && chunk.BudgetChanged(cur.Capacity, b) {
+		return e.c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: n.Idx, Capacity: b})
+	}
+	return nil
+}
+
+func (e *harnessEnv) SetPolicyAuto(ctx context.Context) error {
+	res, _, err := e.c.Leader().Node.Propose(ctx, meta.Command{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: true, Now: e.c.Clk.Now().UnixNano()}})
+	if err == nil {
+		err = res.Err
+	}
+	return err
 }
 
 func (e *harnessEnv) Name() string { return "in-process harness" }
@@ -131,14 +173,25 @@ func (e *harnessEnv) GCNow(ctx context.Context) (repair.Result, error) {
 	return repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil).RunOnce(ctx)
 }
 
+// SetPolicy pins a policy as the admin op does: manual mode first, then the policy.
 func (e *harnessEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	l := e.c.Leader()
-	res, _, err := l.Node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: k, M: m, Now: e.c.Clk.Now().UnixNano()}})
-	if err == nil {
-		err = res.Err
+	now := e.c.Clk.Now().UnixNano()
+	for _, cmd := range []meta.Command{
+		{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: false, Now: now}},
+		{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: k, M: m, Now: now}},
+	} {
+		res, _, err := l.Node.Propose(ctx, cmd)
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			e.c.Settle()
+			return err
+		}
 	}
 	e.c.Settle()
-	return err
+	return nil
 }
 
 func (e *harnessEnv) SetState(ctx context.Context, n soak.NodeRef, st meta.NodeState) error {
@@ -283,7 +336,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 10 {
+	if sum.Failed != 0 || len(sum.Phases) != 11 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

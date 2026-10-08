@@ -272,7 +272,11 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   partition (a minority is cut off: the majority elects and keeps committing, a cut-off
   gateway refuses metadata operations and buffers WRITEs that commit after the heal; then
   the gateway itself is cut off and rejoins; a refused operation may land after the heal,
-  which Raft allows, so the check is FSM agreement, not absence; I-29, L-59, L-148). A
+  which Raft allows, so the check is FSM agreement, not absence; I-29, L-59, L-148); 11
+  automation (every budget within the hysteresis of `/dev/disk`, a 2 GiB `/dev/fill` on
+  one node moves its store cap within two ticks, the corpus's data slots sit on voters,
+  `set-redundancy --auto` moves the policy to the member table's rule with the migration
+  complete and the corpus exact, then the previous pin is restored; I-74, I-75, I-77). A
   phase the environment cannot run is recorded as *skipped (capability)*, never passed.
   On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
   it, and once the service manager has it back it drops every peer until the phase's

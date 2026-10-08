@@ -32,13 +32,22 @@ func BudgetChanged(old, cur uint64) bool {
 	return old-cur > step
 }
 
+// Disk reports the store's bytes and its disk's free and total bytes (the budget's inputs).
+func (s *Store) Disk() (used, free, total uint64, err error) {
+	free, total, err = s.fsys.Free(s.root)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("chunk: measuring %s: %w", s.root, err)
+	}
+	return uint64(max(s.Used(), 0)), free, total, nil
+}
+
 // Rebudget measures the data disk, derives the budget and sets the store's cap to it.
 func (s *Store) Rebudget() (uint64, error) {
-	free, total, err := s.fsys.Free(s.root)
+	used, free, total, err := s.Disk()
 	if err != nil {
-		return 0, fmt.Errorf("chunk: measuring %s: %w", s.root, err)
+		return 0, err
 	}
-	b := Budget(uint64(max(s.Used(), 0)), free, total)
+	b := Budget(used, free, total)
 	s.SetCapacity(int64(b))
 	return b, nil
 }

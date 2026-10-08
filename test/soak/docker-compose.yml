@@ -13,7 +13,6 @@ x-node: &node
     K: "2"
     M: "1"
     CHUNK: 256K
-    CAPACITY: 2G
     REPAIR_GRACE: 20s
     FILL_AFTER: 20s
   healthcheck:

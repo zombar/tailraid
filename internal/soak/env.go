@@ -16,6 +16,13 @@ type NodeRef struct {
 	RPC  string       `json:"rpc"` // host:port as this driver reaches it (informational)
 }
 
+// DiskInfo is a node's data disk as its budget sees it (GET /dev/disk).
+type DiskInfo struct {
+	Used  uint64 `json:"used"` // shard bytes held
+	Free  uint64 `json:"free"`
+	Total uint64 `json:"total"`
+}
+
 // Caps lists what an Env can do; phases needing more are recorded as skipped.
 type Caps struct {
 	Kill         bool // Kill/Start/Restart
@@ -45,6 +52,11 @@ type Env interface {
 	// Goroutines is the node's goroutine dump (/dev/goroutines), taken after a failed
 	// phase so a hang is diagnosed from the report rather than by killing the node.
 	Goroutines(ctx context.Context, node NodeRef) (string, error)
+	// automation (docs/01 §Node budget, docs/03): the node's disk as its budget sees it,
+	// a scratch file that consumes disk (bytes 0 removes it; /dev/fill), auto redundancy.
+	Disk(ctx context.Context, node NodeRef) (DiskInfo, error)
+	Fill(ctx context.Context, node NodeRef, bytes uint64) error
+	SetPolicyAuto(ctx context.Context) error
 
 	// faults
 	Kill(ctx context.Context, node NodeRef) error

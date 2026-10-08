@@ -121,7 +121,8 @@ tailraid verify --report out.html
 ```
 
 runs the soak scenarios (transfer, cross-device integrity, random-access churn, dedup
-and garbage collection, metadata agreement across every node) against your live cluster
+and garbage collection, metadata agreement across every node, and the automation: budgets
+that follow each disk, data shards on the always-on devices, the automatic policy) against your live cluster
 through this device's mount and writes a self-contained HTML report with charts; add
 `--destructive --restarts` to include corruption, node kills and partitions on devices
 that run with `dev.enabled`. The same scenarios run nightly against a four-node Docker

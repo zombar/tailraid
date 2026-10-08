@@ -44,7 +44,7 @@ func TestDev_FSMHashCorruptAndExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	exited := make(chan int, 1)
-	srv := httptest.NewServer(handler(a, store, nil, nil, func(code int) { exited <- code }))
+	srv := httptest.NewServer(handler(a, store, t.TempDir(), nil, nil, func(code int) { exited <- code }))
 	defer srv.Close()
 	post := func(path string) int {
 		resp, err := http.Post(srv.URL+path, "", nil)
