@@ -106,21 +106,29 @@ func (e *LiveEnv) leaderAddr(ctx context.Context) (string, error) {
 }
 
 func (e *LiveEnv) leaderOp(ctx context.Context, op rpc.AdminOp, out any) error {
+	addr, err := e.leaderAddr(ctx)
+	if err != nil {
+		return err
+	}
 	var last error
-	for attempt := 0; attempt < 5; attempt++ {
-		addr, err := e.leaderAddr(ctx)
+	for attempt := 0; attempt < 6; attempt++ {
+		raw, err := e.Client.Admin(ctx, addr, op)
 		if err == nil {
-			var raw json.RawMessage
-			if raw, err = e.Client.Admin(ctx, addr, op); err == nil {
-				if out == nil {
-					return nil
-				}
-				return json.Unmarshal(raw, out)
+			if out == nil {
+				return nil
 			}
+			return json.Unmarshal(raw, out)
 		}
 		last = err
+		if redirect := rpc.LeaderFromErr(err); redirect != "" { // 421 names the leader
+			addr = redirect
+			continue
+		}
 		if werr := e.Wait(ctx, time.Second); werr != nil {
 			return werr
+		}
+		if a, err := e.leaderAddr(ctx); err == nil {
+			addr = a
 		}
 	}
 	return last

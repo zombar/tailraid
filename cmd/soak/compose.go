@@ -233,20 +233,40 @@ func (e *composeEnv) adminOp(ctx context.Context, ref soak.NodeRef, op rpc.Admin
 
 func (e *composeEnv) leaderOp(ctx context.Context, op rpc.AdminOp, out any) error {
 	var last error
-	for attempt := 0; attempt < 5; attempt++ { // the leader may move between lookup and call
-		l, err := e.leader(ctx)
-		if err == nil {
-			err = e.adminOp(ctx, l, op, out)
-		}
+	target, err := e.leader(ctx)
+	if err != nil {
+		return err
+	}
+	for attempt := 0; attempt < 6; attempt++ { // the leader may move between lookup and call
+		err := e.adminOp(ctx, target, op, out)
 		if err == nil {
 			return nil
 		}
-		last = err
+		last = fmt.Errorf("via %s: %w", target.Name, err)
+		if redirect := rpc.LeaderFromErr(err); redirect != "" { // 421: the reply names the leader
+			if n, ok := e.byRPC(redirect); ok {
+				target = n
+				continue
+			}
+		}
 		if werr := e.Wait(ctx, time.Second); werr != nil {
 			return werr
 		}
+		if l, err := e.leader(ctx); err == nil {
+			target = l
+		}
 	}
 	return last
+}
+
+// byRPC maps a node RPC address (host:port) to its NodeRef.
+func (e *composeEnv) byRPC(addr string) (soak.NodeRef, bool) {
+	for _, n := range e.nodes {
+		if n.ref.RPC == addr {
+			return n.ref, true
+		}
+	}
+	return soak.NodeRef{}, false
 }
 
 func (e *composeEnv) RepairNow(ctx context.Context) (repair.Stats, error) {
@@ -280,6 +300,11 @@ func (e *composeEnv) SetState(ctx context.Context, ref soak.NodeRef, state meta.
 	}
 	body, _ := json.Marshal(rpc.MemberOp{Op: "set_state", NodeIdx: ref.Idx, State: state})
 	_, err = e.call(ctx, l, http.MethodPost, "/v1/members", body)
+	if redirect := rpc.LeaderFromErr(err); redirect != "" {
+		if n, ok := e.byRPC(redirect); ok {
+			_, err = e.call(ctx, n, http.MethodPost, "/v1/members", body)
+		}
+	}
 	return err
 }
 

@@ -157,6 +157,25 @@ func (r *Run) setShared(k string, v any) {
 	r.shared[k] = v
 }
 
+// leaderRef returns the current leader as a NodeRef (falls back to the first node).
+func (r *Run) leaderRef(ctx context.Context) NodeRef {
+	if rep, _, err := r.anyStatus(ctx); err == nil {
+		for i := range rep.Nodes {
+			if rep.Nodes[i].Leader {
+				if n, ok := r.nodeByIdx(int(rep.Nodes[i].Idx)); ok {
+					return n
+				}
+			}
+		}
+	}
+	return r.nodes[0]
+}
+
+// chunksOf asks the leader (whose FSM is never behind a SetPlacement) for a file's chunks.
+func (r *Run) chunksOf(ctx context.Context, path string) ([]admin.ChunkReport, error) {
+	return r.Env.Chunks(ctx, r.leaderRef(ctx), path)
+}
+
 // checkFSMAgreement records the FSM-hash comparison, or a note when no node serves
 // /dev/fsm-hash (live clusters without dev.enabled).
 func (r *Run) checkFSMAgreement(ctx context.Context, name string) {
@@ -252,7 +271,7 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 		r.checkAt("fsck on "+n.Name, ok, detail, "", "", n.Name)
 	}
 	r.checkFSMAgreement(ctx, "FSM hashes agree")
-	reps, err := r.Env.Chunks(ctx, r.nodes[0], join(r.Root, "corpus", "big.bin"))
+	reps, err := r.chunksOf(ctx, join(r.Root, "corpus", "big.bin"))
 	if err != nil {
 		return err
 	}
@@ -515,21 +534,32 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	m := r.corpusModel()
 	// one shard (≤ m) of a committed chunk: reads stay exact, scrub repairs it
 	target := join(r.Root, "corpus", "big.bin")
-	reps, err := r.Env.Chunks(ctx, r.nodes[0], target)
-	if err != nil || len(reps) == 0 {
-		return fmt.Errorf("chunks of %s: %w", target, err)
+	var c admin.ChunkReport
+	var holder NodeRef
+	var key string
+	var cerr error
+	for attempt := 0; attempt < 3; attempt++ { // a repair may move the slot between lookup and corrupt
+		reps, err := r.chunksOf(ctx, target)
+		if err != nil || len(reps) == 0 {
+			return fmt.Errorf("chunks of %s: %w", target, err)
+		}
+		c = reps[0]
+		if key, err = shardKey(c, 0); err != nil {
+			return err
+		}
+		var ok bool
+		if holder, ok = r.nodeByIdx(c.Slots[0].Node); !ok {
+			return fmt.Errorf("slot 0 of %s on unknown node %d", c.Hash, c.Slots[0].Node)
+		}
+		if cerr = r.Env.Corrupt(ctx, holder, key); cerr == nil {
+			break
+		}
+		if err := r.Env.Wait(ctx, time.Second); err != nil {
+			return err
+		}
 	}
-	c := reps[0]
-	key, err := shardKey(c, 0)
-	if err != nil {
-		return err
-	}
-	holder, ok := r.nodeByIdx(c.Slots[0].Node)
-	if !ok {
-		return fmt.Errorf("slot 0 of %s on unknown node %d", c.Hash, c.Slots[0].Node)
-	}
-	if err := r.Env.Corrupt(ctx, holder, key); err != nil {
-		return err
+	if cerr != nil {
+		return fmt.Errorf("corrupt %s slot 0 on %s: %w", c.Hash[:12], holder.Name, cerr)
 	}
 	r.event("corrupt", fmt.Sprintf("%s slot 0 on %s", c.Hash[:12], holder.Name))
 	got, err := v.ReadAll(target)
@@ -539,7 +569,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 		return err
 	}
 	r.check("scrub finds and repairs the corrupt shard", st.ScrubBad >= 1 && st.Repaired >= 1, fmt.Sprintf("%+v", st))
-	if reps, err = r.Env.Chunks(ctx, r.nodes[0], target); err == nil && len(reps) > 0 {
+	if reps, err := r.chunksOf(ctx, target); err == nil && len(reps) > 0 {
 		s := reps[0].Slots[0]
 		r.checkAt("corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot 0 now on node %d", s.Node), target, c.Hash, "")
 	}
@@ -553,7 +583,8 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 		return err
 	}
-	if reps, err = r.Env.Chunks(ctx, r.nodes[0], p); err != nil || len(reps) != 1 {
+	reps, err := r.chunksOf(ctx, p)
+	if err != nil || len(reps) != 1 {
 		return fmt.Errorf("chunks of %s: %w", p, err)
 	}
 	c = reps[0]

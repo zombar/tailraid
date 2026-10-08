@@ -234,6 +234,9 @@ func (c *Client) ApplyAt(ctx context.Context, addr string, cmd meta.Command) (me
 
 // LeaderFromErr extracts the leader address from an ErrNotLeader produced by ApplyAt.
 func LeaderFromErr(err error) string {
+	if err == nil {
+		return ""
+	}
 	s := err.Error()
 	const tag = "(leader "
 	i := bytes.Index([]byte(s), []byte(tag))
