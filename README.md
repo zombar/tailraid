@@ -118,6 +118,26 @@ cluster in CI, including parity loss, leader kills, redundancy changes and resta
 **[Latest report](docs/reports/latest.html)** (download and open; GitHub does not render
 HTML).
 
+## Releasing
+
+A release is a tag on `main`; CI builds and publishes it. From an up-to-date `main`:
+
+```sh
+make tag VERSION=v0.2.0
+```
+
+The target refuses a dirty tree or an existing tag, runs `make check`, and regenerates
+`CHANGELOG.md` from the commit subjects since the last tag (so write subjects as
+`scope: what changed`). `main` only takes pull requests, so the first run commits the
+changelog on `changelog/<version>`, opens that pull request and stops; merge it, `git
+pull`, and run the same command again. With nothing left to commit it creates the
+annotated tag and pushes it, which starts the `release` job: six static binaries
+(`linux`, `darwin`, `windows` × `amd64`, `arm64`), `sha256sums.txt`, and a GitHub release
+named after the tag with that version's changelog section as the notes. Every binary
+answers `tailraid version` with the tag, and `tailraid update` on a device offers it.
+Versions are semver with a `v` prefix; a build from a bare commit prints a short SHA and
+is never offered as an update. Details in [docs/12-operations.md](docs/12-operations.md) §4.
+
 ## Documentation
 
 - [docs/README.md](docs/README.md) — the design documents in reading order: data model,
