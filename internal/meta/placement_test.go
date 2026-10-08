@@ -232,6 +232,7 @@ func TestPlace_StabilityOnMembershipChange(t *testing.T) {
 	TestPlace_StabilityOnAdd(t)
 }
 
+// Lifecycle: L-156
 func TestCandidates_Filter(t *testing.T) {
 	nodes := []Node{
 		{Idx: 1, State: Active, Kind: KindDevice, Capacity: 10},

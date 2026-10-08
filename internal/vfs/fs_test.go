@@ -63,7 +63,7 @@ func (s *billySuite) TearDownTest(_ *check.C) { s.tb.runCleanups() }
 // go-nfs performs Stat, OpenFile(O_RDWR), Seek, Write, Close for every WRITE RPC and
 // Open, ReadAt, Close for every READ. This is the sequence that corrupted files in the
 // previous attempt.
-// Invariant: I-7, I-34
+// Invariant: I-7, I-34, I-45
 // Lifecycle: L-1, L-2, L-5
 func TestVFS_PerRPCOpenCloseSequence(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
@@ -133,8 +133,8 @@ func TestVFS_PerRPCOpenCloseSequence(t *testing.T) {
 	}
 }
 
-// Invariant: I-34
-// Lifecycle: L-2
+// Invariant: I-34, I-45
+// Lifecycle: L-2, L-30
 func TestVFS_WriteAtNonZeroOffset_PreservesPrefix(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()
@@ -204,6 +204,7 @@ func TestVFS_RemoveDirtyFile_DropsOverlay(t *testing.T) {
 	}
 }
 
+// Invariant: I-46
 func TestVFS_SymlinkAndChange(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()

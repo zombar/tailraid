@@ -95,7 +95,7 @@ func TestWAL_AppendReplayRoundTrip(t *testing.T) {
 }
 
 // Invariant: I-37
-// Lifecycle: L-113
+// Lifecycle: L-113, L-122
 func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 	for _, mode := range []string{"truncate-mid-record", "flip-crc", "flip-data", "truncate-mid-header"} {
 		t.Run(mode, func(t *testing.T) {
@@ -184,6 +184,7 @@ func TestWAL_Reset(t *testing.T) {
 }
 
 // Invariant: I-35, I-37
+// Lifecycle: L-172
 func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "3.wal")
 	w, err := openWAL(sysfs.OS{}, path)

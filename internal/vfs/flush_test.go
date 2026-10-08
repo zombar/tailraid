@@ -172,6 +172,7 @@ func TestFlusher_HoleChunksAreHashZero(t *testing.T) {
 }
 
 // Lifecycle: L-33, L-34
+// Invariant: I-2
 func TestFlusher_DedupLiveAndTombstoned_NoUpload(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 6)
@@ -605,7 +606,7 @@ func TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks(t *testing.T) {
 
 // Review #2 end to end: through overlay, flusher, FSM and reader.
 // Invariant: I-1, I-35
-// Lifecycle: L-8, L-11, L-38
+// Lifecycle: L-8, L-11, L-38, L-168
 func TestVFS_TruncateThenGrow_OldBytesDoNotResurface(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	cs := uint64(testharness.ChunkSize)

@@ -140,7 +140,7 @@ func corruptCases() map[string]func(raw []byte) []byte {
 }
 
 // Invariant: I-11
-// Lifecycle: L-129, L-154
+// Lifecycle: L-129, L-154, L-107, L-108
 func TestStore_GetVerifiesHash_Corrupted(t *testing.T) {
 	for name, mut := range corruptCases() {
 		t.Run(name, func(t *testing.T) {
@@ -282,7 +282,7 @@ func TestStore_CrashBeforeRename_LeavesNoVisibleShard(t *testing.T) {
 }
 
 // Invariant: I-11
-// Lifecycle: L-126
+// Lifecycle: L-126, L-117
 func TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid(t *testing.T) {
 	root := t.TempDir()
 	fl := sysfstest.New(sysfs.OS{})
@@ -390,7 +390,7 @@ func TestStore_DeleteIfOlder_RefusesYoungShard(t *testing.T) {
 }
 
 // Invariant: I-11
-// Lifecycle: L-127, L-129
+// Lifecycle: L-127, L-129, L-108
 func TestStore_TornWrite_DetectedOnRead(t *testing.T) {
 	root := t.TempDir()
 	fl := sysfstest.New(sysfs.OS{})

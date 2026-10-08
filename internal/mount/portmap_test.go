@@ -94,7 +94,7 @@ func TestPortmap_GetportDumpNull(t *testing.T) {
 	}
 }
 
-// Invariant: I-58
+// Invariant: I-58, I-50
 func TestPortmap_RefusesNonLoopback(t *testing.T) {
 	p := &Portmap{Port: 2049}
 	if err := p.Serve(context.Background(), "0.0.0.0:0"); !errors.Is(err, ErrNotLoopback) {

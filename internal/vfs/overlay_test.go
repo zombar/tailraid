@@ -358,6 +358,7 @@ func TestOverlay_CommitFlushed_ResetsOrCompacts(t *testing.T) {
 	}
 }
 
+// Lifecycle: L-172
 func TestOverlay_CommitFlushed_WithResidual(t *testing.T) {
 	ov, _ := newOverlay(t, t.TempDir())
 	ino := meta.Ino(12)

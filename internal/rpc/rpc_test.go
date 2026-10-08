@@ -234,7 +234,7 @@ func TestChunkRPC_FullNodeIs507(t *testing.T) {
 
 // Review #4/#14: the DELETE fence.
 // Invariant: I-13, I-14
-// Lifecycle: L-134, L-137, L-169
+// Lifecycle: L-134, L-137, L-169, L-174
 func TestChunkRPC_DeleteFence(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
@@ -313,7 +313,7 @@ func TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge(t *testing.T) {
 	}
 }
 
-// Invariant: I-18
+// Invariant: I-18, I-49
 func TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader(t *testing.T) {
 	e := newEnv(t)
 	e.ts.Remove(memberIP)
@@ -442,6 +442,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 	resp.Body.Close()
 }
 
+// Invariant: I-50
 func TestListen_RefusesNonLoopbackWithoutAuthorizer(t *testing.T) {
 	if _, err := Listen("0.0.0.0:0", AllowAll{}); err == nil {
 		t.Fatal("bound without authorizer")

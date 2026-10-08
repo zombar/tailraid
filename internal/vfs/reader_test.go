@@ -129,6 +129,7 @@ func TestReader_ReadsWithOneNodeDown_AndFromCache(t *testing.T) {
 }
 
 // Lifecycle: L-75
+// Invariant: I-40
 func TestReader_FewerThanKLive_EIO(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 2)
@@ -144,7 +145,8 @@ func TestReader_FewerThanKLive_EIO(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-68, L-105
+// Lifecycle: L-68, L-105, L-166
+// Invariant: I-40
 func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 3)
@@ -179,6 +181,7 @@ func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
 }
 
 // Lifecycle: L-69
+// Invariant: I-2, I-40
 func TestReader_DecodedHashMismatch_EIO(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 1, 1)
 	// register a chunk entry whose hash does not match the bytes its shards hold
@@ -197,7 +200,7 @@ func TestReader_DecodedHashMismatch_EIO(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-71
+// Lifecycle: L-71, L-70
 func TestReader_ReadAt_HolesAndShortChunks(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	ino := f.Create("a")

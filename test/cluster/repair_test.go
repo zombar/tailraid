@@ -333,8 +333,8 @@ func slotOf(ch meta.Chunk, idx meta.NodeIdx) int {
 	return -1
 }
 
-// Invariant: I-32
-// Lifecycle: L-93, L-94
+// Invariant: I-32, I-42
+// Lifecycle: L-93, L-94, L-161
 func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
@@ -440,7 +440,7 @@ func TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-105, L-110, L-130
+// Lifecycle: L-105, L-110, L-130, L-111, L-166
 func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()
@@ -588,7 +588,7 @@ func TestGC_LeaderClockBehind_DoesNotStallGC(t *testing.T) {
 }
 
 // Invariant: I-13, I-14
-// Lifecycle: L-54, L-85
+// Lifecycle: L-54, L-85, L-80
 func TestCluster_GCDoesNotDeleteInflightUpload(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()

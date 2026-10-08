@@ -68,8 +68,8 @@ func TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes(t *testing.T) {
 	}
 }
 
-// Invariant: I-12
-// Lifecycle: L-74, L-75
+// Invariant: I-12, I-40
+// Lifecycle: L-74, L-75, L-64, L-65
 func TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()
@@ -138,7 +138,7 @@ func TestCluster_FollowerProposalsForwardToLeader(t *testing.T) {
 }
 
 // Invariant: I-4, I-29
-// Lifecycle: L-58
+// Lifecycle: L-58, L-61
 func TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()
@@ -186,7 +186,7 @@ func TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits(t *testing.T) {
 }
 
 // Invariant: I-6
-// Lifecycle: L-59
+// Lifecycle: L-59, L-148
 func TestCluster_SplitBrain_OnlyMajorityCommits(t *testing.T) {
 	c := testharness.NewCluster(t, 5, 2, 1)
 	defer c.Close()
@@ -305,8 +305,8 @@ func otherNodes(n, except int) []int {
 	return out
 }
 
-// Invariant: I-48
-// Lifecycle: L-93, L-95, L-96
+// Invariant: I-48, I-42
+// Lifecycle: L-93, L-95, L-96, L-156, L-161
 func TestCluster_JoinDrainRemove(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()

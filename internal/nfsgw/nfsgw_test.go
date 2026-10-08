@@ -160,7 +160,7 @@ func splitPath(p string) (dir, name string) {
 	return "/", p
 }
 
-// Invariant: I-7, I-34
+// Invariant: I-7, I-34, I-45
 // Lifecycle: L-1, L-2, L-5
 func TestNFS_WriteSequence_MultiRPC(t *testing.T) {
 	g := startGateway(t)
@@ -201,7 +201,41 @@ func TestNFS_WriteSequence_MultiRPC(t *testing.T) {
 	}
 }
 
+// Owner and times set through SETATTR land in the FSM (so every gateway sees them) and
+// come back through LOOKUP/GETATTR on the wire.
+// Invariant: I-46
+func TestNFS_SetattrOwnerAndTimes(t *testing.T) {
+	g := startGateway(t)
+	if _, err := g.tgt.Create("/o", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	must(t, g.tgt.Setattr("/o", nfsc.Sattr3{UID: nfsc.SetUID{SetIt: true, UID: 1234}, GID: nfsc.SetUID{SetIt: true, UID: 5678}}))
+	at := nfsc.NFS3Time{Seconds: 1_600_000_000, Nseconds: 7}
+	mt := nfsc.NFS3Time{Seconds: 1_600_000_100, Nseconds: 42}
+	must(t, g.tgt.Setattr("/o", nfsc.Sattr3{
+		Atime: nfsc.SetTime{SetIt: nfsc.SetToClientTime, Time: at},
+		Mtime: nfsc.SetTime{SetIt: nfsc.SetToClientTime, Time: mt},
+	}))
+	in := g.f.Inode(g.f.InodeOf(g.f.FS(), "/o")) // the replicated FSM: what any gateway sees
+	if in.Uid != 1234 || in.Gid != 5678 {
+		t.Fatalf("owner %d:%d in the FSM", in.Uid, in.Gid)
+	}
+	if in.Mtime != int64(mt.Seconds)*1e9+int64(mt.Nseconds) || in.Atime != int64(at.Seconds)*1e9+int64(at.Nseconds) {
+		t.Fatalf("times in the FSM: atime %d mtime %d", in.Atime, in.Mtime)
+	}
+	_, fh, err := g.tgt.Lookup("/o")
+	must(t, err)
+	attr, err := g.tgt.GetAttr(fh)
+	must(t, err)
+	// go-nfs reports atime and ctime as the modification time (docs/07 POSIX gaps), so
+	// only owner and mtime can be checked on the wire; atime is checked in the FSM above.
+	if attr.UID != 1234 || attr.GID != 5678 || attr.Mtime != mt {
+		t.Fatalf("on the wire: uid %d gid %d mtime %+v", attr.UID, attr.GID, attr.Mtime)
+	}
+}
+
 // Lifecycle: L-8, L-11
+// Invariant: I-46
 func TestNFS_SetattrSizeTruncates(t *testing.T) {
 	g := startGateway(t)
 	if _, err := g.tgt.Create("/f", 0o644); err != nil {
@@ -310,6 +344,7 @@ func isStale(err error) bool {
 	return false
 }
 
+// Invariant: I-47
 func TestNFS_ReadDirPlusLargeDirectory(t *testing.T) {
 	g := startGateway(t)
 	if _, err := g.tgt.Mkdir("/big", 0o755); err != nil {
@@ -345,6 +380,7 @@ func TestNFS_ReadDirPlusLargeDirectory(t *testing.T) {
 	}
 }
 
+// Invariant: I-50
 func TestNFS_FSStatAndUnsupported(t *testing.T) {
 	g := startGateway(t)
 	info, err := g.tgt.FSInfo()

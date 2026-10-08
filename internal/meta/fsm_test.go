@@ -601,6 +601,7 @@ func TestFSM_Commit_UnknownChunkRejected(t *testing.T) {
 	tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 2, NewSize: testCS, Writes: []ChunkWrite{{0, g}}, Now: 4}}, ErrUnknownChunk)
 }
 
+// Invariant: I-2
 func TestFSM_Commit_Errors(t *testing.T) {
 	tf := newTFSM(t)
 	d := tf.mkdir(RootIno, "d")
@@ -680,7 +681,7 @@ func TestFSM_Commit_TruncateDown(t *testing.T) {
 
 // The review's bug #2: a truncate followed by growth must drop the bytes beyond the
 // truncation point even though the final size is larger than before.
-// Lifecycle: L-8, L-11
+// Lifecycle: L-8, L-11, L-168
 func TestFSM_Commit_TruncateThenGrow_DropsOldBytes(t *testing.T) {
 	tf := newTFSM(t)
 	f := tf.create(RootIno, "f")
@@ -1094,7 +1095,7 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	}
 }
 
-// Invariant: I-4
+// Invariant: I-4, I-43
 // Lifecycle: L-159
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 	rng := testseed.Seed(t)

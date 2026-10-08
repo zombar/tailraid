@@ -35,7 +35,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-27 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-22 inode ≥ 32 MiB | Assembled (full chunks only) | `TestExtents_Without`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk` |
 | L-28 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-23 total ≥ 256 MiB | Assembled (largest inodes first) | `TestStubLifecycle_L_28` |
 | L-29 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-24 shutdown | Committed before exit | `TestFlusher_RunIdleTriggerAndShutdownFlush` |
-| L-30 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 assemble needs base | Assembled | `TestStubLifecycle_L_30` |
+| L-30 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 assemble needs base | Assembled | `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
 | L-31 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 base unreadable (< k) | Dirty | `TestStubLifecycle_L_31` |
 | L-32 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-26 all zero | (HashZero, no entry) | `TestFlusher_HoleChunksAreHashZero` |
 | L-33 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-27 hash exists live | DedupHit | `TestChunkDescribe_StateFilesAndEvents`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFlusher_DedupLiveAndTombstoned_NoUpload` |
@@ -66,16 +66,16 @@ exactly one design doc transition table and cited by at least one test via
 | L-58 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-51 ErrLeadershipLost/timeout | Placed (outcome unknown) → Committed | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFlusher_LateRetry_RePutsBeforeCommit`, `TestFlusher_ProposeFailureRetriesSamePlan` |
 | L-59 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-52 no quorum | Dirty (retained) | `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestFlusher_FewerThanKAcks_StaysDirty` |
 | L-60 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-53 snapshot restore on follower | Committed | `TestFSM_ApplySnapshotRestoreEquivalence` |
-| L-61 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-54 leader change | Committed | `TestStubLifecycle_L_61` |
+| L-61 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-54 leader change | Committed | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits` |
 | L-62 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-55 WaitApplied | Committed | `TestOverlay_CommitFlushed_ResetsOrCompacts` |
 | L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestReader_FetchFirstK` |
-| L-64 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-57 read, m unreachable | Committed | `TestStubLifecycle_L_64` |
-| L-65 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-58 read, m+1 unreachable | Committed | `TestStubLifecycle_L_65` |
+| L-64 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-57 read, m unreachable | Committed | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
+| L-65 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-58 read, m+1 unreachable | Committed | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-66 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-59 cache hit | Committed | `TestReader_ReadsWithOneNodeDown_AndFromCache` |
-| L-67 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-60 cache corrupt | Committed | `TestStubLifecycle_L_67` |
+| L-67 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-60 cache corrupt | Committed | `TestCache_CorruptEntryEvicted` |
 | L-68 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-61 fetched shard ErrCorrupt/404 | Degraded | `TestReader_CorruptShard_DecodesFromOthers_AndReports` |
 | L-69 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-62 decoded hash mismatch | Degraded | `TestReader_DecodedHashMismatch_EIO` |
-| L-70 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-63 read beyond stored Size | Committed | `TestStubLifecycle_L_70` |
+| L-70 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-63 read beyond stored Size | Committed | `TestReader_ReadAt_HolesAndShortChunks` |
 | L-71 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (HashZero) | E-64 read | (HashZero) | `TestReader_ReadAt_HolesAndShortChunks` |
 | L-72 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-65 read on issuing gateway | Dirty | `TestOverlay_ReadMergesExtentsOverBase`, `TestOverlay_WriteAtNonZeroOffset_PreservesBase` |
 | L-73 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (new) | E-66 read on other gateway before apply | Committed | `TestStubLifecycle_L_73` |
@@ -85,10 +85,10 @@ exactly one design doc transition table and cited by at least one test via
 | L-77 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-69 GCDelete after grace (on the FSM clock) | Collected | `TestFSM_GCDelete_Boundary`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC` |
 | L-78 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-28 referenced by Commit | Revived → Committed | `TestFSM_Revive`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
 | L-79 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Collected | E-70 DELETE RPC fails | Orphan (that node) | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
-| L-80 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (young) | E-71 Sweep | Orphan | `TestStubLifecycle_L_80` |
+| L-80 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (young) | E-71 Sweep | Orphan | `TestCluster_GCDoesNotDeleteInflightUpload`, `TestSweep_YoungShardKept` |
 | L-81 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (old) | E-72 Sweep | Swept | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
 | L-82 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (orphan shard on old node) | E-73 Sweep, placement names another node | Committed; orphan shard Swept | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
-| L-83 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-74 Sweep, placed on self | Committed | `TestStubLifecycle_L_83` |
+| L-83 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-74 Sweep, placed on self | Committed | `TestSweep_OldPlacedHereKept` |
 | L-84 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-75 Sweep | Tombstoned | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
 | L-85 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-71 Sweep runs concurrently | Uploading | `TestCluster_GCDoesNotDeleteInflightUpload` |
 | L-86 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-76 node dead < fill_after | Committed | `TestProber_LivenessAndHoldDowns`, `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |
@@ -97,7 +97,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-89 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | repair run (read k, encode, PUT, SetPlacement) | Repairing → Committed | `TestFSM_SetPlacement`, `TestRepair_FillsDegradedSlotsWhenSpareAppears` |
 | L-90 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing | E-89 repair PUT fails | Degraded | `TestStubLifecycle_L_90` |
 | L-91 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing | E-90 node returns with old shard mid-repair | Committed (new placement) | `TestRepair_DeadNodeHoldDown_ThenReplaced` |
-| L-92 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | E-78 node dead > evict_after | Degraded | `TestStubLifecycle_L_92` |
+| L-92 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | E-78 node dead > evict_after | Degraded | `TestProber_LivenessAndHoldDowns` |
 | L-93 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-80 node drain | Degraded (migration) | `TestCluster_JoinDrainRemove`, `TestFSM_NodeStates`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
 | L-94 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (drain) | relocation done | Committed; old shards Relocated → Deleted | `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | L-95 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (any slot on node) | E-81 node remove | Committed | `TestCluster_JoinDrainRemove` |
@@ -112,22 +112,22 @@ exactly one design doc transition table and cited by at least one test via
 | L-104 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-88 S3 slow/unreachable | Committed / Degraded after fill_after | `TestStubLifecycle_L_104` |
 | L-105 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-91 1..m shards corrupt | Degraded | `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-106 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-92 m+1 corrupt | Degraded | `TestStubLifecycle_L_106` |
-| L-107 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-93 header mismatch | Degraded | `TestStubLifecycle_L_107` |
-| L-108 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-94 truncated shard | Degraded | `TestStubLifecycle_L_108` |
-| L-109 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-95 scrub OK | Committed | `TestStubLifecycle_L_109` |
+| L-107 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-93 header mismatch | Degraded | `TestStore_GetVerifiesHash_Corrupted` |
+| L-108 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-94 truncated shard | Degraded | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
+| L-109 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-95 scrub OK | Committed | `TestChunkDescribe_StateFilesAndEvents` |
 | L-110 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-96 scrub detects corruption | Degraded → Committed | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
-| L-111 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-97 shard file missing | Degraded | `TestStubLifecycle_L_111` |
+| L-111 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-97 shard file missing | Degraded | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-112 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-98 object missing | Degraded | `TestStubLifecycle_L_112` |
 | L-113 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-100 C1 crash before WAL fsync | (none) or Dirty | `TestOverlay_RestartReplaysDirtyWALs`, `TestWAL_ReplayStopsAtTornTail` |
 | L-114 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-101 C2 crash after WAL fsync | Dirty (replayed) | `TestOverlay_RestartReplaysDirtyWALs` |
 | L-115 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-102 C3 node crash, temp written | Uploading (slot fails) | `TestCrash_AtEveryPoint` |
 | L-116 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-103 C4 node crash after fsync before rename | Uploading (slot fails) | `TestCrash_AtEveryPoint` |
-| L-117 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-104 C5 power loss after rename before dir sync | Uploading (slot not acked) | `TestStubLifecycle_L_117` |
+| L-117 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-104 C5 power loss after rename before dir sync | Uploading (slot not acked) | `TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid` |
 | L-118 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-105 C6 gateway crash after acks before Commit | Dirty (replay) ; landed shards Orphan | `TestCrash_AtEveryPoint` |
 | L-119 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-106 C7 crash after commit before WAL reset | Committed | `TestCrash_AtEveryPoint` |
 | L-120 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | any | E-107 storage node restart | unchanged | `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestDurability_AckImpliesReadableFromKSurvivors`, `TestOpen_WaitReadyReplaysLogBeforeReads`, `TestSingleNode_BootstrapProposeRestart`, `TestStore_CapacityAccounting`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard` |
 | L-121 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-108 gateway restart | Dirty | `TestCrash_AtEveryPoint` |
-| L-122 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-109 torn WAL tail | Dirty (prefix) | `TestStubLifecycle_L_122` |
+| L-122 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-109 torn WAL tail | Dirty (prefix) | `TestWAL_ReplayStopsAtTornTail` |
 | L-123 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-110 disk full on one node | as E-36 | `TestStore_DiskFull_ReturnsErrAndNoPartialShard` |
 | L-124 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-111 raft.db unopenable on one node | Committed | `TestStubLifecycle_L_124` |
 | L-125 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (shard none) | PUT begins | Temp | `TestStore_PutGetRoundTrip` |
@@ -136,8 +136,8 @@ exactly one design doc transition table and cited by at least one test via
 | L-128 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | Get | Verified | `TestStore_PutGetRoundTrip` |
 | L-129 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | bit flip / zero-fill / truncation | Corrupt → Quarantined | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
 | L-130 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Quarantined | repair PUT | Repaired (Durable) | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
-| L-131 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | node offline | Unreachable | `TestReader_SkipsDeadHolders` |
-| L-132 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Unreachable | node online | Reachable | `TestStubLifecycle_L_132` |
+| L-131 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | node offline | Unreachable | `TestProber_LivenessAndHoldDowns`, `TestReader_SkipsDeadHolders` |
+| L-132 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Unreachable | node online | Reachable | `TestProber_LivenessAndHoldDowns` |
 | L-133 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | SetPlacement to other node | Relocated | `TestSweep_OldNotPlacedHereDeleted` |
 | L-134 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | GCDelete DELETE with valid fence (applied index ≥ header, not placed on self, file older than grace) | Deleted | `TestChunkRPC_DeleteFence`, `TestStore_CapacityAccounting` |
 | L-135 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (orphan, old) | Sweep | Swept | `TestSweep_OldUnknownDeleted` |
@@ -153,7 +153,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-145 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (young) | Sweep | Swept | `TestStore_DeleteIfOlder_RefusesYoungShard`, `TestSweep_YoungShardKept` |
 | L-146 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned (≥ k slots on live nodes) | Commit referencing hash | Uploading | `TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit` |
 | L-147 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | membership change (join/remove/IP/capacity) | placement changed | `TestFSM_SetPlacement` |
-| L-148 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | Commit proposed | visible on any gateway before Raft commit | `TestStubLifecycle_L_148` |
+| L-148 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | Commit proposed | visible on any gateway before Raft commit | `TestCluster_SplitBrain_OnlyMajorityCommits` |
 | L-149 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (none) | WRITE | FILE_SYNC before WAL fsync | `TestStubLifecycle_L_149` |
 | L-150 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | any | Refs > 0 with no inode referencing the hash | `TestCheckInvariants_DetectsEachViolation` |
 | L-151 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | any | len(Chunks) ≠ ceil(Size/CS) | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite` |
@@ -161,25 +161,25 @@ exactly one design doc transition table and cited by at least one test via
 | L-153 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (any inode) | Create after Unlink | same (ino, gen) reused | `TestFSM_InoGenNotReusedAfterUnlink` |
 | L-154 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Corrupt | Get | bytes returned | `TestStore_GetVerifiesHash_Corrupted` |
 | L-155 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | acks < k | Commit proposed | `TestFlusher_FewerThanKAcks_StaysDirty` |
-| L-156 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | Place | slot on a Draining/Removed node for a new chunk | `TestStubLifecycle_L_156` |
+| L-156 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | Place | slot on a Draining/Removed node for a new chunk | `TestCandidates_Filter`, `TestCluster_JoinDrainRemove` |
 | L-157 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing (policy) | migration | old shards deleted before new placement committed | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | L-158 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (placed on self) | Sweep | Swept | `TestSweep_OldPlacedHereKept` |
 | L-159 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | any FSM state | Apply | result depends on wall clock, disk, or map iteration order | `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas` |
 | L-160 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Collected | Commit referencing hash | Committed without upload | `TestFSM_Commit_UnknownChunkRejected` |
-| L-161 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (any slot on node) | node remove without --force | Degraded | `TestStubLifecycle_L_161` |
+| L-161 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (any slot on node) | node remove without --force | Degraded | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | L-162 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | ErrConflict rebase | dirty extents lost | `TestModelCheck_Long` |
 | L-163 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (two versions) | stale read | bytes from two versions in one chunk | `TestModelCheck_Long` |
 | L-164 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | Sweep | shards deleted before GCDelete | `TestSweep_OldPlacedHereKept` |
 | L-165 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | repair | chunk bytes differ from original Hash after repair | `TestStubLifecycle_L_165` |
-| L-166 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-112 reader reports a bad slot | Degraded | `TestStubLifecycle_L_166` |
+| L-166 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-112 reader reports a bad slot | Degraded | `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-167 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned/Degraded (< k present slots) | E-113 dedup hit | Uploading (fill) → Committed | `TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
-| L-168 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-114 truncate down then write past the truncation point | Dirty (`minSize` < `size`) → Committed | `TestStubLifecycle_L_168` |
+| L-168 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-114 truncate down then write past the truncation point | Dirty (`minSize` < `size`) → Committed | `TestFSM_Commit_TruncateThenGrow_DropsOldBytes`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface` |
 | L-169 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | E-115 DELETE with stale fence | Durable | `TestChunkRPC_DeleteFence` |
 | L-170 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (S3 object) | E-116 leader S3 sweep | Swept | `TestStubLifecycle_L_170` |
 | L-171 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | E-117 Sweep while not `Healthy` / behind leader index | Orphan | `TestStubLifecycle_L_171` |
-| L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestStubLifecycle_L_172` |
+| L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestOverlay_CommitFlushed_WithResidual`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_Compact_KeepsOnlyLive` |
 | L-173 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (`(k,m)` ≠ policy) | E-119 migration PUTs under new keys | Repairing → Committed | `TestModelCheck_Long`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
-| L-174 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | DELETE accepted with applied index < fence, or file younger than grace, or slot placed on self | Deleted | `TestStubLifecycle_L_174` |
+| L-174 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | DELETE accepted with applied index < fence, or file younger than grace, or slot placed on self | Deleted | `TestChunkRPC_DeleteFence` |
 | L-175 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | Commit without `HasTruncate` and `NewSize` < `Size` | Committed (shrunk) | `TestFSM_Commit_RejectsImplicitShrink` |
 | L-176 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded/Tombstoned (< k present slots) | dedup hit | Committed (no upload) | `TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
 | L-177 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | Sweep while not `Healthy` | Swept | `TestStubLifecycle_L_177` |

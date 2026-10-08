@@ -106,6 +106,7 @@ func TestCache_RebuildsOrderOnOpen(t *testing.T) {
 	}
 }
 
+// Lifecycle: L-67
 func TestCache_CorruptEntryEvicted(t *testing.T) {
 	root := t.TempDir()
 	c, _ := OpenCache(sysfs.OS{}, root, 10_000, clock.Real())

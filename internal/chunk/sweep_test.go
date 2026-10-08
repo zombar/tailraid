@@ -33,7 +33,7 @@ func putAged(t *testing.T, s *Store, root string, seed int64, idx int, age time.
 const grace = 10 * time.Minute
 
 // Invariant: I-14
-// Lifecycle: L-145
+// Lifecycle: L-145, L-80
 func TestSweep_YoungShardKept(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 0)
@@ -79,7 +79,7 @@ func TestSweep_OldNotPlacedHereDeleted(t *testing.T) {
 }
 
 // Invariant: I-13
-// Lifecycle: L-158, L-164
+// Lifecycle: L-158, L-164, L-83
 func TestSweep_OldPlacedHereKept(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 0)
