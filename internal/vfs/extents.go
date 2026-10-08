@@ -94,6 +94,11 @@ func (e extents) bytes() uint64 {
 func (e extents) coversChunk(idx uint64, cs uint32, size uint64) bool {
 	start := idx * uint64(cs)
 	end := min(start+uint64(cs), size)
+	return e.covers(start, end)
+}
+
+// covers reports whether every byte of [start, end) is dirty; an empty range never is.
+func (e extents) covers(start, end uint64) bool {
 	if end <= start {
 		return false
 	}

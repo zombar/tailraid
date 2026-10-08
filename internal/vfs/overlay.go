@@ -401,17 +401,34 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 	if d == nil {
 		return 0, meta.ErrNotExist
 	}
-	defer d.mu.Unlock()
 	size := d.effSize(committed)
+	limit := baseLimit(d.sizeSet, d.minSize)
+	covered := d.ext.covers(off, min(off+uint64(len(p)), size)) || (d.plan != nil && d.plan.Extents.covers(off, min(off+uint64(len(p)), min(size, d.planMin))))
+	d.mu.Unlock()
 	if off >= size {
 		return 0, io.EOF
 	}
 	n := min(uint64(len(p)), size-off)
 	buf := p[:n]
 	clear(buf)
-	if limit := baseLimit(d.sizeSet, d.minSize); off < limit {
+	// The base is fetched with the inode unlocked: a chunk fetch can take a network round
+	// trip and must not stall WRITEs to the same inode. Dirty bytes are applied on top
+	// afterwards from the state of that moment, so a write that lands meanwhile wins. A
+	// range the dirty bytes cover entirely needs no base at all.
+	if off < limit && !covered {
 		if err := base(off, buf[:min(n, limit-off)]); err != nil {
 			return 0, err
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.dead { // evicted meanwhile: the base bytes are the committed version, whole (L-73)
+		return int(n), nil
+	}
+	if now := baseLimit(d.sizeSet, d.minSize); now < limit { // truncated meanwhile: base bytes above the new point are gone
+		from := max(now, off)
+		if from < off+n {
+			clear(buf[from-off:])
 		}
 	}
 	// Plan extents first, then fresh ones (fresh are newer and win). Plan bytes at or
@@ -522,18 +539,22 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 // ReadPlanRange assembles [off, off+len(p)) for a flush: base bytes below the plan's
 // MinSize, zeros at or above it, and only the plan's extents on top (fresh writes belong
 // to the next flush).
+//
+// The base is fetched before the inode is locked (it may be a network round trip and
+// must not stall WRITEs), and not at all when the plan's extents cover the whole range
+// (an aligned full-chunk write assembles without a read-modify-write fetch, L-7).
 func (o *Overlay) ReadPlanRange(plan *FlushPlan, off uint64, p []byte, base func(off uint64, p []byte) error) error {
+	clear(p)
+	if limit := baseLimit(plan.SizeSet, plan.MinSize); off < limit && !plan.Extents.covers(off, off+uint64(len(p))) {
+		if err := base(off, p[:min(uint64(len(p)), limit-off)]); err != nil {
+			return err
+		}
+	}
 	d, _ := o.get(plan.Ino, 0, false)
 	if d == nil {
 		return meta.ErrNotExist
 	}
 	defer d.mu.Unlock()
-	clear(p)
-	if limit := baseLimit(plan.SizeSet, plan.MinSize); off < limit {
-		if err := base(off, p[:min(uint64(len(p)), limit-off)]); err != nil {
-			return err
-		}
-	}
 	return d.applyExtents(plan.Extents, off, p, math.MaxUint64)
 }
 

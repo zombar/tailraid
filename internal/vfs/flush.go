@@ -332,28 +332,72 @@ func (f *Flusher) assemble(ctx context.Context, plan *FlushPlan, base meta.Inode
 		}
 	}
 	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
-	works := make([]*chunkWork, 0, len(idxs))
-	for _, i := range idxs {
-		eff := min(cs, plan.Size-i*cs)
-		buf := make([]byte, eff)
-		baseRead := func(off uint64, p []byte) error {
-			_, err := f.rd.ReadAt(ctx, base, p, int64(off))
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
+	works := make([]*chunkWork, len(idxs))
+	baseRead := func(off uint64, p []byte) error {
+		_, err := f.rd.ReadAt(ctx, base, p, int64(off))
+		if errors.Is(err, io.EOF) {
+			return nil
 		}
+		return err
+	}
+	// chunks are assembled (base fetch, WAL read, hash) in parallel; works keeps idx order
+	err := parallel(ctx, f.cfg.Workers, len(idxs), func(j int) error {
+		i := idxs[j]
+		buf := make([]byte, min(cs, plan.Size-i*cs))
 		if err := f.ov.ReadPlanRange(plan, i*cs, buf, baseRead); err != nil {
-			return nil, fmt.Errorf("assemble chunk %d: %w", i, err)
+			return fmt.Errorf("assemble chunk %d: %w", i, err)
 		}
 		w := &chunkWork{idx: i}
 		if !allZero(buf) {
 			w.data = buf
 			w.hash = sha256Sum(buf)
 		}
-		works = append(works, w)
+		works[j] = w
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return works, nil
+}
+
+// parallel runs fn(0..n-1) on at most workers goroutines and returns the first error;
+// the rest are cancelled through ctx.
+func parallel(ctx context.Context, workers, n int, fn func(i int) error) error {
+	if workers < 1 {
+		workers = 1
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	sem := make(chan struct{}, workers)
+	for i := 0; i < n; i++ {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			i = n
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := fn(i); err != nil {
+				mu.Lock()
+				if first == nil {
+					first = err
+					cancel()
+				}
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	return first
 }
 
 func allZero(b []byte) bool {
@@ -365,12 +409,13 @@ func allZero(b []byte) bool {
 	return true
 }
 
-// resolveAndUpload runs steps 6–9 for every non-hole chunk.
+// resolveAndUpload runs steps 6–9 for every non-hole chunk, chunks in parallel.
 func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forceUpload bool) error {
 	vol := f.st.Volume()
-	for _, w := range works {
+	return parallel(ctx, f.cfg.Workers, len(works), func(i int) error {
+		w := works[i]
 		if w.data == nil {
-			continue
+			return nil
 		}
 		if !forceUpload {
 			if c, ok := f.st.GetChunk(w.hash); ok {
@@ -378,25 +423,19 @@ func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forc
 				if present >= int(c.K) {
 					w.k, w.m, w.place = c.K, c.M, c.Placement
 					f.Events.Record(w.hash, meta.EvDedupHit, fmt.Sprintf("refs %d", c.Refs))
-					continue // dedup hit, no upload (L-33, L-34)
+					return nil // dedup hit, no upload (L-33, L-34)
 				}
 				// degraded, dead-holder or shard-less entry: fill its slots with the bytes in hand
 				f.Events.Record(w.hash, meta.EvFill, fmt.Sprintf("%d present of %d", present, int(c.K)+int(c.M)))
-				if err := f.fillSlots(ctx, w, c, keep); err != nil {
-					return err
-				}
-				continue
+				return f.fillSlots(ctx, w, c, keep)
 			}
 		}
 		w.k, w.m = vol.K, vol.M
 		if meta.IsSmallChunk(uint32(len(w.data)), vol.ChunkSize) {
 			w.k = 1 // replication for small chunks (docs/03)
 		}
-		if err := f.upload(ctx, w, nil); err != nil {
-			return err
-		}
-	}
-	return nil
+		return f.upload(ctx, w, nil)
+	})
 }
 
 // presentSlots returns c's placement with every slot that is not both on a live node and
