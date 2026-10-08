@@ -247,11 +247,11 @@ state to patch.
 
 | Invariant | Tests |
 |---|---|
-| I-13 | `TestCluster_GCDoesNotDeleteInflightUpload`, `TestRepair_DeletesOldShardsOnlyAfterCommit`, `TestSweep_OldPlacedHereKept`, `TestSweep_SkippedWhenNotHealthy`, `TestModelCheck_Long` |
-| I-14 | `TestSweep_YoungShardKept`, `TestStore_DeleteIfOlder_KeepsYoung`, `TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesStaleIndex`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestGC_LeaderClockBehind_DoesNotStallGC` |
-| I-15 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`, `TestRepair_ReportedBadSlotIsRepaired`, `TestRepair_PartialFillThenComplete` |
-| I-41 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Commit_RevivesTombstonedChunk`, `TestVFS_DedupIdenticalChunks`, `TestFlusher_DedupHitWithFewerThanKLiveSlots_Fills` |
-| I-42 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestCLI_NodeDrain_ThenRemove_MovesSlots` |
-| I-43 | `TestFSM_DeterministicAcrossReplicas`, `TestFSM_GCDeleteDeterministic` |
-| I-44 | `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards`, `TestCheckInvariants_DetectsEachViolation`, `TestCheck_MPlusOneCorrupt_NotOK` |
+| I-13 | `TestChunkRPC_DeleteFence`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestModelCheck_Long`, `TestReset_WipesRaftKeepsShards`, `TestSweep_OldPlacedHereKept`, `TestSweep_SkippedWhenNotHealthy` |
+| I-14 | `TestChunkRPC_DeleteFence`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestFlusher_LateRetry_RePutsBeforeCommit`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC`, `TestStore_DeleteIfOlder_RefusesYoungShard`, `TestSweep_YoungShardKept` |
+| I-15 | `TestModelCheck_Long`, `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestRepair_FillsDegradedSlotsWhenSpareAppears`, `TestRepair_MigrationCrash_Resumes`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_SmallChunk_SetRedundancy_Migrates` |
+| I-41 | `TestFSM_Revive` |
+| I-42 | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
+| I-43 | `TestFSM_DeterministicAcrossReplicas` |
+| I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
 | I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |

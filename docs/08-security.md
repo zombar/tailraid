@@ -176,7 +176,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 
 | Invariant | Tests |
 |---|---|
-| I-18 | `TestWhoIs_DeniesUnknownPeer`, `TestWhoIs_DeniesStableIDMismatch`, `TestWhoIs_AllowsMember`, `TestWhoIs_PurgeOnMembershipChange`, `TestChunkRPC_ReadsAuthBeforeBody`, `TestRPC_ClusterIDMismatch409` |
-| I-48 | `TestJoin_TokenAndIdentity`, `TestJoin_RateLimitedPerSource`, `TestToken_Rotate` |
-| I-49 | `TestIDStream_RejectsForeignCluster`, `TestCluster_TwoInitsDoNotMerge` |
-| I-50 | `TestRPC_ListenRefusesNonLoopbackWithoutAuth`, `TestNFSGW_BindsLoopbackOnly`, `TestServe_ListenerAddresses` |
+| I-18 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge` |
+| I-48 | `TestCluster_JoinDrainRemove`, `TestJoin_RateLimitedPerSource`, `TestJoin_TokenAndIdentity`, `TestToken_Rotate` |
+| I-49 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestIDStream_RejectsForeignCluster` |
+| I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestPortmap_RefusesNonLoopback` |

@@ -80,22 +80,22 @@ addressing); `FuzzRoundTrip`.
 
 **`internal/chunk`** — `TestStore_PutGetRoundTrip` size table; `TestStore_GetVerifiesHash_Corrupted`
 (table: bit flip, truncated, zero-filled, bad magic → `ErrCorrupt` and the file is quarantined);
-`TestStore_PutRejectsHashMismatch`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
-`TestStore_CrashAfterRenameBeforeDirSync_NotAcked`; `TestStore_OpenSweepsTemps`;
+`TestChunkRPC_HashMismatchRejected`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
+`TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
 `TestStore_TornWrite_DetectedOnRead`; `TestStore_ConcurrentPutSameHash` (32 goroutines,
-`-race`); `TestStore_DiskFull_NoPartialShard`; `TestStore_DupPutDifferentPayload_Overwrites`;
-`TestStore_DeleteIfOlder_KeepsYoung`; `TestCache_LRUEvictsBySize`; `FuzzStore_PutGet`.
+`-race`); `TestStore_DiskFull_ReturnsErrAndNoPartialShard`; `TestStore_PutDifferentPayloadSameKey_Replaces`;
+`TestStore_DeleteIfOlder_RefusesYoungShard`; `TestCache_LRUEvictsBySize`; `FuzzStore_PutGet`.
 
 **`internal/meta`** — `TestFSM_ApplySnapshotRestoreEquivalence` (5k random commands;
 snapshot; restore; compare; also restore-then-replay-tail); `TestFSM_DeterministicAcrossReplicas`
 (same log into 3 FSMs → byte-identical snapshots; catches map-iteration order);
 rename table (`over file`, `over empty dir`, `over non-empty dir`, `into own subtree`,
-`same path`, `cross-dir keeps ino+gen`); `TestFSM_HandleStableAcrossRestart`;
-`TestFSM_InoGenNotReusedAfterUnlink`; `TestFSM_RefCount_SharedChunkAcrossFiles`;
-`TestFSM_Commit_RejectsStaleBaseVersion`; `TestFSM_Commit_ErrNeedTailRewrite`;
-`TestFSM_Commit_TruncateThenGrow_DropsOldChunks`; `TestFSM_NowIsMonotonic`;
-`TestFSM_RefcountUnderflow_IsBadCommand`;
-`TestFSM_SetVolume_NewPolicyAppliesToNewChunksOnly`; invariant checker used by every FSM test
+`same path`, `cross-dir keeps ino+gen`); `TestHandle_RoundTrip_BigEndian`;
+`TestFSM_InoGenNotReusedAfterUnlink`; `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`;
+`TestFSM_Commit_RejectsStaleBaseVersion`; `TestFSM_Commit_TruncateDown`;
+`TestFSM_Commit_TruncateThenGrow_DropsOldBytes`; `TestFSM_LastNowMonotonic`;
+`TestFSM_RefCountNeverUnderflows`;
+`TestFSM_SetVolume_PolicyVersionBumps`; invariant checker used by every FSM test
 (Σrefs = references from inodes, `len(Chunks) == ceil(Size/CS)`, parent chains reach root,
 `Tombs ⇔ Refs==0`); `FuzzDecodeCommand`.
 
@@ -114,31 +114,31 @@ under `-short` and 50k in long mode, ops weighted over `OpenFile+Seek+Write+Clos
 tree every 100 ops, and again after flush + reopen from the same stores (restart equivalence).
 Plus the deliberately simple `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`,
 `TestVFS_PerRPCOpenCloseSequence` (the exact go-nfs per-WRITE sequence),
-`TestVFS_WriteSpanningChunkBoundary`, `TestVFS_WritePastEOF_CreatesHole_ReadsZeros`,
-`TestVFS_TruncateDown_DropsChunkRefs`, `TestVFS_TruncateUp_Zeros`,
-`TestVFS_CloseFlushIsDurable`, `TestVFS_DedupIdenticalChunks`,
+`TestOverlay_WriteSpanningChunkBoundary`, `TestOverlay_WritePastEOF_ReadsZerosInGap`,
+`TestFSM_Commit_TruncateDown`, `TestOverlay_TruncateThenGrow_ZerosOldBytes`,
+`TestVFS_PerRPCOpenCloseSequence`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`,
 `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`,
-`TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestFlusher_UnknownChunk_ReUpload`,
-`TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_ConflictRebase_KeepsAllExtents`,
+`TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_UnknownChunk_ReUpload`,
+`TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`,
 `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`,
-`TestWAL_ReplayStopsAtTornTail`, `TestWAL_CompactKeepsLiveExtents`,
-`TestVFS_UnlinkDirtyFile_DropsWAL`, `TestVFS_ConcurrentWritersDifferentFiles`.
+`TestWAL_ReplayStopsAtTornTail`, `TestWAL_Compact_KeepsOnlyLive`,
+`TestVFS_RemoveDirtyFile_DropsOverlay`, `TestOverlay_ConcurrentWritersDifferentInodes`.
 
 **`internal/nfsgw`** — in-process over `willscott/go-nfs-client` against `nfs.Serve` on
 `127.0.0.1:0` (no root): `TestNFS_WriteSequence_MultiRPC` (64 KiB and 1 MiB pieces, shuffled
-offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrModeOwnerTimes`,
-`TestNFS_RenameKeepsHandleValid`, `TestNFS_HandleSurvivesGatewayRestart`,
-`TestNFS_RemovedHandleIsStale`, `TestNFS_BogusHandleIsStaleNotPanic`,
-`TestNFS_ReadDirPlusLargeDirectory` (5k entries), `TestNFS_UnsupportedOpsReturnNotSupp`.
+offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrOwnerAndTimes`,
+`TestNFS_RenameKeepsHandleValid`, 
+`TestNFS_RemovedHandleIsStale`, 
+`TestNFS_ReadDirPlusLargeDirectory` (5k entries), `TestNFS_FSStatAndUnsupported`.
 
-**`internal/rpc`** — `TestChunkRPC_SizeBoundaries` {0, 1, max−1, max, max+1 → 413} with client
-and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_GetMissing404`;
-`TestChunkRPC_ContextCancelAbortsUpload`; `TestRPC_DeleteFence_RefusesStaleIndex`,
-`TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesPlacedShard412`;
-`TestWhoIs_DeniesUnknownPeer`,
-`TestWhoIs_DeniesStableIDMismatch`, `TestWhoIs_AllowsMember`, `TestWhoIs_PurgeOnMembershipChange`;
-`TestChunkRPC_ReadsAuthBeforeBody`; `TestRPC_ClusterIDMismatch409`;
-`TestRPC_ListenRefusesNonLoopbackWithoutAuth`.
+**`internal/rpc`** — `TestChunkRPC_PutGetHeadDelete_SizeBoundaries` {0, 1, max−1, max, max+1 → 413} with client
+and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_PutGetHeadDelete_SizeBoundaries`;
+`TestChunkRPC_DeleteFence`,
+`TestChunkRPC_DeleteFence`, ;
+`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`,
+`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`, ;
+`TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`; ;
+`TestListen_RefusesNonLoopbackWithoutAuthorizer`.
 
 **`internal/cluster` + `internal/testharness`** — harness:
 
@@ -151,19 +151,19 @@ func (c *Cluster) Partition(a, b []int); func (c *Cluster) Heal()
 func (c *Cluster) Quiesce(t *testing.T)   // Barrier on leader + all FSMs at the same index
 ```
 
-Scenarios: `TestCluster_WriteReadAllNodes`, `TestCluster_KillMNodes_AllDataReadable`,
-`TestCluster_KillMPlusOne_ReadsFailCleanly`, `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy`,
+Scenarios: `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`,
+`TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestRepair_DeadNodeHoldDown_ThenReplaced`,
 `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`,
 `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestCluster_GCDoesNotDeleteInflightUpload`,
-`TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_PlacementAgreesOnAllNodes`,
-`TestIDStream_RejectsForeignCluster`, `TestCluster_TwoInitsDoNotMerge`,
-`TestJoin_WrongToken403_NoRaftChange`, `TestCluster_IPChange_UpdatesAddr`,
-`TestProber_LaptopSleep_NoRepairBeforeHoldDown`, `TestServe_SecondInstanceSameDirFails`.
+`TestCluster_SplitBrain_OnlyMajorityCommits`, `TestModelCheck_Long`,
+`TestIDStream_RejectsForeignCluster`, 
+`TestJoin_TokenAndIdentity`, `TestCluster_UpdateAddr_ChangesRPCAddr`,
+`TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestSecondOpen_IsRefused`.
 
 **Data-loss specific** — `TestCrash_AtEveryPoint`: for each hook, start a write of a known
 payload, kill the gateway at the hook, restart, and require exactly one of two outcomes:
 not acknowledged ⇒ old content and no visible orphan shards, or acknowledged ⇒ new content
-readable from every live gateway. `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`.
+readable from every live gateway. `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption`.
 `TestDurability_AckImpliesReadableFromKSurvivors` (`Durable()`; after each ack: kill and
 restart the gateway, let the WAL replay and flush, then kill m nodes and read elsewhere;
 rotate the gateway; 20 iterations short / 200 long). **`TestModelCheck_Long`** (skipped under `-short`; `make
@@ -171,7 +171,7 @@ test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
 
-**End to end** — `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` (in `-short`, ≈5 s).
+**End to end** — `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` (in `-short`, ≈5 s).
 `test/mount/TestMount_Workload`, gated on `TAILRAID_MOUNT_TEST=1` and `sudo -n true`: real
 `mount -t nfs`, then `cp -r` + `diff -r`, `dd … seek=N conv=notrunc` + `cmp`,
 write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, remount,

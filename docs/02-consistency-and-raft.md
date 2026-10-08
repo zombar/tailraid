@@ -312,12 +312,12 @@ no divergent state to merge because it never applied uncommitted entries.
 
 | Invariant | Tests |
 |---|---|
-| I-4 | `TestFSM_DeterministicAcrossReplicas`, `TestFSM_ApplyUsesCommandNowNotClock`, `TestCluster_PlacementAgreesOnAllNodes`, `TestSoak_FSMHashAgreement` |
-| I-5 | `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_SnapshotPersistConcurrentWithApply`, `TestCluster_RejoinAfterLongAbsence_SnapshotInstall` |
-| I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_MinorityGatewayReturnsEROFS`, `TestModelCheck_Long` |
-| I-26 | `TestFSM_ApplyRules_Table`, `TestFSM_FailedCommandLeavesStateUnchanged`, `FuzzDecodeCommand` |
-| I-27 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Invariants_RandomCommands`, `TestFSM_Tombstone_OnRefsZero`, `TestFSM_Commit_RevivesTombstonedChunk` |
-| I-28 | `TestFSM_Commit_RejectsStaleBaseVersion`, `TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestVFS_ConcurrentGateways_SameChunkOneWins` |
+| I-4 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas`, `TestModelCheck_Long` |
+| I-5 | `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestSingleNode_BootstrapProposeRestart` |
+| I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits` |
+| I-26 | `FuzzDecodeCommand`, `TestErrorCode_RoundTrip`, `TestFSM_BadCommandLeavesStateUnchanged`, `TestFSM_Commit_NewSizeBounds`, `TestFSM_Commit_RejectsImplicitShrink`, `TestFSM_Create_NameBoundaries`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestVFS_RenameIntoOwnSubtree_NoSideEffects` |
+| I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
+| I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
-| I-64 | `TestFSM_Commit_NewSizeBounds`, `TestChunkCount_NoOverflow`, `TestVFS_SizeBeyondMax_EFBIG` |
-| I-29 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestCluster_ForwardRetriesOnlyOnNotLeader`, `TestFSM_RefcountUnderflow_IsBadCommand` |
+| I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
+| I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |

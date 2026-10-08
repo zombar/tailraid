@@ -280,8 +280,8 @@ defined in `04-write-path-and-durability.md`.
 
 | Invariant | Tests |
 |---|---|
-| I-1 | `TestFSM_SetChunks_SizeAndChunkListConsistent`, `TestFSM_Invariants_RandomCommands`, `TestVFS_OracleRandomOps`, `TestVFS_WritePastEOF_CreatesHole_ReadsZeros`, `TestVFS_TruncateUp_Zeros` |
-| I-2 | `TestFSM_RejectsHashZeroChunkEntry`, `TestVFS_DedupIdenticalChunks`, `TestVFS_AllZeroChunkBecomesHashZero`, `TestReader_VerifiesDecodedHash` |
-| I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestFSM_Rename_KeepsInoGen`, `TestNFS_RemovedHandleIsStale` |
-| I-22 | `TestCodec_StateRoundTrip`, `TestCodec_CanonicalOrdering`, `TestFSM_DeterministicAcrossReplicas`, `FuzzDecodeCommand`, `FuzzDecodeState` |
+| I-1 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewFileAndOverwrite`, `TestMount_Workload`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestVFS_ZeroByteFile_NoWALNoCommit` |
+| I-2 | `TestFSM_Commit_Errors`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestReader_DecodedHashMismatch_EIO` |
+| I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestInoGen_RootIsOne_ZeroIsNever` |
+| I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |

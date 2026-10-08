@@ -31,8 +31,9 @@ const (
 	msgCall, msgReply         = 0, 1
 	replyAccepted             = 0
 	acceptSuccess             = 0
-	acceptProcUnavail         = 3
+	acceptProgUnavail         = 1
 	acceptProgMismatch        = 2
+	acceptProcUnavail         = 3
 	maxPmapMsg                = 4096
 	rpcVersion         uint32 = 2
 )
@@ -139,7 +140,10 @@ func (p *Portmap) handle(msg []byte) []byte {
 	}
 	w := &xdrWriter{}
 	w.u32(xid).u32(msgReply).u32(replyAccepted).u32(0).u32(0) // verifier AUTH_NULL
-	if prog != pmapProg || vers != pmapVers {
+	if prog != pmapProg {
+		return w.u32(acceptProgUnavail).bytes() // RFC 5531: not the portmapper at all
+	}
+	if vers != pmapVers {
 		return w.u32(acceptProgMismatch).u32(pmapVers).u32(pmapVers).bytes()
 	}
 	switch proc {

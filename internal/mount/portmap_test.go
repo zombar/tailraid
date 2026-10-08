@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -102,5 +103,71 @@ func TestPortmap_RefusesNonLoopback(t *testing.T) {
 	}
 	if err := p.Serve(context.Background(), "nope"); err == nil {
 		t.Fatal("bad address accepted")
+	}
+}
+
+// Reply table of the stub, by hand over the handler: the accept status and payload for
+// each request shape mount.exe or anything else on loopback could send (RFC 5531 §9).
+// Invariant: I-50
+func TestPortmap_ReplyTable(t *testing.T) {
+	p := &Portmap{Port: 2049, Log: slog.Default()}
+	u32 := func(b []byte, i int) uint32 { return binary.BigEndian.Uint32(b[4*i:]) }
+	msg := func(prog, vers, proc uint32, args ...uint32) []byte {
+		m := binary.BigEndian.AppendUint32(nil, 11)
+		for _, v := range []uint32{0, 2, prog, vers, proc, 0, 0, 0, 0} {
+			m = binary.BigEndian.AppendUint32(m, v)
+		}
+		for _, v := range args {
+			m = binary.BigEndian.AppendUint32(m, v)
+		}
+		return m
+	}
+	const (
+		success      = 0
+		progUnavail  = 1
+		progMismatch = 2
+		procUnavail  = 3
+	)
+	cases := []struct {
+		name   string
+		req    []byte
+		accept uint32
+		rest   []uint32 // words after the accept status
+	}{
+		{"null", msg(100000, 2, 0), success, nil},
+		{"getport nfs v3 tcp", msg(100000, 2, 3, 100003, 3, 6), success, []uint32{2049}},
+		{"getport mount v3 tcp", msg(100000, 2, 3, 100005, 3, 6), success, []uint32{2049}},
+		{"getport mount v3 udp: not served", msg(100000, 2, 3, 100005, 3, 17), success, []uint32{0}},
+		{"getport nfs v2: not served", msg(100000, 2, 3, 100003, 2, 6), success, []uint32{0}},
+		{"getport nlm: not registered", msg(100000, 2, 3, 100021, 4, 6), success, []uint32{0}},
+		{"unknown procedure", msg(100000, 2, 9), procUnavail, nil},
+		{"wrong program", msg(100003, 3, 0), progUnavail, nil},
+		{"wrong portmap version", msg(100000, 3, 0), progMismatch, []uint32{2, 2}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rep := p.handle(c.req)
+			if len(rep) < 24 {
+				t.Fatalf("reply %x", rep)
+			}
+			if u32(rep, 0) != 11 || u32(rep, 1) != 1 || u32(rep, 2) != 0 {
+				t.Fatalf("header %x", rep[:12])
+			}
+			if got := u32(rep, 5); got != c.accept {
+				t.Fatalf("accept status %d, want %d", got, c.accept)
+			}
+			for i, w := range c.rest {
+				if got := u32(rep, 6+i); got != w {
+					t.Fatalf("word %d = %d, want %d", i, got, w)
+				}
+			}
+			if len(rep) != 24+4*len(c.rest) {
+				t.Fatalf("reply length %d", len(rep))
+			}
+		})
+	}
+	// garbage is dropped, never answered
+	if rep := p.handle([]byte{1, 2, 3}); rep != nil {
+		t.Fatalf("garbage answered: %x", rep)
 	}
 }

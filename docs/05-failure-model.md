@@ -137,8 +137,8 @@ re-placements (06 §3).
   then kill m other nodes and read back via a surviving gateway; rotate the gateway node;
   20 iterations under `-short`, 200 in `make test-long`. (Before the flush the bytes live
   only in the issuing gateway's WAL, by contract.)
-- `TestCluster_KillMNodes_AllDataReadable`, `TestCluster_KillMPlusOne_ReadsFailCleanly`.
-- `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`.
+- `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`.
+- `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption`.
 - `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`.
 - `TestModelCheck_Long` — 5 nodes 3+2, weighted scheduler of client ops, `Kill`, `Restart`,
   `Partition`, `Heal`, `Clock.Advance`, `Scrub`; every 50 steps heal + quiesce and assert:
@@ -159,7 +159,7 @@ re-placements (06 §3).
 
 | Invariant | Tests |
 |---|---|
-| I-12 | `TestDurability_AckImpliesReadableFromKSurvivors`, `TestCluster_KillMNodes_AllDataReadable`, `TestModelCheck_Long`, `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` |
-| I-38 | `TestCrash_AtEveryPoint`, `TestVFS_RestartWithDirtyWAL_Replays` |
-| I-39 | `TestCluster_StaleGatewayReturnsEROFS`, `TestCluster_StaleGatewayBuffersDataWrites`, `TestCluster_QuorumLostReadsStillServed` |
-| I-40 | `TestReader_CorruptShardReconstructs`, `TestReader_TooManyCorruptShardsEIO`, `TestCluster_KillMPlusOne_ReadsFailCleanly` |
+| I-12 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestCrash_AtEveryPoint`, `TestDurability_AckImpliesReadableFromKSurvivors`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts`, `TestModelCheck_Long` |
+| I-38 | `TestCrash_AtEveryPoint` |
+| I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale` |
+| I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO` |

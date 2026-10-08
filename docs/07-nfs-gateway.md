@@ -99,7 +99,7 @@ options pin the ports instead.
 `mount` returns EPERM, printing the exact command first.
 
 **Windows**: `mount.exe` has no port option and discovers MOUNT/NFS via the portmapper, so
-on Windows the gateway binds the well-known port 2049 and `internal/mount/portmap_windows.go`
+on Windows the gateway binds the well-known port 2049 and `internal/mount/portmap.go`
 answers PMAP v2 `NULL`, `GETPORT` and `DUMP` for programs 100003 v3 and 100005 v3 → 2049/TCP.
 Windows has no privileged-port concept, so no elevation is needed for 111 or 2049, but the
 "Client for NFS" feature must be enabled and set to TCP (go-nfs is TCP-only):
@@ -152,8 +152,8 @@ quickly under the service manager; the mount survives because handles are stable
 
 | Invariant | Tests |
 |---|---|
-| I-16 | `TestNFS_RenameKeepsHandleValid`, `TestNFS_HandleSurvivesGatewayRestart`, `TestFSM_HandleStableAcrossRestart`, `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` |
-| I-17 | `TestNFS_RemovedHandleIsStale`, `TestNFS_BogusHandleIsStaleNotPanic`, `TestFSM_InoGenNotReusedAfterUnlink` |
-| I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`, `TestVFS_OracleRandomOps` |
-| I-46 | `TestNFS_SetattrModeOwnerTimes`, `TestVFS_ChangeOps` |
+| I-16 | `TestHandle_RoundTrip_BigEndian`, `TestNFS_RenameKeepsHandleValid` |
+| I-17 | `TestNFS_RemovedHandleIsStale` |
+| I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
+| I-46 | `TestNFS_SetattrOwnerAndTimes`, `TestNFS_SetattrSizeTruncates`, `TestVFS_SymlinkAndChange` |
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |

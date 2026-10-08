@@ -22,12 +22,12 @@ internal/cluster    raft wiring, membership, liveness, forwarding
 internal/rpc        node HTTP RPC + WhoIs authorizer   internal/tailscale  CLI shell-out + Fake
 internal/config     YAML config           internal/mount    per-OS mount helpers, PMAP stub
 internal/svc        service install       internal/admin    status/check/describe reports
-internal/s3, s3srv  (M5, deferred) SigV4 + lightweight S3 server/client
 internal/dev        /dev/* endpoints, only with dev.enabled
 internal/soak       Env interface, scenarios, HTML report (shared by cmd/soak and `tailraid verify`)
 internal/testharness  in-process Cluster, FaultNet, Hooks (test only)
-test/invariants     skipped stubs that cite not-yet-implemented I-n / L-n
-test/e2e, test/mount, test/soak
+test/invariants     skipped stubs that cite not-yet-implemented I-n / L-n (S3 only now)
+test/cluster        multi-node tests on the in-process harness: cluster, durability, repair, model checker
+test/mount, test/soak
 docs/               whitepaper 00–11, generated invariants.md + lifecycle.md, windows-checklist.md
 scripts/check-invariants.sh   enforces docs ↔ tests mapping
 ```
@@ -74,15 +74,17 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
   chunk with < k+m good slots, "orphan shard" for an uploaded-but-uncommitted or unplaced
   shard, "re-place" for `SetPlacement` work, `ErrFull` for the 507 condition, wire names
   (`NFS3ERR_IO`) in tables and errno names (`EROFS`) in prose, `(k,m)` for a policy.
-- The only seams: `clock.Clock`, `sysfs.FS` (shard store and WAL only), `FaultNet`, `cluster.Hooks`,
-  `tailscale.Client`. Raft is not wrapped.
-- No `time.Sleep` for synchronization (forbidigo). Wait on channels, futures or an
-  `Eventually` helper driven by the fake clock.
+- The only seams: `clock.Clock`, `sysfs.FS` (shard store and WAL only), `FaultNet`,
+  `vfs.Flusher.Hooks` (crash points), `tailscale.Client`, and `cluster.Options.Stores`/`Timing`
+  (Raft stores and timeouts; the harness passes in-memory stores). Raft is not wrapped.
+- No `time.Sleep` for synchronization (forbidigo). Wait on channels, futures or the
+  `testharness.Eventually` helper (it polls on the wall clock; tests that wait on a
+  tailraid timer advance the fake clock inside the condition).
 - Review checklist for every PR: every write-path test writes at a **non-zero offset**;
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on every
   node" function has an **N-node determinism** test; every randomized test takes `-seed` and
   prints it on failure; `goleak.VerifyTestMain` in packages that start goroutines.
-- Prefer deleting over abstracting. Production code is ≈ 15k lines through M4 (measured; the plan's 8k was optimistic,
+- Prefer deleting over abstracting. Production code is ≈ 17.6k lines through M4 (measured 2026-10-08; the plan's 8k was optimistic,
   see docs/00). If a feature needs far more than its row in docs/00, the design is wrong.
 - Logging with `log/slog`; no metrics library (`tailraid status --json` instead).
 
