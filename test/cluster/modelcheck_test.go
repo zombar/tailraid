@@ -14,6 +14,8 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
@@ -48,8 +50,11 @@ const maxWorlds = 8
 // unflushed writes to one file stay on one gateway between quiescences: docs/04 §6 makes
 // concurrent writers through different gateways last-committer-wins at chunk
 // granularity, which a byte-exact model cannot predict.
+// The schedule also changes the volume policy and drains a node mid-run: after each
+// quiescence the repairer must have migrated every chunk to the current (k,m) and moved
+// every slot off the draining node (docs/06).
 // Invariant: I-4, I-9, I-12, I-13, I-15, I-29
-// Lifecycle: L-162, L-163
+// Lifecycle: L-162, L-163, L-173
 func TestModelCheck_Long(t *testing.T) {
 	n := *steps
 	if n == 0 {
@@ -100,6 +105,19 @@ func TestModelCheck_Long(t *testing.T) {
 	}
 	var partitioned bool
 	log := func(format string, args ...any) { t.Logf("step: "+format, args...) }
+	policy := [2]uint8{3, 2}
+	policies := [][2]uint8{{3, 2}, {2, 2}, {2, 1}, {1, 2}, {3, 1}}
+	draining := -1 // node index being drained, or -1
+	leaderOp := func(what string, op func(l *testharness.ClusterNode) error) bool {
+		if partitioned {
+			return false
+		}
+		if err := op(c.Leader()); err != nil {
+			log("%s failed: %v", what, err)
+			return false
+		}
+		return true
+	}
 	// owner: the gateway holding a file's unflushed writes; frozen: names touched by a
 	// remove or rename this epoch. Nobody writes them until the next quiescence: a gateway
 	// that has not yet applied the command still resolves the old inode (docs/02 §stale
@@ -293,10 +311,56 @@ func TestModelCheck_Long(t *testing.T) {
 			c.Partition([]int{0, 1}, []int{2, 3, 4})
 			partitioned = true
 			log("%d partition {0,1}|{2,3,4}", step)
-		case r < 96: // advance the clock past the live window and let hold-downs run
+		case r < 95: // advance the clock past the live window and let hold-downs run
 			c.Clk.Advance(cluster.LiveThreshold + time.Second)
 			c.Probe()
 			log("%d clock +live", step)
+		case r < 97: // change the volume policy (new chunks follow it, old ones migrate)
+			limit := len(c.Nodes)
+			if draining >= 0 {
+				limit--
+			}
+			var options [][2]uint8
+			for _, p := range policies {
+				if p != policy && int(p[0])+int(p[1]) <= limit {
+					options = append(options, p)
+				}
+			}
+			if len(options) == 0 {
+				return
+			}
+			next := options[rng.Intn(len(options))]
+			if leaderOp("set_policy", func(l *testharness.ClusterNode) error {
+				res, _, err := l.Node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: next[0], M: next[1], Now: c.Clk.Now().UnixNano()}})
+				if err == nil {
+					err = res.Err
+				}
+				return err
+			}) {
+				policy = next
+				log("%d set_policy %d+%d", step, next[0], next[1])
+			}
+		case r < 98: // drain a node, or put the draining one back
+			if draining >= 0 {
+				victim := draining
+				if leaderOp("activate", func(l *testharness.ClusterNode) error {
+					return l.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: c.Nodes[victim].Idx(), State: meta.Active})
+				}) {
+					draining = -1
+					log("%d activate n%d", step, victim)
+				}
+				return
+			}
+			if int(policy[0])+int(policy[1]) >= len(c.Nodes) {
+				return // nowhere to move the slots to
+			}
+			victim := rng.Intn(len(c.Nodes))
+			if leaderOp("drain", func(l *testharness.ClusterNode) error {
+				return l.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: c.Nodes[victim].Idx(), State: meta.Draining})
+			}) {
+				draining = victim
+				log("%d drain n%d", step, victim)
+			}
 		default: // repair pass on the leader (if any)
 			if partitioned {
 				return
@@ -329,12 +393,25 @@ func TestModelCheck_Long(t *testing.T) {
 			c.Settle()
 			c.Clk.Advance(cluster.FillAfter + time.Second)
 			c.Probe()
-			leader := c.Leader()
-			if _, err := newRepairer(c, leader, repairCfg()).Scan(ctx); err != nil {
-				t.Fatalf("step %d repair: %v", step, err)
+			// repair until a pass finds nothing left to do (fills, then migrations)
+			var st repair.Stats
+			for pass := 0; ; pass++ {
+				var err error
+				if st, err = newRepairer(c, c.Leader(), repairCfg()).Scan(ctx); err != nil {
+					t.Fatalf("step %d repair: %v", step, err)
+				}
+				c.Settle()
+				if st.Repaired+st.Partial+st.Migrated+st.Deferred == 0 {
+					break
+				}
+				if pass == 5 {
+					t.Fatalf("step %d: repair does not converge: %+v", step, st)
+				}
 			}
-			c.Settle()
-			worlds = []world{checkInvariants(t, c, worlds, names, step)}
+			if st.PolicyStale != 0 || st.Unrepairable != 0 {
+				t.Fatalf("step %d: after repair %+v (policy %d+%d, draining %d)", step, st, policy[0], policy[1], draining)
+			}
+			worlds = []world{checkInvariants(t, c, worlds, names, step, policy, draining)}
 			owner = map[string]int{}
 			frozen = map[string]bool{}
 		}
@@ -342,7 +419,7 @@ func TestModelCheck_Long(t *testing.T) {
 }
 
 // checkInvariants returns the candidate world reality matches, or fails the test.
-func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names []string, step int) world {
+func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names []string, step int, policy [2]uint8, draining int) world {
 	t.Helper()
 	// I-12: every acknowledged byte reads identically from every gateway, cold; names the
 	// world lacks must not exist
@@ -414,11 +491,18 @@ func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names
 			t.Fatalf("step %d: n%d FSM state diverges from n0", step, i)
 		}
 	}
-	// I-9/I-13/I-15: after repair every live chunk is fully placed on distinct nodes and
-	// every named slot holds its shard
+	// I-9/I-13/I-15: after repair every live chunk is fully placed on distinct nodes, on
+	// the current policy, off the draining node, and every named slot holds its shard
 	c.Nodes[0].Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
 		if ch.Refs == 0 {
 			return true
+		}
+		wantK, wantM := policy[0], policy[1]
+		if ch.K == 1 && ch.Size <= 64<<10 {
+			wantK = 1
+		}
+		if ch.K != wantK || ch.M != wantM {
+			t.Fatalf("step %d: chunk %x still on %d+%d, policy %d+%d", step, ch.Hash[:6], ch.K, ch.M, wantK, wantM)
 		}
 		seen := map[meta.NodeIdx]bool{}
 		for i, s := range ch.Placement {
@@ -427,6 +511,9 @@ func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names
 			}
 			if seen[s] {
 				t.Fatalf("step %d: chunk %x places two slots on node %d", step, ch.Hash[:6], s)
+			}
+			if draining >= 0 && int(s)-1 == draining {
+				t.Fatalf("step %d: chunk %x slot %d still on draining n%d", step, ch.Hash[:6], i, draining)
 			}
 			seen[s] = true
 			if !c.Nodes[int(s)-1].Store.Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
