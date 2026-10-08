@@ -55,7 +55,7 @@ func connect(addr string) (*nfsc.Target, func(), error) {
 		cl, err := rpc.DialTCP("tcp", addr, false)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Second)
+			<-time.After(time.Second)
 			continue
 		}
 		type mountArgs struct {
@@ -235,7 +235,7 @@ func write(t *nfsc.Target, shared string) {
 		fatal("manifest: %v", err)
 	}
 	fmt.Printf("write: ok, %d files written through %s; waiting for the idle flush\n", len(files), "n1")
-	time.Sleep(5 * time.Second)
+	<-time.After(5 * time.Second) // real idle timer of the running nodes
 }
 
 func verify(t *nfsc.Target, shared string) {
