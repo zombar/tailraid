@@ -137,19 +137,35 @@ func (s *Store) Put(k ShardKey, payload []byte) (added int64, err error) {
 		}
 		oldSize = fi.Size() // different or unreadable content: replace atomically below
 	}
-	if s.capacity > 0 && s.used.Load()-oldSize+size > s.capacity {
-		return 0, fmt.Errorf("%w: used %d + %d > %d", ErrFull, s.used.Load(), size, s.capacity)
+	// Reserve the bytes before writing, atomically against concurrent Puts of other keys
+	// (the per-key lock does not order those): the store never exceeds its capacity
+	// (L-138). The reservation is released on any failure below.
+	if s.capacity > 0 {
+		for {
+			cur := s.used.Load()
+			if cur-oldSize+size > s.capacity {
+				return 0, fmt.Errorf("%w: used %d + %d > %d", ErrFull, cur, size, s.capacity)
+			}
+			if s.used.CompareAndSwap(cur, cur+size) {
+				break
+			}
+		}
+	} else {
+		s.used.Add(size)
 	}
+	release := func() { s.used.Add(-size) }
 	dir := filepath.Dir(final)
 	if err := s.fsys.MkdirAll(dir, 0o755); err != nil {
+		release()
 		return 0, fmt.Errorf("chunk: mkdir %s: %w", dir, err)
 	}
 	f, err := s.fsys.CreateTemp(dir, tmpPrefix+"*")
 	if err != nil {
+		release()
 		return 0, fmt.Errorf("chunk: create temp for %s: %w", k, err)
 	}
 	tmp := f.Name()
-	cleanup := func() { _ = f.Close(); _ = s.fsys.Remove(tmp) }
+	cleanup := func() { _ = f.Close(); _ = s.fsys.Remove(tmp); release() }
 
 	var hdr [HeaderSize]byte
 	copy(hdr[:4], magic)
@@ -169,13 +185,15 @@ func (s *Store) Put(k ShardKey, payload []byte) (added int64, err error) {
 	}
 	if err := f.Close(); err != nil {
 		_ = s.fsys.Remove(tmp)
+		release()
 		return 0, fmt.Errorf("chunk: close %s: %w", k, err)
 	}
 	if err := s.fsys.Rename(tmp, final); err != nil {
 		_ = s.fsys.Remove(tmp)
+		release()
 		return 0, fmt.Errorf("chunk: rename %s: %w", k, err)
 	}
-	s.used.Add(size - oldSize)
+	s.used.Add(-oldSize) // the new bytes were reserved above; the replaced file is gone
 	// The rename is only durable once the directory is synced; that is part of the ack.
 	// If the sync fails the shard may or may not survive a crash, but it is complete and
 	// verifiable either way, so the caller is told it is not durable and may retry.

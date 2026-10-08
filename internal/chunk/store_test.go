@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -552,6 +553,61 @@ func TestStore_DiskFull_ReturnsErrAndNoPartialShard(t *testing.T) {
 }
 
 // Lifecycle: L-138
+// Concurrent Puts of distinct keys near the capacity never push the store over it: the
+// reservation is atomic across keys, exactly as many succeed as fit, the rest get ErrFull
+// and leave nothing behind.
+// Lifecycle: L-138
+func TestStore_ConcurrentPutsNearCapacity_NeverExceed(t *testing.T) {
+	const fit = 5
+	size := int64(HeaderSize + 100)
+	root := t.TempDir()
+	s := openStore(t, sysfs.OS{}, root, fit*size)
+	const writers = 24
+	var wg sync.WaitGroup
+	var okCount, fullCount atomic.Int32
+	var otherErr atomic.Value
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := payload(100, int64(1000+i))
+			_, err := s.Put(keyFor(p, 0), p)
+			switch {
+			case err == nil:
+				okCount.Add(1)
+			case errors.Is(err, ErrFull):
+				fullCount.Add(1)
+			default:
+				otherErr.Store(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if e := otherErr.Load(); e != nil {
+		t.Fatal(e)
+	}
+	if okCount.Load() != fit || fullCount.Load() != writers-fit {
+		t.Fatalf("%d puts succeeded, %d full; want %d and %d", okCount.Load(), fullCount.Load(), fit, writers-fit)
+	}
+	if s.Used() != fit*size || s.Used() > s.Capacity() {
+		t.Fatalf("used %d of %d", s.Used(), s.Capacity())
+	}
+	files := 0
+	_ = s.Walk(func(ShardKey, int64, time.Time) error { files++; return nil })
+	if files != fit {
+		t.Fatalf("%d shard files on disk", files)
+	}
+	temps, _ := filepath.Glob(filepath.Join(root, "shards", "*", ".tmp-*"))
+	if len(temps) != 0 {
+		t.Fatalf("temps: %v", temps)
+	}
+	// a reopened store recounts the same usage
+	s2 := openStore(t, sysfs.OS{}, root, fit*size)
+	if s2.Used() != fit*size {
+		t.Fatalf("recounted used %d", s2.Used())
+	}
+}
+
 func TestStore_CapacityEnforced(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 3*(HeaderSize+100))

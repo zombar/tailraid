@@ -478,8 +478,18 @@ func TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-105, L-110, L-130, L-111, L-166
+// Lifecycle: L-165, L-105, L-110, L-130, L-111, L-166
 func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
+	// the repair's output is verified against the hash before SetPlacement (L-165): after
+	// each repair every node, cold, reads back the original bytes
+	readAllNodes := func(c *testharness.Cluster, want []byte) {
+		t.Helper()
+		for i := range c.Nodes {
+			if got, err := c.ReadFileCold(i, "/f"); err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("n%d after repair: %v", i, err)
+			}
+		}
+	}
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()
 	data := testharness.Pattern(int(testharness.ChunkSize), 9)
@@ -510,6 +520,7 @@ func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
 	if s == 0 || !c.Nodes[s-1].Store.Has(chunk.Key(after.Hash, after.K, after.M, 2)) {
 		t.Fatalf("slot 2 not restored: %v", after.Placement)
 	}
+	readAllNodes(c, data)
 	// scrub finds silent corruption without a report
 	corruptShardFile(t, c.Nodes[s-1].Store.Path(chunk.Key(after.Hash, after.K, after.M, 2)))
 	cfg := repairCfg()
@@ -519,8 +530,43 @@ func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
 	if st.Scrubbed != 1 || st.ScrubBad != 1 || st.Repaired != 1 {
 		t.Fatalf("scrub %+v", st)
 	}
-	if got, err := c.ReadFileCold(0, "/f"); err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("read after scrub repair: %v", err)
+	readAllNodes(c, data)
+}
+
+// A node that is not Healthy, or has not applied the log as far as the leader had, never
+// sweeps: its chunk table could call a committed shard an orphan (forbidden L-177).
+// Invariant: I-13
+// Lifecycle: L-171, L-177
+func TestSweep_SkippedWhenNotHealthy(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	c.WriteFile(0, "/f", testharness.Pattern(int(testharness.ChunkSize), 61))
+	c.Settle()
+	nd := c.Nodes[1]
+	stray := testharness.Pattern(64, 62)
+	var h meta.Hash
+	copy(h[:], stray)
+	key := chunk.Key(h, 2, 1, 0) // no chunk entry: an orphan once old enough
+	if _, err := nd.Store.Put(key, stray); err != nil {
+		t.Fatal(err)
+	}
+	ageShardFile(t, nd.Store.Path(key), 11*time.Minute)
+	want := c.Leader().Node.Raft.AppliedIndex()
+	c.Settle()
+	sweep := func(healthy bool, applied uint64) int {
+		n, err := repair.SweepLocal(ctx, nd.Store, nd.Node.FSM, nd.Idx(), 10*time.Minute, c.Clk,
+			func() bool { return healthy }, func() uint64 { return applied }, func() (uint64, bool) { return want, true })
+		must(t, err)
+		return n
+	}
+	if n := sweep(false, nd.Node.Raft.AppliedIndex()); n != 0 || !nd.Store.Has(key) {
+		t.Fatalf("not healthy: swept %d", n)
+	}
+	if n := sweep(true, want-1); n != 0 || !nd.Store.Has(key) {
+		t.Fatalf("behind the leader: swept %d", n)
+	}
+	if n := sweep(true, nd.Node.Raft.AppliedIndex()); n != 1 || nd.Store.Has(key) {
+		t.Fatalf("healthy and caught up: swept %d", n)
 	}
 }
 

@@ -84,26 +84,8 @@ func TestStubLifecycle_L_139(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-139")
 }
 
-// Lifecycle: L-165
-// Degraded --[repair]--> chunk bytes differ from original Hash after repair
-func TestStubLifecycle_L_165(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-165")
-}
-
 // Lifecycle: L-170
 // Orphan (S3 object) --[E-116 leader S3 sweep]--> Swept
 func TestStubLifecycle_L_170(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-170")
-}
-
-// Lifecycle: L-171
-// Orphan --[E-117 Sweep while not `Healthy` / behind leader index]--> Orphan
-func TestStubLifecycle_L_171(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-171")
-}
-
-// Lifecycle: L-177
-// Orphan --[Sweep while not `Healthy`]--> Swept
-func TestStubLifecycle_L_177(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-177")
 }
