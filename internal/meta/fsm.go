@@ -187,6 +187,17 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 		return Result{}, ErrBadCommand
 	}
 	if n.Idx == 0 {
+		// one record per node ID: a repeated join (a retry after a timeout, possibly at a
+		// new leader whose copy has not applied the first upsert) updates it instead of
+		// allocating a second index (I-62)
+		for idx, cur := range st.Nodes {
+			if cur.ID == n.ID && cur.State != Removed {
+				n.Idx = idx
+				break
+			}
+		}
+	}
+	if n.Idx == 0 {
 		idx := st.NextNode
 		st.NextNode++
 		n.Idx = idx

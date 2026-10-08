@@ -52,6 +52,11 @@ type Options struct {
 	SnapshotThreshold uint64
 	// Faults, when set, lets /dev/fault rules cut Raft traffic to and from peers.
 	Faults Faults
+	// NoSync skips the fsync of every Raft append. Test harness only: an in-process kill
+	// keeps the OS page cache, so crash tests still see every committed entry, while a
+	// loaded CI runner's disk no longer stalls the Raft loop into spurious elections.
+	// Production never sets it (docs/04 §8.1).
+	NoSync bool
 }
 
 // Node is an open Raft member.
@@ -119,7 +124,7 @@ type stores struct {
 	snaps *raft.FileSnapshotStore
 }
 
-func openStores(dataDir string, logOutput io.Writer) (*stores, error) {
+func openStores(dataDir string, logOutput io.Writer, noSync bool) (*stores, error) {
 	dir := filepath.Join(dataDir, "raft")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -127,7 +132,7 @@ func openStores(dataDir string, logOutput io.Writer) (*stores, error) {
 	logs, err := raftboltdb.New(raftboltdb.Options{
 		Path:        filepath.Join(dir, "raft.db"),
 		BoltOptions: &bbolt.Options{Timeout: time.Second},
-		NoSync:      false, // every append is fsynced (docs/04 §8.1)
+		NoSync:      noSync, // false outside the test harness: every append is fsynced (docs/04 §8.1)
 	})
 	if err != nil {
 		if errors.Is(err, bolterrors.ErrTimeout) {
@@ -212,7 +217,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 		return nil, err
 	}
 	_, logOutput := o.logger()
-	st, err := openStores(o.DataDir, logOutput)
+	st, err := openStores(o.DataDir, logOutput, o.NoSync)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +269,7 @@ func Open(o Options) (*Node, error) {
 		return nil, ErrNotInit
 	}
 	_, logOutput := o.logger()
-	st, err := openStores(o.DataDir, logOutput)
+	st, err := openStores(o.DataDir, logOutput, o.NoSync)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +307,7 @@ func OpenFresh(o Options) (*Node, error) {
 		return nil, ErrAlreadyInit
 	}
 	_, logOutput := o.logger()
-	st, err := openStores(o.DataDir, logOutput)
+	st, err := openStores(o.DataDir, logOutput, o.NoSync)
 	if err != nil {
 		return nil, err
 	}

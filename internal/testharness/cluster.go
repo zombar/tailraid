@@ -194,7 +194,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		nd.raddr, nd.trans = raft.NewInmemTransportWithTimeout(nd.raddr, 10*time.Second)
 	}
 	c.connectAll()
-	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Fast: true, SnapshotThreshold: c.snap}
+	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Fast: true, NoSync: true, SnapshotThreshold: c.snap}
 	if os.Getenv("TAILRAID_HARNESS_DEBUG") != "" {
 		opts.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})).With("node", fmt.Sprintf("n%d", nd.I))
 	}

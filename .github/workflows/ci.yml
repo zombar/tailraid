@@ -53,13 +53,6 @@ jobs:
         with: { go-version-file: go.mod, cache: true }
       - run: go test -short -race -cover ./...
         shell: bash
-        if: matrix.os != 'windows-latest'
-      # the Windows runner is too slow for the 1 s Raft election timeouts of the
-      # harness-based packages (test/cluster, internal/soak); their logic is OS-independent
-      # and runs on ubuntu and macos. Windows keeps every unit package, without -race.
-      - run: go test -short -cover $(go list ./... | grep -v -e /test/cluster -e /internal/soak)
-        shell: bash
-        if: matrix.os == 'windows-latest'
 
   long:
     name: long (model checker, durability, oracle)

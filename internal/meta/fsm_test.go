@@ -1317,3 +1317,37 @@ func TestFSM_WaitApplied_ReturnsOnClose(t *testing.T) {
 		t.Fatalf("already applied index must still succeed: %v", err)
 	}
 }
+
+// A join retried after a timeout may reach a leader whose FSM copy has not applied the
+// first upsert; the FSM itself must keep one record per node ID.
+// Invariant: I-62
+func TestFSM_NodeUpsert_IdempotentByID(t *testing.T) {
+	f := NewFSM()
+	apply := func(idx uint64, c Command) Result {
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+	}
+	apply(1, Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: 65536, K: 2, M: 1, Now: 1}})
+	nd := Node{ID: "aaaaaaaaaaaaaaaa", Name: "a", Kind: KindDevice, Addr: "10.0.0.1", RaftPort: 1, RPCPort: 2, Capacity: 10}
+	r1 := apply(2, Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: nd}})
+	nd.Capacity = 20 // the retry carries fresher fields
+	r2 := apply(3, Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: nd}})
+	if r1.Err != nil || r2.Err != nil || r1.Ino != r2.Ino {
+		t.Fatalf("retry allocated a new index: %+v %+v", r1, r2)
+	}
+	nodes := f.Nodes()
+	if len(nodes) != 1 || nodes[0].Capacity != 20 || nodes[0].State != Active {
+		t.Fatalf("nodes after retry: %+v", nodes)
+	}
+	// a different ID still gets its own index
+	other := nd
+	other.ID = "bbbbbbbbbbbbbbbb"
+	r3 := apply(4, Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: other}})
+	if r3.Err != nil || r3.Ino == r1.Ino {
+		t.Fatalf("second node: %+v", r3)
+	}
+	// a removed record is not revived by a bare upsert
+	apply(5, Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: NodeIdx(r3.Ino), State: Removed}})
+	if r4 := apply(6, Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: other}}); r4.Err != nil || r4.Ino == r3.Ino {
+		t.Fatalf("upsert after removal must allocate anew: %+v", r4)
+	}
+}

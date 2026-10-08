@@ -89,7 +89,10 @@ accepts it from the first log entry.
 the same `ClusterID` or the zero value (meaning "unchanged"), else `ErrPolicy`. `token
 rotate` is `MetaSet{ClusterID: zero, JoinToken: new}`.
 
-**NodeUpsert.** `Idx == 0` allocates `NextNode` (never reused) and sets `State = Active`.
+**NodeUpsert.** `Idx == 0` first looks for a live record with the same node ID and updates
+it (a join retried after a timeout, possibly at a new leader whose copy has not yet applied
+the first upsert, must not create a second member); otherwise it allocates `NextNode`
+(never reused) and sets `State = Active`.
 Otherwise updates mutable fields (Name, TSStableID, Addr, RaftPort, RPCPort, Capacity, Voter,
 Version, S3Endpoint, S3Bucket, S3Prefix, S3Region, S3PathStyle — the `Node` struct of 01) of
 an existing node; `ErrNoSuchNode` if absent. `Kind` and `ID` cannot change.
@@ -290,6 +293,7 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-28** — A `Commit` whose `BaseVersion` does not match the inode's current `Version` is
   rejected without side effects, so two gateways cannot interleave partial updates to one
   file.
+- **I-62** — A node ID has at most one record that is not `Removed` in the node table: a `NodeUpsert` with `Idx == 0` for a known ID updates that record and never allocates a new index, so a retried join is idempotent whichever leader serves it.
 - **I-29** — The leader-forwarding layer never applies a command twice: a forwarded command
   is handed to Raft at most once per proposal, and the forwarding layer itself retries only
   after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
@@ -305,4 +309,5 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-26 | `TestFSM_ApplyRules_Table`, `TestFSM_FailedCommandLeavesStateUnchanged`, `FuzzDecodeCommand` |
 | I-27 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Invariants_RandomCommands`, `TestFSM_Tombstone_OnRefsZero`, `TestFSM_Commit_RevivesTombstonedChunk` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion`, `TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestVFS_ConcurrentGateways_SameChunkOneWins` |
+| I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
 | I-29 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestCluster_ForwardRetriesOnlyOnNotLeader`, `TestFSM_RefcountUnderflow_IsBadCommand` |
