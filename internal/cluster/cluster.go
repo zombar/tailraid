@@ -476,11 +476,9 @@ func (n *Node) Close() error {
 
 // SelfIdx finds this node's NodeIdx in the FSM by raft ID.
 func (n *Node) SelfIdx() (meta.NodeIdx, bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == n.ID {
-			return nodes[i].Idx, true
-		}
+	nd, ok := n.FSM.NodeByID(n.ID)
+	if !ok {
+		return 0, false
 	}
-	return 0, false
+	return nd.Idx, true
 }

@@ -11,6 +11,8 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"math"
+	"net"
+	"strconv"
 	"strings"
 )
 
@@ -114,6 +116,10 @@ type Node struct {
 	S3Region    string
 	S3PathStyle bool
 }
+
+// RPCAddr is the node's host:port for member RPC; RaftAddr the Raft stream's.
+func (n Node) RPCAddr() string  { return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort))) }
+func (n Node) RaftAddr() string { return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RaftPort))) }
 
 // Volume is the policy for new chunks. ChunkSize is fixed for the life of the volume;
 // K and M may change at any time (PolicyVersion bumps).

@@ -135,7 +135,7 @@ func init() {
 		if a, ok := inmemAddrs[nd.ID]; ok {
 			return a
 		}
-		return raft.ServerAddress(net.JoinHostPort(nd.Addr, strconv.Itoa(int(nd.RaftPort))))
+		return raft.ServerAddress(nd.RaftAddr())
 	}
 }
 

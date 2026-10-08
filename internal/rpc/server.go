@@ -25,6 +25,17 @@ import (
 )
 
 // ShardStore is what the shard endpoints need from chunk.Store.
+// acquire takes a slot of sem unless ctx ends first (a caller that gave up must not hold
+// a queue position).
+func acquire(ctx context.Context, sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 type ShardStore interface {
 	Open(k chunk.ShardKey) (io.ReadCloser, int64, error)
 	PutVerified(k chunk.ShardKey, payload []byte, sum [32]byte) (int64, error) // sum = sha256(payload), verified by the caller
@@ -263,7 +274,10 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
-		s.getSem <- struct{}{}
+		if !acquire(r.Context(), s.getSem) {
+			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+			return
+		}
 		defer func() { <-s.getSem }()
 		rc, size, err := s.o.Store.Open(key)
 		switch {
@@ -282,7 +296,10 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
 	case http.MethodPut:
-		s.putSem <- struct{}{}
+		if !acquire(r.Context(), s.putSem) {
+			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+			return
+		}
 		defer func() { <-s.putSem }()
 		if r.ContentLength > s.o.MaxShard {
 			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")

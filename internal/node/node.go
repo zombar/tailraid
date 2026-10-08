@@ -181,7 +181,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log}
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Members: node.FSM.Nodes, Clk: clk}
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: func() any {

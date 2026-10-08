@@ -36,7 +36,7 @@ var _ chunk.ShardClient = (*Client)(nil)
 func NewClient(clusterID [16]byte, resolve Resolver, local ShardStore) *Client {
 	tr := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
-		MaxIdleConnsPerHost:   8,
+		MaxIdleConnsPerHost:   32, // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}

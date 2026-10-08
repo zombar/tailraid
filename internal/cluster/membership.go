@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -30,42 +28,24 @@ func (n *Node) LeaderRPCAddr() string {
 	if id == "" {
 		return ""
 	}
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == string(id) && nodes[i].Addr != "" {
-			return net.JoinHostPort(nodes[i].Addr, strconv.Itoa(int(nodes[i].RPCPort)))
-		}
+	if nd, ok := n.FSM.NodeByID(string(id)); ok && nd.Addr != "" {
+		return nd.RPCAddr()
 	}
 	return ""
 }
 
 // RPCAddrOf resolves a node index to its RPC address (rpc.Resolver).
 func (n *Node) RPCAddrOf(idx meta.NodeIdx) (addr string, self, ok bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].Idx == idx {
-			if nodes[i].Kind != meta.KindDevice || nodes[i].Addr == "" {
-				return "", false, false
-			}
-			return net.JoinHostPort(nodes[i].Addr, strconv.Itoa(int(nodes[i].RPCPort))), nodes[i].ID == n.ID, true
-		}
+	nd, found := n.FSM.Node(idx)
+	if !found || nd.Kind != meta.KindDevice || nd.Addr == "" {
+		return "", false, false
 	}
-	return "", false, false
+	return nd.RPCAddr(), nd.ID == n.ID, true
 }
 
-func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].Idx == idx {
-			return nodes[i], true
-		}
-	}
-	return meta.Node{}, false
-}
+func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) { return n.FSM.Node(idx) }
 
-func raftAddrOf(nd meta.Node) raft.ServerAddress {
-	return raft.ServerAddress(net.JoinHostPort(nd.Addr, strconv.Itoa(int(nd.RaftPort))))
-}
+func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.RaftAddr()) }
 
 // RaftAddrFor lets tests substitute in-memory transport addresses for node records.
 var RaftAddrFor = raftAddrOf
@@ -83,15 +63,21 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	}
 	nd := meta.Node{ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
 		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano()}
-	// re-join of a known node keeps its index
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == req.NodeID {
-			if nodes[i].State == meta.Removed {
-				return rpc.JoinResponse{}, fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
+	var err error
+	// re-join of a known node keeps its index; a removed record refuses the ID
+	n.FSM.ForEachNode(func(cur meta.Node) bool {
+		if cur.ID == req.NodeID {
+			if cur.State == meta.Removed {
+				nd.Idx = 0
+				err = fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
+				return false
 			}
-			nd.Idx = nodes[i].Idx
+			nd.Idx = cur.Idx
 		}
+		return true
+	})
+	if err != nil {
+		return rpc.JoinResponse{}, err
 	}
 	var fut raft.IndexFuture
 	if req.Voter {

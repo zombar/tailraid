@@ -279,16 +279,14 @@ func (p *Prober) Self() meta.NodeIdx {
 }
 
 func (p *Prober) Live() []meta.NodeIdx {
-	nodes := p.node.FSM.Nodes()
 	var out []meta.NodeIdx
-	for i := range nodes {
-		if nodes[i].State == meta.Removed {
-			continue
+	p.node.FSM.ForEachNode(func(nd meta.Node) bool {
+		if nd.State != meta.Removed && p.IsLive(nd.Idx) {
+			out = append(out, nd.Idx)
 		}
-		if p.IsLive(nodes[i].Idx) {
-			out = append(out, nodes[i].Idx)
-		}
-	}
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
@@ -345,12 +343,4 @@ func (n *Node) Health(clk clock.Clock, prober *Prober) HealthReport {
 	return rep
 }
 
-func (n *Node) nodeByID(id string) (meta.Node, bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == id {
-			return nodes[i], true
-		}
-	}
-	return meta.Node{}, false
-}
+func (n *Node) nodeByID(id string) (meta.Node, bool) { return n.FSM.NodeByID(id) }

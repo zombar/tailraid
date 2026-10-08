@@ -135,7 +135,7 @@ func newEnv(t *testing.T) *env {
 	}
 	e.ts = tailscale.NewFake(memberIP, "self-1", nil)
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
-	e.auth = &WhoIsAuthorizer{TS: e.ts, Members: e.app.fsm.Nodes, Clk: e.clk}
+	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
 	e.srv, err = NewServer(Options{NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
 		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,

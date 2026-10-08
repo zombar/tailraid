@@ -192,6 +192,55 @@ func (f *FSM) ForEachChunk(fn func(Chunk) bool) {
 	}
 }
 
+// Node returns the record at idx.
+func (f *FSM) Node(idx NodeIdx) (Node, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n, ok := f.st.Nodes[idx]
+	if !ok {
+		return Node{}, false
+	}
+	return *n, true
+}
+
+// ForEachNode calls fn for every node record, in no particular order, until fn returns
+// false. Unlike Nodes it copies nothing but the record handed to fn.
+func (f *FSM) ForEachNode(fn func(Node) bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	for _, n := range f.st.Nodes {
+		if !fn(*n) {
+			return
+		}
+	}
+}
+
+// NodeByID returns the record with the given raft ID that is not Removed.
+func (f *FSM) NodeByID(id string) (Node, bool) {
+	return f.findNode(func(n *Node) bool { return n.ID == id && n.State != Removed })
+}
+
+// NodeByAddr returns the device record at addr that is not Removed (the RPC authorizer's
+// member lookup, docs/08).
+func (f *FSM) NodeByAddr(addr string) (Node, bool) {
+	return f.findNode(func(n *Node) bool { return n.Kind == KindDevice && n.State != Removed && n.Addr == addr })
+}
+
+func (f *FSM) findNode(pred func(*Node) bool) (Node, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var found *Node
+	for _, n := range f.st.Nodes {
+		if pred(n) && (found == nil || n.Idx < found.Idx) { // deterministic when several match
+			found = n
+		}
+	}
+	if found == nil {
+		return Node{}, false
+	}
+	return *found, true
+}
+
 // Nodes returns all node records sorted by Idx.
 func (f *FSM) Nodes() []Node {
 	f.mu.RLock()

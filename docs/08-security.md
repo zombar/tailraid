@@ -31,7 +31,8 @@ implements:
    `TSStableID`. Mismatch → **403** and the cache entry for that IP is purged. This catches
    an IP that was reassigned to another device and a device that re-authenticated under a
    different identity.
-4. Cache: positive results for 5 minutes, negative results for 30 seconds. The cache is
+4. Cache: positive results for 5 minutes, negative results for 30 seconds; concurrent
+   misses for one address share a single WhoIs call. The cache is
    purged entirely on every membership change event, so a removed member is rejected on
    its very next request even with a warm cache.
 5. The `X-Tailraid-Cluster` header must equal this node's cluster ID → otherwise **409**.

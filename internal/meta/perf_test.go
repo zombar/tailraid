@@ -180,3 +180,57 @@ func TestFSM_ForEachChunk_OrderAndStop(t *testing.T) {
 		t.Fatalf("stopped after %d", n)
 	}
 }
+
+// The indexed node lookups agree with the sorted table: by index, by raft ID and by
+// address (devices that are not Removed only), and ForEachNode visits every record once.
+func TestFSM_NodeLookups(t *testing.T) {
+	tf := newTFSM(t)
+	for i := 1; i <= 4; i++ {
+		tf.ok(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: fmt.Sprintf("id%d", i), Name: fmt.Sprintf("n%d", i), Kind: KindDevice, State: Active, Addr: fmt.Sprintf("10.0.0.%d", i), RPCPort: 20481, RaftPort: 20480}}})
+	}
+	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 4, State: Removed, Now: 5}})
+	nodes := tf.f.Nodes()
+	if len(nodes) != 4 {
+		t.Fatalf("%d nodes", len(nodes))
+	}
+	for _, want := range nodes {
+		got, ok := tf.f.Node(want.Idx)
+		if !ok || got.ID != want.ID {
+			t.Fatalf("Node(%d) = %+v %v", want.Idx, got, ok)
+		}
+		if want.State == Removed {
+			if _, ok := tf.f.NodeByID(want.ID); ok {
+				t.Fatal("NodeByID returned a removed record")
+			}
+			if _, ok := tf.f.NodeByAddr(want.Addr); ok {
+				t.Fatal("NodeByAddr returned a removed record")
+			}
+			continue
+		}
+		if got, ok := tf.f.NodeByID(want.ID); !ok || got.Idx != want.Idx {
+			t.Fatalf("NodeByID(%s) = %+v %v", want.ID, got, ok)
+		}
+		if got, ok := tf.f.NodeByAddr(want.Addr); !ok || got.Idx != want.Idx {
+			t.Fatalf("NodeByAddr(%s) = %+v %v", want.Addr, got, ok)
+		}
+		if got.RPCAddr() != want.Addr+":20481" || got.RaftAddr() != want.Addr+":20480" {
+			t.Fatalf("addresses %s %s", got.RPCAddr(), got.RaftAddr())
+		}
+	}
+	if _, ok := tf.f.Node(99); ok {
+		t.Fatal("Node(99)")
+	}
+	if _, ok := tf.f.NodeByAddr("10.9.9.9"); ok {
+		t.Fatal("NodeByAddr unknown")
+	}
+	seen := map[NodeIdx]int{}
+	tf.f.ForEachNode(func(n Node) bool { seen[n.Idx]++; return true })
+	if len(seen) != 4 {
+		t.Fatalf("ForEachNode saw %v", seen)
+	}
+	n := 0
+	tf.f.ForEachNode(func(Node) bool { n++; return false })
+	if n != 1 {
+		t.Fatalf("ForEachNode did not stop: %d", n)
+	}
+}
