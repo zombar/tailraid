@@ -327,6 +327,34 @@ func volumeCmd() *cobra.Command {
 	return c
 }
 
+func resetCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "reset",
+		Short: "Wipe this device's local Raft state and identity so it can join afresh (shards are kept)",
+		Long: `reset deletes <data_dir>/raft, node_id and cluster_id. It never touches shards/ (the
+sweep reconciles them after the rejoin) or cache/. It refuses while serve is running and
+while staging/ holds unflushed writes, unless --discard-dirty says to lose them.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			if yes, _ := cmd.Flags().GetBool("yes"); !yes {
+				return fmt.Errorf("reset wipes %s/raft, node_id and cluster_id; re-run with --yes", cfg.Node.DataDir)
+			}
+			discard, _ := cmd.Flags().GetBool("discard-dirty")
+			if err := cluster.Reset(cfg.Node.DataDir, discard); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "reset %s: raft state and identity removed; shards kept\n", cfg.Node.DataDir)
+			return nil
+		},
+	}
+	c.Flags().Bool("yes", false, "confirm the wipe")
+	c.Flags().Bool("discard-dirty", false, "also delete staging/ (unflushed, acknowledged writes are lost)")
+	return c
+}
+
 func tokenCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use: "token", Short: "Show the join token",

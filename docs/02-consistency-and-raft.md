@@ -265,7 +265,9 @@ same ID), `node set-capacity` (`NodeUpsert`), `node drain` (`NodeSetState Draini
 excluded from new placement; repairer re-places its slots), `node remove`
 (`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`),
 `tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
-the device can `join` afresh; never touches `shards/`, which the sweep reconciles later).
+the device can `join` afresh; never touches `shards/`, which the sweep reconciles later; it
+refuses while `serve` runs and while `staging/` holds unflushed writes, unless
+`--discard-dirty` accepts losing them).
 
 ## Partitions and quorum
 
