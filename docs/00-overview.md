@@ -20,7 +20,7 @@ numbered invariant (`I-n`) in these documents is enforced by at least one named 
 3. **Dedup**: identical 1 MiB chunks are stored once regardless of path or how often they
    are written.
 4. **Native mounts** on Windows, macOS, Linux with no kernel drivers to install.
-5. **Small, provable code**: a single static binary of about 17.6k production lines through
+5. **Small, provable code**: a single static binary of about 18.1k production lines through
    M4 (the original 8k budget was optimistic, see the size table), with a test suite that
    would have caught every bug the predecessor shipped.
 6. **Day-zero membership management**: add, drain, remove, promote nodes and change `k+m`
@@ -133,7 +133,7 @@ for a member. No TLS of our own.
 | `internal/{mount,svc,dev}` | ~700 |
 | `internal/soak` (engine, live env, report; shipped for `tailraid verify`) | ~2,300 |
 | `internal/update` | ~350 |
-| **Through M4 (measured 2026-10-08, after the review fixes)** | **≈ 17.6k** |
+| **Through M4 (measured 2026-10-08, after the review fixes and the hot-path work)** | **≈ 18.1k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The

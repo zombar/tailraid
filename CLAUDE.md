@@ -84,7 +84,7 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on every
   node" function has an **N-node determinism** test; every randomized test takes `-seed` and
   prints it on failure; `goleak.VerifyTestMain` in packages that start goroutines.
-- Prefer deleting over abstracting. Production code is ≈ 17.6k lines through M4 (measured 2026-10-08; the plan's 8k was optimistic,
+- Prefer deleting over abstracting. Production code is ≈ 18.1k lines through M4 (measured 2026-10-08 after the review and hot-path work; the plan's 8k was optimistic,
   see docs/00). If a feature needs far more than its row in docs/00, the design is wrong.
 - Logging with `log/slog`; no metrics library (`tailraid status --json` instead).
 

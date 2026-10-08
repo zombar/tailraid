@@ -53,6 +53,8 @@ type Fabric struct {
 	down        map[meta.NodeIdx]bool
 	full        map[meta.NodeIdx]bool
 	failPutOnce map[meta.NodeIdx]int
+	failPutWith map[meta.NodeIdx]error     // every PUT to the node fails with this
+	stallPut    map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
 	putCount    int
 	gets        map[meta.NodeIdx]int
 	proposeErr  error // returned once by Propose as a transport failure
@@ -222,7 +224,16 @@ func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, b
 		f.mu.Unlock()
 		return errors.New("fabric: injected put failure")
 	}
+	if err := f.failPutWith[node]; err != nil {
+		f.mu.Unlock()
+		return err
+	}
+	stall := f.stallPut[node]
 	f.mu.Unlock()
+	if stall != nil {
+		stall.enteredOnce.Do(func() { close(stall.entered) })
+		<-stall.release
+	}
 	if !ok || down {
 		return errNodeDown
 	}
@@ -447,6 +458,43 @@ func (f *Fabric) FailPutOnce(n meta.NodeIdx, count int) {
 	f.mu.Lock()
 	f.failPutOnce[n] = count
 	f.mu.Unlock()
+}
+
+// FailPutWith makes every PUT to node fail with err (nil restores service).
+func (f *Fabric) FailPutWith(node meta.NodeIdx, err error) {
+	f.mu.Lock()
+	if f.failPutWith == nil {
+		f.failPutWith = map[meta.NodeIdx]error{}
+	}
+	f.failPutWith[node] = err
+	f.mu.Unlock()
+}
+
+type putStall struct {
+	entered     chan struct{}
+	enteredOnce sync.Once
+	release     chan struct{}
+}
+
+// StallPut makes every PUT to node block until release is called; entered closes when the
+// first one is waiting.
+func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
+	s := &putStall{entered: make(chan struct{}), release: make(chan struct{})}
+	f.mu.Lock()
+	if f.stallPut == nil {
+		f.stallPut = map[meta.NodeIdx]*putStall{}
+	}
+	f.stallPut[node] = s
+	f.mu.Unlock()
+	var once sync.Once
+	return s.entered, func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.stallPut, node)
+			f.mu.Unlock()
+			close(s.release)
+		})
+	}
 }
 
 // ProposeErrOnce makes the next Propose fail as a transport error.

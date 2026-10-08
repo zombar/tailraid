@@ -517,8 +517,15 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 		}
 	}
 	failed := f.putSlots(ctx, w, shards, place, acked)
-	if len(failed) > 0 {
-		// re-place failed slots once, excluding failed nodes and current holders
+	unacked := 0
+	for i := range place {
+		if place[i] != 0 && !acked[i] {
+			unacked++ // failed, or still pending past the deadline (L-43)
+		}
+	}
+	if unacked > 0 {
+		// re-place every slot without an ack once, excluding failed and straggling nodes
+		// and the current holders
 		var exclude []meta.NodeIdx
 		for i, n := range place {
 			if n != 0 && (acked[i] || !failed[i]) {
@@ -587,16 +594,22 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 			acks++
 		}
 	}
+	// Once the deadline has passed, the first moment k acks are in ends the wait and the
+	// stragglers are recorded as missing slots (L-43). The deadline fires once, so it is
+	// remembered rather than re-selected: a deadline that passes before the k-th ack must
+	// still cut the wait short when that ack arrives.
 	deadline := f.clk.After(f.cfg.PutDeadline)
+	expired := false
 	for pending > 0 {
+		if expired && acks >= int(w.k) {
+			return failed
+		}
 		var r res
 		select {
 		case r = <-out:
 		case <-deadline:
-			if acks >= int(w.k) {
-				return failed // stragglers are recorded as missing slots
-			}
-			r = <-out
+			expired, deadline = true, nil
+			continue
 		}
 		pending--
 		if r.err != nil {
