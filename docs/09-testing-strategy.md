@@ -197,6 +197,11 @@ write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, r
 - `goleak.VerifyTestMain` in every package that starts goroutines; the ignore list is empty
   unless an entry carries an upstream issue link.
 - `t.Parallel()` only in pure packages (ec, placement, meta).
+- **Hot-path benchmarks** (`make bench`): flush of full chunks, cached and uncached reads,
+  Commit on a 16k-chunk file, LOOKUP / GETATTR / READDIR on a 10k-entry directory, FSSTAT
+  over 100k chunks, the chunk walk, shard-store PUT, cache GET, extent insert and cover
+  checks, encode and decode. A baseline is committed as `docs/reports/bench-<date>.txt`;
+  a performance change carries a `benchstat` delta against it in the commit message.
 
 ## 6. Soak suite and live verification
 
