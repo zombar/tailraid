@@ -75,6 +75,16 @@ type WhoIs struct {
 	} `json:"UserProfile"`
 }
 
+// Login is the tailnet user behind a WhoIs answer, or "" when there is none. Tailscale
+// reports the pseudo-login "tagged-devices" for every tagged node, so a tagged answer has
+// no login: two tagged servers must never match each other under a same-user rule (docs/13).
+func (w *WhoIs) Login() string {
+	if len(w.Node.Tags) > 0 {
+		return ""
+	}
+	return w.UserProfile.LoginName
+}
+
 // IPv4 returns a node's Tailscale IPv4 address.
 func (p PeerStatus) IPv4() (netip.Addr, bool) {
 	for _, a := range p.TailscaleIPs {
@@ -230,6 +240,18 @@ func (f *Fake) Add(addr netip.Addr, stableID, host string) {
 	if addr != f.St.Self.TailscaleIPs[0] {
 		f.St.Peer["nodekey:"+stableID] = PeerStatus{ID: stableID, HostName: host, TailscaleIPs: []netip.Addr{addr}, Online: true}
 	}
+}
+
+// SetUser sets the login name and tags WhoIs reports for a known node; unknown addresses
+// are ignored.
+func (f *Fake) SetUser(addr netip.Addr, login string, tags ...string) {
+	w, ok := f.Nodes[addr]
+	if !ok {
+		return
+	}
+	w.UserProfile.LoginName = login
+	w.Node.Tags = tags
+	f.Nodes[addr] = w
 }
 
 // Remove forgets a node (re-auth or deletion).

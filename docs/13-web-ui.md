@@ -259,7 +259,7 @@ same commits.
 
 | Invariant | Tests |
 |---|---|
-| I-68 | `TestStub_I_68` |
+| I-68 | `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone`, `TestStub_I_68` |
 | I-69 | `TestStub_I_69` |
 | I-70 | `TestStub_I_70` |
 | I-71 | `TestStub_I_71` |

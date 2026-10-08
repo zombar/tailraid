@@ -176,7 +176,13 @@ func Listen(addr string, auth Authorizer) (net.Listener, error) {
 
 // Serve runs the HTTP server on l until ctx is done.
 func (s *Server) Serve(ctx context.Context, l net.Listener) error {
-	srv := &http.Server{Handler: s.handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 2 * time.Minute}
+	return ServeHTTP(ctx, l, s.handler)
+}
+
+// ServeHTTP serves h on l with the node's timeouts until ctx is done, then shuts down
+// gracefully (5 s). The web UI listener (docs/13) shares it.
+func ServeHTTP(ctx context.Context, l net.Listener, h http.Handler) error {
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 2 * time.Minute}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(l) }()
 	select {
@@ -202,7 +208,8 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(ErrorBody{Error: msg})
 }
 
-func srcAddr(r *http.Request) (netip.Addr, bool) {
+// SourceAddr is the TCP peer address of a request (never a header), unmapped from IPv6.
+func SourceAddr(r *http.Request) (netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return netip.Addr{}, false
@@ -232,7 +239,7 @@ const memberKey ctxKey = 1
 // member authorizes before any body is read (I-18).
 func (s *Server) member(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		src, ok := srcAddr(r)
+		src, ok := SourceAddr(r)
 		if !ok {
 			writeErr(w, http.StatusForbidden, "unparseable source address")
 			return
@@ -433,7 +440,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "cluster id mismatch")
 		return
 	}
-	src, ok := srcAddr(r)
+	src, ok := SourceAddr(r)
 	if !ok {
 		writeErr(w, http.StatusForbidden, "unparseable source address")
 		return
