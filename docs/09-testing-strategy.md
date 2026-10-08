@@ -267,7 +267,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
 
 `.github/workflows/ci.yml`: `checks` (tidy diff, gofmt) · `lint` (golangci-lint v2 via
 `go tool -modfile=tools.mod`, `check-invariants.sh --check`) · `vuln` (govulncheck) · `test`
-matrix ubuntu/macos/windows `go test -short -race -cover ./...` (no coverage gate) · `long`
+matrix ubuntu/macos/windows `go test -short -race -cover ./...` (no coverage gate; the
+Windows leg runs without `-race` and without the harness-based `test/cluster` and
+`internal/soak` packages, whose 1 s Raft election timeouts the slower runner cannot hold —
+their logic is OS-independent and covered by the other two legs) · `long`
 on pushes to main and nightly (`make test-long`) · `mount` on main (ubuntu with
 `nfs-common`, macos; `sudo -E make test-mount`) · `soak` nightly on ubuntu uploading
 `report.html` · `release` on tags `v*` (6 static binaries + sha256sums). Go version is read
