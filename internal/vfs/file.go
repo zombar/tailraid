@@ -185,7 +185,11 @@ func (fi *fileInfo) Mode() os.FileMode {
 	return m
 }
 func (fi *fileInfo) ModTime() time.Time { return time.Unix(0, fi.in.Mtime) }
-func (fi *fileInfo) IsDir() bool        { return fi.in.Type == meta.TDir }
+
+// Dirty reports acknowledged bytes not yet committed to the cluster (the size and the
+// bytes come from the overlay; docs/13 omits the ETag while it is set).
+func (fi *fileInfo) Dirty() bool { return fi.dirty }
+func (fi *fileInfo) IsDir() bool { return fi.in.Type == meta.TDir }
 func (fi *fileInfo) Sys() any {
 	return &nfsfile.FileInfo{Nlink: uint32(fi.in.Nlink), UID: fi.in.Uid, GID: fi.in.Gid, Fileid: uint64(fi.in.Ino)}
 }

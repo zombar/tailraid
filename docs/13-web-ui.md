@@ -260,8 +260,8 @@ same commits.
 | Invariant | Tests |
 |---|---|
 | I-68 | `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone`, `TestStub_I_68` |
-| I-69 | `TestStub_I_69` |
-| I-70 | `TestStub_I_70` |
+| I-69 | `TestVFS_StatReportsDirty`, `TestStub_I_69` |
+| I-70 | `TestVFS_CapErrorsKeepSentinels`, `TestStub_I_70` |
 | I-71 | `TestStub_I_71` |
 | I-72 | `TestStub_I_72` |
-| I-73 | `TestStub_I_73` |
+| I-73 | `TestConfig_ListenWeb`, `TestStub_I_73` |

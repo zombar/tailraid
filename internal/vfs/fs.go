@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -107,7 +108,9 @@ func mapErr(op, name string, err error) error {
 	case errors.Is(err, ErrIO):
 		e = syscall.EIO
 	case errors.Is(err, ErrWALFull), errors.Is(err, ErrDirtyFull):
-		e = syscall.EIO // NFS3ERR_IO; the client retries once the flush drains (docs/04 §3)
+		// NFS3ERR_IO; the client retries once the flush drains (docs/04 §3). The sentinel
+		// stays reachable so the web UI's upload can wait instead (docs/13 §4).
+		e = fmt.Errorf("%w: %w", syscall.EIO, err)
 	case errors.Is(err, ErrFileTooLarge):
 		e = syscall.EFBIG
 	default:

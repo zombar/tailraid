@@ -98,6 +98,7 @@ type Report struct {
 	JoinToken   string         `json:"join_token,omitempty"`
 	Repair      *RepairStatus  `json:"repair,omitempty"`
 	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
+	WebURL      string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	GeneratedAt time.Time      `json:"generated_at"`
 }
 

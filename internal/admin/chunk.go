@@ -53,15 +53,30 @@ var ErrAmbiguous = errors.New("admin: hash prefix matches several chunks")
 // DescribeChunks resolves sel — a hex hash or prefix (≥ 8 hex digits) or a /path (every
 // chunk of that file, in order) — and builds one report per chunk. hc may be nil.
 func DescribeChunks(ctx context.Context, st *meta.Store, p *cluster.Prober, hc ShardChecker, ring *meta.EventRing, sel string) ([]ChunkReport, error) {
+	_, out, err := DescribeChunksPage(ctx, st, p, hc, ring, sel, 0, 0)
+	return out, err
+}
+
+// DescribeChunksPage is DescribeChunks over the window [offset, offset+limit) of the
+// selection (limit <= 0 means to the end) and returns the whole selection's count too.
+// The web UI pages a file's chunks this way because each report costs one HEAD per live
+// slot (docs/13 §5).
+func DescribeChunksPage(ctx context.Context, st *meta.Store, p *cluster.Prober, hc ShardChecker, ring *meta.EventRing, sel string, offset, limit int) (int, []ChunkReport, error) {
 	hashes, err := selectChunks(st, sel)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
-	out := make([]ChunkReport, 0, len(hashes))
-	for _, h := range hashes {
+	total := len(hashes)
+	offset = min(max(offset, 0), total)
+	end := total
+	if limit > 0 && offset+limit < total {
+		end = offset + limit
+	}
+	out := make([]ChunkReport, 0, end-offset)
+	for _, h := range hashes[offset:end] {
 		out = append(out, DescribeChunk(ctx, st, p, hc, ring, h))
 	}
-	return out, nil
+	return total, out, nil
 }
 
 func selectChunks(st *meta.Store, sel string) ([]meta.Hash, error) {
