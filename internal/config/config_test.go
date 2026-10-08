@@ -57,8 +57,9 @@ func TestLoadSave_RoundTripAndStrict(t *testing.T) {
 }
 
 func TestHome_RespectsEnv(t *testing.T) {
-	t.Setenv("TAILRAID_HOME", "/x/y")
-	if Home() != "/x/y" || DefaultPath() != "/x/y/config.yaml" {
-		t.Fatal(Home())
+	h := filepath.Join(t.TempDir(), "x", "y")
+	t.Setenv("TAILRAID_HOME", h)
+	if Home() != h || DefaultPath() != filepath.Join(h, "config.yaml") {
+		t.Fatal(Home(), DefaultPath())
 	}
 }

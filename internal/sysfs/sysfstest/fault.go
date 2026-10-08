@@ -127,6 +127,9 @@ func (f *Fault) check(step Step, file *faultFile) error {
 			file.truncateTo(f.tornKeep)
 		}
 		f.tornKeep = -1
+		if file != nil {
+			_ = file.File.Close() // a dead process holds no handles (Windows cannot remove open files)
+		}
 		panic(crashSentinel{step})
 	}
 	if f.failStep == step {
@@ -257,6 +260,7 @@ func (ff *faultFile) Sync() error {
 
 func (ff *faultFile) Close() error {
 	if err := ff.f.check(StepClose, ff); err != nil {
+		_ = ff.File.Close() // a failed close still releases the descriptor
 		return err
 	}
 	return ff.File.Close()

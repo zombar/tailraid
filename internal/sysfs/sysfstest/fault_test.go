@@ -19,9 +19,11 @@ func writeViaFault(t *testing.T, fsys sysfs.FS, dir string, data []byte) (tmpNam
 	}
 	name := f.Name()
 	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
 		return name, err
 	}
 	if err := f.Sync(); err != nil {
+		_ = f.Close()
 		return name, err
 	}
 	if err := f.Close(); err != nil {

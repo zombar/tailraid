@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -39,6 +40,12 @@ type gateway struct {
 // the client library on the same connection (go-nfs serves MOUNT and NFS on one port).
 func startGateway(t *testing.T) *gateway {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		// go-nfs-client binds explicit local ports that fall inside Windows' reserved
+		// ranges on CI runners. The gateway itself is validated on Windows at M4 through
+		// the real NFS client (docs/windows-checklist.md).
+		t.Skip("NFS client library cannot bind local ports on Windows runners")
+	}
 	f := testharness.NewFabric(t, 3, 2, 1)
 	h := nfsgw.New(f.FS(), f.FSM)
 	l, err := nfsgw.Listen("127.0.0.1:0")

@@ -196,19 +196,29 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("vfs: wal compact fsync: %w", err)
 	}
+	// Both handles are closed before the rename: Windows refuses to replace or rename a
+	// file that has an open handle. The data is already fsynced, so the only window is
+	// between rename and reopen, which a crash recovers from by replaying either file.
+	_ = nf.Close()
+	_ = w.f.Close()
 	if err := os.Rename(tmp, w.path); err != nil {
-		_ = nf.Close()
 		_ = os.Remove(tmp)
+		reopened, rerr := os.OpenFile(w.path, os.O_RDWR, 0o600)
+		if rerr != nil {
+			return nil, fmt.Errorf("vfs: wal compact rename: %w (reopen: %w)", err, rerr)
+		}
+		w.f = reopened
 		return nil, fmt.Errorf("vfs: wal compact rename: %w", err)
 	}
 	if err := syncDir(filepath.Dir(w.path)); err != nil {
-		_ = nf.Close()
 		return nil, err
 	}
-	old := w.f
-	w.f = nf
+	reopened, err := os.OpenFile(w.path, os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("vfs: wal compact reopen: %w", err)
+	}
+	w.f = reopened
 	w.size = pos
-	_ = old.Close()
 	return offs, nil
 }
 
