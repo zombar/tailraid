@@ -3,6 +3,7 @@ package vfs
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -347,5 +348,44 @@ func TestWAL_AppendAfterFailedSync_NoResurrectedRecord(t *testing.T) {
 	defer w2.Close()
 	if recs := replayAll(t, w2); len(recs) != 1 || recs[0].typ != recBase {
 		t.Fatalf("replayed %+v, want the base record only", recs)
+	}
+}
+
+// A record is bounded so a corrupt length can never drive a huge allocation on replay:
+// the largest record is accepted and read back, one byte more is refused up front.
+// Invariant: I-37
+func TestWAL_RecordSizeBoundaries(t *testing.T) {
+	for _, n := range []int{maxRecordData - 1, maxRecordData, maxRecordData + 1} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "9.wal")
+			w, err := openWAL(sysfs.OS{}, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := make([]byte, n)
+			data[n-1] = 9
+			_, err = w.AppendWrite(4096, data)
+			if n > maxRecordData {
+				if err == nil {
+					t.Fatal("over-sized record accepted")
+				}
+				if w.Size() != 0 {
+					t.Fatalf("WAL grew to %d on a refused record", w.Size())
+				}
+				must(t, w.Close())
+				return
+			}
+			must(t, err)
+			must(t, w.Close())
+			w2, err := openWAL(sysfs.OS{}, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w2.Close()
+			recs := replayAll(t, w2)
+			if len(recs) != 1 || int(recs[0].n) != n || recs[0].data[n-1] != 9 {
+				t.Fatalf("replayed %d records, n=%d", len(recs), recs[0].n)
+			}
+		})
 	}
 }

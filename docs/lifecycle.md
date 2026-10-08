@@ -18,7 +18,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-10 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-10 truncate to 0 | Tombstoned (all chunks Refs−1) if unshared | `TestFSM_Commit_TruncateDown` |
 | L-11 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-11 truncate up | Committed (short tail) + HashZero indices | `TestFSM_Commit_GrowWithHoles`, `TestFSM_Commit_TruncateThenGrow_DropsOldBytes`, `TestNFS_SetattrSizeTruncates`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDownThenUp`, `TestOverlay_TruncateThenGrow_ZerosOldBytes`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface` |
 | L-12 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-12 truncate below dirty extents | Dirty (extents trimmed) | `TestExtents_InsertOverlap_Property`, `TestExtents_Truncate`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateThenGrow_ZerosOldBytes`, `TestVFS_OracleRandomOps` |
-| L-13 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-13 unlink before flush | (dropped) | `TestOverlay_DropRemovesWAL`, `TestVFS_RemoveDirtyFile_DropsOverlay` |
+| L-13 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-13 unlink before flush | (dropped) | `TestOverlay_DropRemovesWAL`, `TestVFS_RemoveDirtyFile_DropsOverlay`, `TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL` |
 | L-14 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-13 unlink (shared chunk) | Committed (Refs−1 ≥ 1) | `TestFSM_Unlink_Rmdir`, `TestNFS_RemovedHandleIsStale`, `TestVFS_OracleRandomOps` |
 | L-15 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-13 unlink (sole reference) | Tombstoned | `TestFSM_Unlink_Rmdir` |
 | L-16 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-14 rename | Committed | `TestFSM_Rename_Table`, `TestMount_Workload`, `TestNFS_RenameKeepsHandleValid`, `TestVFS_OracleRandomOps` |
@@ -154,7 +154,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-146 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned (≥ k slots on live nodes) | Commit referencing hash | Uploading | `TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit` |
 | L-147 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | membership change (join/remove/IP/capacity) | placement changed | `TestFSM_SetPlacement` |
 | L-148 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | Commit proposed | visible on any gateway before Raft commit | `TestCluster_SplitBrain_OnlyMajorityCommits` |
-| L-149 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (none) | WRITE | FILE_SYNC before WAL fsync | `TestStubLifecycle_L_149` |
+| L-149 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (none) | WRITE | FILE_SYNC before WAL fsync | `TestOverlay_WriteNotAckedWhenFsyncFails`, `TestStubLifecycle_L_149` |
 | L-150 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | any | Refs > 0 with no inode referencing the hash | `TestCheckInvariants_DetectsEachViolation` |
 | L-151 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | any | len(Chunks) ≠ ceil(Size/CS) | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite` |
 | L-152 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | all zero | shards stored for HashZero | `TestFlusher_HoleChunksAreHashZero` |

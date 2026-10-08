@@ -14,6 +14,8 @@ import (
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs/sysfstest"
 )
 
 const testCS = uint32(4096)
@@ -884,5 +886,30 @@ func TestOverlay_StaleCompactTempRemoved(t *testing.T) {
 	want := append(make([]byte, 300), "live"...)
 	if got := readFrom(t, ov2, ino, 0, baseOf(nil), 400); !bytes.Equal(got, want) {
 		t.Fatalf("differs at %d", firstDiff(got, want))
+	}
+}
+
+// A WRITE whose WAL record did not fsync is not acknowledged: the overlay returns the
+// error, holds no byte of it, and a restart replays nothing from it (forbidden L-149).
+// Invariant: I-7
+// Lifecycle: L-149
+func TestOverlay_WriteNotAckedWhenFsyncFails(t *testing.T) {
+	dir := t.TempDir()
+	ff := sysfstest.New(sysfs.OS{})
+	ov, _ := newOverlay(t, dir, WithFS(ff))
+	ino := meta.Ino(51)
+	must(t, ov.Write(ino, 0, 4096, []byte("first")))
+	ff.FailAt(sysfstest.StepSync, errors.New("disk said no"))
+	if err := ov.Write(ino, 0, 8192, []byte("second")); err == nil {
+		t.Fatal("write acknowledged although its record never reached the disk")
+	}
+	if d := ov.Dirty(); len(d) != 1 || d[0].DirtyBytes != 5 {
+		t.Fatalf("dirty after the failed write: %+v", d)
+	}
+	must(t, ov.Close())
+	ov2, _ := newOverlay(t, dir)
+	want := append(make([]byte, 4096), "first"...)
+	if got := readFrom(t, ov2, ino, 0, baseOf(nil), 9000); !bytes.Equal(got, want) {
+		t.Fatalf("after restart: len %d, differs at %d", len(got), firstDiff(got, want))
 	}
 }

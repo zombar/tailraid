@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -540,4 +541,113 @@ func TestVFS_ProposeFails_RetriesUntilStale(t *testing.T) {
 			t.Fatalf("mkdir while stale: err=%v, want EROFS", err)
 		}
 	})
+}
+
+// Opening a symlink for writing is refused: a symlink holds no data, and a handle on its
+// inode would swallow every write (the flusher ignores non-files). NFS clients READLINK
+// and open the target, so nothing legitimate reaches this path.
+// Invariant: I-7
+func TestVFS_WriteToSymlinkInode_NotSilentlyDropped(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fh, err := fs.Create("/target")
+	must(t, err)
+	must(t, fh.Close())
+	must(t, fs.Symlink("/target", "/link"))
+	if _, err := fs.OpenFile("/link", os.O_RDWR, 0); !errors.Is(err, syscall.ELOOP) {
+		t.Fatalf("open symlink for write: err=%v, want ELOOP", err)
+	}
+	if len(f.Ov.Dirty()) != 0 {
+		t.Fatalf("overlay dirtied by a refused open: %+v", f.Ov.Dirty())
+	}
+}
+
+// A rename of a directory into its own subtree fails without side effects: no parent
+// directory is created on the way to the refusal.
+// Invariant: I-26
+func TestVFS_RenameIntoOwnSubtree_NoSideEffects(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	must(t, fs.MkdirAll("/a/b", 0o755))
+	if err := fs.Rename("/a", "/a/b/c/d"); err == nil {
+		t.Fatal("rename into own subtree succeeded")
+	}
+	if _, err := fs.Stat("/a/b/c"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the refused rename created /a/b/c: %v", err)
+	}
+	must(t, fs.Rename("/a", "/a")) // onto itself: a POSIX no-op, not a loop
+	if _, err := fs.Stat("/a/b"); err != nil {
+		t.Fatalf("original tree damaged: %v", err)
+	}
+}
+
+// A write through the handle of a removed file fails and leaves no WAL behind: the
+// overlay entry went with the unlink and nothing recreates it.
+// Lifecycle: L-13
+func TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fh, err := fs.Create("/gone")
+	must(t, err)
+	if _, err := fh.Seek(4096, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Write([]byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, fs.Remove("/gone"))
+	if _, err := fh.Write([]byte("after")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("write after remove: err=%v, want ENOENT", err)
+	}
+	must(t, f.Flusher().FlushAll(ctx))
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("overlay still tracks the removed file: %+v", d)
+	}
+	wals, _ := filepath.Glob(filepath.Join(f.Staging(), "*.wal"))
+	if len(wals) != 0 {
+		t.Fatalf("orphan WALs: %v", wals)
+	}
+}
+
+// Creating or truncating an already empty, clean file writes nothing: no WAL, no dirty
+// entry, no Commit for a file that did not change.
+// Invariant: I-1
+func TestVFS_ZeroByteFile_NoWALNoCommit(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fh, err := fs.Create("/z") // O_CREATE|O_TRUNC on a new empty file
+	must(t, err)
+	must(t, fh.Close())
+	ino := f.InodeOf(fs, "/z")
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("empty create dirtied the overlay: %+v", d)
+	}
+	must(t, f.Flusher().FlushAll(ctx))
+	if in := f.Inode(ino); in.Version != 0 || in.Size != 0 || len(in.Chunks) != 0 {
+		t.Fatalf("empty file was committed: %+v", in)
+	}
+	fh, err = fs.OpenFile("/z", os.O_RDWR|os.O_TRUNC, 0) // truncate of a clean empty file
+	must(t, err)
+	must(t, fh.Close())
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("O_TRUNC on an empty clean file dirtied the overlay: %+v", d)
+	}
+	wals, _ := filepath.Glob(filepath.Join(f.Staging(), "*.wal"))
+	if len(wals) != 0 {
+		t.Fatalf("WAL files for an untouched empty file: %v", wals)
+	}
+	// a non-empty file truncated to zero still records the truncate
+	fh, err = fs.Create("/n")
+	must(t, err)
+	if _, err := fh.Write([]byte("bytes")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, fh.Close())
+	must(t, f.Flusher().FlushAll(ctx))
+	fh, err = fs.OpenFile("/n", os.O_RDWR|os.O_TRUNC, 0)
+	must(t, err)
+	must(t, fh.Close())
+	if d := f.Ov.Dirty(); len(d) != 1 {
+		t.Fatalf("truncate of a non-empty file not recorded: %+v", d)
+	}
 }

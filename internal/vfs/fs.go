@@ -70,6 +70,18 @@ func split(name string) []string {
 	return strings.Split(name[1:], "/")
 }
 
+func equalParts(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func parentOf(parts []string) ([]string, string) {
 	if len(parts) == 0 {
 		return nil, ""
@@ -169,6 +181,11 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 		if in.Type == meta.TDir {
 			return nil, mapErr("open", filename, meta.ErrIsDir)
 		}
+		if in.Type != meta.TFile {
+			// a symlink has no data of its own; NFS clients READLINK and open the target,
+			// so a handle here would only swallow writes (flush ignores non-files)
+			return nil, mapErr("open", filename, syscall.ELOOP)
+		}
 	case errors.Is(err, meta.ErrNotExist) && flag&os.O_CREATE != 0:
 		dirParts, base := parentOf(parts)
 		if err := f.mkdirAll(ctx, dirParts, 0o755); err != nil {
@@ -196,8 +213,11 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 	}
 	file := &File{fs: f, ino: in.Ino, name: filepath.Join(parts...), flag: flag} // billy names are root-relative
 	if flag&os.O_TRUNC != 0 && flag&(os.O_WRONLY|os.O_RDWR) != 0 {
-		if err := f.ov.Truncate(in.Ino, in.Size, 0); err != nil {
-			return nil, mapErr("open", filename, err)
+		// nothing to cut on an empty, clean file: no WAL record, no commit (I-1)
+		if _, dirty := f.ov.Size(in.Ino, in.Size); dirty || in.Size != 0 {
+			if err := f.ov.Truncate(in.Ino, in.Size, 0); err != nil {
+				return nil, mapErr("open", filename, err)
+			}
 		}
 	}
 	if flag&os.O_APPEND != 0 {
@@ -241,6 +261,11 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	oldDir, err := f.st.Resolve(op)
 	if err != nil {
 		return mapErr("rename", oldpath, err)
+	}
+	// a directory cannot move under itself; refuse before creating any parent (the FSM
+	// would refuse too, but only after mkdirAll had left new directories behind)
+	if oldParts := split(oldpath); len(oldParts) <= len(np) && equalParts(oldParts, np[:len(oldParts)]) {
+		return mapErr("rename", oldpath, meta.ErrLoop)
 	}
 	if err := f.mkdirAll(ctx, np, 0o755); err != nil {
 		return mapErr("rename", newpath, err)

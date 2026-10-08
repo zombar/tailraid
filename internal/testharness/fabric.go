@@ -91,6 +91,9 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	return f
 }
 
+// Staging is the overlay's WAL directory.
+func (f *Fabric) Staging() string { return f.staging }
+
 // RestartOverlay closes the overlay and reopens it from its WALs, as a gateway restart
 // does; dirty state must survive. Flushers and filesystems built before must be rebuilt.
 // Options (caps) apply to the reopened overlay.

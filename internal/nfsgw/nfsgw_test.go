@@ -60,7 +60,14 @@ func startGateway(t *testing.T) *gateway {
 	go func() { _ = nfsgw.Serve(sctx, l, h); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	cl, err := rpc.DialTCP("tcp", l.Addr().String(), false)
+	// the client library binds a random explicit local port and, unprivileged, does not
+	// retry a collision with a port another test's connection still holds
+	var cl *rpc.Client
+	for attempt := 0; attempt < 8; attempt++ {
+		if cl, err = rpc.DialTCP("tcp", l.Addr().String(), false); err == nil || !strings.Contains(err.Error(), "address already in use") {
+			break
+		}
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
