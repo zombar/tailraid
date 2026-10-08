@@ -90,6 +90,18 @@ type ClusterNode struct {
 	trans  *raft.InmemTransport
 	raddr  raft.ServerAddress
 	alive  bool // guarded by Cluster.mu
+	// Raft state lives in memory and survives a simulated kill, like the page cache of a
+	// process kill would; production uses the fsynced bbolt store (docs/04 §8.1)
+	stores  *cluster.Stores
+	started bool
+}
+
+// RaftTiming is the harness's shortened Raft timing: quick elections, but a lease long
+// enough that a leader under the race detector's load does not lose it to a slow
+// follower (CI showed 25 ms contact times stepping a 25 ms lease into permanent churn).
+func RaftTiming() *cluster.RaftTiming {
+	return &cluster.RaftTiming{Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond,
+		Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond}
 }
 
 // Cluster is an in-process multi-node tailraid.
@@ -205,7 +217,11 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		nd.raddr, nd.trans = raft.NewInmemTransportWithTimeout(nd.raddr, 10*time.Second)
 	}
 	c.connectAll()
-	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Fast: true, NoSync: true, SnapshotThreshold: c.snap}
+	if nd.stores == nil {
+		st := raft.NewInmemStore()
+		nd.stores = &cluster.Stores{Logs: st, Stable: st, Snaps: raft.NewInmemSnapshotStore()}
+	}
+	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Timing: RaftTiming(), Stores: nd.stores, SnapshotThreshold: c.snap}
 	if os.Getenv("TAILRAID_HARNESS_DEBUG") != "" {
 		opts.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})).With("node", fmt.Sprintf("n%d", nd.I))
 	}
@@ -213,7 +229,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	switch {
 	case bootstrap:
 		nd.Node, err = cluster.Bootstrap(context.Background(), opts, nd.record(c), vol, "harness-token")
-	case cluster.HasState(nd.Dir):
+	case nd.started:
 		nd.Node, err = cluster.Open(opts)
 	default:
 		nd.Node, err = cluster.OpenFresh(opts)
@@ -221,6 +237,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	if err != nil {
 		c.T.Fatal(err)
 	}
+	nd.started = true
 	if bootstrap {
 		if c.CID, err = cluster.LoadClusterID(nd.Dir); err != nil {
 			c.T.Fatal(err)

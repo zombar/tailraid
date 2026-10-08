@@ -25,7 +25,7 @@ func opts(t *testing.T, dir string) Options {
 		t.Fatal(err)
 	}
 	_, trans := raft.NewInmemTransport(raft.ServerAddress(id))
-	return Options{DataDir: dir, NodeID: id, Transport: trans, Fast: true}
+	return Options{DataDir: dir, NodeID: id, Transport: trans, Timing: &RaftTiming{Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond, Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond}}
 }
 
 func bootstrap(t *testing.T, dir string) *Node {

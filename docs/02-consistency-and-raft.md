@@ -192,7 +192,10 @@ on close. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db`
 `NoSync = false`.
 
 Raft configuration: `HeartbeatTimeout 2s`, `ElectionTimeout 2s`, `LeaderLeaseTimeout 1s`,
-`CommitTimeout 50ms`, `SnapshotInterval 2m`, `SnapshotThreshold 8192`, `TrailingLogs 10240`.
+`CommitTimeout 50ms`, `SnapshotInterval 2m`, `SnapshotThreshold 8192`, `TrailingLogs 10240`
+(`cluster.Options.Timing` overrides the timeouts; the test harness uses 1 s / 1 s / 500 ms /
+10 ms and Raft's in-memory stores through `Options.Stores`, which is how tests get speed
+without any switch that skips an fsync).
 Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
 
 ## Reads
