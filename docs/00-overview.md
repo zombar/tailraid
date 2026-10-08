@@ -29,7 +29,9 @@ numbered invariant (`I-n`) in these documents is enforced by at least one named 
 ## Non-goals (out of scope)
 
 S3 features beyond the implemented subset (versioning, ACLs, policies, lifecycle, tagging,
-SSE, object lock, presigned POST); web UI; metrics stack (a `status` JSON instead);
+SSE, object lock, presigned POST); web UI beyond the dashboard and file browser of docs/13
+(no user management, no mutating admin operations from the browser); metrics stack (a
+`status` JSON instead);
 encryption at rest (WireGuard covers transit); quotas; file versioning / recycle bin;
 xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; multiple
 independent volumes (S3 buckets are top-level directories of the one volume);
@@ -76,12 +78,15 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
       membership, prober/liveness, events)      GET/PUT/HEAD/DELETE /v1/shards/{key},
       raft TCP <tsIP>:20480 + cluster-id        POST /v1/apply, /v1/members, /v1/join,
       handshake; raft-boltdb; FileSnapshotStore GET /health; WhoIs authorizer)
+      webui (HTTP on <tsIP>:20482: dashboard over the status report, file browser and
+      media over the vfs; member-or-same-user WhoIs; docs/13)
                         ▲
       tailscale (CLI shell-out: status/whois JSON, binary finder, Fake)
       repair (leader only: GC of tombstones after grace; scanner refills missing/dead slots; scrub)
 ```
 
-Ports: Raft `<tsIP>:20480`, node RPC `<tsIP>:20481`, S3 gateway `<tsIP>:20443`, NFS
+Ports: Raft `<tsIP>:20480`, node RPC `<tsIP>:20481`, web UI `<tsIP>:20482`, S3 gateway
+`<tsIP>:20443`, NFS
 `127.0.0.1:20490` (Windows: `127.0.0.1:2049` plus a portmapper stub on `127.0.0.1:111`).
 
 Identity and transport security come from Tailscale: every RPC connection is authorized by
@@ -133,7 +138,9 @@ for a member. No TLS of our own.
 | `internal/{mount,svc,dev}` | ~700 |
 | `internal/soak` (engine, live env, report; shipped for `tailraid verify`) | ~2,300 |
 | `internal/update` | ~350 |
+| `internal/webui` (handler over the vfs; its TypeScript app is 1.4k lines and 0.2k of CSS, not Go) | ~570 |
 | **Through M4 (measured 2026-10-08, after the review fixes and the hot-path work)** | **≈ 18.1k** |
+| **Through the web UI (measured 2026-10-08: +0.7k, the handler plus ~130 lines of wiring in rpc, tailscale, admin, vfs, config, node and cmd)** | **≈ 18.8k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
@@ -179,6 +186,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
 | [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
 | [11-chunk-lifecycle](11-chunk-lifecycle.md) | Chunk and shard state machines, event catalogue, transition cells L-n. I-56, I-57 |
+| [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, uploads, the style guide. I-68..I-73 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged

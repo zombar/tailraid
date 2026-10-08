@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid dashboard</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a class="active" href="#/">Dashboard</a><a href="#/browse/">Files</a></nav>
+  <span class="pill warn" title="leader reachable, k ≤ live < k+m: reads OK if k holders live; writes degraded (≥ k shards); 0 slots filled as soon as a spare is live, dead-node slots re-placed after fill_after (10 min)">degraded</span>
+  <span class="who">pike · leader atlas · 2/3 voters live</span>
+</header>
+<div id="warnings">
+  <div class="warn-strip">lumen has been dead for 3m0s; its 27,400 slots are re-placed after 10m</div>
+</div>
+<main>
+
+  <section>
+    <h2>Volume</h2>
+    <div class="tiles">
+      <div class="tile"><div class="label">Policy</div><div class="value">2+1</div><div class="sub">1 MiB chunks · policy v3</div></div>
+      <div class="tile"><div class="label">Files</div><div class="value">12,418</div><div class="sub">48,211 chunks · 212 tombstoned</div></div>
+      <div class="tile"><div class="label">Dedup</div><div class="value">1.12×</div><div class="sub">41.3 GiB logical</div></div>
+    </div>
+    <div class="compare">
+      <div class="bar-row"><span class="bar-label">logical</span><div class="bar tall"><i style="width:74%"></i></div><span class="bar-val">41.3 GiB</span></div>
+      <div class="bar-row"><span class="bar-label">stored</span><div class="bar tall"><i style="width:100%"></i></div><span class="bar-val">55.9 GiB with parity</span></div>
+      <div class="bar-row"><span class="bar-label">usable</span><div class="bar tall"><i style="width:30%"></i></div><span class="bar-val">305.3 GiB used of 1.0 TiB · 720.0 GiB free</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Balance</h2>
+    <div class="cards">
+      <div class="card node">
+        <div class="name-row"><span class="dot ok"></span><span class="name">atlas</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span></span></div>
+        <div class="bar-row"><span class="bar-label">capacity</span><div class="bar"><i style="width:42%"></i></div><span class="bar-val">209.5 GiB of 500 GiB</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:61%"></i><b class="tick" style="left:60%"></b></div><span class="bar-val">59,120 · expected 57,853 · +2.2 %</span></div>
+        <div class="meta"><span>rtt 4ms</span><span>v0.4.1</span><span>applied 182,344</span><span>100.64.0.3:20481</span><span>joined 2026-09-12</span></div>
+      </div>
+      <div class="card node self">
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
+        <div class="bar-row"><span class="bar-label">capacity</span><div class="bar"><i style="width:40%"></i></div><span class="bar-val">198.8 GiB of 500 GiB</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:59%"></i><b class="tick" style="left:60%"></b></div><span class="bar-val">56,980 · expected 57,853 · −1.5 %</span></div>
+        <div class="meta"><span>rtt 0ms</span><span>v0.4.1</span><span>applied 182,344</span><span>100.64.0.12:20481</span><span>joined 2026-09-14</span></div>
+      </div>
+      <div class="card node">
+        <div class="name-row"><span class="dot bad" title="dead for 3m0s"></span><span class="name">lumen</span><span class="badges"><span class="badge strong">voter</span></span></div>
+        <div class="bar-row"><span class="bar-label">capacity</span><div class="bar off"></div><span class="bar-val">unknown (dead 3m0s)</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:28%"></i><b class="tick" style="left:30%"></b></div><span class="bar-val">27,400 · expected 28,927 · −5.3 % · <span class="text-bad">37 missing</span></span></div>
+        <div class="meta"><span>rtt —</span><span>v0.4.1</span><span>applied 181,990</span><span>100.64.0.31:20481</span><span>joined 2026-09-14</span></div>
+      </div>
+      <div class="card node">
+        <div class="name-row"><span class="dot ok"></span><span class="name">nomad</span><span class="badges"><span class="badge">non-voter</span><span class="badge warn">draining</span></span></div>
+        <div class="bar-row"><span class="bar-label">capacity</span><div class="bar"><i style="width:9%"></i></div><span class="bar-val">21.7 GiB of 250 GiB</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar warn"><i style="width:2%"></i></div><span class="bar-val">1,133 slots to move</span></div>
+        <div class="meta"><span>rtt 38ms</span><span>v0.4.0</span><span>applied 182,344</span><span>100.64.0.40:20481</span><span>joined 2026-09-20</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Integrity</h2>
+    <div class="tiles">
+      <div class="tile warn"><div class="label"><span class="dot warn"></span>Degraded</div><div class="value">37</div><div class="sub">chunks with fewer than 3 good slots</div></div>
+      <div class="tile warn"><div class="label"><span class="dot warn"></span>Repair pending</div><div class="value">37</div><div class="sub">waiting for fill_after (10m)</div></div>
+      <div class="tile zero"><div class="label">Unreadable</div><div class="value">0</div><div class="sub">chunks with fewer than 2 live slots</div></div>
+      <div class="tile zero"><div class="label">Stale policy</div><div class="value">0</div><div class="sub">chunks not yet at 2+1</div></div>
+    </div>
+    <div>
+      <div class="spark-wrap"><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><path class="area" d="M0 28 L10 28 L20 28 L30 28 L40 28 L50 28 L60 28 L70 27 L80 16 L90 15 L100 15 L110 15 L120 15 L120 32 L0 32 Z"/><path class="line" d="M0 28 L10 28 L20 28 L30 28 L40 28 L50 28 L60 28 L70 27 L80 16 L90 15 L100 15 L110 15 L120 15"/></svg><span class="spark-dot warn" style="top:22px"></span></div>
+      <div class="small dim">degraded + pending, last 10 min (this tab only)</div>
+    </div>
+    <div class="note">Repair runs on the leader. This node (pike) is a follower. <a href="http://100.64.0.3:20482/">Open atlas's dashboard</a> for the repairer's counters.</div>
+    <h3>Gateway</h3>
+    <div class="bar-row"><span class="bar-label">dirty bytes</span><div class="bar"><i style="width:7%"></i></div><span class="bar-val">18.2 MiB in 3 files of 256 MiB · flushing</span></div>
+    <div class="bar-row"><span class="bar-label">WAL</span><div class="bar"><i style="width:17%"></i></div><span class="bar-val">22.0 MiB of 128 MiB</span></div>
+    <div class="small dim">acknowledged writes not yet committed to the cluster</div>
+  </section>
+
+</main>
+<div id="toasts" aria-live="polite"></div>
+</body>
+</html>

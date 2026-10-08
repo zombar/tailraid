@@ -177,6 +177,16 @@ steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` re
 write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, remount,
 `diff -r`.
 
+**`internal/webui`** — handler tests on `testharness.Fabric` with a real `WhoIsAuthorizer`
+over `tailscale.Fake`: authorization table (member, same-user non-member, other user,
+tagged, unresolved own login, WhoIs down) and a body-unread 403; the CSRF header; a path
+table (`..`, `//`, backslash, root, directory, NUL, missing); Range boundaries
+{0, 1, size−1, size, size+1} plus a chunk-crossing range on a file written at a non-zero
+offset, ETag / 304 / HEAD, read-your-writes on a dirty overlay, content types and the
+sandbox headers; upload size table {0, 1, CS−1, CS, CS+1}, overwrite-truncates, the
+WAL-cap wait, mkdir, stale gateway → 503; the status cache with the fake clock; the
+embedded assets. See docs/13 §Tests.
+
 ## 5. Speed and determinism
 
 - `go test -short -race ./...` ≈ 2 min on the dev laptop (`make check`). Measured caps:
@@ -298,7 +308,8 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
 ## 7. CI
 
 `.github/workflows/ci.yml`: `checks` (tidy diff, gofmt) · `lint` (golangci-lint v2 via
-`go tool -modfile=tools.mod`, `check-invariants.sh --check`) · `vuln` (govulncheck) · `test`
+`go tool -modfile=tools.mod`, `check-invariants.sh --check`, `make web-check`: the committed
+browser bundle matches `internal/webui/src`) · `vuln` (govulncheck) · `test`
 matrix ubuntu/macos/windows `go test -short -race -cover ./...` (no coverage gate) · `long`
 on pushes to main and nightly (`make test-long`) · `mount` on main (ubuntu with
 `nfs-common`, macos; `sudo -E make test-mount`) · `soak` nightly on ubuntu uploading

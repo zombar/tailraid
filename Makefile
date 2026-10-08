@@ -12,7 +12,13 @@ BIN := tailraid
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install changelog test test-race test-long test-mount soak soak-full fuzz lint fmt fmt-check vuln \
-        release tag check invariants tidy clean help
+        release tag check invariants tidy clean help web web-check
+
+# Browser UI (docs/13 §6): esbuild is a Go tool; the bundle is committed and embedded.
+WEB_SRC := internal/webui/src
+WEB_DIST := internal/webui/dist
+ESBUILD := $(TOOL) esbuild $(WEB_SRC)/main.ts --bundle --format=esm --target=es2022 --platform=browser \
+           --log-level=warning --legal-comments=none
 
 ## build: static binary for the current OS/arch into ./dist
 build:
@@ -67,6 +73,16 @@ fuzz:
 	    echo "== $$pkg $$f"; go test -run '^$$' -fuzz "^$$f$$" -fuzztime 30s $$pkg; \
 	  done; \
 	done
+
+## web: bundle the browser UI (internal/webui/src → internal/webui/dist/app.js, committed)
+web:
+	$(ESBUILD) --outfile=$(WEB_DIST)/app.js
+
+## web-check: the committed bundle matches the sources (part of check)
+web-check:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	$(ESBUILD) --outfile=$$tmp/app.js && cmp -s $$tmp/app.js $(WEB_DIST)/app.js \
+	  || { echo "$(WEB_DIST)/app.js is stale; run make web"; exit 1; }
 
 ## lint: golangci-lint + invariant/lifecycle citation check
 lint:
@@ -133,7 +149,7 @@ release:
 	@cat dist/sha256sums.txt
 
 ## check: everything the pre-commit hook requires
-check: fmt-check lint test-race
+check: fmt-check lint web-check test-race
 
 clean:
 	rm -rf dist report.html results.jsonl

@@ -38,6 +38,7 @@ type WhoIsAuthorizer struct {
 
 type cacheEntry struct {
 	stableID string
+	login    string // tailnet user, "" for tagged devices (docs/13 §2)
 	err      error
 	expires  time.Time
 }
@@ -66,6 +67,18 @@ func (a *WhoIsAuthorizer) now() time.Time {
 // misses for one address share a single WhoIs call (a burst of shard PUTs from a new
 // peer costs one shell-out, not one per request).
 func (a *WhoIsAuthorizer) Identify(ctx context.Context, src netip.Addr) (string, error) {
+	e, err := a.lookup(ctx, src)
+	return e.stableID, err
+}
+
+// User resolves src to its StableID and tailnet login through the same cache (docs/13 §2).
+func (a *WhoIsAuthorizer) User(ctx context.Context, src netip.Addr) (stableID, login string, err error) {
+	e, err := a.lookup(ctx, src)
+	return e.stableID, e.login, err
+}
+
+// lookup is the cached, single-flight WhoIs behind Identify and User.
+func (a *WhoIsAuthorizer) lookup(ctx context.Context, src netip.Addr) (cacheEntry, error) {
 	for {
 		a.mu.Lock()
 		if a.cache == nil {
@@ -76,7 +89,7 @@ func (a *WhoIsAuthorizer) Identify(ctx context.Context, src netip.Addr) (string,
 		}
 		if e, ok := a.cache[src]; ok && a.now().Before(e.expires) {
 			a.mu.Unlock()
-			return e.stableID, e.err
+			return e, e.err
 		}
 		wait, running := a.inflight[src]
 		if !running {
@@ -89,20 +102,20 @@ func (a *WhoIsAuthorizer) Identify(ctx context.Context, src netip.Addr) (string,
 			case <-wait:
 				continue // the result is cached now, or the call failed and ours may fare better
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return cacheEntry{}, ctx.Err()
 			}
 		}
-		id, err := a.whois(ctx, src)
+		e, err := a.whois(ctx, src)
 		a.mu.Lock()
 		delete(a.inflight, src)
 		a.mu.Unlock()
 		close(wait)
-		return id, err
+		return e, err
 	}
 }
 
 // whois is the uncached lookup; it caches positive and not-found answers.
-func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr) (string, error) {
+func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr) (cacheEntry, error) {
 	pos, neg := a.ttls()
 	w, err := a.TS.WhoIs(ctx, src)
 	e := cacheEntry{}
@@ -111,15 +124,15 @@ func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr) (string, er
 			e.err = fmt.Errorf("%w: %s is not on the tailnet", ErrForbidden, src)
 			e.expires = a.now().Add(neg)
 		} else {
-			return "", fmt.Errorf("%w: whois: %v", ErrUnavailable, err) //nolint:errorlint // transport failure, not a sentinel to unwrap
+			return cacheEntry{}, fmt.Errorf("%w: whois: %v", ErrUnavailable, err) //nolint:errorlint // transport failure, not a sentinel to unwrap
 		}
 	} else {
-		e.stableID, e.expires = w.Node.StableID, a.now().Add(pos)
+		e.stableID, e.login, e.expires = w.Node.StableID, w.Login(), a.now().Add(pos)
 	}
 	a.mu.Lock()
 	a.cache[src] = e
 	a.mu.Unlock()
-	return e.stableID, e.err
+	return e, e.err
 }
 
 // Allow implements docs/08 steps 2–4: member by IP, then WhoIs StableID must match.
@@ -158,4 +171,8 @@ func (a AllowAll) Allow(context.Context, netip.Addr) (meta.Node, error) { return
 
 func (a AllowAll) Identify(context.Context, netip.Addr) (string, error) {
 	return a.Node.TSStableID, nil
+}
+
+func (a AllowAll) User(context.Context, netip.Addr) (string, string, error) {
+	return a.Node.TSStableID, "", nil
 }

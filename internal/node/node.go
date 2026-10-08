@@ -32,6 +32,7 @@ import (
 	"github.com/zombar/tailraid/internal/sysfs"
 	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/vfs"
+	"github.com/zombar/tailraid/internal/webui"
 )
 
 // Identity is what the tailnet says about this machine.
@@ -182,16 +183,39 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc.Events = ring
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
+	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
+	if cfg.Listen.Web != 0 {
+		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
+	}
+	status := func() any {
+		rep := admin.Build(node, prober, clusterID, clk, repairer)
+		rep.Gateway = admin.GatewayFromDirty(ov.Dirty())
+		if webAddr != "" {
+			rep.WebURL = "http://" + webAddr + "/"
+		}
+		return rep
+	}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
-		Status: func() any {
-			rep := admin.Build(node, prober, clusterID, clk, repairer)
-			rep.Gateway = admin.GatewayFromDirty(ov.Dirty())
-			return rep
-		}, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
+		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
 	if err != nil {
 		return err
+	}
+	var web *webui.Server
+	webUsers := "members only"
+	if webAddr != "" {
+		login := selfLogin(ctx, ts, ident.IP, log)
+		if login != "" {
+			webUsers = login
+		}
+		web, err = webui.New(webui.Options{FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status,
+			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
+				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
+			}, Clk: clk, Logger: log})
+		if err != nil {
+			return err
+		}
 	}
 	rd.BadSlot = func(key chunk.ShardKey, bad meta.NodeIdx) {
 		if node.IsLeader() {
@@ -213,6 +237,14 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		_ = rl.Close()
 		return err
 	}
+	var wl net.Listener
+	if web != nil {
+		if wl, err = net.Listen("tcp", webAddr); err != nil {
+			_ = rl.Close()
+			_ = nl.Close()
+			return fmt.Errorf("web ui listener: %w", err)
+		}
+	}
 	nfsgw.UseLogger(log)           // one log stream, one format (the library logs client noise)
 	if runtime.GOOS == "windows" { // mount.exe finds the gateway through the portmapper (docs/12 §2)
 		_, nfsPort, _ := net.SplitHostPort(nl.Addr().String())
@@ -228,10 +260,16 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		"nfs", nl.Addr(), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
 	prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
 	log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+	if web != nil {
+		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
+	}
 
-	// background loops: RPC server, prober, address watch, flusher
+	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, web UI
 	bg, cancelBg := context.WithCancel(context.Background())
-	const loops = 6
+	loops := 6
+	if web != nil {
+		loops++
+	}
 	done := make(chan struct{}, loops)
 	// an address change re-registers the node, then ends this process: the RPC and Raft
 	// listeners are bound to the old address and the service manager restarts us
@@ -253,6 +291,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		done <- struct{}{}
 	}()
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
+	if web != nil {
+		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
+	}
 
 	err = nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM))
 	cancelBg()
@@ -263,6 +304,17 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return ErrAddressChanged
 	}
 	return err
+}
+
+// selfLogin is this node's tailnet login for the web UI's same-user rule (docs/13 §2):
+// "" (members only) when WhoIs cannot answer for the node's own address or it is tagged.
+func selfLogin(ctx context.Context, ts tailscale.Client, ip netip.Addr, log *slog.Logger) string {
+	w, err := ts.WhoIs(ctx, ip)
+	if err != nil || w.Login() == "" {
+		log.Warn("web ui: own tailnet login unknown; only cluster members may open it", "err", err)
+		return ""
+	}
+	return w.Login()
 }
 
 // staleFor reports whether the gateway has had no leader contact for the Stale threshold

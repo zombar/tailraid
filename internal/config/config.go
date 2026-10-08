@@ -27,6 +27,7 @@ type Config struct {
 	Listen struct {
 		Raft int    `yaml:"raft"` // tailnet TCP port
 		RPC  int    `yaml:"rpc"`  // tailnet TCP port
+		Web  int    `yaml:"web"`  // tailnet TCP port of the browser UI (docs/13); 0 disables it
 		NFS  string `yaml:"nfs"`  // loopback host:port
 	} `yaml:"listen"`
 	Mount struct {
@@ -108,6 +109,7 @@ func Default() Config {
 	c.Node.Capacity = "100G"
 	c.Listen.Raft = 20480
 	c.Listen.RPC = 20481
+	c.Listen.Web = 20482
 	c.Listen.NFS = "127.0.0.1:20490"
 	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
@@ -161,6 +163,11 @@ func (c Config) Validate() error {
 	}
 	if _, err := ParseBytes(c.Node.Capacity); err != nil {
 		return fmt.Errorf("config: node.capacity: %w", err)
+	}
+	if w := c.Listen.Web; w < 0 || w > 65535 {
+		return fmt.Errorf("config: listen.web %d: want 0 (off) or a TCP port", w)
+	} else if w != 0 && (w == c.Listen.RPC || w == c.Listen.Raft) {
+		return fmt.Errorf("config: listen.web %d must differ from listen.rpc and listen.raft", w)
 	}
 	return nil
 }

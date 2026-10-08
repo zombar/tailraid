@@ -73,6 +73,7 @@ node:
 listen:
   raft: 20480             # tailnet TCP
   rpc: 20481              # tailnet TCP
+  web: 20482              # tailnet TCP; the browser UI, 0 disables it
   nfs: 127.0.0.1:20490    # loopback only (2049 on Windows)
 mount:
   path: ~/TailRAID
@@ -101,6 +102,15 @@ tailraid logs -f                       # the service log
 ```
 
 Every command takes `--json` and `--node <ip>` to address another device.
+
+## Browser UI
+
+Every device that runs `serve` also serves a small web page on its Tailscale IP,
+`http://<tsIP>:20482/` (`tailraid status` prints it): a dashboard of data balance and
+integrity, and a file browser that streams audio, video and images, uploads files and makes
+folders. It is open to the cluster's devices and to any tailnet device logged in as the same
+user, so a phone works; other users' devices and tagged servers are refused. Cluster
+administration stays in the CLI. Design in [docs/13](docs/13-web-ui.md).
 
 ## Verifying your cluster
 

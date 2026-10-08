@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid components</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  /* lookdev-only chrome: two theme frames side by side */
+  body { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 0; }
+  .frame { background: var(--bg); color: var(--text); padding: 0 0 48px; }
+  .frame > .sheet { display: grid; gap: 24px; padding: var(--gutter); max-width: 560px; margin: 0 auto; }
+  .frame h2 span { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+  .swatch { display: grid; gap: 4px; font: 12px var(--mono); color: var(--dim); }
+  .swatch i { display: block; height: 36px; border-radius: 6px; border: 1px solid var(--line); }
+  .lbl { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="frame theme-light"><div class="sheet" id="sheet">
+
+  <header class="top" style="position:static;margin:0 calc(-1 * var(--gutter))">
+    <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+    <nav class="tabs"><a class="active" href="#/">Dashboard</a><a href="#/browse/">Files</a></nav>
+    <span class="pill ok">healthy</span>
+    <span class="who">atlas · leader · 3/3 voters</span>
+  </header>
+
+  <section>
+    <h2>Tokens <span>light / dark are the same sheet</span></h2>
+    <div class="swatches">
+      <div class="swatch"><i style="background:var(--bg)"></i>--bg</div>
+      <div class="swatch"><i style="background:var(--surface)"></i>--surface</div>
+      <div class="swatch"><i style="background:var(--line)"></i>--line</div>
+      <div class="swatch"><i style="background:var(--text)"></i>--text</div>
+      <div class="swatch"><i style="background:var(--dim)"></i>--dim</div>
+      <div class="swatch"><i style="background:var(--accent)"></i>--accent</div>
+      <div class="swatch"><i style="background:var(--ok)"></i>--ok</div>
+      <div class="swatch"><i style="background:var(--warn)"></i>--warn</div>
+      <div class="swatch"><i style="background:var(--bad)"></i>--bad</div>
+      <div class="swatch"><i style="background:var(--fill)"></i>--fill</div>
+    </div>
+    <p class="small dim" style="margin:0">Sans for prose. <span class="mono">Mono for names, paths, hashes, 1,234 and 41.3 GiB.</span></p>
+  </section>
+
+  <section>
+    <h2>Health pill <span>one word, dot repeats the colour</span></h2>
+    <div class="row">
+      <span class="pill ok">healthy</span>
+      <span class="pill warn">degraded</span>
+      <span class="pill warn">stale</span>
+      <span class="pill bad">unreadable</span>
+      <span class="pill bad">no leader</span>
+      <span class="pill bad">unreachable</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Badges and dots</h2>
+    <div class="row">
+      <span class="badge strong">leader</span>
+      <span class="badge strong">voter</span>
+      <span class="badge self">self</span>
+      <span class="badge">non-voter</span>
+      <span class="badge">s3</span>
+      <span class="badge warn">draining</span>
+      <span class="badge">removed</span>
+      <span class="badge bad">lost</span>
+    </div>
+    <div class="row">
+      <span class="row"><span class="dot ok"></span><span class="small">live</span></span>
+      <span class="row"><span class="dot bad"></span><span class="small">dead 3m0s</span></span>
+      <span class="row"><span class="dot off"></span><span class="small">unknown</span></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Warnings strip</h2>
+    <div id="warnings" style="margin:0 calc(-1 * var(--gutter))">
+      <div class="warn-strip">lumen has been dead for 3m0s; its 27,400 slots are re-placed after 10m</div>
+      <div class="warn-strip">policy 2+1 with 2 live storage nodes: writes are degraded</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Stat tiles <span>zero is quiet</span></h2>
+    <div class="tiles">
+      <div class="tile zero"><div class="label">Degraded</div><div class="value">0</div><div class="sub">chunks</div></div>
+      <div class="tile warn"><div class="label"><span class="dot warn"></span>Degraded</div><div class="value">37</div><div class="sub">chunks</div></div>
+      <div class="tile warn"><div class="label"><span class="dot warn"></span>Repair pending</div><div class="value">37</div><div class="sub">after fill_after</div></div>
+      <div class="tile bad"><div class="label"><span class="dot bad"></span>Unreadable</div><div class="value">2</div><div class="sub">chunks</div></div>
+      <div class="tile zero"><div class="label">Stale policy</div><div class="value">0</div><div class="sub">chunks</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bars <span>neutral within bounds, colour is a status</span></h2>
+    <div class="bar-row"><span class="bar-label">capacity</span><div class="bar"><i style="width:42%"></i></div><span class="bar-val">209.5 GiB of 500 GiB · 290.5 GiB free</span></div>
+    <div class="bar-row"><span class="bar-label">capacity</span><div class="bar warn"><i style="width:86%"></i></div><span class="bar-val">430.1 GiB of 500 GiB · 86 %</span></div>
+    <div class="bar-row"><span class="bar-label">capacity</span><div class="bar bad"><i style="width:97%"></i></div><span class="bar-val">485.2 GiB of 500 GiB · 97 %, writes return 507 soon</span></div>
+    <div class="bar-row"><span class="bar-label">capacity</span><div class="bar off"></div><span class="bar-val">unknown (dead)</span></div>
+    <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:61%"></i><b class="tick" style="left:60%"></b></div><span class="bar-val">59,120 slots · expected 57,853 · +2.2 %</span></div>
+    <div class="bar-row"><span class="bar-label">slots</span><div class="bar warn"><i style="width:48%"></i><b class="tick" style="left:60%"></b></div><span class="bar-val">46,300 slots · expected 57,853 · −20.0 % · 37 missing</span></div>
+    <div class="bar-row"><span class="bar-label">slots</span><div class="bar warn"><i style="width:4%"></i></div><span class="bar-val">1,133 slots to move (draining)</span></div>
+    <div class="compare">
+      <div class="bar-row"><span class="bar-label">logical</span><div class="bar tall"><i style="width:74%"></i></div><span class="bar-val">41.3 GiB</span></div>
+      <div class="bar-row"><span class="bar-label">stored</span><div class="bar tall"><i style="width:100%"></i></div><span class="bar-val">55.9 GiB · 2+1 · dedup 1.12×</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Sparkline <span>degraded + pending, last 10 min, this tab</span></h2>
+    <div class="spark-wrap"><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><path class="area" d="M0 28 L10 28 L20 27 L30 27 L40 20 L50 12 L60 10 L70 10 L80 11 L90 11 L100 14 L110 16 L120 16 L120 32 L0 32 Z"/><path class="line" d="M0 28 L10 28 L20 27 L30 27 L40 20 L50 12 L60 10 L70 10 L80 11 L90 11 L100 14 L110 16 L120 16"/></svg><span class="spark-dot warn" style="top:24px"></span></div>
+    <div class="spark-wrap"><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><path class="line" d="M0 28 L120 28"/></svg><span class="spark-dot" style="top:42px"></span></div>
+  </section>
+
+  <section>
+    <h2>Key / value grid</h2>
+    <dl class="kv">
+      <div><dt>scanned</dt><dd>48,211</dd></div>
+      <div><dt>repaired</dt><dd>12</dd></div>
+      <div><dt>partial</dt><dd>0</dd></div>
+      <div><dt>unrepairable</dt><dd class="bad">2</dd></div>
+      <div><dt>deferred</dt><dd>37</dd></div>
+      <div><dt>scrub bad</dt><dd class="warn">1</dd></div>
+      <div><dt>bytes moved</dt><dd>1.2 GiB</dd></div>
+      <div><dt>errors</dt><dd>0</dd></div>
+    </dl>
+    <div class="note">Repair runs on the leader. This node (pike) is a follower. <a href="#">Open atlas's dashboard</a></div>
+  </section>
+
+  <section>
+    <h2>Node card</h2>
+    <div class="cards">
+      <div class="card node self">
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
+        <div class="bar-row"><span class="bar-label">capacity</span><div class="bar"><i style="width:40%"></i></div><span class="bar-val">198.8 GiB of 500 GiB</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:59%"></i><b class="tick" style="left:60%"></b></div><span class="bar-val">56,980 · expected 57,853 · −1.5 %</span></div>
+        <div class="meta"><span>rtt 0ms</span><span>v0.4.1</span><span>applied 182,344</span><span>100.64.0.12:20481</span><span>joined 2026-09-14</span></div>
+      </div>
+      <div class="card node">
+        <div class="name-row"><span class="dot bad" title="dead for 3m0s"></span><span class="name">lumen</span><span class="badges"><span class="badge strong">voter</span></span></div>
+        <div class="bar-row"><span class="bar-label">capacity</span><div class="bar off"></div><span class="bar-val">unknown (dead 3m0s)</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:28%"></i><b class="tick" style="left:30%"></b></div><span class="bar-val">27,400 · expected 28,927 · −5.3 % · <span class="text-bad">37 missing</span></span></div>
+        <div class="meta"><span>rtt —</span><span>v0.4.1</span><span>applied 181,990</span><span>100.64.0.31:20481</span><span>joined 2026-09-14</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>File rows, breadcrumb, toolbar</h2>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span></div>
+    <div class="toolbar">
+      <label class="btn">Upload<input type="file" multiple></label>
+      <button type="button">New folder</button>
+      <span class="spacer"></span>
+      <select aria-label="sort"><option>name ↑</option><option>size</option><option>modified</option></select>
+    </div>
+    <table class="files">
+      <thead><tr><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="#/browse/media/Day%201"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)</a></td><td class="size"></td><td class="mtime">2 h ago</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Opening #1.mp4</a></td><td class="size">1.9 GiB</td><td class="mtime">2026-10-02 21:14</td></tr>
+        <tr class="dirty"><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>03 - Jam.flac</a></td><td class="size">212.4 MiB</td><td class="mtime">12 s ago</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"/><circle cx="11" cy="5.5" r="1"/></svg>cover 100%.jpg</a></td><td class="size">3.4 MiB</td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>README.md</a></td><td class="size">2.1 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr><td class="name"><span class="linkname"><svg class="icon" viewBox="0 0 16 16"><path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2.5-2.5a2.5 2.5 0 0 0-3.5-3.5L8 4.5 M9.5 6.5a2.5 2.5 0 0 0-3.5 0L3.5 9a2.5 2.5 0 0 0 3.5 3.5L8 11.5"/></svg>notes <span class="target">→ ../notes.txt</span></span></td><td class="size"></td><td class="mtime">2026-09-30 09:02</td></tr>
+      </tbody>
+    </table>
+    <div class="empty">empty folder</div>
+  </section>
+
+  <section>
+    <h2>Upload queue, inline form, error, toasts</h2>
+    <div class="uploads">
+      <div class="upload"><span class="name">04 - Crowd.mov</span><span class="state">412.0 MiB / 660.3 MiB <button type="button">cancel</button></span><div class="bar"><i style="width:62%"></i></div></div>
+      <div class="upload"><span class="name">05 - Soundcheck.wav</span><span class="state">queued <button type="button">cancel</button></span></div>
+      <div class="upload"><span class="name">02 - Encore?.m4a</span><span class="state ok">done</span></div>
+      <div class="upload"><span class="name">Day 1.zip</span><span class="state bad">failed: no space left on the volume (507)</span></div>
+    </div>
+    <form class="inline-form"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg><input type="text" placeholder="folder name" value="photos" aria-label="folder name"><button type="submit">Create</button><button type="button">Cancel</button></form>
+    <div class="error">Could not list /media/Concerts 2024: not a directory (400). <a href="#">Retry</a></div>
+    <div class="row">
+      <div class="toast ok" style="position:static">Created photos</div>
+      <div class="toast bad" style="position:static">mkdir photos: already exists (409)</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Slot cells and chunk rows</h2>
+    <div class="row small">
+      <span class="row"><span class="cell"></span><span class="dim">present</span></span>
+      <span class="row"><span class="cell unverified"></span><span class="dim">not verified</span></span>
+      <span class="row"><span class="cell warn"></span><span class="dim">live, absent</span></span>
+      <span class="row"><span class="cell bad"></span><span class="dim">dead</span></span>
+      <span class="row"><span class="cell unplaced"></span><span class="dim">unplaced</span></span>
+    </div>
+    <details class="panel" open>
+      <summary>Integrity (1,946 chunks) <span class="dim small" style="font-weight:400">· 1,909 committed · 37 degraded</span></summary>
+      <div class="body">
+        <div class="chunk-row"><span class="dim">#0</span><span title="3f9a1c4e7b...">3f9a1c4e7b</span><span class="km dim">2+1</span><span class="live">3/3</span><div class="cells"><span class="cell" title="slot 0 · atlas"></span><span class="cell" title="slot 1 · pike"></span><span class="cell unverified" title="slot 2 · nomad · not verified"></span></div></div>
+        <div class="chunk-row"><span class="dim">#1</span><span>a07c33d901</span><span class="km dim">2+1</span><span class="live warn">2/3</span><div class="cells"><span class="cell"></span><span class="cell bad" title="slot 1 · lumen · dead"></span><span class="cell"></span></div></div>
+        <div class="chunk-row"><span class="dim">#2</span><span>ee12b8f044</span><span class="km dim">2+1</span><span class="live warn">2/3</span><div class="cells"><span class="cell"></span><span class="cell"></span><span class="cell unplaced" title="slot 2 · unplaced"></span></div></div>
+        <div class="chunk-row"><span class="dim">#3</span><span>5d0e7a9c21</span><span class="km dim">2+1</span><span class="live bad">1/3</span><div class="cells"><span class="cell warn" title="slot 0 · pike · live, shard absent"></span><span class="cell bad"></span><span class="cell"></span></div></div>
+        <button type="button">Load 64 more</button>
+      </div>
+    </details>
+  </section>
+
+</div></div>
+<div class="frame theme-dark"><div class="sheet" id="dark"></div></div>
+<script>document.getElementById('dark').innerHTML = document.getElementById('sheet').innerHTML;</script>
+</body>
+</html>

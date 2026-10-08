@@ -54,6 +54,8 @@ Endpoints and who may call them:
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |
 | `/dev/*` | members, only with `dev.enabled` | |
+| web UI (`<tsIP>:20482`): `GET /`, `/assets/*`, `/api/*`, `GET`/`HEAD /files/*` | members, or any tailnet device logged in as this node's user | docs/13 §2; no cluster header |
+| web UI: `PUT /files/*`, `POST /api/mkdir` | the same, plus the `X-Tailraid-UI` header | no CORS, so a cross-site page cannot send the header |
 
 Authorization is checked before any request body is consumed (`http.MaxBytesReader` is
 installed after the check). A rejected PUT therefore costs the attacker's bandwidth, not
@@ -91,6 +93,21 @@ an active attacker inside the tailnet (that attacker already owns a member devic
   boundary.
 - `internal/rpc.Listen` refuses to bind a non-loopback address when no `Authorizer` is
   configured (errol rule), so a misconfiguration cannot expose unauthenticated RPC.
+- The web UI listener binds the node's Tailscale IP only, like RPC, and `webui.New` refuses
+  to build without an authorizer (docs/13, I-73).
+
+## Web UI authorization (same-user rule)
+
+The web UI (docs/13) serves people, not nodes: the user's phone or laptop is on the tailnet
+but is usually not a storage node. Its listener therefore accepts a source that is either a
+cluster member under the RPC rule above, or a tailnet device whose WhoIs
+`UserProfile.LoginName` equals the login name of this node's own identity, resolved once at
+start by `WhoIs`-ing the node's own Tailscale IP. A tagged device reports the pseudo-login
+`tagged-devices`, so a login is treated as empty whenever the WhoIs answer carries tags, and an
+empty login never matches on either side. The same identity cache, TTLs and purge on
+membership change apply. Mutating routes additionally require a custom header that a
+cross-origin page cannot send, and files served from the volume carry a sandboxing CSP so a
+stored HTML file cannot act as the viewer. Invariants I-68 and I-71 in docs/13.
 
 ## S3 gateway (M5a, deferred)
 
@@ -148,6 +165,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | LAN host reaches NFS or RPC | NFS bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
+| Guest, other-user or tagged tailnet device opens the web UI | member-or-same-user WhoIs rule; tagged devices have no login (docs/13, I-68) |
+| Cross-site page drives an upload through a logged-in browser | `X-Tailraid-UI` header required before the body is read; no CORS (I-71) |
+| A stored HTML or SVG file scripts against the API when opened from `/files/` | `Content-Security-Policy: sandbox` and `nosniff` on every `/files/` response (I-71) |
 | Join-token brute force | tailnet-only, member or not; 8 base32 chars; after a failure 1 attempt/s per source IP; rotate anytime |
 
 ## Non-goals (explicit)
