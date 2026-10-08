@@ -61,7 +61,7 @@ type Stats struct {
 	Repaired     int   `json:"repaired"`     // chunks brought to full placement
 	Partial      int   `json:"partial"`      // chunks improved but still degraded
 	Unrepairable int   `json:"unrepairable"` // < k good live slots
-	Deferred     int   `json:"deferred"`     // policy migration waiting for enough acks
+	Deferred     int   `json:"deferred"`     // policy migration not committed: fewer than k acks
 	Migrated     int   `json:"migrated"`     // moved to the current (k,m)
 	PolicyStale  int   `json:"policy_stale"` // still on an older (k,m) after the pass
 	Scrubbed     int   `json:"scrubbed"`
@@ -267,15 +267,17 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 		st.BytesMoved += outcome.bytes
 		switch {
 		case !outcome.changed && migrate:
-			st.Deferred++
+			st.Deferred++ // fewer than k acks: the old encoding stays committed, retried next pass
 		case !outcome.changed:
 			// no live spare could take the bad slots; counted as still degraded
-		case migrate && outcome.full:
+		case migrate:
+			// the chunk is on the new policy now; with missing slots it is also partial
 			st.Migrated++
 			st.PolicyStale--
+			if !outcome.full {
+				st.Partial++
+			}
 			r.Events.Record(c.Hash, meta.EvMigrated, fmt.Sprintf("%d+%d -> %d+%d", c.K, c.M, vol.K, vol.M))
-		case migrate:
-			st.Deferred++
 		case outcome.full:
 			st.Repaired++
 			r.Events.Record(c.Hash, meta.EvRepaired, fmt.Sprintf("%d bad slots", len(bad)))

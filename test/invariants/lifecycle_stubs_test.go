@@ -36,34 +36,10 @@ func TestStubLifecycle_L_48(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-48")
 }
 
-// Lifecycle: L-73
-// Committed (new) --[E-66 read on other gateway before apply]--> Committed
-func TestStubLifecycle_L_73(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-73")
-}
-
-// Lifecycle: L-90
-// Repairing --[E-89 repair PUT fails]--> Degraded
-func TestStubLifecycle_L_90(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-90")
-}
-
-// Lifecycle: L-98
-// Committed --[E-84 set-capacity]--> Committed
-func TestStubLifecycle_L_98(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-98")
-}
-
 // Lifecycle: L-99
 // Committed --[E-85 IP change]--> Committed
 func TestStubLifecycle_L_99(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-99")
-}
-
-// Lifecycle: L-102
-// Repairing (policy) --[leader crash mid-migration]--> Degraded (policy)
-func TestStubLifecycle_L_102(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-102")
 }
 
 // Lifecycle: L-104

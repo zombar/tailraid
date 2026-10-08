@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -749,4 +750,127 @@ func ageAllShards(t *testing.T, c *testharness.Cluster, i int, by time.Duration)
 		ageShardFile(t, c.Nodes[i].Store.Path(k), by)
 		return nil
 	})
+}
+
+// failPuts wraps a node's shard client so repair PUTs can be made to fail without taking
+// the target node down (its health probes still answer).
+type failPuts struct {
+	repair.Shards
+	mu    sync.Mutex
+	after int          // successful PUTs allowed before every PUT fails; -1 = unlimited
+	to    meta.NodeIdx // when non-zero, only PUTs to this node fail
+	puts  int
+}
+
+func (f *failPuts) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if (f.to == 0 || node == f.to) && f.after >= 0 && f.puts >= f.after {
+		return errors.New("injected put failure")
+	}
+	f.puts++
+	return f.Shards.Put(ctx, node, key, body)
+}
+
+func repairerWith(c *testharness.Cluster, nd *testharness.ClusterNode, shards repair.Shards) *repair.Repairer {
+	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, shards, nd.Reader, c.Clk, repairCfg(), nil)
+	r.Events = nd.Events
+	return r
+}
+
+// A repair whose PUT fails leaves the committed placement alone and is retried on the next
+// pass; nothing is proposed for a slot that did not land.
+// Lifecycle: L-90
+func TestRepair_PutFails_Retries(t *testing.T) {
+	c := testharness.NewCluster(t, 4, 2, 1)
+	defer c.Close()
+	leader := c.Leader()
+	spare := (leader.I + 1) % 4
+	c.Kill(spare)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	data := testharness.Pattern(int(testharness.ChunkSize), 66)
+	c.WriteFile(leader.I, "/f", data)
+	c.Settle()
+	ch := c.ChunksOf(leader.I, "/f")[0]
+	victim := holdersBySlot(c, ch, leader)[0]
+	c.Kill(victim)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe()
+	c.Restart(spare)
+	c.Settle()
+	flaky := &failPuts{Shards: leader.Client, after: 0, to: c.Nodes[spare].Idx()}
+	r := repairerWith(c, leader, flaky)
+	st, err := r.Scan(ctx)
+	must(t, err)
+	if st.Repaired != 0 || st.Partial != 0 {
+		t.Fatalf("a failed PUT was counted as progress: %+v", st)
+	}
+	if after := c.ChunksOf(leader.I, "/f")[0]; !equalPlacement(after.Placement, ch.Placement) {
+		t.Fatalf("placement changed although the PUT failed: %v -> %v", ch.Placement, after.Placement)
+	}
+	flaky.after = -1 // the spare accepts PUTs again
+	st, err = r.Scan(ctx)
+	must(t, err)
+	if st.Repaired != 1 {
+		t.Fatalf("retry on the next pass: %+v", st)
+	}
+	if got, err := c.ReadFileCold(spare, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after the retried repair: %v", err)
+	}
+}
+
+// A leader that dies in the middle of a policy migration leaves every chunk either on the
+// old placement or fully on the new one; the next leader's pass finishes the migration and
+// every file reads back from every node.
+// Invariant: I-15, I-32
+// Lifecycle: L-102
+func TestRepair_MigrationCrash_Resumes(t *testing.T) {
+	c := testharness.NewCluster(t, 4, 2, 1)
+	defer c.Close()
+	var data [][]byte
+	for i := 0; i < 3; i++ {
+		data = append(data, testharness.Pattern(int(testharness.ChunkSize), byte(70+i)))
+		c.WriteFile(0, "/f"+string(rune('a'+i)), data[i])
+	}
+	c.Settle()
+	leader := c.Leader()
+	res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: 3, M: 1, Now: c.Clk.Now().UnixNano()}})
+	must(t, err)
+	must(t, res.Err)
+	c.Settle()
+	// the first chunk's four PUTs land, then the leader "dies": every later PUT fails
+	dying := &failPuts{Shards: leader.Client, after: 4}
+	st, err := repairerWith(c, leader, dying).Scan(ctx)
+	must(t, err)
+	if st.Migrated != 1 {
+		t.Fatalf("expected exactly one chunk migrated before the crash: %+v", st)
+	}
+	c.Kill(leader.I)
+	c.Settle()
+	next := c.Leader()
+	// three nodes are left for four slots: the two remaining chunks migrate with one zero
+	// slot each (migrated and partial), nothing stays on the old policy
+	st, err = newRepairer(c, next, repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Migrated != 2 || st.Partial != 2 || st.PolicyStale != 0 || st.Deferred != 0 || st.Unrepairable != 0 {
+		t.Fatalf("the next leader's pass: %+v", st)
+	}
+	for i := 0; i < 3; i++ {
+		for _, ch := range c.ChunksOf(next.I, "/f"+string(rune('a'+i))) {
+			if ch.K != 3 || ch.M != 1 || len(ch.Placement) != 4 {
+				t.Fatalf("chunk of file %d on %d+%d with %d slots", i, ch.K, ch.M, len(ch.Placement))
+			}
+		}
+		for j := range c.Nodes {
+			if !c.Alive(j) {
+				continue
+			}
+			if got, err := c.ReadFileCold(j, "/f"+string(rune('a'+i))); err != nil || !bytes.Equal(got, data[i]) {
+				t.Fatalf("n%d file %d after the resumed migration: %v", j, i, err)
+			}
+		}
+	}
 }

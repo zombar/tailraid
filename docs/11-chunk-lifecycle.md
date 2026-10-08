@@ -261,7 +261,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-70 | Committed | E-63 read beyond stored Size | Committed | zero-filled bytes (truncate-up semantics) | `TestReader_ZeroFillShortChunk` |
 | L-71 | (HashZero) | E-64 read | (HashZero) | zeros; no fetch; no cache | `TestReader_HashZeroNoFetch` |
 | L-72 | Dirty | E-65 read on issuing gateway | Dirty | overlay bytes merged over base (read-your-writes) | `TestOverlay_ReadYourWrites` |
-| L-73 | Committed (new) | E-66 read on other gateway before apply | Committed | previous whole version returned; never a mix | `TestCluster_StaleReadPreviousVersion` |
+| L-73 | Committed (new) | E-66 read on other gateway before apply | Committed | previous whole version returned; never a mix | `TestCluster_OtherGatewaySeesPreviousVersionUntilApply` |
 | L-74 | Degraded | E-56 read, ≥ k reachable | Degraded | bytes correct | `TestLifecycle_Degraded_ReadOK` |
 | L-75 | Committed | E-67 Refs → 0 | Tombstoned | in `Tombs`; `TombstonedAt = Now` | `TestFSM_Tombstone_OnRefsZero` |
 | L-76 | Tombstoned | E-68 GCDelete before grace (on the FSM clock) | Tombstoned | not a victim; shards untouched; a lagging leader clock does not stall it | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC`, `TestFSM_GCDelete_Boundary` |
@@ -278,7 +278,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-87 | Committed | E-77 node dead > fill_after | Degraded | repair queued; `check` lists affected chunks/files | `TestRepair_FillAfterTriggers` |
 | L-88 | Degraded (dead node) | E-79 node returns before repair | Committed | no work; slot reachable again | `TestRepair_NodeReturns_CancelsRepair` |
 | L-89 | Degraded | repair run (read k, encode, PUT, SetPlacement) | Repairing → Committed | k+m slots on distinct live nodes; under-replicated −1 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy` |
-| L-90 | Repairing | E-89 repair PUT fails | Degraded | stays queued; next scan retries; rate limited | `TestRepair_PutFails_Retries` |
+| L-90 | Repairing | E-89 repair PUT fails | Degraded | nothing proposed for the slot that did not land; the committed placement stays; the next scan retries; rate limited | `TestRepair_PutFails_Retries` |
 | L-91 | Repairing | E-90 node returns with old shard mid-repair | Committed (new placement) | `SetPlacement` wins; old copy is Orphan → Swept | `TestRepair_RaceWithReturningNode` |
 | L-92 | Degraded | E-78 node dead > evict_after | Degraded | `MemberLost` event; `status` marks the node lost and prompts `node remove --force` | `TestProber_LivenessAndHoldDowns`, `TestStatus_SuggestsRemoveAfterEvict` |
 | L-93 | Committed | E-80 node drain | Degraded (migration) | node excluded from new placement; repairer relocates every slot; until a replacement is placed the slot stays on the draining node, whose live shard counts as readable (I-65) | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
@@ -364,7 +364,7 @@ event ring or the final state).
 | L-147 | Committed | membership change (join/remove/IP/capacity) | placement changed | forbidden: placement changes only via `SetPlacement` | `TestFSM_PlacementOnlyChangedBySetPlacement`, `TestPlace_StabilityOnMembershipChange` |
 | L-148 | Placed | Commit proposed | visible on any gateway before Raft commit | forbidden (I-7) | `TestCluster_StaleReadPreviousVersion`, `TestCluster_SplitBrain_OnlyMajorityCommits` |
 | L-149 | (none) | WRITE | FILE_SYNC before WAL fsync | forbidden (I-7): a WRITE whose record did not fsync is an error, holds no byte and replays nothing | `TestOverlay_WriteNotAckedWhenFsyncFails`, `TestCrash_AtEveryPoint` |
-| L-150 | Committed | any | Refs > 0 with no inode referencing the hash | forbidden: Σ inode references == Refs | `TestFSM_InvariantChecker_RefsMatchReferences` |
+| L-150 | Committed | any | Refs > 0 with no inode referencing the hash | forbidden: Σ (inode, index) references == Refs, the same hash at two indices counting twice | `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestCheckInvariants_DetectsEachViolation` |
 | L-151 | Committed | any | len(Chunks) ≠ ceil(Size/CS) | forbidden (I-1) | `TestFSM_SetChunks_SizeAndChunkListConsistent` |
 | L-152 | Assembled | all zero | shards stored for HashZero | forbidden (I-2) | `TestFlusher_AllZeroChunk_BecomesHashZero` |
 | L-153 | (any inode) | Create after Unlink | same (ino, gen) reused | forbidden (I-3) | `TestFSM_InoGenNotReusedAfterUnlink` |

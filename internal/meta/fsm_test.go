@@ -589,6 +589,35 @@ func TestFSM_NodeRemove_RefusedWhileHoldingSlots(t *testing.T) {
 	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 3, State: Removed, Now: 6}})
 }
 
+// Refs count (inode, index) positions, not files: the same hash at two indices of one
+// file counts twice, a truncate that drops one index decrements once, and the invariant
+// checker agrees at every step.
+// Invariant: I-27
+// Lifecycle: L-150
+func TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex(t *testing.T) {
+	tf := newTFSM(t)
+	f := tf.create(RootIno, "f")
+	h := sha("same")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: 2 * testCS, Writes: []ChunkWrite{{0, h}, {1, h}}, NewChunks: []ChunkDesc{desc(h)}, Now: 1}})
+	if c := tf.chunk(h); c.Refs != 2 {
+		t.Fatalf("refs %d after two indices", c.Refs)
+	}
+	g := tf.create(RootIno, "g")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, NewSize: testCS, Writes: []ChunkWrite{{0, h}}, Now: 2}})
+	if c := tf.chunk(h); c.Refs != 3 {
+		t.Fatalf("refs %d after a third position", c.Refs)
+	}
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS, NewSize: testCS, Now: 3}})
+	if c := tf.chunk(h); c.Refs != 2 {
+		t.Fatalf("refs %d after dropping one index", c.Refs)
+	}
+	tf.ok(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 4}})
+	tf.ok(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "g", Now: 5}})
+	if c := tf.chunk(h); c.Refs != 0 || c.TombstonedAt == 0 {
+		t.Fatalf("refs %d tombstoned %d after both unlinks", c.Refs, c.TombstonedAt)
+	}
+}
+
 // A Commit without HasTruncate may keep or grow a file but never shrink it; the flusher
 // always sends an explicit truncation point when the file got shorter.
 // Invariant: I-26

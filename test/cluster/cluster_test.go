@@ -7,8 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/zombar/tailraid/internal/chunk"
+	"io"
 	"os"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -467,5 +471,87 @@ func TestCluster_UpdateAddr_ChangesRPCAddr(t *testing.T) {
 	after := c.ChunksOf(0, "/f")[0].Placement
 	if !equalPlacement(after, before) {
 		t.Fatalf("placement changed on an address change: %v -> %v", before, after)
+	}
+}
+
+// A gateway that has not applied a Commit yet serves the previous whole version: never a
+// mixture of old and new chunks. Here the reader is cut off from the leader only (it keeps
+// its other peers for shard reads and stays a follower on the old term), so it reads the
+// old version until the partition heals and it applies the Commit.
+// Invariant: I-36
+// Lifecycle: L-73
+func TestCluster_OtherGatewaySeesPreviousVersionUntilApply(t *testing.T) {
+	c := testharness.NewCluster(t, 4, 2, 1)
+	defer c.Close()
+	v1 := testharness.Pattern(2*int(testharness.ChunkSize)+10, 63)
+	leader := c.Leader()
+	c.WriteFile(leader.I, "/f", v1)
+	c.Settle()
+	reader := (leader.I + 1) % 4
+	c.Partition([]int{reader}, []int{leader.I})
+	v2 := append(bytes.Clone(v1[:testharness.ChunkSize/2]), testharness.Pattern(2*int(testharness.ChunkSize), 64)...)
+	fh, err := leader.FS.OpenFile("/f", os.O_RDWR, 0)
+	must(t, err)
+	if _, err := fh.Seek(int64(testharness.ChunkSize/2), io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Write(v2[testharness.ChunkSize/2:]); err != nil {
+		t.Fatal(err)
+	}
+	must(t, fh.Close())
+	must(t, leader.Flush.FlushAll(ctx))
+	if got, err := c.ReadFileCold(leader.I, "/f"); err != nil || !bytes.Equal(got, v2) {
+		t.Fatalf("leader after commit: %v", err)
+	}
+	got, err := c.ReadFileCold(reader, "/f")
+	must(t, err)
+	if !bytes.Equal(got, v1) {
+		t.Fatalf("cut-off gateway served something other than the previous version (len %d, diff at %d)", len(got), testharness.FirstDiff(got, v1))
+	}
+	c.Heal()
+	c.Settle()
+	if got, err := c.ReadFileCold(reader, "/f"); err != nil || !bytes.Equal(got, v2) {
+		t.Fatalf("after heal: %v", err)
+	}
+}
+
+// set-capacity changes a node's weight for future placements and nothing else: no
+// placement and no shard inventory moves.
+// Lifecycle: L-98
+func TestCluster_SetCapacityDoesNotMoveData(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	for i := 0; i < 3; i++ {
+		c.WriteFile(i, "/f"+string(rune('a'+i)), testharness.Pattern(int(testharness.ChunkSize)+i, byte(65+i)))
+	}
+	c.Settle()
+	inventory := func() map[int][]string {
+		out := map[int][]string{}
+		for i, nd := range c.Nodes {
+			_ = nd.Store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error { out[i] = append(out[i], string(k)); return nil })
+			sort.Strings(out[i])
+		}
+		return out
+	}
+	placements := func() [][]meta.NodeIdx {
+		var out [][]meta.NodeIdx
+		for i := 0; i < 3; i++ {
+			for _, ch := range c.ChunksOf(0, "/f"+string(rune('a'+i))) {
+				out = append(out, ch.Placement)
+			}
+		}
+		return out
+	}
+	invBefore, plBefore := inventory(), placements()
+	leader := c.Leader()
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: c.Nodes[(leader.I+1)%3].Idx(), Capacity: 7}))
+	c.Settle()
+	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Repaired+st.Partial+st.Migrated != 0 {
+		t.Fatalf("a capacity change caused repair work: %+v", st)
+	}
+	if !reflect.DeepEqual(inventory(), invBefore) || !reflect.DeepEqual(placements(), plBefore) {
+		t.Fatalf("data moved on set-capacity: %v -> %v", plBefore, placements())
 	}
 }
