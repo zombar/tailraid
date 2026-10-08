@@ -200,8 +200,9 @@ write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, r
 - **Hot-path benchmarks** (`make bench`): flush of full chunks, cached and uncached reads,
   Commit on a 16k-chunk file, LOOKUP / GETATTR / READDIR on a 10k-entry directory, FSSTAT
   over 100k chunks, the chunk walk, shard-store PUT, cache GET, extent insert and cover
-  checks, encode and decode. A baseline is committed as `docs/reports/bench-<date>.txt`;
-  a performance change carries a `benchstat` delta against it in the commit message.
+  checks, encode and decode. A baseline is committed as `docs/reports/bench-<date>.txt` and the run after a
+  round of work as `bench-<date>-after.txt`; a performance change carries a `benchstat`
+  delta against the baseline in the commit message.
 
 ## 6. Soak suite and live verification
 
