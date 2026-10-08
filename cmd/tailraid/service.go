@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -28,6 +29,9 @@ func svcParams(cmd *cobra.Command) (svc.Params, config.Config, string, error) {
 	}
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return svc.Params{}, cfg, "", err
+	}
+	if strings.Contains(exe, "go-build") { // `go run` binaries vanish; the unit would point at nothing
+		return svc.Params{}, cfg, "", fmt.Errorf("install needs a stable binary path, not %s (make build, then copy dist/tailraid somewhere permanent)", exe)
 	}
 	p := svc.Params{GOOS: runtime.GOOS, Exe: exe, ConfigPath: path, Home: config.Home(), LogFile: cfg.LogFile()}
 	if u, err := user.Current(); err == nil {
