@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -24,12 +24,13 @@ import (
 
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 )
 
 // Errors.
 var (
-	ErrNotLeader    = errors.New("cluster: not the leader")
-	ErrNoLeader     = errors.New("cluster: no leader")
+	ErrNotLeader    = fmt.Errorf("cluster: not the leader: %w", rpc.ErrNotLeader)
+	ErrNoLeader     = fmt.Errorf("cluster: no leader: %w", rpc.ErrNoLeader)
 	ErrAlreadyInit  = errors.New("cluster: data directory already holds raft state")
 	ErrNotInit      = errors.New("cluster: data directory is not initialised (run init or join)")
 	ErrAlreadyOpen  = errors.New("cluster: data directory is in use by another process")
@@ -40,9 +41,15 @@ var (
 type Options struct {
 	DataDir   string
 	NodeID    string         // raft.ServerID; LoadOrCreateNodeID
+	ClusterID [16]byte       // for the Raft stream handshake; Bootstrap generates it
 	RaftAddr  string         // TCP bind/advertise address when Transport is nil
 	Transport raft.Transport // tests pass raft.NewInmemTransport
 	Logger    *slog.Logger
+	// Fast shortens the Raft timeouts to tens of milliseconds and lowers the snapshot
+	// threshold; tests only.
+	Fast bool
+	// SnapshotThreshold overrides the documented 8192 (tests of snapshot install).
+	SnapshotThreshold uint64
 }
 
 // Node is an open Raft member.
@@ -55,6 +62,9 @@ type Node struct {
 	trans  raft.Transport
 	log    *slog.Logger
 	closed bool
+
+	fwdMu sync.Mutex
+	fwd   Forwarder
 }
 
 // RaftConfig returns the documented tuning (docs/02 §Raft configuration).
@@ -135,11 +145,22 @@ func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
 	if o.Transport != nil {
 		return o.Transport, nil
 	}
-	addr, err := net.ResolveTCPAddr("tcp", o.RaftAddr)
+	return NewTransport(o.RaftAddr, o.ClusterID, logOutput)
+}
+
+// LoadClusterID reads <data_dir>/cluster_id.
+func LoadClusterID(dataDir string) ([16]byte, error) {
+	var id [16]byte
+	b, err := os.ReadFile(filepath.Join(dataDir, "cluster_id"))
 	if err != nil {
-		return nil, fmt.Errorf("cluster: raft address: %w", err)
+		return id, err
 	}
-	return raft.NewTCPTransport(o.RaftAddr, addr, 3, 10*time.Second, logOutput)
+	raw, err := hex.DecodeString(strings.TrimSpace(string(b)))
+	if err != nil || len(raw) != 16 {
+		return id, fmt.Errorf("cluster: malformed cluster_id")
+	}
+	copy(id[:], raw)
+	return id, nil
 }
 
 func (o *Options) logger() (*slog.Logger, io.Writer) {
@@ -163,6 +184,15 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	if HasState(o.DataDir) {
 		return nil, ErrAlreadyInit
 	}
+	var cid [16]byte
+	_, _ = rand.Read(cid[:])
+	o.ClusterID = cid
+	if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(hex.EncodeToString(cid[:])+"\n"), 0o600); err != nil {
+		return nil, err
+	}
 	_, logOutput := o.logger()
 	st, err := openStores(o.DataDir, logOutput)
 	if err != nil {
@@ -173,7 +203,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 		_ = st.logs.Close()
 		return nil, err
 	}
-	conf := RaftConfig(o.NodeID, logOutput)
+	conf := o.raftConfig(logOutput)
 	cfg := raft.Configuration{Servers: []raft.Server{{Suffrage: raft.Voter, ID: raft.ServerID(o.NodeID), Address: trans.LocalAddr()}}}
 	if err := raft.BootstrapCluster(conf, st.logs, st.logs, st.snaps, trans, cfg); err != nil {
 		_ = st.logs.Close()
@@ -187,8 +217,6 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 		_ = n.Close()
 		return nil, err
 	}
-	var cid [16]byte
-	_, _ = rand.Read(cid[:])
 	self.Idx = 0 // allocate
 	self.ID = o.NodeID
 	if self.Kind == 0 {
@@ -208,10 +236,6 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 			_ = n.Close()
 			return nil, fmt.Errorf("cluster: bootstrap op %d: %w", c.Op, err)
 		}
-	}
-	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(hex.EncodeToString(cid[:])+"\n"), 0o600); err != nil {
-		_ = n.Close()
-		return nil, err
 	}
 	return n, nil
 }
@@ -234,10 +258,45 @@ func Open(o Options) (*Node, error) {
 	return start(o, st, trans)
 }
 
+func (o *Options) raftConfig(logOutput io.Writer) *raft.Config {
+	c := RaftConfig(o.NodeID, logOutput)
+	if o.Fast {
+		c.HeartbeatTimeout = 50 * time.Millisecond
+		c.ElectionTimeout = 50 * time.Millisecond
+		c.LeaderLeaseTimeout = 25 * time.Millisecond
+		c.CommitTimeout = 5 * time.Millisecond
+		c.SnapshotInterval = 100 * time.Millisecond
+	}
+	if o.SnapshotThreshold != 0 {
+		c.SnapshotThreshold = o.SnapshotThreshold
+		c.TrailingLogs = o.SnapshotThreshold / 2
+	}
+	return c
+}
+
+// OpenFresh starts Raft on an empty data directory so a leader can add this node
+// (`tailraid join`): the log fills by replication or snapshot install.
+func OpenFresh(o Options) (*Node, error) {
+	if HasState(o.DataDir) {
+		return nil, ErrAlreadyInit
+	}
+	_, logOutput := o.logger()
+	st, err := openStores(o.DataDir, logOutput)
+	if err != nil {
+		return nil, err
+	}
+	trans, err := o.transport(logOutput)
+	if err != nil {
+		_ = st.logs.Close()
+		return nil, err
+	}
+	return start(o, st, trans)
+}
+
 func start(o Options, st *stores, trans raft.Transport) (*Node, error) {
 	log, logOutput := o.logger()
 	fsm := meta.NewFSM()
-	r, err := raft.NewRaft(RaftConfig(o.NodeID, logOutput), fsm, st.logs, st.logs, st.snaps, trans)
+	r, err := raft.NewRaft(o.raftConfig(logOutput), fsm, st.logs, st.logs, st.snaps, trans)
 	if err != nil {
 		_ = st.logs.Close()
 		return nil, fmt.Errorf("cluster: start raft: %w", err)
@@ -314,6 +373,10 @@ func (n *Node) lastCommandIndex() (uint64, error) {
 	for idx := n.Raft.LastIndex(); idx >= first && idx > 0; idx-- {
 		var l raft.Log
 		if err := n.logs.GetLog(idx, &l); err != nil {
+			if errors.Is(err, raft.ErrLogNotFound) {
+				// compacted into a snapshot the FSM has already restored
+				return 0, nil
+			}
 			return 0, fmt.Errorf("cluster: read log %d: %w", idx, err)
 		}
 		if l.Type == raft.LogCommand {
@@ -325,30 +388,6 @@ func (n *Node) lastCommandIndex() (uint64, error) {
 
 // IsLeader reports whether this node currently leads.
 func (n *Node) IsLeader() bool { return n.Raft.State() == raft.Leader }
-
-// Propose implements meta.Proposer by applying through Raft. M1: leader only; a
-// follower returns ErrNotLeader (forwarding arrives with M2).
-func (n *Node) Propose(ctx context.Context, cmd meta.Command) (meta.Result, uint64, error) {
-	if !n.IsLeader() {
-		if addr, _ := n.Raft.LeaderWithID(); addr == "" {
-			return meta.Result{}, 0, ErrNoLeader
-		}
-		return meta.Result{}, 0, ErrNotLeader
-	}
-	timeout := 5 * time.Second
-	if d, ok := ctx.Deadline(); ok {
-		timeout = time.Until(d)
-	}
-	fut := n.Raft.Apply(meta.EncodeCommand(cmd), timeout)
-	if err := fut.Error(); err != nil {
-		return meta.Result{}, 0, fmt.Errorf("cluster: apply: %w", err)
-	}
-	res, ok := fut.Response().(meta.Result)
-	if !ok {
-		return meta.Result{}, 0, ErrUnknownReply
-	}
-	return res, fut.Index(), nil
-}
 
 // Close shuts Raft down and releases the stores.
 func (n *Node) Close() error {

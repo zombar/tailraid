@@ -10,14 +10,6 @@ import "testing"
 // Becomes: TestStore_PutRejectsHashMismatch, TestVFS_DedupeIdenticalChunks (M1).
 func TestStub_I_2(t *testing.T) { t.Skip("stub until M1; see docs/01-data-model.md") }
 
-// Invariant: I-6
-// Becomes: TestCluster_SplitBrain_OnlyMajorityCommits (M2).
-func TestStub_I_6(t *testing.T) { t.Skip("stub until M2; see docs/02-consistency-and-raft.md") }
-
-// Invariant: I-12
-// Becomes: TestCluster_KillMNodes_AllDataReadable, TestDurability_AckImpliesReadableFromKSurvivors (M2/M3).
-func TestStub_I_12(t *testing.T) { t.Skip("stub until M2; see docs/05-failure-model.md") }
-
 // Invariant: I-15
 // Becomes: TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy, TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK (M3).
 func TestStub_I_15(t *testing.T) { t.Skip("stub until M3; see docs/06-gc-and-repair.md") }

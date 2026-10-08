@@ -10,16 +10,8 @@ func TestStub_I_32(t *testing.T) {
 	t.Skip("stub until M1-M3; see docs/03-erasure-coding-and-placement.md")
 }
 
-// Invariant: I-36
-func TestStub_I_36(t *testing.T) {
-	t.Skip("stub until M1-M3; see docs/04-write-path-and-durability.md")
-}
-
 // Invariant: I-38
 func TestStub_I_38(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure-model.md") }
-
-// Invariant: I-39
-func TestStub_I_39(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure-model.md") }
 
 // Invariant: I-40
 func TestStub_I_40(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure-model.md") }

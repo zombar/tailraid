@@ -48,12 +48,6 @@ func TestStubLifecycle_L_46(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-46")
 }
 
-// Lifecycle: L-47
-// Uploading --[E-39 409 cluster-id]--> as E-34
-func TestStubLifecycle_L_47(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-47")
-}
-
 // Lifecycle: L-48
 // Uploading --[E-40 slow S3 past deadline, acks ≥ k]--> Placed(n<k+m)
 func TestStubLifecycle_L_48(t *testing.T) {
@@ -144,24 +138,6 @@ func TestStubLifecycle_L_85(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-85")
 }
 
-// Lifecycle: L-86
-// Committed --[E-76 node dead < fill_after]--> Committed
-func TestStubLifecycle_L_86(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-86")
-}
-
-// Lifecycle: L-87
-// Committed --[E-77 node dead > fill_after]--> Degraded
-func TestStubLifecycle_L_87(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-87")
-}
-
-// Lifecycle: L-88
-// Degraded (dead node) --[E-79 node returns before repair]--> Committed
-func TestStubLifecycle_L_88(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-88")
-}
-
 // Lifecycle: L-90
 // Repairing --[E-89 repair PUT fails]--> Degraded
 func TestStubLifecycle_L_90(t *testing.T) {
@@ -184,12 +160,6 @@ func TestStubLifecycle_L_92(t *testing.T) {
 // Degraded (drain) --[relocation done]--> Committed; old shards Relocated → Deleted
 func TestStubLifecycle_L_94(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-94")
-}
-
-// Lifecycle: L-95
-// Committed (any slot on node) --[E-81 node remove]--> Committed
-func TestStubLifecycle_L_95(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-95")
 }
 
 // Lifecycle: L-98
