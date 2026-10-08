@@ -1,0 +1,213 @@
+package meta
+
+import (
+	"bytes"
+	"encoding/hex"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func h(s string) []byte {
+	b, err := hex.DecodeString(strings.Join(strings.Fields(s), ""))
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func repeatHex(b byte, n int) string { return strings.Repeat(hex.EncodeToString([]byte{b}), n) }
+
+// goldenCommands pins the wire format of every Op. Changing any of these bytes is a
+// codec version bump, never a silent change.
+var goldenCommands = []struct {
+	name string
+	cmd  Command
+	hex  string
+}{
+	{"SetVolume", Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: 1 << 20, K: 2, M: 1, Now: 7}},
+		"01 01 00001000 02 01 0700000000000000"},
+	{"MetaSet", Command{Op: OpMetaSet, MetaSet: &MetaSet{ClusterID: [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, JoinToken: "abcdefgh", CreatedAt: 1}},
+		"01 02 000102030405060708090a0b0c0d0e0f 08 6162636465666768 0100000000000000"},
+	{"NodeUpsert", Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "0123456789abcdef", Name: "n", Kind: KindDevice, State: Active,
+		TSStableID: "27", Addr: "100.64.0.11", RaftPort: 20480, RPCPort: 20481, Voter: true, Capacity: 1024, Version: "v1", JoinedAt: 13}}},
+		"01 03 0000 10 30313233343536373839616263646566 01 6e 01 01 02 3237 0b 3130302e36342e302e3131 0050 0150 01 0004000000000000 02 7631 0d00000000000000 00 00 00 00 00"},
+	{"NodeUpsertS3", Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{Idx: 2, ID: "fedcba9876543210", Name: "b", Kind: KindS3, State: Active,
+		Capacity: 7, S3Endpoint: "e", S3Bucket: "b", S3Prefix: "p", S3Region: "r", S3PathStyle: true}}},
+		"01 03 0200 10 66656463626139383736353433323130 01 62 02 01 00 00 0000 0000 00 0700000000000000 00 0000000000000000 01 65 01 62 01 70 01 72 01"},
+	{"NodeSetState", Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 3, State: Draining, Now: 5}},
+		"01 04 0300 02 0500000000000000"},
+	{"Create", Command{Op: OpCreate, Create: &Create{Parent: 1, Name: "f", Type: TFile, Mode: 0o644, Uid: 501, Gid: 20, Now: 9}},
+		"01 05 0100000000000000 01 66 01 a4010000 f5010000 14000000 00 0900000000000000"},
+	{"Mkdir", Command{Op: OpMkdir, Mkdir: &Mkdir{Parent: 1, Name: "d", Mode: 0o755, Now: 3}},
+		"01 06 0100000000000000 01 64 ed010000 00000000 00000000 0300000000000000"},
+	{"Unlink", Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}},
+		"01 07 0100000000000000 01 61 0200000000000000"},
+	{"Rmdir", Command{Op: OpRmdir, Rmdir: &Rmdir{Parent: 1, Name: "d", Now: 4}},
+		"01 08 0100000000000000 01 64 0400000000000000"},
+	{"Rename", Command{Op: OpRename, Rename: &Rename{OldParent: 1, OldName: "a", NewParent: 2, NewName: "b", Now: 6}},
+		"01 09 0100000000000000 01 61 0200000000000000 01 62 0600000000000000"},
+	{"SetAttr", Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 5, Mask: AttrMode | AttrMtime, Mode: 0o600, Mtime: 10, Now: 11}},
+		"01 0a 0500000000000000 11 80010000 00000000 00000000 0000000000000000 0a00000000000000 0b00000000000000"},
+	{"Commit", Command{Op: OpCommit, Commit: &Commit{Ino: 5, BaseVersion: 2, NewSize: 3,
+		Writes:    []ChunkWrite{{Idx: 0, Hash: sampleHash(0xaa)}},
+		NewChunks: []ChunkDesc{{Hash: sampleHash(0xaa), Size: 3, K: 1, M: 1, Placement: []NodeIdx{1, 2}}}, Now: 12}},
+		"01 0b 0500000000000000 0200000000000000 00 0000000000000000 0300000000000000 01 00000000 " + repeatHex(0xaa, 32) +
+			" 01 " + repeatHex(0xaa, 32) + " 03000000 01 01 02 0100 0200 0c00000000000000"},
+	{"CommitTruncate", Command{Op: OpCommit, Commit: &Commit{Ino: 5, BaseVersion: 2, HasTruncate: true, TruncateTo: 1, NewSize: 0, Now: 12}},
+		"01 0b 0500000000000000 0200000000000000 01 0100000000000000 0000000000000000 00 00 0c00000000000000"},
+	{"SetPlacement", Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: sampleHash(0xbb), Placement: []NodeIdx{1, 0, 3}, K: 2, M: 1}},
+		"01 0c " + repeatHex(0xbb, 32) + " 03 0100 0000 0300 02 01"},
+	{"GCDelete", Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: -1}},
+		"01 0d ffffffffffffffff"},
+}
+
+// Invariant: I-22
+func TestEncodeCommand_Golden(t *testing.T) {
+	for _, g := range goldenCommands {
+		t.Run(g.name, func(t *testing.T) {
+			got := EncodeCommand(g.cmd)
+			if want := h(g.hex); !bytes.Equal(got, want) {
+				t.Fatalf("encode\n got %x\nwant %x", got, want)
+			}
+			dec, err := DecodeCommand(got)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !reflect.DeepEqual(normalizeCommand(dec), normalizeCommand(g.cmd)) {
+				t.Fatalf("round trip\n got %+v\nwant %+v", dec, g.cmd)
+			}
+		})
+	}
+}
+
+// normalizeCommand makes nil and empty slices compare equal.
+func normalizeCommand(c Command) Command {
+	if c.Commit != nil {
+		cc := *c.Commit
+		if len(cc.Writes) == 0 {
+			cc.Writes = nil
+		}
+		if len(cc.NewChunks) == 0 {
+			cc.NewChunks = nil
+		}
+		for i := range cc.NewChunks {
+			if len(cc.NewChunks[i].Placement) == 0 {
+				cc.NewChunks[i].Placement = nil
+			}
+		}
+		c.Commit = &cc
+	}
+	if c.SetPlacement != nil && len(c.SetPlacement.Placement) == 0 {
+		sp := *c.SetPlacement
+		sp.Placement = nil
+		c.SetPlacement = &sp
+	}
+	return c
+}
+
+func TestEncodeCommand_AllOpsCovered(t *testing.T) {
+	seen := map[Op]bool{}
+	for _, g := range goldenCommands {
+		seen[g.cmd.Op] = true
+	}
+	for op := OpSetVolume; op <= OpGCDelete; op++ {
+		if !seen[op] {
+			t.Errorf("op %d has no golden", op)
+		}
+	}
+}
+
+func TestDecodeCommand_Rejects(t *testing.T) {
+	good := EncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}})
+	cases := map[string][]byte{
+		"empty":              {},
+		"version only":       {1},
+		"bad version":        append([]byte{2}, good[1:]...),
+		"unknown op":         {1, 200},
+		"op zero":            {1, 0},
+		"truncated":          good[:len(good)-1],
+		"trailing garbage":   append(append([]byte{}, good...), 0),
+		"huge string len":    {1, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0x0f},
+		"missing payload":    {1, 13},
+		"non-minimal varint": {1, 7, 1, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x00, 2, 0, 0, 0, 0, 0, 0, 0},
+	}
+	for name, in := range cases {
+		if _, err := DecodeCommand(in); err == nil {
+			t.Errorf("%s: accepted %x", name, in)
+		}
+	}
+}
+
+func TestEncodeCommand_MissingPayloadPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for Op without payload")
+		}
+	}()
+	EncodeCommand(Command{Op: OpUnlink})
+}
+
+func TestResult_RoundTrip(t *testing.T) {
+	cases := []Result{
+		{},
+		{Ino: 7, Gen: 9},
+		{Err: ErrConflict},
+		{Victims: []GCVictim{{Hash: sampleHash(1), Placement: []NodeIdx{1, 0, 2}}, {Hash: sampleHash(2)}}},
+	}
+	for _, r := range cases {
+		b := EncodeResult(r)
+		got, err := DecodeResult(b)
+		if err != nil {
+			t.Fatalf("decode %+v: %v", r, err)
+		}
+		if got.Ino != r.Ino || got.Gen != r.Gen || (got.Err == nil) != (r.Err == nil) || (r.Err != nil && got.Err.Error() != r.Err.Error()) {
+			t.Fatalf("got %+v want %+v", got, r)
+		}
+		if len(got.Victims) != len(r.Victims) {
+			t.Fatalf("victims %d want %d", len(got.Victims), len(r.Victims))
+		}
+		for i := range r.Victims {
+			if got.Victims[i].Hash != r.Victims[i].Hash || !equalIdx(got.Victims[i].Placement, r.Victims[i].Placement) {
+				t.Fatalf("victim %d: %+v want %+v", i, got.Victims[i], r.Victims[i])
+			}
+		}
+	}
+	if _, err := DecodeResult([]byte{99}); err == nil {
+		t.Fatal("unknown error code accepted")
+	}
+	if _, err := DecodeResult(append(EncodeResult(Result{}), 0)); err == nil {
+		t.Fatal("trailing garbage accepted")
+	}
+}
+
+func equalIdx(a, b []NodeIdx) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Invariant: I-22, I-26
+func FuzzDecodeCommand(f *testing.F) {
+	for i := range goldenCommands {
+		f.Add(h(goldenCommands[i].hex))
+	}
+	f.Add([]byte{})
+	f.Add([]byte{1})
+	f.Fuzz(func(t *testing.T, in []byte) {
+		c, err := DecodeCommand(in)
+		if err != nil {
+			return
+		}
+		out := EncodeCommand(c)
+		if !bytes.Equal(out, in) {
+			t.Fatalf("decode/encode not identity: %x -> %x", in, out)
+		}
+	})
+}
