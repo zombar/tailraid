@@ -226,7 +226,7 @@ func write(t *nfsc.Target, shared string) {
 	}
 	files["/versioned.txt"] = []byte("v30\n")
 	// manifest
-	var lines []string
+	lines := make([]string, 0, len(files))
 	for p, data := range files {
 		lines = append(lines, fmt.Sprintf("%x  %s", sha256.Sum256(data), p))
 	}
