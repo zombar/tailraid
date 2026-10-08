@@ -84,6 +84,7 @@ type Repairer struct {
 	limit  *limiter
 	Events *meta.EventRing // chunk history (nil unless dev.enabled)
 
+	scanMu   sync.Mutex // one pass at a time: `check --scrub` never overlaps the background loop
 	mu       sync.Mutex
 	reported map[chunk.ShardKey]time.Time // reader bad-slot reports
 	last     Stats
@@ -159,7 +160,15 @@ func (r *Repairer) classify(c meta.Chunk, vol meta.Volume, nodes map[meta.NodeId
 func (r *Repairer) Config() Config { return r.cfg }
 
 // Scan performs one pass: repair, migrate, scrub (docs/06 §4–5).
-func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
+func (r *Repairer) Scan(ctx context.Context) (Stats, error) { return r.scan(ctx, r.cfg.ScrubShare) }
+
+// Scrub is one pass that verifies every chunk (`check --scrub`), with the configured
+// hold-downs and rate limit, serialized with the background passes.
+func (r *Repairer) Scrub(ctx context.Context) (Stats, error) { return r.scan(ctx, 1) }
+
+func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
+	r.scanMu.Lock()
+	defer r.scanMu.Unlock()
 	var st Stats
 	vol := r.st.Volume()
 	nodes := map[meta.NodeIdx]meta.Node{}
@@ -217,7 +226,7 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 		}
 		bad, kept, migrate, readable := r.classify(c, vol, nodes, reported)
 		if len(bad) == 0 && !migrate {
-			if r.cfg.ScrubShare > 0 && int(c.Hash[0])%r.cfg.ScrubShare == pass%r.cfg.ScrubShare {
+			if scrubShare > 0 && int(c.Hash[0])%scrubShare == pass%scrubShare {
 				st.Scrubbed++
 				corrupt, err := r.scrub(ctx, c)
 				if err != nil {

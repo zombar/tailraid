@@ -23,6 +23,7 @@ type Config struct {
 	TotalDirtyHi   uint64        // flush the largest inodes
 	PutDeadline    time.Duration // step 9: wait for stragglers at most this long
 	ProposeTimeout time.Duration
+	ShutdownFlush  time.Duration // FlushAll on shutdown gives up after this; the WAL keeps the rest
 	Workers        int
 	RetryMin       time.Duration
 	RetryMax       time.Duration
@@ -32,7 +33,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20,
-		PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second,
+		PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second, ShutdownFlush: 30 * time.Second,
 		Workers: 4, RetryMin: time.Second, RetryMax: 60 * time.Second,
 	}
 }
@@ -119,8 +120,13 @@ func (f *Flusher) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
-			if err := f.FlushAll(context.Background()); err != nil {
-				f.log.Warn("shutdown flush incomplete", "err", err)
+			// bounded (docs/04 §3): a dead holder must not hold the shutdown; the WAL keeps
+			// whatever did not flush and the next start flushes it
+			sctx, cancel := context.WithTimeout(context.Background(), f.cfg.ShutdownFlush)
+			err := f.FlushAll(sctx)
+			cancel()
+			if err != nil {
+				f.log.Warn("shutdown flush incomplete; the WAL keeps the rest", "err", err)
 			}
 			return
 		case <-timer.C():

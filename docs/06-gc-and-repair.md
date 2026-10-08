@@ -166,7 +166,9 @@ and the GC worker are leader-only and run only while the leader is `Healthy`.
 ## 5. Scrub
 
 Every scan pass also verifies a sample of chunks (default 1 % per pass, so a full scrub
-completes in ~100 passes; `tailraid check --scrub` forces 100 %): fetch **all** k+m shards,
+completes in ~100 passes; `tailraid check --scrub` runs one 100 % pass through the leader's
+repairer, with the configured `fill_after` and rate limit, serialized with the background
+passes): fetch **all** k+m shards,
 `codec.Verify`. A `false` result or any `ErrCorrupt` from a node marks the offending slots
 bad and repairs them via §4 (the chunk itself is decoded from a hash-verified subset).
 A node that detects a header or hash mismatch at read time moves the file to
@@ -220,12 +222,15 @@ node's chunk event ring (docs/11 §7; `(event ring disabled)` unless `dev.enable
 prefix of at least 8 hex digits is accepted when it is unique; a path describes every chunk
 of that file in order.
 
-`tailraid fsck [--fix] [--verify-data]` checks, from any node's FSM copy: refcount sums;
-`len(Chunks) == ceil(Size/CS)` for every file; every parent chain reaches root and every
-`Children` entry points to an inode whose `Parent`/`Name` agree; `Tombs ⇔ Refs == 0`;
-placement distinctness; and, with `--verify-data`, decodes every chunk from its shards and
-compares hashes (this is the "offline reconstruct" used by the soak suite's cross-view
-check). `--fix` only re-derives refcounts and tombstones; it never deletes shards.
+`tailraid fsck` checks, from the asked node's FSM copy, every FSM invariant
+(`meta.CheckInvariants`): refcount sums; `len(Chunks) == ceil(Size/CS)` for every file;
+every parent chain reaches root and every `Children` entry points to an inode whose
+`Parent`/`Name` agree; `Tombs ⇔ Refs == 0`; placement distinctness. It also counts the
+orphan shards on that node (files the chunk table does not place there, plus anything in
+the shard tree that is not a shard); orphans are informational, the sweep removes them
+after grace. Data is verified by `check --scrub` (§5), not by fsck, and there is no
+`--fix`: the FSM keeps refcounts exact (I-27), so any finding is a bug to report, not
+state to patch.
 
 ## Invariants
 
@@ -248,5 +253,5 @@ check). `--fix` only re-derives refcounts and tombstones; it never deletes shard
 | I-41 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Commit_RevivesTombstonedChunk`, `TestVFS_DedupIdenticalChunks`, `TestFlusher_DedupHitWithFewerThanKLiveSlots_Fills` |
 | I-42 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestCLI_NodeDrain_ThenRemove_MovesSlots` |
 | I-43 | `TestFSM_DeterministicAcrossReplicas`, `TestFSM_GCDeleteDeterministic` |
-| I-44 | `TestFsck_CleanClusterNoFindings`, `TestFsck_DetectsInjectedRefcountError` |
+| I-44 | `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards`, `TestCheckInvariants_DetectsEachViolation`, `TestCheck_MPlusOneCorrupt_NotOK` |
 | I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |

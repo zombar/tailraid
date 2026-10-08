@@ -36,7 +36,7 @@ the cluster's repair.grace.`,
 			if _, err := os.Stat(cfg.Mount.Path); err != nil {
 				return fmt.Errorf("mount path %s: %w (run `tailraid mount` first)", cfg.Mount.Path, err)
 			}
-			grace, _, err := cfg.RepairDurations()
+			grace, fillAfter, err := cfg.RepairDurations()
 			if err != nil {
 				return err
 			}
@@ -52,7 +52,7 @@ the cluster's repair.grace.`,
 				seed = time.Now().UnixNano()
 			}
 			p := soak.Quick()
-			p.Name, p.Grace, p.FillAfter = "live", grace, grace
+			p.Name, p.Grace, p.FillAfter = "live", grace, fillAfter
 			if cs, _ := cmd.Flags().GetInt("chunk"); cs > 0 {
 				p.ChunkSize = cs
 			}

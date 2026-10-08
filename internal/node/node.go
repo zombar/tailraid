@@ -362,21 +362,16 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		return a.node.FSM.Volume(), nil
 	case "check":
-		cfg := repair.DefaultConfig()
-		if op.Scrub {
-			cfg.ScrubShare = 1
-		}
+		// --scrub runs one full-verification pass through the leader's repairer, so it
+		// uses the configured fill_after and rate limit and never overlaps a background pass
 		var st repair.Stats
-		var err error
 		if op.Scrub {
-			scrubber := repair.New(a.node.FSM, a.node, a.prober, a.client, a.rd, a.clk, cfg, a.log)
-			scrubber.Events = a.ring
-			st, err = scrubber.Scan(ctx)
+			var err error
+			if st, err = a.repairer.Scrub(ctx); err != nil {
+				return nil, err
+			}
 		} else {
 			st, _ = a.repairer.Last()
-		}
-		if err != nil {
-			return nil, err
 		}
 		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, op.Files), nil
 	case "fsck":
@@ -389,6 +384,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		_ = a.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
 			h, kk, mm, idx, err := chunk.ParseKey(k)
 			if err != nil {
+				rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
 				return nil
 			}
 			c, ok := a.node.FSM.GetChunk(h)

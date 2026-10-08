@@ -137,7 +137,7 @@ extents.
 | inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that still arrives while the WAL is at the cap fails with `NFS3ERR_IO` (`EIO`, never `EAGAIN`) and succeeds once the flush has drained it |
 | total dirty bytes ≥ `TotalDirtyHi` | 256 MiB | flush the largest inodes until below |
 | total dirty bytes ≥ `MaxDirty` | 1 GiB | every WRITE returns `NFS3ERR_IO` (`EIO`) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
-| shutdown | — | `FlushAll` with a bounded deadline, then exit (WAL survives anyway) |
+| shutdown | 30 s (`ShutdownFlush`) | `FlushAll` with that deadline, then exit; whatever did not flush stays in the WAL and flushes on the next start |
 
 Flush workers run per inode from a bounded pool (default 4) so a big copy does not starve
 small files.
