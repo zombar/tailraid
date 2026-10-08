@@ -447,6 +447,9 @@ func TestWebUI_StaticAssets(t *testing.T) {
 	if code, h, body := u.get("/assets/app.css"); code != 200 || h.Get("Content-Type") != "text/css; charset=utf-8" || !strings.Contains(string(body), "--accent") {
 		t.Fatalf("app.css: %d %q", code, h.Get("Content-Type"))
 	}
+	if code, h, body := u.get("/assets/app.js"); code != 200 || h.Get("Content-Type") != "text/javascript; charset=utf-8" || len(body) == 0 {
+		t.Fatalf("app.js: %d %q len=%d", code, h.Get("Content-Type"), len(body))
+	}
 	for _, p := range []string{"/assets/nope", "/assets/", "/index.html", "/nope"} {
 		if code, _, _ := u.get(p); code != 404 {
 			t.Errorf("%s: %d, want 404", p, code)
