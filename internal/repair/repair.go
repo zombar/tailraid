@@ -156,6 +156,33 @@ func (r *Repairer) classify(c meta.Chunk, vol meta.Volume, nodes map[meta.NodeId
 	return h.Bad, kept, h.PolicyStale, h.Readable
 }
 
+// autoPolicy proposes the policy the member table calls for (docs/03, I-75): only when
+// it differs from the volume's and a full placement is possible now; otherwise the change
+// waits for a later pass. Returns the volume the pass scans with.
+func (r *Repairer) autoPolicy(ctx context.Context, nodes []meta.Node, vol meta.Volume) meta.Volume {
+	k, m := meta.AutoPolicy(nodes)
+	if k == vol.K && m == vol.M {
+		return vol
+	}
+	if err := meta.PolicyAllowed(nodes, r.live, k, m); err != nil {
+		r.log.Info("auto policy deferred", "want", fmt.Sprintf("%d+%d", k, m), "reason", err)
+		return vol
+	}
+	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: k, M: m, Now: r.clk.Now().UnixNano()}})
+	if err == nil {
+		err = res.Err
+	}
+	if err != nil {
+		r.log.Warn("auto policy proposal failed, will retry", "err", err)
+		return vol
+	}
+	if err := r.st.WaitApplied(ctx, index); err != nil {
+		return vol
+	}
+	r.log.Info("auto policy", "from", fmt.Sprintf("%d+%d", vol.K, vol.M), "to", fmt.Sprintf("%d+%d", k, m))
+	return r.st.Volume()
+}
+
 // Config returns the repairer's configuration (status derives states with its fill_after).
 func (r *Repairer) Config() Config { return r.cfg }
 
@@ -173,6 +200,9 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 	vol := r.st.Volume()
 	nodes := map[meta.NodeIdx]meta.Node{}
 	all := r.st.Nodes()
+	if vol.Auto {
+		vol = r.autoPolicy(ctx, all, vol)
+	}
 	for i := range all {
 		nodes[all[i].Idx] = all[i]
 	}

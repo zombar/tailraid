@@ -116,10 +116,30 @@ type Cluster struct {
 
 	retryUntilStale bool
 	nonVoters       map[int]bool
+	auto            bool
 }
 
 // Voter reports whether node i joins as a Raft voter (all do unless NonVoters says otherwise).
 func (c *Cluster) Voter(i int) bool { return !c.nonVoters[i] }
+
+// AddNode creates one more node after NewCluster, joins it through the leader (as a voter
+// or not) and settles. Returns its index.
+func (c *Cluster) AddNode(voter bool) int {
+	c.T.Helper()
+	i := len(c.Nodes)
+	if !voter {
+		if c.nonVoters == nil {
+			c.nonVoters = map[int]bool{}
+		}
+		c.nonVoters[i] = true
+	}
+	nd := c.newNode(i)
+	c.Nodes = append(c.Nodes, nd)
+	nd.start(c, false, meta.SetVolume{})
+	c.join(nd)
+	c.Settle()
+	return i
+}
 
 // Idx is the node's FSM index (1-based, same as creation order).
 func (n *ClusterNode) Idx() meta.NodeIdx { return meta.NodeIdx(n.I + 1) }
@@ -151,6 +171,13 @@ type clusterOpts struct {
 	chunkSize         uint32
 	retryUntilStale   bool
 	nonVoters         map[int]bool
+	auto              bool
+}
+
+// AutoPolicy bootstraps the volume in automatic redundancy mode (docs/03): the leader's
+// repair passes raise and lower the policy as members come and go.
+func AutoPolicy() ClusterOption {
+	return func(o *clusterOpts) { o.auto = true }
 }
 
 // RetryUntilStale gives every node's filesystem the production health view: a failed
@@ -187,7 +214,7 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 	for _, f := range opts {
 		f(&o)
 	}
-	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters}
+	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters, auto: o.auto}
 	for i := 0; i < n; i++ {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
@@ -246,7 +273,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	var err error
 	switch {
 	case bootstrap:
-		nd.Node, err = cluster.Bootstrap(context.Background(), opts, nd.record(c), vol, false, "harness-token")
+		nd.Node, err = cluster.Bootstrap(context.Background(), opts, nd.record(c), vol, c.auto, "harness-token")
 	case nd.started:
 		nd.Node, err = cluster.Open(opts)
 	default:

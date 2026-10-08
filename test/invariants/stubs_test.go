@@ -18,12 +18,6 @@ func TestStub_I_20(t *testing.T) { t.Skip("stub until M5a; see docs/10-s3-nodes.
 // Becomes: TestS3_ListObjectsV2_CompleteOrderedUnderConcurrentWrites (M5a).
 func TestStub_I_21(t *testing.T) { t.Skip("stub until M5a; see docs/10-s3-nodes.md") }
 
-// Invariant: I-75
-// Becomes: TestAutoPolicy_Table (docs/03).
-func TestStub_I_75(t *testing.T) {
-	t.Skip("stub until init-without-flags lands; see docs/03")
-}
-
 // Invariant: I-76
 // Becomes: TestCLI_Init_NoFlags (docs/12).
 func TestStub_I_76(t *testing.T) {

@@ -259,5 +259,5 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-32 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_MigrationCrash_Resumes`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnAdd`, `TestPlace_StabilityOnMembershipChange`, `TestPlace_StabilityOnRemove` |
 | I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |
-| I-75 | `TestFSM_SetVolumeMode`, `TestStub_I_75` |
+| I-75 | `TestAutoPolicy_Table`, `TestAutoPolicy_NNodeDeterminism`, `TestCluster_AutoPolicy_GrowsOnJoin_DefersWhileAsleep`, `TestCluster_AutoPolicy_ShrinksOnRemoveNotOnDeath`, `TestAutoPolicy_ManualPins`, `TestFSM_SetVolumeMode` |
 | I-77 | `TestPlaceKM_VoterFirst_DataSlots`, `TestPlaceKM_VoterFirst_NNodeDeterminism`, `TestFillPlacement_KeepsSlotClass`, `TestCandidates_VoterBit`, `TestCluster_ReadableWithNonVotersAsleep` |
