@@ -20,14 +20,12 @@ type Stats struct {
 	StoredBytes  uint64 // Σ over live chunks of ShardLen(size,k)·(k+m)
 }
 
+// copyInode is the read API's view of an inode: every field but the Children map, which
+// is the directory's live name table and would cost O(entries) per LOOKUP or GETATTR to
+// copy (docs/02 §Reads). Names are read through Lookup and ReadDir.
 func copyInode(in *Inode) Inode {
 	cp := *in
-	if in.Children != nil {
-		cp.Children = make(map[string]Ino, len(in.Children))
-		for k, v := range in.Children {
-			cp.Children[k] = v
-		}
-	}
+	cp.Children = nil
 	return cp
 }
 

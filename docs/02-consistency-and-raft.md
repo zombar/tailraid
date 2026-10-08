@@ -203,7 +203,9 @@ Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
 `meta.Store` is the read API of the FSM (`type Store = FSM`); the vfs, gateways, repairer
 and CLI reports hold a `*meta.Store`. Every read (`GetInode`, `Lookup`, `Resolve`, `PathOf`,
 `ReadDir`, `GetChunk`, `ForEachChunk`, `Nodes`, `Volume`, `Stats`, `Applied`,
-`WaitApplied`) is served from the local FSM under `RLock`, returning copies. Followers may therefore serve slightly stale
+`WaitApplied`) is served from the local FSM under `RLock`, returning copies. An inode
+copy carries no `Children` map (a directory's name table is read through `Lookup` and
+`ReadDir`), so a LOOKUP or GETATTR costs O(1) however large the directory. Followers may therefore serve slightly stale
 metadata; this is accepted NFS behaviour and lets a disconnected laptop browse the tree.
 A gateway that just proposed a command calls `WaitApplied(index)` before answering, which
 gives read-your-writes on the issuing node.

@@ -107,6 +107,16 @@ func (tf *tfsm) inode(ino Ino) Inode {
 	return in
 }
 
+// child resolves name in dir, or 0.
+func (tf *tfsm) child(dir Ino, name string) Ino {
+	tf.t.Helper()
+	in, ok := tf.f.Lookup(dir, name)
+	if !ok {
+		return 0
+	}
+	return in.Ino
+}
+
 func (tf *tfsm) chunk(hh Hash) Chunk {
 	tf.t.Helper()
 	c, ok := tf.f.GetChunk(hh)
@@ -228,10 +238,10 @@ func TestFSM_Create_Mkdir_Errors(t *testing.T) {
 	tf := newTFSM(t)
 	d := tf.mkdir(RootIno, "d")
 	f := tf.create(d, "f")
-	if in := tf.inode(RootIno); in.Nlink != 3 || in.Children["d"] != d {
+	if in, child := tf.inode(RootIno), tf.child(RootIno, "d"); in.Nlink != 3 || child != d {
 		t.Fatalf("root after mkdir: %+v", in)
 	}
-	if in := tf.inode(d); in.Nlink != 2 || in.Children["f"] != f || in.Parent != RootIno || in.Name != "d" {
+	if in, child := tf.inode(d), tf.child(d, "f"); in.Nlink != 2 || child != f || in.Parent != RootIno || in.Name != "d" {
 		t.Fatalf("dir: %+v", in)
 	}
 	if in := tf.inode(f); in.Type != TFile || in.Mode != 0o644 || in.Nlink != 1 || in.Gen == 0 || in.Parent != d || in.Name != "f" {
@@ -362,7 +372,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if in.Gen != gen1 || in.Parent != d2 || in.Name != "moved" || in.Ctime != 70 {
 		t.Fatalf("moved %+v", in)
 	}
-	if _, ok := tf.inode(d1).Children["f1"]; ok {
+	if tf.child(d1, "f1") != 0 {
 		t.Fatal("old entry remains")
 	}
 	// file over file: dest unlinked, dest refs dropped (L-17)
@@ -373,7 +383,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if c := tf.chunk(y); c.Refs != 0 || c.TombstonedAt != 70 {
 		t.Fatalf("dest chunk %+v", c)
 	}
-	if tf.inode(d2).Children["f2"] != f1 {
+	if tf.child(d2, "f2") != f1 {
 		t.Fatal("entry does not point at source")
 	}
 	// dir over empty dir; nlink bookkeeping
@@ -382,7 +392,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if _, ok := tf.f.GetInode(emptyDir); ok {
 		t.Fatal("replaced empty dir still exists")
 	}
-	if tf.inode(RootIno).Nlink != rootN-1 || tf.inode(RootIno).Children["empty"] != d1 {
+	if tf.inode(RootIno).Nlink != rootN-1 || tf.child(RootIno, "empty") != d1 {
 		t.Fatalf("root %+v", tf.inode(RootIno))
 	}
 	// dir cross-parent: parents' Nlink adjust
@@ -395,7 +405,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	l1 := tf.ok(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "l1", Type: TSymlink, Target: "a", Now: 1}}).Ino
 	tf.ok(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "l2", Type: TSymlink, Target: "b", Now: 1}})
 	tf.ok(rn(RootIno, "l1", RootIno, "l2"))
-	if tf.inode(RootIno).Children["l2"] != l1 {
+	if tf.child(RootIno, "l2") != l1 {
 		t.Fatal("symlink rename")
 	}
 }
@@ -1418,11 +1428,9 @@ func TestStore_ReadAPI(t *testing.T) {
 	if _, err := tf.f.ReadDir(999); !errors.Is(err, ErrNotExist) {
 		t.Fatal("ReadDir missing")
 	}
-	// copies: mutating a returned inode's Children must not affect the FSM
-	in, _ := tf.f.GetInode(d)
-	in.Children["evil"] = 1
-	if _, ok := tf.f.Lookup(d, "evil"); ok {
-		t.Fatal("GetInode returned shared map")
+	// copies: a returned inode carries no name table at all (docs/02 §Reads)
+	if in, _ := tf.f.GetInode(d); in.Children != nil {
+		t.Fatal("GetInode returned the Children map")
 	}
 	c, _ := tf.f.GetChunk(a)
 	c.Placement[0] = 99

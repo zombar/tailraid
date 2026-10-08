@@ -679,9 +679,18 @@ func (a *applier) commit(c *Commit) error {
 		d := e.d
 		st.Chunks[d.Hash] = &Chunk{Hash: d.Hash, Size: d.Size, K: d.K, M: d.M, Placement: append([]NodeIdx(nil), d.Placement...)}
 	}
+	// Only the indices that change carry a delta: written ones (old entry out, new in),
+	// and the entries a truncate drops; everything below keep that was not written is
+	// the same hash in both lists and would cancel. Commit therefore costs O(writes),
+	// not O(file length), under the FSM write lock.
 	delta := refDelta{}
-	delta.add(newList, +1)
-	delta.add(oldList, -1)
+	for _, w := range c.Writes {
+		delta.add([]Hash{w.Hash}, +1)
+		if int(w.Idx) < keep {
+			delta.add([]Hash{oldList[w.Idx]}, -1)
+		}
+	}
+	delta.add(oldList[keep:], -1)
 	for _, e := range fresh {
 		if _, touched := delta[e.d.Hash]; !touched {
 			delta[e.d.Hash] += 0 // ensure tombstone bookkeeping runs for unreferenced new entries
