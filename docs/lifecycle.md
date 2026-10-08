@@ -38,8 +38,8 @@ exactly one design doc transition table and cited by at least one test via
 | L-30 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 assemble needs base | Assembled | `TestStubLifecycle_L_30` |
 | L-31 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 base unreadable (< k) | Dirty | `TestStubLifecycle_L_31` |
 | L-32 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-26 all zero | (HashZero, no entry) | `TestFlusher_HoleChunksAreHashZero` |
-| L-33 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-27 hash exists live | DedupHit | `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestFSM_Commit_NewFileAndOverwrite` |
-| L-34 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-28 hash exists tombstoned | DedupHit → Revived | `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestFSM_Revive` |
+| L-33 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-27 hash exists live | DedupHit | `TestFSM_Commit_NewFileAndOverwrite`, `TestFlusher_DedupLiveAndTombstoned_NoUpload` |
+| L-34 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-28 hash exists tombstoned | DedupHit → Revived | `TestFSM_Revive`, `TestFlusher_DedupLiveAndTombstoned_NoUpload` |
 | L-35 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-29 ≤ 64 KiB | Uploading (k=1, m) | `TestFlusher_SmallAndLargeChunksCommit` |
 | L-36 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-30 > 64 KiB | Uploading (K, M) | `TestFlusher_SmallAndLargeChunksCommit` |
 | L-37 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Assembled | E-31 policy changed | Uploading (new K, M) | `TestFSM_SetVolume_PolicyVersionBumps` |
@@ -56,10 +56,10 @@ exactly one design doc transition table and cited by at least one test via
 | L-48 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-40 slow S3 past deadline, acks ≥ k | Placed(n<k+m) | `TestStubLifecycle_L_48` |
 | L-49 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-41 duplicate PUT (racing gateways) | Placed | `TestStubLifecycle_L_49` |
 | L-50 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-42 self in placement | Placed | `TestFlusher_SmallAndLargeChunksCommit` |
-| L-51 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed(k+m) | E-45 Commit OK | Committed | `TestFlusher_SmallAndLargeChunksCommit`, `TestFSM_Commit_NewFileAndOverwrite` |
+| L-51 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed(k+m) | E-45 Commit OK | Committed | `TestFSM_Commit_NewFileAndOverwrite`, `TestFlusher_SmallAndLargeChunksCommit` |
 | L-52 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed(n<k+m) | E-45 Commit OK | Degraded | `TestFlusher_DegradedCommitRecordsZeroSlots` |
-| L-53 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-46 ErrConflict | Placed → Committed | `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFSM_Commit_RejectsStaleBaseVersion` |
-| L-54 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | DedupHit | E-47 ErrUnknownChunk | Uploading → Committed | `TestFlusher_UnknownChunk_ReUpload`, `TestFSM_Commit_UnknownChunkRejected` |
+| L-53 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-46 ErrConflict | Placed → Committed | `TestFSM_Commit_RejectsStaleBaseVersion`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend` |
+| L-54 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | DedupHit | E-47 ErrUnknownChunk | Uploading → Committed | `TestFSM_Commit_UnknownChunkRejected`, `TestFlusher_UnknownChunk_ReUpload` |
 | L-55 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-48 ErrNotExist | (dropped); shards Orphan | `TestFlusher_UnlinkedBeforeFlush_Dropped` |
 | L-56 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-49 ErrNeedTailRewrite | Assembled (tail) → Placed | `TestFSM_Commit_TruncateDown` |
 | L-57 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-50 ErrNotLeader | Placed → Committed | `TestStubLifecycle_L_57` |

@@ -15,6 +15,9 @@
 # Tolerates docs that do not exist yet (zero definitions is not an error).
 #
 # Usage: scripts/check-invariants.sh [--check]
+# Byte-order collation everywhere (macOS sort is locale/case-aware by default), so the
+# generated tables are identical on every platform.
+export LC_ALL=C
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
