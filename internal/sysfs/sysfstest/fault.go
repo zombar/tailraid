@@ -220,6 +220,8 @@ func (f *Fault) Stat(name string) (fs.FileInfo, error) {
 	return f.inner.Stat(name)
 }
 
+func (f *Fault) Free(dir string) (uint64, uint64, error) { return f.inner.Free(dir) }
+
 func (f *Fault) Chtimes(name string, atime, mtime time.Time) error {
 	if f.isCrashed() {
 		return ErrCrashed

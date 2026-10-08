@@ -25,6 +25,9 @@ type FS interface {
 	Chtimes(name string, atime, mtime time.Time) error
 	// SyncDir fsyncs a directory so a completed rename is durable. No-op on Windows.
 	SyncDir(name string) error
+	// Free reports the bytes available to this process and the size of the filesystem
+	// holding dir (the node budget of docs/01 derives from them).
+	Free(dir string) (free, total uint64, err error)
 }
 
 // File is the subset of *os.File the shard store and the WAL use.
@@ -58,4 +61,5 @@ func (OS) Stat(name string) (fs.FileInfo, error)        { return os.Stat(name) }
 func (OS) Chtimes(name string, atime, mtime time.Time) error {
 	return os.Chtimes(name, atime, mtime)
 }
-func (OS) SyncDir(name string) error { return syncDir(name) }
+func (OS) Free(dir string) (free, total uint64, err error) { return diskFree(dir) }
+func (OS) SyncDir(name string) error                       { return syncDir(name) }
