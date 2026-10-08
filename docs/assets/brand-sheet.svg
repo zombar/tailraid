@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 650" width="100%" height="100%">
+  <defs>
+    <style>
+      .bg-dark { fill: #0f172a; }
+      .bg-light { fill: #ffffff; }
+      .text-dark { fill: #0f172a; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace; font-weight: 600; }
+      .text-light { fill: #f8fafc; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace; font-weight: 600; }
+      .text-dim { fill: #64748b; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 1.5px; }
+    </style>
+
+    <!-- Master Icon Mark (Dark Theme) -->
+    <g id="tailraid-mark-dark">
+      <g transform="rotate(32)">
+        <!-- Left Solid Bar -->
+        <rect x="-34" y="-40" width="16" height="80" rx="1" fill="#f8fafc" />
+        
+        <!-- Center Parity Bar (Locked Corners & 3 Balanced Dashes) -->
+        <path stroke="#38bdf8" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none"
+              d="M -9 -20 V -40 H 9 V -20
+                 M -9 -10 V 10
+                 M 9 -10 V 10
+                 M -9 20 V 40 H 9 V 20" />
+        
+        <!-- Right Solid Bar -->
+        <rect x="18" y="-40" width="16" height="80" rx="1" fill="#f8fafc" />
+      </g>
+    </g>
+
+    <!-- Master Icon Mark (Light Theme) -->
+    <g id="tailraid-mark-light">
+      <g transform="rotate(32)">
+        <!-- Left Solid Bar -->
+        <rect x="-34" y="-40" width="16" height="80" rx="1" fill="#0f172a" />
+        
+        <!-- Center Parity Bar (Locked Corners & 3 Balanced Dashes) -->
+        <path stroke="#2563eb" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none"
+              d="M -9 -20 V -40 H 9 V -20
+                 M -9 -10 V 10
+                 M 9 -10 V 10
+                 M -9 20 V 40 H 9 V 20" />
+        
+        <!-- Right Solid Bar -->
+        <rect x="18" y="-40" width="16" height="80" rx="1" fill="#0f172a" />
+      </g>
+    </g>
+  </defs>
+
+  <!-- Dark Canvas -->
+  <rect x="0" y="0" width="400" height="650" class="bg-dark" />
+  
+  <!-- Light Canvas -->
+  <rect x="400" y="0" width="400" height="650" class="bg-light" />
+  <line x1="400" y1="0" x2="400" y2="650" stroke="#e2e8f0" stroke-width="1" />
+
+  <!-- SECTION 1: STANDALONE MARKS -->
+  <text x="40" y="45" class="text-dim">DARK THEME / STANDALONE</text>
+  <use href="#tailraid-mark-dark" x="200" y="160" transform="scale(1.2) translate(-33, -27)" />
+
+  <text x="440" y="45" class="text-dim">LIGHT THEME / STANDALONE</text>
+  <use href="#tailraid-mark-light" x="600" y="160" transform="scale(1.2) translate(-100, -27)" />
+
+  <line x1="30" y1="270" x2="370" y2="270" stroke="#1e293b" stroke-width="1" />
+  <line x1="430" y1="270" x2="770" y2="270" stroke="#f1f5f9" stroke-width="1" />
+
+  <!-- SECTION 2: COMBINATION LOGO -->
+  <text x="40" y="310" class="text-dim">COMBINATION LOGO</text>
+  <g transform="translate(60, 390)">
+    <use href="#tailraid-mark-dark" x="0" y="0" transform="scale(0.55)" />
+    <text x="50" y="10" class="text-light" font-size="34" letter-spacing="-0.5px">tail<tspan fill="#38bdf8">raid</tspan></text>
+  </g>
+
+  <text x="440" y="310" class="text-dim">COMBINATION LOGO</text>
+  <g transform="translate(460, 390)">
+    <use href="#tailraid-mark-light" x="0" y="0" transform="scale(0.55)" />
+    <text x="50" y="10" class="text-dark" font-size="34" letter-spacing="-0.5px">tail<tspan fill="#2563eb">raid</tspan></text>
+  </g>
+
+  <line x1="30" y1="470" x2="370" y2="470" stroke="#1e293b" stroke-width="1" />
+  <line x1="430" y1="470" x2="770" y2="470" stroke="#f1f5f9" stroke-width="1" />
+
+  <!-- SECTION 3: INTERFACE PREVIEWS -->
+  <text x="40" y="510" class="text-dim">CLI / FAVICON PREVIEWS</text>
+  
+  <g transform="translate(100, 560)">
+    <rect x="-16" y="-16" width="32" height="32" fill="#1e293b" rx="4" />
+    <use href="#tailraid-mark-dark" x="0" y="0" transform="scale(0.22)" />
+    <text x="0" y="30" class="text-dim" text-anchor="middle">24px</text>
+  </g>
+  
+  <g transform="translate(240, 560)">
+    <rect x="-12" y="-12" width="24" height="24" fill="#1e293b" rx="3" />
+    <use href="#tailraid-mark-dark" x="0" y="0" transform="scale(0.15)" />
+    <text x="0" y="30" class="text-dim" text-anchor="middle">16px</text>
+  </g>
+
+  <text x="440" y="510" class="text-dim">CLI / FAVICON PREVIEWS</text>
+  
+  <g transform="translate(500, 560)">
+    <rect x="-16" y="-16" width="32" height="32" fill="#f1f5f9" rx="4" />
+    <use href="#tailraid-mark-light" x="0" y="0" transform="scale(0.22)" />
+    <text x="0" y="30" class="text-dim" text-anchor="middle">24px</text>
+  </g>
+  
+  <g transform="translate(640, 560)">
+    <rect x="-12" y="-12" width="24" height="24" fill="#f1f5f9" rx="3" />
+    <use href="#tailraid-mark-light" x="0" y="0" transform="scale(0.15)" />
+    <text x="0" y="30" class="text-dim" text-anchor="middle">16px</text>
+  </g>
+</svg>

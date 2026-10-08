@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 70" width="300" height="70" role="img" aria-label="tailraid">
+  <g transform="translate(36 35) scale(0.6)">
+    <g transform="rotate(32)">
+      <rect x="-34" y="-40" width="16" height="80" rx="1" fill="#0f172a"/>
+      <path stroke="#2563eb" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none"
+            d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/>
+      <rect x="18" y="-40" width="16" height="80" rx="1" fill="#0f172a"/>
+    </g>
+  </g>
+  <text x="84" y="47" fill="#0f172a" font-family="'JetBrains Mono','Fira Code','Cascadia Code',Consolas,monospace" font-weight="600" font-size="38" letter-spacing="-0.5">tail<tspan fill="#2563eb">raid</tspan></text>
+</svg>

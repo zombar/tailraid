@@ -1,6 +1,13 @@
-# tailraid
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo-light.svg" alt="tailraid" width="300">
+  </picture>
+</p>
 
-**Status: M0 — design docs and tooling. No working code yet.**
+**Status:** M0–M3b complete: single node, Raft cluster, repair/GC, model checker, soak suite.
+Validated on a real macOS NFS mount and a four-node docker-compose cluster; multi-device
+validation on a real tailnet, service install (M4) and the S3 gateway (M5) are next.
 
 tailraid turns the devices on your Tailscale tailnet into one shared volume that behaves
 like a modern RAID array: data is Reed-Solomon erasure-coded across devices so any `m` of
@@ -31,11 +38,24 @@ destruction of the issuing gateway's own disk before its write-ahead log has flu
 - `CLAUDE.md` — how the code is written: docs first, test first, conventions, scope.
 - `Makefile` — `make help`.
 
+## Quick start
+
+```
+tailraid init --k 2 --m 1 --name studio        # first (always-on) device: creates the volume
+tailraid serve                                 # on every device; prints the mount command
+tailraid join <ip-of-first-device> <token>     # other devices, then `tailraid serve`
+tailraid mount                                 # mounts via the OS NFS client (~/TailRAID)
+tailraid status                                # health, members, slots, warnings
+tailraid check / repair / fsck / gc            # replication health and maintenance
+tailraid verify --report out.html              # soak scenarios against the live cluster
+```
+
 ## Building
 
 ```
 make build          # dist/tailraid for this machine (Go 1.27, CGO_ENABLED=0)
 make check          # gofmt, lint, invariant check, go test -short -race
+make soak           # four-node docker-compose soak → report.html (needs Docker)
 ```
 
 Reference for what not to do: the previous attempt,

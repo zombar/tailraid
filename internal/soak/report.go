@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -31,7 +32,12 @@ type reportData struct {
 	Charts     []template.HTML
 	Generated  string
 	Throughput string
+	Mark       template.HTML // the logo mark, inline
+	Favicon    string        // the mark, URL-encoded for a data: favicon
 }
+
+// logoMark is docs/assets/logo-mark.svg (currentColor ink, blue parity bar).
+const logoMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-50 -50 100 100"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path stroke="#2563eb" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg>`
 
 type phaseView struct {
 	Name   string
@@ -74,6 +80,8 @@ func buildReport(s Summary) reportData {
 	}
 	d.Pass = d.Failed == 0
 	d.Charts, d.Throughput = charts(s)
+	d.Mark = template.HTML(logoMark) //nolint:gosec // constant SVG
+	d.Favicon = url.PathEscape(strings.Replace(logoMark, `fill="currentColor"`, `fill="#0f172a"`, 2))
 	return d
 }
 
@@ -189,9 +197,10 @@ func maxf(a, b float64) float64 {
 
 var reportTmpl = template.Must(template.New("report").Funcs(template.FuncMap{"join": strings.Join}).Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>{{.Title}}</title>
+<link rel="icon" href="data:image/svg+xml,{{.Favicon}}">
 <style>
 body{font:14px/1.45 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;margin:0;padding:24px;color:#111;background:#fff;max-width:1000px}
-h1{margin:0 0 4px;font-size:22px} h2{font-size:17px;margin:28px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px}
+h1{margin:0 0 4px;font-size:22px;display:flex;align-items:center;gap:10px;font-family:'JetBrains Mono','Fira Code',Consolas,monospace} h1 svg{width:28px;height:28px;color:#0f172a} h2{font-size:17px;margin:28px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px}
 .banner{padding:14px 18px;border-radius:8px;font-size:20px;font-weight:600;color:#fff;margin:14px 0}
 .pass{background:#16a34a}.fail{background:#dc2626}
 table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid #e5e5e5;padding:5px 8px;text-align:left;vertical-align:top}
@@ -200,7 +209,7 @@ th{background:#f6f6f6} .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font
 .title{font:600 13px sans-serif;fill:#222}.tick{font:11px sans-serif;fill:#555}.grid{stroke:#eee}.marker{stroke:#999;stroke-dasharray:3 3}.marklabel{font:9px sans-serif;fill:#777}
 details summary{cursor:pointer} .checks td:first-child{width:38%}
 </style></head><body>
-<h1>{{.Title}}</h1>
+<h1>{{.Mark}} tail<span style="color:#2563eb">raid</span> soak report</h1>
 <div class="meta">target: <b>{{.Env}}</b> · profile <b>{{.Profile}}</b> · started {{.Started}} · duration {{.Duration}} · generated {{.Generated}}</div>
 <div class="banner {{if .Pass}}pass{{else}}fail{{end}}">{{if .Pass}}PASS{{else}}FAIL{{end}} — {{.Checks}} checks, {{.Failed}} failed, {{.Skipped}} phases skipped · {{.Throughput}}</div>
 <h2>Phases</h2>
