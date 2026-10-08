@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%22-50%20-50%20100%20100%22%3E%3Cg%20transform%3D%22rotate%2832%29%22%3E%3Crect%20x%3D%22-34%22%20y%3D%22-40%22%20width%3D%2216%22%20height%3D%2280%22%20rx%3D%221%22%20fill%3D%22%230f172a%22%2F%3E%3Cpath%20stroke%3D%22%232563eb%22%20stroke-width%3D%223.5%22%20stroke-linecap%3D%22square%22%20stroke-linejoin%3D%22miter%22%20fill%3D%22none%22%20d%3D%22M%20-9%20-20%20V%20-40%20H%209%20V%20-20%20M%20-9%20-10%20V%2010%20M%209%20-10%20V%2010%20M%20-9%2020%20V%2040%20H%209%20V%2020%22%2F%3E%3Crect%20x%3D%2218%22%20y%3D%22-40%22%20width%3D%2216%22%20height%3D%2280%22%20rx%3D%221%22%20fill%3D%22%230f172a%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+<script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/" data-tab="dash">Dashboard</a><a href="#/browse/" data-tab="files">Files</a></nav>
+  <span id="health" class="pill">loading</span>
+  <span id="who" class="who"></span>
+</header>
+<div id="warnings"></div>
+<main id="view"></main>
+<div id="toasts" aria-live="polite"></div>
+<noscript><main><div class="note">The tailraid web UI needs JavaScript. Use <code>tailraid status</code> instead.</div></main></noscript>
+</body>
+</html>

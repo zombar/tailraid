@@ -254,14 +254,13 @@ colour-alone. No dual axes, no stacked bars, no pie.
 
 ## Tests
 
-Stubs cite every invariant until the handler lands; the real names replace them in the
-same commits.
-
 | Invariant | Tests |
 |---|---|
-| I-68 | `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone`, `TestStub_I_68` |
-| I-69 | `TestVFS_StatReportsDirty`, `TestStub_I_69` |
-| I-70 | `TestVFS_CapErrorsKeepSentinels`, `TestStub_I_70` |
-| I-71 | `TestStub_I_71` |
-| I-72 | `TestStub_I_72` |
-| I-73 | `TestConfig_ListenWeb`, `TestStub_I_73` |
+| I-68 | `TestWebUI_Authorize_MemberOrSameUser`, `TestWebUI_Authorize_BeforeBody`, `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone` |
+| I-69 | `TestWebUI_Get_RangeBoundaries`, `TestWebUI_Get_ETagAndHead`, `TestWebUI_Get_DirtyOverlayReadYourWrites`, `TestWebUI_Get_ContentTypes`, `TestVFS_StatReportsDirty` |
+| I-70 | `TestWebUI_Put_NewAndOverwrite`, `TestWebUI_Put_SizeBoundaries`, `TestWebUI_Put_WaitsForWALCap`, `TestWebUI_Mkdir`, `TestWebUI_Mutations_StaleIs503`, `TestVFS_CapErrorsKeepSentinels` |
+| I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
+| I-72 | `TestWebUI_Paths` |
+| I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |
+
+`TestWebUI_Ls_Stat` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

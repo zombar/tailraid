@@ -1,0 +1,170 @@
+// Package webui serves the browser dashboard and file browser (docs/13): one HTTP handler
+// over the vfs and the FSM on its own tailnet listener, authorized from the TCP source by
+// the member-or-same-user WhoIs rule. Cluster administration stays in the CLI.
+package webui
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"syscall"
+
+	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/vfs"
+)
+
+// HeaderUI must be present on every mutating request (docs/13 §3): a page on another
+// origin cannot make the browser send it, and there is no CORS to grant it.
+const HeaderUI = "X-Tailraid-UI"
+
+// Authorizer is what the UI needs from rpc.WhoIsAuthorizer (docs/13 §2).
+type Authorizer interface {
+	// Allow returns the member behind src under the RPC rule (docs/08), or an error.
+	Allow(ctx context.Context, src netip.Addr) (meta.Node, error)
+	// User returns the tailnet StableID and login behind src ("" login for tagged devices).
+	User(ctx context.Context, src netip.Addr) (stableID, login string, err error)
+}
+
+// Options wire a Server.
+type Options struct {
+	FS     *vfs.FS
+	Store  *meta.Store
+	Auth   Authorizer
+	Login  string     // this node's tailnet login; "" = cluster members only
+	Status func() any // the admin report (same closure as the RPC status endpoint)
+	Chunks func(ctx context.Context, path string, offset, limit int) (int, []admin.ChunkReport, error)
+	Clk    clock.Clock
+	Logger *slog.Logger
+}
+
+// Server is the web UI handler.
+type Server struct {
+	o       Options
+	handler http.Handler
+	cache   statusCache
+}
+
+// New validates the options and builds the handler.
+func New(o Options) (*Server, error) {
+	if o.FS == nil || o.Store == nil || o.Auth == nil {
+		return nil, errors.New("webui: FS, Store and Auth are required")
+	}
+	if o.Clk == nil {
+		o.Clk = clock.Real()
+	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
+	s := &Server{o: o}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("GET /assets/{file}", s.asset)
+	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/ls", s.ls)
+	mux.HandleFunc("GET /api/stat", s.stat)
+	mux.HandleFunc("GET /api/chunks", s.chunks)
+	mux.HandleFunc("GET /files/{path...}", s.get) // a GET pattern serves HEAD too
+	mux.HandleFunc("PUT /files/{path...}", csrf(s.put))
+	mux.HandleFunc("POST /api/mkdir", csrf(s.mkdir))
+	s.handler = s.authz(mux)
+	return s, nil
+}
+
+// Handler returns the HTTP handler.
+func (s *Server) Handler() http.Handler { return s.handler }
+
+// Serve runs the handler on l until ctx is done.
+func (s *Server) Serve(ctx context.Context, l net.Listener) error {
+	return rpc.ServeHTTP(ctx, l, s.handler)
+}
+
+// authz implements docs/13 §2 from the TCP source alone, before any body byte is read.
+func (s *Server) authz(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		src, ok := rpc.SourceAddr(r)
+		if !ok {
+			writeErr(w, http.StatusForbidden, "no source address")
+			return
+		}
+		_, err := s.o.Auth.Allow(r.Context(), src)
+		if err == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if errors.Is(err, rpc.ErrUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		_, login, err := s.o.Auth.User(r.Context(), src)
+		switch {
+		case err == nil && login != "" && login == s.o.Login:
+			next.ServeHTTP(w, r)
+		case errors.Is(err, rpc.ErrUnavailable):
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+		default:
+			s.o.Logger.Warn("web ui: refused", "src", src, "login", login, "err", err)
+			writeErr(w, http.StatusForbidden, "not a cluster member and not this node's user")
+		}
+	})
+}
+
+// csrf refuses a mutating request without HeaderUI before its body is read (I-71).
+func csrf(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(HeaderUI) == "" {
+			writeErr(w, http.StatusForbidden, "missing "+HeaderUI+" header")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// fail maps an error to its status (docs/13 §3) and writes it.
+func (s *Server) fail(w http.ResponseWriter, err error) {
+	code := errStatus(err)
+	if code == http.StatusServiceUnavailable && errors.Is(err, syscall.EROFS) {
+		w.Header().Set("Retry-After", "5")
+	}
+	if code == http.StatusInternalServerError {
+		s.o.Logger.Error("web ui", "err", err)
+	}
+	writeErr(w, code, err.Error())
+}
+
+func errStatus(err error) int {
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, meta.ErrNotExist):
+		return http.StatusNotFound
+	case errors.Is(err, os.ErrExist), errors.Is(err, meta.ErrExist), errors.Is(err, admin.ErrAmbiguous):
+		return http.StatusConflict
+	case errors.Is(err, syscall.EISDIR), errors.Is(err, meta.ErrIsDir), errors.Is(err, syscall.ENOTDIR), errors.Is(err, meta.ErrNotDir),
+		errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENAMETOOLONG), errors.Is(err, meta.ErrNameTooLong), errors.Is(err, meta.ErrBadCommand):
+		return http.StatusBadRequest
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, chunk.ErrFull):
+		return http.StatusInsufficientStorage
+	case errors.Is(err, syscall.EROFS), errors.Is(err, syscall.EIO):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
+}
