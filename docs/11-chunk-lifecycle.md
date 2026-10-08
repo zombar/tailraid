@@ -258,8 +258,8 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-73 | Committed (new) | E-66 read on other gateway before apply | Committed | previous whole version returned; never a mix | `TestCluster_StaleReadPreviousVersion` |
 | L-74 | Degraded | E-56 read, ≥ k reachable | Degraded | bytes correct | `TestLifecycle_Degraded_ReadOK` |
 | L-75 | Committed | E-67 Refs → 0 | Tombstoned | in `Tombs`; `TombstonedAt = Now` | `TestFSM_Tombstone_OnRefsZero` |
-| L-76 | Tombstoned | E-68 GCDelete before grace | Tombstoned | not a victim; shards untouched | `TestGC_RespectsGrace` |
-| L-77 | Tombstoned | E-69 GCDelete after grace | Collected | victims returned; DELETE sent to every non-zero slot; `gc_bytes_reclaimed` | `TestGC_CollectsAfterGrace` |
+| L-76 | Tombstoned | E-68 GCDelete before grace (on the FSM clock) | Tombstoned | not a victim; shards untouched; a lagging leader clock does not stall it | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC`, `TestFSM_GCDelete_Boundary` |
+| L-77 | Tombstoned | E-69 GCDelete after grace (on the FSM clock) | Collected | victims returned; DELETE sent to every non-zero slot; `gc_bytes_reclaimed` | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC` |
 | L-78 | Tombstoned | E-28 referenced by Commit | Revived → Committed | `Refs = 1`, `TombstonedAt = 0`; no upload | `TestFSM_Revive`, `TestVFS_DedupRevivesTombstone_NoUpload` |
 | L-79 | Collected | E-70 DELETE RPC fails | Orphan (that node) | sweep removes it after grace; `check` counts orphan shards | `TestGC_DeleteRPCFails_SweepCatches` |
 | L-80 | Orphan (young) | E-71 Sweep | Orphan | kept (I-14); may be committed shortly | `TestCluster_GCDoesNotDeleteInflightUpload`, `TestSweep_KeepsYoungOrphan` |

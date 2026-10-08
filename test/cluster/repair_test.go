@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
@@ -544,6 +545,45 @@ func TestGC_CollectsAfterGrace_RespectsFence_AndSweep(t *testing.T) {
 		if n != 1 || c.Nodes[i].Store.Has(k) {
 			t.Fatalf("sweep on n%d removed %d", i, n)
 		}
+	}
+}
+
+// Grace is measured on the FSM clock, the clock that stamped TombstonedAt: a leader whose
+// own clock lags the proposers (here by half an hour) must still collect a tombstone once
+// the FSM clock has moved grace past it, and must still respect grace before that.
+// Invariant: I-14
+// Lifecycle: L-76, L-77
+func TestGC_LeaderClockBehind_DoesNotStallGC(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	data := testharness.Pattern(int(testharness.ChunkSize), 34)
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	ch := c.ChunksOf(0, "/f")[0]
+	must(t, c.Nodes[0].FS.Remove("/f"))
+	c.Settle()
+	leader := c.Leader()
+	behind := clock.NewFake(c.Clk.Now().Add(-30 * time.Minute))
+	gc := repair.NewGC(leader.Node.FSM, leader.Node, leader.Client, leader.Prober, behind, 10*time.Minute, nil)
+	res, err := gc.RunOnce(ctx)
+	must(t, err)
+	if res.Victims != 0 {
+		t.Fatalf("collected inside grace: %+v", res)
+	}
+	// the FSM clock advances through the proposers' commands; the leader's clock does not
+	c.Clk.Advance(11 * time.Minute)
+	c.WriteFile(0, "/g", data[:4096])
+	c.Settle()
+	if leader.Node.FSM.LastNow() < c.Clk.Now().UnixNano() {
+		t.Fatalf("FSM clock %d behind the proposers' %d", leader.Node.FSM.LastNow(), c.Clk.Now().UnixNano())
+	}
+	res, err = gc.RunOnce(ctx)
+	must(t, err)
+	if res.Victims != 1 {
+		t.Fatalf("GC stalled behind the leader's clock: %+v", res)
+	}
+	if _, ok := leader.Node.FSM.GetChunk(ch.Hash); ok {
+		t.Fatal("entry survived GC")
 	}
 }
 

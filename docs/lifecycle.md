@@ -81,8 +81,8 @@ exactly one design doc transition table and cited by at least one test via
 | L-73 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (new) | E-66 read on other gateway before apply | Committed | `TestStubLifecycle_L_73` |
 | L-74 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | E-56 read, ≥ k reachable | Degraded | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestDurability_AckImpliesReadableFromKSurvivors`, `TestReader_ReadsWithOneNodeDown_AndFromCache` |
 | L-75 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-67 Refs → 0 | Tombstoned | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestFSM_Unlink_Rmdir`, `TestReader_FewerThanKLive_EIO` |
-| L-76 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-68 GCDelete before grace | Tombstoned | `TestFSM_GCDelete_Boundary`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
-| L-77 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-69 GCDelete after grace | Collected | `TestFSM_GCDelete_Boundary`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
+| L-76 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-68 GCDelete before grace (on the FSM clock) | Tombstoned | `TestFSM_GCDelete_Boundary`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC` |
+| L-77 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-69 GCDelete after grace (on the FSM clock) | Collected | `TestFSM_GCDelete_Boundary`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC` |
 | L-78 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-28 referenced by Commit | Revived → Committed | `TestFSM_Revive`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
 | L-79 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Collected | E-70 DELETE RPC fails | Orphan (that node) | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
 | L-80 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (young) | E-71 Sweep | Orphan | `TestStubLifecycle_L_80` |

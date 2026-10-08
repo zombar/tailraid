@@ -43,8 +43,13 @@ func (g *GC) RunOnce(ctx context.Context) (deleted int, err error)
 ```
 
 Every `gc_interval` (default 10 min) the leader proposes
-`GCDelete{Before: fsmNow − grace}` with `grace = 10 min`, where `fsmNow` is the leader's
-clock clamped by the FSM (02). The FSM deletes every chunk entry with `Refs == 0 &&
+`GCDelete{Before: fsmNow − grace}` with `grace = 10 min`, where `fsmNow = max(leader wall
+clock, State.LastNow)`: the leader's clock clamped by the FSM clock (02), the same clock that
+stamped every `TombstonedAt`. A leader whose clock lags the proposers therefore never stalls
+GC, and `Before` never goes backwards across leader changes. A leader whose clock runs ahead
+by Δ shortens grace by Δ (bounded by the skew assumption in 05 §7); the only consequence is
+that a flusher mid-dedup gets `ErrUnknownChunk` and re-uploads, never data loss. The FSM
+deletes every chunk entry with `Refs == 0 &&
 TombstonedAt < Before` and returns the victims `[]{Hash, K, M, Placement}`. The worker
 then issues `DELETE /v1/shards/{key}` for each victim slot on **device** nodes with the
 header `X-Tailraid-Log-Index: <index of the GCDelete>` (best effort; misses are caught by
@@ -238,7 +243,7 @@ check). `--fix` only re-derives refcounts and tombstones; it never deletes shard
 | Invariant | Tests |
 |---|---|
 | I-13 | `TestCluster_GCDoesNotDeleteInflightUpload`, `TestRepair_DeletesOldShardsOnlyAfterCommit`, `TestSweep_OldPlacedHereKept`, `TestSweep_SkippedWhenNotHealthy`, `TestModelCheck_Long` |
-| I-14 | `TestSweep_YoungShardKept`, `TestStore_DeleteIfOlder_KeepsYoung`, `TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesStaleIndex`, `TestCluster_GCDoesNotDeleteInflightUpload` |
+| I-14 | `TestSweep_YoungShardKept`, `TestStore_DeleteIfOlder_KeepsYoung`, `TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesStaleIndex`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestGC_LeaderClockBehind_DoesNotStallGC` |
 | I-15 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`, `TestRepair_ReportedBadSlotIsRepaired`, `TestRepair_PartialFillThenComplete` |
 | I-41 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Commit_RevivesTombstonedChunk`, `TestVFS_DedupIdenticalChunks`, `TestFlusher_DedupHitWithFewerThanKLiveSlots_Fills` |
 | I-42 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestCLI_NodeDrain_ThenRemove_MovesSlots` |
