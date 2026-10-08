@@ -1,0 +1,28 @@
+{
+  "Node": {
+    "ID": 19,
+    "StableID": "19",
+    "Name": "skel.8ball.local.",
+    "User": 1,
+    "Addresses": [
+      "100.64.0.3/32",
+      "fd7a:115c:a1e0::3/128"
+    ],
+    "AllowedIPs": [
+      "100.64.0.3/32",
+      "fd7a:115c:a1e0::3/128"
+    ],
+    "Hostinfo": {
+      "OS": "linux",
+      "Hostname": "skel",
+      "IPNVersion": "1.98.4-t9e69045b2-ged3a62f14"
+    },
+    "Tags": null
+  },
+  "UserProfile": {
+    "ID": 1,
+    "LoginName": "user@example.invalid",
+    "DisplayName": "User"
+  },
+  "CapMap": null
+}

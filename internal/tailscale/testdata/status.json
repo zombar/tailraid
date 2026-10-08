@@ -1,0 +1,220 @@
+{
+  "BackendState": "Running",
+  "TailscaleIPs": [
+    "100.64.0.11",
+    "fd7a:115c:a1e0::b"
+  ],
+  "MagicDNSSuffix": "8ball.local",
+  "CurrentTailnet": {
+    "Name": "headscale.8ball.app",
+    "MagicDNSSuffix": "8ball.local",
+    "MagicDNSEnabled": true
+  },
+  "Version": "1.102.3-t9329c3677-ga522f65e9",
+  "Self": {
+    "ID": "27",
+    "HostName": "jockey",
+    "DNSName": "jockey.8ball.local.",
+    "OS": "macOS",
+    "TailscaleIPs": [
+      "100.64.0.11",
+      "fd7a:115c:a1e0::b"
+    ],
+    "Online": true,
+    "LastSeen": "0001-01-01T00:00:00Z",
+    "Tags": null,
+    "Active": false,
+    "Created": "2026-09-04T10:53:49.414310053Z",
+    "UserID": 1,
+    "PublicKey": "nodekey:REDACTED"
+  },
+  "Peer": {
+    "nodekey:REDACTED-15": {
+      "ID": "15",
+      "HostName": "N4KX9MK665",
+      "DNSName": "n4kx9mk665.8ball.local.",
+      "OS": "macOS",
+      "TailscaleIPs": [
+        "100.64.0.6",
+        "fd7a:115c:a1e0::6"
+      ],
+      "Online": false,
+      "LastSeen": "2025-10-15T12:23:58.631985537Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2025-09-08T09:06:54.578419529Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-16": {
+      "ID": "16",
+      "HostName": "forge3d-ai-gateway",
+      "DNSName": "forge3d-ai-gateway.8ball.local.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.7",
+        "fd7a:115c:a1e0::7"
+      ],
+      "Online": false,
+      "LastSeen": "2025-12-17T18:53:28.233732612Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2025-09-08T14:05:33.870871267Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-19": {
+      "ID": "19",
+      "HostName": "skel",
+      "DNSName": "skel.8ball.local.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.3",
+        "fd7a:115c:a1e0::3"
+      ],
+      "Online": true,
+      "LastSeen": "0001-01-01T00:00:00Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2026-06-05T11:28:33.884686194Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-1": {
+      "ID": "1",
+      "HostName": "pk",
+      "DNSName": "pk.8ball.local.",
+      "OS": "windows",
+      "TailscaleIPs": [
+        "100.64.0.1",
+        "fd7a:115c:a1e0::1"
+      ],
+      "Online": false,
+      "LastSeen": "2026-02-18T09:55:06.268760594Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2025-09-06T08:41:11.759670066Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-2": {
+      "ID": "2",
+      "HostName": "honker",
+      "DNSName": "honker.8ball.local.",
+      "OS": "windows",
+      "TailscaleIPs": [
+        "100.64.0.2",
+        "fd7a:115c:a1e0::2"
+      ],
+      "Online": true,
+      "LastSeen": "0001-01-01T00:00:00Z",
+      "Tags": null,
+      "Active": true,
+      "Created": "2025-09-06T08:48:32.520081724Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-14": {
+      "ID": "14",
+      "HostName": "localhost",
+      "DNSName": "localhost.8ball.local.",
+      "OS": "android",
+      "TailscaleIPs": [
+        "100.64.0.5",
+        "fd7a:115c:a1e0::5"
+      ],
+      "Online": false,
+      "LastSeen": "2025-12-18T06:29:14.631854159Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2025-09-07T12:02:50.515202424Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-24": {
+      "ID": "24",
+      "HostName": "strata-main-dev01",
+      "DNSName": "strata-main-dev01.8ball.local.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.14",
+        "fd7a:115c:a1e0::e"
+      ],
+      "Online": true,
+      "LastSeen": "0001-01-01T00:00:00Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2026-06-27T23:59:22.60117284Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-18": {
+      "ID": "18",
+      "HostName": "MGQ4CW3VC6",
+      "DNSName": "mgq4cw3vc6.8ball.local.",
+      "OS": "macOS",
+      "TailscaleIPs": [
+        "100.64.0.9",
+        "fd7a:115c:a1e0::9"
+      ],
+      "Online": false,
+      "LastSeen": "2026-08-26T23:48:22.860005505Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2025-09-12T15:20:14.01738139Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-26": {
+      "ID": "26",
+      "HostName": "prude",
+      "DNSName": "prude.8ball.local.",
+      "OS": "macOS",
+      "TailscaleIPs": [
+        "100.64.0.10",
+        "fd7a:115c:a1e0::a"
+      ],
+      "Online": false,
+      "LastSeen": "2026-09-04T12:01:47.346061722Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2026-08-27T10:25:07.342047428Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-13": {
+      "ID": "13",
+      "HostName": "headscale-fra-gw1",
+      "DNSName": "headscale-fra-gw1.8ball.local.",
+      "OS": "linux",
+      "TailscaleIPs": [
+        "100.64.0.4",
+        "fd7a:115c:a1e0::4"
+      ],
+      "Online": true,
+      "LastSeen": "0001-01-01T00:00:00Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2025-09-06T22:32:50.489470811Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    },
+    "nodekey:REDACTED-25": {
+      "ID": "25",
+      "HostName": "oldie",
+      "DNSName": "oldie.8ball.local.",
+      "OS": "macOS",
+      "TailscaleIPs": [
+        "100.64.0.8",
+        "fd7a:115c:a1e0::8"
+      ],
+      "Online": false,
+      "LastSeen": "2026-08-21T15:45:30.602222015Z",
+      "Tags": null,
+      "Active": false,
+      "Created": "2026-07-25T17:58:05.458263482Z",
+      "UserID": 1,
+      "PublicKey": "nodekey:REDACTED"
+    }
+  }
+}
