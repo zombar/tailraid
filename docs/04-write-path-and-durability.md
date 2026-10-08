@@ -262,7 +262,7 @@ the remainder (a short dedup'd chunk under a truncate-up). The overlay is consul
 |---|---|---|
 | Raft has a leader, ≥ k live storage nodes | OK | proceeds |
 | Raft has a leader, < k live | OK until `MaxDirty`, then `NFS3ERR_IO` | fails at step 9, retried with backoff |
-| no leader / `Health == Stale` | data WRITEs accepted into the WAL until `MaxDirty`, then `NFS3ERR_IO`; metadata mutations (create, mkdir, unlink, rename, setattr) `NFS3ERR_ROFS` | fails at step 10, retried |
+| no leader / `Health == Stale` | data WRITEs accepted into the WAL until `MaxDirty`, then `NFS3ERR_IO`; metadata mutations (create, mkdir, unlink, rename, setattr) `EROFS` (`NFS3ERR_ACCES` or `NFS3ERR_IO` on the wire, 07) | fails at step 10, retried |
 | gateway process restart | — | WAL replayed, flush resumes |
 
 The WAL is the only place acknowledged-but-unflushed bytes live. It is fsynced per record

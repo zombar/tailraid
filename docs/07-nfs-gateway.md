@@ -37,6 +37,15 @@ Consequences:
 - `Sys()` must return go-nfs's `FileInfo` so fileids are inode numbers, not path hashes
   (otherwise a rename changes the fileid and clients see a different file).
 
+**Error mapping.** go-nfs maps a filesystem error to an NFS3 status per operation and has
+no `ROFS` mapping, so the gateway's `EROFS` (stale, docs/02) reaches the wire as
+`NFS3ERR_ACCES` from CREATE, MKDIR and SYMLINK and as `NFS3ERR_IO` from REMOVE, RMDIR and
+RENAME; WRITE errors other than `ENOSPC`/`EDQUOT`/`EFBIG` are `NFS3ERR_IO`. A change hook's
+error (SETATTR mode/owner/times) would be passed through unmapped as an RPC `GARBAGE_ARGS`,
+so the handler's `Change` adapter maps it itself: `ENOENT` → `NFS3ERR_NOENT`, `EROFS` →
+`NFS3ERR_ACCES`, anything else → `NFS3ERR_IO`. `TestNFS_ReadOnly_WireStatuses` pins all of
+this.
+
 ## Handler
 
 ```go

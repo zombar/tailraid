@@ -73,7 +73,7 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
 - Terminology: "shard store" (`internal/chunk`), "dead"/"live" for liveness, "degraded" for a
   chunk with < k+m good slots, "orphan shard" for an uploaded-but-uncommitted or unplaced
   shard, "re-place" for `SetPlacement` work, `ErrFull` for the 507 condition, wire names
-  (`NFS3ERR_ROFS`) in tables and errno names (`EROFS`) in prose, `(k,m)` for a policy.
+  (`NFS3ERR_IO`) in tables and errno names (`EROFS`) in prose, `(k,m)` for a policy.
 - The only seams: `clock.Clock`, `sysfs.FS` (shard store and WAL only), `FaultNet`, `cluster.Hooks`,
   `tailscale.Client`. Raft is not wrapped.
 - No `time.Sleep` for synchronization (forbidigo). Wait on channels, futures or an

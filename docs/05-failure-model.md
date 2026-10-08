@@ -76,7 +76,7 @@ window the chunk survives fewer than m additional losses.
 | leader reachable, live ≥ k+m | normal | normal | full placement |
 | leader reachable, k ≤ live < k+m | normal | OK if k holders live | degraded (≥ k shards, `0` slots); `0` slots are filled as soon as a live spare exists; slots on dead nodes are re-placed after `fill_after` |
 | leader reachable, live < k | normal | `NFS3ERR_IO` for affected chunks | flush fails; WAL buffers up to 1 GiB then `NFS3ERR_IO` |
-| no leader contact > 30 s (`Stale`) or no quorum (`NoLeader`) | stale local copy | served from local FSM + reachable peers | data WRITEs into the WAL until the caps, then `NFS3ERR_IO`; metadata mutations `NFS3ERR_ROFS` |
+| no leader contact > 30 s (`Stale`) or no quorum (`NoLeader`) | stale local copy | served from local FSM + reachable peers | data WRITEs into the WAL until the caps, then `NFS3ERR_IO`; metadata mutations `EROFS` (`NFS3ERR_ACCES` or `NFS3ERR_IO` on the wire, 07) |
 
 What the user sees:
 

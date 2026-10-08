@@ -336,6 +336,78 @@ func TestNFS_RemovedHandleIsStale(t *testing.T) {
 	}
 }
 
+// wireStatus returns the NFS3 status number of a client error, or -1 for success / a
+// non-NFS error.
+func wireStatus(err error) int {
+	var e *nfsc.Error
+	if errors.As(err, &e) {
+		return int(e.ErrorNum)
+	}
+	if err == nil {
+		return -1
+	}
+	return -2
+}
+
+// While the gateway is stale (no leader contact for the threshold) every metadata
+// mutation fails and every data WRITE still lands in the WAL. go-nfs has no mapping from a
+// filesystem EROFS to NFS3ERR_ROFS: the wire carries NFS3ERR_ACCES or NFS3ERR_IO per
+// operation (docs/02 §Health, docs/07), and this test pins which.
+// Invariant: I-39
+// Lifecycle: L-187
+func TestNFS_ReadOnly_WireStatuses(t *testing.T) {
+	g := startGateway(t)
+	if _, err := g.tgt.Create("/f", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.tgt.Mkdir("/d", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g.f.SetStale(true)
+	g.f.ProposeDown(errors.New("no leader"))
+	defer g.f.ProposeDown(nil)
+	const (
+		acces = 13
+		eio   = 5
+		rofs  = 30
+	)
+	want := map[string]int{
+		"mkdir":   acces,
+		"create":  acces,
+		"remove":  eio,
+		"rmdir":   eio,
+		"rename":  eio,
+		"symlink": acces,
+	}
+	got := map[string]int{}
+	_, err := g.tgt.Mkdir("/x", 0o755)
+	got["mkdir"] = wireStatus(err)
+	_, err = g.tgt.Create("/y", 0o644)
+	got["create"] = wireStatus(err)
+	got["remove"] = wireStatus(g.tgt.Remove("/f"))
+	got["rmdir"] = wireStatus(g.tgt.RemoveAll("/d"))
+	got["rename"] = wireStatus(g.tgt.Rename("/f", "/g"))
+	got["symlink"] = wireStatus(g.tgt.Symlink("/f", "/s"))
+	// SETATTR: go-nfs would pass the change hook's error through as an RPC GARBAGE_ARGS;
+	// the gateway's change adapter maps it to ACCES like CREATE and MKDIR
+	got["setattr"] = wireStatus(g.tgt.Setattr("/f", nfsc.Sattr3{Mode: nfsc.SetMode{SetIt: true, Mode: 0o600}}))
+	want["setattr"] = acces
+	for op, st := range got {
+		t.Logf("%s: status %d", op, st)
+		if st == -1 || st == rofs {
+			t.Fatalf("%s while stale: status %d (success or ROFS)", op, st)
+		}
+		if st != want[op] {
+			t.Errorf("%s while stale: NFS3 status %d, documented %d", op, st, want[op])
+		}
+	}
+	// data WRITEs keep landing in the WAL
+	g.writeAt("/f", 4096, []byte("still accepted"))
+	if got := g.readAll("/f", 4096+14); string(got[4096:]) != "still accepted" {
+		t.Fatalf("write while stale not readable back: %q", got[4096:])
+	}
+}
+
 func isStale(err error) bool {
 	var e *nfsc.Error
 	if errors.As(err, &e) {

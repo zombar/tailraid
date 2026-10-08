@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"syscall"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
@@ -34,7 +37,42 @@ func (h *Handler) Mount(_ context.Context, _ net.Conn, _ nfs.MountRequest) (nfs.
 }
 
 // Change is never nil: chmod, chown and utimes are supported.
-func (h *Handler) Change(billy.Filesystem) billy.Change { return h.fs }
+// Change returns the attribute hooks. go-nfs passes a change hook's error through to the
+// wire unmapped, which the client sees as an RPC-level GARBAGE_ARGS rather than an NFS3
+// status; the adapter maps it to the status the other mutations get (docs/07).
+func (h *Handler) Change(billy.Filesystem) billy.Change { return changeStatus{h.fs} }
+
+type changeStatus struct{ billy.Change }
+
+func (c changeStatus) Chmod(name string, mode os.FileMode) error {
+	return attrStatus(c.Change.Chmod(name, mode))
+}
+
+func (c changeStatus) Lchown(name string, uid, gid int) error {
+	return attrStatus(c.Change.Lchown(name, uid, gid))
+}
+
+func (c changeStatus) Chown(name string, uid, gid int) error {
+	return attrStatus(c.Change.Chown(name, uid, gid))
+}
+
+func (c changeStatus) Chtimes(name string, atime, mtime time.Time) error {
+	return attrStatus(c.Change.Chtimes(name, atime, mtime))
+}
+
+// attrStatus maps a SETATTR error to an NFS3 status: ENOENT → NOENT, EROFS/EACCES → ACCES
+// (what CREATE and MKDIR get on a stale gateway), anything else → IO.
+func attrStatus(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrNotExist):
+		return &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusNoEnt, WrappedErr: err}
+	case errors.Is(err, syscall.EROFS), errors.Is(err, os.ErrPermission):
+		return &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusAccess, WrappedErr: err}
+	}
+	return &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusIO, WrappedErr: err}
+}
 
 // FSStat reports capacity: Total = Σ Active capacity · K/(K+M); Free = Total − stored·K/(K+M).
 func (h *Handler) FSStat(_ context.Context, _ billy.Filesystem, s *nfs.FSStat) error {

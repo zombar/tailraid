@@ -221,7 +221,7 @@ Health, computed locally:
 | `Health` | Condition | Gateway behaviour |
 |---|---|---|
 | `Healthy` | leader known, last contact < 30 s | normal |
-| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `EROFS` (`NFS3ERR_ROFS`); before the threshold a failed proposal is retried with backoff, since a leader change takes seconds; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
+| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `EROFS`, which reaches the wire as `NFS3ERR_ACCES` (create, mkdir, symlink, setattr) or `NFS3ERR_IO` (remove, rmdir, rename): go-nfs maps a filesystem error per operation and has no `ROFS` mapping (07); before the threshold a failed proposal is retried with backoff, since a leader change takes seconds; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
 | `NoLeader` | Raft has no leader (quorum lost) | same as `Stale`; `status` reports which voters are unreachable |
 
 ## Proposing and leader forwarding
@@ -274,7 +274,7 @@ refuses while `serve` runs and while `staging/` holds unflushed writes, unless
 Raft guarantees that only a partition containing a majority of voters elects a leader and
 commits entries (I-6). The minority side's gateways move to `Stale`/`NoLeader`: reads
 continue from the local FSM and from any reachable shard holders; metadata mutations return
-`NFS3ERR_ROFS`; data WRITEs are still accepted into the WAL until the dirty caps, and
+`EROFS` (`NFS3ERR_ACCES`/`NFS3ERR_IO` on the wire, 07); data WRITEs are still accepted into the WAL until the dirty caps, and
 everything in the WAL sits there until the flusher can propose again.
 When the partition heals, the minority's Raft log is reconciled by Raft itself; our FSM has
 no divergent state to merge because it never applied uncommitted entries.
