@@ -134,6 +134,9 @@ func printStatus(w io.Writer, r admin.Report) {
 	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 {
 		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
 	}
+	if r.WebURL != "" {
+		fmt.Fprintf(w, "web     %s\n", r.WebURL)
+	}
 	printNodes(w, r.Nodes)
 	for _, warn := range r.Warnings {
 		fmt.Fprintf(w, "! %s\n", warn)
