@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -165,7 +166,7 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 	default:
 		return nil, mapErr("open", filename, err)
 	}
-	file := &File{fs: f, ino: in.Ino, name: strings.Join(parts, "/"), flag: flag} // billy names are root-relative
+	file := &File{fs: f, ino: in.Ino, name: filepath.Join(parts...), flag: flag} // billy names are root-relative
 	if flag&os.O_TRUNC != 0 && flag&(os.O_WRONLY|os.O_RDWR) != 0 {
 		if err := f.ov.Truncate(in.Ino, in.Size, 0); err != nil {
 			return nil, mapErr("open", filename, err)
@@ -261,7 +262,9 @@ func (f *FS) Remove(filename string) error {
 	return nil
 }
 
-func (f *FS) Join(elem ...string) string { return path.Join(elem...) }
+// Join uses the OS separator like billy's osfs does; every entry point splits on both
+// separators, so callers may pass either form.
+func (f *FS) Join(elem ...string) string { return filepath.Join(elem...) }
 
 // --- billy.TempFile ------------------------------------------------------------------
 

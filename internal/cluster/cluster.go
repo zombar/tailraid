@@ -271,8 +271,10 @@ func (n *Node) WaitReady(ctx context.Context, timeout time.Duration) error {
 	if err := n.WaitLeader(ctx, timeout); err != nil {
 		return err
 	}
-	// Raft's AppliedIndex advances from the FSM goroutine after each apply and counts
-	// configuration entries the FSM never sees, so it is the right catch-up marker.
+	// Raft's AppliedIndex is advanced by its main goroutine when a batch is handed to
+	// the FSM goroutine, not when the FSM has applied it, so it only proves dispatch.
+	// Configuration entries never reach the FSM, so the FSM's own index is compared
+	// against the last *command* entry in the log.
 	deadline := time.After(timeout)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
@@ -281,11 +283,44 @@ func (n *Node) WaitReady(ctx context.Context, timeout time.Duration) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline:
-			return fmt.Errorf("cluster: log replay incomplete after %s (applied %d of %d)", timeout, n.Raft.AppliedIndex(), n.Raft.LastIndex())
+			return fmt.Errorf("cluster: log replay incomplete after %s (dispatched %d of %d)", timeout, n.Raft.AppliedIndex(), n.Raft.LastIndex())
 		case <-tick.C:
 		}
 	}
+	if n.IsLeader() {
+		if err := n.Raft.Barrier(timeout).Error(); err != nil {
+			return fmt.Errorf("cluster: barrier: %w", err)
+		}
+	}
+	last, err := n.lastCommandIndex()
+	if err != nil {
+		return err
+	}
+	wctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := n.FSM.WaitApplied(wctx, last); err != nil {
+		return fmt.Errorf("cluster: fsm replay incomplete (applied %d, last command %d): %w", n.FSM.Applied(), last, err)
+	}
 	return nil
+}
+
+// lastCommandIndex scans the log store backwards for the newest command entry. Entries
+// compacted into a snapshot are already reflected in the FSM's applied index.
+func (n *Node) lastCommandIndex() (uint64, error) {
+	first, err := n.logs.FirstIndex()
+	if err != nil {
+		return 0, fmt.Errorf("cluster: first index: %w", err)
+	}
+	for idx := n.Raft.LastIndex(); idx >= first && idx > 0; idx-- {
+		var l raft.Log
+		if err := n.logs.GetLog(idx, &l); err != nil {
+			return 0, fmt.Errorf("cluster: read log %d: %w", idx, err)
+		}
+		if l.Type == raft.LogCommand {
+			return idx, nil
+		}
+	}
+	return 0, nil
 }
 
 // IsLeader reports whether this node currently leads.
