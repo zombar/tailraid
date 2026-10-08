@@ -1,8 +1,10 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -22,9 +25,20 @@ import (
 )
 
 // ShardStore is what the shard endpoints need from chunk.Store.
+// acquire takes a slot of sem unless ctx ends first (a caller that gave up must not hold
+// a queue position).
+func acquire(ctx context.Context, sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 type ShardStore interface {
 	Open(k chunk.ShardKey) (io.ReadCloser, int64, error)
-	Put(k chunk.ShardKey, payload []byte) (int64, error)
+	PutVerified(k chunk.ShardKey, payload []byte, sum [32]byte) (int64, error) // sum = sha256(payload), verified by the caller
 	Has(k chunk.ShardKey) bool
 	DeleteIfOlder(k chunk.ShardKey, minAge time.Duration, now time.Time) (bool, int64, error)
 	Used() int64
@@ -84,11 +98,13 @@ type Options struct {
 
 // Server serves the node RPC.
 type Server struct {
-	o       Options
-	clusID  string
-	putSem  chan struct{}
-	getSem  chan struct{}
-	handler http.Handler
+	joinMu   sync.Mutex
+	joinLast map[string]time.Time // source IP → last failed join attempt
+	o        Options
+	clusID   string
+	putSem   chan struct{}
+	getSem   chan struct{}
+	handler  http.Handler
 }
 
 // NewServer validates options and builds the handler.
@@ -114,7 +130,7 @@ func NewServer(o Options) (*Server, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	s := &Server{o: o, clusID: hex.EncodeToString(o.ClusterID[:]), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots)}
+	s := &Server{o: o, clusID: meta.HexID(o.ClusterID), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.Handle("/v1/shards/", s.clusterCheck(s.member(http.HandlerFunc(s.shards))))
@@ -258,7 +274,10 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
-		s.getSem <- struct{}{}
+		if !acquire(r.Context(), s.getSem) {
+			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+			return
+		}
 		defer func() { <-s.getSem }()
 		rc, size, err := s.o.Store.Open(key)
 		switch {
@@ -277,13 +296,18 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
 	case http.MethodPut:
-		s.putSem <- struct{}{}
+		if !acquire(r.Context(), s.putSem) {
+			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+			return
+		}
 		defer func() { <-s.putSem }()
 		if r.ContentLength > s.o.MaxShard {
 			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
 			return
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
+		buf := bytes.NewBuffer(make([]byte, 0, max(0, min(r.ContentLength, s.o.MaxShard))+1)) // sized by Content-Length: one allocation
+		_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
+		body := buf.Bytes()
 		if err != nil {
 			var mbe *http.MaxBytesError
 			if errors.As(err, &mbe) {
@@ -293,14 +317,12 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 			return
 		}
-		if want := r.Header.Get(HeaderShardSum); want != "" {
-			sum := sha256.Sum256(body)
-			if !strings.EqualFold(want, hex.EncodeToString(sum[:])) {
-				writeErr(w, http.StatusBadRequest, "shard hash mismatch")
-				return
-			}
+		sum := sha256.Sum256(body) // once per hop: verified against the header, then handed to the store
+		if want := r.Header.Get(HeaderShardSum); want != "" && !strings.EqualFold(want, hex.EncodeToString(sum[:])) {
+			writeErr(w, http.StatusBadRequest, "shard hash mismatch")
+			return
 		}
-		if _, err := s.o.Store.Put(key, body); err != nil {
+		if _, err := s.o.Store.PutVerified(key, body, sum); err != nil {
 			if errors.Is(err, chunk.ErrFull) {
 				writeErr(w, http.StatusInsufficientStorage, "no space")
 				return
@@ -365,6 +387,38 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(meta.EncodeResult(res))
 }
 
+// JoinInterval is how long a source IP waits after a failed join attempt.
+const JoinInterval = time.Second
+
+// joinAllowed reports whether src may attempt a join now: not within JoinInterval of its
+// last failed attempt. Successful joins are never throttled (a scripted install joins
+// several devices quickly from one host).
+func (s *Server) joinAllowed(src string) bool {
+	now := s.o.Clk.Now()
+	s.joinMu.Lock()
+	defer s.joinMu.Unlock()
+	last, ok := s.joinLast[src]
+	return !ok || now.Sub(last) >= JoinInterval
+}
+
+// joinFailed records a failed attempt from src.
+func (s *Server) joinFailed(src string) {
+	now := s.o.Clk.Now()
+	s.joinMu.Lock()
+	defer s.joinMu.Unlock()
+	if s.joinLast == nil {
+		s.joinLast = map[string]time.Time{}
+	}
+	s.joinLast[src] = now
+	if len(s.joinLast) > 10_000 { // bounded: forget entries older than the interval
+		for k, t := range s.joinLast {
+			if now.Sub(t) >= JoinInterval {
+				delete(s.joinLast, k)
+			}
+		}
+	}
+}
+
 func (s *Server) notLeader(w http.ResponseWriter) {
 	if addr := s.o.Applier.LeaderRPCAddr(); addr != "" {
 		w.Header().Set(HeaderLeader, addr)
@@ -389,12 +443,20 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad join request")
 		return
 	}
-	if s.o.JoinToken == nil || req.Token == "" || req.Token != s.o.JoinToken() {
+	// after a failed attempt a source IP gets one attempt per second (docs/08 threat
+	// table); the token compare is constant-time so a wrong token leaks nothing
+	if !s.joinAllowed(src.String()) {
+		writeErr(w, http.StatusTooManyRequests, "join: one attempt per second per source after a failure")
+		return
+	}
+	if s.o.JoinToken == nil || req.Token == "" || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.o.JoinToken())) != 1 {
+		s.joinFailed(src.String())
 		writeErr(w, http.StatusForbidden, "bad join token")
 		return
 	}
 	id, err := s.o.Auth.Identify(r.Context(), src)
 	if err != nil {
+		s.joinFailed(src.String())
 		writeErr(w, http.StatusForbidden, "join: "+err.Error())
 		return
 	}

@@ -3,6 +3,7 @@ package soak
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/repair"
 )
 
 // Profile sizes a run.
@@ -39,9 +41,11 @@ func Quick() Profile {
 // Record is one line of results.jsonl.
 type Record struct {
 	T     time.Time         `json:"t"`
-	Kind  string            `json:"kind"` // sample | event | check | phase | summary
+	Line  int               `json:"line"` // 1-based line in results.jsonl
+	Kind  string            `json:"kind"` // sample | event | check | phase | dump | summary
 	Phase string            `json:"phase,omitempty"`
 	Name  string            `json:"name,omitempty"`
+	Cites string            `json:"cites,omitempty"` // invariants and lifecycle cells a check exercises ("I-12 L-64")
 	OK    *bool             `json:"ok,omitempty"`
 	Skip  bool              `json:"skipped,omitempty"`
 	Text  string            `json:"text,omitempty"`
@@ -54,26 +58,32 @@ type Record struct {
 
 // Sample is one metric row (driver counters plus one node's status view).
 type Sample struct {
-	BytesWritten  int64          `json:"bytes_written"`
-	BytesRead     int64          `json:"bytes_read"`
-	Writes        int64          `json:"writes"`
-	Reads         int64          `json:"reads"`
-	WriteLatency  [8]int64       `json:"write_latency"` // histogram buckets, see latencyBuckets
-	ReadLatency   [8]int64       `json:"read_latency"`
-	Degraded      int            `json:"degraded"`
-	Unreadable    int            `json:"unreadable"`
-	StalePolicy   int            `json:"stale_policy"`
-	StoredBytes   uint64         `json:"stored_bytes"`
-	LogicalBytes  uint64         `json:"logical_bytes"`
-	Slots         map[string]int `json:"slots"` // per node name
-	Live          int            `json:"live"`
-	FSMAgree      *bool          `json:"fsm_agree,omitempty"` // nil when not sampled this round
-	Health        string         `json:"health"`
-	RepairBacklog int            `json:"repair_backlog"` // degraded + stale policy
+	BytesWritten  int64                      `json:"bytes_written"`
+	BytesRead     int64                      `json:"bytes_read"`
+	Writes        int64                      `json:"writes"`
+	Reads         int64                      `json:"reads"`
+	WriteLatency  [len(latencyBuckets)]int64 `json:"write_latency"` // cumulative histogram, see latencyBuckets
+	ReadLatency   [len(latencyBuckets)]int64 `json:"read_latency"`
+	Degraded      int                        `json:"degraded"`
+	RepairPending int                        `json:"repair_pending"`
+	Unreadable    int                        `json:"unreadable"`
+	StalePolicy   int                        `json:"stale_policy"`
+	StoredBytes   uint64                     `json:"stored_bytes"`
+	LogicalBytes  uint64                     `json:"logical_bytes"`
+	DedupRatio    float64                    `json:"dedup_ratio"`
+	Slots         map[string]int             `json:"slots"` // per node name
+	LiveNodes     map[string]bool            `json:"live_nodes"`
+	Live          int                        `json:"live"`
+	FSMAgree      *bool                      `json:"fsm_agree,omitempty"` // nil when not sampled this round
+	Health        string                     `json:"health"`
+	RepairBacklog int                        `json:"repair_backlog"` // degraded + stale policy
+	WALBytes      int64                      `json:"wal_bytes"`      // the sampled node's overlay WAL depth
+	DirtyBytes    uint64                     `json:"dirty_bytes"`
 }
 
-// latencyBuckets are the upper bounds of the latency histogram (ms), last is +Inf.
-var latencyBuckets = [8]float64{1, 5, 20, 50, 100, 500, 2000, 0}
+// latencyBuckets are the fixed upper bounds of the latency histogram in ms (log-spaced,
+// the last is +Inf), so histograms from different runs line up.
+var latencyBuckets = [14]float64{0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 0}
 
 func bucket(d time.Duration) int {
 	ms := float64(d) / float64(time.Millisecond)
@@ -92,11 +102,16 @@ type Run struct {
 	Log     *slog.Logger
 	Out     io.Writer // results.jsonl (may be nil)
 	Rng     *rand.Rand
-	Root    string // volume directory for this run, e.g. /_soak/20261008T1200
+	Seed    int64    // the Rng's seed, for the report
+	Flags   []string // run flags worth recording ("destructive", "restarts")
+	Root    string   // volume directory for this run, e.g. /_soak/20261008T1200
 
 	mu       sync.Mutex
 	records  []Record
 	counters Sample
+	lats     []opLatency
+	repair   repair.Stats  // Σ of every repair and scrub pass the run asked for
+	gc       repair.Result // Σ of every GC pass
 	phase    string
 	nodes    []NodeRef
 	failed   int
@@ -106,16 +121,34 @@ type Run struct {
 	shared   map[string]any // cross-phase state (the corpus model)
 }
 
+// opLatency is one measured operation.
+type opLatency struct {
+	T     time.Time
+	Phase string
+	Read  bool
+	D     time.Duration
+}
+
 // Summary is the outcome of a run.
 type Summary struct {
-	Env      string
-	Profile  string
-	Started  time.Time
-	Duration time.Duration
-	Phases   []PhaseResult
-	Failed   int
-	Records  []Record
-	Nodes    []NodeRef
+	Env       string
+	Profile   string
+	Seed      int64
+	Flags     []string
+	Started   time.Time
+	Duration  time.Duration
+	K, M      uint8
+	ChunkSize int
+	NodeCount int
+	Versions  map[string]string // node name → binary version at the start
+	Phases    []PhaseResult
+	Failed    int
+	Partial   bool // a phase was skipped for a capability the environment lacks
+	Records   []Record
+	Nodes     []NodeRef
+	Latency   []LatencyRow
+	Totals    Totals
+	Coverage  []CoverageRow
 }
 
 // PhaseResult aggregates the checks of one phase.
@@ -128,14 +161,46 @@ type PhaseResult struct {
 	Took    time.Duration
 }
 
+// LatencyRow is the driver-side latency of one operation kind in one phase, over the
+// whole phase or only while a fault was in force.
+type LatencyRow struct {
+	Phase       string
+	Kind        string // write | read
+	UnderFaults bool
+	N           int
+	P50         time.Duration
+	P99         time.Duration
+	Max         time.Duration
+}
+
+// Totals are the run's counters.
+type Totals struct {
+	BytesWritten int64
+	BytesRead    int64
+	Writes       int64
+	Reads        int64
+	DedupRatio   float64 // from the last status sample
+	MaxWALBytes  int64   // deepest overlay WAL seen in a sample
+	Repair       repair.Stats
+	GC           repair.Result
+}
+
+// CoverageRow is one invariant or lifecycle cell and the checks that cited it.
+type CoverageRow struct {
+	ID     string
+	Passed int
+	Failed int
+}
+
 func (r *Run) now() time.Time { return time.Now() }
 
 func (r *Run) emit(rec Record) {
 	rec.T = r.now()
+	r.mu.Lock()
 	if rec.Phase == "" {
 		rec.Phase = r.phase
 	}
-	r.mu.Lock()
+	rec.Line = len(r.records) + 1
 	r.records = append(r.records, rec)
 	if rec.Kind == "check" && rec.OK != nil && !*rec.OK {
 		r.failed++
@@ -162,15 +227,56 @@ func (r *Run) emit(rec Record) {
 // event records a timeline marker (kills, restarts, partitions, policy changes).
 func (r *Run) event(name, text string) { r.emit(Record{Kind: "event", Name: name, Text: text}) }
 
-// check records a pass/fail; failed checks may name the file, chunk and node involved.
-func (r *Run) check(name string, ok bool, text string) bool {
-	r.emit(Record{Kind: "check", Name: name, OK: &ok, Text: text})
+// check records a pass/fail with the invariants and lifecycle cells it exercises; failed
+// checks may name the file, chunk and node involved.
+func (r *Run) check(cites, name string, ok bool, text string) bool {
+	r.emit(Record{Kind: "check", Name: name, Cites: cites, OK: &ok, Text: text})
 	return ok
 }
 
-func (r *Run) checkAt(name string, ok bool, text, file, chunk, node string) bool {
-	r.emit(Record{Kind: "check", Name: name, OK: &ok, Text: text, File: file, Chunk: chunk, Node: node})
+func (r *Run) checkAt(cites, name string, ok bool, text, file, chunk, node string) bool {
+	r.emit(Record{Kind: "check", Name: name, Cites: cites, OK: &ok, Text: text, File: file, Chunk: chunk, Node: node})
 	return ok
+}
+
+// repairNow, scrub and gcNow run the maintenance passes and keep the run's totals.
+func (r *Run) repairNow(ctx context.Context) (repair.Stats, error) {
+	st, err := r.Env.RepairNow(ctx)
+	r.addRepair(st)
+	return st, err
+}
+
+func (r *Run) scrub(ctx context.Context) (repair.Stats, error) {
+	st, err := r.Env.Scrub(ctx)
+	r.addRepair(st)
+	return st, err
+}
+
+func (r *Run) addRepair(st repair.Stats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t := &r.repair
+	t.Scanned += st.Scanned
+	t.Repaired += st.Repaired
+	t.Partial += st.Partial
+	t.Unrepairable += st.Unrepairable
+	t.Deferred += st.Deferred
+	t.Migrated += st.Migrated
+	t.PolicyStale += st.PolicyStale
+	t.Scrubbed += st.Scrubbed
+	t.ScrubBad += st.ScrubBad
+	t.BytesMoved += st.BytesMoved
+	t.Errors += st.Errors
+}
+
+func (r *Run) gcNow(ctx context.Context) (repair.Result, error) {
+	res, err := r.Env.GCNow(ctx)
+	r.mu.Lock()
+	r.gc.Victims += res.Victims
+	r.gc.Deleted += res.Deleted
+	r.gc.Refused += res.Refused
+	r.mu.Unlock()
+	return res, err
 }
 
 func (r *Run) skip(reason string) { r.emit(Record{Kind: "phase", Skip: true, Text: reason}) }
@@ -185,10 +291,12 @@ type measured struct {
 func (m measured) WriteAt(p string, off int64, data []byte) error {
 	t := time.Now()
 	err := m.Volume.WriteAt(p, off, data)
+	d := time.Since(t)
 	m.r.mu.Lock()
 	m.r.counters.Writes++
 	m.r.counters.BytesWritten += int64(len(data))
-	m.r.counters.WriteLatency[bucket(time.Since(t))]++
+	m.r.counters.WriteLatency[bucket(d)]++
+	m.r.lats = append(m.r.lats, opLatency{T: t, Phase: m.r.phase, D: d})
 	m.r.mu.Unlock()
 	return err
 }
@@ -196,10 +304,12 @@ func (m measured) WriteAt(p string, off int64, data []byte) error {
 func (m measured) ReadAll(p string) ([]byte, error) {
 	t := time.Now()
 	b, err := m.Volume.ReadAll(p)
+	d := time.Since(t)
 	m.r.mu.Lock()
 	m.r.counters.Reads++
 	m.r.counters.BytesRead += int64(len(b))
-	m.r.counters.ReadLatency[bucket(time.Since(t))]++
+	m.r.counters.ReadLatency[bucket(d)]++
+	m.r.lats = append(m.r.lats, opLatency{T: t, Phase: m.r.phase, Read: true, D: d})
 	m.r.mu.Unlock()
 	return b, err
 }
@@ -230,17 +340,21 @@ func (r *Run) sample(ctx context.Context, round int) {
 	s := r.snapshotCounters()
 	rep, node, err := r.anyStatus(ctx)
 	if err == nil {
-		s.Degraded, s.Unreadable, s.StalePolicy = rep.Volume.Degraded, rep.Volume.Unreadable, rep.Volume.StalePolicy
-		s.StoredBytes, s.LogicalBytes = rep.Volume.StoredBytes, rep.Volume.LogicalBytes
+		s.Degraded, s.RepairPending, s.Unreadable, s.StalePolicy = rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy
+		s.StoredBytes, s.LogicalBytes, s.DedupRatio = rep.Volume.StoredBytes, rep.Volume.LogicalBytes, rep.Volume.DedupRatio
 		s.Health = rep.Health
-		s.Slots = map[string]int{}
+		s.Slots, s.LiveNodes = map[string]int{}, map[string]bool{}
 		for i := range rep.Nodes {
 			s.Slots[rep.Nodes[i].Name] = rep.Nodes[i].Slots
+			s.LiveNodes[rep.Nodes[i].Name] = rep.Nodes[i].Live
 			if rep.Nodes[i].Live {
 				s.Live++
 			}
 		}
 		s.RepairBacklog = s.Degraded + s.StalePolicy
+		if rep.Gateway != nil {
+			s.WALBytes, s.DirtyBytes = rep.Gateway.WALBytes, rep.Gateway.DirtyBytes
+		}
 	}
 	if round%5 == 0 {
 		if agree, _, ok := r.fsmAgreement(ctx); ok {
@@ -254,6 +368,28 @@ func (r *Run) snapshotCounters() Sample {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.counters
+}
+
+// setPhase names the phase every record emitted from now on belongs to (the sampler
+// goroutine reads it).
+func (r *Run) setPhase(name string) {
+	r.mu.Lock()
+	r.phase = name
+	r.mu.Unlock()
+}
+
+// recordsSince copies the records appended at or after index from (the sampler appends
+// concurrently).
+func (r *Run) recordsSince(from int) []Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]Record(nil), r.records[from:]...)
+}
+
+func (r *Run) recordCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.records)
 }
 
 // anyStatus returns the leader's status report when the leader answers (it carries the
@@ -382,6 +518,21 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	}
 	r.nodes = nodes
 	r.started = r.now()
+	rep, _, err := r.anyStatus(ctx)
+	if err != nil {
+		return Summary{}, fmt.Errorf("soak: status: %w", err)
+	}
+	if r.Profile.ChunkSize == 0 { // the corpus straddles the cluster's real chunk size
+		if rep.Volume.ChunkSize == 0 {
+			return Summary{}, errors.New("soak: status reports no chunk size")
+		}
+		r.Profile.ChunkSize = int(rep.Volume.ChunkSize)
+	}
+	sum := Summary{Env: r.Env.Name(), Profile: r.Profile.Name, Seed: r.Seed, Flags: r.Flags, Started: r.started, Nodes: nodes,
+		K: rep.Volume.K, M: rep.Volume.M, ChunkSize: r.Profile.ChunkSize, NodeCount: len(nodes), Versions: map[string]string{}}
+	for i := range rep.Nodes {
+		sum.Versions[rep.Nodes[i].Name] = rep.Nodes[i].Version
+	}
 	if len(r.gateways()) == 0 {
 		return Summary{}, fmt.Errorf("soak: no gateway reachable in %s", r.Env.Name())
 	}
@@ -401,18 +552,19 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	r.startSampler(ctx)
 	var results []PhaseResult
 	for _, ph := range phases {
-		r.phase = ph.name
-		before := len(r.records)
+		r.setPhase(ph.name)
+		before := r.recordCount()
 		t := r.now()
 		r.emit(Record{Kind: "phase", Name: ph.name, Text: "start"})
 		r.sample(ctx, 0)
 		if err := ph.run(ctx, r); err != nil {
-			r.check("phase completed", false, err.Error())
+			r.check("", "phase completed", false, err.Error())
 		}
 		r.sample(ctx, 0)
 		pr := PhaseResult{Name: ph.name, Took: r.now().Sub(t)}
-		for i := before; i < len(r.records); i++ {
-			rec := &r.records[i]
+		recs := r.recordsSince(before)
+		for i := range recs {
+			rec := &recs[i]
 			switch {
 			case rec.Kind == "check":
 				pr.Checks = append(pr.Checks, *rec)
@@ -423,17 +575,58 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 				pr.Skipped, pr.Reason = true, rec.Text
 			}
 		}
+		if pr.Failed > 0 {
+			r.captureDumps(ctx)
+		}
 		results = append(results, pr)
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	r.phase = "cleanup"
+	r.setPhase("cleanup")
 	r.cleanup(ctx)
 	r.stopSampler()
-	sum := Summary{Env: r.Env.Name(), Profile: r.Profile.Name, Started: r.started, Duration: r.now().Sub(r.started), Phases: results, Failed: r.failed, Records: r.records, Nodes: r.nodes}
 	r.emit(Record{Kind: "summary", Text: fmt.Sprintf("%d failed checks", r.failed)})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sum.Duration, sum.Phases, sum.Failed = r.now().Sub(r.started), results, r.failed
+	sum.Records = append([]Record(nil), r.records...)
+	for _, pr := range results {
+		sum.Partial = sum.Partial || pr.Skipped
+	}
+	sum.Latency = latencyRows(r.lats, results, faultWindows(sum.Records))
+	sum.Coverage = coverage(results)
+	sum.Totals = Totals{BytesWritten: r.counters.BytesWritten, BytesRead: r.counters.BytesRead, Writes: r.counters.Writes, Reads: r.counters.Reads, Repair: r.repair, GC: r.gc}
+	for i := range sum.Records {
+		if s := sum.Records[i].S; s != nil {
+			sum.Totals.MaxWALBytes = max(sum.Totals.MaxWALBytes, s.WALBytes)
+			if s.DedupRatio > 0 {
+				sum.Totals.DedupRatio = s.DedupRatio
+			}
+		}
+	}
 	return sum, nil
+}
+
+// dumpMax bounds one node's goroutine dump in the results stream.
+const dumpMax = 512 << 10
+
+// captureDumps records every node's goroutine dump after a failed phase (docs/09 §6); a
+// node without dev.enabled, or one that does not answer, leaves a note instead.
+func (r *Run) captureDumps(ctx context.Context) {
+	for _, n := range r.nodes {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		dump, err := r.Env.Goroutines(cctx, n)
+		cancel()
+		if err != nil {
+			r.event("note", fmt.Sprintf("no goroutine dump from %s: %v", n.Name, err))
+			continue
+		}
+		if len(dump) > dumpMax {
+			dump = dump[:dumpMax] + "\n... (truncated)"
+		}
+		r.emit(Record{Kind: "dump", Node: n.Name, Text: dump})
+	}
 }
 
 // cleanup removes the run directory so a live volume is left as found.

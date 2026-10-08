@@ -91,13 +91,12 @@ type    := 1 = write (data follows), 2 = truncate (len = 0, off = new size)
 `crc32c` covers `type|off|len|data`. All integers little-endian.
 
 ```go
-type WAL struct { f *os.File; off int64 }
-func openWAL(path string) (*WAL, error)
+type WAL struct { fs sysfs.FS; f sysfs.File; off int64 }
+func openWAL(fs sysfs.FS, path string) (*WAL, error)                       // a new file's directory entry is fsynced before it is used
 func (w *WAL) AppendWrite(off uint64, p []byte) (walOff int64, err error)   // write + f.Sync()
 func (w *WAL) AppendTruncate(size uint64) error                             // + f.Sync()
 func (w *WAL) ReadAt(p []byte, walOff int64) error
 func (w *WAL) Replay(fn func(typ uint8, off uint64, data []byte, walOff int64) error) error
-func (w *WAL) Reset() error                                                 // ftruncate(0) + fsync
 func (w *WAL) Compact(live extents) (extents, error)                        // rewrite to a new file holding only live extents, fsync, rename
 ```
 
@@ -105,7 +104,14 @@ Rules:
 
 - `AppendWrite` and `AppendTruncate` return only after `f.Sync()` succeeds. There is no
   "no-sync" mode: the struct has no such field, and tests that want speed put the staging
-  directory on a tmpfs or accept the cost.
+  directory on a tmpfs or accept the cost. All file access goes through the `sysfs.FS`
+  seam so tests can inject a failed fsync or a crash at any step.
+- A WAL file is created on the first write to an inode, and its directory is fsynced before
+  the first record is appended: an acknowledged record never depends on a directory entry
+  that power loss could drop (I-63). After a failed fsync the un-synced record is cut back
+  off the file so a later crash cannot replay bytes that were never acknowledged (I-37).
+- A crash during `Compact` may leave `<ino>.wal.new`; `OpenOverlay` removes it (the old
+  log is a superset and replays correctly).
 - `Replay` reads records in order and **stops at the first record whose CRC fails or whose
   length runs past EOF** (the torn tail from a crash mid-append). Everything before it is
   replayed into the extent set; the file is then truncated to that point.
@@ -127,10 +133,10 @@ extents.
 |---|---|---|
 | inode idle (no WRITE for) | 2 s | flush that inode |
 | inode dirty bytes ≥ `FileDirtyHi` | 32 MiB | partial flush: its fully covered chunks now; the partial tail chunk stays dirty |
-| inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode |
+| inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that still arrives while the WAL is at the cap fails with `NFS3ERR_IO` (`EIO`, never `EAGAIN`) and succeeds once the flush has drained it |
 | total dirty bytes ≥ `TotalDirtyHi` | 256 MiB | flush the largest inodes until below |
-| total dirty bytes ≥ `MaxDirty` | 1 GiB | WRITE returns `NFS3ERR_IO` until it drains |
-| shutdown | — | `FlushAll` with a bounded deadline, then exit (WAL survives anyway) |
+| total dirty bytes ≥ `MaxDirty` | 1 GiB | every WRITE returns `NFS3ERR_IO` (`EIO`) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
+| shutdown | 30 s (`ShutdownFlush`) | `FlushAll` with that deadline, then exit; whatever did not flush stays in the WAL and flushes on the next start |
 
 Flush workers run per inode from a bounded pool (default 4) so a big copy does not starve
 small files.
@@ -165,13 +171,15 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    `plan.sizeSet`, and overlay the WAL extents. Clip to `eff`.
 5. **Holes.** If the assembled chunk is all zero → `ChunkWrite{i, HashZero}`; no upload.
 6. **Hash and dedup.** `h = sha256(chunk)`. If `st.GetChunk(h)` exists (live or tombstoned)
-   and **at least `k` of its placement slots are on live nodes** → `ChunkWrite{i, h}` with
-   no upload; the Commit revives a tombstone. If the entry exists but has fewer than `k`
-   live slots (degraded beyond readability, or a tombstone whose holders died — tombstones
-   are never repaired), the flusher has the bytes in hand: it re-encodes with the entry's
-   recorded `(k, m)`, PUTs the missing slots to fresh nodes (re-place excluding current
-   holders), and proposes `SetPlacement` for the filled slots before the Commit. An
-   acknowledged write is never committed against an unreadable chunk.
+   and **at least `k` of its placement slots are present** (on a live node that answers
+   `HEAD` for the shard; liveness alone is not trusted, a live node may have lost the
+   file) → `ChunkWrite{i, h}` with no upload; the Commit revives a tombstone. If the entry
+   exists but has fewer than `k` present slots (degraded beyond readability, a tombstone
+   whose holders died — tombstones are never repaired — or holders that lost their shards),
+   the flusher has the bytes in hand: it re-encodes with the entry's recorded `(k, m)`,
+   PUTs every slot that is not present to fresh nodes (re-place excluding current holders),
+   and proposes `SetPlacement` for the filled slots before the Commit. An acknowledged
+   write is never committed against an unreadable chunk.
 7. **Policy.** `(k, m) = len(chunk) ≤ SmallChunk ? (1, Vol.M) : (Vol.K, Vol.M)`.
 8. **Place.** `placement = Place(h, liveCandidates(peers.Live(), nodes), k+m)` where
    candidates exclude `Draining`/`Removed` nodes and nodes that answered `ErrFull`, built
@@ -198,15 +206,17 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
       conflict (I-35).
     - `ErrUnknownChunk`: a dedup'd chunk was GC'd between step 6 and commit. Upload it (steps
       7–9 for that chunk) and propose again.
-    - Any retry of the Commit (conflict, unknown chunk, `ErrLeadershipLost`, timeout) that
-      happens more than `grace/2` (5 min) after the PUTs of step 9 first re-runs step 9 for
-      every new chunk: PUTs are idempotent and this guarantees the orphan-shard sweep (06)
-      cannot have removed them in the meantime.
+    - Any retry of the Commit (conflict, unknown chunk, `ErrLeadershipLost`, timeout)
+      re-runs steps 6–9 for every chunk of the plan: a chunk is registered only by the
+      Commit that applies, so the dedup lookup misses and the PUTs are repeated. PUTs are
+      idempotent and refresh the shards' mtime, which guarantees the orphan-shard sweep
+      (06) cannot have removed them in the meantime however late the retry.
     - `ErrNotExist`: inode gone → `ov.Drop(ino)`, return nil.
     - `ErrNeedTailRewrite`: programming error in step 3; log at error level and retry with
       the tail chunk included.
 11. **Wait and clear.** `st.WaitApplied(index)`; `ov.commitFlushed(ino, plan)` removes the
-    plan's extents from the file's bookkeeping; if no extents remain, `wal.Reset()`.
+    plan's extents from the file's bookkeeping; if no extents remain, the inode leaves the
+    overlay and its WAL file is removed (`evict`).
 
 Step 9's "≥ k acks" is the user's chosen degraded-write policy (see 05 §5). Full
 redundancy is restored by the repairer (06).
@@ -218,10 +228,14 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error)
 func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64) (int, error)
 ```
 
-1. `HashZero` → caller zero-fills. Cache hit (`cache.Get` verifies sha256) → return.
+1. `HashZero` → caller zero-fills. Cache hit → return: the hottest 64 MiB of chunks sit
+   in memory (verified when inserted, a subset of the disk entries); a disk hit verifies
+   sha256 and promotes the chunk to memory. A hit refreshes the file's mtime at most once
+   a minute (the on-disk order only matters across restarts). Concurrent reads of one
+   chunk share a single fetch.
 2. `c := st.GetChunk(h)`; missing → `EIO` (metadata says the chunk exists; this is a bug or
    a lost majority, not a normal path).
-3. `order = peers.Rank(nonZero(c.Placement))`: self first, then by RTT, S3 nodes last.
+3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131), and slots are offered in placement order so data shards win ties over parity (L-63).
 4. Fetch the first `k` shards in parallel. On any failure or `ErrCorrupt`, pull the next slot
    in `order` until `k` good shards or the list is exhausted (→ `EIO`, logged with the chunk
    hash and the slots tried).
@@ -252,7 +266,7 @@ the remainder (a short dedup'd chunk under a truncate-up). The overlay is consul
 |---|---|---|
 | Raft has a leader, ≥ k live storage nodes | OK | proceeds |
 | Raft has a leader, < k live | OK until `MaxDirty`, then `NFS3ERR_IO` | fails at step 9, retried with backoff |
-| no leader / `Health == Stale` | data WRITEs accepted into the WAL until `MaxDirty`, then `NFS3ERR_IO`; metadata mutations (create, mkdir, unlink, rename, setattr) `NFS3ERR_ROFS` | fails at step 10, retried |
+| no leader / `Health == Stale` | data WRITEs accepted into the WAL until `MaxDirty`, then `NFS3ERR_IO`; metadata mutations (create, mkdir, unlink, rename, setattr) `EROFS` (`NFS3ERR_ACCES` or `NFS3ERR_IO` on the wire, 07) | fails at step 10, retried |
 | gateway process restart | — | WAL replayed, flush resumes |
 
 The WAL is the only place acknowledged-but-unflushed bytes live. It is fsynced per record
@@ -281,7 +295,7 @@ Degraded writes (user's choice) hold < m parity until repair.
 
 | Component | What is fsynced | When |
 |---|---|---|
-| WAL (`staging/<ino>.wal`) | the file | after every appended record, before the WRITE reply |
+| WAL (`staging/<ino>.wal`) | the file; the directory when the file is created | after every appended record, before the WRITE reply; the directory before the first record |
 | shard store (`shards/hh/<key>`) | temp file, rename, directory | `write → f.Sync() → Close → Rename → fsync(dir)`; `Put` returns (and the PUT is acked) only after the directory fsync |
 | raft log/stable (`raft/raft.db`) | bbolt | `NoSync = false` (every Raft append) |
 | snapshots | `FileSnapshotStore` | fsync on `Close` |
@@ -306,14 +320,16 @@ It is deliberately not in the barebones scope; the seam is `WAL.AppendWrite`.
 - **I-35** — A flush never drops dirty extents or a truncation point: on `ErrConflict`, `ErrUnknownChunk` or PUT failure the same plan (extents, `minSize`, `sizeSet`) is retried against the newer base with `NewSize` recomputed so that no other gateway's committed bytes are cut off except by an explicit truncate; extents are removed only after `WaitApplied` of the Commit that carries them.
 - **I-36** — Other gateways observe either the previous committed chunk list or the new one, never a mixture.
 - **I-37** — WAL replay after a crash restores exactly the records whose CRC verifies, in order, and discards the torn tail; replayed bytes equal the acknowledged bytes.
+- **I-63** — A WRITE is acknowledged only when every file its durability depends on has a durable directory entry: a newly created WAL file's directory is fsynced before its first record is appended.
 
 ## Tests
 
 | Invariant | Tests |
 |---|---|
-| I-7 | `TestVFS_CloseFlushIsDurable`, `TestVFS_PerRPCOpenCloseSequence`, `TestFlusher_RequiresKAcks`, `TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_FewerThanKAcks_StaysDirty`, `TestCrash_AtEveryPoint`, `TestCluster_WriteReadAllNodes` |
-| I-11 | `TestStore_PutGetRoundTrip`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead`, `TestStore_GetVerifiesHash_Corrupted`, `TestStore_OpenSweepsTemps` |
-| I-34 | `TestVFS_OracleRandomOps`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`, `TestNFS_WriteSequence_MultiRPC` |
-| I-35 | `TestFlusher_ConflictRebase_KeepsAllExtents`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_ConflictRebase_TruncateWins`, `TestFlusher_UnknownChunk_ReUpload`, `TestFlusher_PutFailureRetriesSamePlan`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestFlusher_PartialFlush_SizeNeverAheadOfData` |
-| I-36 | `TestCluster_ReaderSeesWholeVersions`, `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` |
-| I-37 | `TestWAL_ReplayStopsAtTornTail`, `TestVFS_RestartWithDirtyWAL_Replays`, `TestWAL_CompactKeepsLiveExtents` |
+| I-7 | `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestCrash_AtEveryPoint`, `TestFlusher_FewerThanKAcks_StaysDirty`, `TestFlusher_LateRetry_RePutsBeforeCommit`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_SmallAndLargeChunksCommit`, `TestMount_Workload`, `TestNFS_WriteSequence_MultiRPC`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestOverlay_WriteNotAckedWhenFsyncFails`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteToSymlinkInode_NotSilentlyDropped`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_CreateFsyncsDirectory`, `TestWAL_SyncFailure_ReturnsError` |
+| I-11 | `TestChunkRPC_PutGetHeadDelete_SizeBoundaries`, `TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_GetVerifiesHash_Corrupted`, `TestStore_PayloadBoundaries`, `TestStore_PutDifferentPayloadSameKey_Replaces`, `TestStore_PutGetRoundTrip`, `TestStore_TornWrite_DetectedOnRead` |
+| I-34 | `TestExtents_InsertOverlap_Property`, `TestMount_Workload`, `TestNFS_WriteSequence_MultiRPC`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_WriteAtNonZeroOffset_PreservesBase`, `TestVFS_MaxDirty_ReturnsEIO`, `TestVFS_OracleRandomOps`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
+| I-35 | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_ConflictRebase_TruncateWins`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_ProposeFailureRetriesSamePlan`, `TestOverlay_AbortFlush_MergesBackNewerWins`, `TestOverlay_StaleEntry_FollowsCommittedSize`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestWAL_Compact_KeepsOnlyLive` |
+| I-36 | `TestCluster_OtherGatewaySeesPreviousVersionUntilApply`, `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` |
+| I-37 | `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
+| I-63 | `TestWAL_CreateFsyncsDirectory` |

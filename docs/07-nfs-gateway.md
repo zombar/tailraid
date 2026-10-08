@@ -15,10 +15,10 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 
 | NFS procedure | go-nfs calls on the billy filesystem |
 |---|---|
-| WRITE (every RPC, ≤ wsize, typically 64 KiB–1 MiB) | `Stat(path)` → `OpenFile(path, O_RDWR, 0)` → `file.Seek(offset, 0)` → `file.Write(data)` → `file.Close()`; replies **FILE_SYNC** unconditionally |
+| WRITE (every RPC, ≤ wsize, typically 64 KiB–1 MiB) | `Stat(path)` → `OpenFile(path, O_RDWR, 0)` → `file.Seek(offset, 0)` → `file.Write(data)` → `file.Close()`; replies **FILE_SYNC** unconditionally; a write past `MaxFileSize` (I-64) fails with `EFBIG` → `NFS3ERR_FBIG` |
 | COMMIT | no-op; never touches billy |
 | READ | `Open(path)` → `file.ReadAt(buf, offset)` → `file.Close()` |
-| SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()` |
+| SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()`; a size past `MaxFileSize` (I-64) fails with `EFBIG` |
 | SETATTR mode/uid/gid/times | `Handler.Change(fs)` → `Chmod`/`Lchown`/`Chtimes`; if `Change` returns nil every such call fails with NFS3ERR_NOTSUPP |
 | CREATE | `fs.Create(path)` → `Close()` (then SETATTR for mode) |
 | MKDIR / RMDIR / REMOVE / RENAME | `MkdirAll`, `Remove`, `Remove`, `Rename` |
@@ -36,6 +36,15 @@ Consequences:
 - `Change` must be implemented or every `chmod`, `touch`, `cp -p` fails.
 - `Sys()` must return go-nfs's `FileInfo` so fileids are inode numbers, not path hashes
   (otherwise a rename changes the fileid and clients see a different file).
+
+**Error mapping.** go-nfs maps a filesystem error to an NFS3 status per operation and has
+no `ROFS` mapping, so the gateway's `EROFS` (stale, docs/02) reaches the wire as
+`NFS3ERR_ACCES` from CREATE, MKDIR and SYMLINK and as `NFS3ERR_IO` from REMOVE, RMDIR and
+RENAME; WRITE errors other than `ENOSPC`/`EDQUOT`/`EFBIG` are `NFS3ERR_IO`. A change hook's
+error (SETATTR mode/owner/times) would be passed through unmapped as an RPC `GARBAGE_ARGS`,
+so the handler's `Change` adapter maps it itself: `ENOENT` → `NFS3ERR_NOENT`, `EROFS` →
+`NFS3ERR_ACCES`, anything else → `NFS3ERR_IO`. `TestNFS_ReadOnly_WireStatuses` pins all of
+this.
 
 ## Handler
 
@@ -66,8 +75,13 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **FSStat**: `Total = Σ Node.Capacity · K/(K+M)` over Active nodes, `Free = Total − stored·K/(K+M)`,
   `Files = inodes`, `FreeFiles = 1<<32 − inodes`. Degraded chunks count at their nominal size.
 - **READDIR / READDIRPLUS**: go-nfs pages with cookies over the `[]os.FileInfo` returned by
-  `ReadDir`, which the FSM returns sorted by name. The cookie verifier is go-nfs's default
-  hash of the name list. Directories of 10k+ entries are tested (`TestNFS_ReadDirPlusLargeDirectory`).
+  `ReadDir`, which the FSM returns sorted by name. The handler implements go-nfs's
+  `CachingHandler` verifier hooks only: the cookie verifier is a hash of the directory
+  inode's identity and `Version` (bumped by every name-table change), and the listing is kept (64 most recent)
+  so the following pages reuse it instead of listing and sorting the directory again; a
+  change to the directory changes the verifier, so a stale cookie gets
+  `NFS3ERR_BAD_COOKIE` (I-47, `TestNFS_ReadDirPlus_RemoveBetweenPages`). Directories of
+  10k+ entries are tested (`TestNFS_ReadDirPlusLargeDirectory`).
 - **Attribute caching**: the gateway sets no special attribute TTL; clients use their
   defaults (`actimeo` 3–60 s). Another device's writes become visible on this device within
   the client's attribute cache window after the Raft commit replicates. Stat of a dirty file
@@ -90,7 +104,7 @@ options pin the ports instead.
 `mount` returns EPERM, printing the exact command first.
 
 **Windows**: `mount.exe` has no port option and discovers MOUNT/NFS via the portmapper, so
-on Windows the gateway binds the well-known port 2049 and `internal/mount/portmap_windows.go`
+on Windows the gateway binds the well-known port 2049 and `internal/mount/portmap.go`
 answers PMAP v2 `NULL`, `GETPORT` and `DUMP` for programs 100003 v3 and 100005 v3 → 2049/TCP.
 Windows has no privileged-port concept, so no elevation is needed for 111 or 2049, but the
 "Client for NFS" feature must be enabled and set to TCP (go-nfs is TCP-only):
@@ -121,7 +135,9 @@ quickly under the service manager; the mount survives because handles are stable
 - Permissions are stored and returned but not enforced by the gateway: the loopback
   listener trusts the local OS, which already enforces access to the mount point.
 - Cross-device visibility is eventually consistent within the client's attribute cache
+- **atime and ctime on the wire are the mtime.** go-nfs fills every reply's `atime`, `mtime` and `ctime` from the billy `ModTime()`; a client-supplied atime is stored in the FSM (and seen by every gateway through `tailraid` itself) but GETATTR reports it as the mtime. No consumer of this volume is known to depend on atime.
   window; the FSM itself is linearizable through Raft.
+- **Name length.** go-nfs refuses a name longer than 255 bytes with `NFS3ERR_NAMETOOLONG` before it reaches the volume; the FSM enforces the same limit (I-66) for every other proposer.
 
 ## Invariants
 
@@ -141,8 +157,8 @@ quickly under the service manager; the mount survives because handles are stable
 
 | Invariant | Tests |
 |---|---|
-| I-16 | `TestNFS_RenameKeepsHandleValid`, `TestNFS_HandleSurvivesGatewayRestart`, `TestFSM_HandleStableAcrossRestart`, `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` |
-| I-17 | `TestNFS_RemovedHandleIsStale`, `TestNFS_BogusHandleIsStaleNotPanic`, `TestFSM_InoGenNotReusedAfterUnlink` |
-| I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`, `TestVFS_OracleRandomOps` |
-| I-46 | `TestNFS_SetattrModeOwnerTimes`, `TestVFS_ChangeOps` |
-| I-47 | `TestNFS_ReadDirPlusLargeDirectory` |
+| I-16 | `TestHandle_RoundTrip_BigEndian`, `TestNFS_RenameKeepsHandleValid` |
+| I-17 | `TestNFS_RemovedHandleIsStale` |
+| I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
+| I-46 | `TestNFS_SetattrOwnerAndTimes`, `TestNFS_SetattrSizeTruncates`, `TestVFS_SymlinkAndChange` |
+| I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |

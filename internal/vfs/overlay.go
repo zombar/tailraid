@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -15,14 +14,27 @@ import (
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // ErrWALFull is returned by Write when the inode's WAL has reached its cap; the caller
 // must flush the inode before writing more (docs/04 §WAL cap).
 var ErrWALFull = errors.New("vfs: wal cap reached, flush required")
 
+// ErrFileTooLarge is returned by Write and Truncate when the file would exceed
+// meta.MaxFileSize for the volume's chunk size (EFBIG to the client, I-64).
+var ErrFileTooLarge = errors.New("vfs: file would exceed the maximum size")
+
 // DefaultWALCap is 4 × FileDirtyHi (docs/04).
 const DefaultWALCap int64 = 4 * 32 << 20
+
+// DefaultMaxDirty is the gateway-wide dirty-byte cap (docs/04 §3): at or above it every
+// WRITE fails with EIO until flushes drain the overlay.
+const DefaultMaxDirty uint64 = 1 << 30
+
+// ErrDirtyFull is returned by Write while the gateway holds MaxDirty or more dirty bytes
+// (EIO to the client, L-23).
+var ErrDirtyFull = errors.New("vfs: gateway dirty-byte cap reached")
 
 // Option configures an Overlay.
 type Option func(*Overlay)
@@ -30,10 +42,18 @@ type Option func(*Overlay)
 // WithWALCap sets the per-inode WAL size cap in bytes.
 func WithWALCap(n int64) Option { return func(o *Overlay) { o.walCap = n } }
 
+// WithMaxDirty sets the gateway-wide dirty-byte cap.
+func WithMaxDirty(n uint64) Option { return func(o *Overlay) { o.maxDirty = n } }
+
+// WithFS routes every WAL file operation through fsys (tests inject faults); the
+// default is the real filesystem.
+func WithFS(fsys sysfs.FS) Option { return func(o *Overlay) { o.fs = fsys } }
+
 // DirtyInfo describes one inode with unflushed state (docs/04 §flush triggers).
 type DirtyInfo struct {
 	Ino        meta.Ino
 	DirtyBytes uint64 // bytes in extents not yet captured by a flush plan
+	WALBytes   int64  // size of the inode's WAL file (every record since the last compaction)
 	Size       uint64
 	LastWrite  time.Time
 	Flushing   bool // a flush plan is outstanding
@@ -114,6 +134,8 @@ type Overlay struct {
 	chunkSize uint32
 	clk       clock.Clock
 	walCap    int64
+	maxDirty  uint64
+	fs        sysfs.FS
 
 	mu    sync.RWMutex
 	files map[meta.Ino]*dirtyFile
@@ -125,19 +147,25 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 	if chunkSize == 0 {
 		return nil, errors.New("vfs: chunk size must be > 0")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
-	}
-	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, files: map[meta.Ino]*dirtyFile{}}
+	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, maxDirty: DefaultMaxDirty, fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}}
 	for _, opt := range opts {
 		opt(o)
 	}
-	ents, err := os.ReadDir(dir)
+	if err := o.fs.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
+	}
+	ents, err := o.fs.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: overlay dir: %w", err)
 	}
 	for _, e := range ents {
 		name := e.Name()
+		if strings.HasSuffix(name, ".wal.new") { // a crash mid-Compact; the old log is a superset
+			if err := o.fs.Remove(filepath.Join(dir, name)); err != nil {
+				return nil, fmt.Errorf("vfs: remove stale compaction temp: %w", err)
+			}
+			continue
+		}
 		if e.IsDir() || !strings.HasSuffix(name, ".wal") {
 			continue
 		}
@@ -154,7 +182,7 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 }
 
 func (o *Overlay) replay(ino meta.Ino, path string) error {
-	w, err := openWAL(path)
+	w, err := openWAL(o.fs, path)
 	if err != nil {
 		return err
 	}
@@ -187,7 +215,7 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		// An empty log (crash between Reset and AppendBase) or a base record alone
 		// (crash between a clean Commit and the removal) carries no state.
 		_ = w.Close()
-		return os.Remove(path)
+		return o.fs.Remove(path)
 	}
 	o.files[ino] = d
 	return nil
@@ -234,7 +262,7 @@ again:
 		o.mu.Lock()
 		d, ok = o.files[ino]
 		if !ok {
-			w, err := openWAL(filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
+			w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
 			if err != nil {
 				o.mu.Unlock()
 				return nil, err
@@ -279,7 +307,7 @@ func (o *Overlay) evict(d *dirtyFile) error {
 	o.mu.Unlock()
 	d.dead = true
 	err := d.wal.Close()
-	if rerr := os.Remove(d.wal.path); rerr != nil && err == nil {
+	if rerr := o.fs.Remove(d.wal.path); rerr != nil && err == nil {
 		err = rerr
 	}
 	return err
@@ -290,12 +318,21 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	if len(p) == 0 {
 		return nil
 	}
+	if limit := meta.MaxFileSize(o.chunkSize); off > limit || uint64(len(p)) > limit-off {
+		return ErrFileTooLarge
+	}
+	if o.TotalDirty() >= o.maxDirty {
+		return ErrDirtyFull // L-23: nothing is accepted until flushes drain the overlay
+	}
 	d, err := o.get(ino, baseSize, true)
 	if err != nil {
 		return err
 	}
 	defer d.mu.Unlock()
-	if d.wal.Size()+recHeaderLen+int64(len(p)) > o.walCap {
+	if d.wal.Size() >= o.walCap {
+		// The flusher flushes this inode in full at the cap (L-186); until that drains
+		// the WAL nothing more is accepted. One record may cross the line, so the cap is
+		// a trigger the run loop can observe, not a size the WAL can never reach.
 		return ErrWALFull
 	}
 	walOff, err := d.wal.AppendWrite(off, p)
@@ -310,6 +347,9 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 
 // Truncate sets the overlay size and records the truncation point (review #2).
 func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
+	if size > meta.MaxFileSize(o.chunkSize) {
+		return ErrFileTooLarge
+	}
 	d, err := o.get(ino, baseSize, true)
 	if err != nil {
 		return err
@@ -361,26 +401,45 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 	if d == nil {
 		return 0, meta.ErrNotExist
 	}
-	defer d.mu.Unlock()
 	size := d.effSize(committed)
+	limit := baseLimit(d.sizeSet, d.minSize)
+	covered := d.ext.covers(off, min(off+uint64(len(p)), size)) || (d.plan != nil && d.plan.Extents.covers(off, min(off+uint64(len(p)), min(size, d.planMin))))
+	d.mu.Unlock()
 	if off >= size {
 		return 0, io.EOF
 	}
 	n := min(uint64(len(p)), size-off)
 	buf := p[:n]
 	clear(buf)
-	if limit := baseLimit(d.sizeSet, d.minSize); off < limit {
+	// The base is fetched with the inode unlocked: a chunk fetch can take a network round
+	// trip and must not stall WRITEs to the same inode. Dirty bytes are applied on top
+	// afterwards from the state of that moment, so a write that lands meanwhile wins. A
+	// range the dirty bytes cover entirely needs no base at all.
+	if off < limit && !covered {
 		if err := base(off, buf[:min(n, limit-off)]); err != nil {
 			return 0, err
 		}
 	}
-	// Plan extents first, then fresh ones (fresh are newer and win).
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.dead { // evicted meanwhile: the base bytes are the committed version, whole (L-73)
+		return int(n), nil
+	}
+	if now := baseLimit(d.sizeSet, d.minSize); now < limit { // truncated meanwhile: base bytes above the new point are gone
+		from := max(now, off)
+		if from < off+n {
+			clear(buf[from-off:])
+		}
+	}
+	// Plan extents first, then fresh ones (fresh are newer and win). Plan bytes at or
+	// beyond the lowest truncation point since the snapshot are dead (L-181): the commit
+	// still carries them, but minSize hides them afterwards and reads must not show them.
 	if d.plan != nil {
-		if err := d.applyExtents(d.plan.Extents, off, buf); err != nil {
+		if err := d.applyExtents(d.plan.Extents, off, buf, d.planMin); err != nil {
 			return 0, err
 		}
 	}
-	if err := d.applyExtents(d.ext, off, buf); err != nil {
+	if err := d.applyExtents(d.ext, off, buf, math.MaxUint64); err != nil {
 		return 0, err
 	}
 	if uint64(len(p)) > n {
@@ -389,8 +448,9 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 	return int(n), nil
 }
 
-func (d *dirtyFile) applyExtents(ext extents, off uint64, buf []byte) error {
-	end := off + uint64(len(buf))
+// applyExtents copies the bytes of ext within [off, off+len(buf)) and below limit into buf.
+func (d *dirtyFile) applyExtents(ext extents, off uint64, buf []byte, limit uint64) error {
+	end := min(off+uint64(len(buf)), limit)
 	for _, x := range ext.overlapping(off, uint64(len(buf))) {
 		s := max(x.off, off)
 		e := min(x.end(), end)
@@ -417,7 +477,7 @@ func (o *Overlay) Drop(ino meta.Ino) {
 	}
 	d.mu.Lock()
 	_ = d.wal.Close()
-	_ = os.Remove(d.wal.path)
+	_ = o.fs.Remove(d.wal.path)
 	d.mu.Unlock()
 }
 
@@ -430,7 +490,7 @@ func (o *Overlay) Dirty() []DirtyInfo {
 	for _, d := range entries {
 		d.mu.Lock()
 		if !d.dead && d.dirty() {
-			out = append(out, DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil})
+			out = append(out, DirtyInfo{Ino: d.ino, DirtyBytes: d.ext.bytes(), WALBytes: d.wal.Size(), Size: d.size, LastWrite: d.lastWrite, Flushing: d.plan != nil})
 		}
 		d.mu.Unlock()
 	}
@@ -454,6 +514,9 @@ func (o *Overlay) TotalDirty() uint64 {
 	return n
 }
 
+// WALCap is the per-inode WAL size at which the flusher flushes the inode in full.
+func (o *Overlay) WALCap() int64 { return o.walCap }
+
 // SnapshotForFlush atomically captures the dirty state as a plan and starts a fresh
 // extent set. It returns false when nothing is dirty or a plan is already outstanding.
 func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
@@ -476,19 +539,23 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 // ReadPlanRange assembles [off, off+len(p)) for a flush: base bytes below the plan's
 // MinSize, zeros at or above it, and only the plan's extents on top (fresh writes belong
 // to the next flush).
+//
+// The base is fetched before the inode is locked (it may be a network round trip and
+// must not stall WRITEs), and not at all when the plan's extents cover the whole range
+// (an aligned full-chunk write assembles without a read-modify-write fetch, L-7).
 func (o *Overlay) ReadPlanRange(plan *FlushPlan, off uint64, p []byte, base func(off uint64, p []byte) error) error {
+	clear(p)
+	if limit := baseLimit(plan.SizeSet, plan.MinSize); off < limit && !plan.Extents.covers(off, off+uint64(len(p))) {
+		if err := base(off, p[:min(uint64(len(p)), limit-off)]); err != nil {
+			return err
+		}
+	}
 	d, _ := o.get(plan.Ino, 0, false)
 	if d == nil {
 		return meta.ErrNotExist
 	}
 	defer d.mu.Unlock()
-	clear(p)
-	if limit := baseLimit(plan.SizeSet, plan.MinSize); off < limit {
-		if err := base(off, p[:min(uint64(len(p)), limit-off)]); err != nil {
-			return err
-		}
-	}
-	return d.applyExtents(plan.Extents, off, p)
+	return d.applyExtents(plan.Extents, off, p, math.MaxUint64)
 }
 
 // ReadPlan fills p with the plan extent's bytes starting at x.off+skip.
@@ -556,10 +623,15 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		// size instead of pinning this one (L-178)
 		return o.evict(d)
 	}
-	// Compact: base, optional truncate, then the live extents' data.
+	// Compact: base, the truncation point, the raised size if a truncate-up happened
+	// while the plan was outstanding (L-180), then the live extents' data (last, so the
+	// record offsets below line up).
 	recs := []walRec{{typ: recBase, off: committedSize}}
 	if d.sizeSet {
 		recs = append(recs, walRec{typ: recTruncate, off: d.minSize})
+		if d.size > d.minSize {
+			recs = append(recs, walRec{typ: recTruncate, off: d.size})
+		}
 	}
 	for _, x := range d.ext {
 		data := make([]byte, x.n)

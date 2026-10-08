@@ -5,10 +5,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"math"
 	"math/rand"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 
 	"github.com/hashicorp/raft"
 )
@@ -103,6 +108,16 @@ func (tf *tfsm) inode(ino Ino) Inode {
 	return in
 }
 
+// child resolves name in dir, or 0.
+func (tf *tfsm) child(dir Ino, name string) Ino {
+	tf.t.Helper()
+	in, ok := tf.f.Lookup(dir, name)
+	if !ok {
+		return 0
+	}
+	return in.Ino
+}
+
 func (tf *tfsm) chunk(hh Hash) Chunk {
 	tf.t.Helper()
 	c, ok := tf.f.GetChunk(hh)
@@ -120,7 +135,7 @@ func TestFSM_BadCommandLeavesStateUnchanged(t *testing.T) {
 	tf := newTFSM(t)
 	tf.create(RootIno, "a")
 	before := encodeState(t, tf.f.state())
-	rng := rand.New(rand.NewSource(7))
+	rng := testseed.Seed(t)
 	for i := 0; i < 500; i++ {
 		b := make([]byte, rng.Intn(64))
 		rng.Read(b)
@@ -224,10 +239,10 @@ func TestFSM_Create_Mkdir_Errors(t *testing.T) {
 	tf := newTFSM(t)
 	d := tf.mkdir(RootIno, "d")
 	f := tf.create(d, "f")
-	if in := tf.inode(RootIno); in.Nlink != 3 || in.Children["d"] != d {
+	if in, child := tf.inode(RootIno), tf.child(RootIno, "d"); in.Nlink != 3 || child != d {
 		t.Fatalf("root after mkdir: %+v", in)
 	}
-	if in := tf.inode(d); in.Nlink != 2 || in.Children["f"] != f || in.Parent != RootIno || in.Name != "d" {
+	if in, child := tf.inode(d), tf.child(d, "f"); in.Nlink != 2 || child != f || in.Parent != RootIno || in.Name != "d" {
 		t.Fatalf("dir: %+v", in)
 	}
 	if in := tf.inode(f); in.Type != TFile || in.Mode != 0o644 || in.Nlink != 1 || in.Gen == 0 || in.Parent != d || in.Name != "f" {
@@ -358,7 +373,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if in.Gen != gen1 || in.Parent != d2 || in.Name != "moved" || in.Ctime != 70 {
 		t.Fatalf("moved %+v", in)
 	}
-	if _, ok := tf.inode(d1).Children["f1"]; ok {
+	if tf.child(d1, "f1") != 0 {
 		t.Fatal("old entry remains")
 	}
 	// file over file: dest unlinked, dest refs dropped (L-17)
@@ -369,7 +384,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if c := tf.chunk(y); c.Refs != 0 || c.TombstonedAt != 70 {
 		t.Fatalf("dest chunk %+v", c)
 	}
-	if tf.inode(d2).Children["f2"] != f1 {
+	if tf.child(d2, "f2") != f1 {
 		t.Fatal("entry does not point at source")
 	}
 	// dir over empty dir; nlink bookkeeping
@@ -378,7 +393,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if _, ok := tf.f.GetInode(emptyDir); ok {
 		t.Fatal("replaced empty dir still exists")
 	}
-	if tf.inode(RootIno).Nlink != rootN-1 || tf.inode(RootIno).Children["empty"] != d1 {
+	if tf.inode(RootIno).Nlink != rootN-1 || tf.child(RootIno, "empty") != d1 {
 		t.Fatalf("root %+v", tf.inode(RootIno))
 	}
 	// dir cross-parent: parents' Nlink adjust
@@ -391,7 +406,7 @@ func TestFSM_Rename_Table(t *testing.T) {
 	l1 := tf.ok(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "l1", Type: TSymlink, Target: "a", Now: 1}}).Ino
 	tf.ok(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "l2", Type: TSymlink, Target: "b", Now: 1}})
 	tf.ok(rn(RootIno, "l1", RootIno, "l2"))
-	if tf.inode(RootIno).Children["l2"] != l1 {
+	if tf.child(RootIno, "l2") != l1 {
 		t.Fatal("symlink rename")
 	}
 }
@@ -483,6 +498,234 @@ func TestFSM_Commit_RejectsStaleBaseVersion(t *testing.T) {
 	tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 5, NewSize: testCS, Now: 2}}, ErrConflict)
 }
 
+// Names are 1..MaxNameLen bytes with no '/' or NUL; too long is its own error so the
+// gateway answers NFS3ERR_NAMETOOLONG. Create, Mkdir, Symlink and Rename share the rule.
+// Invariant: I-26, I-66
+func TestFSM_Create_NameBoundaries(t *testing.T) {
+	long := strings.Repeat("a", MaxNameLen)
+	multibyte := strings.Repeat("é", MaxNameLen/2) + "a" // 255 bytes of UTF-8
+	cases := []struct {
+		name string
+		val  string
+		want error
+	}{
+		{"empty", "", ErrBadCommand}, {"one byte", "a", nil}, {"max", long, nil}, {"max+1", long + "a", ErrNameTooLong},
+		{"utf-8 at max", multibyte, nil}, {"utf-8 past max", multibyte + "é", ErrNameTooLong},
+		{"dot", ".", ErrBadCommand}, {"dotdot", "..", ErrBadCommand}, {"slash", "a/b", ErrBadCommand}, {"nul", "a\x00b", ErrBadCommand},
+		{"beyond the wire string limit: undecodable", strings.Repeat("x", 70000), ErrBadCommand},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tf := newTFSM(t)
+			d := tf.mkdir(RootIno, "d")
+			for i, kind := range []string{"file", "dir", "symlink"} {
+				sub := tf.mkdir(d, fmt.Sprintf("op%d", i))
+				var cmd Command
+				switch kind {
+				case "file":
+					cmd = Command{Op: OpCreate, Create: &Create{Parent: sub, Name: c.val, Type: TFile, Mode: 0o644, Now: 1}}
+				case "dir":
+					cmd = Command{Op: OpMkdir, Mkdir: &Mkdir{Parent: sub, Name: c.val, Mode: 0o755, Now: 1}}
+				default:
+					cmd = Command{Op: OpCreate, Create: &Create{Parent: sub, Name: c.val, Type: TSymlink, Mode: 0o777, Target: "/t", Now: 1}}
+				}
+				if c.want != nil {
+					tf.fails(cmd, c.want)
+				} else {
+					tf.ok(cmd)
+				}
+			}
+			tf.create(d, "src")
+			rn := Command{Op: OpRename, Rename: &Rename{OldParent: d, OldName: "src", NewParent: d, NewName: c.val, Now: 2}}
+			if c.want != nil {
+				tf.fails(rn, c.want)
+			} else {
+				tf.ok(rn)
+			}
+		})
+	}
+}
+
+// The chunk size is bounded once (I-67): init, the FSM and the shard store share it.
+// Invariant: I-67
+func TestFSM_SetVolume_ChunkSizeBounds(t *testing.T) {
+	cases := []struct {
+		cs uint32
+		ok bool
+	}{
+		{0, false}, {1, true}, {MaxChunkSize - 1, true}, {MaxChunkSize, true}, {MaxChunkSize + 1, false}, {1 << 30, false},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprint(c.cs), func(t *testing.T) {
+			tf := &tfsm{t: t, f: NewFSM()}
+			cmd := Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: c.cs, K: 2, M: 1, Now: 1}}
+			if c.ok {
+				tf.ok(cmd)
+				if v := tf.f.Volume(); v.ChunkSize != c.cs {
+					t.Fatalf("chunk size %d", v.ChunkSize)
+				}
+			} else {
+				tf.fails(cmd, ErrPolicy)
+			}
+		})
+	}
+}
+
+// The FSM, not the leader, refuses to remove a node that still holds a placement slot
+// (live or tombstoned chunk); once the slots are zeroed the removal applies, and a removed
+// node can neither change state again nor be removed twice.
+// Invariant: I-9, I-26
+// Lifecycle: L-95, L-96
+func TestFSM_NodeRemove_RefusedWhileHoldingSlots(t *testing.T) {
+	tf := newTFSM(t)
+	for i := 1; i <= 3; i++ {
+		tf.ok(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: fmt.Sprintf("n%d", i), Kind: KindDevice, Capacity: 1, Addr: "1.1.1.1"}}})
+	}
+	f := tf.create(RootIno, "f")
+	h := sha("h")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS, Writes: []ChunkWrite{{0, h}}, NewChunks: []ChunkDesc{desc(h)}, Now: 1}})
+	remove := Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 2, State: Removed, Now: 2}}
+	tf.fails(remove, ErrNodeNotEmpty)
+	// a tombstoned chunk still pins the slot
+	tf.ok(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 3}})
+	tf.fails(remove, ErrNodeNotEmpty)
+	// draining is allowed while holding slots; removal only once the slot is zeroed
+	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 2, State: Draining, Now: 4}})
+	tf.ok(Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: h, K: 2, M: 1, Placement: []NodeIdx{1, 0, 3}}})
+	tf.ok(remove)
+	tf.fails(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 2, State: Active, Now: 5}}, ErrBadCommand)
+	tf.fails(remove, ErrBadCommand)
+	// an empty node leaves straight from Active
+	tf.ok(Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: h, K: 2, M: 1, Placement: []NodeIdx{1, 0, 0}}})
+	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: 3, State: Removed, Now: 6}})
+}
+
+// Refs count (inode, index) positions, not files: the same hash at two indices of one
+// file counts twice, a truncate that drops one index decrements once, and the invariant
+// checker agrees at every step.
+// Invariant: I-27
+// Lifecycle: L-150
+func TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex(t *testing.T) {
+	tf := newTFSM(t)
+	f := tf.create(RootIno, "f")
+	h := sha("same")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: 2 * testCS, Writes: []ChunkWrite{{0, h}, {1, h}}, NewChunks: []ChunkDesc{desc(h)}, Now: 1}})
+	if c := tf.chunk(h); c.Refs != 2 {
+		t.Fatalf("refs %d after two indices", c.Refs)
+	}
+	g := tf.create(RootIno, "g")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, NewSize: testCS, Writes: []ChunkWrite{{0, h}}, Now: 2}})
+	if c := tf.chunk(h); c.Refs != 3 {
+		t.Fatalf("refs %d after a third position", c.Refs)
+	}
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS, NewSize: testCS, Now: 3}})
+	if c := tf.chunk(h); c.Refs != 2 {
+		t.Fatalf("refs %d after dropping one index", c.Refs)
+	}
+	tf.ok(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 4}})
+	tf.ok(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "g", Now: 5}})
+	if c := tf.chunk(h); c.Refs != 0 || c.TombstonedAt == 0 {
+		t.Fatalf("refs %d tombstoned %d after both unlinks", c.Refs, c.TombstonedAt)
+	}
+}
+
+// A Commit without HasTruncate may keep or grow a file but never shrink it; the flusher
+// always sends an explicit truncation point when the file got shorter.
+// Invariant: I-26
+// Lifecycle: L-175
+func TestFSM_Commit_RejectsImplicitShrink(t *testing.T) {
+	tf := newTFSM(t)
+	f := tf.create(RootIno, "f")
+	a := sha("a")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS + 10, Writes: []ChunkWrite{{0, a}}, NewChunks: []ChunkDesc{desc(a)}, Now: 1}})
+	size := uint64(testCS + 10)
+	cases := []struct {
+		name    string
+		newSize uint64
+		want    error
+	}{
+		{"shrink by one", size - 1, ErrBadCommand},
+		{"shrink to zero", 0, ErrBadCommand},
+		{"same size", size, nil},
+		{"grow by one", size + 1, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before := tf.inode(f)
+			cmd := Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: before.Version, NewSize: c.newSize, Now: 2}}
+			if c.want != nil {
+				tf.fails(cmd, c.want)
+				if in := tf.inode(f); in.Size != before.Size || in.Version != before.Version {
+					t.Fatalf("rejected commit changed the inode: %+v", in)
+				}
+				if ch := tf.chunk(a); ch.Refs != 1 {
+					t.Fatalf("refs %d", ch.Refs)
+				}
+				return
+			}
+			tf.ok(cmd)
+			if in := tf.inode(f); in.Size != c.newSize {
+				t.Fatalf("size %d want %d", in.Size, c.newSize)
+			}
+		})
+	}
+	// the same shrink is fine with an explicit truncate
+	in := tf.inode(f)
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: in.Version, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 3}})
+	if ch := tf.chunk(a); ch.Refs != 0 {
+		t.Fatalf("refs after truncate %d", ch.Refs)
+	}
+}
+
+// The chunk list of every file lives in memory on every node and a Commit rebuilds it, so
+// NewSize is bounded; beyond the bound the command is malformed and nothing is allocated.
+// Invariant: I-26, I-64
+// Lifecycle: L-182
+func TestFSM_Commit_NewSizeBounds(t *testing.T) {
+	maxSize := MaxFileSize(testCS)
+	cases := []struct {
+		name    string
+		newSize uint64
+		ok      bool
+	}{
+		{"0", 0, true}, {"1", 1, true}, {"CS-1", testCS - 1, true}, {"CS", testCS, true}, {"CS+1", testCS + 1, true},
+		{"max-1", maxSize - 1, true}, {"max", maxSize, true}, {"max+1", maxSize + 1, false}, {"MaxUint64", math.MaxUint64, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tf := newTFSM(t)
+			f := tf.create(RootIno, "f")
+			cmd := Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: c.newSize, Now: 1}}
+			if !c.ok {
+				tf.fails(cmd, ErrBadCommand)
+				return
+			}
+			tf.ok(cmd)
+			if in := tf.inode(f); in.Size != c.newSize || len(in.Chunks) != ChunkCount(c.newSize, testCS) {
+				t.Fatalf("size %d chunks %d", in.Size, len(in.Chunks))
+			}
+		})
+	}
+}
+
+// Invariant: I-1, I-64
+func TestChunkCount_NoOverflow(t *testing.T) {
+	cases := []struct {
+		size uint64
+		cs   uint32
+		want int
+	}{
+		{0, 1 << 20, 0}, {1, 1 << 20, 1}, {1 << 20, 1 << 20, 1}, {1<<20 + 1, 1 << 20, 2},
+		{math.MaxUint64, 1 << 20, 1 << 44}, {math.MaxUint64 - 5, 1 << 20, 1 << 44},
+		{math.MaxUint64, 1, math.MaxInt}, {math.MaxUint64, 2, math.MaxInt},
+	}
+	for _, c := range cases {
+		if got := ChunkCount(c.size, c.cs); got != c.want {
+			t.Fatalf("ChunkCount(%d, %d) = %d, want %d", c.size, c.cs, got, c.want)
+		}
+	}
+}
+
 // Lifecycle: L-54, L-160
 func TestFSM_Commit_UnknownChunkRejected(t *testing.T) {
 	tf := newTFSM(t)
@@ -491,7 +734,7 @@ func TestFSM_Commit_UnknownChunkRejected(t *testing.T) {
 	// tombstoned is fine (revive), collected is not
 	g := sha("g")
 	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS, Writes: []ChunkWrite{{0, g}}, NewChunks: []ChunkDesc{desc(g)}, Now: 1}})
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 0, Now: 2}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 2}})
 	if ch := tf.chunk(g); ch.Refs != 0 || ch.TombstonedAt != 2 {
 		t.Fatalf("g %+v", ch)
 	}
@@ -502,6 +745,7 @@ func TestFSM_Commit_UnknownChunkRejected(t *testing.T) {
 	tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 2, NewSize: testCS, Writes: []ChunkWrite{{0, g}}, Now: 4}}, ErrUnknownChunk)
 }
 
+// Invariant: I-2
 func TestFSM_Commit_Errors(t *testing.T) {
 	tf := newTFSM(t)
 	d := tf.mkdir(RootIno, "d")
@@ -535,7 +779,8 @@ func TestFSM_Commit_TruncateDown(t *testing.T) {
 	}
 	t.Run("mid-chunk without tail rewrite", func(t *testing.T) {
 		tf, f, _ := setup(t)
-		tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS + 10, Now: 2}}, ErrNeedTailRewrite)
+		// without HasTruncate a shrink is malformed outright (L-175); with it the tail rule applies
+		tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS + 10, Now: 2}}, ErrBadCommand)
 		tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS + 10, NewSize: testCS + 10, Now: 2}}, ErrNeedTailRewrite)
 	})
 	t.Run("mid-chunk with tail rewrite", func(t *testing.T) {
@@ -552,21 +797,21 @@ func TestFSM_Commit_TruncateDown(t *testing.T) {
 	})
 	t.Run("mid-chunk with HashZero tail", func(t *testing.T) {
 		tf, f, _ := setup(t)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS + 10, Writes: []ChunkWrite{{1, HashZero}}, Now: 2}})
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS + 10, NewSize: testCS + 10, Writes: []ChunkWrite{{1, HashZero}}, Now: 2}})
 		if in := tf.inode(f); len(in.Chunks) != 2 || in.Chunks[1] != HashZero {
 			t.Fatalf("%+v", in)
 		}
 	})
 	t.Run("aligned", func(t *testing.T) {
 		tf, f, hs := setup(t)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 2 * testCS, Now: 2}})
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 2 * testCS, NewSize: 2 * testCS, Now: 2}})
 		if in := tf.inode(f); len(in.Chunks) != 2 || tf.chunk(hs[2]).Refs != 0 {
 			t.Fatalf("%+v", in)
 		}
 	})
 	t.Run("to zero", func(t *testing.T) {
 		tf, f, hs := setup(t)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 0, Now: 2}})
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 2}})
 		if in := tf.inode(f); len(in.Chunks) != 0 || in.Size != 0 {
 			t.Fatalf("%+v", in)
 		}
@@ -580,7 +825,7 @@ func TestFSM_Commit_TruncateDown(t *testing.T) {
 
 // The review's bug #2: a truncate followed by growth must drop the bytes beyond the
 // truncation point even though the final size is larger than before.
-// Lifecycle: L-8, L-11
+// Lifecycle: L-8, L-11, L-168
 func TestFSM_Commit_TruncateThenGrow_DropsOldBytes(t *testing.T) {
 	tf := newTFSM(t)
 	f := tf.create(RootIno, "f")
@@ -672,8 +917,8 @@ func TestFSM_GCDelete_Boundary(t *testing.T) {
 	f := tf.create(RootIno, "f")
 	live, t1, t2 := sha("live"), sha("t1"), sha("t2")
 	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: 3 * testCS, Writes: []ChunkWrite{{0, live}, {1, t1}, {2, t2}}, NewChunks: []ChunkDesc{desc(live), desc(t1), desc(t2)}, Now: 1}})
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 2 * testCS, Now: 10}}) // t2 tombstoned at 10
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 2, NewSize: testCS, Now: 20}})     // t1 tombstoned at 20
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 2 * testCS, NewSize: 2 * testCS, Now: 10}}) // t2 tombstoned at 10
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 2, HasTruncate: true, TruncateTo: testCS, NewSize: testCS, Now: 20}})         // t1 tombstoned at 20
 	r := tf.ok(Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: 10}})
 	if len(r.Victims) != 0 {
 		t.Fatalf("Before == TombstonedAt collected: %+v", r.Victims)
@@ -696,7 +941,7 @@ func TestFSM_GCDelete_Boundary(t *testing.T) {
 		t.Fatal("referenced chunk collected")
 	}
 	// victims are sorted by hash for determinism
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 3, NewSize: 0, Now: 30}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 3, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 30}})
 	g := tf.create(RootIno, "g")
 	var ws []ChunkWrite
 	var ds []ChunkDesc
@@ -778,7 +1023,7 @@ func TestFSM_LastNowMonotonic(t *testing.T) {
 	// tombstone time uses the clamped clock so GC grace cannot be defeated by skew
 	a := sha("a")
 	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: testCS, Writes: []ChunkWrite{{0, a}}, NewChunks: []ChunkDesc{desc(a)}, Now: 1}})
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: 0, Now: 1}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 1}})
 	if c := tf.chunk(a); c.TombstonedAt != 1000 {
 		t.Fatalf("TombstonedAt %d", c.TombstonedAt)
 	}
@@ -932,7 +1177,7 @@ func applyAll(t *testing.T, f *FSM, logs []*raft.Log) {
 // Lifecycle: L-60, L-159
 func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	const n = 5000
-	rng := rand.New(rand.NewSource(42))
+	rng := testseed.Seed(t)
 	ref := NewFSM()
 	gen := &cmdGen{rng: rng, f: ref, now: 1000}
 	cur := NewFSM() // snapshot/restore path
@@ -994,10 +1239,10 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	}
 }
 
-// Invariant: I-4
+// Invariant: I-4, I-43
 // Lifecycle: L-159
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
-	rng := rand.New(rand.NewSource(99))
+	rng := testseed.Seed(t)
 	gen := &cmdGen{rng: rng, f: NewFSM(), now: 5}
 	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})}}
 	gen.f.Apply(logs[0])
@@ -1020,7 +1265,7 @@ func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 func TestFSM_Persist_ConcurrentWithApply(t *testing.T) {
 	f := NewFSM()
 	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
-	gen := &cmdGen{rng: rand.New(rand.NewSource(3)), f: f, now: 10}
+	gen := &cmdGen{rng: testseed.Seed(t), f: f, now: 10}
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 	wg.Add(1)
@@ -1184,11 +1429,9 @@ func TestStore_ReadAPI(t *testing.T) {
 	if _, err := tf.f.ReadDir(999); !errors.Is(err, ErrNotExist) {
 		t.Fatal("ReadDir missing")
 	}
-	// copies: mutating a returned inode's Children must not affect the FSM
-	in, _ := tf.f.GetInode(d)
-	in.Children["evil"] = 1
-	if _, ok := tf.f.Lookup(d, "evil"); ok {
-		t.Fatal("GetInode returned shared map")
+	// copies: a returned inode carries no name table at all (docs/02 §Reads)
+	if in, _ := tf.f.GetInode(d); in.Children != nil {
+		t.Fatal("GetInode returned the Children map")
 	}
 	c, _ := tf.f.GetChunk(a)
 	c.Placement[0] = 99
@@ -1224,8 +1467,8 @@ func TestCheckInvariants_DetectsEachViolation(t *testing.T) {
 		a, b := sha("a"), sha("b")
 		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, NewSize: 2 * testCS, Writes: []ChunkWrite{{0, a}, {1, b}}, NewChunks: []ChunkDesc{desc(a), desc(b)}, Now: 1}})
 		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, NewSize: testCS, Writes: []ChunkWrite{{0, a}}, Now: 2}})
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, BaseVersion: 1, NewSize: 0, Now: 3}})      // nothing tombstoned (a still ref'd by f)
-		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, NewSize: testCS, Now: 4}}) // b tombstoned
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: g, BaseVersion: 1, HasTruncate: true, TruncateTo: 0, NewSize: 0, Now: 3}})           // nothing tombstoned (a still ref'd by f)
+		tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS, NewSize: testCS, Now: 4}}) // b tombstoned
 		return tf.f.state().Clone()
 	}
 	if v := CheckInvariants(build()); len(v) != 0 {

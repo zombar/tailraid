@@ -19,12 +19,14 @@ var (
 	ErrNoSuchNode      = errors.New("meta: no such node")
 	ErrNodeNotEmpty    = errors.New("meta: node still holds sole shards")
 	ErrPolicy          = errors.New("meta: invalid volume policy")
+	ErrNameTooLong     = errors.New("meta: name longer than MaxNameLen bytes")
 )
 
 var errByCode = []error{
 	nil, // 0
 	ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
 	ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
+	ErrNameTooLong,
 }
 
 // ErrorCode maps a sentinel error to its wire code. nil is 0; a non-sentinel error is

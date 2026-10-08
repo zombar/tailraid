@@ -20,8 +20,9 @@ numbered invariant (`I-n`) in these documents is enforced by at least one named 
 3. **Dedup**: identical 1 MiB chunks are stored once regardless of path or how often they
    are written.
 4. **Native mounts** on Windows, macOS, Linux with no kernel drivers to install.
-5. **Small, provable code**: about 8k production lines through M4 (about 10k with S3), with
-   a test suite that would have caught every bug the predecessor shipped.
+5. **Small, provable code**: a single static binary of about 18.1k production lines through
+   M4 (the original 8k budget was optimistic, see the size table), with a test suite that
+   would have caught every bug the predecessor shipped.
 6. **Day-zero membership management**: add, drain, remove, promote nodes and change `k+m`
    at any time without downtime.
 
@@ -47,7 +48,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **inode** | A file, directory or symlink record in the FSM, identified by `Ino` (monotonic, never reused) plus `Gen`. |
 | **chunk** | A fixed-size (default 1 MiB) span of a file at offset `idx*ChunkSize`, content-addressed by SHA-256 of its logical bytes. The unit of dedup and of erasure coding. |
 | **stripe** | One chunk encoded into `k` data shards and `m` parity shards. Chunk and stripe are 1:1. |
-| **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one node; key `hex(hash).idx`. |
+| **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one node; key `hex(hash).k-m.idx` (the encoding is part of the key, so a migration's new shards coexist with the old). |
 | **slot** | Position `idx` in a chunk's `Placement []NodeIdx`. Slot value 0 means "no node holds this shard yet" (degraded). |
 | **placement** | The `k+m` node indices that hold a chunk's shards, chosen by rendezvous hashing at write time and **stored** in the chunk table. |
 | **policy version** | `Volume.PolicyVersion`, bumped by `volume set-redundancy`. Chunks whose `(K,M)` differ from the current policy are migrated lazily by the repairer. |
@@ -123,18 +124,19 @@ for a member. No TLS of our own.
 
 | Area | Lines (production) |
 |---|---|
-| `cmd/tailraid`, `internal/admin` | ~2,500 |
-| `internal/{clock,sysfs,ec,chunk}` | ~1,100 |
-| `internal/meta` (FSM, codec, placement, event ring) | ~2,100 |
-| `internal/vfs` (overlay, WAL, flusher, reader, billy) | ~2,300 |
-| `internal/nfsgw`, `internal/repair` | ~1,200 |
-| `internal/{cluster,rpc,tailscale,config,node}` | ~3,300 |
-| `internal/{mount,svc,dev}` | ~900 |
-| `internal/soak` (engine, live env, report; shipped for `tailraid verify`) | ~1,900 |
-| **Through M4 (measured 2026-10-08)** | **≈ 15.3k** |
-| `internal/s3`, `internal/s3srv` (M5, deferred) | ~1,700 planned |
+| `cmd/tailraid`, `internal/admin` | ~1,850 |
+| `internal/{clock,sysfs,ec,chunk}` | ~1,550 |
+| `internal/meta` (FSM, codec, placement, chunk state, event ring) | ~2,700 |
+| `internal/vfs` (overlay, WAL, flusher, reader, billy) | ~2,550 |
+| `internal/nfsgw`, `internal/repair` | ~900 |
+| `internal/{cluster,rpc,tailscale,config,node}` | ~3,600 |
+| `internal/{mount,svc,dev}` | ~700 |
+| `internal/soak` (engine, live env, report; shipped for `tailraid verify`) | ~2,300 |
+| `internal/update` | ~350 |
+| **Through M4 (measured 2026-10-08, after the review fixes and the hot-path work)** | **≈ 18.1k** |
+| `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
-The original budget was ≈ 7.9k through M4; the measured count is about twice that. The
+The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
 difference is explained by the parts the plan sized optimistically rather than by scope
 creep: the repair scanner's partial fills and migrations, the admin reports and CLI, and
 the soak engine. Keep the rule in `CLAUDE.md`: prefer deleting over abstracting, and a
@@ -148,7 +150,7 @@ Tests are not budget-limited but each must cite the invariant it defends.
 |---|---|---|
 | M0 | These docs, `invariants.md`, `check-invariants.sh`, Makefile, lint, CI skeleton, CLAUDE.md, skipped test stubs for every I-n | `make lint` green with every invariant mapped |
 | M1 | Single node: clock, sysfs, ec, chunk, meta (in-proc), vfs, nfsgw, `serve`+`mount` | billy suites, `TestVFS_OracleRandomOps`, `TestNFS_WriteSequence_MultiRPC`, `make test-mount` |
-| M2 | Cluster: tailscale, config, cluster (raft), rpc, placement over live set, testharness, admin reports, node/volume CLI | all cluster scenarios, `TestE2E_ThreeNodes…`, `TestCrash_AtEveryPoint`, 3 real devices |
+| M2 | Cluster: tailscale, config, cluster (raft), rpc, placement over live set, testharness, admin reports, node/volume CLI | all cluster scenarios, `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestCrash_AtEveryPoint`, 3 real devices |
 | M3 | Durability: repair, GC, scrub, sweep, `check`/`fsck`, `volume set-redundancy` | GC/torn-shard/ack-durability tests, `TestModelCheck_Long` 20 min × 3 seeds |
 | M3b | Soak suite (compose + live), `/dev/*` endpoints, HTML report | `make soak` green, `tailraid verify` green on the real cluster |
 | M4 | Ops: service install, mount helpers, Windows portmap stub, `make release` | 6 release artifacts; Windows checklist executed |

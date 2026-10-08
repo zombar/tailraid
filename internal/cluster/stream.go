@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -35,6 +36,12 @@ type idStream struct {
 	raft.StreamLayer
 	id     [16]byte
 	faults Faults // nil: no rules
+
+	once      sync.Once
+	accepted  chan net.Conn // connections that passed the handshake
+	closed    chan struct{}
+	acceptMu  sync.Mutex
+	acceptErr error
 }
 
 // Faults is the /dev/fault rule set (internal/dev.Faults): peers to refuse.
@@ -73,21 +80,49 @@ func (s *idStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Con
 	return s.handshake(c)
 }
 
-// Accept keeps accepting until a connection passes the handshake, so a foreign peer
-// cannot wedge the listener.
+// Accept hands out connections that passed the handshake. Handshakes run off the accept
+// goroutine (each has a 5 s deadline), so a foreign or stalled peer never holds up the
+// peers behind it, let alone wedges the listener.
 func (s *idStream) Accept() (net.Conn, error) {
+	s.once.Do(func() {
+		s.accepted, s.closed = make(chan net.Conn), make(chan struct{})
+		go s.pump()
+	})
+	select {
+	case c := <-s.accepted:
+		return c, nil
+	case <-s.closed:
+		s.acceptMu.Lock()
+		defer s.acceptMu.Unlock()
+		return nil, s.acceptErr
+	}
+}
+
+func (s *idStream) pump() {
 	for {
 		c, err := s.StreamLayer.Accept()
 		if err != nil {
-			return nil, err
+			s.acceptMu.Lock()
+			s.acceptErr = err
+			s.acceptMu.Unlock()
+			close(s.closed)
+			return
 		}
 		if s.faults != nil && s.faults.Blocked(c.RemoteAddr().String()) {
 			_ = c.Close()
 			continue
 		}
-		if hc, err := s.handshake(c); err == nil {
-			return hc, nil
-		}
+		go func() {
+			hc, err := s.handshake(c)
+			if err != nil {
+				return
+			}
+			select {
+			case s.accepted <- hc:
+			case <-s.closed:
+				_ = hc.Close()
+			}
+		}()
 	}
 }
 

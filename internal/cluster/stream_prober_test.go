@@ -15,6 +15,7 @@ import (
 )
 
 // Lifecycle: L-47
+// Invariant: I-49
 func TestIDStream_RejectsForeignCluster(t *testing.T) {
 	mk := func(id byte) (*idStream, string) {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -64,7 +65,7 @@ func (f *fakeHealth) Health(_ context.Context, addr string) (rpc.Health, error) 
 	return rpc.Health{Free: 1}, nil
 }
 
-// Lifecycle: L-86, L-87, L-88
+// Lifecycle: L-86, L-87, L-88, L-92, L-131, L-132
 func TestProber_LivenessAndHoldDowns(t *testing.T) {
 	dir := t.TempDir()
 	n := bootstrap(t, dir)

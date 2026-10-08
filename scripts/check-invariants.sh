@@ -126,6 +126,24 @@ check_set() { # prefix defs cites label
 check_set I "$TMP/idefs" "$TMP/icites" "invariants"
 check_set L "$TMP/ldefs" "$TMP/lcites" "lifecycle cells"
 
+# ---- test names in the docs must exist ---------------------------------------------------
+# Every backticked `TestX` / `FuzzX` in a design doc (docs/10 is deferred and names planned
+# tests) must be a test function somewhere in the tree, so a doc never points at a test that
+# was renamed or never written.
+grep -rhoE '^func (Test|Fuzz)[A-Za-z0-9_]+' --include='*_test.go' . | sed 's/^func //' | sort -u > "$TMP/realnames"
+missing_names=""
+for f in docs/[0-9][0-9]-*.md; do
+  case "$f" in docs/10-*) continue;; esac
+  for n in $(grep -ohE '`(Test|Fuzz)[A-Z_][A-Za-z0-9_]*`' "$f" | tr -d '`' | sort -u); do
+    if ! grep -qx "$n" "$TMP/realnames"; then missing_names="$missing_names $n($f)"; fi
+  done
+done
+if [ -n "$missing_names" ]; then
+  echo "ERROR: docs name tests that do not exist:"
+  for m in $missing_names; do echo "  $m"; done
+  fail=1
+fi
+
 tests_for() { # num cites
   local t
   t="$(awk -F'\t' -v n="$1" '$1==n {print $2}' "$2" | sort -u | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')"

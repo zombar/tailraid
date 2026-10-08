@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -30,6 +31,7 @@ var phases = []phase{
 	{"7 membership", phaseMembership},
 	{"8 dedup and gc", phaseDedupGC},
 	{"9 restart storm", phaseRestartStorm},
+	{"10 partition", phasePartition},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -178,13 +180,13 @@ func (r *Run) chunksOf(ctx context.Context, path string) ([]admin.ChunkReport, e
 
 // checkFSMAgreement records the FSM-hash comparison, or a note when no node serves
 // /dev/fsm-hash (live clusters without dev.enabled).
-func (r *Run) checkFSMAgreement(ctx context.Context, name string) {
+func (r *Run) checkFSMAgreement(ctx context.Context, cites, name string) {
 	agree, detail, available := r.fsmAgreementSettled(ctx)
 	if !available {
 		r.event("note", name+": skipped, "+detail)
 		return
 	}
-	r.check(name, agree, detail)
+	r.check(cites, name, agree, detail)
 }
 
 // waitHealthy polls status until the cluster is healthy with every node live; the
@@ -215,7 +217,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration) (bool, str
 // repairUntilClean runs repair passes until one finds nothing to do (or 8 passes).
 func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
 	for pass := 0; pass < 8; pass++ {
-		st, err := r.Env.RepairNow(ctx)
+		st, err := r.repairNow(ctx)
 		if err != nil {
 			return admin.Report{}, err
 		}
@@ -241,14 +243,14 @@ func phaseBaseline(ctx context.Context, r *Run) error {
 	err := r.writeModel(v, m)
 	took := time.Since(t)
 	after := r.snapshotCounters()
-	r.check("every write acknowledged", err == nil, fmt.Sprintf("%d files via %s", len(m), gw.Name))
+	r.check("I-7", "every write acknowledged", err == nil, fmt.Sprintf("%d files via %s", len(m), gw.Name))
 	if err != nil {
 		return err
 	}
 	mb := float64(after.BytesWritten-before.BytesWritten) / (1 << 20)
 	r.event("baseline written", fmt.Sprintf("%.1f MiB in %s (%.1f MiB/s) via %s", mb, took.Round(time.Millisecond), mb/took.Seconds(), gw.Name))
 	bad, first := r.verifyModel(v, m)
-	r.check("read-your-writes on the writing gateway", bad == 0, first)
+	r.check("I-34 L-72", "read-your-writes on the writing gateway", bad == 0, first)
 	r.setShared("corpus", m)
 	return r.Env.Wait(ctx, r.Profile.FlushIdle)
 }
@@ -260,17 +262,17 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 	for _, gw := range r.gateways() {
 		v, _ := r.volume(gw)
 		bad, first := r.verifyModel(v, m)
-		r.checkAt("corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
+		r.checkAt("I-12 I-36 L-51", "corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
 	}
 	for _, n := range r.nodes {
 		ok, detail, err := r.Env.Fsck(ctx, n)
 		if err != nil {
-			r.checkAt("fsck on "+n.Name, false, err.Error(), "", "", n.Name)
+			r.checkAt("I-44", "fsck on "+n.Name, false, err.Error(), "", "", n.Name)
 			continue
 		}
-		r.checkAt("fsck on "+n.Name, ok, detail, "", "", n.Name)
+		r.checkAt("I-44", "fsck on "+n.Name, ok, detail, "", "", n.Name)
 	}
-	r.checkFSMAgreement(ctx, "FSM hashes agree")
+	r.checkFSMAgreement(ctx, "I-4", "FSM hashes agree")
 	reps, err := r.chunksOf(ctx, join(r.Root, "corpus", "big.bin"))
 	if err != nil {
 		return err
@@ -280,10 +282,10 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 		c := &reps[i]
 		if c.LiveSlots != len(c.Slots) || c.State != "committed" {
 			full = false
-			r.checkAt("chunk fully placed", false, fmt.Sprintf("%s %d/%d live slots", c.State, c.LiveSlots, len(c.Slots)), "big.bin", c.Hash, "")
+			r.checkAt("I-9 L-39 L-51", "chunk fully placed", false, fmt.Sprintf("%s %d/%d live slots", c.State, c.LiveSlots, len(c.Slots)), "big.bin", c.Hash, "")
 		}
 	}
-	r.check("big.bin fully placed on live nodes", full, fmt.Sprintf("%d chunks", len(reps)))
+	r.check("I-9 L-39 L-51", "big.bin fully placed on live nodes", full, fmt.Sprintf("%d chunks", len(reps)))
 	return nil
 }
 
@@ -374,7 +376,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 				delete(m, name)
 			}
 		}
-		r.check("churn ops acknowledged via "+gw.Name, errs == 0, fmt.Sprintf("%d of %d ops failed", errs, r.Profile.ChurnOps))
+		r.check("I-45 L-2 L-3 L-5 L-6", "churn ops acknowledged via "+gw.Name, errs == 0, fmt.Sprintf("%d of %d ops failed", errs, r.Profile.ChurnOps))
 		for p, d := range m {
 			all[p] = d
 		}
@@ -386,7 +388,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 	reader := gws[len(gws)-1]
 	v, _ := r.volume(reader)
 	bad, first := r.verifyModel(v, all)
-	r.checkAt("churn result identical via "+reader.Name, bad == 0, fmt.Sprintf("%d files differ: %s", bad, first), first, "", reader.Name)
+	r.checkAt("I-12 I-36 L-21", "churn result identical via "+reader.Name, bad == 0, fmt.Sprintf("%d files differ: %s", bad, first), first, "", reader.Name)
 	for p := range all {
 		r.corpusModel()[p] = all[p] // keep verifying them in later phases
 	}
@@ -430,14 +432,14 @@ func phaseParity(ctx context.Context, r *Run) error {
 		return err
 	}
 	bad, first := r.verifyModel(v, m)
-	r.checkAt(fmt.Sprintf("reads exact with m=%d nodes dead", mm), bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-12 L-64 L-131", fmt.Sprintf("reads exact with m=%d nodes dead", mm), bad == 0, first, first, "", gw.Name)
 	during := r.randomBytes(r.Profile.ChunkSize + 77)
 	p := join(r.Root, "parity", "during-loss.bin")
 	werr := v.Mkdir(join(r.Root, "parity"))
 	if werr == nil {
 		werr = v.WriteAt(p, 0, during)
 	}
-	r.check("writes accepted with m nodes dead (degraded)", werr == nil, fmt.Sprint(werr))
+	r.check("L-41 L-52", "writes accepted with m nodes dead (degraded)", werr == nil, fmt.Sprint(werr))
 	if werr == nil {
 		m[p] = during
 	}
@@ -446,7 +448,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		return err
 	}
 	if rep, _, err = r.anyStatus(ctx); err == nil {
-		r.check("status reports degraded chunks while a holder is dead", rep.Volume.Degraded > 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
+		r.check("I-56 L-86", "status reports degraded chunks while a holder is dead", rep.Volume.Degraded > 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
 	}
 	// the dead node returns: after fill_after a repair pass fills what was written meanwhile
 	for _, n := range victims[:mm] {
@@ -456,14 +458,14 @@ func phaseParity(ctx context.Context, r *Run) error {
 		r.event("start", n.Name)
 	}
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-	r.check("cluster healthy after the node returned", healthy, hdetail)
+	r.check("L-88 L-132", "cluster healthy after the node returned", healthy, hdetail)
 	if err := r.Env.Wait(ctx, r.Profile.FillAfter+time.Second); err != nil {
 		return err
 	}
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
 	}
-	r.check("degraded chunks back to 0 after repair", rep.Volume.Degraded == 0, fmt.Sprintf("%d degraded, %d unreadable", rep.Volume.Degraded, rep.Volume.Unreadable))
+	r.check("I-15 L-87 L-89", "degraded chunks back to 0 after repair", rep.Volume.Degraded == 0, fmt.Sprintf("%d degraded, %d unreadable", rep.Volume.Degraded, rep.Volume.Unreadable))
 	// lose m+1: every read is exact or an error, never garbage
 	for _, n := range victims {
 		if err := r.Env.Kill(ctx, n); err != nil {
@@ -482,10 +484,10 @@ func phaseParity(ctx context.Context, r *Run) error {
 			errs++
 		case !bytes.Equal(got, m[path]):
 			garbage++
-			r.checkAt("read returned wrong bytes with m+1 nodes dead", false, path, path, "", gw.Name)
+			r.checkAt("I-40 L-65", "read returned wrong bytes with m+1 nodes dead", false, path, path, "", gw.Name)
 		}
 	}
-	r.check(fmt.Sprintf("no garbage with m+1=%d nodes dead", mm+1), garbage == 0, fmt.Sprintf("%d reads failed cleanly, %d exact", errs, len(m)-errs-garbage))
+	r.check("I-40 L-65", fmt.Sprintf("no garbage with m+1=%d nodes dead", mm+1), garbage == 0, fmt.Sprintf("%d reads failed cleanly, %d exact", errs, len(m)-errs-garbage))
 	for _, n := range victims {
 		if err := r.Env.Start(ctx, n); err != nil {
 			return err
@@ -493,13 +495,13 @@ func phaseParity(ctx context.Context, r *Run) error {
 		r.event("start", n.Name)
 	}
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-	r.check("cluster healthy after all nodes returned", healthy, hdetail)
+	r.check("L-132", "cluster healthy after all nodes returned", healthy, hdetail)
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
 	}
-	r.check("no degraded chunks after recovery", rep.Volume.Degraded == 0 && rep.Volume.Unreadable == 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
+	r.check("I-15 L-88", "no degraded chunks after recovery", rep.Volume.Degraded == 0 && rep.Volume.Unreadable == 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
 	bad, first = r.verifyModel(v, m)
-	r.checkAt("corpus exact after recovery", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-12", "corpus exact after recovery", bad == 0, first, first, "", gw.Name)
 	return nil
 }
 
@@ -515,6 +517,51 @@ func shardKey(c admin.ChunkReport, slot int) (string, error) {
 	return string(chunk.Key(h, c.K, c.M, slot)), nil
 }
 
+// presentSlots lists the slots whose live node answered HEAD with the shard present.
+func presentSlots(c admin.ChunkReport) []int {
+	var out []int
+	for i, s := range c.Slots {
+		if s.Node != 0 && s.Live && s.Present != nil && *s.Present {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// liveSlots counts the slots placed on a live node.
+func liveSlots(c admin.ChunkReport) int {
+	n := 0
+	for _, s := range c.Slots {
+		if s.Node != 0 && s.Live {
+			n++
+		}
+	}
+	return n
+}
+
+// slotTable prints a chunk's slots for a check's detail: "0:n3 live present, 1:n1 live absent".
+func slotTable(c admin.ChunkReport) string {
+	parts := make([]string, 0, len(c.Slots))
+	for i, s := range c.Slots {
+		state := "missing"
+		if s.Node != 0 {
+			state = fmt.Sprintf("node %d", s.Node)
+			switch {
+			case !s.Live:
+				state += " dead"
+			case s.Present == nil:
+				state += " unchecked"
+			case *s.Present:
+				state += " present"
+			default:
+				state += " ABSENT"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%d:%s", i, state))
+	}
+	return fmt.Sprintf("%s %d+%d [%s]", c.Hash[:12], c.K, c.M, strings.Join(parts, ", "))
+}
+
 func (r *Run) nodeByIdx(idx int) (NodeRef, bool) {
 	for _, n := range r.nodes {
 		if int(n.Idx) == idx {
@@ -522,6 +569,28 @@ func (r *Run) nodeByIdx(idx int) (NodeRef, bool) {
 		}
 	}
 	return NodeRef{}, false
+}
+
+// storedDelta is how many bytes the volume grew by between two status samples; negative
+// when GC or a migration shrank it meanwhile (an unsigned subtraction would wrap).
+func storedDelta(before, after uint64) int64 { return int64(after) - int64(before) }
+
+// corruptionVerdict judges the m+1 corruption read. With fewer than m+1 shards corrupted
+// the check is void and fails loudly instead of passing by accident. A reader without
+// the chunk in its cache must get an error; a reader that may have it cached may also
+// serve the exact bytes. Wrong bytes are never acceptable.
+func corruptionVerdict(corrupted, m int, coldReader bool, err error, exact bool) (bool, string) {
+	switch {
+	case corrupted <= m:
+		return false, fmt.Sprintf("only %d of the required m+1=%d shards could be corrupted", corrupted, m+1)
+	case err != nil:
+		return true, fmt.Sprintf("read failed cleanly: %v", err)
+	case !exact:
+		return false, "read returned wrong bytes"
+	case coldReader:
+		return false, "a gateway without the chunk cached served it with m+1 shards corrupt"
+	}
+	return true, "served exact from the gateway's cache"
 }
 
 func phaseCorruption(ctx context.Context, r *Run) error {
@@ -538,18 +607,27 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	var holder NodeRef
 	var key string
 	var cerr error
+	slot := -1
 	for attempt := 0; attempt < 3; attempt++ { // a repair may move the slot between lookup and corrupt
 		reps, err := r.chunksOf(ctx, target)
 		if err != nil || len(reps) == 0 {
 			return fmt.Errorf("chunks of %s: %w", target, err)
 		}
 		c = reps[0]
-		if key, err = shardKey(c, 0); err != nil {
+		// the describe checks each live slot with HEAD: a slot named by the placement but
+		// absent from its live node is a finding of its own, not a reason to abort
+		present := presentSlots(c)
+		r.checkAt("I-13 L-111", "every live slot of the committed chunk holds its shard", len(present) == liveSlots(c), slotTable(c), target, c.Hash, "")
+		if len(present) == 0 {
+			return fmt.Errorf("no present slot to corrupt: %s", slotTable(c))
+		}
+		slot = present[0]
+		if key, err = shardKey(c, slot); err != nil {
 			return err
 		}
 		var ok bool
-		if holder, ok = r.nodeByIdx(c.Slots[0].Node); !ok {
-			return fmt.Errorf("slot 0 of %s on unknown node %d", c.Hash, c.Slots[0].Node)
+		if holder, ok = r.nodeByIdx(c.Slots[slot].Node); !ok {
+			return fmt.Errorf("slot %d of %s on unknown node %d", slot, c.Hash, c.Slots[slot].Node)
 		}
 		if cerr = r.Env.Corrupt(ctx, holder, key); cerr == nil {
 			break
@@ -559,19 +637,19 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 		}
 	}
 	if cerr != nil {
-		return fmt.Errorf("corrupt %s slot 0 on %s: %w", c.Hash[:12], holder.Name, cerr)
+		return fmt.Errorf("corrupt %s slot %d on %s: %w (%s)", c.Hash[:12], slot, holder.Name, cerr, slotTable(c))
 	}
-	r.event("corrupt", fmt.Sprintf("%s slot 0 on %s", c.Hash[:12], holder.Name))
+	r.event("corrupt", fmt.Sprintf("%s slot %d on %s", c.Hash[:12], slot, holder.Name))
 	got, err := v.ReadAll(target)
-	r.checkAt("read exact with m shards corrupt", err == nil && bytes.Equal(got, m[target]), fmt.Sprint(err), target, c.Hash, holder.Name)
-	st, err := r.Env.Scrub(ctx)
+	r.checkAt("I-40 L-68 L-105", "read exact with m shards corrupt", err == nil && bytes.Equal(got, m[target]), fmt.Sprint(err), target, c.Hash, holder.Name)
+	st, err := r.scrub(ctx)
 	if err != nil {
 		return err
 	}
-	r.check("scrub finds and repairs the corrupt shard", st.ScrubBad >= 1 && st.Repaired >= 1, fmt.Sprintf("%+v", st))
-	if reps, err := r.chunksOf(ctx, target); err == nil && len(reps) > 0 {
-		s := reps[0].Slots[0]
-		r.checkAt("corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot 0 now on node %d", s.Node), target, c.Hash, "")
+	r.check("I-15 L-110", "scrub finds and repairs the corrupt shard", st.ScrubBad >= 1 && st.Repaired >= 1, fmt.Sprintf("%+v", st))
+	if reps, err := r.chunksOf(ctx, target); err == nil && len(reps) > 0 && slot < len(reps[0].Slots) {
+		s := reps[0].Slots[slot]
+		r.checkAt("L-110 L-130", "corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot %d now on node %d", slot, s.Node), target, c.Hash, "")
 	}
 	// m+1 shards of a dedicated chunk: the read fails cleanly or is served exact from a
 	// cache, never wrong bytes
@@ -589,7 +667,10 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	}
 	c = reps[0]
 	corrupted := 0
-	for slot := 0; slot <= int(c.M) && slot < len(c.Slots); slot++ {
+	for _, slot := range presentSlots(c) { // m+1 of the slots that hold their shard
+		if corrupted > int(c.M) {
+			break
+		}
 		key, err := shardKey(c, slot)
 		if err != nil {
 			return err
@@ -613,10 +694,8 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	}
 	rv, _ := r.volume(reader)
 	got, err = rv.ReadAll(p)
-	r.checkAt(fmt.Sprintf("m+1=%d corrupt shards: error or exact, never garbage", corrupted), err != nil || bytes.Equal(got, data), fmt.Sprintf("err=%v", err), p, c.Hash, reader.Name)
-	if err == nil {
-		r.event("note", "read served exact (cached or a surviving shard): corruption count may not have reached m+1")
-	}
+	ok, text := corruptionVerdict(corrupted, int(c.M), reader.Idx != gw.Idx, err, bytes.Equal(got, data))
+	r.checkAt("I-40 L-106", fmt.Sprintf("m+1=%d corrupt shards: error, never garbage", int(c.M)+1), ok, text, p, c.Hash, reader.Name)
 	if err := v.Remove(p); err != nil {
 		return err
 	}
@@ -643,15 +722,23 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 			}
 		}
 		if leader.Name == "" {
-			r.check("leader known before the kill", false, "no leader in status")
+			r.check("I-6", "leader known before the kill", false, "no leader in status")
 			return nil
 		}
-		gw := r.gateways()[0]
-		for _, g := range r.gateways() { // write through a follower when we can
+		var gw NodeRef
+		for _, g := range r.gateways() { // write through a follower: killing our own gateway cuts the mount
 			if g.Idx != leader.Idx {
 				gw = g
 				break
 			}
+		}
+		if gw.Name == "" {
+			if round == 0 {
+				r.skip(fmt.Sprintf("the only gateway (%s) leads; a live run cannot kill its own node", leader.Name))
+				return nil
+			}
+			r.event("note", fmt.Sprintf("round %d skipped: the only gateway (%s) now leads", round, leader.Name))
+			break
 		}
 		v, _ := r.volume(gw)
 		dir := join(r.Root, "consensus")
@@ -680,19 +767,19 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		}
 		r.event("start", leader.Name)
 		healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-		r.check("cluster healthy after the leader returned", healthy, hdetail)
+		r.check("L-61", "cluster healthy after the leader returned", healthy, hdetail)
 		if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 			return err
 		}
 		reader := r.gateways()[len(r.gateways())-1]
 		rv, _ := r.volume(reader)
 		bad, first := r.verifyModel(rv, acked)
-		r.checkAt(fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
+		r.checkAt("I-7 I-12 L-57 L-58 L-61", fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
 		for p, d := range acked {
 			m[p] = d
 		}
 	}
-	r.checkFSMAgreement(ctx, "FSM hashes agree after leader losses")
+	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after leader losses")
 	return nil
 }
 
@@ -726,7 +813,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	}
 	for _, pol := range [][2]uint8{{k1, m1}, {k0, m0}} {
 		if err := r.Env.SetPolicy(ctx, pol[0], pol[1]); err != nil {
-			r.check(fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
+			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
 			return nil
 		}
 		r.event("set-redundancy", fmt.Sprintf("%d+%d", pol[0], pol[1]))
@@ -742,9 +829,9 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		if rep, err = r.repairUntilClean(ctx); err != nil {
 			return err
 		}
-		r.check(fmt.Sprintf("migration to %d+%d complete", pol[0], pol[1]), rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0, fmt.Sprintf("%d stale, %d degraded", rep.Volume.StalePolicy, rep.Volume.Degraded))
+		r.check("I-15 I-32 L-100 L-101", fmt.Sprintf("migration to %d+%d complete", pol[0], pol[1]), rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0, fmt.Sprintf("%d stale, %d degraded", rep.Volume.StalePolicy, rep.Volume.Degraded))
 		bad, first := r.verifyModel(v, m)
-		r.checkAt(fmt.Sprintf("corpus exact under %d+%d", pol[0], pol[1]), bad == 0, first, first, "", gw.Name)
+		r.checkAt("I-12 I-15 L-173", fmt.Sprintf("corpus exact under %d+%d", pol[0], pol[1]), bad == 0, first, first, "", gw.Name)
 	}
 	// drain the last node (needs a spare), then put it back
 	if active <= int(k0)+int(m0) {
@@ -756,7 +843,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		victim = r.nodes[len(r.nodes)-2]
 	}
 	if err := r.Env.SetState(ctx, victim, meta.Draining); err != nil {
-		r.check("drain accepted", false, err.Error())
+		r.check("L-93", "drain accepted", false, err.Error())
 		return nil
 	}
 	r.event("drain", victim.Name)
@@ -769,9 +856,9 @@ func phaseMembership(ctx context.Context, r *Run) error {
 			slots = rep.Nodes[i].Slots
 		}
 	}
-	r.checkAt("drained node holds no slots", slots == 0, fmt.Sprintf("%d slots left", slots), "", "", victim.Name)
+	r.checkAt("I-42 L-94", "drained node holds no slots", slots == 0, fmt.Sprintf("%d slots left", slots), "", "", victim.Name)
 	bad, first := r.verifyModel(v, m)
-	r.checkAt("corpus exact after the drain", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-32", "corpus exact after the drain", bad == 0, first, first, "", gw.Name)
 	if err := r.Env.SetState(ctx, victim, meta.Active); err != nil {
 		return err
 	}
@@ -806,8 +893,8 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	if rep, _, err = r.anyStatus(ctx); err != nil {
 		return err
 	}
-	grew := rep.Volume.StoredBytes - before
-	r.check("second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < before, fmt.Sprintf("+%d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
+	grew := storedDelta(before, rep.Volume.StoredBytes)
+	r.check("I-2 L-19 L-33", "second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < int64(before), fmt.Sprintf("%+d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
 	for p, d := range copyM {
 		m[p] = d
 	}
@@ -831,19 +918,19 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	if err := r.Env.Wait(ctx, r.Profile.Grace+time.Second); err != nil {
 		return err
 	}
-	res, err := r.Env.GCNow(ctx)
+	res, err := r.gcNow(ctx)
 	if err != nil {
 		return err
 	}
-	r.check("gc collects the removed file's chunks", res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v (refused deletes are orphans for the sweep)", res))
+	r.check("I-13 L-15 L-75 L-77", "gc collects the removed file's chunks", res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v (refused deletes are orphans for the sweep)", res))
 	if rep, _, err = r.anyStatus(ctx); err != nil {
 		return err
 	}
-	r.check("stored bytes shrink after gc", rep.Volume.StoredBytes < stored1, fmt.Sprintf("%d -> %d", stored1, rep.Volume.StoredBytes))
+	r.check("L-77 L-134", "stored bytes shrink after gc", rep.Volume.StoredBytes < stored1, fmt.Sprintf("%d -> %d", stored1, rep.Volume.StoredBytes))
 	ok, detail, err := r.Env.Fsck(ctx, r.nodes[0])
-	r.check("fsck clean after gc", err == nil && ok, detail+fmt.Sprint(err))
+	r.check("I-27 I-44", "fsck clean after gc", err == nil && ok, detail+fmt.Sprint(err))
 	bad, first := r.verifyModel(v, m)
-	r.checkAt("corpus exact after gc", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-13 I-41", "corpus exact after gc", bad == 0, first, first, "", gw.Name)
 	return nil
 }
 
@@ -876,19 +963,267 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	}
 	r.event("restart all", fmt.Sprintf("%d nodes", len(r.nodes)))
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+60*time.Second)
-	r.check("cluster healthy after the restart storm", healthy, hdetail)
+	r.check("L-120", "cluster healthy after the restart storm", healthy, hdetail)
 	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 		return err
 	}
 	gw := r.gateways()[len(r.gateways())-1]
 	v, _ := r.volume(gw)
 	bad, first := r.verifyModel(v, acked)
-	r.checkAt("writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
 	for p, d := range acked {
 		m[p] = d
 	}
 	bad, first = r.verifyModel(v, m)
-	r.checkAt("whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
-	r.checkFSMAgreement(ctx, "FSM hashes agree after the restart storm")
+	r.checkAt("I-12 L-120", "whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
+	r.checkFSMAgreement(ctx, "I-4 I-5", "FSM hashes agree after the restart storm")
 	return nil
+}
+
+// --- 10 partition --------------------------------------------------------------------------
+
+// phasePartition cuts a minority of nodes off, then the gateway itself. The majority keeps
+// committing (L-148); a cut-off gateway refuses metadata operations with EROFS while its
+// WRITEs stay buffered and are committed once the partition heals (L-59); nothing it
+// refused shows up afterwards and nothing acknowledged is applied twice (I-29).
+func phasePartition(ctx context.Context, r *Run) error {
+	if !r.Env.Caps().Partition {
+		r.skip("environment cannot partition nodes")
+		return nil
+	}
+	rep, _, err := r.anyStatus(ctx)
+	if err != nil {
+		return err
+	}
+	k := int(rep.Volume.K)
+	voters := 0
+	for i := range rep.Nodes {
+		if rep.Nodes[i].Voter {
+			voters++
+		}
+	}
+	gws := r.gateways()
+	gw := gws[0]
+	// the minority: the last nodes, never the first gateway, keeping a voter quorum and at
+	// least k nodes on the majority side
+	budget := min((voters-1)/2, len(r.nodes)-k)
+	var minority, majority []NodeRef
+	for i := len(r.nodes) - 1; i >= 0; i-- {
+		n := r.nodes[i]
+		if n.Idx != gw.Idx && len(minority) < budget {
+			minority = append(minority, n)
+		} else {
+			majority = append(majority, n)
+		}
+	}
+	if len(minority) == 0 {
+		r.skip(fmt.Sprintf("need a minority to cut off: %d voters, %d nodes, k=%d", voters, len(r.nodes), k))
+		return nil
+	}
+	m := r.corpusModel()
+	v, _ := r.volume(gw)
+	dir := join(r.Root, "partition")
+	if err := v.Mkdir(dir); err != nil {
+		return err
+	}
+	cs := r.Profile.ChunkSize
+	// files written before the cut, so a cut-off gateway can write into an existing inode
+	pre := map[string][]byte{}
+	for _, name := range []string{"minor.bin", "self.bin"} {
+		p := join(dir, name)
+		data := r.randomBytes(cs + 5)
+		if err := v.WriteAt(p, 0, data); err != nil {
+			return err
+		}
+		pre[p], m[p] = data, data
+	}
+	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
+		return err
+	}
+	names := func(side []NodeRef) string {
+		out := make([]string, 0, len(side))
+		for _, n := range side {
+			out = append(out, n.Name)
+		}
+		return strings.Join(out, ",")
+	}
+
+	// step 1: a minority is cut off
+	if err := r.Env.Partition(ctx, minority, majority); err != nil {
+		return err
+	}
+	r.event("partition", names(minority)+" | "+names(majority))
+	led, ldetail := r.awaitLeader(ctx, majority, r.Profile.RestartSettle+30*time.Second)
+	r.check("I-6", "the majority side elects a leader", led, ldetail)
+	major := join(dir, "major.bin")
+	data := r.randomBytes(cs + 9)
+	werr := v.WriteAt(major, 0, data)
+	r.check("I-6 L-148", fmt.Sprintf("writes commit on the majority side with %s cut off", names(minority)), werr == nil, fmt.Sprint(werr))
+	if werr == nil {
+		m[major] = data
+	}
+	var minorGW *NodeRef
+	for i := range gws {
+		for _, n := range minority {
+			if gws[i].Idx == n.Idx {
+				minorGW = &gws[i]
+			}
+		}
+	}
+	minor := join(dir, "minor.bin")
+	refused := join(dir, "minor-dir")
+	if minorGW != nil {
+		mv, _ := r.volume(*minorGW)
+		merr := mv.Mkdir(refused)
+		r.checkAt("I-6 I-39 L-59", "metadata operation on the cut-off side is refused", merr != nil, fmt.Sprint(merr), refused, "", minorGW.Name)
+		tail := r.randomBytes(cs / 2)
+		off := int64(cs - 3)
+		if werr := mv.WriteAt(minor, off, tail); werr == nil { // L-59: still buffered
+			m[minor] = overwrite(pre[minor], off, tail)
+			r.event("note", fmt.Sprintf("WRITE buffered on cut-off gateway %s", minorGW.Name))
+		} else {
+			r.event("note", fmt.Sprintf("WRITE refused on cut-off gateway %s: %v", minorGW.Name, werr))
+		}
+	} else {
+		r.event("note", "no gateway on the cut-off side; its EROFS and buffered-write checks need MultiGateway")
+	}
+	if err := r.Env.Heal(ctx); err != nil {
+		return err
+	}
+	r.event("heal", "")
+	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
+	r.check("L-132", "cluster healthy after the heal", healthy, hdetail)
+	ok, detail := r.awaitCommitted(ctx, gw, minor, m[minor])
+	r.checkAt("I-7 L-59", "bytes written on the cut-off side are committed after the heal", ok, detail, minor, "", gw.Name)
+	r.noteRefused(v, refused)
+	bad, first := r.verifyModel(v, m)
+	r.checkAt("I-12 I-29", "corpus exact after the minority rejoins", bad == 0, first, first, "", gw.Name)
+	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after the minority rejoins")
+
+	// step 2: the gateway itself is cut off
+	var others []NodeRef
+	for _, n := range r.nodes {
+		if n.Idx != gw.Idx {
+			others = append(others, n)
+		}
+	}
+	if err := r.Env.Partition(ctx, []NodeRef{gw}, others); err != nil {
+		return err
+	}
+	r.event("partition", gw.Name+" | "+names(others))
+	refused = join(dir, "self-dir")
+	merr := v.Mkdir(refused)
+	r.checkAt("I-6 I-39 L-59", "metadata operation on the cut-off gateway is refused", merr != nil, fmt.Sprint(merr), refused, "", gw.Name)
+	self := join(dir, "self.bin")
+	tail := r.randomBytes(cs / 2)
+	off := int64(cs - 7)
+	werr = v.WriteAt(self, off, tail)
+	r.checkAt("L-59", "WRITE on the cut-off gateway is buffered, not refused", werr == nil, fmt.Sprint(werr), self, "", gw.Name)
+	if werr == nil {
+		m[self] = overwrite(pre[self], off, tail)
+	}
+	if err := r.Env.Heal(ctx); err != nil {
+		return err
+	}
+	r.event("heal", "")
+	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
+	r.check("L-132", "cluster healthy after the gateway rejoins", healthy, hdetail)
+	ok, detail = r.awaitCommitted(ctx, gw, self, m[self])
+	r.checkAt("I-7 L-59", "bytes buffered on the cut-off gateway are committed after the heal", ok, detail, self, "", gw.Name)
+	r.noteRefused(v, refused)
+	for _, g := range gws {
+		rv, _ := r.volume(g)
+		bad, first := r.verifyModel(rv, m)
+		r.checkAt("I-12 I-29 L-148", "corpus exact after the gateway rejoins", bad == 0, first, first, "", g.Name)
+	}
+	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after the gateway rejoins")
+	return nil
+}
+
+// overwrite is the file content after writing data at off into base.
+func overwrite(base []byte, off int64, data []byte) []byte {
+	out := make([]byte, max(len(base), int(off)+len(data)))
+	copy(out, base)
+	copy(out[off:], data)
+	return out
+}
+
+// noteRefused records whether a metadata operation refused during a partition landed
+// anyway. Raft allows either outcome (the leader may have appended it before losing its
+// lease and commit it on rejoining); what matters is that every node agrees, which the
+// FSM-hash check covers.
+func (r *Run) noteRefused(v Volume, path string) {
+	if _, err := v.Size(path); err == nil {
+		r.event("note", "refused metadata operation landed after the heal (ambiguous outcome, allowed): "+path)
+	} else {
+		r.event("note", "refused metadata operation is absent after the heal: "+path)
+	}
+}
+
+// awaitLeader polls status through the given nodes until one reports a healthy leader.
+func (r *Run) awaitLeader(ctx context.Context, via []NodeRef, timeout time.Duration) (bool, string) {
+	deadline := time.Now().Add(timeout)
+	for {
+		detail := "no status"
+		for _, n := range via {
+			rep, err := r.Env.Status(ctx, n)
+			if err != nil {
+				detail = fmt.Sprintf("%s: %v", n.Name, err)
+				continue
+			}
+			if rep.Health == "healthy" && rep.Leader != "" {
+				return true, fmt.Sprintf("leader %s (via %s)", rep.Leader, n.Name)
+			}
+			detail = fmt.Sprintf("%s: health %s, leader %q", n.Name, rep.Health, rep.Leader)
+		}
+		if time.Now().After(deadline) || r.Env.Wait(ctx, 500*time.Millisecond) != nil {
+			return false, detail
+		}
+	}
+}
+
+// awaitCommitted polls until the FSM of a node other than gw (or gw itself when it is the
+// only node) lists path with committed chunks summing to the expected length, and the
+// bytes read through gw match. The chunk sum is what proves the flush landed: gw alone
+// would serve its own dirty bytes.
+func (r *Run) awaitCommitted(ctx context.Context, gw NodeRef, path string, want []byte) (bool, string) {
+	witness := gw
+	for _, n := range r.nodes {
+		if n.Idx != gw.Idx {
+			witness = n
+			break
+		}
+	}
+	deadline := time.Now().Add(r.Profile.FlushIdle + 30*time.Second)
+	for {
+		detail := ""
+		reps, err := r.Env.Chunks(ctx, witness, path)
+		switch {
+		case err != nil:
+			detail = fmt.Sprintf("%s: %v", witness.Name, err)
+		default:
+			committed, total := true, 0
+			for i := range reps {
+				if !reps[i].Found || reps[i].State == "unknown" {
+					committed = false
+				}
+				total += int(reps[i].Size)
+			}
+			v, _ := r.volume(gw)
+			got, rerr := v.ReadAll(path)
+			switch {
+			case !committed || total != len(want):
+				detail = fmt.Sprintf("%s lists %d chunks, %d bytes committed, want %d", witness.Name, len(reps), total, len(want))
+			case rerr != nil:
+				detail = fmt.Sprintf("read via %s: %v", gw.Name, rerr)
+			case !bytes.Equal(got, want):
+				detail = fmt.Sprintf("read via %s: %d bytes, want %d", gw.Name, len(got), len(want))
+			default:
+				return true, fmt.Sprintf("%d chunks committed on %s", len(reps), witness.Name)
+			}
+		}
+		if time.Now().After(deadline) || r.Env.Wait(ctx, 500*time.Millisecond) != nil {
+			return false, detail
+		}
+	}
 }

@@ -13,9 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -168,21 +168,27 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		uid, gid = 0, 0
 	}
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
+	fs.SetHealth(func() bool { return staleFor(node, prober, clk) })
 
 	rcfg := repair.DefaultConfig()
 	if rcfg.Grace, rcfg.FillAfter, err = cfg.RepairDurations(); err != nil {
 		return err
 	}
 	client.SetGrace(rcfg.Grace)
+	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log}
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Members: node.FSM.Nodes, Clk: clk}
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
-		Status: func() any { return admin.Build(node, prober, clusterID, clk, repairer) }, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
+		Status: func() any {
+			rep := admin.Build(node, prober, clusterID, clk, repairer)
+			rep.Gateway = admin.GatewayFromDirty(ov.Dirty())
+			return rep
+		}, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
 	if err != nil {
 		return err
@@ -227,9 +233,20 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	bg, cancelBg := context.WithCancel(context.Background())
 	const loops = 6
 	done := make(chan struct{}, loops)
+	// an address change re-registers the node, then ends this process: the RPC and Raft
+	// listeners are bound to the old address and the service manager restarts us
+	sctx, stop := context.WithCancel(ctx)
+	defer stop()
+	var addrChanged atomic.Bool
 	go func() { _ = srv.Serve(bg, rl); done <- struct{}{} }()
 	go func() { prober.Run(bg); done <- struct{}{} }()
-	go func() { watchAddress(bg, ts, node, client, selfIdx, ident.IP, log); done <- struct{}{} }()
+	go func() {
+		if watchAddress(bg, ts, node, client, selfIdx, ident.IP, log) {
+			addrChanged.Store(true)
+			stop()
+		}
+		done <- struct{}{}
+	}()
 	go func() { fl.Run(bg); done <- struct{}{} }()
 	go func() {
 		repairer.Run(bg, func() bool { return node.IsLeader() && node.Health(clk, prober).State == cluster.Healthy })
@@ -237,13 +254,34 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}()
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
 
-	err = nfsgw.Serve(ctx, nl, nfsgw.New(fs, node.FSM))
+	err = nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM))
 	cancelBg()
 	for i := 0; i < loops; i++ {
 		<-done
 	}
+	if addrChanged.Load() {
+		return ErrAddressChanged
+	}
 	return err
 }
+
+// staleFor reports whether the gateway has had no leader contact for the Stale threshold
+// (docs/02 §Health): the Stale state, or no leader at all for that long. A short election
+// is not stale, so metadata mutations wait for it instead of failing.
+func staleFor(node *cluster.Node, prober *cluster.Prober, clk clock.Clock) bool {
+	switch h := node.Health(clk, prober); h.State {
+	case cluster.Stale:
+		return true
+	case cluster.NoLeader:
+		return clk.Now().Sub(node.Raft.LastContact()) >= cluster.StaleThreshold
+	}
+	return false
+}
+
+// ErrAddressChanged is returned by Serve after the node's Tailscale address changed and
+// was re-registered: the listeners are bound to the old address, so the process exits for
+// the service manager to restart it (docs/05, L-99).
+var ErrAddressChanged = errors.New("node: tailscale address changed and re-registered; restart to bind the new address")
 
 // adminOps implements rpc.Admin and runs the periodic GC and sweep.
 type adminOps struct {
@@ -309,25 +347,9 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	}
 }
 
-// CheckReport is the `check` reply.
-type CheckReport struct {
-	Scan       repair.Stats `json:"scan"`
-	Degraded   int          `json:"degraded_chunks"`
-	Unreadable int          `json:"unreadable_chunks"`
-	Files      []string     `json:"files,omitempty"` // paths touching degraded/unreadable chunks
-	OK         bool         `json:"ok"`
-}
-
-// FsckReport is the `fsck` reply.
-type FsckReport struct {
-	Violations   []string `json:"violations"`
-	OrphanShards int      `json:"orphan_shards_on_this_node"`
-	OK           bool     `json:"ok"`
-}
-
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
-	case "repair_now", "check", "set_policy", "gc_now":
+	case "repair_now", "check", "set_policy", "gc_now", "rotate_token":
 		if !a.node.IsLeader() {
 			if a.node.LeaderRPCAddr() == "" {
 				return nil, cluster.ErrNoLeader
@@ -342,19 +364,23 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.repairer.Scan(ctx)
 	case "gc_now":
 		return a.gc.RunOnce(ctx)
+	case "rotate_token":
+		// a MetaSet with the token only: the cluster ID is left as it is (docs/08 §Join)
+		token := meta.NewJoinToken()
+		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpMetaSet, MetaSet: &meta.MetaSet{JoinToken: token}})
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := a.node.FSM.WaitApplied(ctx, index); err != nil {
+			return nil, err
+		}
+		return map[string]string{"join_token": token}, nil
 	case "set_policy":
-		if op.K < 1 || int(op.K)+int(op.M) > 256 {
-			return nil, fmt.Errorf("bad policy %d+%d", op.K, op.M)
-		}
-		live := 0
-		nodes := a.node.FSM.Nodes()
-		for i := range nodes {
-			if nodes[i].State == meta.Active && a.prober.IsLive(nodes[i].Idx) {
-				live++
-			}
-		}
-		if int(op.K)+int(op.M) > live {
-			return nil, fmt.Errorf("policy %d+%d needs %d live active nodes, have %d", op.K, op.M, int(op.K)+int(op.M), live)
+		if err := admin.PolicyAllowed(a.node.FSM.Nodes(), a.prober, op.K, op.M); err != nil {
+			return nil, err
 		}
 		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: op.K, M: op.M, Now: a.clk.Now().UnixNano()}})
 		if err == nil {
@@ -368,61 +394,29 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		return a.node.FSM.Volume(), nil
 	case "check":
-		cfg := repair.DefaultConfig()
-		if op.Scrub {
-			cfg.ScrubShare = 1
-		}
+		// --scrub runs one full-verification pass through the leader's repairer, so it
+		// uses the configured fill_after and rate limit and never overlaps a background pass
 		var st repair.Stats
-		var err error
 		if op.Scrub {
-			scrubber := repair.New(a.node.FSM, a.node, a.prober, a.client, a.rd, a.clk, cfg, a.log)
-			scrubber.Events = a.ring
-			st, err = scrubber.Scan(ctx)
+			var err error
+			if st, err = a.repairer.Scrub(ctx); err != nil {
+				return nil, err
+			}
 		} else {
 			st, _ = a.repairer.Last()
 		}
-		if err != nil {
-			return nil, err
-		}
-		rep := CheckReport{Scan: st}
-		degraded := map[meta.Hash]bool{}
-		a.node.FSM.ForEachChunk(func(c meta.Chunk) bool {
-			if c.Refs == 0 {
-				return true
-			}
-			good, liveSlots := 0, 0
-			for _, s := range c.Placement {
-				if s != 0 {
-					good++
-					if a.prober.IsLive(s) {
-						liveSlots++
-					}
-				}
-			}
-			if liveSlots < int(c.K)+int(c.M) {
-				rep.Degraded++
-				degraded[c.Hash] = true
-			}
-			if liveSlots < int(c.K) {
-				rep.Unreadable++
-			}
-			return true
-		})
-		if op.Files && len(degraded) > 0 {
-			rep.Files = a.filesReferencing(degraded)
-		}
-		rep.OK = rep.Unreadable == 0 && rep.Degraded == 0
-		return rep, nil
+		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, op.Files), nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
 		if err != nil {
 			return nil, err
 		}
 		fs := snap.(interface{ State() *meta.State })
-		rep := FsckReport{Violations: meta.CheckInvariants(fs.State())}
+		rep := admin.FsckReport{Violations: meta.CheckInvariants(fs.State())}
 		_ = a.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
 			h, kk, mm, idx, err := chunk.ParseKey(k)
 			if err != nil {
+				rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
 				return nil
 			}
 			c, ok := a.node.FSM.GetChunk(h)
@@ -438,33 +432,6 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 }
 
 // filesReferencing walks the tree once and returns the paths whose chunks are in set.
-func (a *adminOps) filesReferencing(set map[meta.Hash]bool) []string {
-	var out []string
-	var walk func(ino meta.Ino, prefix string)
-	walk = func(ino meta.Ino, prefix string) {
-		ents, err := a.node.FSM.ReadDir(ino)
-		if err != nil {
-			return
-		}
-		for i := range ents {
-			p := prefix + "/" + ents[i].Name
-			switch ents[i].Type {
-			case meta.TDir:
-				walk(ents[i].Ino, p)
-			case meta.TFile:
-				for _, h := range ents[i].Chunks {
-					if set[h] {
-						out = append(out, p)
-						break
-					}
-				}
-			}
-		}
-	}
-	walk(meta.RootIno, "")
-	sort.Strings(out)
-	return out
-}
 
 // fence answers the DELETE fence from the local FSM.
 type fence struct {
@@ -484,14 +451,15 @@ func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) {
 	return c.Placement[idx] == f.self, true
 }
 
-// watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change).
-func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, self meta.NodeIdx, current netip.Addr, log *slog.Logger) {
+// watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change)
+// and returns true once the new address is in the node table, so the caller can restart.
+func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, self meta.NodeIdx, current netip.Addr, log *slog.Logger) bool {
 	t := time.NewTicker(cluster.ProbeInterval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-t.C:
 		}
 		st, err := ts.Status(ctx)
@@ -515,7 +483,8 @@ func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, 
 			log.Warn("address update failed, will retry", "err", err)
 			continue
 		}
-		current = ip
+		log.Warn("address re-registered; exiting so the service manager restarts the listeners on it", "addr", ip)
+		return true
 	}
 }
 

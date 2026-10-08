@@ -97,14 +97,15 @@ Otherwise updates mutable fields (Name, TSStableID, Addr, RaftPort, RPCPort, Cap
 Version, S3Endpoint, S3Bucket, S3Prefix, S3Region, S3PathStyle — the `Node` struct of 01) of
 an existing node; `ErrNoSuchNode` if absent. `Kind` and `ID` cannot change.
 
-**NodeSetState.** `Active → Draining → Removed` or `Draining → Active`. `Removed` is terminal.
-Transition to `Removed` is refused with `ErrNodeNotEmpty` while *any* live chunk still has a
-non-zero placement slot on this node (every slot is a sole copy of its shard index, I-9). The
-CLI flow is `node drain` → wait for the repairer to re-place every slot → `node remove`;
-`--force` first proposes `SetPlacement` with slot 0 for the remaining shards, making the
-degradation explicit, then removes. Order on the leader: `NodeSetState{Removed}` is committed
-first, then `raft.RemoveServer`, so the node table never lists a server that Raft has
-forgotten.
+**NodeSetState.** `Active ↔ Draining`, and `Active | Draining → Removed`. `Removed` is
+terminal. The FSM refuses the transition to `Removed` with `ErrNodeNotEmpty` while *any*
+chunk entry (live or tombstoned) still has a non-zero placement slot on this node (every
+slot is a sole copy of its shard index, I-9). The CLI flow is `node drain` → wait for the
+repairer to re-place every slot → `node remove`; `--force` first proposes `SetPlacement`
+with slot 0 for every remaining slot, making the degradation explicit, then removes. Order
+on the leader: `NodeSetState{Removed}` is committed first, then `raft.RemoveServer`, so the
+node table never lists a server that Raft has forgotten. A removed node is refused when it
+tries to join again until it has been `reset`.
 
 **Create / Mkdir.** `Parent` must exist and be `TDir` (`ErrNotExist`/`ErrNotDir`). `Name`
 must be non-empty, not `.` or `..`, contain no `/`, and be ≤ 255 bytes (`ErrBadCommand`).
@@ -146,7 +147,9 @@ settable here; truncation is a `Commit`.
    (the FSM cannot trim bytes out of a chunk; the flusher always rewrites the straddling
    chunk, see 04). Without `HasTruncate`, `cur = old` and `NewSize >= inode.Size` is
    required (`ErrBadCommand`): a file can only shrink through an explicit truncate.
-6. **Then grow.** `n = ceil(NewSize/ChunkSize)`; `NewSize >= TruncateTo` when
+6. **Then grow.** `NewSize` must not exceed `MaxFileSize(ChunkSize) = ChunkSize × 2^20`
+   (`ErrBadCommand`, checked before anything is sized by it: the chunk list of every file
+   lives in memory on every node, I-64). `n = ceil(NewSize/ChunkSize)`; `NewSize >= TruncateTo` when
    `HasTruncate`. `newChunks = copy(cur[:min(len(cur), n)])`, extended with `HashZero` to
    length `n`. Every `Writes[i].Idx` must be `< n` (`ErrBadCommand`).
 7. **Then write.** Apply `Writes`. For each position whose hash changed (including positions
@@ -189,7 +192,11 @@ on close. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db`
 `NoSync = false`.
 
 Raft configuration: `HeartbeatTimeout 2s`, `ElectionTimeout 2s`, `LeaderLeaseTimeout 1s`,
-`CommitTimeout 50ms`, `SnapshotInterval 2m`, `SnapshotThreshold 8192`, `TrailingLogs 10240`.
+`CommitTimeout 10ms` (how soon followers learn the commit index after an apply with no
+successor; a follower gateway's `WaitApplied` bounds on it), `SnapshotInterval 2m`, `SnapshotThreshold 8192`, `TrailingLogs 10240`
+(`cluster.Options.Timing` overrides the timeouts; the test harness uses 1 s / 1 s / 500 ms /
+10 ms and Raft's in-memory stores through `Options.Stores`, which is how tests get speed
+without any switch that skips an fsync).
 Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
 
 ## Reads
@@ -197,7 +204,9 @@ Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
 `meta.Store` is the read API of the FSM (`type Store = FSM`); the vfs, gateways, repairer
 and CLI reports hold a `*meta.Store`. Every read (`GetInode`, `Lookup`, `Resolve`, `PathOf`,
 `ReadDir`, `GetChunk`, `ForEachChunk`, `Nodes`, `Volume`, `Stats`, `Applied`,
-`WaitApplied`) is served from the local FSM under `RLock`, returning copies. Followers may therefore serve slightly stale
+`WaitApplied`) is served from the local FSM under `RLock`, returning copies. An inode
+copy carries no `Children` map (a directory's name table is read through `Lookup` and
+`ReadDir`), so a LOOKUP or GETATTR costs O(1) however large the directory. Followers may therefore serve slightly stale
 metadata; this is accepted NFS behaviour and lets a disconnected laptop browse the tree.
 A gateway that just proposed a command calls `WaitApplied(index)` before answering, which
 gives read-your-writes on the issuing node.
@@ -218,7 +227,7 @@ Health, computed locally:
 | `Health` | Condition | Gateway behaviour |
 |---|---|---|
 | `Healthy` | leader known, last contact < 30 s | normal |
-| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `NFS3ERR_ROFS`; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
+| `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `EROFS`, which reaches the wire as `NFS3ERR_ACCES` (create, mkdir, symlink, setattr) or `NFS3ERR_IO` (remove, rmdir, rename): go-nfs maps a filesystem error per operation and has no `ROFS` mapping (07); before the threshold a failed proposal is retried with backoff, since a leader change takes seconds; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
 | `NoLeader` | Raft has no leader (quorum lost) | same as `Stale`; `status` reports which voters are unreachable |
 
 ## Proposing and leader forwarding
@@ -262,14 +271,16 @@ same ID), `node set-capacity` (`NodeUpsert`), `node drain` (`NodeSetState Draini
 excluded from new placement; repairer re-places its slots), `node remove`
 (`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`),
 `tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
-the device can `join` afresh; never touches `shards/`, which the sweep reconciles later).
+the device can `join` afresh; never touches `shards/`, which the sweep reconciles later; it
+refuses while `serve` runs and while `staging/` holds unflushed writes, unless
+`--discard-dirty` accepts losing them).
 
 ## Partitions and quorum
 
 Raft guarantees that only a partition containing a majority of voters elects a leader and
 commits entries (I-6). The minority side's gateways move to `Stale`/`NoLeader`: reads
 continue from the local FSM and from any reachable shard holders; metadata mutations return
-`NFS3ERR_ROFS`; data WRITEs are still accepted into the WAL until the dirty caps, and
+`EROFS` (`NFS3ERR_ACCES`/`NFS3ERR_IO` on the wire, 07); data WRITEs are still accepted into the WAL until the dirty caps, and
 everything in the WAL sits there until the flusher can propose again.
 When the partition heals, the minority's Raft log is reconciled by Raft itself; our FSM has
 no divergent state to merge because it never applied uncommitted entries.
@@ -294,6 +305,7 @@ no divergent state to merge because it never applied uncommitted entries.
   rejected without side effects, so two gateways cannot interleave partial updates to one
   file.
 - **I-62** — A node ID has at most one record that is not `Removed` in the node table: a `NodeUpsert` with `Idx == 0` for a known ID updates that record and never allocates a new index, so a retried join is idempotent whichever leader serves it.
+- **I-64** — No command makes a file larger than `MaxFileSize(ChunkSize)` (`ChunkSize × 2^20` chunks): a `Commit` beyond it is `ErrBadCommand` before anything is allocated from its size, the gateway refuses the WRITE or SETATTR with `EFBIG` first, and `Apply` never panics on a decodable command.
 - **I-29** — The leader-forwarding layer never applies a command twice: a forwarded command
   is handed to Raft at most once per proposal, and the forwarding layer itself retries only
   after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
@@ -303,11 +315,12 @@ no divergent state to merge because it never applied uncommitted entries.
 
 | Invariant | Tests |
 |---|---|
-| I-4 | `TestFSM_DeterministicAcrossReplicas`, `TestFSM_ApplyUsesCommandNowNotClock`, `TestCluster_PlacementAgreesOnAllNodes`, `TestSoak_FSMHashAgreement` |
-| I-5 | `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_SnapshotPersistConcurrentWithApply`, `TestCluster_RejoinAfterLongAbsence_SnapshotInstall` |
-| I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_MinorityGatewayReturnsEROFS`, `TestModelCheck_Long` |
-| I-26 | `TestFSM_ApplyRules_Table`, `TestFSM_FailedCommandLeavesStateUnchanged`, `FuzzDecodeCommand` |
-| I-27 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Invariants_RandomCommands`, `TestFSM_Tombstone_OnRefsZero`, `TestFSM_Commit_RevivesTombstonedChunk` |
-| I-28 | `TestFSM_Commit_RejectsStaleBaseVersion`, `TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestVFS_ConcurrentGateways_SameChunkOneWins` |
+| I-4 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas`, `TestModelCheck_Long` |
+| I-5 | `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestSingleNode_BootstrapProposeRestart` |
+| I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits` |
+| I-26 | `FuzzDecodeCommand`, `TestErrorCode_RoundTrip`, `TestFSM_BadCommandLeavesStateUnchanged`, `TestFSM_Commit_NewSizeBounds`, `TestFSM_Commit_RejectsImplicitShrink`, `TestFSM_Create_NameBoundaries`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestVFS_RenameIntoOwnSubtree_NoSideEffects` |
+| I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
+| I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
-| I-29 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestCluster_ForwardRetriesOnlyOnNotLeader`, `TestFSM_RefcountUnderflow_IsBadCommand` |
+| I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
+| I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |

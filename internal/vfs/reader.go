@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/ec"
@@ -32,6 +34,56 @@ type Reader struct {
 	// shard so the leader can queue a repair (docs/06 §4 case 5). Must not block.
 	BadSlot func(key chunk.ShardKey, node meta.NodeIdx)
 	Events  *meta.EventRing // chunk history (nil unless dev.enabled)
+
+	mu       sync.Mutex
+	inflight map[meta.Hash]*fetchCall // one fetch per hash at a time; readahead shares it
+	lat      latencyRing              // recent shard GET times: the hedge delay is their p95
+}
+
+// latencyRing keeps the last 64 successful shard GET durations.
+type latencyRing struct {
+	mu   sync.Mutex
+	d    [64]time.Duration
+	n, i int
+}
+
+func (r *latencyRing) add(d time.Duration) {
+	r.mu.Lock()
+	r.d[r.i] = d
+	r.i = (r.i + 1) % len(r.d)
+	if r.n < len(r.d) {
+		r.n++
+	}
+	r.mu.Unlock()
+}
+
+// Hedge bounds: a straggler is given at least this long and at most that long before a
+// further shard is requested in its place.
+const (
+	hedgeMin     = 20 * time.Millisecond
+	hedgeMax     = 2 * time.Second
+	hedgeDefault = 200 * time.Millisecond
+)
+
+// hedgeDelay is the p95 of recent GETs clamped to [hedgeMin, hedgeMax], or hedgeDefault
+// before any GET completed.
+func (r *latencyRing) hedgeDelay() time.Duration {
+	r.mu.Lock()
+	n := r.n
+	s := append([]time.Duration(nil), r.d[:n]...)
+	r.mu.Unlock()
+	if n == 0 {
+		return hedgeDefault
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	return min(max(s[(n*95+99)/100-1], hedgeMin), hedgeMax)
+}
+
+// fetchCall is a fetch in progress that later readers of the same chunk wait on.
+type fetchCall struct {
+	done chan struct{}
+	data []byte
+	err  error
 }
 
 // NewReader wires a reader. cache may be nil.
@@ -39,13 +91,14 @@ func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache
 	if codecs == nil {
 		codecs = &ec.Pool{}
 	}
-	return &Reader{st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default()}
+	return &Reader{st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(), inflight: map[meta.Hash]*fetchCall{}}
 }
 
 func sha256Sum(b []byte) meta.Hash { return sha256.Sum256(b) }
 
 // ReadChunk returns the logical bytes of chunk h. HashZero returns nil (the caller
-// zero-fills).
+// zero-fills). The slice may be shared with the cache and other readers: do not modify
+// it. Concurrent reads of one chunk (readahead, several clients) share one fetch.
 func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 	if h == meta.HashZero {
 		return nil, nil
@@ -55,6 +108,36 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 			return b, nil
 		}
 	}
+	for {
+		r.mu.Lock()
+		call, running := r.inflight[h]
+		if !running {
+			call = &fetchCall{done: make(chan struct{})}
+			r.inflight[h] = call
+		}
+		r.mu.Unlock()
+		if !running {
+			call.data, call.err = r.fetchChunk(ctx, h)
+			r.mu.Lock()
+			delete(r.inflight, h)
+			r.mu.Unlock()
+			close(call.done)
+			return call.data, call.err
+		}
+		select {
+		case <-call.done:
+			if call.err != nil && errors.Is(call.err, context.Canceled) {
+				continue // the leader gave up for its own reasons; fetch for ourselves
+			}
+			return call.data, call.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// fetchChunk is the uncached read: shards, decode, verify, cache.
+func (r *Reader) fetchChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 	c, ok := r.st.GetChunk(h)
 	if !ok {
 		return nil, fmt.Errorf("%w: chunk %x not in metadata", ErrIO, h[:8])
@@ -80,11 +163,14 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrIO, err)
 	}
-	// slot order: rank the holder nodes, map back to slot indexes
+	// Live holders only (L-131): a dead node would cost the dial or header timeout for
+	// nothing. Holders are offered to Rank in slot order, so data slots come first at
+	// equal rank and a decode is only needed when a data shard is unreachable (L-63).
+	live := meta.LiveSet(r.peers.Live())
 	slotOf := map[meta.NodeIdx]int{}
 	var holders []meta.NodeIdx
 	for i, n := range c.Placement {
-		if n != 0 {
+		if n != 0 && live[n] {
 			slotOf[n] = i
 			holders = append(holders, n)
 		}
@@ -95,30 +181,36 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 	}
 	shards := make([][]byte, total)
 	good := 0
-	next := 0
 	type res struct {
 		slot int
 		b    []byte
 		err  error
+		took time.Duration
 	}
-	for good < k && next < len(order) {
-		want := k - good
-		batch := order[next:min(next+want, len(order))]
-		next += len(batch)
-		out := make(chan res, len(batch))
-		var wg sync.WaitGroup
-		for _, slot := range batch {
-			wg.Add(1)
-			go func(slot int) {
-				defer wg.Done()
-				node := c.Placement[slot]
-				b, err := r.shards.Get(ctx, node, chunk.Key(c.Hash, c.K, c.M, slot))
-				out <- res{slot, b, err}
-			}(slot)
-		}
-		wg.Wait()
-		close(out)
-		for x := range out {
+	// The first k slots are requested at once; a slot whose reply is late by the hedge
+	// delay (p95 of recent GETs) has the next slot in rank order requested alongside it,
+	// so one slow holder costs a shard's worth of extra traffic, not its timeout.
+	out := make(chan res, len(order))
+	next, pending := 0, 0
+	launch := func() {
+		slot := order[next]
+		next++
+		pending++
+		go func() {
+			start := time.Now()
+			b, err := r.shards.Get(ctx, c.Placement[slot], chunk.Key(c.Hash, c.K, c.M, slot))
+			out <- res{slot, b, err, time.Since(start)}
+		}()
+	}
+	for good+pending < k && next < len(order) {
+		launch()
+	}
+	hedge := time.NewTimer(r.lat.hedgeDelay())
+	defer hedge.Stop()
+	for good < k && pending > 0 {
+		select {
+		case x := <-out:
+			pending--
 			if x.err != nil {
 				if errors.Is(x.err, chunk.ErrNotFound) || errors.Is(x.err, chunk.ErrCorrupt) {
 					r.Events.Record(c.Hash, meta.EvReadBadSlot, fmt.Sprintf("slot %d node %d: %v", x.slot, c.Placement[x.slot], x.err))
@@ -126,10 +218,21 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 						r.BadSlot(chunk.Key(c.Hash, c.K, c.M, x.slot), c.Placement[x.slot])
 					}
 				}
-				continue
+			} else {
+				shards[x.slot] = x.b
+				good++
+				r.lat.add(x.took)
 			}
-			shards[x.slot] = x.b
-			good++
+			for good+pending < k && next < len(order) { // a failure is replaced at once
+				launch()
+			}
+		case <-hedge.C:
+			if next < len(order) {
+				launch()
+				hedge.Reset(r.lat.hedgeDelay())
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 	if good < k {
@@ -140,6 +243,18 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 		return nil, fmt.Errorf("%w: decode chunk %x: %w", ErrIO, c.Hash[:8], err)
 	}
 	return data, nil
+}
+
+// BaseReader is ReadAt as the overlay wants its base callback: a read past the committed
+// size is not an error (the overlay zero-fills what the base does not cover).
+func (r *Reader) BaseReader(ctx context.Context, in meta.Inode) func(off uint64, p []byte) error {
+	return func(off uint64, p []byte) error {
+		_, err := r.ReadAt(ctx, in, p, int64(off))
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 // ReadAt reads committed file bytes: chunk by chunk, zero-filling holes and the tail of

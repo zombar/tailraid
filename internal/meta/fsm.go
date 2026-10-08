@@ -21,18 +21,17 @@ import (
 type FSM struct {
 	mu      sync.RWMutex
 	st      *State
+	stats   Stats // volume totals, kept in step with every apply (Inodes filled on read)
 	applied atomic.Uint64
 
-	waitMu   sync.Mutex
-	waitCond *sync.Cond
-	closed   bool // set by Close: no further index will ever be applied
+	waitMu sync.Mutex
+	waitCh chan struct{} // closed and replaced on every applied index: one broadcast, no goroutine per waiter
+	closed bool          // set by Close: no further index will ever be applied
 }
 
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
-	f := &FSM{st: NewState()}
-	f.waitCond = sync.NewCond(&f.waitMu)
-	return f
+	return &FSM{st: NewState(), waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Tests use it directly.
@@ -40,10 +39,15 @@ func (f *FSM) state() *State { return f.st }
 
 // Apply implements raft.FSM. Non-command logs advance the applied index only.
 func (f *FSM) Apply(l *raft.Log) interface{} {
+	var cmd Command
+	var decodeErr error
+	if l.Type == raft.LogCommand {
+		cmd, decodeErr = DecodeCommand(l.Data) // outside the lock: readers are not held up by decoding
+	}
 	f.mu.Lock()
 	var res interface{}
 	if l.Type == raft.LogCommand {
-		res = f.applyLocked(l)
+		res = f.applyLocked(cmd, decodeErr, l.Index)
 	}
 	f.st.Applied = l.Index
 	f.mu.Unlock()
@@ -54,16 +58,16 @@ func (f *FSM) Apply(l *raft.Log) interface{} {
 func (f *FSM) setApplied(idx uint64) {
 	f.waitMu.Lock()
 	f.applied.Store(idx)
-	f.waitCond.Broadcast()
+	close(f.waitCh)
+	f.waitCh = make(chan struct{})
 	f.waitMu.Unlock()
 }
 
-func (f *FSM) applyLocked(l *raft.Log) Result {
-	cmd, err := DecodeCommand(l.Data)
-	if err != nil {
+func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
+	if decodeErr != nil {
 		return Result{Err: ErrBadCommand}
 	}
-	a := &applier{st: f.st, index: l.Index}
+	a := &applier{st: f.st, stats: &f.stats, index: index}
 	res, err := a.apply(cmd)
 	if err != nil {
 		return Result{Err: err}
@@ -77,6 +81,7 @@ func (f *FSM) applyLocked(l *raft.Log) Result {
 // applier carries one command's context. Every op validates fully before mutating.
 type applier struct {
 	st    *State
+	stats *Stats
 	index uint64
 	now   int64 // clamped command clock; 0 when the op carries no Now
 }
@@ -134,8 +139,8 @@ func (a *applier) setVolume(c *SetVolume) error {
 	}
 	first := st.Vol.ChunkSize == 0
 	if first {
-		if c.ChunkSize == 0 {
-			return ErrPolicy
+		if c.ChunkSize == 0 || c.ChunkSize > MaxChunkSize {
+			return ErrPolicy // I-67: one bound for init, the FSM and the shard store
 		}
 		st.Vol.ChunkSize = c.ChunkSize
 	} else if c.ChunkSize != 0 && c.ChunkSize != st.Vol.ChunkSize {
@@ -225,6 +230,17 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 	if n.State == Removed {
 		return ErrBadCommand
 	}
+	if c.State == Removed {
+		// Every slot is the sole copy of its shard index (I-9): a node that still holds
+		// one cannot leave the table (docs/02). `node remove --force` zeroes the slots first.
+		for _, ch := range a.st.Chunks {
+			for _, s := range ch.Placement {
+				if s == c.Idx {
+					return ErrNodeNotEmpty
+				}
+			}
+		}
+	}
 	a.clock(c.Now)
 	n.State = c.State
 	return nil
@@ -232,8 +248,16 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 
 // --- namespace ---------------------------------------------------------------
 
-func validName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/")
+// validName enforces I-66: a name is 1..MaxNameLen bytes, not "." or "..", and holds
+// neither '/' nor NUL. Too long is its own error so the gateway can say NAMETOOLONG.
+func validName(name string) error {
+	switch {
+	case len(name) > MaxNameLen:
+		return ErrNameTooLong
+	case name == "", name == ".", name == "..", strings.ContainsAny(name, "/\x00"):
+		return ErrBadCommand
+	}
+	return nil
 }
 
 func (a *applier) dir(ino Ino) (*Inode, error) {
@@ -257,12 +281,16 @@ func (a *applier) newInode(typ FileType, parent *Inode, name string, mode, uid, 
 	st.Inodes[in.Ino] = in
 	parent.Children[name] = in.Ino
 	parent.Mtime, parent.Ctime = now, now
+	parent.Version++ // the name table changed (docs/01)
 	return in
 }
 
 func (a *applier) create(c *Create) (Result, error) {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return Result{}, ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return Result{}, err
 	}
 	if c.Type != TFile && c.Type != TSymlink {
 		return Result{}, ErrBadCommand
@@ -287,8 +315,11 @@ func (a *applier) create(c *Create) (Result, error) {
 }
 
 func (a *applier) mkdir(c *Mkdir) (Result, error) {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return Result{}, ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return Result{}, err
 	}
 	p, err := a.dir(c.Parent)
 	if err != nil {
@@ -330,10 +361,13 @@ func (d refDelta) check(st *State) error {
 	return nil
 }
 
-// commit applies the deltas and fixes tombstone bookkeeping. Call only after check.
-func (d refDelta) commit(st *State, now int64) {
+// commit applies the deltas, fixes tombstone bookkeeping and keeps the chunk totals.
+// Call only after check.
+func (d refDelta) commit(st *State, stats *Stats, now int64) {
 	for h, n := range d {
 		c := st.Chunks[h]
+		fresh := c.Refs == 0 && c.TombstonedAt == 0 // registered by this command, not counted yet
+		wasLive := c.Refs > 0
 		c.Refs = uint32(int(c.Refs) + n)
 		if c.Refs == 0 {
 			if c.TombstonedAt == 0 {
@@ -344,12 +378,19 @@ func (d refDelta) commit(st *State, now int64) {
 			c.TombstonedAt = 0
 			delete(st.Tombs, h)
 		}
+		if !fresh {
+			stats.chunkOut(c, wasLive)
+		}
+		stats.chunkIn(c)
 	}
 }
 
 func (a *applier) unlink(c *Unlink) error {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return err
 	}
 	st := a.st
 	p, err := a.dir(c.Parent)
@@ -370,16 +411,23 @@ func (a *applier) unlink(c *Unlink) error {
 		return err
 	}
 	now := a.clock(c.Now)
-	d.commit(st, now)
+	d.commit(st, a.stats, now)
+	if in.Type == TFile {
+		a.stats.LogicalBytes -= in.Size
+	}
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	p.Mtime, p.Ctime = now, now
+	p.Version++ // the name table changed (docs/01)
 	return nil
 }
 
 func (a *applier) rmdir(c *Rmdir) error {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return err
 	}
 	st := a.st
 	p, err := a.dir(c.Parent)
@@ -402,6 +450,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	delete(st.Inodes, ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
+	p.Version++ // the name table changed (docs/01)
 	return nil
 }
 
@@ -420,8 +469,14 @@ func (a *applier) isAncestor(anc, dir Ino) bool {
 }
 
 func (a *applier) rename(c *Rename) error {
-	if c == nil || !validName(c.OldName) || !validName(c.NewName) {
+	if c == nil {
 		return ErrBadCommand
+	}
+	if err := validName(c.OldName); err != nil {
+		return err
+	}
+	if err := validName(c.NewName); err != nil {
+		return err
 	}
 	st := a.st
 	op, err := a.dir(c.OldParent)
@@ -464,7 +519,10 @@ func (a *applier) rename(c *Rename) error {
 	}
 	now := a.clock(c.Now)
 	if dst != nil {
-		d.commit(st, now)
+		d.commit(st, a.stats, now)
+		if dst.Type == TFile {
+			a.stats.LogicalBytes -= dst.Size
+		}
 		delete(st.Inodes, dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
@@ -478,7 +536,9 @@ func (a *applier) rename(c *Rename) error {
 	}
 	src.Parent, src.Name, src.Ctime = c.NewParent, c.NewName, now
 	op.Mtime, op.Ctime = now, now
+	op.Version++ // the name table changed (docs/01)
 	np.Mtime, np.Ctime = now, now
+	np.Version++ // the name table changed (docs/01)
 	return nil
 }
 
@@ -554,6 +614,12 @@ func (a *applier) commit(c *Commit) error {
 	}
 	if c.HasTruncate && c.TruncateTo > c.NewSize {
 		return ErrBadCommand
+	}
+	if !c.HasTruncate && c.NewSize < in.Size {
+		return ErrBadCommand // a file shrinks only through an explicit truncate (L-175)
+	}
+	if c.NewSize > MaxFileSize(st.Vol.ChunkSize) {
+		return ErrBadCommand // bounded chunk list; checked before anything is sized by NewSize (I-64, L-182)
 	}
 	// Validate NewChunks before touching anything (a failing commit registers nothing).
 	type newEntry struct {
@@ -636,9 +702,18 @@ func (a *applier) commit(c *Commit) error {
 		d := e.d
 		st.Chunks[d.Hash] = &Chunk{Hash: d.Hash, Size: d.Size, K: d.K, M: d.M, Placement: append([]NodeIdx(nil), d.Placement...)}
 	}
+	// Only the indices that change carry a delta: written ones (old entry out, new in),
+	// and the entries a truncate drops; everything below keep that was not written is
+	// the same hash in both lists and would cancel. Commit therefore costs O(writes),
+	// not O(file length), under the FSM write lock.
 	delta := refDelta{}
-	delta.add(newList, +1)
-	delta.add(oldList, -1)
+	for _, w := range c.Writes {
+		delta.add([]Hash{w.Hash}, +1)
+		if int(w.Idx) < keep {
+			delta.add([]Hash{oldList[w.Idx]}, -1)
+		}
+	}
+	delta.add(oldList[keep:], -1)
 	for _, e := range fresh {
 		if _, touched := delta[e.d.Hash]; !touched {
 			delta[e.d.Hash] += 0 // ensure tombstone bookkeeping runs for unreferenced new entries
@@ -651,8 +726,9 @@ func (a *applier) commit(c *Commit) error {
 		return err
 	}
 	now := a.clock(c.Now)
-	delta.commit(st, now)
+	delta.commit(st, a.stats, now)
 	in.Chunks = newList
+	a.stats.LogicalBytes += c.NewSize - in.Size // unsigned: wraps and unwraps exactly
 	in.Size = c.NewSize
 	in.Version++
 	in.Mtime, in.Ctime = now, now
@@ -670,8 +746,14 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	if !validPlacement(c.K, c.M, c.Placement) {
 		return ErrBadCommand
 	}
+	if ch.Refs > 0 {
+		a.stats.StoredBytes -= storedBytes(ch)
+	}
 	ch.K, ch.M = c.K, c.M
 	ch.Placement = append([]NodeIdx(nil), c.Placement...)
+	if ch.Refs > 0 {
+		a.stats.StoredBytes += storedBytes(ch)
+	}
 	return nil
 }
 
@@ -692,6 +774,7 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 		delete(st.Chunks, v.Hash)
 		delete(st.Tombs, v.Hash)
 	}
+	a.stats.Tombstoned -= len(victims)
 	return Result{Victims: victims}, nil
 }
 
@@ -730,6 +813,7 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	}
 	f.mu.Lock()
 	f.st = st
+	f.stats = computeStats(st)
 	f.mu.Unlock()
 	f.setApplied(st.Applied)
 	return nil
@@ -739,37 +823,26 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 // closed (ErrClosed: the node shut down with the entry in flight, so the outcome is
 // unknown to this caller).
 func (f *FSM) WaitApplied(ctx context.Context, index uint64) error {
-	if f.applied.Load() >= index {
-		return nil
-	}
-	done := make(chan error, 1)
-	go func() {
-		f.waitMu.Lock()
-		for f.applied.Load() < index {
-			if f.closed {
-				f.waitMu.Unlock()
-				done <- ErrClosed
-				return
-			}
-			select {
-			case <-ctx.Done():
-				f.waitMu.Unlock()
-				return
-			default:
-			}
-			f.waitCond.Wait()
+	for {
+		if f.applied.Load() >= index {
+			return nil
 		}
-		f.waitMu.Unlock()
-		done <- nil
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
 		f.waitMu.Lock()
-		f.waitCond.Broadcast()
+		if f.closed {
+			f.waitMu.Unlock()
+			return ErrClosed
+		}
+		if f.applied.Load() >= index {
+			f.waitMu.Unlock()
+			return nil
+		}
+		ch := f.waitCh
 		f.waitMu.Unlock()
-		return ctx.Err()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -778,6 +851,7 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error {
 func (f *FSM) Close() {
 	f.waitMu.Lock()
 	f.closed = true
-	f.waitCond.Broadcast()
+	close(f.waitCh)
+	f.waitCh = make(chan struct{})
 	f.waitMu.Unlock()
 }

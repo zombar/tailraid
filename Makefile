@@ -35,6 +35,10 @@ test-race:
 test-long:
 	go test -race -run 'ModelCheck|Durability|Oracle' -timeout 30m $(PKGS)
 
+# hot-path benchmarks; compare against docs/reports/bench-*.txt with benchstat
+bench:
+	go test -run '^$$' -bench . -benchmem -count=6 -timeout 30m ./internal/meta ./internal/vfs ./internal/chunk ./internal/ec
+
 ## test-mount: real NFS mount workload; needs sudo (run as: sudo -E make test-mount)
 test-mount:
 	TAILRAID_MOUNT_TEST=1 go test -v -count=1 -run 'TestMount' -timeout 20m ./test/mount/

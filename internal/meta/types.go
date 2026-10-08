@@ -7,7 +7,15 @@
 package meta
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/binary"
+	"encoding/hex"
+	"math"
+	"net"
+	"path"
+	"strconv"
+	"strings"
 )
 
 // Hash is the SHA-256 of the logical bytes of a chunk.
@@ -111,6 +119,71 @@ type Node struct {
 	S3PathStyle bool
 }
 
+// String names a node state as `status` and the reports print it.
+func (s NodeState) String() string {
+	switch s {
+	case Draining:
+		return "draining"
+	case Removed:
+		return "removed"
+	}
+	return "active"
+}
+
+// String names a node kind.
+func (k NodeKind) String() string {
+	if k == KindS3 {
+		return "s3"
+	}
+	return "device"
+}
+
+// HexID is the printed form of a cluster ID.
+func HexID(id [16]byte) string { return hex.EncodeToString(id[:]) }
+
+// SplitPath cleans a slash- or backslash-separated path into components relative to the
+// root: "" or "/" is the root (nil).
+func SplitPath(name string) []string {
+	name = path.Clean("/" + strings.ReplaceAll(name, "\\", "/"))
+	if name == "/" {
+		return nil
+	}
+	return strings.Split(name[1:], "/")
+}
+
+// LiveSet is a set view of a liveness list.
+func LiveSet(live []NodeIdx) map[NodeIdx]bool {
+	out := make(map[NodeIdx]bool, len(live))
+	for _, n := range live {
+		out[n] = true
+	}
+	return out
+}
+
+// FillPlacement places every zero slot of place on a fresh candidate chosen by Place for
+// h; slots for which no candidate is left stay 0. Placement by hash keeps it the same
+// answer on every node (I-8).
+func FillPlacement(h Hash, place []NodeIdx, cands []Candidate) {
+	needed := 0
+	for _, n := range place {
+		if n == 0 {
+			needed++
+		}
+	}
+	fresh := Place(h, cands, needed)
+	fi := 0
+	for i := range place {
+		if place[i] == 0 && fi < len(fresh) {
+			place[i] = fresh[fi]
+			fi++
+		}
+	}
+}
+
+// RPCAddr is the node's host:port for member RPC; RaftAddr the Raft stream's.
+func (n Node) RPCAddr() string  { return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort))) }
+func (n Node) RaftAddr() string { return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RaftPort))) }
+
 // Volume is the policy for new chunks. ChunkSize is fixed for the life of the volume;
 // K and M may change at any time (PolicyVersion bumps).
 type Volume struct {
@@ -194,14 +267,26 @@ func (s *State) Clone() *State {
 	return c
 }
 
+// MaxChunksPerFile bounds a file's chunk list (I-64): the FSM holds every chunk hash of
+// every file in memory and a Commit rebuilds the whole list, so no command may ask for
+// more. With 1 MiB chunks this is a 1 TiB file (a 32 MiB list on every node).
+const MaxChunksPerFile = 1 << 20
+
+// MaxFileSize is the largest size a file may have under chunkSize.
+func MaxFileSize(chunkSize uint32) uint64 { return uint64(chunkSize) * MaxChunksPerFile }
+
 // ChunkCount returns ceil(size/chunkSize), the number of chunk slots a file of the given
-// size occupies (I-1).
+// size occupies (I-1). It never overflows: the result saturates at math.MaxInt.
 func ChunkCount(size uint64, chunkSize uint32) int {
-	if size == 0 {
-		return 0
-	}
 	cs := uint64(chunkSize)
-	return int((size + cs - 1) / cs)
+	q := size / cs
+	if size%cs != 0 {
+		q++
+	}
+	if q > uint64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(q)
 }
 
 // HandleMagic is the first four bytes of every NFS file handle ("TRHD").
@@ -225,4 +310,13 @@ func DecodeHandle(b []byte) (ino Ino, gen uint32, ok bool) {
 		return 0, 0, false
 	}
 	return Ino(binary.BigEndian.Uint64(b[8:16])), binary.BigEndian.Uint32(b[4:8]), true
+}
+
+// NewJoinToken returns a fresh join token: 8 random base32 characters (docs/08 §Join).
+func NewJoinToken() string {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("meta: crypto/rand: " + err.Error())
+	}
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:]))
 }

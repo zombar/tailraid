@@ -42,6 +42,9 @@ type Env interface {
 	Fsck(ctx context.Context, node NodeRef) (ok bool, detail string, err error)
 	Chunks(ctx context.Context, node NodeRef, path string) ([]admin.ChunkReport, error)
 	FSMHash(ctx context.Context, node NodeRef) (applied uint64, hash string, err error)
+	// Goroutines is the node's goroutine dump (/dev/goroutines), taken after a failed
+	// phase so a hang is diagnosed from the report rather than by killing the node.
+	Goroutines(ctx context.Context, node NodeRef) (string, error)
 
 	// faults
 	Kill(ctx context.Context, node NodeRef) error

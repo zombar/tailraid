@@ -135,7 +135,7 @@ func newEnv(t *testing.T) *env {
 	}
 	e.ts = tailscale.NewFake(memberIP, "self-1", nil)
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
-	e.auth = &WhoIsAuthorizer{TS: e.ts, Members: e.app.fsm.Nodes, Clk: e.clk}
+	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
 	e.srv, err = NewServer(Options{NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
 		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
@@ -234,7 +234,7 @@ func TestChunkRPC_FullNodeIs507(t *testing.T) {
 
 // Review #4/#14: the DELETE fence.
 // Invariant: I-13, I-14
-// Lifecycle: L-134, L-137, L-169
+// Lifecycle: L-134, L-137, L-169, L-174
 func TestChunkRPC_DeleteFence(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
@@ -313,7 +313,7 @@ func TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge(t *testing.T) {
 	}
 }
 
-// Invariant: I-18
+// Invariant: I-18, I-49
 func TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader(t *testing.T) {
 	e := newEnv(t)
 	e.ts.Remove(memberIP)
@@ -383,6 +383,30 @@ func TestApply_ForwardAndRedirect(t *testing.T) {
 	}
 }
 
+// After a failed attempt a source IP gets one join attempt per second, so the 8-character
+// token cannot be brute-forced from inside the tailnet (docs/08 threat table); successful
+// joins are never throttled.
+// Invariant: I-48
+func TestJoin_RateLimitedPerSource(t *testing.T) {
+	e := newEnv(t)
+	c := e.client()
+	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2, Capacity: 5}
+	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("first attempt: %v", err)
+	}
+	req.Token = "tok"
+	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("second attempt within a second: err=%v, want ErrRateLimited", err)
+	}
+	if len(e.app.fsm.Nodes()) != 1 {
+		t.Fatal("a rate-limited join changed membership")
+	}
+	e.clk.Advance(JoinInterval)
+	if _, err := c.Join(ctx, e.addr, req); err != nil {
+		t.Fatalf("attempt after the interval: %v", err)
+	}
+}
+
 // Invariant: I-48
 // Lifecycle: L-96
 func TestJoin_TokenAndIdentity(t *testing.T) {
@@ -395,10 +419,12 @@ func TestJoin_TokenAndIdentity(t *testing.T) {
 	if len(e.app.fsm.Nodes()) != 1 {
 		t.Fatal("wrong token changed membership")
 	}
+	e.clk.Advance(JoinInterval) // a failed attempt throttles the source for a second
 	req.Token, req.TSStableID = "tok", "someone-else"
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("identity mismatch: %v", err)
 	}
+	e.clk.Advance(JoinInterval)
 	req.TSStableID = "self-1"
 	jr, err := c.Join(ctx, e.addr, req)
 	if err != nil || jr.NodeIdx != 2 || len(jr.Members) != 2 || jr.Volume.K != 2 {
@@ -430,7 +456,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() {
 		t.Fatalf("health %+v %v", h, err)
 	}
-	st, err := c.Status(ctx, e.addr)
+	st, err := c.Call(ctx, e.addr, http.MethodGet, "/v1/status", nil)
 	if err != nil || !bytes.Contains(st, []byte(`"members"`)) {
 		t.Fatalf("status %s %v", st, err)
 	}
@@ -442,6 +468,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 	resp.Body.Close()
 }
 
+// Invariant: I-50
 func TestListen_RefusesNonLoopbackWithoutAuthorizer(t *testing.T) {
 	if _, err := Listen("0.0.0.0:0", AllowAll{}); err == nil {
 		t.Fatal("bound without authorizer")

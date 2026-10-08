@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // WAL record types.
@@ -35,15 +36,17 @@ type walRec struct {
 }
 
 // WAL is a per-inode append-only log. Every append is fsynced before it returns, so a
-// successful append means the bytes survive a crash or power loss (I-7).
+// successful append means the bytes survive a crash or power loss (I-7). All file access
+// goes through the sysfs.FS seam so tests can inject fsync failures and crashes.
 type WAL struct {
+	fs   sysfs.FS
 	path string
-	f    *os.File
+	f    sysfs.File
 	size int64
 }
 
-func openWAL(path string) (*WAL, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+func openWAL(fsys sysfs.FS, path string) (*WAL, error) {
+	f, err := fsys.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: open wal: %w", err)
 	}
@@ -52,7 +55,15 @@ func openWAL(path string) (*WAL, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("vfs: stat wal: %w", err)
 	}
-	return &WAL{path: path, f: f, size: st.Size()}, nil
+	if st.Size() == 0 {
+		// A new (or still empty) log: its directory entry must be durable before any
+		// record it holds is acknowledged (I-63).
+		if err := fsys.SyncDir(filepath.Dir(path)); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("vfs: fsync wal dir: %w", err)
+		}
+	}
+	return &WAL{fs: fsys, path: path, f: f, size: st.Size()}, nil
 }
 
 // Size is the byte length of the log.
@@ -80,6 +91,10 @@ func (w *WAL) append(typ uint8, off uint64, data []byte) (int64, error) {
 		return 0, fmt.Errorf("vfs: wal write: %w", err)
 	}
 	if err := w.f.Sync(); err != nil {
+		// Not acknowledged: cut the record back off so a crash cannot replay it (I-37).
+		// Best effort; the next append overwrites the same offset anyway.
+		_ = w.f.Truncate(w.size)
+		_ = w.f.Sync()
 		return 0, fmt.Errorf("vfs: wal fsync: %w", err)
 	}
 	dataOff := w.size + recHeaderLen
@@ -159,23 +174,11 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 	return nil
 }
 
-// Reset empties the log (after a full flush).
-func (w *WAL) Reset() error {
-	if err := w.f.Truncate(0); err != nil {
-		return fmt.Errorf("vfs: wal reset: %w", err)
-	}
-	if err := w.f.Sync(); err != nil {
-		return fmt.Errorf("vfs: wal fsync: %w", err)
-	}
-	w.size = 0
-	return nil
-}
-
 // Compact atomically replaces the log with exactly recs, returning each record's data
 // offset in the new log. The data slices must have been read out before the call.
 func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	tmp := w.path + ".new"
-	nf, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	nf, err := w.fs.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: wal compact: %w", err)
 	}
@@ -185,7 +188,7 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 		buf := encodeRecord(r.typ, r.off, r.data)
 		if _, err := nf.WriteAt(buf, pos); err != nil {
 			_ = nf.Close()
-			_ = os.Remove(tmp)
+			_ = w.fs.Remove(tmp)
 			return nil, fmt.Errorf("vfs: wal compact write: %w", err)
 		}
 		offs[i] = pos + recHeaderLen
@@ -193,7 +196,7 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	}
 	if err := nf.Sync(); err != nil {
 		_ = nf.Close()
-		_ = os.Remove(tmp)
+		_ = w.fs.Remove(tmp)
 		return nil, fmt.Errorf("vfs: wal compact fsync: %w", err)
 	}
 	// Both handles are closed before the rename: Windows refuses to replace or rename a
@@ -201,19 +204,19 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	// between rename and reopen, which a crash recovers from by replaying either file.
 	_ = nf.Close()
 	_ = w.f.Close()
-	if err := os.Rename(tmp, w.path); err != nil {
-		_ = os.Remove(tmp)
-		reopened, rerr := os.OpenFile(w.path, os.O_RDWR, 0o600)
+	if err := w.fs.Rename(tmp, w.path); err != nil {
+		_ = w.fs.Remove(tmp)
+		reopened, rerr := w.fs.OpenFile(w.path, os.O_RDWR, 0o600)
 		if rerr != nil {
 			return nil, fmt.Errorf("vfs: wal compact rename: %w (reopen: %w)", err, rerr)
 		}
 		w.f = reopened
 		return nil, fmt.Errorf("vfs: wal compact rename: %w", err)
 	}
-	if err := syncDir(filepath.Dir(w.path)); err != nil {
-		return nil, err
+	if err := w.fs.SyncDir(filepath.Dir(w.path)); err != nil {
+		return nil, fmt.Errorf("vfs: wal compact fsync dir: %w", err)
 	}
-	reopened, err := os.OpenFile(w.path, os.O_RDWR, 0o600)
+	reopened, err := w.fs.OpenFile(w.path, os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: wal compact reopen: %w", err)
 	}
@@ -221,18 +224,3 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	w.size = pos
 	return offs, nil
 }
-
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("vfs: open dir: %w", err)
-	}
-	defer d.Close()
-	if err := d.Sync(); err != nil && !errors.Is(err, os.ErrInvalid) && !isDirSyncUnsupported(err) {
-		return fmt.Errorf("vfs: fsync dir: %w", err)
-	}
-	return nil
-}
-
-// ensure io is referenced for implementers reading the record layout.
-var _ = io.EOF

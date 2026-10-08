@@ -98,13 +98,24 @@ type Prober struct {
 	mu     sync.Mutex
 	probes map[meta.NodeIdx]*Probe
 	events chan Event
+
+	fillAfter, evictAfter time.Duration
 }
 
 var _ meta.Peers = (*Prober)(nil)
 
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
-	return &Prober{node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64)}
+	return &Prober{node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
+		fillAfter: FillAfter, evictAfter: EvictAfter}
+}
+
+// SetHoldDowns overrides the MemberDown and MemberLost hold-downs (the configured
+// repair.fill_after and evict_after), so the prober's events agree with the repairer.
+func (p *Prober) SetHoldDowns(fillAfter, evictAfter time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fillAfter, p.evictAfter = fillAfter, evictAfter
 }
 
 // Events delivers MemberUp/Down/Lost; the buffer is bounded and events are dropped,
@@ -203,11 +214,11 @@ func (p *Prober) holdDowns(now time.Time) {
 		if pr.DeadSince.IsZero() {
 			continue
 		}
-		if !pr.Down && now.Sub(pr.DeadSince) >= FillAfter {
+		if !pr.Down && now.Sub(pr.DeadSince) >= p.fillAfter {
 			pr.Down = true
 			p.emit(Event{Kind: MemberDown, Idx: idx, Since: pr.DeadSince})
 		}
-		if !pr.Lost && now.Sub(pr.DeadSince) >= EvictAfter {
+		if !pr.Lost && now.Sub(pr.DeadSince) >= p.evictAfter {
 			pr.Lost = true
 			p.emit(Event{Kind: MemberLost, Idx: idx, Since: pr.DeadSince})
 		}
@@ -235,9 +246,13 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	}
 	p.mu.Lock()
 	pr, ok := p.probes[idx]
+	var lastOK time.Time
+	if ok {
+		lastOK = pr.LastOK // copied under the lock: record rewrites the probe in place
+	}
 	p.mu.Unlock()
-	if ok && !pr.LastOK.IsZero() {
-		return p.clk.Now().Sub(pr.LastOK) < LiveThreshold
+	if ok && !lastOK.IsZero() {
+		return p.clk.Now().Sub(lastOK) < LiveThreshold
 	}
 	if nd, found := p.node.nodeByIdx(idx); found && nd.JoinedAt > 0 {
 		return p.clk.Now().Sub(time.Unix(0, nd.JoinedAt)) < LiveThreshold
@@ -264,16 +279,14 @@ func (p *Prober) Self() meta.NodeIdx {
 }
 
 func (p *Prober) Live() []meta.NodeIdx {
-	nodes := p.node.FSM.Nodes()
 	var out []meta.NodeIdx
-	for i := range nodes {
-		if nodes[i].State == meta.Removed {
-			continue
+	p.node.FSM.ForEachNode(func(nd meta.Node) bool {
+		if nd.State != meta.Removed && p.IsLive(nd.Idx) {
+			out = append(out, nd.Idx)
 		}
-		if p.IsLive(nodes[i].Idx) {
-			out = append(out, nodes[i].Idx)
-		}
-	}
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
@@ -330,12 +343,4 @@ func (n *Node) Health(clk clock.Clock, prober *Prober) HealthReport {
 	return rep
 }
 
-func (n *Node) nodeByID(id string) (meta.Node, bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == id {
-			return nodes[i], true
-		}
-	}
-	return meta.Node{}, false
-}
+func (n *Node) nodeByID(id string) (meta.Node, bool) { return n.FSM.NodeByID(id) }

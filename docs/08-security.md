@@ -31,7 +31,8 @@ implements:
    `TSStableID`. Mismatch → **403** and the cache entry for that IP is purged. This catches
    an IP that was reassigned to another device and a device that re-authenticated under a
    different identity.
-4. Cache: positive results for 5 minutes, negative results for 30 seconds. The cache is
+4. Cache: positive results for 5 minutes, negative results for 30 seconds; concurrent
+   misses for one address share a single WhoIs call. The cache is
    purged entirely on every membership change event, so a removed member is rejected on
    its very next request even with a warm cache.
 5. The `X-Tailraid-Cluster` header must equal this node's cluster ID → otherwise **409**.
@@ -64,6 +65,7 @@ the node's disk.
 name, address, ports, suffrage request and capacity. The receiving node:
 
 - requires `WhoIs(src).StableID == claimed StableID` (the joiner is who it says it is),
+- after a failed attempt accepts one more from that source IP per second (`429` otherwise); successful joins are never throttled,
 - requires `token == Meta.JoinToken` from the FSM (constant-time compare),
 - forwards a member-add to the Raft leader; the leader adds the server to the Raft
   configuration (voter or non-voter) and upserts the member record.
@@ -109,8 +111,10 @@ verified.
 
 `/dev/fsm-hash` (applied index and SHA-256 of the encoded FSM state), `/dev/corrupt?key=`
 (flips a byte of a shard file's payload), `/dev/exit` (process exit 3 after the reply, for
-a service manager to restart) and `/dev/fault` (per-peer drop rules on the Raft stream and
-the node RPC, both directions; docs/12 §3) exist for the soak suite (`docs/09`); metrics come from `/v1/status`. They are
+a service manager to restart), `/dev/fault` (per-peer drop rules on the Raft stream and
+the node RPC, both directions; docs/12 §3) and `/dev/goroutines` (the stack of every
+goroutine, as a crash dump prints it, so a hung node is diagnosed without killing it)
+exist for the soak suite (`docs/09`); metrics come from `/v1/status`. They are
 registered only when `dev.enabled: true` is set in the node's config; otherwise the routes
 do not exist (404). When enabled they go through the same WhoIs member authorization as
 every other endpoint, every node's `/health` carries `dev: true`, and `tailraid status`
@@ -140,11 +144,11 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Removed member keeps using a warm authorizer cache | cache purged on membership change |
 | Accidental join to the wrong cluster | join token |
 | Rogue "leader" overwrites a follower's log | handshake; Raft traffic only on Tailscale IPs |
-| Corrupt or forged shard body | receiver verifies `X-Shard-SHA256`; reader verifies decoded chunk hash |
+| Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | LAN host reaches NFS or RPC | NFS bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
-| Join-token brute force | tailnet-only, member or not; 8 base32 chars; rate limit 1 attempt/s per source IP; rotate anytime |
+| Join-token brute force | tailnet-only, member or not; 8 base32 chars; after a failure 1 attempt/s per source IP; rotate anytime |
 
 ## Non-goals (explicit)
 
@@ -175,7 +179,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 
 | Invariant | Tests |
 |---|---|
-| I-18 | `TestWhoIs_DeniesUnknownPeer`, `TestWhoIs_DeniesStableIDMismatch`, `TestWhoIs_AllowsMember`, `TestWhoIs_PurgeOnMembershipChange`, `TestChunkRPC_ReadsAuthBeforeBody`, `TestRPC_ClusterIDMismatch409` |
-| I-48 | `TestJoin_WrongToken403_NoRaftChange`, `TestJoin_StableIDMismatch403`, `TestJoin_Succeeds_AddsNonvoter` |
-| I-49 | `TestIDStream_RejectsForeignCluster`, `TestCluster_TwoInitsDoNotMerge` |
-| I-50 | `TestRPC_ListenRefusesNonLoopbackWithoutAuth`, `TestNFSGW_BindsLoopbackOnly`, `TestServe_ListenerAddresses` |
+| I-18 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge` |
+| I-48 | `TestCluster_JoinDrainRemove`, `TestJoin_RateLimitedPerSource`, `TestJoin_TokenAndIdentity`, `TestToken_Rotate` |
+| I-49 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestIDStream_RejectsForeignCluster` |
+| I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestPortmap_RefusesNonLoopback` |

@@ -497,10 +497,7 @@ func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names
 		if ch.Refs == 0 {
 			return true
 		}
-		wantK, wantM := policy[0], policy[1]
-		if ch.K == 1 && ch.Size <= 64<<10 {
-			wantK = 1
-		}
+		wantK, wantM := meta.TargetPolicy(ch, c.Nodes[0].Node.FSM.Volume())
 		if ch.K != wantK || ch.M != wantM {
 			t.Fatalf("step %d: chunk %x still on %d+%d, policy %d+%d", step, ch.Hash[:6], ch.K, ch.M, wantK, wantM)
 		}

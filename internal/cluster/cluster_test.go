@@ -3,6 +3,9 @@ package cluster
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +28,7 @@ func opts(t *testing.T, dir string) Options {
 		t.Fatal(err)
 	}
 	_, trans := raft.NewInmemTransport(raft.ServerAddress(id))
-	return Options{DataDir: dir, NodeID: id, Transport: trans, Fast: true}
+	return Options{DataDir: dir, NodeID: id, Transport: trans, Timing: &RaftTiming{Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond, Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond}}
 }
 
 func bootstrap(t *testing.T, dir string) *Node {
@@ -157,5 +160,27 @@ func TestLoadOrCreateNodeID_Stable(t *testing.T) {
 	b, _ := LoadOrCreateNodeID(dir)
 	if a != b {
 		t.Fatal("node id not stable")
+	}
+}
+
+// A node whose raft.db cannot be opened fails to start with a clear error instead of
+// panicking or starting empty; the rest of the cluster is unaffected (it never sees it).
+// Lifecycle: L-124
+func TestOpen_CorruptRaftDB_FailsClearly(t *testing.T) {
+	dir := t.TempDir()
+	n := bootstrap(t, dir)
+	if err := n.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "raft", "raft.db")
+	if err := os.WriteFile(db, []byte("this is not a bolt database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(opts(t, dir))
+	if err == nil {
+		t.Fatal("open succeeded on a corrupt raft.db")
+	}
+	if !strings.Contains(err.Error(), "raft.db") {
+		t.Fatalf("error does not name the file: %v", err)
 	}
 }

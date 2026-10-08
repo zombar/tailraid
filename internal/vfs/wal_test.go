@@ -3,9 +3,13 @@ package vfs
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/sysfs/sysfstest"
 )
 
 type rec struct {
@@ -32,7 +36,7 @@ func replayAll(t *testing.T, w *WAL) []rec {
 // Invariant: I-7, I-37
 func TestWAL_AppendReplayRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "7.wal")
-	w, err := openWAL(path)
+	w, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +65,7 @@ func TestWAL_AppendReplayRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w2, err := openWAL(path)
+	w2, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,12 +96,12 @@ func TestWAL_AppendReplayRoundTrip(t *testing.T) {
 }
 
 // Invariant: I-37
-// Lifecycle: L-113
+// Lifecycle: L-113, L-122
 func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 	for _, mode := range []string{"truncate-mid-record", "flip-crc", "flip-data", "truncate-mid-header"} {
 		t.Run(mode, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "1.wal")
-			w, err := openWAL(path)
+			w, err := openWAL(sysfs.OS{}, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +132,7 @@ func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 			if err := os.WriteFile(path, raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			w2, err := openWAL(path)
+			w2, err := openWAL(sysfs.OS{}, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,35 +159,11 @@ func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 	}
 }
 
-func TestWAL_Reset(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "9.wal")
-	w, err := openWAL(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-	if _, err := w.AppendWrite(0, []byte("abc")); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	if w.Size() != 0 {
-		t.Fatalf("Size after reset = %d", w.Size())
-	}
-	if got := replayAll(t, w); len(got) != 0 {
-		t.Fatalf("records after reset: %+v", got)
-	}
-	o, err := w.AppendWrite(1, []byte("d"))
-	if err != nil || o != recHeaderLen {
-		t.Fatalf("append after reset: off=%d err=%v", o, err)
-	}
-}
-
 // Invariant: I-35, I-37
+// Lifecycle: L-172
 func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "3.wal")
-	w, err := openWAL(path)
+	w, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +201,7 @@ func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	w2, err := openWAL(path)
+	w2, err := openWAL(sysfs.OS{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +226,7 @@ func readWAL(t *testing.T, w *WAL, off int64, n int) []byte {
 }
 
 func TestWAL_ReadAtBeyondEnd(t *testing.T) {
-	w, err := openWAL(filepath.Join(t.TempDir(), "2.wal"))
+	w, err := openWAL(sysfs.OS{}, filepath.Join(t.TempDir(), "2.wal"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,5 +234,133 @@ func TestWAL_ReadAtBeyondEnd(t *testing.T) {
 	o, _ := w.AppendWrite(0, []byte("ab"))
 	if err := w.ReadAt(make([]byte, 5), o); err == nil {
 		t.Fatal("ReadAt past end succeeded")
+	}
+}
+
+// The WAL runs on the sysfs.FS seam so fsync failures and crashes can be injected. A
+// failed fsync must surface from the append: the WRITE is then not acknowledged (I-7).
+// Invariant: I-7
+func TestWAL_SyncFailure_ReturnsError(t *testing.T) {
+	ff := sysfstest.New(sysfs.OS{})
+	w, err := openWAL(ff, filepath.Join(t.TempDir(), "1.wal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.AppendBase(0); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("boom")
+	ff.FailAt(sysfstest.StepSync, boom)
+	if _, err := w.AppendWrite(4096, []byte("x")); !errors.Is(err, boom) {
+		t.Fatalf("AppendWrite after fsync failure: err=%v, want %v", err, boom)
+	}
+	// The next append must not report a size that includes the un-synced record.
+	if _, err := w.AppendWrite(8192, []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	recs := replayAll(t, w)
+	if len(recs) != 2 || recs[1].off != 8192 {
+		t.Fatalf("replayed %+v, want base + write@8192", recs)
+	}
+}
+
+// A new WAL file's directory entry is fsynced before the first record is appended, so an
+// acknowledged WRITE never depends on an entry that power loss could drop. Reopening an
+// existing log does not sync the directory.
+// Invariant: I-7, I-63
+func TestWAL_CreateFsyncsDirectory(t *testing.T) {
+	ff := sysfstest.New(sysfs.OS{})
+	path := filepath.Join(t.TempDir(), "1.wal")
+	boom := errors.New("boom")
+	ff.FailAt(sysfstest.StepSyncDir, boom)
+	if _, err := openWAL(ff, path); !errors.Is(err, boom) {
+		t.Fatalf("openWAL of a new file without a directory fsync: err=%v, want %v", err, boom)
+	}
+	w, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.AppendWrite(4096, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.Close())
+	ff.FailAt(sysfstest.StepSyncDir, boom) // must stay armed: reopen does not sync the dir
+	w2, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer w2.Close()
+	if recs := replayAll(t, w2); len(recs) != 1 || recs[0].off != 4096 {
+		t.Fatalf("replayed %+v", recs)
+	}
+	if err := ff.SyncDir(filepath.Dir(path)); !errors.Is(err, boom) {
+		t.Fatal("reopening an existing WAL synced the directory")
+	}
+}
+
+// After a failed fsync the record is not acknowledged; a crash right after must not
+// replay it (its bytes may still have reached the disk).
+// Invariant: I-37
+func TestWAL_AppendAfterFailedSync_NoResurrectedRecord(t *testing.T) {
+	ff := sysfstest.New(sysfs.OS{})
+	path := filepath.Join(t.TempDir(), "1.wal")
+	w, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must(t, w.AppendBase(0))
+	boom := errors.New("boom")
+	ff.FailAt(sysfstest.StepSync, boom)
+	if _, err := w.AppendWrite(4096, []byte("never acknowledged")); !errors.Is(err, boom) {
+		t.Fatalf("err=%v want %v", err, boom)
+	}
+	must(t, w.Close()) // the process dies here
+	w2, err := openWAL(ff, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w2.Close()
+	if recs := replayAll(t, w2); len(recs) != 1 || recs[0].typ != recBase {
+		t.Fatalf("replayed %+v, want the base record only", recs)
+	}
+}
+
+// A record is bounded so a corrupt length can never drive a huge allocation on replay:
+// the largest record is accepted and read back, one byte more is refused up front.
+// Invariant: I-37
+func TestWAL_RecordSizeBoundaries(t *testing.T) {
+	for _, n := range []int{maxRecordData - 1, maxRecordData, maxRecordData + 1} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "9.wal")
+			w, err := openWAL(sysfs.OS{}, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := make([]byte, n)
+			data[n-1] = 9
+			_, err = w.AppendWrite(4096, data)
+			if n > maxRecordData {
+				if err == nil {
+					t.Fatal("over-sized record accepted")
+				}
+				if w.Size() != 0 {
+					t.Fatalf("WAL grew to %d on a refused record", w.Size())
+				}
+				must(t, w.Close())
+				return
+			}
+			must(t, err)
+			must(t, w.Close())
+			w2, err := openWAL(sysfs.OS{}, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w2.Close()
+			recs := replayAll(t, w2)
+			if len(recs) != 1 || int(recs[0].n) != n || recs[0].data[n-1] != 9 {
+				t.Fatalf("replayed %d records, n=%d", len(recs), recs[0].n)
+			}
+		})
 	}
 }

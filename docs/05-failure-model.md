@@ -76,7 +76,7 @@ window the chunk survives fewer than m additional losses.
 | leader reachable, live ≥ k+m | normal | normal | full placement |
 | leader reachable, k ≤ live < k+m | normal | OK if k holders live | degraded (≥ k shards, `0` slots); `0` slots are filled as soon as a live spare exists; slots on dead nodes are re-placed after `fill_after` |
 | leader reachable, live < k | normal | `NFS3ERR_IO` for affected chunks | flush fails; WAL buffers up to 1 GiB then `NFS3ERR_IO` |
-| no leader contact > 30 s (`Stale`) or no quorum (`NoLeader`) | stale local copy | served from local FSM + reachable peers | data WRITEs into the WAL until the caps, then `NFS3ERR_IO`; metadata mutations `NFS3ERR_ROFS` |
+| no leader contact > 30 s (`Stale`) or no quorum (`NoLeader`) | stale local copy | served from local FSM + reachable peers | data WRITEs into the WAL until the caps, then `NFS3ERR_IO`; metadata mutations `EROFS` (`NFS3ERR_ACCES` or `NFS3ERR_IO` on the wire, 07) |
 
 What the user sees:
 
@@ -96,7 +96,7 @@ What the user sees:
 | live threshold | 15 s | a node is *live* if a probe succeeded within this window |
 | `Stale` threshold | 30 s | gateway with no leader contact → metadata mutations `EROFS` |
 | `fill_after` | 10 min | leader waits this long after a node goes dead before re-placing its slots (laptop sleep); `0` slots have no hold-down |
-| `evict_after` | 7 d | `MemberLost` event; `status` suggests `node remove` |
+| `evict_after` | 7 d | `MemberLost` event; `status` marks the node `lost` and its warning names the `node remove --force` command |
 | Raft heartbeat / election / lease / commit | 2 s / 2 s / 1 s / 50 ms | — |
 | GC grace | 10 min | see 06 |
 
@@ -137,8 +137,8 @@ re-placements (06 §3).
   then kill m other nodes and read back via a surviving gateway; rotate the gateway node;
   20 iterations under `-short`, 200 in `make test-long`. (Before the flush the bytes live
   only in the issuing gateway's WAL, by contract.)
-- `TestCluster_KillMNodes_AllDataReadable`, `TestCluster_KillMPlusOne_ReadsFailCleanly`.
-- `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`.
+- `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`.
+- `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption`.
 - `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`.
 - `TestModelCheck_Long` — 5 nodes 3+2, weighted scheduler of client ops, `Kill`, `Restart`,
   `Partition`, `Heal`, `Clock.Advance`, `Scrub`; every 50 steps heal + quiesce and assert:
@@ -159,7 +159,7 @@ re-placements (06 §3).
 
 | Invariant | Tests |
 |---|---|
-| I-12 | `TestDurability_AckImpliesReadableFromKSurvivors`, `TestCluster_KillMNodes_AllDataReadable`, `TestModelCheck_Long`, `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` |
-| I-38 | `TestCrash_AtEveryPoint`, `TestVFS_RestartWithDirtyWAL_Replays` |
-| I-39 | `TestCluster_StaleGatewayReturnsEROFS`, `TestCluster_StaleGatewayBuffersDataWrites`, `TestCluster_QuorumLostReadsStillServed` |
-| I-40 | `TestReader_CorruptShardReconstructs`, `TestReader_TooManyCorruptShardsEIO`, `TestCluster_KillMPlusOne_ReadsFailCleanly` |
+| I-12 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestCrash_AtEveryPoint`, `TestDurability_AckImpliesReadableFromKSurvivors`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts`, `TestModelCheck_Long` |
+| I-38 | `TestCrash_AtEveryPoint` |
+| I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale` |
+| I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO` |

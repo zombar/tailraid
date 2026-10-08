@@ -51,13 +51,9 @@ func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Cl
 	if err != nil {
 		return admin.Report{}, nil, "", err
 	}
-	raw, err := c.Status(ctx, addr)
+	rep, err := admin.FetchStatus(ctx, c, addr)
 	if err != nil {
 		return admin.Report{}, nil, "", fmt.Errorf("status from %s (is `tailraid serve` running?): %w", addr, err)
-	}
-	var rep admin.Report
-	if err := json.Unmarshal(raw, &rep); err != nil {
-		return admin.Report{}, nil, "", err
 	}
 	return rep, c, addr, nil
 }
@@ -135,8 +131,8 @@ func printStatus(w io.Writer, r admin.Report) {
 	v := r.Volume
 	fmt.Fprintf(w, "volume  %d+%d, chunk %s  files: %d  logical: %s  stored: %s  free: %s  dedup: %.2fx\n",
 		v.K, v.M, bytesStr(uint64(v.ChunkSize)), v.Inodes, bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), bytesStr(v.Free), v.DedupRatio)
-	if v.Degraded > 0 || v.Unreadable > 0 {
-		fmt.Fprintf(w, "chunks  degraded: %d  unreadable: %d  policy-stale: %d\n", v.Degraded, v.Unreadable, v.StalePolicy)
+	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 {
+		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
 	}
 	printNodes(w, r.Nodes)
 	for _, warn := range r.Warnings {
@@ -275,11 +271,10 @@ func nodeCmd() *cobra.Command {
 	return c
 }
 
+// leaderOr is the leader's RPC address, or addr when the report names no leader.
 func leaderOr(rep admin.Report, addr string) string {
-	for i := range rep.Nodes {
-		if n := &rep.Nodes[i]; n.Leader && n.Addr != "" {
-			return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort)))
-		}
+	if l := rep.LeaderRPC(); l != "" {
+		return l
 	}
 	return addr
 }
@@ -309,7 +304,7 @@ func volumeCmd() *cobra.Command {
 			v := rep.Volume
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "policy        %d+%d (version %d), chunk %s\n", v.K, v.M, v.PolicyVersion, bytesStr(uint64(v.ChunkSize)))
-			fmt.Fprintf(w, "inodes        %d\nchunks        %d (%d tombstoned, %d degraded, %d unreadable, %d on an older policy)\n", v.Inodes, v.Chunks, v.Tombstoned, v.Degraded, v.Unreadable, v.StalePolicy)
+			fmt.Fprintf(w, "inodes        %d\nchunks        %d (%d tombstoned, %d degraded, %d repair-pending, %d unreadable, %d on an older policy)\n", v.Inodes, v.Chunks, v.Tombstoned, v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
 			fmt.Fprintf(w, "logical       %s\nstored        %s (dedup %.2fx)\n", bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), v.DedupRatio)
 			fmt.Fprintf(w, "capacity      %s raw, %s usable, %s free\n", bytesStr(v.Capacity), bytesStr(v.UsableCapacity), bytesStr(v.Free))
 			return nil
@@ -327,6 +322,34 @@ func volumeCmd() *cobra.Command {
 	return c
 }
 
+func resetCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "reset",
+		Short: "Wipe this device's local Raft state and identity so it can join afresh (shards are kept)",
+		Long: `reset deletes <data_dir>/raft, node_id and cluster_id. It never touches shards/ (the
+sweep reconciles them after the rejoin) or cache/. It refuses while serve is running and
+while staging/ holds unflushed writes, unless --discard-dirty says to lose them.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, _, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			if yes, _ := cmd.Flags().GetBool("yes"); !yes {
+				return fmt.Errorf("reset wipes %s/raft, node_id and cluster_id; re-run with --yes", cfg.Node.DataDir)
+			}
+			discard, _ := cmd.Flags().GetBool("discard-dirty")
+			if err := cluster.Reset(cfg.Node.DataDir, discard); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "reset %s: raft state and identity removed; shards kept\n", cfg.Node.DataDir)
+			return nil
+		},
+	}
+	c.Flags().Bool("yes", false, "confirm the wipe")
+	c.Flags().Bool("discard-dirty", false, "also delete staging/ (unflushed, acknowledged writes are lost)")
+	return c
+}
+
 func tokenCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use: "token", Short: "Show the join token",
@@ -339,6 +362,25 @@ func tokenCmd() *cobra.Command {
 			return nil
 		},
 	}
+	rotate := &cobra.Command{
+		Use: "rotate", Short: "Replace the join token (a Raft MetaSet); the old token stops working at once",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "rotate_token"})
+			if err != nil {
+				return err
+			}
+			var rep struct {
+				JoinToken string `json:"join_token"`
+			}
+			if err := json.Unmarshal(raw, &rep); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), rep.JoinToken)
+			return nil
+		},
+	}
+	addNodeFlags(rotate)
+	c.AddCommand(rotate)
 	addNodeFlags(c)
 	return c
 }

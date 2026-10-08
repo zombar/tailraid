@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/ec"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -23,6 +24,75 @@ func writeAndFlush(t *testing.T, f *testharness.Fabric, name string, data []byte
 		t.Fatalf("flush: %v", err)
 	}
 	return ino
+}
+
+// A holder the prober reports dead is never dialled: it would only cost the dial or
+// header timeout; the read takes k shards from the live holders.
+// Lifecycle: L-131
+func TestReader_SkipsDeadHolders(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	data := testharness.Pattern(int(testharness.ChunkSize), 3)
+	ino := writeAndFlush(t, f, "a", data)
+	in := f.Inode(ino)
+	c, _ := f.FSM.GetChunk(in.Chunks[0])
+	// the dead holder is the one the fabric would rank first after self
+	dead := meta.NodeIdx(0)
+	for _, n := range c.Placement {
+		if n != f.Self() && (dead == 0 || n < dead) {
+			dead = n
+		}
+	}
+	f.SetDown(dead, true)
+	got := make([]byte, len(data))
+	if _, err := f.ReaderNoCache().ReadAt(context.Background(), in, got, 0); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("content differs at %d", testharness.FirstDiff(got, data))
+	}
+	if n := f.Gets(dead); n != 0 {
+		t.Fatalf("dead holder %d was dialled %d times", dead, n)
+	}
+	total := 0
+	for _, n := range c.Placement {
+		total += f.Gets(n)
+	}
+	if total != int(c.K) {
+		t.Fatalf("%d GETs for a k=%d read", total, c.K)
+	}
+}
+
+// flatPeers ranks nothing: every holder is equally close, so the slot order decides.
+type flatPeers struct{ *testharness.Fabric }
+
+func (p flatPeers) Rank(nodes []meta.NodeIdx) []meta.NodeIdx { return nodes }
+
+// With every holder reachable and equally ranked the reader fetches exactly the k data
+// shards, so no parity shard is transferred and no reconstruction is needed.
+// Lifecycle: L-63
+func TestReader_FetchFirstK(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 2)
+	data := testharness.Pattern(int(testharness.ChunkSize), 4)
+	ino := writeAndFlush(t, f, "a", data)
+	in := f.Inode(ino)
+	c, _ := f.FSM.GetChunk(in.Chunks[0])
+	rd := vfs.NewReader(f.FSM, flatPeers{f}, f, nil, &ec.Pool{})
+	got := make([]byte, len(data))
+	if _, err := rd.ReadAt(context.Background(), in, got, 0); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("content differs at %d", testharness.FirstDiff(got, data))
+	}
+	for i, n := range c.Placement {
+		want := 0
+		if i < int(c.K) {
+			want = 1
+		}
+		if g := f.Gets(n); g != want {
+			t.Fatalf("slot %d (node %d): %d GETs, want %d; placement %v", i, n, g, want, c.Placement)
+		}
+	}
 }
 
 // Lifecycle: L-66, L-74
@@ -59,6 +129,7 @@ func TestReader_ReadsWithOneNodeDown_AndFromCache(t *testing.T) {
 }
 
 // Lifecycle: L-75
+// Invariant: I-40
 func TestReader_FewerThanKLive_EIO(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 2)
@@ -74,7 +145,8 @@ func TestReader_FewerThanKLive_EIO(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-68, L-105
+// Lifecycle: L-68, L-105, L-166
+// Invariant: I-40
 func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 3)
@@ -109,6 +181,7 @@ func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
 }
 
 // Lifecycle: L-69
+// Invariant: I-2, I-40
 func TestReader_DecodedHashMismatch_EIO(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 1, 1)
 	// register a chunk entry whose hash does not match the bytes its shards hold
@@ -127,7 +200,7 @@ func TestReader_DecodedHashMismatch_EIO(t *testing.T) {
 	}
 }
 
-// Lifecycle: L-71
+// Lifecycle: L-71, L-70
 func TestReader_ReadAt_HolesAndShortChunks(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	ino := f.Create("a")

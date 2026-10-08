@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // Invariant: I-7
@@ -170,6 +172,7 @@ func TestFlusher_HoleChunksAreHashZero(t *testing.T) {
 }
 
 // Lifecycle: L-33, L-34
+// Invariant: I-2
 func TestFlusher_DedupLiveAndTombstoned_NoUpload(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 6)
@@ -205,7 +208,7 @@ func TestFlusher_DedupLiveAndTombstoned_NoUpload(t *testing.T) {
 }
 
 // Review #6: a dedup hit against an entry with < k live slots fills the slots first.
-// Lifecycle: L-146
+// Lifecycle: L-146, L-167, L-176
 func TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	data := testharness.Pattern(int(testharness.ChunkSize), 7)
@@ -241,6 +244,98 @@ func TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit(t *testing.T) {
 	}
 	if got := f.ReadFile(b); !bytes.Equal(got, data) {
 		t.Fatal("unreadable after fill")
+	}
+}
+
+// A live holder may have lost its shard file (disk restored from backup, data dir wiped).
+// Liveness alone is not trusted on a dedup hit: with fewer than k slots actually present
+// the flusher re-PUTs the absent ones from its own bytes before the Commit; with k or
+// more present it dedups as usual.
+// Invariant: I-12
+// Lifecycle: L-167, L-176, L-183
+func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	data := testharness.Pattern(int(testharness.ChunkSize), 21)
+	a := f.Create("a")
+	must(t, f.Ov.Write(a, 0, 0, data))
+	must(t, f.Flusher().FlushInode(ctx, a))
+	h := f.Inode(a).Chunks[0]
+	c, _ := f.FSM.GetChunk(h)
+	key := func(slot int) chunk.ShardKey { return chunk.Key(h, c.K, c.M, slot) }
+
+	// one holder lost its file: still k present → dedup, no PUT
+	if _, err := f.Stores[c.Placement[0]].Delete(key(0)); err != nil {
+		t.Fatal(err)
+	}
+	before := f.Puts()
+	cs := uint64(testharness.ChunkSize)
+	b := f.Create("b")
+	must(t, f.Ov.Write(b, 0, cs, data)) // chunk 1 is the dedup'd chunk; chunk 0 a hole
+	must(t, f.Flusher().FlushInode(ctx, b))
+	if f.Puts() != before {
+		t.Fatalf("dedup with k present slots uploaded %d shards", f.Puts()-before)
+	}
+
+	// a second holder lost its file: fewer than k present → fill before the commit
+	if _, err := f.Stores[c.Placement[1]].Delete(key(1)); err != nil {
+		t.Fatal(err)
+	}
+	before = f.Puts()
+	d := f.Create("d")
+	must(t, f.Ov.Write(d, 0, cs, data))
+	must(t, f.Flusher().FlushInode(ctx, d))
+	if f.Puts()-before != 2 {
+		t.Fatalf("fill PUT %d shards, want the 2 absent slots", f.Puts()-before)
+	}
+	ops := f.Ops()
+	if ops[len(ops)-2] != meta.OpSetPlacement || ops[len(ops)-1] != meta.OpCommit {
+		t.Fatalf("ops %v, want SetPlacement then Commit", ops[len(ops)-3:])
+	}
+	c2, _ := f.FSM.GetChunk(h)
+	for i, n := range c2.Placement {
+		if n == 0 || !f.Stores[n].Has(chunk.Key(h, c2.K, c2.M, i)) {
+			t.Fatalf("slot %d node %d not present after fill: %v", i, n, c2.Placement)
+		}
+	}
+	in := f.Inode(d)
+	out := make([]byte, len(data))
+	if _, err := f.ReaderNoCache().ReadAt(ctx, in, out, int64(cs)); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(out, data) {
+		t.Fatalf("other-gateway read differs at %d", testharness.FirstDiff(out, data))
+	}
+}
+
+// A retried Commit (here after a transport failure of the proposal) re-runs the PUTs:
+// the chunk is registered only by the Commit that applies, so the shards are PUT again,
+// which refreshes their mtime and keeps the orphan sweep away however late the retry.
+// Invariant: I-7, I-14
+// Lifecycle: L-58
+func TestFlusher_LateRetry_RePutsBeforeCommit(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	ino := f.Create("a")
+	data := testharness.Pattern(int(testharness.ChunkSize), 22)
+	must(t, f.Ov.Write(ino, 0, 8192, data))
+	f.ProposeErrOnce(errors.New("leadership lost"))
+	if err := f.Flusher().FlushInode(ctx, ino); err == nil {
+		t.Fatal("expected the proposal to fail")
+	}
+	first := f.Puts()
+	if first != 3 { // k+m shards of the one non-hole chunk... plus the straddling one
+		t.Logf("first attempt PUT %d shards", first)
+	}
+	f.Clk.Advance(6 * time.Minute) // well past grace/2
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	if f.Puts() <= first {
+		t.Fatalf("retry did not re-PUT: %d PUTs before, %d after", first, f.Puts())
+	}
+	if f.Puts() != 2*first {
+		t.Fatalf("retry PUT %d shards, want every shard again (%d)", f.Puts()-first, first)
+	}
+	want := append(make([]byte, 8192), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
 	}
 }
 
@@ -420,9 +515,98 @@ func TestFlusher_PartialFlush_SizeNeverAheadOfData(t *testing.T) {
 	}
 }
 
+// A partial flush commits only entirely dirty chunks. The bytes of a partly dirty chunk
+// below the last committed one (here the head chunk the append starts in) are not
+// committed, so they must stay dirty (residual) rather than vanish (L-179).
+// Invariant: I-7, I-35
+// Lifecycle: L-27, L-179
+func TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := uint64(testharness.ChunkSize)
+	ino := f.Create("a")
+	head := testharness.Pattern(int(cs+cs/2), 17)
+	must(t, f.Ov.Write(ino, 0, 0, head))
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	base := f.Inode(ino)
+	tail := testharness.Pattern(int(40*cs), 18)
+	must(t, f.Ov.Write(ino, base.Size, base.Size, tail)) // append starts mid-chunk 1
+	want := append(append([]byte{}, head...), tail...)
+	must(t, f.Flusher().FlushPartial(ctx, ino))
+	in := f.Inode(ino)
+	if in.Size != 41*cs || len(in.Chunks) != 41 {
+		t.Fatalf("partial flush committed size %d, %d chunks", in.Size, len(in.Chunks))
+	}
+	// residual: the dirty half of chunk 1 and the dirty half of chunk 41
+	if d := f.Ov.Dirty(); len(d) != 1 || d[0].DirtyBytes != cs {
+		t.Fatalf("residual %+v, want %d dirty bytes", d, cs)
+	}
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("read-your-writes after partial flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	f.RestartOverlay()
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after restart differs at %d", testharness.FirstDiff(got, want))
+	}
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("still dirty after full flush: %+v", d)
+	}
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after full flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	if in := f.Inode(ino); in.Size != uint64(len(want)) || len(in.Chunks) != 42 {
+		t.Fatalf("final inode %+v", in)
+	}
+}
+
+// Two extents with a gap: the second starts mid-chunk. The partially dirty chunk between
+// them is below the last committed chunk and must stay dirty (L-179), while the untouched
+// gap becomes holes.
+// Invariant: I-7, I-35
+// Lifecycle: L-27, L-179
+func TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := uint64(testharness.ChunkSize)
+	ino := f.Create("a")
+	first := testharness.Pattern(int(10*cs), 19)
+	second := testharness.Pattern(int(60*cs-(20*cs+cs/2)), 20)
+	must(t, f.Ov.Write(ino, 0, 0, first))
+	must(t, f.Ov.Write(ino, 0, 20*cs+cs/2, second))
+	want := make([]byte, 60*cs)
+	copy(want, first)
+	copy(want[20*cs+cs/2:], second)
+	must(t, f.Flusher().FlushPartial(ctx, ino))
+	in := f.Inode(ino)
+	if in.Size != 60*cs || len(in.Chunks) != 60 {
+		t.Fatalf("partial flush committed size %d, %d chunks", in.Size, len(in.Chunks))
+	}
+	for i := 10; i <= 20; i++ {
+		if in.Chunks[i] != meta.HashZero {
+			t.Fatalf("chunk %d should be a hole", i)
+		}
+	}
+	if d := f.Ov.Dirty(); len(d) != 1 || d[0].DirtyBytes != cs/2 {
+		t.Fatalf("residual %+v, want %d dirty bytes", d, cs/2)
+	}
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("read-your-writes after partial flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	f.RestartOverlay()
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after restart differs at %d", testharness.FirstDiff(got, want))
+	}
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after full flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	if in := f.Inode(ino); in.Chunks[20] == meta.HashZero || in.Chunks[19] != meta.HashZero {
+		t.Fatalf("final chunks %v", in.Chunks[18:22])
+	}
+}
+
 // Review #2 end to end: through overlay, flusher, FSM and reader.
 // Invariant: I-1, I-35
-// Lifecycle: L-8, L-11, L-38
+// Lifecycle: L-8, L-11, L-38, L-168
 func TestVFS_TruncateThenGrow_OldBytesDoNotResurface(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	cs := uint64(testharness.ChunkSize)
@@ -472,6 +656,215 @@ func TestFlusher_RunIdleTriggerAndShutdownFlush(t *testing.T) {
 	if in := f.Inode(ino); in.Version != 2 || in.Size != 5004 {
 		t.Fatalf("shutdown flush: %+v", in)
 	}
+}
+
+// A region rewritten over and over keeps the dirty bytes small while the WAL grows with
+// every record; at the WAL cap the run loop flushes the inode in full (so the WAL
+// compacts) without waiting for the idle timer or the dirty-byte thresholds.
+// Lifecycle: L-186
+func TestFlusher_WALCapTriggersFlush(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := int(testharness.ChunkSize)
+	f.RestartOverlay(vfs.WithWALCap(int64(3*cs - 1)))
+	fl := f.Flusher(func(c *vfs.Config) { c.IdleFlush = time.Hour; c.FileDirtyHi = 1 << 40; c.TotalDirtyHi = 1 << 40 })
+	rctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { fl.Run(rctx); close(done) }()
+	ino := f.Create("a")
+	data := testharness.Pattern(cs, 23)
+	must(t, f.Ov.Write(ino, 0, uint64(cs), data)) // the same chunk, three times
+	must(t, f.Ov.Write(ino, 0, uint64(cs), data))
+	f.Clk.Advance(250 * time.Millisecond)
+	if v := f.Inode(ino).Version; v != 0 {
+		t.Fatalf("flushed below the WAL cap (version %d)", v)
+	}
+	must(t, f.Ov.Write(ino, 0, uint64(cs), data)) // WAL now ≥ cap, dirty bytes still one chunk
+	f.Clk.Advance(250 * time.Millisecond)
+	testharness.Eventually(t, func() bool { return f.Inode(ino).Version == 1 }, "WAL cap flush")
+	testharness.Eventually(t, func() bool { return len(f.Ov.Dirty()) == 0 }, "WAL released")
+	want := append(make([]byte, cs), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
+	}
+	cancel()
+	<-done
+}
+
+// The small-chunk rule at the chunk-size boundary with the harness's 64 KiB chunks: a
+// chunk one byte short of full is replicated (k=1), a full chunk is striped, and a file
+// of cs+1 bytes mixes both. A chunk written at a non-zero chunk offset is judged by its
+// own size, not the file's.
+// Lifecycle: L-35, L-36
+func TestFlusher_SmallChunkBoundary(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := int(testharness.ChunkSize)
+	cases := []struct {
+		name  string
+		off   uint64
+		n     int
+		wantK []uint8 // per chunk index, 0 = hole
+	}{
+		{"cs-1", 0, cs - 1, []uint8{1}},
+		{"cs", 0, cs, []uint8{2}},
+		{"cs+1", 0, cs + 1, []uint8{2, 1}},
+		{"full chunk at offset cs", uint64(cs), cs, []uint8{0, 2}},
+		{"short chunk at offset cs", uint64(cs), cs - 1, []uint8{0, 1}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ino := f.Create(c.name)
+			must(t, f.Ov.Write(ino, 0, c.off, testharness.Pattern(c.n, 51)))
+			must(t, f.Flusher().FlushInode(ctx, ino))
+			in := f.Inode(ino)
+			if len(in.Chunks) != len(c.wantK) {
+				t.Fatalf("%d chunks, want %d", len(in.Chunks), len(c.wantK))
+			}
+			for i, h := range in.Chunks {
+				if c.wantK[i] == 0 {
+					if h != meta.HashZero {
+						t.Fatalf("chunk %d should be a hole", i)
+					}
+					continue
+				}
+				ch, _ := f.FSM.GetChunk(h)
+				if ch.K != c.wantK[i] || ch.M != 1 {
+					t.Fatalf("chunk %d (%d bytes) on %d+%d, want k=%d", i, ch.Size, ch.K, ch.M, c.wantK[i])
+				}
+			}
+		})
+	}
+}
+
+// With exactly k live nodes the flush commits degraded: k acks, the parity slot 0, the
+// data readable, and status counts it under-replicated.
+// Lifecycle: L-41, L-52
+func TestFlusher_LiveEqualsK_CommitsDegraded(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	f.SetDown(3, true) // live = {1, 2} = k
+	ino := f.Create("a")
+	data := testharness.Pattern(int(testharness.ChunkSize), 52)
+	must(t, f.Ov.Write(ino, 0, uint64(testharness.ChunkSize), data))
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	in := f.Inode(ino)
+	c, _ := f.FSM.GetChunk(in.Chunks[1])
+	zeros := 0
+	for _, s := range c.Placement {
+		if s == 0 {
+			zeros++
+		}
+	}
+	if zeros != 1 || len(c.Placement) != 3 {
+		t.Fatalf("placement %v, want one zero slot", c.Placement)
+	}
+	want := append(make([]byte, testharness.ChunkSize), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
+	}
+	h := meta.ChunkState(c, f.FSM.Volume(), meta.HealthInput{Nodes: nodesByIdx(f), Live: f, FillAfter: time.Hour})
+	if !h.UnderReplicated(c.K, c.M) || !h.RepairPending() || h.Unreadable(c.K) {
+		t.Fatalf("state %+v", h)
+	}
+}
+
+// A policy change between the PUTs and the Commit does not disturb the flush: the chunk
+// commits on the policy it was encoded with and is then migration-pending.
+// Lifecycle: L-37, L-100
+func TestFlusher_PolicyChangeMidUpload(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	ino := f.Create("a")
+	data := testharness.Pattern(int(testharness.ChunkSize), 53)
+	must(t, f.Ov.Write(ino, 0, uint64(testharness.ChunkSize), data))
+	fl := f.Flusher()
+	fl.Hooks.AfterAllShardsAcked = func() {
+		f.MustApply(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: 1, M: 1, Now: 9}})
+	}
+	must(t, fl.FlushInode(ctx, ino))
+	c, _ := f.FSM.GetChunk(f.Inode(ino).Chunks[1])
+	if c.K != 2 || c.M != 1 {
+		t.Fatalf("chunk committed on %d+%d, want the 2+1 it was encoded with", c.K, c.M)
+	}
+	if k, m := meta.TargetPolicy(c, f.FSM.Volume()); k != 1 || m != 1 {
+		t.Fatalf("target policy %d+%d", k, m)
+	}
+	if !meta.ChunkState(c, f.FSM.Volume(), meta.HealthInput{Nodes: nodesByIdx(f), Live: f, FillAfter: time.Hour}).PolicyStale {
+		t.Fatal("chunk not marked migration-pending after the policy change")
+	}
+	want := append(make([]byte, testharness.ChunkSize), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
+	}
+}
+
+// At the total-dirty threshold the run loop flushes the largest inodes first until the
+// total is below it; smaller ones wait for their own triggers.
+// Lifecycle: L-28
+func TestFlusher_TotalDirtyHiTrigger(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := uint64(testharness.ChunkSize)
+	fl := f.Flusher(func(c *vfs.Config) { c.IdleFlush = time.Hour; c.FileDirtyHi = 1 << 40; c.TotalDirtyHi = 3 * cs })
+	big, mid, small := f.Create("big"), f.Create("mid"), f.Create("small")
+	must(t, f.Ov.Write(big, 0, cs, testharness.Pattern(int(3*cs), 54)))
+	must(t, f.Ov.Write(mid, 0, cs, testharness.Pattern(int(2*cs), 55)))
+	must(t, f.Ov.Write(small, 0, cs, testharness.Pattern(int(cs), 56)))
+	rctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { fl.Run(rctx); close(done) }()
+	// tick the run loop until it has evaluated the trigger (its timer is armed once the
+	// goroutine is up); extra ticks change nothing: the total is then below the threshold
+	testharness.Eventually(t, func() bool {
+		f.Clk.Advance(250 * time.Millisecond)
+		return f.Inode(big).Version == 1 && f.Inode(mid).Version == 1
+	}, "largest two flushed")
+	if v := f.Inode(small).Version; v != 0 {
+		t.Fatalf("small file flushed (version %d) although the total was already below the threshold", v)
+	}
+	if d := f.Ov.Dirty(); len(d) != 1 || d[0].Ino != small {
+		t.Fatalf("dirty set %+v, want only the small file", d)
+	}
+	cancel()
+	<-done
+}
+
+// A partial-chunk write whose base chunk cannot be read (fewer than k holders live) does
+// not flush: the error is returned, the bytes stay dirty, and the flush succeeds once the
+// base is readable again.
+// Lifecycle: L-31
+func TestFlusher_AssembleFails_BaseUnreadable_StaysDirty(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := uint64(testharness.ChunkSize)
+	ino := f.Create("a")
+	base := testharness.Pattern(int(cs+100), 57)
+	must(t, f.Ov.Write(ino, 0, 0, base))
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	f.SetDown(2, true)
+	f.SetDown(3, true) // only self is live: chunk 0 cannot be decoded
+	must(t, f.Ov.Write(ino, cs+100, 10, []byte("patch")))
+	if err := f.Flusher().FlushInode(ctx, ino); err == nil {
+		t.Fatal("flush succeeded with an unreadable base chunk")
+	}
+	if d := f.Ov.Dirty(); len(d) != 1 || d[0].DirtyBytes != 5 || d[0].Flushing {
+		t.Fatalf("dirty state after the failed flush: %+v", d)
+	}
+	if in := f.Inode(ino); in.Version != 1 {
+		t.Fatalf("a failed assembly committed something: %+v", in)
+	}
+	f.SetDown(2, false)
+	f.SetDown(3, false)
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	want := bytes.Clone(base)
+	copy(want[10:], "patch")
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("differs at %d", testharness.FirstDiff(got, want))
+	}
+}
+
+func nodesByIdx(f *testharness.Fabric) map[meta.NodeIdx]meta.Node {
+	out := map[meta.NodeIdx]meta.Node{}
+	nodes := f.FSM.Nodes()
+	for i := range nodes {
+		out[nodes[i].Idx] = nodes[i]
+	}
+	return out
 }
 
 func sha256Of(b []byte) meta.Hash { return sha256.Sum256(b) }

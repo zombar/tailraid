@@ -43,8 +43,13 @@ func (g *GC) RunOnce(ctx context.Context) (deleted int, err error)
 ```
 
 Every `gc_interval` (default 10 min) the leader proposes
-`GCDelete{Before: fsmNow − grace}` with `grace = 10 min`, where `fsmNow` is the leader's
-clock clamped by the FSM (02). The FSM deletes every chunk entry with `Refs == 0 &&
+`GCDelete{Before: fsmNow − grace}` with `grace = 10 min`, where `fsmNow = max(leader wall
+clock, State.LastNow)`: the leader's clock clamped by the FSM clock (02), the same clock that
+stamped every `TombstonedAt`. A leader whose clock lags the proposers therefore never stalls
+GC, and `Before` never goes backwards across leader changes. A leader whose clock runs ahead
+by Δ shortens grace by Δ (bounded by the skew assumption in 05 §7); the only consequence is
+that a flusher mid-dedup gets `ErrUnknownChunk` and re-uploads, never data loss. The FSM
+deletes every chunk entry with `Refs == 0 &&
 TombstonedAt < Before` and returns the victims `[]{Hash, K, M, Placement}`. The worker
 then issues `DELETE /v1/shards/{key}` for each victim slot on **device** nodes with the
 header `X-Tailraid-Log-Index: <index of the GCDelete>` (best effort; misses are caught by
@@ -161,7 +166,9 @@ and the GC worker are leader-only and run only while the leader is `Healthy`.
 ## 5. Scrub
 
 Every scan pass also verifies a sample of chunks (default 1 % per pass, so a full scrub
-completes in ~100 passes; `tailraid check --scrub` forces 100 %): fetch **all** k+m shards,
+completes in ~100 passes; `tailraid check --scrub` runs one 100 % pass through the leader's
+repairer, with the configured `fill_after` and rate limit, serialized with the background
+passes): fetch **all** k+m shards,
 `codec.Verify`. A `false` result or any `ErrCorrupt` from a node marks the offending slots
 bad and repairs them via §4 (the chunk itself is decoded from a hash-verified subset).
 A node that detects a header or hash mismatch at read time moves the file to
@@ -215,12 +222,15 @@ node's chunk event ring (docs/11 §7; `(event ring disabled)` unless `dev.enable
 prefix of at least 8 hex digits is accepted when it is unique; a path describes every chunk
 of that file in order.
 
-`tailraid fsck [--fix] [--verify-data]` checks, from any node's FSM copy: refcount sums;
-`len(Chunks) == ceil(Size/CS)` for every file; every parent chain reaches root and every
-`Children` entry points to an inode whose `Parent`/`Name` agree; `Tombs ⇔ Refs == 0`;
-placement distinctness; and, with `--verify-data`, decodes every chunk from its shards and
-compares hashes (this is the "offline reconstruct" used by the soak suite's cross-view
-check). `--fix` only re-derives refcounts and tombstones; it never deletes shards.
+`tailraid fsck` checks, from the asked node's FSM copy, every FSM invariant
+(`meta.CheckInvariants`): refcount sums; `len(Chunks) == ceil(Size/CS)` for every file;
+every parent chain reaches root and every `Children` entry points to an inode whose
+`Parent`/`Name` agree; `Tombs ⇔ Refs == 0`; placement distinctness. It also counts the
+orphan shards on that node (files the chunk table does not place there, plus anything in
+the shard tree that is not a shard); orphans are informational, the sweep removes them
+after grace. Data is verified by `check --scrub` (§5), not by fsck, and there is no
+`--fix`: the FSM keeps refcounts exact (I-27), so any finding is a bug to report, not
+state to patch.
 
 ## Invariants
 
@@ -231,15 +241,17 @@ check). `--fix` only re-derives refcounts and tombstones; it never deletes shard
 - **I-42** — Draining a node moves every one of its slots before `node remove` succeeds without `--force`; after removal no committed placement references the node except via `--force`-acknowledged degraded slots.
 - **I-43** — `GCDelete` applied on any replica deletes exactly the same chunk entries (determinism via `Before` in the command).
 - **I-44** — `fsck` reports zero findings on a cluster where every test in this document passed; any finding is a bug, not noise.
+- **I-65** — A repair pass never lowers the number of readable slots of a chunk and never proposes a placement equal to the committed one: a slot whose shard is still readable (a live draining node) stays in the placement until a replacement is placed, a live draining holder counts toward the `≥ k` readability test, and a pass that could improve nothing proposes nothing.
 
 ## Tests
 
 | Invariant | Tests |
 |---|---|
-| I-13 | `TestCluster_GCDoesNotDeleteInflightUpload`, `TestRepair_DeletesOldShardsOnlyAfterCommit`, `TestSweep_OldPlacedHereKept`, `TestSweep_SkippedWhenNotHealthy`, `TestModelCheck_Long` |
-| I-14 | `TestSweep_YoungShardKept`, `TestStore_DeleteIfOlder_KeepsYoung`, `TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesStaleIndex`, `TestCluster_GCDoesNotDeleteInflightUpload` |
-| I-15 | `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`, `TestRepair_ReportedBadSlotIsRepaired`, `TestRepair_PartialFillThenComplete` |
-| I-41 | `TestFSM_RefCount_SharedChunkAcrossFiles`, `TestFSM_Commit_RevivesTombstonedChunk`, `TestVFS_DedupIdenticalChunks`, `TestFlusher_DedupHitWithFewerThanKLiveSlots_Fills` |
-| I-42 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestCLI_NodeDrain_ThenRemove_MovesSlots` |
-| I-43 | `TestFSM_DeterministicAcrossReplicas`, `TestFSM_GCDeleteDeterministic` |
-| I-44 | `TestFsck_CleanClusterNoFindings`, `TestFsck_DetectsInjectedRefcountError` |
+| I-13 | `TestChunkRPC_DeleteFence`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestModelCheck_Long`, `TestReset_WipesRaftKeepsShards`, `TestSweep_OldPlacedHereKept`, `TestSweep_SkippedWhenNotHealthy` |
+| I-14 | `TestChunkRPC_DeleteFence`, `TestCluster_GCDoesNotDeleteInflightUpload`, `TestFlusher_LateRetry_RePutsBeforeCommit`, `TestGC_CollectsAfterGrace_RespectsFence_AndSweep`, `TestGC_LeaderClockBehind_DoesNotStallGC`, `TestStore_DeleteIfOlder_RefusesYoungShard`, `TestSweep_YoungShardKept` |
+| I-15 | `TestModelCheck_Long`, `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestRepair_FillsDegradedSlotsWhenSpareAppears`, `TestRepair_MigrationCrash_Resumes`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_SmallChunk_SetRedundancy_Migrates` |
+| I-41 | `TestFSM_Revive` |
+| I-42 | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
+| I-43 | `TestFSM_DeterministicAcrossReplicas` |
+| I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
+| I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |

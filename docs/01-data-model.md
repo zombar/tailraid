@@ -24,7 +24,8 @@ type Inode struct {
     Size     uint64
     Atime, Mtime, Ctime int64 // unix nanoseconds, supplied by the proposer (never the FSM)
     Nlink    uint16           // 1 for files/symlinks; 2 + number of subdirectories for dirs
-    Version  uint64           // bumps on every Commit (data change); Commit's optimistic check
+    Version  uint64           // files: bumps on every Commit (data change), Commit's optimistic check;
+                              // directories: bumps on every change of the name table (READDIR cookie verifier)
     Parent   Ino              // 0 for root; single parent (no hard links)
     Name     string           // name within Parent; "" for root
     Chunks   []Hash           // TFile only; len == ceil(Size/ChunkSize); copy-on-write slice
@@ -269,6 +270,9 @@ gateways on different devices (they encode cluster-wide identity, not a path).
   `Ino` values are never reused after `Unlink`/`Rmdir`.
 - **I-22** — Encoding is canonical: two `State` values that are equal produce byte-identical
   `EncodeState` output, and `DecodeState(EncodeState(s)) == s`.
+- **I-66** — A directory entry name is 1 to `MaxNameLen` (255) bytes and contains neither
+  `/` nor NUL; `Create`, `Mkdir`, `Symlink` and `Rename` reject anything else before touching
+  state (`ErrNameTooLong` → `ENAMETOOLONG` / `NFS3ERR_NAMETOOLONG`, otherwise `ErrBadCommand`).
 
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
@@ -277,7 +281,8 @@ defined in `04-write-path-and-durability.md`.
 
 | Invariant | Tests |
 |---|---|
-| I-1 | `TestFSM_SetChunks_SizeAndChunkListConsistent`, `TestFSM_Invariants_RandomCommands`, `TestVFS_OracleRandomOps`, `TestVFS_WritePastEOF_CreatesHole_ReadsZeros`, `TestVFS_TruncateUp_Zeros` |
-| I-2 | `TestFSM_RejectsHashZeroChunkEntry`, `TestVFS_DedupIdenticalChunks`, `TestVFS_AllZeroChunkBecomesHashZero`, `TestReader_VerifiesDecodedHash` |
-| I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestFSM_Rename_KeepsInoGen`, `TestNFS_RemovedHandleIsStale` |
-| I-22 | `TestCodec_StateRoundTrip`, `TestCodec_CanonicalOrdering`, `TestFSM_DeterministicAcrossReplicas`, `FuzzDecodeCommand`, `FuzzDecodeState` |
+| I-1 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewFileAndOverwrite`, `TestMount_Workload`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestVFS_ZeroByteFile_NoWALNoCommit` |
+| I-2 | `TestFSM_Commit_Errors`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestReader_DecodedHashMismatch_EIO` |
+| I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestInoGen_RootIsOne_ZeroIsNever` |
+| I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
+| I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |

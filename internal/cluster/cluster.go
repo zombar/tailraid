@@ -22,7 +22,6 @@ import (
 	"go.etcd.io/bbolt"
 	bolterrors "go.etcd.io/bbolt/errors"
 
-	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 )
@@ -45,18 +44,36 @@ type Options struct {
 	RaftAddr  string         // TCP bind/advertise address when Transport is nil
 	Transport raft.Transport // tests pass raft.NewInmemTransport
 	Logger    *slog.Logger
-	// Fast shortens the Raft timeouts to tens of milliseconds and lowers the snapshot
-	// threshold; tests only.
-	Fast bool
+	// Timing overrides the documented Raft timeouts (docs/02 §Raft configuration); nil
+	// keeps them. The test harness shortens them.
+	Timing *RaftTiming
+	// Stores, when set, replaces the on-disk Raft log, stable and snapshot stores (bbolt
+	// and FileSnapshotStore, every append fsynced). The test harness passes Raft's
+	// in-memory stores and keeps them across a simulated kill; production never sets it,
+	// so there is no switch that skips an fsync (docs/04 §8.1).
+	Stores *Stores
 	// SnapshotThreshold overrides the documented 8192 (tests of snapshot install).
 	SnapshotThreshold uint64
 	// Faults, when set, lets /dev/fault rules cut Raft traffic to and from peers.
 	Faults Faults
-	// NoSync skips the fsync of every Raft append. Test harness only: an in-process kill
-	// keeps the OS page cache, so crash tests still see every committed entry, while a
-	// loaded CI runner's disk no longer stalls the Raft loop into spurious elections.
-	// Production never sets it (docs/04 §8.1).
-	NoSync bool
+}
+
+// RaftTiming is the set of Raft timeouts a caller may override.
+type RaftTiming struct {
+	Heartbeat, Election, LeaderLease, Commit, SnapshotInterval time.Duration
+}
+
+// Stores is a caller-supplied set of Raft stores (Options.Stores).
+type Stores struct {
+	Logs   raft.LogStore
+	Stable raft.StableStore
+	Snaps  raft.SnapshotStore
+}
+
+// HasState reports whether the stores hold any Raft log.
+func (s *Stores) HasState() bool {
+	last, err := s.Logs.LastIndex()
+	return err == nil && last > 0
 }
 
 // Node is an open Raft member.
@@ -65,7 +82,8 @@ type Node struct {
 	Raft *raft.Raft
 	FSM  *meta.FSM
 
-	logs   *raftboltdb.BoltStore
+	logs   raft.LogStore
+	closer io.Closer // the on-disk store; nil for injected stores
 	trans  raft.Transport
 	log    *slog.Logger
 	closed bool
@@ -81,7 +99,7 @@ func RaftConfig(id string, logOutput io.Writer) *raft.Config {
 	c.HeartbeatTimeout = 2 * time.Second
 	c.ElectionTimeout = 2 * time.Second
 	c.LeaderLeaseTimeout = time.Second
-	c.CommitTimeout = 50 * time.Millisecond
+	c.CommitTimeout = 10 * time.Millisecond // followers learn the commit index this soon after a quiet apply
 	c.SnapshotInterval = 2 * time.Minute
 	c.SnapshotThreshold = 8192
 	c.TrailingLogs = 10240
@@ -120,19 +138,39 @@ func HasState(dataDir string) bool {
 }
 
 type stores struct {
-	logs  *raftboltdb.BoltStore
-	snaps *raft.FileSnapshotStore
+	logs   raft.LogStore
+	stable raft.StableStore
+	snaps  raft.SnapshotStore
+	closer io.Closer
 }
 
-func openStores(dataDir string, logOutput io.Writer, noSync bool) (*stores, error) {
-	dir := filepath.Join(dataDir, "raft")
+func (s *stores) close() {
+	if s.closer != nil {
+		_ = s.closer.Close()
+	}
+}
+
+// hasState reports whether the node has Raft state: in the injected stores, or on disk.
+func (o *Options) hasState() bool {
+	if o.Stores != nil {
+		return o.Stores.HasState()
+	}
+	return HasState(o.DataDir)
+}
+
+// openStores returns the injected stores, or opens the on-disk bbolt log/stable store
+// (every append fsynced, docs/04 §8.1) and the file snapshot store.
+func (o *Options) openStores(logOutput io.Writer) (*stores, error) {
+	if o.Stores != nil {
+		return &stores{logs: o.Stores.Logs, stable: o.Stores.Stable, snaps: o.Stores.Snaps}, nil
+	}
+	dir := filepath.Join(o.DataDir, "raft")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	logs, err := raftboltdb.New(raftboltdb.Options{
 		Path:        filepath.Join(dir, "raft.db"),
 		BoltOptions: &bbolt.Options{Timeout: time.Second},
-		NoSync:      noSync, // false outside the test harness: every append is fsynced (docs/04 §8.1)
 	})
 	if err != nil {
 		if errors.Is(err, bolterrors.ErrTimeout) {
@@ -145,7 +183,7 @@ func openStores(dataDir string, logOutput io.Writer, noSync bool) (*stores, erro
 		_ = logs.Close()
 		return nil, fmt.Errorf("cluster: snapshot store: %w", err)
 	}
-	return &stores{logs: logs, snaps: snaps}, nil
+	return &stores{logs: logs, stable: logs, snaps: snaps, closer: logs}, nil
 }
 
 func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
@@ -204,7 +242,7 @@ func (w slogWriter) Write(p []byte) (int, error) {
 // Bootstrap creates a new single-voter cluster in an empty data directory and applies
 // the initial metadata: cluster ID, join token, this node's record and the volume policy.
 func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolume, joinToken string) (*Node, error) {
-	if HasState(o.DataDir) {
+	if o.hasState() {
 		return nil, ErrAlreadyInit
 	}
 	var cid [16]byte
@@ -213,23 +251,23 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(hex.EncodeToString(cid[:])+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(meta.HexID(cid)+"\n"), 0o600); err != nil {
 		return nil, err
 	}
 	_, logOutput := o.logger()
-	st, err := openStores(o.DataDir, logOutput, o.NoSync)
+	st, err := o.openStores(logOutput)
 	if err != nil {
 		return nil, err
 	}
 	trans, err := o.transport(logOutput)
 	if err != nil {
-		_ = st.logs.Close()
+		st.close()
 		return nil, err
 	}
 	conf := o.raftConfig(logOutput)
 	cfg := raft.Configuration{Servers: []raft.Server{{Suffrage: raft.Voter, ID: raft.ServerID(o.NodeID), Address: trans.LocalAddr()}}}
-	if err := raft.BootstrapCluster(conf, st.logs, st.logs, st.snaps, trans, cfg); err != nil {
-		_ = st.logs.Close()
+	if err := raft.BootstrapCluster(conf, st.logs, st.stable, st.snaps, trans, cfg); err != nil {
+		st.close()
 		return nil, fmt.Errorf("cluster: bootstrap: %w", err)
 	}
 	n, err := start(o, st, trans)
@@ -265,17 +303,17 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 
 // Open starts Raft on an initialised data directory.
 func Open(o Options) (*Node, error) {
-	if !HasState(o.DataDir) {
+	if !o.hasState() {
 		return nil, ErrNotInit
 	}
 	_, logOutput := o.logger()
-	st, err := openStores(o.DataDir, logOutput, o.NoSync)
+	st, err := o.openStores(logOutput)
 	if err != nil {
 		return nil, err
 	}
 	trans, err := o.transport(logOutput)
 	if err != nil {
-		_ = st.logs.Close()
+		st.close()
 		return nil, err
 	}
 	return start(o, st, trans)
@@ -283,15 +321,12 @@ func Open(o Options) (*Node, error) {
 
 func (o *Options) raftConfig(logOutput io.Writer) *raft.Config {
 	c := RaftConfig(o.NodeID, logOutput)
-	if o.Fast {
-		// Short enough for quick elections in tests, long enough that a leader under the
-		// race detector's load does not lose its lease to a slow follower (CI showed
-		// 25 ms contact times stepping a 25 ms lease down into permanent churn).
-		c.HeartbeatTimeout = 1000 * time.Millisecond
-		c.ElectionTimeout = 1000 * time.Millisecond
-		c.LeaderLeaseTimeout = 500 * time.Millisecond
-		c.CommitTimeout = 10 * time.Millisecond
-		c.SnapshotInterval = 500 * time.Millisecond
+	if t := o.Timing; t != nil {
+		c.HeartbeatTimeout = t.Heartbeat
+		c.ElectionTimeout = t.Election
+		c.LeaderLeaseTimeout = t.LeaderLease
+		c.CommitTimeout = t.Commit
+		c.SnapshotInterval = t.SnapshotInterval
 	}
 	if o.SnapshotThreshold != 0 {
 		c.SnapshotThreshold = o.SnapshotThreshold
@@ -303,17 +338,17 @@ func (o *Options) raftConfig(logOutput io.Writer) *raft.Config {
 // OpenFresh starts Raft on an empty data directory so a leader can add this node
 // (`tailraid join`): the log fills by replication or snapshot install.
 func OpenFresh(o Options) (*Node, error) {
-	if HasState(o.DataDir) {
+	if o.hasState() {
 		return nil, ErrAlreadyInit
 	}
 	_, logOutput := o.logger()
-	st, err := openStores(o.DataDir, logOutput, o.NoSync)
+	st, err := o.openStores(logOutput)
 	if err != nil {
 		return nil, err
 	}
 	trans, err := o.transport(logOutput)
 	if err != nil {
-		_ = st.logs.Close()
+		st.close()
 		return nil, err
 	}
 	return start(o, st, trans)
@@ -322,12 +357,12 @@ func OpenFresh(o Options) (*Node, error) {
 func start(o Options, st *stores, trans raft.Transport) (*Node, error) {
 	log, logOutput := o.logger()
 	fsm := meta.NewFSM()
-	r, err := raft.NewRaft(o.raftConfig(logOutput), fsm, st.logs, st.logs, st.snaps, trans)
+	r, err := raft.NewRaft(o.raftConfig(logOutput), fsm, st.logs, st.stable, st.snaps, trans)
 	if err != nil {
-		_ = st.logs.Close()
+		st.close()
 		return nil, fmt.Errorf("cluster: start raft: %w", err)
 	}
-	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, trans: trans, log: log}, nil
+	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, closer: st.closer, trans: trans, log: log}, nil
 }
 
 // WaitLeader blocks until this node sees a leader or the timeout passes.
@@ -429,60 +464,21 @@ func (n *Node) Close() error {
 	if c, ok := n.trans.(io.Closer); ok {
 		_ = c.Close()
 	}
-	if err := n.logs.Close(); err != nil && first == nil {
-		first = err
+	if n.closer != nil {
+		if err := n.closer.Close(); err != nil && first == nil {
+			first = err
+		}
 	}
 	return first
 }
 
 // --- single-node views used by M1 ---------------------------------------------------
 
-// LocalPeers is the liveness view of a node that is alone in its cluster.
-type LocalPeers struct{ Idx meta.NodeIdx }
-
-func (p LocalPeers) Self() meta.NodeIdx                       { return p.Idx }
-func (p LocalPeers) Live() []meta.NodeIdx                     { return []meta.NodeIdx{p.Idx} }
-func (p LocalPeers) Rank(nodes []meta.NodeIdx) []meta.NodeIdx { return nodes }
-
-// LocalShards routes shard traffic for this node to its own store; other nodes are
-// unreachable until the M2 RPC client takes over.
-type LocalShards struct {
-	Idx   meta.NodeIdx
-	Store *chunk.Store
-}
-
-var errRemoteUnavailable = errors.New("cluster: remote shard transport not available")
-
-func (s LocalShards) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
-	if node != s.Idx {
-		return errRemoteUnavailable
-	}
-	_, err := s.Store.Put(key, body)
-	return err
-}
-
-func (s LocalShards) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
-	if node != s.Idx {
-		return nil, errRemoteUnavailable
-	}
-	return s.Store.Get(key)
-}
-
-func (s LocalShards) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) error {
-	if node != s.Idx {
-		return errRemoteUnavailable
-	}
-	_, err := s.Store.Delete(key)
-	return err
-}
-
 // SelfIdx finds this node's NodeIdx in the FSM by raft ID.
 func (n *Node) SelfIdx() (meta.NodeIdx, bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == n.ID {
-			return nodes[i].Idx, true
-		}
+	nd, ok := n.FSM.NodeByID(n.ID)
+	if !ok {
+		return 0, false
 	}
-	return 0, false
+	return nd.Idx, true
 }

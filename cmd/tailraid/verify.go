@@ -36,7 +36,7 @@ the cluster's repair.grace.`,
 			if _, err := os.Stat(cfg.Mount.Path); err != nil {
 				return fmt.Errorf("mount path %s: %w (run `tailraid mount` first)", cfg.Mount.Path, err)
 			}
-			grace, _, err := cfg.RepairDurations()
+			grace, fillAfter, err := cfg.RepairDurations()
 			if err != nil {
 				return err
 			}
@@ -52,18 +52,26 @@ the cluster's repair.grace.`,
 				seed = time.Now().UnixNano()
 			}
 			p := soak.Quick()
-			p.Name, p.Grace, p.FillAfter = "live", grace, grace
+			p.Name, p.Grace, p.FillAfter = "live", grace, fillAfter
+			p.ChunkSize = 0 // taken from the cluster's status unless --chunk overrides it
 			if cs, _ := cmd.Flags().GetInt("chunk"); cs > 0 {
 				p.ChunkSize = cs
 			}
-			env := &soak.LiveEnv{Client: cl, SelfAddr: addr, MountPath: cfg.Mount.Path, ClusterID: fmt.Sprintf("%x", cid[:4]), Destructive: destructive, Restarts: restarts}
+			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), destructive, restarts)
 			rf, err := os.Create(resultsPath)
 			if err != nil {
 				return err
 			}
 			defer rf.Close()
 			log := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
-			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed))} //nolint:gosec // workload
+			var flags []string
+			if destructive {
+				flags = append(flags, "destructive")
+			}
+			if restarts {
+				flags = append(flags, "restarts")
+			}
+			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed)), Seed: seed, Flags: flags} //nolint:gosec // workload
 			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive, "restarts", restarts)
 			sum, err := run.Execute(ctx)
 			if err != nil {

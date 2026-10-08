@@ -45,9 +45,13 @@ friendly and bounds padding at `64*k` bytes per chunk.
 **Policy selection per chunk** (in the flusher):
 
 ```
-if size <= 64 KiB:  k = 1, m = Vol.M
-else:               k = Vol.K, m = Vol.M
+if size < ChunkSize and size <= 64 KiB (meta.SmallChunkMax):  k = 1, m = Vol.M
+else:                                                          k = Vol.K, m = Vol.M
 ```
+
+A full chunk is never "small", however small the chunk size (test harnesses use 64 KiB
+chunks). `meta.IsSmallChunk` and `meta.TargetPolicy` are the only places this rule lives:
+the flusher, the repair scanner and every report read them.
 
 Small files thus cost `(m+1)×` their size with a single RPC per replica instead of `k+m`
 RPCs for a few kilobytes. Space overhead of a full 1 MiB chunk at 2+1 is 1.5× plus ≤128 B.
@@ -137,7 +141,9 @@ type Peers interface {
 ```
 
 `Reader.ReadChunk(h)`: cache hit → return. Otherwise `c = GetChunk(h)`; order
-`Rank(non-zero placement)`; fetch the first `k` in parallel; on any failure or `ErrCorrupt`
+`Rank(live non-zero placement)` (dead holders are never dialled, L-131; slots are offered
+in placement order so data shards come before parity at equal rank, L-63); fetch the
+first `k` in parallel; on any failure or `ErrCorrupt`
 pull the next slot until `k` good shards are in hand; `Decode(shards, c.Size)`; verify
 `sha256 == h` (a mismatch is `EIO` and is logged with the slot list for scrub); cache.
 Fewer than `k` reachable shards ⇒ `EIO` for that chunk only.
@@ -177,6 +183,9 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 - **I-32** — Policy migration and drain never reduce a chunk's reachable shard count below
   its recorded `k`: old shards are deleted only after the new placement has been committed
   and applied.
+- **I-67** — The chunk size is bounded once: `init`, `SetVolume` and the shard store all
+  enforce `ChunkSize ≤ meta.MaxChunkSize` (64 MiB), so a k=1 shard of the largest chunk
+  always fits `chunk.MaxPayload` and no shard is stored that cannot be read back.
 - **I-33** — Weighted placement is proportional: over many hashes a candidate receives
   shards in proportion to its weight within ±10 %, and removing a candidate relocates only
   the shards it held.
@@ -185,9 +194,10 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 
 | Invariant | Tests |
 |---|---|
-| I-8 | `TestPlace_DeterministicAcrossNodes`, `FuzzPlace_Determinism`, `TestCluster_PlacementAgreesOnAllNodes` |
-| I-9 | `TestPlace_DistinctNodes`, `TestFSM_Commit_RejectsDuplicatePlacement`, `TestCluster_WriteReadAllNodes`, `TestModelCheck_Long` |
-| I-10 | `TestDecode_EverySubsetOfKShards`, `TestDecode_FewerThanK_Fails`, `TestEncodeDecode_Sizes`, `TestTailPadding_NotLeaked`, `FuzzRoundTrip`, `TestCluster_KillMNodes_AllDataReadable` |
-| I-30 | `TestShardSizesEqual_AndDeterministic`, `TestEncode_DoesNotAliasInput`, `TestVerify_EncodedIsConsistent` |
-| I-32 | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DeletesOldShardsOnlyAfterCommit` |
-| I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnRemove` |
+| I-8 | `FuzzPlace_Determinism`, `TestPlace_DeterministicAcrossNodes`, `TestPlace_GoldenVectors` |
+| I-9 | `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestExcludeIdx`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestModelCheck_Long`, `TestPlace_DistinctNodes` |
+| I-10 | `FuzzRoundTrip`, `TestDecode_EverySubsetOfKShards`, `TestDecode_FewerThanK_Fails`, `TestEncodeDecode_Sizes`, `TestRoundTrip_Property`, `TestTailPadding_NotLeaked` |
+| I-30 | `FuzzRoundTrip`, `TestEncodeDecode_Sizes`, `TestEncode_DoesNotAliasInput`, `TestRoundTrip_Property`, `TestShardSizesEqual_AndDeterministic`, `TestVerify_DetectsCorruption`, `TestVerify_EncodedIsConsistent` |
+| I-32 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_MigrationCrash_Resumes`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
+| I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnAdd`, `TestPlace_StabilityOnMembershipChange`, `TestPlace_StabilityOnRemove` |
+| I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |

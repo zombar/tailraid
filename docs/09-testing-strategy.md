@@ -59,7 +59,7 @@ Rules that keep it honest:
 | Seam | Where | Why |
 |---|---|---|
 | `clock.Clock` (`Now`, `NewTimer`, `After`, `Since`) + `clock.Fake{Advance, Set}` | every tailraid timer: GC grace, repair hold-down, flush idle, attr TTL, HTTP timeouts | no sleeps in tests; ~80 lines. Raft keeps its own real clock; raft tests use 20 ms timeouts and condition polling |
-| `sysfs.FS` (`CreateTemp, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, Sync, Close`) + `sysfstest.Fault` | `internal/chunk` only | ENOSPC, torn writes, crash at each fsync step (`SyncDir` is on the ack path: a PUT is acked only after it) |
+| `sysfs.FS` (`CreateTemp, OpenFile, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, WriteAt, Sync, Close, Truncate`) + `sysfstest.Fault` | `internal/chunk` and the `internal/vfs` WAL only | ENOSPC, torn writes, failed fsync, crash at each fsync step (`SyncDir` is on the ack path: a PUT is acked only after it; a WAL append is acked only after its fsync) |
 | `FaultNet` (`http.RoundTripper` wrapper keyed src→dst: `Drop`, `Delay`, `Partition`, `ErrorOnce`) | RPC client in tests and under `--dev` | production HTTP code runs in every multi-node test |
 | `cluster.Hooks` (nil-checked func fields, one per crash point C1..C7 of `docs/05`: `BeforeWALSync`, `BeforeClientAck`, `AfterShardTempWritten`, `AfterShardFsync`, `AfterShardRename`, `AfterAllShardsAcked`, `AfterRaftCommit`) | write path | crash injection at every durability point; nil in production, no behaviour change |
 | `tailscale.Client` interface + `tailscale.Fake` | WhoIs authorizer, prober | tailscaled is not available in CI |
@@ -80,22 +80,22 @@ addressing); `FuzzRoundTrip`.
 
 **`internal/chunk`** — `TestStore_PutGetRoundTrip` size table; `TestStore_GetVerifiesHash_Corrupted`
 (table: bit flip, truncated, zero-filled, bad magic → `ErrCorrupt` and the file is quarantined);
-`TestStore_PutRejectsHashMismatch`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
-`TestStore_CrashAfterRenameBeforeDirSync_NotAcked`; `TestStore_OpenSweepsTemps`;
+`TestChunkRPC_HashMismatchRejected`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
+`TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`; `TestStore_CrashBeforeRename_LeavesNoVisibleShard`;
 `TestStore_TornWrite_DetectedOnRead`; `TestStore_ConcurrentPutSameHash` (32 goroutines,
-`-race`); `TestStore_DiskFull_NoPartialShard`; `TestStore_DupPutDifferentPayload_Overwrites`;
-`TestStore_DeleteIfOlder_KeepsYoung`; `TestCache_LRUEvictsBySize`; `FuzzStore_PutGet`.
+`-race`); `TestStore_DiskFull_ReturnsErrAndNoPartialShard`; `TestStore_PutDifferentPayloadSameKey_Replaces`;
+`TestStore_DeleteIfOlder_RefusesYoungShard`; `TestCache_LRUEvictsBySize`; `FuzzStore_PutGet`.
 
 **`internal/meta`** — `TestFSM_ApplySnapshotRestoreEquivalence` (5k random commands;
 snapshot; restore; compare; also restore-then-replay-tail); `TestFSM_DeterministicAcrossReplicas`
 (same log into 3 FSMs → byte-identical snapshots; catches map-iteration order);
 rename table (`over file`, `over empty dir`, `over non-empty dir`, `into own subtree`,
-`same path`, `cross-dir keeps ino+gen`); `TestFSM_HandleStableAcrossRestart`;
-`TestFSM_InoGenNotReusedAfterUnlink`; `TestFSM_RefCount_SharedChunkAcrossFiles`;
-`TestFSM_Commit_RejectsStaleBaseVersion`; `TestFSM_Commit_ErrNeedTailRewrite`;
-`TestFSM_Commit_TruncateThenGrow_DropsOldChunks`; `TestFSM_NowIsMonotonic`;
-`TestFSM_RefcountUnderflow_IsBadCommand`;
-`TestFSM_SetVolume_NewPolicyAppliesToNewChunksOnly`; invariant checker used by every FSM test
+`same path`, `cross-dir keeps ino+gen`); `TestHandle_RoundTrip_BigEndian`;
+`TestFSM_InoGenNotReusedAfterUnlink`; `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`;
+`TestFSM_Commit_RejectsStaleBaseVersion`; `TestFSM_Commit_TruncateDown`;
+`TestFSM_Commit_TruncateThenGrow_DropsOldBytes`; `TestFSM_LastNowMonotonic`;
+`TestFSM_RefCountNeverUnderflows`;
+`TestFSM_SetVolume_PolicyVersionBumps`; invariant checker used by every FSM test
 (Σrefs = references from inodes, `len(Chunks) == ceil(Size/CS)`, parent chains reach root,
 `Tombs ⇔ Refs==0`); `FuzzDecodeCommand`.
 
@@ -114,31 +114,31 @@ under `-short` and 50k in long mode, ops weighted over `OpenFile+Seek+Write+Clos
 tree every 100 ops, and again after flush + reopen from the same stores (restart equivalence).
 Plus the deliberately simple `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`,
 `TestVFS_PerRPCOpenCloseSequence` (the exact go-nfs per-WRITE sequence),
-`TestVFS_WriteSpanningChunkBoundary`, `TestVFS_WritePastEOF_CreatesHole_ReadsZeros`,
-`TestVFS_TruncateDown_DropsChunkRefs`, `TestVFS_TruncateUp_Zeros`,
-`TestVFS_CloseFlushIsDurable`, `TestVFS_DedupIdenticalChunks`,
+`TestOverlay_WriteSpanningChunkBoundary`, `TestOverlay_WritePastEOF_ReadsZerosInGap`,
+`TestFSM_Commit_TruncateDown`, `TestOverlay_TruncateThenGrow_ZerosOldBytes`,
+`TestVFS_PerRPCOpenCloseSequence`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`,
 `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`,
-`TestVFS_ConcurrentGateways_DisjointChunksBothLand`, `TestFlusher_UnknownChunk_ReUpload`,
-`TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_ConflictRebase_KeepsAllExtents`,
+`TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_UnknownChunk_ReUpload`,
+`TestFlusher_DegradedCommitRecordsZeroSlots`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`,
 `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`,
-`TestWAL_ReplayStopsAtTornTail`, `TestWAL_CompactKeepsLiveExtents`,
-`TestVFS_UnlinkDirtyFile_DropsWAL`, `TestVFS_ConcurrentWritersDifferentFiles`.
+`TestWAL_ReplayStopsAtTornTail`, `TestWAL_Compact_KeepsOnlyLive`,
+`TestVFS_RemoveDirtyFile_DropsOverlay`, `TestOverlay_ConcurrentWritersDifferentInodes`.
 
 **`internal/nfsgw`** — in-process over `willscott/go-nfs-client` against `nfs.Serve` on
 `127.0.0.1:0` (no root): `TestNFS_WriteSequence_MultiRPC` (64 KiB and 1 MiB pieces, shuffled
-offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrModeOwnerTimes`,
-`TestNFS_RenameKeepsHandleValid`, `TestNFS_HandleSurvivesGatewayRestart`,
-`TestNFS_RemovedHandleIsStale`, `TestNFS_BogusHandleIsStaleNotPanic`,
-`TestNFS_ReadDirPlusLargeDirectory` (5k entries), `TestNFS_UnsupportedOpsReturnNotSupp`.
+offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrOwnerAndTimes`,
+`TestNFS_RenameKeepsHandleValid`, 
+`TestNFS_RemovedHandleIsStale`, 
+`TestNFS_ReadDirPlusLargeDirectory` (5k entries), `TestNFS_FSStatAndUnsupported`.
 
-**`internal/rpc`** — `TestChunkRPC_SizeBoundaries` {0, 1, max−1, max, max+1 → 413} with client
-and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_GetMissing404`;
-`TestChunkRPC_ContextCancelAbortsUpload`; `TestRPC_DeleteFence_RefusesStaleIndex`,
-`TestRPC_DeleteFence_RefusesYoungShard`, `TestRPC_DeleteFence_RefusesPlacedShard412`;
-`TestWhoIs_DeniesUnknownPeer`,
-`TestWhoIs_DeniesStableIDMismatch`, `TestWhoIs_AllowsMember`, `TestWhoIs_PurgeOnMembershipChange`;
-`TestChunkRPC_ReadsAuthBeforeBody`; `TestRPC_ClusterIDMismatch409`;
-`TestRPC_ListenRefusesNonLoopbackWithoutAuth`.
+**`internal/rpc`** — `TestChunkRPC_PutGetHeadDelete_SizeBoundaries` {0, 1, max−1, max, max+1 → 413} with client
+and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_PutGetHeadDelete_SizeBoundaries`;
+`TestChunkRPC_DeleteFence`,
+`TestChunkRPC_DeleteFence`, ;
+`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`,
+`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`, ;
+`TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`; ;
+`TestListen_RefusesNonLoopbackWithoutAuthorizer`.
 
 **`internal/cluster` + `internal/testharness`** — harness:
 
@@ -151,19 +151,19 @@ func (c *Cluster) Partition(a, b []int); func (c *Cluster) Heal()
 func (c *Cluster) Quiesce(t *testing.T)   // Barrier on leader + all FSMs at the same index
 ```
 
-Scenarios: `TestCluster_WriteReadAllNodes`, `TestCluster_KillMNodes_AllDataReadable`,
-`TestCluster_KillMPlusOne_ReadsFailCleanly`, `TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy`,
+Scenarios: `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`,
+`TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestRepair_DeadNodeHoldDown_ThenReplaced`,
 `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`,
 `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestCluster_GCDoesNotDeleteInflightUpload`,
-`TestCluster_SplitBrain_OnlyMajorityCommits`, `TestCluster_PlacementAgreesOnAllNodes`,
-`TestIDStream_RejectsForeignCluster`, `TestCluster_TwoInitsDoNotMerge`,
-`TestJoin_WrongToken403_NoRaftChange`, `TestCluster_IPChange_UpdatesAddr`,
-`TestProber_LaptopSleep_NoRepairBeforeHoldDown`, `TestServe_SecondInstanceSameDirFails`.
+`TestCluster_SplitBrain_OnlyMajorityCommits`, `TestModelCheck_Long`,
+`TestIDStream_RejectsForeignCluster`, 
+`TestJoin_TokenAndIdentity`, `TestCluster_UpdateAddr_ChangesRPCAddr`,
+`TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestSecondOpen_IsRefused`.
 
 **Data-loss specific** — `TestCrash_AtEveryPoint`: for each hook, start a write of a known
 payload, kill the gateway at the hook, restart, and require exactly one of two outcomes:
 not acknowledged ⇒ old content and no visible orphan shards, or acknowledged ⇒ new content
-readable from every live gateway. `TestCluster_TornShardOnOneNode_ReadDecodes_AndRepairs`.
+readable from every live gateway. `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption`.
 `TestDurability_AckImpliesReadableFromKSurvivors` (`Durable()`; after each ack: kill and
 restart the gateway, let the WAL replay and flush, then kill m nodes and read elsewhere;
 rotate the gateway; 20 iterations short / 200 long). **`TestModelCheck_Long`** (skipped under `-short`; `make
@@ -171,7 +171,7 @@ test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
 
-**End to end** — `TestE2E_ThreeNodes_NFSWriteOnA_ReadOnB_KillC` (in `-short`, ≈5 s).
+**End to end** — `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` (in `-short`, ≈5 s).
 `test/mount/TestMount_Workload`, gated on `TAILRAID_MOUNT_TEST=1` and `sudo -n true`: real
 `mount -t nfs`, then `cp -r` + `diff -r`, `dd … seek=N conv=notrunc` + `cmp`,
 write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, remount,
@@ -197,6 +197,12 @@ write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, r
 - `goleak.VerifyTestMain` in every package that starts goroutines; the ignore list is empty
   unless an entry carries an upstream issue link.
 - `t.Parallel()` only in pure packages (ec, placement, meta).
+- **Hot-path benchmarks** (`make bench`): flush of full chunks, cached and uncached reads,
+  Commit on a 16k-chunk file, LOOKUP / GETATTR / READDIR on a 10k-entry directory, FSSTAT
+  over 100k chunks, the chunk walk, shard-store PUT, cache GET, extent insert and cover
+  checks, encode and decode. A baseline is committed as `docs/reports/bench-<date>.txt` and the run after a
+  round of work as `bench-<date>-after.txt`; a performance change carries a `benchstat`
+  delta against the baseline in the commit message.
 
 ## 6. Soak suite and live verification
 
@@ -221,7 +227,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   (n1–n3 voters, n4 non-voter) with `dev.enabled`, `repair.grace` and `repair.fill_after`
   of 20 s, and one **worker** sidecar per node sharing the node's network namespace
   (`soak-client worker`). The worker reaches the node's loopback NFS gateway through the
-  pure-Go NFSv3 client and the node's RPC from the node's own tailnet IP (so WhoIs sees a
+  pure-Go NFSv3 client (with a 60 s call timeout and a fresh connection after any
+  operation that overruns 75 s: a reply landing after that client's own timeout wedges its
+  receive loop for good, and a follower gateway legitimately holds a metadata operation
+  for up to the 30 s Stale threshold during an election) and the node's RPC from the node's own tailnet IP (so WhoIs sees a
   member); it exposes both over a small HTTP API on a published port. The driver runs on the
   host: `Volume` and `Call` go through the worker, kills, restarts and partitions through
   `docker compose kill|start|restart` and `docker network disconnect|connect`, corruption
@@ -249,18 +258,41 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   persist; FSM hashes agree); 7 membership (`set-redundancy` 2+1→1+2→2+1 under load with
   `stale_policy_chunks` draining to 0; drain and re-activate n4); 8 dedup and GC (second
   copy of the corpus adds < 1 % stored bytes; removing a unique file reclaims after grace,
-  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity). A phase
-  the environment cannot run is recorded as *skipped (capability)*, never passed.
+  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity); 10
+  partition (a minority is cut off: the majority elects and keeps committing, a cut-off
+  gateway refuses metadata operations and buffers WRITEs that commit after the heal; then
+  the gateway itself is cut off and rejoins; a refused operation may land after the heal,
+  which Raft allows, so the check is FSM agreement, not absence; I-29, L-59, L-148). A
+  phase the environment cannot run is recorded as *skipped (capability)*, never passed.
+  On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
+  it, and once the service manager has it back it drops every peer until the phase's
+  `Start`, so "m nodes dead" holds for as long as the phase needs rather than for the
+  service manager's restart delay. The device running `verify` is never killed (its mount
+  is the run's only volume); when it leads, the consensus phase is skipped.
 - **Results and report**: the driver appends one JSON line per event, check and 1 s
-  sample (bytes moved, write/read latency, `degraded_chunks`, `stored_bytes`,
-  `logical_bytes`, slots per node, FSM-hash agreement) to `results.jsonl`, then renders a
-  self-contained `report.html` with inline SVG charts drawn in Go: pass/fail banner and the
-  phase × check matrix, throughput with event markers, degraded chunks over time, stored
-  vs logical bytes, slots per node before and after membership changes, latency
-  histograms, the FSM-hash agreement strip, and a table of every inconsistency with file,
-  chunk, node and phase. The report header names the target (compose topology or live
-  cluster) and the node versions.
+  sample (bytes moved, cumulative write/read latency histograms over fixed log-spaced
+  buckets, degraded / repair-pending / unreadable / stale-policy chunks, stored and
+  logical bytes, dedup ratio, slots and liveness per node, the sampled node's overlay WAL
+  depth, FSM-hash agreement) to `results.jsonl`; every record carries its line number.
+  Every check cites the invariants and lifecycle cells it exercises (`I-n`, `L-n`; a
+  test keeps the citations defined). The driver then renders a self-contained
+  `report.html` with inline SVG charts drawn in Go: the header (target, profile, policy
+  and chunk size, node count, seed, flags, per-node binary version), a PASS / FAIL /
+  PARTIAL banner (PARTIAL when a phase was skipped for a capability the environment
+  lacks: a live run without `--destructive --restarts` never shows green), the phase ×
+  check matrix with citations, every inconsistency with file, chunk, node and its
+  `results.jsonl` line, totals (bytes, ops, dedup ratio, deepest WAL, repair and GC
+  counters), p50 / p99 / max latency per phase and separately for the operations issued
+  while a fault was in force, the coverage table of cited IDs with pass and fail counts,
+  the notes the phases left (an FSM-hash check that could not run, a refused operation
+  that landed after a heal), every node's goroutine dump taken right after a failed
+  phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
+  bands and every event marker, node liveness lanes, repair backlog, stored vs logical
+  bytes, overlay WAL depth, slots per node, latency histograms and the FSM-hash strip.
 - `make soak` (quick, ~10 min) runs the compose profile; `make soak-full` the long one.
+  Setup (two cross-compiled binaries, eight cached image layers, four joins) takes about a
+  minute on an idle machine; run it on its own, since `make check` alongside it turns that
+  into ten.
   Acceptance for M3b includes injecting one deliberate bug and watching the suite go red.
 
 ## 7. CI

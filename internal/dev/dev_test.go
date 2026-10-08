@@ -2,9 +2,11 @@ package dev
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +53,15 @@ func TestDev_FSMHashCorruptAndExit(t *testing.T) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode
+	}
+	if resp, err := http.Get(srv.URL + "/dev/goroutines"); err != nil {
+		t.Fatal(err)
+	} else {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "goroutine ") || !strings.Contains(string(body), "dev.handler") {
+			t.Fatalf("goroutines: %d %.200s", resp.StatusCode, body)
+		}
 	}
 	if code := post("/dev/corrupt?key=nope"); code != http.StatusNotFound {
 		t.Fatalf("unknown key: %d", code)

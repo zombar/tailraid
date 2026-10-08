@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"github.com/zombar/tailraid/internal/testseed"
 	"os"
+	"runtime/pprof"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,8 +27,13 @@ import (
 // harnessEnv runs the soak phases against the in-process cluster: billy volumes, the fake
 // clock behind Wait, and the admin surface called directly.
 type harnessEnv struct {
-	t *testing.T
-	c *testharness.Cluster
+	t           *testing.T
+	c           *testharness.Cluster
+	partitioned bool // Settle would wait for cut-off nodes to catch up, which they cannot
+
+	// a restart rebuilds a node's overlay and FSM handles while the sampler goroutine
+	// reads them: faults take the write side, the sampler's reads the read side
+	mu sync.RWMutex
 }
 
 func (e *harnessEnv) Name() string { return "in-process harness" }
@@ -63,7 +70,8 @@ func (e *harnessEnv) quorum() bool {
 	return alive > len(e.c.Nodes)/2
 }
 
-// Wait advances the fake clock, flushes every live gateway and settles the cluster.
+// Wait advances the fake clock, flushes every live gateway and settles the cluster
+// (not under a partition: the cut-off side cannot catch up until the heal).
 func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 	e.c.Clk.Advance(d)
 	e.c.Probe()
@@ -75,16 +83,22 @@ func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 			_ = e.c.Nodes[i].Flush.FlushAll(ctx)
 		}
 	}
-	e.c.Settle()
+	if !e.partitioned {
+		e.c.Settle()
+	}
 	return nil
 }
 
 func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
 		return admin.Report{}, errors.New("node is down")
 	}
-	return admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil), nil
+	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
+	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty())
+	return rep, nil
 }
 
 func (e *harnessEnv) repairer(scrub bool) *repair.Repairer {
@@ -152,6 +166,8 @@ func (e *harnessEnv) Chunks(ctx context.Context, n soak.NodeRef, path string) ([
 }
 
 func (e *harnessEnv) FSMHash(_ context.Context, n soak.NodeRef) (uint64, string, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
 		return 0, "", errors.New("node is down")
@@ -160,7 +176,18 @@ func (e *harnessEnv) FSMHash(_ context.Context, n soak.NodeRef) (uint64, string,
 	return h.Applied, h.Hash, err
 }
 
+// Goroutines dumps the test process (every harness node lives in it).
+func (e *harnessEnv) Goroutines(context.Context, soak.NodeRef) (string, error) {
+	var b bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&b, 2); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
 func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.c.Kill(e.node(n).I)
 	e.c.Clk.Advance(cluster.LiveThreshold + time.Second)
 	e.c.Probe()
@@ -168,6 +195,8 @@ func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
 }
 
 func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.c.Restart(e.node(n).I)
 	if e.quorum() {
 		e.c.Settle()
@@ -176,6 +205,8 @@ func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
 }
 
 func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, n := range nodes {
 		e.c.Kill(e.node(n).I)
 	}
@@ -195,11 +226,13 @@ func (e *harnessEnv) Partition(_ context.Context, a, b []soak.NodeRef) error {
 		ib = append(ib, e.node(n).I)
 	}
 	e.c.Partition(ia, ib)
+	e.partitioned = true
 	return nil
 }
 
 func (e *harnessEnv) Heal(context.Context) error {
 	e.c.Heal()
+	e.partitioned = false
 	e.c.Settle()
 	return nil
 }
@@ -215,18 +248,24 @@ func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) erro
 func harnessProfile() soak.Profile {
 	cs := int(testharness.ChunkSize)
 	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
-		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second}
+		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second,
+		SampleEvery: 50 * time.Millisecond} // the sampler runs concurrently with the phases, as it does in production
 }
 
 // The whole scenario sequence runs green against the in-process cluster, every phase
 // reports checks (none skipped), the results stream has samples and events, and the
-// report renders with the phase matrix and charts.
+// report renders with the phase matrix and charts. The partition phase is the only
+// end-to-end exercise of a cut-off gateway: metadata refused, WRITEs buffered and
+// committed after the heal, the majority committing throughout.
+// Invariant: I-29
+// Lifecycle: L-59, L-148
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
-	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rand.New(rand.NewSource(1))} //nolint:gosec // seeded workload
+	seed, rng := testseed.New(t)
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed}
 	sum, err := run.Execute(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +283,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 9 {
+	if sum.Failed != 0 || len(sum.Phases) != 10 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -267,9 +306,26 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	if path := os.Getenv("SOAK_REPORT_OUT"); path != "" { // for eyeballing the report
 		_ = os.WriteFile(path, html.Bytes(), 0o600)
 	}
-	for _, want := range []string{"<svg", "9 restart storm", "PASS", "FSM-hash agreement", "Throughput"} {
+	for _, want := range []string{"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
+		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
+		}
+	}
+	if strings.Contains(out, "peak write 0.0 MiB/s") {
+		t.Error("throughput chart has no rate: the boundary-sample filter dropped every interval")
+	}
+	for _, want := range []string{} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q", want)
+		}
+	}
+	if sum.Partial || sum.K != 2 || sum.M != 1 || sum.NodeCount != 4 || sum.Totals.BytesWritten == 0 || sum.Totals.Repair.Scanned == 0 || sum.Totals.GC.Victims == 0 || len(sum.Coverage) < 30 {
+		t.Errorf("summary metadata: partial=%v %d+%d nodes=%d totals=%+v coverage=%d", sum.Partial, sum.K, sum.M, sum.NodeCount, sum.Totals, len(sum.Coverage))
+	}
+	for i, rec := range sum.Records {
+		if rec.Line != i+1 {
+			t.Fatalf("record %d has line %d", i, rec.Line)
 		}
 	}
 	// the cleanup left no run directory behind

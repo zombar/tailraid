@@ -90,6 +90,18 @@ type ClusterNode struct {
 	trans  *raft.InmemTransport
 	raddr  raft.ServerAddress
 	alive  bool // guarded by Cluster.mu
+	// Raft state lives in memory and survives a simulated kill, like the page cache of a
+	// process kill would; production uses the fsynced bbolt store (docs/04 §8.1)
+	stores  *cluster.Stores
+	started bool
+}
+
+// RaftTiming is the harness's shortened Raft timing: quick elections, but a lease long
+// enough that a leader under the race detector's load does not lose it to a slow
+// follower (CI showed 25 ms contact times stepping a 25 ms lease into permanent churn).
+func RaftTiming() *cluster.RaftTiming {
+	return &cluster.RaftTiming{Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond,
+		Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond}
 }
 
 // Cluster is an in-process multi-node tailraid.
@@ -101,6 +113,8 @@ type Cluster struct {
 	CID   [16]byte
 	mu    sync.Mutex
 	snap  uint64
+
+	retryUntilStale bool
 }
 
 // Idx is the node's FSM index (1-based, same as creation order).
@@ -121,7 +135,7 @@ func init() {
 		if a, ok := inmemAddrs[nd.ID]; ok {
 			return a
 		}
-		return raft.ServerAddress(net.JoinHostPort(nd.Addr, strconv.Itoa(int(nd.RaftPort))))
+		return raft.ServerAddress(nd.RaftAddr())
 	}
 }
 
@@ -131,6 +145,15 @@ type ClusterOption func(*clusterOpts)
 type clusterOpts struct {
 	snapshotThreshold uint64
 	chunkSize         uint32
+	retryUntilStale   bool
+}
+
+// RetryUntilStale gives every node's filesystem the production health view: a failed
+// metadata proposal is retried on the fake clock until the node is stale (L-187). Tests
+// that use it must drive c.Clk while a mutation is in flight; without it a failed
+// proposal is EROFS at once, so fault tests fail fast.
+func RetryUntilStale() ClusterOption {
+	return func(o *clusterOpts) { o.retryUntilStale = true }
 }
 
 // SnapshotThreshold lowers Raft's snapshot threshold (tests of snapshot install).
@@ -146,7 +169,7 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 	for _, f := range opts {
 		f(&o)
 	}
-	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold}
+	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale}
 	for i := 0; i < n; i++ {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
@@ -194,7 +217,11 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		nd.raddr, nd.trans = raft.NewInmemTransportWithTimeout(nd.raddr, 10*time.Second)
 	}
 	c.connectAll()
-	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Fast: true, NoSync: true, SnapshotThreshold: c.snap}
+	if nd.stores == nil {
+		st := raft.NewInmemStore()
+		nd.stores = &cluster.Stores{Logs: st, Stable: st, Snaps: raft.NewInmemSnapshotStore()}
+	}
+	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Timing: RaftTiming(), Stores: nd.stores, SnapshotThreshold: c.snap}
 	if os.Getenv("TAILRAID_HARNESS_DEBUG") != "" {
 		opts.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})).With("node", fmt.Sprintf("n%d", nd.I))
 	}
@@ -202,7 +229,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	switch {
 	case bootstrap:
 		nd.Node, err = cluster.Bootstrap(context.Background(), opts, nd.record(c), vol, "harness-token")
-	case cluster.HasState(nd.Dir):
+	case nd.started:
 		nd.Node, err = cluster.Open(opts)
 	default:
 		nd.Node, err = cluster.OpenFresh(opts)
@@ -210,6 +237,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	if err != nil {
 		c.T.Fatal(err)
 	}
+	nd.started = true
 	if bootstrap {
 		if c.CID, err = cluster.LoadClusterID(nd.Dir); err != nil {
 			c.T.Fatal(err)
@@ -240,11 +268,21 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Reader = vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nd.Cache, nil)
 	nd.Reader.Events = nd.Events
 	cfg := vfs.DefaultConfig()
-	cfg.SmallChunk = SmallChunk
 	cfg.PutDeadline = 2 * time.Second
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, nd.Cache, c.Clk, cfg, nil)
 	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
+	if c.retryUntilStale {
+		nd.FS.SetHealth(func() bool {
+			switch h := nd.Node.Health(c.Clk, nd.Prober); h.State {
+			case cluster.Stale:
+				return true
+			case cluster.NoLeader:
+				return c.Clk.Now().Sub(nd.Node.Raft.LastContact()) >= cluster.StaleThreshold
+			}
+			return false
+		})
+	}
 	nd.RPC, err = rpc.NewServer(rpc.Options{NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,
 		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute})
@@ -330,15 +368,7 @@ func (c *Cluster) ChunksOf(i int, path string) []meta.Chunk {
 	return out
 }
 
-func splitPath(p string) []string {
-	var parts []string
-	for _, s := range strings.Split(p, "/") {
-		if s != "" {
-			parts = append(parts, s)
-		}
-	}
-	return parts
-}
+func splitPath(p string) []string { return meta.SplitPath(p) }
 
 // ReadFileCold reads path on node i through a reader with no cache, so every chunk
 // is reconstructed from shards.

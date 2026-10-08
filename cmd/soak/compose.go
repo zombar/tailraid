@@ -13,8 +13,6 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
-	"github.com/zombar/tailraid/internal/repair"
-	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/soak"
 )
 
@@ -28,6 +26,7 @@ type composeNode struct {
 // composeEnv drives the compose cluster from the host through the worker sidecars and the
 // docker compose CLI (docs/09 §6).
 type composeEnv struct {
+	soak.Admin
 	dir   string // compose project directory
 	nodes []composeNode
 	http  *http.Client
@@ -41,13 +40,25 @@ func newComposeEnv(dir string, n int) *composeEnv {
 			ip:     fmt.Sprintf("172.30.0.%d", 10+i),
 			worker: fmt.Sprintf("http://127.0.0.1:%d", 20500+i),
 		})
+		e.Seeds = append(e.Seeds, e.nodes[i-1].ref.RPC)
 	}
+	e.Caller = e
 	return e
 }
 
 func (e *composeEnv) Name() string { return fmt.Sprintf("docker compose, %d nodes", len(e.nodes)) }
 
-func (e *composeEnv) Nodes(context.Context) ([]soak.NodeRef, error) {
+// Nodes returns the compose nodes with the indices the cluster gave them. The containers
+// join in whatever order they come up, so n2 may well be node 4: the index is read from
+// the cluster's status by name, never assumed from the container number.
+func (e *composeEnv) Nodes(ctx context.Context) ([]soak.NodeRef, error) {
+	rep, err := e.SeedStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolveIndices(e.nodes, rep.Nodes); err != nil {
+		return nil, err
+	}
 	out := make([]soak.NodeRef, 0, len(e.nodes))
 	for _, n := range e.nodes {
 		out = append(out, n.ref)
@@ -55,19 +66,34 @@ func (e *composeEnv) Nodes(context.Context) ([]soak.NodeRef, error) {
 	return out, nil
 }
 
-func (e *composeEnv) node(ref soak.NodeRef) composeNode { return e.nodes[int(ref.Idx)-1] }
+// resolveIndices sets each compose node's index from the status report, matched by name.
+func resolveIndices(nodes []composeNode, members []admin.NodeReport) error {
+	for i := range nodes {
+		found := false
+		for j := range members {
+			if members[j].Name == nodes[i].ref.Name {
+				nodes[i].ref.Idx, found = members[j].Idx, true
+			}
+		}
+		if !found {
+			return fmt.Errorf("compose node %s is not in the cluster's node table", nodes[i].ref.Name)
+		}
+	}
+	return nil
+}
+
+// node finds the compose node behind a ref by name (indices are assigned by the cluster).
+func (e *composeEnv) node(ref soak.NodeRef) composeNode {
+	for _, n := range e.nodes {
+		if n.ref.Name == ref.Name {
+			return n
+		}
+	}
+	panic("compose: unknown node " + ref.Name)
+}
 
 func (e *composeEnv) Caps() soak.Caps {
 	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true}
-}
-
-func (e *composeEnv) Wait(ctx context.Context, d time.Duration) error {
-	select {
-	case <-time.After(d):
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // --- worker calls --------------------------------------------------------------------------
@@ -186,77 +212,15 @@ func (v *httpVolume) List(p string) ([]string, error) {
 	return r.Names, err
 }
 
-// --- admin surface -------------------------------------------------------------------------
+// --- admin surface: soak.Admin through the workers -----------------------------------------
 
-func (e *composeEnv) Status(ctx context.Context, ref soak.NodeRef) (admin.Report, error) {
-	var rep admin.Report
-	body, err := e.call(ctx, ref, http.MethodGet, "/v1/status", nil)
-	if err != nil {
-		return rep, err
+// Call implements admin.Caller: the RPC is proxied by the worker of the node that owns addr.
+func (e *composeEnv) Call(ctx context.Context, addr, method, path string, body []byte) ([]byte, error) {
+	ref, ok := e.byRPC(addr)
+	if !ok {
+		return nil, fmt.Errorf("no compose node at %s", addr)
 	}
-	err = json.Unmarshal(body, &rep)
-	return rep, err
-}
-
-// leader finds the node that currently leads (by status).
-func (e *composeEnv) leader(ctx context.Context) (soak.NodeRef, error) {
-	var last error
-	for _, n := range e.nodes {
-		rep, err := e.Status(ctx, n.ref)
-		if err != nil {
-			last = err
-			continue
-		}
-		for i := range rep.Nodes {
-			if rep.Nodes[i].Leader {
-				return e.nodes[int(rep.Nodes[i].Idx)-1].ref, nil
-			}
-		}
-	}
-	if last == nil {
-		last = errors.New("no leader")
-	}
-	return soak.NodeRef{}, last
-}
-
-func (e *composeEnv) adminOp(ctx context.Context, ref soak.NodeRef, op rpc.AdminOp, out any) error {
-	body, _ := json.Marshal(op)
-	raw, err := e.call(ctx, ref, http.MethodPost, "/v1/admin", body)
-	if err != nil {
-		return err
-	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(raw, out)
-}
-
-func (e *composeEnv) leaderOp(ctx context.Context, op rpc.AdminOp, out any) error {
-	var last error
-	target, err := e.leader(ctx)
-	if err != nil {
-		return err
-	}
-	for attempt := 0; attempt < 6; attempt++ { // the leader may move between lookup and call
-		err := e.adminOp(ctx, target, op, out)
-		if err == nil {
-			return nil
-		}
-		last = fmt.Errorf("via %s: %w", target.Name, err)
-		if redirect := rpc.LeaderFromErr(err); redirect != "" { // 421: the reply names the leader
-			if n, ok := e.byRPC(redirect); ok {
-				target = n
-				continue
-			}
-		}
-		if werr := e.Wait(ctx, time.Second); werr != nil {
-			return werr
-		}
-		if l, err := e.leader(ctx); err == nil {
-			target = l
-		}
-	}
-	return last
+	return e.call(ctx, ref, method, path, body)
 }
 
 // byRPC maps a node RPC address (host:port) to its NodeRef.
@@ -269,79 +233,22 @@ func (e *composeEnv) byRPC(addr string) (soak.NodeRef, bool) {
 	return soak.NodeRef{}, false
 }
 
-func (e *composeEnv) RepairNow(ctx context.Context) (repair.Stats, error) {
-	var st repair.Stats
-	err := e.leaderOp(ctx, rpc.AdminOp{Op: "repair_now"}, &st)
-	return st, err
-}
-
-func (e *composeEnv) Scrub(ctx context.Context) (repair.Stats, error) {
-	var rep struct {
-		Scan repair.Stats `json:"scan"`
-	}
-	err := e.leaderOp(ctx, rpc.AdminOp{Op: "check", Scrub: true}, &rep)
-	return rep.Scan, err
-}
-
-func (e *composeEnv) GCNow(ctx context.Context) (repair.Result, error) {
-	var res repair.Result
-	err := e.leaderOp(ctx, rpc.AdminOp{Op: "gc_now"}, &res)
-	return res, err
-}
-
-func (e *composeEnv) SetPolicy(ctx context.Context, k, m uint8) error {
-	return e.leaderOp(ctx, rpc.AdminOp{Op: "set_policy", K: k, M: m}, nil)
-}
-
-func (e *composeEnv) SetState(ctx context.Context, ref soak.NodeRef, state meta.NodeState) error {
-	l, err := e.leader(ctx)
+// Goroutines returns the node's dump followed by its worker's own (the client side of a
+// hang is as telling as the gateway's).
+func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, error) {
+	node, err := e.Admin.Goroutines(ctx, ref)
 	if err != nil {
-		return err
+		return "", err
 	}
-	body, _ := json.Marshal(rpc.MemberOp{Op: "set_state", NodeIdx: ref.Idx, State: state})
-	_, err = e.call(ctx, l, http.MethodPost, "/v1/members", body)
-	if redirect := rpc.LeaderFromErr(err); redirect != "" {
-		if n, ok := e.byRPC(redirect); ok {
-			_, err = e.call(ctx, n, http.MethodPost, "/v1/members", body)
-		}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, e.node(ref).worker+"/goroutines", http.NoBody)
+	resp, werr := e.http.Do(req)
+	if werr != nil {
+		return node, nil
 	}
-	return err
-}
-
-func (e *composeEnv) Fsck(ctx context.Context, ref soak.NodeRef) (bool, string, error) {
-	var rep struct {
-		Violations []string `json:"violations"`
-		Orphans    int      `json:"orphan_shards_on_this_node"`
-		OK         bool     `json:"ok"`
-	}
-	if err := e.adminOp(ctx, ref, rpc.AdminOp{Op: "fsck"}, &rep); err != nil {
-		return false, "", err
-	}
-	return rep.OK, fmt.Sprintf("%d violations, %d orphan shards", len(rep.Violations), rep.Orphans) + strings.Join(rep.Violations, "; "), nil
-}
-
-func (e *composeEnv) Chunks(ctx context.Context, ref soak.NodeRef, path string) ([]admin.ChunkReport, error) {
-	var reps []admin.ChunkReport
-	err := e.adminOp(ctx, ref, rpc.AdminOp{Op: "chunk", Chunk: path}, &reps)
-	return reps, err
-}
-
-func (e *composeEnv) FSMHash(ctx context.Context, ref soak.NodeRef) (uint64, string, error) {
-	var h struct {
-		Applied uint64 `json:"applied"`
-		Hash    string `json:"hash"`
-	}
-	body, err := e.call(ctx, ref, http.MethodGet, "/dev/fsm-hash", nil)
-	if err != nil {
-		return 0, "", err
-	}
-	err = json.Unmarshal(body, &h)
-	return h.Applied, h.Hash, err
-}
-
-func (e *composeEnv) Corrupt(ctx context.Context, ref soak.NodeRef, key string) error {
-	_, err := e.call(ctx, ref, http.MethodPost, "/dev/corrupt?key="+key, nil)
-	return err
+	defer resp.Body.Close()
+	var wb bytes.Buffer
+	_, _ = wb.ReadFrom(resp.Body)
+	return node + "\n\n==== worker " + workerName(ref) + " ====\n\n" + wb.String(), nil
 }
 
 // --- faults through docker compose and the workers ----------------------------------------

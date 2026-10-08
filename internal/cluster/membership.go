@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -14,11 +12,9 @@ import (
 	"github.com/zombar/tailraid/internal/rpc"
 )
 
-// Membership errors.
-var (
-	ErrHoldsShards = errors.New("cluster: node still holds shard slots; drain it first or use --force")
-	ErrBadMemberOp = errors.New("cluster: bad member operation")
-)
+// Membership errors. A remove refused because the node still holds slots is
+// meta.ErrNodeNotEmpty, enforced by the FSM itself (docs/02).
+var ErrBadMemberOp = errors.New("cluster: bad member operation")
 
 var _ rpc.Joiner = (*Node)(nil)
 var _ rpc.Applier = (*Node)(nil)
@@ -32,42 +28,24 @@ func (n *Node) LeaderRPCAddr() string {
 	if id == "" {
 		return ""
 	}
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == string(id) && nodes[i].Addr != "" {
-			return net.JoinHostPort(nodes[i].Addr, strconv.Itoa(int(nodes[i].RPCPort)))
-		}
+	if nd, ok := n.FSM.NodeByID(string(id)); ok && nd.Addr != "" {
+		return nd.RPCAddr()
 	}
 	return ""
 }
 
 // RPCAddrOf resolves a node index to its RPC address (rpc.Resolver).
 func (n *Node) RPCAddrOf(idx meta.NodeIdx) (addr string, self, ok bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].Idx == idx {
-			if nodes[i].Kind != meta.KindDevice || nodes[i].Addr == "" {
-				return "", false, false
-			}
-			return net.JoinHostPort(nodes[i].Addr, strconv.Itoa(int(nodes[i].RPCPort))), nodes[i].ID == n.ID, true
-		}
+	nd, found := n.FSM.Node(idx)
+	if !found || nd.Kind != meta.KindDevice || nd.Addr == "" {
+		return "", false, false
 	}
-	return "", false, false
+	return nd.RPCAddr(), nd.ID == n.ID, true
 }
 
-func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) {
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].Idx == idx {
-			return nodes[i], true
-		}
-	}
-	return meta.Node{}, false
-}
+func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) { return n.FSM.Node(idx) }
 
-func raftAddrOf(nd meta.Node) raft.ServerAddress {
-	return raft.ServerAddress(net.JoinHostPort(nd.Addr, strconv.Itoa(int(nd.RaftPort))))
-}
+func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.RaftAddr()) }
 
 // RaftAddrFor lets tests substitute in-memory transport addresses for node records.
 var RaftAddrFor = raftAddrOf
@@ -85,15 +63,21 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	}
 	nd := meta.Node{ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
 		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano()}
-	// re-join of a known node keeps its index
-	nodes := n.FSM.Nodes()
-	for i := range nodes {
-		if nodes[i].ID == req.NodeID {
-			if nodes[i].State == meta.Removed {
-				return rpc.JoinResponse{}, fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
+	var err error
+	// re-join of a known node keeps its index; a removed record refuses the ID
+	n.FSM.ForEachNode(func(cur meta.Node) bool {
+		if cur.ID == req.NodeID {
+			if cur.State == meta.Removed {
+				nd.Idx = 0
+				err = fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
+				return false
 			}
-			nd.Idx = nodes[i].Idx
+			nd.Idx = cur.Idx
 		}
+		return true
+	})
+	if err != nil {
+		return rpc.JoinResponse{}, err
 	}
 	var fut raft.IndexFuture
 	if req.Voter {
@@ -115,7 +99,7 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		return rpc.JoinResponse{}, err
 	}
 	m := n.FSM.Meta()
-	return rpc.JoinResponse{ClusterID: fmt.Sprintf("%x", m.ClusterID[:]), NodeIdx: meta.NodeIdx(res.Ino), Volume: n.FSM.Volume(), Members: n.FSM.Nodes()}, nil
+	return rpc.JoinResponse{ClusterID: meta.HexID(m.ClusterID), NodeIdx: meta.NodeIdx(res.Ino), Volume: n.FSM.Volume(), Members: n.FSM.Nodes()}, nil
 }
 
 // SlotsHeldBy counts committed shard slots placed on a node.
@@ -157,10 +141,16 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 	}
 	switch op.Op {
 	case "remove":
-		if nd.State != meta.Removed && !op.Force && n.SlotsHeldBy(op.NodeIdx) > 0 {
-			return ErrHoldsShards
-		}
 		if nd.State != meta.Removed {
+			if op.Force {
+				// make the degradation explicit: zero every slot on the node, then the
+				// repairer fills them from the other copies (docs/02, L-96)
+				if err := n.zeroSlots(ctx, op.NodeIdx, propose); err != nil {
+					return err
+				}
+			} else if held := n.SlotsHeldBy(op.NodeIdx); held > 0 {
+				return fmt.Errorf("%w: %d slots still on node %d; drain it first or use --force", meta.ErrNodeNotEmpty, held, op.NodeIdx)
+			}
 			if err := propose(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: op.NodeIdx, State: meta.Removed, Now: time.Now().UnixNano()}}); err != nil {
 				return err
 			}
@@ -211,6 +201,32 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	}
 	return fmt.Errorf("%w: unknown op %q", ErrBadMemberOp, op.Op)
+}
+
+// zeroSlots proposes SetPlacement with slot 0 for every chunk that places a shard on idx.
+func (n *Node) zeroSlots(ctx context.Context, idx meta.NodeIdx, propose func(meta.Command) error) error {
+	var victims []meta.Chunk
+	n.FSM.ForEachChunk(func(c meta.Chunk) bool {
+		for _, s := range c.Placement {
+			if s == idx {
+				victims = append(victims, c)
+				break
+			}
+		}
+		return true
+	})
+	for _, c := range victims {
+		place := append([]meta.NodeIdx(nil), c.Placement...)
+		for i, s := range place {
+			if s == idx {
+				place[i] = 0
+			}
+		}
+		if err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place}}); err != nil {
+			return fmt.Errorf("zero slots of %x: %w", c.Hash[:8], err)
+		}
+	}
+	return nil
 }
 
 // raftErr maps Raft's leadership errors onto the not-leader sentinel so RPC callers get

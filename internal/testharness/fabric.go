@@ -4,16 +4,16 @@ package testharness
 import (
 	"context"
 	"errors"
-	"flag"
 	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 
 	"github.com/hashicorp/raft"
 	nfsfile "github.com/willscott/go-nfs/file"
@@ -46,20 +46,25 @@ type Fabric struct {
 	Stores  map[meta.NodeIdx]*chunk.Store
 	Cache   *chunk.Cache
 	Ov      *vfs.Overlay
+	staging string
 
 	mu          sync.Mutex
 	idx         uint64
 	down        map[meta.NodeIdx]bool
 	full        map[meta.NodeIdx]bool
 	failPutOnce map[meta.NodeIdx]int
+	failPutWith map[meta.NodeIdx]error     // every PUT to the node fails with this
+	stallPut    map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
 	putCount    int
+	gets        map[meta.NodeIdx]int
 	proposeErr  error // returned once by Propose as a transport failure
+	proposeDown error // returned by every Propose while set
+	stale       bool  // the gateway's health view given to vfs.FS
 	proposed    []meta.Op
 }
 
 const (
-	ChunkSize  = uint32(64 << 10) // 64 KiB chunks keep the tests small
-	SmallChunk = uint32(4 << 10)  // chunks ≤ 4 KiB use k=1
+	ChunkSize = uint32(64 << 10) // 64 KiB chunks keep the tests small
 )
 
 // NewFabric builds a fabric with the given node count and (k,m) policy.
@@ -68,7 +73,7 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	f := &Fabric{
 		TB: t, FSM: meta.NewFSM(), Clk: clock.NewFake(time.Unix(1_700_000_000, 0)), SelfIdx: 1,
 		Stores: map[meta.NodeIdx]*chunk.Store{}, down: map[meta.NodeIdx]bool{}, full: map[meta.NodeIdx]bool{},
-		failPutOnce: map[meta.NodeIdx]int{},
+		failPutOnce: map[meta.NodeIdx]int{}, gets: map[meta.NodeIdx]int{},
 	}
 	f.Apply(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: ChunkSize, K: k, M: m, Now: 1}})
 	root := t.TempDir()
@@ -80,12 +85,31 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Ov, err = vfs.OpenOverlay(filepath.Join(root, "staging"), ChunkSize, f.Clk)
+	f.staging = filepath.Join(root, "staging")
+	f.Ov, err = vfs.OpenOverlay(f.staging, ChunkSize, f.Clk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.Ov.Close() })
 	return f
+}
+
+// Staging is the overlay's WAL directory.
+func (f *Fabric) Staging() string { return f.staging }
+
+// RestartOverlay closes the overlay and reopens it from its WALs, as a gateway restart
+// does; dirty state must survive. Flushers and filesystems built before must be rebuilt.
+// Options (caps) apply to the reopened overlay.
+func (f *Fabric) RestartOverlay(opts ...vfs.Option) {
+	f.TB.Helper()
+	if err := f.Ov.Close(); err != nil {
+		f.TB.Fatal(err)
+	}
+	ov, err := vfs.OpenOverlay(f.staging, ChunkSize, f.Clk, opts...)
+	if err != nil {
+		f.TB.Fatal(err)
+	}
+	f.Ov = ov
 }
 
 // AddNode registers a device node with its own shard store.
@@ -135,6 +159,9 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 		f.proposeErr = nil
 		return meta.Result{}, 0, err
 	}
+	if f.proposeDown != nil {
+		return meta.Result{}, 0, f.proposeDown
+	}
 	res := f.applyLocked(c)
 	return res, f.idx, nil
 }
@@ -170,6 +197,19 @@ func (f *Fabric) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	return out
 }
 
+// --- meta.Liveness ---
+
+// IsLive reports whether node n is up (not SetDown).
+func (f *Fabric) IsLive(n meta.NodeIdx) bool { return !f.IsDown(n) }
+
+// DeadFor is zero for a live node and a day for a down one: past every hold-down.
+func (f *Fabric) DeadFor(n meta.NodeIdx) time.Duration {
+	if f.IsDown(n) {
+		return 24 * time.Hour
+	}
+	return 0
+}
+
 // --- chunk.ShardClient ---
 
 var errNodeDown = errors.New("fabric: node down")
@@ -184,7 +224,18 @@ func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, b
 		f.mu.Unlock()
 		return errors.New("fabric: injected put failure")
 	}
+	if err := f.failPutWith[node]; err != nil {
+		f.mu.Unlock()
+		return err
+	}
+	stall := f.stallPut[node]
 	f.mu.Unlock()
+	if stall != nil {
+		stall.inflight.Add(1)
+		defer stall.inflight.Done()
+		stall.enteredOnce.Do(func() { close(stall.entered) })
+		<-stall.release
+	}
 	if !ok || down {
 		return errNodeDown
 	}
@@ -197,6 +248,7 @@ func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, b
 
 func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
 	f.mu.Lock()
+	f.gets[node]++
 	st, ok := f.Stores[node]
 	down := f.down[node]
 	f.mu.Unlock()
@@ -204,6 +256,17 @@ func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (
 		return nil, errNodeDown
 	}
 	return st.Get(key)
+}
+
+func (f *Fabric) Has(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error) {
+	f.mu.Lock()
+	st, ok := f.Stores[node]
+	down := f.down[node]
+	f.mu.Unlock()
+	if !ok || down {
+		return false, errNodeDown
+	}
+	return st.Has(key), nil
 }
 
 func (f *Fabric) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) error {
@@ -225,6 +288,13 @@ func (f *Fabric) SetDown(n meta.NodeIdx, down bool) {
 }
 
 // Puts counts shard PUTs issued so far.
+// Gets returns the number of shard GETs issued to node so far.
+func (f *Fabric) Gets(node meta.NodeIdx) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gets[node]
+}
+
 func (f *Fabric) Puts() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -251,12 +321,15 @@ func (f *Fabric) ReaderNoCache() *vfs.Reader {
 }
 
 // FS returns a billy filesystem over the fabric.
-func (f *Fabric) FS() *vfs.FS { return vfs.New(f.FSM, f, f.Ov, f.Reader(), f.Clk, 501, 20) }
+func (f *Fabric) FS() *vfs.FS {
+	fs := vfs.New(f.FSM, f, f.Ov, f.Reader(), f.Clk, 501, 20)
+	fs.SetHealth(f.isStale)
+	return fs
+}
 
 // Flusher returns a flusher with the test chunk policy.
 func (f *Fabric) Flusher(opts ...func(*vfs.Config)) *vfs.Flusher {
 	cfg := vfs.DefaultConfig()
-	cfg.SmallChunk = SmallChunk
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -336,15 +409,8 @@ func (f *Fabric) ReadFile(ino meta.Ino) []byte {
 		size = sz
 	}
 	out := make([]byte, size)
-	base := func(off uint64, p []byte) error {
-		_, err := rd.ReadAt(ctx, in, p, int64(off))
-		if errors.Is(err, io.EOF) {
-			return nil // past the committed size: the overlay zero-fills
-		}
-		return err
-	}
 	if _, ok := f.Ov.Size(ino, in.Size); ok {
-		n, err := f.Ov.Read(ino, in.Size, 0, out, base)
+		n, err := f.Ov.Read(ino, in.Size, 0, out, rd.BaseReader(ctx, in))
 		if err != nil && !errors.Is(err, io.EOF) {
 			f.TB.Fatal(err)
 		}
@@ -396,11 +462,71 @@ func (f *Fabric) FailPutOnce(n meta.NodeIdx, count int) {
 	f.mu.Unlock()
 }
 
+// FailPutWith makes every PUT to node fail with err (nil restores service).
+func (f *Fabric) FailPutWith(node meta.NodeIdx, err error) {
+	f.mu.Lock()
+	if f.failPutWith == nil {
+		f.failPutWith = map[meta.NodeIdx]error{}
+	}
+	f.failPutWith[node] = err
+	f.mu.Unlock()
+}
+
+type putStall struct {
+	entered     chan struct{}
+	enteredOnce sync.Once
+	release     chan struct{}
+	inflight    sync.WaitGroup // PUTs that entered the stall and have not finished
+}
+
+// StallPut makes every PUT to node block until release is called; entered closes when the
+// first one is waiting. release returns only once every stalled PUT has run to completion,
+// so a test's temp dir is not written to after the test ends.
+func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
+	s := &putStall{entered: make(chan struct{}), release: make(chan struct{})}
+	f.mu.Lock()
+	if f.stallPut == nil {
+		f.stallPut = map[meta.NodeIdx]*putStall{}
+	}
+	f.stallPut[node] = s
+	f.mu.Unlock()
+	var once sync.Once
+	return s.entered, func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.stallPut, node)
+			f.mu.Unlock()
+			close(s.release)
+		})
+		s.inflight.Wait()
+	}
+}
+
 // ProposeErrOnce makes the next Propose fail as a transport error.
 func (f *Fabric) ProposeErrOnce(err error) {
 	f.mu.Lock()
 	f.proposeErr = err
 	f.mu.Unlock()
+}
+
+// ProposeDown makes every Propose fail with err (nil restores service).
+func (f *Fabric) ProposeDown(err error) {
+	f.mu.Lock()
+	f.proposeDown = err
+	f.mu.Unlock()
+}
+
+// SetStale sets the health view the filesystem consults after a failed proposal.
+func (f *Fabric) SetStale(stale bool) {
+	f.mu.Lock()
+	f.stale = stale
+	f.mu.Unlock()
+}
+
+func (f *Fabric) isStale() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stale
 }
 
 // InodeOf resolves a path through the filesystem's fileid.
@@ -432,23 +558,5 @@ func FirstDiff(a, b []byte) int {
 	return len(a)
 }
 
-func init() {
-	// Test packages may define their own -seed; share it rather than redefine it.
-	if flag.Lookup("seed") == nil {
-		flag.Int64("seed", 0, "seed for randomized tests (0 = time-based)")
-	}
-}
-
 // Seed returns a seeded RNG, logging the seed so a failure can be replayed with -seed.
-func Seed(t *testing.T) *rand.Rand {
-	t.Helper()
-	var s int64
-	if f := flag.Lookup("seed"); f != nil {
-		s, _ = strconv.ParseInt(f.Value.String(), 10, 64)
-	}
-	if s == 0 {
-		s = time.Now().UnixNano()
-	}
-	t.Logf("seed=%d (re-run with -seed=%d)", s, s)
-	return rand.New(rand.NewSource(s))
-}
+func Seed(t *testing.T) *rand.Rand { return testseed.Seed(t) }

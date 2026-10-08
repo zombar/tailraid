@@ -1,23 +1,10 @@
 package vfs
 
 import (
-	"flag"
-	"math/rand"
 	"testing"
-	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 )
-
-var seedFlag = flag.Int64("seed", 0, "seed for randomized tests (0 = time-based)")
-
-func seed(t *testing.T) *rand.Rand {
-	t.Helper()
-	s := *seedFlag
-	if s == 0 {
-		s = time.Now().UnixNano()
-	}
-	t.Logf("seed=%d (re-run with -seed=%d)", s, s)
-	return rand.New(rand.NewSource(s))
-}
 
 // oracle is a byte-array model of a dirty file: each byte records which write (by sequence
 // number) last touched it, 0 meaning "base".
@@ -86,7 +73,7 @@ func checkAgainstOracle(t *testing.T, e extents, o *oracle, origOff map[uint32]u
 // Invariant: I-34
 // Lifecycle: L-6, L-12
 func TestExtents_InsertOverlap_Property(t *testing.T) {
-	rng := seed(t)
+	rng := testseed.Seed(t)
 	iters := 300
 	if testing.Short() {
 		iters = 100
@@ -194,4 +181,57 @@ func TestExtents_CoversChunk(t *testing.T) {
 			t.Errorf("%s: coversChunk = %v want %v", c.name, got, c.want)
 		}
 	}
+}
+
+// Lifecycle: L-27, L-179
+func TestExtents_Without(t *testing.T) {
+	const cs = 100
+	ext := func(off, n uint64, walOff int64) extent { return extent{off: off, n: n, walOff: walOff} }
+	cases := []struct {
+		name string
+		in   extents
+		idxs []uint64
+		want extents
+	}{
+		{"nothing committed", extents{ext(150, 100, 0)}, nil, extents{ext(150, 100, 0)}},
+		{"extent inside one chunk", extents{ext(120, 50, 7)}, []uint64{1}, nil},
+		{"head and tail around a run", extents{ext(150, 400, 0)}, []uint64{2, 3, 4},
+			extents{ext(150, 50, 0), ext(500, 50, 350)}},
+		{"gap between committed chunks", extents{ext(0, 1000, 0)}, []uint64{0, 1, 5, 6},
+			extents{ext(200, 300, 200), ext(700, 300, 700)}},
+		{"two extents, second starts mid-chunk", extents{ext(0, 200, 0), ext(350, 250, 200)}, []uint64{0, 1, 4, 5},
+			extents{ext(350, 50, 200)}},
+		{"chunk boundary exactly", extents{ext(100, 100, 3)}, []uint64{0, 2}, extents{ext(100, 100, 3)}},
+		{"chunks beyond every extent", extents{ext(0, 50, 0)}, []uint64{3, 4}, extents{ext(0, 50, 0)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.in.without(c.idxs, cs)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %+v, want %+v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("got %+v, want %+v", got, c.want)
+				}
+			}
+			if got.bytes()+committedBytes(c.in, c.idxs, cs) != c.in.bytes() {
+				t.Fatalf("bytes not conserved: %+v", got)
+			}
+		})
+	}
+}
+
+// committedBytes counts the bytes of e inside the given chunks (test oracle for without).
+func committedBytes(e extents, idxs []uint64, cs uint64) uint64 {
+	var n uint64
+	for _, x := range e {
+		for _, i := range idxs {
+			lo, hi := max(x.off, i*cs), min(x.end(), (i+1)*cs)
+			if hi > lo {
+				n += hi - lo
+			}
+		}
+	}
+	return n
 }

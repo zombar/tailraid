@@ -20,6 +20,12 @@ type marker struct {
 	label string
 }
 
+// band is a labelled span of the time axis (a phase).
+type band struct {
+	x0, x1 float64
+	label  string
+}
+
 const (
 	chartW, chartH = 760, 220
 	padL, padR     = 56, 16
@@ -45,8 +51,9 @@ func fmtNum(v float64) string {
 	}
 }
 
-// lineChart draws series over a shared time axis with vertical event markers.
-func lineChart(title, yLabel string, ss []series, marks []marker) string {
+// lineChart draws series over a shared time axis with phase bands behind them and
+// vertical event markers.
+func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) string {
 	var maxX, maxY float64
 	for _, s := range ss {
 		for _, p := range s.points {
@@ -56,6 +63,9 @@ func lineChart(title, yLabel string, ss []series, marks []marker) string {
 	}
 	for _, m := range marks {
 		maxX = math.Max(maxX, m.x)
+	}
+	for _, b := range bands {
+		maxX = math.Max(maxX, b.x1)
 	}
 	if maxX == 0 {
 		maxX = 1
@@ -70,6 +80,18 @@ func lineChart(title, yLabel string, ss []series, marks []marker) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH, html.EscapeString(title))
 	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
+	// phase bands, alternating shades, labelled at the top
+	for i, bd := range bands {
+		x0, x1 := sx(bd.x0), sx(math.Max(bd.x1, bd.x0))
+		fill := "#f8fafc"
+		if i%2 == 1 {
+			fill = "#eef2f7"
+		}
+		fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.1f" height="%.1f" fill="%s"><title>%s</title></rect>`, x0, padT, math.Max(x1-x0, 0.5), ih, fill, html.EscapeString(bd.label))
+		if x1-x0 > 14 {
+			fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="marklabel">%s</text>`, x0+2, padT+9, html.EscapeString(bandLabel(bd.label)))
+		}
+	}
 	// grid and axes
 	for i := 0; i <= 4; i++ {
 		y := float64(padT) + ih*float64(i)/4
@@ -82,11 +104,12 @@ func lineChart(title, yLabel string, ss []series, marks []marker) string {
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, chartH-padB+16, fmtNum(maxX*float64(i)/6))
 	}
 	fmt.Fprintf(&b, `<text x="12" y="%.1f" class="tick" transform="rotate(-90 12 %.1f)" text-anchor="middle">%s</text>`, float64(padT)+ih/2, float64(padT)+ih/2, html.EscapeString(yLabel))
-	// markers
-	for _, m := range marks {
+	// markers: labels alternate between three heights so neighbours stay readable
+	for i, m := range marks {
 		x := sx(m.x)
-		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"/><text x="%.1f" y="%d" class="marklabel" transform="rotate(-90 %.1f %d)">%s</text>`,
-			x, padT, x, chartH-padB, x+3, chartH-padB-4, x+3, chartH-padB-4, html.EscapeString(m.label))
+		y := chartH - padB - 4 - (i%3)*40
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"><title>%s</title></line><text x="%.1f" y="%d" class="marklabel" transform="rotate(-90 %.1f %d)">%s</text>`,
+			x, padT, x, chartH-padB, html.EscapeString(m.label), x+3, y, x+3, y, html.EscapeString(m.label))
 	}
 	// series
 	for i, s := range ss {
@@ -164,6 +187,41 @@ func barChart(title string, labels []string, ss []series) string {
 		}
 		fmt.Fprintf(&b, `<rect x="%d" y="%d" width="10" height="10" fill="%s"/><text x="%d" y="%d" class="tick">%s</text>`,
 			chartW-padR-150, padT+2+i*14, color, chartW-padR-136, padT+11+i*14, html.EscapeString(s.name))
+	}
+	b.WriteString("</svg>")
+	return b.String()
+}
+
+// bandLabel shortens "4 parity" to its number for narrow bands.
+func bandLabel(s string) string {
+	if i := strings.IndexByte(s, ' '); i > 0 && i <= 2 {
+		return s[:i]
+	}
+	return s
+}
+
+// lanes draws one row of coloured cells per name along the time axis (node liveness).
+func lanes(title string, maxX float64, names []string, cells map[string][][2]float64, colors map[string][]string) string {
+	const rowH = 16
+	h := padT + rowH*len(names) + 24
+	iw := float64(chartW - padL - padR)
+	if maxX == 0 {
+		maxX = 1
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, h, html.EscapeString(title))
+	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
+	for row, name := range names {
+		y := padT + row*rowH
+		fmt.Fprintf(&b, `<text x="%d" y="%d" class="tick" text-anchor="end">%s</text>`, padL-6, y+12, html.EscapeString(name))
+		for i, c := range cells[name] {
+			x := float64(padL) + c[0]/maxX*iw
+			fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="4" height="%d" fill="%s"/>`, x-2, y+2, rowH-4, colors[name][i])
+		}
+	}
+	for i := 0; i <= 6; i++ {
+		x := float64(padL) + iw*float64(i)/6
+		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, h-6, fmtNum(maxX*float64(i)/6))
 	}
 	b.WriteString("</svg>")
 	return b.String()

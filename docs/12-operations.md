@@ -31,6 +31,12 @@ Mounting stays a user action (`tailraid mount`) on every OS: the LaunchAgent and
 systemd unit only serve. The mount survives service restarts because handles are stable
 (I-16) and the mounts are `soft`.
 
+**Address changes.** When the device's Tailscale IP changes, `serve` re-registers the new
+address in the node table (every peer dials it from then on) and exits with a non-zero
+status, because its Raft and RPC listeners are bound to the old address; the service unit's
+restart policy brings it back on the new one within seconds. Without a service manager,
+restart `tailraid serve` by hand.
+
 ## 2. Windows portmap stub
 
 `mount.exe` has no port option: it asks the portmapper on 111 where MOUNT (100005 v3)
@@ -51,7 +57,7 @@ and refuses any other bind address. It is compiled on every OS so its tests run 
 
 ## 3. Fault injection on a live cluster (`dev.enabled`)
 
-Two endpoints (docs/08) turn a real node into a soak target:
+Three endpoints (docs/08) turn a real node into a soak target:
 
 - `POST /dev/exit` replies `204` and exits with status 3 after 100 ms. With a service
   manager that restarts the process this is "kill a node".
@@ -60,10 +66,15 @@ Two endpoints (docs/08) turn a real node into a soak target:
   connections, the node RPC client refuses to send to them, and inbound RPC from them is
   answered `503`. An empty list heals. `GET /dev/fault` returns the rules. Rules live in
   memory only; a restart heals.
+- `GET /dev/goroutines` returns every goroutine's stack. `verify` and the compose driver
+  take it from every node after a failed phase and attach it to the report, so a node
+  that hangs is diagnosed from the report rather than by sending it SIGQUIT.
 
 `tailraid verify --destructive --restarts` declares that every target runs with
 `dev.enabled` under a restarting service manager: the parity, consensus, restart-storm
-and partition steps then run against the real cluster through those endpoints.
+and partition steps then run against the real cluster through those endpoints. Because
+the service manager restarts an exited node within seconds, `verify` holds a killed node
+down with drop rules on it and on its peers until the phase restarts it (docs/09 §6).
 
 ## 4. Releases
 
@@ -107,6 +118,14 @@ release artifact (`internal/update`):
    running process is not restarted by `update`.
 
 `--check` stops after step 2 and exits 2 when an update is available.
+
+## 6. Mixed versions
+
+There is no FSM versioning. A release that adds a rule the FSM enforces (a name longer
+than 255 bytes, a chunk size above 64 MiB, a Commit past `MaxFileSize`) can reject a log
+entry an older gateway wrote, so upgrade every node before relying on the new limits;
+every such rule is also checked by the gateway before it proposes, so a cluster running
+one version never produces an entry another node of that version rejects.
 
 ## Invariants
 

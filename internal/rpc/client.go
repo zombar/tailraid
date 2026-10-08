@@ -36,7 +36,7 @@ var _ chunk.ShardClient = (*Client)(nil)
 func NewClient(clusterID [16]byte, resolve Resolver, local ShardStore) *Client {
 	tr := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
-		MaxIdleConnsPerHost:   8,
+		MaxIdleConnsPerHost:   32, // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
@@ -84,6 +84,8 @@ func errFromStatus(resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusForbidden:
 		return fmt.Errorf("%w: %s", ErrForbidden, msg)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("%w: %s", ErrRateLimited, msg)
 	case http.StatusConflict:
 		return fmt.Errorf("%w: %s", ErrWrongCluster, msg)
 	case http.StatusMisdirectedRequest:
@@ -121,11 +123,11 @@ func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 	if err != nil {
 		return err
 	}
+	sum := sha256.Sum256(body)
 	if self && c.local != nil {
-		_, err := c.local.Put(key, body)
+		_, err := c.local.PutVerified(key, body, sum)
 		return err
 	}
-	sum := sha256.Sum256(body)
 	resp, err := c.do(ctx, http.MethodPut, addr, "/v1/shards/"+string(key), body, map[string]string{HeaderShardSum: hex.EncodeToString(sum[:])})
 	if err != nil {
 		return err
@@ -157,6 +159,11 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, errFromStatus(resp)
+	}
+	if n := resp.ContentLength; n >= 0 && n <= chunk.MaxPayload+chunk.HeaderSize {
+		b := make([]byte, n) // sized by Content-Length: one allocation, no growth copies
+		_, err := io.ReadFull(resp.Body, b)
+		return b, err
 	}
 	return io.ReadAll(resp.Body)
 }
@@ -255,36 +262,37 @@ func LeaderFromErr(err error) string {
 	return ""
 }
 
-// Join sends a join request to a node of the cluster.
-func (c *Client) Join(ctx context.Context, addr string, req JoinRequest) (JoinResponse, error) {
-	body, _ := json.Marshal(req)
-	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/join", body, map[string]string{"Content-Type": "application/json"})
-	if err != nil {
-		return JoinResponse{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return JoinResponse{}, errFromStatus(resp)
-	}
-	var jr JoinResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&jr); err != nil {
-		return JoinResponse{}, fmt.Errorf("%w: bad join reply: %v", ErrBadRequest, err) //nolint:errorlint // transport
-	}
-	return jr, nil
-}
-
-// Members sends a member operation.
-func (c *Client) Members(ctx context.Context, addr string, op MemberOp) error {
-	body, _ := json.Marshal(op)
-	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/members", body, map[string]string{"Content-Type": "application/json"})
+// postJSON sends in as JSON and decodes a reply with the expected status into out (nil:
+// the body is ignored). Every other status becomes the sentinel errFromStatus maps it to.
+func (c *Client) postJSON(ctx context.Context, addr, path string, in, out any, want int) error {
+	body, _ := json.Marshal(in)
+	resp, err := c.do(ctx, http.MethodPost, addr, path, body, map[string]string{"Content-Type": "application/json"})
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != want {
 		return errFromStatus(resp)
 	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out); err != nil {
+		return fmt.Errorf("%w: bad %s reply: %v", ErrBadRequest, path, err) //nolint:errorlint // transport
+	}
 	return nil
+}
+
+// Join sends a join request to a node of the cluster.
+func (c *Client) Join(ctx context.Context, addr string, req JoinRequest) (JoinResponse, error) {
+	var jr JoinResponse
+	err := c.postJSON(ctx, addr, "/v1/join", req, &jr, http.StatusOK)
+	return jr, err
+}
+
+// Members sends a member operation.
+func (c *Client) Members(ctx context.Context, addr string, op MemberOp) error {
+	return c.postJSON(ctx, addr, "/v1/members", op, nil, http.StatusOK)
 }
 
 // Health probes a node.
@@ -306,29 +314,7 @@ func (c *Client) Health(ctx context.Context, addr string) (Health, error) {
 
 // ReportBadSlot tells the leader a slot was unreadable.
 func (c *Client) ReportBadSlot(ctx context.Context, addr string, key chunk.ShardKey, node meta.NodeIdx) error {
-	body, _ := json.Marshal(BadSlot{Key: string(key), Node: node})
-	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/bad-slot", body, map[string]string{"Content-Type": "application/json"})
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		return errFromStatus(resp)
-	}
-	return nil
-}
-
-// Status fetches the admin report from a node.
-func (c *Client) Status(ctx context.Context, addr string) (json.RawMessage, error) {
-	resp, err := c.do(ctx, http.MethodGet, addr, "/v1/status", nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errFromStatus(resp)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	return c.postJSON(ctx, addr, "/v1/bad-slot", BadSlot{Key: string(key), Node: node}, nil, http.StatusAccepted)
 }
 
 // Admin sends a maintenance operation and returns the raw JSON reply.
@@ -351,14 +337,7 @@ func (c *Client) Call(ctx context.Context, addr, method, path string, body []byt
 }
 
 func (c *Client) Admin(ctx context.Context, addr string, op AdminOp) (json.RawMessage, error) {
-	body, _ := json.Marshal(op)
-	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/admin", body, map[string]string{"Content-Type": "application/json"})
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, errFromStatus(resp)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	var raw json.RawMessage
+	err := c.postJSON(ctx, addr, "/v1/admin", op, &raw, http.StatusOK)
+	return raw, err
 }

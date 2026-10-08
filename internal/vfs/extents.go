@@ -16,45 +16,46 @@ func (x extent) end() uint64 { return x.off + x.n }
 // extents is sorted by off, non-overlapping, every n > 0.
 type extents []extent
 
-// insert adds x, overriding any existing bytes in its range (last writer wins).
+// insert adds x, overriding any existing bytes in its range (last writer wins). The
+// overlapping run is found by binary search, so a WRITE costs O(log n) plus the splice
+// rather than a re-sort of the whole map.
 func (e *extents) insert(x extent) {
 	if x.n == 0 {
 		return
 	}
-	out := make(extents, 0, len(*e)+2)
-	for _, y := range *e {
-		switch {
-		case y.end() <= x.off || y.off >= x.end():
-			out = append(out, y)
-		default:
-			if y.off < x.off { // keep left part
-				out = append(out, extent{off: y.off, n: x.off - y.off, walOff: y.walOff})
-			}
-			if y.end() > x.end() { // keep right part
-				d := x.end() - y.off
-				out = append(out, extent{off: x.end(), n: y.end() - x.end(), walOff: y.walOff + int64(d)})
-			}
-		}
+	old := *e
+	i, j := old.span(x.off, x.n) // [i, j) overlaps x; old[:i] lies before, old[j:] after
+	out := make(extents, 0, len(old)+2)
+	out = append(out, old[:i]...)
+	if i < j && old[i].off < x.off { // keep the left part of the first overlapped extent
+		y := old[i]
+		out = append(out, extent{off: y.off, n: x.off - y.off, walOff: y.walOff})
 	}
 	out = append(out, x)
-	sort.Slice(out, func(i, j int) bool { return out[i].off < out[j].off })
+	if i < j && old[j-1].end() > x.end() { // keep the right part of the last one
+		y := old[j-1]
+		d := x.end() - y.off
+		out = append(out, extent{off: x.end(), n: y.end() - x.end(), walOff: y.walOff + int64(d)})
+	}
+	out = append(out, old[j:]...)
 	*e = out
 }
 
-// overlapping returns the extents intersecting [off, off+n), in order (not clipped).
-func (e extents) overlapping(off, n uint64) []extent {
-	var out []extent
-	end := off + n
-	for _, x := range e {
-		if x.end() <= off {
-			continue
-		}
-		if x.off >= end {
-			break
-		}
-		out = append(out, x)
+// span returns the index range [i, j) of the extents intersecting [off, off+n).
+func (e extents) span(off, n uint64) (int, int) {
+	i := sort.Search(len(e), func(k int) bool { return e[k].end() > off })
+	j := i
+	for j < len(e) && e[j].off < off+n {
+		j++
 	}
-	return out
+	return i, j
+}
+
+// overlapping returns the extents intersecting [off, off+n), in order (not clipped). The
+// result aliases e and is read-only.
+func (e extents) overlapping(off, n uint64) []extent {
+	i, j := e.span(off, n)
+	return e[i:j]
 }
 
 // truncate drops bytes at or beyond size.
@@ -94,6 +95,11 @@ func (e extents) bytes() uint64 {
 func (e extents) coversChunk(idx uint64, cs uint32, size uint64) bool {
 	start := idx * uint64(cs)
 	end := min(start+uint64(cs), size)
+	return e.covers(start, end)
+}
+
+// covers reports whether every byte of [start, end) is dirty; an empty range never is.
+func (e extents) covers(start, end uint64) bool {
 	if end <= start {
 		return false
 	}
@@ -108,6 +114,37 @@ func (e extents) coversChunk(idx uint64, cs uint32, size uint64) bool {
 		}
 	}
 	return cursor >= end
+}
+
+// without returns the parts of e outside the chunks idxs (ascending) of size cs, walOff
+// adjusted: the dirty bytes a partial flush leaves behind once those chunks are committed.
+func (e extents) without(idxs []uint64, cs uint64) extents {
+	var out extents
+	j := 0
+	for _, x := range e {
+		cur := x
+		for cur.n > 0 {
+			for j < len(idxs) && (idxs[j]+1)*cs <= cur.off {
+				j++
+			}
+			if j == len(idxs) || idxs[j]*cs >= cur.end() {
+				out = append(out, cur)
+				break
+			}
+			cstart, cend := idxs[j]*cs, (idxs[j]+1)*cs
+			if cur.off < cstart { // keep the part before the chunk
+				out = append(out, extent{off: cur.off, n: cstart - cur.off, walOff: cur.walOff})
+				skip := cstart - cur.off
+				cur = extent{off: cstart, n: cur.n - skip, walOff: cur.walOff + int64(skip)}
+			}
+			if cur.end() <= cend { // the rest lies inside the chunk
+				break
+			}
+			skip := cend - cur.off
+			cur = extent{off: cend, n: cur.n - skip, walOff: cur.walOff + int64(skip)}
+		}
+	}
+	return out
 }
 
 // clone returns an independent copy.

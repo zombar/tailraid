@@ -42,9 +42,12 @@ type Result struct {
 
 // RunOnce proposes GCDelete{Before: fsmNow − grace} and deletes the victims' shards with
 // the fence header. Entries younger than grace stay; so do files younger than grace.
+// fsmNow is the leader's clock clamped by the FSM clock (docs/06 §2, docs/05 §7): grace is
+// measured on the same clock that stamped TombstonedAt, so a leader whose clock lags the
+// proposers never stalls GC and Before never goes backwards across leader changes.
 func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 	var res Result
-	before := g.clk.Now().UnixNano() - g.grace.Nanoseconds()
+	before := max(g.clk.Now().UnixNano(), g.st.LastNow()) - g.grace.Nanoseconds()
 	r, index, err := g.prop.Propose(ctx, meta.Command{Op: meta.OpGCDelete, GCDelete: &meta.GCDelete{Before: before}})
 	if err == nil {
 		err = r.Err
@@ -68,7 +71,11 @@ func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 				continue
 			}
 			err := g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index)
-			if errors.Is(err, rpc.ErrFenced) { // a follower still applying the GC entry: once more shortly
+			if errors.Is(err, rpc.ErrFenced) {
+				// A follower still applying the GC entry: once more shortly. This is a
+				// sub-second real-time backoff for a remote process, not a scheduled event,
+				// so it deliberately bypasses the clock seam (a fake clock nobody advances
+				// would hang here).
 				select {
 				case <-time.After(200 * time.Millisecond):
 				case <-ctx.Done():

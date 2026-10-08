@@ -7,9 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -24,19 +22,32 @@ import (
 // metadata mutation is a Raft proposal followed by WaitApplied, so a gateway is
 // linearizable with itself; reads come from the local FSM copy with the overlay on top.
 type FS struct {
-	st   *meta.Store
-	prop meta.Proposer
-	ov   *Overlay
-	rd   *Reader
-	clk  clock.Clock
-	uid  uint32
-	gid  uint32
+	st    *meta.Store
+	prop  meta.Proposer
+	ov    *Overlay
+	rd    *Reader
+	clk   clock.Clock
+	uid   uint32
+	gid   uint32
+	stale func() bool // no leader contact for the Stale threshold (docs/02 §Health); nil = always
 }
 
 // New wires a filesystem. uid/gid are stamped on created inodes.
 func New(st *meta.Store, prop meta.Proposer, ov *Overlay, rd *Reader, clk clock.Clock, uid, gid uint32) *FS {
 	return &FS{st: st, prop: prop, ov: ov, rd: rd, clk: clk, uid: uid, gid: gid}
 }
+
+// SetHealth gives the filesystem the gateway's health view: while stale reports false a
+// failed proposal (no leader, leader lost) is retried, because the leader is usually back
+// within seconds; once stale (no leader contact for 30 s, docs/02) the mutation fails
+// with EROFS (L-187). Without a view every failure is EROFS at once.
+func (f *FS) SetHealth(stale func() bool) { f.stale = stale }
+
+// Proposal retry backoff while the gateway is not yet stale.
+const (
+	proposeRetryMin = 200 * time.Millisecond
+	proposeRetryMax = 2 * time.Second
+)
 
 var (
 	_ billy.Filesystem = (*FS)(nil)
@@ -49,12 +60,18 @@ var (
 var ErrReadOnly = syscall.EROFS
 
 // split cleans a billy path into components relative to the root.
-func split(name string) []string {
-	name = path.Clean("/" + strings.ReplaceAll(name, "\\", "/"))
-	if name == "/" {
-		return nil
+func split(name string) []string { return meta.SplitPath(name) }
+
+func equalParts(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return strings.Split(name[1:], "/")
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func parentOf(parts []string) ([]string, string) {
@@ -83,12 +100,16 @@ func mapErr(op, name string, err error) error {
 		e = syscall.ENOTEMPTY
 	case errors.Is(err, meta.ErrLoop):
 		e = syscall.EINVAL
+	case errors.Is(err, meta.ErrNameTooLong):
+		e = syscall.ENAMETOOLONG
 	case errors.Is(err, meta.ErrBadCommand):
 		e = syscall.EINVAL
 	case errors.Is(err, ErrIO):
 		e = syscall.EIO
-	case errors.Is(err, ErrWALFull):
-		e = syscall.EAGAIN
+	case errors.Is(err, ErrWALFull), errors.Is(err, ErrDirtyFull):
+		e = syscall.EIO // NFS3ERR_IO; the client retries once the flush drains (docs/04 §3)
+	case errors.Is(err, ErrFileTooLarge):
+		e = syscall.EFBIG
 	default:
 		e = err
 	}
@@ -97,17 +118,28 @@ func mapErr(op, name string, err error) error {
 
 // propose applies a metadata mutation and waits for it locally.
 func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error) {
-	res, index, err := f.prop.Propose(ctx, cmd)
-	if err != nil {
-		return meta.Result{}, ErrReadOnly
+	delay := proposeRetryMin
+	for {
+		res, index, err := f.prop.Propose(ctx, cmd)
+		if err == nil {
+			if res.Err != nil {
+				return res, res.Err
+			}
+			if err := f.st.WaitApplied(ctx, index); err != nil {
+				return res, err
+			}
+			return res, nil
+		}
+		if f.stale == nil || f.stale() {
+			return meta.Result{}, ErrReadOnly
+		}
+		select {
+		case <-ctx.Done():
+			return meta.Result{}, ErrReadOnly
+		case <-f.clk.After(delay):
+		}
+		delay = min(delay*2, proposeRetryMax)
 	}
-	if res.Err != nil {
-		return res, res.Err
-	}
-	if err := f.st.WaitApplied(ctx, index); err != nil {
-		return res, err
-	}
-	return res, nil
 }
 
 func (f *FS) now() int64 { return f.clk.Now().UnixNano() }
@@ -141,6 +173,11 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 		if in.Type == meta.TDir {
 			return nil, mapErr("open", filename, meta.ErrIsDir)
 		}
+		if in.Type != meta.TFile {
+			// a symlink has no data of its own; NFS clients READLINK and open the target,
+			// so a handle here would only swallow writes (flush ignores non-files)
+			return nil, mapErr("open", filename, syscall.ELOOP)
+		}
 	case errors.Is(err, meta.ErrNotExist) && flag&os.O_CREATE != 0:
 		dirParts, base := parentOf(parts)
 		if err := f.mkdirAll(ctx, dirParts, 0o755); err != nil {
@@ -168,8 +205,11 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 	}
 	file := &File{fs: f, ino: in.Ino, name: filepath.Join(parts...), flag: flag} // billy names are root-relative
 	if flag&os.O_TRUNC != 0 && flag&(os.O_WRONLY|os.O_RDWR) != 0 {
-		if err := f.ov.Truncate(in.Ino, in.Size, 0); err != nil {
-			return nil, mapErr("open", filename, err)
+		// nothing to cut on an empty, clean file: no WAL record, no commit (I-1)
+		if _, dirty := f.ov.Size(in.Ino, in.Size); dirty || in.Size != 0 {
+			if err := f.ov.Truncate(in.Ino, in.Size, 0); err != nil {
+				return nil, mapErr("open", filename, err)
+			}
 		}
 	}
 	if flag&os.O_APPEND != 0 {
@@ -213,6 +253,11 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	oldDir, err := f.st.Resolve(op)
 	if err != nil {
 		return mapErr("rename", oldpath, err)
+	}
+	// a directory cannot move under itself; refuse before creating any parent (the FSM
+	// would refuse too, but only after mkdirAll had left new directories behind)
+	if oldParts := split(oldpath); len(oldParts) <= len(np) && equalParts(oldParts, np[:len(oldParts)]) {
+		return mapErr("rename", oldpath, meta.ErrLoop)
 	}
 	if err := f.mkdirAll(ctx, np, 0o755); err != nil {
 		return mapErr("rename", newpath, err)

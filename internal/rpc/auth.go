@@ -25,14 +25,15 @@ type Authorizer interface {
 
 // WhoIsAuthorizer authorizes by member table then WhoIs StableID (docs/08 steps 1–4).
 type WhoIsAuthorizer struct {
-	TS      tailscale.Client
-	Members func() []meta.Node
-	Clk     clock.Clock
-	PosTTL  time.Duration // default 10 min
-	NegTTL  time.Duration // default 30 s
+	TS     tailscale.Client
+	Member func(addr string) (meta.Node, bool) // the device record at addr, if any (meta.Store.NodeByAddr)
+	Clk    clock.Clock
+	PosTTL time.Duration // default 10 min
+	NegTTL time.Duration // default 30 s
 
-	mu    sync.Mutex
-	cache map[netip.Addr]cacheEntry
+	mu       sync.Mutex
+	cache    map[netip.Addr]cacheEntry
+	inflight map[netip.Addr]chan struct{} // one WhoIs per address at a time; concurrent misses wait
 }
 
 type cacheEntry struct {
@@ -61,17 +62,47 @@ func (a *WhoIsAuthorizer) now() time.Time {
 	return time.Now()
 }
 
-// Identify resolves src through WhoIs with positive and negative caching.
+// Identify resolves src through WhoIs with positive and negative caching; concurrent
+// misses for one address share a single WhoIs call (a burst of shard PUTs from a new
+// peer costs one shell-out, not one per request).
 func (a *WhoIsAuthorizer) Identify(ctx context.Context, src netip.Addr) (string, error) {
-	a.mu.Lock()
-	if a.cache == nil {
-		a.cache = map[netip.Addr]cacheEntry{}
-	}
-	if e, ok := a.cache[src]; ok && a.now().Before(e.expires) {
+	for {
+		a.mu.Lock()
+		if a.cache == nil {
+			a.cache = map[netip.Addr]cacheEntry{}
+		}
+		if a.inflight == nil {
+			a.inflight = map[netip.Addr]chan struct{}{}
+		}
+		if e, ok := a.cache[src]; ok && a.now().Before(e.expires) {
+			a.mu.Unlock()
+			return e.stableID, e.err
+		}
+		wait, running := a.inflight[src]
+		if !running {
+			wait = make(chan struct{})
+			a.inflight[src] = wait
+		}
 		a.mu.Unlock()
-		return e.stableID, e.err
+		if running {
+			select {
+			case <-wait:
+				continue // the result is cached now, or the call failed and ours may fare better
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		id, err := a.whois(ctx, src)
+		a.mu.Lock()
+		delete(a.inflight, src)
+		a.mu.Unlock()
+		close(wait)
+		return id, err
 	}
-	a.mu.Unlock()
+}
+
+// whois is the uncached lookup; it caches positive and not-found answers.
+func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr) (string, error) {
 	pos, neg := a.ttls()
 	w, err := a.TS.WhoIs(ctx, src)
 	e := cacheEntry{}
@@ -93,15 +124,7 @@ func (a *WhoIsAuthorizer) Identify(ctx context.Context, src netip.Addr) (string,
 
 // Allow implements docs/08 steps 2–4: member by IP, then WhoIs StableID must match.
 func (a *WhoIsAuthorizer) Allow(ctx context.Context, src netip.Addr) (meta.Node, error) {
-	var member meta.Node
-	found := false
-	nodes := a.Members()
-	for i := range nodes {
-		if nodes[i].Kind == meta.KindDevice && nodes[i].State != meta.Removed && nodes[i].Addr == src.String() {
-			member, found = nodes[i], true
-			break
-		}
-	}
+	member, found := a.Member(src.String())
 	if !found {
 		return meta.Node{}, fmt.Errorf("%w: %s is not a member", ErrForbidden, src)
 	}

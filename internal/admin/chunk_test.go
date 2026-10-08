@@ -17,7 +17,7 @@ import (
 // reference the chunk, checks each live slot, and prints the node's event ring, which
 // shows the path a chunk took (upload then commit; a dedup hit on the second file).
 // Invariant: I-57
-// Lifecycle: L-33, L-140
+// Lifecycle: L-33, L-140, L-109
 func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()

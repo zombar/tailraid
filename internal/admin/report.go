@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"fmt"
 	"sort"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // NodeReport is one row of `node ls`.
@@ -25,6 +27,7 @@ type NodeReport struct {
 	Self     bool           `json:"self"`
 	Live     bool           `json:"live"`
 	DeadFor  string         `json:"dead_for,omitempty"`
+	Lost     bool           `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT      string         `json:"rtt,omitempty"`
 	Free     int64          `json:"free"`
 	Capacity uint64         `json:"capacity"`
@@ -54,25 +57,48 @@ type VolumeReport struct {
 	UsableCapacity uint64  `json:"usable_capacity"`
 	Free           uint64  `json:"free"`
 	Degraded       int     `json:"degraded_chunks"`   // chunks with < k+m good slots
+	RepairPending  int     `json:"repair_pending"`    // chunks with a slot to re-place (after fill_after)
 	Unreadable     int     `json:"unreadable_chunks"` // chunks with < k live slots
 	StalePolicy    int     `json:"stale_policy_chunks"`
 }
 
+// GatewayReport is this node's overlay: what is acknowledged but not yet committed.
+type GatewayReport struct {
+	DirtyInodes int    `json:"dirty_inodes"`
+	DirtyBytes  uint64 `json:"dirty_bytes"` // bytes in extents not yet captured by a flush plan
+	WALBytes    int64  `json:"wal_bytes"`   // Σ per-inode WAL file sizes
+	Flushing    int    `json:"flushing"`    // inodes with a flush plan outstanding
+}
+
+// GatewayFromDirty folds the overlay's dirty list into the status view.
+func GatewayFromDirty(infos []vfs.DirtyInfo) *GatewayReport {
+	g := &GatewayReport{DirtyInodes: len(infos)}
+	for i := range infos {
+		g.DirtyBytes += infos[i].DirtyBytes
+		g.WALBytes += infos[i].WALBytes
+		if infos[i].Flushing {
+			g.Flushing++
+		}
+	}
+	return g
+}
+
 // Report is the whole `status` document.
 type Report struct {
-	Node        string        `json:"node"`
-	ClusterID   string        `json:"cluster_id"`
-	Health      string        `json:"health"`
-	Leader      string        `json:"leader"`
-	LastContact string        `json:"last_contact,omitempty"`
-	Voters      int           `json:"voters"`
-	LiveVoters  int           `json:"live_voters"`
-	Warnings    []string      `json:"warnings,omitempty"`
-	Volume      VolumeReport  `json:"volume"`
-	Nodes       []NodeReport  `json:"nodes"`
-	JoinToken   string        `json:"join_token,omitempty"`
-	Repair      *RepairStatus `json:"repair,omitempty"`
-	GeneratedAt time.Time     `json:"generated_at"`
+	Node        string         `json:"node"`
+	ClusterID   string         `json:"cluster_id"`
+	Health      string         `json:"health"`
+	Leader      string         `json:"leader"`
+	LastContact string         `json:"last_contact,omitempty"`
+	Voters      int            `json:"voters"`
+	LiveVoters  int            `json:"live_voters"`
+	Warnings    []string       `json:"warnings,omitempty"`
+	Volume      VolumeReport   `json:"volume"`
+	Nodes       []NodeReport   `json:"nodes"`
+	JoinToken   string         `json:"join_token,omitempty"`
+	Repair      *RepairStatus  `json:"repair,omitempty"`
+	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
+	GeneratedAt time.Time      `json:"generated_at"`
 }
 
 // RepairStatus is the leader's last scan (nil on followers).
@@ -86,7 +112,7 @@ type RepairStatus struct {
 func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clock, rp *repair.Repairer) Report {
 	st := n.FSM
 	now := clk.Now()
-	rep := Report{Node: n.ID, ClusterID: hexID(clusterID), GeneratedAt: now}
+	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now}
 	h := n.Health(clk, p)
 	rep.Health, rep.Leader, rep.Voters, rep.LiveVoters = h.State.String(), h.Leader, h.Voters, h.LiveVoters
 	if h.LastContact > 0 {
@@ -104,49 +130,29 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	if p != nil {
 		probes = p.Snapshot()
 	}
-	live := map[meta.NodeIdx]bool{}
-	slots := map[meta.NodeIdx]int{}
-	missing := map[meta.NodeIdx]int{}
-	for i := range nodes {
-		if p != nil {
-			live[nodes[i].Idx] = p.IsLive(nodes[i].Idx)
-		} else {
-			live[nodes[i].Idx] = nodes[i].ID == n.ID
-		}
+	// Chunk states come from the one derivation (meta.ChunkState, I-56) with the
+	// repairer's fill_after, so status, check and the scanner agree.
+	var lv meta.Liveness
+	if p != nil {
+		lv = p
+	} else {
+		lv = selfLiveness{self: n.ID, nodes: nodes}
 	}
-	st.ForEachChunk(func(c meta.Chunk) bool {
-		if c.Refs == 0 {
-			return true
-		}
-		good, liveSlots := 0, 0
-		for _, s := range c.Placement {
-			if s == 0 {
-				continue
-			}
-			slots[s]++
-			good++
-			if live[s] {
-				liveSlots++
-			} else {
-				missing[s]++
-			}
-		}
-		if good < int(c.K)+int(c.M) || liveSlots < int(c.K)+int(c.M) {
-			rep.Volume.Degraded++
-		}
-		if liveSlots < int(c.K) {
-			rep.Volume.Unreadable++
-		}
-		// small chunks use k=1 by design; anything else on a different (k,m) awaits migration
-		if (c.K != vol.K || c.M != vol.M) && (c.K != 1 || c.Size > 64<<10) {
-			rep.Volume.StalePolicy++
-		}
-		return true
-	})
+	fillAfter := cluster.FillAfter
+	if rp != nil {
+		fillAfter = rp.Config().FillAfter
+	}
+	health := ScanHealth(st, lv, fillAfter)
+	rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy = health.Degraded, health.RepairPending, health.Unreadable, health.StalePolicy
+	slots, missing := health.Slots, health.Missing
+	live := map[meta.NodeIdx]bool{}
+	for i := range nodes {
+		live[nodes[i].Idx] = lv.IsLive(nodes[i].Idx)
+	}
 	_, leaderID := n.Raft.LeaderWithID()
 	for i := range nodes {
 		nd := nodes[i]
-		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: kindName(nd.Kind), State: stateName(nd.State), Addr: nd.Addr, RPCPort: nd.RPCPort,
+		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: nd.ID == n.ID, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
 			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State}
 		if pr, ok := probes[nd.Idx]; ok {
@@ -156,6 +162,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 			}
 			if !pr.DeadSince.IsZero() {
 				r.DeadFor = now.Sub(pr.DeadSince).Round(time.Second).String()
+				r.Lost = pr.Lost
 			}
 		}
 		if nd.State == meta.Active {
@@ -164,16 +171,10 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		rep.Nodes = append(rep.Nodes, r)
 	}
 	sort.Slice(rep.Nodes, func(i, j int) bool { return rep.Nodes[i].Idx < rep.Nodes[j].Idx })
-	k, km := uint64(vol.K), uint64(vol.K)+uint64(vol.M)
-	if km > 0 {
-		rep.Volume.UsableCapacity = rep.Volume.Capacity * k / km
-		used := stats.StoredBytes * k / km
-		if rep.Volume.UsableCapacity > used {
-			rep.Volume.Free = rep.Volume.UsableCapacity - used
-		}
-		if used > 0 {
-			rep.Volume.DedupRatio = float64(stats.LogicalBytes) / float64(used)
-		}
+	var used uint64
+	rep.Volume.UsableCapacity, used, rep.Volume.Free = meta.Usage(vol, nodes, stats)
+	if used > 0 {
+		rep.Volume.DedupRatio = float64(stats.LogicalBytes) / float64(used)
 	}
 	if rp != nil && n.IsLeader() {
 		st, at := rp.Last()
@@ -210,35 +211,29 @@ func warnings(r Report) []string {
 		if n.State == "removed" {
 			continue
 		}
-		if !n.Live && n.DeadFor != "" {
+		switch {
+		case n.Lost:
+			w = append(w, fmt.Sprintf("node %s has been unreachable for %s, longer than evict_after: `tailraid node remove %d --force` drops its slots so repair can re-place them", n.Name, n.DeadFor, n.Idx))
+		case !n.Live && n.DeadFor != "":
 			w = append(w, "node "+n.Name+" has been unreachable for "+n.DeadFor)
 		}
 	}
 	return w
 }
 
-func kindName(k meta.NodeKind) string {
-	if k == meta.KindS3 {
-		return "s3"
-	}
-	return "device"
+// selfLiveness is the view of a node without a prober: only this node is live.
+type selfLiveness struct {
+	self  string
+	nodes []meta.Node
 }
 
-func stateName(s meta.NodeState) string {
-	switch s {
-	case meta.Draining:
-		return "draining"
-	case meta.Removed:
-		return "removed"
+func (s selfLiveness) IsLive(idx meta.NodeIdx) bool {
+	for i := range s.nodes {
+		if s.nodes[i].Idx == idx {
+			return s.nodes[i].ID == s.self
+		}
 	}
-	return "active"
+	return false
 }
 
-func hexID(id [16]byte) string {
-	const digits = "0123456789abcdef"
-	out := make([]byte, 32)
-	for i, b := range id {
-		out[i*2], out[i*2+1] = digits[b>>4], digits[b&0xf]
-	}
-	return string(out)
-}
+func (selfLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
