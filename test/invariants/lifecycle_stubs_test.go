@@ -6,124 +6,10 @@ import "testing"
 
 // Stubs keep every lifecycle cell cited until the real tests land in M1–M3.
 
-// Lifecycle: L-1
-// (none) --[E-1 WRITE at 0, new file]--> Dirty
-func TestStubLifecycle_L_1(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-1")
-}
-
-// Lifecycle: L-2
-// Committed --[E-2 WRITE inside committed chunk]--> Dirty (partial extent over Committed base)
-func TestStubLifecycle_L_2(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-2")
-}
-
-// Lifecycle: L-3
-// Committed --[E-3 WRITE at EOF]--> Dirty (tail chunk)
-func TestStubLifecycle_L_3(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-3")
-}
-
-// Lifecycle: L-4
-// Committed --[E-4 WRITE past EOF]--> Dirty (target chunk); intervening indices become HashZero at flush
-func TestStubLifecycle_L_4(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-4")
-}
-
-// Lifecycle: L-5
-// Committed --[E-5 WRITE spanning boundary]--> Dirty ×2
-func TestStubLifecycle_L_5(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-5")
-}
-
-// Lifecycle: L-6
-// Dirty --[E-6 overlapping WRITE]--> Dirty
-func TestStubLifecycle_L_6(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-6")
-}
-
-// Lifecycle: L-7
-// (none) --[E-7 aligned full-chunk WRITE]--> Dirty (full cover)
-func TestStubLifecycle_L_7(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-7")
-}
-
-// Lifecycle: L-8
-// Committed --[E-8 truncate down mid-chunk]--> Dirty (tail rewrite pending, `sizeSet`, `minSize`)
-func TestStubLifecycle_L_8(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-8")
-}
-
-// Lifecycle: L-9
-// Committed --[E-9 truncate down to boundary]--> Committed (dropped indices Refs−1 → Tombstoned if 0)
-func TestStubLifecycle_L_9(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-9")
-}
-
-// Lifecycle: L-10
-// Committed --[E-10 truncate to 0]--> Tombstoned (all chunks Refs−1) if unshared
-func TestStubLifecycle_L_10(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-10")
-}
-
-// Lifecycle: L-11
-// Committed --[E-11 truncate up]--> Committed (short tail) + HashZero indices
-func TestStubLifecycle_L_11(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-11")
-}
-
-// Lifecycle: L-12
-// Dirty --[E-12 truncate below dirty extents]--> Dirty (extents trimmed)
-func TestStubLifecycle_L_12(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-12")
-}
-
-// Lifecycle: L-13
-// Dirty --[E-13 unlink before flush]--> (dropped)
-func TestStubLifecycle_L_13(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-13")
-}
-
-// Lifecycle: L-14
-// Committed --[E-13 unlink (shared chunk)]--> Committed (Refs−1 ≥ 1)
-func TestStubLifecycle_L_14(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-14")
-}
-
-// Lifecycle: L-15
-// Committed --[E-13 unlink (sole reference)]--> Tombstoned
-func TestStubLifecycle_L_15(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-15")
-}
-
-// Lifecycle: L-16
-// Committed --[E-14 rename]--> Committed
-func TestStubLifecycle_L_16(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-16")
-}
-
-// Lifecycle: L-17
-// Committed (dest file's chunks) --[E-15 rename over existing]--> Committed/Tombstoned per Refs
-func TestStubLifecycle_L_17(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-17")
-}
-
 // Lifecycle: L-18
 // Dirty --[E-14 rename of dirty file]--> Dirty
 func TestStubLifecycle_L_18(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-18")
-}
-
-// Lifecycle: L-19
-// Committed --[E-16 identical content again]--> Committed (Refs+1)
-func TestStubLifecycle_L_19(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-19")
-}
-
-// Lifecycle: L-20
-// Tombstoned --[E-16 identical content before GC]--> Revived → Committed
-func TestStubLifecycle_L_20(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-20")
 }
 
 // Lifecycle: L-21
@@ -136,12 +22,6 @@ func TestStubLifecycle_L_21(t *testing.T) {
 // Committed --[E-18 two gateways, same chunk]--> Committed (second committer's version); the first committer's chunk is Tombstoned when its last ref is replaced
 func TestStubLifecycle_L_22(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-22")
-}
-
-// Lifecycle: L-23
-// Dirty --[E-19 MaxDirty exceeded]--> Dirty
-func TestStubLifecycle_L_23(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-23")
 }
 
 // Lifecycle: L-24
@@ -198,18 +78,6 @@ func TestStubLifecycle_L_32(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-32")
 }
 
-// Lifecycle: L-33
-// Assembled --[E-27 hash exists live]--> DedupHit
-func TestStubLifecycle_L_33(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-33")
-}
-
-// Lifecycle: L-34
-// Assembled --[E-28 hash exists tombstoned]--> DedupHit → Revived
-func TestStubLifecycle_L_34(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-34")
-}
-
 // Lifecycle: L-35
 // Assembled --[E-29 ≤ 64 KiB]--> Uploading (k=1, m)
 func TestStubLifecycle_L_35(t *testing.T) {
@@ -220,12 +88,6 @@ func TestStubLifecycle_L_35(t *testing.T) {
 // Assembled --[E-30 > 64 KiB]--> Uploading (K, M)
 func TestStubLifecycle_L_36(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-36")
-}
-
-// Lifecycle: L-37
-// Assembled --[E-31 policy changed]--> Uploading (new K, M)
-func TestStubLifecycle_L_37(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-37")
 }
 
 // Lifecycle: L-38
@@ -306,40 +168,16 @@ func TestStubLifecycle_L_50(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-50")
 }
 
-// Lifecycle: L-51
-// Placed(k+m) --[E-45 Commit OK]--> Committed
-func TestStubLifecycle_L_51(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-51")
-}
-
 // Lifecycle: L-52
 // Placed(n<k+m) --[E-45 Commit OK]--> Degraded
 func TestStubLifecycle_L_52(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-52")
 }
 
-// Lifecycle: L-53
-// Placed --[E-46 ErrConflict]--> Placed → Committed
-func TestStubLifecycle_L_53(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-53")
-}
-
-// Lifecycle: L-54
-// DedupHit --[E-47 ErrUnknownChunk]--> Uploading → Committed
-func TestStubLifecycle_L_54(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-54")
-}
-
 // Lifecycle: L-55
 // Placed --[E-48 ErrNotExist]--> (dropped); shards Orphan
 func TestStubLifecycle_L_55(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-55")
-}
-
-// Lifecycle: L-56
-// Placed --[E-49 ErrNeedTailRewrite]--> Assembled (tail) → Placed
-func TestStubLifecycle_L_56(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-56")
 }
 
 // Lifecycle: L-57
@@ -360,22 +198,10 @@ func TestStubLifecycle_L_59(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-59")
 }
 
-// Lifecycle: L-60
-// Committed --[E-53 snapshot restore on follower]--> Committed
-func TestStubLifecycle_L_60(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-60")
-}
-
 // Lifecycle: L-61
 // Committed --[E-54 leader change]--> Committed
 func TestStubLifecycle_L_61(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-61")
-}
-
-// Lifecycle: L-62
-// Committed --[E-55 WaitApplied]--> Committed
-func TestStubLifecycle_L_62(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-62")
 }
 
 // Lifecycle: L-63
@@ -432,12 +258,6 @@ func TestStubLifecycle_L_71(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-71")
 }
 
-// Lifecycle: L-72
-// Dirty --[E-65 read on issuing gateway]--> Dirty
-func TestStubLifecycle_L_72(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-72")
-}
-
 // Lifecycle: L-73
 // Committed (new) --[E-66 read on other gateway before apply]--> Committed
 func TestStubLifecycle_L_73(t *testing.T) {
@@ -448,30 +268,6 @@ func TestStubLifecycle_L_73(t *testing.T) {
 // Degraded --[E-56 read, ≥ k reachable]--> Degraded
 func TestStubLifecycle_L_74(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-74")
-}
-
-// Lifecycle: L-75
-// Committed --[E-67 Refs → 0]--> Tombstoned
-func TestStubLifecycle_L_75(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-75")
-}
-
-// Lifecycle: L-76
-// Tombstoned --[E-68 GCDelete before grace]--> Tombstoned
-func TestStubLifecycle_L_76(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-76")
-}
-
-// Lifecycle: L-77
-// Tombstoned --[E-69 GCDelete after grace]--> Collected
-func TestStubLifecycle_L_77(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-77")
-}
-
-// Lifecycle: L-78
-// Tombstoned --[E-28 referenced by Commit]--> Revived → Committed
-func TestStubLifecycle_L_78(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-78")
 }
 
 // Lifecycle: L-79
@@ -534,12 +330,6 @@ func TestStubLifecycle_L_88(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-88")
 }
 
-// Lifecycle: L-89
-// Degraded --[repair run (read k, encode, PUT, SetPlacement)]--> Repairing → Committed
-func TestStubLifecycle_L_89(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-89")
-}
-
 // Lifecycle: L-90
 // Repairing --[E-89 repair PUT fails]--> Degraded
 func TestStubLifecycle_L_90(t *testing.T) {
@@ -556,12 +346,6 @@ func TestStubLifecycle_L_91(t *testing.T) {
 // Degraded --[E-78 node dead > evict_after]--> Degraded
 func TestStubLifecycle_L_92(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-92")
-}
-
-// Lifecycle: L-93
-// Committed --[E-80 node drain]--> Degraded (migration)
-func TestStubLifecycle_L_93(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-93")
 }
 
 // Lifecycle: L-94
@@ -582,12 +366,6 @@ func TestStubLifecycle_L_96(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-96")
 }
 
-// Lifecycle: L-97
-// Committed --[E-83 join]--> Committed
-func TestStubLifecycle_L_97(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-97")
-}
-
 // Lifecycle: L-98
 // Committed --[E-84 set-capacity]--> Committed
 func TestStubLifecycle_L_98(t *testing.T) {
@@ -598,12 +376,6 @@ func TestStubLifecycle_L_98(t *testing.T) {
 // Committed --[E-85 IP change]--> Committed
 func TestStubLifecycle_L_99(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-99")
-}
-
-// Lifecycle: L-100
-// Committed --[E-86 set-redundancy]--> Degraded (policy)
-func TestStubLifecycle_L_100(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-100")
 }
 
 // Lifecycle: L-101
@@ -678,18 +450,6 @@ func TestStubLifecycle_L_112(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-112")
 }
 
-// Lifecycle: L-113
-// Dirty --[E-100 C1 crash before WAL fsync]--> (none) or Dirty
-func TestStubLifecycle_L_113(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-113")
-}
-
-// Lifecycle: L-114
-// Dirty --[E-101 C2 crash after WAL fsync]--> Dirty (replayed)
-func TestStubLifecycle_L_114(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-114")
-}
-
 // Lifecycle: L-115
 // Uploading --[E-102 C3 node crash, temp written]--> Uploading (slot fails)
 func TestStubLifecycle_L_115(t *testing.T) {
@@ -720,12 +480,6 @@ func TestStubLifecycle_L_119(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-119")
 }
 
-// Lifecycle: L-120
-// any --[E-107 storage node restart]--> unchanged
-func TestStubLifecycle_L_120(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-120")
-}
-
 // Lifecycle: L-121
 // Dirty --[E-108 gateway restart]--> Dirty
 func TestStubLifecycle_L_121(t *testing.T) {
@@ -738,46 +492,10 @@ func TestStubLifecycle_L_122(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-122")
 }
 
-// Lifecycle: L-123
-// Uploading --[E-110 disk full on one node]--> as E-36
-func TestStubLifecycle_L_123(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-123")
-}
-
 // Lifecycle: L-124
 // Committed --[E-111 raft.db unopenable on one node]--> Committed
 func TestStubLifecycle_L_124(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-124")
-}
-
-// Lifecycle: L-125
-// (shard none) --[PUT begins]--> Temp
-func TestStubLifecycle_L_125(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-125")
-}
-
-// Lifecycle: L-126
-// Temp --[fsync + rename]--> Durable
-func TestStubLifecycle_L_126(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-126")
-}
-
-// Lifecycle: L-127
-// Temp --[process crash]--> (removed)
-func TestStubLifecycle_L_127(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-127")
-}
-
-// Lifecycle: L-128
-// Durable --[Get]--> Verified
-func TestStubLifecycle_L_128(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-128")
-}
-
-// Lifecycle: L-129
-// Durable --[bit flip / zero-fill / truncation]--> Corrupt → Quarantined
-func TestStubLifecycle_L_129(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-129")
 }
 
 // Lifecycle: L-130
@@ -798,40 +516,10 @@ func TestStubLifecycle_L_132(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-132")
 }
 
-// Lifecycle: L-133
-// Durable --[SetPlacement to other node]--> Relocated
-func TestStubLifecycle_L_133(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-133")
-}
-
-// Lifecycle: L-134
-// Durable --[GCDelete DELETE with valid fence (applied index ≥ header, not placed on self, file older than grace)]--> Deleted
-func TestStubLifecycle_L_134(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-134")
-}
-
-// Lifecycle: L-135
-// Durable (orphan, old) --[Sweep]--> Swept
-func TestStubLifecycle_L_135(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-135")
-}
-
-// Lifecycle: L-136
-// Durable --[duplicate PUT]--> Durable
-func TestStubLifecycle_L_136(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-136")
-}
-
 // Lifecycle: L-137
 // Durable (placed on self) --[E-44 DELETE for a placed key]--> Durable
 func TestStubLifecycle_L_137(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-137")
-}
-
-// Lifecycle: L-138
-// Durable --[PUT with capacity exceeded]--> Durable (new one rejected)
-func TestStubLifecycle_L_138(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-138")
 }
 
 // Lifecycle: L-139
@@ -846,46 +534,10 @@ func TestStubLifecycle_L_140(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-140")
 }
 
-// Lifecycle: L-141
-// Committed --[GCDelete]--> Collected
-func TestStubLifecycle_L_141(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-141")
-}
-
-// Lifecycle: L-142
-// Temp --[Get/Open by a reader]--> served
-func TestStubLifecycle_L_142(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-142")
-}
-
-// Lifecycle: L-143
-// Committed/Tombstoned --[Unlink/Commit]--> Refs < 0
-func TestStubLifecycle_L_143(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-143")
-}
-
-// Lifecycle: L-144
-// Uploading/Repairing --[Place/SetPlacement]--> two slots of one stripe on one node
-func TestStubLifecycle_L_144(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-144")
-}
-
-// Lifecycle: L-145
-// Orphan (young) --[Sweep]--> Swept
-func TestStubLifecycle_L_145(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-145")
-}
-
 // Lifecycle: L-146
 // Tombstoned (≥ k slots on live nodes) --[Commit referencing hash]--> Uploading
 func TestStubLifecycle_L_146(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-146")
-}
-
-// Lifecycle: L-147
-// Committed --[membership change (join/remove/IP/capacity)]--> placement changed
-func TestStubLifecycle_L_147(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-147")
 }
 
 // Lifecycle: L-148
@@ -900,34 +552,10 @@ func TestStubLifecycle_L_149(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-149")
 }
 
-// Lifecycle: L-150
-// Committed --[any]--> Refs > 0 with no inode referencing the hash
-func TestStubLifecycle_L_150(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-150")
-}
-
-// Lifecycle: L-151
-// Committed --[any]--> len(Chunks) ≠ ceil(Size/CS)
-func TestStubLifecycle_L_151(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-151")
-}
-
 // Lifecycle: L-152
 // Assembled --[all zero]--> shards stored for HashZero
 func TestStubLifecycle_L_152(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-152")
-}
-
-// Lifecycle: L-153
-// (any inode) --[Create after Unlink]--> same (ino, gen) reused
-func TestStubLifecycle_L_153(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-153")
-}
-
-// Lifecycle: L-154
-// Corrupt --[Get]--> bytes returned
-func TestStubLifecycle_L_154(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-154")
 }
 
 // Lifecycle: L-155
@@ -948,24 +576,6 @@ func TestStubLifecycle_L_157(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-157")
 }
 
-// Lifecycle: L-158
-// Durable (placed on self) --[Sweep]--> Swept
-func TestStubLifecycle_L_158(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-158")
-}
-
-// Lifecycle: L-159
-// any FSM state --[Apply]--> result depends on wall clock, disk, or map iteration order
-func TestStubLifecycle_L_159(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-159")
-}
-
-// Lifecycle: L-160
-// Collected --[Commit referencing hash]--> Committed without upload
-func TestStubLifecycle_L_160(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-160")
-}
-
 // Lifecycle: L-161
 // Committed (any slot on node) --[node remove without --force]--> Degraded
 func TestStubLifecycle_L_161(t *testing.T) {
@@ -982,12 +592,6 @@ func TestStubLifecycle_L_162(t *testing.T) {
 // Committed (two versions) --[stale read]--> bytes from two versions in one chunk
 func TestStubLifecycle_L_163(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-163")
-}
-
-// Lifecycle: L-164
-// Tombstoned --[Sweep]--> shards deleted before GCDelete
-func TestStubLifecycle_L_164(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-164")
 }
 
 // Lifecycle: L-165

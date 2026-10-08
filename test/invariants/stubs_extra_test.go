@@ -5,12 +5,6 @@ import "testing"
 // Stubs for invariants defined in docs 01-06 and 10 by the design pass. Each is replaced by
 // the real tests named in that doc's Tests table as its milestone lands.
 
-// Invariant: I-27
-func TestStub_I_27(t *testing.T) { t.Skip("stub until M1-M3; see docs/02-consistency-and-raft.md") }
-
-// Invariant: I-28
-func TestStub_I_28(t *testing.T) { t.Skip("stub until M1-M3; see docs/02-consistency-and-raft.md") }
-
 // Invariant: I-29
 func TestStub_I_29(t *testing.T) { t.Skip("stub until M1-M3; see docs/02-consistency-and-raft.md") }
 
@@ -19,23 +13,8 @@ func TestStub_I_32(t *testing.T) {
 	t.Skip("stub until M1-M3; see docs/03-erasure-coding-and-placement.md")
 }
 
-// Invariant: I-34
-func TestStub_I_34(t *testing.T) {
-	t.Skip("stub until M1-M3; see docs/04-write-path-and-durability.md")
-}
-
-// Invariant: I-35
-func TestStub_I_35(t *testing.T) {
-	t.Skip("stub until M1-M3; see docs/04-write-path-and-durability.md")
-}
-
 // Invariant: I-36
 func TestStub_I_36(t *testing.T) {
-	t.Skip("stub until M1-M3; see docs/04-write-path-and-durability.md")
-}
-
-// Invariant: I-37
-func TestStub_I_37(t *testing.T) {
 	t.Skip("stub until M1-M3; see docs/04-write-path-and-durability.md")
 }
 
@@ -47,9 +26,6 @@ func TestStub_I_39(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure
 
 // Invariant: I-40
 func TestStub_I_40(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure-model.md") }
-
-// Invariant: I-41
-func TestStub_I_41(t *testing.T) { t.Skip("stub until M1-M3; see docs/06-gc-and-repair.md") }
 
 // Invariant: I-42
 func TestStub_I_42(t *testing.T) { t.Skip("stub until M1-M3; see docs/06-gc-and-repair.md") }
