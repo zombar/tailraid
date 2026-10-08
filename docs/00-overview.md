@@ -141,6 +141,8 @@ for a member. No TLS of our own.
 | `internal/webui` (handler over the vfs; its TypeScript app is 1.4k lines and 0.2k of CSS, not Go) | ~570 |
 | **Through M4 (measured 2026-10-08, after the review fixes and the hot-path work)** | **≈ 18.1k** |
 | **Through the web UI (measured 2026-10-08: +0.7k, the handler plus ~130 lines of wiring in rpc, tailscale, admin, vfs, config, node and cmd)** | **≈ 18.8k** |
+| `init` without flags (voter-first placement, derived budget, automatic redundancy, codec v2: ~0.4k) and the soak automation phase with `/dev/disk`, `/dev/fill` (~0.2k) | +0.6k |
+| **Through init-without-flags (measured 2026-10-08)** | **≈ 19.4k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
