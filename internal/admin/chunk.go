@@ -102,15 +102,7 @@ func selectChunks(st *meta.Store, sel string) ([]meta.Hash, error) {
 	}
 }
 
-func splitPath(p string) []string {
-	var out []string
-	for _, s := range strings.Split(p, "/") {
-		if s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
+func splitPath(p string) []string { return meta.SplitPath(p) }
 
 // DescribeChunk builds the report for one hash.
 func DescribeChunk(ctx context.Context, st *meta.Store, p *cluster.Prober, hc ShardChecker, ring *meta.EventRing, h meta.Hash) ChunkReport {

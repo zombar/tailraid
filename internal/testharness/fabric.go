@@ -4,7 +4,6 @@ package testharness
 import (
 	"context"
 	"errors"
-	"github.com/zombar/tailraid/internal/testseed"
 	"io"
 	"math/rand"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 
 	"github.com/hashicorp/raft"
 	nfsfile "github.com/willscott/go-nfs/file"
@@ -395,15 +396,8 @@ func (f *Fabric) ReadFile(ino meta.Ino) []byte {
 		size = sz
 	}
 	out := make([]byte, size)
-	base := func(off uint64, p []byte) error {
-		_, err := rd.ReadAt(ctx, in, p, int64(off))
-		if errors.Is(err, io.EOF) {
-			return nil // past the committed size: the overlay zero-fills
-		}
-		return err
-	}
 	if _, ok := f.Ov.Size(ino, in.Size); ok {
-		n, err := f.Ov.Read(ino, in.Size, 0, out, base)
+		n, err := f.Ov.Read(ino, in.Size, 0, out, rd.BaseReader(ctx, in))
 		if err != nil && !errors.Is(err, io.EOF) {
 			f.TB.Fatal(err)
 		}

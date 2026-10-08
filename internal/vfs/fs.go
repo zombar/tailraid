@@ -7,9 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -62,13 +60,7 @@ var (
 var ErrReadOnly = syscall.EROFS
 
 // split cleans a billy path into components relative to the root.
-func split(name string) []string {
-	name = path.Clean("/" + strings.ReplaceAll(name, "\\", "/"))
-	if name == "/" {
-		return nil
-	}
-	return strings.Split(name[1:], "/")
-}
+func split(name string) []string { return meta.SplitPath(name) }
 
 func equalParts(a, b []string) bool {
 	if len(a) != len(b) {

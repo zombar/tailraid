@@ -130,7 +130,7 @@ func NewServer(o Options) (*Server, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	s := &Server{o: o, clusID: hex.EncodeToString(o.ClusterID[:]), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots)}
+	s := &Server{o: o, clusID: meta.HexID(o.ClusterID), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.Handle("/v1/shards/", s.clusterCheck(s.member(http.HandlerFunc(s.shards))))

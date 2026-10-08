@@ -78,31 +78,22 @@ func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts
 		mtime time.Time
 	}
 	var ents []ent
-	subs, err := fsys.ReadDir(c.dir())
+	err := walkTwoLevel(fsys, c.dir(), func(_ string, de fs.DirEntry) error {
+		b, err := hex.DecodeString(de.Name())
+		if err != nil || len(b) != 32 {
+			return nil
+		}
+		fi, err := de.Info()
+		if err != nil {
+			return nil
+		}
+		var h [32]byte
+		copy(h[:], b)
+		ents = append(ents, ent{cacheEntry{hash: h, size: fi.Size(), touched: fi.ModTime()}, fi.ModTime()})
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	for _, sub := range subs {
-		if !sub.IsDir() {
-			continue
-		}
-		files, err := fsys.ReadDir(filepath.Join(c.dir(), sub.Name()))
-		if err != nil {
-			return nil, err
-		}
-		for _, de := range files {
-			b, err := hex.DecodeString(de.Name())
-			if err != nil || len(b) != 32 || de.IsDir() {
-				continue
-			}
-			fi, err := de.Info()
-			if err != nil {
-				continue
-			}
-			var h [32]byte
-			copy(h[:], b)
-			ents = append(ents, ent{cacheEntry{hash: h, size: fi.Size(), touched: fi.ModTime()}, fi.ModTime()})
-		}
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].mtime.After(ents[j].mtime) })
 	for _, e := range ents { // most recent first → PushBack keeps front = most recent

@@ -10,7 +10,6 @@ import (
 	iofs "io/fs"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -152,9 +151,7 @@ func (h *Handler) DataForVerifier(path string, verifier uint64) []iofs.FileInfo 
 	return contents
 }
 
-func splitPath(p string) []string {
-	return strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' })
-}
+func splitPath(p string) []string { return meta.SplitPath(p) }
 
 // hashListing is the verifier for a path that no longer resolves (go-nfs's own scheme).
 func hashListing(path string, contents []iofs.FileInfo) uint64 {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	nfs "github.com/willscott/go-nfs"
 	"io"
 	"log/slog"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	nfs "github.com/willscott/go-nfs"
 
 	nfsc "github.com/willscott/go-nfs-client/nfs"
 	"github.com/willscott/go-nfs-client/nfs/rpc"

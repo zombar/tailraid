@@ -100,15 +100,8 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	base := func(o uint64, b []byte) error {
-		_, err := f.fs.rd.ReadAt(context.Background(), in, b, int64(o))
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return err
-	}
 	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
-		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, base)
+		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReader(context.Background(), in))
 		if err != nil && !errors.Is(err, io.EOF) {
 			return n, mapErr("read", f.name, err)
 		}

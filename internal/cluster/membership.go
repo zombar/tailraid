@@ -99,7 +99,7 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		return rpc.JoinResponse{}, err
 	}
 	m := n.FSM.Meta()
-	return rpc.JoinResponse{ClusterID: fmt.Sprintf("%x", m.ClusterID[:]), NodeIdx: meta.NodeIdx(res.Ino), Volume: n.FSM.Volume(), Members: n.FSM.Nodes()}, nil
+	return rpc.JoinResponse{ClusterID: meta.HexID(m.ClusterID), NodeIdx: meta.NodeIdx(res.Ino), Volume: n.FSM.Volume(), Members: n.FSM.Nodes()}, nil
 }
 
 // SlotsHeldBy counts committed shard slots placed on a node.

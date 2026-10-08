@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/zombar/tailraid/internal/meta"
 	"io"
 	"io/fs"
 	"path/filepath"
@@ -15,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zombar/tailraid/internal/meta"
 
 	"github.com/zombar/tailraid/internal/sysfs"
 )
@@ -356,7 +357,13 @@ func (s *Store) Walk(fn func(k ShardKey, size int64, mtime time.Time) error) err
 }
 
 func (s *Store) walkFiles(fn func(dir string, de fs.DirEntry) error) error {
-	subs, err := s.fsys.ReadDir(s.shardsDir())
+	return walkTwoLevel(s.fsys, s.shardsDir(), fn)
+}
+
+// walkTwoLevel calls fn for every file under root/<prefix>/ (the shard store's and the
+// cache's layout), stopping at fn's first error.
+func walkTwoLevel(fsys sysfs.FS, root string, fn func(dir string, de fs.DirEntry) error) error {
+	subs, err := fsys.ReadDir(root)
 	if err != nil {
 		return err
 	}
@@ -364,8 +371,8 @@ func (s *Store) walkFiles(fn func(dir string, de fs.DirEntry) error) error {
 		if !sub.IsDir() {
 			continue
 		}
-		dir := filepath.Join(s.shardsDir(), sub.Name())
-		ents, err := s.fsys.ReadDir(dir)
+		dir := filepath.Join(root, sub.Name())
+		ents, err := fsys.ReadDir(dir)
 		if err != nil {
 			return err
 		}

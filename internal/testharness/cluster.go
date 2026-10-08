@@ -368,15 +368,7 @@ func (c *Cluster) ChunksOf(i int, path string) []meta.Chunk {
 	return out
 }
 
-func splitPath(p string) []string {
-	var parts []string
-	for _, s := range strings.Split(p, "/") {
-		if s != "" {
-			parts = append(parts, s)
-		}
-	}
-	return parts
-}
+func splitPath(p string) []string { return meta.SplitPath(p) }
 
 // ReadFileCold reads path on node i through a reader with no cache, so every chunk
 // is reconstructed from shards.

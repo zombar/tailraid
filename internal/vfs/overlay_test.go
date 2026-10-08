@@ -3,7 +3,6 @@ package vfs
 import (
 	"bytes"
 	"errors"
-	"github.com/zombar/tailraid/internal/testseed"
 	"io"
 	"math/rand"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"

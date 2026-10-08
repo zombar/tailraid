@@ -112,7 +112,7 @@ type RepairStatus struct {
 func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clock, rp *repair.Repairer) Report {
 	st := n.FSM
 	now := clk.Now()
-	rep := Report{Node: n.ID, ClusterID: hexID(clusterID), GeneratedAt: now}
+	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now}
 	h := n.Health(clk, p)
 	rep.Health, rep.Leader, rep.Voters, rep.LiveVoters = h.State.String(), h.Leader, h.Voters, h.LiveVoters
 	if h.LastContact > 0 {
@@ -152,7 +152,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	_, leaderID := n.Raft.LeaderWithID()
 	for i := range nodes {
 		nd := nodes[i]
-		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: kindName(nd.Kind), State: stateName(nd.State), Addr: nd.Addr, RPCPort: nd.RPCPort,
+		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: nd.ID == n.ID, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
 			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State}
 		if pr, ok := probes[nd.Idx]; ok {
@@ -237,29 +237,3 @@ func (s selfLiveness) IsLive(idx meta.NodeIdx) bool {
 }
 
 func (selfLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
-
-func kindName(k meta.NodeKind) string {
-	if k == meta.KindS3 {
-		return "s3"
-	}
-	return "device"
-}
-
-func stateName(s meta.NodeState) string {
-	switch s {
-	case meta.Draining:
-		return "draining"
-	case meta.Removed:
-		return "removed"
-	}
-	return "active"
-}
-
-func hexID(id [16]byte) string {
-	const digits = "0123456789abcdef"
-	out := make([]byte, 32)
-	for i, b := range id {
-		out[i*2], out[i*2+1] = digits[b>>4], digits[b&0xf]
-	}
-	return string(out)
-}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"sort"
 	"sync"
@@ -334,13 +333,7 @@ func (f *Flusher) assemble(ctx context.Context, plan *FlushPlan, base meta.Inode
 	}
 	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
 	works := make([]*chunkWork, len(idxs))
-	baseRead := func(off uint64, p []byte) error {
-		_, err := f.rd.ReadAt(ctx, base, p, int64(off))
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return err
-	}
+	baseRead := f.rd.BaseReader(ctx, base)
 	// chunks are assembled (base fetch, WAL read, hash) in parallel; works keeps idx order
 	err := parallel(ctx, f.cfg.Workers, len(idxs), func(j int) error {
 		i := idxs[j]
@@ -450,10 +443,7 @@ func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forc
 // checked with HEAD rather than assumed from liveness: a live node may have lost the
 // file (L-183), and a dedup'd Commit must never point at an unreadable chunk (L-176).
 func (f *Flusher) presentSlots(ctx context.Context, c meta.Chunk) ([]meta.NodeIdx, int) {
-	live := map[meta.NodeIdx]bool{}
-	for _, n := range f.peers.Live() {
-		live[n] = true
-	}
+	live := meta.LiveSet(f.peers.Live())
 	keep := make([]meta.NodeIdx, len(c.Placement))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -484,10 +474,7 @@ func (f *Flusher) presentSlots(ctx context.Context, c meta.Chunk) ([]meta.NodeId
 
 // candidates returns the live, Active, non-full nodes minus excluded ones.
 func (f *Flusher) candidates(exclude []meta.NodeIdx) []meta.Candidate {
-	live := map[meta.NodeIdx]bool{}
-	for _, n := range f.peers.Live() {
-		live[n] = true
-	}
+	live := meta.LiveSet(f.peers.Live())
 	now := f.clk.Now()
 	f.mu.Lock()
 	for n, until := range f.full {
@@ -522,14 +509,7 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 			held = append(held, n)
 		}
 	}
-	fresh := meta.Place(w.hash, f.candidates(held), total-len(held))
-	fi := 0
-	for i := range place {
-		if place[i] == 0 && fi < len(fresh) {
-			place[i] = fresh[fi]
-			fi++
-		}
-	}
+	meta.FillPlacement(w.hash, place, f.candidates(held))
 	acked := make([]bool, total)
 	for i, n := range keep {
 		if i < total && n != 0 {
@@ -550,20 +530,12 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 				exclude = append(exclude, place[i])
 			}
 		}
-		var missing []int
 		for i := range place {
 			if !acked[i] {
-				missing = append(missing, i)
-			}
-		}
-		alt := meta.Place(w.hash, f.candidates(exclude), len(missing))
-		for j, i := range missing {
-			if j < len(alt) {
-				place[i] = alt[j]
-			} else {
 				place[i] = 0
 			}
 		}
+		meta.FillPlacement(w.hash, place, f.candidates(exclude))
 		f.putSlots(ctx, w, shards, place, acked)
 	}
 	acks := 0

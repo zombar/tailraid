@@ -166,10 +166,7 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 	// Live holders only (L-131): a dead node would cost the dial or header timeout for
 	// nothing. Holders are offered to Rank in slot order, so data slots come first at
 	// equal rank and a decode is only needed when a data shard is unreachable (L-63).
-	live := map[meta.NodeIdx]bool{}
-	for _, n := range r.peers.Live() {
-		live[n] = true
-	}
+	live := meta.LiveSet(r.peers.Live())
 	slotOf := map[meta.NodeIdx]int{}
 	var holders []meta.NodeIdx
 	for i, n := range c.Placement {
@@ -246,6 +243,18 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 		return nil, fmt.Errorf("%w: decode chunk %x: %w", ErrIO, c.Hash[:8], err)
 	}
 	return data, nil
+}
+
+// BaseReader is ReadAt as the overlay wants its base callback: a read past the committed
+// size is not an error (the overlay zero-fills what the base does not cover).
+func (r *Reader) BaseReader(ctx context.Context, in meta.Inode) func(off uint64, p []byte) error {
+	return func(off uint64, p []byte) error {
+		_, err := r.ReadAt(ctx, in, p, int64(off))
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 // ReadAt reads committed file bytes: chunk by chunk, zero-filling holes and the tail of

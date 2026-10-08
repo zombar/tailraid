@@ -328,25 +328,8 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			}
 		}
 	}
-	live := map[meta.NodeIdx]bool{}
-	for _, n := range r.live.Live() {
-		live[n] = true
-	}
-	cands := meta.ExcludeIdx(meta.Candidates(r.st.Nodes(), func(n meta.NodeIdx) bool { return live[n] }), held)
-	needed := 0
-	for _, n := range newPlace {
-		if n == 0 {
-			needed++
-		}
-	}
-	fresh := meta.Place(c.Hash, cands, needed)
-	fi := 0
-	for i := range newPlace {
-		if newPlace[i] == 0 && fi < len(fresh) {
-			newPlace[i] = fresh[fi]
-			fi++
-		}
-	}
+	live := meta.LiveSet(r.live.Live())
+	meta.FillPlacement(c.Hash, newPlace, meta.ExcludeIdx(meta.Candidates(r.st.Nodes(), func(n meta.NodeIdx) bool { return live[n] }), held))
 	// A slot whose shard is still served (live draining holder) keeps its node until a
 	// replacement is placed: a repair never lowers the readable slot count (I-65, L-184).
 	// unchanged marks slots that need no PUT: kept ones and retained ones.

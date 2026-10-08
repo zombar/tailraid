@@ -4,11 +4,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"flag"
-	"github.com/zombar/tailraid/internal/testseed"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zombar/tailraid/internal/testseed"
 )
 
 func hashN(i uint64) Hash {

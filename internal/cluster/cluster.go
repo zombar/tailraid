@@ -251,7 +251,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(hex.EncodeToString(cid[:])+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(meta.HexID(cid)+"\n"), 0o600); err != nil {
 		return nil, err
 	}
 	_, logOutput := o.logger()

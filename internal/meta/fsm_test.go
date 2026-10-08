@@ -6,13 +6,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/zombar/tailraid/internal/testseed"
 	"math"
 	"math/rand"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 
 	"github.com/hashicorp/raft"
 )
