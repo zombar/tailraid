@@ -141,6 +141,188 @@ func TestRepair_DeadNodeHoldDown_ThenReplaced(t *testing.T) {
 	}
 }
 
+// holdersBySlot returns the node indexes (into c.Nodes) of ch's holders in slot order,
+// excluding the leader so they can be killed or drained without an election.
+func holdersBySlot(c *testharness.Cluster, ch meta.Chunk, leader *testharness.ClusterNode) []int {
+	var out []int
+	for _, s := range ch.Placement {
+		if s == 0 || s == leader.Idx() {
+			continue
+		}
+		out = append(out, int(s)-1)
+	}
+	return out
+}
+
+// A missing slot with no live spare, plus a holder that is dead but inside fill_after:
+// nothing is placeable, so the pass must propose nothing rather than re-commit the same
+// placement every minute and count it as a partial repair.
+// Invariant: I-65
+// Lifecycle: L-86, L-185
+func TestRepair_DeadWithinFillAfter_NoRepeatProposal(t *testing.T) {
+	c := testharness.NewCluster(t, 5, 2, 2)
+	defer c.Close()
+	leader := c.Leader()
+	// two nodes down: four slots, three live nodes, so the write lands with one zero slot
+	// (a 3-of-5 quorum remains)
+	c.Kill((leader.I + 1) % 5)
+	c.Kill((leader.I + 2) % 5)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	data := testharness.Pattern(int(testharness.ChunkSize), 31)
+	c.WriteFile(leader.I, "/f", data)
+	c.Settle()
+	ch := c.ChunksOf(leader.I, "/f")[0]
+	zero := 0
+	for _, s := range ch.Placement {
+		if s == 0 {
+			zero++
+		}
+	}
+	if zero != 1 {
+		t.Fatalf("expected one zero slot after a degraded write, got placement %v", ch.Placement)
+	}
+	// a holder becomes unreachable for the leader's prober (RPC only, so Raft keeps its
+	// quorum) and stays inside fill_after: its slot is kept, not re-placed
+	victim := holdersBySlot(c, ch, leader)[0]
+	leader.Net.Cut(c.Nodes[victim].RPCAddr(), true)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	leader.Prober.Tick(ctx)
+	if leader.Prober.IsLive(c.Nodes[victim].Idx()) {
+		t.Fatal("victim still live after the cut")
+	}
+	r := newRepairer(c, leader, repairCfg())
+	for pass := 1; pass <= 2; pass++ {
+		st, err := r.Scan(ctx)
+		must(t, err)
+		if st.Partial != 0 || st.Repaired != 0 || st.Unrepairable != 0 {
+			t.Fatalf("pass %d: nothing was placeable yet the scan reports %+v", pass, st)
+		}
+	}
+	for _, k := range leader.Events.Kinds(ch.Hash) {
+		if k == meta.EvPartial || k == meta.EvRepaired {
+			t.Fatalf("a no-op pass recorded %v: %v", k, leader.Events.Of(ch.Hash))
+		}
+	}
+	if after := c.ChunksOf(leader.I, "/f")[0]; !equalPlacement(after.Placement, ch.Placement) {
+		t.Fatalf("placement changed %v -> %v", ch.Placement, after.Placement)
+	}
+}
+
+func equalPlacement(a, b []meta.NodeIdx) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// One holder is dead past fill_after, another is draining, and exactly one spare
+// appears: the spare replaces the dead node's slot and the draining node keeps its slot
+// (and its shard) until a replacement for it exists. Zeroing it would have cut the
+// readable copies from four to three while the node was live and holding the shard.
+// Invariant: I-65
+// Lifecycle: L-93, L-184
+func TestRepair_DrainNoReplacement_KeepsShard(t *testing.T) {
+	c := testharness.NewCluster(t, 5, 2, 2)
+	defer c.Close()
+	leader := c.Leader()
+	spare := (leader.I + 1) % 5
+	c.Kill(spare)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	data := testharness.Pattern(int(testharness.ChunkSize), 32)
+	c.WriteFile(leader.I, "/f", data)
+	c.Settle()
+	ch := c.ChunksOf(leader.I, "/f")[0]
+	holders := holdersBySlot(c, ch, leader)
+	if len(holders) < 2 {
+		t.Fatalf("placement %v leaves fewer than two non-leader holders", ch.Placement)
+	}
+	dead, draining := holders[0], holders[1] // the earlier slot dies so the spare is spent on it first
+	c.Kill(dead)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe() // observed dead...
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe() // ...and past the hold-down
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: c.Nodes[draining].Idx(), State: meta.Draining}))
+	c.Restart(spare)
+	c.Settle()
+	if leader.Prober.IsLive(c.Nodes[dead].Idx()) || leader.Prober.DeadFor(c.Nodes[dead].Idx()) < cluster.FillAfter {
+		t.Fatal("dead node not past fill_after")
+	}
+	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Unrepairable != 0 || st.Errors != 0 {
+		t.Fatalf("scan %+v", st)
+	}
+	after := c.ChunksOf(leader.I, "/f")[0]
+	drainKey := chunk.Key(after.Hash, after.K, after.M, slotOf(ch, c.Nodes[draining].Idx()))
+	filled := 0
+	for _, s := range after.Placement {
+		if s != 0 {
+			filled++
+		}
+		if s == c.Nodes[dead].Idx() {
+			t.Fatalf("dead node still placed: %v", after.Placement)
+		}
+	}
+	if filled != 4 {
+		t.Fatalf("placement %v lost a readable slot (was %v)", after.Placement, ch.Placement)
+	}
+	if after.Placement[slotOf(ch, c.Nodes[draining].Idx())] != c.Nodes[draining].Idx() {
+		t.Fatalf("draining node's slot was reassigned without a replacement: %v", after.Placement)
+	}
+	if !c.Nodes[draining].Store.Has(drainKey) {
+		t.Fatal("draining node's shard was deleted")
+	}
+	if got, err := c.ReadFileCold(spare, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after repair: %v", err)
+	}
+}
+
+// A chunk whose only live copies include a draining node is still readable, so the
+// scanner must not count it unrepairable (and must not propose anything if no spare
+// can take the slots).
+// Invariant: I-65
+// Lifecycle: L-93
+func TestRepair_DrainingHolderIsReadable(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	leader := c.Leader()
+	data := testharness.Pattern(int(testharness.ChunkSize), 33)
+	c.WriteFile(leader.I, "/f", data)
+	c.Settle()
+	ch := c.ChunksOf(leader.I, "/f")[0]
+	holders := holdersBySlot(c, ch, leader)
+	dead, draining := holders[0], holders[1]
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: c.Nodes[draining].Idx(), State: meta.Draining}))
+	c.Kill(dead)
+	c.Clk.Advance(cluster.LiveThreshold + time.Second)
+	c.Probe()
+	c.Clk.Advance(cluster.FillAfter)
+	c.Probe()
+	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Unrepairable != 0 {
+		t.Fatalf("readable chunk (leader + live draining holder) reported unrepairable: %+v", st)
+	}
+	if st.Partial != 0 || st.Repaired != 0 {
+		t.Fatalf("no spare exists yet the scan reports %+v", st)
+	}
+	after := c.ChunksOf(leader.I, "/f")[0]
+	if after.Placement[slotOf(ch, c.Nodes[draining].Idx())] != c.Nodes[draining].Idx() {
+		t.Fatalf("draining node's slot dropped: %v", after.Placement)
+	}
+	if got, err := c.ReadFileCold(leader.I, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read: %v", err)
+	}
+}
+
 func slotOf(ch meta.Chunk, idx meta.NodeIdx) int {
 	for i, s := range ch.Placement {
 		if s == idx {

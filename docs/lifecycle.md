@@ -91,14 +91,14 @@ exactly one design doc transition table and cited by at least one test via
 | L-83 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-74 Sweep, placed on self | Committed | `TestStubLifecycle_L_83` |
 | L-84 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-75 Sweep | Tombstoned | `TestGC_CollectsAfterGrace_RespectsFence_AndSweep` |
 | L-85 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-71 Sweep runs concurrently | Uploading | `TestCluster_GCDoesNotDeleteInflightUpload` |
-| L-86 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-76 node dead < fill_after | Committed | `TestProber_LivenessAndHoldDowns`, `TestRepair_DeadNodeHoldDown_ThenReplaced` |
+| L-86 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-76 node dead < fill_after | Committed | `TestProber_LivenessAndHoldDowns`, `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |
 | L-87 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-77 node dead > fill_after | Degraded | `TestProber_LivenessAndHoldDowns`, `TestRepair_DeadNodeHoldDown_ThenReplaced` |
 | L-88 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (dead node) | E-79 node returns before repair | Committed | `TestProber_LivenessAndHoldDowns`, `TestRepair_DeadNodeHoldDown_ThenReplaced` |
 | L-89 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | repair run (read k, encode, PUT, SetPlacement) | Repairing → Committed | `TestFSM_SetPlacement`, `TestRepair_FillsDegradedSlotsWhenSpareAppears` |
 | L-90 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing | E-89 repair PUT fails | Degraded | `TestStubLifecycle_L_90` |
 | L-91 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing | E-90 node returns with old shard mid-repair | Committed (new placement) | `TestRepair_DeadNodeHoldDown_ThenReplaced` |
 | L-92 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | E-78 node dead > evict_after | Degraded | `TestStubLifecycle_L_92` |
-| L-93 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-80 node drain | Degraded (migration) | `TestCluster_JoinDrainRemove`, `TestFSM_NodeStates`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
+| L-93 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-80 node drain | Degraded (migration) | `TestCluster_JoinDrainRemove`, `TestFSM_NodeStates`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
 | L-94 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (drain) | relocation done | Committed; old shards Relocated → Deleted | `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | L-95 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (any slot on node) | E-81 node remove | Committed | `TestCluster_JoinDrainRemove` |
 | L-96 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-82 node remove --force | Degraded | `TestCluster_JoinDrainRemove`, `TestJoin_TokenAndIdentity` |
@@ -189,3 +189,5 @@ exactly one design doc transition table and cited by at least one test via
 | L-181 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (flush plan outstanding) | E-12 truncate below the plan's extents | Dirty (plan bytes beyond the point dead) | `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes` |
 | L-182 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | Commit with `NewSize` > `MaxFileSize(ChunkSize)` | Committed (unbounded chunk list) | `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | L-183 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (holders live, shard files lost on some) | E-113 dedup hit | Uploading (fill) → Committed | `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
+| L-184 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (slot on a live draining node, no replacement available) | repair pass that improves another slot | slot zeroed and the draining node's shard deleted | `TestRepair_DrainNoReplacement_KeepsShard` |
+| L-185 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (a missing slot, or a slot on a node dead inside `fill_after`) | repair pass with no live spare | Degraded | `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |

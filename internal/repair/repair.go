@@ -143,10 +143,13 @@ func (r *Repairer) Run(ctx context.Context, isLeader func() bool) {
 	}
 }
 
-// badSlot explains why a slot needs re-placing.
+// badSlot explains why a slot needs re-placing. readable marks a slot whose shard is
+// still served by a live node (a draining holder): it counts toward readability and is
+// kept in the placement until a replacement is placed (I-65).
 type badSlot struct {
-	idx    int
-	reason string
+	idx      int
+	reason   string
+	readable bool
 }
 
 // classify returns the bad slots of c, the kept good slots and whether a policy migration
@@ -158,25 +161,20 @@ func (r *Repairer) classify(c meta.Chunk, vol meta.Volume, nodes map[meta.NodeId
 	for i, n := range c.Placement {
 		switch {
 		case n == 0:
-			bad = append(bad, badSlot{i, "missing"})
-		case nodes[n].State == meta.Removed || nodes[n].State == meta.Draining:
-			bad = append(bad, badSlot{i, "node " + stateWord(nodes[n].State)})
+			bad = append(bad, badSlot{i, "missing", false})
+		case nodes[n].State == meta.Draining:
+			bad = append(bad, badSlot{i, "node draining", r.live.IsLive(n)})
+		case nodes[n].State == meta.Removed:
+			bad = append(bad, badSlot{i, "node removed", false})
 		case !r.live.IsLive(n) && r.live.DeadFor(n) >= r.cfg.FillAfter:
-			bad = append(bad, badSlot{i, "node dead"})
+			bad = append(bad, badSlot{i, "node dead", false})
 		case reported[i]:
-			bad = append(bad, badSlot{i, "reported"})
+			bad = append(bad, badSlot{i, "reported", false})
 		default:
 			kept[i] = n
 		}
 	}
 	return bad, kept, migrate
-}
-
-func stateWord(s meta.NodeState) string {
-	if s == meta.Draining {
-		return "draining"
-	}
-	return "removed"
 }
 
 // targetPolicy is the (k,m) the chunk should have under the current volume policy.
@@ -192,6 +190,18 @@ func (r *Repairer) goodLive(kept []meta.NodeIdx) int {
 	n := 0
 	for _, idx := range kept {
 		if idx != 0 && r.live.IsLive(idx) {
+			n++
+		}
+	}
+	return n
+}
+
+// readable counts the slots a read can use right now: kept slots on live nodes plus bad
+// slots whose shard is still served (I-65).
+func (r *Repairer) readable(kept []meta.NodeIdx, bad []badSlot) int {
+	n := r.goodLive(kept)
+	for _, b := range bad {
+		if b.readable {
 			n++
 		}
 	}
@@ -271,7 +281,7 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 				st.ScrubBad += len(corrupt)
 				r.Events.Record(c.Hash, meta.EvScrubBad, fmt.Sprintf("slots %v", corrupt))
 				for _, i := range corrupt {
-					bad = append(bad, badSlot{i, "scrub"})
+					bad = append(bad, badSlot{i, "scrub", false})
 					kept[i] = 0
 				}
 			} else {
@@ -281,9 +291,9 @@ func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
 		if migrate {
 			st.PolicyStale++
 		}
-		if r.goodLive(kept) < int(c.K) {
+		if n := r.readable(kept, bad); n < int(c.K) {
 			st.Unrepairable++
-			r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d live good slots < k=%d", r.goodLive(kept), c.K))
+			r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d readable slots < k=%d", n, c.K))
 			continue
 		}
 		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
@@ -374,13 +384,28 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []badSlot, k
 			fi++
 		}
 	}
+	// A slot whose shard is still served (live draining holder) keeps its node until a
+	// replacement is placed: a repair never lowers the readable slot count (I-65, L-184).
+	// unchanged marks slots that need no PUT: kept ones and retained ones.
+	unchanged := make([]bool, total)
+	for i := range unchanged {
+		unchanged[i] = !migrate && i < len(kept) && kept[i] != 0
+	}
+	if !migrate {
+		for _, b := range bad {
+			if b.readable && newPlace[b.idx] == 0 {
+				newPlace[b.idx] = c.Placement[b.idx]
+				unchanged[b.idx] = true
+			}
+		}
+	}
 	var moved int64
 	acked := 0
 	for i, n := range newPlace {
 		if n == 0 {
 			continue
 		}
-		if !migrate && kept[i] == n {
+		if unchanged[i] {
 			acked++
 			continue
 		}
@@ -396,8 +421,16 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []badSlot, k
 	if migrate && acked < int(k) {
 		return outcome{bytes: moved}, nil // keep the old encoding committed; try again next pass
 	}
-	if !migrate && acked == r.goodLive(kept) {
-		return outcome{bytes: moved}, nil // nothing improved; nothing to commit
+	if !migrate {
+		stayed := 0
+		for _, u := range unchanged {
+			if u {
+				stayed++
+			}
+		}
+		if acked == stayed {
+			return outcome{bytes: moved}, nil // nothing placeable improved; nothing to commit (L-185)
+		}
 	}
 	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace}})
 	if err == nil {

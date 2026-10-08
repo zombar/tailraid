@@ -275,7 +275,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-90 | Repairing | E-89 repair PUT fails | Degraded | stays queued; next scan retries; rate limited | `TestRepair_PutFails_Retries` |
 | L-91 | Repairing | E-90 node returns with old shard mid-repair | Committed (new placement) | `SetPlacement` wins; old copy is Orphan → Swept | `TestRepair_RaceWithReturningNode` |
 | L-92 | Degraded | E-78 node dead > evict_after | Degraded | `MemberLost` event; operator prompted to `node remove` | `TestProber_EvictAfter` |
-| L-93 | Committed | E-80 node drain | Degraded (migration) | node excluded from new placement; repairer relocates every slot | `TestRepair_DrainMovesAllSlotsBeforeRemove` |
+| L-93 | Committed | E-80 node drain | Degraded (migration) | node excluded from new placement; repairer relocates every slot; until a replacement is placed the slot stays on the draining node, whose live shard counts as readable (I-65) | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
 | L-94 | Degraded (drain) | relocation done | Committed; old shards Relocated → Deleted | `node remove` now allowed | `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | L-95 | Committed (any slot on node) | E-81 node remove | Committed | refused (`ErrNodeNotEmpty`) with the count of slots still on the node; `drain` first | `TestCLI_NodeRemove_RefusesWhileHoldingSlots` |
 | L-96 | Committed | E-82 node remove --force | Degraded | slots on it become 0; repair fills from other k | `TestCLI_NodeRemoveForce` |
@@ -335,6 +335,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-180 | Dirty (size raised by a truncate while a flush plan is outstanding) | E-118 flush completes | Dirty (compacted WAL, size kept) | the compacted WAL records the truncation point and the raised size, so a restart replays the acknowledged SETATTR size, not the smaller committed or truncated size | `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestOverlay_OracleRandomOps` |
 | L-181 | Dirty (flush plan outstanding) | E-12 truncate below the plan's extents | Dirty (plan bytes beyond the point dead) | SETATTR OK; reads never return plan bytes at or beyond the lowest truncation point since the snapshot; the commit still carries them and `minSize` hides them afterwards; an abort trims them | `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_OracleRandomOps` |
 | L-183 | Committed (holders live, shard files lost on some) | E-113 dedup hit | Uploading (fill) → Committed | the flusher checks presence with `HEAD` per live slot; with fewer than k present it PUTs the absent slots from its own bytes and proposes `SetPlacement` before the Commit; with k or more present it dedups and leaves the rest to scrub and repair | `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
+| L-185 | Degraded (a missing slot, or a slot on a node dead inside `fill_after`) | repair pass with no live spare | Degraded | nothing is placeable, so nothing is proposed: no `SetPlacement`, no `partial` count, no event (I-65); the next pass retries | `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |
 
 **6. Forbidden transitions.**
 
@@ -377,6 +378,7 @@ event ring or the final state).
 | L-177 | Orphan | Sweep while not `Healthy` | Swept | forbidden: a node whose chunk table may be behind never deletes shards | `TestSweep_SkippedWhenNotHealthy` |
 | L-179 | Dirty (chunk partly dirty, below the last committed chunk) | E-22 partial flush | dirty bytes dropped | forbidden (I-7): a partial flush commits only entirely dirty chunks and keeps every other dirty byte as residual; acknowledged bytes are never neither committed nor dirty | `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks` |
 | L-182 | Committed | Commit with `NewSize` > `MaxFileSize(ChunkSize)` | Committed (unbounded chunk list) | forbidden (I-64): `ErrBadCommand` before anything is sized by `NewSize`; the gateway refuses the WRITE or SETATTR with `EFBIG` first, so no replica ever allocates per a hostile size | `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
+| L-184 | Committed (slot on a live draining node, no replacement available) | repair pass that improves another slot | slot zeroed and the draining node's shard deleted | forbidden (I-65): the draining node keeps its slot until a replacement is placed; a repair commit never lowers the readable slot count | `TestRepair_DrainNoReplacement_KeepsShard` |
 
 ## 7. How the matrix is tested
 

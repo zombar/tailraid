@@ -231,6 +231,7 @@ check). `--fix` only re-derives refcounts and tombstones; it never deletes shard
 - **I-42** — Draining a node moves every one of its slots before `node remove` succeeds without `--force`; after removal no committed placement references the node except via `--force`-acknowledged degraded slots.
 - **I-43** — `GCDelete` applied on any replica deletes exactly the same chunk entries (determinism via `Before` in the command).
 - **I-44** — `fsck` reports zero findings on a cluster where every test in this document passed; any finding is a bug, not noise.
+- **I-65** — A repair pass never lowers the number of readable slots of a chunk and never proposes a placement equal to the committed one: a slot whose shard is still readable (a live draining node) stays in the placement until a replacement is placed, a live draining holder counts toward the `≥ k` readability test, and a pass that could improve nothing proposes nothing.
 
 ## Tests
 
@@ -243,3 +244,4 @@ check). `--fix` only re-derives refcounts and tombstones; it never deletes shard
 | I-42 | `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestCLI_NodeDrain_ThenRemove_MovesSlots` |
 | I-43 | `TestFSM_DeterministicAcrossReplicas`, `TestFSM_GCDeleteDeterministic` |
 | I-44 | `TestFsck_CleanClusterNoFindings`, `TestFsck_DetectsInjectedRefcountError` |
+| I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
