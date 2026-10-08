@@ -32,15 +32,26 @@ func fakeGitHub(t *testing.T, tag string, binary []byte, goodSum bool) *httptest
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q},{"name":"sha256sums.txt","browser_download_url":%q}]}`,
-			tag, name, srv.URL+"/dl/"+name, srv.URL+"/dl/sha256sums.txt")
+		// a private repository: browser URLs 404, the API asset URLs serve bytes to a token
+		fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"browser_download_url":%q,"url":%q},{"name":"sha256sums.txt","browser_download_url":%q,"url":%q}]}`,
+			tag, name, srv.URL+"/dl/"+name, srv.URL+"/repos/zombar/tailraid/releases/assets/1", srv.URL+"/dl/sha256sums.txt", srv.URL+"/repos/zombar/tailraid/releases/assets/2")
 	}
 	mux.HandleFunc("/repos/zombar/tailraid/releases/latest", release)
 	mux.HandleFunc("/repos/zombar/tailraid/releases/tags/"+tag, release)
-	mux.HandleFunc("/dl/"+name, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(binary) })
-	mux.HandleFunc("/dl/sha256sums.txt", func(w http.ResponseWriter, _ *http.Request) {
+	private := func(next func(w http.ResponseWriter)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer tok" || r.Header.Get("Accept") != "application/octet-stream" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			next(w)
+		}
+	}
+	mux.HandleFunc("/dl/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	mux.HandleFunc("/repos/zombar/tailraid/releases/assets/1", private(func(w http.ResponseWriter) { _, _ = w.Write(binary) }))
+	mux.HandleFunc("/repos/zombar/tailraid/releases/assets/2", private(func(w http.ResponseWriter) {
 		fmt.Fprintf(w, "%s  %s\n%s  tailraid_darwin_arm64\n", hexSum, name, strings.Repeat("1", 64))
-	})
+	}))
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

@@ -186,7 +186,7 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 	if n.Kind != KindDevice && n.Kind != KindS3 {
 		return Result{}, ErrBadCommand
 	}
-	if n.Idx == 0 {
+	if n.Idx == 0 && n.ID != "" {
 		// one record per node ID: a repeated join (a retry after a timeout, possibly at a
 		// new leader whose copy has not applied the first upsert) updates it instead of
 		// allocating a second index (I-62)

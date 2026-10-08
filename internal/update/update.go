@@ -29,11 +29,14 @@ type Release struct {
 	Assets []Asset `json:"assets"`
 }
 
-// Asset is one release file.
+// Asset is one release file. A private repository serves its bytes only through the
+// API URL (Accept: application/octet-stream, bearer token); the browser URL is for
+// public ones.
 type Asset struct {
-	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
-	Size int64  `json:"size"`
+	Name   string `json:"name"`
+	URL    string `json:"browser_download_url"`
+	APIURL string `json:"url"`
+	Size   int64  `json:"size"`
 }
 
 // Updater talks to one repository.
@@ -58,6 +61,14 @@ var (
 	ErrNoToken    = errors.New("update: repository needs a token (TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or `gh auth login`)")
 	errBadVersion = errors.New("update: downloaded binary reports a different version")
 )
+
+// downloadURL picks the API URL when a token is in play (private repository).
+func (u *Updater) downloadURL(a *Asset) string {
+	if u.Token != "" && a.APIURL != "" {
+		return a.APIURL
+	}
+	return a.URL
+}
 
 func (u *Updater) defaults() {
 	if u.Binary == "" {
@@ -189,7 +200,7 @@ func (u *Updater) Apply(ctx context.Context, rel *Release, exe, current, goos, g
 	if asset == nil || sums == nil {
 		return fmt.Errorf("%w: want %s and sha256sums.txt in %s", ErrNoAsset, name, rel.Tag)
 	}
-	sumBody, err := u.fetch(ctx, sums.URL, 1<<20)
+	sumBody, err := u.fetch(ctx, u.downloadURL(sums), 1<<20)
 	if err != nil {
 		return err
 	}
@@ -206,7 +217,7 @@ func (u *Updater) Apply(ctx context.Context, rel *Release, exe, current, goos, g
 	cleanup := func() { _ = os.Remove(tmpPath) }
 	fmt.Fprintf(u.Out, "downloading %s (%s)\n", asset.Name, rel.Tag)
 	h := sha256.New()
-	if err := u.stream(ctx, asset.URL, io.MultiWriter(tmp, h)); err != nil {
+	if err := u.stream(ctx, u.downloadURL(asset), io.MultiWriter(tmp, h)); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return err
