@@ -80,11 +80,17 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrIO, err)
 	}
-	// slot order: rank the holder nodes, map back to slot indexes
+	// Live holders only (L-131): a dead node would cost the dial or header timeout for
+	// nothing. Holders are offered to Rank in slot order, so data slots come first at
+	// equal rank and a decode is only needed when a data shard is unreachable (L-63).
+	live := map[meta.NodeIdx]bool{}
+	for _, n := range r.peers.Live() {
+		live[n] = true
+	}
 	slotOf := map[meta.NodeIdx]int{}
 	var holders []meta.NodeIdx
 	for i, n := range c.Placement {
-		if n != 0 {
+		if n != 0 && live[n] {
 			slotOf[n] = i
 			holders = append(holders, n)
 		}

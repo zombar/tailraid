@@ -60,12 +60,6 @@ func TestStubLifecycle_L_61(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-61")
 }
 
-// Lifecycle: L-63
-// Committed --[E-56 read, all reachable]--> Committed
-func TestStubLifecycle_L_63(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-63")
-}
-
 // Lifecycle: L-64
 // Committed --[E-57 read, m unreachable]--> Committed
 func TestStubLifecycle_L_64(t *testing.T) {
@@ -196,12 +190,6 @@ func TestStubLifecycle_L_122(t *testing.T) {
 // Committed --[E-111 raft.db unopenable on one node]--> Committed
 func TestStubLifecycle_L_124(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-124")
-}
-
-// Lifecycle: L-131
-// Durable --[node offline]--> Unreachable
-func TestStubLifecycle_L_131(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-131")
 }
 
 // Lifecycle: L-132

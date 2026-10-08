@@ -54,6 +54,7 @@ type Fabric struct {
 	full        map[meta.NodeIdx]bool
 	failPutOnce map[meta.NodeIdx]int
 	putCount    int
+	gets        map[meta.NodeIdx]int
 	proposeErr  error // returned once by Propose as a transport failure
 	proposed    []meta.Op
 }
@@ -69,7 +70,7 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	f := &Fabric{
 		TB: t, FSM: meta.NewFSM(), Clk: clock.NewFake(time.Unix(1_700_000_000, 0)), SelfIdx: 1,
 		Stores: map[meta.NodeIdx]*chunk.Store{}, down: map[meta.NodeIdx]bool{}, full: map[meta.NodeIdx]bool{},
-		failPutOnce: map[meta.NodeIdx]int{},
+		failPutOnce: map[meta.NodeIdx]int{}, gets: map[meta.NodeIdx]int{},
 	}
 	f.Apply(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: ChunkSize, K: k, M: m, Now: 1}})
 	root := t.TempDir()
@@ -214,6 +215,7 @@ func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, b
 
 func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
 	f.mu.Lock()
+	f.gets[node]++
 	st, ok := f.Stores[node]
 	down := f.down[node]
 	f.mu.Unlock()
@@ -253,6 +255,13 @@ func (f *Fabric) SetDown(n meta.NodeIdx, down bool) {
 }
 
 // Puts counts shard PUTs issued so far.
+// Gets returns the number of shard GETs issued to node so far.
+func (f *Fabric) Gets(node meta.NodeIdx) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gets[node]
+}
+
 func (f *Fabric) Puts() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

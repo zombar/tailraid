@@ -68,7 +68,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-60 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-53 snapshot restore on follower | Committed | `TestFSM_ApplySnapshotRestoreEquivalence` |
 | L-61 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-54 leader change | Committed | `TestStubLifecycle_L_61` |
 | L-62 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-55 WaitApplied | Committed | `TestOverlay_CommitFlushed_ResetsOrCompacts` |
-| L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestStubLifecycle_L_63` |
+| L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestReader_FetchFirstK` |
 | L-64 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-57 read, m unreachable | Committed | `TestStubLifecycle_L_64` |
 | L-65 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-58 read, m+1 unreachable | Committed | `TestStubLifecycle_L_65` |
 | L-66 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-59 cache hit | Committed | `TestReader_ReadsWithOneNodeDown_AndFromCache` |
@@ -136,7 +136,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-128 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | Get | Verified | `TestStore_PutGetRoundTrip` |
 | L-129 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | bit flip / zero-fill / truncation | Corrupt → Quarantined | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
 | L-130 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Quarantined | repair PUT | Repaired (Durable) | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
-| L-131 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | node offline | Unreachable | `TestStubLifecycle_L_131` |
+| L-131 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | node offline | Unreachable | `TestReader_SkipsDeadHolders` |
 | L-132 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Unreachable | node online | Reachable | `TestStubLifecycle_L_132` |
 | L-133 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | SetPlacement to other node | Relocated | `TestSweep_OldNotPlacedHereDeleted` |
 | L-134 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | GCDelete DELETE with valid fence (applied index ≥ header, not placed on self, file older than grace) | Deleted | `TestChunkRPC_DeleteFence`, `TestStore_CapacityAccounting` |

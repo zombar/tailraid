@@ -231,7 +231,7 @@ func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64
 1. `HashZero` → caller zero-fills. Cache hit (`cache.Get` verifies sha256) → return.
 2. `c := st.GetChunk(h)`; missing → `EIO` (metadata says the chunk exists; this is a bug or
    a lost majority, not a normal path).
-3. `order = peers.Rank(nonZero(c.Placement))`: self first, then by RTT, S3 nodes last.
+3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131), and slots are offered in placement order so data shards win ties over parity (L-63).
 4. Fetch the first `k` shards in parallel. On any failure or `ErrCorrupt`, pull the next slot
    in `order` until `k` good shards or the list is exhausted (→ `EIO`, logged with the chunk
    hash and the slots tried).

@@ -245,7 +245,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-60 | Committed | E-53 snapshot restore on follower | Committed | restored entry identical; FSM hash equal | `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestFSM_ApplySnapshotRestoreEquivalence` |
 | L-61 | Committed | E-54 leader change | Committed | no chunk-level effect; repair queue rebuilt by new leader from FSM | `TestCluster_LeaderChange_NoChunkEffect` |
 | L-62 | Committed | E-55 WaitApplied | Committed | flushed extents cleared; `wal.Reset()` when inode clean | `TestFlusher_CommitFlushed_ResetsWAL` |
-| L-63 | Committed | E-56 read, all reachable | Committed | first k by `Rank` (self first); decode only if a data shard missing | `TestReader_FetchFirstK` |
+| L-63 | Committed | E-56 read, all reachable | Committed | first k by `Rank` (self first, then RTT; data slots before parity at equal rank); decode only if a data shard is missing | `TestReader_FetchFirstK` |
 | L-64 | Committed | E-57 read, m unreachable | Committed | decode from any k; latency higher; no error | `TestCluster_KillMNodes_AllDataReadable` |
 | L-65 | Committed | E-58 read, m+1 unreachable | Committed | EIO; no partial/garbage data; other chunks unaffected | `TestCluster_KillMPlusOne_ReadsFailCleanly` |
 | L-66 | Committed | E-59 cache hit | Committed | no network; bytes verified against Hash on insert | `TestReader_CacheHit` |
@@ -313,7 +313,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-128 | Durable | Get | Verified | header hash recomputed and matched on every read | `TestStore_Get_Verifies` |
 | L-129 | Durable | bit flip / zero-fill / truncation | Corrupt → Quarantined | `ErrCorrupt`; file moved to `quarantine/<key>.<unixnano>` (cap 64, oldest removed), never served; `shards_corrupt` +1 | `TestStore_GetVerifiesHash_Corrupted` |
 | L-130 | Quarantined | repair PUT | Repaired (Durable) | same key rewritten; slot reachable again | `TestScrub_RepairsCorrupt` |
-| L-131 | Durable | node offline | Unreachable | reader skips slot; `Live()` excludes node | `TestProber_Unreachable` |
+| L-131 | Durable | node offline | Unreachable | `Live()` excludes the node and the reader never dials its slot (no dial or header timeout spent on it) | `TestReader_SkipsDeadHolders`, `TestProber_LivenessAndHoldDowns` |
 | L-132 | Unreachable | node online | Reachable | probe success within 5 s cycle | `TestProber_Recovers` |
 | L-133 | Durable | SetPlacement to other node | Relocated | old copy is Orphan; swept after grace or deleted by repairer | `TestSweep_StalePlacementShard` |
 | L-134 | Durable | GCDelete DELETE with valid fence (applied index ≥ header, not placed on self, file older than grace) | Deleted | `Used` −= size; `Has` false | `TestGC_CollectsAfterGrace`, `TestRPC_DeleteFence_Accepts` |
