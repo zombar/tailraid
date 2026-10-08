@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M0–M4 built. Pending validation outside this machine: the Windows checklist on real hardware and the multi-device run on the real tailnet (`install`, then `verify --destructive --restarts`). M5 (S3 gateway, S3 storage nodes) is deferred as of 2026-10-08: the volume is complete without it; docs/10 keeps the design and its invariants stay as stubs. The browser UI (docs/13: dashboard and file browser on `<tsIP>:20482`) is in progress; its lookdev in `docs/assets/lookdev/` is signed off and is the markup the TypeScript must render.
+**Milestone status:** M0–M4 built. Pending validation outside this machine: the Windows checklist on real hardware and the multi-device run on the real tailnet (`install`, then `verify --destructive --restarts`). M5 (S3 gateway, S3 storage nodes) is deferred as of 2026-10-08: the volume is complete without it; docs/10 keeps the design and its invariants stay as stubs. The browser UI (docs/13: dashboard and file browser on `<tsIP>:20482`) is built; its lookdev in `docs/assets/lookdev/` is the signed-off markup the TypeScript renders. Pending: a run on the real tailnet from a phone (same-user rule) and the manual QA list in docs/13.
 
 ## Layout
 
@@ -86,8 +86,8 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on every
   node" function has an **N-node determinism** test; every randomized test takes `-seed` and
   prints it on failure; `goleak.VerifyTestMain` in packages that start goroutines.
-- Prefer deleting over abstracting. Production code is ≈ 18.1k lines through M4 (measured 2026-10-08 after the review and hot-path work; the plan's 8k was optimistic,
-  see docs/00). If a feature needs far more than its row in docs/00, the design is wrong.
+- Prefer deleting over abstracting. Production code is ≈ 18.8k lines through the web UI (measured 2026-10-08; 18.1k through M4 after the review and hot-path work; the plan's 8k was optimistic,
+  see docs/00), plus 1.4k lines of TypeScript. If a feature needs far more than its row in docs/00, the design is wrong.
 - Logging with `log/slog`; no metrics library (`tailraid status --json` instead).
 - Browser UI: TypeScript in `internal/webui/src`, no framework, no node/npm; esbuild is a Go
   tool in `tools.mod`. Run `make web` after touching `src/`; `make web-check` fails the commit

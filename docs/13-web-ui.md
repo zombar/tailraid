@@ -222,6 +222,25 @@ The expected-share tick is 2 px of ink crossing the track. The sparkline carries
 caption says what it is and over what window. Every bar has a text value; nothing is
 colour-alone. No dual axes, no stacked bars, no pie.
 
+## Manual checks (real tailnet, before a release)
+
+1. Desktop Chrome, Safari and Firefox: the dashboard in light and dark (toggle the OS
+   theme live); the pill through stopping a node (degraded), killing the leader (stale,
+   then no leader) and stopping the daemon (unreachable).
+2. Follower and leader: the integrity block links the leader from a follower and shows
+   the repairer's counters on the leader; "last scan never" on a fresh cluster.
+3. Polling pauses while the tab is hidden and resumes with one immediate fetch.
+4. Balance: `node set-capacity` moves the expected share; a draining node shows "slots to
+   move".
+5. Browser: nested folders, every sort both ways, names with spaces, `#`, `%`, `?` and
+   non-ASCII; a 409 toast on an existing folder name; an upload of a 100 MB file with
+   progress, a cancel mid-way, five files queued in order, a 507 toast on a full volume.
+6. A phone logged in as the same user: a 1 GB mp4 starts within a second and seeking
+   works; the next track starts after the first tap; lock-screen controls show the name;
+   an album of m4a plays through; image prev/next; no horizontal scroll on any route.
+7. A tagged device and another user's device get 403; `tailraid status` prints the URL.
+8. `.mkv`, `.flac` and `.avi` show the decoder note; a stored `.html` opens inert.
+
 ## Invariants
 
 - **I-68** — Every request to the web listener is authorized from the TCP source address
