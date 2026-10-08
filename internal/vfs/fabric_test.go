@@ -23,8 +23,17 @@ import (
 // fabric is an in-process single-gateway cluster: one real FSM applied through a
 // synchronous proposer, N real shard stores reachable through a fault-injectable shard
 // client, and a fake liveness view. It is the harness for Reader and Flusher tests.
+// tb is the subset of testing.TB the fabric needs, so gocheck suites can build one too.
+type tb interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+	TempDir() string
+	Cleanup(func())
+}
+
 type fabric struct {
-	t      *testing.T
+	t      tb
 	fsm    *meta.FSM
 	clk    *clock.Fake
 	self   meta.NodeIdx
@@ -48,7 +57,7 @@ const (
 	fabSmall = uint32(4 << 10)  // chunks ≤ 4 KiB use k=1
 )
 
-func newFabric(t *testing.T, nodes int, k, m uint8) *fabric {
+func newFabric(t tb, nodes int, k, m uint8) *fabric {
 	t.Helper()
 	f := &fabric{
 		t: t, fsm: meta.NewFSM(), clk: clock.NewFake(time.Unix(1_700_000_000, 0)), self: 1,
@@ -233,6 +242,9 @@ func (f *fabric) readerNoCache() *Reader {
 	return NewReader(f.fsm, f, f, nil, &ec.Pool{})
 }
 
+// fs returns a billy filesystem over the fabric.
+func (f *fabric) fs() *FS { return New(f.fsm, f, f.ov, f.reader(), f.clk, 501, 20) }
+
 func (f *fabric) flusher(opts ...func(*Config)) *Flusher {
 	cfg := DefaultConfig()
 	cfg.SmallChunk = fabSmall
@@ -299,6 +311,9 @@ func (f *fabric) corruptShard(node meta.NodeIdx, key chunk.ShardKey) {
 // readFile reads the whole file as a client would: overlay over committed chunks.
 func (f *fabric) readFile(ino meta.Ino) []byte {
 	f.t.Helper()
+	if _, ok := f.fsm.GetInode(ino); !ok {
+		f.t.Fatalf("inode %d missing", ino)
+	}
 	ctx := context.Background()
 	rd := f.reader()
 	in := f.inode(ino)

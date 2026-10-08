@@ -6,12 +6,6 @@ import "testing"
 
 // Stubs keep every lifecycle cell cited until the real tests land in M1–M3.
 
-// Lifecycle: L-18
-// Dirty --[E-14 rename of dirty file]--> Dirty
-func TestStubLifecycle_L_18(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-18")
-}
-
 // Lifecycle: L-24
 // (none) --[E-20 S3 PUT]--> Dirty → … → Committed
 func TestStubLifecycle_L_24(t *testing.T) {
