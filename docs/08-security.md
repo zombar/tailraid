@@ -90,7 +90,7 @@ an active attacker inside the tailnet (that attacker already owns a member devic
 - `internal/rpc.Listen` refuses to bind a non-loopback address when no `Authorizer` is
   configured (errol rule), so a misconfiguration cannot expose unauthenticated RPC.
 
-## S3 gateway (M5a)
+## S3 gateway (M5a, deferred)
 
 The S3 API server listens on the node's Tailscale IP (and loopback). It requires **both**:
 

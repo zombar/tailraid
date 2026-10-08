@@ -123,16 +123,22 @@ for a member. No TLS of our own.
 
 | Area | Lines (production) |
 |---|---|
-| `cmd/tailraid`, `internal/admin` | ~1,400 |
-| `internal/{clock,sysfs,ec,chunk}` | ~840 |
-| `internal/meta` (FSM, codec, placement) | ~1,250 |
-| `internal/vfs` (overlay, WAL, flusher, reader, billy) | ~1,500 |
-| `internal/nfsgw`, `internal/repair` | ~630 |
-| `internal/{cluster,rpc,tailscale,config}` | ~1,760 |
-| `internal/{mount,svc,dev}` | ~720 |
-| **Through M4** | **≈ 7.9k** |
-| `internal/s3`, `internal/s3srv` (M5) | ~1,700 |
-| `internal/soak` (shipped part of `tailraid verify`) | ~400 |
+| `cmd/tailraid`, `internal/admin` | ~2,500 |
+| `internal/{clock,sysfs,ec,chunk}` | ~1,100 |
+| `internal/meta` (FSM, codec, placement, event ring) | ~2,100 |
+| `internal/vfs` (overlay, WAL, flusher, reader, billy) | ~2,300 |
+| `internal/nfsgw`, `internal/repair` | ~1,200 |
+| `internal/{cluster,rpc,tailscale,config,node}` | ~3,300 |
+| `internal/{mount,svc,dev}` | ~900 |
+| `internal/soak` (engine, live env, report; shipped for `tailraid verify`) | ~1,900 |
+| **Through M4 (measured 2026-10-08)** | **≈ 15.3k** |
+| `internal/s3`, `internal/s3srv` (M5, deferred) | ~1,700 planned |
+
+The original budget was ≈ 7.9k through M4; the measured count is about twice that. The
+difference is explained by the parts the plan sized optimistically rather than by scope
+creep: the repair scanner's partial fills and migrations, the admin reports and CLI, and
+the soak engine. Keep the rule in `CLAUDE.md`: prefer deleting over abstracting, and a
+feature that needs far more than its row here means the design is wrong.
 
 Tests are not budget-limited but each must cite the invariant it defends.
 
@@ -146,8 +152,15 @@ Tests are not budget-limited but each must cite the invariant it defends.
 | M3 | Durability: repair, GC, scrub, sweep, `check`/`fsck`, `volume set-redundancy` | GC/torn-shard/ack-durability tests, `TestModelCheck_Long` 20 min × 3 seeds |
 | M3b | Soak suite (compose + live), `/dev/*` endpoints, HTML report | `make soak` green, `tailraid verify` green on the real cluster |
 | M4 | Ops: service install, mount helpers, Windows portmap stub, `make release` | 6 release artifacts; Windows checklist executed |
-| M5a | S3 API gateway (own SigV4 server over vfs) | I-19/I-20/I-21, NFS↔S3 oracle, rclone conformance |
-| M5b | Remote S3 storage nodes (own client) | mixed-kind cluster tests, live bucket test |
+| M5a | *Deferred (2026-10-08).* S3 API gateway (own SigV4 server over vfs) | I-19/I-20/I-21, NFS↔S3 oracle, rclone conformance |
+| M5b | *Deferred (2026-10-08).* Remote S3 storage nodes (own client) | mixed-kind cluster tests, live bucket test |
+
+M5 is deferred, not dropped: the volume is complete without it. What it would add is
+S3-protocol access for devices without an NFS client (Windows Home, rclone, backup tools)
+and buckets as off-site storage nodes with Raft snapshot backup, which is the planned fix
+for the "permanent loss of the Raft majority" gap in docs/05. The seams it needs
+(`Node.Kind`, the per-node shard client, `Peers.Rank` ordering) are in place, so taking it
+up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 
 ## Document map
 

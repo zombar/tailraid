@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M0–M3b done. M4 in progress: `install|uninstall|start|stop|logs` (launchd agent, systemd unit, Windows SCM with `serve --service`), `log.file`, the Windows portmap stub (unit-tested, unvalidated on hardware), `/dev/fault` drop rules on Raft and RPC, `verify --destructive --restarts`, `make release` (6 binaries). Remaining M4: Windows checklist on real hardware, real-device validation. Then M5 S3.
+**Milestone status:** M0–M4 built. Pending validation outside this machine: the Windows checklist on real hardware and the multi-device run on the real tailnet (`install`, then `verify --destructive --restarts`). M5 (S3 gateway, S3 storage nodes) is deferred as of 2026-10-08: the volume is complete without it; docs/10 keeps the design and its invariants stay as stubs.
 
 ## Layout
 
@@ -22,7 +22,7 @@ internal/cluster    raft wiring, membership, liveness, forwarding
 internal/rpc        node HTTP RPC + WhoIs authorizer   internal/tailscale  CLI shell-out + Fake
 internal/config     YAML config           internal/mount    per-OS mount helpers, PMAP stub
 internal/svc        service install       internal/admin    status/check/describe reports
-internal/s3, s3srv  (M5) SigV4 + lightweight S3 server/client
+internal/s3, s3srv  (M5, deferred) SigV4 + lightweight S3 server/client
 internal/dev        /dev/* endpoints, only with dev.enabled
 internal/soak       Env interface, scenarios, HTML report (shared by cmd/soak and `tailraid verify`)
 internal/testharness  in-process Cluster, FaultNet, Hooks (test only)
@@ -82,17 +82,18 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on every
   node" function has an **N-node determinism** test; every randomized test takes `-seed` and
   prints it on failure; `goleak.VerifyTestMain` in packages that start goroutines.
-- Prefer deleting over abstracting. Production code ceiling ≈ 8k lines through M4, ≈ 10k
-  with S3. If a feature needs more, the design is wrong.
+- Prefer deleting over abstracting. Production code is ≈ 15k lines through M4 (measured; the plan's 8k was optimistic,
+  see docs/00). If a feature needs far more than its row in docs/00, the design is wrong.
 - Logging with `log/slog`; no metrics library (`tailraid status --json` instead).
 
 ## CLI (target surface; see the plan for details)
 
 `init`, `join`, `serve`, `token`, `reset` (wipes local Raft state only, never shards) ·
 `status`, `node ls|describe|promote|demote|
-set-capacity|drain|remove|add-s3|keys` · `check`, `repair`, `gc`, `fsck` · `volume
-describe|grow|set-redundancy` · `bucket ls|describe|create|rm` · `chunk describe <hash>`
-(lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `s3 keys` · `verify` (live soak + HTML report)
+set-capacity|drain|remove` · `check`, `repair`, `gc`, `fsck` · `volume
+describe|grow|set-redundancy` · `chunk describe <hash>`
+(lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report)
+· deferred with M5: `node add-s3|keys`, `bucket ls|describe|create|rm`, `s3 keys`
 · `mount`, `umount`, `install`, `uninstall`, `start`, `stop`, `logs` · `version`.
 
 ## Out of scope (keep it small)

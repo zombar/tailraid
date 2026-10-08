@@ -5,9 +5,10 @@
   </picture>
 </p>
 
-**Status:** M0–M3b complete: single node, Raft cluster, repair/GC, model checker, soak suite.
-Validated on a real macOS NFS mount and a four-node docker-compose cluster; multi-device
-validation on a real tailnet, service install (M4) and the S3 gateway (M5) are next.
+**Status:** M0–M4 built: single node, Raft cluster, repair/GC, model checker, soak suite,
+service install, Windows portmap stub, releases. Validated on a real macOS NFS mount and a
+four-node docker-compose cluster; multi-device validation on a real tailnet and the Windows
+hardware checklist are pending. The S3 gateway and S3 storage nodes (M5) are deferred.
 
 tailraid turns the devices on your Tailscale tailnet into one shared volume that behaves
 like a modern RAID array: data is Reed-Solomon erasure-coded across devices so any `m` of
