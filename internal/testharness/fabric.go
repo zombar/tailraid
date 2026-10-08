@@ -46,6 +46,7 @@ type Fabric struct {
 	Stores  map[meta.NodeIdx]*chunk.Store
 	Cache   *chunk.Cache
 	Ov      *vfs.Overlay
+	staging string
 
 	mu          sync.Mutex
 	idx         uint64
@@ -80,12 +81,27 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Ov, err = vfs.OpenOverlay(filepath.Join(root, "staging"), ChunkSize, f.Clk)
+	f.staging = filepath.Join(root, "staging")
+	f.Ov, err = vfs.OpenOverlay(f.staging, ChunkSize, f.Clk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.Ov.Close() })
 	return f
+}
+
+// RestartOverlay closes the overlay and reopens it from its WALs, as a gateway restart
+// does; dirty state must survive. Flushers and filesystems built before must be rebuilt.
+func (f *Fabric) RestartOverlay() {
+	f.TB.Helper()
+	if err := f.Ov.Close(); err != nil {
+		f.TB.Fatal(err)
+	}
+	ov, err := vfs.OpenOverlay(f.staging, ChunkSize, f.Clk)
+	if err != nil {
+		f.TB.Fatal(err)
+	}
+	f.Ov = ov
 }
 
 // AddNode registers a device node with its own shard store.

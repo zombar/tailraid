@@ -32,7 +32,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-24 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (none) | E-20 S3 PUT | Dirty → … → Committed | `TestStubLifecycle_L_24` |
 | L-25 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (parts) | E-20 multipart Complete | Committed (spliced chunk list) | `TestStubLifecycle_L_25` |
 | L-26 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-21 idle 2 s | Assembled | `TestFlusher_RunIdleTriggerAndShutdownFlush`, `TestFlusher_SmallAndLargeChunksCommit` |
-| L-27 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-22 inode ≥ 32 MiB | Assembled (full chunks only) | `TestFlusher_PartialFlush_SizeNeverAheadOfData` |
+| L-27 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-22 inode ≥ 32 MiB | Assembled (full chunks only) | `TestExtents_Without`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk` |
 | L-28 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-23 total ≥ 256 MiB | Assembled (largest inodes first) | `TestStubLifecycle_L_28` |
 | L-29 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-24 shutdown | Committed before exit | `TestFlusher_RunIdleTriggerAndShutdownFlush` |
 | L-30 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (partial) | E-25 assemble needs base | Assembled | `TestStubLifecycle_L_30` |
@@ -184,3 +184,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-176 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded/Tombstoned (< k live slots) | dedup hit | Committed (no upload) | `TestStubLifecycle_L_176` |
 | L-177 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | Sweep while not `Healthy` | Swept | `TestStubLifecycle_L_177` |
 | L-178 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-120 write/truncate via a gateway whose overlay entry is stale | Dirty → Committed | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestOverlay_StaleEntry_FollowsCommittedSize` |
+| L-179 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (chunk partly dirty, below the last committed chunk) | E-22 partial flush | dirty bytes dropped | `TestExtents_Without`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk` |

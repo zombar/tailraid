@@ -420,6 +420,95 @@ func TestFlusher_PartialFlush_SizeNeverAheadOfData(t *testing.T) {
 	}
 }
 
+// A partial flush commits only entirely dirty chunks. The bytes of a partly dirty chunk
+// below the last committed one (here the head chunk the append starts in) are not
+// committed, so they must stay dirty (residual) rather than vanish (L-179).
+// Invariant: I-7, I-35
+// Lifecycle: L-27, L-179
+func TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := uint64(testharness.ChunkSize)
+	ino := f.Create("a")
+	head := testharness.Pattern(int(cs+cs/2), 17)
+	must(t, f.Ov.Write(ino, 0, 0, head))
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	base := f.Inode(ino)
+	tail := testharness.Pattern(int(40*cs), 18)
+	must(t, f.Ov.Write(ino, base.Size, base.Size, tail)) // append starts mid-chunk 1
+	want := append(append([]byte{}, head...), tail...)
+	must(t, f.Flusher().FlushPartial(ctx, ino))
+	in := f.Inode(ino)
+	if in.Size != 41*cs || len(in.Chunks) != 41 {
+		t.Fatalf("partial flush committed size %d, %d chunks", in.Size, len(in.Chunks))
+	}
+	// residual: the dirty half of chunk 1 and the dirty half of chunk 41
+	if d := f.Ov.Dirty(); len(d) != 1 || d[0].DirtyBytes != cs {
+		t.Fatalf("residual %+v, want %d dirty bytes", d, cs)
+	}
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("read-your-writes after partial flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	f.RestartOverlay()
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after restart differs at %d", testharness.FirstDiff(got, want))
+	}
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("still dirty after full flush: %+v", d)
+	}
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after full flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	if in := f.Inode(ino); in.Size != uint64(len(want)) || len(in.Chunks) != 42 {
+		t.Fatalf("final inode %+v", in)
+	}
+}
+
+// Two extents with a gap: the second starts mid-chunk. The partially dirty chunk between
+// them is below the last committed chunk and must stay dirty (L-179), while the untouched
+// gap becomes holes.
+// Invariant: I-7, I-35
+// Lifecycle: L-27, L-179
+func TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	cs := uint64(testharness.ChunkSize)
+	ino := f.Create("a")
+	first := testharness.Pattern(int(10*cs), 19)
+	second := testharness.Pattern(int(60*cs-(20*cs+cs/2)), 20)
+	must(t, f.Ov.Write(ino, 0, 0, first))
+	must(t, f.Ov.Write(ino, 0, 20*cs+cs/2, second))
+	want := make([]byte, 60*cs)
+	copy(want, first)
+	copy(want[20*cs+cs/2:], second)
+	must(t, f.Flusher().FlushPartial(ctx, ino))
+	in := f.Inode(ino)
+	if in.Size != 60*cs || len(in.Chunks) != 60 {
+		t.Fatalf("partial flush committed size %d, %d chunks", in.Size, len(in.Chunks))
+	}
+	for i := 10; i <= 20; i++ {
+		if in.Chunks[i] != meta.HashZero {
+			t.Fatalf("chunk %d should be a hole", i)
+		}
+	}
+	if d := f.Ov.Dirty(); len(d) != 1 || d[0].DirtyBytes != cs/2 {
+		t.Fatalf("residual %+v, want %d dirty bytes", d, cs/2)
+	}
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("read-your-writes after partial flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	f.RestartOverlay()
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after restart differs at %d", testharness.FirstDiff(got, want))
+	}
+	must(t, f.Flusher().FlushInode(ctx, ino))
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("after full flush differs at %d", testharness.FirstDiff(got, want))
+	}
+	if in := f.Inode(ino); in.Chunks[20] == meta.HashZero || in.Chunks[19] != meta.HashZero {
+		t.Fatalf("final chunks %v", in.Chunks[18:22])
+	}
+}
+
 // Review #2 end to end: through overlay, flusher, FSM and reader.
 // Invariant: I-1, I-35
 // Lifecycle: L-8, L-11, L-38

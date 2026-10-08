@@ -110,6 +110,37 @@ func (e extents) coversChunk(idx uint64, cs uint32, size uint64) bool {
 	return cursor >= end
 }
 
+// without returns the parts of e outside the chunks idxs (ascending) of size cs, walOff
+// adjusted: the dirty bytes a partial flush leaves behind once those chunks are committed.
+func (e extents) without(idxs []uint64, cs uint64) extents {
+	var out extents
+	j := 0
+	for _, x := range e {
+		cur := x
+		for cur.n > 0 {
+			for j < len(idxs) && (idxs[j]+1)*cs <= cur.off {
+				j++
+			}
+			if j == len(idxs) || idxs[j]*cs >= cur.end() {
+				out = append(out, cur)
+				break
+			}
+			cstart, cend := idxs[j]*cs, (idxs[j]+1)*cs
+			if cur.off < cstart { // keep the part before the chunk
+				out = append(out, extent{off: cur.off, n: cstart - cur.off, walOff: cur.walOff})
+				skip := cstart - cur.off
+				cur = extent{off: cstart, n: cur.n - skip, walOff: cur.walOff + int64(skip)}
+			}
+			if cur.end() <= cend { // the rest lies inside the chunk
+				break
+			}
+			skip := cend - cur.off
+			cur = extent{off: cend, n: cur.n - skip, walOff: cur.walOff + int64(skip)}
+		}
+	}
+	return out
+}
+
 // clone returns an independent copy.
 func (e extents) clone() extents {
 	out := make(extents, len(e))

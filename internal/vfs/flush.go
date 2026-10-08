@@ -619,7 +619,12 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 	switch {
 	case partial:
 		cmd.NewSize = max(base.Size, min(lastFull, plan.Size))
-		plan.Residual = clipExtents(plan.Extents, cmd.NewSize)
+		// every dirty byte outside a committed chunk stays dirty (L-27, never L-179)
+		committed := make([]uint64, len(works))
+		for i, w := range works {
+			committed[i] = w.idx
+		}
+		plan.Residual = plan.Extents.without(committed, cs)
 	case plan.SizeSet:
 		cmd.HasTruncate, cmd.TruncateTo = true, plan.MinSize
 		cmd.NewSize = max(plan.MinSize, plan.Extents.maxEnd())
@@ -639,22 +644,4 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 	}
 	cmd.Writes = kept
 	return cmd
-}
-
-// clipExtents returns the parts of e at or beyond lo (walOff adjusted), i.e. the dirty
-// bytes a partial flush leaves behind.
-func clipExtents(e extents, lo uint64) extents {
-	var out extents
-	for _, x := range e {
-		if x.end() <= lo {
-			continue
-		}
-		if x.off >= lo {
-			out = append(out, x)
-			continue
-		}
-		skip := lo - x.off
-		out = append(out, extent{off: lo, n: x.n - skip, walOff: x.walOff + int64(skip)})
-	}
-	return out
 }

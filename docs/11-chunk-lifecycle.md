@@ -209,7 +209,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-24 | (none) | E-20 S3 PUT | Dirty → … → Committed | 200 only after `Close` (WAL fsync); readable via NFS identically | `TestS3_PutThenNFSRead_Identical`, `TestS3_PutAckAfterClose` |
 | L-25 | Committed (parts) | E-20 multipart Complete | Committed (spliced chunk list) | no data copy; ETag `md5(md5s)-N`; parts dir removed | `TestS3_MultipartComplete_SplicesChunks` |
 | L-26 | Dirty | E-21 idle 2 s | Assembled | flush begins; WRITEs continue into a fresh extent set | `TestFlusher_IdleTrigger` |
-| L-27 | Dirty | E-22 inode ≥ 32 MiB | Assembled (full chunks only) | partial tail stays Dirty; `NewSize = max(base.Size, end of last fully flushed chunk)`, never ahead of committed data | `TestFlusher_FileDirtyHiTrigger`, `TestFlusher_PartialFlush_SizeNeverAheadOfData` |
+| L-27 | Dirty | E-22 inode ≥ 32 MiB | Assembled (full chunks only) | only entirely dirty full-size chunks are committed; every dirty byte outside a committed chunk (the partial tail, a partially dirty head chunk, any partially dirty chunk between extents) stays Dirty as the residual; `NewSize = max(base.Size, end of last fully flushed chunk)`, never ahead of committed data | `TestFlusher_FileDirtyHiTrigger`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks` |
 | L-28 | Dirty | E-23 total ≥ 256 MiB | Assembled (largest inodes first) | total dirty falls below threshold | `TestFlusher_TotalDirtyHiTrigger` |
 | L-29 | Dirty | E-24 shutdown | Committed before exit | `FlushAll` blocks shutdown until committed or deadline; residual stays in WAL | `TestFlusher_ShutdownFlushesAll` |
 | L-30 | Dirty (partial) | E-25 assemble needs base | Assembled | base chunk fetched via `Reader.ReadChunk` and overlaid | `TestFlusher_AssembleRMW` |
@@ -372,6 +372,7 @@ event ring or the final state).
 | L-175 | Committed | Commit without `HasTruncate` and `NewSize` < `Size` | Committed (shrunk) | forbidden: `ErrBadCommand`; a file shrinks only through an explicit truncate | `TestFSM_Commit_RejectsImplicitShrink` |
 | L-176 | Degraded/Tombstoned (< k live slots) | dedup hit | Committed (no upload) | forbidden: an acknowledged write is never committed against a chunk with fewer than k live slots | `TestFlusher_DedupHitWithFewerThanKLiveSlots_Fills` |
 | L-177 | Orphan | Sweep while not `Healthy` | Swept | forbidden: a node whose chunk table may be behind never deletes shards | `TestSweep_SkippedWhenNotHealthy` |
+| L-179 | Dirty (chunk partly dirty, below the last committed chunk) | E-22 partial flush | dirty bytes dropped | forbidden (I-7): a partial flush commits only entirely dirty chunks and keeps every other dirty byte as residual; acknowledged bytes are never neither committed nor dirty | `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks` |
 
 ## 7. How the matrix is tested
 

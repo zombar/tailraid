@@ -195,3 +195,56 @@ func TestExtents_CoversChunk(t *testing.T) {
 		}
 	}
 }
+
+// Lifecycle: L-27, L-179
+func TestExtents_Without(t *testing.T) {
+	const cs = 100
+	ext := func(off, n uint64, walOff int64) extent { return extent{off: off, n: n, walOff: walOff} }
+	cases := []struct {
+		name string
+		in   extents
+		idxs []uint64
+		want extents
+	}{
+		{"nothing committed", extents{ext(150, 100, 0)}, nil, extents{ext(150, 100, 0)}},
+		{"extent inside one chunk", extents{ext(120, 50, 7)}, []uint64{1}, nil},
+		{"head and tail around a run", extents{ext(150, 400, 0)}, []uint64{2, 3, 4},
+			extents{ext(150, 50, 0), ext(500, 50, 350)}},
+		{"gap between committed chunks", extents{ext(0, 1000, 0)}, []uint64{0, 1, 5, 6},
+			extents{ext(200, 300, 200), ext(700, 300, 700)}},
+		{"two extents, second starts mid-chunk", extents{ext(0, 200, 0), ext(350, 250, 200)}, []uint64{0, 1, 4, 5},
+			extents{ext(350, 50, 200)}},
+		{"chunk boundary exactly", extents{ext(100, 100, 3)}, []uint64{0, 2}, extents{ext(100, 100, 3)}},
+		{"chunks beyond every extent", extents{ext(0, 50, 0)}, []uint64{3, 4}, extents{ext(0, 50, 0)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.in.without(c.idxs, cs)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %+v, want %+v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("got %+v, want %+v", got, c.want)
+				}
+			}
+			if got.bytes()+committedBytes(c.in, c.idxs, cs) != c.in.bytes() {
+				t.Fatalf("bytes not conserved: %+v", got)
+			}
+		})
+	}
+}
+
+// committedBytes counts the bytes of e inside the given chunks (test oracle for without).
+func committedBytes(e extents, idxs []uint64, cs uint64) uint64 {
+	var n uint64
+	for _, x := range e {
+		for _, i := range idxs {
+			lo, hi := max(x.off, i*cs), min(x.end(), (i+1)*cs)
+			if hi > lo {
+				n += hi - lo
+			}
+		}
+	}
+	return n
+}
