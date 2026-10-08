@@ -387,6 +387,27 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 	return p, true
 }
 
+// ReadPlanRange assembles [off, off+len(p)) for a flush: base bytes below the plan's
+// MinSize, zeros at or above it, and only the plan's extents on top (fresh writes belong
+// to the next flush).
+func (o *Overlay) ReadPlanRange(plan *FlushPlan, off uint64, p []byte, base func(off uint64, p []byte) error) error {
+	d, _ := o.get(plan.Ino, 0, false)
+	if d == nil {
+		return meta.ErrNotExist
+	}
+	defer d.mu.Unlock()
+	if off < plan.MinSize {
+		bn := min(uint64(len(p)), plan.MinSize-off)
+		if err := base(off, p[:bn]); err != nil {
+			return err
+		}
+		clear(p[bn:])
+	} else {
+		clear(p)
+	}
+	return d.applyExtents(plan.Extents, off, p)
+}
+
 // ReadPlan fills p with the plan extent's bytes starting at x.off+skip.
 func (o *Overlay) ReadPlan(plan *FlushPlan, x extent, skip uint64, p []byte) error {
 	d, _ := o.get(plan.Ino, 0, false)

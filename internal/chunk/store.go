@@ -95,6 +95,9 @@ func (s *Store) Used() int64     { return s.used.Load() }
 func (s *Store) Capacity() int64 { return s.capacity }
 
 // Has reports whether a shard file is visible under its final name.
+// Path returns the on-disk path of a shard key (used by scrub tooling and tests).
+func (s *Store) Path(k ShardKey) string { return s.path(k) }
+
 func (s *Store) Has(k ShardKey) bool {
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return false
