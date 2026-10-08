@@ -80,11 +80,14 @@ down with drop rules on it and on its peers until the phase restarts it (docs/09
 
 A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
 
-1. `make tag VERSION=v0.1.0` refuses a dirty tree or a tag that exists, runs `make check`,
-   regenerates `CHANGELOG.md` from the commit log (`scripts/changelog.sh`: one section per
-   tag, entries grouped into Changes / Documentation / Tooling by the subject's `scope:`
-   prefix, so commit subjects are the changelog), commits it, then creates an annotated
-   tag and pushes it.
+1. `make tag VERSION=v0.1.0`, on `main`, refuses a dirty tree or a tag that exists, runs
+   `make check` and regenerates `CHANGELOG.md` from the commit log (`scripts/changelog.sh`:
+   one section per tag, entries grouped into Changes / Documentation / Tooling by the
+   subject's `scope:` prefix, so commit subjects are the changelog). `main` only takes
+   pull requests, so when the changelog changed the target commits it on
+   `changelog/<version>`, opens the pull request and stops; merge it, pull, and run the
+   same command again: with nothing left to commit it creates the annotated tag and
+   pushes it.
 2. CI (`release` job, after `checks`, `lint` and `test`) runs `make release
    VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
    built with `-trimpath -ldflags "-s -w -X main.version=<tag>"`, plus `sha256sums.txt`
