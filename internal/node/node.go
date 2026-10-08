@@ -406,6 +406,32 @@ func (a *adminOps) rebudget(ctx context.Context) {
 	a.log.Info("budget re-derived", "was", nd.Capacity, "now", b)
 }
 
+// setPolicy is `volume set-redundancy`: --auto hands the policy to the leader's repair
+// passes (docs/03); --k/--m pin it, after the usual live-count check.
+func (a *adminOps) setPolicy(ctx context.Context, op rpc.AdminOp) (any, error) {
+	now := a.clk.Now().UnixNano()
+	cmds := []meta.Command{{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: op.Auto, Now: now}}}
+	if !op.Auto {
+		if err := meta.PolicyAllowed(a.node.FSM.Nodes(), a.prober, op.K, op.M); err != nil {
+			return nil, err
+		}
+		cmds = append(cmds, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: op.K, M: op.M, Now: now}})
+	}
+	for _, c := range cmds {
+		res, index, err := a.node.Propose(ctx, c)
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := a.node.FSM.WaitApplied(ctx, index); err != nil {
+			return nil, err
+		}
+	}
+	return a.node.FSM.Volume(), nil
+}
+
 func (a *adminOps) healthy() bool { return a.node.Health(a.clk, a.prober).State == cluster.Healthy }
 
 // leaderApplied reads the leader's applied index from the prober table.
@@ -494,20 +520,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		return map[string]string{"join_token": token}, nil
 	case "set_policy":
-		if err := admin.PolicyAllowed(a.node.FSM.Nodes(), a.prober, op.K, op.M); err != nil {
-			return nil, err
-		}
-		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: op.K, M: op.M, Now: a.clk.Now().UnixNano()}})
-		if err == nil {
-			err = res.Err
-		}
-		if err != nil {
-			return nil, err
-		}
-		if err := a.node.FSM.WaitApplied(ctx, index); err != nil {
-			return nil, err
-		}
-		return a.node.FSM.Volume(), nil
+		return a.setPolicy(ctx, op)
 	case "check":
 		// --scrub runs one full-verification pass through the leader's repairer, so it
 		// uses the configured fill_after and rate limit and never overlaps a background pass

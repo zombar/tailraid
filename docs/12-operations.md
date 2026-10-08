@@ -165,4 +165,4 @@ test rigs; `--k`/`--m` on `init` pin a manual policy for test rigs and are hidde
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
-| I-76 | `TestStub_I_76` |
+| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |

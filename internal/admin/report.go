@@ -45,6 +45,7 @@ type NodeReport struct {
 type VolumeReport struct {
 	K              uint8   `json:"k"`
 	M              uint8   `json:"m"`
+	Auto           bool    `json:"auto"` // the leader chooses K, M (docs/03)
 	ChunkSize      uint32  `json:"chunk_size"`
 	PolicyVersion  uint32  `json:"policy_version"`
 	Inodes         int     `json:"inodes"`
@@ -123,7 +124,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 
 	vol := st.Volume()
 	stats := st.Stats()
-	rep.Volume = VolumeReport{K: vol.K, M: vol.M, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
+	rep.Volume = VolumeReport{K: vol.K, M: vol.M, Auto: vol.Auto, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
 		Inodes: stats.Inodes, Chunks: stats.Chunks, Tombstoned: stats.Tombstoned, LogicalBytes: stats.LogicalBytes, StoredBytes: stats.StoredBytes}
 
 	nodes := st.Nodes()
