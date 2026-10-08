@@ -555,3 +555,41 @@ func TestCluster_SetCapacityDoesNotMoveData(t *testing.T) {
 		t.Fatalf("data moved on set-capacity: %v -> %v", plBefore, placements())
 	}
 }
+
+// The policy `init` defaults to, 1+0, is plain replication-free storage: one shard per
+// chunk, no parity. An acknowledged write survives a restart of its only holder, and a
+// corrupt shard is EIO, never garbage (the chunk hash is verified on every read).
+// Invariant: I-12, I-40
+func TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 1, 0)
+	defer c.Close()
+	data := testharness.Pattern(int(testharness.ChunkSize)+7, 73)
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	for i := range c.Nodes {
+		if got, err := c.ReadFileCold(i, "/f"); err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("n%d: %v", i, err)
+		}
+	}
+	chunks := c.ChunksOf(0, "/f")
+	if len(chunks) != 2 || chunks[0].K != 1 || chunks[0].M != 0 || len(chunks[0].Placement) != 1 {
+		t.Fatalf("chunks %+v", chunks)
+	}
+	holder := int(chunks[0].Placement[0]) - 1
+	reader := (holder + 1) % 3
+	c.Kill(holder)
+	c.Restart(holder)
+	c.Settle()
+	if got, err := c.ReadFileCold(reader, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("after the holder restarted: %v", err)
+	}
+	// the only copy is corrupt: the read is EIO, never garbage
+	corruptShardFile(t, c.Nodes[holder].Store.Path(chunk.Key(chunks[0].Hash, 1, 0, 0)))
+	got, err := c.ReadFileCold(reader, "/f")
+	if err == nil || !errors.Is(err, vfs.ErrIO) {
+		t.Fatalf("corrupt sole copy: err=%v (got %d bytes)", err, len(got))
+	}
+	if bytes.Equal(got[:min(len(got), len(data))], data[:min(len(got), len(data))]) && len(got) == len(data) {
+		t.Fatal("corrupt sole copy returned the original bytes")
+	}
+}

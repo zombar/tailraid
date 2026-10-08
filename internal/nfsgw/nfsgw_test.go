@@ -521,3 +521,151 @@ func TestUseLogger_RoutesLibraryLogs(t *testing.T) {
 		t.Fatalf("ParseLevel: %v %v", lvl, err)
 	}
 }
+
+// readDirPage issues one READDIRPLUS with an explicit cookie and verifier (the client
+// library pages internally and hides them) and returns the status, the entries, the
+// directory's verifier and the eof flag.
+func readDirPage(t *testing.T, g *gateway, fh []byte, cookie, verf uint64) (status uint32, entries []nfsc.EntryPlus, outVerf uint64, eof bool) {
+	t.Helper()
+	type args struct {
+		rpc.Header
+		FH         []byte
+		Cookie     uint64
+		CookieVerf uint64
+		DirCount   uint32
+		MaxCount   uint32
+	}
+	type dirListOK struct {
+		DirAttrs   nfsc.PostOpAttr
+		CookieVerf uint64
+	}
+	type item struct {
+		IsSet bool           `xdr:"union"`
+		Entry nfsc.EntryPlus `xdr:"unioncase=1"`
+	}
+	res, err := g.cl.Call(&args{Header: rpc.Header{Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3ReadDirPlus,
+		Cred: rpc.NewAuthUnix("test", 501, 20).Auth(), Verf: rpc.AuthNull}, FH: fh, Cookie: cookie, CookieVerf: verf, DirCount: 512, MaxCount: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = xdr.ReadUint32(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != nfsc.NFS3Ok {
+		return status, nil, 0, false
+	}
+	var ok dirListOK
+	if err := xdr.Read(res, &ok); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var it item
+		if err := xdr.Read(res, &it); err != nil {
+			t.Fatal(err)
+		}
+		if !it.IsSet {
+			break
+		}
+		entries = append(entries, it.Entry)
+	}
+	if err := xdr.Read(res, &eof); err != nil {
+		t.Fatal(err)
+	}
+	return status, entries, ok.CookieVerf, eof
+}
+
+// A directory that changes between two READDIRPLUS pages never yields a duplicate or a
+// skipped surviving entry: the gateway either continues the listing consistently or
+// answers NFS3ERR_BAD_COOKIE, after which a fresh listing is complete and exact.
+// Invariant: I-47
+func TestNFS_ReadDirPlus_RemoveBetweenPages(t *testing.T) {
+	g := startGateway(t)
+	if _, err := g.tgt.Mkdir("/pg", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const n = 150
+	all := map[string]bool{}
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("e%03d", i)
+		if _, err := g.tgt.Create("/pg/"+name, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		all[name] = true
+	}
+	_, fh, err := g.tgt.Lookup("/pg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, page1, verf, eof := readDirPage(t, g, fh, 0, 0)
+	if status != nfsc.NFS3Ok || eof || len(page1) == 0 {
+		t.Fatalf("first page: status %d eof %v entries %d", status, eof, len(page1))
+	}
+	seen := map[string]bool{}
+	for _, e := range page1 {
+		seen[e.FileName] = true
+	}
+	// remove an entry the listing has not reached yet
+	removed := ""
+	for i := n - 1; i >= 0; i-- {
+		if name := fmt.Sprintf("e%03d", i); !seen[name] {
+			removed = name
+			break
+		}
+	}
+	if removed == "" {
+		t.Fatal("first page listed everything; shrink MaxCount")
+	}
+	must(t, g.tgt.Remove("/pg/"+removed))
+	delete(all, removed)
+	cookie := page1[len(page1)-1].Cookie
+	status, page, _, eof := readDirPage(t, g, fh, cookie, verf)
+	switch status {
+	case nfsc.NFS3ErrBadCookie:
+		// the directory changed under the listing: restart from the top
+		seen = map[string]bool{}
+		cookie, verf, eof = 0, 0, false
+	case nfsc.NFS3Ok:
+		for _, e := range page {
+			if seen[e.FileName] {
+				t.Fatalf("duplicate %s across pages", e.FileName)
+			}
+			seen[e.FileName] = true
+		}
+		if len(page) > 0 {
+			cookie = page[len(page)-1].Cookie
+		}
+	default:
+		t.Fatalf("second page: status %d", status)
+	}
+	for !eof {
+		status, page, verf2, more := readDirPage(t, g, fh, cookie, verf)
+		if status != nfsc.NFS3Ok {
+			t.Fatalf("page after cookie %d: status %d", cookie, status)
+		}
+		verf = verf2
+		for _, e := range page {
+			if seen[e.FileName] {
+				t.Fatalf("duplicate %s", e.FileName)
+			}
+			seen[e.FileName] = true
+		}
+		if len(page) > 0 {
+			cookie = page[len(page)-1].Cookie
+		}
+		eof = more
+	}
+	delete(seen, ".")
+	delete(seen, "..")
+	if seen[removed] {
+		t.Fatalf("removed entry %s listed", removed)
+	}
+	for name := range all {
+		if !seen[name] {
+			t.Fatalf("surviving entry %s skipped", name)
+		}
+	}
+	if len(seen) != len(all) {
+		t.Fatalf("listed %d entries, want %d", len(seen), len(all))
+	}
+}

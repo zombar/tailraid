@@ -156,4 +156,4 @@ quickly under the service manager; the mount survives because handles are stable
 | I-17 | `TestNFS_RemovedHandleIsStale`, `TestNFS_BogusHandleIsStaleNotPanic`, `TestFSM_InoGenNotReusedAfterUnlink` |
 | I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix`, `TestVFS_OracleRandomOps` |
 | I-46 | `TestNFS_SetattrModeOwnerTimes`, `TestVFS_ChangeOps` |
-| I-47 | `TestNFS_ReadDirPlusLargeDirectory` |
+| I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
