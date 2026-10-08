@@ -1,4 +1,4 @@
-package vfs
+package vfs_test
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	nfsfile "github.com/willscott/go-nfs/file"
 	check "gopkg.in/check.v1"
 
-	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/gurgeh/tailraid/internal/testharness"
 )
 
 // --- go-billy conformance suites via a gocheck shim ------------------------------------
@@ -47,8 +47,8 @@ var _ = check.Suite(&billySuite{})
 
 func (s *billySuite) SetUpTest(c *check.C) {
 	s.tb = &checkTB{C: c}
-	f := newFabric(s.tb, 3, 2, 1)
-	fs := f.fs()
+	f := testharness.NewFabric(s.tb, 3, 2, 1)
+	fs := f.FS()
 	s.BasicSuite.FS = fs
 	s.DirSuite.FS = fs
 }
@@ -63,12 +63,12 @@ func (s *billySuite) TearDownTest(_ *check.C) { s.tb.runCleanups() }
 // Invariant: I-7, I-34
 // Lifecycle: L-1, L-2, L-5
 func TestVFS_PerRPCOpenCloseSequence(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	fs := f.fs()
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
 	fh, err := fs.Create("/dir/file")
 	must(t, err)
 	must(t, fh.Close())
-	payload := pattern(300<<10, 1) // 300 KiB in 64 KiB WRITEs, out of order like macOS
+	payload := testharness.Pattern(300<<10, 1) // 300 KiB in 64 KiB WRITEs, out of order like macOS
 	const wsize = 64 << 10
 	var offs []int
 	for off := 0; off < len(payload); off += wsize {
@@ -102,17 +102,17 @@ func TestVFS_PerRPCOpenCloseSequence(t *testing.T) {
 		return out[:n]
 	}
 	if got := readBack(); !bytes.Equal(got, payload) {
-		t.Fatalf("before flush: differs at %d (len %d)", firstDiff(got, payload), len(got))
+		t.Fatalf("before flush: differs at %d (len %d)", testharness.FirstDiff(got, payload), len(got))
 	}
 	st, _ := fs.Stat("/dir/file")
 	if st.Size() != int64(len(payload)) {
 		t.Fatalf("size while dirty %d", st.Size())
 	}
-	must(t, f.flusher().FlushAll(ctx))
+	must(t, f.Flusher().FlushAll(ctx))
 	if got := readBack(); !bytes.Equal(got, payload) {
-		t.Fatalf("after flush: differs at %d", firstDiff(got, payload))
+		t.Fatalf("after flush: differs at %d", testharness.FirstDiff(got, payload))
 	}
-	in := f.inode(f.inodeOf(fs, "/dir/file"))
+	in := f.Inode(f.InodeOf(fs, "/dir/file"))
 	if in.Size != uint64(len(payload)) || len(in.Chunks) != 5 {
 		t.Fatalf("inode %+v", in)
 	}
@@ -124,31 +124,22 @@ func TestVFS_PerRPCOpenCloseSequence(t *testing.T) {
 	if got := readBack(); len(got) != 100<<10 || !bytes.Equal(got, payload[:100<<10]) {
 		t.Fatalf("after truncate: len %d", len(got))
 	}
-	must(t, f.flusher().FlushAll(ctx))
+	must(t, f.Flusher().FlushAll(ctx))
 	if got := readBack(); !bytes.Equal(got, payload[:100<<10]) {
 		t.Fatal("after truncate flush")
 	}
 }
 
-func (f *fabric) inodeOf(fs *FS, name string) meta.Ino {
-	f.t.Helper()
-	in, err := fs.resolve(name)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return in.Ino
-}
-
 // Invariant: I-34
 // Lifecycle: L-2
 func TestVFS_WriteAtNonZeroOffset_PreservesPrefix(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	fs := f.fs()
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
 	fh, _ := fs.Create("/f")
-	prefix := pattern(70<<10, 2)
+	prefix := testharness.Pattern(70<<10, 2)
 	_, _ = fh.Write(prefix)
 	_ = fh.Close()
-	must(t, f.flusher().FlushAll(ctx))
+	must(t, f.Flusher().FlushAll(ctx))
 	fh, _ = fs.OpenFile("/f", os.O_RDWR, 0)
 	_, _ = fh.Seek(65<<10, io.SeekStart)
 	_, _ = fh.Write([]byte("PATCH"))
@@ -162,57 +153,57 @@ func TestVFS_WriteAtNonZeroOffset_PreservesPrefix(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(got, want) {
-			t.Fatalf("%s: differs at %d", stage, firstDiff(got, want))
+			t.Fatalf("%s: differs at %d", stage, testharness.FirstDiff(got, want))
 		}
 	}
 	verify("dirty")
-	must(t, f.flusher().FlushAll(ctx))
+	must(t, f.Flusher().FlushAll(ctx))
 	verify("flushed")
 }
 
 // Lifecycle: L-18
 func TestVFS_RenameDirtyFile_FlushCommitsSameIno(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	fs := f.fs()
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
 	fh, _ := fs.Create("/a")
 	_, _ = fh.Write([]byte("dirty bytes"))
 	_ = fh.Close()
-	ino := f.inodeOf(fs, "/a")
+	ino := f.InodeOf(fs, "/a")
 	must(t, fs.Rename("/a", "/b"))
-	must(t, f.flusher().FlushAll(ctx))
-	in := f.inode(ino)
+	must(t, f.Flusher().FlushAll(ctx))
+	in := f.Inode(ino)
 	if in.Name != "b" || in.Size != 11 || in.Version != 1 {
 		t.Fatalf("%+v", in)
 	}
-	if got := f.readFile(ino); string(got) != "dirty bytes" {
+	if got := f.ReadFile(ino); string(got) != "dirty bytes" {
 		t.Fatalf("%q", got)
 	}
 }
 
 // Lifecycle: L-13
 func TestVFS_RemoveDirtyFile_DropsOverlay(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	fs := f.fs()
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
 	fh, _ := fs.Create("/a")
 	_, _ = fh.Write([]byte("gone"))
 	_ = fh.Close()
-	ino := f.inodeOf(fs, "/a")
+	ino := f.InodeOf(fs, "/a")
 	must(t, fs.Remove("/a"))
-	if _, ok := f.ov.Size(ino); ok {
+	if _, ok := f.Ov.Size(ino); ok {
 		t.Fatal("overlay still tracks removed inode")
 	}
 	if _, err := fh.Write([]byte("x")); err == nil {
 		t.Fatal("write to removed inode succeeded")
 	}
-	must(t, f.flusher().FlushAll(ctx))
-	if f.fsm.Stats().Chunks != 0 {
+	must(t, f.Flusher().FlushAll(ctx))
+	if f.FSM.Stats().Chunks != 0 {
 		t.Fatal("chunks committed for a removed file")
 	}
 }
 
 func TestVFS_SymlinkAndChange(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	fs := f.fs()
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
 	must(t, fs.Symlink("/target", "/d/link"))
 	if got, err := fs.Readlink("/d/link"); err != nil || got != "/target" {
 		t.Fatalf("readlink %q %v", got, err)
@@ -229,7 +220,7 @@ func TestVFS_SymlinkAndChange(t *testing.T) {
 	must(t, fs.Chtimes("/d/f", mt, mt))
 	st, _ = fs.Stat("/d/f")
 	sys := st.Sys().(*nfsfile.FileInfo)
-	if st.Mode().Perm() != 0o600 || sys.UID != 7 || sys.GID != 9 || !st.ModTime().Equal(mt) || sys.Fileid != uint64(f.inodeOf(fs, "/d/f")) {
+	if st.Mode().Perm() != 0o600 || sys.UID != 7 || sys.GID != 9 || !st.ModTime().Equal(mt) || sys.Fileid != uint64(f.InodeOf(fs, "/d/f")) {
 		t.Fatalf("stat %v sys %+v mtime %v", st.Mode(), sys, st.ModTime())
 	}
 	if _, err := fs.Readlink("/d/f"); err == nil {
@@ -245,15 +236,15 @@ func TestVFS_SymlinkAndChange(t *testing.T) {
 // Invariant: I-1, I-34, I-35
 // Lifecycle: L-1, L-2, L-3, L-4, L-5, L-6, L-8, L-11, L-12, L-14, L-16, L-17
 func TestVFS_OracleRandomOps(t *testing.T) {
-	rng := seed(t)
+	rng := testharness.Seed(t)
 	ops := 400
 	if !testing.Short() {
 		ops = 4000
 	}
-	f := newFabric(t, 3, 2, 1)
-	fs := f.fs()
-	fl := f.flusher()
-	cs := int(fabCS)
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fl := f.Flusher()
+	cs := int(testharness.ChunkSize)
 	model := map[string][]byte{}
 	names := []string{"/a", "/b", "/d/c", "/d/e/f"}
 	pickName := func() string { return names[rng.Intn(len(names))] }
@@ -290,7 +281,7 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 			}
 			_ = fh.Close()
 			if !bytes.Equal(got[:n], want) {
-				t.Fatalf("%s: %s differs at %d (len %d want %d)", stage, name, firstDiff(got[:n], want), n, len(want))
+				t.Fatalf("%s: %s differs at %d (len %d want %d)", stage, name, testharness.FirstDiff(got[:n], want), n, len(want))
 			}
 			st, _ := fs.Stat(name)
 			if st.Size() != int64(len(want)) {
@@ -316,7 +307,7 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 				cur = nil
 			}
 			off := pickOff(len(cur))
-			data := pattern(1+rng.Intn(cs/2), byte(rng.Intn(256)))
+			data := testharness.Pattern(1+rng.Intn(cs/2), byte(rng.Intn(256)))
 			_, _ = fh.Seek(int64(off), io.SeekStart)
 			if _, err := fh.Write(data); err != nil {
 				t.Fatalf("op %d write: %v", i, err)
@@ -354,7 +345,7 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 			if rng.Intn(2) == 0 {
 				must(t, fl.FlushAll(ctx))
 			} else if exists {
-				must(t, fl.FlushInode(ctx, f.inodeOf(fs, name)))
+				must(t, fl.FlushInode(ctx, f.InodeOf(fs, name)))
 			}
 		default: // read-only step
 		}
@@ -365,7 +356,7 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 	verify("final")
 	must(t, fl.FlushAll(ctx))
 	verify("flushed")
-	if d := f.ov.Dirty(); len(d) != 0 {
+	if d := f.Ov.Dirty(); len(d) != 0 {
 		t.Fatalf("dirty after FlushAll: %+v", d)
 	}
 	// every model file is now served purely from committed chunks by a cold reader
@@ -375,13 +366,13 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 	}
 	sort.Strings(keys)
 	for _, name := range keys {
-		in := f.inode(f.inodeOf(fs, name))
+		in := f.Inode(f.InodeOf(fs, name))
 		got := make([]byte, len(model[name]))
-		if _, err := f.readerNoCache().ReadAt(ctx, in, got, 0); err != nil && !errors.Is(err, io.EOF) {
+		if _, err := f.ReaderNoCache().ReadAt(ctx, in, got, 0); err != nil && !errors.Is(err, io.EOF) {
 			t.Fatalf("cold read %s: %v", name, err)
 		}
 		if !bytes.Equal(got, model[name]) {
-			t.Fatalf("cold read %s differs at %d", name, firstDiff(got, model[name]))
+			t.Fatalf("cold read %s differs at %d", name, testharness.FirstDiff(got, model[name]))
 		}
 	}
 }

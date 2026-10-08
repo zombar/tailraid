@@ -1,4 +1,4 @@
-package vfs
+package vfs_test
 
 import (
 	"bytes"
@@ -10,14 +10,16 @@ import (
 
 	"github.com/gurgeh/tailraid/internal/chunk"
 	"github.com/gurgeh/tailraid/internal/meta"
+	"github.com/gurgeh/tailraid/internal/testharness"
+	"github.com/gurgeh/tailraid/internal/vfs"
 )
 
 // writeAndFlush creates a file holding data and flushes it through the real flusher.
-func writeAndFlush(t *testing.T, f *fabric, name string, data []byte) meta.Ino {
+func writeAndFlush(t *testing.T, f *testharness.Fabric, name string, data []byte) meta.Ino {
 	t.Helper()
-	ino := f.create(name)
-	must(t, f.ov.Write(ino, 0, 0, data))
-	if err := f.flusher().FlushInode(context.Background(), ino); err != nil {
+	ino := f.Create(name)
+	must(t, f.Ov.Write(ino, 0, 0, data))
+	if err := f.Flusher().FlushInode(context.Background(), ino); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
 	return ino
@@ -25,28 +27,28 @@ func writeAndFlush(t *testing.T, f *fabric, name string, data []byte) meta.Ino {
 
 // Lifecycle: L-66, L-74
 func TestReader_ReadsWithOneNodeDown_AndFromCache(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	data := pattern(int(fabCS), 1)
+	f := testharness.NewFabric(t, 3, 2, 1)
+	data := testharness.Pattern(int(testharness.ChunkSize), 1)
 	ino := writeAndFlush(t, f, "a", data)
-	in := f.inode(ino)
+	in := f.Inode(ino)
 	h := in.Chunks[0]
-	c, _ := f.fsm.GetChunk(h)
+	c, _ := f.FSM.GetChunk(h)
 
 	// a reader on a gateway with a cold cache and one holder down decodes from k shards
-	f.setDown(c.Placement[0], true)
-	cold := f.readerNoCache()
+	f.SetDown(c.Placement[0], true)
+	cold := f.ReaderNoCache()
 	got := make([]byte, len(data))
 	if _, err := cold.ReadAt(context.Background(), in, got, 0); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, data) {
-		t.Fatalf("content differs at %d", firstDiff(got, data))
+		t.Fatalf("content differs at %d", testharness.FirstDiff(got, data))
 	}
 	// cache hit on the issuing gateway: every node down, still readable (L-66)
 	for _, n := range c.Placement {
-		f.setDown(n, true)
+		f.SetDown(n, true)
 	}
-	rd := f.reader()
+	rd := f.Reader()
 	got2 := make([]byte, len(data))
 	if _, err := rd.ReadAt(context.Background(), in, got2, 0); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("cache read: %v", err)
@@ -58,40 +60,40 @@ func TestReader_ReadsWithOneNodeDown_AndFromCache(t *testing.T) {
 
 // Lifecycle: L-75
 func TestReader_FewerThanKLive_EIO(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	data := pattern(int(fabCS), 2)
+	f := testharness.NewFabric(t, 3, 2, 1)
+	data := testharness.Pattern(int(testharness.ChunkSize), 2)
 	ino := writeAndFlush(t, f, "a", data)
-	in := f.inode(ino)
-	c, _ := f.fsm.GetChunk(in.Chunks[0])
-	f.setDown(c.Placement[0], true)
-	f.setDown(c.Placement[1], true)
-	rd := f.readerNoCache()
+	in := f.Inode(ino)
+	c, _ := f.FSM.GetChunk(in.Chunks[0])
+	f.SetDown(c.Placement[0], true)
+	f.SetDown(c.Placement[1], true)
+	rd := f.ReaderNoCache()
 	_, err := rd.ReadChunk(context.Background(), in.Chunks[0])
-	if !errors.Is(err, ErrIO) {
-		t.Fatalf("got %v, want ErrIO", err)
+	if !errors.Is(err, vfs.ErrIO) {
+		t.Fatalf("got %v, want vfs.ErrIO", err)
 	}
 }
 
 // Lifecycle: L-68, L-105
 func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	data := pattern(int(fabCS), 3)
+	f := testharness.NewFabric(t, 3, 2, 1)
+	data := testharness.Pattern(int(testharness.ChunkSize), 3)
 	ino := writeAndFlush(t, f, "a", data)
-	in := f.inode(ino)
+	in := f.Inode(ino)
 	h := in.Chunks[0]
-	c, _ := f.fsm.GetChunk(h)
+	c, _ := f.FSM.GetChunk(h)
 	// corrupt the slot held by this gateway: Rank puts self first, so it is always read
 	slot := -1
 	for i, n := range c.Placement {
-		if n == f.self {
+		if n == f.SelfIdx {
 			slot = i
 		}
 	}
 	if slot < 0 {
 		t.Fatalf("self not in placement %v", c.Placement)
 	}
-	f.corruptShard(f.self, chunk.Key(h, c.K, c.M, slot))
-	rd := f.readerNoCache()
+	f.CorruptShard(f.SelfIdx, chunk.Key(h, c.K, c.M, slot))
+	rd := f.ReaderNoCache()
 	var reported []chunk.ShardKey
 	rd.BadSlot = func(key chunk.ShardKey, _ meta.NodeIdx) { reported = append(reported, key) }
 	got, err := rd.ReadChunk(context.Background(), h)
@@ -108,52 +110,52 @@ func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
 
 // Lifecycle: L-69
 func TestReader_DecodedHashMismatch_EIO(t *testing.T) {
-	f := newFabric(t, 3, 1, 1)
+	f := testharness.NewFabric(t, 3, 1, 1)
 	// register a chunk entry whose hash does not match the bytes its shards hold
-	data := pattern(1000, 4)
+	data := testharness.Pattern(1000, 4)
 	wrong := sha256.Sum256([]byte("not the data"))
 	key0, key1 := chunk.Key(wrong, 1, 1, 0), chunk.Key(wrong, 1, 1, 1)
 	ctx := context.Background()
 	must(t, f.Put(ctx, 1, key0, data))
 	must(t, f.Put(ctx, 2, key1, data))
-	ino := f.create("x")
-	f.mustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, NewSize: 1000, Writes: []meta.ChunkWrite{{Idx: 0, Hash: wrong}},
+	ino := f.Create("x")
+	f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, NewSize: 1000, Writes: []meta.ChunkWrite{{Idx: 0, Hash: wrong}},
 		NewChunks: []meta.ChunkDesc{{Hash: wrong, Size: 1000, K: 1, M: 1, Placement: []meta.NodeIdx{1, 2}}}, Now: 2}})
-	_, err := f.readerNoCache().ReadChunk(ctx, wrong)
-	if !errors.Is(err, ErrIO) {
-		t.Fatalf("got %v, want ErrIO", err)
+	_, err := f.ReaderNoCache().ReadChunk(ctx, wrong)
+	if !errors.Is(err, vfs.ErrIO) {
+		t.Fatalf("got %v, want vfs.ErrIO", err)
 	}
 }
 
 // Lifecycle: L-71
 func TestReader_ReadAt_HolesAndShortChunks(t *testing.T) {
-	f := newFabric(t, 3, 2, 1)
-	ino := f.create("a")
-	cs := uint64(fabCS)
+	f := testharness.NewFabric(t, 3, 2, 1)
+	ino := f.Create("a")
+	cs := uint64(testharness.ChunkSize)
 	// write only in chunk 2 (bytes 2cs+10..2cs+20) → chunks 0,1 are holes, chunk 2 is short
-	must(t, f.ov.Write(ino, 0, 2*cs+10, []byte("0123456789")))
-	must(t, f.flusher().FlushInode(context.Background(), ino))
-	in := f.inode(ino)
+	must(t, f.Ov.Write(ino, 0, 2*cs+10, []byte("0123456789")))
+	must(t, f.Flusher().FlushInode(context.Background(), ino))
+	in := f.Inode(ino)
 	if len(in.Chunks) != 3 || in.Chunks[0] != meta.HashZero || in.Chunks[1] != meta.HashZero || in.Chunks[2] == meta.HashZero {
 		t.Fatalf("chunks %v", in.Chunks)
 	}
-	c, _ := f.fsm.GetChunk(in.Chunks[2])
+	c, _ := f.FSM.GetChunk(in.Chunks[2])
 	if c.Size != 20 || c.K != 1 { // 20-byte chunk → small-chunk policy k=1
 		t.Fatalf("chunk entry %+v", c)
 	}
 	// truncate up through the FSM: the short chunk is zero-filled on read
-	f.mustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs, Now: 3}})
-	in = f.inode(ino)
+	f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs, Now: 3}})
+	in = f.Inode(ino)
 	want := make([]byte, 3*cs)
 	copy(want[2*cs+10:], "0123456789")
 	got := make([]byte, 3*cs)
-	rd := f.reader()
+	rd := f.Reader()
 	n, err := rd.ReadAt(context.Background(), in, got, 0)
 	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatal(err)
 	}
 	if n != len(want) || !bytes.Equal(got, want) {
-		t.Fatalf("n=%d differs at %d", n, firstDiff(got, want))
+		t.Fatalf("n=%d differs at %d", n, testharness.FirstDiff(got, want))
 	}
 	// reads past EOF and short reads
 	if n, err := rd.ReadAt(context.Background(), in, got, int64(3*cs)); n != 0 || !errors.Is(err, io.EOF) {

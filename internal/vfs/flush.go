@@ -94,6 +94,12 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error {
 	return f.flush(ctx, ino, false)
 }
 
+// FlushPartial commits only the fully dirty full-size chunks of ino (FileDirtyHi
+// trigger); the partial tail stays in the overlay. Truncates are never flushed partially.
+func (f *Flusher) FlushPartial(ctx context.Context, ino meta.Ino) error {
+	return f.flush(ctx, ino, true)
+}
+
 // FlushAll flushes every dirty inode once (shutdown).
 func (f *Flusher) FlushAll(ctx context.Context) error {
 	var first error
