@@ -246,7 +246,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	var err error
 	switch {
 	case bootstrap:
-		nd.Node, err = cluster.Bootstrap(context.Background(), opts, nd.record(c), vol, "harness-token")
+		nd.Node, err = cluster.Bootstrap(context.Background(), opts, nd.record(c), vol, false, "harness-token")
 	case nd.started:
 		nd.Node, err = cluster.Open(opts)
 	default:

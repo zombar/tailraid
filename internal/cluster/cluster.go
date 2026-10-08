@@ -241,7 +241,7 @@ func (w slogWriter) Write(p []byte) (int, error) {
 
 // Bootstrap creates a new single-voter cluster in an empty data directory and applies
 // the initial metadata: cluster ID, join token, this node's record and the volume policy.
-func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolume, joinToken string) (*Node, error) {
+func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolume, auto bool, joinToken string) (*Node, error) {
 	if o.hasState() {
 		return nil, ErrAlreadyInit
 	}
@@ -286,8 +286,11 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	cmds := []meta.Command{
 		{Op: meta.OpMetaSet, MetaSet: &meta.MetaSet{ClusterID: cid, JoinToken: joinToken, CreatedAt: time.Now().UnixNano()}},
 		{Op: meta.OpSetVolume, SetVolume: &vol},
-		{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: self}},
 	}
+	if auto { // automatic redundancy (docs/03): the leader grows the policy as devices join
+		cmds = append(cmds, meta.Command{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: true, Now: vol.Now}})
+	}
+	cmds = append(cmds, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: self}})
 	for _, c := range cmds {
 		res, _, err := n.Propose(ctx, c)
 		if err == nil {

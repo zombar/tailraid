@@ -69,7 +69,7 @@ func TestMount_Workload(t *testing.T) {
 	}
 	n, err := cluster.Bootstrap(context.Background(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: "127.0.0.1:20482"},
 		meta.Node{Name: "mounttest", Kind: meta.KindDevice, Capacity: 20 << 30, Voter: true},
-		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: time.Now().UnixNano()}, "t")
+		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: time.Now().UnixNano()}, false, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

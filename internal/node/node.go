@@ -124,12 +124,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if !ok {
 		return errors.New("this node is not in the cluster node table")
 	}
-	capBytes, err := config.ParseBytes(cfg.Node.Capacity)
-	if err != nil {
-		return err
-	}
 	clk := clock.Real()
-	store, err := chunk.Open(sysfs.OS{}, filepath.Join(cfg.Node.DataDir, "shards"), int64(capBytes))
+	store, pinned, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -181,7 +177,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log, pinned: pinned}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
@@ -348,6 +344,66 @@ type adminOps struct {
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
+	pinned   bool // node.capacity is set: never re-derive the budget
+}
+
+// openStore opens the shard store with its budget: node.capacity pins it, otherwise it is
+// derived from the data disk (docs/01 §Node budget, I-74).
+func openStore(cfg config.Config) (*chunk.Store, bool, error) {
+	pinned := cfg.Node.Capacity != ""
+	var capBytes uint64
+	if pinned {
+		var err error
+		if capBytes, err = config.ParseBytes(cfg.Node.Capacity); err != nil {
+			return nil, false, err
+		}
+	}
+	store, err := chunk.Open(sysfs.OS{}, filepath.Join(cfg.Node.DataDir, "shards"), int64(capBytes))
+	if err != nil {
+		return nil, false, err
+	}
+	if !pinned {
+		if _, err := store.Rebudget(); err != nil {
+			return nil, false, err
+		}
+	}
+	return store, pinned, nil
+}
+
+// Budget is the shard budget init and join register for this device.
+func Budget(cfg config.Config) (uint64, error) {
+	store, _, err := openStore(cfg)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(store.Capacity()), nil
+}
+
+// rebudget re-derives this node's budget from its data disk and registers it through the
+// leader when it moved past the hysteresis (docs/01 §Node budget, I-74).
+func (a *adminOps) rebudget(ctx context.Context) {
+	b, err := a.store.Rebudget()
+	if err != nil {
+		a.log.Warn("budget: measuring the data disk failed", "err", err)
+		return
+	}
+	nd, ok := a.node.FSM.Node(a.self)
+	if !ok || !chunk.BudgetChanged(nd.Capacity, b) {
+		return
+	}
+	op := rpc.MemberOp{Op: "set_capacity", NodeIdx: a.self, Capacity: b}
+	if a.node.IsLeader() {
+		err = a.node.MemberOp(ctx, op)
+	} else if addr := a.node.LeaderRPCAddr(); addr != "" {
+		err = a.client.Members(ctx, addr, op)
+	} else {
+		err = cluster.ErrNoLeader
+	}
+	if err != nil {
+		a.log.Warn("budget: update failed, will retry", "err", err)
+		return
+	}
+	a.log.Info("budget re-derived", "was", nd.Capacity, "now", b)
 }
 
 func (a *adminOps) healthy() bool { return a.node.Health(a.clk, a.prober).State == cluster.Healthy }
@@ -373,12 +429,19 @@ func (a *adminOps) leaderApplied() (uint64, bool) {
 func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	gcT := a.clk.NewTimer(cfg.GCInterval)
 	sweepT := a.clk.NewTimer(time.Hour)
+	budgetT := a.clk.NewTimer(cfg.GCInterval)
 	defer gcT.Stop()
 	defer sweepT.Stop()
+	defer budgetT.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-budgetT.C():
+			if !a.pinned {
+				a.rebudget(ctx)
+			}
+			budgetT.Reset(cfg.GCInterval)
 		case <-gcT.C():
 			if a.node.IsLeader() && a.healthy() {
 				if res, err := a.gc.RunOnce(ctx); err != nil {
@@ -554,7 +617,7 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	capBytes, err := config.ParseBytes(cfg.Node.Capacity)
+	capBytes, err := Budget(cfg)
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
