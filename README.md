@@ -51,6 +51,7 @@ tailraid check / repair / fsck / gc            # replication health and maintena
 tailraid verify --report out.html              # soak scenarios against the live cluster
 tailraid install                               # run serve under launchd / systemd / the Windows SCM
 tailraid logs -f                               # follow the service log
+tailraid update                                # replace the binary with the latest release (verified)
 ```
 
 ## Building

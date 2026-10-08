@@ -92,7 +92,7 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
 `status`, `node ls|describe|promote|demote|
 set-capacity|drain|remove` · `check`, `repair`, `gc`, `fsck` · `volume
 describe|grow|set-redundancy` · `chunk describe <hash>`
-(lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report)
+(lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report) · `update [--check]`
 · deferred with M5: `node add-s3|keys`, `bucket ls|describe|create|rm`, `s3 keys`
 · `mount`, `umount`, `install`, `uninstall`, `start`, `stop`, `logs` · `version`.
 

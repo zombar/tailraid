@@ -12,7 +12,7 @@ BIN := tailraid
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build test test-race test-long test-mount soak soak-full fuzz lint fmt fmt-check vuln \
-        release check invariants tidy clean help
+        release tag check invariants tidy clean help
 
 ## build: static binary for the current OS/arch into ./dist
 build:
@@ -85,6 +85,16 @@ vuln:
 tidy:
 	go mod tidy
 	go mod tidy -modfile=tools.mod
+
+## tag: cut a release tag after a green check (make tag VERSION=v0.1.0); CI builds and publishes it
+tag:
+	@case "$(VERSION)" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "VERSION must be vMAJOR.MINOR.PATCH"; exit 1;; esac
+	@test -z "$$(git status --porcelain)" || { echo "working tree not clean"; exit 1; }
+	@! git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null || { echo "$(VERSION) exists"; exit 1; }
+	$(MAKE) check
+	git tag -a "$(VERSION)" -m "tailraid $(VERSION)"
+	git push origin "$(VERSION)"
+	@echo "tagged $(VERSION); CI publishes the release at https://github.com/zombar/tailraid/releases/tag/$(VERSION)"
 
 ## release: cross-compile static binaries for every platform + sha256sums
 release:

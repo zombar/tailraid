@@ -67,16 +67,49 @@ and partition steps then run against the real cluster through those endpoints.
 
 ## 4. Releases
 
-`make release` cross-compiles `tailraid_{linux,darwin,windows}_{amd64,arm64}` with
-`-trimpath -ldflags "-s -w -X main.version=<tag>"` and writes `sha256sums.txt`; CI runs
-it on tags `v*` and attaches the seven files to the GitHub release. Every artifact prints
-its version with `tailraid version`.
+A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
+
+1. `make tag VERSION=v0.1.0` refuses a dirty tree or a tag that exists, runs `make check`,
+   creates an annotated tag and pushes it.
+2. CI (`release` job, after `checks`, `lint` and `test`) runs `make release
+   VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
+   built with `-trimpath -ldflags "-s -w -X main.version=<tag>"`, plus `sha256sums.txt`
+   over them, attached to a GitHub release named after the tag.
+3. Every artifact answers `tailraid version` with the tag, which is what the updater and
+   `status` (`VERSION` column) show.
+
+Versions are plain semver with a `v` prefix; a build from a commit prints
+`<short-sha>[-dirty]` and is never offered as an update target.
+
+## 5. Self-update
+
+`tailraid update [--check] [--version vX.Y.Z] [--yes]` replaces the running binary with a
+release artifact (`internal/update`):
+
+1. Resolve the release: `GET /repos/zombar/tailraid/releases/latest` (or `/tags/<v>`),
+   authenticated with `TAILRAID_GITHUB_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`
+   when the `gh` CLI is installed (the repository is private; a public repository needs
+   none). The asset is `tailraid_<GOOS>_<GOARCH>[.exe]`.
+2. Compare: a release older than or equal to the running semver is not applied unless
+   `--version` names it explicitly; a non-semver build (`dev`, `<sha>`) always updates.
+3. Download the asset and `sha256sums.txt` from the same release, into a temp file in the
+   executable's directory (same filesystem, so the swap is a rename), and verify the SHA-256
+   against the entry for that asset name. A mismatch deletes the download and fails.
+4. Run the downloaded file with `version` and require it to print the release tag.
+5. Swap atomically: rename the running binary to `<exe>.old` (Windows cannot overwrite a
+   running image; Unix could but the same path keeps the code identical), rename the
+   download into place, remove `.old` (left behind on Windows until the next run).
+6. Print how to restart the service (`tailraid stop && tailraid start`, or `sc.exe`); the
+   running process is not restarted by `update`.
+
+`--check` stops after step 2 and exits 2 when an update is available.
 
 ## Invariants
 
 - **I-58** — The portmap stub answers `GETPORT` for programs 100003 and 100005 version 3 over TCP with the NFS gateway port and `0` for any other mapping, serves `NULL` and `DUMP`, answers `PROC_UNAVAIL` for other procedures, and binds loopback only.
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere.
+- **I-61** — `update` replaces the binary only with an artifact whose SHA-256 matches the `sha256sums.txt` of the same release and which reports that release's version when run; on any failure the running binary is untouched and no partial file is left in its directory; a release that is not newer than a semver build is applied only when named explicitly.
 
 ## Tests
 
@@ -85,3 +118,4 @@ its version with `tailraid version`.
 | I-58 | `TestPortmap_GetportDumpNull`, `TestPortmap_RefusesNonLoopback` |
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
+| I-61 | `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
