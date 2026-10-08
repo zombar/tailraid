@@ -97,7 +97,6 @@ func (w *WAL) AppendWrite(off uint64, p []byte) (walOff int64, err error)   // w
 func (w *WAL) AppendTruncate(size uint64) error                             // + f.Sync()
 func (w *WAL) ReadAt(p []byte, walOff int64) error
 func (w *WAL) Replay(fn func(typ uint8, off uint64, data []byte, walOff int64) error) error
-func (w *WAL) Reset() error                                                 // ftruncate(0) + fsync
 func (w *WAL) Compact(live extents) (extents, error)                        // rewrite to a new file holding only live extents, fsync, rename
 ```
 
@@ -216,7 +215,8 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
     - `ErrNeedTailRewrite`: programming error in step 3; log at error level and retry with
       the tail chunk included.
 11. **Wait and clear.** `st.WaitApplied(index)`; `ov.commitFlushed(ino, plan)` removes the
-    plan's extents from the file's bookkeeping; if no extents remain, `wal.Reset()`.
+    plan's extents from the file's bookkeeping; if no extents remain, the inode leaves the
+    overlay and its WAL file is removed (`evict`).
 
 Step 9's "≥ k acks" is the user's chosen degraded-write policy (see 05 §5). Full
 redundancy is restored by the repairer (06).

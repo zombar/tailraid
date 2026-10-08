@@ -159,31 +159,6 @@ func TestWAL_ReplayStopsAtTornTail(t *testing.T) {
 	}
 }
 
-func TestWAL_Reset(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "9.wal")
-	w, err := openWAL(sysfs.OS{}, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-	if _, err := w.AppendWrite(0, []byte("abc")); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	if w.Size() != 0 {
-		t.Fatalf("Size after reset = %d", w.Size())
-	}
-	if got := replayAll(t, w); len(got) != 0 {
-		t.Fatalf("records after reset: %+v", got)
-	}
-	o, err := w.AppendWrite(1, []byte("d"))
-	if err != nil || o != recHeaderLen {
-		t.Fatalf("append after reset: off=%d err=%v", o, err)
-	}
-}
-
 // Invariant: I-35, I-37
 // Lifecycle: L-172
 func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {

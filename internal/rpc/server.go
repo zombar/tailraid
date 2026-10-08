@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -287,7 +288,9 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
 			return
 		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
+		buf := bytes.NewBuffer(make([]byte, 0, max(0, min(r.ContentLength, s.o.MaxShard))+1)) // sized by Content-Length: one allocation
+		_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
+		body := buf.Bytes()
 		if err != nil {
 			var mbe *http.MaxBytesError
 			if errors.As(err, &mbe) {

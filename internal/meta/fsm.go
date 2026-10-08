@@ -39,10 +39,15 @@ func (f *FSM) state() *State { return f.st }
 
 // Apply implements raft.FSM. Non-command logs advance the applied index only.
 func (f *FSM) Apply(l *raft.Log) interface{} {
+	var cmd Command
+	var decodeErr error
+	if l.Type == raft.LogCommand {
+		cmd, decodeErr = DecodeCommand(l.Data) // outside the lock: readers are not held up by decoding
+	}
 	f.mu.Lock()
 	var res interface{}
 	if l.Type == raft.LogCommand {
-		res = f.applyLocked(l)
+		res = f.applyLocked(cmd, decodeErr, l.Index)
 	}
 	f.st.Applied = l.Index
 	f.mu.Unlock()
@@ -58,12 +63,11 @@ func (f *FSM) setApplied(idx uint64) {
 	f.waitMu.Unlock()
 }
 
-func (f *FSM) applyLocked(l *raft.Log) Result {
-	cmd, err := DecodeCommand(l.Data)
-	if err != nil {
+func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
+	if decodeErr != nil {
 		return Result{Err: ErrBadCommand}
 	}
-	a := &applier{st: f.st, stats: &f.stats, index: l.Index}
+	a := &applier{st: f.st, stats: &f.stats, index: index}
 	res, err := a.apply(cmd)
 	if err != nil {
 		return Result{Err: err}

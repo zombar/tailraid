@@ -387,7 +387,16 @@ func (s *Store) readFile(p string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, HeaderSize+MaxPayload+1))
+	const limit = HeaderSize + MaxPayload + 1
+	if fi, err := f.Stat(); err == nil && fi.Size() <= limit { // one allocation of the known size
+		buf := make([]byte, fi.Size())
+		n, err := io.ReadFull(f, buf)
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, err
+		}
+		return buf[:n], nil
+	}
+	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 // verify checks the TRS1 header against the payload and returns the payload.

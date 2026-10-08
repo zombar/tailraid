@@ -160,6 +160,11 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	if resp.StatusCode != http.StatusOK {
 		return nil, errFromStatus(resp)
 	}
+	if n := resp.ContentLength; n >= 0 && n <= chunk.MaxPayload+chunk.HeaderSize {
+		b := make([]byte, n) // sized by Content-Length: one allocation, no growth copies
+		_, err := io.ReadFull(resp.Body, b)
+		return b, err
+	}
 	return io.ReadAll(resp.Body)
 }
 

@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -400,11 +401,17 @@ func parallel(ctx context.Context, workers, n int, fn func(i int) error) error {
 	return first
 }
 
+// zeroBlock lets allZero compare whole blocks with the runtime's memequal instead of a
+// byte loop.
+var zeroBlock [64 << 10]byte
+
 func allZero(b []byte) bool {
-	for _, x := range b {
-		if x != 0 {
+	for len(b) > 0 {
+		n := min(len(b), len(zeroBlock))
+		if !bytes.Equal(b[:n], zeroBlock[:n]) {
 			return false
 		}
+		b = b[n:]
 	}
 	return true
 }

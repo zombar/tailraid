@@ -174,18 +174,6 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 	return nil
 }
 
-// Reset empties the log (after a full flush).
-func (w *WAL) Reset() error {
-	if err := w.f.Truncate(0); err != nil {
-		return fmt.Errorf("vfs: wal reset: %w", err)
-	}
-	if err := w.f.Sync(); err != nil {
-		return fmt.Errorf("vfs: wal fsync: %w", err)
-	}
-	w.size = 0
-	return nil
-}
-
 // Compact atomically replaces the log with exactly recs, returning each record's data
 // offset in the new log. The data slices must have been read out before the call.
 func (w *WAL) Compact(recs []walRec) ([]int64, error) {
