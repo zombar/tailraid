@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,10 @@ func main() {
 	mux.HandleFunc("POST /rpc", w.rpc)
 	mux.HandleFunc("POST /partition", w.partition)
 	mux.HandleFunc("POST /heal", w.heal)
+	mux.HandleFunc("GET /goroutines", func(rw http.ResponseWriter, _ *http.Request) {
+		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_ = pprof.Lookup("goroutine").WriteTo(rw, 2)
+	})
 	logger.Info("soak worker listening", "addr", os.Args[2], "nfs", w.nfsAddr, "rpc", w.rpcAddr)
 	srv := &http.Server{Addr: os.Args[2], Handler: mux, ReadHeaderTimeout: 5 * time.Second, ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}
 	if err := srv.ListenAndServe(); err != nil {

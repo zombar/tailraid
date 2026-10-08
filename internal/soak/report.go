@@ -33,6 +33,7 @@ type reportData struct {
 	Phases     []phaseView
 	Issues     []issueView
 	Notes      []noteView
+	Dumps      []dumpView
 	Latency    []latencyView
 	Totals     []kv
 	Coverage   []CoverageRow
@@ -73,6 +74,14 @@ type issueView struct {
 
 type noteView struct {
 	Phase string
+	Text  string
+}
+
+// dumpView is one node's goroutine dump taken after a failed phase.
+type dumpView struct {
+	Phase string
+	Node  string
+	Lines int
 	Text  string
 }
 
@@ -130,8 +139,12 @@ func buildReport(s Summary) reportData {
 		d.Verdict = "PASS"
 	}
 	for i := range s.Records {
-		if rec := &s.Records[i]; rec.Kind == "event" && rec.Name == "note" {
+		rec := &s.Records[i]
+		switch {
+		case rec.Kind == "event" && rec.Name == "note":
 			d.Notes = append(d.Notes, noteView{Phase: rec.Phase, Text: rec.Text})
+		case rec.Kind == "dump":
+			d.Dumps = append(d.Dumps, dumpView{Phase: rec.Phase, Node: rec.Node, Lines: strings.Count(rec.Text, "\n"), Text: rec.Text})
 		}
 	}
 	for _, row := range s.Latency {
@@ -335,7 +348,7 @@ table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid
 th{background:#f6f6f6} .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font-weight:600}.skip{color:#777;font-weight:600}
 .meta{color:#555} .cites{color:#777;font-size:11px;white-space:nowrap} .chart{width:100%;height:auto;margin:10px 0;border:1px solid #eee;border-radius:6px}
 .title{font:600 13px sans-serif;fill:#222}.tick{font:11px sans-serif;fill:#555}.grid{stroke:#eee}.marker{stroke:#999;stroke-dasharray:3 3}.marklabel{font:9px sans-serif;fill:#777}
-details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-align:right} .cov span{display:inline-block;margin:2px 6px 2px 0;padding:1px 6px;border-radius:4px;background:#eef2f7;font-size:12px} .cov .bad{background:#fee2e2}
+details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-align:right} .cov span{display:inline-block;margin:2px 6px 2px 0;padding:1px 6px;border-radius:4px;background:#eef2f7;font-size:12px} .cov .bad{background:#fee2e2} .dump{font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto;max-height:480px;background:#f8fafc;padding:8px;border:1px solid #eee}
 </style></head><body>
 <h1>{{.Mark}}<span>tail<span style="color:#2563eb">raid</span> soak report</span></h1>
 <div class="meta">target: <b>{{.Env}}</b> · profile <b>{{.Profile}}</b> · policy {{.Policy}} · seed <code>{{.Seed}}</code> · flags {{.Flags}}<br>started {{.Started}} · duration {{.Duration}} · generated {{.Generated}}</div>
@@ -350,6 +363,9 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 {{if .Issues}}<table><tr><th>Phase</th><th>Check</th><th>Detail</th><th>File</th><th>Chunk</th><th>Node</th><th>Record</th></tr>
 {{range .Issues}}<tr><td>{{.Phase}}</td><td>{{.Name}}</td><td>{{.Text}}</td><td>{{.File}}</td><td>{{.Chunk}}</td><td>{{.Node}}</td><td><code>{{.Where}}</code></td></tr>{{end}}</table>
 {{else}}<p class="ok">none</p>{{end}}
+{{if .Dumps}}<h2>Goroutine dumps</h2>
+<p class="meta">every node's goroutines, taken right after a failed phase (dev.enabled); a hang shows as goroutines blocked for minutes</p>
+{{range .Dumps}}<details><summary>{{.Phase}} — {{.Node}} ({{.Lines}} lines)</summary><pre class="dump">{{.Text}}</pre></details>{{end}}{{end}}
 <h2>Totals</h2>
 <table>{{range .Totals}}<tr><th>{{.K}}</th><td>{{.V}}</td></tr>{{end}}</table>
 <h2>Latency (driver side)</h2>

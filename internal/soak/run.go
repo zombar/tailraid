@@ -42,7 +42,7 @@ func Quick() Profile {
 type Record struct {
 	T     time.Time         `json:"t"`
 	Line  int               `json:"line"` // 1-based line in results.jsonl
-	Kind  string            `json:"kind"` // sample | event | check | phase | summary
+	Kind  string            `json:"kind"` // sample | event | check | phase | dump | summary
 	Phase string            `json:"phase,omitempty"`
 	Name  string            `json:"name,omitempty"`
 	Cites string            `json:"cites,omitempty"` // invariants and lifecycle cells a check exercises ("I-12 L-64")
@@ -575,6 +575,9 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 				pr.Skipped, pr.Reason = true, rec.Text
 			}
 		}
+		if pr.Failed > 0 {
+			r.captureDumps(ctx)
+		}
 		results = append(results, pr)
 		if ctx.Err() != nil {
 			break
@@ -603,6 +606,27 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 		}
 	}
 	return sum, nil
+}
+
+// dumpMax bounds one node's goroutine dump in the results stream.
+const dumpMax = 512 << 10
+
+// captureDumps records every node's goroutine dump after a failed phase (docs/09 §6); a
+// node without dev.enabled, or one that does not answer, leaves a note instead.
+func (r *Run) captureDumps(ctx context.Context) {
+	for _, n := range r.nodes {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		dump, err := r.Env.Goroutines(cctx, n)
+		cancel()
+		if err != nil {
+			r.event("note", fmt.Sprintf("no goroutine dump from %s: %v", n.Name, err))
+			continue
+		}
+		if len(dump) > dumpMax {
+			dump = dump[:dumpMax] + "\n... (truncated)"
+		}
+		r.emit(Record{Kind: "dump", Node: n.Name, Text: dump})
+	}
 }
 
 // cleanup removes the run directory so a live volume is left as found.

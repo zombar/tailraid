@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime/pprof"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -79,6 +80,12 @@ func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit
 		}
 		log.Warn("dev: shard corrupted on request", "key", string(key))
 		w.WriteHeader(http.StatusNoContent)
+	})
+	// the stack of every goroutine, as a crash dump would print it: a hung node is
+	// diagnosed without killing it (docs/12 §3)
+	mux.HandleFunc("GET /dev/goroutines", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_ = pprof.Lookup("goroutine").WriteTo(w, 2)
 	})
 	mux.HandleFunc("POST /dev/exit", func(w http.ResponseWriter, _ *http.Request) {
 		log.Warn("dev: exit requested")

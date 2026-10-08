@@ -168,6 +168,11 @@ func (a *Admin) FSMHash(ctx context.Context, n NodeRef) (uint64, string, error) 
 	return h.Applied, h.Hash, err
 }
 
+func (a *Admin) Goroutines(ctx context.Context, n NodeRef) (string, error) {
+	raw, err := a.Caller.Call(ctx, n.RPC, http.MethodGet, "/dev/goroutines", nil)
+	return string(raw), err
+}
+
 func (a *Admin) Corrupt(ctx context.Context, n NodeRef, key string) error {
 	return a.call(ctx, n.RPC, http.MethodPost, "/dev/corrupt?key="+key, nil, nil)
 }

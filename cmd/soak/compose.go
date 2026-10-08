@@ -198,6 +198,24 @@ func (e *composeEnv) byRPC(addr string) (soak.NodeRef, bool) {
 	return soak.NodeRef{}, false
 }
 
+// Goroutines returns the node's dump followed by its worker's own (the client side of a
+// hang is as telling as the gateway's).
+func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, error) {
+	node, err := e.Admin.Goroutines(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, e.node(ref).worker+"/goroutines", http.NoBody)
+	resp, werr := e.http.Do(req)
+	if werr != nil {
+		return node, nil
+	}
+	defer resp.Body.Close()
+	var wb bytes.Buffer
+	_, _ = wb.ReadFrom(resp.Body)
+	return node + "\n\n==== worker " + workerName(ref) + " ====\n\n" + wb.String(), nil
+}
+
 // --- faults through docker compose and the workers ----------------------------------------
 
 func (e *composeEnv) compose(ctx context.Context, args ...string) error {

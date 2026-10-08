@@ -57,7 +57,7 @@ and refuses any other bind address. It is compiled on every OS so its tests run 
 
 ## 3. Fault injection on a live cluster (`dev.enabled`)
 
-Two endpoints (docs/08) turn a real node into a soak target:
+Three endpoints (docs/08) turn a real node into a soak target:
 
 - `POST /dev/exit` replies `204` and exits with status 3 after 100 ms. With a service
   manager that restarts the process this is "kill a node".
@@ -66,6 +66,9 @@ Two endpoints (docs/08) turn a real node into a soak target:
   connections, the node RPC client refuses to send to them, and inbound RPC from them is
   answered `503`. An empty list heals. `GET /dev/fault` returns the rules. Rules live in
   memory only; a restart heals.
+- `GET /dev/goroutines` returns every goroutine's stack. `verify` and the compose driver
+  take it from every node after a failed phase and attach it to the report, so a node
+  that hangs is diagnosed from the report rather than by sending it SIGQUIT.
 
 `tailraid verify --destructive --restarts` declares that every target runs with
 `dev.enabled` under a restarting service manager: the parity, consensus, restart-storm

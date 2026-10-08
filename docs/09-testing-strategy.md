@@ -285,10 +285,14 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   counters), p50 / p99 / max latency per phase and separately for the operations issued
   while a fault was in force, the coverage table of cited IDs with pass and fail counts,
   the notes the phases left (an FSM-hash check that could not run, a refused operation
-  that landed after a heal), and the charts: throughput by sample interval with phase
+  that landed after a heal), every node's goroutine dump taken right after a failed
+  phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
   bytes, overlay WAL depth, slots per node, latency histograms and the FSM-hash strip.
 - `make soak` (quick, ~10 min) runs the compose profile; `make soak-full` the long one.
+  Setup (two cross-compiled binaries, eight cached image layers, four joins) takes about a
+  minute on an idle machine; run it on its own, since `make check` alongside it turns that
+  into ten.
   Acceptance for M3b includes injecting one deliberate bug and watching the suite go red.
 
 ## 7. CI

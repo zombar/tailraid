@@ -517,6 +517,51 @@ func shardKey(c admin.ChunkReport, slot int) (string, error) {
 	return string(chunk.Key(h, c.K, c.M, slot)), nil
 }
 
+// presentSlots lists the slots whose live node answered HEAD with the shard present.
+func presentSlots(c admin.ChunkReport) []int {
+	var out []int
+	for i, s := range c.Slots {
+		if s.Node != 0 && s.Live && s.Present != nil && *s.Present {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// liveSlots counts the slots placed on a live node.
+func liveSlots(c admin.ChunkReport) int {
+	n := 0
+	for _, s := range c.Slots {
+		if s.Node != 0 && s.Live {
+			n++
+		}
+	}
+	return n
+}
+
+// slotTable prints a chunk's slots for a check's detail: "0:n3 live present, 1:n1 live absent".
+func slotTable(c admin.ChunkReport) string {
+	parts := make([]string, 0, len(c.Slots))
+	for i, s := range c.Slots {
+		state := "missing"
+		if s.Node != 0 {
+			state = fmt.Sprintf("node %d", s.Node)
+			switch {
+			case !s.Live:
+				state += " dead"
+			case s.Present == nil:
+				state += " unchecked"
+			case *s.Present:
+				state += " present"
+			default:
+				state += " ABSENT"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%d:%s", i, state))
+	}
+	return fmt.Sprintf("%s %d+%d [%s]", c.Hash[:12], c.K, c.M, strings.Join(parts, ", "))
+}
+
 func (r *Run) nodeByIdx(idx int) (NodeRef, bool) {
 	for _, n := range r.nodes {
 		if int(n.Idx) == idx {
@@ -562,18 +607,27 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	var holder NodeRef
 	var key string
 	var cerr error
+	slot := -1
 	for attempt := 0; attempt < 3; attempt++ { // a repair may move the slot between lookup and corrupt
 		reps, err := r.chunksOf(ctx, target)
 		if err != nil || len(reps) == 0 {
 			return fmt.Errorf("chunks of %s: %w", target, err)
 		}
 		c = reps[0]
-		if key, err = shardKey(c, 0); err != nil {
+		// the describe checks each live slot with HEAD: a slot named by the placement but
+		// absent from its live node is a finding of its own, not a reason to abort
+		present := presentSlots(c)
+		r.checkAt("I-13 L-111", "every live slot of the committed chunk holds its shard", len(present) == liveSlots(c), slotTable(c), target, c.Hash, "")
+		if len(present) == 0 {
+			return fmt.Errorf("no present slot to corrupt: %s", slotTable(c))
+		}
+		slot = present[0]
+		if key, err = shardKey(c, slot); err != nil {
 			return err
 		}
 		var ok bool
-		if holder, ok = r.nodeByIdx(c.Slots[0].Node); !ok {
-			return fmt.Errorf("slot 0 of %s on unknown node %d", c.Hash, c.Slots[0].Node)
+		if holder, ok = r.nodeByIdx(c.Slots[slot].Node); !ok {
+			return fmt.Errorf("slot %d of %s on unknown node %d", slot, c.Hash, c.Slots[slot].Node)
 		}
 		if cerr = r.Env.Corrupt(ctx, holder, key); cerr == nil {
 			break
@@ -583,9 +637,9 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 		}
 	}
 	if cerr != nil {
-		return fmt.Errorf("corrupt %s slot 0 on %s: %w", c.Hash[:12], holder.Name, cerr)
+		return fmt.Errorf("corrupt %s slot %d on %s: %w (%s)", c.Hash[:12], slot, holder.Name, cerr, slotTable(c))
 	}
-	r.event("corrupt", fmt.Sprintf("%s slot 0 on %s", c.Hash[:12], holder.Name))
+	r.event("corrupt", fmt.Sprintf("%s slot %d on %s", c.Hash[:12], slot, holder.Name))
 	got, err := v.ReadAll(target)
 	r.checkAt("I-40 L-68 L-105", "read exact with m shards corrupt", err == nil && bytes.Equal(got, m[target]), fmt.Sprint(err), target, c.Hash, holder.Name)
 	st, err := r.scrub(ctx)
@@ -593,9 +647,9 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 		return err
 	}
 	r.check("I-15 L-110", "scrub finds and repairs the corrupt shard", st.ScrubBad >= 1 && st.Repaired >= 1, fmt.Sprintf("%+v", st))
-	if reps, err := r.chunksOf(ctx, target); err == nil && len(reps) > 0 {
-		s := reps[0].Slots[0]
-		r.checkAt("L-110 L-130", "corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot 0 now on node %d", s.Node), target, c.Hash, "")
+	if reps, err := r.chunksOf(ctx, target); err == nil && len(reps) > 0 && slot < len(reps[0].Slots) {
+		s := reps[0].Slots[slot]
+		r.checkAt("L-110 L-130", "corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot %d now on node %d", slot, s.Node), target, c.Hash, "")
 	}
 	// m+1 shards of a dedicated chunk: the read fails cleanly or is served exact from a
 	// cache, never wrong bytes
@@ -613,7 +667,10 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	}
 	c = reps[0]
 	corrupted := 0
-	for slot := 0; slot <= int(c.M) && slot < len(c.Slots); slot++ {
+	for _, slot := range presentSlots(c) { // m+1 of the slots that hold their shard
+		if corrupted > int(c.M) {
+			break
+		}
 		key, err := shardKey(c, slot)
 		if err != nil {
 			return err

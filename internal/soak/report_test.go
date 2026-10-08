@@ -25,6 +25,7 @@ func TestRender_EscapesHostileNodeNamesAndErrors(t *testing.T) {
 			{T: start.Add(2 * time.Second), Kind: "event", Name: "kill", Text: hostile},
 			{T: start.Add(3 * time.Second), Kind: "event", Name: "note", Text: "note " + hostile},
 			{T: start.Add(4 * time.Second), Kind: "sample", S: &Sample{BytesWritten: 1 << 20, Slots: map[string]int{hostile: 2}, LiveNodes: map[string]bool{hostile: false}}},
+			{T: start.Add(5 * time.Second), Kind: "dump", Phase: "1 x", Node: hostile, Text: "goroutine 1 [select]:\nmain.main()\n" + hostile + "\n"},
 		},
 		Latency:  []LatencyRow{{Phase: "1 x", Kind: "write", N: 1, P50: time.Millisecond, P99: time.Millisecond, Max: time.Millisecond}},
 		Coverage: []CoverageRow{{ID: "I-1", Failed: 1}}}
@@ -37,7 +38,7 @@ func TestRender_EscapesHostileNodeNamesAndErrors(t *testing.T) {
 		i := strings.Index(html, hostile)
 		t.Fatalf("raw hostile string in report near: %q", html[max(0, i-80):i+40])
 	}
-	for _, want := range []string{"&lt;script&gt;", "FAIL", "results.jsonl:3", "seed <code>7</code>", "I-1 0/<b>1 failed</b>", "note &lt;script&gt;", "Node liveness"} {
+	for _, want := range []string{"&lt;script&gt;", "FAIL", "results.jsonl:3", "seed <code>7</code>", "I-1 0/<b>1 failed</b>", "note &lt;script&gt;", "Node liveness", "Goroutine dumps", "(3 lines)", "goroutine 1 [select]:"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("report lacks %q", want)
 		}

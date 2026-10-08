@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/zombar/tailraid/internal/testseed"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
@@ -173,6 +174,15 @@ func (e *harnessEnv) FSMHash(_ context.Context, n soak.NodeRef) (uint64, string,
 	}
 	h, err := dev.Hash(nd.Node.FSM)
 	return h.Applied, h.Hash, err
+}
+
+// Goroutines dumps the test process (every harness node lives in it).
+func (e *harnessEnv) Goroutines(context.Context, soak.NodeRef) (string, error) {
+	var b bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&b, 2); err != nil {
+		return "", err
+	}
+	return b.String(), nil
 }
 
 func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
