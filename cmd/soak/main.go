@@ -57,7 +57,7 @@ func run() int {
 			return 1
 		}
 	}
-	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed))} //nolint:gosec // workload
+	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed} //nolint:gosec // workload
 	log.Info("soak run", "profile", p.Name, "seed", *seed, "nodes", *nodes)
 	sum, err := r.Execute(ctx)
 	if err != nil {

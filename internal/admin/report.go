@@ -10,6 +10,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // NodeReport is one row of `node ls`.
@@ -61,21 +62,43 @@ type VolumeReport struct {
 	StalePolicy    int     `json:"stale_policy_chunks"`
 }
 
+// GatewayReport is this node's overlay: what is acknowledged but not yet committed.
+type GatewayReport struct {
+	DirtyInodes int    `json:"dirty_inodes"`
+	DirtyBytes  uint64 `json:"dirty_bytes"` // bytes in extents not yet captured by a flush plan
+	WALBytes    int64  `json:"wal_bytes"`   // Σ per-inode WAL file sizes
+	Flushing    int    `json:"flushing"`    // inodes with a flush plan outstanding
+}
+
+// GatewayFromDirty folds the overlay's dirty list into the status view.
+func GatewayFromDirty(infos []vfs.DirtyInfo) *GatewayReport {
+	g := &GatewayReport{DirtyInodes: len(infos)}
+	for i := range infos {
+		g.DirtyBytes += infos[i].DirtyBytes
+		g.WALBytes += infos[i].WALBytes
+		if infos[i].Flushing {
+			g.Flushing++
+		}
+	}
+	return g
+}
+
 // Report is the whole `status` document.
 type Report struct {
-	Node        string        `json:"node"`
-	ClusterID   string        `json:"cluster_id"`
-	Health      string        `json:"health"`
-	Leader      string        `json:"leader"`
-	LastContact string        `json:"last_contact,omitempty"`
-	Voters      int           `json:"voters"`
-	LiveVoters  int           `json:"live_voters"`
-	Warnings    []string      `json:"warnings,omitempty"`
-	Volume      VolumeReport  `json:"volume"`
-	Nodes       []NodeReport  `json:"nodes"`
-	JoinToken   string        `json:"join_token,omitempty"`
-	Repair      *RepairStatus `json:"repair,omitempty"`
-	GeneratedAt time.Time     `json:"generated_at"`
+	Node        string         `json:"node"`
+	ClusterID   string         `json:"cluster_id"`
+	Health      string         `json:"health"`
+	Leader      string         `json:"leader"`
+	LastContact string         `json:"last_contact,omitempty"`
+	Voters      int            `json:"voters"`
+	LiveVoters  int            `json:"live_voters"`
+	Warnings    []string       `json:"warnings,omitempty"`
+	Volume      VolumeReport   `json:"volume"`
+	Nodes       []NodeReport   `json:"nodes"`
+	JoinToken   string         `json:"join_token,omitempty"`
+	Repair      *RepairStatus  `json:"repair,omitempty"`
+	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
+	GeneratedAt time.Time      `json:"generated_at"`
 }
 
 // RepairStatus is the leader's last scan (nil on followers).

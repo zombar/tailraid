@@ -184,7 +184,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Members: node.FSM.Nodes, Clk: clk}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
-		Status: func() any { return admin.Build(node, prober, clusterID, clk, repairer) }, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
+		Status: func() any {
+			rep := admin.Build(node, prober, clusterID, clk, repairer)
+			rep.Gateway = admin.GatewayFromDirty(ov.Dirty())
+			return rep
+		}, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
 	if err != nil {
 		return err

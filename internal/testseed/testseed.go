@@ -15,10 +15,17 @@ var seedFlag = flag.Int64("seed", 0, "seed for randomized tests (0 = time-based)
 // logs the seed with the command line that replays it.
 func Seed(t testing.TB) *rand.Rand {
 	t.Helper()
+	_, rng := New(t)
+	return rng
+}
+
+// New is Seed with the seed value as well, for tests that record it.
+func New(t testing.TB) (int64, *rand.Rand) {
+	t.Helper()
 	s := *seedFlag
 	if s == 0 {
 		s = time.Now().UnixNano()
 	}
 	t.Logf("seed=%d (re-run with -seed=%d)", s, s)
-	return rand.New(rand.NewSource(s)) //nolint:gosec // test randomness
+	return s, rand.New(rand.NewSource(s)) //nolint:gosec // test randomness
 }

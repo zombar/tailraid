@@ -64,7 +64,14 @@ the cluster's repair.grace.`,
 			}
 			defer rf.Close()
 			log := slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), nil))
-			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed))} //nolint:gosec // workload
+			var flags []string
+			if destructive {
+				flags = append(flags, "destructive")
+			}
+			if restarts {
+				flags = append(flags, "restarts")
+			}
+			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed)), Seed: seed, Flags: flags} //nolint:gosec // workload
 			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive, "restarts", restarts)
 			sum, err := run.Execute(ctx)
 			if err != nil {

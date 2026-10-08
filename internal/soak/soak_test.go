@@ -25,8 +25,9 @@ import (
 // harnessEnv runs the soak phases against the in-process cluster: billy volumes, the fake
 // clock behind Wait, and the admin surface called directly.
 type harnessEnv struct {
-	t *testing.T
-	c *testharness.Cluster
+	t           *testing.T
+	c           *testharness.Cluster
+	partitioned bool // Settle would wait for cut-off nodes to catch up, which they cannot
 }
 
 func (e *harnessEnv) Name() string { return "in-process harness" }
@@ -63,7 +64,8 @@ func (e *harnessEnv) quorum() bool {
 	return alive > len(e.c.Nodes)/2
 }
 
-// Wait advances the fake clock, flushes every live gateway and settles the cluster.
+// Wait advances the fake clock, flushes every live gateway and settles the cluster
+// (not under a partition: the cut-off side cannot catch up until the heal).
 func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 	e.c.Clk.Advance(d)
 	e.c.Probe()
@@ -75,7 +77,9 @@ func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 			_ = e.c.Nodes[i].Flush.FlushAll(ctx)
 		}
 	}
-	e.c.Settle()
+	if !e.partitioned {
+		e.c.Settle()
+	}
 	return nil
 }
 
@@ -84,7 +88,9 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 	if !e.c.Alive(nd.I) {
 		return admin.Report{}, errors.New("node is down")
 	}
-	return admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil), nil
+	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
+	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty())
+	return rep, nil
 }
 
 func (e *harnessEnv) repairer(scrub bool) *repair.Repairer {
@@ -195,11 +201,13 @@ func (e *harnessEnv) Partition(_ context.Context, a, b []soak.NodeRef) error {
 		ib = append(ib, e.node(n).I)
 	}
 	e.c.Partition(ia, ib)
+	e.partitioned = true
 	return nil
 }
 
 func (e *harnessEnv) Heal(context.Context) error {
 	e.c.Heal()
+	e.partitioned = false
 	e.c.Settle()
 	return nil
 }
@@ -231,7 +239,8 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	defer c.Close()
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
-	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: testseed.Seed(t)}
+	seed, rng := testseed.New(t)
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed}
 	sum, err := run.Execute(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -272,9 +281,26 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	if path := os.Getenv("SOAK_REPORT_OUT"); path != "" { // for eyeballing the report
 		_ = os.WriteFile(path, html.Bytes(), 0o600)
 	}
-	for _, want := range []string{"<svg", "9 restart storm", "10 partition", "PASS", "FSM-hash agreement", "Throughput"} {
+	for _, want := range []string{"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
+		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
+		}
+	}
+	if strings.Contains(out, "peak write 0.0 MiB/s") {
+		t.Error("throughput chart has no rate: the boundary-sample filter dropped every interval")
+	}
+	for _, want := range []string{} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q", want)
+		}
+	}
+	if sum.Partial || sum.K != 2 || sum.M != 1 || sum.NodeCount != 4 || sum.Totals.BytesWritten == 0 || sum.Totals.Repair.Scanned == 0 || sum.Totals.GC.Victims == 0 || len(sum.Coverage) < 30 {
+		t.Errorf("summary metadata: partial=%v %d+%d nodes=%d totals=%+v coverage=%d", sum.Partial, sum.K, sum.M, sum.NodeCount, sum.Totals, len(sum.Coverage))
+	}
+	for i, rec := range sum.Records {
+		if rec.Line != i+1 {
+			t.Fatalf("record %d has line %d", i, rec.Line)
 		}
 	}
 	// the cleanup left no run directory behind

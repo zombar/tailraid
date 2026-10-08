@@ -261,14 +261,24 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   service manager's restart delay. The device running `verify` is never killed (its mount
   is the run's only volume); when it leads, the consensus phase is skipped.
 - **Results and report**: the driver appends one JSON line per event, check and 1 s
-  sample (bytes moved, write/read latency, `degraded_chunks`, `stored_bytes`,
-  `logical_bytes`, slots per node, FSM-hash agreement) to `results.jsonl`, then renders a
-  self-contained `report.html` with inline SVG charts drawn in Go: pass/fail banner and the
-  phase × check matrix, throughput with event markers, degraded chunks over time, stored
-  vs logical bytes, slots per node before and after membership changes, latency
-  histograms, the FSM-hash agreement strip, and a table of every inconsistency with file,
-  chunk, node and phase. The report header names the target (compose topology or live
-  cluster) and the node versions.
+  sample (bytes moved, cumulative write/read latency histograms over fixed log-spaced
+  buckets, degraded / repair-pending / unreadable / stale-policy chunks, stored and
+  logical bytes, dedup ratio, slots and liveness per node, the sampled node's overlay WAL
+  depth, FSM-hash agreement) to `results.jsonl`; every record carries its line number.
+  Every check cites the invariants and lifecycle cells it exercises (`I-n`, `L-n`; a
+  test keeps the citations defined). The driver then renders a self-contained
+  `report.html` with inline SVG charts drawn in Go: the header (target, profile, policy
+  and chunk size, node count, seed, flags, per-node binary version), a PASS / FAIL /
+  PARTIAL banner (PARTIAL when a phase was skipped for a capability the environment
+  lacks: a live run without `--destructive --restarts` never shows green), the phase ×
+  check matrix with citations, every inconsistency with file, chunk, node and its
+  `results.jsonl` line, totals (bytes, ops, dedup ratio, deepest WAL, repair and GC
+  counters), p50 / p99 / max latency per phase and separately for the operations issued
+  while a fault was in force, the coverage table of cited IDs with pass and fail counts,
+  the notes the phases left (an FSM-hash check that could not run, a refused operation
+  that landed after a heal), and the charts: throughput by sample interval with phase
+  bands and every event marker, node liveness lanes, repair backlog, stored vs logical
+  bytes, overlay WAL depth, slots per node, latency histograms and the FSM-hash strip.
 - `make soak` (quick, ~10 min) runs the compose profile; `make soak-full` the long one.
   Acceptance for M3b includes injecting one deliberate bug and watching the suite go red.
 

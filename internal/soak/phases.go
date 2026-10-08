@@ -180,13 +180,13 @@ func (r *Run) chunksOf(ctx context.Context, path string) ([]admin.ChunkReport, e
 
 // checkFSMAgreement records the FSM-hash comparison, or a note when no node serves
 // /dev/fsm-hash (live clusters without dev.enabled).
-func (r *Run) checkFSMAgreement(ctx context.Context, name string) {
+func (r *Run) checkFSMAgreement(ctx context.Context, cites, name string) {
 	agree, detail, available := r.fsmAgreementSettled(ctx)
 	if !available {
 		r.event("note", name+": skipped, "+detail)
 		return
 	}
-	r.check(name, agree, detail)
+	r.check(cites, name, agree, detail)
 }
 
 // waitHealthy polls status until the cluster is healthy with every node live; the
@@ -217,7 +217,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration) (bool, str
 // repairUntilClean runs repair passes until one finds nothing to do (or 8 passes).
 func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
 	for pass := 0; pass < 8; pass++ {
-		st, err := r.Env.RepairNow(ctx)
+		st, err := r.repairNow(ctx)
 		if err != nil {
 			return admin.Report{}, err
 		}
@@ -243,14 +243,14 @@ func phaseBaseline(ctx context.Context, r *Run) error {
 	err := r.writeModel(v, m)
 	took := time.Since(t)
 	after := r.snapshotCounters()
-	r.check("every write acknowledged", err == nil, fmt.Sprintf("%d files via %s", len(m), gw.Name))
+	r.check("I-7", "every write acknowledged", err == nil, fmt.Sprintf("%d files via %s", len(m), gw.Name))
 	if err != nil {
 		return err
 	}
 	mb := float64(after.BytesWritten-before.BytesWritten) / (1 << 20)
 	r.event("baseline written", fmt.Sprintf("%.1f MiB in %s (%.1f MiB/s) via %s", mb, took.Round(time.Millisecond), mb/took.Seconds(), gw.Name))
 	bad, first := r.verifyModel(v, m)
-	r.check("read-your-writes on the writing gateway", bad == 0, first)
+	r.check("I-34 L-72", "read-your-writes on the writing gateway", bad == 0, first)
 	r.setShared("corpus", m)
 	return r.Env.Wait(ctx, r.Profile.FlushIdle)
 }
@@ -262,17 +262,17 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 	for _, gw := range r.gateways() {
 		v, _ := r.volume(gw)
 		bad, first := r.verifyModel(v, m)
-		r.checkAt("corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
+		r.checkAt("I-12 I-36 L-51", "corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
 	}
 	for _, n := range r.nodes {
 		ok, detail, err := r.Env.Fsck(ctx, n)
 		if err != nil {
-			r.checkAt("fsck on "+n.Name, false, err.Error(), "", "", n.Name)
+			r.checkAt("I-44", "fsck on "+n.Name, false, err.Error(), "", "", n.Name)
 			continue
 		}
-		r.checkAt("fsck on "+n.Name, ok, detail, "", "", n.Name)
+		r.checkAt("I-44", "fsck on "+n.Name, ok, detail, "", "", n.Name)
 	}
-	r.checkFSMAgreement(ctx, "FSM hashes agree")
+	r.checkFSMAgreement(ctx, "I-4", "FSM hashes agree")
 	reps, err := r.chunksOf(ctx, join(r.Root, "corpus", "big.bin"))
 	if err != nil {
 		return err
@@ -282,10 +282,10 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 		c := &reps[i]
 		if c.LiveSlots != len(c.Slots) || c.State != "committed" {
 			full = false
-			r.checkAt("chunk fully placed", false, fmt.Sprintf("%s %d/%d live slots", c.State, c.LiveSlots, len(c.Slots)), "big.bin", c.Hash, "")
+			r.checkAt("I-9 L-39 L-51", "chunk fully placed", false, fmt.Sprintf("%s %d/%d live slots", c.State, c.LiveSlots, len(c.Slots)), "big.bin", c.Hash, "")
 		}
 	}
-	r.check("big.bin fully placed on live nodes", full, fmt.Sprintf("%d chunks", len(reps)))
+	r.check("I-9 L-39 L-51", "big.bin fully placed on live nodes", full, fmt.Sprintf("%d chunks", len(reps)))
 	return nil
 }
 
@@ -376,7 +376,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 				delete(m, name)
 			}
 		}
-		r.check("churn ops acknowledged via "+gw.Name, errs == 0, fmt.Sprintf("%d of %d ops failed", errs, r.Profile.ChurnOps))
+		r.check("I-45 L-2 L-3 L-5 L-6", "churn ops acknowledged via "+gw.Name, errs == 0, fmt.Sprintf("%d of %d ops failed", errs, r.Profile.ChurnOps))
 		for p, d := range m {
 			all[p] = d
 		}
@@ -388,7 +388,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 	reader := gws[len(gws)-1]
 	v, _ := r.volume(reader)
 	bad, first := r.verifyModel(v, all)
-	r.checkAt("churn result identical via "+reader.Name, bad == 0, fmt.Sprintf("%d files differ: %s", bad, first), first, "", reader.Name)
+	r.checkAt("I-12 I-36 L-21", "churn result identical via "+reader.Name, bad == 0, fmt.Sprintf("%d files differ: %s", bad, first), first, "", reader.Name)
 	for p := range all {
 		r.corpusModel()[p] = all[p] // keep verifying them in later phases
 	}
@@ -432,14 +432,14 @@ func phaseParity(ctx context.Context, r *Run) error {
 		return err
 	}
 	bad, first := r.verifyModel(v, m)
-	r.checkAt(fmt.Sprintf("reads exact with m=%d nodes dead", mm), bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-12 L-64 L-131", fmt.Sprintf("reads exact with m=%d nodes dead", mm), bad == 0, first, first, "", gw.Name)
 	during := r.randomBytes(r.Profile.ChunkSize + 77)
 	p := join(r.Root, "parity", "during-loss.bin")
 	werr := v.Mkdir(join(r.Root, "parity"))
 	if werr == nil {
 		werr = v.WriteAt(p, 0, during)
 	}
-	r.check("writes accepted with m nodes dead (degraded)", werr == nil, fmt.Sprint(werr))
+	r.check("L-41 L-52", "writes accepted with m nodes dead (degraded)", werr == nil, fmt.Sprint(werr))
 	if werr == nil {
 		m[p] = during
 	}
@@ -448,7 +448,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		return err
 	}
 	if rep, _, err = r.anyStatus(ctx); err == nil {
-		r.check("status reports degraded chunks while a holder is dead", rep.Volume.Degraded > 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
+		r.check("I-56 L-86", "status reports degraded chunks while a holder is dead", rep.Volume.Degraded > 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
 	}
 	// the dead node returns: after fill_after a repair pass fills what was written meanwhile
 	for _, n := range victims[:mm] {
@@ -458,14 +458,14 @@ func phaseParity(ctx context.Context, r *Run) error {
 		r.event("start", n.Name)
 	}
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-	r.check("cluster healthy after the node returned", healthy, hdetail)
+	r.check("L-88 L-132", "cluster healthy after the node returned", healthy, hdetail)
 	if err := r.Env.Wait(ctx, r.Profile.FillAfter+time.Second); err != nil {
 		return err
 	}
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
 	}
-	r.check("degraded chunks back to 0 after repair", rep.Volume.Degraded == 0, fmt.Sprintf("%d degraded, %d unreadable", rep.Volume.Degraded, rep.Volume.Unreadable))
+	r.check("I-15 L-87 L-89", "degraded chunks back to 0 after repair", rep.Volume.Degraded == 0, fmt.Sprintf("%d degraded, %d unreadable", rep.Volume.Degraded, rep.Volume.Unreadable))
 	// lose m+1: every read is exact or an error, never garbage
 	for _, n := range victims {
 		if err := r.Env.Kill(ctx, n); err != nil {
@@ -484,10 +484,10 @@ func phaseParity(ctx context.Context, r *Run) error {
 			errs++
 		case !bytes.Equal(got, m[path]):
 			garbage++
-			r.checkAt("read returned wrong bytes with m+1 nodes dead", false, path, path, "", gw.Name)
+			r.checkAt("I-40 L-65", "read returned wrong bytes with m+1 nodes dead", false, path, path, "", gw.Name)
 		}
 	}
-	r.check(fmt.Sprintf("no garbage with m+1=%d nodes dead", mm+1), garbage == 0, fmt.Sprintf("%d reads failed cleanly, %d exact", errs, len(m)-errs-garbage))
+	r.check("I-40 L-65", fmt.Sprintf("no garbage with m+1=%d nodes dead", mm+1), garbage == 0, fmt.Sprintf("%d reads failed cleanly, %d exact", errs, len(m)-errs-garbage))
 	for _, n := range victims {
 		if err := r.Env.Start(ctx, n); err != nil {
 			return err
@@ -495,13 +495,13 @@ func phaseParity(ctx context.Context, r *Run) error {
 		r.event("start", n.Name)
 	}
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-	r.check("cluster healthy after all nodes returned", healthy, hdetail)
+	r.check("L-132", "cluster healthy after all nodes returned", healthy, hdetail)
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
 	}
-	r.check("no degraded chunks after recovery", rep.Volume.Degraded == 0 && rep.Volume.Unreadable == 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
+	r.check("I-15 L-88", "no degraded chunks after recovery", rep.Volume.Degraded == 0 && rep.Volume.Unreadable == 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
 	bad, first = r.verifyModel(v, m)
-	r.checkAt("corpus exact after recovery", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-12", "corpus exact after recovery", bad == 0, first, first, "", gw.Name)
 	return nil
 }
 
@@ -587,15 +587,15 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	}
 	r.event("corrupt", fmt.Sprintf("%s slot 0 on %s", c.Hash[:12], holder.Name))
 	got, err := v.ReadAll(target)
-	r.checkAt("read exact with m shards corrupt", err == nil && bytes.Equal(got, m[target]), fmt.Sprint(err), target, c.Hash, holder.Name)
-	st, err := r.Env.Scrub(ctx)
+	r.checkAt("I-40 L-68 L-105", "read exact with m shards corrupt", err == nil && bytes.Equal(got, m[target]), fmt.Sprint(err), target, c.Hash, holder.Name)
+	st, err := r.scrub(ctx)
 	if err != nil {
 		return err
 	}
-	r.check("scrub finds and repairs the corrupt shard", st.ScrubBad >= 1 && st.Repaired >= 1, fmt.Sprintf("%+v", st))
+	r.check("I-15 L-110", "scrub finds and repairs the corrupt shard", st.ScrubBad >= 1 && st.Repaired >= 1, fmt.Sprintf("%+v", st))
 	if reps, err := r.chunksOf(ctx, target); err == nil && len(reps) > 0 {
 		s := reps[0].Slots[0]
-		r.checkAt("corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot 0 now on node %d", s.Node), target, c.Hash, "")
+		r.checkAt("L-110 L-130", "corrupt shard replaced", s.Node != 0 && s.Live && s.Present != nil && *s.Present, fmt.Sprintf("slot 0 now on node %d", s.Node), target, c.Hash, "")
 	}
 	// m+1 shards of a dedicated chunk: the read fails cleanly or is served exact from a
 	// cache, never wrong bytes
@@ -638,7 +638,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	rv, _ := r.volume(reader)
 	got, err = rv.ReadAll(p)
 	ok, text := corruptionVerdict(corrupted, int(c.M), reader.Idx != gw.Idx, err, bytes.Equal(got, data))
-	r.checkAt(fmt.Sprintf("m+1=%d corrupt shards: error, never garbage", int(c.M)+1), ok, text, p, c.Hash, reader.Name)
+	r.checkAt("I-40 L-106", fmt.Sprintf("m+1=%d corrupt shards: error, never garbage", int(c.M)+1), ok, text, p, c.Hash, reader.Name)
 	if err := v.Remove(p); err != nil {
 		return err
 	}
@@ -665,7 +665,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 			}
 		}
 		if leader.Name == "" {
-			r.check("leader known before the kill", false, "no leader in status")
+			r.check("I-6", "leader known before the kill", false, "no leader in status")
 			return nil
 		}
 		var gw NodeRef
@@ -710,19 +710,19 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		}
 		r.event("start", leader.Name)
 		healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-		r.check("cluster healthy after the leader returned", healthy, hdetail)
+		r.check("L-61", "cluster healthy after the leader returned", healthy, hdetail)
 		if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 			return err
 		}
 		reader := r.gateways()[len(r.gateways())-1]
 		rv, _ := r.volume(reader)
 		bad, first := r.verifyModel(rv, acked)
-		r.checkAt(fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
+		r.checkAt("I-7 I-12 L-57 L-58 L-61", fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
 		for p, d := range acked {
 			m[p] = d
 		}
 	}
-	r.checkFSMAgreement(ctx, "FSM hashes agree after leader losses")
+	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after leader losses")
 	return nil
 }
 
@@ -756,7 +756,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	}
 	for _, pol := range [][2]uint8{{k1, m1}, {k0, m0}} {
 		if err := r.Env.SetPolicy(ctx, pol[0], pol[1]); err != nil {
-			r.check(fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
+			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
 			return nil
 		}
 		r.event("set-redundancy", fmt.Sprintf("%d+%d", pol[0], pol[1]))
@@ -772,9 +772,9 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		if rep, err = r.repairUntilClean(ctx); err != nil {
 			return err
 		}
-		r.check(fmt.Sprintf("migration to %d+%d complete", pol[0], pol[1]), rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0, fmt.Sprintf("%d stale, %d degraded", rep.Volume.StalePolicy, rep.Volume.Degraded))
+		r.check("I-15 I-32 L-100 L-101", fmt.Sprintf("migration to %d+%d complete", pol[0], pol[1]), rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0, fmt.Sprintf("%d stale, %d degraded", rep.Volume.StalePolicy, rep.Volume.Degraded))
 		bad, first := r.verifyModel(v, m)
-		r.checkAt(fmt.Sprintf("corpus exact under %d+%d", pol[0], pol[1]), bad == 0, first, first, "", gw.Name)
+		r.checkAt("I-12 I-15 L-173", fmt.Sprintf("corpus exact under %d+%d", pol[0], pol[1]), bad == 0, first, first, "", gw.Name)
 	}
 	// drain the last node (needs a spare), then put it back
 	if active <= int(k0)+int(m0) {
@@ -786,7 +786,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		victim = r.nodes[len(r.nodes)-2]
 	}
 	if err := r.Env.SetState(ctx, victim, meta.Draining); err != nil {
-		r.check("drain accepted", false, err.Error())
+		r.check("L-93", "drain accepted", false, err.Error())
 		return nil
 	}
 	r.event("drain", victim.Name)
@@ -799,9 +799,9 @@ func phaseMembership(ctx context.Context, r *Run) error {
 			slots = rep.Nodes[i].Slots
 		}
 	}
-	r.checkAt("drained node holds no slots", slots == 0, fmt.Sprintf("%d slots left", slots), "", "", victim.Name)
+	r.checkAt("I-42 L-94", "drained node holds no slots", slots == 0, fmt.Sprintf("%d slots left", slots), "", "", victim.Name)
 	bad, first := r.verifyModel(v, m)
-	r.checkAt("corpus exact after the drain", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-32", "corpus exact after the drain", bad == 0, first, first, "", gw.Name)
 	if err := r.Env.SetState(ctx, victim, meta.Active); err != nil {
 		return err
 	}
@@ -837,7 +837,7 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 		return err
 	}
 	grew := storedDelta(before, rep.Volume.StoredBytes)
-	r.check("second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < int64(before), fmt.Sprintf("%+d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
+	r.check("I-2 L-19 L-33", "second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < int64(before), fmt.Sprintf("%+d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
 	for p, d := range copyM {
 		m[p] = d
 	}
@@ -861,19 +861,19 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	if err := r.Env.Wait(ctx, r.Profile.Grace+time.Second); err != nil {
 		return err
 	}
-	res, err := r.Env.GCNow(ctx)
+	res, err := r.gcNow(ctx)
 	if err != nil {
 		return err
 	}
-	r.check("gc collects the removed file's chunks", res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v (refused deletes are orphans for the sweep)", res))
+	r.check("I-13 L-15 L-75 L-77", "gc collects the removed file's chunks", res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v (refused deletes are orphans for the sweep)", res))
 	if rep, _, err = r.anyStatus(ctx); err != nil {
 		return err
 	}
-	r.check("stored bytes shrink after gc", rep.Volume.StoredBytes < stored1, fmt.Sprintf("%d -> %d", stored1, rep.Volume.StoredBytes))
+	r.check("L-77 L-134", "stored bytes shrink after gc", rep.Volume.StoredBytes < stored1, fmt.Sprintf("%d -> %d", stored1, rep.Volume.StoredBytes))
 	ok, detail, err := r.Env.Fsck(ctx, r.nodes[0])
-	r.check("fsck clean after gc", err == nil && ok, detail+fmt.Sprint(err))
+	r.check("I-27 I-44", "fsck clean after gc", err == nil && ok, detail+fmt.Sprint(err))
 	bad, first := r.verifyModel(v, m)
-	r.checkAt("corpus exact after gc", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-13 I-41", "corpus exact after gc", bad == 0, first, first, "", gw.Name)
 	return nil
 }
 
@@ -906,20 +906,20 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	}
 	r.event("restart all", fmt.Sprintf("%d nodes", len(r.nodes)))
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+60*time.Second)
-	r.check("cluster healthy after the restart storm", healthy, hdetail)
+	r.check("L-120", "cluster healthy after the restart storm", healthy, hdetail)
 	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 		return err
 	}
 	gw := r.gateways()[len(r.gateways())-1]
 	v, _ := r.volume(gw)
 	bad, first := r.verifyModel(v, acked)
-	r.checkAt("writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
+	r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
 	for p, d := range acked {
 		m[p] = d
 	}
 	bad, first = r.verifyModel(v, m)
-	r.checkAt("whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
-	r.checkFSMAgreement(ctx, "FSM hashes agree after the restart storm")
+	r.checkAt("I-12 L-120", "whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
+	r.checkFSMAgreement(ctx, "I-4 I-5", "FSM hashes agree after the restart storm")
 	return nil
 }
 
@@ -997,11 +997,11 @@ func phasePartition(ctx context.Context, r *Run) error {
 	}
 	r.event("partition", names(minority)+" | "+names(majority))
 	led, ldetail := r.awaitLeader(ctx, majority, r.Profile.RestartSettle+30*time.Second)
-	r.check("the majority side elects a leader", led, ldetail)
+	r.check("I-6", "the majority side elects a leader", led, ldetail)
 	major := join(dir, "major.bin")
 	data := r.randomBytes(cs + 9)
 	werr := v.WriteAt(major, 0, data)
-	r.check(fmt.Sprintf("writes commit on the majority side with %s cut off", names(minority)), werr == nil, fmt.Sprint(werr))
+	r.check("I-6 L-148", fmt.Sprintf("writes commit on the majority side with %s cut off", names(minority)), werr == nil, fmt.Sprint(werr))
 	if werr == nil {
 		m[major] = data
 	}
@@ -1018,7 +1018,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if minorGW != nil {
 		mv, _ := r.volume(*minorGW)
 		merr := mv.Mkdir(refused)
-		r.checkAt("metadata operation on the cut-off side is refused", merr != nil, fmt.Sprint(merr), refused, "", minorGW.Name)
+		r.checkAt("I-6 I-39 L-59", "metadata operation on the cut-off side is refused", merr != nil, fmt.Sprint(merr), refused, "", minorGW.Name)
 		tail := r.randomBytes(cs / 2)
 		off := int64(cs - 3)
 		if werr := mv.WriteAt(minor, off, tail); werr == nil { // L-59: still buffered
@@ -1035,13 +1035,13 @@ func phasePartition(ctx context.Context, r *Run) error {
 	}
 	r.event("heal", "")
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-	r.check("cluster healthy after the heal", healthy, hdetail)
+	r.check("L-132", "cluster healthy after the heal", healthy, hdetail)
 	ok, detail := r.awaitCommitted(ctx, gw, minor, m[minor])
-	r.checkAt("bytes written on the cut-off side are committed after the heal", ok, detail, minor, "", gw.Name)
+	r.checkAt("I-7 L-59", "bytes written on the cut-off side are committed after the heal", ok, detail, minor, "", gw.Name)
 	r.noteRefused(v, refused)
 	bad, first := r.verifyModel(v, m)
-	r.checkAt("corpus exact after the minority rejoins", bad == 0, first, first, "", gw.Name)
-	r.checkFSMAgreement(ctx, "FSM hashes agree after the minority rejoins")
+	r.checkAt("I-12 I-29", "corpus exact after the minority rejoins", bad == 0, first, first, "", gw.Name)
+	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after the minority rejoins")
 
 	// step 2: the gateway itself is cut off
 	var others []NodeRef
@@ -1056,12 +1056,12 @@ func phasePartition(ctx context.Context, r *Run) error {
 	r.event("partition", gw.Name+" | "+names(others))
 	refused = join(dir, "self-dir")
 	merr := v.Mkdir(refused)
-	r.checkAt("metadata operation on the cut-off gateway is refused", merr != nil, fmt.Sprint(merr), refused, "", gw.Name)
+	r.checkAt("I-6 I-39 L-59", "metadata operation on the cut-off gateway is refused", merr != nil, fmt.Sprint(merr), refused, "", gw.Name)
 	self := join(dir, "self.bin")
 	tail := r.randomBytes(cs / 2)
 	off := int64(cs - 7)
 	werr = v.WriteAt(self, off, tail)
-	r.checkAt("WRITE on the cut-off gateway is buffered, not refused", werr == nil, fmt.Sprint(werr), self, "", gw.Name)
+	r.checkAt("L-59", "WRITE on the cut-off gateway is buffered, not refused", werr == nil, fmt.Sprint(werr), self, "", gw.Name)
 	if werr == nil {
 		m[self] = overwrite(pre[self], off, tail)
 	}
@@ -1070,16 +1070,16 @@ func phasePartition(ctx context.Context, r *Run) error {
 	}
 	r.event("heal", "")
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
-	r.check("cluster healthy after the gateway rejoins", healthy, hdetail)
+	r.check("L-132", "cluster healthy after the gateway rejoins", healthy, hdetail)
 	ok, detail = r.awaitCommitted(ctx, gw, self, m[self])
-	r.checkAt("bytes buffered on the cut-off gateway are committed after the heal", ok, detail, self, "", gw.Name)
+	r.checkAt("I-7 L-59", "bytes buffered on the cut-off gateway are committed after the heal", ok, detail, self, "", gw.Name)
 	r.noteRefused(v, refused)
 	for _, g := range gws {
 		rv, _ := r.volume(g)
 		bad, first := r.verifyModel(rv, m)
-		r.checkAt("corpus exact after the gateway rejoins", bad == 0, first, first, "", g.Name)
+		r.checkAt("I-12 I-29 L-148", "corpus exact after the gateway rejoins", bad == 0, first, first, "", g.Name)
 	}
-	r.checkFSMAgreement(ctx, "FSM hashes agree after the gateway rejoins")
+	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after the gateway rejoins")
 	return nil
 }
 
