@@ -21,7 +21,7 @@ type Config struct {
 	Node struct {
 		Name     string `yaml:"name"`
 		DataDir  string `yaml:"data_dir"`
-		Capacity string `yaml:"capacity"` // e.g. "500G"; shard-byte budget and placement weight
+		Capacity string `yaml:"capacity"` // "" derives the shard budget from the data disk (docs/01); "500G" pins it
 		Voter    bool   `yaml:"voter"`
 	} `yaml:"node"`
 	Listen struct {
@@ -106,7 +106,7 @@ func Default() Config {
 	host, _ := os.Hostname()
 	c.Node.Name = host
 	c.Node.DataDir = filepath.Join(Home(), "data")
-	c.Node.Capacity = "100G"
+	c.Node.Capacity = "" // derived
 	c.Listen.Raft = 20480
 	c.Listen.RPC = 20481
 	c.Listen.Web = 20482
@@ -161,8 +161,10 @@ func (c Config) Validate() error {
 	if c.Listen.NFS == "" {
 		return errors.New("config: listen.nfs is required")
 	}
-	if _, err := ParseBytes(c.Node.Capacity); err != nil {
-		return fmt.Errorf("config: node.capacity: %w", err)
+	if c.Node.Capacity != "" { // "" = derived from the data disk
+		if _, err := ParseBytes(c.Node.Capacity); err != nil {
+			return fmt.Errorf("config: node.capacity: %w", err)
+		}
 	}
 	if w := c.Listen.Web; w < 0 || w > 65535 {
 		return fmt.Errorf("config: listen.web %d: want 0 (off) or a TCP port", w)

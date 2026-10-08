@@ -35,7 +35,7 @@ cat > "$TAILRAID_HOME/config.yaml" <<EOF
 node:
   name: $NODE_NAME
   data_dir: $TAILRAID_HOME/data
-  capacity: ${CAPACITY:-2G}
+  ${CAPACITY:+capacity: $CAPACITY}
   voter: ${VOTER:-true}
 listen:
   raft: 20480

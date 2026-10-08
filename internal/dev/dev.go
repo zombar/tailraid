@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime/pprof"
+	"strconv"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -29,14 +31,16 @@ type FSMHash struct {
 type Store interface {
 	Path(k chunk.ShardKey) string
 	Has(k chunk.ShardKey) bool
+	Disk() (used, free, total uint64, err error)
 }
 
-// Handler returns the /dev/* mux; faults may be nil (no /dev/fault). exit defaults to os.Exit.
-func Handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger) http.Handler {
-	return handler(st, store, faults, log, os.Exit)
+// Handler returns the /dev/* mux; faults may be nil (no /dev/fault). dir is the data
+// directory /dev/fill consumes. exit defaults to os.Exit.
+func Handler(st *meta.Store, store Store, dir string, faults *Faults, log *slog.Logger) http.Handler {
+	return handler(st, store, dir, faults, log, os.Exit)
 }
 
-func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit func(int)) http.Handler {
+func handler(st *meta.Store, store Store, dir string, faults *Faults, log *slog.Logger, exit func(int)) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -87,12 +91,69 @@ func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_ = pprof.Lookup("goroutine").WriteTo(w, 2)
 	})
+	// the data disk as the budget sees it, and a scratch file that consumes it (docs/01
+	// §Node budget): the soak suite's way to move a node's free space
+	mux.HandleFunc("GET /dev/disk", func(w http.ResponseWriter, _ *http.Request) {
+		used, free, total, err := store.Disk()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]uint64{"used": used, "free": free, "total": total})
+	})
+	mux.HandleFunc("POST /dev/fill", func(w http.ResponseWriter, r *http.Request) {
+		n, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
+		if err != nil {
+			http.Error(w, "bytes: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := Fill(dir, n); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Warn("dev: scratch fill set", "bytes", n)
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /dev/exit", func(w http.ResponseWriter, _ *http.Request) {
 		log.Warn("dev: exit requested")
 		w.WriteHeader(http.StatusNoContent)
 		time.AfterFunc(100*time.Millisecond, func() { exit(3) })
 	})
 	return mux
+}
+
+// Fill writes (or removes, for 0) the scratch file dir/dev-fill of n bytes, really
+// allocated so the filesystem's free space moves.
+func Fill(dir string, n uint64) error {
+	p := filepath.Join(dir, "dev-fill")
+	if n == 0 {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	block := make([]byte, 1<<20)
+	for left := n; left > 0; {
+		w := uint64(len(block))
+		if left < w {
+			w = left
+		}
+		if _, err := f.Write(block[:w]); err != nil {
+			_ = f.Close()
+			return err
+		}
+		left -= w
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // Hash computes the FSMHash of st's current state.

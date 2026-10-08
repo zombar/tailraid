@@ -5,6 +5,7 @@ export type Health = "healthy" | "stale" | "no-leader";
 export interface VolumeReport {
   k: number;
   m: number;
+  auto: boolean;
   chunk_size: number;
   policy_version: number;
   inodes: number;

@@ -32,6 +32,7 @@ var phases = []phase{
 	{"8 dedup and gc", phaseDedupGC},
 	{"9 restart storm", phaseRestartStorm},
 	{"10 partition", phasePartition},
+	{"11 automation", phaseAutomation},
 }
 
 // model is the client's belief about the corpus: path → content.

@@ -470,7 +470,7 @@ function volume(root, r) {
   const tiles = h(
     "div",
     { class: "tiles" },
-    tile2("Policy", `${v.k}+${v.m}`, `${bytes(v.chunk_size)} chunks \xB7 policy v${v.policy_version}`),
+    tile2("Policy", `${v.k}+${v.m}`, `${v.auto ? "auto" : "manual"} \xB7 ${bytes(v.chunk_size)} chunks \xB7 policy v${v.policy_version}`),
     tile2("Files", count(v.inodes), `${count(v.chunks)} chunks \xB7 ${count(v.tombstoned)} tombstoned`),
     tile2("Dedup", v.dedup_ratio.toFixed(2) + "\xD7", bytes(v.logical_bytes) + " logical")
   );

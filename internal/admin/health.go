@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"fmt"
 	"sort"
 	"time"
 
@@ -64,23 +63,10 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 	return v
 }
 
-// PolicyAllowed is the `volume set-redundancy` precondition: k ≥ 1, k+m ≤ 256 and at
-// least k+m live Active nodes, so a full placement is possible the moment the policy is
-// set (migration never waits for nodes that are not there).
+// PolicyAllowed is the `volume set-redundancy` precondition (meta.PolicyAllowed: k ≥ 1,
+// k+m ≤ 256 and at least k+m live Active nodes).
 func PolicyAllowed(nodes []meta.Node, live meta.Liveness, k, m uint8) error {
-	if k < 1 || int(k)+int(m) > 256 {
-		return fmt.Errorf("bad policy %d+%d", k, m)
-	}
-	n := 0
-	for i := range nodes {
-		if nodes[i].State == meta.Active && live.IsLive(nodes[i].Idx) {
-			n++
-		}
-	}
-	if int(k)+int(m) > n {
-		return fmt.Errorf("policy %d+%d needs %d live active nodes, have %d", k, m, int(k)+int(m), n)
-	}
-	return nil
+	return meta.PolicyAllowed(nodes, live, k, m)
 }
 
 // CheckReport is the `check` reply.

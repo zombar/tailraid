@@ -37,7 +37,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
 
 func initCmd() *cobra.Command {
 	var k, m int
-	var chunkSize, capacity, name, tokenFlag string
+	var chunkSize, name, tokenFlag string
 	c := &cobra.Command{
 		Use:   "init",
 		Short: "Bootstrap a new cluster on this node",
@@ -49,14 +49,7 @@ func initCmd() *cobra.Command {
 			if name != "" {
 				cfg.Node.Name = name
 			}
-			if capacity != "" {
-				cfg.Node.Capacity = capacity
-			}
 			cfg.Node.Voter = true
-			capBytes, err := config.ParseBytes(cfg.Node.Capacity)
-			if err != nil {
-				return err
-			}
 			cs, err := config.ParseBytes(chunkSize)
 			if err != nil || cs == 0 || cs > meta.MaxChunkSize {
 				return fmt.Errorf("bad --chunk %q (1 byte to %d MiB)", chunkSize, meta.MaxChunkSize>>20)
@@ -79,24 +72,35 @@ func initCmd() *cobra.Command {
 			if token == "" {
 				token = meta.NewJoinToken()
 			}
+			budget, err := node.Budget(cfg) // pinned by node.capacity, else derived from the data disk (docs/01)
+			if err != nil {
+				return err
+			}
+			// --k/--m pin a manual policy (test rigs); otherwise the leader grows it as devices join (docs/03)
+			auto := !cmd.Flags().Changed("k") && !cmd.Flags().Changed("m")
 			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
-				meta.Node{Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: capBytes,
+				meta.Node{Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: budget,
 					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano()},
-				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, token)
+				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, auto, token)
 			if err != nil {
 				return err
 			}
 			defer n.Close()
-			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d, chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
-				cfg.Node.DataDir, id, ident.IP, k, m, chunkSize, path, ident.IP, token)
+			mode := "manual"
+			if auto {
+				mode = "auto, grows as devices join"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, budget %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
+				cfg.Node.DataDir, id, ident.IP, bytesStr(budget), k, m, mode, chunkSize, path, ident.IP, token)
 			return nil
 		},
 	}
-	c.Flags().IntVar(&k, "k", 1, "data shards per chunk")
-	c.Flags().IntVar(&m, "m", 0, "parity shards per chunk")
+	c.Flags().IntVar(&k, "k", 1, "data shards per chunk (pins a manual policy)")
+	c.Flags().IntVar(&m, "m", 0, "parity shards per chunk (pins a manual policy)")
+	_ = c.Flags().MarkHidden("k")
+	_ = c.Flags().MarkHidden("m")
 	c.Flags().StringVar(&chunkSize, "chunk", "1M", "chunk size (fixed for the volume's life)")
-	c.Flags().StringVar(&capacity, "capacity", "", "shard-byte budget for this node (default from config)")
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	c.Flags().StringVar(&tokenFlag, "token", "", "join token (default: random; set for automation)")
 	return c

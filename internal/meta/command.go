@@ -7,19 +7,20 @@ type Op uint8
 
 // Commands, in wire order. See docs/02-consistency-and-raft.md for the apply rules.
 const (
-	OpSetVolume    Op = 1  // {ChunkSize (only at bootstrap), K, M, Now}
-	OpMetaSet      Op = 2  // {ClusterID, JoinToken, CreatedAt}
-	OpNodeUpsert   Op = 3  // {Node; Idx 0 = allocate}
-	OpNodeSetState Op = 4  // {Idx, State, Now}
-	OpCreate       Op = 5  // {Parent, Name, Type, Mode, Uid, Gid, Target, Now}
-	OpMkdir        Op = 6  // {Parent, Name, Mode, Uid, Gid, Now}
-	OpUnlink       Op = 7  // {Parent, Name, Now}
-	OpRmdir        Op = 8  // {Parent, Name, Now}
-	OpRename       Op = 9  // {OldParent, OldName, NewParent, NewName, Now}
-	OpSetAttr      Op = 10 // {Ino, Mask, Mode, Uid, Gid, Atime, Mtime, Now}
-	OpCommit       Op = 11 // {Ino, BaseVersion, HasTruncate, TruncateTo, NewSize, Writes, NewChunks, Now}
-	OpSetPlacement Op = 12 // {Hash, Placement, K, M}
-	OpGCDelete     Op = 13 // {Before} → Result.Victims
+	OpSetVolume     Op = 1  // {ChunkSize (only at bootstrap), K, M, Now}
+	OpMetaSet       Op = 2  // {ClusterID, JoinToken, CreatedAt}
+	OpNodeUpsert    Op = 3  // {Node; Idx 0 = allocate}
+	OpNodeSetState  Op = 4  // {Idx, State, Now}
+	OpCreate        Op = 5  // {Parent, Name, Type, Mode, Uid, Gid, Target, Now}
+	OpMkdir         Op = 6  // {Parent, Name, Mode, Uid, Gid, Now}
+	OpUnlink        Op = 7  // {Parent, Name, Now}
+	OpRmdir         Op = 8  // {Parent, Name, Now}
+	OpRename        Op = 9  // {OldParent, OldName, NewParent, NewName, Now}
+	OpSetAttr       Op = 10 // {Ino, Mask, Mode, Uid, Gid, Atime, Mtime, Now}
+	OpCommit        Op = 11 // {Ino, BaseVersion, HasTruncate, TruncateTo, NewSize, Writes, NewChunks, Now}
+	OpSetPlacement  Op = 12 // {Hash, Placement, K, M}
+	OpGCDelete      Op = 13 // {Before} → Result.Victims
+	OpSetVolumeMode Op = 14 // {Auto, Now}: the leader picks K, M from the member table (docs/03)
 )
 
 const commandVersion = 1
@@ -40,6 +41,10 @@ type (
 		ChunkSize uint32
 		K, M      uint8
 		Now       int64
+	}
+	SetVolumeMode struct {
+		Auto bool
+		Now  int64
 	}
 	MetaSet struct {
 		ClusterID [16]byte
@@ -139,20 +144,21 @@ type GCVictim struct {
 
 // Command is one Raft log entry: Op plus exactly one non-nil payload.
 type Command struct {
-	Op           Op
-	SetVolume    *SetVolume
-	MetaSet      *MetaSet
-	NodeUpsert   *NodeUpsert
-	NodeSetState *NodeSetState
-	Create       *Create
-	Mkdir        *Mkdir
-	Unlink       *Unlink
-	Rmdir        *Rmdir
-	Rename       *Rename
-	SetAttr      *SetAttr
-	Commit       *Commit
-	SetPlacement *SetPlacement
-	GCDelete     *GCDelete
+	Op            Op
+	SetVolume     *SetVolume
+	MetaSet       *MetaSet
+	NodeUpsert    *NodeUpsert
+	NodeSetState  *NodeSetState
+	Create        *Create
+	Mkdir         *Mkdir
+	Unlink        *Unlink
+	Rmdir         *Rmdir
+	Rename        *Rename
+	SetAttr       *SetAttr
+	Commit        *Commit
+	SetPlacement  *SetPlacement
+	GCDelete      *GCDelete
+	SetVolumeMode *SetVolumeMode
 }
 
 // Result is what Apply returns for a command.
@@ -265,6 +271,10 @@ func EncodeCommand(c Command) []byte {
 	case OpGCDelete:
 		p := mustPayload(c.GCDelete, c.Op)
 		w.i64(p.Before)
+	case OpSetVolumeMode:
+		p := mustPayload(c.SetVolumeMode, c.Op)
+		w.bool(p.Auto)
+		w.i64(p.Now)
 	default:
 		panic(fmt.Sprintf("meta: EncodeCommand: unknown op %d", c.Op))
 	}
@@ -336,6 +346,8 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.SetPlacement = &SetPlacement{Hash: r.hash(), Placement: r.nodeIdxs(), K: r.u8(), M: r.u8()}
 	case OpGCDelete:
 		c.GCDelete = &GCDelete{Before: r.i64()}
+	case OpSetVolumeMode:
+		c.SetVolumeMode = &SetVolumeMode{Auto: r.bool(), Now: r.i64()}
 	default:
 		return c, fmt.Errorf("meta: unknown op %d", c.Op)
 	}

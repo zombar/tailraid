@@ -55,7 +55,8 @@ type Node struct {           // the ONE node struct; 02 and 10 refer to it, neve
     Addr       string         // device: current Tailscale IPv4 (string form)
     RaftPort, RPCPort uint16  // device only
     Voter      bool           // device only
-    Capacity   uint64         // shard-byte budget; also the placement weight
+    Capacity   uint64         // shard-byte budget; also the placement weight; derived from the
+                              // data directory's free space unless pinned by node.capacity (I-74)
     Version    string         // software version last reported (device only)
     JoinedAt   int64
     // s3 only (credentials are NOT here; see 10-s3.md)
@@ -67,6 +68,8 @@ type Volume struct {
     ChunkSize     uint32      // default 1 MiB; fixed for the life of the volume
     K, M          uint8       // current policy for NEW chunks
     PolicyVersion uint32      // bumped by every SetVolume that changes K or M
+    Auto          bool        // the leader picks K, M from the member table (03); set by init,
+                              // cleared by `volume set-redundancy --k --m`, restored by `--auto`
 }
 
 type Meta struct {
@@ -214,9 +217,9 @@ Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM retur
 
 ```
 4 bytes  magic "TRM1"
-u8       codec version (1)
+u8       codec version (2; a version-1 snapshot is still read, with Auto = false)
 u64      Applied
-section  Volume   {ChunkSize u32, K u8, M u8, PolicyVersion u32}
+section  Volume   {ChunkSize u32, K u8, M u8, PolicyVersion u32, Auto bool}
 section  Meta     {ClusterID 16B, JoinToken string, CreatedAt i64}
 u64      NextIno, u16 NextNode
 section  Nodes    uvarint count, then each Node (fields in struct order; strings as bytes)
@@ -258,6 +261,19 @@ offset  size  field
 `NFS3ERR_STALE`. Handles are therefore stable across renames, gateway restarts, and across
 gateways on different devices (they encode cluster-wide identity, not a path).
 
+## Node budget
+
+A device's `Capacity` is its shard-byte budget: the local shard store refuses a PUT that
+would exceed it (`ErrFull`, HTTP 507) and placement weights by it. Unless `node.capacity`
+is set in the config (a pin), the budget is **derived**: `used + free − reserve` of the
+filesystem holding the data directory, with `reserve = max(10 % of the filesystem, 8 GiB)`
+so the volume never drives the disk to `ENOSPC`. `init` and `join` derive it before the
+member record is written; `serve` re-derives it on every maintenance tick (one minute),
+sets the store's cap at once, and proposes `set_capacity` for itself through the leader
+only when the value moved by more than `max(5 %, 1 GiB)`, so placement weights stay still
+while a disk breathes. `Capacity == 0` (a full disk) takes the node out of the candidate
+set without touching what it already holds.
+
 ## Invariants
 
 - **I-1** — For every `TFile` inode, `len(Chunks) == ceil(Size/ChunkSize)` and the file's
@@ -277,6 +293,11 @@ gateways on different devices (they encode cluster-wide identity, not a path).
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
 
+- **I-74** — A device's derived budget is `used + free − reserve` of the data directory's
+  filesystem (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
+  store's cap following at once and a `set_capacity` proposal only past the hysteresis
+  `max(5 %, 1 GiB)`; a node pinned by `node.capacity` is never re-derived.
+
 ## Tests
 
 | Invariant | Tests |
@@ -284,5 +305,6 @@ defined in `04-write-path-and-durability.md`.
 | I-1 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewFileAndOverwrite`, `TestMount_Workload`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestVFS_ZeroByteFile_NoWALNoCommit` |
 | I-2 | `TestFSM_Commit_Errors`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestReader_DecodedHashMismatch_EIO` |
 | I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestInoGen_RootIsOne_ZeroIsNever` |
-| I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
+| I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
+| I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestBudget_PinnedOrDerived`, `TestConfig_CapacityAuto` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |

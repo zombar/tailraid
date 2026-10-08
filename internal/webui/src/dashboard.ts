@@ -30,7 +30,7 @@ function volume(root: HTMLElement, r: Report): void {
   const tiles = h(
     "div",
     { class: "tiles" },
-    tile("Policy", `${v.k}+${v.m}`, `${bytes(v.chunk_size)} chunks · policy v${v.policy_version}`),
+    tile("Policy", `${v.k}+${v.m}`, `${v.auto ? "auto" : "manual"} · ${bytes(v.chunk_size)} chunks · policy v${v.policy_version}`),
     tile("Files", count(v.inodes), `${count(v.chunks)} chunks · ${count(v.tombstoned)} tombstoned`),
     tile("Dedup", v.dedup_ratio.toFixed(2) + "×", bytes(v.logical_bytes) + " logical"),
   );

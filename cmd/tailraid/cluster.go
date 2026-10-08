@@ -65,7 +65,7 @@ func addNodeFlags(c *cobra.Command) {
 
 func joinCmd() *cobra.Command {
 	var voter bool
-	var capacity, name string
+	var name string
 	c := &cobra.Command{
 		Use:   "join <host> <token>",
 		Short: "Join this device to an existing cluster",
@@ -77,9 +77,6 @@ func joinCmd() *cobra.Command {
 			}
 			if name != "" {
 				cfg.Node.Name = name
-			}
-			if capacity != "" {
-				cfg.Node.Capacity = capacity
 			}
 			cfg.Node.Voter = voter
 			if err := config.Save(path, cfg); err != nil {
@@ -95,7 +92,6 @@ func joinCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&voter, "voter", false, "join as a Raft voter (always-on devices only)")
-	c.Flags().StringVar(&capacity, "capacity", "", "shard-byte budget for this node")
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	return c
 }
@@ -254,23 +250,12 @@ func nodeCmd() *cobra.Command {
 	demote := op("demote <node>", "Make a member a non-voter", "set_voter", nil)
 	drain := op("drain <node>", "Stop placing new shards on a member and move its slots away", "set_state", func(_ *cobra.Command, _ []string, mo *rpc.MemberOp) error { mo.State = meta.Draining; return nil })
 	activate := op("activate <node>", "Undo drain", "set_state", func(_ *cobra.Command, _ []string, mo *rpc.MemberOp) error { mo.State = meta.Active; return nil })
-	setCap := op("set-capacity <node> <bytes>", "Change a member's shard budget (placement weight)", "set_capacity", func(_ *cobra.Command, args []string, mo *rpc.MemberOp) error {
-		if len(args) < 2 {
-			return errors.New("usage: node set-capacity <node> <bytes>")
-		}
-		n, err := config.ParseBytes(args[1])
-		if err != nil {
-			return err
-		}
-		mo.Capacity = n
-		return nil
-	})
 	remove := op("remove <node>", "Remove a member (refused while it holds shard slots unless --force)", "remove", func(cmd *cobra.Command, _ []string, mo *rpc.MemberOp) error {
 		mo.Force, _ = cmd.Flags().GetBool("force")
 		return nil
 	})
 	remove.Flags().Bool("force", false, "remove even if the node still holds shard slots")
-	c.AddCommand(ls, describe, promote, demote, drain, activate, setCap, remove)
+	c.AddCommand(ls, describe, promote, demote, drain, activate, remove)
 	return c
 }
 
@@ -306,7 +291,11 @@ func volumeCmd() *cobra.Command {
 			}
 			v := rep.Volume
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "policy        %d+%d (version %d), chunk %s\n", v.K, v.M, v.PolicyVersion, bytesStr(uint64(v.ChunkSize)))
+			mode := "manual"
+			if v.Auto {
+				mode = "auto"
+			}
+			fmt.Fprintf(w, "policy        %d+%d (%s, version %d), chunk %s\n", v.K, v.M, mode, v.PolicyVersion, bytesStr(uint64(v.ChunkSize)))
 			fmt.Fprintf(w, "inodes        %d\nchunks        %d (%d tombstoned, %d degraded, %d repair-pending, %d unreadable, %d on an older policy)\n", v.Inodes, v.Chunks, v.Tombstoned, v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
 			fmt.Fprintf(w, "logical       %s\nstored        %s (dedup %.2fx)\n", bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), v.DedupRatio)
 			fmt.Fprintf(w, "capacity      %s raw, %s usable, %s free\n", bytesStr(v.Capacity), bytesStr(v.UsableCapacity), bytesStr(v.Free))
@@ -317,7 +306,7 @@ func volumeCmd() *cobra.Command {
 	grow := &cobra.Command{
 		Use: "grow", Short: "How to add capacity",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "Capacity grows by joining a device (`tailraid join`) or raising a member's budget (`tailraid node set-capacity <node> <bytes>`). New chunks are placed by capacity weight; existing chunks stay where they are.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Capacity grows by joining a device (`tailraid join`) or by freeing space on a member's data disk: each device's budget follows its free space (pin it with node.capacity in the config). New chunks are placed by budget weight; existing chunks stay where they are.")
 			return nil
 		},
 	}
@@ -499,23 +488,33 @@ func fsckCmd() *cobra.Command {
 
 func setRedundancyCmd() *cobra.Command {
 	var k, m int
+	var auto bool
 	c := &cobra.Command{
 		Use:   "set-redundancy",
-		Short: "Change the volume's k+m; existing chunks migrate in the background",
+		Short: "Pin the volume's k+m, or --auto to let the leader choose it; existing chunks migrate in the background",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if auto {
+				raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", Auto: true})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "policy is automatic again: the leader applies the rule of docs/03 on its next repair pass")
+				return printRaw(cmd.OutOrStdout(), raw)
+			}
 			if k < 1 || m < 0 {
-				return errors.New("--k and --m are required")
+				return errors.New("--k and --m (or --auto) are required")
 			}
 			raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", K: uint8(k), M: uint8(m)})
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "policy set to %d+%d; existing chunks migrate on the next repair passes (watch `tailraid volume describe`)\n", k, m)
+			fmt.Fprintf(cmd.OutOrStdout(), "policy pinned to %d+%d; existing chunks migrate on the next repair passes (watch `tailraid volume describe`)\n", k, m)
 			return printRaw(cmd.OutOrStdout(), raw)
 		},
 	}
 	addNodeFlags(c)
 	c.Flags().IntVar(&k, "k", 0, "data shards")
 	c.Flags().IntVar(&m, "m", -1, "parity shards")
+	c.Flags().BoolVar(&auto, "auto", false, "let the leader choose the policy from the member table")
 	return c
 }

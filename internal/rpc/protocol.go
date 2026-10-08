@@ -99,6 +99,7 @@ type AdminOp struct {
 	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
+	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
 	Scrub bool   `json:"scrub,omitempty"` // check: force a full scrub pass
 	Files bool   `json:"files,omitempty"` // check: list affected files
 	Chunk string `json:"chunk,omitempty"` // chunk: hex hash (prefix ≥ 8) or a /path

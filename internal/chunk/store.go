@@ -42,7 +42,7 @@ var (
 type Store struct {
 	fsys     sysfs.FS
 	root     string
-	capacity int64
+	capacity atomic.Int64 // 0 = unlimited; follows the derived budget (Rebudget)
 	used     atomic.Int64
 	lmu      sync.Mutex
 	locks    map[ShardKey]*keyLock // Put/Delete/quarantine of one key serialize; other keys never wait
@@ -60,7 +60,8 @@ type keyLock struct {
 // from disk.
 // capacity 0 means unlimited.
 func Open(fsys sysfs.FS, root string, capacity int64) (*Store, error) {
-	s := &Store{fsys: fsys, root: root, capacity: capacity, locks: map[ShardKey]*keyLock{}}
+	s := &Store{fsys: fsys, root: root, locks: map[ShardKey]*keyLock{}}
+	s.capacity.Store(capacity)
 	for _, d := range []string{s.shardsDir(), s.quarantineDir()} {
 		if err := fsys.MkdirAll(d, 0o755); err != nil {
 			return nil, fmt.Errorf("chunk: open %s: %w", d, err)
@@ -130,7 +131,11 @@ func (s *Store) mkdirOnce(dir string) error {
 
 // Used returns the bytes of visible shard files; Capacity the configured budget (0 = none).
 func (s *Store) Used() int64     { return s.used.Load() }
-func (s *Store) Capacity() int64 { return s.capacity }
+func (s *Store) Capacity() int64 { return s.capacity.Load() }
+
+// SetCapacity changes the budget; a PUT already past the new cap is not undone, the
+// next one is refused (ErrFull) until the sweep or a delete makes room.
+func (s *Store) SetCapacity(n int64) { s.capacity.Store(max(n, 0)) }
 
 // Has reports whether a shard file is visible under its final name.
 // Path returns the on-disk path of a shard key (used by scrub tooling and tests).
@@ -180,11 +185,11 @@ func (s *Store) PutVerified(k ShardKey, payload []byte, sum [32]byte) (added int
 	// Reserve the bytes before writing, atomically against concurrent Puts of other keys
 	// (the per-key lock does not order those): the store never exceeds its capacity
 	// (L-138). The reservation is released on any failure below.
-	if s.capacity > 0 {
+	if capacity := s.capacity.Load(); capacity > 0 {
 		for {
 			cur := s.used.Load()
-			if cur-oldSize+size > s.capacity {
-				return 0, fmt.Errorf("%w: used %d + %d > %d", ErrFull, cur, size, s.capacity)
+			if cur-oldSize+size > capacity {
+				return 0, fmt.Errorf("%w: used %d + %d > %d", ErrFull, cur, size, capacity)
 			}
 			if s.used.CompareAndSwap(cur, cur+size) {
 				break

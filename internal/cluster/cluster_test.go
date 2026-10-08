@@ -34,7 +34,7 @@ func opts(t *testing.T, dir string) Options {
 func bootstrap(t *testing.T, dir string) *Node {
 	t.Helper()
 	n, err := Bootstrap(ctx, opts(t, dir), meta.Node{Name: "solo", Kind: meta.KindDevice, Capacity: 1 << 30},
-		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: 1}, "token")
+		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: 1}, false, "token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestSingleNode_BootstrapProposeRestart(t *testing.T) {
 	if err != nil || !errors.Is(res.Err, meta.ErrExist) {
 		t.Fatalf("dup create: %v %v", err, res.Err)
 	}
-	if _, err := Bootstrap(ctx, opts(t, dir), meta.Node{}, meta.SetVolume{}, ""); !errors.Is(err, ErrAlreadyInit) {
+	if _, err := Bootstrap(ctx, opts(t, dir), meta.Node{}, meta.SetVolume{}, false, ""); !errors.Is(err, ErrAlreadyInit) {
 		t.Fatalf("second bootstrap: %v", err)
 	}
 	if err := n.Close(); err != nil {

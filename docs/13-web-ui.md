@@ -230,8 +230,8 @@ colour-alone. No dual axes, no stacked bars, no pie.
 2. Follower and leader: the integrity block links the leader from a follower and shows
    the repairer's counters on the leader; "last scan never" on a fresh cluster.
 3. Polling pauses while the tab is hidden and resumes with one immediate fetch.
-4. Balance: `node set-capacity` moves the expected share; a draining node shows "slots to
-   move".
+4. Balance: filling a device's disk lowers its budget and expected share within a minute;
+   a draining node shows "slots to move".
 5. Browser: nested folders, every sort both ways, names with spaces, `#`, `%`, `?` and
    non-ASCII; a 409 toast on an existing folder name; an upload of a 100 MB file with
    progress, a cancel mid-way, five files queued in order, a 507 toast on a full volume.

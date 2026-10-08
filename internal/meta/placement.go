@@ -6,10 +6,12 @@ import (
 	"sort"
 )
 
-// Candidate is a node eligible to receive a shard. Weight is the node's Capacity.
+// Candidate is a node eligible to receive a shard. Weight is the node's Capacity; Voter
+// marks an always-on device, which the data slots prefer (docs/03 §Voter-first slots).
 type Candidate struct {
 	Idx    NodeIdx
 	Weight uint64
+	Voter  bool
 }
 
 // Candidates filters the node table to placement candidates: Active, live, with
@@ -21,10 +23,65 @@ func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 		if n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
 			continue
 		}
-		out = append(out, Candidate{Idx: n.Idx, Weight: n.Capacity})
+		out = append(out, Candidate{Idx: n.Idx, Weight: n.Capacity, Voter: n.Voter && n.Kind == KindDevice})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Idx < out[j].Idx })
 	return out
+}
+
+// PlaceKM places a k+m stripe: the k data slots by rendezvous over the voter candidates
+// when at least k voters are present (otherwise over all candidates), then the m parity
+// slots by rendezvous over the candidates not yet used. Unfilled slots are 0. With no
+// voter candidate the result equals Place(h, cands, k+m); it is a pure function of
+// (h, candidate set, k, m) (I-8, I-77).
+func PlaceKM(h Hash, cands []Candidate, k, m int) []NodeIdx {
+	place := make([]NodeIdx, max(k, 0)+max(m, 0))
+	FillPlacement(h, place, cands, k)
+	return place
+}
+
+// FillPlacement fills every zero slot of place from cands (the caller has already
+// excluded the nodes place holds): zero data slots (index < k) from voters first, zero
+// parity slots from anyone left. Slots for which no candidate remains stay 0. Placement
+// by hash keeps it the same answer on every node (I-8).
+func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int) {
+	needData, needParity := 0, 0
+	for i, n := range place {
+		if n != 0 {
+			continue
+		}
+		if i < k {
+			needData++
+		} else {
+			needParity++
+		}
+	}
+	var voters []Candidate
+	for _, c := range cands {
+		if c.Voter {
+			voters = append(voters, c)
+		}
+	}
+	data := Place(h, voters, needData)
+	if len(data) < needData { // too few voters: data slots fall back to everyone
+		data = Place(h, cands, needData)
+	}
+	parity := Place(h, ExcludeIdx(cands, data), needParity)
+	di, pi := 0, 0
+	for i := range place {
+		if place[i] != 0 {
+			continue
+		}
+		if i < k {
+			if di < len(data) {
+				place[i] = data[di]
+				di++
+			}
+		} else if pi < len(parity) {
+			place[i] = parity[pi]
+			pi++
+		}
+	}
 }
 
 // Place selects up to n distinct nodes for the shards of chunk h by weighted rendezvous
