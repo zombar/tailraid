@@ -42,12 +42,6 @@ func TestStubLifecycle_L_43(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-43")
 }
 
-// Lifecycle: L-45
-// Uploading --[E-37 400 hash mismatch]--> Uploading (retry once same node)
-func TestStubLifecycle_L_45(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-45")
-}
-
 // Lifecycle: L-46
 // Uploading --[E-38 403]--> as E-34
 func TestStubLifecycle_L_46(t *testing.T) {
@@ -64,18 +58,6 @@ func TestStubLifecycle_L_47(t *testing.T) {
 // Uploading --[E-40 slow S3 past deadline, acks ≥ k]--> Placed(n<k+m)
 func TestStubLifecycle_L_48(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-48")
-}
-
-// Lifecycle: L-49
-// Uploading --[E-41 duplicate PUT (racing gateways)]--> Placed
-func TestStubLifecycle_L_49(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-49")
-}
-
-// Lifecycle: L-57
-// Placed --[E-50 ErrNotLeader]--> Placed → Committed
-func TestStubLifecycle_L_57(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-57")
 }
 
 // Lifecycle: L-61
@@ -208,12 +190,6 @@ func TestStubLifecycle_L_94(t *testing.T) {
 // Committed (any slot on node) --[E-81 node remove]--> Committed
 func TestStubLifecycle_L_95(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-95")
-}
-
-// Lifecycle: L-96
-// Committed --[E-82 node remove --force]--> Degraded
-func TestStubLifecycle_L_96(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-96")
 }
 
 // Lifecycle: L-98
@@ -360,12 +336,6 @@ func TestStubLifecycle_L_132(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-132")
 }
 
-// Lifecycle: L-137
-// Durable (placed on self) --[E-44 DELETE for a placed key]--> Durable
-func TestStubLifecycle_L_137(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-137")
-}
-
 // Lifecycle: L-139
 // Durable (S3) --[object deleted externally]--> (missing)
 func TestStubLifecycle_L_139(t *testing.T) {
@@ -442,12 +412,6 @@ func TestStubLifecycle_L_167(t *testing.T) {
 // Committed --[E-114 truncate down then write past the truncation point]--> Dirty (`minSize` < `size`) → Committed
 func TestStubLifecycle_L_168(t *testing.T) {
 	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-168")
-}
-
-// Lifecycle: L-169
-// Durable (device) --[E-115 DELETE with stale fence]--> Durable
-func TestStubLifecycle_L_169(t *testing.T) {
-	t.Skip("stub until M1–M3; see docs/11-chunk-lifecycle.md L-169")
 }
 
 // Lifecycle: L-170
