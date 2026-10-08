@@ -228,7 +228,11 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error)
 func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64) (int, error)
 ```
 
-1. `HashZero` → caller zero-fills. Cache hit (`cache.Get` verifies sha256) → return.
+1. `HashZero` → caller zero-fills. Cache hit → return: the hottest 64 MiB of chunks sit
+   in memory (verified when inserted, a subset of the disk entries); a disk hit verifies
+   sha256 and promotes the chunk to memory. A hit refreshes the file's mtime at most once
+   a minute (the on-disk order only matters across restarts). Concurrent reads of one
+   chunk share a single fetch.
 2. `c := st.GetChunk(h)`; missing → `EIO` (metadata says the chunk exists; this is a bug or
    a lost majority, not a normal path).
 3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131), and slots are offered in placement order so data shards win ties over parity (L-63).

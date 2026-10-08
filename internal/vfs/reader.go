@@ -32,6 +32,16 @@ type Reader struct {
 	// shard so the leader can queue a repair (docs/06 §4 case 5). Must not block.
 	BadSlot func(key chunk.ShardKey, node meta.NodeIdx)
 	Events  *meta.EventRing // chunk history (nil unless dev.enabled)
+
+	mu       sync.Mutex
+	inflight map[meta.Hash]*fetchCall // one fetch per hash at a time; readahead shares it
+}
+
+// fetchCall is a fetch in progress that later readers of the same chunk wait on.
+type fetchCall struct {
+	done chan struct{}
+	data []byte
+	err  error
 }
 
 // NewReader wires a reader. cache may be nil.
@@ -39,13 +49,14 @@ func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache
 	if codecs == nil {
 		codecs = &ec.Pool{}
 	}
-	return &Reader{st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default()}
+	return &Reader{st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(), inflight: map[meta.Hash]*fetchCall{}}
 }
 
 func sha256Sum(b []byte) meta.Hash { return sha256.Sum256(b) }
 
 // ReadChunk returns the logical bytes of chunk h. HashZero returns nil (the caller
-// zero-fills).
+// zero-fills). The slice may be shared with the cache and other readers: do not modify
+// it. Concurrent reads of one chunk (readahead, several clients) share one fetch.
 func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 	if h == meta.HashZero {
 		return nil, nil
@@ -55,6 +66,36 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 			return b, nil
 		}
 	}
+	for {
+		r.mu.Lock()
+		call, running := r.inflight[h]
+		if !running {
+			call = &fetchCall{done: make(chan struct{})}
+			r.inflight[h] = call
+		}
+		r.mu.Unlock()
+		if !running {
+			call.data, call.err = r.fetchChunk(ctx, h)
+			r.mu.Lock()
+			delete(r.inflight, h)
+			r.mu.Unlock()
+			close(call.done)
+			return call.data, call.err
+		}
+		select {
+		case <-call.done:
+			if call.err != nil && errors.Is(call.err, context.Canceled) {
+				continue // the leader gave up for its own reasons; fetch for ourselves
+			}
+			return call.data, call.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// fetchChunk is the uncached read: shards, decode, verify, cache.
+func (r *Reader) fetchChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 	c, ok := r.st.GetChunk(h)
 	if !ok {
 		return nil, fmt.Errorf("%w: chunk %x not in metadata", ErrIO, h[:8])
