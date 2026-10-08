@@ -46,10 +46,15 @@ type Fence interface {
 	PlacedOnSelf(key chunk.ShardKey) (placed, known bool)
 }
 
-// Joiner performs the leader-side join (cluster package).
+// Joiner performs the leader-side join and member operations (cluster package).
 type Joiner interface {
 	Join(ctx context.Context, req JoinRequest) (JoinResponse, error)
 	MemberOp(ctx context.Context, op MemberOp) error
+}
+
+// Admin runs leader-side maintenance (node package): the reply is JSON.
+type Admin interface {
+	AdminOp(ctx context.Context, op AdminOp) (any, error)
 }
 
 // Options wire a Server.
@@ -61,6 +66,7 @@ type Options struct {
 	Applier   Applier
 	Fence     Fence
 	Joiner    Joiner
+	Admin     Admin
 	Auth      Authorizer
 	Members   func() []meta.Node
 	JoinToken func() string
@@ -113,6 +119,7 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
 	mux.Handle("POST /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.members))))
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
+	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
 	mux.Handle("POST /v1/join", http.HandlerFunc(s.join)) // token + claimed identity, not membership
 	s.handler = mux
@@ -445,4 +452,27 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
+	var op AdminOp
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad admin op")
+		return
+	}
+	if s.o.Admin == nil {
+		writeErr(w, http.StatusServiceUnavailable, "admin not available")
+		return
+	}
+	reply, err := s.o.Admin.AdminOp(r.Context(), op)
+	if err != nil {
+		if errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader) {
+			s.notLeader(w)
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(reply)
 }

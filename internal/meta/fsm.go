@@ -672,7 +672,7 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 	for h := range st.Tombs {
 		ch := st.Chunks[h]
 		if ch.Refs == 0 && ch.TombstonedAt < c.Before {
-			victims = append(victims, GCVictim{Hash: h, Placement: append([]NodeIdx(nil), ch.Placement...)})
+			victims = append(victims, GCVictim{Hash: h, K: ch.K, M: ch.M, Placement: append([]NodeIdx(nil), ch.Placement...)})
 		}
 	}
 	sort.Slice(victims, func(i, j int) bool { return bytes.Compare(victims[i].Hash[:], victims[j].Hash[:]) < 0 })
@@ -705,6 +705,9 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 }
 
 func (s *snapshot) Release() {}
+
+// State exposes the cloned state (fsck runs CheckInvariants on it without holding the FSM lock).
+func (s *snapshot) State() *State { return s.st }
 
 // Restore implements raft.FSM: decode fully, then swap atomically.
 func (f *FSM) Restore(rc io.ReadCloser) error {

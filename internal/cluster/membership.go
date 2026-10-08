@@ -102,7 +102,7 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		fut = n.Raft.AddNonvoter(raft.ServerID(req.NodeID), RaftAddrFor(nd), 0, 10*time.Second)
 	}
 	if err := fut.Error(); err != nil {
-		return rpc.JoinResponse{}, fmt.Errorf("cluster: add raft server: %w", err)
+		return rpc.JoinResponse{}, raftErr("add raft server", err)
 	}
 	res, index, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	if err == nil {
@@ -167,7 +167,7 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		if nd.Kind == meta.KindDevice && nd.ID != n.ID {
 			if err := n.Raft.RemoveServer(raft.ServerID(nd.ID), 0, 10*time.Second).Error(); err != nil {
-				return fmt.Errorf("cluster: remove raft server: %w", err)
+				return raftErr("remove raft server", err)
 			}
 		}
 		return nil
@@ -190,7 +190,7 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
 		}
 		if err := fut.Error(); err != nil {
-			return fmt.Errorf("cluster: change suffrage: %w", err)
+			return raftErr("change suffrage", err)
 		}
 		nd.Voter = op.Voter
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
@@ -206,9 +206,18 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
 		}
 		if err := fut.Error(); err != nil {
-			return fmt.Errorf("cluster: update raft address: %w", err)
+			return raftErr("update raft address", err)
 		}
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	}
 	return fmt.Errorf("%w: unknown op %q", ErrBadMemberOp, op.Op)
+}
+
+// raftErr maps Raft's leadership errors onto the not-leader sentinel so RPC callers get
+// a redirect and retry, and wraps anything else.
+func raftErr(what string, err error) error {
+	if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) || errors.Is(err, raft.ErrLeadershipTransferInProgress) {
+		return fmt.Errorf("%w: %s: %v", ErrNotLeader, what, err) //nolint:errorlint // raft detail
+	}
+	return fmt.Errorf("cluster: %s: %w", what, err)
 }

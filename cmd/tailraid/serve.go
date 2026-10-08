@@ -129,7 +129,9 @@ func serveCmd() *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return node.Serve(ctx, cfg, slog.Default(), version)
+			log := cfg.Logger()
+			slog.SetDefault(log)
+			return node.Serve(ctx, cfg, log, version)
 		},
 	}
 }

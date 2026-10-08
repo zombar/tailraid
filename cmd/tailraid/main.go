@@ -18,7 +18,7 @@ func main() {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().String("config", "", "config file (default: per-OS tailraid/config.yaml)")
-	root.AddCommand(initCmd(), joinCmd(), serveCmd(), statusCmd(), nodeCmd(), volumeCmd(), tokenCmd(), mountCmd(), umountCmd(), versionCmd())
+	root.AddCommand(initCmd(), joinCmd(), serveCmd(), statusCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), fsckCmd(), mountCmd(), umountCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "tailraid:", err)
 		os.Exit(1)

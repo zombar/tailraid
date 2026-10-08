@@ -8,6 +8,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/repair"
 )
 
 // NodeReport is one row of `node ls`.
@@ -58,22 +59,30 @@ type VolumeReport struct {
 
 // Report is the whole `status` document.
 type Report struct {
-	Node        string       `json:"node"`
-	ClusterID   string       `json:"cluster_id"`
-	Health      string       `json:"health"`
-	Leader      string       `json:"leader"`
-	LastContact string       `json:"last_contact,omitempty"`
-	Voters      int          `json:"voters"`
-	LiveVoters  int          `json:"live_voters"`
-	Warnings    []string     `json:"warnings,omitempty"`
-	Volume      VolumeReport `json:"volume"`
-	Nodes       []NodeReport `json:"nodes"`
-	JoinToken   string       `json:"join_token,omitempty"`
-	GeneratedAt time.Time    `json:"generated_at"`
+	Node        string        `json:"node"`
+	ClusterID   string        `json:"cluster_id"`
+	Health      string        `json:"health"`
+	Leader      string        `json:"leader"`
+	LastContact string        `json:"last_contact,omitempty"`
+	Voters      int           `json:"voters"`
+	LiveVoters  int           `json:"live_voters"`
+	Warnings    []string      `json:"warnings,omitempty"`
+	Volume      VolumeReport  `json:"volume"`
+	Nodes       []NodeReport  `json:"nodes"`
+	JoinToken   string        `json:"join_token,omitempty"`
+	Repair      *RepairStatus `json:"repair,omitempty"`
+	GeneratedAt time.Time     `json:"generated_at"`
 }
 
-// Build assembles the report from the local FSM and prober view.
-func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clock) Report {
+// RepairStatus is the leader's last scan (nil on followers).
+type RepairStatus struct {
+	LastScan time.Time    `json:"last_scan"`
+	Stats    repair.Stats `json:"stats"`
+	Reported int          `json:"reported_bad_slots"`
+}
+
+// Build assembles the report from the local FSM and prober view; rep may be nil.
+func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clock, rp *repair.Repairer) Report {
 	st := n.FSM
 	now := clk.Now()
 	rep := Report{Node: n.ID, ClusterID: hexID(clusterID), GeneratedAt: now}
@@ -164,6 +173,10 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		if used > 0 {
 			rep.Volume.DedupRatio = float64(stats.LogicalBytes) / float64(used)
 		}
+	}
+	if rp != nil && n.IsLeader() {
+		st, at := rp.Last()
+		rep.Repair = &RepairStatus{LastScan: at, Stats: st, Reported: rp.Reported()}
 	}
 	rep.Warnings = warnings(rep)
 	return rep

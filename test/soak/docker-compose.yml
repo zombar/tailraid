@@ -7,6 +7,8 @@ x-node: &node
   environment: &env
     IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3"
     TOKEN: compose-token
+    TAILRAID_LOG_LEVEL: debug
+    TAILRAID_LOG_FORMAT: json
     K: "2"
     M: "1"
     CHUNK: 256K

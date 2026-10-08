@@ -17,7 +17,7 @@ func TestReport_ReflectsClusterState(t *testing.T) {
 	c.WriteFile(0, "/f", testharness.Pattern(2*int(testharness.ChunkSize), 1))
 	c.Settle()
 	leader := c.Leader()
-	rep := admin.Build(leader.Node, leader.Prober, c.CID, c.Clk)
+	rep := admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, nil)
 	if rep.Health != "healthy" || rep.Voters != 3 || rep.LiveVoters != 3 || len(rep.Nodes) != 3 || rep.Leader != leader.ID {
 		t.Fatalf("report %+v", rep)
 	}
@@ -52,7 +52,7 @@ func TestReport_ReflectsClusterState(t *testing.T) {
 	c.Clk.Advance(cluster.LiveThreshold + time.Second)
 	c.Probe()
 	leader = c.Leader()
-	rep = admin.Build(leader.Node, leader.Prober, c.CID, c.Clk)
+	rep = admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, nil)
 	if rep.LiveVoters != 2 || rep.Volume.Degraded != 2 || rep.Volume.Unreadable != 0 {
 		t.Fatalf("after kill %+v", rep.Volume)
 	}

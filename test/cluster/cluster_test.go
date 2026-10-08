@@ -150,7 +150,7 @@ func TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			name := fmt.Sprintf("f%03d", i)
-			for attempt := 0; attempt < 50; attempt++ {
+			for attempt := 0; attempt < 150; attempt++ { // an election after the kill takes a few seconds
 				nd := c.Nodes[i%3]
 				if !c.Alive(i % 3) {
 					nd = c.Leader()
@@ -161,7 +161,7 @@ func TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits(t *testing.T) {
 					return
 				}
 				results[i] = err
-				<-time.After(20 * time.Millisecond)
+				<-time.After(100 * time.Millisecond)
 			}
 		}(i)
 		if i == n/2 {

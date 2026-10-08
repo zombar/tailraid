@@ -323,7 +323,7 @@ func volumeCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.AddCommand(describe, grow)
+	c.AddCommand(describe, grow, setRedundancyCmd())
 	return c
 }
 
@@ -340,5 +340,137 @@ func tokenCmd() *cobra.Command {
 		},
 	}
 	addNodeFlags(c)
+	return c
+}
+
+func adminCall(cmd *cobra.Command, op rpc.AdminOp) (json.RawMessage, error) {
+	rep, c, addr, err := fetchReport(cmd.Context(), cmd)
+	if err != nil {
+		return nil, err
+	}
+	return c.Admin(cmd.Context(), leaderOr(rep, addr), op)
+}
+
+func printRaw(w io.Writer, raw json.RawMessage) error {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		_, err = w.Write(raw)
+		return err
+	}
+	return printJSON(w, v)
+}
+
+func checkCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "check",
+		Short: "Replication health: degraded and unreadable chunks, last repair pass (exit 1 if issues)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			scrub, _ := cmd.Flags().GetBool("scrub")
+			files, _ := cmd.Flags().GetBool("files")
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "check", Scrub: scrub, Files: files})
+			if err != nil {
+				return err
+			}
+			if err := printRaw(cmd.OutOrStdout(), raw); err != nil {
+				return err
+			}
+			var rep struct {
+				OK bool `json:"ok"`
+			}
+			_ = json.Unmarshal(raw, &rep)
+			if !rep.OK {
+				return errors.New("check found issues")
+			}
+			return nil
+		},
+	}
+	addNodeFlags(c)
+	c.Flags().Bool("scrub", false, "verify every shard of every chunk (slow)")
+	c.Flags().Bool("files", false, "list files touching degraded or unreadable chunks")
+	return c
+}
+
+func repairCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "repair",
+		Short: "Run a repair pass on the leader now and print its statistics",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "repair_now"})
+			if err != nil {
+				return err
+			}
+			return printRaw(cmd.OutOrStdout(), raw)
+		},
+	}
+	addNodeFlags(c)
+	return c
+}
+
+func gcCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "gc",
+		Short: "Collect tombstoned chunks older than the grace period now",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "gc_now"})
+			if err != nil {
+				return err
+			}
+			return printRaw(cmd.OutOrStdout(), raw)
+		},
+	}
+	addNodeFlags(c)
+	return c
+}
+
+func fsckCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "fsck",
+		Short: "Check metadata invariants and count orphan shards on the target node",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, cl, addr, err := fetchReport(cmd.Context(), cmd)
+			if err != nil {
+				return err
+			}
+			raw, err := cl.Admin(cmd.Context(), addr, rpc.AdminOp{Op: "fsck"})
+			if err != nil {
+				return err
+			}
+			if err := printRaw(cmd.OutOrStdout(), raw); err != nil {
+				return err
+			}
+			var rep struct {
+				OK bool `json:"ok"`
+			}
+			_ = json.Unmarshal(raw, &rep)
+			if !rep.OK {
+				return errors.New("fsck found violations")
+			}
+			return nil
+		},
+	}
+	addNodeFlags(c)
+	return c
+}
+
+func setRedundancyCmd() *cobra.Command {
+	var k, m int
+	c := &cobra.Command{
+		Use:   "set-redundancy",
+		Short: "Change the volume's k+m; existing chunks migrate in the background",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if k < 1 || m < 0 {
+				return errors.New("--k and --m are required")
+			}
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", K: uint8(k), M: uint8(m)})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "policy set to %d+%d; existing chunks migrate on the next repair passes (watch `tailraid volume describe`)\n", k, m)
+			return printRaw(cmd.OutOrStdout(), raw)
+		},
+	}
+	addNodeFlags(c)
+	c.Flags().IntVar(&k, "k", 0, "data shards")
+	c.Flags().IntVar(&m, "m", -1, "parity shards")
 	return c
 }

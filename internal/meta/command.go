@@ -133,6 +133,7 @@ type ChunkDesc struct {
 // GCVictim is a chunk removed by GCDelete whose shards the leader must now delete.
 type GCVictim struct {
 	Hash      Hash
+	K, M      uint8 // the collected entry's encoding, so shard keys can be derived
 	Placement []NodeIdx
 }
 
@@ -383,6 +384,8 @@ func EncodeResult(res Result) []byte {
 	w.uvarint(uint64(len(res.Victims)))
 	for i := range res.Victims {
 		w.hash(res.Victims[i].Hash)
+		w.u8(res.Victims[i].K)
+		w.u8(res.Victims[i].M)
 		w.nodeIdxs(res.Victims[i].Placement)
 	}
 	return w.b
@@ -406,7 +409,7 @@ func DecodeResult(b []byte) (Result, error) {
 	if n := r.length(maxListLen); n > 0 {
 		res.Victims = make([]GCVictim, n)
 		for i := range res.Victims {
-			res.Victims[i] = GCVictim{Hash: r.hash(), Placement: r.nodeIdxs()}
+			res.Victims[i] = GCVictim{Hash: r.hash(), K: r.u8(), M: r.u8(), Placement: r.nodeIdxs()}
 		}
 	}
 	if err := r.done(); err != nil {

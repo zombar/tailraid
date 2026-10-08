@@ -1,0 +1,507 @@
+// Package repair restores redundancy and reclaims space (docs/06): the leader-only GC
+// worker and repair scanner, the scrub sampler, and the per-node orphan sweep.
+package repair
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/meta"
+)
+
+// Liveness is the prober view the scanner needs (cluster.Prober).
+type Liveness interface {
+	Self() meta.NodeIdx
+	Live() []meta.NodeIdx
+	IsLive(idx meta.NodeIdx) bool
+	DeadFor(idx meta.NodeIdx) time.Duration
+}
+
+// Shards is the transport the repairer uses (rpc.Client).
+type Shards interface {
+	chunk.ShardClient
+	Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error)
+	DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, index uint64) error
+}
+
+// ChunkReader decodes a chunk from k shards (vfs.Reader).
+type ChunkReader interface {
+	ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error)
+}
+
+// Config tunes the repairer.
+type Config struct {
+	FillAfter    time.Duration // dead-node hold-down before re-placing its slots
+	ScrubShare   int           // 1 in ScrubShare chunks verified per pass (0 = none, 1 = all)
+	RateBytes    int64         // shard bytes per second moved by repair (0 = unlimited)
+	Grace        time.Duration // GC grace
+	GCInterval   time.Duration
+	ScanInterval time.Duration
+	ReportTTL    time.Duration // reported bad slots expire after this
+}
+
+// DefaultConfig returns the documented defaults.
+func DefaultConfig() Config {
+	return Config{FillAfter: 10 * time.Minute, ScrubShare: 100, RateBytes: 50 << 20, Grace: 10 * time.Minute,
+		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute}
+}
+
+// Stats summarises one scan pass (admin.RepairStatus).
+type Stats struct {
+	Scanned      int   `json:"scanned"`
+	Repaired     int   `json:"repaired"`     // chunks brought to full placement
+	Partial      int   `json:"partial"`      // chunks improved but still degraded
+	Unrepairable int   `json:"unrepairable"` // < k good live slots
+	Deferred     int   `json:"deferred"`     // policy migration waiting for enough acks
+	Migrated     int   `json:"migrated"`     // moved to the current (k,m)
+	PolicyStale  int   `json:"policy_stale"` // still on an older (k,m) after the pass
+	Scrubbed     int   `json:"scrubbed"`
+	ScrubBad     int   `json:"scrub_bad"` // slots found corrupt by scrub
+	BytesMoved   int64 `json:"bytes_moved"`
+	Errors       int   `json:"errors"`
+}
+
+// Repairer is the leader's scanner.
+type Repairer struct {
+	st     *meta.Store
+	prop   meta.Proposer
+	live   Liveness
+	shards Shards
+	rd     ChunkReader
+	clk    clock.Clock
+	cfg    Config
+	log    *slog.Logger
+	codecs *ec.Pool
+	limit  *limiter
+
+	mu       sync.Mutex
+	reported map[chunk.ShardKey]time.Time // reader bad-slot reports
+	last     Stats
+	lastAt   time.Time
+	pass     int
+}
+
+// New wires a repairer. log may be nil.
+func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd ChunkReader, clk clock.Clock, cfg Config, log *slog.Logger) *Repairer {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Repairer{st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
+		limit: newLimiter(cfg.RateBytes, clk), reported: map[chunk.ShardKey]time.Time{}}
+}
+
+// ReportBad records a reader's bad-slot report (docs/06 §4 case 5); bounded and expiring.
+func (r *Repairer) ReportBad(key chunk.ShardKey, _ meta.NodeIdx) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.reported) >= 100_000 {
+		return
+	}
+	r.reported[key] = r.clk.Now()
+}
+
+// Reported returns the number of outstanding reader bad-slot reports.
+func (r *Repairer) Reported() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.reported)
+}
+
+// Last returns the most recent pass statistics and when it ran.
+func (r *Repairer) Last() (Stats, time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last, r.lastAt
+}
+
+// Run scans every ScanInterval until ctx is done; isLeader gates each pass.
+func (r *Repairer) Run(ctx context.Context, isLeader func() bool) {
+	t := r.clk.NewTimer(r.cfg.ScanInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C():
+		}
+		if isLeader() {
+			if _, err := r.Scan(ctx); err != nil {
+				r.log.Warn("repair scan failed", "err", err)
+			}
+		}
+		t.Reset(r.cfg.ScanInterval)
+	}
+}
+
+// badSlot explains why a slot needs re-placing.
+type badSlot struct {
+	idx    int
+	reason string
+}
+
+// classify returns the bad slots of c, the kept good slots and whether a policy migration
+// is due (docs/06 §4 cases 1–5).
+func (r *Repairer) classify(c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reported map[int]bool) (bad []badSlot, kept []meta.NodeIdx, migrate bool) {
+	target := targetPolicy(c, vol)
+	migrate = target[0] != c.K || target[1] != c.M
+	kept = make([]meta.NodeIdx, len(c.Placement))
+	for i, n := range c.Placement {
+		switch {
+		case n == 0:
+			bad = append(bad, badSlot{i, "missing"})
+		case nodes[n].State == meta.Removed || nodes[n].State == meta.Draining:
+			bad = append(bad, badSlot{i, "node " + stateWord(nodes[n].State)})
+		case !r.live.IsLive(n) && r.live.DeadFor(n) >= r.cfg.FillAfter:
+			bad = append(bad, badSlot{i, "node dead"})
+		case reported[i]:
+			bad = append(bad, badSlot{i, "reported"})
+		default:
+			kept[i] = n
+		}
+	}
+	return bad, kept, migrate
+}
+
+func stateWord(s meta.NodeState) string {
+	if s == meta.Draining {
+		return "draining"
+	}
+	return "removed"
+}
+
+// targetPolicy is the (k,m) the chunk should have under the current volume policy.
+func targetPolicy(c meta.Chunk, vol meta.Volume) [2]uint8 {
+	if c.K == 1 && c.Size <= 64<<10 {
+		return [2]uint8{1, vol.M}
+	}
+	return [2]uint8{vol.K, vol.M}
+}
+
+// goodLive counts kept slots on live nodes.
+func (r *Repairer) goodLive(kept []meta.NodeIdx) int {
+	n := 0
+	for _, idx := range kept {
+		if idx != 0 && r.live.IsLive(idx) {
+			n++
+		}
+	}
+	return n
+}
+
+// Scan performs one pass: repair, migrate, scrub (docs/06 §4–5).
+func (r *Repairer) Scan(ctx context.Context) (Stats, error) {
+	var st Stats
+	vol := r.st.Volume()
+	nodes := map[meta.NodeIdx]meta.Node{}
+	all := r.st.Nodes()
+	for i := range all {
+		nodes[all[i].Idx] = all[i]
+	}
+	r.mu.Lock()
+	r.pass++
+	pass := r.pass
+	now := r.clk.Now()
+	reportedKeys := map[meta.Hash]map[int]bool{}
+	for k, at := range r.reported {
+		if now.Sub(at) > r.cfg.ReportTTL {
+			delete(r.reported, k)
+			continue
+		}
+		if h, _, _, idx, err := chunk.ParseKey(k); err == nil {
+			if reportedKeys[h] == nil {
+				reportedKeys[h] = map[int]bool{}
+			}
+			reportedKeys[h][idx] = true
+		}
+	}
+	r.mu.Unlock()
+
+	// policy migration order: fewest effective parity first
+	var work []meta.Chunk
+	r.st.ForEachChunk(func(c meta.Chunk) bool {
+		if c.Refs > 0 {
+			work = append(work, c)
+		}
+		return true
+	})
+	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
+
+	for _, c := range work {
+		if ctx.Err() != nil {
+			return st, ctx.Err()
+		}
+		st.Scanned++
+		// re-verify reported slots with a HEAD; a present shard is not bad (docs/06 §4 case 5)
+		reported := map[int]bool{}
+		for idx := range reportedKeys[c.Hash] {
+			if idx < len(c.Placement) && c.Placement[idx] != 0 && r.live.IsLive(c.Placement[idx]) {
+				has, err := r.shards.Has(ctx, c.Placement[idx], chunk.Key(c.Hash, c.K, c.M, idx))
+				if err == nil && has {
+					r.mu.Lock()
+					delete(r.reported, chunk.Key(c.Hash, c.K, c.M, idx))
+					r.mu.Unlock()
+					continue
+				}
+				reported[idx] = true
+			}
+		}
+		bad, kept, migrate := r.classify(c, vol, nodes, reported)
+		if len(bad) == 0 && !migrate {
+			if r.cfg.ScrubShare > 0 && int(c.Hash[0])%r.cfg.ScrubShare == pass%r.cfg.ScrubShare {
+				st.Scrubbed++
+				corrupt, err := r.scrub(ctx, c)
+				if err != nil {
+					st.Errors++
+					continue
+				}
+				if len(corrupt) == 0 {
+					continue
+				}
+				st.ScrubBad += len(corrupt)
+				for _, i := range corrupt {
+					bad = append(bad, badSlot{i, "scrub"})
+					kept[i] = 0
+				}
+			} else {
+				continue
+			}
+		}
+		if migrate {
+			st.PolicyStale++
+		}
+		if r.goodLive(kept) < int(c.K) {
+			st.Unrepairable++
+			continue
+		}
+		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
+		if err != nil {
+			st.Errors++
+			r.log.Warn("repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+			continue
+		}
+		st.BytesMoved += outcome.bytes
+		switch {
+		case !outcome.changed && migrate:
+			st.Deferred++
+		case !outcome.changed:
+			// no live spare could take the bad slots; counted as still degraded
+		case migrate && outcome.full:
+			st.Migrated++
+			st.PolicyStale--
+		case migrate:
+			st.Deferred++
+		case outcome.full:
+			st.Repaired++
+		default:
+			st.Partial++
+		}
+	}
+	r.mu.Lock()
+	r.last, r.lastAt = st, r.clk.Now()
+	r.mu.Unlock()
+	return st, nil
+}
+
+type outcome struct {
+	changed bool // a new placement was committed
+	full    bool
+	bytes   int64
+}
+
+// repairOne re-places the bad slots (or every slot for a migration), commits the new
+// placement and only then deletes superseded shards (docs/06 §4 steps 1–6).
+func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []badSlot, kept []meta.NodeIdx, migrate bool, vol meta.Volume) (outcome, error) {
+	data, err := r.rd.ReadChunk(ctx, c.Hash)
+	if err != nil {
+		return outcome{}, fmt.Errorf("read: %w", err)
+	}
+	k, m := c.K, c.M
+	if migrate {
+		t := targetPolicy(c, vol)
+		k, m = t[0], t[1]
+	}
+	codec, err := r.codecs.Get(k, m)
+	if err != nil {
+		return outcome{}, err
+	}
+	shards, err := codec.Encode(data)
+	if err != nil {
+		return outcome{}, err
+	}
+	total := int(k) + int(m)
+	newPlace := make([]meta.NodeIdx, total)
+	var held []meta.NodeIdx
+	if !migrate {
+		copy(newPlace, kept)
+		for _, n := range kept {
+			if n != 0 {
+				held = append(held, n)
+			}
+		}
+	}
+	live := map[meta.NodeIdx]bool{}
+	for _, n := range r.live.Live() {
+		live[n] = true
+	}
+	cands := meta.ExcludeIdx(meta.Candidates(r.st.Nodes(), func(n meta.NodeIdx) bool { return live[n] }), held)
+	needed := 0
+	for _, n := range newPlace {
+		if n == 0 {
+			needed++
+		}
+	}
+	fresh := meta.Place(c.Hash, cands, needed)
+	fi := 0
+	for i := range newPlace {
+		if newPlace[i] == 0 && fi < len(fresh) {
+			newPlace[i] = fresh[fi]
+			fi++
+		}
+	}
+	var moved int64
+	acked := 0
+	for i, n := range newPlace {
+		if n == 0 {
+			continue
+		}
+		if !migrate && kept[i] == n {
+			acked++
+			continue
+		}
+		r.limit.wait(ctx, int64(len(shards[i])))
+		if err := r.shards.Put(ctx, n, chunk.Key(c.Hash, k, m, i), shards[i]); err != nil {
+			r.log.Warn("repair put failed", "node", n, "slot", i, "err", err)
+			newPlace[i] = 0
+			continue
+		}
+		moved += int64(len(shards[i]))
+		acked++
+	}
+	if migrate && acked < int(k) {
+		return outcome{bytes: moved}, nil // keep the old encoding committed; try again next pass
+	}
+	if !migrate && acked == r.goodLive(kept) {
+		return outcome{bytes: moved}, nil // nothing improved; nothing to commit
+	}
+	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace}})
+	if err == nil {
+		err = res.Err
+	}
+	if err != nil {
+		return outcome{bytes: moved}, fmt.Errorf("set placement: %w", err)
+	}
+	if err := r.st.WaitApplied(ctx, index); err != nil {
+		return outcome{bytes: moved}, err
+	}
+	// superseded shards: old keys after a migration, or slots that moved off live nodes
+	for i, old := range c.Placement {
+		if old == 0 || !r.live.IsLive(old) {
+			continue // a dead node sweeps its own stale shards when it returns
+		}
+		var stale bool
+		if migrate {
+			stale = true
+		} else {
+			stale = i < len(newPlace) && newPlace[i] != old
+		}
+		if stale {
+			if err := r.shards.DeleteFenced(ctx, old, chunk.Key(c.Hash, c.K, c.M, i), index); err != nil {
+				r.log.Debug("stale shard delete refused", "node", old, "slot", i, "err", err)
+			}
+		}
+	}
+	full := true
+	for _, n := range newPlace {
+		if n == 0 {
+			full = false
+		}
+	}
+	return outcome{changed: true, full: full, bytes: moved}, nil
+}
+
+// scrub fetches every shard of c and returns the slots whose content is wrong.
+func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
+	total := int(c.K) + int(c.M)
+	got := make([][]byte, total)
+	var corrupt []int
+	for i, n := range c.Placement {
+		if n == 0 || !r.live.IsLive(n) {
+			continue
+		}
+		b, err := r.shards.Get(ctx, n, chunk.Key(c.Hash, c.K, c.M, i))
+		if err != nil {
+			if errors.Is(err, chunk.ErrNotFound) || errors.Is(err, chunk.ErrCorrupt) {
+				corrupt = append(corrupt, i)
+			}
+			continue
+		}
+		got[i] = b
+	}
+	data, err := r.rd.ReadChunk(ctx, c.Hash) // hash-verified decode
+	if err != nil {
+		return corrupt, err
+	}
+	codec, err := r.codecs.Get(c.K, c.M)
+	if err != nil {
+		return corrupt, err
+	}
+	want, err := codec.Encode(data)
+	if err != nil {
+		return corrupt, err
+	}
+	for i := range got {
+		if got[i] != nil && !bytes.Equal(got[i], want[i]) {
+			corrupt = append(corrupt, i)
+		}
+	}
+	sort.Ints(corrupt)
+	return corrupt, nil
+}
+
+// --- rate limiter ------------------------------------------------------------------
+
+type limiter struct {
+	rate   int64
+	clk    clock.Clock
+	mu     sync.Mutex
+	tokens int64
+	last   time.Time
+}
+
+func newLimiter(rate int64, clk clock.Clock) *limiter {
+	return &limiter{rate: rate, clk: clk, tokens: rate, last: clk.Now()}
+}
+
+// wait blocks until n bytes may be moved.
+func (l *limiter) wait(ctx context.Context, n int64) {
+	if l.rate <= 0 {
+		return
+	}
+	for {
+		l.mu.Lock()
+		now := l.clk.Now()
+		l.tokens = min(l.rate, l.tokens+int64(now.Sub(l.last).Seconds()*float64(l.rate)))
+		l.last = now
+		if l.tokens >= n || n > l.rate {
+			l.tokens -= n
+			l.mu.Unlock()
+			return
+		}
+		need := time.Duration(float64(n-l.tokens) / float64(l.rate) * float64(time.Second))
+		l.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-l.clk.After(need):
+		}
+	}
+}

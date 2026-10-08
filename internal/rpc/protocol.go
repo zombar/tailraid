@@ -91,3 +91,12 @@ type BadSlot struct {
 type ErrorBody struct {
 	Error string `json:"error"`
 }
+
+// AdminOp is POST /v1/admin: leader-side maintenance actions.
+type AdminOp struct {
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck
+	K     uint8  `json:"k,omitempty"`
+	M     uint8  `json:"m,omitempty"`
+	Scrub bool   `json:"scrub,omitempty"` // check: force a full scrub pass
+	Files bool   `json:"files,omitempty"` // check: list affected files
+}

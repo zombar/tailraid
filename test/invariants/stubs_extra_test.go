@@ -5,14 +5,6 @@ import "testing"
 // Stubs for invariants defined in docs 01-06 and 10 by the design pass. Each is replaced by
 // the real tests named in that doc's Tests table as its milestone lands.
 
-// Invariant: I-32
-func TestStub_I_32(t *testing.T) {
-	t.Skip("stub until M1-M3; see docs/03-erasure-coding-and-placement.md")
-}
-
-// Invariant: I-38
-func TestStub_I_38(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure-model.md") }
-
 // Invariant: I-40
 func TestStub_I_40(t *testing.T) { t.Skip("stub until M1-M3; see docs/05-failure-model.md") }
 

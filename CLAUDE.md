@@ -6,7 +6,7 @@ hashicorp/raft, data as Reed-Solomon shards of content-addressed 1 MiB chunks, m
 NFSv3 on loopback (and later an S3 API). Design docs live in `docs/`; read `docs/README.md`
 first. The approved plan is `~/.claude/plans/i-want-to-create-starry-kahn.md`.
 
-**Milestone status:** M2 cluster code complete (tailscale client, tailnet RPC with WhoIs auth, membership/join/forwarding/liveness, multi-node harness and scenarios, status/node/volume/token CLI); validated single-node on the real tailnet; multi-device validation pending. Next: M3 repair/GC/check/fsck.
+**Milestone status:** M3 in progress: repair scanner (fill, dead-node hold-down, drain, policy migration, scrub, reported slots), GC with the delete fence, gated sweep, check/repair/gc/fsck/set-redundancy, crash-at-every-point and ack-implies-readable tests all green; validated on the compose cluster. Remaining: model checker (long), chunk describe, test-time trim. Then M3b soak report.
 
 ## Layout
 

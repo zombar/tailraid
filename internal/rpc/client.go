@@ -27,6 +27,7 @@ type Client struct {
 	clusID  string
 	resolve Resolver
 	local   ShardStore
+	grace   time.Duration // age guard for self-targeted deletes (same rule as the fence)
 }
 
 var _ chunk.ShardClient = (*Client)(nil)
@@ -39,8 +40,11 @@ func NewClient(clusterID [16]byte, resolve Resolver, local ShardStore) *Client {
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
-	return &Client{http: &http.Client{Transport: tr, Timeout: 60 * time.Second}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, local: local}
+	return &Client{http: &http.Client{Transport: tr, Timeout: 60 * time.Second}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, local: local, grace: 10 * time.Minute}
 }
+
+// SetGrace sets the minimum age of a shard this node will delete locally.
+func (c *Client) SetGrace(d time.Duration) { c.grace = d }
 
 // SetTransport replaces the HTTP transport (tests inject FaultNet).
 func (c *Client) SetTransport(rt http.RoundTripper) { c.http.Transport = rt }
@@ -165,8 +169,8 @@ func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.
 		return err
 	}
 	if self && c.local != nil {
-		// local deletes still honour the age guard; placement is the caller's check
-		_, _, err := c.local.DeleteIfOlder(key, 0, time.Now())
+		// the same age guard as the remote fence (I-14); placement is the caller's check
+		_, _, err := c.local.DeleteIfOlder(key, c.grace, time.Now())
 		return err
 	}
 	resp, err := c.do(ctx, http.MethodDelete, addr, "/v1/shards/"+string(key), nil, map[string]string{HeaderLogIndex: strconv.FormatUint(index, 10)})
@@ -309,6 +313,20 @@ func (c *Client) ReportBadSlot(ctx context.Context, addr string, key chunk.Shard
 // Status fetches the admin report from a node.
 func (c *Client) Status(ctx context.Context, addr string) (json.RawMessage, error) {
 	resp, err := c.do(ctx, http.MethodGet, addr, "/v1/status", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errFromStatus(resp)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+}
+
+// Admin sends a maintenance operation and returns the raw JSON reply.
+func (c *Client) Admin(ctx context.Context, addr string, op AdminOp) (json.RawMessage, error) {
+	body, _ := json.Marshal(op)
+	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/admin", body, map[string]string{"Content-Type": "application/json"})
 	if err != nil {
 		return nil, err
 	}

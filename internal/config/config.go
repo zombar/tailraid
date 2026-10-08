@@ -4,9 +4,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 )
@@ -31,6 +33,10 @@ type Config struct {
 	Tailscale struct {
 		CLI string `yaml:"cli"` // path override for the tailscale binary
 	} `yaml:"tailscale"`
+	Log struct {
+		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
+		Format string `yaml:"format"` // text | json (env TAILRAID_LOG_FORMAT overrides)
+	} `yaml:"log"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
@@ -73,6 +79,7 @@ func Default() Config {
 	c.Listen.Raft = 20480
 	c.Listen.RPC = 20481
 	c.Listen.NFS = "127.0.0.1:20490"
+	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
 	c.Mount.Path = filepath.Join(home, "TailRAID")
 	if runtime.GOOS == "windows" {
@@ -157,4 +164,32 @@ func upper(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// Logger builds the process logger from config and environment. Output goes to stderr,
+// which service managers and Docker capture.
+func (c Config) Logger() *slog.Logger {
+	level, format := c.Log.Level, c.Log.Format
+	if v := os.Getenv("TAILRAID_LOG_LEVEL"); v != "" {
+		level = v
+	}
+	if v := os.Getenv("TAILRAID_LOG_FORMAT"); v != "" {
+		format = v
+	}
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn", "warning":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: lvl}
+	if strings.EqualFold(format, "json") {
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, opts))
 }

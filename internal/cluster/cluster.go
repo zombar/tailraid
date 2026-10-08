@@ -173,8 +173,24 @@ func (o *Options) logger() (*slog.Logger, io.Writer) {
 
 type slogWriter struct{ l *slog.Logger }
 
+// Write maps hashicorp/raft's "[LEVEL] raft: msg" lines onto slog levels so operators
+// see warnings and errors at the default level and the rest under debug.
 func (w slogWriter) Write(p []byte) (int, error) {
-	w.l.Debug(strings.TrimSpace(string(p)), "src", "raft")
+	line := strings.TrimSpace(string(p))
+	msg := line
+	if i := strings.Index(line, "] "); i > 0 && strings.HasPrefix(line[i+2:], "raft: ") {
+		msg = line[i+2+len("raft: "):]
+	}
+	switch {
+	case strings.Contains(line, "[ERROR]"):
+		w.l.Error(msg, "src", "raft")
+	case strings.Contains(line, "[WARN]"):
+		w.l.Warn(msg, "src", "raft")
+	case strings.Contains(line, "[INFO]"):
+		w.l.Info(msg, "src", "raft")
+	default:
+		w.l.Debug(msg, "src", "raft")
+	}
 	return len(p), nil
 }
 
@@ -264,11 +280,11 @@ func (o *Options) raftConfig(logOutput io.Writer) *raft.Config {
 		// Short enough for quick elections in tests, long enough that a leader under the
 		// race detector's load does not lose its lease to a slow follower (CI showed
 		// 25 ms contact times stepping a 25 ms lease down into permanent churn).
-		c.HeartbeatTimeout = 300 * time.Millisecond
-		c.ElectionTimeout = 300 * time.Millisecond
-		c.LeaderLeaseTimeout = 150 * time.Millisecond
+		c.HeartbeatTimeout = 1000 * time.Millisecond
+		c.ElectionTimeout = 1000 * time.Millisecond
+		c.LeaderLeaseTimeout = 500 * time.Millisecond
 		c.CommitTimeout = 10 * time.Millisecond
-		c.SnapshotInterval = 200 * time.Millisecond
+		c.SnapshotInterval = 500 * time.Millisecond
 	}
 	if o.SnapshotThreshold != 0 {
 		c.SnapshotThreshold = o.SnapshotThreshold

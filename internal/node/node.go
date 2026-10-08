@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/nfsgw"
+	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/sysfs"
 	"github.com/zombar/tailraid/internal/tailscale"
@@ -141,13 +143,6 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0)}
 	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
-	rd.BadSlot = func(key chunk.ShardKey, bad meta.NodeIdx) {
-		if addr := node.LeaderRPCAddr(); addr != "" {
-			rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = client.ReportBadSlot(rctx, addr, key, bad)
-		}
-	}
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, cache, clk, vfs.DefaultConfig(), log)
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
 	if runtime.GOOS == "windows" {
@@ -155,12 +150,28 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
 
+	rcfg := repair.DefaultConfig()
+	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
+	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, self: selfIdx, clk: clk, log: log}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Members: node.FSM.Nodes, Clk: clk}
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
-		Joiner: node, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
-		Status: func() any { return admin.Build(node, prober, clusterID, clk) }, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096})
+		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
+		Status: func() any { return admin.Build(node, prober, clusterID, clk, repairer) }, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
+		BadSlot: repairer.ReportBad})
 	if err != nil {
 		return err
+	}
+	rd.BadSlot = func(key chunk.ShardKey, bad meta.NodeIdx) {
+		if node.IsLeader() {
+			repairer.ReportBad(key, bad)
+			return
+		}
+		if addr := node.LeaderRPCAddr(); addr != "" {
+			rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = client.ReportBadSlot(rctx, addr, key, bad)
+		}
 	}
 	rl, err := rpc.Listen(rpcAddr, auth)
 	if err != nil {
@@ -178,18 +189,238 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	// background loops: RPC server, prober, address watch, flusher
 	bg, cancelBg := context.WithCancel(context.Background())
-	done := make(chan struct{}, 4)
+	const loops = 6
+	done := make(chan struct{}, loops)
 	go func() { _ = srv.Serve(bg, rl); done <- struct{}{} }()
 	go func() { prober.Run(bg); done <- struct{}{} }()
 	go func() { watchAddress(bg, ts, node, client, selfIdx, ident.IP, log); done <- struct{}{} }()
 	go func() { fl.Run(bg); done <- struct{}{} }()
+	go func() {
+		repairer.Run(bg, func() bool { return node.IsLeader() && node.Health(clk, prober).State == cluster.Healthy })
+		done <- struct{}{}
+	}()
+	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
 
 	err = nfsgw.Serve(ctx, nl, nfsgw.New(fs, node.FSM))
 	cancelBg()
-	for i := 0; i < 4; i++ {
+	for i := 0; i < loops; i++ {
 		<-done
 	}
 	return err
+}
+
+// adminOps implements rpc.Admin and runs the periodic GC and sweep.
+type adminOps struct {
+	node     *cluster.Node
+	prober   *cluster.Prober
+	repairer *repair.Repairer
+	gc       *repair.GC
+	store    *chunk.Store
+	self     meta.NodeIdx
+	clk      clock.Clock
+	log      *slog.Logger
+}
+
+func (a *adminOps) healthy() bool { return a.node.Health(a.clk, a.prober).State == cluster.Healthy }
+
+// leaderApplied reads the leader's applied index from the prober table.
+func (a *adminOps) leaderApplied() (uint64, bool) {
+	if a.node.IsLeader() {
+		return a.node.AppliedIndex(), true
+	}
+	_, id := a.node.Raft.LeaderWithID()
+	nodes := a.node.FSM.Nodes()
+	for i := range nodes {
+		if nodes[i].ID == string(id) {
+			if pr, ok := a.prober.Snapshot()[nodes[i].Idx]; ok && !pr.LastOK.IsZero() {
+				return pr.Applied, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// maintenance runs GC (leader) every GCInterval and the local sweep hourly.
+func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
+	gcT := a.clk.NewTimer(cfg.GCInterval)
+	sweepT := a.clk.NewTimer(time.Hour)
+	defer gcT.Stop()
+	defer sweepT.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-gcT.C():
+			if a.node.IsLeader() && a.healthy() {
+				if res, err := a.gc.RunOnce(ctx); err != nil {
+					a.log.Warn("gc failed", "err", err)
+				} else if res.Victims > 0 {
+					a.log.Info("gc", "victims", res.Victims, "deleted", res.Deleted, "refused", res.Refused)
+				}
+			}
+			gcT.Reset(cfg.GCInterval)
+		case <-sweepT.C():
+			if n, err := repair.SweepLocal(ctx, a.store, a.node.FSM, a.self, cfg.Grace, a.clk, a.healthy, a.node.AppliedIndex, a.leaderApplied); err != nil {
+				a.log.Warn("sweep failed", "err", err)
+			} else if n > 0 {
+				a.log.Info("sweep", "orphans_removed", n)
+			}
+			sweepT.Reset(time.Hour)
+		}
+	}
+}
+
+// CheckReport is the `check` reply.
+type CheckReport struct {
+	Scan       repair.Stats `json:"scan"`
+	Degraded   int          `json:"degraded_chunks"`
+	Unreadable int          `json:"unreadable_chunks"`
+	Files      []string     `json:"files,omitempty"` // paths touching degraded/unreadable chunks
+	OK         bool         `json:"ok"`
+}
+
+// FsckReport is the `fsck` reply.
+type FsckReport struct {
+	Violations   []string `json:"violations"`
+	OrphanShards int      `json:"orphan_shards_on_this_node"`
+	OK           bool     `json:"ok"`
+}
+
+func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
+	switch op.Op {
+	case "repair_now", "check", "set_policy", "gc_now":
+		if !a.node.IsLeader() {
+			if a.node.LeaderRPCAddr() == "" {
+				return nil, cluster.ErrNoLeader
+			}
+			return nil, cluster.ErrNotLeader
+		}
+	}
+	switch op.Op {
+	case "repair_now":
+		return a.repairer.Scan(ctx)
+	case "gc_now":
+		return a.gc.RunOnce(ctx)
+	case "set_policy":
+		if op.K < 1 || int(op.K)+int(op.M) > 256 {
+			return nil, fmt.Errorf("bad policy %d+%d", op.K, op.M)
+		}
+		live := 0
+		nodes := a.node.FSM.Nodes()
+		for i := range nodes {
+			if nodes[i].State == meta.Active && a.prober.IsLive(nodes[i].Idx) {
+				live++
+			}
+		}
+		if int(op.K)+int(op.M) > live {
+			return nil, fmt.Errorf("policy %d+%d needs %d live active nodes, have %d", op.K, op.M, int(op.K)+int(op.M), live)
+		}
+		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: op.K, M: op.M, Now: a.clk.Now().UnixNano()}})
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := a.node.FSM.WaitApplied(ctx, index); err != nil {
+			return nil, err
+		}
+		return a.node.FSM.Volume(), nil
+	case "check":
+		cfg := repair.DefaultConfig()
+		if op.Scrub {
+			cfg.ScrubShare = 1
+		}
+		var st repair.Stats
+		var err error
+		if op.Scrub {
+			st, err = repair.New(a.node.FSM, a.node, a.prober, nil, nil, a.clk, cfg, a.log).Scan(ctx)
+		} else {
+			st, _ = a.repairer.Last()
+		}
+		if err != nil {
+			return nil, err
+		}
+		rep := CheckReport{Scan: st}
+		degraded := map[meta.Hash]bool{}
+		a.node.FSM.ForEachChunk(func(c meta.Chunk) bool {
+			if c.Refs == 0 {
+				return true
+			}
+			good, liveSlots := 0, 0
+			for _, s := range c.Placement {
+				if s != 0 {
+					good++
+					if a.prober.IsLive(s) {
+						liveSlots++
+					}
+				}
+			}
+			if liveSlots < int(c.K)+int(c.M) {
+				rep.Degraded++
+				degraded[c.Hash] = true
+			}
+			if liveSlots < int(c.K) {
+				rep.Unreadable++
+			}
+			return true
+		})
+		if op.Files && len(degraded) > 0 {
+			rep.Files = a.filesReferencing(degraded)
+		}
+		rep.OK = rep.Unreadable == 0 && rep.Degraded == 0
+		return rep, nil
+	case "fsck":
+		snap, err := a.node.FSM.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+		fs := snap.(interface{ State() *meta.State })
+		rep := FsckReport{Violations: meta.CheckInvariants(fs.State())}
+		_ = a.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
+			h, kk, mm, idx, err := chunk.ParseKey(k)
+			if err != nil {
+				return nil
+			}
+			c, ok := a.node.FSM.GetChunk(h)
+			if !ok || c.K != kk || c.M != mm || idx >= len(c.Placement) || c.Placement[idx] != a.self {
+				rep.OrphanShards++
+			}
+			return nil
+		})
+		rep.OK = len(rep.Violations) == 0
+		return rep, nil
+	}
+	return nil, fmt.Errorf("unknown admin op %q", op.Op)
+}
+
+// filesReferencing walks the tree once and returns the paths whose chunks are in set.
+func (a *adminOps) filesReferencing(set map[meta.Hash]bool) []string {
+	var out []string
+	var walk func(ino meta.Ino, prefix string)
+	walk = func(ino meta.Ino, prefix string) {
+		ents, err := a.node.FSM.ReadDir(ino)
+		if err != nil {
+			return
+		}
+		for i := range ents {
+			p := prefix + "/" + ents[i].Name
+			switch ents[i].Type {
+			case meta.TDir:
+				walk(ents[i].Ino, p)
+			case meta.TFile:
+				for _, h := range ents[i].Chunks {
+					if set[h] {
+						out = append(out, p)
+						break
+					}
+				}
+			}
+		}
+	}
+	walk(meta.RootIno, "")
+	sort.Strings(out)
+	return out
 }
 
 // fence answers the DELETE fence from the local FSM.

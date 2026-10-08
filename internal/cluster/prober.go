@@ -225,14 +225,23 @@ func (p *Prober) Snapshot() map[meta.NodeIdx]Probe {
 }
 
 // IsLive reports whether a probe succeeded within LiveThreshold (self is always live).
+// A node that joined less than LiveThreshold ago and has not been probed yet counts as
+// live: the leader just talked to it, and treating it as dead would place the first
+// writes after a join degraded.
 func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	if self, ok := p.node.SelfIdx(); ok && self == idx {
 		return true
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	pr, ok := p.probes[idx]
-	return ok && p.clk.Now().Sub(pr.LastOK) < LiveThreshold
+	p.mu.Unlock()
+	if ok && !pr.LastOK.IsZero() {
+		return p.clk.Now().Sub(pr.LastOK) < LiveThreshold
+	}
+	if nd, found := p.node.nodeByIdx(idx); found && nd.JoinedAt > 0 {
+		return p.clk.Now().Sub(time.Unix(0, nd.JoinedAt)) < LiveThreshold
+	}
+	return false
 }
 
 // DeadFor returns how long a node has been dead (0 when live or unknown).

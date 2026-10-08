@@ -376,9 +376,18 @@ func (c *Cluster) Leader() *ClusterNode {
 // liveness on every prober.
 func (c *Cluster) Settle() {
 	c.T.Helper()
-	leader := c.Leader()
-	if err := leader.Node.Raft.Barrier(5 * time.Second).Error(); err != nil {
-		c.T.Fatal(err)
+	// a barrier can fail when leadership moves under load; re-find the leader and retry
+	var leader *ClusterNode
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		leader = c.Leader()
+		if err = leader.Node.Raft.Barrier(5 * time.Second).Error(); err == nil {
+			break
+		}
+		<-time.After(100 * time.Millisecond)
+	}
+	if err != nil {
+		c.T.Fatalf("settle: %v", err)
 	}
 	last := leader.Node.Raft.LastIndex()
 	inConfig := map[string]bool{}
@@ -543,9 +552,13 @@ func (c *Cluster) WriteFile(i int, path string, data []byte) {
 		c.T.Fatalf("n%d write %s: %v", i, path, err)
 	}
 	_ = f.Close()
-	if err := nd.Flush.FlushAll(context.Background()); err != nil {
-		c.T.Fatalf("n%d flush: %v", i, err)
+	for attempt := 0; attempt < 30; attempt++ { // a flush fails across a leadership change and is retried
+		if err = nd.Flush.FlushAll(context.Background()); err == nil {
+			return
+		}
+		<-time.After(100 * time.Millisecond)
 	}
+	c.T.Fatalf("n%d flush: %v", i, err)
 }
 
 // ReadFile reads path through node i's filesystem with a cold cache.

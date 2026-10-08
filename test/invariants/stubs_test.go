@@ -10,10 +10,6 @@ import "testing"
 // Becomes: TestStore_PutRejectsHashMismatch, TestVFS_DedupeIdenticalChunks (M1).
 func TestStub_I_2(t *testing.T) { t.Skip("stub until M1; see docs/01-data-model.md") }
 
-// Invariant: I-15
-// Becomes: TestCluster_NodeDiesMidFlush_RepairRestoresRedundancy, TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK (M3).
-func TestStub_I_15(t *testing.T) { t.Skip("stub until M3; see docs/06-gc-and-repair.md") }
-
 // Invariant: I-19
 // Becomes: TestS3NFS_OracleBothFrontEnds (M5a).
 func TestStub_I_19(t *testing.T) { t.Skip("stub until M5a; see docs/10-s3-nodes.md") }
