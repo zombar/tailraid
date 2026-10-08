@@ -1,0 +1,7 @@
+# Pre-commit gate (docs/09 §2): formatting, lint, invariant/lifecycle citations, fast race suite.
+# Install once per clone: `lefthook install` (https://github.com/evilmartians/lefthook).
+pre-commit:
+  parallel: false
+  commands:
+    check:
+      run: make check

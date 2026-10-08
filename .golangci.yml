@@ -1,0 +1,59 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gocritic
+    - errorlint
+    - misspell
+    - unconvert
+    - prealloc
+    - forbidigo
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam        # we pass small structs by value deliberately
+        - unnamedResult    # (billy.File, error) style is fine
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # No test-mode switches in production code (docs/09 §2).
+        - pattern: 'os\.Getenv\("TAILRAID_TEST"\)'
+          msg: "no test-mode env vars in production code; use real stores or the clock/sysfs seams"
+        - pattern: 'os\.LookupEnv\("TAILRAID_TEST"\)'
+          msg: "no test-mode env vars in production code; use real stores or the clock/sysfs seams"
+        # No sleep-based synchronization in tests (docs/09 §5); production code uses clock.Clock.
+        - pattern: '^time\.Sleep$'
+          msg: "no time.Sleep: tests wait on channels/Eventually with the fake clock; production uses clock.Clock"
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - prealloc
+      # Only the raft timing helper may sleep, with a comment explaining why.
+      - path: internal/testharness/raftwait\.go
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofmt

@@ -1,0 +1,6 @@
+/dist/
+/report.html
+/results.jsonl
+*.test
+/.idea/
+.DS_Store
