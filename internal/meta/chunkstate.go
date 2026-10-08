@@ -2,6 +2,13 @@ package meta
 
 import "time"
 
+// MaxChunkSize bounds the volume's chunk size (I-67): the shard store, the RPC body limit
+// and the flusher's buffers are all sized from it, and a k=1 chunk is stored whole.
+const MaxChunkSize = 64 << 20
+
+// MaxNameLen is the longest directory entry name in bytes (I-66), the NFS limit.
+const MaxNameLen = 255
+
 // SmallChunkMax is the small-chunk threshold of docs/03: a chunk shorter than a full chunk
 // and at most this many bytes is replicated (k=1, m=Vol.M) instead of striped.
 const SmallChunkMax = 64 << 10

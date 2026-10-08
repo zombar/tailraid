@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/zombar/tailraid/internal/meta"
 	"hash/fnv"
 	"io"
 	"io/fs"
@@ -23,8 +24,9 @@ import (
 const (
 	magic      = "TRS1"
 	HeaderSize = 4 + 4 + 32
-	// MaxPayload bounds payloadLen so a corrupt header cannot drive a huge allocation.
-	MaxPayload = 64 << 20
+	// MaxPayload bounds payloadLen so a corrupt header cannot drive a huge allocation; it
+	// is the volume's maximum chunk size (I-67), so a k=1 shard of the largest chunk fits.
+	MaxPayload = meta.MaxChunkSize
 	tmpPrefix  = ".tmp-"
 	// QuarantineMax caps the number of corrupt files kept for forensics.
 	QuarantineMax = 64
@@ -113,6 +115,9 @@ func (s *Store) Has(k ShardKey) bool {
 func (s *Store) Put(k ShardKey, payload []byte) (added int64, err error) {
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return 0, err
+	}
+	if len(payload) > MaxPayload {
+		return 0, fmt.Errorf("chunk: payload of %d bytes exceeds MaxPayload %d", len(payload), MaxPayload)
 	}
 	mu := s.lock(k)
 	mu.Lock()

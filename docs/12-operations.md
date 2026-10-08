@@ -108,6 +108,14 @@ release artifact (`internal/update`):
 
 `--check` stops after step 2 and exits 2 when an update is available.
 
+## 6. Mixed versions
+
+There is no FSM versioning. A release that adds a rule the FSM enforces (a name longer
+than 255 bytes, a chunk size above 64 MiB, a Commit past `MaxFileSize`) can reject a log
+entry an older gateway wrote, so upgrade every node before relying on the new limits;
+every such rule is also checked by the gateway before it proposes, so a cluster running
+one version never produces an entry another node of that version rejects.
+
 ## Invariants
 
 - **I-58** — The portmap stub answers `GETPORT` for programs 100003 and 100005 version 3 over TCP with the NFS gateway port and `0` for any other mapping, serves `NULL` and `DUMP`, answers `PROC_UNAVAIL` for other procedures, and binds loopback only.

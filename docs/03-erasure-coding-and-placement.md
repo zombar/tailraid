@@ -183,6 +183,9 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 - **I-32** — Policy migration and drain never reduce a chunk's reachable shard count below
   its recorded `k`: old shards are deleted only after the new placement has been committed
   and applied.
+- **I-67** — The chunk size is bounded once: `init`, `SetVolume` and the shard store all
+  enforce `ChunkSize ≤ meta.MaxChunkSize` (64 MiB), so a k=1 shard of the largest chunk
+  always fits `chunk.MaxPayload` and no shard is stored that cannot be read back.
 - **I-33** — Weighted placement is proportional: over many hashes a candidate receives
   shards in proportion to its weight within ±10 %, and removing a candidate relocates only
   the shards it held.
@@ -197,3 +200,4 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-30 | `TestShardSizesEqual_AndDeterministic`, `TestEncode_DoesNotAliasInput`, `TestVerify_EncodedIsConsistent` |
 | I-32 | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK`, `TestRepair_DrainMovesAllSlotsBeforeRemove`, `TestRepair_DeletesOldShardsOnlyAfterCommit` |
 | I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnRemove` |
+| I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |

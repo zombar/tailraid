@@ -83,6 +83,8 @@ func mapErr(op, name string, err error) error {
 		e = syscall.ENOTEMPTY
 	case errors.Is(err, meta.ErrLoop):
 		e = syscall.EINVAL
+	case errors.Is(err, meta.ErrNameTooLong):
+		e = syscall.ENAMETOOLONG
 	case errors.Is(err, meta.ErrBadCommand):
 		e = syscall.EINVAL
 	case errors.Is(err, ErrIO):

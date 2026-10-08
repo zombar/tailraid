@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -459,5 +460,26 @@ func TestVFS_MaxDirty_ReturnsEIO(t *testing.T) {
 	must(t, write("/b", 0, 1))
 	if _, err := fs.Stat("/b"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A name longer than 255 bytes is refused with ENAMETOOLONG (NFS3ERR_NAMETOOLONG); go-nfs
+// refuses it at the wire too, so this is the backstop for other billy consumers.
+// Invariant: I-66
+func TestVFS_NameTooLong_ENAMETOOLONG(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	long := "/" + strings.Repeat("n", meta.MaxNameLen)
+	if _, err := fs.Create(long); err != nil {
+		t.Fatalf("255-byte name: %v", err)
+	}
+	if _, err := fs.Create(long + "n"); !errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Fatalf("256-byte name: err=%v, want ENAMETOOLONG", err)
+	}
+	if err := fs.MkdirAll(long+"n", 0o755); !errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Fatalf("mkdir 256-byte name: err=%v", err)
+	}
+	if err := fs.Rename(long, long+"n"); !errors.Is(err, syscall.ENAMETOOLONG) {
+		t.Fatalf("rename to a 256-byte name: err=%v", err)
 	}
 }

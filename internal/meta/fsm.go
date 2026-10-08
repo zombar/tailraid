@@ -134,8 +134,8 @@ func (a *applier) setVolume(c *SetVolume) error {
 	}
 	first := st.Vol.ChunkSize == 0
 	if first {
-		if c.ChunkSize == 0 {
-			return ErrPolicy
+		if c.ChunkSize == 0 || c.ChunkSize > MaxChunkSize {
+			return ErrPolicy // I-67: one bound for init, the FSM and the shard store
 		}
 		st.Vol.ChunkSize = c.ChunkSize
 	} else if c.ChunkSize != 0 && c.ChunkSize != st.Vol.ChunkSize {
@@ -232,8 +232,16 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 
 // --- namespace ---------------------------------------------------------------
 
-func validName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/")
+// validName enforces I-66: a name is 1..MaxNameLen bytes, not "." or "..", and holds
+// neither '/' nor NUL. Too long is its own error so the gateway can say NAMETOOLONG.
+func validName(name string) error {
+	switch {
+	case len(name) > MaxNameLen:
+		return ErrNameTooLong
+	case name == "", name == ".", name == "..", strings.ContainsAny(name, "/\x00"):
+		return ErrBadCommand
+	}
+	return nil
 }
 
 func (a *applier) dir(ino Ino) (*Inode, error) {
@@ -261,8 +269,11 @@ func (a *applier) newInode(typ FileType, parent *Inode, name string, mode, uid, 
 }
 
 func (a *applier) create(c *Create) (Result, error) {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return Result{}, ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return Result{}, err
 	}
 	if c.Type != TFile && c.Type != TSymlink {
 		return Result{}, ErrBadCommand
@@ -287,8 +298,11 @@ func (a *applier) create(c *Create) (Result, error) {
 }
 
 func (a *applier) mkdir(c *Mkdir) (Result, error) {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return Result{}, ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return Result{}, err
 	}
 	p, err := a.dir(c.Parent)
 	if err != nil {
@@ -348,8 +362,11 @@ func (d refDelta) commit(st *State, now int64) {
 }
 
 func (a *applier) unlink(c *Unlink) error {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return err
 	}
 	st := a.st
 	p, err := a.dir(c.Parent)
@@ -378,8 +395,11 @@ func (a *applier) unlink(c *Unlink) error {
 }
 
 func (a *applier) rmdir(c *Rmdir) error {
-	if c == nil || !validName(c.Name) {
+	if c == nil {
 		return ErrBadCommand
+	}
+	if err := validName(c.Name); err != nil {
+		return err
 	}
 	st := a.st
 	p, err := a.dir(c.Parent)
@@ -420,8 +440,14 @@ func (a *applier) isAncestor(anc, dir Ino) bool {
 }
 
 func (a *applier) rename(c *Rename) error {
-	if c == nil || !validName(c.OldName) || !validName(c.NewName) {
+	if c == nil {
 		return ErrBadCommand
+	}
+	if err := validName(c.OldName); err != nil {
+		return err
+	}
+	if err := validName(c.NewName); err != nil {
+		return err
 	}
 	st := a.st
 	op, err := a.dir(c.OldParent)

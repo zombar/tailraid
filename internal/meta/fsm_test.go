@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"github.com/zombar/tailraid/internal/testseed"
 	"math"
 	"math/rand"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -483,6 +485,79 @@ func TestFSM_Commit_RejectsStaleBaseVersion(t *testing.T) {
 		t.Fatal("conflicting commit registered a chunk")
 	}
 	tf.fails(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 5, NewSize: testCS, Now: 2}}, ErrConflict)
+}
+
+// Names are 1..MaxNameLen bytes with no '/' or NUL; too long is its own error so the
+// gateway answers NFS3ERR_NAMETOOLONG. Create, Mkdir, Symlink and Rename share the rule.
+// Invariant: I-26, I-66
+func TestFSM_Create_NameBoundaries(t *testing.T) {
+	long := strings.Repeat("a", MaxNameLen)
+	multibyte := strings.Repeat("é", MaxNameLen/2) + "a" // 255 bytes of UTF-8
+	cases := []struct {
+		name string
+		val  string
+		want error
+	}{
+		{"empty", "", ErrBadCommand}, {"one byte", "a", nil}, {"max", long, nil}, {"max+1", long + "a", ErrNameTooLong},
+		{"utf-8 at max", multibyte, nil}, {"utf-8 past max", multibyte + "é", ErrNameTooLong},
+		{"dot", ".", ErrBadCommand}, {"dotdot", "..", ErrBadCommand}, {"slash", "a/b", ErrBadCommand}, {"nul", "a\x00b", ErrBadCommand},
+		{"beyond the wire string limit: undecodable", strings.Repeat("x", 70000), ErrBadCommand},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tf := newTFSM(t)
+			d := tf.mkdir(RootIno, "d")
+			for i, kind := range []string{"file", "dir", "symlink"} {
+				sub := tf.mkdir(d, fmt.Sprintf("op%d", i))
+				var cmd Command
+				switch kind {
+				case "file":
+					cmd = Command{Op: OpCreate, Create: &Create{Parent: sub, Name: c.val, Type: TFile, Mode: 0o644, Now: 1}}
+				case "dir":
+					cmd = Command{Op: OpMkdir, Mkdir: &Mkdir{Parent: sub, Name: c.val, Mode: 0o755, Now: 1}}
+				default:
+					cmd = Command{Op: OpCreate, Create: &Create{Parent: sub, Name: c.val, Type: TSymlink, Mode: 0o777, Target: "/t", Now: 1}}
+				}
+				if c.want != nil {
+					tf.fails(cmd, c.want)
+				} else {
+					tf.ok(cmd)
+				}
+			}
+			tf.create(d, "src")
+			rn := Command{Op: OpRename, Rename: &Rename{OldParent: d, OldName: "src", NewParent: d, NewName: c.val, Now: 2}}
+			if c.want != nil {
+				tf.fails(rn, c.want)
+			} else {
+				tf.ok(rn)
+			}
+		})
+	}
+}
+
+// The chunk size is bounded once (I-67): init, the FSM and the shard store share it.
+// Invariant: I-67
+func TestFSM_SetVolume_ChunkSizeBounds(t *testing.T) {
+	cases := []struct {
+		cs uint32
+		ok bool
+	}{
+		{0, false}, {1, true}, {MaxChunkSize - 1, true}, {MaxChunkSize, true}, {MaxChunkSize + 1, false}, {1 << 30, false},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprint(c.cs), func(t *testing.T) {
+			tf := &tfsm{t: t, f: NewFSM()}
+			cmd := Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: c.cs, K: 2, M: 1, Now: 1}}
+			if c.ok {
+				tf.ok(cmd)
+				if v := tf.f.Volume(); v.ChunkSize != c.cs {
+					t.Fatalf("chunk size %d", v.ChunkSize)
+				}
+			} else {
+				tf.fails(cmd, ErrPolicy)
+			}
+		})
+	}
 }
 
 // A Commit without HasTruncate may keep or grow a file but never shrink it; the flusher

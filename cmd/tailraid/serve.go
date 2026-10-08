@@ -58,8 +58,8 @@ func initCmd() *cobra.Command {
 				return err
 			}
 			cs, err := config.ParseBytes(chunkSize)
-			if err != nil || cs == 0 || cs > 1<<30 {
-				return fmt.Errorf("bad --chunk %q", chunkSize)
+			if err != nil || cs == 0 || cs > meta.MaxChunkSize {
+				return fmt.Errorf("bad --chunk %q (1 byte to %d MiB)", chunkSize, meta.MaxChunkSize>>20)
 			}
 			if k < 1 || m < 0 || k+m > 256 {
 				return fmt.Errorf("bad policy k=%d m=%d", k, m)

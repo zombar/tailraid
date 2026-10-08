@@ -269,6 +269,9 @@ gateways on different devices (they encode cluster-wide identity, not a path).
   `Ino` values are never reused after `Unlink`/`Rmdir`.
 - **I-22** — Encoding is canonical: two `State` values that are equal produce byte-identical
   `EncodeState` output, and `DecodeState(EncodeState(s)) == s`.
+- **I-66** — A directory entry name is 1 to `MaxNameLen` (255) bytes and contains neither
+  `/` nor NUL; `Create`, `Mkdir`, `Symlink` and `Rename` reject anything else before touching
+  state (`ErrNameTooLong` → `ENAMETOOLONG` / `NFS3ERR_NAMETOOLONG`, otherwise `ErrBadCommand`).
 
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
@@ -281,3 +284,4 @@ defined in `04-write-path-and-durability.md`.
 | I-2 | `TestFSM_RejectsHashZeroChunkEntry`, `TestVFS_DedupIdenticalChunks`, `TestVFS_AllZeroChunkBecomesHashZero`, `TestReader_VerifiesDecodedHash` |
 | I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestFSM_Rename_KeepsInoGen`, `TestNFS_RemovedHandleIsStale` |
 | I-22 | `TestCodec_StateRoundTrip`, `TestCodec_CanonicalOrdering`, `TestFSM_DeterministicAcrossReplicas`, `FuzzDecodeCommand`, `FuzzDecodeState` |
+| I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |

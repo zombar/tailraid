@@ -59,6 +59,34 @@ func diskUsed(t *testing.T, root string) int64 {
 	return used
 }
 
+// The store never writes a payload larger than the volume's maximum chunk size, and
+// never trusts a header that claims one.
+// Invariant: I-11, I-67
+func TestStore_PayloadBoundaries(t *testing.T) {
+	for _, n := range []int{MaxPayload - 1, MaxPayload, MaxPayload + 1} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			s := openStore(t, sysfs.OS{}, t.TempDir(), 0)
+			p := make([]byte, n)
+			p[n/2] = 7
+			k := keyFor(p, 1)
+			_, err := s.Put(k, p)
+			if n > MaxPayload {
+				if err == nil || s.Has(k) {
+					t.Fatalf("payload of %d accepted", n)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Get(k)
+			if err != nil || len(got) != n || got[n/2] != 7 {
+				t.Fatalf("round trip of %d bytes: len %d err %v", n, len(got), err)
+			}
+		})
+	}
+}
+
 // Invariant: I-11
 // Lifecycle: L-125, L-126, L-128
 func TestStore_PutGetRoundTrip(t *testing.T) {
