@@ -77,7 +77,7 @@ func initCmd() *cobra.Command {
 			}
 			token := tokenFlag
 			if token == "" {
-				token = randomToken()
+				token = meta.NewJoinToken()
 			}
 			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
@@ -100,24 +100,6 @@ func initCmd() *cobra.Command {
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	c.Flags().StringVar(&tokenFlag, "token", "", "join token (default: random; set for automation)")
 	return c
-}
-
-func randomToken() string {
-	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
-	b := make([]byte, 8)
-	f, err := os.Open("/dev/urandom")
-	if err == nil {
-		_, _ = f.Read(b)
-		_ = f.Close()
-	} else {
-		for i := range b {
-			b[i] = byte(time.Now().UnixNano() >> (i * 7))
-		}
-	}
-	for i := range b {
-		b[i] = alphabet[int(b[i])%len(alphabet)]
-	}
-	return string(b)
 }
 
 func serveCmd() *cobra.Command {

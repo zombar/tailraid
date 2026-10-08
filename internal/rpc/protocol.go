@@ -27,6 +27,7 @@ const (
 // Errors the client returns.
 var (
 	ErrForbidden    = errors.New("rpc: forbidden")
+	ErrRateLimited  = errors.New("rpc: too many join attempts from this source")
 	ErrWrongCluster = errors.New("rpc: cluster id mismatch")
 	ErrNotLeader    = errors.New("rpc: not the leader")
 	ErrNoLeader     = errors.New("rpc: no leader")
@@ -95,7 +96,7 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
 	Scrub bool   `json:"scrub,omitempty"` // check: force a full scrub pass

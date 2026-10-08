@@ -84,6 +84,8 @@ func errFromStatus(resp *http.Response) error {
 	switch resp.StatusCode {
 	case http.StatusForbidden:
 		return fmt.Errorf("%w: %s", ErrForbidden, msg)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("%w: %s", ErrRateLimited, msg)
 	case http.StatusConflict:
 		return fmt.Errorf("%w: %s", ErrWrongCluster, msg)
 	case http.StatusMisdirectedRequest:

@@ -367,6 +367,25 @@ func tokenCmd() *cobra.Command {
 			return nil
 		},
 	}
+	rotate := &cobra.Command{
+		Use: "rotate", Short: "Replace the join token (a Raft MetaSet); the old token stops working at once",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "rotate_token"})
+			if err != nil {
+				return err
+			}
+			var rep struct {
+				JoinToken string `json:"join_token"`
+			}
+			if err := json.Unmarshal(raw, &rep); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), rep.JoinToken)
+			return nil
+		},
+	}
+	addNodeFlags(rotate)
+	c.AddCommand(rotate)
 	addNodeFlags(c)
 	return c
 }

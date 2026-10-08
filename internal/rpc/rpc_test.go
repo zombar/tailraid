@@ -383,6 +383,30 @@ func TestApply_ForwardAndRedirect(t *testing.T) {
 	}
 }
 
+// After a failed attempt a source IP gets one join attempt per second, so the 8-character
+// token cannot be brute-forced from inside the tailnet (docs/08 threat table); successful
+// joins are never throttled.
+// Invariant: I-48
+func TestJoin_RateLimitedPerSource(t *testing.T) {
+	e := newEnv(t)
+	c := e.client()
+	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2, Capacity: 5}
+	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("first attempt: %v", err)
+	}
+	req.Token = "tok"
+	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("second attempt within a second: err=%v, want ErrRateLimited", err)
+	}
+	if len(e.app.fsm.Nodes()) != 1 {
+		t.Fatal("a rate-limited join changed membership")
+	}
+	e.clk.Advance(JoinInterval)
+	if _, err := c.Join(ctx, e.addr, req); err != nil {
+		t.Fatalf("attempt after the interval: %v", err)
+	}
+}
+
 // Invariant: I-48
 // Lifecycle: L-96
 func TestJoin_TokenAndIdentity(t *testing.T) {
@@ -395,10 +419,12 @@ func TestJoin_TokenAndIdentity(t *testing.T) {
 	if len(e.app.fsm.Nodes()) != 1 {
 		t.Fatal("wrong token changed membership")
 	}
+	e.clk.Advance(JoinInterval) // a failed attempt throttles the source for a second
 	req.Token, req.TSStableID = "tok", "someone-else"
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("identity mismatch: %v", err)
 	}
+	e.clk.Advance(JoinInterval)
 	req.TSStableID = "self-1"
 	jr, err := c.Join(ctx, e.addr, req)
 	if err != nil || jr.NodeIdx != 2 || len(jr.Members) != 2 || jr.Volume.K != 2 {

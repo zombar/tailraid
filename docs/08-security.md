@@ -64,6 +64,7 @@ the node's disk.
 name, address, ports, suffrage request and capacity. The receiving node:
 
 - requires `WhoIs(src).StableID == claimed StableID` (the joiner is who it says it is),
+- after a failed attempt accepts one more from that source IP per second (`429` otherwise); successful joins are never throttled,
 - requires `token == Meta.JoinToken` from the FSM (constant-time compare),
 - forwards a member-add to the Raft leader; the leader adds the server to the Raft
   configuration (voter or non-voter) and upserts the member record.
@@ -144,7 +145,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | LAN host reaches NFS or RPC | NFS bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
-| Join-token brute force | tailnet-only, member or not; 8 base32 chars; rate limit 1 attempt/s per source IP; rotate anytime |
+| Join-token brute force | tailnet-only, member or not; 8 base32 chars; after a failure 1 attempt/s per source IP; rotate anytime |
 
 ## Non-goals (explicit)
 
@@ -176,6 +177,6 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Invariant | Tests |
 |---|---|
 | I-18 | `TestWhoIs_DeniesUnknownPeer`, `TestWhoIs_DeniesStableIDMismatch`, `TestWhoIs_AllowsMember`, `TestWhoIs_PurgeOnMembershipChange`, `TestChunkRPC_ReadsAuthBeforeBody`, `TestRPC_ClusterIDMismatch409` |
-| I-48 | `TestJoin_WrongToken403_NoRaftChange`, `TestJoin_StableIDMismatch403`, `TestJoin_Succeeds_AddsNonvoter` |
+| I-48 | `TestJoin_TokenAndIdentity`, `TestJoin_RateLimitedPerSource`, `TestToken_Rotate` |
 | I-49 | `TestIDStream_RejectsForeignCluster`, `TestCluster_TwoInitsDoNotMerge` |
 | I-50 | `TestRPC_ListenRefusesNonLoopbackWithoutAuth`, `TestNFSGW_BindsLoopbackOnly`, `TestServe_ListenerAddresses` |

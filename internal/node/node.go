@@ -345,7 +345,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
-	case "repair_now", "check", "set_policy", "gc_now":
+	case "repair_now", "check", "set_policy", "gc_now", "rotate_token":
 		if !a.node.IsLeader() {
 			if a.node.LeaderRPCAddr() == "" {
 				return nil, cluster.ErrNoLeader
@@ -360,6 +360,20 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.repairer.Scan(ctx)
 	case "gc_now":
 		return a.gc.RunOnce(ctx)
+	case "rotate_token":
+		// a MetaSet with the token only: the cluster ID is left as it is (docs/08 §Join)
+		token := meta.NewJoinToken()
+		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpMetaSet, MetaSet: &meta.MetaSet{JoinToken: token}})
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			return nil, err
+		}
+		if err := a.node.FSM.WaitApplied(ctx, index); err != nil {
+			return nil, err
+		}
+		return map[string]string{"join_token": token}, nil
 	case "set_policy":
 		if err := admin.PolicyAllowed(a.node.FSM.Nodes(), a.prober, op.K, op.M); err != nil {
 			return nil, err

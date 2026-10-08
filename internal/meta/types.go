@@ -7,8 +7,11 @@
 package meta
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/binary"
 	"math"
+	"strings"
 )
 
 // Hash is the SHA-256 of the logical bytes of a chunk.
@@ -238,4 +241,13 @@ func DecodeHandle(b []byte) (ino Ino, gen uint32, ok bool) {
 		return 0, 0, false
 	}
 	return Ino(binary.BigEndian.Uint64(b[8:16])), binary.BigEndian.Uint32(b[4:8]), true
+}
+
+// NewJoinToken returns a fresh join token: 8 random base32 characters (docs/08 §Join).
+func NewJoinToken() string {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("meta: crypto/rand: " + err.Error())
+	}
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:]))
 }

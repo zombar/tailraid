@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -84,11 +86,13 @@ type Options struct {
 
 // Server serves the node RPC.
 type Server struct {
-	o       Options
-	clusID  string
-	putSem  chan struct{}
-	getSem  chan struct{}
-	handler http.Handler
+	joinMu   sync.Mutex
+	joinLast map[string]time.Time // source IP → last failed join attempt
+	o        Options
+	clusID   string
+	putSem   chan struct{}
+	getSem   chan struct{}
+	handler  http.Handler
 }
 
 // NewServer validates options and builds the handler.
@@ -365,6 +369,38 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(meta.EncodeResult(res))
 }
 
+// JoinInterval is how long a source IP waits after a failed join attempt.
+const JoinInterval = time.Second
+
+// joinAllowed reports whether src may attempt a join now: not within JoinInterval of its
+// last failed attempt. Successful joins are never throttled (a scripted install joins
+// several devices quickly from one host).
+func (s *Server) joinAllowed(src string) bool {
+	now := s.o.Clk.Now()
+	s.joinMu.Lock()
+	defer s.joinMu.Unlock()
+	last, ok := s.joinLast[src]
+	return !ok || now.Sub(last) >= JoinInterval
+}
+
+// joinFailed records a failed attempt from src.
+func (s *Server) joinFailed(src string) {
+	now := s.o.Clk.Now()
+	s.joinMu.Lock()
+	defer s.joinMu.Unlock()
+	if s.joinLast == nil {
+		s.joinLast = map[string]time.Time{}
+	}
+	s.joinLast[src] = now
+	if len(s.joinLast) > 10_000 { // bounded: forget entries older than the interval
+		for k, t := range s.joinLast {
+			if now.Sub(t) >= JoinInterval {
+				delete(s.joinLast, k)
+			}
+		}
+	}
+}
+
 func (s *Server) notLeader(w http.ResponseWriter) {
 	if addr := s.o.Applier.LeaderRPCAddr(); addr != "" {
 		w.Header().Set(HeaderLeader, addr)
@@ -389,12 +425,20 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad join request")
 		return
 	}
-	if s.o.JoinToken == nil || req.Token == "" || req.Token != s.o.JoinToken() {
+	// after a failed attempt a source IP gets one attempt per second (docs/08 threat
+	// table); the token compare is constant-time so a wrong token leaks nothing
+	if !s.joinAllowed(src.String()) {
+		writeErr(w, http.StatusTooManyRequests, "join: one attempt per second per source after a failure")
+		return
+	}
+	if s.o.JoinToken == nil || req.Token == "" || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.o.JoinToken())) != 1 {
+		s.joinFailed(src.String())
 		writeErr(w, http.StatusForbidden, "bad join token")
 		return
 	}
 	id, err := s.o.Auth.Identify(r.Context(), src)
 	if err != nil {
+		s.joinFailed(src.String())
 		writeErr(w, http.StatusForbidden, "join: "+err.Error())
 		return
 	}

@@ -88,3 +88,26 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// `token rotate` replaces the join token through a MetaSet that leaves the cluster ID
+// untouched; the new token is what every node's status then shows.
+// Invariant: I-48
+func TestToken_Rotate(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	leader := c.Leader()
+	before := leader.Node.FSM.Meta()
+	raw, err := opsFor(c, leader).AdminOp(ctx, rpc.AdminOp{Op: "rotate_token"})
+	must(t, err)
+	tok := raw.(map[string]string)["join_token"]
+	if len(tok) != 8 || tok == before.JoinToken {
+		t.Fatalf("new token %q (old %q)", tok, before.JoinToken)
+	}
+	c.Settle()
+	for _, nd := range c.Nodes {
+		m := nd.Node.FSM.Meta()
+		if m.JoinToken != tok || m.ClusterID != before.ClusterID {
+			t.Fatalf("n%d meta %+v", nd.I, m)
+		}
+	}
+}
