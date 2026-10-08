@@ -96,6 +96,41 @@ func TestSingleNode_BootstrapProposeRestart(t *testing.T) {
 	}
 }
 
+// Regression: the mount test found serve reading the node table before a restarted
+// leader had replayed its log ("this node is not in the cluster node table").
+// Lifecycle: L-120
+func TestOpen_WaitReadyReplaysLogBeforeReads(t *testing.T) {
+	dir := t.TempDir()
+	n := bootstrap(t, dir)
+	for i := 0; i < 50; i++ { // enough entries that replay is observable
+		_, _, _ = n.Propose(ctx, meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{Parent: meta.RootIno, Name: string(rune('a'+i%26)) + string(rune('a'+i/26)), Mode: 0o755, Now: int64(i)}})
+	}
+	must(t, n.Close())
+	for round := 0; round < 3; round++ {
+		n2, err := Open(opts(t, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := n2.WaitReady(ctx, 10*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := n2.SelfIdx(); !ok {
+			t.Fatalf("round %d: node table empty after WaitReady", round)
+		}
+		if st := n2.FSM.Stats(); st.Inodes != 51 {
+			t.Fatalf("round %d: %d inodes after replay", round, st.Inodes)
+		}
+		must(t, n2.Close())
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpen_RequiresInit(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Open(opts(t, dir)); !errors.Is(err, ErrNotInit) {

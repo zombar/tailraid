@@ -125,7 +125,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-117 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-104 C5 power loss after rename before dir sync | Uploading (slot not acked) | `TestStubLifecycle_L_117` |
 | L-118 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed | E-105 C6 gateway crash after acks before Commit | Dirty (replay) ; landed shards Orphan | `TestStubLifecycle_L_118` |
 | L-119 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-106 C7 crash after commit before WAL reset | Committed | `TestStubLifecycle_L_119` |
-| L-120 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | any | E-107 storage node restart | unchanged | `TestSingleNode_BootstrapProposeRestart`, `TestStore_CapacityAccounting`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard` |
+| L-120 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | any | E-107 storage node restart | unchanged | `TestOpen_WaitReadyReplaysLogBeforeReads`, `TestSingleNode_BootstrapProposeRestart`, `TestStore_CapacityAccounting`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard` |
 | L-121 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-108 gateway restart | Dirty | `TestStubLifecycle_L_121` |
 | L-122 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-109 torn WAL tail | Dirty (prefix) | `TestStubLifecycle_L_122` |
 | L-123 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-110 disk full on one node | as E-36 | `TestStore_DiskFull_ReturnsErrAndNoPartialShard` |

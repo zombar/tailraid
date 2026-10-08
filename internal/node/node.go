@@ -35,8 +35,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	defer node.Close()
-	if err := node.WaitLeader(ctx, 30*time.Second); err != nil {
-		return fmt.Errorf("waiting for raft leader: %w", err)
+	if err := node.WaitReady(ctx, 30*time.Second); err != nil {
+		return fmt.Errorf("waiting for raft: %w", err)
 	}
 	selfIdx, ok := node.SelfIdx()
 	if !ok {

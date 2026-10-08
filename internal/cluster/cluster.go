@@ -183,7 +183,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	if err != nil {
 		return nil, err
 	}
-	if err := n.WaitLeader(ctx, 10*time.Second); err != nil {
+	if err := n.WaitReady(ctx, 10*time.Second); err != nil {
 		_ = n.Close()
 		return nil, err
 	}
@@ -262,6 +262,30 @@ func (n *Node) WaitLeader(ctx context.Context, timeout time.Duration) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// WaitReady waits for a leader and for this node's FSM to have applied every log
+// entry Raft already holds, so reads of the node table and volume policy see the state
+// as of the last commit (a freshly elected leader replays its log asynchronously).
+func (n *Node) WaitReady(ctx context.Context, timeout time.Duration) error {
+	if err := n.WaitLeader(ctx, timeout); err != nil {
+		return err
+	}
+	// Raft's AppliedIndex advances from the FSM goroutine after each apply and counts
+	// configuration entries the FSM never sees, so it is the right catch-up marker.
+	deadline := time.After(timeout)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for n.Raft.AppliedIndex() < n.Raft.LastIndex() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("cluster: log replay incomplete after %s (applied %d of %d)", timeout, n.Raft.AppliedIndex(), n.Raft.LastIndex())
+		case <-tick.C:
+		}
+	}
+	return nil
 }
 
 // IsLeader reports whether this node currently leads.
