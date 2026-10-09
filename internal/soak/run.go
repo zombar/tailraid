@@ -100,11 +100,19 @@ type Sample struct {
 	DiskReadBps  float64 `json:"disk_read_bps"`
 }
 
-// vitalsPrev is the last machine report of one node, for the rates.
+// vitalsPrev is the last machine report of one node that a rate was computed from, and
+// the rates themselves (carried across intervals too short to divide by).
 type vitalsPrev struct {
-	t time.Time
-	m admin.MachineReport
+	t                 time.Time
+	m                 admin.MachineReport
+	cpu, mcpu, wr, rd float64
+	hasRates          bool
 }
+
+// minRateInterval is the shortest interval a rate is computed over: the samples at
+// phase boundaries sit milliseconds from a periodic one, and a counter delta over that
+// is noise (as the throughput chart's boundary filter already knows).
+const minRateInterval = 250 * time.Millisecond
 
 // latencyBuckets are the fixed upper bounds of the latency histogram in ms (log-spaced,
 // the last is +Inf), so histograms from different runs line up.
@@ -429,26 +437,31 @@ func (r *Run) vitalsSample(s *Sample, node string, m admin.MachineReport) {
 		r.vitals = map[string]vitalsPrev{}
 	}
 	prev, ok := r.vitals[node]
-	r.vitals[node] = vitalsPrev{t: now, m: m}
 	if !ok {
+		r.vitals[node] = vitalsPrev{t: now, m: m}
+		return
+	}
+	if dt := now.Sub(prev.t); dt < minRateInterval {
+		// too close to divide by: carry the last rates, keep the earlier report as the base
+		s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps = prev.cpu, prev.mcpu, prev.wr, prev.rd
 		return
 	}
 	dt := now.Sub(prev.t).Seconds()
-	if dt <= 0 {
-		return
-	}
+	cur := vitalsPrev{t: now, m: m, hasRates: true}
 	if m.CPUSeconds >= prev.m.CPUSeconds {
-		s.CPUPct = (m.CPUSeconds - prev.m.CPUSeconds) / dt * 100
+		cur.cpu = (m.CPUSeconds - prev.m.CPUSeconds) / dt * 100
 	}
 	if m.MachineTotal > prev.m.MachineTotal && m.MachineBusy >= prev.m.MachineBusy {
-		s.MachinePct = float64(m.MachineBusy-prev.m.MachineBusy) / float64(m.MachineTotal-prev.m.MachineTotal) * 100
+		cur.mcpu = float64(m.MachineBusy-prev.m.MachineBusy) / float64(m.MachineTotal-prev.m.MachineTotal) * 100
 	}
 	if m.DiskWritten >= prev.m.DiskWritten {
-		s.DiskWriteBps = float64(m.DiskWritten-prev.m.DiskWritten) / dt
+		cur.wr = float64(m.DiskWritten-prev.m.DiskWritten) / dt
 	}
 	if m.DiskRead >= prev.m.DiskRead {
-		s.DiskReadBps = float64(m.DiskRead-prev.m.DiskRead) / dt
+		cur.rd = float64(m.DiskRead-prev.m.DiskRead) / dt
 	}
+	r.vitals[node] = cur
+	s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps = cur.cpu, cur.mcpu, cur.wr, cur.rd
 }
 
 func (r *Run) snapshotCounters() Sample {
