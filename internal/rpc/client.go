@@ -40,7 +40,20 @@ func NewClient(clusterID [16]byte, resolve Resolver, local ShardStore) *Client {
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
-	return &Client{http: &http.Client{Transport: tr, Timeout: 60 * time.Second}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, local: local, grace: 10 * time.Minute}
+	// no whole-request timeout on the client: a shard call's deadline scales with its
+	// size (callTimeout), the rest get callTimeout(0); ResponseHeaderTimeout bounds a
+	// dead peer either way (I-83)
+	return &Client{http: &http.Client{Transport: tr}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, local: local, grace: 10 * time.Minute}
+}
+
+// transferRate is the slowest tailnet path a shard transfer is given: a DERP relay at
+// 256 KiB/s moves a 64 MiB shard in about four minutes.
+const transferRate = 256 << 10
+
+// callTimeout is the deadline of one RPC that carries n body bytes: a fixed allowance
+// plus the time to move n bytes at transferRate (docs/04 §4 step 9, I-83).
+func callTimeout(n int64) time.Duration {
+	return 10*time.Second + time.Duration(n)*time.Second/transferRate
 }
 
 // SetGrace sets the minimum age of a shard this node will delete locally.
@@ -52,6 +65,15 @@ func (c *Client) SetTransport(rt http.RoundTripper) { c.http.Transport = rt }
 // WrapTransport replaces the transport with wrap(current) (dev fault rules).
 func (c *Client) WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) {
 	c.http.Transport = wrap(c.http.Transport)
+}
+
+// bound gives a call without a deadline one of callTimeout(n); the caller cancels it once
+// the reply, body included, has been consumed.
+func bound(ctx context.Context, n int64) (context.Context, context.CancelFunc) {
+	if _, has := ctx.Deadline(); has {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, callTimeout(n))
 }
 
 func (c *Client) do(ctx context.Context, method, addr, path string, body []byte, hdr map[string]string) (*http.Response, error) {
@@ -128,6 +150,8 @@ func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 		_, err := c.local.PutVerified(key, body, sum)
 		return err
 	}
+	ctx, cancel := bound(ctx, int64(len(body)))
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodPut, addr, "/v1/shards/"+string(key), body, map[string]string{HeaderShardSum: hex.EncodeToString(sum[:])})
 	if err != nil {
 		return err
@@ -144,6 +168,8 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := bound(ctx, chunk.MaxPayload) // the reply is up to a shard
+	defer cancel()
 	if self && c.local != nil {
 		rc, _, err := c.local.Open(key)
 		if err != nil {
@@ -185,6 +211,8 @@ func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.
 		_, _, err := c.local.DeleteIfOlder(key, c.grace, time.Now())
 		return err
 	}
+	ctx, cancel := bound(ctx, 0)
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodDelete, addr, "/v1/shards/"+string(key), nil, map[string]string{HeaderLogIndex: strconv.FormatUint(index, 10)})
 	if err != nil {
 		return err
@@ -205,6 +233,8 @@ func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	if self && c.local != nil {
 		return c.local.Has(key), nil
 	}
+	ctx, cancel := bound(ctx, 0)
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodHead, addr, "/v1/shards/"+string(key), nil, nil)
 	if err != nil {
 		return false, err
@@ -224,7 +254,10 @@ func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 // ApplyAt proposes a command through the node at addr (the leader, or a node that
 // redirects with 421).
 func (c *Client) ApplyAt(ctx context.Context, addr string, cmd meta.Command) (meta.Result, uint64, error) {
-	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/apply", meta.EncodeCommand(cmd), map[string]string{"Content-Type": "application/octet-stream"})
+	cmdBytes := meta.EncodeCommand(cmd)
+	ctx, cancel := bound(ctx, int64(len(cmdBytes)))
+	defer cancel()
+	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/apply", cmdBytes, map[string]string{"Content-Type": "application/octet-stream"})
 	if err != nil {
 		return meta.Result{}, 0, err
 	}
@@ -266,6 +299,8 @@ func LeaderFromErr(err error) string {
 // the body is ignored). Every other status becomes the sentinel errFromStatus maps it to.
 func (c *Client) postJSON(ctx context.Context, addr, path string, in, out any, want int) error {
 	body, _ := json.Marshal(in)
+	ctx, cancel := bound(ctx, int64(len(body)))
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodPost, addr, path, body, map[string]string{"Content-Type": "application/json"})
 	if err != nil {
 		return err
@@ -297,6 +332,8 @@ func (c *Client) Members(ctx context.Context, addr string, op MemberOp) error {
 
 // Health probes a node.
 func (c *Client) Health(ctx context.Context, addr string) (Health, error) {
+	ctx, cancel := bound(ctx, 0)
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodGet, addr, "/health", nil, nil)
 	if err != nil {
 		return Health{}, err
@@ -325,6 +362,8 @@ func (c *Client) Call(ctx context.Context, addr, method, path string, body []byt
 	if body != nil {
 		hdr["Content-Type"] = "application/json"
 	}
+	ctx, cancel := bound(ctx, int64(len(body))+16<<20) // replies up to the 16 MiB read limit
+	defer cancel()
 	resp, err := c.do(ctx, method, addr, path, body, hdr)
 	if err != nil {
 		return nil, err
