@@ -3,6 +3,7 @@
 package soak
 
 import (
+	"crypto/sha256"
 	"errors"
 	"io"
 	"io/fs"
@@ -23,6 +24,18 @@ type Volume interface {
 	Remove(p string) error // files and empty directories
 	Size(p string) (int64, error)
 	List(p string) ([]string, error) // entry names of a directory
+	// Hash streams the file: its sha256 and size, so a large file is checked without
+	// the driver holding it (docs/09 §6).
+	Hash(p string) ([32]byte, int64, error)
+}
+
+// hashReader streams r through sha256.
+func hashReader(r io.Reader) ([32]byte, int64, error) {
+	h := sha256.New()
+	n, err := io.Copy(h, r)
+	var sum [32]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, n, err
 }
 
 // OSVolume is a mounted volume (the live environment's own kernel NFS client).
@@ -46,6 +59,15 @@ func (v OSVolume) WriteAt(p string, off int64, data []byte) error {
 }
 
 func (v OSVolume) ReadAll(p string) ([]byte, error) { return os.ReadFile(v.abs(p)) }
+
+func (v OSVolume) Hash(p string) ([32]byte, int64, error) {
+	f, err := os.Open(v.abs(p))
+	if err != nil {
+		return [32]byte{}, 0, err
+	}
+	defer f.Close()
+	return hashReader(f)
+}
 
 func (v OSVolume) Truncate(p string, size int64) error { return os.Truncate(v.abs(p), size) }
 
@@ -102,6 +124,15 @@ func (v BillyVolume) ReadAll(p string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(f)
+}
+
+func (v BillyVolume) Hash(p string) ([32]byte, int64, error) {
+	f, err := v.FS.Open(p)
+	if err != nil {
+		return [32]byte{}, 0, err
+	}
+	defer f.Close()
+	return hashReader(f)
 }
 
 func (v BillyVolume) Truncate(p string, size int64) error {

@@ -3,6 +3,7 @@ package admin
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"time"
 
@@ -63,12 +64,19 @@ type VolumeReport struct {
 	StalePolicy    int     `json:"stale_policy_chunks"`
 }
 
-// GatewayReport is this node's overlay: what is acknowledged but not yet committed.
+// GatewayReport is this node's overlay: what is acknowledged but not yet committed, and
+// what the flusher holds for it (docs/04 §9, docs/12 §8, I-84).
 type GatewayReport struct {
-	DirtyInodes int    `json:"dirty_inodes"`
-	DirtyBytes  uint64 `json:"dirty_bytes"` // bytes in extents not yet captured by a flush plan
-	WALBytes    int64  `json:"wal_bytes"`   // Σ per-inode WAL file sizes
-	Flushing    int    `json:"flushing"`    // inodes with a flush plan outstanding
+	DirtyInodes  int    `json:"dirty_inodes"`
+	DirtyBytes   uint64 `json:"dirty_bytes"` // bytes in extents not yet captured by a flush plan
+	PlanBytes    uint64 `json:"plan_bytes"`  // bytes in flushes under way
+	WALBytes     int64  `json:"wal_bytes"`   // Σ per-inode WAL file sizes
+	WALCap       uint64 `json:"wal_cap"`     // the per-inode WAL cap
+	Flushing     int    `json:"flushing"`    // inodes with a flush plan outstanding
+	FlushBytes   uint64 `json:"flush_bytes"` // chunk and shard buffers the flusher holds right now
+	FlushPeak    uint64 `json:"flush_peak"`  // the most it has held since start
+	FlushCap     uint64 `json:"flush_cap"`   // the bound of docs/04 §9 at the current policy
+	LastFlushErr string `json:"last_flush_err,omitempty"`
 }
 
 // GatewayFromDirty folds the overlay's dirty list into the status view.
@@ -76,12 +84,37 @@ func GatewayFromDirty(infos []vfs.DirtyInfo) *GatewayReport {
 	g := &GatewayReport{DirtyInodes: len(infos)}
 	for i := range infos {
 		g.DirtyBytes += infos[i].DirtyBytes
+		g.PlanBytes += infos[i].PlanBytes
 		g.WALBytes += infos[i].WALBytes
 		if infos[i].Flushing {
 			g.Flushing++
 		}
+		if infos[i].LastErr != "" && g.LastFlushErr == "" {
+			g.LastFlushErr = infos[i].LastErr
+		}
 	}
 	return g
+}
+
+// WithFlusher adds the flusher's and the overlay's bounds to the gateway view.
+func (g *GatewayReport) WithFlusher(fl *vfs.Flusher, ov *vfs.Overlay) *GatewayReport {
+	g.FlushBytes, g.FlushPeak = fl.Buffers()
+	g.FlushCap = fl.BufferCap()
+	g.WALCap = uint64(max(ov.WALCap(), 0))
+	return g
+}
+
+// ProcessReport is the Go runtime's view of this node's process (docs/12 §8, I-84).
+type ProcessReport struct {
+	HeapInuse  uint64 `json:"heap_inuse"`
+	Sys        uint64 `json:"sys"`
+	Goroutines int    `json:"goroutines"`
+}
+
+func processReport() *ProcessReport {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return &ProcessReport{HeapInuse: ms.HeapInuse, Sys: ms.Sys, Goroutines: runtime.NumGoroutine()}
 }
 
 // Report is the whole `status` document.
@@ -99,6 +132,7 @@ type Report struct {
 	JoinToken   string         `json:"join_token,omitempty"`
 	Repair      *RepairStatus  `json:"repair,omitempty"`
 	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
+	Process     *ProcessReport `json:"process,omitempty"` // this node's runtime (docs/12 §8)
 	WebURL      string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	GeneratedAt time.Time      `json:"generated_at"`
 }
@@ -114,7 +148,7 @@ type RepairStatus struct {
 func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clock, rp *repair.Repairer) Report {
 	st := n.FSM
 	now := clk.Now()
-	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now}
+	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now, Process: processReport()}
 	h := n.Health(clk, p)
 	rep.Health, rep.Leader, rep.Voters, rep.LiveVoters = h.State.String(), h.Leader, h.Voters, h.LiveVoters
 	if h.LastContact > 0 {

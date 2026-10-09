@@ -161,6 +161,8 @@ func buildReport(s Summary) reportData {
 		{"read", fmt.Sprintf("%s in %d ops", humanBytes(float64(t.BytesRead)), t.Reads)},
 		{"dedup ratio", fmt.Sprintf("%.2fx", t.DedupRatio)},
 		{"deepest overlay WAL", humanBytes(float64(t.MaxWALBytes))},
+		{"peak flush buffers", humanBytes(float64(t.MaxFlush))},
+		{"peak heap in use", humanBytes(float64(t.MaxHeap))},
 		{"repair", fmt.Sprintf("%d scanned, %d repaired, %d partial, %d unrepairable, %d migrated, %d deferred, %d scrubbed, %d corrupt, %s moved, %d errors",
 			t.Repair.Scanned, t.Repair.Repaired, t.Repair.Partial, t.Repair.Unrepairable, t.Repair.Migrated, t.Repair.Deferred, t.Repair.Scrubbed, t.Repair.ScrubBad, humanBytes(float64(t.Repair.BytesMoved)), t.Repair.Errors)},
 		{"gc", fmt.Sprintf("%d chunk entries collected, %d shards deleted, %d deletes refused", t.GC.Victims, t.GC.Deleted, t.GC.Refused)},
@@ -235,6 +237,9 @@ func charts(s Summary) ([]template.HTML, string) {
 	deg, pend, stale, unread := series{name: "degraded"}, series{name: "repair pending"}, series{name: "stale policy"}, series{name: "unreadable"}
 	stored, logical := series{name: "stored bytes"}, series{name: "logical bytes"}
 	wal, dirty := series{name: "overlay WAL bytes"}, series{name: "dirty bytes"}
+	plan, flush := series{name: "plan bytes"}, series{name: "flush buffers"}
+	heap, sys := series{name: "heap in use"}, series{name: "sys"}
+	haveMem := false
 	nodeSeries := map[string]*series{}
 	var nodeNames []string
 	liveCells, liveColors := map[string][][2]float64{}, map[string][]string{}
@@ -252,7 +257,12 @@ func charts(s Summary) ([]template.HTML, string) {
 		logical.points = append(logical.points, [2]float64{x(rec), float64(sm.LogicalBytes)})
 		wal.points = append(wal.points, [2]float64{x(rec), float64(sm.WALBytes)})
 		dirty.points = append(dirty.points, [2]float64{x(rec), float64(sm.DirtyBytes)})
+		plan.points = append(plan.points, [2]float64{x(rec), float64(sm.PlanBytes)})
+		flush.points = append(flush.points, [2]float64{x(rec), float64(sm.FlushBytes)})
+		heap.points = append(heap.points, [2]float64{x(rec), float64(sm.HeapInuse)})
+		sys.points = append(sys.points, [2]float64{x(rec), float64(sm.Sys)})
 		haveWAL = haveWAL || sm.WALBytes > 0 || sm.DirtyBytes > 0
+		haveMem = haveMem || sm.HeapInuse > 0
 		for name, slots := range sm.Slots {
 			ns, ok := nodeSeries[name]
 			if !ok {
@@ -289,7 +299,10 @@ func charts(s Summary) ([]template.HTML, string) {
 		template.HTML(lineChart("Repair backlog", "chunks", []series{deg, pend, stale, unread}, marks, bands)),         //nolint:gosec // generated SVG
 		template.HTML(lineChart("Stored vs logical bytes (dedup)", "bytes", []series{stored, logical}, nil, bands)))    //nolint:gosec // generated SVG
 	if haveWAL {
-		out = append(out, template.HTML(lineChart("Overlay WAL depth on the sampled node", "bytes", []series{wal, dirty}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(lineChart("Overlay WAL depth on the sampled node", "bytes", []series{wal, dirty, plan, flush}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	if haveMem {
+		out = append(out, template.HTML(lineChart("Process memory on the sampled node", "bytes", []series{heap, sys}, marks, bands))) //nolint:gosec // generated SVG
 	}
 	ns := make([]series, 0, len(nodeNames))
 	for _, n := range nodeNames {

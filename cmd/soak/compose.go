@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -160,6 +161,7 @@ type fsResp struct {
 	Data  []byte   `json:"data,omitempty"`
 	Size  int64    `json:"size"`
 	Names []string `json:"names,omitempty"`
+	Hash  string   `json:"hash,omitempty"` // hex sha256 (op "hash")
 	Error string   `json:"error,omitempty"`
 }
 
@@ -206,6 +208,22 @@ func (v *httpVolume) Remove(p string) error { _, err := v.do(fsReq{Op: "remove",
 func (v *httpVolume) Size(p string) (int64, error) {
 	r, err := v.do(fsReq{Op: "size", Path: p})
 	return r.Size, err
+}
+func (v *httpVolume) Hash(p string) ([32]byte, int64, error) {
+	r, err := v.do(fsReq{Op: "hash", Path: p})
+	var sum [32]byte
+	if err != nil {
+		return sum, 0, err
+	}
+	b, err := hex.DecodeString(r.Hash)
+	if err != nil {
+		return sum, 0, fmt.Errorf("hash reply %q: %w", r.Hash, err)
+	}
+	if len(b) != 32 {
+		return sum, 0, fmt.Errorf("hash reply %q: not a sha256", r.Hash)
+	}
+	copy(sum[:], b)
+	return sum, r.Size, nil
 }
 func (v *httpVolume) List(p string) ([]string, error) {
 	r, err := v.do(fsReq{Op: "list", Path: p})

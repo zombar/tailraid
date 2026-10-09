@@ -21,6 +21,7 @@ import (
 type Profile struct {
 	Name          string
 	BigFile       int           // bytes of the largest corpus file
+	LargeFile     int           // bytes of the large-file phase's one file (0 skips the phase)
 	SmallFiles    int           // count of tiny files
 	ChurnOps      int           // random-access operations per gateway
 	LeaderKills   int           // consensus phase rounds
@@ -34,7 +35,7 @@ type Profile struct {
 
 // Quick is the compose profile (~10 min).
 func Quick() Profile {
-	return Profile{Name: "quick", BigFile: 3_000_000, SmallFiles: 150, ChurnOps: 300, LeaderKills: 3, ChunkSize: 256 << 10,
+	return Profile{Name: "quick", BigFile: 3_000_000, LargeFile: 256 << 20, SmallFiles: 150, ChurnOps: 300, LeaderKills: 3, ChunkSize: 256 << 10,
 		FlushIdle: 4 * time.Second, FillAfter: 20 * time.Second, Grace: 20 * time.Second, SampleEvery: time.Second, RestartSettle: 15 * time.Second}
 }
 
@@ -79,6 +80,11 @@ type Sample struct {
 	RepairBacklog int                        `json:"repair_backlog"` // degraded + stale policy
 	WALBytes      int64                      `json:"wal_bytes"`      // the sampled node's overlay WAL depth
 	DirtyBytes    uint64                     `json:"dirty_bytes"`
+	PlanBytes     uint64                     `json:"plan_bytes"`
+	FlushBytes    uint64                     `json:"flush_bytes"` // the sampled node's flush buffers (docs/04 §9)
+	HeapInuse     uint64                     `json:"heap_inuse"`  // the sampled node's process (docs/12 §8)
+	Sys           uint64                     `json:"sys"`
+	Goroutines    int                        `json:"goroutines"`
 }
 
 // latencyBuckets are the fixed upper bounds of the latency histogram in ms (log-spaced,
@@ -181,6 +187,8 @@ type Totals struct {
 	Reads        int64
 	DedupRatio   float64 // from the last status sample
 	MaxWALBytes  int64   // deepest overlay WAL seen in a sample
+	MaxFlush     uint64  // most flush buffer bytes seen in a sample
+	MaxHeap      uint64  // highest heap in use seen in a sample
 	Repair       repair.Stats
 	GC           repair.Result
 }
@@ -314,6 +322,20 @@ func (m measured) ReadAll(p string) ([]byte, error) {
 	return b, err
 }
 
+// Hash counts as one read of the file's size.
+func (m measured) Hash(p string) ([32]byte, int64, error) {
+	t := time.Now()
+	sum, n, err := m.Volume.Hash(p)
+	d := time.Since(t)
+	m.r.mu.Lock()
+	m.r.counters.Reads++
+	m.r.counters.BytesRead += n
+	m.r.counters.ReadLatency[bucket(d)]++
+	m.r.lats = append(m.r.lats, opLatency{T: t, Phase: m.r.phase, Read: true, D: d})
+	m.r.mu.Unlock()
+	return sum, n, err
+}
+
 // volume returns the measured gateway of node, if the env reaches it.
 func (r *Run) volume(node NodeRef) (Volume, bool) {
 	v, ok := r.Env.Volume(node)
@@ -353,7 +375,10 @@ func (r *Run) sample(ctx context.Context, round int) {
 		}
 		s.RepairBacklog = s.Degraded + s.StalePolicy
 		if rep.Gateway != nil {
-			s.WALBytes, s.DirtyBytes = rep.Gateway.WALBytes, rep.Gateway.DirtyBytes
+			s.WALBytes, s.DirtyBytes, s.PlanBytes, s.FlushBytes = rep.Gateway.WALBytes, rep.Gateway.DirtyBytes, rep.Gateway.PlanBytes, rep.Gateway.FlushBytes
+		}
+		if rep.Process != nil {
+			s.HeapInuse, s.Sys, s.Goroutines = rep.Process.HeapInuse, rep.Process.Sys, rep.Process.Goroutines
 		}
 	}
 	if round%5 == 0 {
@@ -600,6 +625,8 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	for i := range sum.Records {
 		if s := sum.Records[i].S; s != nil {
 			sum.Totals.MaxWALBytes = max(sum.Totals.MaxWALBytes, s.WALBytes)
+			sum.Totals.MaxFlush = max(sum.Totals.MaxFlush, s.FlushBytes)
+			sum.Totals.MaxHeap = max(sum.Totals.MaxHeap, s.HeapInuse)
 			if s.DedupRatio > 0 {
 				sum.Totals.DedupRatio = s.DedupRatio
 			}

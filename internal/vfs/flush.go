@@ -95,6 +95,15 @@ func (f *Flusher) Buffers() (cur, peak uint64) {
 	return uint64(max(f.buffers.Load(), 0)), uint64(max(f.peak.Load(), 0))
 }
 
+// BufferCap is the bound Buffers never exceeds at the volume's current policy:
+// ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k)) (docs/04 §9, I-78).
+func (f *Flusher) BufferCap() uint64 {
+	vol := f.st.Volume()
+	cs := int(vol.ChunkSize)
+	k := max(int(vol.K), 1)
+	return uint64(max(1, f.cfg.ChunkWorkers)) * uint64(cs+(k+int(vol.M))*ec.ShardLen(cs, k))
+}
+
 func (f *Flusher) hold(n int) {
 	cur := f.buffers.Add(int64(n))
 	for {

@@ -15,6 +15,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -164,6 +165,7 @@ type fsResp struct {
 	Data  []byte   `json:"data,omitempty"`
 	Size  int64    `json:"size"`
 	Names []string `json:"names,omitempty"`
+	Hash  string   `json:"hash,omitempty"` // hex sha256 (op "hash")
 	Error string   `json:"error,omitempty"`
 }
 
@@ -236,6 +238,12 @@ func (w *worker) doFSOn(t *nfsc.Target, req fsReq) (resp fsResp) {
 			return fail(err)
 		}
 		return fsResp{Size: fi.Size()}
+	case "hash":
+		sum, n, err := hashFile(t, req.Path)
+		if err != nil {
+			return fail(err)
+		}
+		return fsResp{Hash: hex.EncodeToString(sum[:]), Size: n}
 	case "list":
 		ents, err := t.ReadDirPlus(req.Path)
 		if err != nil {
@@ -279,6 +287,34 @@ func writeAt(t *nfsc.Target, p string, off int64, data []byte) error {
 		off += int64(n)
 	}
 	return nil
+}
+
+// hashFile streams the file through sha256 in 64 KiB reads: a large file is checked
+// without the worker holding it.
+func hashFile(t *nfsc.Target, p string) ([32]byte, int64, error) {
+	var sum [32]byte
+	fi, _, err := t.Lookup(p)
+	if err != nil {
+		return sum, 0, err
+	}
+	f, err := t.Open(p)
+	if err != nil {
+		return sum, 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	buf := make([]byte, 64<<10)
+	var got int64
+	for got < fi.Size() {
+		n, err := f.ReadAt(buf[:min(int64(len(buf)), fi.Size()-got)], got)
+		if n == 0 && err != nil {
+			return sum, got, err
+		}
+		h.Write(buf[:n])
+		got += int64(n)
+	}
+	copy(sum[:], h.Sum(nil))
+	return sum, got, nil
 }
 
 func readAll(t *nfsc.Target, p string) ([]byte, error) {

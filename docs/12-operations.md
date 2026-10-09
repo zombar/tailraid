@@ -181,3 +181,4 @@ large copy is a visible line, not a guess (I-84).
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
+| I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |

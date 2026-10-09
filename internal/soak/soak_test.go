@@ -139,7 +139,7 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		return admin.Report{}, errors.New("node is down")
 	}
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
-	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty())
+	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov)
 	return rep, nil
 }
 
@@ -300,7 +300,7 @@ func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) erro
 
 func harnessProfile() soak.Profile {
 	cs := int(testharness.ChunkSize)
-	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
+	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, LargeFile: 2 << 20, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
 		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second,
 		SampleEvery: 50 * time.Millisecond} // the sampler runs concurrently with the phases, as it does in production
 }
@@ -313,7 +313,7 @@ func harnessProfile() soak.Profile {
 // Invariant: I-29
 // Lifecycle: L-59, L-148
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
-	c := testharness.NewCluster(t, 4, 2, 1)
+	c := testharness.NewCluster(t, 4, 2, 1, testharness.WALCap(512<<10)) // the large-file phase meets the cap
 	defer c.Close()
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
@@ -336,7 +336,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 11 {
+	if sum.Failed != 0 || len(sum.Phases) != 12 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -360,7 +360,8 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		_ = os.WriteFile(path, html.Bytes(), 0o600)
 	}
 	for _, want := range []string{"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
-		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation"} {
+		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
+		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

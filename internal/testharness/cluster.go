@@ -117,6 +117,7 @@ type Cluster struct {
 	retryUntilStale bool
 	nonVoters       map[int]bool
 	auto            bool
+	walCap          int64 // per-inode WAL cap for every gateway (0 = default)
 }
 
 // Voter reports whether node i joins as a Raft voter (all do unless NonVoters says otherwise).
@@ -172,6 +173,13 @@ type clusterOpts struct {
 	retryUntilStale   bool
 	nonVoters         map[int]bool
 	auto              bool
+	walCap            int64
+}
+
+// WALCap sets every gateway's per-inode WAL cap, so a run with small files still meets
+// the cap and the wait behind it (docs/04 §3).
+func WALCap(n int64) ClusterOption {
+	return func(o *clusterOpts) { o.walCap = n }
 }
 
 // AutoPolicy bootstraps the volume in automatic redundancy mode (docs/03): the leader's
@@ -214,7 +222,7 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 	for _, f := range opts {
 		f(&o)
 	}
-	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters, auto: o.auto}
+	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters, auto: o.auto, walCap: o.walCap}
 	for i := 0; i < n; i++ {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
@@ -300,7 +308,11 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	if v := nd.Node.FSM.Volume(); v.ChunkSize != 0 {
 		cs = v.ChunkSize
 	}
-	nd.Ov, err = vfs.OpenOverlay(filepath.Join(nd.Dir, "staging"), cs, c.Clk)
+	var ovOpts []vfs.Option
+	if c.walCap > 0 {
+		ovOpts = append(ovOpts, vfs.WithWALCap(c.walCap))
+	}
+	nd.Ov, err = vfs.OpenOverlay(filepath.Join(nd.Dir, "staging"), cs, c.Clk, ovOpts...)
 	if err != nil {
 		c.T.Fatal(err)
 	}
