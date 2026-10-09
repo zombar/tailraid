@@ -88,7 +88,7 @@ func platformVitals(m *MachineReport) {
 var wholeDisk = regexp.MustCompile(`^(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme\d+n\d+|mmcblk\d+)$`)
 
 func fields(path string) []string {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // a fixed /proc or /sys path
 	if err != nil {
 		return nil
 	}
@@ -96,7 +96,7 @@ func fields(path string) []string {
 }
 
 func eachLine(path string, fn func(line string)) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // a fixed /proc or /sys path
 	if err != nil {
 		return
 	}

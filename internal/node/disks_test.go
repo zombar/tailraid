@@ -84,14 +84,22 @@ func TestDiskMarker_Table(t *testing.T) {
 			}
 		})
 	}
-	// add-disk refuses a path holding anything but lost+found, and an existing marker
+	// add-disk refuses a path holding anything but lost+found; a marker of this cluster and
+	// host is reused (a retried init or join, I-121), one of another cluster refused
 	p := t.TempDir()
 	_ = os.Mkdir(filepath.Join(p, "lost+found"), 0o700)
-	if _, err := PrepareDisk(p, testCluster, "h1"); err != nil {
+	id, err := PrepareDisk(p, testCluster, "h1")
+	if err != nil {
 		t.Fatalf("lost+found refused: %v", err)
 	}
-	if _, err := PrepareDisk(p, testCluster, "h1"); !errors.Is(err, ErrDiskNotEmpty) {
-		t.Fatalf("second prepare: %v", err)
+	if again, err := PrepareDisk(p, testCluster, "h1"); err != nil || again != id {
+		t.Fatalf("second prepare: %q %v, want the same id %q", again, err, id)
+	}
+	if _, err := PrepareDisk(p, [16]byte{9}, "h1"); !errors.Is(err, ErrDiskNotEmpty) {
+		t.Fatalf("another cluster's marker: %v", err)
+	}
+	if _, err := PrepareDisk(p, testCluster, "h2"); !errors.Is(err, ErrDiskNotEmpty) {
+		t.Fatalf("another host's marker: %v", err)
 	}
 }
 
@@ -160,8 +168,11 @@ func TestNode_Rebudget_PerTarget(t *testing.T) {
 	if _, ok := got[3]; ok || pinned.Capacity() != 123 {
 		t.Fatal("a pinned target was re-derived")
 	}
-	// a and b share the temp filesystem: each gets half, never the whole
-	if got[1] != got[2] || got[1]+got[2] > whole || (whole > 1 && got[1] == whole) {
+	// a and b share the temp filesystem: each gets half, never the whole. The filesystem
+	// is the real one and other tests write to it, so the second reading may differ from
+	// the one budgets() used by a few blocks: allow that drift, not a whole budget.
+	const drift = 64 << 20
+	if got[1] != got[2] || got[1]+got[2] > whole+drift || (whole > 1 && got[1] == whole) {
 		t.Fatalf("shared budgets %d, %d of %d", got[1], got[2], whole)
 	}
 	if a.Capacity() != int64(got[1]) {

@@ -249,7 +249,7 @@ func TestWebUI_Put_Concurrency_503(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		conn := u.rawPut(fmt.Sprintf("/slot%d", i), 10, nil)
 		conns = append(conns, conn)
 		name := fmt.Sprintf("/.slot%d.tailraid-upload", i) // the temp exists once the handler holds a slot
@@ -292,7 +292,7 @@ func TestWebUI_SweepUploads_AgeTable(t *testing.T) {
 	for _, c := range []struct {
 		age  time.Duration
 		gone bool
-	}{{webui.UploadTTL - time.Second, false}, {webui.UploadTTL, true}, {webui.UploadTTL + time.Second, true}} {
+	}{{webui.UploadTTL - time.Second, false}, {webui.UploadTTL, false}, {webui.UploadTTL + time.Second, true}} { // exactly the TTL old is still kept (docs/06: one grace rule)
 		t.Run(c.age.String(), func(t *testing.T) {
 			u := newUI(t)
 			must(t, u.fs.MkdirAll("/d", 0o755))

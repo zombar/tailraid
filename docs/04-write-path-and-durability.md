@@ -175,6 +175,9 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    len(base.Chunks)`), **zero every base byte at offset ≥ `plan.minSize`** when
    `plan.sizeSet`, and overlay the WAL extents. Clip to `eff`.
 5. **Holes.** If the assembled chunk is all zero → `ChunkWrite{i, HashZero}`; no upload.
+   An index past the base list that no write touches is not in the touched set at all:
+   the FSM grows the list with `HashZero`, so a truncate followed by a far seek costs
+   one `ChunkWrite` for the written chunk, not one per index in between (I-80).
 6. **Hash and dedup.** `h = sha256(chunk)`. If `st.GetChunk(h)` exists (live or tombstoned)
    and **at least `k` of its placement slots are present** (on a live node that answers
    `HEAD` for the shard; liveness alone is not trusted, a live node may have lost the
@@ -373,6 +376,14 @@ the WAL cap.
 - **I-79** — A WRITE that meets the per-inode WAL cap or the gateway dirty-byte cap waits for the flusher up to `CapWait` and succeeds as soon as the cap clears; it fails (`EIO`, or `ENOSPC` when the inode's last flush error was the cluster being full) only when `CapWait` expires or that inode's last flush attempt failed; acknowledged bytes are never affected by the wait or the failure.
 - **I-80** — A flush commits at most `FileDirtyHi` bytes of chunks per Commit and leaves the rest dirty as residual; the gateway's total dirty count includes the bytes of outstanding plans; compaction streams live records through a bounded buffer and leaves the inode on an open, correctly indexed WAL even when a step after the rename fails; a per-inode WAL file never exceeds `WALCap` plus one record.
 - **I-83** — A shard PUT's deadline scales with its size, the RPC server's concurrent PUT and GET slots satisfy `slots × MaxShard ≤ 256 MiB`, and a PUT whose slot was re-placed or whose chunk has been decided is cancelled and awaited, so no goroutine keeps a shard buffer alive past its chunk.
+- **I-98** — A chunk read returns as soon as k shards have arrived and cancels every GET
+  it still has in flight (the hedged request and any slower holder), so a stuck holder
+  never keeps a shard buffer or a server slot past the read that asked.
+- **I-101** — After a failed fsync the WAL reopens its file before the next append, so a
+  later fsync cannot report success for bytes the kernel already dropped; after a
+  compaction or reopen that fails, every call on that WAL returns `ErrWALClosed` until the
+  gateway restarts and replays the log, and replay reports the bytes it discarded after
+  the last intact record.
 
 ## Tests
 
@@ -383,9 +394,11 @@ the WAL cap.
 | I-34 | `TestExtents_InsertOverlap_Property`, `TestMount_Workload`, `TestNFS_WriteSequence_MultiRPC`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_WriteAtNonZeroOffset_PreservesBase`, `TestVFS_MaxDirty_ReturnsEIO`, `TestVFS_OracleRandomOps`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
 | I-35 | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_ConflictRebase_TruncateWins`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_ProposeFailureRetriesSamePlan`, `TestOverlay_AbortFlush_MergesBackNewerWins`, `TestOverlay_StaleEntry_FollowsCommittedSize`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestWAL_Compact_KeepsOnlyLive` |
 | I-36 | `TestCluster_OtherGatewaySeesPreviousVersionUntilApply`, `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` |
-| I-37 | `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
+| I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |
+| I-98 | `TestReader_HedgesStalledHolder` |
+| I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |

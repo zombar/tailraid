@@ -35,8 +35,17 @@ func TestDescribeChunksPage_Boundaries(t *testing.T) {
 	cases := []struct {
 		offset, limit, want int
 	}{
-		{0, 0, n}, {0, 1, 1}, {0, n - 1, n - 1}, {0, n, n}, {0, n + 1, n},
-		{1, 0, n - 1}, {n - 1, 0, 1}, {n, 0, 0}, {n + 1, 0, 0}, {2, 2, 2}, {n - 1, 2, 1},
+		{0, 0, n},
+		{0, 1, 1},
+		{0, n - 1, n - 1},
+		{0, n, n},
+		{0, n + 1, n},
+		{1, 0, n - 1},
+		{n - 1, 0, 1},
+		{n, 0, 0},
+		{n + 1, 0, 0},
+		{2, 2, 2},
+		{n - 1, 2, 1},
 	}
 	for _, tc := range cases {
 		_, reps := page(tc.offset, tc.limit)

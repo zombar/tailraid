@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -27,9 +28,7 @@ type world map[string][]byte
 
 func (w world) clone() world {
 	c := make(world, len(w))
-	for k, v := range w {
-		c[k] = v
-	}
+	maps.Copy(c, w)
 	return c
 }
 
@@ -355,9 +354,14 @@ func TestModelCheck_Long(t *testing.T) {
 				log("%d set_policy %d+%d", step, next[0], next[1])
 			}
 		case r < 98 && rng.Intn(2) == 0 && !partitioned: // add a disk, or fail or restore one
-			gws := liveGateways()
-			if len(disks) < 4 && len(gws) > 0 {
-				i := gws[rng.Intn(len(gws))]
+			var hosts []int // a disk belongs to an Active host (docs/14 §1): never the draining one
+			for _, g := range liveGateways() {
+				if g != draining {
+					hosts = append(hosts, g)
+				}
+			}
+			if len(disks) < 4 && len(hosts) > 0 {
+				i := hosts[rng.Intn(len(hosts))]
 				disks = append(disks, &addedDisk{node: i, idx: c.AddDisk(i)})
 				log("%d add disk to n%d", step, i)
 				return
@@ -413,7 +417,7 @@ func TestModelCheck_Long(t *testing.T) {
 			quorumUp()
 			restoreDisks()
 			for i := range c.Nodes {
-				for attempt := 0; attempt < 30; attempt++ {
+				for range 30 {
 					if err := c.Nodes[i].Flush.FlushAll(ctx); err == nil {
 						break
 					}

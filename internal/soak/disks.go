@@ -27,7 +27,9 @@ func phaseDisks(ctx context.Context, r *Run) error {
 		return nil
 	}
 	r.capChecks(ctx, rep, "as written")
-	if err := r.skewChecks(ctx, rep); err != nil {
+	if !r.Env.Caps().Mutate {
+		r.checkSkipped("I-42 L-193 L-194", "skew under drains", "draining hosts needs --destructive on a live cluster")
+	} else if err := r.skewChecks(ctx, rep); err != nil {
 		return err
 	}
 	if !r.Env.Caps().Disks || !r.Env.Caps().Kill {
@@ -35,8 +37,8 @@ func phaseDisks(ctx context.Context, r *Run) error {
 	} else if err := r.diskFailureChecks(ctx); err != nil {
 		return err
 	}
-	if !r.Env.Caps().Disks {
-		r.event("note", "disk add and remove skipped: the environment cannot add a disk")
+	if !r.Env.Caps().Disks || !r.Env.Caps().Mutate {
+		r.event("note", "disk add and remove skipped: the environment cannot add a disk, or it is a live cluster without --destructive")
 	} else if err := r.diskLifecycleChecks(ctx); err != nil {
 		return err
 	}
@@ -127,11 +129,14 @@ func (r *Run) skewChecks(ctx context.Context, rep admin.Report) error {
 			others = append(others, n)
 		}
 	}
+	u := r.undoer(ctx)
+	defer u.run()
 	for _, n := range others {
 		if err := r.Env.SetState(ctx, n, meta.Draining); err != nil {
 			r.check("L-93", "drain accepted", false, err.Error())
 			return nil
 		}
+		u.add("activate "+n.Name, func(c context.Context) error { return r.Env.SetState(c, n, meta.Active) })
 		r.event("drain", n.Name)
 	}
 	rep, err := r.repairUntilClean(ctx)
@@ -148,6 +153,7 @@ func (r *Run) skewChecks(ctx context.Context, rep admin.Report) error {
 		if err := r.Env.SetState(ctx, n, meta.Active); err != nil {
 			return err
 		}
+		u.done("activate " + n.Name)
 		r.event("activate", n.Name)
 	}
 	if rep, _, err = r.anyStatus(ctx); err != nil {
@@ -273,11 +279,14 @@ func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 		return err
 	}
 	k0, m0, wasAuto := rep.Volume.K, rep.Volume.M, rep.Volume.Auto
+	u := r.undoer(ctx)
+	defer u.run()
 	if !wasAuto {
 		if err := r.Env.SetPolicyAuto(ctx); err != nil {
 			r.check("I-75", "set-redundancy --auto accepted", false, err.Error())
 			return nil
 		}
+		u.add("pin the policy back", func(c context.Context) error { return r.Env.SetPolicy(c, k0, m0) })
 		r.event("set-redundancy", "auto")
 	}
 	follows := func(when string) admin.Report {
@@ -286,7 +295,12 @@ func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 			r.check("I-88", "repair "+when, false, err.Error())
 			return rep
 		}
-		wk, wm := meta.AutoPolicy(membersOf(rep))
+		members, err := membersOf(rep)
+		if err != nil {
+			r.check("I-88", "member table "+when, false, err.Error())
+			return rep
+		}
+		wk, wm := meta.AutoPolicy(members)
 		r.check("I-88 I-75", "policy follows the member table "+when, rep.Volume.Auto && rep.Volume.K == wk && rep.Volume.M == wm && rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0,
 			fmt.Sprintf("policy %d+%d, rule %d+%d, %d stale, %d degraded", rep.Volume.K, rep.Volume.M, wk, wm, rep.Volume.StalePolicy, rep.Volume.Degraded))
 		bad, first := r.verifyModel(v, m)
@@ -348,6 +362,7 @@ func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d (pin back) accepted", k0, m0), false, err.Error())
 			return nil
 		}
+		u.done("pin the policy back")
 		r.event("set-redundancy", fmt.Sprintf("%d+%d (pinned back)", k0, m0))
 		if _, err := r.repairUntilClean(ctx); err != nil {
 			return err

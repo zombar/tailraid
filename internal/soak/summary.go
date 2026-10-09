@@ -1,6 +1,7 @@
 package soak
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -54,12 +55,9 @@ func percentiles(ds []time.Duration) (p50, p99, maxD time.Duration) {
 		return 0, 0, 0
 	}
 	s := append([]time.Duration(nil), ds...)
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	slices.Sort(s)
 	rank := func(p float64) time.Duration {
-		i := int(p*float64(len(s))+0.999999) - 1
-		if i < 0 {
-			i = 0
-		}
+		i := max(int(p*float64(len(s))+0.999999)-1, 0)
 		if i >= len(s) {
 			i = len(s) - 1
 		}
@@ -110,7 +108,10 @@ func coverage(phases []PhaseResult) []CoverageRow {
 	for _, ph := range phases {
 		for i := range ph.Checks {
 			c := &ph.Checks[i]
-			for _, id := range strings.Fields(c.Cites) {
+			if c.Skip {
+				continue // measured nothing: covers nothing
+			}
+			for id := range strings.FieldsSeq(c.Cites) {
 				row, ok := rows[id]
 				if !ok {
 					row = &CoverageRow{ID: id}
@@ -143,15 +144,15 @@ func idLess(a, b string) bool {
 }
 
 func splitID(id string) (kind string, n int) {
-	i := strings.IndexByte(id, '-')
-	if i < 0 {
+	before, after, ok := strings.Cut(id, "-")
+	if !ok {
 		return id, 0
 	}
-	for _, c := range id[i+1:] {
+	for _, c := range after {
 		if c < '0' || c > '9' {
 			break
 		}
 		n = n*10 + int(c-'0')
 	}
-	return id[:i], n
+	return before, n
 }

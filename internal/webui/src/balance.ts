@@ -64,7 +64,8 @@ export function withDisks(nodes: NodeReport[]): NodeReport[] {
 export function render(root: HTMLElement, r: Report): void {
   const nodes = withDisks(r.nodes);
   const per = chunksPerTarget(r);
-  const targetsOf = (n: NodeReport) => 1 + r.nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state === "active" && d.capacity > 0).length;
+  // a device row is never a target (docs/14 §9): a host's expected share is its disks'
+  const targetsOf = (n: NodeReport) => (n.kind === "s3" ? 1 : r.nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state === "active" && d.capacity > 0).length);
   const sh = shares(nodes, (n) => per * targetsOf(n));
   const scale = Math.max(1, ...nodes.map((n) => Math.max(n.slots, sh.get(n.idx)?.expected ?? 0)));
   const cards = h("div", { class: "cards" });
@@ -90,7 +91,7 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
   if (!n.live) {
     capacity = barRow("capacity", bar(0, "off"), "unknown (dead " + (n.dead_for ?? "?") + ")");
   } else if (n.capacity === 0) {
-    capacity = barRow("capacity", bar(0), "no capacity");
+    capacity = barRow("capacity", bar(0), n.kind === "device" ? "no disks" : "no capacity");
   } else {
     const used = Math.max(0, n.capacity - n.free);
     const frac = used / n.capacity;
@@ -107,7 +108,7 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
     if (!Number.isNaN(dev)) val.append(" · " + signedPct(dev));
     if (n.missing_slots > 0) {
       val.append(" · ");
-      val.append(h("span", { class: "bad-text" }, `${count(n.missing_slots)} missing`));
+      val.append(h("span", { class: "text-bad" }, `${count(n.missing_slots)} missing`));
     }
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }

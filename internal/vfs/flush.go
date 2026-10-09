@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -57,11 +60,14 @@ type Flusher struct {
 	shards chunk.ShardClient
 	rd     *Reader
 	clk    clock.Clock
-	cfg    Config
-	log    *slog.Logger
-	codecs *ec.Pool
-	Hooks  Hooks
-	Events *meta.EventRing // chunk history (nil unless dev.enabled)
+	// warnFlush and warnPut keep a fault at one line a minute per site (I-124): a dead
+	// holder would otherwise log once per dirty inode per flush pass.
+	warnFlush, warnPut logx.Limiter
+	cfg                Config
+	log                *slog.Logger
+	codecs             *ec.Pool
+	Hooks              Hooks
+	Events             *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	sem     chan struct{} // ChunkWorkers slots: chunks in memory across every flush
 	buffers atomic.Int64  // chunk and shard bytes held right now
@@ -79,13 +85,16 @@ type backoffState struct {
 
 // NewFlusher wires a flusher. log may be nil.
 func NewFlusher(ov *Overlay, st *meta.Store, prop meta.Proposer, peers meta.Peers, shards chunk.ShardClient,
-	rd *Reader, clk clock.Clock, cfg Config, log *slog.Logger) *Flusher {
+	rd *Reader, clk clock.Clock, cfg Config, log *slog.Logger,
+) *Flusher {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Flusher{ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, clk: clk, cfg: cfg,
+	return &Flusher{
+		ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, clk: clk, cfg: cfg,
 		log: log, codecs: &ec.Pool{}, sem: make(chan struct{}, max(1, cfg.ChunkWorkers)),
-		backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{}}
+		backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{},
+	}
 }
 
 // Buffers reports the chunk and shard bytes the flusher holds in memory right now and
@@ -204,7 +213,7 @@ func (f *Flusher) Run(ctx context.Context) {
 				defer wg.Done()
 				defer func() { <-sem }()
 				if err := f.flush(ctx, ino, partial); err != nil {
-					f.log.Warn("flush failed, will retry", "ino", ino, "err", err)
+					f.warnFlush.Warn(f.log, "flush failed, will retry", "ino", ino, "err", err)
 					f.scheduleRetry(ino)
 				} else {
 					f.clearRetry(ino)
@@ -254,6 +263,7 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	if err != nil {
 		if errors.Is(err, meta.ErrNotExist) {
 			f.ov.Drop(ino)
+			f.clearRetry(ino) // nothing left to retry: the backoff entry goes with the inode
 			return nil
 		}
 		f.ov.AbortFlush(plan)
@@ -279,7 +289,7 @@ type chunkWork struct {
 // commitPlan runs steps 2–11 for a plan, including rebases, and returns the committed size.
 func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool) (uint64, error) {
 	forceUpload := false
-	for attempt := 0; attempt < 16; attempt++ {
+	for range 16 {
 		base, ok := f.st.GetInode(plan.Ino)
 		if !ok || base.Type != meta.TFile {
 			return 0, meta.ErrNotExist
@@ -364,8 +374,11 @@ func (f *Flusher) touched(plan *FlushPlan, base meta.Inode, partial bool) (idxs 
 		if plan.MinSize%cs != 0 {
 			touched[plan.MinSize/cs] = true // the chunk straddling the truncation point
 		}
-		for i := (plan.MinSize + cs - 1) / cs; i < n; i++ {
-			if !touched[i] && (int(i) >= len(base.Chunks) || base.Chunks[i] != meta.HashZero) {
+		// chunks the base holds past the truncation point must be rewritten as holes;
+		// chunks past the base list are holes already (the FSM grows the list with
+		// HashZero), so a truncate followed by a far seek costs no write per index
+		for i := (plan.MinSize + cs - 1) / cs; i < n && int(i) < len(base.Chunks); i++ {
+			if !touched[i] && base.Chunks[i] != meta.HashZero {
 				touched[i] = true // truncated-away bytes become holes
 			}
 		}
@@ -376,7 +389,7 @@ func (f *Flusher) touched(plan *FlushPlan, base meta.Inode, partial bool) (idxs 
 			idxs = append(idxs, i)
 		}
 	}
-	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
+	slices.Sort(idxs)
 	if batch := max(1, int(f.cfg.FileDirtyHi/cs)); !plan.SizeSet && len(idxs) > batch {
 		idxs, limited = idxs[:batch], true
 	}
@@ -611,9 +624,7 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 			}
 		}
 		meta.FillPlacement(w.hash, place, f.candidates(exclude), int(w.k), meta.DomainsOf(f.st.Nodes()))
-		for i, err := range f.putSlots(ctx, w, shards, place, acked) {
-			failed[i] = err
-		}
+		maps.Copy(failed, f.putSlots(ctx, w, shards, place, acked))
 	}
 	acks := 0
 	for i := range place {
@@ -625,8 +636,10 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 	}
 	if acks < int(w.k) {
 		err := fmt.Errorf("%w: chunk %x: %d < %d", ErrTooFewAcks, w.hash[:8], acks, w.k)
-		if len(failed) > 0 && allFull(failed) {
-			err = fmt.Errorf("%w: %w", err, chunk.ErrFull) // ENOSPC to the client, not EIO (I-79)
+		if (len(failed) > 0 && allFull(failed)) || !meta.HasTargets(f.st.Nodes()) {
+			// ENOSPC to the client, not EIO: every holder is full (I-79), or the volume has
+			// no disk to hold anything (docs/14 §9, I-120)
+			err = fmt.Errorf("%w: %w", err, chunk.ErrFull)
 		}
 		return err
 	}
@@ -709,7 +722,7 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 				f.full[place[r.slot]] = f.clk.Now().Add(time.Minute)
 				f.mu.Unlock()
 			}
-			f.log.Warn("shard put failed", "node", place[r.slot], "slot", r.slot, "err", r.err)
+			f.warnPut.Warn(f.log, "shard put failed", "node", place[r.slot], "slot", r.slot, "err", r.err)
 			f.Events.Record(w.hash, meta.EvPutFailed, fmt.Sprintf("slot %d node %d: %v", r.slot, place[r.slot], r.err))
 			continue
 		}
@@ -727,7 +740,7 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c me
 	if err := f.upload(ctx, w, data, keep); err != nil {
 		return err
 	}
-	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place}})
+	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place, Expect: c.Placement}})
 	if err != nil {
 		return fmt.Errorf("propose set-placement: %w", err)
 	}
@@ -769,10 +782,9 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 		plan.Residual = plan.Extents.without(committed, cs)
 	case plan.SizeSet:
 		cmd.HasTruncate, cmd.TruncateTo = true, plan.MinSize
-		cmd.NewSize = max(plan.MinSize, plan.Extents.maxEnd())
-		if plan.Size > cmd.NewSize { // truncate-up without writes
-			cmd.NewSize = plan.Size
-		}
+		cmd.NewSize = max(plan.Size,
+			// truncate-up without writes
+			max(plan.MinSize, plan.Extents.maxEnd()))
 	default:
 		cmd.NewSize = max(base.Size, plan.Extents.maxEnd())
 	}

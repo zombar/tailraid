@@ -1,42 +1,47 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-// node.capacity is derived from the data disk unless pinned (docs/01 §Node budget).
+// A disk's capacity is derived from its filesystem unless pinned; a device row has no
+// budget, so a config that still pins node.capacity is refused (docs/01 §Node budget,
+// docs/14 §9).
 // Invariant: I-74
-func TestConfig_CapacityAuto(t *testing.T) {
+func TestConfig_DiskCapacity(t *testing.T) {
 	c := Default()
-	c.Node.DataDir = "/tmp/c"
-	if c.Node.Capacity != "" {
-		t.Fatalf("default capacity %q, want derived", c.Node.Capacity)
-	}
+	home := t.TempDir() // absolute on every OS, which Validate requires of a disk path
+	c.Node.DataDir = filepath.Join(home, "c")
+	c.Node.Disks = []Disk{{Path: filepath.Join(home, "d1")}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("derived: %v", err)
 	}
-	c.Node.Capacity = "500G"
+	c.Node.Disks[0].Capacity = "500G"
 	if err := c.Validate(); err != nil {
 		t.Fatalf("pinned: %v", err)
 	}
-	c.Node.Capacity = "lots"
+	c.Node.Disks[0].Capacity = "lots"
 	if err := c.Validate(); err == nil {
 		t.Fatal("bad capacity accepted")
 	}
-	// a config written by an older release keeps its pin; a file without the key derives
+	// a file without a capacity derives; one from before devices stopped being targets
+	// (node.capacity) fails the strict load, which names the key
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(p, []byte("node:\n  data_dir: /tmp/c\n  capacity: 100G\n"), 0o600); err != nil {
+	yaml := fmt.Sprintf("node:\n  data_dir: %s\n  disks:\n    - path: %s\n    - path: %s\n      capacity: 100G\n", filepath.Join(home, "c"), filepath.Join(home, "d1"), filepath.Join(home, "d2"))
+	if err := os.WriteFile(p, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := Load(p); err != nil || got.Node.Capacity != "100G" {
-		t.Fatalf("old config: %+v %v", got.Node, err)
+	got, err := Load(p)
+	if err != nil || len(got.Node.Disks) != 2 || got.Node.Disks[0].Capacity != "" || got.Node.Disks[1].Capacity != "100G" {
+		t.Fatalf("disks: %+v %v", got.Node.Disks, err)
 	}
-	if err := os.WriteFile(p, []byte("node:\n  data_dir: /tmp/c\n"), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte("node:\n  data_dir: "+filepath.Join(home, "c")+"\n  capacity: 100G\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := Load(p); err != nil || got.Node.Capacity != "" {
-		t.Fatalf("new config: %+v %v", got.Node, err)
+	if _, err := Load(p); err == nil {
+		t.Fatal("a config pinning node.capacity was accepted")
 	}
 }

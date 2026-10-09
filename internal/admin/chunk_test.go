@@ -48,9 +48,11 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 		t.Fatalf("event path %v", kinds)
 	}
 	// a hash prefix selects the same chunk; an ambiguous or malformed one is refused
-	byPrefix, err := admin.DescribeChunks(ctx, n0.Node.FSM, n0.Prober, n0.Client, n0.Events, r.Hash[:12])
-	if err != nil || len(byPrefix) != 1 || byPrefix[0].Hash != r.Hash {
-		t.Fatalf("by prefix: %v %+v", err, byPrefix)
+	for _, prefix := range []string{r.Hash[:12], r.Hash[:9]} { // an odd number of digits is a prefix too
+		byPrefix, err := admin.DescribeChunks(ctx, n0.Node.FSM, n0.Prober, n0.Client, n0.Events, prefix)
+		if err != nil || len(byPrefix) != 1 || byPrefix[0].Hash != r.Hash {
+			t.Fatalf("by prefix %q: %v %+v", prefix, err, byPrefix)
+		}
 	}
 	if _, err := admin.DescribeChunks(ctx, n0.Node.FSM, n0.Prober, n0.Client, n0.Events, "abc"); err == nil {
 		t.Fatal("short selector accepted")
@@ -76,9 +78,9 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 	}
 	// a dead slot holder: degraded, slot not live, no HEAD attempted; a ring-less node
 	// still reports the state but says the ring is off
-	victim := r.Slots[0].Node - 1
+	victim := c.HostOf(meta.NodeIdx(r.Slots[0].Node)) // the slot is a disk; its host is what dies
 	if victim == 0 {
-		victim = r.Slots[1].Node - 1
+		victim = c.HostOf(meta.NodeIdx(r.Slots[1].Node))
 	}
 	c.Kill(victim)
 	c.Clk.Advance(cluster.LiveThreshold + time.Second)
@@ -108,7 +110,7 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 func hashOf(t *testing.T, hexs string) meta.Hash {
 	t.Helper()
 	var h meta.Hash
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		var b byte
 		for _, c := range hexs[2*i : 2*i+2] {
 			b <<= 4

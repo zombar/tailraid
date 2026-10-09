@@ -5,19 +5,16 @@ import (
 	"errors"
 	"net"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/raft"
 
-	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/dev"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // A drop rule cuts all four paths on the node holding it: Raft dials to the peer, Raft
@@ -29,19 +26,19 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	cid[0] = 9
 	faults := dev.NewFaults()
 	// Raft stream: node A holds the rules, node B is the peer
-	ta, err := cluster.NewTransport("127.0.0.1:0", cid, nil, faults)
+	ta, err := cluster.NewTransport("127.0.0.1:0", cid, nil, faults, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ta.(*raft.NetworkTransport).Close()
-	tb, err := cluster.NewTransport("127.0.0.1:0", cid, nil, nil)
+	tb, err := cluster.NewTransport("127.0.0.1:0", cid, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tb.(*raft.NetworkTransport).Close()
 	ping := func(from, to raft.Transport) error {
 		var resp raft.AppendEntriesResponse
-		return from.(*raft.NetworkTransport).AppendEntries("", to.LocalAddr(), &raft.AppendEntriesRequest{RPCHeader: raft.RPCHeader{ProtocolVersion: raft.ProtocolVersionMax}}, &resp)
+		return from.(*raft.NetworkTransport).AppendEntries("", to.LocalAddr(), &raft.AppendEntriesRequest{ProtocolVersion: raft.ProtocolVersionMax}, &resp)
 	}
 	faults.Set([]string{"127.0.0.1"})
 	if err := ping(ta, tb); err == nil || !isDrop(err) {
@@ -62,19 +59,17 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	}
 
 	// RPC: a server with the rules answers 503 to the peer; a client with the rules refuses
-	store, err := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "shards"), 1<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv, err := rpc.NewServer(rpc.Options{NodeID: "a", ClusterID: cid, Store: store, Applier: fakeApplier{}, Auth: rpc.AllowAll{},
-		Members: func() []meta.Node { return nil }, Blocked: faults.Blocked})
+	srv, err := rpc.NewServer(rpc.Options{
+		NodeID: "a", ClusterID: cid, Applier: fakeApplier{}, Auth: rpc.AllowAll{},
+		Members: func() []meta.Node { return nil }, Blocked: faults.Blocked,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hs := httptest.NewServer(srv.Handler())
 	defer hs.Close()
 	addr := hs.Listener.Addr().String()
-	cl := rpc.NewClient(cid, nil, nil)
+	cl := rpc.NewClient(cid, nil)
 	cl.WrapTransport(faults.Transport)
 	ctx := context.Background()
 	if _, err := cl.Health(ctx, addr); err != nil {
@@ -84,7 +79,7 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	if _, err := cl.Health(ctx, addr); err == nil || !strings.Contains(err.Error(), dev.ErrDropped.Error()) {
 		t.Fatalf("outbound with a rule: %v", err)
 	}
-	plain := rpc.NewClient(cid, nil, nil)
+	plain := rpc.NewClient(cid, nil)
 	if _, err := plain.Health(ctx, addr); err == nil {
 		t.Fatal("inbound from a blocked peer answered")
 	}
@@ -106,3 +101,4 @@ func (fakeApplier) Propose(context.Context, meta.Command) (meta.Result, uint64, 
 func (fakeApplier) AppliedIndex() uint64  { return 0 }
 func (fakeApplier) IsLeader() bool        { return true }
 func (fakeApplier) LeaderRPCAddr() string { return "" }
+func (fakeApplier) Ready() bool           { return true }

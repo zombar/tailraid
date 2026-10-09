@@ -22,7 +22,9 @@ type GC struct {
 	live   Liveness
 	clk    clock.Clock
 	grace  time.Duration
-	log    *slog.Logger
+	// Batch is the number of chunk entries one GCDelete removes; 0 is GCBatch.
+	Batch int
+	log   *slog.Logger
 }
 
 // NewGC wires the collector.
@@ -48,26 +50,45 @@ type Result struct {
 func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 	var res Result
 	before := max(g.clk.Now().UnixNano(), g.st.LastNow()) - g.grace.Nanoseconds()
-	r, index, err := g.prop.Propose(ctx, meta.Command{Op: meta.OpGCDelete, GCDelete: &meta.GCDelete{Before: before}})
-	if err == nil {
-		err = r.Err
+	batch := g.Batch
+	if batch == 0 {
+		batch = GCBatch
 	}
-	if err != nil {
-		return res, fmt.Errorf("gc: %w", err)
+	// one entry per batch (I-103): an rm -rf of terabytes is many short applies, not one
+	// long stall under the FSM lock and one huge result
+	for {
+		r, index, err := g.prop.Propose(ctx, meta.Command{Op: meta.OpGCDelete, GCDelete: &meta.GCDelete{Before: before, Limit: uint32(batch)}})
+		if err == nil {
+			err = r.Err
+		}
+		if err != nil {
+			return res, fmt.Errorf("gc: %w", err)
+		}
+		if err := g.st.WaitApplied(ctx, index); err != nil {
+			return res, err
+		}
+		res.Victims += len(r.Victims)
+		g.deleteShards(ctx, r.Victims, index, &res)
+		if len(r.Victims) < batch {
+			return res, nil
+		}
 	}
-	if err := g.st.WaitApplied(ctx, index); err != nil {
-		return res, err
-	}
-	res.Victims = len(r.Victims)
+}
+
+// GCBatch is the default number of chunk entries one GCDelete removes (GC.Batch).
+const GCBatch = 1024
+
+// deleteShards deletes the victims' shards on every live target with the fence header.
+func (g *GC) deleteShards(ctx context.Context, victims []meta.GCVictim, index uint64, res *Result) {
 	nodes := map[meta.NodeIdx]meta.Node{}
 	all := g.st.Nodes()
 	for i := range all {
 		nodes[all[i].Idx] = all[i]
 	}
-	for _, v := range r.Victims {
+	for _, v := range victims {
 		g.Events.Record(v.Hash, meta.EvCollected, fmt.Sprintf("gc index %d", index))
 		for i, n := range v.Placement {
-			if n == 0 || nodes[n].Kind != meta.KindDevice || !g.live.IsLive(n) {
+			if n == 0 || nodes[n].Kind != meta.KindDisk || !g.live.IsLive(n) { // only disks hold shards (docs/14 §9); S3 is deferred (docs/10)
 				continue
 			}
 			err := g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index)
@@ -89,5 +110,4 @@ func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 			res.Deleted++
 		}
 	}
-	return res, nil
 }

@@ -17,11 +17,14 @@ type NodeRef struct {
 	Host string       `json:"host,omitempty"` // an added disk's host node name (docs/14); "" for a node
 }
 
-// DiskInfo is a node's data disk as its budget sees it (GET /dev/disk).
+// DiskInfo is one of a node's disks as its budget sees it (GET /dev/disk, docs/12 §3).
 type DiskInfo struct {
-	Used  uint64 `json:"used"` // shard bytes held
-	Free  uint64 `json:"free"`
-	Total uint64 `json:"total"`
+	ID     string `json:"id"`
+	Name   string `json:"name"` // the disk row's name, "<host>/<n>", as status reports it
+	Used   uint64 `json:"used"` // shard bytes held
+	Free   uint64 `json:"free"`
+	Total  uint64 `json:"total"`
+	Pinned bool   `json:"pinned"` // its budget is pinned by the config: a fill moves nothing
 }
 
 // Caps lists what an Env can do; phases needing more are recorded as skipped.
@@ -31,6 +34,10 @@ type Caps struct {
 	Corrupt      bool
 	MultiGateway bool // Volume available on more than one node
 	Disks        bool // FailDisk/RestoreDisk on the hosts' added disks (docs/14)
+	// Mutate allows the phases that change the cluster itself rather than its files:
+	// policy changes, drains and removals, filling a node's disk. A live cluster allows
+	// them only with --destructive.
+	Mutate bool
 }
 
 // Env is one target cluster (docs/09 §6).
@@ -58,10 +65,11 @@ type Env interface {
 	// Goroutines is the node's goroutine dump (/dev/goroutines), taken after a failed
 	// phase so a hang is diagnosed from the report rather than by killing the node.
 	Goroutines(ctx context.Context, node NodeRef) (string, error)
-	// automation (docs/01 §Node budget, docs/03): the node's disk as its budget sees it,
-	// a scratch file that consumes disk (bytes 0 removes it; /dev/fill), auto redundancy.
-	Disk(ctx context.Context, node NodeRef) (DiskInfo, error)
-	Fill(ctx context.Context, node NodeRef, bytes uint64) error
+	// automation (docs/01 §Node budget, docs/03): the node's disks as their budgets see
+	// them, a scratch file that consumes one disk (bytes 0 removes it; /dev/fill), auto
+	// redundancy.
+	Disks(ctx context.Context, node NodeRef) ([]DiskInfo, error)
+	Fill(ctx context.Context, node NodeRef, disk string, bytes uint64) error
 	SetPolicyAuto(ctx context.Context) error
 
 	// faults

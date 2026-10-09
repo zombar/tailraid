@@ -17,34 +17,33 @@ import (
 
 // NodeReport is one row of `node ls`.
 type NodeReport struct {
-	Idx        meta.NodeIdx   `json:"idx"`
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Kind       string         `json:"kind"`
-	Host       meta.NodeIdx   `json:"host,omitempty"` // disks: the device that serves it (docs/14)
-	State      string         `json:"state"`
-	Addr       string         `json:"addr"`
-	RPCPort    uint16         `json:"rpc_port"`
-	Voter      bool           `json:"voter"`
-	Leader     bool           `json:"leader"`
-	Self       bool           `json:"self"`
-	Live       bool           `json:"live"`
-	DeadFor    string         `json:"dead_for,omitempty"`
-	Lost       bool           `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
-	RTT        string         `json:"rtt,omitempty"`
-	Free       int64          `json:"free"`
-	Capacity   uint64         `json:"capacity"`
-	Version    string         `json:"version"`
-	Applied    uint64         `json:"applied"`
-	Slots      int            `json:"slots"`
-	Missing    int            `json:"missing_slots"` // slots this node should hold but is dead for
-	Dev        bool           `json:"dev,omitempty"` // /dev/* endpoints enabled
-	TSStable   string         `json:"ts_stable_id,omitempty"`
-	JoinedAt   time.Time      `json:"joined_at"`
-	DataDir    bool           `json:"data_dir,omitempty"`    // a host's own store, on a host with added disks (docs/14 §8)
-	SharedWith []string       `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
-	fs         string         // filesystem ID from the last probe
-	rawState   meta.NodeState // for sorting
+	Idx        meta.NodeIdx `json:"idx"`
+	ID         string       `json:"id"`
+	Name       string       `json:"name"`
+	Kind       string       `json:"kind"`
+	Host       meta.NodeIdx `json:"host,omitempty"` // disks: the device that serves it (docs/14)
+	State      string       `json:"state"`
+	Addr       string       `json:"addr"`
+	RPCPort    uint16       `json:"rpc_port"`
+	Voter      bool         `json:"voter"`
+	Leader     bool         `json:"leader"`
+	Self       bool         `json:"self"`
+	Live       bool         `json:"live"`
+	DeadFor    string       `json:"dead_for,omitempty"`
+	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
+	RTT        string       `json:"rtt,omitempty"`
+	Free       int64        `json:"free"`
+	Capacity   uint64       `json:"capacity"`
+	Version    string       `json:"version"`
+	Applied    uint64       `json:"applied"`
+	Slots      int          `json:"slots"`
+	Missing    int          `json:"missing_slots"` // slots this node should hold but is dead for
+	Dev        bool         `json:"dev,omitempty"` // /dev/* endpoints enabled
+	TSStable   string       `json:"ts_stable_id,omitempty"`
+	JoinedAt   time.Time    `json:"joined_at"`
+	Diskless   bool         `json:"diskless,omitempty"`    // a device with no disk rows: a gateway-only host (docs/14 §9)
+	SharedWith []string     `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
+	fs         string       // filesystem ID from the last probe
 }
 
 // VolumeReport is `volume describe`.
@@ -130,6 +129,7 @@ type Report struct {
 	Node        string         `json:"node"`
 	ClusterID   string         `json:"cluster_id"`
 	Health      string         `json:"health"`
+	Ready       bool           `json:"ready"` // this node knows a leader and has applied every committed entry (I-125)
 	Leader      string         `json:"leader"`
 	LastContact string         `json:"last_contact,omitempty"`
 	Voters      int            `json:"voters"`
@@ -141,9 +141,12 @@ type Report struct {
 	Repair      *RepairStatus  `json:"repair,omitempty"`
 	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
 	Process     *ProcessReport `json:"process,omitempty"` // this node's runtime (docs/12 §8)
-	Machine     *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
-	WebURL      string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
-	GeneratedAt time.Time      `json:"generated_at"`
+	// IncompatibleEntries counts log entries this binary could not decode: a newer release
+	// is writing to the cluster and this node must be updated (docs/12 §6, I-105).
+	IncompatibleEntries uint64         `json:"incompatible_entries,omitempty"`
+	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
+	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
+	GeneratedAt         time.Time      `json:"generated_at"`
 }
 
 // RepairStatus is the leader's last scan (nil on followers).
@@ -160,15 +163,22 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now, Process: processReport()}
 	h := n.Health(clk, p)
 	rep.Health, rep.Leader, rep.Voters, rep.LiveVoters = h.State.String(), h.Leader, h.Voters, h.LiveVoters
+	rep.Ready = n.Ready()
 	if h.LastContact > 0 {
 		rep.LastContact = h.LastContact.Round(time.Millisecond).String()
 	}
 	rep.JoinToken = st.Meta().JoinToken
+	rep.IncompatibleEntries = st.Incompatible()
+	if rep.IncompatibleEntries > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d log entries from a newer release could not be decoded: update this node", rep.IncompatibleEntries))
+	}
 
 	vol := st.Volume()
 	stats := st.Stats()
-	rep.Volume = VolumeReport{K: vol.K, M: vol.M, Auto: vol.Auto, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
-		Inodes: stats.Inodes, Chunks: stats.Chunks, Tombstoned: stats.Tombstoned, LogicalBytes: stats.LogicalBytes, StoredBytes: stats.StoredBytes}
+	rep.Volume = VolumeReport{
+		K: vol.K, M: vol.M, Auto: vol.Auto, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
+		Inodes: stats.Inodes, Chunks: stats.Chunks, Tombstoned: stats.Tombstoned, LogicalBytes: stats.LogicalBytes, StoredBytes: stats.StoredBytes,
+	}
 
 	nodes := st.Nodes()
 	probes := map[meta.NodeIdx]cluster.Probe{}
@@ -201,9 +211,11 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	for i := range nodes {
 		nd := nodes[i]
 		self := nd.ID == n.ID || (nd.Kind == meta.KindDisk && nd.Host == selfIdx) // a disk of this host
-		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
+		r := NodeReport{
+			Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
-			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State}
+			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
+		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS
 			r.Free, r.Applied, r.Dev = pr.Free, pr.Applied, pr.Dev
@@ -215,7 +227,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 				r.Lost = pr.Lost
 			}
 		}
-		if nd.State == meta.Active {
+		if nd.State == meta.Active && nd.Kind != meta.KindDevice { // a device stores nothing (docs/14 §9)
 			rep.Volume.Capacity += nd.Capacity
 		}
 		rep.Nodes = append(rep.Nodes, r)
@@ -235,15 +247,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	return rep
 }
 
-// markDisks labels each host's own store when it has added disks, and lists the targets
-// of one host on one filesystem with each other (docs/14 §8): they fail together.
+// markDisks flags each device with no disks as diskless (docs/14 §9), and lists the
+// disks of one host on one filesystem with each other (docs/14 §8): they fail together.
 func markDisks(nodes []NodeReport) {
-	hostOf := func(n *NodeReport) meta.NodeIdx {
-		if n.Kind == "disk" {
-			return n.Host
-		}
-		return n.Idx
-	}
 	type key struct {
 		host meta.NodeIdx
 		fs   string
@@ -252,20 +258,18 @@ func markDisks(nodes []NodeReport) {
 	hasDisk := map[meta.NodeIdx]bool{}
 	for i := range nodes {
 		n := &nodes[i]
-		if n.State == "removed" || n.Kind == "s3" {
+		if n.State == meta.Removed.String() || n.Kind != meta.KindDisk.String() {
 			continue
 		}
-		if n.Kind == "disk" {
-			hasDisk[n.Host] = true
-		}
+		hasDisk[n.Host] = true
 		if n.fs != "" {
-			k := key{hostOf(n), n.fs}
+			k := key{n.Host, n.fs}
 			groups[k] = append(groups[k], i)
 		}
 	}
 	for i := range nodes {
-		if nodes[i].Kind == "device" && hasDisk[nodes[i].Idx] {
-			nodes[i].DataDir = true
+		if nodes[i].Kind == meta.KindDevice.String() && nodes[i].State != meta.Removed.String() && !hasDisk[nodes[i].Idx] {
+			nodes[i].Diskless = true
 		}
 	}
 	for _, members := range groups {
@@ -283,21 +287,8 @@ func markDisks(nodes []NodeReport) {
 	}
 }
 
-// Label is how a target is named to a person: a host's own store reads "<host> (data
-// dir)" once the host has added disks.
-func (n NodeReport) Label() string {
-	if n.DataDir {
-		return n.Name + " (data dir)"
-	}
-	return n.Name
-}
-
 // sharedDiskWarnings is one line per group of targets on one physical disk.
 func sharedDiskWarnings(nodes []NodeReport) []string {
-	byName := map[string]*NodeReport{}
-	for i := range nodes {
-		byName[nodes[i].Name] = &nodes[i]
-	}
 	seen := map[string]bool{}
 	var out []string
 	for i := range nodes {
@@ -307,12 +298,10 @@ func sharedDiskWarnings(nodes []NodeReport) []string {
 		}
 		names := append([]string{n.Name}, n.SharedWith...)
 		sort.Strings(names)
-		labels := make([]string, 0, len(names))
 		for _, name := range names {
 			seen[name] = true
-			labels = append(labels, byName[name].Label())
 		}
-		list := strings.Join(labels[:len(labels)-1], ", ") + " and " + labels[len(labels)-1]
+		list := strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 		out = append(out, list+" are on one physical disk: they fail together, so data spread across them is not redundant")
 	}
 	return out

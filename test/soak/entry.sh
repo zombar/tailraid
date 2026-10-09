@@ -1,7 +1,8 @@
 #!/bin/sh
 # Node entrypoint for the compose cluster. Env:
-#   ROLE=init|join   SELF_IP, NODE_NAME, LEADER (ip for join), TOKEN, K, M, CAPACITY, VOTER
-#   DISKS (space-separated mount paths of added disks, docs/14), DISK_CAPACITY
+#   ROLE=init|join   SELF_IP, NODE_NAME, LEADER (ip for join), TOKEN, K, M, VOTER
+#   DISKS (space-separated disks, docs/14, each `path` or `path=capacity`; empty for a
+#   diskless host, docs/14 §9)
 set -eu
 mkdir -p "$TAILRAID_HOME"
 # one log format for the whole container stream: shell messages and CLI output become
@@ -36,7 +37,6 @@ cat > "$TAILRAID_HOME/config.yaml" <<EOF
 node:
   name: $NODE_NAME
   data_dir: $TAILRAID_HOME/data
-  ${CAPACITY:+capacity: $CAPACITY}
   voter: ${VOTER:-true}
 listen:
   raft: 20480
@@ -51,15 +51,18 @@ dev:
   enabled: true
   tailscale_fake: $TAILRAID_HOME/ts.json
 EOF
-# the joining nodes add their disks after the join (node add-disk, docs/14 §2); the init
-# node lists them in its config and init registers them
+# init and join both register the disks the config lists (docs/14 §2, §9): a derived
+# budget for a bare path, a pinned one for `path=capacity`
 diskcfg() {
   echo "  disks:"
   for d in $DISKS; do
-    printf '    - path: %s\n      capacity: "%s"\n' "$d" "${DISK_CAPACITY:-}"
+    case "$d" in
+      *=*) printf '    - path: %s\n      capacity: "%s"\n' "${d%%=*}" "${d#*=}" ;;
+      *) printf '    - path: %s\n' "$d" ;;
+    esac
   done
 }
-if [ -n "${DISKS:-}" ] && [ "$ROLE" = init ] && [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
+if [ -n "${DISKS:-}" ] && [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
   # insert under node: (after the voter line)
   diskcfg > "$TAILRAID_HOME/disks.yaml"
   sed -i "/^  voter:/r $TAILRAID_HOME/disks.yaml" "$TAILRAID_HOME/config.yaml"
@@ -76,16 +79,6 @@ if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
   else
     until curl -fsS "http://$LEADER:20481/health" >/dev/null 2>&1; do say "waiting for $LEADER"; sleep 1; done
     until cli tailraid join "$LEADER" "$TOKEN" $( [ "${VOTER:-true}" = true ] && echo --voter ); do say "join retry"; sleep 2; done
-    if [ -n "${DISKS:-}" ]; then
-      # add-disk talks to the running node: serve in the background until they are in
-      tailraid serve &
-      pid=$!
-      until curl -fsS "http://$SELF_IP:20481/health" >/dev/null 2>&1; do sleep 1; done
-      for d in $DISKS; do
-        until cli tailraid node add-disk "$d" $( [ -n "${DISK_CAPACITY:-}" ] && echo --capacity "$DISK_CAPACITY" ); do say "add-disk retry $d"; sleep 2; done
-      done
-      kill "$pid"; wait "$pid" 2>/dev/null || true
-    fi
   fi
   if [ -n "${DISKS:-}" ]; then
     diskcfg > "$TAILRAID_HOME/disks.saved.yaml"

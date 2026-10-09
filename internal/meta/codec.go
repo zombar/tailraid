@@ -1,9 +1,11 @@
 package meta
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 )
 
@@ -25,7 +27,7 @@ func EncodeState(wr io.Writer, s *State) error { return encodeStateVersion(wr, s
 // ever written in production, and the older ones exist so the decoder's compatibility
 // paths are tested against real bytes.
 func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
-	w := &writer{b: make([]byte, 0, 1024)}
+	w := &writer{b: make([]byte, 0, 64<<10), out: wr}
 	w.b = append(w.b, stateMagic...)
 	w.u8(version)
 	w.u64(s.Applied)
@@ -51,6 +53,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 	w.uvarint(uint64(len(nodeIdx)))
 	for _, idx := range nodeIdx {
 		writeNode(w, s.Nodes[NodeIdx(idx)], version >= stateVersion)
+		w.spill()
 	}
 
 	hashes := make([]Hash, 0, len(s.Chunks))
@@ -68,13 +71,14 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.u32(c.Refs)
 		w.nodeIdxs(c.Placement)
 		w.i64(c.TombstonedAt)
+		w.spill()
 	}
 
 	inos := make([]uint64, 0, len(s.Inodes))
 	for ino := range s.Inodes {
 		inos = append(inos, uint64(ino))
 	}
-	sort.Slice(inos, func(i, j int) bool { return inos[i] < inos[j] })
+	slices.Sort(inos)
 	w.uvarint(uint64(len(inos)))
 	for _, ino := range inos {
 		in := s.Inodes[Ino(ino)]
@@ -114,20 +118,16 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		default:
 			return fmt.Errorf("meta: inode %d has invalid type %d", in.Ino, in.Type)
 		}
+		w.spill()
 	}
-	_, err := wr.Write(w.b)
-	return err
+	return w.flush()
 }
 
 // DecodeState parses a snapshot written by EncodeState. It rejects unknown versions,
 // truncation, trailing bytes, and structurally invalid states (HashZero chunk entries,
 // invalid inode types, non-canonical order).
 func DecodeState(rd io.Reader) (*State, error) {
-	b, err := readAll(rd)
-	if err != nil {
-		return nil, err
-	}
-	r := &reader{b: b}
+	r := &reader{src: bufio.NewReaderSize(rd, 1<<20)} // streamed: never the whole snapshot in memory at once (I-104)
 	if !bytes.Equal(r.take(4), stateMagic) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
@@ -186,8 +186,10 @@ func DecodeState(rd io.Reader) (*State, error) {
 	n = r.length(maxListLen)
 	var prevIno Ino
 	for i := 0; i < n && r.err == nil; i++ {
-		in := &Inode{Ino: Ino(r.u64()), Gen: r.u32(), Type: FileType(r.u8()), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(),
-			Size: r.u64(), Atime: r.i64(), Mtime: r.i64(), Ctime: r.i64(), Nlink: r.u16(), Version: r.u64(), Parent: Ino(r.u64()), Name: r.str()}
+		in := &Inode{
+			Ino: Ino(r.u64()), Gen: r.u32(), Type: FileType(r.u8()), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(),
+			Size: r.u64(), Atime: r.i64(), Mtime: r.i64(), Ctime: r.i64(), Nlink: r.u16(), Version: r.u64(), Parent: Ino(r.u64()), Name: r.str(),
+		}
 		if i > 0 && in.Ino <= prevIno {
 			return nil, fmt.Errorf("meta: inodes not in canonical order")
 		}

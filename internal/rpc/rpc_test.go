@@ -38,6 +38,7 @@ type fakeApplier struct {
 	idx        uint64
 	leader     bool
 	leaderAddr string
+	proposeErr error // returned by Propose after applying: the leader lost the outcome
 }
 
 func newApplier() *fakeApplier {
@@ -50,7 +51,7 @@ func (a *fakeApplier) apply(c meta.Command) (meta.Result, uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.idx++
-	res := a.fsm.Apply(&raft.Log{Index: a.idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)}).(meta.Result)
+	res := a.fsm.Apply(&raft.Log{Index: a.idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)}).(meta.Result)
 	return res, a.idx
 }
 
@@ -59,11 +60,18 @@ func (a *fakeApplier) Propose(_ context.Context, c meta.Command) (meta.Result, u
 		return meta.Result{}, 0, ErrNotLeader
 	}
 	r, i := a.apply(c)
+	a.mu.Lock()
+	perr := a.proposeErr
+	a.mu.Unlock()
+	if perr != nil {
+		return meta.Result{}, 0, perr
+	}
 	return r, i, nil
 }
 func (a *fakeApplier) IsLeader() bool        { a.mu.Lock(); defer a.mu.Unlock(); return a.leader }
 func (a *fakeApplier) LeaderRPCAddr() string { a.mu.Lock(); defer a.mu.Unlock(); return a.leaderAddr }
 func (a *fakeApplier) AppliedIndex() uint64  { return a.fsm.Applied() }
+func (a *fakeApplier) Ready() bool           { return a.IsLeader() || a.LeaderRPCAddr() != "" }
 func (a *fakeApplier) setLeader(l bool, addr string) {
 	a.mu.Lock()
 	a.leader, a.leaderAddr = l, addr
@@ -72,7 +80,7 @@ func (a *fakeApplier) setLeader(l bool, addr string) {
 
 type fakeFence struct{ placed map[chunk.ShardKey]bool }
 
-func (f fakeFence) PlacedOnSelf(k chunk.ShardKey) (bool, bool) { return f.placed[k], true }
+func (f fakeFence) PlacedOn(_ meta.NodeIdx, k chunk.ShardKey) bool { return f.placed[k] }
 
 type fakeJoiner struct {
 	mu  sync.Mutex
@@ -85,7 +93,8 @@ func (j *fakeJoiner) Join(_ context.Context, req JoinRequest) (JoinResponse, err
 		return JoinResponse{}, ErrNotLeader
 	}
 	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
-		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity}}})
+		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter,
+	}}})
 	if res.Err != nil {
 		return JoinResponse{}, res.Err
 	}
@@ -124,7 +133,10 @@ var (
 )
 
 // newEnv serves a node whose member table contains the loopback caller as member 1.
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, nil) }
+
+// newEnvWith builds the environment with mod applied to the server options first.
+func newEnvWith(t *testing.T, mod func(*Options)) *env {
 	t.Helper()
 	e := &env{t: t, app: newApplier(), clk: clock.NewFake(time.Now()), fence: fakeFence{placed: map[chunk.ShardKey]bool{}}}
 	e.cid = [16]byte{1, 2, 3}
@@ -137,9 +149,15 @@ func newEnv(t *testing.T) *env {
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
 	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
-	e.srv, err = NewServer(Options{NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
+	opts := Options{
+		NodeID: "n1", ClusterID: e.cid, Version: "t", Applier: e.app, Fence: e.fence, Joiner: e.joiner, Disk: e.diskLookup, DiskHealth: e.diskHealth,
 		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
-		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) }})
+		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) },
+	}
+	if mod != nil {
+		mod(&opts)
+	}
+	e.srv, err = NewServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,13 +167,36 @@ func newEnv(t *testing.T) *env {
 	return e
 }
 
+// The server's one disk, "d0", is target 1 (a device stores nothing, docs/14 §9: the
+// rpc package only routes by disk ID).
+func (e *env) diskLookup(id string) (ShardStore, meta.NodeIdx, bool) {
+	if id == "d0" {
+		return e.store, 1, true
+	}
+	return nil, 0, false
+}
+
+func (e *env) diskHealth() []DiskHealth {
+	return []DiskHealth{{ID: "d0", Used: e.store.Used(), Capacity: e.store.Capacity(), Free: e.store.Capacity() - e.store.Used(), OK: true}}
+}
+
+// disk0 names target 1 as disk "d0" for a client.
+func disk0(idx meta.NodeIdx) (string, bool) {
+	if idx == 1 {
+		return "d0", true
+	}
+	return "", false
+}
+
 func (e *env) client() *Client {
-	return NewClient(e.cid, func(idx meta.NodeIdx) (string, bool, bool) {
+	c := NewClient(e.cid, func(idx meta.NodeIdx) (string, bool, bool) {
 		if idx == 1 {
 			return e.addr, false, true // route "self" over HTTP so the server path is exercised
 		}
 		return "", false, false
-	}, nil)
+	})
+	c.SetDisks(disk0, nil)
+	return c
 }
 
 func key(payload []byte, idx int) chunk.ShardKey { return chunk.Key(sha256.Sum256(payload), 2, 1, idx) }
@@ -201,7 +242,7 @@ func TestChunkRPC_HashMismatchRejected(t *testing.T) {
 	c := e.client()
 	p := []byte("payload")
 	k := key(p, 0)
-	resp, err := c.do(ctx, http.MethodPut, e.addr, "/v1/shards/"+string(k), p, map[string]string{HeaderShardSum: "00ff"})
+	resp, err := c.do(ctx, http.MethodPut, e.addr, "/v1/disks/d0/shards/"+string(k), p, map[string]string{HeaderShardSum: "00ff"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +254,7 @@ func TestChunkRPC_HashMismatchRejected(t *testing.T) {
 		t.Fatal("mismatched shard stored")
 	}
 	// bad key is 400 too
-	resp, _ = c.do(ctx, http.MethodGet, e.addr, "/v1/shards/not-a-key", nil, nil)
+	resp, _ = c.do(ctx, http.MethodGet, e.addr, "/v1/disks/d0/shards/not-a-key", nil, nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("bad key status %d", resp.StatusCode)
@@ -224,7 +265,7 @@ func TestChunkRPC_HashMismatchRejected(t *testing.T) {
 func TestChunkRPC_FullNodeIs507(t *testing.T) {
 	e := newEnv(t)
 	small, _ := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "s"), 100)
-	e.srv.o.Store = small
+	e.store = small
 	c := e.client()
 	p := bytes.Repeat([]byte{1}, 200)
 	if err := c.Put(ctx, 1, key(p, 0), p); !errors.Is(err, chunk.ErrFull) {
@@ -242,7 +283,7 @@ func TestChunkRPC_DeleteFence(t *testing.T) {
 	k := key(p, 0)
 	must(t, c.Put(ctx, 1, k, p))
 	// no header → 400
-	resp, _ := c.do(ctx, http.MethodDelete, e.addr, "/v1/shards/"+string(k), nil, nil)
+	resp, _ := c.do(ctx, http.MethodDelete, e.addr, "/v1/disks/d0/shards/"+string(k), nil, nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("no index: %d", resp.StatusCode)
@@ -322,7 +363,7 @@ func TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader(t *testing.T) {
 	pr, pw := net.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	req, _ := http.NewRequest(http.MethodPut, e.hs.URL+"/v1/shards/"+string(key([]byte("x"), 0)), pr)
+	req, _ := http.NewRequest(http.MethodPut, e.hs.URL+"/v1/disks/d0/shards/"+string(key([]byte("x"), 0)), pr)
 	req.Header.Set(HeaderCluster, e.srv.clusID)
 	req.ContentLength = 1 << 40
 	done := make(chan *http.Response, 1)
@@ -344,7 +385,8 @@ func TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader(t *testing.T) {
 		t.Fatal("server waited for the body before authorizing")
 	}
 	// wrong cluster id → 409 before auth
-	other := NewClient([16]byte{9}, func(meta.NodeIdx) (string, bool, bool) { return e.addr, false, true }, nil)
+	other := NewClient([16]byte{9}, func(meta.NodeIdx) (string, bool, bool) { return e.addr, false, true })
+	other.SetDisks(disk0, nil)
 	if _, err := other.Get(ctx, 1, key([]byte("x"), 0)); !errors.Is(err, ErrWrongCluster) {
 		t.Fatalf("cluster mismatch: %v", err)
 	}
@@ -390,7 +432,7 @@ func TestApply_ForwardAndRedirect(t *testing.T) {
 func TestJoin_RateLimitedPerSource(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
-	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2, Capacity: 5}
+	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2}
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("first attempt: %v", err)
 	}
@@ -412,7 +454,7 @@ func TestJoin_RateLimitedPerSource(t *testing.T) {
 func TestJoin_TokenAndIdentity(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
-	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2, Capacity: 5}
+	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2}
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("wrong token: %v", err)
 	}
@@ -453,7 +495,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 		t.Fatalf("bad slots %+v", e.bad)
 	}
 	h, err := c.Health(ctx, e.addr)
-	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() {
+	if err != nil || h.NodeID != "n1" || !h.Leader || len(h.Disks) != 1 || h.Disks[0].Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() || h.Codec != meta.CodecVersion {
 		t.Fatalf("health %+v %v", h, err)
 	}
 	st, err := c.Call(ctx, e.addr, http.MethodGet, "/v1/status", nil)
@@ -470,10 +512,10 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 
 // Invariant: I-50
 func TestListen_RefusesNonLoopbackWithoutAuthorizer(t *testing.T) {
-	if _, err := Listen("0.0.0.0:0", AllowAll{}); err == nil {
+	if _, err := Listen(t.Context(), "0.0.0.0:0", AllowAll{}); err == nil {
 		t.Fatal("bound without authorizer")
 	}
-	l, err := Listen("127.0.0.1:0", AllowAll{})
+	l, err := Listen(t.Context(), "127.0.0.1:0", AllowAll{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,7 +32,7 @@ func (e *env) withDisk(t *testing.T) *chunk.Store {
 		if id == "d1" {
 			return d, 2, true
 		}
-		return nil, 0, false
+		return e.diskLookup(id)
 	}
 	e.srv.o.DiskHealth = func() []DiskHealth {
 		return []DiskHealth{{ID: "d1", Used: d.Used(), Capacity: d.Capacity(), Free: d.Capacity() - d.Used(), OK: true}, {ID: "d2", Reason: "disk_id missing"}}
@@ -48,9 +48,11 @@ func (e *env) diskClient() *Client {
 			return e.addr, false, true
 		}
 		return "", false, false
-	}, nil)
+	})
 	c.SetDisks(func(idx meta.NodeIdx) (string, bool) {
 		switch idx {
+		case 1:
+			return "d0", true
 		case 2:
 			return "d1", true
 		case 3:
@@ -96,7 +98,7 @@ func TestChunkRPC_DiskPath_RoundTrip(t *testing.T) {
 	if ok, err := c.Has(ctx, 3, key(p, 0)); ok || !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("head on a closed disk: %v %v", ok, err)
 	}
-	// /health lists every disk
+	// /health lists every disk (the server's own d0 is replaced by withDisk's two)
 	h, err := c.Health(ctx, e.addr)
 	if err != nil || len(h.Disks) != 2 || !h.Disks[0].OK || h.Disks[1].OK {
 		t.Fatalf("health: %+v %v", h.Disks, err)
@@ -123,9 +125,10 @@ func TestChunkRPC_DiskDeleteFence(t *testing.T) {
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	// a fence that cannot answer for disks refuses every disk delete
+	// a server without a fence refuses every delete
+	e.srv.o.Fence = nil
 	if st := del(); st != 412 {
-		t.Fatalf("no disk fence: status %d", st)
+		t.Fatalf("no fence: status %d", st)
 	}
 	f := diskFence{fakeFence: e.fence, onDisk: map[chunk.ShardKey]bool{k: true}}
 	e.srv.o.Fence = f
@@ -143,9 +146,11 @@ func TestClient_LocalDiskRouting(t *testing.T) {
 	dir := t.TempDir()
 	own, _ := chunk.Open(sysfs.OS{}, filepath.Join(dir, "own"), 1<<30)
 	d1, _ := chunk.Open(sysfs.OS{}, filepath.Join(dir, "d1"), 1<<30)
-	c := NewClient([16]byte{1}, func(meta.NodeIdx) (string, bool, bool) { return "unused:1", true, true }, own)
+	c := NewClient([16]byte{1}, func(meta.NodeIdx) (string, bool, bool) { return "unused:1", true, true })
 	c.SetDisks(func(idx meta.NodeIdx) (string, bool) {
 		switch idx {
+		case 1:
+			return "own", true
 		case 2:
 			return "d1", true
 		case 3:
@@ -153,11 +158,18 @@ func TestClient_LocalDiskRouting(t *testing.T) {
 		}
 		return "", false
 	}, func(id string) ShardStore {
-		if id == "d1" {
+		switch id {
+		case "own":
+			return own
+		case "d1":
 			return d1
 		}
 		return nil
 	})
+	// a device row (here 4) is never a target: unavailable, not "absent" (docs/14 §9)
+	if _, err := c.Get(ctx, 4, key([]byte("x"), 0)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("get from a device index: %v", err)
+	}
 	p := []byte("local")
 	k := key(p, 0)
 	if err := c.Put(ctx, 2, k, p); err != nil || !d1.Has(k) || own.Has(k) {

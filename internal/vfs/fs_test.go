@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -38,8 +39,8 @@ func (c *checkTB) Cleanup(f func())                  { c.cleanups = append(c.cle
 func (c *checkTB) Fatal(args ...any)                 { c.C.Fatal(args...) }
 func (c *checkTB) Fatalf(format string, args ...any) { c.C.Fatalf(format, args...) }
 func (c *checkTB) runCleanups() {
-	for i := len(c.cleanups) - 1; i >= 0; i-- {
-		c.cleanups[i]()
+	for _, v := range slices.Backward(c.cleanups) {
+		v()
 	}
 }
 
@@ -303,7 +304,7 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 			}
 		}
 	}
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		name := pickName()
 		cur, exists := model[name]
 		switch r := rng.Intn(12); {
@@ -649,5 +650,83 @@ func TestVFS_ZeroByteFile_NoWALNoCommit(t *testing.T) {
 	must(t, fh.Close())
 	if d := f.Ov.Dirty(); len(d) != 1 {
 		t.Fatalf("truncate of a non-empty file not recorded: %+v", d)
+	}
+}
+
+// WriteAt is the SMB gateway's WRITE (docs/15): the bytes land at exactly the requested
+// offset, every other byte is intact, and the handle's position does not move. The table
+// crosses a chunk boundary at a non-zero offset with the sizes around MaxWriteSize's
+// stand-in here, the chunk size.
+// Invariant: I-106, I-45
+func TestVFS_WriteAt_ExactOffset_PosUnchanged(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	cs := int(testharness.ChunkSize)
+	base := testharness.Pattern(2*cs+100, 3)
+	fh, err := fs.Create("/f")
+	must(t, err)
+	_, err = fh.Write(base)
+	must(t, err)
+	must(t, fh.Close())
+	must(t, f.Flusher().FlushAll(ctx))
+
+	fh, err = fs.OpenFile("/f", os.O_RDWR, 0)
+	must(t, err)
+	wa, ok := fh.(io.WriterAt)
+	if !ok {
+		t.Fatal("vfs.File is not an io.WriterAt")
+	}
+	if _, err := fh.Seek(7, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wa.WriteAt([]byte("x"), -1); !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("negative offset: %v, want EINVAL", err)
+	}
+	want := bytes.Clone(base)
+	off := cs - 3 // straddles the first chunk boundary
+	for i, size := range []int{0, 1, cs - 1, cs, cs + 1} {
+		payload := testharness.Pattern(size, byte(10+i))
+		n, err := wa.WriteAt(payload, int64(off))
+		if err != nil || n != size {
+			t.Fatalf("size %d: n=%d err=%v", size, n, err)
+		}
+		copy(want[off:], payload)
+		if pos, _ := fh.Seek(0, io.SeekCurrent); pos != 7 {
+			t.Fatalf("size %d: position moved to %d", size, pos)
+		}
+		got := make([]byte, len(want))
+		if _, err := fh.ReadAt(got, 0); err != nil && !errors.Is(err, io.EOF) {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("size %d dirty: differs at %d", size, testharness.FirstDiff(got, want))
+		}
+	}
+	must(t, fh.Close())
+	must(t, f.Flusher().FlushAll(ctx))
+	if got := f.ReadFile(f.InodeOf(fs, "/f")); !bytes.Equal(got, want) {
+		t.Fatalf("flushed: differs at %d", testharness.FirstDiff(got, want))
+	}
+
+	ro, err := fs.Open("/f")
+	must(t, err)
+	if _, err := ro.(io.WriterAt).WriteAt([]byte("x"), 0); !errors.Is(err, syscall.EBADF) {
+		t.Fatalf("WriteAt on a read-only handle: %v, want EBADF", err)
+	}
+	// the SMB adapter reads the inode number and the inode's own times off the file info
+	fi, err := fs.Stat("/f")
+	must(t, err)
+	in := f.Inode(f.InodeOf(fs, "/f"))
+	if ii, ok := fi.(interface{ Ino() meta.Ino }); !ok || ii.Ino() != in.Ino {
+		t.Fatalf("Ino() = %v, want %d", ok, in.Ino)
+	}
+	ti, ok := fi.(interface {
+		Times() (atime, mtime, ctime time.Time)
+	})
+	if !ok {
+		t.Fatal("file info has no Times()")
+	}
+	if a, m, c := ti.Times(); a.UnixNano() != in.Atime || m.UnixNano() != in.Mtime || c.UnixNano() != in.Ctime {
+		t.Fatalf("Times() = %v %v %v, want the inode's %d %d %d", a, m, c, in.Atime, in.Mtime, in.Ctime)
 	}
 }

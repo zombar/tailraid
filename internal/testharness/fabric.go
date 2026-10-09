@@ -4,10 +4,12 @@ package testharness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -48,20 +50,23 @@ type Fabric struct {
 	Ov      *vfs.Overlay
 	staging string
 
-	mu            sync.Mutex
-	idx           uint64
-	down          map[meta.NodeIdx]bool
-	full          map[meta.NodeIdx]bool
-	failPutOnce   map[meta.NodeIdx]int
-	failPutWith   map[meta.NodeIdx]error     // every PUT to the node fails with this
-	stallPut      map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
-	cancelledPuts map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
-	putCount      int
-	gets          map[meta.NodeIdx]int
-	proposeErr    error // returned once by Propose as a transport failure
-	proposeDown   error // returned by every Propose while set
-	stale         bool  // the gateway's health view given to vfs.FS
-	proposed      []meta.Op
+	mu             sync.Mutex
+	idx            uint64
+	targetOf       map[meta.NodeIdx]meta.NodeIdx // host → its disk (docs/14 §9)
+	hostOf         map[meta.NodeIdx]meta.NodeIdx // disk → its host
+	down           map[meta.NodeIdx]bool
+	full           map[meta.NodeIdx]bool
+	failPutOnce    map[meta.NodeIdx]int
+	failPutWith    map[meta.NodeIdx]error     // every PUT to the node fails with this
+	stallPut       map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
+	cancelledPuts  map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
+	putCount       int
+	gets           map[meta.NodeIdx]int
+	proposeErr     error // returned once by Propose as a transport failure
+	proposeDown    error // returned by every Propose while set
+	proposeUnknown int   // Propose applies the command and then reports an unknown outcome, this many times
+	stale          bool  // the gateway's health view given to vfs.FS
+	proposed       []meta.Op
 }
 
 const (
@@ -74,12 +79,18 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	f := &Fabric{
 		TB: t, FSM: meta.NewFSM(), Clk: clock.NewFake(time.Unix(1_700_000_000, 0)), SelfIdx: 1,
 		Stores: map[meta.NodeIdx]*chunk.Store{}, down: map[meta.NodeIdx]bool{}, full: map[meta.NodeIdx]bool{},
+		targetOf: map[meta.NodeIdx]meta.NodeIdx{}, hostOf: map[meta.NodeIdx]meta.NodeIdx{},
 		failPutOnce: map[meta.NodeIdx]int{}, gets: map[meta.NodeIdx]int{},
 	}
 	f.Apply(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: ChunkSize, K: k, M: m, Now: 1}})
 	root := t.TempDir()
-	for i := 1; i <= nodes; i++ {
-		f.AddNode()
+	// the hosts take indices 1..nodes, as tests address them; their disks follow
+	hosts := make([]meta.NodeIdx, 0, nodes)
+	for range nodes {
+		hosts = append(hosts, f.addDevice())
+	}
+	for _, h := range hosts {
+		f.addDisk(h)
 	}
 	var err error
 	f.Cache, err = chunk.OpenCache(sysfs.OS{}, filepath.Join(root, "cache"), 1<<30, f.Clk)
@@ -113,17 +124,84 @@ func (f *Fabric) RestartOverlay(opts ...vfs.Option) {
 	f.Ov = ov
 }
 
-// AddNode registers a device node with its own shard store.
+// AddNode registers a host: a device row (a member, never a target, docs/14 §9) with one
+// disk row under it whose shard store is Stores[host]. It returns the host's index; the
+// fabric's API stays host-indexed (SetDown, SetFull, Stores, ShardsOn…), and the shard
+// client translates a disk target to its host. Target gives the disk's index.
 func (f *Fabric) AddNode() meta.NodeIdx {
 	f.TB.Helper()
-	r := f.Apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{Name: "n", Kind: meta.KindDevice, Capacity: 1 << 40}}})
-	idx := meta.NodeIdx(r.Ino)
+	host := f.addDevice()
+	f.addDisk(host)
+	return host
+}
+
+// addDevice registers a device row, a member that stores nothing.
+func (f *Fabric) addDevice() meta.NodeIdx {
+	r := f.Apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{Name: "n", Kind: meta.KindDevice}}})
+	return meta.NodeIdx(r.Ino)
+}
+
+// addDisk registers host's one disk and opens its store under Stores[host].
+func (f *Fabric) addDisk(host meta.NodeIdx) {
+	f.TB.Helper()
+	r := f.Apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
+		ID: fmt.Sprintf("disk%d", host), Name: fmt.Sprintf("n%d/1", host), Kind: meta.KindDisk, Host: host, Capacity: 1 << 40,
+	}}})
+	disk := meta.NodeIdx(r.Ino)
 	st, err := chunk.Open(sysfs.OS{}, filepath.Join(f.TB.TempDir(), "shards"), 1<<40)
 	if err != nil {
 		f.TB.Fatal(err)
 	}
-	f.Stores[idx] = st
-	return idx
+	f.mu.Lock()
+	f.Stores[host] = st
+	f.targetOf[host] = disk
+	f.hostOf[disk] = host
+	f.mu.Unlock()
+}
+
+// StoreOf is the shard store behind a placement target (a disk, or a host index).
+func (f *Fabric) StoreOf(target meta.NodeIdx) *chunk.Store {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Stores[f.hostLocked(target)]
+}
+
+// Target is the disk (placement target) of a host.
+func (f *Fabric) Target(host meta.NodeIdx) meta.NodeIdx {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.targetOf[host]
+}
+
+// Targets lists every host's disk, in host order: what a placement built by hand names.
+func (f *Fabric) Targets() []meta.NodeIdx {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	hosts := make([]meta.NodeIdx, 0, len(f.targetOf))
+	for h := range f.targetOf {
+		hosts = append(hosts, h)
+	}
+	slices.Sort(hosts)
+	out := make([]meta.NodeIdx, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, f.targetOf[h])
+	}
+	return out
+}
+
+// host maps a target (a disk) or a host index to the host; an unknown index stays as
+// it is. Callers hold no lock.
+func (f *Fabric) host(n meta.NodeIdx) meta.NodeIdx {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hostLocked(n)
+}
+
+func (f *Fabric) hostLocked(n meta.NodeIdx) meta.NodeIdx {
+	if h, ok := f.hostOf[n]; ok {
+		return h
+	}
+	return n
 }
 
 func (f *Fabric) Apply(c meta.Command) meta.Result {
@@ -135,7 +213,7 @@ func (f *Fabric) Apply(c meta.Command) meta.Result {
 
 func (f *Fabric) applyLocked(c meta.Command) meta.Result {
 	f.idx++
-	res := f.FSM.Apply(&raft.Log{Index: f.idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)}).(meta.Result)
+	res := f.FSM.Apply(&raft.Log{Index: f.idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)}).(meta.Result)
 	f.proposed = append(f.proposed, c.Op)
 	return res
 }
@@ -164,6 +242,10 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 		return meta.Result{}, 0, f.proposeDown
 	}
 	res := f.applyLocked(c)
+	if f.proposeUnknown > 0 { // applied, but the gateway never learns it (docs/02 §forwarding)
+		f.proposeUnknown--
+		return meta.Result{}, 0, fmt.Errorf("%w: harness", meta.ErrUnknownOutcome)
+	}
 	return res, f.idx, nil
 }
 
@@ -171,26 +253,28 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 
 func (f *Fabric) Self() meta.NodeIdx { return f.SelfIdx }
 
+// Live lists every live host and its disk (a disk is live while its host is).
 func (f *Fabric) Live() []meta.NodeIdx {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []meta.NodeIdx
-	for idx := range f.Stores {
-		if !f.down[idx] {
-			out = append(out, idx)
+	for host := range f.Stores {
+		if !f.down[host] {
+			out = append(out, host, f.targetOf[host])
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
+// Rank puts this host's own disk first, then the rest by index.
 func (f *Fabric) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	out := append([]meta.NodeIdx(nil), nodes...)
 	sort.Slice(out, func(i, j int) bool {
-		if out[i] == f.SelfIdx {
+		if f.host(out[i]) == f.SelfIdx {
 			return true
 		}
-		if out[j] == f.SelfIdx {
+		if f.host(out[j]) == f.SelfIdx {
 			return false
 		}
 		return out[i] < out[j]
@@ -200,7 +284,7 @@ func (f *Fabric) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 
 // --- meta.Liveness ---
 
-// IsLive reports whether node n is up (not SetDown).
+// IsLive reports whether node n (a host, or a disk through its host) is up.
 func (f *Fabric) IsLive(n meta.NodeIdx) bool { return !f.IsDown(n) }
 
 // DeadFor is zero for a live node and a day for a down one: past every hold-down.
@@ -217,6 +301,7 @@ var errNodeDown = errors.New("fabric: node down")
 
 func (f *Fabric) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
 	f.mu.Lock()
+	node = f.hostLocked(node)
 	f.putCount++
 	st, ok := f.Stores[node]
 	down, full := f.down[node], f.full[node]
@@ -256,6 +341,7 @@ func (f *Fabric) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 
 func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
 	f.mu.Lock()
+	node = f.hostLocked(node)
 	f.gets[node]++
 	st, ok := f.Stores[node]
 	down := f.down[node]
@@ -268,6 +354,7 @@ func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (
 
 func (f *Fabric) Has(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error) {
 	f.mu.Lock()
+	node = f.hostLocked(node)
 	st, ok := f.Stores[node]
 	down := f.down[node]
 	f.mu.Unlock()
@@ -279,6 +366,7 @@ func (f *Fabric) Has(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (
 
 func (f *Fabric) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) error {
 	f.mu.Lock()
+	node = f.hostLocked(node)
 	st, ok := f.Stores[node]
 	f.mu.Unlock()
 	if !ok {
@@ -288,10 +376,16 @@ func (f *Fabric) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey
 	return err
 }
 
+// DeleteFenced is Delete for the repair package's Shards: the harness keeps no fence,
+// so a GC delete here always lands (the fence has its own tests in rpc and chunk).
+func (f *Fabric) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, _ uint64) error {
+	return f.Delete(ctx, node, key)
+}
+
 // SetDown marks a node dead or alive for the shard client and liveness view.
 func (f *Fabric) SetDown(n meta.NodeIdx, down bool) {
 	f.mu.Lock()
-	f.down[n] = down
+	f.down[f.hostLocked(n)] = down
 	f.mu.Unlock()
 }
 
@@ -300,7 +394,7 @@ func (f *Fabric) SetDown(n meta.NodeIdx, down bool) {
 func (f *Fabric) Gets(node meta.NodeIdx) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.gets[node]
+	return f.gets[f.hostLocked(node)]
 }
 
 func (f *Fabric) Puts() int {
@@ -367,14 +461,14 @@ func (f *Fabric) Inode(ino meta.Ino) meta.Inode {
 func (f *Fabric) ShardsOn(h meta.Hash, k, m uint8) []meta.NodeIdx {
 	var out []meta.NodeIdx
 	for idx, st := range f.Stores {
-		for i := 0; i < int(k)+int(m); i++ {
+		for i := range int(k) + int(m) {
 			if st.Has(chunk.Key(h, k, m, i)) {
 				out = append(out, idx)
 				break
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -382,6 +476,7 @@ func (f *Fabric) ShardsOn(h meta.Hash, k, m uint8) []meta.NodeIdx {
 // CorruptShard flips a byte inside the shard file for key on node.
 func (f *Fabric) CorruptShard(node meta.NodeIdx, key chunk.ShardKey) {
 	f.TB.Helper()
+	node = f.host(node)
 	var path string
 	_ = f.Stores[node].Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
 		if k == key {
@@ -453,26 +548,27 @@ func Eventually(t *testing.T, cond func() bool, msg string) {
 func (f *Fabric) IsDown(n meta.NodeIdx) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.down[n]
+	return f.down[f.hostLocked(n)]
 }
 
 // SetFull makes a node answer ErrFull to PUTs.
 func (f *Fabric) SetFull(n meta.NodeIdx, full bool) {
 	f.mu.Lock()
-	f.full[n] = full
+	f.full[f.hostLocked(n)] = full
 	f.mu.Unlock()
 }
 
 // FailPutOnce makes the next count PUTs to node fail.
 func (f *Fabric) FailPutOnce(n meta.NodeIdx, count int) {
 	f.mu.Lock()
-	f.failPutOnce[n] = count
+	f.failPutOnce[f.hostLocked(n)] = count
 	f.mu.Unlock()
 }
 
 // FailPutWith makes every PUT to node fail with err (nil restores service).
 func (f *Fabric) FailPutWith(node meta.NodeIdx, err error) {
 	f.mu.Lock()
+	node = f.hostLocked(node)
 	if f.failPutWith == nil {
 		f.failPutWith = map[meta.NodeIdx]error{}
 	}
@@ -491,7 +587,7 @@ type putStall struct {
 func (f *Fabric) CancelledPuts(node meta.NodeIdx) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cancelledPuts[node]
+	return f.cancelledPuts[f.hostLocked(node)]
 }
 
 // StallPut makes every PUT to node block until release is called or the caller cancels;
@@ -500,6 +596,7 @@ func (f *Fabric) CancelledPuts(node meta.NodeIdx) int {
 func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
 	s := &putStall{entered: make(chan struct{}), release: make(chan struct{})}
 	f.mu.Lock()
+	node = f.hostLocked(node)
 	if f.stallPut == nil {
 		f.stallPut = map[meta.NodeIdx]*putStall{}
 		f.cancelledPuts = map[meta.NodeIdx]int{}
@@ -519,6 +616,14 @@ func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release f
 }
 
 // ProposeErrOnce makes the next Propose fail as a transport error.
+// ProposeUnknown makes the next n proposals apply and then report meta.ErrUnknownOutcome:
+// the leader did its work, the reply was lost (I-95).
+func (f *Fabric) ProposeUnknown(n int) {
+	f.mu.Lock()
+	f.proposeUnknown = n
+	f.mu.Unlock()
+}
+
 func (f *Fabric) ProposeErrOnce(err error) {
 	f.mu.Lock()
 	f.proposeErr = err

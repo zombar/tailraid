@@ -38,7 +38,7 @@ func newTFSM(t *testing.T) *tfsm {
 func (tf *tfsm) apply(c Command) Result {
 	tf.t.Helper()
 	tf.idx++
-	res, ok := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+	res, ok := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	if !ok {
 		tf.t.Fatalf("Apply returned %T, want Result", res)
 	}
@@ -136,7 +136,7 @@ func TestFSM_BadCommandLeavesStateUnchanged(t *testing.T) {
 	tf.create(RootIno, "a")
 	before := encodeState(t, tf.f.state())
 	rng := testseed.Seed(t)
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		b := make([]byte, rng.Intn(64))
 		rng.Read(b)
 		tf.idx++
@@ -270,7 +270,7 @@ func TestFSM_Create_Mkdir_Errors(t *testing.T) {
 func TestFSM_InoGenNotReusedAfterUnlink(t *testing.T) {
 	tf := newTFSM(t)
 	seen := map[Ino]uint32{}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		r := tf.ok(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "f", Type: TFile, Now: 1}})
 		if g, dup := seen[r.Ino]; dup {
 			t.Fatalf("ino %d reused (gen %d then %d)", r.Ino, g, r.Gen)
@@ -294,7 +294,7 @@ func TestFSM_InoGenNotReusedAfterUnlink(t *testing.T) {
 	if err := g.Restore(sink.reader()); err != nil {
 		t.Fatal(err)
 	}
-	r := g.Apply(&raft.Log{Index: tf.idx + 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "f", Type: TFile}})}).(Result)
+	r := g.Apply(&raft.Log{Index: tf.idx + 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "f", Type: TFile}})}).(Result)
 	if _, dup := seen[r.Ino]; dup {
 		t.Fatalf("ino %d reused after restore", r.Ino)
 	}
@@ -509,9 +509,16 @@ func TestFSM_Create_NameBoundaries(t *testing.T) {
 		val  string
 		want error
 	}{
-		{"empty", "", ErrBadCommand}, {"one byte", "a", nil}, {"max", long, nil}, {"max+1", long + "a", ErrNameTooLong},
-		{"utf-8 at max", multibyte, nil}, {"utf-8 past max", multibyte + "é", ErrNameTooLong},
-		{"dot", ".", ErrBadCommand}, {"dotdot", "..", ErrBadCommand}, {"slash", "a/b", ErrBadCommand}, {"nul", "a\x00b", ErrBadCommand},
+		{"empty", "", ErrBadCommand},
+		{"one byte", "a", nil},
+		{"max", long, nil},
+		{"max+1", long + "a", ErrNameTooLong},
+		{"utf-8 at max", multibyte, nil},
+		{"utf-8 past max", multibyte + "é", ErrNameTooLong},
+		{"dot", ".", ErrBadCommand},
+		{"dotdot", "..", ErrBadCommand},
+		{"slash", "a/b", ErrBadCommand},
+		{"nul", "a\x00b", ErrBadCommand},
 		{"beyond the wire string limit: undecodable", strings.Repeat("x", 70000), ErrBadCommand},
 	}
 	for _, c := range cases {
@@ -688,8 +695,15 @@ func TestFSM_Commit_NewSizeBounds(t *testing.T) {
 		newSize uint64
 		ok      bool
 	}{
-		{"0", 0, true}, {"1", 1, true}, {"CS-1", testCS - 1, true}, {"CS", testCS, true}, {"CS+1", testCS + 1, true},
-		{"max-1", maxSize - 1, true}, {"max", maxSize, true}, {"max+1", maxSize + 1, false}, {"MaxUint64", math.MaxUint64, false},
+		{"0", 0, true},
+		{"1", 1, true},
+		{"CS-1", testCS - 1, true},
+		{"CS", testCS, true},
+		{"CS+1", testCS + 1, true},
+		{"max-1", maxSize - 1, true},
+		{"max", maxSize, true},
+		{"max+1", maxSize + 1, false},
+		{"MaxUint64", math.MaxUint64, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -715,9 +729,14 @@ func TestChunkCount_NoOverflow(t *testing.T) {
 		cs   uint32
 		want int
 	}{
-		{0, 1 << 20, 0}, {1, 1 << 20, 1}, {1 << 20, 1 << 20, 1}, {1<<20 + 1, 1 << 20, 2},
-		{math.MaxUint64, 1 << 20, 1 << 44}, {math.MaxUint64 - 5, 1 << 20, 1 << 44},
-		{math.MaxUint64, 1, math.MaxInt}, {math.MaxUint64, 2, math.MaxInt},
+		{0, 1 << 20, 0},
+		{1, 1 << 20, 1},
+		{1 << 20, 1 << 20, 1},
+		{1<<20 + 1, 1 << 20, 2},
+		{math.MaxUint64, 1 << 20, 1 << 44},
+		{math.MaxUint64 - 5, 1 << 20, 1 << 44},
+		{math.MaxUint64, 1, math.MaxInt},
+		{math.MaxUint64, 2, math.MaxInt},
 	}
 	for _, c := range cases {
 		if got := ChunkCount(c.size, c.cs); got != c.want {
@@ -840,8 +859,10 @@ func TestFSM_Commit_TruncateThenGrow_DropsOldBytes(t *testing.T) {
 	// truncate(1.5 chunks) then write @ chunk 5: tail of chunk 1 rewritten, chunks 2,3 dropped,
 	// chunk 4 is a hole, chunk 5 new.
 	tail, five := sha("tail"), sha("five")
-	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS + testCS/2, NewSize: 6 * testCS,
-		Writes: []ChunkWrite{{1, tail}, {5, five}}, NewChunks: []ChunkDesc{desc(tail), desc(five)}, Now: 2}})
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{
+		Ino: f, BaseVersion: 1, HasTruncate: true, TruncateTo: testCS + testCS/2, NewSize: 6 * testCS,
+		Writes: []ChunkWrite{{1, tail}, {5, five}}, NewChunks: []ChunkDesc{desc(tail), desc(five)}, Now: 2,
+	}})
 	in := tf.inode(f)
 	want := []Hash{hs[0], tail, HashZero, HashZero, HashZero, five}
 	if len(in.Chunks) != 6 {
@@ -945,7 +966,7 @@ func TestFSM_GCDelete_Boundary(t *testing.T) {
 	g := tf.create(RootIno, "g")
 	var ws []ChunkWrite
 	var ds []ChunkDesc
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		hh := sha(string(rune('A' + i)))
 		ws = append(ws, ChunkWrite{uint32(i), hh})
 		ds = append(ds, desc(hh))
@@ -997,7 +1018,7 @@ func TestFSM_RefCountNeverUnderflows(t *testing.T) {
 	tf.f.st.Chunks[a].Refs = 0
 	tf.f.mu.Unlock()
 	tf.idx++
-	res := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 2}})}).(Result)
+	res := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 2}})}).(Result)
 	if !errors.Is(res.Err, ErrBadCommand) {
 		t.Fatalf("underflow produced %v", res.Err)
 	}
@@ -1078,6 +1099,7 @@ func (g *cmdGen) files() (dirs, files []Inode) {
 			dirs = append(dirs, in)
 		case TFile:
 			files = append(files, in)
+		case TSymlink:
 		}
 	}
 	return dirs, files
@@ -1135,7 +1157,7 @@ func (g *cmdGen) next() Command {
 		c.HasTruncate, c.TruncateTo = true, uint64(g.rng.Intn(int(newSize)+1))
 	}
 	n := ChunkCount(newSize, testCS)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if g.rng.Intn(2) == 0 {
 			continue
 		}
@@ -1183,16 +1205,16 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	cur := NewFSM() // snapshot/restore path
 	var idx uint64
 	bootstrap := Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}
-	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(bootstrap)}}
+	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(bootstrap)}}
 	idx = 1
 	ref.Apply(logs[0])
 	cur.Apply(logs[0])
 	okCount := 0
 	sawTomb := false
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c := gen.next()
 		idx++
-		l := &raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}
+		l := &raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}
 		r1 := ref.Apply(l).(Result)
 		r2 := cur.Apply(l).(Result)
 		if !errors.Is(r1.Err, r2.Err) && (r1.Err != nil || r2.Err != nil) {
@@ -1244,16 +1266,16 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 	rng := testseed.Seed(t)
 	gen := &cmdGen{rng: rng, f: NewFSM(), now: 5}
-	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})}}
+	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})}}
 	gen.f.Apply(logs[0])
 	for i := 2; i <= 2000; i++ {
 		c := gen.next()
-		l := &raft.Log{Index: uint64(i), Type: raft.LogCommand, Data: EncodeCommand(c)}
+		l := &raft.Log{Index: uint64(i), Type: raft.LogCommand, Data: MustEncodeCommand(c)}
 		gen.f.Apply(l)
 		logs = append(logs, l)
 	}
 	want := encodeState(t, gen.f.state())
-	for r := 0; r < 3; r++ {
+	for r := range 3 {
 		f := NewFSM()
 		applyAll(t, f, logs)
 		if got := encodeState(t, f.state()); !bytes.Equal(got, want) {
@@ -1264,13 +1286,11 @@ func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 
 func TestFSM_Persist_ConcurrentWithApply(t *testing.T) {
 	f := NewFSM()
-	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
+	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
 	gen := &cmdGen{rng: testseed.Seed(t), f: f, now: 10}
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		idx := uint64(2)
 		for {
 			select {
@@ -1278,11 +1298,11 @@ func TestFSM_Persist_ConcurrentWithApply(t *testing.T) {
 				return
 			default:
 			}
-			f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(gen.next())})
+			f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(gen.next())})
 			idx++
 		}
-	}()
-	for i := 0; i < 20; i++ {
+	})
+	for i := range 20 {
 		snap, err := f.Snapshot()
 		if err != nil {
 			t.Fatal(err)
@@ -1328,7 +1348,7 @@ func (s *failSink) Cancel() error             { s.cancelled = true; return nil }
 
 func TestFSM_Restore_RejectsGarbage(t *testing.T) {
 	f := NewFSM()
-	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
+	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
 	before := encodeState(t, f.state())
 	if err := f.Restore(&readCloser{Reader: bytes.NewReader([]byte("nope"))}); err == nil {
 		t.Fatal("garbage restored")
@@ -1567,7 +1587,7 @@ func TestFSM_WaitApplied_ReturnsOnClose(t *testing.T) {
 func TestFSM_NodeUpsert_IdempotentByID(t *testing.T) {
 	f := NewFSM()
 	apply := func(idx uint64, c Command) Result {
-		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	}
 	apply(1, Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: 65536, K: 2, M: 1, Now: 1}})
 	nd := Node{ID: "aaaaaaaaaaaaaaaa", Name: "a", Kind: KindDevice, Addr: "10.0.0.1", RaftPort: 1, RPCPort: 2, Capacity: 10}

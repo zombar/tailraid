@@ -9,17 +9,22 @@ import (
 )
 
 // topology builds a node table of len(disks) hosts: host i is a device (voter when
-// voter[i]) with its own store of the given weight, plus disks[i] added disks of weight 2.
-// A device pinned to 0 is a host whose system disk does not store shards.
-func topology(disks []int, voter []bool, deviceCap uint64) []Node {
+// voter[i]) with disks[i] disks of weight 2, plus, when extra is not 0, one more disk of
+// that weight (what the host's own store was before devices stopped being targets,
+// docs/14 §9). The device row itself carries no budget.
+func topology(disks []int, voter []bool, extra uint64) []Node {
 	var out []Node
 	idx := NodeIdx(1)
 	for h, nd := range disks {
 		host := idx
-		out = append(out, Node{Idx: host, ID: "host", Kind: KindDevice, State: Active, Capacity: deviceCap, Voter: voter[h]})
+		out = append(out, Node{Idx: host, ID: "host", Kind: KindDevice, State: Active, Voter: voter[h]})
 		idx++
-		for d := 0; d < nd; d++ {
+		for range nd {
 			out = append(out, Node{Idx: idx, ID: "disk", Kind: KindDisk, State: Active, Capacity: 2, Host: host})
+			idx++
+		}
+		if extra != 0 {
+			out = append(out, Node{Idx: idx, ID: "disk", Kind: KindDisk, State: Active, Capacity: extra, Host: host})
 			idx++
 		}
 	}
@@ -65,16 +70,16 @@ func legacyPlace(h Hash, cands []Candidate, n int) []NodeIdx {
 // Invariant: I-87
 func TestPlace_OneTargetPerHost_Unchanged(t *testing.T) {
 	r := testseed.Seed(t)
-	for trial := 0; trial < 200; trial++ {
+	for trial := range 200 {
 		nc := 1 + r.Intn(12)
 		c := make([]Candidate, nc)
 		for i := range c {
-			c[i] = Candidate{Idx: NodeIdx(i + 1), Weight: uint64(1 + r.Intn(100)), Voter: r.Intn(2) == 0}
+			c[i] = Candidate{Idx: NodeIdx(i + 1), Weight: uint64(1 + r.Intn(100))} // no voters: voter-first data slots are I-77, not the host cap
 		}
-		for i := uint64(0); i < 200; i++ {
+		for i := range uint64(200) {
 			h := hashN(uint64(trial)*1000 + i)
 			n := 1 + r.Intn(10)
-			if got, want := Place(h, c, n), legacyPlace(h, c, n); !equalIdx(got, want) {
+			if got, want := place(h, c, n), legacyPlace(h, c, n); !equalIdx(got, want) {
 				t.Fatalf("trial %d hash %d n %d: %v != %v", trial, i, n, got, want)
 			}
 		}
@@ -98,8 +103,8 @@ func TestPlace_HostCap(t *testing.T) {
 	for _, c := range cases {
 		nodes := topology(c.disks, allVoters(len(c.disks)), 1)
 		cs := Candidates(nodes, allLive)
-		for i := uint64(0); i < 2000; i++ {
-			p := Place(hashN(i), cs, c.n)
+		for i := range uint64(2000) {
+			p := place(hashN(i), cs, c.n)
 			if len(p) != c.n {
 				t.Fatalf("%s: placed %d of %d", c.name, len(p), c.n)
 			}
@@ -112,10 +117,10 @@ func TestPlace_HostCap(t *testing.T) {
 		}
 	}
 	// a host with too few targets: the cap cannot hold, the second pass fills from the rest
-	nodes := topology([]int{0, 5}, allVoters(2), 1) // host 1: its own store only; host 2: 6 targets
+	nodes := topology([]int{0, 5}, allVoters(2), 1) // host 1: one disk; host 2: 6 disks
 	cs := Candidates(nodes, allLive)
-	for i := uint64(0); i < 500; i++ {
-		p := Place(hashN(i), cs, 6)
+	for i := range uint64(500) {
+		p := place(hashN(i), cs, 6)
 		if len(p) != 6 {
 			t.Fatalf("uneven: placed %d of 6", len(p))
 		}
@@ -128,10 +133,10 @@ func TestPlace_HostCap_NNodeDeterminism(t *testing.T) {
 	r := testseed.Seed(t)
 	nodes := topology([]int{2, 3, 1, 4}, []bool{true, true, false, true}, 3)
 	base := Candidates(nodes, allLive)
-	for i := uint64(0); i < 3000; i++ {
+	for i := range uint64(3000) {
 		h := hashN(i)
 		want := PlaceKM(h, base, 4, 2)
-		for node := 0; node < 5; node++ {
+		for node := range 5 {
 			if got := PlaceKM(h, shuffled(r, base), 4, 2); !equalIdx(got, want) {
 				t.Fatalf("hash %d node %d: %v != %v", i, node, got, want)
 			}
@@ -146,7 +151,7 @@ func TestFillPlacement_HostCap(t *testing.T) {
 	nodes := topology([]int{2, 2}, allVoters(2), 2)
 	dom := DomainsOf(nodes)
 	cs := Candidates(nodes, allLive)
-	for i := uint64(0); i < 2000; i++ {
+	for i := range uint64(2000) {
 		h := hashN(i)
 		place := []NodeIdx{1, 0, 0, 0}
 		FillPlacement(h, place, ExcludeIdx(cs, place), 2, dom)
@@ -173,15 +178,16 @@ func TestFillPlacement_HostCap(t *testing.T) {
 
 // Invariant: I-87, I-77
 func TestCandidates_DiskDomainAndVoter(t *testing.T) {
-	nodes := topology([]int{2, 1}, []bool{true, false}, 1)
-	// host 1 (voter): idx 1, disks 2 and 3; host 4 (non-voter): idx 4, disk 5
+	nodes := topology([]int{2, 1}, []bool{true, false}, 0)
+	// host 1 (voter): idx 1, disks 2 and 3; host 4 (non-voter): idx 4, disk 5; the device
+	// rows themselves are never candidates (docs/14 §9)
 	nodes = append(nodes,
 		Node{Idx: 6, Kind: KindDisk, State: Draining, Capacity: 2, Host: 1},
 		Node{Idx: 7, Kind: KindDisk, State: Active, Capacity: 0, Host: 1})
 	cs := Candidates(nodes, allLive)
 	want := []Candidate{
-		{Idx: 1, Weight: 1, Voter: true}, {Idx: 2, Weight: 2, Voter: true, Domain: 1},
-		{Idx: 3, Weight: 2, Voter: true, Domain: 1}, {Idx: 4, Weight: 1, Voter: false},
+		{Idx: 2, Weight: 2, Voter: true, Domain: 1},
+		{Idx: 3, Weight: 2, Voter: true, Domain: 1},
 		{Idx: 5, Weight: 2, Voter: false, Domain: 4},
 	}
 	if len(cs) != len(want) {
@@ -220,8 +226,9 @@ func TestAutoPolicy_Disks_Table(t *testing.T) {
 		dk, hst int // Tolerance
 	}{
 		{"1 x 1", []int{0}, allVoters(1), 1, 1, 0, 0, 0},
-		{"1 host, system disk + 3 disks", []int{3}, allVoters(1), 1, 2, 2, 2, 0},
-		{"1 host, 4 disks, system pinned 0", []int{4}, allVoters(1), 0, 2, 2, 2, 0},
+		{"1 host, 4 disks", []int{3}, allVoters(1), 1, 2, 2, 2, 0},
+		{"1 host, 4 disks, none extra", []int{4}, allVoters(1), 0, 2, 2, 2, 0},
+		{"1 host, no disk", []int{0}, allVoters(1), 0, 1, 0, 0, 0},
 		{"2 x 1", []int{0, 0}, allVoters(2), 1, 1, 1, 1, 1},
 		{"2 hosts x 3 targets", []int{2, 2}, allVoters(2), 1, 2, 2, 2, 1},
 		{"3 x 1", []int{0, 0, 0}, allVoters(3), 1, 2, 1, 1, 1},
@@ -256,8 +263,8 @@ func TestAutoPolicy_OneTargetPerHost_Unchanged(t *testing.T) {
 		k := max(min(max(v, 1), n-m, MaxAutoK), 1)
 		return uint8(k), uint8(m)
 	}
-	for v := 0; v <= 9; v++ {
-		for s := 0; s <= 9; s++ {
+	for v := range 10 {
+		for s := range 10 {
 			if v+s == 0 {
 				continue
 			}
@@ -272,7 +279,7 @@ func TestAutoPolicy_OneTargetPerHost_Unchanged(t *testing.T) {
 // Invariant: I-88
 func TestAutoPolicy_SurvivesOneHost(t *testing.T) {
 	r := testseed.Seed(t)
-	for trial := 0; trial < 500; trial++ {
+	for range 500 {
 		hosts := 2 + r.Intn(5)
 		disks := make([]int, hosts)
 		voter := make([]bool, hosts)
@@ -324,8 +331,8 @@ func TestTolerance_Table(t *testing.T) {
 // set-redundancy needs k+m live Active nodes at the moment it is set (moved from the
 // admin package, which only wrapped PolicyAllowed).
 func TestPolicyAllowed_LiveCountBoundary(t *testing.T) {
-	dev := KindDevice
-	nodes := []Node{{Idx: 1, Kind: dev, State: Active}, {Idx: 2, Kind: dev, State: Active}, {Idx: 3, Kind: dev, State: Active}, {Idx: 4, Kind: dev, State: Draining}}
+	nodes := topology([]int{1, 1, 1, 1}, allVoters(4), 0) // one disk per host; host 7's disk drains
+	nodes[7].State = Draining
 	cases := []struct {
 		k, m uint8
 		ok   bool
@@ -352,17 +359,22 @@ func TestPolicyAllowed_CountsTargets(t *testing.T) {
 			t.Errorf("%d+%d: %v", c.k, c.m, err)
 		}
 	}
-	// a device pinned to 0 with disks is not a target
-	nodes[0].Capacity = 0
+	// a device row is never a target: with one disk draining, three are left
+	nodes[1].State = Draining
 	if err := PolicyAllowed(nodes, allLiveness{}, 2, 2); err == nil {
 		t.Errorf("2+2 allowed on 3 targets")
+	}
+	// a diskless host adds nothing
+	nodes = append(nodes, Node{Idx: 9, Kind: KindDevice, State: Active, Voter: true})
+	if err := PolicyAllowed(nodes, allLiveness{}, 2, 2); err == nil {
+		t.Errorf("2+2 allowed with a diskless host counted")
 	}
 }
 
 // Invariant: I-22
 func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 	disk := Node{Idx: 0, ID: "d1", Name: "pike/1", Kind: KindDisk, Capacity: 99, Host: 3, JoinedAt: 5}
-	b := EncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: disk}})
+	b := MustEncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: disk}})
 	if b[0] != 2 {
 		t.Errorf("disk upsert written as version %d, want 2", b[0])
 	}
@@ -373,7 +385,7 @@ func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 	// a device upsert keeps the version-1 bytes, so a cluster without disks writes what an
 	// older node reads (docs/12 §6)
 	dev := Node{ID: "n1", Name: "pike", Kind: KindDevice, Capacity: 7, Voter: true}
-	b = EncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: dev}})
+	b = MustEncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: dev}})
 	if b[0] != 1 {
 		t.Errorf("device upsert written as version %d, want 1", b[0])
 	}

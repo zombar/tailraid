@@ -103,8 +103,10 @@ func TestFlusher_ConflictRetry_ReassemblesFromWAL(t *testing.T) {
 			return
 		}
 		must(t, f.Put(ctx, 1, chunk.Key(oh, 2, 1, 0), other[:cs/2]))
-		f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs,
-			Writes: []meta.ChunkWrite{{Idx: 2, Hash: oh}}, NewChunks: []meta.ChunkDesc{{Hash: oh, Size: uint32(cs), K: 2, M: 1, Placement: []meta.NodeIdx{1, 2, 3}}}, Now: 7}})
+		f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{
+			Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs,
+			Writes: []meta.ChunkWrite{{Idx: 2, Hash: oh}}, NewChunks: []meta.ChunkDesc{{Hash: oh, Size: uint32(cs), K: 2, M: 1, Placement: []meta.NodeIdx{1, 2, 3}}}, Now: 7,
+		}})
 	}
 	must(t, fl.FlushInode(ctx, ino))
 	if attempts != 2 {
@@ -136,7 +138,7 @@ func TestFlusher_StragglerPut_CancelledAfterReplace(t *testing.T) {
 	must(t, f.Ov.Write(ino, 0, 0, data))
 	h := sha256Of(data)
 	cands := meta.Candidates(f.FSM.Nodes(), func(meta.NodeIdx) bool { return true })
-	victim := meta.Place(h, cands, 3)[2]
+	victim := meta.PlaceKM(h, cands, 3, 0)[2]
 	entered, release := f.StallPut(victim)
 	defer release()
 	fl := f.Flusher(func(c *vfs.Config) { c.PutDeadline = time.Second })

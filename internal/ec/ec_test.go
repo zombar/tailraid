@@ -3,10 +3,11 @@ package ec
 import (
 	"bytes"
 	"errors"
-	"github.com/zombar/tailraid/internal/testseed"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 )
 
 func randBytes(r *rand.Rand, n int) []byte {
@@ -128,9 +129,9 @@ func TestDecode_FewerThanK_Fails(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for present := 0; present < k; present++ {
+		for present := range k {
 			sub := make([][]byte, k+m)
-			for i := 0; i < present; i++ {
+			for i := range present {
 				sub[i] = full[i]
 			}
 			out, err := c.Decode(sub, len(in))
@@ -323,9 +324,17 @@ func TestNew_RejectsBadParams(t *testing.T) {
 
 func TestShardLen(t *testing.T) {
 	cases := []struct{ size, k, want int }{
-		{0, 1, 64}, {0, 4, 64}, {1, 1, 64}, {64, 1, 64}, {65, 1, 128},
-		{1, 2, 64}, {128, 2, 64}, {129, 2, 128}, {1 << 20, 4, 1 << 18},
-		{(1 << 20) + 1, 4, (1 << 18) + 64}, {1000, 3, 384},
+		{0, 1, 64},
+		{0, 4, 64},
+		{1, 1, 64},
+		{64, 1, 64},
+		{65, 1, 128},
+		{1, 2, 64},
+		{128, 2, 64},
+		{129, 2, 128},
+		{1 << 20, 4, 1 << 18},
+		{(1 << 20) + 1, 4, (1 << 18) + 64},
+		{1000, 3, 384},
 	}
 	for _, c := range cases {
 		if got := ShardLen(c.size, c.k); got != c.want {
@@ -417,7 +426,7 @@ func BenchmarkEncode_4_2_1MiB(b *testing.B) {
 	rand.New(rand.NewSource(1)).Read(in) //nolint:gosec // benchmark data
 	b.SetBytes(int64(len(in)))
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := c.Encode(in); err != nil {
 			b.Fatal(err)
 		}
@@ -437,7 +446,7 @@ func BenchmarkDecode_4_2_1MiB_OneMissing(b *testing.B) {
 	}
 	b.SetBytes(int64(len(in)))
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sub := append([][]byte(nil), full...)
 		sub[1] = nil
 		if _, err := c.Decode(sub, len(in)); err != nil {

@@ -18,6 +18,25 @@ linters:
     - unconvert
     - prealloc
     - forbidigo
+    # Added by the 2026-10 review (docs/09 §2).
+    - modernize # newer language and library forms
+    - exhaustive # every enum switch names each value or has a default
+    - gosec # file modes, unhandled errors, shell-outs
+    - noctx # dials and requests carry a context
+    - nilerr # a checked error is returned, not swallowed
+    - bodyclose # HTTP bodies are closed
+    - sloglint # one slog style
+    - intrange # range over int
+    - dupl # duplicate fragments: the parallel-helper pattern
+    - errname # ErrX sentinels, XError types
+    - unparam # unused parameters and results
+    - copyloopvar
+    - durationcheck
+    - makezero
+    - usetesting
+    # Not enabled: recvcheck (value receivers on slice types next to the two that mutate
+    # are the idiom in vfs/extents), gocognit/gocyclo/funlen (the FSM and the flusher are
+    # long by design), revive (overlaps), wsl/nlreturn (style churn).
   settings:
     gocritic:
       enabled-tags:
@@ -25,12 +44,21 @@ linters:
         - performance
         - style
       disabled-checks:
-        - hugeParam        # we pass small structs by value deliberately
-        - unnamedResult    # (billy.File, error) style is fine
+        - hugeParam # we pass small structs by value deliberately
+        - unnamedResult # (billy.File, error) style is fine
     errorlint:
       errorf: true
       asserts: true
       comparison: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    gosec:
+      excludes:
+        - G115 # int conversions: every size is bounded by a typed limit (docs/01)
+    dupl:
+      threshold: 80
+    sloglint:
+      kv-only: true
     forbidigo:
       analyze-types: true
       forbid:
@@ -49,11 +77,34 @@ linters:
       - path: _test\.go
         linters:
           - prealloc
+          - noctx # tests dial and GET with bare calls; the harness owns their lifetime
+          - bodyclose # httptest responses in tests
+          - dupl # table tests repeat on purpose
+          - gosec # temp files, 0o644 fixtures and shell-outs in tests
+          - unparam # helpers with one caller keep their parameters for the next table row
+          - nilerr # a test helper that swallows an error does so to assert on state instead
+      # The in-process harness is test infrastructure: its listeners live for one test and
+      # its fixtures write wherever the test put them.
+      - path: internal/testharness/
+        linters:
+          - noctx
+          - gosec
       # Only the raft timing helper may sleep, with a comment explaining why.
       - path: internal/testharness/raftwait\.go
         linters:
           - forbidigo
 
+issues:
+  # Show everything: the default caps (50 per linter, 3 of the same text) hide findings.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 formatters:
   enable:
     - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/zombar/tailraid

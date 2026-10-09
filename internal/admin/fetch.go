@@ -3,9 +3,9 @@ package admin
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
-	"strconv"
+
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // Caller is one raw member RPC to a node by address: rpc.Client over the tailnet, or a
@@ -27,7 +27,7 @@ func FetchStatus(ctx context.Context, c Caller, addr string) (Report, error) {
 
 // RPCAddr is the node's host:port for member RPC.
 func (n *NodeReport) RPCAddr() string {
-	return net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort)))
+	return meta.Node{Addr: n.Addr, RPCPort: n.RPCPort}.RPCAddr()
 }
 
 // LeaderRPC is the RPC address of the leader as this report sees it, or "" without one.

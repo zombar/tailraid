@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -36,6 +37,7 @@ var phases = []phase{
 	{"11 automation", phaseAutomation},
 	{"12 large file", phaseLargeFile},
 	{"13 disks", phaseDisks},
+	{"14 diskless host", phaseDiskless},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -62,7 +64,7 @@ func (r *Run) corpus(dir string) model {
 	copy(sparse, r.randomBytes(100))
 	copy(sparse[len(sparse)-100:], r.randomBytes(100))
 	m[join(dir, "sparse.bin")] = sparse
-	for i := 0; i < r.Profile.SmallFiles; i++ {
+	for i := range r.Profile.SmallFiles {
 		m[join(dir, "small", fmt.Sprintf("f%03d.txt", i))] = []byte(fmt.Sprintf("file %d\n", i))
 	}
 	return m
@@ -221,7 +223,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ..
 
 // repairUntilClean runs repair passes until one finds nothing to do (or 8 passes).
 func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
-	for pass := 0; pass < 8; pass++ {
+	for range 8 {
 		st, err := r.repairNow(ctx)
 		if err != nil {
 			return admin.Report{}, err
@@ -316,7 +318,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 			names[i] = join(dir, fmt.Sprintf("f%d", i))
 		}
 		errs := 0
-		for op := 0; op < r.Profile.ChurnOps; op++ {
+		for range r.Profile.ChurnOps {
 			name := names[r.Rng.Intn(len(names))]
 			cur := m[name]
 			switch x := r.Rng.Intn(10); {
@@ -382,9 +384,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 			}
 		}
 		r.check("I-45 L-2 L-3 L-5 L-6", "churn ops acknowledged via "+gw.Name, errs == 0, fmt.Sprintf("%d of %d ops failed", errs, r.Profile.ChurnOps))
-		for p, d := range m {
-			all[p] = d
-		}
+		maps.Copy(all, m)
 		_ = wi
 	}
 	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
@@ -413,24 +413,33 @@ func phaseParity(ctx context.Context, r *Run) error {
 	}
 	m := r.corpusModel()
 	k, mm := int(rep.Volume.K), int(rep.Volume.M)
-	// victims: the last nodes, never the gateway we read through
+	// victims: the last hosts that hold slots, never the gateway we read through; a
+	// diskless host holds nothing, so losing it degrades no chunk (docs/14 §9)
 	gw := r.gateways()[0]
 	var victims []NodeRef
-	for i := len(r.nodes) - 1; i >= 0 && len(victims) < mm+1; i-- {
-		if r.nodes[i].Idx != gw.Idx {
-			victims = append(victims, r.nodes[i])
+	holders := 0
+	for _, n := range slices.Backward(r.nodes) {
+		if hostSlots(rep, int(n.Idx)) == 0 {
+			continue
+		}
+		holders++
+		if n.Idx != gw.Idx && len(victims) < mm+1 {
+			victims = append(victims, n)
 		}
 	}
-	if len(victims) < mm+1 || len(r.nodes) < k+mm+1 {
-		r.skip(fmt.Sprintf("need %d nodes besides the gateway to lose m+1, have %d", mm+1, len(victims)))
+	if len(victims) < mm+1 || holders < k+mm+1 {
+		r.skip(fmt.Sprintf("need %d hosts with slots besides the gateway to lose m+1, have %d", mm+1, len(victims)))
 		return nil
 	}
 	v := r.volume(gw)
+	u := r.undoer(ctx)
+	defer u.run()
 	// lose m
 	for _, n := range victims[:mm] {
 		if err := r.Env.Kill(ctx, n); err != nil {
 			return err
 		}
+		u.add("start "+n.Name, func(c context.Context) error { return r.Env.Start(c, n) })
 		r.event("kill", n.Name)
 	}
 	if err := r.Env.Wait(ctx, 2*time.Second); err != nil {
@@ -460,6 +469,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		if err := r.Env.Start(ctx, n); err != nil {
 			return err
 		}
+		u.done("start " + n.Name)
 		r.event("start", n.Name)
 	}
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
@@ -476,6 +486,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		if err := r.Env.Kill(ctx, n); err != nil {
 			return err
 		}
+		u.add("start "+n.Name, func(c context.Context) error { return r.Env.Start(c, n) })
 		r.event("kill", n.Name)
 	}
 	if err := r.Env.Wait(ctx, 2*time.Second); err != nil {
@@ -497,6 +508,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		if err := r.Env.Start(ctx, n); err != nil {
 			return err
 		}
+		u.done("start " + n.Name)
 		r.event("start", n.Name)
 	}
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
@@ -546,6 +558,9 @@ func liveSlots(c admin.ChunkReport) int {
 
 // slotTable prints a chunk's slots for a check's detail: "0:n3 live present, 1:n1 live absent".
 func slotTable(c admin.ChunkReport) string {
+	if len(c.Hash) < 12 {
+		return fmt.Sprintf("chunk %q: malformed hash", c.Hash)
+	}
 	parts := make([]string, 0, len(c.Slots))
 	for i, s := range c.Slots {
 		state := "missing"
@@ -614,7 +629,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	var key string
 	var cerr error
 	slot := -1
-	for attempt := 0; attempt < 3; attempt++ { // a repair may move the slot between lookup and corrupt
+	for range 3 { // a repair may move the slot between lookup and corrupt
 		reps, err := r.chunksOf(ctx, target)
 		if err != nil || len(reps) == 0 {
 			return fmt.Errorf("chunks of %s: %w", target, err)
@@ -716,7 +731,9 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		return nil
 	}
 	m := r.corpusModel()
-	for round := 0; round < r.Profile.LeaderKills; round++ {
+	u := r.undoer(ctx)
+	defer u.run()
+	for round := range r.Profile.LeaderKills {
 		rep, _, err := r.anyStatus(ctx)
 		if err != nil {
 			return err
@@ -753,11 +770,12 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		}
 		acked := model{}
 		// writes before, during and after the leader loss: every acknowledged one must persist
-		for i := 0; i < 6; i++ {
+		for i := range 6 {
 			if i == 2 {
 				if err := r.Env.Kill(ctx, leader); err != nil {
 					return err
 				}
+				u.add("start "+leader.Name, func(c context.Context) error { return r.Env.Start(c, leader) })
 				r.event("kill leader", leader.Name)
 			}
 			p := join(dir, fmt.Sprintf("r%d-%d.bin", round, i))
@@ -771,6 +789,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		if err := r.Env.Start(ctx, leader); err != nil {
 			return err
 		}
+		u.done("start " + leader.Name)
 		r.event("start", leader.Name)
 		healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
 		r.check("L-61", "cluster healthy after the leader returned", healthy, hdetail)
@@ -781,9 +800,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		rv := r.volume(reader)
 		bad, first := r.verifyModel(rv, acked)
 		r.checkAt("I-7 I-12 L-57 L-58 L-61", fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
-		for p, d := range acked {
-			m[p] = d
-		}
+		maps.Copy(m, acked)
 	}
 	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after leader losses")
 	return nil
@@ -792,6 +809,10 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 // --- 7 membership --------------------------------------------------------------------------
 
 func phaseMembership(ctx context.Context, r *Run) error {
+	if !r.Env.Caps().Mutate {
+		r.skip("policy changes and drains need --destructive on a live cluster")
+		return nil
+	}
 	rep, _, err := r.anyStatus(ctx)
 	if err != nil {
 		return err
@@ -817,10 +838,17 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		r.skip("no alternative policy fits the live node count")
 		return nil
 	}
+	u := r.undoer(ctx)
+	defer u.run()
 	for _, pol := range [][2]uint8{{k1, m1}, {k0, m0}} {
 		if err := r.Env.SetPolicy(ctx, pol[0], pol[1]); err != nil {
 			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
 			return nil
+		}
+		if pol == [2]uint8{k1, m1} {
+			u.add("set-redundancy back", func(c context.Context) error { return r.Env.SetPolicy(c, k0, m0) })
+		} else {
+			u.done("set-redundancy back")
 		}
 		r.event("set-redundancy", fmt.Sprintf("%d+%d", pol[0], pol[1]))
 		// writes under the new policy while the migration runs
@@ -844,14 +872,24 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		r.event("note", "drain skipped: no spare node beyond k+m, or no node besides the gateway")
 		return nil
 	}
-	victim := r.nodes[len(r.nodes)-1]
-	if victim.Idx == gw.Idx {
-		victim = r.nodes[len(r.nodes)-2]
+	// the last host that holds slots, never the gateway: draining a diskless host would
+	// move nothing (docs/14 §9)
+	var victim NodeRef
+	for _, n := range slices.Backward(r.nodes) {
+		if n.Idx != gw.Idx && hostSlots(rep, int(n.Idx)) > 0 {
+			victim = n
+			break
+		}
+	}
+	if victim.Idx == 0 {
+		r.event("note", "drain skipped: no host besides the gateway holds slots")
+		return nil
 	}
 	if err := r.Env.SetState(ctx, victim, meta.Draining); err != nil {
 		r.check("L-93", "drain accepted", false, err.Error())
 		return nil
 	}
+	u.add("activate "+victim.Name, func(c context.Context) error { return r.Env.SetState(c, victim, meta.Active) })
 	r.event("drain", victim.Name)
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
@@ -863,6 +901,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	if err := r.Env.SetState(ctx, victim, meta.Active); err != nil {
 		return err
 	}
+	u.done("activate " + victim.Name)
 	r.event("activate", victim.Name)
 	return nil
 }
@@ -896,9 +935,7 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	}
 	grew := storedDelta(before, rep.Volume.StoredBytes)
 	r.check("I-2 L-19 L-33", "second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < int64(before), fmt.Sprintf("%+d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
-	for p, d := range copyM {
-		m[p] = d
-	}
+	maps.Copy(m, copyM)
 	// a unique file is removed; after the grace GC reclaims its shards
 	p := join(r.Root, "gc.bin")
 	data := r.randomBytes(r.Profile.BigFile)
@@ -950,11 +987,23 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 		if err := v.Mkdir(dir); err != nil {
 			return err
 		}
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			p := join(dir, fmt.Sprintf("%s-%d.bin", gw.Name, i))
 			data := r.randomBytes(1 + r.Rng.Intn(r.Profile.ChunkSize))
 			if err := v.WriteAt(p, 0, data); err == nil {
 				acked[p] = data
+			}
+		}
+		// a read-modify-write across a chunk boundary of a two-chunk file: what the WAL
+		// replays after the restart is a partial overwrite, not a fresh file
+		cs := r.Profile.ChunkSize
+		p := join(dir, gw.Name+"-rmw.bin")
+		base := r.randomBytes(2*cs + 5)
+		if err := v.WriteAt(p, 0, base); err == nil {
+			patch := r.randomBytes(cs / 2)
+			off := int64(cs - 7)
+			if err := v.WriteAt(p, off, patch); err == nil {
+				acked[p] = overwrite(base, off, patch)
 			}
 		}
 	}
@@ -970,12 +1019,14 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	}
 	gw := r.gateways()[len(r.gateways())-1]
 	v := r.volume(gw)
-	bad, first := r.verifyModel(v, acked)
-	r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
-	for p, d := range acked {
-		m[p] = d
+	if len(acked) == 0 {
+		r.checkSkipped("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", "no write was acknowledged before the restart: nothing to verify")
+	} else {
+		bad, first := r.verifyModel(v, acked)
+		r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
 	}
-	bad, first = r.verifyModel(v, m)
+	maps.Copy(m, acked)
+	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-12 L-120", "whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
 	r.checkFSMAgreement(ctx, "I-4 I-5", "FSM hashes agree after the restart storm")
 	return nil
@@ -1009,8 +1060,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	// least k nodes on the majority side
 	budget := min((voters-1)/2, len(r.nodes)-k)
 	var minority, majority []NodeRef
-	for i := len(r.nodes) - 1; i >= 0; i-- {
-		n := r.nodes[i]
+	for _, n := range slices.Backward(r.nodes) {
 		if n.Idx != gw.Idx && len(minority) < budget {
 			minority = append(minority, n)
 		} else {
@@ -1049,10 +1099,13 @@ func phasePartition(ctx context.Context, r *Run) error {
 		return strings.Join(out, ",")
 	}
 
+	u := r.undoer(ctx)
+	defer u.run()
 	// step 1: a minority is cut off
 	if err := r.Env.Partition(ctx, minority, majority); err != nil {
 		return err
 	}
+	u.add("heal", r.Env.Heal)
 	r.event("partition", names(minority)+" | "+names(majority))
 	led, ldetail := r.awaitLeader(ctx, majority, r.Profile.RestartSettle+30*time.Second)
 	r.check("I-6", "the majority side elects a leader", led, ldetail)
@@ -1091,6 +1144,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if err := r.Env.Heal(ctx); err != nil {
 		return err
 	}
+	u.done("heal")
 	r.event("heal", "")
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
 	r.check("L-132", "cluster healthy after the heal", healthy, hdetail)
@@ -1111,6 +1165,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if err := r.Env.Partition(ctx, []NodeRef{gw}, others); err != nil {
 		return err
 	}
+	u.add("heal", r.Env.Heal)
 	r.event("partition", gw.Name+" | "+names(others))
 	refused = join(dir, "self-dir")
 	merr := v.Mkdir(refused)
@@ -1126,6 +1181,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if err := r.Env.Heal(ctx); err != nil {
 		return err
 	}
+	u.done("heal")
 	r.event("heal", "")
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
 	r.check("L-132", "cluster healthy after the gateway rejoins", healthy, hdetail)

@@ -29,7 +29,7 @@ type composeNode struct {
 type composeEnv struct {
 	soak.Admin
 	dir   string // compose project directory
-	file  string // compose file in dir: docker-compose.yml (4 hosts) or docker-compose.single.yml
+	file  string // compose file in dir: docker-compose.yml (4 hosts with disks + a diskless one) or docker-compose.single.yml
 	nodes []composeNode
 	http  *http.Client
 }
@@ -97,7 +97,7 @@ func (e *composeEnv) node(ref soak.NodeRef) composeNode {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true}
 }
 
 // diskDir is where an added disk named "<host>/<n>" is mounted in its container: the
@@ -231,27 +231,34 @@ func (v *httpVolume) do(req fsReq) (fsResp, error) {
 var errNotExist = errors.New("not found")
 
 func (v *httpVolume) Mkdir(p string) error { _, err := v.do(fsReq{Op: "mkdir", Path: p}); return err }
+
 func (v *httpVolume) WriteAt(p string, off int64, data []byte) error {
 	_, err := v.do(fsReq{Op: "write", Path: p, Off: off, Data: data})
 	return err
 }
+
 func (v *httpVolume) ReadAll(p string) ([]byte, error) {
 	r, err := v.do(fsReq{Op: "read", Path: p})
 	return r.Data, err
 }
+
 func (v *httpVolume) Truncate(p string, size int64) error {
 	_, err := v.do(fsReq{Op: "truncate", Path: p, Size: size})
 	return err
 }
+
 func (v *httpVolume) Rename(from, to string) error {
 	_, err := v.do(fsReq{Op: "rename", Path: from, To: to})
 	return err
 }
+
 func (v *httpVolume) Remove(p string) error { _, err := v.do(fsReq{Op: "remove", Path: p}); return err }
+
 func (v *httpVolume) Size(p string) (int64, error) {
 	r, err := v.do(fsReq{Op: "size", Path: p})
 	return r.Size, err
 }
+
 func (v *httpVolume) Hash(p string) ([32]byte, int64, error) {
 	r, err := v.do(fsReq{Op: "hash", Path: p})
 	var sum [32]byte
@@ -268,6 +275,7 @@ func (v *httpVolume) Hash(p string) ([32]byte, int64, error) {
 	copy(sum[:], b)
 	return sum, r.Size, nil
 }
+
 func (v *httpVolume) List(p string) ([]string, error) {
 	r, err := v.do(fsReq{Op: "list", Path: p})
 	return r.Names, err
@@ -315,7 +323,7 @@ func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, 
 // --- faults through docker compose and the workers ----------------------------------------
 
 func (e *composeEnv) compose(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...)
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -368,7 +376,7 @@ func (e *composeEnv) waitReady(ctx context.Context, ref soak.NodeRef, timeout ti
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, n.worker+"/ready", http.NoBody)
 		resp, err := e.http.Do(req)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode/100 == 2 {
 				return nil
 			}

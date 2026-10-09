@@ -49,9 +49,9 @@ type OS struct{}
 var _ FS = OS{}
 
 func (OS) CreateTemp(dir, pattern string) (File, error) { return os.CreateTemp(dir, pattern) }
-func (OS) Open(name string) (File, error)               { return os.Open(name) }
+func (OS) Open(name string) (File, error)               { return os.Open(name) } //nolint:gosec // the FS seam opens the paths the store and the WAL name
 func (OS) OpenFile(name string, flag int, perm fs.FileMode) (File, error) {
-	return os.OpenFile(name, flag, perm)
+	return os.OpenFile(name, flag, perm) //nolint:gosec // as Open
 }
 func (OS) Rename(oldpath, newpath string) error         { return os.Rename(oldpath, newpath) }
 func (OS) Remove(name string) error                     { return os.Remove(name) }

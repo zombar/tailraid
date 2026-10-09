@@ -59,7 +59,7 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 		prep(f)
 	}
 	h := nfsgw.New(f.FS(), f.FSM)
-	l, err := nfsgw.Listen("127.0.0.1:0")
+	l, err := nfsgw.Listen(t.Context(), "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	// the client library binds a random explicit local port and, unprivileged, does not
 	// retry a collision with a port another test's connection still holds
 	var cl *rpc.Client
-	for attempt := 0; attempt < 8; attempt++ {
+	for range 8 {
 		if cl, err = rpc.DialTCP("tcp", l.Addr().String(), false); err == nil || !strings.Contains(err.Error(), "address already in use") {
 			break
 		}
@@ -84,7 +84,7 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 		rpc.Header
 		Dirpath string
 	}
-	res, err := cl.Call(&mountArgs{Header: rpc.Header{Rpcvers: 2, Prog: nfsc.MountProg, Vers: nfsc.MountVers, Proc: nfsc.MountProc3MNT, Cred: rpc.AuthNull, Verf: rpc.AuthNull}, Dirpath: "/"})
+	res, err := cl.Call(&mountArgs{Rpcvers: 2, Prog: nfsc.MountProg, Vers: nfsc.MountVers, Proc: nfsc.MountProc3MNT, Cred: rpc.AuthNull, Verf: rpc.AuthNull, Dirpath: "/"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +152,9 @@ func (g *gateway) rename(from, to string) error {
 		To   nfsc.Diropargs3
 	}
 	res, err := g.tgt.Call(&renameArgs{
-		Header: rpc.Header{Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3Rename, Cred: rpc.NewAuthUnix("test", 501, 20).Auth(), Verf: rpc.AuthNull},
-		From:   nfsc.Diropargs3{FH: ffh, Filename: fromName},
-		To:     nfsc.Diropargs3{FH: tfh, Filename: toName},
+		Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3Rename, Cred: rpc.NewAuthUnix("test", 501, 20).Auth(), Verf: rpc.AuthNull,
+		From: nfsc.Diropargs3{FH: ffh, Filename: fromName},
+		To:   nfsc.Diropargs3{FH: tfh, Filename: toName},
 	})
 	if err != nil {
 		return err
@@ -354,8 +354,7 @@ func TestNFS_RemovedHandleIsStale(t *testing.T) {
 // wireStatus returns the NFS3 status number of a client error, or -1 for success / a
 // non-NFS error.
 func wireStatus(err error) int {
-	var e *nfsc.Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*nfsc.Error](err); ok {
 		return int(e.ErrorNum)
 	}
 	if err == nil {
@@ -424,8 +423,7 @@ func TestNFS_ReadOnly_WireStatuses(t *testing.T) {
 }
 
 func isStale(err error) bool {
-	var e *nfsc.Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*nfsc.Error](err); ok {
 		return e.ErrorNum == nfsc.NFS3ErrStale
 	}
 	return false
@@ -437,16 +435,21 @@ func TestNFS_ReadDirPlusLargeDirectory(t *testing.T) {
 	if _, err := g.tgt.Mkdir("/big", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The client library re-reads the whole directory on every lookup, so keep the short
-	// run small; 300 entries still spans several READDIRPLUS pages.
+	// The client library re-reads the whole directory on every lookup, so the short run
+	// creates 300 entries through it (several READDIRPLUS pages); the long run adds
+	// entries straight into the FSM up to 100k and lists them all through the wire.
 	n := 300
-	if !testing.Short() {
-		n = 5000
-	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if _, err := g.tgt.Create(fmt.Sprintf("/big/f%04d", i), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if !testing.Short() {
+		dir := g.f.InodeOf(g.f.FS(), "/big")
+		for i := n; i < 100_000; i++ {
+			g.f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: dir, Name: fmt.Sprintf("f%06d", i), Type: meta.TFile, Mode: 0o644, Now: 1}})
+		}
+		n = 100_000
 	}
 	ents, err := g.tgt.ReadDirPlus("/big")
 	if err != nil {
@@ -489,8 +492,8 @@ func TestNFS_FSStatAndUnsupported(t *testing.T) {
 		Link nfsc.Diropargs3
 	}
 	res, err := g.tgt.Call(&linkArgs{
-		Header: rpc.Header{Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: 15, Cred: rpc.AuthNull, Verf: rpc.AuthNull},
-		File:   fh, Link: nfsc.Diropargs3{FH: rfh, Filename: "hard"},
+		Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: 15, Cred: rpc.AuthNull, Verf: rpc.AuthNull,
+		File: fh, Link: nfsc.Diropargs3{FH: rfh, Filename: "hard"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -500,7 +503,7 @@ func TestNFS_FSStatAndUnsupported(t *testing.T) {
 		t.Fatal("LINK succeeded")
 	}
 	// Serve refuses non-loopback listeners
-	if _, err := nfsgw.Listen("0.0.0.0:0"); err == nil {
+	if _, err := nfsgw.Listen(t.Context(), "0.0.0.0:0"); err == nil {
 		t.Fatal("non-loopback listener accepted")
 	}
 	_ = os.Getpid
@@ -551,8 +554,10 @@ func readDirPage(t *testing.T, g *gateway, fh []byte, cookie, verf uint64) (stat
 		IsSet bool           `xdr:"union"`
 		Entry nfsc.EntryPlus `xdr:"unioncase=1"`
 	}
-	res, err := g.cl.Call(&args{Header: rpc.Header{Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3ReadDirPlus,
-		Cred: rpc.NewAuthUnix("test", 501, 20).Auth(), Verf: rpc.AuthNull}, FH: fh, Cookie: cookie, CookieVerf: verf, DirCount: 512, MaxCount: 4096})
+	res, err := g.cl.Call(&args{
+		Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3ReadDirPlus,
+		Cred: rpc.NewAuthUnix("test", 501, 20).Auth(), Verf: rpc.AuthNull, FH: fh, Cookie: cookie, CookieVerf: verf, DirCount: 512, MaxCount: 4096,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +599,7 @@ func TestNFS_ReadDirPlus_RemoveBetweenPages(t *testing.T) {
 	}
 	const n = 150
 	all := map[string]bool{}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		name := fmt.Sprintf("e%03d", i)
 		if _, err := g.tgt.Create("/pg/"+name, 0o644); err != nil {
 			t.Fatal(err)

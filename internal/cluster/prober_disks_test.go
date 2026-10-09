@@ -20,7 +20,7 @@ func (f *diskHealth) Health(_ context.Context, addr string) (rpc.Health, error) 
 	if f.down[addr] {
 		return rpc.Health{}, errors.New("down")
 	}
-	return rpc.Health{Free: 1, Disks: f.disks[addr]}, nil
+	return rpc.Health{Disks: f.disks[addr]}, nil
 }
 
 // Invariant: I-90

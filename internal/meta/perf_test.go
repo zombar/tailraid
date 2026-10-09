@@ -21,13 +21,13 @@ func TestFSM_Commit_RefDeltaMatchesFullRecompute(t *testing.T) {
 	var idx uint64
 	apply := func(c Command) Result {
 		idx++
-		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	}
 	if res := apply(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}); res.Err != nil {
 		t.Fatal(res.Err)
 	}
 	commits := 0
-	for i := 0; i < 3000; i++ {
+	for i := range 3000 {
 		c := gen.next()
 		res := apply(c)
 		if c.Op == OpCommit && res.Err == nil {
@@ -94,12 +94,12 @@ func TestFSM_Stats_IncrementalMatchesRecompute(t *testing.T) {
 	var idx uint64
 	apply := func(c Command) Result {
 		idx++
-		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	}
 	if res := apply(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}); res.Err != nil {
 		t.Fatal(res.Err)
 	}
-	for i := 0; i < 3000; i++ {
+	for i := range 3000 {
 		c := gen.next()
 		apply(c)
 		got := f.Stats()
@@ -158,7 +158,7 @@ func TestUsage_Formula(t *testing.T) {
 func TestFSM_ForEachChunk_OrderAndStop(t *testing.T) {
 	bf := newTFSM(t)
 	var hs []Hash
-	for i := 0; i < 2500; i++ {
+	for i := range 2500 {
 		h := hashN(uint64(i) + 1)
 		hs = append(hs, h)
 		ino := bf.create(RootIno, fmt.Sprintf("f%d", i))

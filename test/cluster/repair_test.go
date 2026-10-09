@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -78,8 +79,8 @@ func TestRepair_FillsDegradedSlotsWhenSpareAppears(t *testing.T) {
 	}
 	for _, ch := range c.ChunksOf(0, "/f") {
 		for i, s := range ch.Placement {
-			if !c.Nodes[s-1].Store.Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
-				t.Fatalf("slot %d on n%d has no shard", i, s-1)
+			if !c.StoreOf(s).Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
+				t.Fatalf("slot %d on target %d has no shard", i, s)
 			}
 		}
 	}
@@ -99,7 +100,7 @@ func TestRepair_DeadNodeHoldDown_ThenReplaced(t *testing.T) {
 	ch := c.ChunksOf(0, "/f")[0]
 	var victim int
 	for i, nd := range c.Nodes {
-		if i != 0 && (nd.Idx() == ch.Placement[0] || nd.Idx() == ch.Placement[1] || nd.Idx() == ch.Placement[2]) {
+		if i != 0 && (nd.Target() == ch.Placement[0] || nd.Target() == ch.Placement[1] || nd.Target() == ch.Placement[2]) {
 			victim = i
 		}
 	}
@@ -123,7 +124,7 @@ func TestRepair_DeadNodeHoldDown_ThenReplaced(t *testing.T) {
 	}
 	after := c.ChunksOf(0, "/f")[0]
 	for _, s := range after.Placement {
-		if s == 0 || s == c.Nodes[victim].Idx() {
+		if s == 0 || s == c.Nodes[victim].Target() {
 			t.Fatalf("placement after repair %v still names dead node %d", after.Placement, victim)
 		}
 	}
@@ -134,7 +135,7 @@ func TestRepair_DeadNodeHoldDown_ThenReplaced(t *testing.T) {
 	if got, err := c.ReadFileCold(victim, "/f"); err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("read on returned node: %v", err)
 	}
-	stale := chunk.Key(ch.Hash, ch.K, ch.M, slotOf(ch, c.Nodes[victim].Idx()))
+	stale := chunk.Key(ch.Hash, ch.K, ch.M, slotOf(ch, c.Nodes[victim].Target()))
 	c.Clk.Advance(11 * time.Minute)
 	n, err := sweepNode(c, victim)
 	must(t, err)
@@ -148,10 +149,10 @@ func TestRepair_DeadNodeHoldDown_ThenReplaced(t *testing.T) {
 func holdersBySlot(c *testharness.Cluster, ch meta.Chunk, leader *testharness.ClusterNode) []int {
 	var out []int
 	for _, s := range ch.Placement {
-		if s == 0 || s == leader.Idx() {
+		if s == 0 || s == leader.Target() {
 			continue
 		}
-		out = append(out, int(s)-1)
+		out = append(out, c.HostOf(s))
 	}
 	return out
 }
@@ -263,20 +264,20 @@ func TestRepair_DrainNoReplacement_KeepsShard(t *testing.T) {
 		t.Fatalf("scan %+v", st)
 	}
 	after := c.ChunksOf(leader.I, "/f")[0]
-	drainKey := chunk.Key(after.Hash, after.K, after.M, slotOf(ch, c.Nodes[draining].Idx()))
+	drainKey := chunk.Key(after.Hash, after.K, after.M, slotOf(ch, c.Nodes[draining].Target()))
 	filled := 0
 	for _, s := range after.Placement {
 		if s != 0 {
 			filled++
 		}
-		if s == c.Nodes[dead].Idx() {
+		if s == c.Nodes[dead].Target() {
 			t.Fatalf("dead node still placed: %v", after.Placement)
 		}
 	}
 	if filled != 4 {
 		t.Fatalf("placement %v lost a readable slot (was %v)", after.Placement, ch.Placement)
 	}
-	if after.Placement[slotOf(ch, c.Nodes[draining].Idx())] != c.Nodes[draining].Idx() {
+	if after.Placement[slotOf(ch, c.Nodes[draining].Target())] != c.Nodes[draining].Target() {
 		t.Fatalf("draining node's slot was reassigned without a replacement: %v", after.Placement)
 	}
 	if !c.Nodes[draining].Store.Has(drainKey) {
@@ -317,7 +318,7 @@ func TestRepair_DrainingHolderIsReadable(t *testing.T) {
 		t.Fatalf("no spare exists yet the scan reports %+v", st)
 	}
 	after := c.ChunksOf(leader.I, "/f")[0]
-	if after.Placement[slotOf(ch, c.Nodes[draining].Idx())] != c.Nodes[draining].Idx() {
+	if after.Placement[slotOf(ch, c.Nodes[draining].Target())] != c.Nodes[draining].Target() {
 		t.Fatalf("draining node's slot dropped: %v", after.Placement)
 	}
 	if got, err := c.ReadFileCold(leader.I, "/f"); err != nil || !bytes.Equal(got, data) {
@@ -339,7 +340,7 @@ func slotOf(ch meta.Chunk, idx meta.NodeIdx) int {
 func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		c.WriteFile(0, "/f"+string(rune('a'+i)), testharness.Pattern(int(testharness.ChunkSize)+1, byte(i)))
 	}
 	c.Settle()
@@ -348,15 +349,18 @@ func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	if leader.I == 3 {
 		drained = 2
 	}
+	for i := 0; leader.Node.SlotsHeldBy(c.Nodes[drained].Target()) == 0; i++ { // never skip: more files until the node holds a slot
+		if i == 8 {
+			t.Fatal("placement avoided the node to be drained across twelve files")
+		}
+		c.WriteFile(0, fmt.Sprintf("/g%d", i), testharness.Pattern(int(testharness.ChunkSize)+1, byte(10+i)))
+		c.Settle()
+	}
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: c.Nodes[drained].Idx(), State: meta.Draining}))
 	c.Settle()
-	before := leader.Node.SlotsHeldBy(c.Nodes[drained].Idx())
-	if before == 0 {
-		t.Skip("placement happened to avoid the drained node")
-	}
 	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
 	must(t, err)
-	if leader.Node.SlotsHeldBy(c.Nodes[drained].Idx()) != 0 {
+	if leader.Node.SlotsHeldBy(c.Nodes[drained].Target()) != 0 {
 		t.Fatalf("drained node still holds slots after scan %+v", st)
 	}
 	// its shard files are younger than grace, so the fenced DELETEs were refused (I-14);
@@ -370,10 +374,11 @@ func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	if left != 0 {
 		t.Fatalf("%d shard files left on the drained node after sweep", left)
 	}
-	// now remove succeeds without --force, and every file still reads
+	// now remove succeeds without --force (the disk, then its host), and every file still reads
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[drained].Target()}))
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[drained].Idx()}))
 	c.Settle()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if got, err := c.ReadFileCold(0, "/f"+string(rune('a'+i))); err != nil || !bytes.Equal(got, testharness.Pattern(int(testharness.ChunkSize)+1, byte(i))) {
 			t.Fatalf("file %d after remove: %v", i, err)
 		}
@@ -446,8 +451,8 @@ func TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK(t *testing.T) {
 			t.Fatalf("chunk still on old policy %+v", ch)
 		}
 		for i, s := range ch.Placement {
-			if s == 0 || !c.Nodes[s-1].Store.Has(chunk.Key(ch.Hash, 3, 2, i)) {
-				t.Fatalf("new slot %d missing on n%d", i, s-1)
+			if s == 0 || !c.StoreOf(s).Has(chunk.Key(ch.Hash, 3, 2, i)) {
+				t.Fatalf("new slot %d missing on target %d", i, s)
 			}
 		}
 	}
@@ -459,7 +464,7 @@ func TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, ch := range c.ChunksOf(0, "/f") {
-			for slot := 0; slot < 3; slot++ {
+			for slot := range 3 {
 				if c.Nodes[i].Store.Has(chunk.Key(ch.Hash, 2, 1, slot)) {
 					t.Fatalf("old shard slot %d still on n%d after sweep", slot, i)
 				}
@@ -500,7 +505,7 @@ func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
 	leader := c.Leader()
 	r := newRepairer(c, leader, repairCfg())
 	// corrupt one slot on disk; a cold read through another node reports it
-	victim := int(ch.Placement[2]) - 1
+	victim := c.HostOf(ch.Placement[2])
 	key := chunk.Key(ch.Hash, ch.K, ch.M, 2)
 	corruptShardFile(t, c.Nodes[victim].Store.Path(key))
 	// a read of that slot detects the corruption, quarantines the file (I-11) and reports it
@@ -518,12 +523,12 @@ func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
 	}
 	after := c.ChunksOf(0, "/f")[0]
 	s := after.Placement[2]
-	if s == 0 || !c.Nodes[s-1].Store.Has(chunk.Key(after.Hash, after.K, after.M, 2)) {
+	if s == 0 || !c.StoreOf(s).Has(chunk.Key(after.Hash, after.K, after.M, 2)) {
 		t.Fatalf("slot 2 not restored: %v", after.Placement)
 	}
 	readAllNodes(c, data)
 	// scrub finds silent corruption without a report
-	corruptShardFile(t, c.Nodes[s-1].Store.Path(chunk.Key(after.Hash, after.K, after.M, 2)))
+	corruptShardFile(t, c.StoreOf(s).Path(chunk.Key(after.Hash, after.K, after.M, 2)))
 	cfg := repairCfg()
 	cfg.ScrubShare = 1
 	st, err = newRepairer(c, c.Leader(), cfg).Scan(ctx)
@@ -555,7 +560,7 @@ func TestSweep_SkippedWhenNotHealthy(t *testing.T) {
 	want := c.Leader().Node.Raft.AppliedIndex()
 	c.Settle()
 	sweep := func(healthy bool, applied uint64) int {
-		n, err := repair.SweepLocal(ctx, nd.Store, nd.Node.FSM, nd.Idx(), 10*time.Minute, c.Clk,
+		n, err := repair.SweepLocal(ctx, nd.Store, nd.Node.FSM, nd.Target(), 10*time.Minute, c.Clk,
 			func() bool { return healthy }, func() uint64 { return applied }, func() (uint64, bool) { return want, true })
 		must(t, err)
 		return n
@@ -592,7 +597,7 @@ func TestGC_CollectsAfterGrace_RespectsFence_AndSweep(t *testing.T) {
 	ch := c.ChunksOf(0, "/f")[0]
 	keys := map[int]chunk.ShardKey{}
 	for i, s := range ch.Placement {
-		keys[int(s)-1] = chunk.Key(ch.Hash, ch.K, ch.M, i)
+		keys[c.HostOf(s)] = chunk.Key(ch.Hash, ch.K, ch.M, i)
 	}
 	must(t, c.Nodes[0].FS.Remove("/f"))
 	c.Settle()
@@ -713,7 +718,7 @@ func TestCluster_GCDoesNotDeleteInflightUpload(t *testing.T) {
 	}
 	ch := c.ChunksOf(0, "/b")[0]
 	for i, s := range ch.Placement {
-		if s == 0 || !c.Nodes[s-1].Store.Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
+		if s == 0 || !c.StoreOf(s).Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
 			t.Fatalf("slot %d missing after GC race", i)
 		}
 	}
@@ -739,7 +744,7 @@ func sweepNode(c *testharness.Cluster, i int) (int, error) {
 	want := c.Leader().Node.Raft.AppliedIndex()
 	c.Settle()
 	nd := c.Nodes[i]
-	return repair.SweepLocal(ctx, nd.Store, nd.Node.FSM, nd.Idx(), 10*time.Minute, c.Clk,
+	return repair.SweepLocal(ctx, nd.Store, nd.Node.FSM, nd.Target(), 10*time.Minute, c.Clk,
 		func() bool { return true }, nd.Node.Raft.AppliedIndex, func() (uint64, bool) { return want, true })
 }
 
@@ -801,7 +806,7 @@ func TestRepair_PutFails_Retries(t *testing.T) {
 	c.Probe()
 	c.Restart(spare)
 	c.Settle()
-	flaky := &failPuts{Shards: leader.Client, after: 0, to: c.Nodes[spare].Idx()}
+	flaky := &failPuts{Shards: leader.Client, after: 0, to: c.Nodes[spare].Target()}
 	r := repairerWith(c, leader, flaky)
 	st, err := r.Scan(ctx)
 	must(t, err)
@@ -831,7 +836,7 @@ func TestRepair_MigrationCrash_Resumes(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
 	var data [][]byte
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		data = append(data, testharness.Pattern(int(testharness.ChunkSize), byte(70+i)))
 		c.WriteFile(0, "/f"+string(rune('a'+i)), data[i])
 	}
@@ -858,7 +863,7 @@ func TestRepair_MigrationCrash_Resumes(t *testing.T) {
 	if st.Migrated != 2 || st.Partial != 2 || st.PolicyStale != 0 || st.Deferred != 0 || st.Unrepairable != 0 {
 		t.Fatalf("the next leader's pass: %+v", st)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		for _, ch := range c.ChunksOf(next.I, "/f"+string(rune('a'+i))) {
 			if ch.K != 3 || ch.M != 1 || len(ch.Placement) != 4 {
 				t.Fatalf("chunk of file %d on %d+%d with %d slots", i, ch.K, ch.M, len(ch.Placement))

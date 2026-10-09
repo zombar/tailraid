@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zombar/tailraid/internal/svc"
 	"github.com/zombar/tailraid/internal/update"
 )
 
@@ -18,15 +19,31 @@ func updateCmd() *cobra.Command {
 		Short: "Replace this binary with a verified release (docs/12 §5)",
 		Long: `update resolves the latest GitHub release (or --version), downloads the artifact for this
 OS and architecture together with the release's sha256sums.txt, verifies the checksum,
-runs the download's "version", and swaps it into place. The running service is not
-restarted. The repository is private: set TAILRAID_GITHUB_TOKEN or GITHUB_TOKEN, or be
-logged in with the gh CLI.`,
+runs the download's "version", and swaps it into place; the release's sha256sums.txt
+must carry the minisign signature of the release key (docs/12 §4). The previous binary
+stays as <exe>.old until the next clean start; --rollback puts it back. The running
+service is not restarted unless --restart is given. The repository is private: set
+TAILRAID_GITHUB_TOKEN or GITHUB_TOKEN, or be logged in with the gh CLI.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			check, _ := cmd.Flags().GetBool("check")
 			want, _ := cmd.Flags().GetString("version")
 			yes, _ := cmd.Flags().GetBool("yes")
+			allowDowngrade, _ := cmd.Flags().GetBool("allow-downgrade")
+			rollback, _ := cmd.Flags().GetBool("rollback")
+			restart, _ := cmd.Flags().GetBool("restart")
 			out := cmd.OutOrStdout()
+			if rollback {
+				exe, err := executable()
+				if err != nil {
+					return err
+				}
+				if err := update.Rollback(exe); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "restored the previous binary at %s\n", exe)
+				return restartService(cmd, restart)
+			}
 			u := &update.Updater{Owner: "zombar", Repo: "tailraid", Token: update.Token(ctx), Out: out}
 			rel, err := u.Resolve(ctx, want)
 			if err != nil {
@@ -54,27 +71,58 @@ logged in with the gh CLI.`,
 					return errors.New("aborted")
 				}
 			}
-			exe, err := os.Executable()
+			exe, err := executable()
 			if err != nil {
 				return err
 			}
-			if exe, err = filepath.EvalSymlinks(exe); err != nil {
+			if err := u.Apply(ctx, rel, exe, version, runtime.GOOS, runtime.GOARCH, want != "", allowDowngrade); err != nil {
 				return err
 			}
-			if err := u.Apply(ctx, rel, exe, version, runtime.GOOS, runtime.GOARCH, want != ""); err != nil {
-				return err
+			if !restart {
+				switch runtime.GOOS {
+				case "windows":
+					fmt.Fprintln(out, "restart the service: sc.exe stop tailraid && sc.exe start tailraid (the previous binary stays beside the new one as .old)")
+				default:
+					fmt.Fprintln(out, "restart the service: tailraid stop && tailraid start (or update --restart next time)")
+				}
 			}
-			switch runtime.GOOS {
-			case "windows":
-				fmt.Fprintln(out, "restart the service: sc.exe stop tailraid && sc.exe start tailraid (an old copy stays beside the binary until then)")
-			default:
-				fmt.Fprintln(out, "restart the service: tailraid stop && tailraid start")
-			}
-			return nil
+			return restartService(cmd, restart)
 		},
 	}
 	c.Flags().Bool("check", false, "only report whether a newer release exists (exit 2 when it does)")
 	c.Flags().String("version", "", "install this release tag even if it is not newer")
 	c.Flags().BoolP("yes", "y", false, "do not ask before replacing the binary")
+	c.Flags().Bool("allow-downgrade", false, "with --version: install a release older than the running one")
+	c.Flags().Bool("rollback", false, "put the previous binary (<exe>.old) back instead of updating")
+	c.Flags().Bool("restart", false, "stop and start the installed service after the swap")
 	return c
+}
+
+// executable is the resolved path of this binary.
+func executable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
+}
+
+// restartService stops and starts the installed service when asked.
+func restartService(cmd *cobra.Command, restart bool) error {
+	if !restart {
+		return nil
+	}
+	p, _, _, err := svcParams(cmd)
+	if err != nil {
+		return err
+	}
+	stop, err := svc.Stop(p)
+	if err != nil {
+		return err
+	}
+	start, err := svc.Start(p)
+	if err != nil {
+		return err
+	}
+	return svc.Apply(cmd.Context(), cmd.OutOrStdout(), svc.Plan{Commands: [][]string{stop, start}})
 }

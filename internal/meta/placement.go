@@ -6,8 +6,8 @@ import (
 	"sort"
 )
 
-// Candidate is a target eligible to receive a shard: a device's own store, an added disk
-// or an S3 node. Weight is its Capacity; Voter marks a target on an always-on device,
+// Candidate is a target eligible to receive a shard: a disk or an S3 node, never a device
+// row (docs/14 §9). Weight is its Capacity; Voter marks a target on an always-on device,
 // which the data slots prefer (docs/03 §Voter-first slots); Domain is the failure domain,
 // the host for a disk and the target itself otherwise (0 means Idx) (docs/14 §5).
 type Candidate struct {
@@ -49,7 +49,8 @@ func DomainsOf(nodes []Node) Domains {
 
 // Candidates filters the node table to placement candidates: Active, live, with
 // non-zero capacity; a disk also needs its host Active, and takes the host's voter bit
-// and the host as its domain. Device, disk and S3 targets qualify. Sorted by Idx.
+// and the host as its domain. Disk and S3 targets qualify; a device row never does
+// (docs/14 §9, I-118). Sorted by Idx.
 func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 	hosts := make(map[NodeIdx]*Node, len(nodes))
 	for i := range nodes {
@@ -60,10 +61,10 @@ func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 	out := make([]Candidate, 0, len(nodes))
 	for i := range nodes {
 		n := &nodes[i]
-		if n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
+		if n.Kind == KindDevice || n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
 			continue
 		}
-		c := Candidate{Idx: n.Idx, Weight: n.Capacity, Voter: n.Voter && n.Kind == KindDevice}
+		c := Candidate{Idx: n.Idx, Weight: n.Capacity}
 		if n.Kind == KindDisk {
 			h := hosts[n.Host]
 			if h == nil || h.State != Active {
@@ -143,26 +144,6 @@ func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int, dom Domain
 	}
 }
 
-// Place selects up to n distinct targets for the shards of chunk h by weighted rendezvous
-// hashing: score_i = -Weight_i / ln(u_i) with u_i derived from fnv64a(h ‖ idx), walked in
-// score order (ties by Idx ascending) skipping a target whose domain already holds
-// ceil(n/D) picks, then filling any slot left from the skipped ones in the same order
-// (I-87). It is a pure function of (h, set of candidates, n) regardless of input order
-// (I-8); with one candidate per domain it is the top-n by score. Shard i goes to
-// result[i]. With fewer than n candidates the result is shorter; duplicate Idx entries
-// count once.
-func Place(h Hash, cands []Candidate, n int) []NodeIdx {
-	if n <= 0 || len(cands) == 0 {
-		return nil
-	}
-	r := ranked(h, cands)
-	domains := map[NodeIdx]bool{}
-	for _, c := range r {
-		domains[c.domain()] = true
-	}
-	return pick(r, n, map[NodeIdx]int{}, hostCap(n, len(domains)))
-}
-
 // hostCap is ceil(n/d), the most slots of an n-slot stripe one of d domains may hold.
 func hostCap(n, d int) int {
 	if d <= 0 {
@@ -221,7 +202,7 @@ func ranked(h Hash, cands []Candidate) []Candidate {
 		buf[32] = byte(c.Idx)
 		buf[33] = byte(c.Idx >> 8)
 		f := fnv.New64a()
-		f.Write(buf[:])
+		_, _ = f.Write(buf[:]) // hash.Hash never fails
 		// FNV-1a has almost no avalanche on its last input bytes: hashes for adjacent
 		// idx values differ by a small multiple of the FNV prime, which made the weight
 		// term dominate. The murmur3 finalizer fixes that while keeping the function pure.

@@ -29,6 +29,11 @@ const (
 const (
 	commandVersion   = 1
 	commandVersionV2 = 2
+	commandVersionV3 = 3 // SetPlacement.Expect and GCDelete.Limit
+	// CodecVersion is the newest log entry and snapshot format this binary writes. A
+	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
+	// I-105): it could not decode what the leader writes.
+	CodecVersion = 3
 )
 
 // SetAttr mask bits.
@@ -121,9 +126,14 @@ type (
 		Hash      Hash
 		Placement []NodeIdx
 		K, M      uint8
+		// Expect, when set, is the placement the proposer planned from: the FSM applies
+		// the command only if the chunk still has it, else ErrConflict (I-102). nil
+		// skips the check (never written by current code).
+		Expect []NodeIdx
 	}
 	GCDelete struct {
 		Before int64
+		Limit  uint32 // at most this many victims per entry, in hash order; 0 is unbounded (I-103)
 	}
 )
 
@@ -175,14 +185,39 @@ type Result struct {
 	Err     error // nil or one of the sentinel errors
 }
 
-// EncodeCommand serializes c. It panics if the payload for c.Op is nil: that is a
-// programming error on the proposer, never a wire condition.
-func EncodeCommand(c Command) []byte {
+// EncodeCommand serializes c. A command whose payload for c.Op is nil, or whose op is
+// unknown, is ErrBadCommand: a programming error on the proposer, reported rather than
+// panicking the leader (I-26).
+func EncodeCommand(c Command) (b []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			b, err = nil, fmt.Errorf("%w: %v", ErrBadCommand, r)
+		}
+	}()
+	return encodeCommand(c), nil
+}
+
+// MustEncodeCommand is EncodeCommand for tests and the harness: it panics on a bad
+// command.
+func MustEncodeCommand(c Command) []byte {
+	b, err := EncodeCommand(c)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
 	v2 := c.Op == OpNodeUpsert && c.NodeUpsert != nil && (c.NodeUpsert.Node.Kind == KindDisk || c.NodeUpsert.Node.Host != 0)
-	if v2 {
+	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
+		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
+	switch {
+	case v3:
+		w.u8(commandVersionV3)
+	case v2:
 		w.u8(commandVersionV2)
-	} else {
+	default:
 		w.u8(commandVersion)
 	}
 	w.u8(uint8(c.Op))
@@ -277,11 +312,17 @@ func EncodeCommand(c Command) []byte {
 		p := mustPayload(c.SetPlacement, c.Op)
 		w.hash(p.Hash)
 		w.nodeIdxs(p.Placement)
+		if v3 {
+			w.nodeIdxs(p.Expect)
+		}
 		w.u8(p.K)
 		w.u8(p.M)
 	case OpGCDelete:
 		p := mustPayload(c.GCDelete, c.Op)
 		w.i64(p.Before)
+		if v3 {
+			w.u32(p.Limit)
+		}
 	case OpSetVolumeMode:
 		p := mustPayload(c.SetVolumeMode, c.Op)
 		w.bool(p.Auto)
@@ -306,7 +347,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && v != commandVersion && v != commandVersionV2 {
+	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -314,6 +355,9 @@ func DecodeCommand(b []byte) (Command, error) {
 		return c, r.err
 	}
 	if v == commandVersionV2 && c.Op != OpNodeUpsert {
+		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
+	}
+	if v == commandVersionV3 && c.Op != OpSetPlacement && c.Op != OpGCDelete {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
 	}
 	switch c.Op {
@@ -358,9 +402,20 @@ func DecodeCommand(b []byte) (Command, error) {
 		p.Now = r.i64()
 		c.Commit = p
 	case OpSetPlacement:
-		c.SetPlacement = &SetPlacement{Hash: r.hash(), Placement: r.nodeIdxs(), K: r.u8(), M: r.u8()}
+		p := &SetPlacement{Hash: r.hash(), Placement: r.nodeIdxs()}
+		if v == commandVersionV3 {
+			p.Expect = r.nodeIdxs()
+			if p.Expect == nil {
+				p.Expect = []NodeIdx{} // written as set; stays set (an empty expectation never matches a stripe)
+			}
+		}
+		p.K, p.M = r.u8(), r.u8()
+		c.SetPlacement = p
 	case OpGCDelete:
 		c.GCDelete = &GCDelete{Before: r.i64()}
+		if v == commandVersionV3 {
+			c.GCDelete.Limit = r.u32()
+		}
 	case OpSetVolumeMode:
 		c.SetVolumeMode = &SetVolumeMode{Auto: r.bool(), Now: r.i64()}
 	default:

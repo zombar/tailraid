@@ -5,6 +5,7 @@ package repair
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -51,8 +53,10 @@ type Config struct {
 
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
-	return Config{FillAfter: 10 * time.Minute, ScrubShare: 100, RateBytes: 50 << 20, Grace: 10 * time.Minute,
-		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute}
+	return Config{
+		FillAfter: 10 * time.Minute, ScrubShare: 100, RateBytes: 50 << 20, Grace: 10 * time.Minute,
+		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute,
+	}
 }
 
 // Stats summarises one scan pass (admin.RepairStatus).
@@ -72,17 +76,19 @@ type Stats struct {
 
 // Repairer is the leader's scanner.
 type Repairer struct {
-	st     *meta.Store
-	prop   meta.Proposer
-	live   Liveness
-	shards Shards
-	rd     ChunkReader
-	clk    clock.Clock
-	cfg    Config
-	log    *slog.Logger
-	codecs *ec.Pool
-	limit  *limiter
-	Events *meta.EventRing // chunk history (nil unless dev.enabled)
+	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
+	warnRepair, warnPut logx.Limiter
+	st                  *meta.Store
+	prop                meta.Proposer
+	live                Liveness
+	shards              Shards
+	rd                  ChunkReader
+	clk                 clock.Clock
+	cfg                 Config
+	log                 *slog.Logger
+	codecs              *ec.Pool
+	limit               *limiter
+	Events              *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	scanMu   sync.Mutex // one pass at a time: `check --scrub` never overlaps the background loop
 	mu       sync.Mutex
@@ -97,8 +103,10 @@ func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd Ch
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Repairer{st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
-		limit: newLimiter(cfg.RateBytes, clk), reported: map[chunk.ShardKey]time.Time{}}
+	return &Repairer{
+		st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
+		limit: newLimiter(cfg.RateBytes, clk), reported: map[chunk.ShardKey]time.Time{},
+	}
 }
 
 // ReportBad records a reader's bad-slot report (docs/06 §4 case 5); bounded and expiring.
@@ -291,7 +299,7 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
 		if err != nil {
 			st.Errors++
-			r.log.Warn("repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+			r.warnRepair.Warn(r.log, "repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
 			continue
 		}
 		st.BytesMoved += outcome.bytes
@@ -388,7 +396,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 		}
 		r.limit.wait(ctx, int64(len(shards[i])))
 		if err := r.shards.Put(ctx, n, chunk.Key(c.Hash, k, m, i), shards[i]); err != nil {
-			r.log.Warn("repair put failed", "node", n, "slot", i, "err", err)
+			r.warnPut.Warn(r.log, "repair put failed", "node", n, "slot", i, "err", err)
 			newPlace[i] = 0
 			continue
 		}
@@ -409,9 +417,15 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			return outcome{bytes: moved}, nil // nothing placeable improved; nothing to commit (L-185)
 		}
 	}
-	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace}})
+	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace, Expect: c.Placement}})
 	if err == nil {
 		err = res.Err
+	}
+	if errors.Is(err, meta.ErrConflict) {
+		// re-placed by a flush or a drain since this pass read it (I-102): the next pass
+		// plans from the new placement; the shards just put are orphans the sweep clears
+		r.log.Info("placement changed under repair, skipping this pass", "chunk", fmt.Sprintf("%x", c.Hash[:8]))
+		return outcome{bytes: moved}, nil
 	}
 	if err != nil {
 		return outcome{bytes: moved}, fmt.Errorf("set placement: %w", err)
@@ -463,13 +477,19 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 		}
 		got[i] = b
 	}
-	data, err := r.rd.ReadChunk(ctx, c.Hash) // hash-verified decode
-	if err != nil {
-		return corrupt, err
-	}
 	codec, err := r.codecs.Get(c.K, c.M)
 	if err != nil {
 		return corrupt, err
+	}
+	// decode from the shards just fetched rather than fetching them again through the
+	// reader: a verified decode needs any k of them, and the hash check below is the
+	// same one the reader applies
+	data, err := codec.Decode(append([][]byte(nil), got...), int(c.Size))
+	if err != nil || sha256.Sum256(data) != c.Hash {
+		data, err = r.rd.ReadChunk(ctx, c.Hash) // a bad majority: let the reader hedge across holders
+		if err != nil {
+			return corrupt, err
+		}
 	}
 	want, err := codec.Encode(data)
 	if err != nil {

@@ -12,14 +12,29 @@ GOLANGCI := $(TOOL) github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 GOVULNCHECK := $(TOOL) golang.org/x/vuln/cmd/govulncheck
 DEADCODE := $(TOOL) golang.org/x/tools/cmd/deadcode
 UNPARAM := $(TOOL) mvdan.cc/unparam
+TSGO := $(TOOL) github.com/microsoft/typescript-go/cmd/tsgo
+MISSPELL := $(TOOL) github.com/golangci/misspell/cmd/misspell
+# actionlint has its own modfile: it needs go.yaml.in/yaml/v4 rc.3 and gosec (in
+# golangci-lint) needs rc.6, and the two release candidates differ in API.
+ACTIONLINT := go run -mod=readonly -modfile=actionlint.mod github.com/rhysd/actionlint/cmd/actionlint
+YAMLFMT := $(TOOL) github.com/google/yamlfmt/cmd/yamlfmt
+# lefthook is built to a stable path: the hook scripts it installs embed the path of the
+# binary that installed them, and a `go run` binary lives in a temp dir that vanishes.
+LEFTHOOK_BIN := dist/tools/lefthook
 PKGS := ./...
 BIN := tailraid
+# Prose and markup the spell check and the docs script cover.
+DOCS := README.md CLAUDE.md CHANGELOG.md docs/*.md docs/windows-checklist.md
+WEB_TEXT := internal/webui/src/*.ts internal/webui/src/app.css internal/webui/static/index.html docs/assets/lookdev/*.html
+YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml
+SHELL_SCRIPTS := scripts/*.sh test/soak/entry.sh
 
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
-        release tag check invariants tidy vendor-check deadcode lint-cross clean help web web-check
+        release tag check invariants tidy vendor-check deadcode lint-cross clean help web web-check web-typecheck \
+        spell docs-check actionlint yaml-check yamlfmt shell-check hooks
 
 # Browser UI (docs/13 §6): esbuild is a Go tool; the bundle is committed and embedded.
 WEB_SRC := internal/webui/src
@@ -58,7 +73,7 @@ bench:
 test-mount:
 	TAILRAID_MOUNT_TEST=1 go test -v -count=1 -run 'TestMount' -timeout 20m ./test/mount/
 
-## soak: four-node docker-compose cluster (two added disks each), scenario driver, report.html + results.jsonl (needs Docker)
+## soak: five-node docker-compose cluster (two disks each, one diskless voter), scenario driver, report.html + results.jsonl (needs Docker)
 soak: soak-binary
 	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
@@ -99,19 +114,53 @@ web-check:
 	$(ESBUILD) --outfile=$$tmp/app.js && cmp -s $$tmp/app.js $(WEB_DIST)/app.js \
 	  || { echo "$(WEB_DIST)/app.js is stale; run make web"; exit 1; }
 
-## lint: golangci-lint + invariant/lifecycle citation check + dead code
+## web-typecheck: the TypeScript type-checks (esbuild only bundles; typescript-go checks)
+web-typecheck:
+	$(TSGO) -p internal/webui/tsconfig.json --noEmit
+
+## lint: golangci-lint + invariant/lifecycle citations + dead code + docs, YAML, workflow and shell checks
 lint:
 	$(GOLANGCI) run $(PKGS)
 	scripts/check-invariants.sh --check
-	$(MAKE) --no-print-directory deadcode
+	$(MAKE) --no-print-directory deadcode docs-check spell actionlint yaml-check shell-check
 
-## lint-cross: golangci-lint under GOOS=darwin and GOOS=windows, so the per-OS files are
+## spell: misspell over docs, README, TypeScript, CSS and the lookdev HTML
+spell:
+	$(MISSPELL) -error $(DOCS) $(WEB_TEXT)
+
+## docs-check: links, anchors, invariant mentions, fences and headings in the docs (scripts/check-docs.sh)
+docs-check:
+	scripts/check-docs.sh
+
+## actionlint: the GitHub workflow files
+actionlint:
+	$(ACTIONLINT) .github/workflows/*.yml
+
+## yaml-check: YAML files are yamlfmt-clean (make yamlfmt rewrites them)
+yaml-check:
+	$(YAMLFMT) -lint $(YAML)
+
+yamlfmt:
+	$(YAMLFMT) $(YAML)
+
+## shell-check: shell scripts parse (bash -n; shellcheck is optional and not required)
+shell-check:
+	@for f in $(SHELL_SCRIPTS); do bash -n "$$f" || exit 1; done
+
+## hooks: install the lefthook git hooks for this clone (pre-commit, pre-push, commit-msg)
+$(LEFTHOOK_BIN): tools.mod tools.sum
+	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) go build -mod=readonly -modfile=tools.mod -o $@ github.com/evilmartians/lefthook/v2
+hooks: $(LEFTHOOK_BIN)
+	$(LEFTHOOK_BIN) install
+
+## lint-cross: golangci-lint under GOOS=linux, darwin and windows, so the per-OS files are
 ## linted too. The linter itself is built for the host first: `GOOS=darwin go run` would
 ## build a darwin linter that cannot run here.
 GOLANGCI_BIN := dist/tools/golangci-lint
 $(GOLANGCI_BIN): tools.mod tools.sum
 	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) go build -mod=readonly -modfile=tools.mod -o $@ github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 lint-cross: $(GOLANGCI_BIN)
+	GOOS=linux $(GOLANGCI_BIN) run $(PKGS)
 	GOOS=darwin $(GOLANGCI_BIN) run $(PKGS)
 	GOOS=windows $(GOLANGCI_BIN) run $(PKGS)
 
@@ -137,10 +186,11 @@ fmt-check:
 vuln:
 	$(GOVULNCHECK) $(PKGS)
 
-## tidy: go mod tidy for both module files, then refresh vendor/
+## tidy: go mod tidy for every module file, then refresh vendor/
 tidy:
 	go mod tidy
 	go mod tidy -modfile=tools.mod
+	go mod tidy -modfile=actionlint.mod
 	go mod vendor
 
 ## vendor-check: vendor/ matches go.mod (part of check and CI)
@@ -195,7 +245,7 @@ release:
 	@cat dist/sha256sums.txt
 
 ## check: everything the pre-commit hook requires
-check: fmt-check vendor-check lint web-check test-race
+check: fmt-check vendor-check lint web-check web-typecheck test-race
 
 clean:
 	rm -rf dist report.html results.jsonl

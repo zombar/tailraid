@@ -6,7 +6,10 @@
     "lib": ["dom", "dom.iterable", "es2022"],
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "useDefineForClassFields": true

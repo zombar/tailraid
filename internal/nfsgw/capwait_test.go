@@ -79,7 +79,7 @@ func TestNFS_WriteWhenFull_IsNOSPC(t *testing.T) {
 	if err := g.f.Flusher().FlushAll(ctx); err == nil {
 		t.Fatal("flush succeeded against full holders")
 	}
-	g.writeAt("/f", 0, testharness.Pattern(900, 6)) // the WAL reaches its cap
+	g.writeAt("/f", 450, testharness.Pattern(900, 6)) // a read-modify-write at a non-zero offset: the WAL reaches its cap
 	fh, err := g.tgt.OpenFile("/f", 0o644)
 	if err != nil {
 		t.Fatal(err)

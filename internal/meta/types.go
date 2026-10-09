@@ -11,6 +11,8 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
+	"maps"
 	"math"
 	"net"
 	"path"
@@ -128,8 +130,30 @@ func (s NodeState) String() string {
 		return "draining"
 	case Removed:
 		return "removed"
+	case Active:
+		return "active"
 	}
-	return "active"
+	return "active" // the zero value, written by nodes that predate the field
+}
+
+// ParseNodeState is the inverse of NodeState.String; an unknown name is an error.
+func ParseNodeState(s string) (NodeState, error) {
+	for _, st := range []NodeState{Active, Draining, Removed} {
+		if st.String() == s {
+			return st, nil
+		}
+	}
+	return 0, fmt.Errorf("meta: unknown node state %q", s)
+}
+
+// ParseNodeKind is the inverse of NodeKind.String; an unknown name is an error.
+func ParseNodeKind(s string) (NodeKind, error) {
+	for _, k := range []NodeKind{KindDevice, KindDisk, KindS3} {
+		if k.String() == s {
+			return k, nil
+		}
+	}
+	return 0, fmt.Errorf("meta: unknown node kind %q", s)
 }
 
 // String names a node kind.
@@ -139,8 +163,10 @@ func (k NodeKind) String() string {
 		return "s3"
 	case KindDisk:
 		return "disk"
+	case KindDevice:
+		return "device"
 	}
-	return "device"
+	return "device" // the zero value, written by nodes that predate the field
 }
 
 // HexID is the printed form of a cluster ID.
@@ -232,9 +258,7 @@ func (s *State) Clone() *State {
 		cp := *in
 		if in.Children != nil {
 			cp.Children = make(map[string]Ino, len(in.Children))
-			for k, v := range in.Children {
-				cp.Children[k] = v
-			}
+			maps.Copy(cp.Children, in.Children)
 		}
 		c.Inodes[ino] = &cp
 	}

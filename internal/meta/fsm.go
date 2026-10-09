@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hashicorp/raft"
 
@@ -19,6 +22,12 @@ import (
 // Result.Err that leaves State unchanged, and map iteration never influences an
 // outcome. The read API (store.go) serves copies under a read lock.
 type FSM struct {
+	// Log, when set, reports entries this binary cannot decode (docs/12 §6); nil is silent.
+	Log *slog.Logger
+
+	incompatible atomic.Uint64 // entries that failed to decode (I-105)
+	lastBadLog   time.Time     // rate limit for the log line above; not state
+
 	mu      sync.RWMutex
 	st      *State
 	stats   Stats // volume totals, kept in step with every apply (Inodes filled on read)
@@ -37,15 +46,19 @@ func NewFSM() *FSM {
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
 func (f *FSM) state() *State { return f.st }
 
+// Incompatible is the number of log entries this binary could not decode (I-105): zero
+// on a cluster that runs one release.
+func (f *FSM) Incompatible() uint64 { return f.incompatible.Load() }
+
 // Apply implements raft.FSM. Non-command logs advance the applied index only.
-func (f *FSM) Apply(l *raft.Log) interface{} {
+func (f *FSM) Apply(l *raft.Log) any {
 	var cmd Command
 	var decodeErr error
 	if l.Type == raft.LogCommand {
 		cmd, decodeErr = DecodeCommand(l.Data) // outside the lock: readers are not held up by decoding
 	}
 	f.mu.Lock()
-	var res interface{}
+	var res any
 	if l.Type == raft.LogCommand {
 		res = f.applyLocked(cmd, decodeErr, l.Index)
 	}
@@ -65,6 +78,14 @@ func (f *FSM) setApplied(idx uint64) {
 
 func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
 	if decodeErr != nil {
+		// an entry this binary cannot decode: written by a newer release (docs/12 §6).
+		// The index advances identically on every replica; the count makes it visible
+		// (status, I-105) and the log says so once a minute.
+		f.incompatible.Add(1)
+		if f.Log != nil && time.Since(f.lastBadLog) > time.Minute {
+			f.lastBadLog = time.Now()
+			f.Log.Error("log entry from a newer release could not be decoded; update this node", "index", index, "err", decodeErr, "total", f.incompatible.Load())
+		}
 		return Result{Err: ErrBadCommand}
 	}
 	a := &applier{st: f.st, stats: &f.stats, index: index}
@@ -265,10 +286,8 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 		// Every slot is the sole copy of its shard index (I-9): a node that still holds
 		// one cannot leave the table (docs/02). `node remove --force` zeroes the slots first.
 		for _, ch := range a.st.Chunks {
-			for _, s := range ch.Placement {
-				if s == c.Idx {
-					return ErrNodeNotEmpty
-				}
+			if slices.Contains(ch.Placement, c.Idx) {
+				return ErrNodeNotEmpty
 			}
 		}
 	}
@@ -281,6 +300,18 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 
 // validName enforces I-66: a name is 1..MaxNameLen bytes, not "." or "..", and holds
 // neither '/' nor NUL. Too long is its own error so the gateway can say NAMETOOLONG.
+// pathLen is the byte length of the path a new entry name under dir would have, "/" and
+// the name included (I-115). A missing dir counts as the root; the caller reports it.
+func (a *applier) pathLen(dir Ino, name string) int {
+	n := 1 + len(name)
+	in, ok := a.st.Inodes[dir]
+	for steps := 0; ok && in.Ino != RootIno && steps <= len(a.st.Inodes); steps++ {
+		n += 1 + len(in.Name)
+		in, ok = a.st.Inodes[in.Parent]
+	}
+	return n
+}
+
 func validName(name string) error {
 	switch {
 	case len(name) > MaxNameLen:
@@ -323,6 +354,9 @@ func (a *applier) create(c *Create) (Result, error) {
 	if err := validName(c.Name); err != nil {
 		return Result{}, err
 	}
+	if a.pathLen(c.Parent, c.Name) > MaxPathLen {
+		return Result{}, ErrNameTooLong
+	}
 	if c.Type != TFile && c.Type != TSymlink {
 		return Result{}, ErrBadCommand
 	}
@@ -351,6 +385,9 @@ func (a *applier) mkdir(c *Mkdir) (Result, error) {
 	}
 	if err := validName(c.Name); err != nil {
 		return Result{}, err
+	}
+	if a.pathLen(c.Parent, c.Name) > MaxPathLen {
+		return Result{}, ErrNameTooLong
 	}
 	p, err := a.dir(c.Parent)
 	if err != nil {
@@ -508,6 +545,9 @@ func (a *applier) rename(c *Rename) error {
 	}
 	if err := validName(c.NewName); err != nil {
 		return err
+	}
+	if a.pathLen(c.NewParent, c.NewName) > MaxPathLen {
+		return ErrNameTooLong
 	}
 	st := a.st
 	op, err := a.dir(c.OldParent)
@@ -723,11 +763,6 @@ func (a *applier) commit(c *Commit) error {
 			return ErrNeedTailRewrite
 		}
 	}
-	newList := make([]Hash, n)
-	copy(newList, oldList[:keep])
-	for _, w := range c.Writes {
-		newList[w.Idx] = w.Hash
-	}
 	// Reference deltas, checked before mutation.
 	for _, e := range fresh {
 		d := e.d
@@ -758,6 +793,14 @@ func (a *applier) commit(c *Commit) error {
 	}
 	now := a.clock(c.Now)
 	delta.commit(st, a.stats, now)
+	// Chunk lists are immutable (copy-on-write): readers, snapshots and the clone share
+	// the slice without a lock, so a Commit allocates a new list (O(file length) in copy,
+	// though O(writes) in reference accounting) rather than rewriting it in place (I-104).
+	newList := make([]Hash, n)
+	copy(newList, oldList[:keep])
+	for _, w := range c.Writes {
+		newList[w.Idx] = w.Hash
+	}
 	in.Chunks = newList
 	a.stats.LogicalBytes += c.NewSize - in.Size // unsigned: wraps and unwraps exactly
 	in.Size = c.NewSize
@@ -776,6 +819,9 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	}
 	if !validPlacement(c.K, c.M, c.Placement) {
 		return ErrBadCommand
+	}
+	if c.Expect != nil && !slices.Equal(ch.Placement, c.Expect) {
+		return ErrConflict // another proposer re-placed it first (I-102, L-197)
 	}
 	if ch.Refs > 0 {
 		a.stats.StoredBytes -= storedBytes(ch)
@@ -801,6 +847,9 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 		}
 	}
 	sort.Slice(victims, func(i, j int) bool { return bytes.Compare(victims[i].Hash[:], victims[j].Hash[:]) < 0 })
+	if c.Limit != 0 && len(victims) > int(c.Limit) {
+		victims = victims[:c.Limit] // the rest on the next entry (I-103); the order is the hash order, so every replica cuts the same
+	}
 	for _, v := range victims {
 		delete(st.Chunks, v.Hash)
 		delete(st.Tombs, v.Hash)

@@ -30,7 +30,7 @@ const fakeTailnet = `{"status":{"BackendState":"Running","TailscaleIPs":["127.0.
 func freePorts(t *testing.T, n int) []int {
 	t.Helper()
 	out := make([]int, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -49,11 +49,13 @@ func devHome(t *testing.T) (string, config.Config) {
 	if err := os.WriteFile(fake, []byte(fakeTailnet), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := freePorts(t, 4)
+	p := freePorts(t, 5)
 	cfg := config.Default()
 	cfg.Node.DataDir = filepath.Join(home, "data")
 	cfg.Listen.Raft, cfg.Listen.RPC, cfg.Listen.Web = p[0], p[1], p[2]
 	cfg.Listen.NFS = fmt.Sprintf("127.0.0.1:%d", p[3])
+	cfg.Listen.SMB = fmt.Sprintf("127.0.0.1:%d", p[4]) // both gateways, so serve runs both
+	cfg.SMB.Password = config.NewSMBPassword()
 	cfg.Mount.Path = filepath.Join(home, "mnt")
 	cfg.Dev.Enabled, cfg.Dev.TailscaleFake = true, fake
 	path := filepath.Join(home, "config.yaml")
@@ -105,7 +107,7 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "policy 1+0 (auto") || !strings.Contains(out, "budget ") {
+	if !strings.Contains(out, "policy 1+0 (auto") || !strings.Contains(out, node.NoDisksHint) {
 		t.Fatalf("init output: %s", out)
 	}
 	host, _ := os.Hostname()
@@ -116,13 +118,8 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 		t.Fatalf("volume %+v", vol)
 	}
 	nodes := n.FSM.Nodes()
-	if len(nodes) != 1 || nodes[0].Name != host || !nodes[0].Voter || nodes[0].Capacity == 0 {
-		t.Fatalf("node table %+v (hostname %q)", nodes, host)
-	}
-	// the config written back keeps the budget derived
-	got, err := config.Load(path)
-	if err != nil || got.Node.Capacity != "" {
-		t.Fatalf("saved config capacity %q %v", got.Node.Capacity, err)
+	if len(nodes) != 1 || nodes[0].Name != host || !nodes[0].Voter || nodes[0].Capacity != 0 {
+		t.Fatalf("node table %+v (hostname %q): one device row, no budget", nodes, host)
 	}
 	// hidden --k/--m pin a manual policy for test rigs
 	path2, cfg2 := devHome(t)
@@ -133,6 +130,40 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 	defer n2.Close()
 	if n2.FSM.Volume().Auto {
 		t.Fatal("--k/--m must pin a manual policy")
+	}
+}
+
+// init generates the SMB share password when listen.smb is set and the config has none,
+// saves it in the config and never prints it (docs/15 §6).
+// Invariant: I-110
+func TestCLI_Init_GeneratesSMBPassword(t *testing.T) {
+	path, _ := devHome(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if !strings.Contains(line, "password:") {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "init", "--config", path, "--token", "testtoken")
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SMB.Password) != 24 {
+		t.Fatalf("saved password %q", got.SMB.Password)
+	}
+	if strings.Contains(out, got.SMB.Password) {
+		t.Fatalf("init printed the password:\n%s", out)
 	}
 }
 
@@ -152,7 +183,7 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 		}
 	})
 	addrA := fmt.Sprintf("127.0.0.1:%d", cfgA.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil, nil)
+	probe := rpc.NewClient([16]byte{}, nil)
 	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addrA); return err == nil }, "node A never served")
 
 	pathB, _ := devHome(t)
@@ -167,7 +198,7 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep, err := admin.FetchStatus(ctx, rpc.NewClient(cid, nil, nil), addrA)
+	rep, err := admin.FetchStatus(ctx, rpc.NewClient(cid, nil), addrA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +207,8 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	}
 	host, _ := os.Hostname()
 	joined := rep.Nodes[1]
-	if joined.Voter || joined.Capacity == 0 || joined.Name != host {
-		t.Fatalf("joined node %+v", joined)
+	if joined.Voter || joined.Capacity != 0 || joined.Name != host || !joined.Diskless {
+		t.Fatalf("joined node %+v: a non-voter with no budget and no disks", joined)
 	}
 	if !rep.Volume.Auto {
 		t.Fatal("status does not report auto mode")

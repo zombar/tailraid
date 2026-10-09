@@ -18,12 +18,6 @@ const (
 	HeaderNodeID   = "X-Tailraid-Node"      // responding node's raft ID
 )
 
-// Ports.
-const (
-	DefaultRaftPort = 20480
-	DefaultRPCPort  = 20481
-)
-
 // Errors the client returns.
 var (
 	ErrForbidden    = errors.New("rpc: forbidden")
@@ -35,6 +29,9 @@ var (
 	ErrTooLarge     = errors.New("rpc: body too large")
 	ErrBadRequest   = errors.New("rpc: bad request")
 	ErrUnavailable  = errors.New("rpc: node unavailable")
+	// ErrApplyFailed is a 500 from POST /v1/apply: the leader handed the command to Raft and
+	// then failed (leadership lost, timeout); the outcome is unknown (docs/02 §forwarding).
+	ErrApplyFailed = errors.New("rpc: apply failed on the leader after dispatch")
 )
 
 // Health is the unauthenticated GET /health body.
@@ -43,13 +40,11 @@ type Health struct {
 	ClusterID string       `json:"cluster_id"`
 	Version   string       `json:"version"`
 	Applied   uint64       `json:"applied"`
+	Codec     uint8        `json:"codec,omitempty"` // meta.CodecVersion of this binary (docs/12 §6)
+	Ready     bool         `json:"ready"`           // a leader is known and the FSM has every committed entry (I-125)
 	Leader    bool         `json:"leader"`
-	Used      int64        `json:"used"`
-	Capacity  int64        `json:"capacity"`
-	Free      int64        `json:"free"`
 	Dev       bool         `json:"dev,omitempty"`   // /dev/* endpoints enabled on this node
-	FS        string       `json:"fs,omitempty"`    // filesystem holding disk 0, to spot targets on one physical disk (docs/14 §8)
-	Disks     []DiskHealth `json:"disks,omitempty"` // added disks (docs/14 §4); the fields above are disk 0
+	Disks     []DiskHealth `json:"disks,omitempty"` // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
 }
 
 // DiskHealth is one added disk in /health: OK is false while the disk is closed (its
@@ -74,7 +69,6 @@ type JoinRequest struct {
 	RaftPort   uint16 `json:"raft_port"`
 	RPCPort    uint16 `json:"rpc_port"`
 	Voter      bool   `json:"voter"`
-	Capacity   uint64 `json:"capacity"`
 	Version    string `json:"version"`
 }
 
@@ -84,6 +78,7 @@ type JoinResponse struct {
 	NodeIdx   meta.NodeIdx `json:"node_idx"`
 	Volume    meta.Volume  `json:"volume"`
 	Members   []meta.Node  `json:"members"`
+	Disks     []meta.Node  `json:"disks,omitempty"` // set by the joiner: the disks it registered from its config (docs/14 §2)
 }
 
 // MemberOp is POST /v1/members.
@@ -112,7 +107,7 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
 	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)

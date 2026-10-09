@@ -2,8 +2,9 @@
 
 `tailraid` turns the devices on a Tailscale tailnet into one shared volume that behaves like
 a modern RAID array: file data is Reed-Solomon erasure-coded into shards spread across
-devices, identical content is stored once, and the volume is mounted locally on Windows,
-macOS and Linux through the operating system's own NFSv3 client. Metadata is kept
+devices, identical content is stored once, and the volume is mounted locally on macOS
+and Linux through the operating system's own NFSv3 client and on Windows through its SMB
+client. Metadata is kept
 consistent by a Raft-replicated state machine, so there is one coherent volume and no
 split-brain.
 
@@ -33,7 +34,8 @@ SSE, object lock, presigned POST); web UI beyond the dashboard and file browser 
 (no user management, no mutating admin operations from the browser); metrics stack (a
 `status` JSON instead);
 encryption at rest (WireGuard covers transit); quotas; file versioning / recycle bin;
-xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; multiple
+xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; SMB encryption,
+dialect 3.1.1, oplocks and leases, SMB security descriptors; Windows before 11 24H2; multiple
 independent volumes (S3 buckets are top-level directories of the one volume);
 content-defined chunking; compression (hook left); tiering; fsck-from-shards metadata
 reconstruction; WAL mirroring to a peer before ack (noted as a later option).
@@ -42,7 +44,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 
 | Term | Meaning |
 |---|---|
-| **node** | A participant in the cluster. `Kind=device` runs `tailraid serve` (Raft, RPC, gateways, shard store). `Kind=s3` is a storage-only bucket: never a Raft member, never a gateway. |
+| **node** | A participant in the cluster. `Kind=device` runs `tailraid serve` (Raft, RPC, gateways) and stores nothing itself; `Kind=disk` is one of a device's disks, the only place shards live (docs/14). `Kind=s3` is a storage-only bucket: never a Raft member, never a gateway. |
 | **member** | A node present in the replicated node table; devices are also Raft servers (voter or non-voter). |
 | **voter** | A Raft server that counts toward quorum. Always-on devices, odd count. Laptops default to non-voter. |
 | **volume** | The single filesystem tree managed by one cluster. Has a policy `Volume{ChunkSize, K, M, PolicyVersion}`. |
@@ -50,11 +52,12 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **inode** | A file, directory or symlink record in the FSM, identified by `Ino` (monotonic, never reused) plus `Gen`. |
 | **chunk** | A fixed-size (default 1 MiB) span of a file at offset `idx*ChunkSize`, content-addressed by SHA-256 of its logical bytes. The unit of dedup and of erasure coding. |
 | **stripe** | One chunk encoded into `k` data shards and `m` parity shards. Chunk and stripe are 1:1. |
-| **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one node; key `hex(hash).k-m.idx` (the encoding is part of the key, so a migration's new shards coexist with the old). |
+| **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one disk; key `hex(hash).k-m.idx` (the encoding is part of the key, so a migration's new shards coexist with the old). |
 | **slot** | Position `idx` in a chunk's `Placement []NodeIdx`. Slot value 0 means "no node holds this shard yet" (degraded). |
 | **placement** | The `k+m` node indices that hold a chunk's shards, chosen by rendezvous hashing at write time and **stored** in the chunk table. |
 | **policy version** | `Volume.PolicyVersion`, bumped by `volume set-redundancy`. Chunks whose `(K,M)` differ from the current policy are migrated lazily by the repairer. |
-| **gateway** | The NFS (and later S3) front end running on a device; any device is a gateway for its own user. |
+| **gateway** | The NFS or SMB (and later S3) front end running on a device; any device is a gateway for its own user. |
+| **diskless host** | A device with no disks: a member, voter if configured, and gateway whose reads and writes go to other hosts' disks (docs/14 §9). |
 | **live** | A node that answered `/health` within the last 15 s (probed every 5 s). Not stored in Raft. |
 | **WAL** | Per-inode write-ahead log on the gateway's disk that makes NFS `FILE_SYNC` honest before the chunk is flushed to the cluster. |
 
@@ -62,6 +65,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 
 ```
  NFS client (OS)  ──127.0.0.1──▶  nfsgw (go-nfs Handler, handles = ino+gen)
+ SMB client (Win) ──127.0.0.1──▶  smbgw (go-filesystems/smb over a vfs adapter, docs/15)
                                       │ billy.Filesystem
                                       ▼
                                    vfs: Overlay (dirty extents + per-inode WAL, fsync)
@@ -75,7 +79,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
              node table, tombstones)
                         ▲                             ▲
       cluster (raft wiring, leader forwarding,   rpc (HTTP/1.1 on <tsIP>:20481:
-      membership, prober/liveness, events)      GET/PUT/HEAD/DELETE /v1/shards/{key},
+      membership, prober/liveness, events)      GET/PUT/HEAD/DELETE /v1/disks/{id}/shards/{key},
       raft TCP <tsIP>:20480 + cluster-id        POST /v1/apply, /v1/members, /v1/join,
       handshake; raft-boltdb; FileSnapshotStore GET /health; WhoIs authorizer)
       webui (HTTP on <tsIP>:20482: dashboard over the status report, file browser and
@@ -87,7 +91,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 
 Ports: Raft `<tsIP>:20480`, node RPC `<tsIP>:20481`, web UI `<tsIP>:20482`, S3 gateway
 `<tsIP>:20443`, NFS
-`127.0.0.1:20490` (Windows: `127.0.0.1:2049` plus a portmapper stub on `127.0.0.1:111`).
+`127.0.0.1:20490` (macOS, Linux), SMB `127.0.0.1:20445` (Windows).
 
 Identity and transport security come from Tailscale: every RPC connection is authorized by
 resolving the source IP with `tailscale whois` and matching the Tailscale stable ID recorded
@@ -148,6 +152,16 @@ for a member. No TLS of our own.
 | **Through streaming large files (measured 2026-10-09)** | **≈ 20.5k** |
 | Several disks per device (docs/14, measured 2026-10-09: node disk set, marker and per-target budgets 0.44k, meta placement, policy, skew and codec 0.37k, CLI 0.15k, rpc and prober 0.2k, soak phase 13, targets and the spread chart 0.7k; the TypeScript Disks block 0.2k, not Go; the plan said 0.8k: the soak and the node's disk lifecycle were sized optimistically) | +1.9k |
 | **Through several disks per device (measured 2026-10-09)** | **≈ 22.4k** |
+| The 2026-10 review, correctness (PR 2, measured 2026-10-09 as the net diff): the Raft accept check and join binding 0.15k, unknown-outcome resolution 0.1k, identity files, body deadlines and cache races 0.15k, WAL failure state, streamed snapshots and the tracked NFS listener 0.2k, placement conflicts, GC batches and codec version 3 0.15k; minus the removed `Place`, wrappers and dead code | +0.8k |
+| **Through the correctness review (measured 2026-10-09)** | **≈ 23.2k** |
+| Tests and the soak report (PR 3, measured 2026-10-09): the soak driver's phase runner with recovery and timeout, the undo list, skipped checks, the abort path and the Mutate gate 0.3k, the FSM path bound and the Windows directory sync under 0.05k; the rest of the PR is test code (new scenarios, size tables, fuzz targets, the skip rule) | +0.35k |
+| **Through the test review (measured 2026-10-09)** | **≈ 23.55k** |
+| Hardening (PR 4, measured 2026-10-09): minisign verification and the signing tool 0.35k, update hardening (size, fsync, rollback, downgrade guard) 0.1k, snapshot export and offline recovery 0.2k, the rotating log file, config validation and the rate limiter 0.25k, unit confinement, shutdown hand-over, readiness and the web UI host check 0.15k | +1.05k |
+| **Through the 2026-10 review (measured 2026-10-09)** | **≈ 24.6k** |
+| Disks only and diskless hosts (docs/14 §9, measured 2026-10-09 as the net diff): the device store, its budget, the `/v1/shards` route and the capacity special cases go (−0.3k); join registering config disks, the legacy-state check, per-disk `/dev/disk` and the soak's diskless voter and phase 14 come (+0.35k); the TypeScript loses its data-dir label | +0.05k |
+| **Through disks only (measured 2026-10-09)** | **≈ 24.65k** |
+| SMB gateway for Windows (docs/15, measured 2026-10-09: the adapter and server wiring in `internal/smbgw` 0.33k, `vfs.File.WriteAt` and the file info's times 0.02k, config, node, CLI and mount helpers 0.19k; minus the portmap stub and the Windows NFS path 0.25k; the server copy in `third_party/smb` is upstream code and not counted) | +0.3k |
+| **Through the SMB gateway (measured 2026-10-09)** | **≈ 24.95k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
@@ -188,14 +202,17 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83 |
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived. I-12, I-38..I-40 |
 | [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, DELETE fence, sweep, repair scanner, scrub, drain, migration. I-13..I-15, I-41..I-44 |
-| [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, per-OS mount. I-16, I-17, I-45..I-47 |
+| [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, macOS and Linux mounts. I-16, I-17, I-45..I-47 |
 | [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys. I-18, I-48..I-50 |
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
 | [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
 | [11-chunk-lifecycle](11-chunk-lifecycle.md) | Chunk and shard state machines, event catalogue, transition cells L-n. I-56, I-57 |
+| [12-operations](12-operations.md) | Service install per OS, log files, the Windows mount, `/dev/*` fault injection, releases, self-update, `init` without options, machine vitals. I-59..I-61, I-76, I-84, I-85 |
 | [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, the style guide. I-68..I-73, I-81, I-82 |
 | [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, domain skew. I-86..I-91 |
+| [15-smb-gateway](15-smb-gateway.md) | SMB2 gateway for Windows: the library and its backend contract, the adapter over the vfs, case-insensitive names, password and `net use` mount, caps, known gaps. I-106..I-110 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged
-into I-11 and I-7 during review); numbers are never reused.
+into I-11 and I-7 during review); I-58 is intentionally unused since the Windows portmap
+stub went with the SMB gateway of docs/15. Numbers are never reused.

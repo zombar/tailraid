@@ -135,7 +135,7 @@ func TestDurability_AckImpliesReadableFromKSurvivors(t *testing.T) {
 	}
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
-	for i := 0; i < iters; i++ {
+	for i := range iters {
 		gw := i % 4
 		if !c.Alive(gw) {
 			c.Restart(gw)
@@ -145,6 +145,7 @@ func TestDurability_AckImpliesReadableFromKSurvivors(t *testing.T) {
 		path := fmt.Sprintf("/f%02d", i)
 		c.WriteFile(gw, path, data) // ack + flush
 		c.Settle()
+		data = rmw(t, c, gw, path, data, int(testharness.ChunkSize)/2+i, testharness.Pattern(64, byte(i+1)))
 		// kill the gateway (m = 1 loss, and it may hold a slot); every survivor reads it cold
 		c.Kill(gw)
 		c.Clk.Advance(cluster.LiveThreshold + time.Second)
@@ -181,7 +182,7 @@ func writeAt(t *testing.T, c *testharness.Cluster, i int, path string, off int, 
 func flushAll(t *testing.T, c *testharness.Cluster, i int) {
 	t.Helper()
 	var err error
-	for attempt := 0; attempt < 30; attempt++ {
+	for range 30 {
 		if err = c.Nodes[i].Flush.FlushAll(ctx); err == nil {
 			c.Settle()
 			return

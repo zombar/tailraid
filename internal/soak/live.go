@@ -29,13 +29,13 @@ type LiveEnv struct {
 
 // NewLiveEnv wires the admin surface to this device's node.
 func NewLiveEnv(client *rpc.Client, selfAddr, mountPath, clusterID string, destructive, restarts bool) *LiveEnv {
-	return &LiveEnv{Admin: Admin{Caller: client, Seeds: []string{selfAddr}}, SelfAddr: selfAddr, MountPath: mountPath, ClusterID: clusterID, Destructive: destructive, Restarts: restarts}
+	return &LiveEnv{Caller: client, Seeds: []string{selfAddr}, SelfAddr: selfAddr, MountPath: mountPath, ClusterID: clusterID, Destructive: destructive, Restarts: restarts}
 }
 
 func (e *LiveEnv) Name() string { return "live cluster " + e.ClusterID }
 
 func (e *LiveEnv) Caps() Caps {
-	return Caps{Corrupt: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts}
+	return Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts}
 }
 
 // Nodes lists the members from this device's status; the local node comes first so its

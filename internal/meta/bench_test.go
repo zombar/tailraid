@@ -27,7 +27,7 @@ func newBFSM(b *testing.B) *bfsm {
 func (bf *bfsm) apply(b *testing.B, c Command) Result {
 	b.Helper()
 	bf.idx++
-	res := bf.f.Apply(&raft.Log{Index: bf.idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+	res := bf.f.Apply(&raft.Log{Index: bf.idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	if res.Err != nil {
 		b.Fatalf("op %d: %v", c.Op, res.Err)
 	}
@@ -51,11 +51,13 @@ func BenchmarkFSM_Commit_LargeFile(b *testing.B) {
 	version := uint64(1)
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		h := hashN(uint64(n + i + 1))
 		idx := uint32(i % n)
-		c := Command{Op: OpCommit, Commit: &Commit{Ino: ino, BaseVersion: version, NewSize: n * testCS,
-			Writes: []ChunkWrite{{Idx: idx, Hash: h}}, NewChunks: []ChunkDesc{{Hash: h, Size: testCS, K: 2, M: 1, Placement: []NodeIdx{1, 2, 3}}}, Now: 3}}
+		c := Command{Op: OpCommit, Commit: &Commit{
+			Ino: ino, BaseVersion: version, NewSize: n * testCS,
+			Writes: []ChunkWrite{{Idx: idx, Hash: h}}, NewChunks: []ChunkDesc{{Hash: h, Size: testCS, K: 2, M: 1, Placement: []NodeIdx{1, 2, 3}}}, Now: 3,
+		}}
 		bf.apply(b, c)
 		version++
 	}
@@ -64,7 +66,7 @@ func BenchmarkFSM_Commit_LargeFile(b *testing.B) {
 func bigDir(b *testing.B, bf *bfsm, n int) Ino {
 	b.Helper()
 	dir := bf.apply(b, Command{Op: OpMkdir, Mkdir: &Mkdir{Parent: RootIno, Name: "d", Mode: 0o755, Now: 1}}).Ino
-	for i := 0; i < n; i++ {
+	for i := range n {
 		bf.apply(b, Command{Op: OpCreate, Create: &Create{Parent: dir, Name: fmt.Sprintf("f%06d", i), Type: TFile, Mode: 0o644, Now: 1}})
 	}
 	return dir
@@ -76,7 +78,7 @@ func BenchmarkLookup_LargeDir(b *testing.B) {
 	dir := bigDir(b, bf, 10_000)
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		if _, ok := bf.f.Lookup(dir, fmt.Sprintf("f%06d", i%10_000)); !ok {
 			b.Fatal("missing")
 		}
@@ -89,7 +91,7 @@ func BenchmarkGetInode_LargeDir(b *testing.B) {
 	dir := bigDir(b, bf, 10_000)
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, ok := bf.f.GetInode(dir); !ok {
 			b.Fatal("missing")
 		}
@@ -102,7 +104,7 @@ func BenchmarkReadDir_10k(b *testing.B) {
 	dir := bigDir(b, bf, 10_000)
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		ents, err := bf.f.ReadDir(dir)
 		if err != nil || len(ents) != 10_000 {
 			b.Fatal(err)
@@ -113,7 +115,7 @@ func BenchmarkReadDir_10k(b *testing.B) {
 // FSSTAT walks every inode and chunk (P8): 10k files of 10 chunks each.
 func BenchmarkFSSTAT(b *testing.B) {
 	bf := newBFSM(b)
-	for i := 0; i < 10_000; i++ {
+	for i := range 10_000 {
 		ino := bf.apply(b, Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: fmt.Sprintf("f%06d", i), Type: TFile, Mode: 0o644, Now: 1}}).Ino
 		writes := make([]ChunkWrite, 10)
 		news := make([]ChunkDesc, 10)
@@ -126,7 +128,7 @@ func BenchmarkFSSTAT(b *testing.B) {
 	}
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if s := bf.f.Stats(); s.Chunks != 100_000 {
 			b.Fatalf("stats %+v", s)
 		}
@@ -136,7 +138,7 @@ func BenchmarkFSSTAT(b *testing.B) {
 // A full chunk walk (repair scan, check, GC victims) over 100k chunks (P9).
 func BenchmarkForEachChunk_100k(b *testing.B) {
 	bf := newBFSM(b)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		ino := bf.apply(b, Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: fmt.Sprintf("f%06d", i), Type: TFile, Mode: 0o644, Now: 1}}).Ino
 		writes := make([]ChunkWrite, 1000)
 		news := make([]ChunkDesc, 1000)
@@ -149,7 +151,7 @@ func BenchmarkForEachChunk_100k(b *testing.B) {
 	}
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		n := 0
 		bf.f.ForEachChunk(func(Chunk) bool { n++; return true })
 		if n != 100_000 {

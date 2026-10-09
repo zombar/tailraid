@@ -22,13 +22,13 @@ func TestCluster_ReadableWithNonVotersAsleep(t *testing.T) {
 	voters := map[meta.NodeIdx]bool{}
 	for i, nd := range c.Nodes {
 		if c.Voter(i) {
-			voters[nd.Idx()] = true
+			voters[nd.Target()] = true // the slots are on the voter's disk (docs/14 §5)
 		}
 	}
 	chunks := 0
 	c.Nodes[0].Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
 		chunks++
-		for i := 0; i < int(ch.K); i++ {
+		for i := range ch.K {
 			if n := ch.Placement[i]; !voters[n] {
 				t.Fatalf("chunk %x data slot %d on non-voter %d (placement %v)", ch.Hash[:4], i, n, ch.Placement)
 			}

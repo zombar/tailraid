@@ -400,6 +400,7 @@ event ring or the final state).
 | L-184 | Committed (slot on a live draining node, no replacement available) | repair pass that improves another slot | slot zeroed and the draining node's shard deleted | forbidden (I-65): the draining node keeps its slot until a replacement is placed; a repair commit never lowers the readable slot count | `TestRepair_DrainNoReplacement_KeepsShard` |
 | L-195 | Durable (on a disk whose marker is missing or foreign) | serve opens stores | served or written | forbidden (I-86): the disk stays closed; reads see it dead, never as shards absent; sweep never runs on it | `TestNode_ClosedDisk_NotServedNotSwept` |
 | L-196 | Degraded (repair, migration or drain) | SetPlacement | a host above the cap while a placement within it exists | forbidden (I-89) | `TestRepair_DeadDisk_RePlacesWithinCap` |
+| L-197 | Committed or Degraded (placement P) | SetPlacement{Expect: Q}, Q ≠ P | any change | forbidden (I-102): ErrConflict, placement stays P; the proposer re-plans from P or skips the chunk this pass | `TestFSM_SetPlacement_ExpectConflict` |
 
 ## 7. How the matrix is tested
 

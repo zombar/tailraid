@@ -16,8 +16,7 @@ services:
       CHUNK: 256K
       REPAIR_GRACE: 20s
       FILL_AFTER: 20s
-      DISKS: /disks/d1 /disks/d2 /disks/d3 /disks/d4
-      DISK_CAPACITY: 8G
+      DISKS: /disks/d1=8G /disks/d2=8G /disks/d3=8G /disks/d4=8G
       ROLE: init
       SELF_IP: 172.30.0.11
       NODE_NAME: n1
@@ -28,7 +27,7 @@ services:
       retries: 30
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
     ports: ["127.0.0.1:20501:20495"]
-    volumes: [n1:/var/lib/tailraid, n1-d1:/disks/d1, n1-d2:/disks/d2, n1-d3:/disks/d3, n1-d4:/disks/d4, n1-spare:/disks/spare]
+    volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-d3:/disks/d3', 'n1-d4:/disks/d4', 'n1-spare:/disks/spare']
 
   w1:
     build: {context: ., dockerfile: Dockerfile.client}

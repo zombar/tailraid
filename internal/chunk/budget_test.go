@@ -84,7 +84,7 @@ func TestStore_SetCapacity_CapFollows(t *testing.T) {
 		_, err := s.PutVerified(Key(sha256.Sum256(payload), 1, 0, 0), payload, sha256.Sum256(payload))
 		return err
 	}
-	for i := byte(0); i < 3; i++ {
+	for i := range byte(3) {
 		if err := put(i); err != nil {
 			t.Fatal(err)
 		}

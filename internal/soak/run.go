@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/rand"
+	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,12 +34,18 @@ type Profile struct {
 	SampleEvery   time.Duration // metric sampling period (0 = phase boundaries only)
 	ChunkSize     int           // the targets' chunk size (corpus sizes straddle it)
 	RestartSettle time.Duration // how long nodes take to come back after a restart
+	// PhaseTimeout fails a phase that runs longer and moves on (goroutine dumps are
+	// taken first); 0 is no limit. A hard-mounted volume that hangs is the case.
+	PhaseTimeout time.Duration
 }
 
 // Quick is the compose profile (~10 min).
 func Quick() Profile {
-	return Profile{Name: "quick", BigFile: 3_000_000, LargeFile: 256 << 20, SmallFiles: 150, ChurnOps: 300, LeaderKills: 3, ChunkSize: 256 << 10,
-		FlushIdle: 4 * time.Second, FillAfter: 20 * time.Second, Grace: 20 * time.Second, SampleEvery: time.Second, RestartSettle: 15 * time.Second}
+	return Profile{
+		Name: "quick", BigFile: 3_000_000, LargeFile: 256 << 20, SmallFiles: 150, ChurnOps: 300, LeaderKills: 3, ChunkSize: 256 << 10,
+		FlushIdle: 4 * time.Second, FillAfter: 20 * time.Second, Grace: 20 * time.Second, SampleEvery: time.Second, RestartSettle: 15 * time.Second,
+		PhaseTimeout: 20 * time.Minute,
+	}
 }
 
 // Record is one line of results.jsonl.
@@ -123,7 +132,7 @@ var latencyBuckets = [14]float64{0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 
 
 func bucket(d time.Duration) int {
 	ms := float64(d) / float64(time.Millisecond)
-	for i := 0; i < len(latencyBuckets)-1; i++ {
+	for i := range len(latencyBuckets) - 1 {
 		if ms <= latencyBuckets[i] {
 			return i
 		}
@@ -133,6 +142,9 @@ func bucket(d time.Duration) int {
 
 // Run drives one profile against one Env and collects results.
 type Run struct {
+	// Phases replaces the standard phase table when set (tests inject a phase).
+	Phases []Phase
+
 	Env     Env
 	Profile Profile
 	Log     *slog.Logger
@@ -142,21 +154,22 @@ type Run struct {
 	Flags   []string // run flags worth recording ("destructive", "restarts")
 	Root    string   // volume directory for this run, e.g. /_soak/20261008T1200
 
-	mu       sync.Mutex
-	records  []Record
-	counters Sample
-	lats     []opLatency
-	vitals   map[string]vitalsPrev // per sampled node, for the rates
-	repair   repair.Stats          // Σ of every repair and scrub pass the run asked for
-	gc       repair.Result         // Σ of every GC pass
-	phase    string
-	nodes    []NodeRef
-	hostOf   map[int]int // disk target → its host (docs/14), learned from status
-	failed   int
-	started  time.Time
-	stopSamp chan struct{}
-	sampDone chan struct{}
-	shared   map[string]any // cross-phase state (the corpus model)
+	mu        sync.Mutex
+	records   []Record
+	counters  Sample
+	lats      []opLatency
+	vitals    map[string]vitalsPrev // per sampled node, for the rates
+	repair    repair.Stats          // Σ of every repair and scrub pass the run asked for
+	gc        repair.Result         // Σ of every GC pass
+	phase     string
+	nodes     []NodeRef
+	hostOf    map[int]int // disk target → its host (docs/14), learned from status
+	failed    int
+	started   time.Time
+	stopSamp  chan struct{}
+	sampDone  chan struct{}
+	shared    map[string]any // cross-phase state (the corpus model)
+	dumpBytes int            // goroutine dump bytes recorded so far (dumpTotalMax)
 }
 
 // opLatency is one measured operation.
@@ -181,7 +194,8 @@ type Summary struct {
 	Versions  map[string]string // node name → binary version at the start
 	Phases    []PhaseResult
 	Failed    int
-	Partial   bool // a phase was skipped for a capability the environment lacks
+	Partial   bool   // a phase was skipped for a capability the environment lacks
+	Aborted   string // why the run stopped before cleanup ("" for a run that reached it)
 	Records   []Record
 	Nodes     []NodeRef
 	Latency   []LatencyRow
@@ -195,8 +209,15 @@ type PhaseResult struct {
 	Checks  []Record
 	Skipped bool
 	Reason  string
+	NotRun  bool // the run stopped before this phase (cancelled or aborted)
 	Failed  int
 	Took    time.Duration
+}
+
+// Phase is one scenario; Run.Phases replaces the standard table (tests).
+type Phase struct {
+	Name string
+	Run  func(ctx context.Context, r *Run) error
 }
 
 // LatencyRow is the driver-side latency of one operation kind in one phase, over the
@@ -249,7 +270,13 @@ func (r *Run) emit(rec Record) {
 		r.failed++
 	}
 	if r.Out != nil {
-		b, _ := json.Marshal(rec)
+		if rec.S != nil {
+			scrubSample(rec.S) // NaN and Inf have no JSON form; a sample is never lost for one field
+		}
+		b, err := json.Marshal(rec)
+		if err != nil { // still: keep the line, say what happened
+			b, _ = json.Marshal(Record{T: rec.T, Line: rec.Line, Kind: "event", Phase: rec.Phase, Name: "note", Text: "record could not be encoded: " + err.Error()})
+		}
 		_, _ = r.Out.Write(append(b, '\n'))
 	}
 	r.mu.Unlock()
@@ -269,6 +296,70 @@ func (r *Run) emit(rec Record) {
 
 // event records a timeline marker (kills, restarts, partitions, policy changes).
 func (r *Run) event(name, text string) { r.emit(Record{Kind: "event", Name: name, Text: text}) }
+
+// scrubSample replaces NaN and Inf in every float field of s with 0: the sources guard
+// their divisions, but a node's own vitals (load, memory pressure) arrive as it sent them.
+func scrubSample(s *Sample) {
+	for _, f := range []*float64{&s.DedupRatio, &s.CPUPct, &s.MachinePct, &s.Load1, &s.MemPressure, &s.DiskWriteBps, &s.DiskReadBps} {
+		if math.IsNaN(*f) || math.IsInf(*f, 0) {
+			*f = 0
+		}
+	}
+}
+
+// checkSkipped records a check that could not be made, with the reason: it counts as
+// neither pass nor fail, and the report shows SKIPPED rather than a pass that measured
+// nothing.
+func (r *Run) checkSkipped(cites, name, reason string) {
+	r.emit(Record{Kind: "check", Name: name, Cites: cites, Skip: true, Text: reason})
+}
+
+// undo collects the restores a phase owes the cluster (start what it killed, heal what it
+// cut, activate what it drained, pin the policy back) and runs the ones the phase did not
+// get to, on a context that outlives a cancellation, so a failed or interrupted phase does
+// not leave a live cluster degraded.
+type undo struct {
+	r     *Run
+	ctx   context.Context
+	names []string
+	steps []func(context.Context) error
+}
+
+func (r *Run) undoer(ctx context.Context) *undo { return &undo{r: r, ctx: ctx} }
+
+// add registers a restore step under name.
+func (u *undo) add(name string, f func(context.Context) error) {
+	u.names = append(u.names, name)
+	u.steps = append(u.steps, f)
+}
+
+// done drops the step named: the phase restored it itself.
+func (u *undo) done(name string) {
+	for i, n := range u.names {
+		if n == name {
+			u.names = append(u.names[:i], u.names[i+1:]...)
+			u.steps = append(u.steps[:i], u.steps[i+1:]...)
+			return
+		}
+	}
+}
+
+// run performs the remaining steps in reverse order.
+func (u *undo) run() {
+	if len(u.steps) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(u.ctx), 2*time.Minute)
+	defer cancel()
+	for i, step := range slices.Backward(u.steps) {
+		if err := step(ctx); err != nil {
+			u.r.event("note", fmt.Sprintf("restore %s failed: %v", u.names[i], err))
+			continue
+		}
+		u.r.event("restore", u.names[i])
+	}
+	u.steps, u.names = nil, nil
+}
 
 // check records a pass/fail with the invariants and lifecycle cells it exercises; failed
 // checks may name the file, chunk and node involved.
@@ -564,7 +655,7 @@ func (r *Run) fsmAgreement(ctx context.Context) (agree bool, detail string, ok b
 // fsmAgreementSettled retries until every node answers at one index (quiescent cluster).
 // available is false when fewer than two nodes serve /dev/fsm-hash at all.
 func (r *Run) fsmAgreementSettled(ctx context.Context) (agree bool, detail string, available bool) {
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		var ok bool
 		agree, detail, ok = r.fsmAgreement(ctx)
 		if ok {
@@ -622,31 +713,33 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	}
 	nodes, err := r.Env.Nodes(ctx)
 	if err != nil {
-		return Summary{}, err
+		return r.abort(err)
 	}
 	r.nodes = nodes
 	r.started = r.now()
 	rep, _, err := r.anyStatus(ctx)
 	if err != nil {
-		return Summary{}, fmt.Errorf("soak: status: %w", err)
+		return r.abort(fmt.Errorf("soak: status: %w", err))
 	}
 	if r.Profile.ChunkSize == 0 { // the corpus straddles the cluster's real chunk size
 		if rep.Volume.ChunkSize == 0 {
-			return Summary{}, errors.New("soak: status reports no chunk size")
+			return r.abort(errors.New("soak: status reports no chunk size"))
 		}
 		r.Profile.ChunkSize = int(rep.Volume.ChunkSize)
 	}
-	sum := Summary{Env: r.Env.Name(), Profile: r.Profile.Name, Seed: r.Seed, Flags: r.Flags, Started: r.started, Nodes: nodes,
-		K: rep.Volume.K, M: rep.Volume.M, ChunkSize: r.Profile.ChunkSize, NodeCount: len(nodes), Versions: map[string]string{}}
+	sum := Summary{
+		Env: r.Env.Name(), Profile: r.Profile.Name, Seed: r.Seed, Flags: r.Flags, Started: r.started, Nodes: nodes,
+		K: rep.Volume.K, M: rep.Volume.M, ChunkSize: r.Profile.ChunkSize, NodeCount: len(nodes), Versions: map[string]string{},
+	}
 	for i := range rep.Nodes {
 		sum.Versions[rep.Nodes[i].Name] = rep.Nodes[i].Version
 	}
 	if len(r.gateways()) == 0 {
-		return Summary{}, fmt.Errorf("soak: no gateway reachable in %s", r.Env.Name())
+		return r.abort(fmt.Errorf("soak: no gateway reachable in %s", r.Env.Name()))
 	}
 	gw := r.gateways()[0]
 	v := r.volume(gw)
-	for attempt := 0; attempt < 30; attempt++ { // a fresh cluster may still be electing (EROFS)
+	for range 30 { // a fresh cluster may still be electing (EROFS)
 		if err = v.Mkdir(r.Root); err == nil {
 			break
 		}
@@ -655,44 +748,33 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 		}
 	}
 	if err != nil {
-		return Summary{}, fmt.Errorf("soak: mkdir %s: %w", r.Root, err)
+		return r.abort(fmt.Errorf("soak: mkdir %s: %w", r.Root, err))
 	}
+	r.setShared("corpus", model{}) // phase 1 fills it; a phase that runs first or after a failed phase 1 finds a map, not nil
 	r.startSampler(ctx)
 	var results []PhaseResult
-	for _, ph := range phases {
-		r.setPhase(ph.name)
-		before := r.recordCount()
-		t := r.now()
-		r.emit(Record{Kind: "phase", Name: ph.name, Text: "start"})
-		r.sample(ctx, 0)
-		if err := ph.run(ctx, r); err != nil {
-			r.check("", "phase completed", false, err.Error())
-		}
-		r.sample(ctx, 0)
-		pr := PhaseResult{Name: ph.name, Took: r.now().Sub(t)}
-		recs := r.recordsSince(before)
-		for i := range recs {
-			rec := &recs[i]
-			switch {
-			case rec.Kind == "check":
-				pr.Checks = append(pr.Checks, *rec)
-				if rec.OK != nil && !*rec.OK {
-					pr.Failed++
-				}
-			case rec.Kind == "phase" && rec.Skip:
-				pr.Skipped, pr.Reason = true, rec.Text
+	table := r.phaseList()
+	for i, ph := range table {
+		if ctx.Err() != nil { // cancelled: the rest is NOT RUN, and the report says so
+			for _, rest := range table[i:] {
+				results = append(results, PhaseResult{Name: rest.name, NotRun: true})
 			}
-		}
-		if pr.Failed > 0 {
-			r.captureDumps(ctx)
-		}
-		results = append(results, pr)
-		if ctx.Err() != nil {
+			after := "the start"
+			if i > 0 {
+				after = table[i-1].name
+			}
+			sum.Aborted = "cancelled after " + after + ": " + ctx.Err().Error()
 			break
 		}
+		results = append(results, r.runPhase(ctx, ph))
+	}
+	if ctx.Err() != nil && sum.Aborted == "" {
+		sum.Aborted = "cancelled: " + ctx.Err().Error()
 	}
 	r.setPhase("cleanup")
-	r.cleanup(ctx)
+	cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute) // a cancelled run still tidies the volume
+	r.cleanup(cctx)
+	ccancel()
 	r.stopSampler()
 	r.emit(Record{Kind: "summary", Text: fmt.Sprintf("%d failed checks", r.failed)})
 	r.mu.Lock()
@@ -722,17 +804,118 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 			sum.Totals.DedupRatio = s.DedupRatio
 		}
 	}
+	if sum.Aborted != "" { // the summary is complete as far as it goes; the caller still exits non-zero
+		return sum, errors.New("soak: " + sum.Aborted)
+	}
 	return sum, nil
 }
 
-// dumpMax bounds one node's goroutine dump in the results stream.
-const dumpMax = 512 << 10
+// phaseList is the phases this run executes: the standard table, or Run.Phases.
+func (r *Run) phaseList() []phase {
+	if r.Phases == nil {
+		return phases
+	}
+	out := make([]phase, len(r.Phases))
+	for i, ph := range r.Phases {
+		out[i] = phase{name: ph.Name, run: ph.Run}
+	}
+	return out
+}
+
+// runPhase executes one phase and records it. A panic in the phase is a failed check with
+// the stack as a dump, not a dead driver; a phase longer than PhaseTimeout is failed, its
+// context cancelled and the run moves on, with every node's goroutines dumped first. A
+// phase that recorded no check and did not skip fails: silence is not a pass.
+func (r *Run) runPhase(ctx context.Context, ph phase) PhaseResult {
+	r.setPhase(ph.name)
+	before := r.recordCount()
+	t := r.now()
+	r.emit(Record{Kind: "phase", Name: ph.name, Text: "start"})
+	r.sample(ctx, 0)
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if p := recover(); p != nil {
+				r.check("", "phase completed", false, fmt.Sprintf("panic: %v", p))
+				r.emit(Record{Kind: "dump", Node: "driver", Text: string(debug.Stack())})
+			}
+		}()
+		if err := ph.run(pctx, r); err != nil && pctx.Err() == nil { // after a timeout the failure is already recorded
+			r.check("", "phase completed", false, err.Error())
+		}
+	}()
+	var expired <-chan time.Time
+	if r.Profile.PhaseTimeout > 0 {
+		tm := time.NewTimer(r.Profile.PhaseTimeout)
+		defer tm.Stop()
+		expired = tm.C
+	}
+	select {
+	case <-done:
+	case <-expired:
+		r.check("", "phase completed", false, fmt.Sprintf("timed out after %s", r.Profile.PhaseTimeout))
+		r.captureDumps(ctx) // what every node was doing while the phase hung
+		cancel()
+		select { // a cooperative phase returns at once; a moment's grace keeps its last records in its own phase
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	}
+	r.sample(ctx, 0)
+	pr := PhaseResult{Name: ph.name, Took: r.now().Sub(t)}
+	collect := func() {
+		pr.Checks, pr.Failed, pr.Skipped, pr.Reason = nil, 0, false, ""
+		recs := r.recordsSince(before)
+		for i := range recs {
+			rec := &recs[i]
+			switch {
+			case rec.Kind == "check":
+				pr.Checks = append(pr.Checks, *rec)
+				if rec.OK != nil && !*rec.OK {
+					pr.Failed++
+				}
+			case rec.Kind == "phase" && rec.Skip:
+				pr.Skipped, pr.Reason = true, rec.Text
+			}
+		}
+	}
+	collect()
+	if !pr.Skipped && len(pr.Checks) == 0 {
+		r.check("", "phase recorded checks", false, "no checks: the phase asserted nothing")
+		collect()
+	}
+	if pr.Failed > 0 {
+		r.captureDumps(ctx)
+	}
+	return pr
+}
+
+// abort is the summary of a run that stopped before its first phase: the records so far
+// and the reason, so the report still renders (verdict ABORTED).
+func (r *Run) abort(err error) (Summary, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Summary{
+		Env: r.Env.Name(), Profile: r.Profile.Name, Seed: r.Seed, Flags: r.Flags, Started: r.started,
+		Duration: r.now().Sub(r.started), Aborted: err.Error(), Records: append([]Record(nil), r.records...), Versions: map[string]string{},
+	}, err
+}
+
+// dumpMax bounds one node's goroutine dump in the results stream; dumpTotalMax bounds a
+// run's dumps altogether (N nodes × failed phases × dumpMax would not).
+const (
+	dumpMax      = 512 << 10
+	dumpTotalMax = 4 << 20
+)
 
 // captureDumps records every node's goroutine dump after a failed phase (docs/09 §6); a
 // node without dev.enabled, or one that does not answer, leaves a note instead.
 func (r *Run) captureDumps(ctx context.Context) {
 	for _, n := range r.nodes {
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second) // after a timeout the phase context is gone; the dump is the point
 		dump, err := r.Env.Goroutines(cctx, n)
 		cancel()
 		if err != nil {
@@ -741,6 +924,16 @@ func (r *Run) captureDumps(ctx context.Context) {
 		}
 		if len(dump) > dumpMax {
 			dump = dump[:dumpMax] + "\n... (truncated)"
+		}
+		r.mu.Lock()
+		over := r.dumpBytes+len(dump) > dumpTotalMax
+		if !over {
+			r.dumpBytes += len(dump)
+		}
+		r.mu.Unlock()
+		if over {
+			r.event("note", fmt.Sprintf("goroutine dump from %s omitted: the run's dumps already hold %s", n.Name, humanBytes(float64(r.dumpBytes))))
+			continue
 		}
 		r.emit(Record{Kind: "dump", Node: n.Name, Text: dump})
 	}

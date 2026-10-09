@@ -36,7 +36,7 @@ func TestIDStream_RejectsForeignCluster(t *testing.T) {
 		}
 		accepted <- err
 	}()
-	if _, err := c.Dial(raft.ServerAddress(baddr), time.Second); !errors.Is(err, ErrClusterMismatch) {
+	if _, err := c.Dial(raft.ServerAddress(baddr), time.Second); !errors.Is(err, ErrHandshakeRefused) { // the acceptor reads first and closes: the dialer never learns why
 		t.Fatalf("foreign dial: %v", err)
 	}
 	conn, err := a.Dial(raft.ServerAddress(baddr), time.Second)
@@ -62,7 +62,7 @@ func (f *fakeHealth) Health(_ context.Context, addr string) (rpc.Health, error) 
 	if f.down[addr] {
 		return rpc.Health{}, errors.New("down")
 	}
-	return rpc.Health{Free: 1}, nil
+	return rpc.Health{}, nil
 }
 
 // Lifecycle: L-86, L-87, L-88, L-92, L-131, L-132
@@ -73,7 +73,8 @@ func TestProber_LivenessAndHoldDowns(t *testing.T) {
 	// three device members: self (idx 1) plus two peers with fake RPC addresses
 	for i, name := range []string{"b", "c"} {
 		r, _, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
-			ID: "peer-" + name + "000000000000", Name: name, Kind: meta.KindDevice, Addr: "10.0.0." + string(rune('2'+i)), RPCPort: 1, RaftPort: 1, Capacity: 1}}})
+			ID: "peer-" + name + "000000000000", Name: name, Kind: meta.KindDevice, Addr: "10.0.0." + string(rune('2'+i)), RPCPort: 1, RaftPort: 1, Capacity: 1,
+		}}})
 		if err != nil || r.Err != nil {
 			t.Fatal(err, r.Err)
 		}

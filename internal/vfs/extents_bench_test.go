@@ -10,7 +10,7 @@ func BenchmarkExtents_Insert(b *testing.B) {
 	rng := rand.New(rand.NewSource(1)) //nolint:gosec // workload
 	var e extents
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := uint64(rng.Intn(16384)) * 4096
 		e.insert(extent{off: off, n: 4096, walOff: int64(i) * 4096})
 		if len(e) > 8192 { // keep the map at a realistic size
@@ -23,12 +23,12 @@ func BenchmarkExtents_Insert(b *testing.B) {
 func BenchmarkExtents_CoversChunk(b *testing.B) {
 	rng := rand.New(rand.NewSource(1)) //nolint:gosec // workload
 	var e extents
-	for i := 0; i < 4096; i++ {
+	for range 4096 {
 		e.insert(extent{off: uint64(rng.Intn(16384)) * 4096, n: 4096})
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		e.coversChunk(uint64(i%64), 1<<20, 64<<20)
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -75,7 +75,7 @@ func (r *latencyRing) hedgeDelay() time.Duration {
 	if n == 0 {
 		return hedgeDefault
 	}
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	slices.Sort(s)
 	return min(max(s[(n*95+99)/100-1], hedgeMin), hedgeMax)
 }
 
@@ -190,7 +190,9 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 	// The first k slots are requested at once; a slot whose reply is late by the hedge
 	// delay (p95 of recent GETs) has the next slot in rank order requested alongside it,
 	// so one slow holder costs a shard's worth of extra traffic, not its timeout.
-	out := make(chan res, len(order))
+	out := make(chan res, len(order)) // every launched GET can deliver without a reader
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // the GETs still in flight once k shards are in (or on failure) stop here
 	next, pending := 0, 0
 	launch := func() {
 		slot := order[next]

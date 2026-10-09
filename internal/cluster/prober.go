@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -107,8 +108,17 @@ var _ meta.Peers = (*Prober)(nil)
 
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
-	return &Prober{node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
-		fillAfter: FillAfter, evictAfter: EvictAfter}
+	return &Prober{
+		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
+		fillAfter: FillAfter, evictAfter: EvictAfter,
+	}
+}
+
+// FillAfter is the MemberDown hold-down in force (repair.fill_after).
+func (p *Prober) FillAfter() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fillAfter
 }
 
 // SetHoldDowns overrides the MemberDown and MemberLost hold-downs (the configured
@@ -160,7 +170,13 @@ func (p *Prober) Tick(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range nodes {
 		nd := nodes[i]
-		if nd.Kind != meta.KindDevice || nd.State == meta.Removed {
+		if nd.State == meta.Removed { // nothing to probe, nothing to keep
+			p.mu.Lock()
+			delete(p.probes, nd.Idx)
+			p.mu.Unlock()
+			continue
+		}
+		if nd.Kind != meta.KindDevice {
 			continue
 		}
 		if nd.ID == p.node.ID {
@@ -168,7 +184,7 @@ func (p *Prober) Tick(ctx context.Context) {
 			if p.SelfHealth != nil {
 				h = p.SelfHealth()
 			}
-			p.record(nd.Idx, now, 0, true, h)
+			p.record(nd.Idx, now, 0, true, h, nil)
 			p.recordDisks(disks[nd.Idx], now, 0, true, h)
 			continue
 		}
@@ -187,7 +203,7 @@ func (p *Prober) Tick(ctx context.Context) {
 			start := p.clk.Now()
 			h, err := p.client.Health(pctx, addr)
 			at, rtt := p.clk.Now(), p.clk.Now().Sub(start)
-			p.record(idx, at, rtt, err == nil, h)
+			p.record(idx, at, rtt, err == nil, h, nil)
 			p.recordDisks(ds, at, rtt, err == nil, h)
 		}(nd.Idx, addr, disks[nd.Idx])
 	}
@@ -195,7 +211,9 @@ func (p *Prober) Tick(ctx context.Context) {
 	p.holdDowns(now)
 }
 
-func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok bool, h rpc.Health) {
+// record settles one probe row; disk is the disk's own health for a disk row (its free
+// bytes and filesystem), nil for a device, which stores nothing (docs/14 §9).
+func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok bool, h rpc.Health, disk *rpc.DiskHealth) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	pr := p.probes[idx]
@@ -205,7 +223,11 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 	}
 	if ok {
 		wasDead := !pr.DeadSince.IsZero()
-		pr.LastOK, pr.RTT, pr.Free, pr.Applied, pr.Version, pr.Dev, pr.FS = now, rtt, h.Free, h.Applied, h.Version, h.Dev, h.FS
+		pr.LastOK, pr.RTT, pr.Applied, pr.Version, pr.Dev = now, rtt, h.Applied, h.Version, h.Dev
+		pr.Free, pr.FS = 0, ""
+		if disk != nil {
+			pr.Free, pr.FS = disk.Free, disk.FS
+		}
 		pr.DeadSince, pr.Down, pr.Lost = time.Time{}, false, false
 		if wasDead {
 			p.emit(Event{Kind: MemberUp, Idx: idx, Since: now})
@@ -224,7 +246,7 @@ func (p *Prober) recordDisks(ds []meta.Node, now time.Time, rtt time.Duration, h
 	for i := range ds {
 		d := &ds[i]
 		if !hostOK {
-			p.record(d.Idx, now, rtt, false, rpc.Health{})
+			p.record(d.Idx, now, rtt, false, rpc.Health{}, nil)
 			continue
 		}
 		var dh *rpc.DiskHealth
@@ -234,7 +256,7 @@ func (p *Prober) recordDisks(ds []meta.Node, now time.Time, rtt time.Duration, h
 			}
 		}
 		if dh != nil && dh.OK {
-			p.record(d.Idx, now, rtt, true, rpc.Health{Free: dh.Free, Applied: h.Applied, Version: h.Version, Dev: h.Dev, FS: dh.FS})
+			p.record(d.Idx, now, rtt, true, h, dh)
 			continue
 		}
 		p.mu.Lock()
@@ -289,6 +311,18 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	if self, ok := p.node.SelfIdx(); ok && self == idx {
 		return true
 	}
+	// this host's own disks: live iff the host's own health lists them OK, without an age
+	// test, since nothing probes self over the network (docs/14 §4)
+	if nd, found := p.node.nodeByIdx(idx); found && nd.Kind == meta.KindDisk {
+		if self, ok := p.node.SelfIdx(); ok && nd.Host == self && p.SelfHealth != nil {
+			for _, dh := range p.SelfHealth().Disks {
+				if dh.ID == nd.ID {
+					return dh.OK
+				}
+			}
+			return false
+		}
+	}
 	p.mu.Lock()
 	pr, ok := p.probes[idx]
 	var lastOK, deadSince time.Time
@@ -334,7 +368,7 @@ func (p *Prober) Live() []meta.NodeIdx {
 		}
 		return true
 	})
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -346,6 +380,9 @@ func (p *Prober) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	rtt := func(idx meta.NodeIdx) time.Duration {
 		if idx == self {
 			return -1
+		}
+		if nd, found := p.node.nodeByIdx(idx); found && nd.Kind == meta.KindDisk && nd.Host == self {
+			return -1 // this host's own disk: no network between us (docs/14 §9)
 		}
 		if pr, ok := snap[idx]; ok && !pr.LastOK.IsZero() {
 			return pr.RTT

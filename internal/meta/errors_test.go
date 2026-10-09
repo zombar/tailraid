@@ -7,8 +7,10 @@ import (
 
 // Invariant: I-26
 func TestErrorCode_RoundTrip(t *testing.T) {
-	all := []error{ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
-		ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy}
+	all := []error{
+		ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
+		ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
+	}
 	seen := map[uint8]bool{}
 	for _, e := range all {
 		c := ErrorCode(e)

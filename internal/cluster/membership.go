@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -16,11 +17,16 @@ import (
 // meta.ErrNodeNotEmpty, enforced by the FSM itself (docs/02).
 var ErrBadMemberOp = errors.New("cluster: bad member operation")
 
-var _ rpc.Joiner = (*Node)(nil)
-var _ rpc.Applier = (*Node)(nil)
+var (
+	_ rpc.Joiner  = (*Node)(nil)
+	_ rpc.Applier = (*Node)(nil)
+)
 
 // AppliedIndex implements rpc.Applier.
-func (n *Node) AppliedIndex() uint64 { return n.Raft.AppliedIndex() }
+// AppliedIndex is the FSM's applied index: what this node has actually applied, which is
+// what the DELETE fence (docs/06) and the health row promise. Raft's own AppliedIndex
+// only proves dispatch to the FSM goroutine.
+func (n *Node) AppliedIndex() uint64 { return n.FSM.Applied() }
 
 // LeaderRPCAddr returns the leader's RPC address from the node table, or "".
 func (n *Node) LeaderRPCAddr() string {
@@ -60,11 +66,10 @@ func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) { return n.FSM.Node
 
 func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.RaftAddr()) }
 
-// RaftAddrFor lets tests substitute in-memory transport addresses for node records.
-var RaftAddrFor = raftAddrOf
-
 // Join implements the leader side of `tailraid join` (docs/02 §Bootstrap and join).
 func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse, error) {
+	n.memberMu.Lock()
+	defer n.memberMu.Unlock()
 	if !n.IsLeader() {
 		if n.LeaderRPCAddr() == "" {
 			return rpc.JoinResponse{}, ErrNoLeader
@@ -74,15 +79,24 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	if len(req.NodeID) != 16 || req.Addr == "" || req.RaftPort == 0 || req.RPCPort == 0 {
 		return rpc.JoinResponse{}, fmt.Errorf("%w: node_id, addr and ports are required", ErrBadMemberOp)
 	}
-	nd := meta.Node{ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
-		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano()}
+	nd := meta.Node{
+		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
+		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Version: req.Version, JoinedAt: time.Now().UnixNano(), // no budget: a device stores nothing (docs/14 §9)
+	}
 	var err error
-	// re-join of a known node keeps its index; a removed record refuses the ID
+	// re-join of a known node keeps its index; a removed record refuses the ID, and so
+	// does a different tailnet identity (I-94): node IDs are public (/health), the
+	// StableID is what WhoIs vouched for
 	n.FSM.ForEachNode(func(cur meta.Node) bool {
 		if cur.ID == req.NodeID {
 			if cur.State == meta.Removed {
 				nd.Idx = 0
 				err = fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
+				return false
+			}
+			if cur.TSStableID != "" && cur.TSStableID != req.TSStableID {
+				nd.Idx = 0
+				err = fmt.Errorf("%w: node %s belongs to tailnet node %s, not %s", ErrBadMemberOp, req.NodeID, cur.TSStableID, req.TSStableID)
 				return false
 			}
 			nd.Idx = cur.Idx
@@ -94,9 +108,9 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	}
 	var fut raft.IndexFuture
 	if req.Voter {
-		fut = n.Raft.AddVoter(raft.ServerID(req.NodeID), RaftAddrFor(nd), 0, 10*time.Second)
+		fut = n.Raft.AddVoter(raft.ServerID(req.NodeID), n.raftAddrFor(nd), 0, 10*time.Second)
 	} else {
-		fut = n.Raft.AddNonvoter(raft.ServerID(req.NodeID), RaftAddrFor(nd), 0, 10*time.Second)
+		fut = n.Raft.AddNonvoter(raft.ServerID(req.NodeID), n.raftAddrFor(nd), 0, 10*time.Second)
 	}
 	if err := fut.Error(); err != nil {
 		return rpc.JoinResponse{}, raftErr("add raft server", err)
@@ -131,6 +145,8 @@ func (n *Node) SlotsHeldBy(idx meta.NodeIdx) int {
 
 // MemberOp implements remove, update_addr, set_voter, set_capacity and set_state on the leader.
 func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
+	n.memberMu.Lock()
+	defer n.memberMu.Unlock()
 	if !n.IsLeader() {
 		if n.LeaderRPCAddr() == "" {
 			return ErrNoLeader
@@ -180,6 +196,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		return propose(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: op.NodeIdx, State: op.State, Now: time.Now().UnixNano()}})
 	case "set_capacity":
+		if nd.Kind == meta.KindDevice {
+			return fmt.Errorf("%w: a device has no budget; set_capacity names a disk (docs/14 §9)", ErrBadMemberOp)
+		}
 		nd.Capacity = op.Capacity
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	case "add_disk":
@@ -196,9 +215,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		var fut raft.IndexFuture
 		if op.Voter {
-			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		} else {
-			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		}
 		if err := fut.Error(); err != nil {
 			return raftErr("change suffrage", err)
@@ -212,9 +231,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		nd.Addr = op.Addr
 		var fut raft.IndexFuture
 		if nd.Voter {
-			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		} else {
-			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		}
 		if err := fut.Error(); err != nil {
 			return raftErr("update raft address", err)
@@ -256,11 +275,8 @@ func (n *Node) diskName(op rpc.MemberOp) string {
 func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) error {
 	var victims []meta.Chunk
 	n.FSM.ForEachChunk(func(c meta.Chunk) bool {
-		for _, s := range c.Placement {
-			if s == idx {
-				victims = append(victims, c)
-				break
-			}
+		if slices.Contains(c.Placement, idx) {
+			victims = append(victims, c)
 		}
 		return true
 	})
@@ -271,7 +287,11 @@ func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) err
 				place[i] = 0
 			}
 		}
-		if err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place}}); err != nil {
+		err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place, Expect: c.Placement}})
+		if errors.Is(err, meta.ErrConflict) {
+			continue // re-placed meanwhile (I-102): whatever landed no longer names idx, or the repairer will see it
+		}
+		if err != nil {
 			return fmt.Errorf("zero slots of %x: %w", c.Hash[:8], err)
 		}
 	}

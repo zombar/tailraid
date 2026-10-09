@@ -109,6 +109,7 @@ func FilesReferencing(st *meta.Store, set map[meta.Hash]bool) []string {
 		for i := range ents {
 			p := prefix + "/" + ents[i].Name
 			switch ents[i].Type {
+			case meta.TSymlink: // no chunks
 			case meta.TDir:
 				walk(ents[i].Ino, p)
 			case meta.TFile:

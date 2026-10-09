@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"path/filepath"
 	"sort"
@@ -56,6 +57,9 @@ func WithCapWait(d time.Duration) Option { return func(o *Overlay) { o.capWait =
 // WithFS routes every WAL file operation through fsys (tests inject faults); the
 // default is the real filesystem.
 func WithFS(fsys sysfs.FS) Option { return func(o *Overlay) { o.fs = fsys } }
+
+// WithLog reports what replay discarded after a crash (docs/04 §2); unset is silent.
+func WithLog(l *slog.Logger) Option { return func(o *Overlay) { o.Log = l } }
 
 // DirtyInfo describes one inode with unflushed state (docs/04 §flush triggers).
 type DirtyInfo struct {
@@ -150,6 +154,10 @@ type Overlay struct {
 	capWait   time.Duration
 	fs        sysfs.FS
 
+	// Log, when set, reports what replay discarded after a crash (docs/04 §2); nil is
+	// silent (tests).
+	Log *slog.Logger
+
 	mu    sync.RWMutex
 	files map[meta.Ino]*dirtyFile
 
@@ -164,8 +172,10 @@ func OpenOverlay(dir string, chunkSize uint32, clk clock.Clock, opts ...Option) 
 	if chunkSize == 0 {
 		return nil, errors.New("vfs: chunk size must be > 0")
 	}
-	o := &Overlay{dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, maxDirty: DefaultMaxDirty, capWait: DefaultCapWait,
-		fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}, progress: make(chan struct{})}
+	o := &Overlay{
+		dir: dir, chunkSize: chunkSize, clk: clk, walCap: DefaultWALCap, maxDirty: DefaultMaxDirty, capWait: DefaultCapWait,
+		fs: sysfs.OS{}, files: map[meta.Ino]*dirtyFile{}, progress: make(chan struct{}),
+	}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -225,6 +235,10 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		}
 		return nil
 	})
+	if w.Discarded > 0 && o.Log != nil {
+		o.Log.Error("wal replay discarded bytes after the last intact record (torn tail, or a corrupt record and everything after it)",
+			"ino", ino, "bytes", w.Discarded, "kept", w.Size())
+	}
 	if err != nil {
 		_ = w.Close()
 		return err
@@ -327,18 +341,23 @@ again:
 		if !create {
 			return nil, nil
 		}
+		// the WAL is opened (and its directory fsynced) outside the global lock: every
+		// lookup on every inode would otherwise wait on this fsync; a racing opener's
+		// handle to the same file is simply closed again
+		w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
+		if err != nil {
+			return nil, err
+		}
 		o.mu.Lock()
 		d, ok = o.files[ino]
 		if !ok {
-			w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
-			if err != nil {
-				o.mu.Unlock()
-				return nil, err
-			}
 			d = &dirtyFile{ino: ino, wal: w}
 			o.files[ino] = d
 		}
 		o.mu.Unlock()
+		if ok {
+			_ = w.Close()
+		}
 	}
 	d.mu.Lock()
 	if d.dead { // evicted between the lookup and the lock
@@ -483,17 +502,6 @@ func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	return d.effSize(committed), true
 }
 
-// MinSize returns the truncation point when a truncate is pending (bytes at or beyond it
-// that no extent covers read as zero); without one it returns 0.
-func (o *Overlay) MinSize(ino meta.Ino) (uint64, bool) {
-	d, _ := o.get(ino, 0, false)
-	if d == nil {
-		return 0, false
-	}
-	defer d.mu.Unlock()
-	return d.minSize, true
-}
-
 // Read fills p from the overlay view of an inode whose committed size is committed:
 // base bytes below the truncation point (everywhere without one), zeros above it, and
 // WAL extents (both the in-flight plan's and fresh ones) on top. base may return fewer
@@ -506,7 +514,10 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 	}
 	size := d.effSize(committed)
 	limit := baseLimit(d.sizeSet, d.minSize)
-	covered := d.ext.covers(off, min(off+uint64(len(p)), size)) || (d.plan != nil && d.plan.Extents.covers(off, min(off+uint64(len(p)), min(size, d.planMin))))
+	end := min(off+uint64(len(p)), size)
+	// the plan's extents say nothing about bytes at or past planMin: a commit from
+	// another gateway may have grown the file there, and those bytes live in the base
+	covered := d.ext.covers(off, end) || (d.plan != nil && end <= d.planMin && d.plan.Extents.covers(off, end))
 	d.mu.Unlock()
 	if off >= size {
 		return 0, io.EOF

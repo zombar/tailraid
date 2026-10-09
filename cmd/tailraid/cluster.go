@@ -45,7 +45,7 @@ func localClient(ctx context.Context, cmd *cobra.Command) (*rpc.Client, string, 
 			addr = net.JoinHostPort(addr, strconv.Itoa(cfg.Listen.RPC))
 		}
 	}
-	return rpc.NewClient(cid, nil, nil), addr, cfg, nil
+	return rpc.NewClient(cid, nil), addr, cfg, nil
 }
 
 func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Client, string, error) {
@@ -81,6 +81,7 @@ func joinCmd() *cobra.Command {
 				cfg.Node.Name = name
 			}
 			cfg.Node.Voter = voter
+			cfg.EnsureSMBPassword() // the share password, when this device serves SMB (docs/15 §6)
 			if err := config.Save(path, cfg); err != nil {
 				return err
 			}
@@ -88,14 +89,28 @@ func joinCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "joined cluster %s as node %d (%s); %d members, policy %d+%d\nconfig: %s\nnext: tailraid serve (or tailraid install)\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "joined cluster %s as node %d (%s); %d members, policy %d+%d\nconfig: %s\n",
 				resp.ClusterID[:8], resp.NodeIdx, cfg.Node.Name, len(resp.Members), resp.Volume.K, resp.Volume.M, path)
+			printDisks(cmd.OutOrStdout(), cfg, resp.Disks)
+			fmt.Fprintln(cmd.OutOrStdout(), "next: tailraid serve (or tailraid install)")
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&voter, "voter", false, "join as a Raft voter (always-on devices only)")
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	return c
+}
+
+// printDisks lists the disks init or join registered, one line each with its budget, or
+// the hint for a device that stores nothing (docs/14 §2, I-121).
+func printDisks(w io.Writer, cfg config.Config, disks []meta.Node) {
+	if len(disks) == 0 {
+		fmt.Fprintln(w, node.NoDisksHint)
+		return
+	}
+	for i := range disks {
+		fmt.Fprintf(w, "disk %s: %s (budget %s)\n", disks[i].Name, cfg.Node.Disks[i].Path, bytesStr(disks[i].Capacity))
+	}
 }
 
 func statusCmd() *cobra.Command {
@@ -108,9 +123,15 @@ func statusCmd() *cobra.Command {
 				return err
 			}
 			if j, _ := cmd.Flags().GetBool("json"); j {
-				return printJSON(cmd.OutOrStdout(), rep)
+				if err := printJSON(cmd.OutOrStdout(), rep); err != nil {
+					return err
+				}
+			} else {
+				printStatus(cmd.OutOrStdout(), rep)
 			}
-			printStatus(cmd.OutOrStdout(), rep)
+			if !rep.Ready { // for supervisors and scripts: exit 1 until the node can serve (I-125)
+				return errors.New("node is not ready: no leader, or the log is still being replayed")
+			}
 			return nil
 		},
 	}
@@ -173,7 +194,7 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 	nodes = hostOrder(nodes)
 	for i := range nodes {
 		n := &nodes[i]
-		name := n.Label() // "<host> (data dir)" once the host has added disks
+		name := n.Name
 		if n.Kind == "disk" {
 			name = "  " + name // indented under its host
 		}
@@ -183,6 +204,9 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 		}
 		if n.Self {
 			flags = append(flags, "self")
+		}
+		if n.Diskless {
+			flags = append(flags, "no disks") // a gateway-only host (docs/14 §9)
 		}
 		if len(n.SharedWith) > 0 {
 			flags = append(flags, "shares disk with "+strings.Join(n.SharedWith, ", "))
@@ -194,7 +218,11 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 				live = "dead " + n.DeadFor
 			}
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, n.Addr, n.Voter, live, n.Slots, bytesStr(uint64(max(n.Free, 0))), n.Version, strings.Join(flags, ", "))
+		free := "-" // a device stores nothing; its disks have the free space
+		if n.Kind != "device" {
+			free = bytesStr(uint64(max(n.Free, 0)))
+		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, n.Addr, n.Voter, live, n.Slots, free, n.Version, strings.Join(flags, ", "))
 	}
 	_ = tw.Flush()
 }
@@ -643,10 +671,11 @@ func setRedundancyCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "policy is automatic again: the leader applies the rule of docs/03 on its next repair pass")
 				return printRaw(cmd.OutOrStdout(), raw)
 			}
-			if k < 1 || m < 0 {
-				return errors.New("--k and --m (or --auto) are required")
+			kk, mm, err := policyFlags(k, m)
+			if err != nil {
+				return err
 			}
-			raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", K: uint8(k), M: uint8(m)})
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", K: kk, M: mm})
 			if err != nil {
 				return err
 			}
@@ -666,4 +695,14 @@ func setRedundancyCmd() *cobra.Command {
 	c.Flags().IntVar(&m, "m", -1, "parity shards")
 	c.Flags().BoolVar(&auto, "auto", false, "let the leader choose the policy from the member table")
 	return c
+}
+
+// policyFlags checks a (k, m) from the command line before the narrowing to uint8:
+// k is 1..255, m is 0..255 and k+m is at most 256 (ec.MaxShards). --k 257 --m 0 used to
+// pin 1+0 after the cast.
+func policyFlags(k, m int) (uint8, uint8, error) {
+	if k < 1 || k > 255 || m < 0 || m > 255 || k+m > 256 {
+		return 0, 0, fmt.Errorf("bad policy k=%d m=%d: k is 1..255, m is 0..255, k+m at most 256", k, m)
+	}
+	return uint8(k), uint8(m), nil
 }

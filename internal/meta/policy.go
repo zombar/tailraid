@@ -2,7 +2,7 @@ package meta
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 )
 
 // MaxAutoK caps the data shard count the automatic policy chooses.
@@ -14,9 +14,9 @@ type target struct {
 	voter     bool
 }
 
-// targets lists the Active device targets: every Active device (its own store), except a
-// device with capacity 0 that has Active disks of its own (it opted its system disk out),
-// and every Active disk of an Active device. S3 nodes are not counted (docs/14 §6).
+// targets lists the Active targets the policy counts: every Active disk of an Active
+// device. A device row itself is never one, so a host with no disks counts for nothing
+// (docs/14 §6, §9, I-118); S3 nodes are not counted.
 func targets(nodes []Node) []target {
 	devs := map[NodeIdx]*Node{}
 	for i := range nodes {
@@ -24,7 +24,6 @@ func targets(nodes []Node) []target {
 			devs[n.Idx] = n
 		}
 	}
-	hasDisk := map[NodeIdx]bool{}
 	var out []target
 	for i := range nodes {
 		n := &nodes[i]
@@ -32,13 +31,7 @@ func targets(nodes []Node) []target {
 			continue
 		}
 		if h := devs[n.Host]; h != nil {
-			hasDisk[h.Idx] = true
 			out = append(out, target{idx: n.Idx, host: h.Idx, voter: h.Voter})
-		}
-	}
-	for _, d := range devs {
-		if d.Capacity > 0 || !hasDisk[d.Idx] {
-			out = append(out, target{idx: d.Idx, host: d.Idx, voter: d.Voter})
 		}
 	}
 	return out
@@ -54,7 +47,7 @@ func perHost(ts []target) []int {
 	for h := range m {
 		hosts = append(hosts, h)
 	}
-	sort.Slice(hosts, func(i, j int) bool { return hosts[i] < hosts[j] })
+	slices.Sort(hosts)
 	out := make([]int, len(hosts))
 	for i, h := range hosts {
 		out[i] = m[h]

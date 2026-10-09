@@ -120,7 +120,7 @@ func TestFlusher_FailedSlotReplacedOnce(t *testing.T) {
 	// find which node the placement will pick and make its first PUT fail
 	h := sha256Of(data)
 	cands := meta.Candidates(f.FSM.Nodes(), func(meta.NodeIdx) bool { return true })
-	victim := meta.Place(h, cands, 3)[1]
+	victim := meta.PlaceKM(h, cands, 3, 0)[1]
 	f.FailPutOnce(victim, 1)
 	must(t, f.Flusher().FlushInode(ctx, ino))
 	c, _ := f.FSM.GetChunk(h)
@@ -220,7 +220,7 @@ func TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit(t *testing.T) {
 	// two of three holders die; one spare joins
 	f.SetDown(c.Placement[1], true)
 	f.SetDown(c.Placement[2], true)
-	spare := f.AddNode()
+	spare := f.Target(f.AddNode()) // the new host's disk is the spare target
 	b := f.Create("b")
 	must(t, f.Ov.Write(b, 0, 0, data))
 	must(t, f.Flusher().FlushInode(ctx, b))
@@ -264,7 +264,7 @@ func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
 	key := func(slot int) chunk.ShardKey { return chunk.Key(h, c.K, c.M, slot) }
 
 	// one holder lost its file: still k present → dedup, no PUT
-	if _, err := f.Stores[c.Placement[0]].Delete(key(0)); err != nil {
+	if _, err := f.StoreOf(c.Placement[0]).Delete(key(0)); err != nil {
 		t.Fatal(err)
 	}
 	before := f.Puts()
@@ -277,7 +277,7 @@ func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
 	}
 
 	// a second holder lost its file: fewer than k present → fill before the commit
-	if _, err := f.Stores[c.Placement[1]].Delete(key(1)); err != nil {
+	if _, err := f.StoreOf(c.Placement[1]).Delete(key(1)); err != nil {
 		t.Fatal(err)
 	}
 	before = f.Puts()
@@ -293,7 +293,7 @@ func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
 	}
 	c2, _ := f.FSM.GetChunk(h)
 	for i, n := range c2.Placement {
-		if n == 0 || !f.Stores[n].Has(chunk.Key(h, c2.K, c2.M, i)) {
+		if n == 0 || !f.StoreOf(n).Has(chunk.Key(h, c2.K, c2.M, i)) {
 			t.Fatalf("slot %d node %d not present after fill: %v", i, n, c2.Placement)
 		}
 	}
@@ -362,8 +362,10 @@ func TestFlusher_ConflictRebase_PreservesConcurrentAppend(t *testing.T) {
 		}
 		done = true
 		must(t, f.Put(ctx, 1, chunk.Key(oh, 2, 1, 0), other[:cs/2]))
-		f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs,
-			Writes: []meta.ChunkWrite{{Idx: 2, Hash: oh}}, NewChunks: []meta.ChunkDesc{{Hash: oh, Size: uint32(cs), K: 2, M: 1, Placement: []meta.NodeIdx{1, 2, 3}}}, Now: 7}})
+		f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{
+			Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs,
+			Writes: []meta.ChunkWrite{{Idx: 2, Hash: oh}}, NewChunks: []meta.ChunkDesc{{Hash: oh, Size: uint32(cs), K: 2, M: 1, Placement: []meta.NodeIdx{1, 2, 3}}}, Now: 7,
+		}})
 	}
 	must(t, fl.FlushInode(ctx, ino))
 	final := f.Inode(ino)
@@ -394,8 +396,10 @@ func TestFlusher_ConflictRebase_TruncateWins(t *testing.T) {
 			return
 		}
 		done = true
-		f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs,
-			Writes: []meta.ChunkWrite{{Idx: 2, Hash: oh}}, NewChunks: []meta.ChunkDesc{{Hash: oh, Size: uint32(cs), K: 2, M: 1, Placement: []meta.NodeIdx{1, 2, 3}}}, Now: 7}})
+		f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{
+			Ino: ino, BaseVersion: in.Version, NewSize: 3 * cs,
+			Writes: []meta.ChunkWrite{{Idx: 2, Hash: oh}}, NewChunks: []meta.ChunkDesc{{Hash: oh, Size: uint32(cs), K: 2, M: 1, Placement: []meta.NodeIdx{1, 2, 3}}}, Now: 7,
+		}})
 	}
 	must(t, fl.FlushInode(ctx, ino))
 	final := f.Inode(ino)
@@ -475,12 +479,16 @@ func TestFlusher_UnlinkedBeforeFlush_Dropped(t *testing.T) {
 	must(t, f.Ov.Write(ino, 0, 0, testharness.Pattern(int(testharness.ChunkSize), 13)))
 	f.MustApply(meta.Command{Op: meta.OpUnlink, Unlink: &meta.Unlink{Parent: meta.RootIno, Name: "a", Now: 5}})
 	before := f.Puts()
+	f.Flusher().ScheduleRetry(ino) // a pending retry from an earlier failure goes with the inode
 	must(t, f.Flusher().FlushInode(ctx, ino))
 	if f.Puts() != before {
 		t.Fatal("uploaded for a dead inode")
 	}
 	if _, ok := f.Ov.Size(ino, 0); ok {
 		t.Fatal("overlay still tracks the inode")
+	}
+	if n := f.Flusher().BackoffEntries(); n != 0 {
+		t.Fatalf("%d backoff entries kept for a dead inode", n)
 	}
 	if st := f.FSM.Stats(); st.Chunks != 0 {
 		t.Fatalf("chunk entries created: %+v", st)

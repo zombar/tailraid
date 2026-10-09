@@ -126,6 +126,17 @@ check_set() { # prefix defs cites label
 check_set I "$TMP/idefs" "$TMP/icites" "invariants"
 check_set L "$TMP/ldefs" "$TMP/lcites" "lifecycle cells"
 
+# ---- no unconditional skips outside the stubs ------------------------------------------
+# A cited test that always skips keeps its invariant "covered" while proving nothing. A
+# skip inside a condition sits two or more tabs deep; a t.Skip at the top level of a test
+# body is refused everywhere but test/invariants, where the stubs live (docs/09 §2).
+unconditional="$(git ls-files -co --exclude-standard -- '*_test.go' ':!vendor' ':!test/invariants' | xargs grep -nE '^	(t|tb)\.Skipf?\(' || true)"
+if [ -n "$unconditional" ]; then
+  echo "ERROR: unconditional t.Skip outside test/invariants:"
+  echo "$unconditional" | sed 's/^/  /'
+  fail=1
+fi
+
 # ---- test names in the docs must exist ---------------------------------------------------
 # Every backticked `TestX` / `FuzzX` in a design doc (docs/10 is deferred and names planned
 # tests) must be a test function somewhere in the tree, so a doc never points at a test that

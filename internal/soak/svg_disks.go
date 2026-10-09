@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"math"
+	"slices"
 	"strings"
 )
 
@@ -19,8 +20,13 @@ var spreadBins = []struct {
 	color string
 	label string
 }{
-	{-0.30, "#1d4ed8", "< −30 %"}, {-0.15, "#7895e4", "−30…−15 %"}, {-0.05, "#c3cdee", "−15…−5 %"},
-	{0.05, "#e5e7eb", "±5 %"}, {0.15, "#e3c3e6", "+5…+15 %"}, {0.30, "#c272c9", "+15…+30 %"}, {math.Inf(1), "#a21caf", "> +30 %"},
+	{-0.30, "#1d4ed8", "< −30 %"},
+	{-0.15, "#7895e4", "−30…−15 %"},
+	{-0.05, "#c3cdee", "−15…−5 %"},
+	{0.05, "#e5e7eb", "±5 %"},
+	{0.15, "#e3c3e6", "+5…+15 %"},
+	{0.30, "#c272c9", "+15…+30 %"},
+	{math.Inf(1), "#a21caf", "> +30 %"},
 }
 
 func spreadColor(dev float64) string {
@@ -79,9 +85,9 @@ func expectedShares(ts []TargetSample, chunks int) []float64 {
 func diskSpread(maxX float64, xs []float64, samples []*Sample) string {
 	// lanes from the last sample that has targets, grouped by host
 	var lanes []TargetSample
-	for i := len(samples) - 1; i >= 0; i-- {
-		if len(samples[i].Targets) > 0 {
-			lanes = samples[i].Targets
+	for _, sample := range slices.Backward(samples) {
+		if len(sample.Targets) > 0 {
+			lanes = sample.Targets
 			break
 		}
 	}
@@ -127,7 +133,7 @@ func diskSpread(maxX float64, xs []float64, samples []*Sample) string {
 		exp := expectedShares(s.Targets, s.Chunks)
 		for j, t := range s.Targets {
 			ly, ok := laneY[t.Name]
-			if !ok {
+			if !ok || j >= len(exp) {
 				continue
 			}
 			fill, tip := "#e5e7eb", "draining"
@@ -140,17 +146,17 @@ func diskSpread(maxX float64, xs []float64, samples []*Sample) string {
 			case t.Active:
 				tip = "no budget"
 			}
-			fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.2f" height="%d" fill="%s"><title>%s at %.0fs: %s</title></rect>`, x0, ly+1, x1-x0, rowH-2, fill, html.EscapeString(t.Name), xs[i], html.EscapeString(tip))
+			fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.2f" height="%d" fill="%s"><title>%s at %.0fs: %s</title></rect>`, x0, ly+1, x1-x0, rowH-2, fill, html.EscapeString(t.Name), xs[i], html.EscapeString(tip)) //nolint:gosec // xs has one entry per sample
 		}
 		c, tip := "#16a34a", "no chunk above the host cap"
 		if s.DomainSkew > 0 {
 			c, tip = "#d97706", fmt.Sprintf("%d chunks above the host cap", s.DomainSkew)
 		}
-		fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.2f" height="%d" fill="%s"><title>%.0fs: %s</title></rect>`, x0, capY+1, x1-x0, rowH-2, c, xs[i], tip)
+		fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="%.2f" height="%d" fill="%s"><title>%.0fs: %s</title></rect>`, x0, capY+1, x1-x0, rowH-2, c, xs[i], tip) //nolint:gosec // as above
 	}
 	fmt.Fprintf(&b, `<text x="%d" y="%d" class="tick" text-anchor="end">host cap</text>`, padL-6, capY+11)
 	ay := capY + rowH + 14
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, ay, fmtNum(maxX*float64(i)/6))
 	}

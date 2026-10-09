@@ -40,15 +40,15 @@ func distinctNonZero(t *testing.T, p []NodeIdx, what string) {
 
 // Invariant: I-77, I-9
 func TestPlaceKM_VoterFirst_DataSlots(t *testing.T) {
-	for v := 0; v <= 5; v++ {
-		for s := 0; s <= 5; s++ {
+	for v := range 6 {
+		for s := range 6 {
 			c := vcands(v, s)
 			for k := 1; k <= 3; k++ {
-				for m := 0; m <= 2; m++ {
+				for m := range 3 {
 					if k+m > v+s {
 						continue
 					}
-					for i := uint64(0); i < 50; i++ {
+					for i := range uint64(50) {
 						h := hashN(i*131 + uint64(v*7+s))
 						p := PlaceKM(h, c, k, m)
 						if len(p) != k+m {
@@ -68,7 +68,7 @@ func TestPlaceKM_VoterFirst_DataSlots(t *testing.T) {
 							}
 						}
 						if v < k || s == 0 { // too few voters, or everyone is a voter: the plain rendezvous order
-							if want := Place(h, c, k+m); !equalIdx(p, want) {
+							if want := place(h, c, k+m); !equalIdx(p, want) {
 								t.Fatalf("v=%d s=%d k=%d m=%d: %v, want Place %v", v, s, k, m, p, want)
 							}
 						}
@@ -88,10 +88,10 @@ func TestPlaceKM_VoterFirst_DataSlots(t *testing.T) {
 func TestPlaceKM_VoterFirst_NNodeDeterminism(t *testing.T) {
 	r := testseed.Seed(t)
 	base := vcands(3, 4)
-	for i := uint64(0); i < 2000; i++ {
+	for i := range uint64(2000) {
 		h := hashN(i)
 		want := PlaceKM(h, base, 2, 2)
-		for n := 0; n < 4; n++ {
+		for n := range 4 {
 			if got := PlaceKM(h, shuffled(r, base), 2, 2); !equalIdx(got, want) {
 				t.Fatalf("hash %d: node %d placed %v, node 0 placed %v", i, n, got, want)
 			}
@@ -103,7 +103,7 @@ func TestPlaceKM_VoterFirst_NNodeDeterminism(t *testing.T) {
 func TestFillPlacement_KeepsSlotClass(t *testing.T) {
 	all := vcands(3, 3) // voters 1..3, non-voters 4..6
 	const k, m = 2, 2
-	for i := uint64(0); i < 200; i++ {
+	for i := range uint64(200) {
 		h := hashN(i)
 		// a fresh fill equals PlaceKM
 		fresh := make([]NodeIdx, k+m)
@@ -132,16 +132,18 @@ func TestFillPlacement_KeepsSlotClass(t *testing.T) {
 	}
 }
 
-// Candidates carries the voter bit for devices only.
+// Candidates carries the voter bit of a disk's host; a bucket has none.
 // Invariant: I-77
 func TestCandidates_VoterBit(t *testing.T) {
 	nodes := []Node{
-		{Idx: 1, Kind: KindDevice, State: Active, Capacity: 10, Voter: true},
-		{Idx: 2, Kind: KindDevice, State: Active, Capacity: 10, Voter: false},
+		{Idx: 1, Kind: KindDevice, State: Active, Voter: true},
+		{Idx: 2, Kind: KindDevice, State: Active, Voter: false},
 		{Idx: 3, Kind: KindS3, State: Active, Capacity: 10, Voter: true}, // meaningless on a bucket
+		{Idx: 4, Kind: KindDisk, State: Active, Capacity: 10, Host: 1},
+		{Idx: 5, Kind: KindDisk, State: Active, Capacity: 10, Host: 2},
 	}
 	got := Candidates(nodes, func(NodeIdx) bool { return true })
-	if len(got) != 3 || !got[0].Voter || got[1].Voter || got[2].Voter {
+	if len(got) != 3 || got[0].Idx != 3 || got[0].Voter || got[1].Idx != 4 || !got[1].Voter || got[2].Idx != 5 || got[2].Voter {
 		t.Fatalf("candidates %+v", got)
 	}
 }

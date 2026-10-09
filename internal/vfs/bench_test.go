@@ -20,7 +20,7 @@ func BenchmarkFlush_FullChunks(b *testing.B) {
 	b.SetBytes(int64(len(data)))
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		b.StopTimer()
 		rand.New(rand.NewSource(int64(i))).Read(data) //nolint:gosec // distinct bytes per file, so nothing dedups
 		ino := f.Create(fmt.Sprintf("f%d", i))
@@ -62,7 +62,7 @@ func BenchmarkRead_Cached(b *testing.B) {
 	b.SetBytes(int64(len(buf)))
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := int64((i * len(buf)) % len(data))
 		if _, err := rd.ReadAt(ctx, in, buf, off); err != nil {
 			b.Fatal(err)
@@ -80,7 +80,7 @@ func BenchmarkRead_Uncached(b *testing.B) {
 	b.SetBytes(int64(len(buf)))
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		off := int64((i * len(buf)) % len(data))
 		if _, err := rd.ReadAt(ctx, in, buf, off); err != nil {
 			b.Fatal(err)
@@ -93,13 +93,13 @@ func BenchmarkRead_Uncached(b *testing.B) {
 func BenchmarkReadDirPlus_10k(b *testing.B) {
 	f := testharness.NewFabric(b, 3, 2, 1)
 	dir := f.MustApply(meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{Parent: meta.RootIno, Name: "d", Mode: 0o755, Now: 1}}).Ino
-	for i := 0; i < 10_000; i++ {
+	for i := range 10_000 {
 		f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: dir, Name: fmt.Sprintf("f%06d", i), Type: meta.TFile, Mode: 0o644, Now: 1}})
 	}
 	fs := f.FS()
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		ents, err := fs.ReadDir("/d")
 		if err != nil || len(ents) != 10_000 {
 			b.Fatal(err)

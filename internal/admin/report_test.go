@@ -19,21 +19,31 @@ func TestReport_ReflectsClusterState(t *testing.T) {
 	c.Settle()
 	leader := c.Leader()
 	rep := admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, nil)
-	if rep.Health != "healthy" || rep.Voters != 3 || rep.LiveVoters != 3 || len(rep.Nodes) != 3 || rep.Leader != leader.ID {
+	// three hosts, each with its one disk: six rows, the slots on the disks (docs/14 §9)
+	if rep.Health != "healthy" || rep.Voters != 3 || rep.LiveVoters != 3 || len(rep.Nodes) != 6 || rep.Leader != leader.ID {
 		t.Fatalf("report %+v", rep)
 	}
 	if rep.Volume.K != 2 || rep.Volume.Chunks != 2 || rep.Volume.Degraded != 0 || rep.Volume.LogicalBytes != 2*uint64(testharness.ChunkSize) {
 		t.Fatalf("volume %+v", rep.Volume)
 	}
-	slots := 0
+	slots, devices, disks := 0, 0, 0
 	for _, n := range rep.Nodes {
 		slots += n.Slots
-		if !n.Live || n.State != "active" || n.Kind != "device" {
+		if !n.Live || n.State != "active" {
 			t.Fatalf("node %+v", n)
 		}
+		switch n.Kind {
+		case "device":
+			devices++
+			if n.Slots != 0 || n.Capacity != 0 || n.Diskless {
+				t.Fatalf("a device row with slots, a budget or flagged diskless: %+v", n)
+			}
+		case "disk":
+			disks++
+		}
 	}
-	if slots != 2*3 {
-		t.Fatalf("slots %d", slots)
+	if slots != 2*3 || devices != 3 || disks != 3 {
+		t.Fatalf("slots %d, %d devices, %d disks", slots, devices, disks)
 	}
 	if len(rep.Warnings) != 0 {
 		t.Fatalf("warnings on a healthy cluster: %v", rep.Warnings)
@@ -59,17 +69,20 @@ func TestReport_ReflectsClusterState(t *testing.T) {
 	if rep.LiveVoters != 2 || rep.Volume.Degraded != 2 || rep.Volume.RepairPending != 0 || rep.Volume.Unreadable != 0 {
 		t.Fatalf("after kill %+v", rep.Volume)
 	}
-	found := false
+	found, diskFound := false, false
 	for _, n := range rep.Nodes {
 		if n.Idx == c.Nodes[victim].Idx() && !n.Live {
 			found = true
+		}
+		if n.Idx == c.Nodes[victim].Target() && !n.Live { // the slots are on its disk (docs/14 §9)
+			diskFound = true
 			if n.Missing != 2 {
-				t.Fatalf("dead node missing slots %d, want 2", n.Missing)
+				t.Fatalf("dead disk missing slots %d, want 2", n.Missing)
 			}
 		}
 	}
-	if !found || len(rep.Warnings) == 0 {
-		t.Fatalf("dead node not reported: %+v", rep)
+	if !found || !diskFound || len(rep.Warnings) == 0 {
+		t.Fatalf("dead node and its disk not reported: %+v", rep)
 	}
 	// past fill_after the slots are bad (L-87): repair pending as well
 	c.Clk.Advance(cluster.FillAfter)

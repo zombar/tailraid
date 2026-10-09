@@ -16,7 +16,7 @@ func TestEventRing_BoundedAndNilSafe(t *testing.T) {
 	r := NewEventRing(clock.NewFake(time.Unix(0, 0)), 3)
 	var h Hash
 	h[0] = 7
-	for i := 0; i < ringLen+10; i++ {
+	for range ringLen + 10 {
 		r.Record(h, EvUploaded, "")
 	}
 	r.Record(h, EvCommitted, "last")
@@ -25,7 +25,7 @@ func TestEventRing_BoundedAndNilSafe(t *testing.T) {
 		t.Fatalf("ring holds %d events, last %+v", len(evs), evs[len(evs)-1])
 	}
 	// chunk cap: the least recently touched hash is dropped first
-	for i := 0; i < ringChunks; i++ {
+	for i := range ringChunks {
 		var o Hash
 		o[0], o[1], o[2] = 1, byte(i>>8), byte(i)
 		r.Record(o, EvScrubOK, "")

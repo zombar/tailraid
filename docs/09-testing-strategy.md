@@ -43,10 +43,24 @@ Rules that keep it honest:
 
 - A `_test.go` that cites an invariant lands in the same commit as, or earlier than, the
   implementation it covers.
-- `make check` (fmt-check, vendor-check, lint with invariants and dead code, web-check,
-  `go test -short -race ./...`) runs in the lefthook pre-commit hook and must pass before
-  every commit.
+- `make check` runs in the lefthook pre-commit hook (`make hooks` installs it; lefthook is
+  a Go tool in `tools.mod`) and must pass before every commit: `fmt-check`,
+  `vendor-check`, `lint` (golangci-lint with the linters listed in `.golangci.yml`,
+  `check-invariants.sh --check`, `deadcode`, `docs-check` for links, anchors and invariant
+  mentions in the prose, `spell` with misspell over docs, TypeScript, CSS and the lookdev
+  HTML, `actionlint` for the workflow, `yaml-check` and `shell-check`), `web-check` (the
+  committed bundle), `web-typecheck` (typescript-go over `internal/webui/tsconfig.json`,
+  since esbuild only bundles) and `go test -short -race ./...`. The CSS and the lookdev
+  have no linter as a Go module, so `internal/webui/static_test.go` is theirs: every class
+  the TypeScript emits exists in `app.css` or the lookdev, and every class `app.css`
+  defines is used. The `commit-msg` hook requires the `scope: subject` form that
+  `scripts/changelog.sh` groups by; `pre-push` runs `make vuln`.
 - No coverage gate. `make test` prints per-package coverage so regressions are visible.
+- A cited test never skips unconditionally: `check-invariants.sh` refuses a `t.Skip` at
+  the top level of a test body outside `test/invariants`, so an invariant cannot count as
+  covered by a test that proves nothing; a skip inside a condition (`-short`, an OS, a
+  missing tool) is fine, and a test whose precondition depends on a hash vector writes
+  until the precondition holds instead of skipping.
 - Review checklist (also in `CLAUDE.md`): every write-path test includes a non-zero offset;
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on
   every node" function has an N-node determinism test; every error path returns a typed
@@ -98,7 +112,7 @@ rename table (`over file`, `over empty dir`, `over non-empty dir`, `into own sub
 `TestFSM_RefCountNeverUnderflows`;
 `TestFSM_SetVolume_PolicyVersionBumps`; invariant checker used by every FSM test
 (Σrefs = references from inodes, `len(Chunks) == ceil(Size/CS)`, parent chains reach root,
-`Tombs ⇔ Refs==0`); `FuzzDecodeCommand`.
+`Tombs ⇔ Refs==0`); `FuzzDecodeCommand`, `FuzzDecodeHandle`. Every parsing surface has a fuzz target (`make fuzz` runs them all for 30 s each): commands, snapshots, placement, shard keys and headers, NFS handles, the WAL (`FuzzWALReplay`), the release checksum file (`FuzzParseSums`).
 
 **`internal/meta` placement** — `TestPlace_DeterministicAcrossNodes` (7 instances, shuffled
 candidate order, 10k hashes → identical); `TestPlace_DistinctNodes`;
@@ -249,8 +263,11 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
 - **Live** (`tailraid verify [--report out.html] [--destructive]`): runs on one device of
   the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
   uses the device's tailnet IP. Non-destructive by default: transfer, integrity across every
-  node's FSM hash, churn, dedup and GC, repair backlog. `--destructive` adds corruption
-  (`/dev/corrupt`, needs `dev.enabled` on the targets); `--destructive --restarts` declares
+  node's FSM hash, churn, dedup and GC, repair backlog; the only thing a non-destructive
+  run changes is the files under its own directory (I-113). `--destructive` adds corruption
+  (`/dev/corrupt`, needs `dev.enabled` on the targets) and the steps that change the
+  cluster itself (`Caps.Mutate`: policy changes, drains and removals, a disk fill);
+  `--destructive --restarts` declares
   that every target runs under a restarting service manager (docs/12 §1) and adds kills,
   restarts and partitions through `/dev/exit` and `/dev/fault`; without it those phases
   are reported as *skipped (capability)*. All IO is confined to `/_soak/<timestamp>/`, deleted
@@ -295,9 +312,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `fill_after`; restore it: live again, its stale shards swept after grace; then, in auto
   mode, add a disk to the gateway host, drain it and remove it, the policy following the
   member table after each step with the corpus exact (the previous pin restored after); I-86, I-87,
-  I-89, I-90, L-192, L-193, L-194). The compose rig gives every node two added disks
-  (4 hosts × 3 targets); `cmd/soak -topology single` runs one node with four disks, where
-  phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
+  I-89, I-90, L-192, L-193, L-194); 14 diskless host (a host with no disks is live, flagged
+  `diskless` with no budget and holds no slot; a corpus written through it is fully placed
+  with no slot on it and reads exact through it and through another gateway; skipped on a
+  rig where every host has a disk; I-118). The compose rig gives four nodes two disks each, one
+  derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
+  host; phase 14 writes through it); `cmd/soak -topology single` runs one node with four
+  disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure and
   disk next to the process memory. A phase the environment cannot run is recorded as
   *skipped (capability)*, never passed.
@@ -306,6 +327,23 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `Start`, so "m nodes dead" holds for as long as the phase needs rather than for the
   service manager's restart delay. The device running `verify` is never killed (its mount
   is the run's only volume); when it leads, the consensus phase is skipped.
+- **Driver rules.** A phase runs in its own goroutine under the profile's `PhaseTimeout`
+  (20 min in the quick profile; 0 is no limit): a phase that panics or overruns is one
+  failed "phase completed" check with the driver's stack or every node's goroutine dump
+  behind it, and the run continues with the next phase (I-111). A phase that recorded no
+  check and did not skip fails too: silence is not a pass. A check that could not be
+  measured (no sample landed, the gateway reports no WAL cap, the file is too small to
+  judge a spread, a victim never answered) is recorded `skipped` with its reason, counts
+  as neither pass nor fail and covers nothing (I-114). Every phase that kills, cuts,
+  drains, fills or re-pins registers the restore with an `undo` list and runs whatever it
+  did not get to on its way out, on a context that outlives a cancellation, so a failed,
+  timed-out or interrupted phase leaves the cluster as it found it (I-112). `Execute`
+  always returns a summary: a run that stops before its first phase (no node, no status,
+  no gateway, the run directory refused) or is cancelled between phases carries
+  `Aborted` and the phases it never reached as *NOT RUN*, the report renders with an
+  `ABORTED` banner, and `verify` and `cmd/soak` write that partial report and exit
+  non-zero; Ctrl-C on `verify` ends the run after the current phase and the cleanup of
+  `/_soak/<ts>` still runs. The goroutine dumps of a run are capped at 4 MiB altogether.
 - **Results and report**: the driver appends one JSON line per event, check and 1 s
   sample (bytes moved, cumulative write/read latency histograms over fixed log-spaced
   buckets, degraded / repair-pending / unreadable / stale-policy chunks, stored and
@@ -315,9 +353,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   test keeps the citations defined). The driver then renders a self-contained
   `report.html` with inline SVG charts drawn in Go: the header (target, profile, policy
   and chunk size, node count, seed, flags, per-node binary version), a PASS / FAIL /
-  PARTIAL banner (PARTIAL when a phase was skipped for a capability the environment
-  lacks: a live run without `--destructive --restarts` never shows green), the phase ×
-  check matrix with citations, every inconsistency with file, chunk, node and its
+  PARTIAL / ABORTED banner (PARTIAL when a phase was skipped for a capability the
+  environment lacks: a live run without `--destructive --restarts` never shows green;
+  ABORTED with the reason when the run stopped early), the phase ×
+  check matrix with citations (`ok`, `FAIL` or `SKIPPED` per check), every inconsistency with file, chunk, node and its
   `results.jsonl` line, totals (bytes, ops, dedup ratio, deepest WAL, repair and GC
   counters), p50 / p99 / max latency per phase and separately for the operations issued
   while a fault was in force, the coverage table of cited IDs with pass and fail counts,
@@ -341,10 +380,40 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
 the committed `vendor/` matches `go.mod`, gofmt) · `lint` (golangci-lint v2 via
 `go run -mod=readonly -modfile=tools.mod`, `check-invariants.sh --check`, `make deadcode`,
 `make web-check`: the committed browser bundle matches `internal/webui/src`; the lint runs
-again under `GOOS=darwin` and `GOOS=windows` so the per-OS files are covered) · `vuln`
+again under `GOOS=linux`, `GOOS=darwin` and `GOOS=windows` with `make lint-cross`, so the per-OS files are covered on every developer machine and in CI) · `vuln`
 (govulncheck; the release job waits for it) · `test`
 matrix ubuntu/macos/windows `go test -short -race -cover ./...` (no coverage gate) · `long`
 on pushes to main and nightly (`make test-long`) · `mount` on main (ubuntu with
 `nfs-common`, macos; `sudo -E make test-mount`) · `soak` nightly on ubuntu uploading
 `report.html` · `release` on tags `v*` (6 static binaries + sha256sums). Go version is read
 from `go.mod`.
+
+## Invariants
+
+The soak driver's own rules (§6 "Driver rules"); the phases cite the invariants of the
+components they exercise.
+
+- **I-111** — A phase that panics or runs past `PhaseTimeout` is recorded as one failed
+  check of that phase, with the driver's stack or every node's goroutine dump as a dump
+  record, and the run continues with the next phase; a phase that records no check and
+  does not skip is failed as well.
+- **I-112** — Every change a phase makes to the cluster (a killed node, a cut, a drained
+  or removed member, a filled disk, a policy change) is restored before the phase's result
+  is recorded, whether the phase completed, failed, panicked, timed out or was cancelled,
+  on a context that outlives the cancellation.
+- **I-113** — A live run without `--destructive` changes nothing but the files under its
+  own run directory: no policy change, drain, removal, fill, corruption, kill or cut is
+  issued, and each such step is recorded skipped with its reason.
+- **I-114** — A check that could not be measured is recorded skipped with its reason and
+  counts as neither pass nor fail; a run that stops before or between phases returns a
+  summary with the reason and the unreached phases as not run, and the report renders it
+  with an `ABORTED` verdict, never `PASS`.
+
+## Tests
+
+| Invariant | Tests |
+|---|---|
+| I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
+| I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores` |
+| I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
+| I-114 | `TestExecute_AbortBeforePhases`, `TestExecute_CancelMarksNotRun`, `TestRender_ZeroPhasesAborted`, `TestRender_NotRunPhases`, `TestSummary_SkippedCheckCoversNothing` |

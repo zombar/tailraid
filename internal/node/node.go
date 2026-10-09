@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	smb "github.com/go-filesystems/smb"
+
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
@@ -29,6 +31,7 @@ import (
 	"github.com/zombar/tailraid/internal/nfsgw"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/sysfs"
 	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -40,6 +43,7 @@ type Identity struct {
 	IP       netip.Addr
 	StableID string
 	Host     string
+	DNSName  string // MagicDNS name without the trailing dot ("" when unknown)
 }
 
 // Tailnet resolves this node's identity, using a fake when dev.enabled points at one.
@@ -66,7 +70,7 @@ func Tailnet(ctx context.Context, cfg config.Config) (tailscale.Client, Identity
 	if err != nil {
 		return nil, Identity{}, err
 	}
-	return ts, Identity{IP: ip, StableID: st.Self.ID, Host: st.Self.HostName}, nil
+	return ts, Identity{IP: ip, StableID: st.Self.ID, Host: st.Self.HostName, DNSName: strings.TrimSuffix(st.Self.DNSName, ".")}, nil
 }
 
 // WaitTailnet retries Tailnet until tailscaled reports Running or the deadline passes
@@ -112,11 +116,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		faults = dev.NewFaults()
 		raftFaults = faults
 	}
-	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log, Faults: raftFaults})
+	// the authorizer exists before the cluster node: the Raft transport gates accepted
+	// connections with it (I-92); the member table is bound as soon as the FSM exists
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log, Faults: raftFaults, PeerAuth: auth})
 	if err != nil {
 		return err
 	}
-	defer node.Close()
+	defer node.Shutdown(5 * time.Second) //nolint:errcheck // a leader hands over first (I-123); the close error is logged by Close's callers elsewhere
+	auth.SetMembers(node.FSM.NodeByAddr)
 	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 		return fmt.Errorf("waiting for raft: %w", err)
 	}
@@ -124,41 +132,37 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if !ok {
 		return errors.New("this node is not in the cluster node table")
 	}
-	clk := clock.Real()
-	store, pinned, err := openStore(cfg)
-	if err != nil {
+	if err := legacyCheck(node.FSM); err != nil { // a state from before devices stopped being targets (docs/14 §9, I-119)
 		return err
 	}
+	clk := clock.Real()
 	cache, err := chunk.OpenCache(sysfs.OS{}, filepath.Join(cfg.Node.DataDir, "cache"), 1<<30, clk)
 	if err != nil {
 		return err
 	}
 	vol := node.FSM.Volume()
-	ov, err := vfs.OpenOverlay(filepath.Join(cfg.Node.DataDir, "staging"), vol.ChunkSize, clk)
+	ov, err := vfs.OpenOverlay(filepath.Join(cfg.Node.DataDir, "staging"), vol.ChunkSize, clk, vfs.WithLog(log))
 	if err != nil {
 		return err
 	}
 	defer ov.Close()
 
-	storeFS, _ := sysfs.FilesystemID(store.Root())        // to spot targets on one physical disk (docs/14 §8)
-	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // added disks (docs/14 §3)
+	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // this host's disks, the only shard stores (docs/14 §3, §9)
 	disks.refresh(node.FSM.Nodes())
 
-	client := rpc.NewClient(clusterID, node.RPCAddrOf, store)
+	client := rpc.NewClient(clusterID, node.RPCAddrOf)
 	client.SetDisks(node.DiskOf, disks.local)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
 	prober.SelfHealth = func() rpc.Health {
-		used, capacity := store.Used(), store.Capacity()
-		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled,
-			FS: storeFS, Disks: disks.health()}
+		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Dev: cfg.Dev.Enabled, Disks: disks.health()}
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
 	var blocked func(string) bool
 	if cfg.Dev.Enabled {
 		ring = meta.NewEventRing(clk, selfIdx)
-		devHandler = dev.Handler(node.FSM, devStores{store, disks}, cfg.Node.DataDir, faults, log)
+		devHandler = dev.Handler(node.FSM, devStores{disks: disks, fsm: node.FSM}, faults, log)
 		client.WrapTransport(faults.Transport)
 		blocked = faults.Blocked
 	}
@@ -183,8 +187,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
@@ -198,11 +201,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		return rep
 	}
-	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Disk: disks.lookup, DiskHealth: disks.health, StoreFS: storeFS, Applier: node, Fence: fence{node, selfIdx},
+	srv, err := rpc.NewServer(rpc.Options{
+		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
-		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
+		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked,
+	})
 	if err != nil {
 		return err
 	}
@@ -213,10 +218,12 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		if login != "" {
 			webUsers = login
 		}
-		web, err = webui.New(webui.Options{FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status,
+		web, err = webui.New(webui.Options{
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
-			}, Clk: clk, Logger: log})
+			}, Clk: clk, Logger: log,
+		})
 		if err != nil {
 			return err
 		}
@@ -232,38 +239,56 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			_ = client.ReportBadSlot(rctx, addr, key, bad)
 		}
 	}
-	rl, err := rpc.Listen(rpcAddr, auth)
+	rl, err := rpc.Listen(ctx, rpcAddr, auth)
 	if err != nil {
 		return err
 	}
-	nl, err := nfsgw.Listen(cfg.Listen.NFS)
-	if err != nil {
-		_ = rl.Close()
-		return err
+	// the gateways: NFS on macOS and Linux, SMB on Windows, either or both by config
+	// (docs/07, docs/15); a listener that fails to bind closes the ones before it
+	open := []net.Listener{rl}
+	closeOpen := func() {
+		for _, l := range open {
+			_ = l.Close()
+		}
 	}
-	var wl net.Listener
+	var nl, sl, wl net.Listener
+	var smbSrv *smb.Server
+	if cfg.Listen.NFS != "" {
+		if nl, err = nfsgw.Listen(ctx, cfg.Listen.NFS); err != nil {
+			closeOpen()
+			return err
+		}
+		open = append(open, nl)
+		nfsgw.UseLogger(log) // one log stream, one format (the library logs client noise)
+	}
+	if cfg.Listen.SMB != "" {
+		if smbSrv, err = smbgw.NewServer(fs, node.FSM, cfg.SMB.Password); err != nil {
+			closeOpen()
+			return err
+		}
+		if sl, err = smbgw.Listen(ctx, cfg.Listen.SMB); err != nil {
+			closeOpen()
+			return err
+		}
+		open = append(open, sl)
+	}
 	if web != nil {
-		if wl, err = net.Listen("tcp", webAddr); err != nil {
-			_ = rl.Close()
-			_ = nl.Close()
+		var lc net.ListenConfig
+		if wl, err = lc.Listen(ctx, "tcp", webAddr); err != nil {
+			closeOpen()
 			return fmt.Errorf("web ui listener: %w", err)
 		}
 	}
-	nfsgw.UseLogger(log)           // one log stream, one format (the library logs client noise)
-	if runtime.GOOS == "windows" { // mount.exe finds the gateway through the portmapper (docs/12 §2)
-		_, nfsPort, _ := net.SplitHostPort(nl.Addr().String())
-		port, _ := strconv.Atoi(nfsPort)
-		pm := &mount.Portmap{Port: uint32(port), Log: log}
-		go func() {
-			if err := pm.Serve(ctx, "127.0.0.1:111"); err != nil {
-				log.Error("portmap stub failed; Windows mount.exe cannot find the gateway", "err", err)
-			}
-		}()
-	}
 	log.Info("tailraid serving", "version", version, "node", id, "idx", selfIdx, "tailnet", ident.IP, "rpc", rl.Addr(), "raft", raftAddr,
-		"nfs", nl.Addr(), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
-	prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
-	log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+		"nfs", addrOrOff(nl), "smb", addrOrOff(sl), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
+	if nl != nil && runtime.GOOS != "windows" {
+		prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
+		log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+	}
+	if sl != nil { // the password is read from stdin by `net use … *`, so the line holds none
+		prog, args, _ := mount.SMBCommand(runtime.GOOS, sl.Addr().String(), cfg.Mount.Path)
+		log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+	}
 	if web != nil {
 		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
 	}
@@ -299,15 +324,39 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
 	}
 
-	err = nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM))
+	// the gateways own the process lifetime: the first to end ends the node (the service
+	// manager restarts it), and the other, if any, is stopped with the serve context
+	gw := make(chan error, 2)
+	gateways := 0
+	if nl != nil {
+		gateways++
+		go func() { gw <- nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM)) }()
+	}
+	if sl != nil {
+		gateways++
+		go func() { gw <- smbgw.Serve(sctx, sl, smbSrv) }()
+	}
+	err = <-gw
+	stop()
+	for range gateways - 1 {
+		<-gw
+	}
 	cancelBg()
-	for i := 0; i < loops; i++ {
+	for range loops {
 		<-done
 	}
 	if addrChanged.Load() {
 		return ErrAddressChanged
 	}
 	return err
+}
+
+// addrOrOff is a gateway listener's address for the log, "off" for a gateway not configured.
+func addrOrOff(l net.Listener) string {
+	if l == nil {
+		return "off"
+	}
+	return l.Addr().String()
 }
 
 // selfLogin is this node's tailnet login for the web UI's same-user rule (docs/13 §2):
@@ -330,6 +379,7 @@ func staleFor(node *cluster.Node, prober *cluster.Prober, clk clock.Clock) bool 
 		return true
 	case cluster.NoLeader:
 		return clk.Now().Sub(node.Raft.LastContact()) >= cluster.StaleThreshold
+	case cluster.Healthy:
 	}
 	return false
 }
@@ -345,7 +395,6 @@ type adminOps struct {
 	prober   *cluster.Prober
 	repairer *repair.Repairer
 	gc       *repair.GC
-	store    *chunk.Store // disk 0
 	disks    *diskSet
 	client   *rpc.Client
 	rd       *vfs.Reader
@@ -354,39 +403,27 @@ type adminOps struct {
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
-	pinned   bool // node.capacity is set: never re-derive the budget
+	dataDir  string
 }
 
-// openStore opens the shard store with its budget: node.capacity pins it, otherwise it is
-// derived from the data disk (docs/01 §Node budget, I-74).
-func openStore(cfg config.Config) (*chunk.Store, bool, error) {
-	pinned := cfg.Node.Capacity != ""
-	var capBytes uint64
-	if pinned {
-		var err error
-		if capBytes, err = config.ParseBytes(cfg.Node.Capacity); err != nil {
-			return nil, false, err
-		}
-	}
-	store, err := chunk.Open(sysfs.OS{}, filepath.Join(cfg.Node.DataDir, "shards"), int64(capBytes))
-	if err != nil {
-		return nil, false, err
-	}
-	if !pinned {
-		if _, err := store.Rebudget(); err != nil {
-			return nil, false, err
-		}
-	}
-	return store, pinned, nil
-}
+// ErrLegacyState is a restored state from before devices stopped being targets
+// (docs/14 §9, I-119): nothing migrates it, so serve refuses to run on it.
+var ErrLegacyState = errors.New("node: this cluster stores shards on device rows")
 
-// Budget is the shard budget init and join register for this device.
-func Budget(cfg config.Config) (uint64, error) {
-	store, _, err := openStore(cfg)
-	if err != nil {
-		return 0, err
+// legacyCheck refuses a state in which a device row carries a budget or a chunk slot
+// names a device index, with the way out.
+func legacyCheck(st *meta.Store) error {
+	devices, slots := meta.LegacyDeviceTargets(st.Nodes(), st.ForEachChunk)
+	if len(devices) == 0 && slots == 0 {
+		return nil
 	}
-	return uint64(store.Capacity()), nil
+	names := make([]string, 0, len(devices))
+	for i := range devices {
+		names = append(names, devices[i].Name)
+	}
+	return fmt.Errorf("%w (%d device rows with a budget: %s; %d chunk slots on devices): this cluster was created by a version that stored shards in the data directory, "+
+		"which this version cannot serve. Re-create it: `tailraid reset --yes` on every device, then `tailraid init` on one, `tailraid join` on the others (with disks listed under node.disks), and copy the data back",
+		ErrLegacyState, len(devices), strings.Join(names, ", "), slots)
 }
 
 // openDisk opens a just-added disk. The CLI registered it through the leader a moment
@@ -414,11 +451,10 @@ func (a *adminOps) openDisk(ctx context.Context, path string) string {
 // openDiskWait bounds how long open_disk waits for the disk's row to reach this node.
 const openDiskWait = 10 * time.Second
 
-// targets lists this host's shard stores: disk 0, then the open added disks.
+// targets lists this host's shard stores: its open disks (none on a diskless host).
 func (a *adminOps) targets() []target {
 	open := a.disks.open()
-	out := make([]target, 0, 1+len(open))
-	out = append(out, target{idx: a.self, store: a.store, pinned: a.pinned})
+	out := make([]target, 0, len(open))
 	for _, ld := range open {
 		out = append(out, target{idx: ld.idx, store: ld.store, pinned: ld.cfg.Capacity != ""})
 	}
@@ -436,7 +472,7 @@ func (a *adminOps) rebudget(ctx context.Context) {
 		return
 	}
 	// a pinned budget is exact: register it whenever the cluster holds another value, so a
-	// device grown in place (node.capacity raised, then a restart) is seen at once
+	// disk grown in place (its capacity raised, then a restart) is seen at once
 	pinned := map[meta.NodeIdx]bool{}
 	for _, t := range a.targets() {
 		if t.pinned {
@@ -584,6 +620,12 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]string{"join_token": token}, nil
 	case "set_policy":
 		return a.setPolicy(ctx, op)
+	case "snapshot": // docs/12 §9: the newest state, exported under the data directory for the CLI to copy out
+		dir, m, err := a.node.ExportSnapshot(filepath.Join(a.dataDir, "export"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"dir": dir, "index": m.Index, "term": m.Term}, nil
 	case "open_disk":
 		if !filepath.IsAbs(op.Path) {
 			return nil, fmt.Errorf("open_disk: %q is not an absolute path", op.Path)
@@ -615,7 +657,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 				h, kk, mm, idx, err := chunk.ParseKey(k)
 				if err != nil {
 					rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
-					return nil
+					return nil         //nolint:nilerr // counted above; the walk goes on
 				}
 				c, ok := a.node.FSM.GetChunk(h)
 				if !ok || c.K != kk || c.M != mm || idx >= len(c.Placement) || c.Placement[idx] != t.idx {
@@ -632,42 +674,26 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 
 // filesReferencing walks the tree once and returns the paths whose chunks are in set.
 
-// fence answers the DELETE fence from the local FSM.
-type fence struct {
-	n    *cluster.Node
-	self meta.NodeIdx
-}
+// fence answers the DELETE fence from the local FSM for one of this host's disks
+// (rpc.Fence).
+type fence struct{ n *cluster.Node }
 
-func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) { return f.placedOn(f.self, key) }
-
-// PlacedOn is the fence for one of this host's added disks (rpc.DiskFence).
 func (f fence) PlacedOn(target meta.NodeIdx, key chunk.ShardKey) bool {
-	placed, _ := f.placedOn(target, key)
-	return placed
-}
-
-func (f fence) placedOn(target meta.NodeIdx, key chunk.ShardKey) (bool, bool) {
 	h, k, m, idx, err := chunk.ParseKey(key)
 	if err != nil {
-		return false, false
+		return false
 	}
 	c, ok := f.n.FSM.GetChunk(h)
-	if !ok || c.K != k || c.M != m || idx >= len(c.Placement) {
-		return false, ok
-	}
-	return c.Placement[idx] == target, true
+	return ok && c.K == k && c.M == m && idx < len(c.Placement) && c.Placement[idx] == target
 }
 
-// devStores is /dev/corrupt's view of this host: disk 0 and the open added disks.
+// devStores is /dev/*'s view of this host's open disks (docs/12 §3).
 type devStores struct {
-	own   *chunk.Store
 	disks *diskSet
+	fsm   *meta.Store
 }
 
 func (d devStores) find(k chunk.ShardKey) *chunk.Store {
-	if d.own.Has(k) {
-		return d.own
-	}
 	for _, ld := range d.disks.open() {
 		if ld.store.Has(k) {
 			return ld.store
@@ -677,13 +703,40 @@ func (d devStores) find(k chunk.ShardKey) *chunk.Store {
 }
 
 func (d devStores) Has(k chunk.ShardKey) bool { return d.find(k) != nil }
+
 func (d devStores) Path(k chunk.ShardKey) string {
 	if s := d.find(k); s != nil {
 		return s.Path(k)
 	}
-	return d.own.Path(k)
+	return ""
 }
-func (d devStores) Disk() (used, free, total uint64, err error) { return d.own.Disk() }
+
+// Disks is GET /dev/disk: every open disk as its budget sees it.
+func (d devStores) Disks() []dev.DiskInfo {
+	var out []dev.DiskInfo
+	for _, ld := range d.disks.open() {
+		used, free, total, err := ld.store.Disk()
+		if err != nil {
+			continue
+		}
+		info := dev.DiskInfo{ID: ld.id, Used: used, Free: free, Total: total, Pinned: ld.cfg.Capacity != ""}
+		if row, ok := d.fsm.Node(ld.idx); ok {
+			info.Name = row.Name
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// Fill is POST /dev/fill: the scratch file on the named disk ("" is the first open one).
+func (d devStores) Fill(id string, n uint64) error {
+	for _, ld := range d.disks.open() {
+		if id == "" || ld.id == id {
+			return dev.Fill(ld.cfg.Path, n)
+		}
+	}
+	return fmt.Errorf("no open disk %q on this host", id)
+}
 
 // watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change)
 // and returns true once the new address is in the node table, so the caller can restart.
@@ -732,20 +785,16 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	_, ident, err := Tailnet(ctx, cfg)
-	if err != nil {
-		return rpc.JoinResponse{}, err
-	}
-	capBytes, err := Budget(cfg)
+	ts, ident, err := Tailnet(ctx, cfg)
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
 	target := host
 	if _, _, err := net.SplitHostPort(host); err != nil {
-		target = net.JoinHostPort(host, strconv.Itoa(rpc.DefaultRPCPort))
+		target = net.JoinHostPort(host, strconv.Itoa(cfg.Listen.RPC)) // the port this cluster uses, as --node assumes
 	}
 	// learn the cluster ID from the target's health endpoint before opening the transport
-	probe := rpc.NewClient([16]byte{}, nil, nil)
+	probe := rpc.NewClient([16]byte{}, nil)
 	h, err := probe.Health(ctx, target)
 	if err != nil {
 		return rpc.JoinResponse{}, fmt.Errorf("reach %s: %w", target, err)
@@ -756,17 +805,26 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	} else {
 		return rpc.JoinResponse{}, fmt.Errorf("bad cluster id from %s", target)
 	}
+	if err := codecCompatible(h.Codec); err != nil {
+		return rpc.JoinResponse{}, err
+	}
 	raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
-	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log})
+	// the transport accepts the leader's Raft connection only from a member (I-92); the
+	// joiner's own table is empty until the log arrives, so the join response seeds it
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log, PeerAuth: auth})
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
 	defer n.Close()
-	client := rpc.NewClient(cid, nil, nil)
-	req := rpc.JoinRequest{Token: token, NodeID: id, Name: cfg.Node.Name, TSStableID: ident.StableID, Addr: ident.IP.String(),
-		RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Voter: voter, Capacity: capBytes, Version: version}
+	auth.SetMembers(n.FSM.NodeByAddr)
+	client := rpc.NewClient(cid, nil)
+	req := rpc.JoinRequest{
+		Token: token, NodeID: id, Name: cfg.Node.Name, TSStableID: ident.StableID, Addr: ident.IP.String(),
+		RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Voter: voter, Version: version,
+	}
 	var resp rpc.JoinResponse
-	for attempt := 0; attempt < 5; attempt++ {
+	for range 5 {
 		resp, err = client.Join(ctx, target, req)
 		if err == nil {
 			break
@@ -789,7 +847,16 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	if err := os.WriteFile(filepath.Join(cfg.Node.DataDir, "cluster_id"), []byte(h.ClusterID+"\n"), 0o600); err != nil {
+	auth.SetSeed(resp.Members)
+	if err := cluster.WriteClusterID(cfg.Node.DataDir, h.ClusterID); err != nil {
+		return resp, err
+	}
+	// the disks listed in the config, registered through the leader as init registers its
+	// own (docs/14 §2, I-121); serve opens them once their rows arrive
+	resp.Disks, err = registerDisks(cfg, cid, id, resp.NodeIdx, func(disk meta.Node) error {
+		return client.Members(ctx, target, rpc.MemberOp{Op: "add_disk", NodeIdx: resp.NodeIdx, DiskID: disk.ID, Name: disk.Name, Capacity: disk.Capacity})
+	})
+	if err != nil {
 		return resp, err
 	}
 	// receive the log before stopping so `serve` starts with the node table present
@@ -797,6 +864,16 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 		log.Warn("joined, but the log has not fully replicated yet; serve will finish it", "err", err)
 	}
 	return resp, nil
+}
+
+// codecCompatible refuses to join a cluster whose node writes a newer log and snapshot
+// format than this binary reads (docs/12 §6, I-105): every entry it sent would be
+// undecodable here. A target that reports no codec predates the field and is older.
+func codecCompatible(leader uint8) error {
+	if leader > meta.CodecVersion {
+		return fmt.Errorf("the cluster writes codec version %d and this binary reads up to %d: update this node first (tailraid update)", leader, meta.CodecVersion)
+	}
+	return nil
 }
 
 func decodeHex(s string) ([]byte, error) {

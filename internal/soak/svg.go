@@ -51,9 +51,39 @@ func fmtNum(v float64) string {
 	}
 }
 
+// markerLabelMax bounds a rotated event label so it stays inside the chart.
+const markerLabelMax = 40
+
+// truncate cuts s to n runes with an ellipsis.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// finitePoints drops NaN and Inf points: one bad vital from a node would otherwise make
+// every coordinate of the chart NaN.
+func finitePoints(ss []series) []series {
+	out := make([]series, len(ss))
+	for i, s := range ss {
+		out[i] = s
+		out[i].points = nil
+		for _, p := range s.points {
+			if math.IsNaN(p[0]) || math.IsInf(p[0], 0) || math.IsNaN(p[1]) || math.IsInf(p[1], 0) {
+				continue
+			}
+			out[i].points = append(out[i].points, p)
+		}
+	}
+	return out
+}
+
 // lineChart draws series over a shared time axis with phase bands behind them and
 // vertical event markers.
 func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) string {
+	ss = finitePoints(ss)
 	var maxX, maxY float64
 	for _, s := range ss {
 		for _, p := range s.points {
@@ -93,13 +123,13 @@ func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) 
 		}
 	}
 	// grid and axes
-	for i := 0; i <= 4; i++ {
+	for i := range 5 {
 		y := float64(padT) + ih*float64(i)/4
 		v := maxY * float64(4-i) / 4
 		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
 			padL, y, chartW-padR, y, padL-6, y+4, fmtNum(v))
 	}
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, chartH-padB+16, fmtNum(maxX*float64(i)/6))
 	}
@@ -109,7 +139,7 @@ func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) 
 		x := sx(m.x)
 		y := chartH - padB - 4 - (i%3)*40
 		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"><title>%s</title></line><text x="%.1f" y="%d" class="marklabel" transform="rotate(-90 %.1f %d)">%s</text>`,
-			x, padT, x, chartH-padB, html.EscapeString(m.label), x+3, y, x+3, y, html.EscapeString(m.label))
+			x, padT, x, chartH-padB, html.EscapeString(m.label), x+3, y, x+3, y, html.EscapeString(truncate(m.label, markerLabelMax)))
 	}
 	// series
 	for i, s := range ss {
@@ -203,7 +233,7 @@ func barChart(title string, labels []string, ss []series) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH+legendHeight(ss), html.EscapeString(title))
 	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
-	for i := 0; i <= 4; i++ {
+	for i := range 5 {
 		y := float64(padT) + ih*float64(i)/4
 		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
 			padL, y, chartW-padR, y, padL-6, y+4, fmtNum(maxY*float64(4-i)/4))
@@ -262,7 +292,7 @@ func lanes(title string, maxX float64, names []string, cells map[string][][2]flo
 			fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="4" height="%d" fill="%s"/>`, x-2, y+2, rowH-4, colors[name][i])
 		}
 	}
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, h-6, fmtNum(maxX*float64(i)/6))
 	}
@@ -284,7 +314,7 @@ func strip(title string, maxX float64, cells [][2]float64, colors []string) stri
 		x := float64(padL) + c[0]/maxX*iw
 		fmt.Fprintf(&b, `<rect x="%.1f" y="28" width="6" height="20" fill="%s"/>`, x-3, colors[i])
 	}
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, h-6, fmtNum(maxX*float64(i)/6))
 	}

@@ -1,6 +1,7 @@
 package nfsgw
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -42,39 +43,54 @@ func (s *slogNFSLogger) ParseLevel(level string) (nfs.LogLevel, error) {
 	return 0, fmt.Errorf("nfsgw: unknown log level %q", level)
 }
 
-func msg(args ...interface{}) string { return strings.TrimSpace(fmt.Sprint(args...)) }
+func msg(args ...any) string { return strings.TrimSpace(fmt.Sprint(args...)) }
 
-func (s *slogNFSLogger) Panic(args ...interface{}) { s.l.Error(msg(args...)); panic(msg(args...)) }
-func (s *slogNFSLogger) Fatal(args ...interface{}) { s.l.Error(msg(args...)) }
-func (s *slogNFSLogger) Error(args ...interface{}) { s.l.Debug(msg(args...)) }
-func (s *slogNFSLogger) Warn(args ...interface{})  { s.l.Warn(msg(args...)) }
-func (s *slogNFSLogger) Info(args ...interface{})  { s.l.Info(msg(args...)) }
-func (s *slogNFSLogger) Debug(args ...interface{}) { s.l.Debug(msg(args...)) }
-func (s *slogNFSLogger) Trace(args ...interface{}) { s.l.Debug(msg(args...)) }
-func (s *slogNFSLogger) Print(args ...interface{}) { s.l.Info(msg(args...)) }
+func (s *slogNFSLogger) Panic(args ...any) { s.l.Error(msg(args...)) } // library glue never panics the gateway
+func (s *slogNFSLogger) Fatal(args ...any) { s.l.Error(msg(args...)) }
+func (s *slogNFSLogger) Error(args ...any) { s.l.Debug(msg(args...)) } // the library reports client errors (EROFS, bad handles) here: noise at the default level
+func (s *slogNFSLogger) Warn(args ...any)  { s.l.Warn(msg(args...)) }
+func (s *slogNFSLogger) Info(args ...any)  { s.l.Info(msg(args...)) }
+func (s *slogNFSLogger) Debug(args ...any) { s.l.Debug(msg(args...)) }
+func (s *slogNFSLogger) Trace(args ...any) { s.l.Debug(msg(args...)) }
+func (s *slogNFSLogger) Print(args ...any) { s.l.Info(msg(args...)) }
 
-func (s *slogNFSLogger) Panicf(format string, args ...interface{}) {
+func (s *slogNFSLogger) Panicf(format string, args ...any) {
+	s.l.Error(fmt.Sprintf(format, args...)) // library glue never panics the gateway
+}
+
+func (s *slogNFSLogger) Fatalf(format string, args ...any) {
 	s.l.Error(fmt.Sprintf(format, args...))
-	panic(fmt.Sprintf(format, args...))
 }
-func (s *slogNFSLogger) Fatalf(format string, args ...interface{}) {
-	s.l.Error(fmt.Sprintf(format, args...))
+
+func (s *slogNFSLogger) Errorf(format string, args ...any) {
+	if !s.l.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	s.l.Debug(fmt.Sprintf(format, args...)) // as Error
 }
-func (s *slogNFSLogger) Errorf(format string, args ...interface{}) {
-	s.l.Debug(fmt.Sprintf(format, args...))
-}
-func (s *slogNFSLogger) Warnf(format string, args ...interface{}) {
+
+func (s *slogNFSLogger) Warnf(format string, args ...any) {
 	s.l.Warn(fmt.Sprintf(format, args...))
 }
-func (s *slogNFSLogger) Infof(format string, args ...interface{}) {
+
+func (s *slogNFSLogger) Infof(format string, args ...any) {
 	s.l.Info(fmt.Sprintf(format, args...))
 }
-func (s *slogNFSLogger) Debugf(format string, args ...interface{}) {
+
+func (s *slogNFSLogger) Debugf(format string, args ...any) {
+	if !s.l.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
 	s.l.Debug(fmt.Sprintf(format, args...))
 }
-func (s *slogNFSLogger) Tracef(format string, args ...interface{}) {
+
+func (s *slogNFSLogger) Tracef(format string, args ...any) {
+	if !s.l.Enabled(context.Background(), slog.LevelDebug) {
+		return // go-nfs traces every RPC; the format runs only when someone listens
+	}
 	s.l.Debug(fmt.Sprintf(format, args...))
 }
-func (s *slogNFSLogger) Printf(format string, args ...interface{}) {
+
+func (s *slogNFSLogger) Printf(format string, args ...any) {
 	s.l.Info(fmt.Sprintf(format, args...))
 }

@@ -538,7 +538,7 @@ func TestOverlay_ConcurrentWritersDifferentInodes(t *testing.T) {
 		wg.Add(1)
 		go func(ino meta.Ino) {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for j := range 50 {
 				if err := ov.Write(ino, 0, uint64(j*10), []byte("0123456789")); err != nil {
 					t.Error(err)
 					return
@@ -651,7 +651,7 @@ func TestOverlay_OracleRandomOps(t *testing.T) {
 			return uint64(rng.Intn(int(size)))
 		}
 	}
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		ino := meta.Ino(1 + rng.Intn(4))
 		f := files[ino]
 		switch r := rng.Intn(13); {

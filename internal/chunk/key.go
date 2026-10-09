@@ -59,7 +59,7 @@ func ParseKey(key ShardKey) (h [32]byte, k, m uint8, idx int, err error) {
 	if len(km) != 2 {
 		return bad("k-m")
 	}
-	kk, ok1 := canonicalInt(km[0], 1, 256)
+	kk, ok1 := canonicalInt(km[0], 1, 255) // uint8, like Key
 	mm, ok2 := canonicalInt(km[1], 0, 255)
 	ii, ok3 := canonicalInt(rest[1], 0, MaxShardIdx)
 	if !ok1 || !ok2 || !ok3 || kk+mm > 256 || ii >= kk+mm {
