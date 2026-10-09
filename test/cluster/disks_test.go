@@ -296,8 +296,9 @@ func TestRepair_DrainHost_MovesItsDisks(t *testing.T) {
 	if n := onHost(); n != 0 {
 		t.Fatalf("%d slots still on the draining host or its disk", n)
 	}
-	// removal goes disk first, then host
+	// removal goes disks first (both of the host's), then host
 	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: d}))
+	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Target()}))
 	c.Settle()
 	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: host}))
 }

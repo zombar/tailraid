@@ -78,9 +78,9 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 	}
 	// a dead slot holder: degraded, slot not live, no HEAD attempted; a ring-less node
 	// still reports the state but says the ring is off
-	victim := r.Slots[0].Node - 1
+	victim := c.HostOf(meta.NodeIdx(r.Slots[0].Node)) // the slot is a disk; its host is what dies
 	if victim == 0 {
-		victim = r.Slots[1].Node - 1
+		victim = c.HostOf(meta.NodeIdx(r.Slots[1].Node))
 	}
 	c.Kill(victim)
 	c.Clk.Advance(cluster.LiveThreshold + time.Second)

@@ -119,6 +119,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version-file: go.mod, cache: true}
       - run: make release VERSION="${GITHUB_REF_NAME}"
+      - name: sign sha256sums.txt (docs/12 §4)
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: go run -mod=vendor ./cmd/tailraid-sign -key-env MINISIGN_SECRET_KEY -sign dist/sha256sums.txt && go run -mod=vendor ./cmd/tailraid-sign -verify dist/sha256sums.txt
       - run: scripts/changelog.sh notes "${GITHUB_REF_NAME}" > dist/release-notes.md && cat dist/release-notes.md
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -126,3 +130,4 @@ jobs:
           files: |
             dist/tailraid_*
             dist/sha256sums.txt
+            dist/sha256sums.txt.minisig

@@ -105,7 +105,7 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "policy 1+0 (auto") || !strings.Contains(out, "budget ") {
+	if !strings.Contains(out, "policy 1+0 (auto") || !strings.Contains(out, node.NoDisksHint) {
 		t.Fatalf("init output: %s", out)
 	}
 	host, _ := os.Hostname()
@@ -116,13 +116,8 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 		t.Fatalf("volume %+v", vol)
 	}
 	nodes := n.FSM.Nodes()
-	if len(nodes) != 1 || nodes[0].Name != host || !nodes[0].Voter || nodes[0].Capacity == 0 {
-		t.Fatalf("node table %+v (hostname %q)", nodes, host)
-	}
-	// the config written back keeps the budget derived
-	got, err := config.Load(path)
-	if err != nil || got.Node.Capacity != "" {
-		t.Fatalf("saved config capacity %q %v", got.Node.Capacity, err)
+	if len(nodes) != 1 || nodes[0].Name != host || !nodes[0].Voter || nodes[0].Capacity != 0 {
+		t.Fatalf("node table %+v (hostname %q): one device row, no budget", nodes, host)
 	}
 	// hidden --k/--m pin a manual policy for test rigs
 	path2, cfg2 := devHome(t)
@@ -152,7 +147,7 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 		}
 	})
 	addrA := fmt.Sprintf("127.0.0.1:%d", cfgA.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil, nil)
+	probe := rpc.NewClient([16]byte{}, nil)
 	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addrA); return err == nil }, "node A never served")
 
 	pathB, _ := devHome(t)
@@ -167,7 +162,7 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep, err := admin.FetchStatus(ctx, rpc.NewClient(cid, nil, nil), addrA)
+	rep, err := admin.FetchStatus(ctx, rpc.NewClient(cid, nil), addrA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +171,8 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	}
 	host, _ := os.Hostname()
 	joined := rep.Nodes[1]
-	if joined.Voter || joined.Capacity == 0 || joined.Name != host {
-		t.Fatalf("joined node %+v", joined)
+	if joined.Voter || joined.Capacity != 0 || joined.Name != host || !joined.Diskless {
+		t.Fatalf("joined node %+v: a non-voter with no budget and no disks", joined)
 	}
 	if !rep.Volume.Auto {
 		t.Fatal("status does not report auto mode")

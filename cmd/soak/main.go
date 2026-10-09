@@ -26,7 +26,7 @@ func run() int {
 	out := flag.String("out", "report.html", "HTML report path")
 	results := flag.String("results", "results.jsonl", "results stream path")
 	dir := flag.String("compose-dir", "test/soak", "compose project directory")
-	topology := flag.String("topology", "multi", "multi (4 hosts × 3 targets) | single (one host, four disks)")
+	topology := flag.String("topology", "multi", "multi (4 hosts × 2 disks plus a diskless voter) | single (one host, four disks)")
 	nodes := flag.Int("nodes", 0, "number of nodes in the compose file (default: 4 for multi, 1 for single)")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "workload seed")
 	flag.Parse()
@@ -51,7 +51,7 @@ func run() int {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	file, n := "docker-compose.yml", 4
+	file, n := "docker-compose.yml", 5
 	switch *topology {
 	case "multi":
 	case "single":

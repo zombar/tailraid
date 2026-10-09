@@ -81,7 +81,7 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	}
 	nd := meta.Node{
 		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
-		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano(),
+		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Version: req.Version, JoinedAt: time.Now().UnixNano(), // no budget: a device stores nothing (docs/14 §9)
 	}
 	var err error
 	// re-join of a known node keeps its index; a removed record refuses the ID, and so
@@ -196,6 +196,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		return propose(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: op.NodeIdx, State: op.State, Now: time.Now().UnixNano()}})
 	case "set_capacity":
+		if nd.Kind == meta.KindDevice {
+			return fmt.Errorf("%w: a device has no budget; set_capacity names a disk (docs/14 §9)", ErrBadMemberOp)
+		}
 		nd.Capacity = op.Capacity
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	case "add_disk":

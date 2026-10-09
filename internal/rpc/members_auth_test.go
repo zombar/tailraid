@@ -44,7 +44,7 @@ func TestMembers_UpdateAddrFromUnknownAddress(t *testing.T) {
 func TestJoin_AddrMustBeCaller(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
-	req := JoinRequest{Token: "tok", NodeID: "n2", Name: "two", TSStableID: "self-1", Addr: "100.64.0.77", RaftPort: 1, RPCPort: 2, Capacity: 5}
+	req := JoinRequest{Token: "tok", NodeID: "n2", Name: "two", TSStableID: "self-1", Addr: "100.64.0.77", RaftPort: 1, RPCPort: 2}
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("join with another address: %v, want ErrForbidden", err)
 	}

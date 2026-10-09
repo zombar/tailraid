@@ -72,9 +72,9 @@ func TestConfig_LogFile(t *testing.T) {
 	c := Default()
 	c.Log.Format = "json"
 	c.Log.File = filepath.Join(t.TempDir(), "logs", "serve.log")
-	l, closeLog := c.OpenLogger()
+	l, lf := c.OpenLogger()
 	l.Info("hello", "k", 1)
-	if err := closeLog(); err != nil {
+	if err := lf.Close(); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(c.Log.File)
@@ -84,9 +84,9 @@ func TestConfig_LogFile(t *testing.T) {
 	if !strings.Contains(string(b), `"msg":"hello","k":1`) {
 		t.Fatalf("log file: %q", b)
 	}
-	l, closeLog = c.OpenLogger()
+	l, lf = c.OpenLogger()
 	l.Info("again")
-	_ = closeLog()
+	_ = lf.Close()
 	if b, _ = os.ReadFile(c.Log.File); strings.Count(string(b), "\n") != 2 {
 		t.Fatalf("not appended: %q", b)
 	}

@@ -32,7 +32,7 @@ export interface NodeReport {
   name: string;
   kind: string; // device | disk | s3
   host?: number; // disks: the device that serves it (docs/14)
-  data_dir?: boolean; // a host's own store, on a host with added disks
+  diskless?: boolean; // a device with no disks: a gateway-only host (docs/14 §9)
   shared_with?: string[]; // targets of the same host on the same physical disk
   state: "active" | "draining" | "removed" | string;
   addr: string;

@@ -22,7 +22,7 @@ func TestCluster_ReadableWithNonVotersAsleep(t *testing.T) {
 	voters := map[meta.NodeIdx]bool{}
 	for i, nd := range c.Nodes {
 		if c.Voter(i) {
-			voters[nd.Idx()] = true
+			voters[nd.Target()] = true // the slots are on the voter's disk (docs/14 §5)
 		}
 	}
 	chunks := 0

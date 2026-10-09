@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/zombar/tailraid/internal/admin"
 )
 
 // statusTTL bounds how often the admin report (a walk of every chunk) is rebuilt; every
@@ -30,6 +32,10 @@ func (s *Server) report() any {
 	now := s.o.Clk.Now()
 	if s.cache.body == nil || now.Sub(s.cache.at) >= statusTTL {
 		rep := s.o.Status()
+		if r, ok := rep.(admin.Report); ok { // the join token is for the CLI on a member, never for a browser (I-127)
+			r.JoinToken = ""
+			rep = r
+		}
 		b, err := json.Marshal(rep)
 		if err != nil {
 			return nil

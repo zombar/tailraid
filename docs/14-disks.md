@@ -26,10 +26,11 @@ remove guard (`ErrNodeNotEmpty`, I-42) and the repair cases for draining and rem
 holders work on a disk unchanged. A `Placement` entry still holds a `NodeIdx`; the chunk
 codec does not change.
 
-A device's own store at `<data_dir>/shards` is its **disk 0**: the device row itself, with
-the device's `Capacity`. Clusters created before disks existed are therefore unchanged,
-and a device that should not store shards on its system disk pins `node.capacity: 0`.
-`NodeUpsert` refuses a `KindDisk` row whose `Host` is not an Active device
+A device stores nothing itself: its `data_dir` holds Raft, `node_id`, `cluster_id`, the
+read cache and the overlay WAL, never a shard. Only disks are placement targets; a device
+row's `Capacity` stays 0 and is read by nothing (I-118). A device with no disks is a
+**diskless host**: a full Raft member (voter if configured) and gateway whose writes land
+on other hosts' disks (§9). `NodeUpsert` refuses a `KindDisk` row whose `Host` is not an Active device
 (`ErrBadCommand`); removing a device is refused while any of its disks is not `Removed`.
 A disk is never more active than its host: while the host is Draining or Removed its disks
 count as such for placement and repair, so `node drain <host>` empties the host's disks
@@ -42,11 +43,10 @@ node. A device and its disks form one domain.
 
 ```yaml
 node:
-  data_dir: /var/lib/tailraid/data   # Raft, WAL, cache, disk 0
-  capacity: ""                       # disk 0's budget: "" derives, "500G" pins, "0" opts out
+  data_dir: /var/lib/tailraid/data   # Raft, WAL, cache; no shards
   disks:
-    - path: /mnt/a                   # one entry per added disk
-      capacity: ""                   # "" derives from the disk's filesystem
+    - path: /mnt/a                   # one entry per disk
+      capacity: ""                   # "" derives from the disk's filesystem, "500G" pins
 ```
 
 `tailraid node add-disk <path> [--capacity SIZE]`, run on the host:
@@ -59,8 +59,10 @@ node:
    the leader (the `member` op `add_disk`, forwarded like `join`);
 5. the running daemon opens the store on its next maintenance tick (no restart needed).
 
-`init` takes the disks already listed in the config: each is marked and registered in the
-same bootstrap as the device row, so `init` stays option-free (12 §7). A disk is named
+`init` and `join` take the disks already listed in the config: each is marked and
+registered with the device row, so both stay option-free (12 §7, I-121); with no disks
+listed both print that the device stores no data and how to add a disk. A marker that
+already names this cluster and host is reused, so a retried `init` or `join` is idempotent. A disk is named
 `<host>/<n>` in `node ls`, `node describe`, `node drain` and `node remove`; `ls` groups
 disks under their host.
 
@@ -73,9 +75,8 @@ two share one budget (§3) and one failure.
 
 ## 3. Stores and budgets
 
-`serve` opens one `chunk.Store` per target it hosts: disk 0 at `<data_dir>/shards` and
-each configured disk at `<path>/shards`. Every store keeps the existing layout, file
-format and sweep (01 §Shards, 06 §3).
+`serve` opens one `chunk.Store` per configured disk, at `<path>/shards`. Every store keeps
+the existing layout, file format and sweep (01 §Shards, 06 §3).
 
 Before opening an added disk, `serve` reads its marker. A missing marker, a different
 `cluster_id`, or a disk ID that is not a row of this host leaves the disk **closed**: it is
@@ -91,12 +92,11 @@ is divided equally among them. A pinned `capacity` is never re-derived.
 ## 4. Transport and liveness
 
 The shard RPC addresses a target by index: the resolver maps a disk to its host's
-`Addr:RPCPort` plus the disk ID. Disk 0 keeps `/v1/shards/{key}`; an added disk is
-`/v1/disks/{diskID}/shards/{key}` with the same methods, headers, fence and status codes
-(04 §3, 06 §2). A request for a disk ID that is not open on that host is `404` with
+`Addr:RPCPort` plus the disk ID: `/v1/disks/{diskID}/shards/{key}`, the only shard route,
+with the methods, headers, fence and status codes of 04 §3 and 06 §2. A request for a
+device index is refused by the client as `ErrUnavailable` (a device is not a target). A request for a disk ID that is not open on that host is `404` with
 `X-Tailraid-Disk: closed`, which the client maps to `ErrUnavailable` (never to "shard
-absent"). On the host itself the client goes straight to the store, as it does today for
-disk 0.
+absent"). On the host itself the client goes straight to the store.
 
 `/health` reports each target: `{idx, used, free, capacity, ok}`. The prober still probes
 hosts only. A disk is **live** iff its host is live and the host's last `/health` reported
@@ -131,10 +131,9 @@ a host above the cap when another placement exists (I-89).
 
 ## 6. Policy
 
-`AutoPolicy` (03 §Choosing the policy) counts **targets**, not devices: every Active
-device (its own store) except one with `Capacity == 0` that has disks of its own (it opted
-its system disk out), and every Active disk of an Active device; S3 nodes are not counted,
-as before. `v` counts the targets on voter hosts. The thresholds for `m` and the cap `k ≤ 6` are unchanged. One step
+`AutoPolicy` (03 §Choosing the policy) counts **targets**, not devices: every Active disk
+of an Active device; a device with no disks counts for nothing, and S3 nodes are not
+counted, as before. `v` counts the targets on voter hosts. The thresholds for `m` and the cap `k ≤ 6` are unchanged. One step
 is added when there are `H ≥ 2` hosts with a target: `k` is lowered (never below 1) until
 no host would hold more than `m` slots of a stripe under the host cap (so `ceil((k+m)/H) ≤
 m` when every host has the targets), and an automatic policy survives the loss of one whole
@@ -192,10 +191,10 @@ writes and repairs only (06 §6).
 - The soak report's **data spread across disks** chart (09 §soak) draws one lane per disk
   over time, coloured by each disk's slot share against its expected share, with a host-cap
   strip underneath.
-- **The data-dir store is labelled.** On a host with added disks, the device's own store
-  (disk 0, in `<data_dir>/shards`) is shown as `<host> (data dir)` in `node ls` and with a
-  `data dir` tag in the web UI, so it is not mistaken for the host itself. A host without
-  added disks is shown as before.
+- **A diskless host is shown as such.** `node ls` prints a device row with `-` for FREE and
+  the flag `no disks` when it has no disk rows; `status` reports it `diskless`, and the web
+  UI's Disks block draws its card with no target rows and the note `gateway only · no
+  disks`.
 - **Targets on one physical disk are flagged.** Each host reports the filesystem ID of
   every target it serves (`fs` in `/health`, from the device number on Unix and the volume
   on Windows); `status` marks targets of one host that share a filesystem with
@@ -203,6 +202,24 @@ writes and repairs only (06 §6).
   is illusory: `node ls` shows `shares disk with <names>` in its flags, `status` adds a
   warning line, and the web UI puts the warning icon (the amber `!` of the warnings strip)
   beside each such target, its title naming the others.
+
+## 9. Diskless hosts and legacy state
+
+A host with no disks is a member like any other: it votes if configured, it mounts the
+volume, its reads fetch shards from the hosts that have them and its writes are placed on
+them. Removing a host's last disk (`node remove <host>/<n>`, refused while the disk holds
+a slot, I-42) leaves such a host; nothing else changes about it. A volume whose node table
+holds no Active disk or S3 row has nowhere to put a chunk: every flush fails with
+`ErrFull`, so the client sees `ENOSPC` (I-120), not the `EIO` of disks that exist but are
+dead.
+
+Clusters created when the device row was a target hold slots on device indices and a
+`Capacity` on device rows. Nothing migrates them: before any listener opens, `serve`
+inspects the restored state and refuses to run when a device row has `Capacity > 0` or a
+chunk slot names a device index, printing that the cluster must be re-created (`tailraid
+reset --yes` on every device, then `init` and `join`, and the data copied back; I-119).
+The FSM itself still applies such entries, so a replayed log restores before the check
+runs.
 
 ## Invariants
 
@@ -225,6 +242,20 @@ writes and repairs only (06 §6).
 - **I-91** — Each target's budget is derived from the filesystem holding its own store and
   proposed separately past the hysteresis of I-74; targets sharing a filesystem divide it,
   so their budgets never sum to more than that filesystem's `used + free − reserve`.
+- **I-118** — A device row is never a placement target: `Candidates`, `AutoPolicy`,
+  `PolicyAllowed`, `Tolerance`, `Usage` and the reports count only disk and S3 rows, no
+  chunk slot names a device index, `set_capacity` is refused for a device, and a device
+  with no disks is a full member (voter if configured) and gateway that reads and writes
+  the volume while holding no slot; removing a host's last disk leaves it such a diskless
+  host.
+- **I-119** — `serve` refuses, before any listener opens, a restored state in which a device
+  row has `Capacity > 0` or a chunk slot names a device index, and prints that the cluster
+  must be re-created with `reset` and `init`/`join`.
+- **I-120** — A volume whose node table holds no Active disk or S3 row fails every flush
+  with `ErrFull`, so the client sees `ENOSPC`, never `EIO`.
+- **I-121** — `join` marks and registers the disks listed in its config exactly as `init`
+  does, named `<host>/<n>` from 1; `init` and `join` with no disks print that the device
+  stores no data and how to add a disk; neither registers a budget on the device row.
 
 ## Tests
 
@@ -236,3 +267,7 @@ writes and repairs only (06 §6).
 | I-89 | `TestChunkState_DomainSkew`, `TestModelCheck_Long`, `TestRepair_DeadDisk_RePlacesWithinCap`, `TestRepair_DomainSkew_MovesWithinCap`, `TestRepair_DomainSkew_UnfixableIgnored` |
 | I-90 | `TestChunkRPC_DiskPath_RoundTrip`, `TestCluster_SingleHostDisks_DiskFails_ReadsAndRepair`, `TestMember_AddDisk_ResolvesToHost`, `TestProber_DiskLiveness` |
 | I-91 | `TestBudget_PerDisk_SharedFilesystem`, `TestNode_Rebudget_PerTarget` |
+| I-118 | `TestAutoPolicy_DisklessHostNotCounted`, `TestCandidates_DevicesNeverTargets`, `TestCluster_DisklessVoter_WritesLandOnOtherHosts`, `TestCluster_RemoveLastDisk_HostBecomesDiskless`, `TestMemberOp_SetCapacity_RefusesDevice`, `TestPrintNodes_DisklessAndSharedDisk`, `TestReport_DisklessAndSharedDisk`, `TestUsage_DisksOnly` |
+| I-119 | `TestCLI_Serve_RefusesLegacyState`, `TestLegacyDeviceTargets_Table`, `TestServe_RefusesLegacyState` |
+| I-120 | `TestCluster_Diskless_WriteIsENOSPC`, `TestFlusher_NoTargets_ErrorWrapsErrFull`, `TestHasTargets_Table` |
+| I-121 | `TestCLI_Init_NoDisks_PrintsHint`, `TestCLI_Join_RegistersConfiguredDisks` |

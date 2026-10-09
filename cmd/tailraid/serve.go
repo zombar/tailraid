@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/svc"
+	"github.com/zombar/tailraid/internal/update"
 )
 
 func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
@@ -72,16 +74,12 @@ func initCmd() *cobra.Command {
 			if token == "" {
 				token = meta.NewJoinToken()
 			}
-			budget, err := node.Budget(cfg) // pinned by node.capacity, else derived from the data disk (docs/01)
-			if err != nil {
-				return err
-			}
-			// --k/--m pin a manual policy (test rigs); otherwise the leader grows it as devices join (docs/03)
+			// --k/--m pin a manual policy (test rigs); otherwise the leader grows it as disks join (docs/03)
 			auto := !cmd.Flags().Changed("k") && !cmd.Flags().Changed("m")
 			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
-				meta.Node{
-					Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: budget,
+				meta.Node{ // no budget: a device stores nothing, its disks do (docs/14 §9)
+					Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true,
 					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano(),
 				},
 				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, auto, token)
@@ -94,18 +92,17 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := node.RegisterDisks(cmd.Context(), n, cfg, cid); err != nil {
+			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid)
+			if err != nil {
 				return err
 			}
 			mode := "manual"
 			if auto {
-				mode = "auto, grows as devices join"
+				mode = "auto, grows as disks join"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, budget %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
-				cfg.Node.DataDir, id, ident.IP, bytesStr(budget), k, m, mode, chunkSize, path, ident.IP, token)
-			for i, d := range cfg.Node.Disks {
-				fmt.Fprintf(cmd.OutOrStdout(), "disk %s: %s\n", node.DiskName(cfg.Node.Name, i+1), d.Path)
-			}
+			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
+				cfg.Node.DataDir, id, ident.IP, k, m, mode, chunkSize, path, ident.IP, token)
+			printDisks(cmd.OutOrStdout(), cfg, disks)
 			return nil
 		},
 	}
@@ -124,15 +121,22 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Run the node: metadata, shard store and NFS gateway",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, _, err := loadConfig(cmd)
+			cfg, path, err := loadConfig(cmd)
 			if err != nil {
 				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			log, closeLog := cfg.OpenLogger()
-			defer func() { _ = closeLog() }()
+			go exitOnSecondSignal(ctx, cmd.ErrOrStderr())
+			log, lf := cfg.OpenLogger()
+			defer func() { _ = lf.Close() }()
 			slog.SetDefault(log)
+			for _, w := range cfg.Warnings(path) {
+				log.Warn(w)
+			}
+			go reopenLogOnSignal(ctx, lf, log)
+			forget := time.AfterFunc(time.Minute, func() { forgetOldBinary(log) }) // the update's .old, once this start has held (I-128)
+			defer forget.Stop()
 			run := func(ctx context.Context) error { return node.Serve(ctx, cfg, log, version) }
 			if asService, _ := cmd.Flags().GetBool("service"); asService {
 				return runAsService(ctx, svc.Name, run)
@@ -142,6 +146,35 @@ func serveCmd() *cobra.Command {
 	}
 	c.Flags().Bool("service", false, "run under the Windows service control manager (set by `tailraid install`)")
 	return c
+}
+
+// forgetOldBinary removes the <exe>.old an update left once this binary has served for
+// a minute: the rollback window closes with a clean start (docs/12 §5).
+func forgetOldBinary(log *slog.Logger) {
+	exe, err := executable()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(exe + ".old"); err != nil {
+		return
+	}
+	if err := update.ForgetOld(exe); err != nil {
+		log.Warn("previous binary not removed", "err", err)
+		return
+	}
+	log.Info("previous binary removed after a clean start", "path", exe+".old")
+}
+
+// exitOnSecondSignal ends the process at once when a second interrupt arrives while the
+// first is still being honoured (the final flush, the leadership hand-over): an operator
+// who presses Ctrl-C twice means now (docs/12 §1, I-123).
+func exitOnSecondSignal(ctx context.Context, w io.Writer) {
+	<-ctx.Done()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	fmt.Fprintln(w, "tailraid: second signal, exiting now")
+	os.Exit(130)
 }
 
 func mountCmd() *cobra.Command {

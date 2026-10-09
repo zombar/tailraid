@@ -51,18 +51,13 @@ type Applier interface {
 	IsLeader() bool
 	LeaderRPCAddr() string // host:port of the leader's RPC, or "" when unknown
 	AppliedIndex() uint64
+	Ready() bool // a leader is known and every committed entry has reached the FSM (I-125)
 }
 
-// Fence answers the DELETE fence questions (docs/06 §2).
+// Fence answers the DELETE fence question (docs/06 §2, docs/14 §4) for one of this
+// host's disks: whether the local FSM places the shard on that target. A server without
+// one refuses every DELETE.
 type Fence interface {
-	// PlacedOnSelf reports whether the local FSM places this shard on this node, and
-	// whether the chunk is known at all.
-	PlacedOnSelf(key chunk.ShardKey) (placed, known bool)
-}
-
-// DiskFence answers the same question for an added disk (docs/14 §4). A server whose
-// Fence does not implement it refuses every DELETE on an added disk.
-type DiskFence interface {
 	PlacedOn(target meta.NodeIdx, key chunk.ShardKey) bool
 }
 
@@ -86,12 +81,10 @@ type Options struct {
 	NodeID    string
 	ClusterID [16]byte
 	Version   string
-	Store     ShardStore
-	// Disk looks up an added disk open on this host by its ID, with its target index;
-	// DiskHealth lists every configured disk for /health. Both nil without disks.
+	// Disk looks up a disk open on this host by its ID, with its target index; DiskHealth
+	// lists every configured disk for /health. Both nil on a diskless host (docs/14 §9).
 	Disk       func(id string) (ShardStore, meta.NodeIdx, bool)
 	DiskHealth func() []DiskHealth
-	StoreFS    string // filesystem ID of Store's directory, reported in /health
 	Applier    Applier
 	Fence      Fence
 	Joiner     Joiner
@@ -140,8 +133,8 @@ type Server struct {
 
 // NewServer validates options and builds the handler.
 func NewServer(o Options) (*Server, error) {
-	if o.Store == nil || o.Applier == nil || o.Auth == nil || o.Members == nil {
-		return nil, errors.New("rpc: Store, Applier, Auth and Members are required")
+	if o.Applier == nil || o.Auth == nil || o.Members == nil {
+		return nil, errors.New("rpc: Applier, Auth and Members are required")
 	}
 	if o.MaxShard == 0 {
 		o.MaxShard = 2 << 20
@@ -167,7 +160,6 @@ func NewServer(o Options) (*Server, error) {
 	s := &Server{o: o, clusID: meta.HexID(o.ClusterID), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
-	mux.Handle("/v1/shards/", s.clusterCheck(s.member(http.HandlerFunc(s.shards))))
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
 	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership, or the update_addr exception (docs/08 step 6, I-93)
@@ -297,11 +289,9 @@ func (s *Server) member(next http.Handler) http.Handler {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	h := Health{
-		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion,
-		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity(),
+		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion, Ready: s.o.Applier.Ready(),
+		Leader: s.o.Applier.IsLeader(),
 	}
-	h.Free = max(h.Capacity-h.Used, 0)
-	h.FS = s.o.StoreFS
 	if s.o.DiskHealth != nil {
 		h.Disks = s.o.DiskHealth()
 	}
@@ -309,19 +299,8 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(h)
 }
 
-func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
-	key := chunk.ShardKey(strings.TrimPrefix(r.URL.Path, "/v1/shards/"))
-	placed := func() bool {
-		if s.o.Fence == nil {
-			return false
-		}
-		p, _ := s.o.Fence.PlacedOnSelf(key)
-		return p
-	}
-	s.serveShard(w, r, s.o.Store, key, placed)
-}
-
-// diskShards serves /v1/disks/{id}/shards/{key}: the shard endpoint of an added disk.
+// diskShards serves /v1/disks/{id}/shards/{key}, the shard endpoint of a disk: the only
+// shard route, since a device stores nothing (docs/14 §4, §9).
 func (s *Server) diskShards(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/v1/disks/")
 	id, k, ok := strings.Cut(rest, "/shards/")
@@ -340,10 +319,7 @@ func (s *Server) diskShards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chunk.ShardKey(k)
-	placed := func() bool {
-		df, ok := s.o.Fence.(DiskFence)
-		return !ok || df.PlacedOn(target, key) // no answer for disks: refuse the delete
-	}
+	placed := func() bool { return s.o.Fence == nil || s.o.Fence.PlacedOn(target, key) } // no fence: refuse the delete
 	s.serveShard(w, r, store, key, placed)
 }
 

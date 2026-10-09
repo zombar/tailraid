@@ -44,7 +44,7 @@ func TestDev_FSMHashCorruptAndExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	exited := make(chan int, 1)
-	srv := httptest.NewServer(handler(a, store, t.TempDir(), nil, nil, func(code int) { exited <- code }))
+	srv := httptest.NewServer(handler(a, oneDisk{store, t.TempDir()}, nil, nil, func(code int) { exited <- code }))
 	defer srv.Close()
 	post := func(path string) int {
 		resp, err := http.Post(srv.URL+path, "", nil)
@@ -89,3 +89,19 @@ func TestDev_FSMHashCorruptAndExit(t *testing.T) {
 		t.Fatal("exit not called")
 	}
 }
+
+// oneDisk is a host with one open disk, as /dev/* sees it.
+type oneDisk struct {
+	store *chunk.Store
+	dir   string
+}
+
+func (d oneDisk) Path(k chunk.ShardKey) string { return d.store.Path(k) }
+func (d oneDisk) Has(k chunk.ShardKey) bool    { return d.store.Has(k) }
+
+func (d oneDisk) Disks() []DiskInfo {
+	used, free, total, _ := d.store.Disk()
+	return []DiskInfo{{ID: "d1", Name: "h/1", Used: used, Free: free, Total: total}}
+}
+
+func (d oneDisk) Fill(_ string, n uint64) error { return Fill(d.dir, n) }

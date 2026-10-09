@@ -15,7 +15,7 @@ import (
 // Invariant: I-116
 func TestDev_FaultBodyCap(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
-	srv := httptest.NewServer(handler(meta.NewFSM(), nil, t.TempDir(), NewFaults(), log, func(int) {}))
+	srv := httptest.NewServer(handler(meta.NewFSM(), nil, NewFaults(), log, func(int) {}))
 	defer srv.Close()
 	const limit = 64 << 10
 	for _, n := range []int{limit - 1, limit, limit + 1} {

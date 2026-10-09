@@ -16,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -59,11 +60,14 @@ type Flusher struct {
 	shards chunk.ShardClient
 	rd     *Reader
 	clk    clock.Clock
-	cfg    Config
-	log    *slog.Logger
-	codecs *ec.Pool
-	Hooks  Hooks
-	Events *meta.EventRing // chunk history (nil unless dev.enabled)
+	// warnFlush and warnPut keep a fault at one line a minute per site (I-124): a dead
+	// holder would otherwise log once per dirty inode per flush pass.
+	warnFlush, warnPut logx.Limiter
+	cfg                Config
+	log                *slog.Logger
+	codecs             *ec.Pool
+	Hooks              Hooks
+	Events             *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	sem     chan struct{} // ChunkWorkers slots: chunks in memory across every flush
 	buffers atomic.Int64  // chunk and shard bytes held right now
@@ -209,7 +213,7 @@ func (f *Flusher) Run(ctx context.Context) {
 				defer wg.Done()
 				defer func() { <-sem }()
 				if err := f.flush(ctx, ino, partial); err != nil {
-					f.log.Warn("flush failed, will retry", "ino", ino, "err", err)
+					f.warnFlush.Warn(f.log, "flush failed, will retry", "ino", ino, "err", err)
 					f.scheduleRetry(ino)
 				} else {
 					f.clearRetry(ino)
@@ -632,8 +636,10 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 	}
 	if acks < int(w.k) {
 		err := fmt.Errorf("%w: chunk %x: %d < %d", ErrTooFewAcks, w.hash[:8], acks, w.k)
-		if len(failed) > 0 && allFull(failed) {
-			err = fmt.Errorf("%w: %w", err, chunk.ErrFull) // ENOSPC to the client, not EIO (I-79)
+		if (len(failed) > 0 && allFull(failed)) || !meta.HasTargets(f.st.Nodes()) {
+			// ENOSPC to the client, not EIO: every holder is full (I-79), or the volume has
+			// no disk to hold anything (docs/14 §9, I-120)
+			err = fmt.Errorf("%w: %w", err, chunk.ErrFull)
 		}
 		return err
 	}
@@ -716,7 +722,7 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 				f.full[place[r.slot]] = f.clk.Now().Add(time.Minute)
 				f.mu.Unlock()
 			}
-			f.log.Warn("shard put failed", "node", place[r.slot], "slot", r.slot, "err", r.err)
+			f.warnPut.Warn(f.log, "shard put failed", "node", place[r.slot], "slot", r.slot, "err", r.err)
 			f.Events.Record(w.hash, meta.EvPutFailed, fmt.Sprintf("slot %d node %d: %v", r.slot, place[r.slot], r.err))
 			continue
 		}

@@ -1,15 +1,16 @@
-# Four tailraid nodes (n1–n3 voters, n4 non-voter) on a private network with fake tailnet
-# identities, each with a worker sidecar sharing its network namespace: the sidecar reaches
-# the node's loopback NFS gateway and its RPC, and exposes both to the host driver
-# (cmd/soak) on a published port. Every node also has two added disks (docs/14), named
-# volumes at /disks/d1 and /disks/d2, so the volume is 4 hosts × 3 targets, and an empty
-# /disks/spare that phase 13 adds, drains and removes. Build the
-# binaries first: make soak-binary. docker-compose.single.yml is one host with four disks.
+# Five tailraid nodes (n1, n2, n5 voters; n3, n4 non-voters) on a private network with
+# fake tailnet identities, each with a worker sidecar sharing its network namespace: the
+# sidecar reaches the node's loopback NFS gateway and its RPC, and exposes both to the host
+# driver (cmd/soak) on a published port. n1–n4 each have two disks (docs/14), named volumes
+# at /disks/d1 (pinned to 8G) and /disks/d2 (derived), so the volume is 4 hosts × 2
+# targets; n5 has none: a diskless voter and gateway (docs/14 §9, phase 14). Every node has
+# an empty /disks/spare that phase 13 adds, drains and removes. Build the binaries first:
+# make soak-binary. docker-compose.single.yml is one host with four disks.
 x-node: &node
   build: .
   cap_add: [NET_ADMIN]
   environment: &env
-    IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3,172.30.0.14=n4"
+    IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3,172.30.0.14=n4,172.30.0.15=n5"
     TOKEN: compose-token
     TAILRAID_LOG_LEVEL: info
     TAILRAID_LOG_FORMAT: json
@@ -18,10 +19,9 @@ x-node: &node
     CHUNK: 256K
     REPAIR_GRACE: 20s
     FILL_AFTER: 20s
-    # added disks: the named volumes all share the Docker VM's filesystem, so their
-    # budgets are pinned; the device's own store keeps its derived budget (phase 11)
-    DISKS: /disks/d1 /disks/d2
-    DISK_CAPACITY: 8G
+    # the named volumes all share the Docker VM's filesystem: d1's budget is pinned,
+    # d2 derives its own (phase 11 fills it and watches the budget follow)
+    DISKS: /disks/d1=8G /disks/d2
   healthcheck:
     test: ["CMD-SHELL", "curl -fsS http://$$SELF_IP:20481/health"]
     interval: 2s
@@ -49,7 +49,7 @@ services:
     depends_on: [n1]
   n3:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3}
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.13}}
     ports: ["127.0.0.1:20503:20495"]
     volumes: ['n3:/var/lib/tailraid', 'n3-d1:/disks/d1', 'n3-d2:/disks/d2', 'n3-spare:/disks/spare']
@@ -61,6 +61,13 @@ services:
     ports: ["127.0.0.1:20504:20495"]
     volumes: ['n4:/var/lib/tailraid', 'n4-d1:/disks/d1', 'n4-d2:/disks/d2', 'n4-spare:/disks/spare']
     depends_on: [n3]
+  n5:
+    !!merge <<: *node
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.15, NODE_NAME: n5, DISKS: ""}
+    networks: {tailraid: {ipv4_address: 172.30.0.15}}
+    ports: ["127.0.0.1:20505:20495"]
+    volumes: ['n5:/var/lib/tailraid', 'n5-spare:/disks/spare']
+    depends_on: [n4]
 
   w1:
     !!merge <<: *worker
@@ -82,6 +89,11 @@ services:
     network_mode: "service:n4"
     command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.14:20481"]
     depends_on: [n4]
+  w5:
+    !!merge <<: *worker
+    network_mode: "service:n5"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.15:20481"]
+    depends_on: [n5]
 
 networks:
   tailraid:
@@ -93,6 +105,7 @@ volumes:
   n2: {}
   n3: {}
   n4: {}
+  n5: {}
   n1-d1: {}
   n1-d2: {}
   n2-d1: {}
@@ -105,3 +118,4 @@ volumes:
   n2-spare: {}
   n3-spare: {}
   n4-spare: {}
+  n5-spare: {}

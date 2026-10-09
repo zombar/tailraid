@@ -24,7 +24,7 @@ func TestPut_StalledBodyFreesSlot(t *testing.T) {
 	}
 	defer conn.Close()
 	stalled := key([]byte("stalled"), 0)
-	fmt.Fprintf(conn, "PUT /v1/shards/%s HTTP/1.1\r\nHost: %s\r\n%s: %s\r\nContent-Length: 100\r\n\r\n0123456789", stalled, e.addr, HeaderCluster, meta.HexID(e.cid))
+	fmt.Fprintf(conn, "PUT /v1/disks/d0/shards/%s HTTP/1.1\r\nHost: %s\r\n%s: %s\r\nContent-Length: 100\r\n\r\n0123456789", stalled, e.addr, HeaderCluster, meta.HexID(e.cid))
 	// the only slot is taken until the deadline; a real PUT behind it must still land
 	start := time.Now()
 	p := bytes.Repeat([]byte{7}, 100)

@@ -42,7 +42,9 @@ func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc.S
 			case svc.Interrogate:
 				s <- c.CurrentStatus
 			case svc.Stop, svc.Shutdown:
-				s <- svc.Status{State: svc.StopPending}
+				// the final flush is capped at 30 s and a leader hands over first (I-123):
+				// tell the manager to wait that long before it gives up on us
+				s <- svc.Status{State: svc.StopPending, WaitHint: 45_000}
 				cancel()
 				<-done
 				return false, 0

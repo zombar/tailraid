@@ -1,6 +1,7 @@
-// Disks: the data spread across every target (docs/14 §8), drawn when any host has an
-// added disk. A spread summary — one column per target above or below its expected share,
-// grouped by host — then one card per host with a row per target. The markup is
+// Disks: the data spread across every disk (docs/14 §8), drawn when any host has a disk.
+// A spread summary — one column per disk above or below its expected share, grouped by
+// host — then one card per host with a row per disk; a host with no disks is a card with
+// the note "gateway only · no disks" (docs/14 §9). The markup is
 // docs/assets/lookdev/disks.html.
 
 import { h } from "./dom.ts";
@@ -11,14 +12,14 @@ import type { NodeReport, Report } from "./api.ts";
 
 interface Host {
   node: NodeReport;
-  targets: NodeReport[]; // its own store first, then its disks
+  targets: NodeReport[]; // its disks; a device row itself is never a target (docs/14 §9)
 }
 
 /** hosts groups the devices with their disks, in node-table order. */
 export function hosts(nodes: NodeReport[]): Host[] {
   return nodes
     .filter((n) => n.kind === "device" && n.state !== "removed")
-    .map((n) => ({ node: n, targets: [n, ...nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed")] }));
+    .map((n) => ({ node: n, targets: nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed") }));
 }
 
 /** devTone is the balance rule: amber past 10 % off the expected share, red past 25 %. */
@@ -26,7 +27,7 @@ function devTone(dev: number): Tone {
   return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
 }
 
-/** off reports a target that holds no budget: a system disk pinned to 0. */
+/** off reports a disk that holds no budget: one pinned to 0. */
 function off(t: NodeReport): boolean {
   return t.state === "active" && t.capacity === 0;
 }
@@ -68,6 +69,7 @@ function spread(groups: Host[], sh: ReturnType<typeof shares>): HTMLElement {
   const pctLabel = (x: number) => `${Math.round(x * 100)} %`;
   const plot = h("div", { class: "spread-plot" });
   for (const g of groups) {
+    if (g.targets.length === 0) continue; // a diskless host has no column (docs/14 §9)
     const cols = h("div", { class: "spread-cols" });
     for (const t of g.targets) {
       const share = sh.get(t.idx);
@@ -108,9 +110,13 @@ function hostCard(g: Host, sh: ReturnType<typeof shares>, scale: number): HTMLEl
   if (n.self) badges.append(h("span", { class: "badge self" }, "self"));
   if (n.state === "draining") badges.append(h("span", { class: "badge warn" }, "draining"));
   const budget = g.targets.reduce((s, t) => s + t.capacity, 0);
-  let sum = `${plural(g.targets.length, "target")} · ${bytes(budget)}`;
+  let sum = g.targets.length === 0 ? "no disks" : `${plural(g.targets.length, "disk")} · ${bytes(budget)}`;
   if (!n.live) sum += " · dead " + (n.dead_for ?? "?");
   const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (n.live ? "ok" : "bad") }), h("span", { class: "name" }, n.name), h("span", { class: "host-sum" }, sum), badges);
+  if (g.targets.length === 0) {
+    // a diskless host: a member and gateway that stores nothing (docs/14 §9)
+    return h("div", { class: "host-row diskless" + (n.self ? " self" : "") }, head, h("div", { class: "host-note" }, "gateway only · no disks"));
+  }
   const strip = h("div", { class: "disk-strip" });
   for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
   const card = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
@@ -120,16 +126,11 @@ function hostCard(g: Host, sh: ReturnType<typeof shares>, scale: number): HTMLEl
   return card;
 }
 
-/** label names a target for a person: a host's own store reads "<host> (data dir)" once it has disks. */
-function label(t: NodeReport): string {
-  return t.data_dir ? `${t.name} (data dir)` : t.name;
-}
-
 function listOf(names: string[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** sharedGroups are the host's targets that sit on one physical disk, as label groups. */
+/** sharedGroups are the host's disks that sit on one physical disk, as name groups. */
 function sharedGroups(targets: NodeReport[]): string[][] {
   const seen = new Set<string>();
   const out: string[][] = [];
@@ -137,7 +138,7 @@ function sharedGroups(targets: NodeReport[]): string[][] {
     if (!t.shared_with?.length || seen.has(t.name)) continue;
     const names = [t.name, ...t.shared_with].sort();
     for (const n of names) seen.add(n);
-    out.push(names.map((n) => label(targets.find((x) => x.name === n) ?? t)));
+    out.push(names);
   }
   return out;
 }
@@ -145,7 +146,6 @@ function sharedGroups(targets: NodeReport[]): string[][] {
 function diskRow(t: NodeReport, share: { expected: number; deviation: number } | undefined, scale: number): HTMLElement {
   const dot = off(t) ? "off" : t.live ? "ok" : "bad";
   const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", { class: "n" }, t.name));
-  if (t.data_dir) name.append(h("span", { class: "tag" }, "data dir"));
   if (t.shared_with?.length) name.append(h("span", { class: "warn-icon", title: `on the same physical disk as ${t.shared_with.join(", ")}: they fail together` }));
   if (off(t)) {
     return h("div", { class: "disk off", title: `${t.name}: no budget (capacity 0)` }, name, h("div", { class: "bar" }), h("div", { class: "disk-val" }, "no budget (capacity 0)"));

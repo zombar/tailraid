@@ -49,6 +49,9 @@ type Updater struct {
 	// Verify runs a downloaded binary and checks it reports tag (default: exec `<path> version`).
 	Verify func(ctx context.Context, path, tag string) error
 	Out    io.Writer
+	// PublicKey is the minisign public key the release's sha256sums.txt.minisig must
+	// verify under (default ReleaseKey; tests sign with their own).
+	PublicKey string
 }
 
 // Errors reported to the CLI.
@@ -59,6 +62,9 @@ var (
 	ErrNoAsset    = errors.New("update: no asset for this platform")
 	ErrNoRelease  = errors.New("update: release not found")
 	ErrNoToken    = errors.New("update: repository needs a token (TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or `gh auth login`)")
+	ErrSize       = errors.New("update: downloaded size differs from the release asset's")
+	ErrDowngrade  = errors.New("update: release is older than the running version; --allow-downgrade installs it anyway (an older node cannot read a newer snapshot, docs/12 §6)")
+	ErrNoRollback = errors.New("update: no previous binary to roll back to")
 	errBadVersion = errors.New("update: downloaded binary reports a different version")
 )
 
@@ -85,6 +91,9 @@ func (u *Updater) defaults() {
 	}
 	if u.Out == nil {
 		u.Out = io.Discard
+	}
+	if u.PublicKey == "" {
+		u.PublicKey = ReleaseKey
 	}
 }
 
@@ -178,31 +187,56 @@ func parse(v string) ([3]int, bool) {
 }
 
 // Apply downloads, verifies and swaps the binary at exe with the release's asset for
-// goos/goarch. current is the running version; force applies a release that is not newer.
-func (u *Updater) Apply(ctx context.Context, rel *Release, exe, current, goos, goarch string, force bool) error {
+// goos/goarch (docs/12 §5, I-128). current is the running version; force applies a
+// release that is not newer (an explicit --version), and a release that is older still
+// needs allowDowngrade. The release's sha256sums.txt must carry a minisign signature
+// that verifies under PublicKey; the download must have the asset's announced size and
+// is fsynced before the swap; the previous binary stays beside the new one as
+// <exe>.old until ForgetOld or Rollback.
+func (u *Updater) Apply(ctx context.Context, rel *Release, exe, current, goos, goarch string, force, allowDowngrade bool) error {
 	u.defaults()
 	if rel.Tag == current {
 		return ErrUpToDate
 	}
-	if !force && !Newer(current, rel.Tag) {
-		return fmt.Errorf("%w: running %s, release %s", ErrNotNewer, current, rel.Tag)
+	if !Newer(current, rel.Tag) {
+		if !force {
+			return fmt.Errorf("%w: running %s, release %s", ErrNotNewer, current, rel.Tag)
+		}
+		if !allowDowngrade {
+			return fmt.Errorf("%w: running %s, release %s", ErrDowngrade, current, rel.Tag)
+		}
+	}
+	if u.PublicKey == "" {
+		return ErrNoReleaseKey
 	}
 	name := AssetName(u.Binary, goos, goarch)
-	var asset, sums *Asset
+	var asset, sums, sig *Asset
 	for i := range rel.Assets {
 		switch rel.Assets[i].Name {
 		case name:
 			asset = &rel.Assets[i]
 		case "sha256sums.txt":
 			sums = &rel.Assets[i]
+		case "sha256sums.txt.minisig":
+			sig = &rel.Assets[i]
 		}
 	}
 	if asset == nil || sums == nil {
 		return fmt.Errorf("%w: want %s and sha256sums.txt in %s", ErrNoAsset, name, rel.Tag)
 	}
+	if sig == nil {
+		return fmt.Errorf("%w: %s", ErrNoSignature, rel.Tag)
+	}
 	sumBody, err := u.fetch(ctx, u.downloadURL(sums), 1<<20)
 	if err != nil {
 		return err
+	}
+	sigBody, err := u.fetch(ctx, u.downloadURL(sig), 64<<10)
+	if err != nil {
+		return err
+	}
+	if err := VerifyFile(u.PublicKey, sumBody, string(sigBody)); err != nil {
+		return fmt.Errorf("%s of %s: %w", sig.Name, rel.Tag, err)
 	}
 	want, ok := parseSums(string(sumBody))[name]
 	if !ok {
@@ -217,7 +251,18 @@ func (u *Updater) Apply(ctx context.Context, rel *Release, exe, current, goos, g
 	cleanup := func() { _ = os.Remove(tmpPath) }
 	fmt.Fprintf(u.Out, "downloading %s (%s)\n", asset.Name, rel.Tag)
 	h := sha256.New()
-	if err := u.stream(ctx, u.downloadURL(asset), io.MultiWriter(tmp, h)); err != nil {
+	n, err := u.stream(ctx, u.downloadURL(asset), io.MultiWriter(tmp, h))
+	if err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if asset.Size > 0 && n != asset.Size {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("%w: %s: got %d bytes, release says %d", ErrSize, name, n, asset.Size)
+	}
+	if err := tmp.Sync(); err != nil { // the bytes are on disk before anything points at them
 		_ = tmp.Close()
 		cleanup()
 		return err
@@ -264,23 +309,22 @@ func (u *Updater) fetch(ctx context.Context, url string, limit int64) ([]byte, e
 	return io.ReadAll(io.LimitReader(resp.Body, limit))
 }
 
-func (u *Updater) stream(ctx context.Context, url string, w io.Writer) error {
+func (u *Updater) stream(ctx context.Context, url string, w io.Writer) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 	u.auth(req)
 	resp, err := u.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("update: %w", err)
+		return 0, fmt.Errorf("update: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("update: %s: %s", url, resp.Status)
+		return 0, fmt.Errorf("update: %s: %s", url, resp.Status)
 	}
-	_, err = io.Copy(w, resp.Body)
-	return err
+	return io.Copy(w, resp.Body)
 }
 
 // parseSums reads "<hex>  <name>" lines.
@@ -310,8 +354,8 @@ func execVersion(ctx context.Context, path, tag string) error {
 	return nil
 }
 
-// swap renames exe to exe.old and tmp into exe's place; .old is removed when the OS
-// allows it (Windows keeps the running image locked until exit).
+// swap renames exe to exe.old and tmp into exe's place. The .old stays: `serve` removes
+// it a minute after a clean start (ForgetOld) and `update --rollback` restores it.
 func swap(exe, tmp string) error {
 	old := exe + ".old"
 	_ = os.Remove(old)
@@ -322,8 +366,37 @@ func swap(exe, tmp string) error {
 		_ = os.Rename(old, exe) // put the original back
 		return fmt.Errorf("update: install new binary: %w", err)
 	}
-	if runtime.GOOS != "windows" {
-		_ = os.Remove(old)
+	return nil
+}
+
+// Rollback puts <exe>.old back in exe's place (I-128): the binary an update replaced,
+// kept until the next clean start. The replaced one is removed.
+func Rollback(exe string) error {
+	old := exe + ".old"
+	if _, err := os.Stat(old); err != nil {
+		return ErrNoRollback
+	}
+	aside := exe + ".rolled-back"
+	_ = os.Remove(aside)
+	if err := os.Rename(exe, aside); err != nil {
+		return fmt.Errorf("update: move current binary aside: %w", err)
+	}
+	if err := os.Rename(old, exe); err != nil {
+		_ = os.Rename(aside, exe)
+		return fmt.Errorf("update: restore previous binary: %w", err)
+	}
+	if runtime.GOOS != "windows" { // Windows keeps a running image locked until exit
+		_ = os.Remove(aside)
+	}
+	return nil
+}
+
+// ForgetOld removes <exe>.old once the new binary has proven itself (a minute into a
+// clean serve). It is a no-op when there is none.
+func ForgetOld(exe string) error {
+	err := os.Remove(exe + ".old")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }

@@ -21,7 +21,7 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 		t.Fatalf("darwin: %v %+v", err, pl)
 	}
 	plist := pl.Files[0].Content
-	for _, want := range []string{"<string>/opt/tailraid</string><string>serve</string>", "<key>KeepAlive</key><true/>", "<key>StandardErrorPath</key><string>/var/log/tailraid.log</string>", "<key>StandardOutPath</key><string>/var/log/tailraid.log</string>"} {
+	for _, want := range []string{"<string>/opt/tailraid</string><string>serve</string>", "<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>", "<key>StandardErrorPath</key><string>/var/log/tailraid.log</string>", "<key>StandardOutPath</key><string>/var/log/tailraid.log</string>"} {
 		if !strings.Contains(plist, want) {
 			t.Errorf("plist lacks %q", want)
 		}
@@ -39,7 +39,7 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit := pl.Files[0].Content
-	for _, want := range []string{"ExecStart=/opt/tailraid serve --config /home/u/.config/tailraid/config.yaml", "User=u", "Restart=always", "After=network-online.target tailscaled.service", "Environment=TAILRAID_HOME=/Users/u/Library/Application Support/tailraid"} {
+	for _, want := range []string{"ExecStart=/opt/tailraid serve --config /home/u/.config/tailraid/config.yaml", "User=u", "Restart=always", "After=network-online.target tailscaled.service", `Environment="TAILRAID_HOME=/Users/u/Library/Application Support/tailraid"`} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q", want)
 		}
