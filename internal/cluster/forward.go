@@ -67,6 +67,9 @@ func (n *Node) applyLocal(ctx context.Context, cmd meta.Command) (meta.Result, u
 	if err := ctx.Err(); err != nil {
 		return meta.Result{}, 0, err
 	}
+	if n.closed.Load() { // nothing is enqueued behind Close's barrier: not dispatched, so safe to retry elsewhere
+		return meta.Result{}, 0, fmt.Errorf("%w: node closing", ErrNotLeader)
+	}
 	timeout := 5 * time.Second
 	if d, ok := ctx.Deadline(); ok {
 		timeout = max(time.Until(d), time.Millisecond)
@@ -77,7 +80,7 @@ func (n *Node) applyLocal(ctx context.Context, cmd meta.Command) (meta.Result, u
 	}
 	fut := n.Raft.Apply(encoded, timeout)
 	done := make(chan error, 1)
-	go func() { done <- fut.Error() }() // raft resolves every future within its timeouts
+	go func() { done <- fut.Error() }() // raft resolves every future: on a stepdown, a timeout, or the barrier Close runs before shutdown
 	select {
 	case err = <-done:
 	case <-ctx.Done():
