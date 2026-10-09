@@ -49,11 +49,13 @@ func devHome(t *testing.T) (string, config.Config) {
 	if err := os.WriteFile(fake, []byte(fakeTailnet), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := freePorts(t, 4)
+	p := freePorts(t, 5)
 	cfg := config.Default()
 	cfg.Node.DataDir = filepath.Join(home, "data")
 	cfg.Listen.Raft, cfg.Listen.RPC, cfg.Listen.Web = p[0], p[1], p[2]
 	cfg.Listen.NFS = fmt.Sprintf("127.0.0.1:%d", p[3])
+	cfg.Listen.SMB = fmt.Sprintf("127.0.0.1:%d", p[4]) // both gateways, so serve runs both
+	cfg.SMB.Password = config.NewSMBPassword()
 	cfg.Mount.Path = filepath.Join(home, "mnt")
 	cfg.Dev.Enabled, cfg.Dev.TailscaleFake = true, fake
 	path := filepath.Join(home, "config.yaml")
@@ -128,6 +130,40 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 	defer n2.Close()
 	if n2.FSM.Volume().Auto {
 		t.Fatal("--k/--m must pin a manual policy")
+	}
+}
+
+// init generates the SMB share password when listen.smb is set and the config has none,
+// saves it in the config and never prints it (docs/15 §6).
+// Invariant: I-110
+func TestCLI_Init_GeneratesSMBPassword(t *testing.T) {
+	path, _ := devHome(t)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if !strings.Contains(line, "password:") {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "init", "--config", path, "--token", "testtoken")
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SMB.Password) != 24 {
+		t.Fatalf("saved password %q", got.SMB.Password)
+	}
+	if strings.Contains(out, got.SMB.Password) {
+		t.Fatalf("init printed the password:\n%s", out)
 	}
 }
 

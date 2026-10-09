@@ -59,21 +59,33 @@ func (f *File) size() uint64 {
 
 func (f *File) writable() bool { return f.flag&(os.O_WRONLY|os.O_RDWR) != 0 }
 
+// Write writes at the current position and advances it: the NFS gateway's seek-then-write
+// per RPC (docs/07).
 func (f *File) Write(p []byte) (int, error) {
+	n, err := f.WriteAt(p, f.pos)
+	f.pos += int64(n)
+	return n, err
+}
+
+// WriteAt writes p at off and leaves the position alone: the SMB gateway's WRITE, which
+// names its offset (docs/15). The bytes are in the fsynced WAL when it returns (I-7).
+func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	if err := f.checkOpen("write"); err != nil {
 		return 0, err
 	}
 	if !f.writable() {
 		return 0, mapErr("write", f.name, syscall.EBADF)
 	}
+	if off < 0 {
+		return 0, mapErr("write", f.name, syscall.EINVAL)
+	}
 	in, err := f.inode()
 	if err != nil {
 		return 0, err
 	}
-	if err := f.fs.ov.Write(f.ino, in.Size, uint64(f.pos), p); err != nil {
+	if err := f.fs.ov.Write(f.ino, in.Size, uint64(off), p); err != nil {
 		return 0, mapErr("write", f.name, err)
 	}
-	f.pos += int64(len(p))
 	return len(p), nil
 }
 
@@ -192,6 +204,15 @@ func (fi *fileInfo) ModTime() time.Time { return time.Unix(0, fi.in.Mtime) }
 // Dirty reports acknowledged bytes not yet committed to the cluster (the size and the
 // bytes come from the overlay; docs/13 omits the ETag while it is set).
 func (fi *fileInfo) Dirty() bool { return fi.dirty }
+
+// Ino and Times give a gateway that needs more than os.FileInfo (the SMB adapter,
+// docs/15) the inode number and the inode's own timestamps, the way Dirty serves the web
+// UI; both are read through small optional interfaces.
+func (fi *fileInfo) Ino() meta.Ino { return fi.in.Ino }
+
+func (fi *fileInfo) Times() (atime, mtime, ctime time.Time) {
+	return time.Unix(0, fi.in.Atime), time.Unix(0, fi.in.Mtime), time.Unix(0, fi.in.Ctime)
+}
 func (fi *fileInfo) IsDir() bool { return fi.in.Type == meta.TDir }
 func (fi *fileInfo) Sys() any {
 	return &nfsfile.FileInfo{Nlink: uint32(fi.in.Nlink), UID: fi.in.Uid, GID: fi.in.Gid, Fileid: uint64(fi.in.Ino)}

@@ -1,9 +1,9 @@
 # 07 — NFS gateway
 
-The NFS gateway is how a device mounts the volume as a local filesystem. Every node that
-runs `tailraid serve` exposes an NFSv3 server on loopback backed by the shared `vfs`
-(`docs/04`). The OS's own NFS client mounts it. Nothing is installed on the OS: macOS and
-Linux ship an NFSv3 client; Windows Pro/Enterprise/Education ship "Client for NFS".
+The NFS gateway is how a macOS or Linux device mounts the volume as a local filesystem.
+Every node that runs `tailraid serve` with `listen.nfs` set exposes an NFSv3 server on
+loopback backed by the shared `vfs` (`docs/04`). The OS's own NFS client mounts it; nothing
+is installed on the OS. Windows mounts over SMB instead (docs/15).
 
 Library: `github.com/willscott/go-nfs` v0.0.4 (pure Go, NFSv3 + MOUNT on one TCP port,
 no portmapper, no NLM). Adapter: `internal/nfsgw` implements `nfs.Handler`;
@@ -61,8 +61,8 @@ func (h *Handler) HandleLimit() int                                 // 1 << 20
 func Serve(ctx context.Context, addr string, h *Handler) error      // net.Listen("tcp", addr); nfs.Serve
 ```
 
-- **Mount**: a single export `/`. Any dirpath the client sends is accepted (the Windows
-  client needs a share name, `\\127.0.0.1\tailraid`). Auth flavor `AuthFlavorNull`; the
+- **Mount**: a single export `/`. Any dirpath the client sends is accepted. Auth flavor
+  `AuthFlavorNull`; the
   listener is bound to `127.0.0.1` so the OS, not NFS, is the security boundary (`docs/08`).
 - **Handles are 16 bytes**: `magic u32 | gen u32 | ino u64`, big-endian. `ToHandle` resolves
   the path in the FSM and encodes (ino, gen). `FromHandle` looks up `Inodes[ino]`; if the
@@ -91,33 +91,16 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 
 ## Ports and mount commands
 
-NFS and MOUNT are served on the same port. No portmapper is run on macOS/Linux; the mount
-options pin the ports instead.
+NFS and MOUNT are served on the same port. No portmapper is run; the mount options pin
+the ports instead.
 
 | OS | Listener | Mount |
 |---|---|---|
 | macOS | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft 127.0.0.1:/ ~/TailRAID` |
 | Linux | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ <dir>` |
-| Windows | `127.0.0.1:2049` + PMAP v2 stub on `127.0.0.1:111` (TCP+UDP) | `mount -o anon,nolock,mtype=soft \\127.0.0.1\tailraid T:` |
 
-`tailraid mount` runs these for you (`internal/mount`); on Unix it retries via `sudo` when
+`tailraid mount` runs these for you (`internal/mount`); it retries via `sudo` when
 `mount` returns EPERM, printing the exact command first.
-
-**Windows**: `mount.exe` has no port option and discovers MOUNT/NFS via the portmapper, so
-on Windows the gateway binds the well-known port 2049 and `internal/mount/portmap.go`
-answers PMAP v2 `NULL`, `GETPORT` and `DUMP` for programs 100003 v3 and 100005 v3 → 2049/TCP.
-Windows has no privileged-port concept, so no elevation is needed for 111 or 2049, but the
-"Client for NFS" feature must be enabled and set to TCP (go-nfs is TCP-only):
-
-```
-Enable-WindowsOptionalFeature -Online -FeatureName ServicesForNFS-ClientOnly
-nfsadmin client localhost config protocol=tcp
-```
-
-and `HKLM\SOFTWARE\Microsoft\ClientForNFS\CurrentVersion\Default` needs `AnonymousUid` /
-`AnonymousGid` (DWORD) matching the uid/gid the gateway reports, or writes are denied.
-`tailraid mount` prints these when `mount.exe` is missing or the mount fails. The whole
-Windows path is **unverified on hardware until M4**; see `docs/windows-checklist.md`.
 
 Why `nolock`: there is no Network Lock Manager. Without `nolock` the client's lock daemon
 tries to reach NLM and `fcntl` locks hang or fail. With it, locks are local to the client
@@ -141,7 +124,6 @@ transparent rather than an I/O error:
 |---|---|---|
 | Linux (`timeo=600,retrans=2`, TCP default) | 60 s per RPC, retried twice | by the compose soak (phase 12) |
 | macOS (`timeo=600` default on TCP) | 60 s per RPC | manual check below |
-| Windows (`mtype=soft`, `Timeout`/`Retransmissions` registry defaults) | 8 s × 1 by default | `docs/windows-checklist.md` |
 
 Manual check (macOS, before a release): copy a file larger than 512 MiB onto the mount while
 the uplink is throttled to ~5 MiB/s; `cp` slows down but finishes without an I/O error and

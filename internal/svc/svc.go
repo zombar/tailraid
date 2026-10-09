@@ -83,7 +83,7 @@ func Install(p Params) (Plan, error) {
 		return Plan{
 			Commands: [][]string{
 				{"sc.exe", "create", Name, "binPath=", bin, "start=", "delayed-auto", "depend=", "Tailscale", "DisplayName=", "tailraid"},
-				{"sc.exe", "description", Name, "tailraid node: metadata, shard store and NFS gateway"},
+				{"sc.exe", "description", Name, "tailraid node: metadata, shard store and gateways"},
 				{"sc.exe", "failure", Name, "reset=", "60", "actions=", "restart/5000/restart/5000/restart/5000"},
 				{"sc.exe", "start", Name},
 			},

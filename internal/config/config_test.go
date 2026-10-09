@@ -51,8 +51,48 @@ func TestLoadSave_RoundTripAndStrict(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = Load(p)
-	if err != nil || got.Listen.NFS == "" || got.Node.DataDir != "/tmp/y" {
+	if err != nil || (got.Listen.NFS == "" && got.Listen.SMB == "") || got.Node.DataDir != "/tmp/y" {
 		t.Fatalf("partial: %+v %v", got, err)
+	}
+}
+
+// A node serves at least one gateway; the SMB gateway needs the share password, which
+// init and join generate once and never regenerate (docs/15 §6).
+// Invariant: I-110
+func TestConfig_Gateways(t *testing.T) {
+	c := Default()
+	c.Node.DataDir = "/tmp/d"
+	c.Listen.NFS, c.Listen.SMB, c.SMB.Password = "", "", ""
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "listen.nfs or listen.smb") {
+		t.Fatalf("no gateway: %v", err)
+	}
+	c.Listen.SMB = DefaultSMBAddr
+	if err := c.Validate(); err != nil { // loadable without the password: init and join add it
+		t.Fatalf("smb without a password: %v", err)
+	}
+	if !c.EnsureSMBPassword() || len(c.SMB.Password) != 24 || strings.Trim(c.SMB.Password, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") != "" {
+		t.Fatalf("generated password %q", c.SMB.Password)
+	}
+	first := c.SMB.Password
+	if c.EnsureSMBPassword() || c.SMB.Password != first {
+		t.Fatal("a password present was regenerated")
+	}
+	if NewSMBPassword() == first {
+		t.Fatal("two passwords alike")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("smb only: %v", err)
+	}
+	c.Listen.NFS = "127.0.0.1:20490"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("both gateways: %v", err)
+	}
+	c.Listen.SMB, c.SMB.Password = "", ""
+	if c.EnsureSMBPassword() || c.SMB.Password != "" {
+		t.Fatal("a password generated without listen.smb")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("nfs only: %v", err)
 	}
 }
 

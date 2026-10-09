@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"io"
@@ -31,11 +33,15 @@ type Config struct {
 		Raft int    `yaml:"raft"` // tailnet TCP port
 		RPC  int    `yaml:"rpc"`  // tailnet TCP port
 		Web  int    `yaml:"web"`  // tailnet TCP port of the browser UI (docs/13); 0 disables it
-		NFS  string `yaml:"nfs"`  // loopback host:port
+		NFS  string `yaml:"nfs"`  // loopback host:port of the NFS gateway (macOS, Linux; docs/07); "" disables it
+		SMB  string `yaml:"smb"`  // loopback host:port of the SMB gateway (Windows; docs/15); "" disables it
 	} `yaml:"listen"`
 	Mount struct {
 		Path string `yaml:"path"`
 	} `yaml:"mount"`
+	SMB struct {
+		Password string `yaml:"password"` // the share's password; init and join generate one when listen.smb is set (docs/15 §6)
+	} `yaml:"smb"`
 	Tailscale struct {
 		CLI string `yaml:"cli"` // path override for the tailscale binary
 	} `yaml:"tailscale"`
@@ -130,11 +136,35 @@ func Default() Config {
 	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
 	c.Mount.Path = filepath.Join(home, "TailRAID")
-	if runtime.GOOS == "windows" {
-		c.Listen.NFS = "127.0.0.1:2049"
+	if runtime.GOOS == "windows" { // Windows mounts over SMB (docs/15)
+		c.Listen.NFS = ""
+		c.Listen.SMB = DefaultSMBAddr
 		c.Mount.Path = "T:"
 	}
 	return c
+}
+
+// DefaultSMBAddr is the SMB gateway's loopback address: not 445, which Windows' own
+// Server service owns (docs/15 §1).
+const DefaultSMBAddr = "127.0.0.1:20445"
+
+// NewSMBPassword is a fresh share password: 24 base32 characters from 15 random bytes.
+func NewSMBPassword() string {
+	var b [15]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("config: crypto/rand: " + err.Error())
+	}
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:])
+}
+
+// EnsureSMBPassword generates the share password when the SMB gateway is enabled and the
+// config has none (init and join call it before saving); it reports whether it did.
+func (c *Config) EnsureSMBPassword() bool {
+	if c.Listen.SMB == "" || c.SMB.Password != "" {
+		return false
+	}
+	c.SMB.Password = NewSMBPassword()
+	return true
 }
 
 // Load reads a config file strictly (unknown keys are errors) over the defaults.
@@ -199,8 +229,8 @@ func (c Config) Validate() error {
 	if c.Node.DataDir == "" {
 		return errors.New("config: node.data_dir is required")
 	}
-	if c.Listen.NFS == "" {
-		return errors.New("config: listen.nfs is required")
+	if c.Listen.NFS == "" && c.Listen.SMB == "" {
+		return errors.New("config: one of listen.nfs or listen.smb is required")
 	}
 	seen := map[string]bool{}
 	for i, d := range c.Node.Disks {
@@ -225,21 +255,36 @@ func (c Config) Validate() error {
 	}
 	// the rest of I-126: every port in range and distinct, known log settings, an
 	// absolute mount path
-	_, nfsPort, err := net.SplitHostPort(c.Listen.NFS)
-	if err != nil {
-		return fmt.Errorf("config: listen.nfs %q: want host:port", c.Listen.NFS)
+	// a gateway listener is "" when that gateway is off (docs/15 §4); a set one is host:port
+	gatewayPort := func(name, addr string) (int, error) {
+		if addr == "" {
+			return 0, nil
+		}
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return 0, fmt.Errorf("config: %s %q: want host:port", name, addr)
+		}
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return 0, fmt.Errorf("config: %s %q: want a TCP port", name, addr)
+		}
+		return n, nil
 	}
-	np, err := strconv.Atoi(nfsPort)
-	if err != nil || np < 1 || np > 65535 {
-		return fmt.Errorf("config: listen.nfs %q: want a TCP port", c.Listen.NFS)
+	np, err := gatewayPort("listen.nfs", c.Listen.NFS)
+	if err != nil {
+		return err
+	}
+	sp, err := gatewayPort("listen.smb", c.Listen.SMB)
+	if err != nil {
+		return err
 	}
 	used := map[int]string{}
 	for _, l := range []struct {
 		name string
 		port int
-	}{{"listen.raft", c.Listen.Raft}, {"listen.rpc", c.Listen.RPC}, {"listen.nfs", np}, {"listen.web", c.Listen.Web}} {
-		if l.name == "listen.web" && l.port == 0 {
-			continue
+	}{{"listen.raft", c.Listen.Raft}, {"listen.rpc", c.Listen.RPC}, {"listen.nfs", np}, {"listen.smb", sp}, {"listen.web", c.Listen.Web}} {
+		if l.port == 0 && (l.name == "listen.web" || l.name == "listen.nfs" || l.name == "listen.smb") {
+			continue // off
 		}
 		if l.port < 1 || l.port > 65535 {
 			return fmt.Errorf("config: %s %d: want a TCP port", l.name, l.port)

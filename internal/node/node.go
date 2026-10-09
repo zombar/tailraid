@@ -18,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	smb "github.com/go-filesystems/smb"
+
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
@@ -29,6 +31,7 @@ import (
 	"github.com/zombar/tailraid/internal/nfsgw"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/sysfs"
 	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -240,35 +243,52 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return err
 	}
-	nl, err := nfsgw.Listen(ctx, cfg.Listen.NFS)
-	if err != nil {
-		_ = rl.Close()
-		return err
+	// the gateways: NFS on macOS and Linux, SMB on Windows, either or both by config
+	// (docs/07, docs/15); a listener that fails to bind closes the ones before it
+	open := []net.Listener{rl}
+	closeOpen := func() {
+		for _, l := range open {
+			_ = l.Close()
+		}
 	}
-	var wl net.Listener
+	var nl, sl, wl net.Listener
+	var smbSrv *smb.Server
+	if cfg.Listen.NFS != "" {
+		if nl, err = nfsgw.Listen(ctx, cfg.Listen.NFS); err != nil {
+			closeOpen()
+			return err
+		}
+		open = append(open, nl)
+		nfsgw.UseLogger(log) // one log stream, one format (the library logs client noise)
+	}
+	if cfg.Listen.SMB != "" {
+		if smbSrv, err = smbgw.NewServer(fs, node.FSM, cfg.SMB.Password); err != nil {
+			closeOpen()
+			return err
+		}
+		if sl, err = smbgw.Listen(ctx, cfg.Listen.SMB); err != nil {
+			closeOpen()
+			return err
+		}
+		open = append(open, sl)
+	}
 	if web != nil {
 		var lc net.ListenConfig
 		if wl, err = lc.Listen(ctx, "tcp", webAddr); err != nil {
-			_ = rl.Close()
-			_ = nl.Close()
+			closeOpen()
 			return fmt.Errorf("web ui listener: %w", err)
 		}
 	}
-	nfsgw.UseLogger(log)           // one log stream, one format (the library logs client noise)
-	if runtime.GOOS == "windows" { // mount.exe finds the gateway through the portmapper (docs/12 §2)
-		_, nfsPort, _ := net.SplitHostPort(nl.Addr().String())
-		port, _ := strconv.Atoi(nfsPort)
-		pm := &mount.Portmap{Port: uint32(port), Log: log}
-		go func() {
-			if err := pm.Serve(ctx, "127.0.0.1:111"); err != nil {
-				log.Error("portmap stub failed; Windows mount.exe cannot find the gateway", "err", err)
-			}
-		}()
-	}
 	log.Info("tailraid serving", "version", version, "node", id, "idx", selfIdx, "tailnet", ident.IP, "rpc", rl.Addr(), "raft", raftAddr,
-		"nfs", nl.Addr(), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
-	prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
-	log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+		"nfs", addrOrOff(nl), "smb", addrOrOff(sl), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
+	if nl != nil && runtime.GOOS != "windows" {
+		prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
+		log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+	}
+	if sl != nil { // the password is read from stdin by `net use … *`, so the line holds none
+		prog, args, _ := mount.SMBCommand(runtime.GOOS, sl.Addr().String(), cfg.Mount.Path)
+		log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
+	}
 	if web != nil {
 		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
 	}
@@ -304,7 +324,23 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
 	}
 
-	err = nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM))
+	// the gateways own the process lifetime: the first to end ends the node (the service
+	// manager restarts it), and the other, if any, is stopped with the serve context
+	gw := make(chan error, 2)
+	gateways := 0
+	if nl != nil {
+		gateways++
+		go func() { gw <- nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM)) }()
+	}
+	if sl != nil {
+		gateways++
+		go func() { gw <- smbgw.Serve(sctx, sl, smbSrv) }()
+	}
+	err = <-gw
+	stop()
+	for range gateways - 1 {
+		<-gw
+	}
 	cancelBg()
 	for range loops {
 		<-done
@@ -313,6 +349,14 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return ErrAddressChanged
 	}
 	return err
+}
+
+// addrOrOff is a gateway listener's address for the log, "off" for a gateway not configured.
+func addrOrOff(l net.Listener) string {
+	if l == nil {
+		return "off"
+	}
+	return l.Addr().String()
 }
 
 // selfLogin is this node's tailnet login for the web UI's same-user rule (docs/13 §2):
