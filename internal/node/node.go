@@ -125,8 +125,20 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer node.Shutdown(5 * time.Second) //nolint:errcheck // a leader hands over first (I-123); the close error is logged by Close's callers elsewhere
 	auth.SetMembers(node.FSM.NodeByAddr)
+	// Raft restores a follower's table from a snapshot only: a node restarted before its
+	// first snapshot (every fresh joiner) has an empty table until the leader connects,
+	// and the leader is accepted only by that table. The seed the join persisted, kept
+	// current from the table while serve runs, stands in until then (I-92).
+	if seed, err := cluster.LoadMemberSeed(cfg.Node.DataDir); err != nil {
+		log.Warn("member seed unreadable; the leader is accepted once the table arrives", "err", err)
+	} else if len(seed) > 0 {
+		auth.SetSeed(seed)
+	}
 	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 		return fmt.Errorf("waiting for raft: %w", err)
+	}
+	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, node.FSM.Nodes()); err != nil {
+		log.Warn("member seed not written", "err", err)
 	}
 	selfIdx, ok := node.SelfIdx()
 	if !ok {
@@ -404,6 +416,7 @@ type adminOps struct {
 	clk      clock.Clock
 	log      *slog.Logger
 	dataDir  string
+	seedKey  string // the device members the seed file holds (refreshSeed)
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -546,6 +559,26 @@ func (a *adminOps) leaderApplied() (uint64, bool) {
 }
 
 // maintenance runs GC (leader) every GCInterval and the local sweep hourly.
+// refreshSeed rewrites <data_dir>/members.seed when the device members changed, so the
+// next start accepts the leader before the log arrives (I-92).
+func (a *adminOps) refreshSeed() {
+	nodes := a.node.FSM.Nodes()
+	var key strings.Builder
+	for i := range nodes {
+		if n := &nodes[i]; n.Kind == meta.KindDevice {
+			fmt.Fprintf(&key, "%s|%s|%s|%d;", n.ID, n.Addr, n.TSStableID, n.State)
+		}
+	}
+	if key.String() == a.seedKey {
+		return
+	}
+	if err := cluster.WriteMemberSeed(a.dataDir, nodes); err != nil {
+		a.log.Warn("member seed not written", "err", err)
+		return
+	}
+	a.seedKey = key.String()
+}
+
 func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	gcT := a.clk.NewTimer(cfg.GCInterval)
 	sweepT := a.clk.NewTimer(time.Hour)
@@ -559,6 +592,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 			return
 		case <-budgetT.C():
 			a.rebudget(ctx) // derived budgets past the hysteresis, pinned ones whenever they differ
+			a.refreshSeed()
 			budgetT.Reset(cfg.ScanInterval)
 		case <-gcT.C():
 			if a.node.IsLeader() && a.healthy() {
@@ -815,6 +849,16 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	// the transport accepts the leader's Raft connection only from a member (I-92); the
 	// joiner's own table is empty until the log arrives, so the join response seeds it
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	// the target is the leader or will name it: its Raft connection must be accepted
+	// from the first attempt, before the join response lists the members, so it is
+	// seeded from WhoIs now (I-92)
+	if targetHost, _, err := net.SplitHostPort(target); err == nil {
+		if ip, err := netip.ParseAddr(targetHost); err == nil {
+			if w, err := ts.WhoIs(ctx, ip); err == nil && w.Node.StableID != "" {
+				auth.SetSeed([]meta.Node{{ID: "join-target", Kind: meta.KindDevice, Addr: ip.String(), TSStableID: w.Node.StableID, State: meta.Active}})
+			}
+		}
+	}
 	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log, PeerAuth: auth})
 	if err != nil {
 		return rpc.JoinResponse{}, err
@@ -851,6 +895,11 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 		return rpc.JoinResponse{}, err
 	}
 	auth.SetSeed(resp.Members)
+	// persisted for serve: if this process stops before the log has arrived, serve's
+	// own member check would otherwise refuse the leader for good (I-92)
+	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, resp.Members); err != nil {
+		return resp, err
+	}
 	if err := cluster.WriteClusterID(cfg.Node.DataDir, h.ClusterID); err != nil {
 		return resp, err
 	}
@@ -862,9 +911,12 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return resp, err
 	}
-	// receive the log before stopping so `serve` starts with the node table present
+	// receive the log before stopping so `serve` starts with the node table present, and
+	// snapshot it: Raft restores a table at open from a snapshot only
 	if err := n.WaitReady(ctx, 60*time.Second); err != nil {
 		log.Warn("joined, but the log has not fully replicated yet; serve will finish it", "err", err)
+	} else if err := n.Raft.Snapshot().Error(); err != nil {
+		log.Debug("no snapshot after the join", "err", err)
 	}
 	return resp, nil
 }
