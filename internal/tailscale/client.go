@@ -163,6 +163,7 @@ func (c *CLI) run(ctx context.Context, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Path, args...)
+	cmd.Env = cliEnv(os.Environ())
 	cmd.WaitDelay = 500 * time.Millisecond // do not hang on grandchildren holding the pipes
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -174,6 +175,23 @@ func (c *CLI) run(ctx context.Context, args ...string) ([]byte, error) {
 		return stdout.Bytes(), fmt.Errorf("%w: %s %s: %w: %s", ErrCLIFailed, filepath.Base(c.Path), strings.Join(args, " "), err, msg)
 	}
 	return stdout.Bytes(), nil
+}
+
+// cliEnv is the CLI's environment: ours, with a TERM. The macOS app's bundled binary
+// acts as the CLI only when TERM is set; a service started by launchd has none, and the
+// binary then tries to launch the GUI and prints an error instead of JSON.
+func cliEnv(env []string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if kv == "TERM=" {
+			continue
+		}
+		if strings.HasPrefix(kv, "TERM=") {
+			return env
+		}
+		out = append(out, kv)
+	}
+	return append(out, "TERM=dumb")
 }
 
 // Status runs `tailscale status --json`.
