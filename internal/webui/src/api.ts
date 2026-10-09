@@ -21,13 +21,17 @@ export interface VolumeReport {
   repair_pending: number;
   unreadable_chunks: number;
   stale_policy_chunks: number;
+  domain_skew: number; // chunks above the host cap (docs/14 §7)
+  tolerates_disks: number;
+  tolerates_hosts: number;
 }
 
 export interface NodeReport {
   idx: number;
   id: string;
   name: string;
-  kind: string;
+  kind: string; // device | disk | s3
+  host?: number; // disks: the device that serves it (docs/14)
   state: "active" | "draining" | "removed" | string;
   addr: string;
   rpc_port: number;

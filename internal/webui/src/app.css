@@ -138,6 +138,50 @@ section { display: grid; gap: 12px; align-content: start; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
 .card .meta { font-size: 12px; color: var(--dim); font-family: var(--mono); display: flex; flex-wrap: wrap; gap: 4px 12px; }
 
+/* ---- disks: one card per host, one row per target in it (docs/14 §8) ------------- */
+h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8px; }
+.disks { display: grid; gap: 12px; }
+.host-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: grid; gap: 10px; min-width: 0; }
+.host-row.self { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.host-row .host-sum { font: 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.disk-strip { display: grid; gap: 2px; }
+.disk { display: grid; grid-template-columns: minmax(72px, 112px) minmax(64px, 1fr) minmax(0, 1.2fr); column-gap: 12px; row-gap: 2px; align-items: center; background: var(--surface); border-radius: 4px; padding: 8px 10px; font-size: 12px; min-width: 0; }
+.disk .disk-name { grid-row: 1 / span 2; font: 600 12px var(--mono); display: flex; align-items: center; gap: 6px; min-width: 0; }
+.disk .disk-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disk > .bar { grid-row: 1 / span 2; }
+.disk .disk-val { grid-column: 3; color: var(--dim); font-family: var(--mono); font-variant-numeric: tabular-nums; display: flex; flex-wrap: wrap; column-gap: 1ch; }
+.disk .disk-val span { white-space: nowrap; }
+.disk .disk-val.dots span:not(:last-child)::after { content: " ·"; }
+.disk.bad .bar, .disk.off .bar { background: repeating-linear-gradient(135deg, var(--line) 0 4px, var(--surface) 4px 8px); }
+.disk.bad .bar > i { background: var(--bad); opacity: .5; }
+.disk.off { background: transparent; outline: 1.5px dashed var(--line); outline-offset: -1.5px; }
+@media (max-width: 480px) {
+  .disk { grid-template-columns: minmax(64px, 96px) minmax(0, 1fr); row-gap: 6px; }
+  .disk .disk-name { grid-row: auto; }
+  .disk > .bar { grid-row: auto; }
+  .disk .disk-val { grid-column: 1 / -1; }
+}
+.cap-note { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+.cap-note.warn { color: var(--warn); }
+/* spread: the block's summary, one column per target around its expected share */
+.spread { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+.spread-axis { display: flex; flex-direction: column; justify-content: space-between; height: 96px; font: 11px var(--mono); color: var(--dim); text-align: right; }
+.spread-plot { display: flex; gap: 16px; min-width: 0; overflow-x: auto; justify-content: flex-start; }
+.spread-host { display: grid; gap: 4px; flex: 0 1 auto; min-width: 0; }
+.spread-cols { display: flex; gap: 2px; height: 96px; }
+.spread-col { position: relative; flex: 0 0 auto; width: 24px; background: var(--surface); }
+.spread-col::before { content: ""; position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: var(--text); opacity: .35; }
+.spread-col > i { position: absolute; left: 0; right: 0; background: var(--fill); }
+.spread-col > i.up { bottom: 50%; border-radius: 2px 2px 0 0; }
+.spread-col > i.down { top: 50%; border-radius: 0 0 2px 2px; }
+.spread-col.warn > i { background: var(--warn); }
+.spread-col.bad > i { background: var(--bad); }
+.spread-col.dead { background: repeating-linear-gradient(135deg, var(--line) 0 4px, var(--surface) 4px 8px); }
+.spread-col.dead > i { background: var(--bad); opacity: .5; }
+.spread-col.drain { background: color-mix(in srgb, var(--warn) 12%, var(--bg)); }
+.spread-col.off { background: transparent; outline: 1.5px dashed var(--line); outline-offset: -1.5px; }
+.spread-label { font: 12px var(--mono); color: var(--dim); display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* ---- file browser -------------------------------------------------------------- */
 .crumbs { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--mono); font-size: 14px; align-items: center; }
 .crumbs a, .crumbs span { padding: 6px 2px; }

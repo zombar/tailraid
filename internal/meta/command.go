@@ -23,7 +23,13 @@ const (
 	OpSetVolumeMode Op = 14 // {Auto, Now}: the leader picks K, M from the member table (docs/03)
 )
 
-const commandVersion = 1
+// commandVersion is the codec version of a log entry. Version 2 is written only for a
+// NodeUpsert that carries a disk (its Node has Host), so a cluster without disks writes
+// exactly what an older node reads (docs/12 §6); both versions are read.
+const (
+	commandVersion   = 1
+	commandVersionV2 = 2
+)
 
 // SetAttr mask bits.
 const (
@@ -173,7 +179,12 @@ type Result struct {
 // programming error on the proposer, never a wire condition.
 func EncodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
-	w.u8(commandVersion)
+	v2 := c.Op == OpNodeUpsert && c.NodeUpsert != nil && (c.NodeUpsert.Node.Kind == KindDisk || c.NodeUpsert.Node.Host != 0)
+	if v2 {
+		w.u8(commandVersionV2)
+	} else {
+		w.u8(commandVersion)
+	}
 	w.u8(uint8(c.Op))
 	switch c.Op {
 	case OpSetVolume:
@@ -189,7 +200,7 @@ func EncodeCommand(c Command) []byte {
 		w.i64(p.CreatedAt)
 	case OpNodeUpsert:
 		p := mustPayload(c.NodeUpsert, c.Op)
-		writeNode(w, &p.Node)
+		writeNode(w, &p.Node, v2)
 	case OpNodeSetState:
 		p := mustPayload(c.NodeSetState, c.Op)
 		w.u16(uint16(p.Idx))
@@ -294,12 +305,16 @@ func mustPayload[T any](p *T, op Op) *T {
 func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
-	if v := r.u8(); r.err == nil && v != commandVersion {
+	v := r.u8()
+	if r.err == nil && v != commandVersion && v != commandVersionV2 {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
 	if r.err != nil {
 		return c, r.err
+	}
+	if v == commandVersionV2 && c.Op != OpNodeUpsert {
+		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
 	}
 	switch c.Op {
 	case OpSetVolume:
@@ -311,7 +326,7 @@ func DecodeCommand(b []byte) (Command, error) {
 		p.CreatedAt = r.i64()
 		c.MetaSet = p
 	case OpNodeUpsert:
-		c.NodeUpsert = &NodeUpsert{Node: readNode(r)}
+		c.NodeUpsert = &NodeUpsert{Node: readNode(r, v >= commandVersionV2)}
 	case OpNodeSetState:
 		c.NodeSetState = &NodeSetState{Idx: NodeIdx(r.u16()), State: NodeState(r.u8()), Now: r.i64()}
 	case OpCreate:
@@ -357,7 +372,8 @@ func DecodeCommand(b []byte) (Command, error) {
 	return c, nil
 }
 
-func writeNode(w *writer, n *Node) {
+// writeNode encodes a node; withHost appends Host (command version 2, snapshot version 3).
+func writeNode(w *writer, n *Node, withHost bool) {
 	w.u16(uint16(n.Idx))
 	w.str(n.ID)
 	w.str(n.Name)
@@ -376,15 +392,22 @@ func writeNode(w *writer, n *Node) {
 	w.str(n.S3Prefix)
 	w.str(n.S3Region)
 	w.bool(n.S3PathStyle)
+	if withHost {
+		w.u16(uint16(n.Host))
+	}
 }
 
-func readNode(r *reader) Node {
-	return Node{
+func readNode(r *reader, withHost bool) Node {
+	n := Node{
 		Idx: NodeIdx(r.u16()), ID: r.str(), Name: r.str(), Kind: NodeKind(r.u8()), State: NodeState(r.u8()),
 		TSStableID: r.str(), Addr: r.str(), RaftPort: r.u16(), RPCPort: r.u16(), Voter: r.bool(), Capacity: r.u64(),
 		Version: r.str(), JoinedAt: r.i64(),
 		S3Endpoint: r.str(), S3Bucket: r.str(), S3Prefix: r.str(), S3Region: r.str(), S3PathStyle: r.bool(),
 	}
+	if withHost {
+		n.Host = NodeIdx(r.u16())
+	}
+	return n
 }
 
 // EncodeResult serializes a Result for leader forwarding. Err must be nil or a sentinel.

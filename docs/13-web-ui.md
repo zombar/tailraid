@@ -13,7 +13,11 @@ every mutating admin operation stays in the CLI.
   capacity, slots and liveness, degraded / repair-pending / unreadable / stale-policy counts,
   the repairer's last pass, the gateway's dirty bytes and WAL) polled every 5 s, plus a
   per-file drill-down from `admin.DescribeChunks`: each chunk's hash, (k,m), live slots and
-  which node holds each shard.
+  which node holds each shard. A **Disks** block under Volume draws the data spread
+  across targets: each host a card with one row per disk, each row's slots against its
+  expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
+  no added disk show one cell, their own store; the block is drawn whenever any host has
+  more than one target.
 - **File browser**: list, stat, stream (HTTP Range), download, upload (`PUT`) and make
   folders. No rename, no delete: those stay on the mount.
 - **Media**: audio, video and images play in the browser's own elements; the node serves
@@ -215,6 +219,8 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Upload row | `.upload` | queued (dim), uploading (bar), done `ok`, failed `bad` with the server's message |
 | Inline form | `.inline-form` | the new-folder input; Enter submits, Escape cancels |
 | Toast | `.toast` | `ok` / `bad`, bottom right, 6 s, click to dismiss, `aria-live="polite"` |
+| Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped under its host, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±10 %, `warn` past 10 %, `bad` past 25 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
+| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), then the slot counts and used of budget; at ≤ 480 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
 | Slot cell | `.cell` | present (green), `warn` `!` live but absent, `bad` `×` dead, `unplaced` dashed, `unverified` 50 % |
 | Panel | `details.panel` | collapsed by default; summary names the count |
 | Empty / error | `.empty`, `.error` | "empty folder"; the error block quotes the server's `error` string and status |

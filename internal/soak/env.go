@@ -13,7 +13,8 @@ import (
 type NodeRef struct {
 	Name string       `json:"name"`
 	Idx  meta.NodeIdx `json:"idx"`
-	RPC  string       `json:"rpc"` // host:port as this driver reaches it (informational)
+	RPC  string       `json:"rpc"`            // host:port as this driver reaches it (informational)
+	Host string       `json:"host,omitempty"` // an added disk's host node name (docs/14); "" for a node
 }
 
 // DiskInfo is a node's data disk as its budget sees it (GET /dev/disk).
@@ -29,6 +30,7 @@ type Caps struct {
 	Partition    bool
 	Corrupt      bool
 	MultiGateway bool // Volume available on more than one node
+	Disks        bool // FailDisk/RestoreDisk on the hosts' added disks (docs/14)
 }
 
 // Env is one target cluster (docs/09 §6).
@@ -67,4 +69,8 @@ type Env interface {
 	Partition(ctx context.Context, a, b []NodeRef) error
 	Heal(ctx context.Context) error
 	Corrupt(ctx context.Context, node NodeRef, key string) error
+	// FailDisk closes an added disk as an unmounted one would (its marker gone, its host
+	// restarted); RestoreDisk brings it back. disk names its host (NodeRef.Host).
+	FailDisk(ctx context.Context, disk NodeRef) error
+	RestoreDisk(ctx context.Context, disk NodeRef) error
 }

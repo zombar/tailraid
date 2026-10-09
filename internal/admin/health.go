@@ -15,6 +15,7 @@ type VolumeHealth struct {
 	RepairPending  int                  // chunks with a slot to re-place (the repairer's view, after fill_after)
 	Unreadable     int                  // chunks with fewer than k readable slots right now
 	StalePolicy    int                  // chunks awaiting migration to the current (k, m)
+	DomainSkew     int                  // chunks above the host cap that repair will move (docs/14 §7)
 	DegradedHashes map[meta.Hash]bool   // degraded, repair-pending or unreadable
 	Slots          map[meta.NodeIdx]int // placement slots per node
 	Missing        map[meta.NodeIdx]int // slots per node whose node is not live
@@ -57,6 +58,9 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 		}
 		if h.PolicyStale {
 			v.StalePolicy++
+		}
+		if h.Skewed {
+			v.DomainSkew++
 		}
 		return true
 	})

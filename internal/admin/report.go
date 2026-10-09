@@ -20,6 +20,7 @@ type NodeReport struct {
 	ID       string         `json:"id"`
 	Name     string         `json:"name"`
 	Kind     string         `json:"kind"`
+	Host     meta.NodeIdx   `json:"host,omitempty"` // disks: the device that serves it (docs/14)
 	State    string         `json:"state"`
 	Addr     string         `json:"addr"`
 	RPCPort  uint16         `json:"rpc_port"`
@@ -62,6 +63,9 @@ type VolumeReport struct {
 	RepairPending  int     `json:"repair_pending"`    // chunks with a slot to re-place (after fill_after)
 	Unreadable     int     `json:"unreadable_chunks"` // chunks with < k live slots
 	StalePolicy    int     `json:"stale_policy_chunks"`
+	DomainSkew     int     `json:"domain_skew"`     // chunks above the host cap, to be moved (docs/14 §7)
+	ToleratesDisks int     `json:"tolerates_disks"` // targets the policy survives losing
+	ToleratesHosts int     `json:"tolerates_hosts"` // whole hosts it survives losing (docs/14 §6)
 }
 
 // GatewayReport is this node's overlay: what is acknowledged but not yet committed, and
@@ -181,16 +185,20 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	}
 	health := ScanHealth(st, lv, fillAfter)
 	rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy = health.Degraded, health.RepairPending, health.Unreadable, health.StalePolicy
+	rep.Volume.DomainSkew = health.DomainSkew
+	rep.Volume.ToleratesDisks, rep.Volume.ToleratesHosts = meta.Tolerance(nodes, vol.K, vol.M)
 	slots, missing := health.Slots, health.Missing
 	live := map[meta.NodeIdx]bool{}
 	for i := range nodes {
 		live[nodes[i].Idx] = lv.IsLive(nodes[i].Idx)
 	}
 	_, leaderID := n.Raft.LeaderWithID()
+	selfIdx, _ := n.SelfIdx()
 	for i := range nodes {
 		nd := nodes[i]
-		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
-			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: nd.ID == n.ID, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
+		self := nd.ID == n.ID || (nd.Kind == meta.KindDisk && nd.Host == selfIdx) // a disk of this host
+		r := NodeReport{Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
+			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
 			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.Free, r.Applied, r.Dev = pr.Free, pr.Applied, pr.Dev
@@ -236,7 +244,7 @@ func warnings(r Report) []string {
 		w = append(w, "some chunks have fewer than k live shards and cannot be read right now")
 	}
 	for i := range r.Nodes {
-		if r.Nodes[i].Dev {
+		if r.Nodes[i].Dev && r.Nodes[i].Kind != "disk" { // a disk reports its host's flag
 			w = append(w, "node "+r.Nodes[i].Name+" has the /dev/* endpoints enabled (dev.enabled): test rigs only")
 		}
 	}

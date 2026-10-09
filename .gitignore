@@ -1,6 +1,8 @@
 /dist/
 /report.html
 /results.jsonl
+/report-single.html
+/results-single.jsonl
 *.test
 /.idea/
 .DS_Store

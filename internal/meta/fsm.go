@@ -201,7 +201,17 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 			return Result{}, ErrNoSuchNode
 		}
 	}
-	if n.Kind != KindDevice && n.Kind != KindS3 {
+	switch n.Kind {
+	case KindDevice, KindS3:
+		if n.Host != 0 {
+			return Result{}, ErrBadCommand
+		}
+	case KindDisk:
+		// a disk belongs to an Active device for its whole life (docs/14 §1)
+		if h, ok := st.Nodes[n.Host]; !ok || h.Kind != KindDevice || h.State != Active {
+			return Result{}, ErrBadCommand
+		}
+	default:
 		return Result{}, ErrBadCommand
 	}
 	if n.Idx == 0 && n.ID != "" {
@@ -242,6 +252,14 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 	}
 	if n.State == Removed {
 		return ErrBadCommand
+	}
+	if c.State == Removed && n.Kind == KindDevice {
+		// a host leaves after its disks (docs/14 §1)
+		for _, d := range a.st.Nodes {
+			if d.Kind == KindDisk && d.Host == c.Idx && d.State != Removed {
+				return ErrNodeNotEmpty
+			}
+		}
 	}
 	if c.State == Removed {
 		// Every slot is the sole copy of its shard index (I-9): a node that still holds

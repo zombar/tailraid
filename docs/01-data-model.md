@@ -263,7 +263,8 @@ gateways on different devices (they encode cluster-wide identity, not a path).
 
 ## Node budget
 
-A device's `Capacity` is its shard-byte budget: the local shard store refuses a PUT that
+A target's `Capacity` is its shard-byte budget (a device's own store here; an added disk
+derives its own from its filesystem the same way, 14 §3): the local shard store refuses a PUT that
 would exceed it (`ErrFull`, HTTP 507) and placement weights by it. Unless `node.capacity`
 is set in the config (a pin), the budget is **derived**: `used + free − reserve` of the
 filesystem holding the data directory, with `reserve = max(10 % of the filesystem, 8 GiB)`

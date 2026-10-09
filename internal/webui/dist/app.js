@@ -383,22 +383,50 @@ function slotStrip(slots) {
 }
 
 // internal/webui/src/balance.ts
-function shares(nodes) {
+function shares(nodes, maxSlots = () => Infinity) {
   const total = nodes.reduce((s, n) => s + n.slots, 0);
-  const active = nodes.filter((n) => n.state === "active");
-  const sumCap = active.reduce((s, n) => s + n.capacity, 0);
+  const expected = /* @__PURE__ */ new Map();
+  let open = nodes.filter((n) => n.state === "active" && n.capacity > 0);
+  let left = total;
+  while (open.length > 0) {
+    const sumCap = open.reduce((s, n) => s + n.capacity, 0);
+    const capped = open.filter((n) => left * n.capacity / sumCap > maxSlots(n));
+    if (capped.length === 0) {
+      for (const n of open) expected.set(n.idx, left * n.capacity / sumCap);
+      break;
+    }
+    for (const n of capped) {
+      expected.set(n.idx, maxSlots(n));
+      left -= maxSlots(n);
+    }
+    open = open.filter((n) => !capped.includes(n));
+  }
   const out = /* @__PURE__ */ new Map();
   for (const n of nodes) {
-    const expected = n.state === "active" && sumCap > 0 ? total * n.capacity / sumCap : 0;
-    out.set(n.idx, { expected, deviation: expected > 0 ? (n.slots - expected) / expected : NaN });
+    const e = expected.get(n.idx) ?? 0;
+    out.set(n.idx, { expected: e, deviation: e > 0 ? (n.slots - e) / e : NaN });
   }
   return out;
 }
+function chunksPerTarget(r) {
+  return Math.max(0, r.volume.chunks - r.volume.tombstoned);
+}
+function withDisks(nodes) {
+  return nodes.filter((n) => n.kind !== "disk").map((n) => {
+    const ds = nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed");
+    if (ds.length === 0) return n;
+    const sum = (f) => f(n) + ds.reduce((s, d) => s + f(d), 0);
+    return { ...n, capacity: sum((x) => x.capacity), free: sum((x) => x.free), slots: sum((x) => x.slots), missing_slots: sum((x) => x.missing_slots) };
+  });
+}
 function render(root, r) {
-  const sh = shares(r.nodes);
-  const scale = Math.max(1, ...r.nodes.map((n) => Math.max(n.slots, sh.get(n.idx)?.expected ?? 0)));
+  const nodes = withDisks(r.nodes);
+  const per = chunksPerTarget(r);
+  const targetsOf = (n) => 1 + r.nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state === "active" && d.capacity > 0).length;
+  const sh = shares(nodes, (n) => per * targetsOf(n));
+  const scale = Math.max(1, ...nodes.map((n) => Math.max(n.slots, sh.get(n.idx)?.expected ?? 0)));
   const cards = h("div", { class: "cards" });
-  for (const n of r.nodes) cards.append(card(n, sh.get(n.idx) ?? { expected: 0, deviation: NaN }, scale));
+  for (const n of nodes) cards.append(card(n, sh.get(n.idx) ?? { expected: 0, deviation: NaN }, scale));
   root.append(h("section", null, h("h2", null, "Balance"), cards));
 }
 function card(n, share, scale) {
@@ -449,10 +477,123 @@ function card(n, share, scale) {
   return h("div", { class: "card node" + (n.self ? " self" : "") }, name, capacity, slots, meta);
 }
 
+// internal/webui/src/disks.ts
+function hosts(nodes) {
+  return nodes.filter((n) => n.kind === "device" && n.state !== "removed").map((n) => ({ node: n, targets: [n, ...nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed")] }));
+}
+function devTone(dev) {
+  return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
+}
+function off(t) {
+  return t.state === "active" && t.capacity === 0;
+}
+function plural(n, one) {
+  return n === 1 ? `1 ${one}` : `${n} ${one}s`;
+}
+function render2(root, r) {
+  if (!r.nodes.some((n2) => n2.kind === "disk")) return;
+  const groups = hosts(r.nodes);
+  const targets = groups.flatMap((g) => g.targets);
+  const per = chunksPerTarget(r);
+  const sh = shares(targets, () => per);
+  const v = r.volume;
+  const active = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
+  const perHost = targets.length / Math.max(1, groups.length);
+  const layout = Number.isInteger(perHost) ? `${plural(groups.length, "host")} \xD7 ${plural(perHost, "target")}` : `${plural(groups.length, "host")}, ${plural(targets.length, "target")}`;
+  const sub = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
+  const n = v.k + v.m;
+  const capPer = Math.ceil(n / Math.max(1, active.length));
+  const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active[0]?.node.name ?? "it"}`);
+  const scale = Math.max(1, ...targets.map((t) => Math.max(t.slots, sh.get(t.idx)?.expected ?? 0))) * 1.1;
+  const block = h("div", { class: "disks" }, spread(groups, sh), capNote);
+  for (const g of groups) block.append(hostCard(g, sh, scale));
+  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub)), block));
+}
+function spread(groups, sh) {
+  const devs = groups.flatMap((g) => g.targets.filter((t) => t.state === "active" && !off(t)).map((t) => Math.abs(sh.get(t.idx)?.deviation ?? 0)));
+  const worst = Math.max(0, ...devs.filter((d) => !Number.isNaN(d)));
+  const lim = worst <= 0.25 ? 0.25 : worst <= 0.5 ? 0.5 : 1;
+  const pctLabel = (x) => `${Math.round(x * 100)} %`;
+  const plot = h("div", { class: "spread-plot" });
+  for (const g of groups) {
+    const cols = h("div", { class: "spread-cols" });
+    for (const t of g.targets) {
+      const share = sh.get(t.idx);
+      if (off(t)) {
+        cols.append(h("div", { class: "spread-col off", title: `${t.name}: no budget (capacity 0)` }));
+        continue;
+      }
+      if (t.state !== "active") {
+        cols.append(h("div", { class: "spread-col drain", title: `${t.name}: draining, ${count(t.slots)} slots to move` }));
+        continue;
+      }
+      const dev = share?.deviation ?? NaN;
+      const d = Number.isNaN(dev) ? 0 : dev;
+      const cls = !t.live ? "dead" : devTone(dev);
+      const title = `${t.name}: ${Number.isNaN(dev) ? "no expected share" : signedPct(dev) + " of expected"} (${count(t.slots)} of ${count(Math.round(share?.expected ?? 0))} slots)` + (t.live ? "" : ", dead");
+      const col = h("div", { class: "spread-col" + (cls ? " " + cls : ""), title });
+      const fill = h("i", { class: d >= 0 ? "up" : "down" });
+      fill.style.height = (Math.min(Math.abs(d), lim) / lim * 50).toFixed(1) + "%";
+      col.append(fill);
+      cols.append(col);
+    }
+    const label = h("div", { class: "spread-label" }, h("span", { class: "dot " + (g.node.live ? "ok" : "bad") }), g.node.name);
+    plot.append(h("div", { class: "spread-host" }, cols, label));
+  }
+  return h(
+    "div",
+    { class: "spread", role: "img", "aria-label": "slot share of each target against its expected share" },
+    h("div", { class: "spread-axis" }, h("span", null, "+" + pctLabel(lim)), h("span", null, "expected"), h("span", null, "\u2212" + pctLabel(lim))),
+    plot
+  );
+}
+function hostCard(g, sh, scale) {
+  const n = g.node;
+  const badges = h("span", { class: "badges" });
+  if (n.leader) badges.append(h("span", { class: "badge strong" }, "leader"));
+  badges.append(n.voter ? h("span", { class: "badge strong" }, "voter") : h("span", { class: "badge" }, "non-voter"));
+  if (n.self) badges.append(h("span", { class: "badge self" }, "self"));
+  if (n.state === "draining") badges.append(h("span", { class: "badge warn" }, "draining"));
+  const budget = g.targets.reduce((s, t) => s + t.capacity, 0);
+  let sum = `${plural(g.targets.length, "target")} \xB7 ${bytes(budget)}`;
+  if (!n.live) sum += " \xB7 dead " + (n.dead_for ?? "?");
+  const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (n.live ? "ok" : "bad") }), h("span", { class: "name" }, n.name), h("span", { class: "host-sum" }, sum), badges);
+  const strip = h("div", { class: "disk-strip" });
+  for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
+  return h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
+}
+function diskRow(t, share, scale) {
+  const dot = off(t) ? "off" : t.live ? "ok" : "bad";
+  const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", null, t.name));
+  if (off(t)) {
+    return h("div", { class: "disk off", title: `${t.name}: no budget (capacity 0)` }, name, h("div", { class: "bar" }), h("div", { class: "disk-val" }, "no budget (capacity 0)"));
+  }
+  const used = Math.max(0, t.capacity - t.free);
+  const usage = t.live ? h("div", { class: "disk-val" }, h("span", null, bytes(used)), h("span", null, "of " + bytes(t.capacity))) : h("div", { class: "disk-val" }, `unknown (dead ${t.dead_for ?? "?"})`);
+  if (t.state !== "active") {
+    const b2 = bar(t.slots / scale);
+    return h(
+      "div",
+      { class: "disk warn", title: `${t.name}: draining, ${count(t.slots)} slots to move` },
+      name,
+      b2,
+      h("div", { class: "disk-val dots" }, h("span", { class: "text-warn" }, "draining"), h("span", null, `${count(t.slots)} slots to move`)),
+      usage
+    );
+  }
+  const exp = share?.expected ?? 0;
+  const dev = share?.deviation ?? NaN;
+  const b = bar(t.slots / scale, t.live ? devTone(dev) : "", exp / scale);
+  const vals = h("div", { class: "disk-val dots" }, h("span", null, `${count(t.slots)} slots`), h("span", null, `exp ${count(Math.round(exp))}`));
+  if (!Number.isNaN(dev)) vals.append(h("span", null, signedPct(dev)));
+  const title = `${t.name}: ${count(t.slots)} slots, expected ${count(Math.round(exp))}; ${bytes(used)} used of ${bytes(t.capacity)}`;
+  return h("div", { class: "disk" + (t.live ? "" : " bad"), title }, name, b, vals, usage);
+}
+
 // internal/webui/src/integrity.ts
 var MAX_DIRTY = 256 * 1024 * 1024;
 var WAL_CAP = 128 * 1024 * 1024;
-function render2(root, r, history) {
+function render3(root, r, history) {
   const v = r.volume;
   const tiles = h(
     "div",
@@ -460,7 +601,8 @@ function render2(root, r, history) {
     tile("Degraded", v.degraded_chunks, `chunks with fewer than ${v.k + v.m} good slots`, "warn"),
     tile("Repair pending", v.repair_pending, "waiting for fill_after", "warn"),
     tile("Unreadable", v.unreadable_chunks, `chunks with fewer than ${v.k} live slots`, "bad"),
-    tile("Stale policy", v.stale_policy_chunks, `chunks not yet at ${v.k}+${v.m}`, "warn")
+    tile("Stale policy", v.stale_policy_chunks, `chunks not yet at ${v.k}+${v.m}`, "warn"),
+    tile("Host skew", v.domain_skew, "chunks above the host cap", "warn")
   );
   const last = history[history.length - 1];
   const lastTone = last && last.degraded + last.pending > 0 ? "warn" : "";
@@ -520,7 +662,7 @@ function repair(r) {
 }
 
 // internal/webui/src/dashboard.ts
-function render3(root) {
+function render4(root) {
   const draw = () => {
     clear(root);
     const r = status.current;
@@ -529,8 +671,9 @@ function render3(root) {
       return;
     }
     volume(root, r);
+    render2(root, r);
     render(root, r);
-    render2(root, r, status.history);
+    render3(root, r, status.history);
   };
   const unsub = status.subscribe(draw);
   draw();
@@ -563,7 +706,7 @@ function tile2(label, value, sub) {
 
 // internal/webui/src/chunks.ts
 var PAGE = 64;
-function render4(path, expected) {
+function render5(path, expected) {
   const summary = h("summary", null, "Integrity" + (expected !== void 0 ? ` (${count(expected)} ${expected === 1 ? "chunk" : "chunks"})` : ""));
   const body = h("div", { class: "body" });
   const panel = h("details", { class: "panel" }, summary, body);
@@ -678,7 +821,7 @@ function mediaKind(e) {
   return KINDS[e]?.[0] ?? "other";
 }
 var media = null;
-function render5(root, path) {
+function render6(root, path) {
   const dir = dirname(path);
   const name = basename(path);
   const kind = mediaKind(ext(name));
@@ -763,7 +906,7 @@ function render5(root, path) {
       );
     }
     const cs = status.current?.volume.chunk_size;
-    section.append(render4(path, entry && cs ? Math.ceil(entry.size / cs) : void 0));
+    section.append(render5(path, entry && cs ? Math.ceil(entry.size / cs) : void 0));
     root.append(section);
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
     keyHandler = (ev) => {
@@ -867,7 +1010,7 @@ async function runQueue() {
   }
   running = false;
 }
-function render6(root, dir) {
+function render7(root, dir) {
   let sort = loadSort();
   let entries = [];
   let formOpen = false;
@@ -1120,12 +1263,12 @@ function route() {
   let tab = "dash";
   if (head === "browse") {
     tab = "files";
-    dispose = render6(view, decodeHashPath(tail));
+    dispose = render7(view, decodeHashPath(tail));
   } else if (head === "file") {
     tab = "files";
-    dispose = render5(view, decodeHashPath(tail));
+    dispose = render6(view, decodeHashPath(tail));
   } else {
-    dispose = render3(view);
+    dispose = render4(view);
   }
   for (const a of tabs) a.classList.toggle("active", a.dataset.tab === tab);
   window.scrollTo(0, 0);

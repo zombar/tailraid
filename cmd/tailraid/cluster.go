@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -127,8 +129,9 @@ func printStatus(w io.Writer, r admin.Report) {
 	v := r.Volume
 	fmt.Fprintf(w, "volume  %d+%d, chunk %s  files: %d  logical: %s  stored: %s  free: %s  dedup: %.2fx\n",
 		v.K, v.M, bytesStr(uint64(v.ChunkSize)), v.Inodes, bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), bytesStr(v.Free), v.DedupRatio)
-	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 {
-		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy)
+	fmt.Fprintf(w, "        survives %s\n", survives(v.ToleratesDisks, v.ToleratesHosts))
+	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 || v.DomainSkew > 0 {
+		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d  host-skew: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy, v.DomainSkew)
 	}
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
@@ -142,11 +145,37 @@ func printStatus(w io.Writer, r admin.Report) {
 	}
 }
 
+// hostOrder lists the nodes with each device's disks right after it (docs/14 §8).
+func hostOrder(nodes []admin.NodeReport) []admin.NodeReport {
+	out := make([]admin.NodeReport, 0, len(nodes))
+	for i := range nodes {
+		if nodes[i].Kind == "disk" {
+			continue
+		}
+		out = append(out, nodes[i])
+		for j := range nodes {
+			if nodes[j].Kind == "disk" && nodes[j].Host == nodes[i].Idx {
+				out = append(out, nodes[j])
+			}
+		}
+	}
+	for i := range nodes { // a disk whose host is missing from the list still shows
+		if nodes[i].Kind == "disk" && !slices.ContainsFunc(out, func(n admin.NodeReport) bool { return n.Idx == nodes[i].Idx }) {
+			out = append(out, nodes[i])
+		}
+	}
+	return out
+}
+
 func printNodes(w io.Writer, nodes []admin.NodeReport) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "IDX\tNAME\tKIND\tSTATE\tADDR\tVOTER\tLIVE\tSLOTS\tFREE\tVERSION\tFLAGS")
+	nodes = hostOrder(nodes)
 	for i := range nodes {
 		n := &nodes[i]
+		if n.Kind == "disk" {
+			n.Name = "  " + n.Name // indented under its host
+		}
 		var flags []string
 		if n.Leader {
 			flags = append(flags, "leader")
@@ -164,6 +193,28 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, n.Name, n.Kind, n.State, n.Addr, n.Voter, live, n.Slots, bytesStr(uint64(max(n.Free, 0))), n.Version, strings.Join(flags, ","))
 	}
 	_ = tw.Flush()
+}
+
+// activeHosts counts the Active devices of the node table.
+func activeHosts(nodes []admin.NodeReport) int {
+	n := 0
+	for i := range nodes {
+		if nodes[i].Kind == "device" && nodes[i].State == "active" {
+			n++
+		}
+	}
+	return n
+}
+
+// survives prints a policy's tolerance: "2 disks, 1 host" (docs/14 §6).
+func survives(disks, hosts int) string {
+	plural := func(n int, one string) string {
+		if n == 1 {
+			return "1 " + one
+		}
+		return fmt.Sprintf("%d %ss", n, one)
+	}
+	return plural(disks, "disk") + ", " + plural(hosts, "host")
 }
 
 func short(id string) string {
@@ -255,7 +306,87 @@ func nodeCmd() *cobra.Command {
 		return nil
 	})
 	remove.Flags().Bool("force", false, "remove even if the node still holds shard slots")
-	c.AddCommand(ls, describe, promote, demote, drain, activate, remove)
+	c.AddCommand(ls, describe, promote, demote, drain, activate, remove, addDiskCmd())
+	return c
+}
+
+// addDiskCmd is `node add-disk <path>`: mark an empty directory as a disk of this device,
+// save it in the config, register it through the leader and have the running node open
+// it (docs/14 §2).
+func addDiskCmd() *cobra.Command {
+	var capacity string
+	c := &cobra.Command{
+		Use: "add-disk <path>", Short: "Add a disk of this device to the volume as a placement target of its own", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, path, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			disk := config.Disk{Path: filepath.Clean(args[0]), Capacity: capacity}
+			next := cfg
+			next.Node.Disks = append(append([]config.Disk(nil), cfg.Node.Disks...), disk)
+			if err := next.Validate(); err != nil {
+				return err
+			}
+			rep, c, addr, err := fetchReport(cmd.Context(), cmd)
+			if err != nil {
+				return err
+			}
+			var host *admin.NodeReport
+			n := 1
+			for i := range rep.Nodes {
+				if rep.Nodes[i].Self && rep.Nodes[i].Kind == "device" {
+					host = &rep.Nodes[i]
+				}
+			}
+			if host == nil {
+				return errors.New("this device is not in the node table")
+			}
+			for i := range rep.Nodes {
+				if rep.Nodes[i].Kind == "disk" && rep.Nodes[i].Host == host.Idx {
+					n++
+				}
+			}
+			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+			if err != nil {
+				return err
+			}
+			id, err := node.PrepareDisk(disk.Path, cid, host.ID)
+			if err != nil {
+				return err
+			}
+			budget, err := node.DiskBudget(disk)
+			if err != nil {
+				return err
+			}
+			if err := config.Save(path, next); err != nil {
+				return err
+			}
+			name := node.DiskName(host.Name, n)
+			if err := c.Members(cmd.Context(), leaderOr(rep, addr), rpc.MemberOp{Op: "add_disk", NodeIdx: host.Idx, DiskID: id, Name: name, Capacity: budget}); err != nil {
+				return fmt.Errorf("register %s (the marker and the config entry stay; re-run to retry): %w", name, err)
+			}
+			raw, err := c.Admin(cmd.Context(), addr, rpc.AdminOp{Op: "open_disk", Path: disk.Path, Capacity: capacity})
+			if err != nil {
+				return err
+			}
+			var st struct {
+				State string `json:"state"`
+			}
+			_ = json.Unmarshal(raw, &st)
+			if rep, _, _, err := fetchReport(cmd.Context(), cmd); err == nil { // the leader settles the name
+				for i := range rep.Nodes {
+					if rep.Nodes[i].ID == id {
+						name = rep.Nodes[i].Name
+					}
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "added disk %s at %s (budget %s): %s\n", name, disk.Path, bytesStr(budget), st.State)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&capacity, "capacity", "", `pin the disk's budget ("500G"); default: derived from its filesystem`)
+	addNodeFlags(c)
 	return c
 }
 
@@ -509,6 +640,13 @@ func setRedundancyCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "policy pinned to %d+%d; existing chunks migrate on the next repair passes (watch `tailraid volume describe`)\n", k, m)
+			if rep, _, _, err := fetchReport(cmd.Context(), cmd); err == nil {
+				v := rep.Volume
+				fmt.Fprintf(cmd.OutOrStdout(), "survives %s\n", survives(v.ToleratesDisks, v.ToleratesHosts))
+				if hosts := activeHosts(rep.Nodes); v.ToleratesHosts == 0 && hosts > 1 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d+%d cannot survive the loss of any one of the %d hosts (docs/14 §6)\n", k, m, hosts)
+				}
+			}
 			return printRaw(cmd.OutOrStdout(), raw)
 		},
 	}

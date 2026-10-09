@@ -1,5 +1,6 @@
 // Balance: one card per node, capacity used (capacity − free) and slots held against the
-// capacity-weighted expected share (rendezvous placement, docs/03).
+// capacity-weighted expected share (rendezvous placement, docs/03). A device's card
+// totals its added disks; the Disks block shows them one by one (docs/14 §8).
 
 import { h } from "./dom.ts";
 import { bar, barRow, fillTone, type Tone } from "./chart.ts";
@@ -11,24 +12,63 @@ interface Share {
   deviation: number; // NaN when no expectation (not active)
 }
 
-/** shares computes each node's expected slot count: total slots × capacity / Σ active capacity. */
-export function shares(nodes: NodeReport[]): Map<number, Share> {
+/**
+ * shares computes each node's expected slot count: the total slots spread over the active
+ * nodes by capacity, except that a node never expects more than maxSlots(n) — one slot per
+ * chunk for a single target (I-9) — and what a capped node cannot take is spread over the
+ * rest by capacity (water-filling). Without a cap it is total × capacity / Σ capacity.
+ */
+export function shares(nodes: NodeReport[], maxSlots: (n: NodeReport) => number = () => Infinity): Map<number, Share> {
   const total = nodes.reduce((s, n) => s + n.slots, 0);
-  const active = nodes.filter((n) => n.state === "active");
-  const sumCap = active.reduce((s, n) => s + n.capacity, 0);
+  const expected = new Map<number, number>();
+  let open = nodes.filter((n) => n.state === "active" && n.capacity > 0);
+  let left = total;
+  while (open.length > 0) {
+    const sumCap = open.reduce((s, n) => s + n.capacity, 0);
+    const capped = open.filter((n) => (left * n.capacity) / sumCap > maxSlots(n));
+    if (capped.length === 0) {
+      for (const n of open) expected.set(n.idx, (left * n.capacity) / sumCap);
+      break;
+    }
+    for (const n of capped) {
+      expected.set(n.idx, maxSlots(n));
+      left -= maxSlots(n);
+    }
+    open = open.filter((n) => !capped.includes(n));
+  }
   const out = new Map<number, Share>();
   for (const n of nodes) {
-    const expected = n.state === "active" && sumCap > 0 ? (total * n.capacity) / sumCap : 0;
-    out.set(n.idx, { expected, deviation: expected > 0 ? (n.slots - expected) / expected : NaN });
+    const e = expected.get(n.idx) ?? 0;
+    out.set(n.idx, { expected: e, deviation: e > 0 ? (n.slots - e) / e : NaN });
   }
   return out;
 }
 
+/** chunksPerTarget is the most slots one target can hold: one per live chunk (I-9). */
+export function chunksPerTarget(r: Report): number {
+  return Math.max(0, r.volume.chunks - r.volume.tombstoned);
+}
+
+/** withDisks folds every disk into its host: capacity, free, slots and missing slots add up. */
+export function withDisks(nodes: NodeReport[]): NodeReport[] {
+  return nodes
+    .filter((n) => n.kind !== "disk")
+    .map((n) => {
+      const ds = nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed");
+      if (ds.length === 0) return n;
+      const sum = (f: (x: NodeReport) => number) => f(n) + ds.reduce((s, d) => s + f(d), 0);
+      return { ...n, capacity: sum((x) => x.capacity), free: sum((x) => x.free), slots: sum((x) => x.slots), missing_slots: sum((x) => x.missing_slots) };
+    });
+}
+
 export function render(root: HTMLElement, r: Report): void {
-  const sh = shares(r.nodes);
-  const scale = Math.max(1, ...r.nodes.map((n) => Math.max(n.slots, sh.get(n.idx)?.expected ?? 0)));
+  const nodes = withDisks(r.nodes);
+  const per = chunksPerTarget(r);
+  const targetsOf = (n: NodeReport) => 1 + r.nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state === "active" && d.capacity > 0).length;
+  const sh = shares(nodes, (n) => per * targetsOf(n));
+  const scale = Math.max(1, ...nodes.map((n) => Math.max(n.slots, sh.get(n.idx)?.expected ?? 0)));
   const cards = h("div", { class: "cards" });
-  for (const n of r.nodes) cards.append(card(n, sh.get(n.idx) ?? { expected: 0, deviation: NaN }, scale));
+  for (const n of nodes) cards.append(card(n, sh.get(n.idx) ?? { expected: 0, deviation: NaN }, scale));
   root.append(h("section", null, h("h2", null, "Balance"), cards));
 }
 

@@ -99,7 +99,7 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true}
 }
 
 func (e *harnessEnv) quorum() bool {
@@ -309,10 +309,49 @@ func (e *harnessEnv) Heal(context.Context) error {
 
 func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) error {
 	nd := e.node(n)
-	if !nd.Store.Has(chunk.ShardKey(key)) {
-		return errors.New("no such shard")
+	k := chunk.ShardKey(key)
+	if nd.Store.Has(k) {
+		return dev.Corrupt(nd.Store.Path(k))
 	}
-	return dev.Corrupt(nd.Store.Path(chunk.ShardKey(key)))
+	nodes := nd.Node.FSM.Nodes()
+	for i := range nodes { // the host's added disks, as /dev/corrupt searches them
+		if t := &nodes[i]; t.Kind == meta.KindDisk && t.Host == nd.Idx() {
+			if s := e.c.DiskStore(nd.I, t.Idx); s != nil && s.Has(k) {
+				return dev.Corrupt(s.Path(k))
+			}
+		}
+	}
+	return errors.New("no such shard")
+}
+
+// hostOf finds the harness node serving a disk ref by its host name.
+func (e *harnessEnv) hostOf(disk soak.NodeRef) (int, error) {
+	for i := range e.c.Nodes {
+		if fmt.Sprintf("n%d", i) == disk.Host {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("no host %q", disk.Host)
+}
+
+func (e *harnessEnv) FailDisk(_ context.Context, disk soak.NodeRef) error {
+	i, err := e.hostOf(disk)
+	if err != nil {
+		return err
+	}
+	e.c.FailDisk(i, disk.Idx, true)
+	e.c.Probe()
+	return nil
+}
+
+func (e *harnessEnv) RestoreDisk(_ context.Context, disk soak.NodeRef) error {
+	i, err := e.hostOf(disk)
+	if err != nil {
+		return err
+	}
+	e.c.FailDisk(i, disk.Idx, false)
+	e.c.Probe()
+	return nil
 }
 
 func harnessProfile() soak.Profile {
@@ -332,6 +371,10 @@ func harnessProfile() soak.Profile {
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1, testharness.WALCap(512<<10)) // the large-file phase meets the cap
 	defer c.Close()
+	for i := range c.Nodes { // 4 hosts × 3 targets, as the compose rig (docs/14)
+		c.AddDisk(i)
+		c.AddDisk(i)
+	}
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
@@ -353,7 +396,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 12 {
+	if sum.Failed != 0 || len(sum.Phases) != 13 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -380,7 +423,8 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
 		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound",
 		"CPU on the sampled node", "Memory on the sampled node", "Data disk on the sampled node", "peak resident set",
-		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity"} {
+		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity",
+		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

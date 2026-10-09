@@ -56,7 +56,8 @@ func TestCheck_MPlusOneCorrupt_NotOK(t *testing.T) {
 
 // set-redundancy needs k+m live Active nodes at the moment it is set.
 func TestAdmin_SetPolicy_LiveCountBoundary(t *testing.T) {
-	nodes := []meta.Node{{Idx: 1, State: meta.Active}, {Idx: 2, State: meta.Active}, {Idx: 3, State: meta.Active}, {Idx: 4, State: meta.Draining}}
+	dev := meta.KindDevice
+	nodes := []meta.Node{{Idx: 1, Kind: dev, State: meta.Active}, {Idx: 2, Kind: dev, State: meta.Active}, {Idx: 3, Kind: dev, State: meta.Active}, {Idx: 4, Kind: dev, State: meta.Draining}}
 	live := allLive{}
 	cases := []struct {
 		k, m uint8

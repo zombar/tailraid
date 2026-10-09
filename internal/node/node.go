@@ -140,19 +140,24 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer ov.Close()
 
+	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // added disks (docs/14 §3)
+	disks.refresh(node.FSM.Nodes())
+
 	client := rpc.NewClient(clusterID, node.RPCAddrOf, store)
+	client.SetDisks(node.DiskOf, disks.local)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
 	prober.SelfHealth = func() rpc.Health {
 		used, capacity := store.Used(), store.Capacity()
-		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled}
+		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled,
+			Disks: disks.health()}
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
 	var blocked func(string) bool
 	if cfg.Dev.Enabled {
 		ring = meta.NewEventRing(clk, selfIdx)
-		devHandler = dev.Handler(node.FSM, store, cfg.Node.DataDir, faults, log)
+		devHandler = dev.Handler(node.FSM, devStores{store, disks}, cfg.Node.DataDir, faults, log)
 		client.WrapTransport(faults.Transport)
 		blocked = faults.Blocked
 	}
@@ -177,7 +182,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
@@ -192,7 +197,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		return rep
 	}
-	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
+	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
@@ -339,7 +344,8 @@ type adminOps struct {
 	prober   *cluster.Prober
 	repairer *repair.Repairer
 	gc       *repair.GC
-	store    *chunk.Store
+	store    *chunk.Store // disk 0
+	disks    *diskSet
 	client   *rpc.Client
 	rd       *vfs.Reader
 	ring     *meta.EventRing
@@ -382,31 +388,46 @@ func Budget(cfg config.Config) (uint64, error) {
 	return uint64(store.Capacity()), nil
 }
 
-// rebudget re-derives this node's budget from its data disk and registers it through the
+// targets lists this host's shard stores: disk 0, then the open added disks.
+func (a *adminOps) targets() []target {
+	open := a.disks.open()
+	out := make([]target, 0, 1+len(open))
+	out = append(out, target{idx: a.self, store: a.store, pinned: a.pinned})
+	for _, ld := range open {
+		out = append(out, target{idx: ld.idx, store: ld.store, pinned: ld.cfg.Capacity != ""})
+	}
+	return out
+}
+
+// rebudget opens any disk that has come up, re-derives every unpinned target's budget
+// from its filesystem (shared filesystems divided, I-91) and registers each through the
 // leader when it moved past the hysteresis (docs/01 §Node budget, I-74).
 func (a *adminOps) rebudget(ctx context.Context) {
-	b, err := a.store.Rebudget()
+	a.disks.refresh(a.node.FSM.Nodes())
+	bs, err := budgets(a.targets())
 	if err != nil {
-		a.log.Warn("budget: measuring the data disk failed", "err", err)
+		a.log.Warn("budget: measuring a disk failed", "err", err)
 		return
 	}
-	nd, ok := a.node.FSM.Node(a.self)
-	if !ok || !chunk.BudgetChanged(nd.Capacity, b) {
-		return
+	for idx, b := range bs {
+		nd, ok := a.node.FSM.Node(idx)
+		if !ok || !chunk.BudgetChanged(nd.Capacity, b) {
+			continue
+		}
+		op := rpc.MemberOp{Op: "set_capacity", NodeIdx: idx, Capacity: b}
+		if a.node.IsLeader() {
+			err = a.node.MemberOp(ctx, op)
+		} else if addr := a.node.LeaderRPCAddr(); addr != "" {
+			err = a.client.Members(ctx, addr, op)
+		} else {
+			err = cluster.ErrNoLeader
+		}
+		if err != nil {
+			a.log.Warn("budget: update failed, will retry", "target", nd.Name, "err", err)
+			continue
+		}
+		a.log.Info("budget re-derived", "target", nd.Name, "was", nd.Capacity, "now", b)
 	}
-	op := rpc.MemberOp{Op: "set_capacity", NodeIdx: a.self, Capacity: b}
-	if a.node.IsLeader() {
-		err = a.node.MemberOp(ctx, op)
-	} else if addr := a.node.LeaderRPCAddr(); addr != "" {
-		err = a.client.Members(ctx, addr, op)
-	} else {
-		err = cluster.ErrNoLeader
-	}
-	if err != nil {
-		a.log.Warn("budget: update failed, will retry", "err", err)
-		return
-	}
-	a.log.Info("budget re-derived", "was", nd.Capacity, "now", b)
 }
 
 // setPolicy is `volume set-redundancy`: --auto hands the policy to the leader's repair
@@ -467,9 +488,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 		case <-ctx.Done():
 			return
 		case <-budgetT.C():
-			if !a.pinned {
-				a.rebudget(ctx)
-			}
+			a.rebudget(ctx) // pinned targets are skipped inside; disks are refreshed either way
 			budgetT.Reset(cfg.ScanInterval)
 		case <-gcT.C():
 			if a.node.IsLeader() && a.healthy() {
@@ -481,10 +500,12 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 			}
 			gcT.Reset(cfg.GCInterval)
 		case <-sweepT.C():
-			if n, err := repair.SweepLocal(ctx, a.store, a.node.FSM, a.self, cfg.Grace, a.clk, a.healthy, a.node.AppliedIndex, a.leaderApplied); err != nil {
-				a.log.Warn("sweep failed", "err", err)
-			} else if n > 0 {
-				a.log.Info("sweep", "orphans_removed", n)
+			for _, t := range a.targets() { // open targets only: a closed disk is never swept (I-86)
+				if n, err := repair.SweepLocal(ctx, t.store, a.node.FSM, t.idx, cfg.Grace, a.clk, a.healthy, a.node.AppliedIndex, a.leaderApplied); err != nil {
+					a.log.Warn("sweep failed", "target", t.idx, "err", err)
+				} else if n > 0 {
+					a.log.Info("sweep", "target", t.idx, "orphans_removed", n)
+				}
 			}
 			if n, err := webui.SweepUploads(ctx, a.fs, a.node.FSM, a.clk.Now(), webui.UploadTTL); err != nil {
 				a.log.Warn("upload sweep failed", "err", err)
@@ -529,6 +550,13 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]string{"join_token": token}, nil
 	case "set_policy":
 		return a.setPolicy(ctx, op)
+	case "open_disk":
+		if !filepath.IsAbs(op.Path) {
+			return nil, fmt.Errorf("open_disk: %q is not an absolute path", op.Path)
+		}
+		a.disks.add(config.Disk{Path: op.Path, Capacity: op.Capacity})
+		a.disks.refresh(a.node.FSM.Nodes())
+		return map[string]string{"state": a.disks.state(op.Path)}, nil
 	case "check":
 		// --scrub runs one full-verification pass through the leader's repairer, so it
 		// uses the configured fill_after and rate limit and never overlaps a background pass
@@ -549,18 +577,20 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		fs := snap.(interface{ State() *meta.State })
 		rep := admin.FsckReport{Violations: meta.CheckInvariants(fs.State())}
-		_ = a.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
-			h, kk, mm, idx, err := chunk.ParseKey(k)
-			if err != nil {
-				rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
+		for _, t := range a.targets() {
+			_ = t.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
+				h, kk, mm, idx, err := chunk.ParseKey(k)
+				if err != nil {
+					rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
+					return nil
+				}
+				c, ok := a.node.FSM.GetChunk(h)
+				if !ok || c.K != kk || c.M != mm || idx >= len(c.Placement) || c.Placement[idx] != t.idx {
+					rep.OrphanShards++
+				}
 				return nil
-			}
-			c, ok := a.node.FSM.GetChunk(h)
-			if !ok || c.K != kk || c.M != mm || idx >= len(c.Placement) || c.Placement[idx] != a.self {
-				rep.OrphanShards++
-			}
-			return nil
-		})
+			})
+		}
 		rep.OK = len(rep.Violations) == 0
 		return rep, nil
 	}
@@ -575,7 +605,15 @@ type fence struct {
 	self meta.NodeIdx
 }
 
-func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) {
+func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) { return f.placedOn(f.self, key) }
+
+// PlacedOn is the fence for one of this host's added disks (rpc.DiskFence).
+func (f fence) PlacedOn(target meta.NodeIdx, key chunk.ShardKey) bool {
+	placed, _ := f.placedOn(target, key)
+	return placed
+}
+
+func (f fence) placedOn(target meta.NodeIdx, key chunk.ShardKey) (bool, bool) {
 	h, k, m, idx, err := chunk.ParseKey(key)
 	if err != nil {
 		return false, false
@@ -584,8 +622,35 @@ func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) {
 	if !ok || c.K != k || c.M != m || idx >= len(c.Placement) {
 		return false, ok
 	}
-	return c.Placement[idx] == f.self, true
+	return c.Placement[idx] == target, true
 }
+
+// devStores is /dev/corrupt's view of this host: disk 0 and the open added disks.
+type devStores struct {
+	own   *chunk.Store
+	disks *diskSet
+}
+
+func (d devStores) find(k chunk.ShardKey) *chunk.Store {
+	if d.own.Has(k) {
+		return d.own
+	}
+	for _, ld := range d.disks.open() {
+		if ld.store.Has(k) {
+			return ld.store
+		}
+	}
+	return nil
+}
+
+func (d devStores) Has(k chunk.ShardKey) bool { return d.find(k) != nil }
+func (d devStores) Path(k chunk.ShardKey) string {
+	if s := d.find(k); s != nil {
+		return s.Path(k)
+	}
+	return d.own.Path(k)
+}
+func (d devStores) Disk() (used, free, total uint64, err error) { return d.own.Disk() }
 
 // watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change)
 // and returns true once the new address is in the node table, so the caller can restart.

@@ -83,6 +83,7 @@ type NodeKind uint8
 const (
 	KindDevice NodeKind = 1
 	KindS3     NodeKind = 2
+	KindDisk   NodeKind = 3 // an added disk of a device: a placement target, never a Raft member (docs/14)
 )
 
 // NodeState is the membership state of a node.
@@ -111,6 +112,7 @@ type Node struct {
 	Capacity   uint64 // shard-byte budget; also the placement weight
 	Version    string // software version last reported
 	JoinedAt   int64
+	Host       NodeIdx // KindDisk: the device that serves this disk; 0 for every other kind
 	// S3 nodes only
 	S3Endpoint  string
 	S3Bucket    string
@@ -132,8 +134,11 @@ func (s NodeState) String() string {
 
 // String names a node kind.
 func (k NodeKind) String() string {
-	if k == KindS3 {
+	switch k {
+	case KindS3:
 		return "s3"
+	case KindDisk:
+		return "disk"
 	}
 	return "device"
 }

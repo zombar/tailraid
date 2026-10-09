@@ -1,6 +1,7 @@
 #!/bin/sh
 # Node entrypoint for the compose cluster. Env:
 #   ROLE=init|join   SELF_IP, NODE_NAME, LEADER (ip for join), TOKEN, K, M, CAPACITY, VOTER
+#   DISKS (space-separated mount paths of added disks, docs/14), DISK_CAPACITY
 set -eu
 mkdir -p "$TAILRAID_HOME"
 # one log format for the whole container stream: shell messages and CLI output become
@@ -50,6 +51,23 @@ dev:
   enabled: true
   tailscale_fake: $TAILRAID_HOME/ts.json
 EOF
+# the joining nodes add their disks after the join (node add-disk, docs/14 §2); the init
+# node lists them in its config and init registers them
+diskcfg() {
+  echo "  disks:"
+  for d in $DISKS; do
+    printf '    - path: %s\n      capacity: "%s"\n' "$d" "${DISK_CAPACITY:-}"
+  done
+}
+if [ -n "${DISKS:-}" ] && [ "$ROLE" = init ] && [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
+  # insert under node: (after the voter line)
+  diskcfg > "$TAILRAID_HOME/disks.yaml"
+  sed -i "/^  voter:/r $TAILRAID_HOME/disks.yaml" "$TAILRAID_HOME/config.yaml"
+fi
+if [ -f "$TAILRAID_HOME/disks.saved.yaml" ]; then
+  # a restart rewrites config.yaml from scratch: keep the disks added since
+  sed -i "/^  voter:/r $TAILRAID_HOME/disks.saved.yaml" "$TAILRAID_HOME/config.yaml"
+fi
 if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
   # CLI output goes through jsonlog without losing the exit status (no pipefail in ash)
   cli() { "$@" > "$TAILRAID_HOME/cli.log" 2>&1; st=$?; jsonlog < "$TAILRAID_HOME/cli.log"; return $st; }
@@ -58,6 +76,19 @@ if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
   else
     until curl -fsS "http://$LEADER:20481/health" >/dev/null 2>&1; do say "waiting for $LEADER"; sleep 1; done
     until cli tailraid join "$LEADER" "$TOKEN" $( [ "${VOTER:-true}" = true ] && echo --voter ); do say "join retry"; sleep 2; done
+    if [ -n "${DISKS:-}" ]; then
+      # add-disk talks to the running node: serve in the background until they are in
+      tailraid serve &
+      pid=$!
+      until curl -fsS "http://$SELF_IP:20481/health" >/dev/null 2>&1; do sleep 1; done
+      for d in $DISKS; do
+        until cli tailraid node add-disk "$d" $( [ -n "${DISK_CAPACITY:-}" ] && echo --capacity "$DISK_CAPACITY" ); do say "add-disk retry $d"; sleep 2; done
+      done
+      kill "$pid"; wait "$pid" 2>/dev/null || true
+    fi
+  fi
+  if [ -n "${DISKS:-}" ]; then
+    diskcfg > "$TAILRAID_HOME/disks.saved.yaml"
   fi
 fi
 exec tailraid serve

@@ -107,14 +107,14 @@ func TestFillPlacement_KeepsSlotClass(t *testing.T) {
 		h := hashN(i)
 		// a fresh fill equals PlaceKM
 		fresh := make([]NodeIdx, k+m)
-		FillPlacement(h, fresh, all, k)
+		FillPlacement(h, fresh, all, k, nil)
 		if want := PlaceKM(h, all, k, m); !equalIdx(fresh, want) {
 			t.Fatalf("hash %d: fresh fill %v, PlaceKM %v", i, fresh, want)
 		}
 		// a data slot refills from voters, a parity slot from anyone; held nodes are never reused
 		place := []NodeIdx{0, 2, 0, 5} // voter 2 holds data slot 1, non-voter 5 holds parity slot 3
 		held := []NodeIdx{2, 5}
-		FillPlacement(h, place, ExcludeIdx(all, held), k)
+		FillPlacement(h, place, ExcludeIdx(all, held), k, nil)
 		distinctNonZero(t, place, "refill")
 		if place[0] == 0 || !isVoter(all, place[0]) {
 			t.Fatalf("hash %d: data slot refilled with %d (want a voter) in %v", i, place[0], place)
@@ -125,7 +125,7 @@ func TestFillPlacement_KeepsSlotClass(t *testing.T) {
 	}
 	// with no voter left, a data slot falls back to the non-voters
 	place := []NodeIdx{0, 1, 0, 0}
-	FillPlacement(hashN(1), place, ExcludeIdx(vcands(1, 3), []NodeIdx{1}), k)
+	FillPlacement(hashN(1), place, ExcludeIdx(vcands(1, 3), []NodeIdx{1}), k, nil)
 	distinctNonZero(t, place, "fallback")
 	if place[0] == 0 || place[2] == 0 || place[3] == 0 {
 		t.Fatalf("fallback left a slot empty: %v", place)

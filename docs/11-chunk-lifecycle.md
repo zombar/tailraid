@@ -28,7 +28,7 @@ and derivable from (gateway Overlay/WAL, FSM `State`, node shard stores, node li
 | **Uploading** | Shards encoded with chosen `(k,m)`, `Place` computed, PUTs in flight. `State.Chunks` has no entry for `Hash`. Shards already landed are Orphan-candidates until Commit. |
 | **Placed(n of k+m)** | PUT phase finished with `n ≥ k` acks within the deadline; `NewChunks` entry prepared with `Placement` slots (0 for failed). Not yet proposed or not yet applied. |
 | **Committed** | `State.Chunks[Hash]` exists, `Refs ≥ 1`, `TombstonedAt == 0`, every slot non-zero, every slot's node is `Active` and live (within `fill_after`), and `(K,M) == Vol.(K,M)`. Steady state. |
-| **Degraded** | `State.Chunks[Hash]` exists with `Refs ≥ 1` and at least one of: a slot is 0; a slot's node is `Draining`/`Removed`; a slot's node has been dead longer than `fill_after`; a slot was reported bad by a reader (`POST /v1/bad-slot`) or its shard is Quarantined; `(K,M) ≠ Vol.(K,M)` (migration pending). Readable iff ≥ k slots reachable and intact. Counted in `status` as degraded. |
+| **Degraded** | `State.Chunks[Hash]` exists with `Refs ≥ 1` and at least one of: a slot is 0; a slot's node is `Draining`/`Removed`; a slot's node has been dead longer than `fill_after`; a slot was reported bad by a reader (`POST /v1/bad-slot`) or its shard is Quarantined; `(K,M) ≠ Vol.(K,M)` (migration pending); one host holds more than the host cap of its slots while a placement within it exists (`DomainSkew`, 14 §7). Readable iff ≥ k slots reachable and intact. Counted in `status` as degraded. |
 | **Repairing** | The leader's repairer has dequeued the chunk: reading k shards, encoding, PUTting replacement slots; ends with `SetPlacement`. Transient; the FSM still shows Degraded until `SetPlacement` applies. |
 | **Tombstoned** | `Refs == 0`, `TombstonedAt > 0`, present in `State.Tombs`. Shards remain on their nodes. Readable by nothing (no inode references it). |
 | **Revived** | A `Commit` referenced a Tombstoned hash: `Refs` became ≥ 1 and `TombstonedAt` reset to 0 in the same apply. Transient marker; the chunk is then Committed or Degraded by the rules above. |
@@ -180,6 +180,8 @@ these numbers.
 - E-120 a gateway writes or truncates through an overlay entry that predates another gateway's Commit (its recorded base size is stale)
 - E-122 a WRITE arrives while the inode's WAL is at its cap or the gateway is at `MaxDirty`
 - E-123 a plan holds more than `FileDirtyHi` bytes of chunks (batch commit)
+- E-124 a disk fails or is closed (marker missing) while its host stays live (14 §4)
+- E-125 a host or disk joins, or a drain ends, so a placement within the host cap exists for a chunk that exceeds it (14 §7)
 
 **5. Transition table.**
 
@@ -350,6 +352,9 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-189 | Dirty | E-122 WRITE at a cap, the inode's last flush attempt failed | Dirty | the WRITE fails at once with `EIO`, or `ENOSPC` when that failure was the cluster being full (`chunk.ErrFull`); the dirty data stays and the flusher keeps retrying with backoff | `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | L-190 | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | the straggler's request is cancelled and awaited before the chunk is decided, so its shard buffer is freed with the chunk; a shard the receiver had already landed is an Orphan swept after grace, never served for this chunk | `TestFlusher_StragglerPut_CancelledAfterReplace` |
 | L-191 | Dirty (plan larger than `FileDirtyHi` bytes of chunks) | E-123 batch commit | Committed (the lowest-indexed batch) + Dirty (residual) | at most `FileDirtyHi` bytes of chunks are committed per Commit with `NewSize` never ahead of committed data; the residual extents stay in the overlay and WAL and are committed by the following flushes in order; the client-visible size and bytes are unchanged throughout | `TestFlusher_BatchCommit_ResidualStaysDirty` |
+| L-192 | Committed (a slot on a disk) | E-124 disk dead > fill_after, host live | Degraded → Repairing → Committed | the disk is dead to every node within one probe interval; reads skip it and decode from the other slots; after `fill_after` the repairer re-places its slots within the host cap; the host's other targets keep serving | `TestCluster_SingleHostDisks_DiskFails_ReadsAndRepair`, `TestRepair_DeadDisk_RePlacesWithinCap` |
+| L-193 | Committed (a host above the cap, fixable) | E-125 repair pass | Degraded (`DomainSkew`) → Repairing → Committed | the excess slots on that host are moved to hosts under the cap like draining slots; old shards are deleted only after `SetPlacement` applies; never fewer than k readable slots | `TestChunkState_DomainSkew`, `TestRepair_DomainSkew_MovesWithinCap` |
+| L-194 | Committed (a host above the cap, no placement within it) | repair pass | Committed | not skewed, not degraded, nothing proposed (I-65); fixed by L-193 once hosts join | `TestChunkState_DomainSkew`, `TestRepair_DomainSkew_MovesWithinCap`, `TestRepair_DomainSkew_UnfixableIgnored` |
 
 **6. Forbidden transitions.**
 
@@ -393,6 +398,8 @@ event ring or the final state).
 | L-179 | Dirty (chunk partly dirty, below the last committed chunk) | E-22 partial flush | dirty bytes dropped | forbidden (I-7): a partial flush commits only entirely dirty chunks and keeps every other dirty byte as residual; acknowledged bytes are never neither committed nor dirty | `TestExtents_Without`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk` |
 | L-182 | Committed | Commit with `NewSize` > `MaxFileSize(ChunkSize)` | Committed (unbounded chunk list) | forbidden (I-64): `ErrBadCommand` before anything is sized by `NewSize`; the gateway refuses the WRITE or SETATTR with `EFBIG` first, so no replica ever allocates per a hostile size | `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | L-184 | Committed (slot on a live draining node, no replacement available) | repair pass that improves another slot | slot zeroed and the draining node's shard deleted | forbidden (I-65): the draining node keeps its slot until a replacement is placed; a repair commit never lowers the readable slot count | `TestRepair_DrainNoReplacement_KeepsShard` |
+| L-195 | Durable (on a disk whose marker is missing or foreign) | serve opens stores | served or written | forbidden (I-86): the disk stays closed; reads see it dead, never as shards absent; sweep never runs on it | `TestNode_ClosedDisk_NotServedNotSwept` |
+| L-196 | Degraded (repair, migration or drain) | SetPlacement | a host above the cap while a placement within it exists | forbidden (I-89) | `TestRepair_DeadDisk_RePlacesWithinCap` |
 
 ## 7. How the matrix is tested
 

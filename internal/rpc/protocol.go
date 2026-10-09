@@ -39,15 +39,27 @@ var (
 
 // Health is the unauthenticated GET /health body.
 type Health struct {
-	NodeID    string `json:"node_id"`
-	ClusterID string `json:"cluster_id"`
-	Version   string `json:"version"`
-	Applied   uint64 `json:"applied"`
-	Leader    bool   `json:"leader"`
-	Used      int64  `json:"used"`
-	Capacity  int64  `json:"capacity"`
-	Free      int64  `json:"free"`
-	Dev       bool   `json:"dev,omitempty"` // /dev/* endpoints enabled on this node
+	NodeID    string       `json:"node_id"`
+	ClusterID string       `json:"cluster_id"`
+	Version   string       `json:"version"`
+	Applied   uint64       `json:"applied"`
+	Leader    bool         `json:"leader"`
+	Used      int64        `json:"used"`
+	Capacity  int64        `json:"capacity"`
+	Free      int64        `json:"free"`
+	Dev       bool         `json:"dev,omitempty"`   // /dev/* endpoints enabled on this node
+	Disks     []DiskHealth `json:"disks,omitempty"` // added disks (docs/14 §4); the fields above are disk 0
+}
+
+// DiskHealth is one added disk in /health: OK is false while the disk is closed (its
+// marker is missing or foreign) or failing, which makes it dead to every node (I-90).
+type DiskHealth struct {
+	ID       string `json:"id"`
+	Used     int64  `json:"used"`
+	Capacity int64  `json:"capacity"`
+	Free     int64  `json:"free"`
+	OK       bool   `json:"ok"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // JoinRequest is POST /v1/join.
@@ -74,8 +86,10 @@ type JoinResponse struct {
 
 // MemberOp is POST /v1/members.
 type MemberOp struct {
-	Op       string         `json:"op"` // remove | update_addr | set_voter | set_capacity | set_state
-	NodeIdx  meta.NodeIdx   `json:"node_idx"`
+	Op       string         `json:"op"`                // remove | update_addr | set_voter | set_capacity | set_state | add_disk
+	NodeIdx  meta.NodeIdx   `json:"node_idx"`          // add_disk: the host
+	DiskID   string         `json:"disk_id,omitempty"` // add_disk: the marker's disk ID (docs/14 §2)
+	Name     string         `json:"name,omitempty"`    // add_disk: "<host>/<n>"
 	Addr     string         `json:"addr,omitempty"`
 	Voter    bool           `json:"voter,omitempty"`
 	Capacity uint64         `json:"capacity,omitempty"`
@@ -96,11 +110,14 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
 	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
 	Scrub bool   `json:"scrub,omitempty"` // check: force a full scrub pass
 	Files bool   `json:"files,omitempty"` // check: list affected files
 	Chunk string `json:"chunk,omitempty"` // chunk: hex hash (prefix ≥ 8) or a /path
+	// open_disk (this host only): start serving a disk `node add-disk` has just added
+	Path     string `json:"path,omitempty"`
+	Capacity string `json:"capacity,omitempty"`
 }

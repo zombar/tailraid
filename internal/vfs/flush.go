@@ -579,7 +579,7 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 			held = append(held, n)
 		}
 	}
-	meta.FillPlacement(w.hash, place, f.candidates(held), int(w.k))
+	meta.FillPlacement(w.hash, place, f.candidates(held), int(w.k), meta.DomainsOf(f.st.Nodes()))
 	acked := make([]bool, total)
 	for i, n := range keep {
 		if i < total && n != 0 {
@@ -610,7 +610,7 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 				place[i] = 0
 			}
 		}
-		meta.FillPlacement(w.hash, place, f.candidates(exclude), int(w.k))
+		meta.FillPlacement(w.hash, place, f.candidates(exclude), int(w.k), meta.DomainsOf(f.st.Nodes()))
 		for i, err := range f.putSlots(ctx, w, shards, place, acked) {
 			failed[i] = err
 		}

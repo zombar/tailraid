@@ -62,6 +62,16 @@ func (e *LiveEnv) Nodes(ctx context.Context) ([]NodeRef, error) {
 	return out, nil
 }
 
+// FailDisk and RestoreDisk are not offered on a live cluster: closing a disk means
+// unmounting it on its device, which the operator does by hand (Caps.Disks is false).
+func (e *LiveEnv) FailDisk(context.Context, NodeRef) error {
+	return errors.New("live: a disk is closed by unmounting it on its device")
+}
+
+func (e *LiveEnv) RestoreDisk(context.Context, NodeRef) error {
+	return errors.New("live: a disk is restored by mounting it on its device")
+}
+
 func (e *LiveEnv) Volume(n NodeRef) (Volume, bool) {
 	if n.RPC != e.SelfAddr {
 		return nil, false

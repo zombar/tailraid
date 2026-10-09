@@ -147,7 +147,10 @@ is derived from the data directory's free space (01) and the volume starts at `1
 automatic redundancy mode (03), growing as devices join. `tailraid join <host> <token>`
 likewise derives the budget; `--voter` stays explicit because only the operator knows
 which devices are always on. `--name`, `--chunk` and `--token` remain for overrides and
-test rigs; `--k`/`--m` on `init` pin a manual policy for test rigs and are hidden.
+test rigs; `--k`/`--m` on `init` pin a manual policy for test rigs and are hidden. Disks
+listed under `node.disks` in the config are marked and registered by `init`; later ones
+are added with `tailraid node add-disk <path>` (14 §2), and the automatic policy counts
+them (a single machine with four disks runs 2+2).
 
 ## 8. What `status` reports about the process
 

@@ -6,24 +6,72 @@ import (
 	"sort"
 )
 
-// Candidate is a node eligible to receive a shard. Weight is the node's Capacity; Voter
-// marks an always-on device, which the data slots prefer (docs/03 §Voter-first slots).
+// Candidate is a target eligible to receive a shard: a device's own store, an added disk
+// or an S3 node. Weight is its Capacity; Voter marks a target on an always-on device,
+// which the data slots prefer (docs/03 §Voter-first slots); Domain is the failure domain,
+// the host for a disk and the target itself otherwise (0 means Idx) (docs/14 §5).
 type Candidate struct {
 	Idx    NodeIdx
 	Weight uint64
 	Voter  bool
+	Domain NodeIdx
+}
+
+func (c Candidate) domain() NodeIdx {
+	if c.Domain != 0 {
+		return c.Domain
+	}
+	return c.Idx
+}
+
+// Domains maps a disk to its host; every other target is its own domain. The zero value
+// (nil) makes every target its own domain.
+type Domains map[NodeIdx]NodeIdx
+
+// Of is n's failure domain.
+func (d Domains) Of(n NodeIdx) NodeIdx {
+	if h, ok := d[n]; ok {
+		return h
+	}
+	return n
+}
+
+// DomainsOf builds the domain map of a node table.
+func DomainsOf(nodes []Node) Domains {
+	d := Domains{}
+	for i := range nodes {
+		if nodes[i].Kind == KindDisk {
+			d[nodes[i].Idx] = nodes[i].Host
+		}
+	}
+	return d
 }
 
 // Candidates filters the node table to placement candidates: Active, live, with
-// non-zero capacity. Both device and S3 nodes qualify. The result is sorted by Idx.
+// non-zero capacity; a disk also needs its host Active, and takes the host's voter bit
+// and the host as its domain. Device, disk and S3 targets qualify. Sorted by Idx.
 func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
+	hosts := make(map[NodeIdx]*Node, len(nodes))
+	for i := range nodes {
+		if nodes[i].Kind == KindDevice {
+			hosts[nodes[i].Idx] = &nodes[i]
+		}
+	}
 	out := make([]Candidate, 0, len(nodes))
 	for i := range nodes {
 		n := &nodes[i]
 		if n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
 			continue
 		}
-		out = append(out, Candidate{Idx: n.Idx, Weight: n.Capacity, Voter: n.Voter && n.Kind == KindDevice})
+		c := Candidate{Idx: n.Idx, Weight: n.Capacity, Voter: n.Voter && n.Kind == KindDevice}
+		if n.Kind == KindDisk {
+			h := hosts[n.Host]
+			if h == nil || h.State != Active {
+				continue
+			}
+			c.Voter, c.Domain = h.Voter, h.Idx
+		}
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Idx < out[j].Idx })
 	return out
@@ -31,23 +79,27 @@ func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 
 // PlaceKM places a k+m stripe: the k data slots by rendezvous over the voter candidates
 // when at least k voters are present (otherwise over all candidates), then the m parity
-// slots by rendezvous over the candidates not yet used. Unfilled slots are 0. With no
-// voter candidate the result equals Place(h, cands, k+m); it is a pure function of
-// (h, candidate set, k, m) (I-8, I-77).
+// slots by rendezvous over the candidates not yet used, both under the host cap. Unfilled
+// slots are 0. With no voter candidate the result equals Place(h, cands, k+m); it is a
+// pure function of (h, candidate set, k, m) (I-8, I-77, I-87).
 func PlaceKM(h Hash, cands []Candidate, k, m int) []NodeIdx {
 	place := make([]NodeIdx, max(k, 0)+max(m, 0))
-	FillPlacement(h, place, cands, k)
+	FillPlacement(h, place, cands, k, nil)
 	return place
 }
 
 // FillPlacement fills every zero slot of place from cands (the caller has already
-// excluded the nodes place holds): zero data slots (index < k) from voters first, zero
-// parity slots from anyone left. Slots for which no candidate remains stay 0. Placement
-// by hash keeps it the same answer on every node (I-8).
-func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int) {
+// excluded the targets place holds): zero data slots (index < k) from voters first, zero
+// parity slots from anyone left. No domain receives more than ceil(len(place)/D) slots,
+// counting the slots already held (dom names their domains), while another choice exists
+// (I-87). Slots for which no candidate remains stay 0. Placement by hash keeps it the
+// same answer on every node (I-8).
+func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int, dom Domains) {
 	needData, needParity := 0, 0
+	count := map[NodeIdx]int{}
 	for i, n := range place {
 		if n != 0 {
+			count[dom.Of(n)]++
 			continue
 		}
 		if i < k {
@@ -56,17 +108,24 @@ func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int) {
 			needParity++
 		}
 	}
+	domains := map[NodeIdx]bool{}
+	for d := range count {
+		domains[d] = true
+	}
 	var voters []Candidate
 	for _, c := range cands {
+		domains[c.domain()] = true
 		if c.Voter {
 			voters = append(voters, c)
 		}
 	}
-	data := Place(h, voters, needData)
-	if len(data) < needData { // too few voters: data slots fall back to everyone
-		data = Place(h, cands, needData)
+	limit := hostCap(len(place), len(domains))
+	rv := ranked(h, voters)
+	if len(rv) < needData { // too few voters: data slots fall back to everyone
+		rv = ranked(h, cands)
 	}
-	parity := Place(h, ExcludeIdx(cands, data), needParity)
+	data := pick(rv, needData, count, limit)
+	parity := pick(ranked(h, ExcludeIdx(cands, data)), needParity, count, limit)
 	di, pi := 0, 0
 	for i := range place {
 		if place[i] != 0 {
@@ -84,17 +143,70 @@ func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int) {
 	}
 }
 
-// Place selects up to n distinct nodes for the shards of chunk h by weighted rendezvous
-// hashing: score_i = -Weight_i / ln(u_i) with u_i derived from fnv64a(h ‖ idx). The
-// result is sorted by score descending (ties by Idx ascending) and is a pure function of
-// (h, set of candidates, n) regardless of input order (I-8). Shard i goes to result[i].
-// With fewer than n candidates the result is shorter; duplicate Idx entries count once.
+// Place selects up to n distinct targets for the shards of chunk h by weighted rendezvous
+// hashing: score_i = -Weight_i / ln(u_i) with u_i derived from fnv64a(h ‖ idx), walked in
+// score order (ties by Idx ascending) skipping a target whose domain already holds
+// ceil(n/D) picks, then filling any slot left from the skipped ones in the same order
+// (I-87). It is a pure function of (h, set of candidates, n) regardless of input order
+// (I-8); with one candidate per domain it is the top-n by score. Shard i goes to
+// result[i]. With fewer than n candidates the result is shorter; duplicate Idx entries
+// count once.
 func Place(h Hash, cands []Candidate, n int) []NodeIdx {
 	if n <= 0 || len(cands) == 0 {
 		return nil
 	}
+	r := ranked(h, cands)
+	domains := map[NodeIdx]bool{}
+	for _, c := range r {
+		domains[c.domain()] = true
+	}
+	return pick(r, n, map[NodeIdx]int{}, hostCap(n, len(domains)))
+}
+
+// hostCap is ceil(n/d), the most slots of an n-slot stripe one of d domains may hold.
+func hostCap(n, d int) int {
+	if d <= 0 {
+		return n
+	}
+	return (n + d - 1) / d
+}
+
+// pick takes up to n targets from r (in rank order) under the domain cap, then fills any
+// slot left from the targets the cap skipped; count holds the slots each domain already
+// has and is updated.
+func pick(r []Candidate, n int, count map[NodeIdx]int, limit int) []NodeIdx {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]NodeIdx, 0, min(n, len(r)))
+	taken := make([]bool, len(r))
+	for i, c := range r {
+		if len(out) == n {
+			break
+		}
+		if count[c.domain()] < limit {
+			out = append(out, c.Idx)
+			count[c.domain()]++
+			taken[i] = true
+		}
+	}
+	for i, c := range r {
+		if len(out) == n {
+			break
+		}
+		if !taken[i] {
+			out = append(out, c.Idx)
+			count[c.domain()]++
+		}
+	}
+	return out
+}
+
+// ranked orders the distinct, weighted candidates by rendezvous score for h, highest
+// first, ties by Idx ascending.
+func ranked(h Hash, cands []Candidate) []Candidate {
 	type scored struct {
-		idx   NodeIdx
+		c     Candidate
 		score float64
 	}
 	seen := make(map[NodeIdx]bool, len(cands))
@@ -116,20 +228,17 @@ func Place(h Hash, cands []Candidate, n int) []NodeIdx {
 		x := fmix64(f.Sum64())
 		// Map to (0,1) strictly: use the top 53 bits plus one half, so u is never 0 or 1.
 		u := (float64(x>>11) + 0.5) / float64(uint64(1)<<53)
-		sc = append(sc, scored{idx: c.Idx, score: -float64(c.Weight) / math.Log(u)})
+		sc = append(sc, scored{c: c, score: -float64(c.Weight) / math.Log(u)})
 	}
 	sort.Slice(sc, func(i, j int) bool {
 		if sc[i].score != sc[j].score {
 			return sc[i].score > sc[j].score
 		}
-		return sc[i].idx < sc[j].idx
+		return sc[i].c.Idx < sc[j].c.Idx
 	})
-	if n > len(sc) {
-		n = len(sc)
-	}
-	out := make([]NodeIdx, n)
-	for i := range out {
-		out[i] = sc[i].idx
+	out := make([]Candidate, len(sc))
+	for i := range sc {
+		out[i] = sc[i].c
 	}
 	return out
 }
@@ -144,8 +253,9 @@ func fmix64(x uint64) uint64 {
 	return x
 }
 
-// ExcludeIdx returns cands without the nodes listed in held (zero entries ignored). Used
-// when re-placing failed slots so a node never receives two shards of one stripe (I-9).
+// ExcludeIdx returns cands without the targets listed in held (zero entries ignored).
+// Used when re-placing failed slots so a target never receives two shards of one stripe
+// (I-9).
 func ExcludeIdx(cands []Candidate, held []NodeIdx) []Candidate {
 	skip := make(map[NodeIdx]bool, len(held))
 	for _, h := range held {

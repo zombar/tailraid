@@ -108,6 +108,20 @@ func TestModelCheck_Long(t *testing.T) {
 	policy := [2]uint8{3, 2}
 	policies := [][2]uint8{{3, 2}, {2, 2}, {2, 1}, {1, 2}, {3, 1}}
 	draining := -1 // node index being drained, or -1
+	type addedDisk struct {
+		node   int
+		idx    meta.NodeIdx
+		failed bool
+	}
+	var disks []*addedDisk // added disks (docs/14): grown and failed at random
+	restoreDisks := func() {
+		for _, d := range disks {
+			if d.failed {
+				c.FailDisk(d.node, d.idx, false)
+				d.failed = false
+			}
+		}
+	}
 	leaderOp := func(what string, op func(l *testharness.ClusterNode) error) bool {
 		if partitioned {
 			return false
@@ -340,6 +354,21 @@ func TestModelCheck_Long(t *testing.T) {
 				policy = next
 				log("%d set_policy %d+%d", step, next[0], next[1])
 			}
+		case r < 98 && rng.Intn(2) == 0 && !partitioned: // add a disk, or fail or restore one
+			gws := liveGateways()
+			if len(disks) < 4 && len(gws) > 0 {
+				i := gws[rng.Intn(len(gws))]
+				disks = append(disks, &addedDisk{node: i, idx: c.AddDisk(i)})
+				log("%d add disk to n%d", step, i)
+				return
+			}
+			if len(disks) > 0 {
+				d := disks[rng.Intn(len(disks))]
+				d.failed = !d.failed
+				c.FailDisk(d.node, d.idx, d.failed)
+				c.Probe()
+				log("%d disk %d of n%d failed=%v", step, d.idx, d.node, d.failed)
+			}
 		case r < 98: // drain a node, or put the draining one back
 			if draining >= 0 {
 				victim := draining
@@ -382,6 +411,7 @@ func TestModelCheck_Long(t *testing.T) {
 				partitioned = false
 			}
 			quorumUp()
+			restoreDisks()
 			for i := range c.Nodes {
 				for attempt := 0; attempt < 30; attempt++ {
 					if err := c.Nodes[i].Flush.FlushAll(ctx); err == nil {
@@ -509,12 +539,16 @@ func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names
 			if seen[s] {
 				t.Fatalf("step %d: chunk %x places two slots on node %d", step, ch.Hash[:6], s)
 			}
-			if draining >= 0 && int(s)-1 == draining {
+			store, host := c.Target(s)
+			if store == nil {
+				t.Fatalf("step %d: chunk %x slot %d on unknown target %d", step, ch.Hash[:6], i, s)
+			}
+			if draining >= 0 && host == draining {
 				t.Fatalf("step %d: chunk %x slot %d still on draining n%d", step, ch.Hash[:6], i, draining)
 			}
 			seen[s] = true
-			if !c.Nodes[int(s)-1].Store.Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
-				t.Fatalf("step %d: chunk %x slot %d: shard missing on n%d", step, ch.Hash[:6], i, s-1)
+			if !store.Has(chunk.Key(ch.Hash, ch.K, ch.M, i)) {
+				t.Fatalf("step %d: chunk %x slot %d: shard missing on target %d (n%d)", step, ch.Hash[:6], i, s, host)
 			}
 		}
 		return true

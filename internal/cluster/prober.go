@@ -145,10 +145,17 @@ func (p *Prober) Run(ctx context.Context) {
 	}
 }
 
-// Tick probes every device member once (exported for tests driving the fake clock).
+// Tick probes every device member once (exported for tests driving the fake clock). A
+// host's reply also settles its disks: live when the host listed them OK (I-90).
 func (p *Prober) Tick(ctx context.Context) {
 	nodes := p.node.FSM.Nodes()
 	now := p.clk.Now()
+	disks := map[meta.NodeIdx][]meta.Node{}
+	for i := range nodes {
+		if nd := &nodes[i]; nd.Kind == meta.KindDisk && nd.State != meta.Removed {
+			disks[nd.Host] = append(disks[nd.Host], *nd)
+		}
+	}
 	var wg sync.WaitGroup
 	for i := range nodes {
 		nd := nodes[i]
@@ -161,6 +168,7 @@ func (p *Prober) Tick(ctx context.Context) {
 				h = p.SelfHealth()
 			}
 			p.record(nd.Idx, now, 0, true, h)
+			p.recordDisks(disks[nd.Idx], now, 0, true, h)
 			continue
 		}
 		if p.client == nil {
@@ -171,14 +179,16 @@ func (p *Prober) Tick(ctx context.Context) {
 			continue
 		}
 		wg.Add(1)
-		go func(idx meta.NodeIdx, addr string) {
+		go func(idx meta.NodeIdx, addr string, ds []meta.Node) {
 			defer wg.Done()
 			pctx, cancel := context.WithTimeout(ctx, p.timeout)
 			defer cancel()
 			start := p.clk.Now()
 			h, err := p.client.Health(pctx, addr)
-			p.record(idx, p.clk.Now(), p.clk.Now().Sub(start), err == nil, h)
-		}(nd.Idx, addr)
+			at, rtt := p.clk.Now(), p.clk.Now().Sub(start)
+			p.record(idx, at, rtt, err == nil, h)
+			p.recordDisks(ds, at, rtt, err == nil, h)
+		}(nd.Idx, addr, disks[nd.Idx])
 	}
 	wg.Wait()
 	p.holdDowns(now)
@@ -203,6 +213,40 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 	}
 	if pr.DeadSince.IsZero() && now.Sub(pr.LastOK) >= LiveThreshold {
 		pr.DeadSince = now
+	}
+}
+
+// recordDisks settles a host's disks from its health reply: an unreachable host's disks
+// age like the host; a disk the host lists OK is live; a disk it lists failing, or does
+// not list at all, is dead from this probe on (docs/14 §4, I-90).
+func (p *Prober) recordDisks(ds []meta.Node, now time.Time, rtt time.Duration, hostOK bool, h rpc.Health) {
+	for i := range ds {
+		d := &ds[i]
+		if !hostOK {
+			p.record(d.Idx, now, rtt, false, rpc.Health{})
+			continue
+		}
+		var dh *rpc.DiskHealth
+		for i := range h.Disks {
+			if h.Disks[i].ID == d.ID {
+				dh = &h.Disks[i]
+			}
+		}
+		if dh != nil && dh.OK {
+			p.record(d.Idx, now, rtt, true, rpc.Health{Free: dh.Free, Applied: h.Applied, Version: h.Version, Dev: h.Dev})
+			continue
+		}
+		p.mu.Lock()
+		pr := p.probes[d.Idx]
+		if pr == nil {
+			pr = &Probe{}
+			p.probes[d.Idx] = pr
+		}
+		pr.LastOK = time.Time{}
+		if pr.DeadSince.IsZero() {
+			pr.DeadSince = now
+		}
+		p.mu.Unlock()
 	}
 }
 
@@ -246,13 +290,16 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	}
 	p.mu.Lock()
 	pr, ok := p.probes[idx]
-	var lastOK time.Time
+	var lastOK, deadSince time.Time
 	if ok {
-		lastOK = pr.LastOK // copied under the lock: record rewrites the probe in place
+		lastOK, deadSince = pr.LastOK, pr.DeadSince // copied under the lock: record rewrites the probe in place
 	}
 	p.mu.Unlock()
 	if ok && !lastOK.IsZero() {
 		return p.clk.Now().Sub(lastOK) < LiveThreshold
+	}
+	if !deadSince.IsZero() {
+		return false // reported failing (a disk its host lists not OK): no join grace
 	}
 	if nd, found := p.node.nodeByIdx(idx); found && nd.JoinedAt > 0 {
 		return p.clk.Now().Sub(time.Unix(0, nd.JoinedAt)) < LiveThreshold

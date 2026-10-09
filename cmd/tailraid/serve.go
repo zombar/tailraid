@@ -87,12 +87,23 @@ func initCmd() *cobra.Command {
 				return err
 			}
 			defer n.Close()
+			// disks already listed in the config become targets of this node (docs/14 §2)
+			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+			if err != nil {
+				return err
+			}
+			if err := node.RegisterDisks(cmd.Context(), n, cfg, cid); err != nil {
+				return err
+			}
 			mode := "manual"
 			if auto {
 				mode = "auto, grows as devices join"
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, budget %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
 				cfg.Node.DataDir, id, ident.IP, bytesStr(budget), k, m, mode, chunkSize, path, ident.IP, token)
+			for i, d := range cfg.Node.Disks {
+				fmt.Fprintf(cmd.OutOrStdout(), "disk %s: %s\n", node.DiskName(cfg.Node.Name, i+1), d.Path)
+			}
 			return nil
 		},
 	}

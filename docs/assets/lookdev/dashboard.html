@@ -22,7 +22,7 @@
   <section>
     <h2>Volume</h2>
     <div class="tiles">
-      <div class="tile"><div class="label">Policy</div><div class="value">2+1</div><div class="sub">auto · 1 MiB chunks · policy v3</div></div>
+      <div class="tile"><div class="label">Policy</div><div class="value">6+2</div><div class="sub">auto · 1 MiB chunks · policy v4</div></div>
       <div class="tile"><div class="label">Files</div><div class="value">12,418</div><div class="sub">48,211 chunks · 212 tombstoned</div></div>
       <div class="tile"><div class="label">Dedup</div><div class="value">1.12×</div><div class="sub">41.3 GiB logical</div></div>
     </div>
@@ -30,6 +30,142 @@
       <div class="bar-row"><span class="bar-label">logical</span><div class="bar tall"><i style="width:74%"></i></div><span class="bar-val">41.3 GiB</span></div>
       <div class="bar-row"><span class="bar-label">stored</span><div class="bar tall"><i style="width:100%"></i></div><span class="bar-val">55.9 GiB with parity</span></div>
       <div class="bar-row"><span class="bar-label">usable</span><div class="bar tall"><i style="width:30%"></i></div><span class="bar-val">305.3 GiB used of 1.0 TiB · 720.0 GiB free</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Disks<span class="h-sub">survives 2 disks, 1 host · auto 6+2 · 4 hosts × 3 targets</span></h2>
+    <div class="disks">
+      <div class="spread" role="img" aria-label="slot share of each target against its expected share">
+        <div class="spread-axis"><span>+25 %</span><span>expected</span><span>−25 %</span></div>
+        <div class="spread-plot">
+          <div class="spread-host">
+            <div class="spread-cols">
+              <div class="spread-col" title="atlas: +0.8 % of expected (15,020 of 14,900 slots)"><i class="up" style="height:1.6%"></i></div>
+              <div class="spread-col" title="atlas/1: +0.3 % of expected (61,210 of 61,031 slots)"><i class="up" style="height:0.6%"></i></div>
+              <div class="spread-col" title="atlas/2: −1.0 % of expected (60,390 of 61,031 slots)"><i class="down" style="height:2.1%"></i></div>
+            </div>
+            <div class="spread-label"><span class="dot ok"></span>atlas</div>
+          </div>
+          <div class="spread-host">
+            <div class="spread-cols">
+              <div class="spread-col" title="pike: +3.2 % of expected (15,380 of 14,900 slots)"><i class="up" style="height:6.4%"></i></div>
+              <div class="spread-col" title="pike/1: +1.1 % of expected (30,840 of 30,515 slots)"><i class="up" style="height:2.1%"></i></div>
+              <div class="spread-col" title="pike/2: −1.9 % of expected (29,950 of 30,515 slots)"><i class="down" style="height:3.7%"></i></div>
+            </div>
+            <div class="spread-label"><span class="dot ok"></span>pike</div>
+          </div>
+          <div class="spread-host">
+            <div class="spread-cols">
+              <div class="spread-col dead" title="lumen: +1.4 % of expected (15,110 of 14,900 slots), dead"><i class="up" style="height:2.8%"></i></div>
+              <div class="spread-col dead" title="lumen/1: −0.2 % of expected (60,880 of 61,031 slots), dead"><i class="down" style="height:0.5%"></i></div>
+              <div class="spread-col dead" title="lumen/2: −0.7 % of expected (60,620 of 61,031 slots), dead"><i class="down" style="height:1.3%"></i></div>
+            </div>
+            <div class="spread-label"><span class="dot bad"></span>lumen</div>
+          </div>
+          <div class="spread-host">
+            <div class="spread-cols">
+              <div class="spread-col" title="nomad: −3.2 % of expected (7,210 of 7,450 slots)"><i class="down" style="height:6.4%"></i></div>
+              <div class="spread-col" title="nomad/1: −3.0 % of expected (14,460 of 14,900 slots)"><i class="down" style="height:5.9%"></i></div>
+              <div class="spread-col drain" title="nomad/2: draining, 1,133 slots to move"></div>
+            </div>
+            <div class="spread-label"><span class="dot ok"></span>nomad</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap-note">no chunk above the host cap (2 of 8 slots per host)</div>
+      <div class="host-row">
+        <div class="name-row"><span class="dot ok"></span><span class="name">atlas</span><span class="host-sum">3 targets · 4.5 TiB</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span></span></div>
+        <div class="disk-strip">
+          <div class="disk" title="atlas: 15,020 slots, expected 14,900; 95.0 GiB used of 500.0 GiB">
+            <div class="disk-name"><span class="dot ok"></span><span>atlas</span></div>
+            <div class="bar"><i style="width:22%"></i><b class="tick" style="left:22%"></b></div>
+            <div class="disk-val dots"><span>15,020 slots</span><span>exp 14,900</span><span>+0.8 %</span></div>
+            <div class="disk-val"><span>95.0 GiB</span><span>of 500.0 GiB</span></div>
+          </div>
+          <div class="disk" title="atlas/1: 61,210 slots, expected 61,031; 410.0 GiB used of 2.0 TiB">
+            <div class="disk-name"><span class="dot ok"></span><span>atlas/1</span></div>
+            <div class="bar"><i style="width:91%"></i><b class="tick" style="left:91%"></b></div>
+            <div class="disk-val dots"><span>61,210 slots</span><span>exp 61,031</span><span>+0.3 %</span></div>
+            <div class="disk-val"><span>410.0 GiB</span><span>of 2.0 TiB</span></div>
+          </div>
+          <div class="disk" title="atlas/2: 60,390 slots, expected 61,031; 402.0 GiB used of 2.0 TiB">
+            <div class="disk-name"><span class="dot ok"></span><span>atlas/2</span></div>
+            <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
+            <div class="disk-val dots"><span>60,390 slots</span><span>exp 61,031</span><span>−1.1 %</span></div>
+            <div class="disk-val"><span>402.0 GiB</span><span>of 2.0 TiB</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="host-row self">
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">3 targets · 2.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
+        <div class="disk-strip">
+          <div class="disk" title="pike: 15,380 slots, expected 14,900; 98.0 GiB used of 500.0 GiB">
+            <div class="disk-name"><span class="dot ok"></span><span>pike</span></div>
+            <div class="bar"><i style="width:23%"></i><b class="tick" style="left:22%"></b></div>
+            <div class="disk-val dots"><span>15,380 slots</span><span>exp 14,900</span><span>+3.2 %</span></div>
+            <div class="disk-val"><span>98.0 GiB</span><span>of 500.0 GiB</span></div>
+          </div>
+          <div class="disk" title="pike/1: 30,840 slots, expected 30,515; 205.0 GiB used of 1.0 TiB">
+            <div class="disk-name"><span class="dot ok"></span><span>pike/1</span></div>
+            <div class="bar"><i style="width:46%"></i><b class="tick" style="left:45%"></b></div>
+            <div class="disk-val dots"><span>30,840 slots</span><span>exp 30,515</span><span>+1.1 %</span></div>
+            <div class="disk-val"><span>205.0 GiB</span><span>of 1.0 TiB</span></div>
+          </div>
+          <div class="disk" title="pike/2: 29,950 slots, expected 30,515; 199.0 GiB used of 1.0 TiB">
+            <div class="disk-name"><span class="dot ok"></span><span>pike/2</span></div>
+            <div class="bar"><i style="width:44%"></i><b class="tick" style="left:45%"></b></div>
+            <div class="disk-val dots"><span>29,950 slots</span><span>exp 30,515</span><span>−1.9 %</span></div>
+            <div class="disk-val"><span>199.0 GiB</span><span>of 1.0 TiB</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="host-row">
+        <div class="name-row"><span class="dot bad"></span><span class="name">lumen</span><span class="host-sum">3 targets · 4.5 TiB · dead 3m0s</span><span class="badges"><span class="badge strong">voter</span></span></div>
+        <div class="disk-strip">
+          <div class="disk bad" title="lumen: 15,110 slots, expected 14,900; 96.0 GiB used of 500.0 GiB">
+            <div class="disk-name"><span class="dot bad"></span><span>lumen</span></div>
+            <div class="bar"><i style="width:22%"></i><b class="tick" style="left:22%"></b></div>
+            <div class="disk-val dots"><span>15,110 slots</span><span>exp 14,900</span><span>+1.4 %</span></div>
+            <div class="disk-val">unknown (dead 3m0s)</div>
+          </div>
+          <div class="disk bad" title="lumen/1: 60,880 slots, expected 61,031; 407.0 GiB used of 2.0 TiB">
+            <div class="disk-name"><span class="dot bad"></span><span>lumen/1</span></div>
+            <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
+            <div class="disk-val dots"><span>60,880 slots</span><span>exp 61,031</span><span>−0.2 %</span></div>
+            <div class="disk-val">unknown (dead 3m0s)</div>
+          </div>
+          <div class="disk bad" title="lumen/2: 60,620 slots, expected 61,031; 405.0 GiB used of 2.0 TiB">
+            <div class="disk-name"><span class="dot bad"></span><span>lumen/2</span></div>
+            <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
+            <div class="disk-val dots"><span>60,620 slots</span><span>exp 61,031</span><span>−0.7 %</span></div>
+            <div class="disk-val">unknown (dead 3m0s)</div>
+          </div>
+        </div>
+      </div>
+      <div class="host-row">
+        <div class="name-row"><span class="dot ok"></span><span class="name">nomad</span><span class="host-sum">3 targets · 1.2 TiB</span><span class="badges"><span class="badge">non-voter</span></span></div>
+        <div class="disk-strip">
+          <div class="disk" title="nomad: 7,210 slots, expected 7,450; 46.0 GiB used of 250.0 GiB">
+            <div class="disk-name"><span class="dot ok"></span><span>nomad</span></div>
+            <div class="bar"><i style="width:11%"></i><b class="tick" style="left:11%"></b></div>
+            <div class="disk-val dots"><span>7,210 slots</span><span>exp 7,450</span><span>−3.2 %</span></div>
+            <div class="disk-val"><span>46.0 GiB</span><span>of 250.0 GiB</span></div>
+          </div>
+          <div class="disk" title="nomad/1: 14,460 slots, expected 14,900; 90.0 GiB used of 500.0 GiB">
+            <div class="disk-name"><span class="dot ok"></span><span>nomad/1</span></div>
+            <div class="bar"><i style="width:21%"></i><b class="tick" style="left:22%"></b></div>
+            <div class="disk-val dots"><span>14,460 slots</span><span>exp 14,900</span><span>−3.0 %</span></div>
+            <div class="disk-val"><span>90.0 GiB</span><span>of 500.0 GiB</span></div>
+          </div>
+          <div class="disk warn" title="nomad/2: 1,133 slots, expected 0; 9.0 GiB used of 500.0 GiB">
+            <div class="disk-name"><span class="dot ok"></span><span>nomad/2</span></div>
+            <div class="bar"><i style="width:2%"></i></div>
+            <div class="disk-val dots"><span class="text-warn">draining</span><span>1,133 slots to move</span></div>
+            <div class="disk-val"><span>9.0 GiB</span><span>of 500.0 GiB</span></div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -66,10 +202,11 @@
   <section>
     <h2>Integrity</h2>
     <div class="tiles">
-      <div class="tile warn"><div class="label"><span class="dot warn"></span>Degraded</div><div class="value">37</div><div class="sub">chunks with fewer than 3 good slots</div></div>
+      <div class="tile warn"><div class="label"><span class="dot warn"></span>Degraded</div><div class="value">37</div><div class="sub">chunks with fewer than 8 good slots</div></div>
       <div class="tile warn"><div class="label"><span class="dot warn"></span>Repair pending</div><div class="value">37</div><div class="sub">waiting for fill_after (10m)</div></div>
-      <div class="tile zero"><div class="label">Unreadable</div><div class="value">0</div><div class="sub">chunks with fewer than 2 live slots</div></div>
-      <div class="tile zero"><div class="label">Stale policy</div><div class="value">0</div><div class="sub">chunks not yet at 2+1</div></div>
+      <div class="tile zero"><div class="label">Unreadable</div><div class="value">0</div><div class="sub">chunks with fewer than 6 live slots</div></div>
+      <div class="tile zero"><div class="label">Stale policy</div><div class="value">0</div><div class="sub">chunks not yet at 6+2</div></div>
+      <div class="tile zero"><div class="label">Host skew</div><div class="value">0</div><div class="sub">chunks above the host cap</div></div>
     </div>
     <div>
       <div class="spark-wrap"><svg class="spark" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><path class="area" d="M0 28 L10 28 L20 28 L30 28 L40 28 L50 28 L60 28 L70 27 L80 16 L90 15 L100 15 L110 15 L120 15 L120 32 L0 32 Z"/><path class="line" d="M0 28 L10 28 L20 28 L30 28 L40 28 L50 28 L60 28 L70 27 L80 16 L90 15 L100 15 L110 15 L120 15"/></svg><span class="spark-dot warn" style="top:22px"></span></div>

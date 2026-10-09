@@ -1,6 +1,9 @@
 package meta
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // MaxChunkSize bounds the volume's chunk size (I-67): the shard store, the RPC body limit
 // and the flusher's buffers are all sized from it, and a k=1 chunk is stored whole.
@@ -46,6 +49,7 @@ type ChunkHealth struct {
 	Bad         []SlotIssue // slots that need re-placing, in slot order
 	Readable    int         // slots a read can use right now
 	PolicyStale bool        // (K, M) differs from TargetPolicy: migration pending
+	Skewed      bool        // a host holds more than the host cap while a placement within it exists (docs/14 §7)
 }
 
 // RepairPending reports whether any slot needs re-placing: the Degraded state of docs/11
@@ -95,18 +99,28 @@ func ChunkState(c Chunk, vol Volume, in HealthInput) ChunkHealth {
 	h := ChunkHealth{Tombstoned: c.Refs == 0}
 	tk, tm := TargetPolicy(c, vol)
 	h.PolicyStale = tk != c.K || tm != c.M
+	readable := make([]bool, len(c.Placement))
+	bad := make([]bool, len(c.Placement))
 	for i, n := range c.Placement {
 		if n == 0 {
 			h.Bad = append(h.Bad, SlotIssue{Idx: i, Reason: "missing"})
+			bad[i] = true
 			continue
 		}
 		nd, known := in.Nodes[n]
+		if known && nd.Kind == KindDisk {
+			// a disk is no more active than its host: draining or removing a host does
+			// the same to its disks (docs/14 §1)
+			if host, ok := in.Nodes[nd.Host]; ok && host.State > nd.State {
+				nd.State = host.State
+			}
+		}
 		live := in.Live.IsLive(n)
 		present, checked := in.Present[i]
-		readable := live && (!checked || present) && !in.Reported[i] && (!known || nd.State != Removed)
+		isReadable := live && (!checked || present) && !in.Reported[i] && (!known || nd.State != Removed)
 		switch {
 		case known && nd.State == Draining:
-			h.Bad = append(h.Bad, SlotIssue{Idx: i, Reason: "node draining", Readable: readable})
+			h.Bad = append(h.Bad, SlotIssue{Idx: i, Reason: "node draining", Readable: isReadable})
 		case known && nd.State == Removed:
 			h.Bad = append(h.Bad, SlotIssue{Idx: i, Reason: "node removed"})
 		case !live && in.Live.DeadFor(n) >= in.FillAfter:
@@ -116,9 +130,66 @@ func ChunkState(c Chunk, vol Volume, in HealthInput) ChunkHealth {
 		case checked && !present:
 			h.Bad = append(h.Bad, SlotIssue{Idx: i, Reason: "absent"})
 		}
-		if readable {
+		if len(h.Bad) > 0 && h.Bad[len(h.Bad)-1].Idx == i {
+			bad[i] = true
+		}
+		readable[i] = isReadable
+		if isReadable {
 			h.Readable++
 		}
 	}
+	h.skew(c, in, readable, bad)
 	return h
+}
+
+// skew marks the slots a host holds above the host cap, highest slot first, when the
+// live candidates admit a placement within it (docs/14 §7, I-89). Slots already bad do
+// not count: they move anyway. With one target per host no host holds two slots, so this
+// never fires on a cluster without disks.
+func (h *ChunkHealth) skew(c Chunk, in HealthInput, readable, bad []bool) {
+	hosts := map[NodeIdx][]int{} // host → its good slots
+	over := false
+	for i, n := range c.Placement {
+		if n == 0 || bad[i] {
+			continue
+		}
+		host := n
+		if nd, ok := in.Nodes[n]; ok && nd.Kind == KindDisk {
+			host = nd.Host
+		}
+		hosts[host] = append(hosts[host], i)
+		over = over || len(hosts[host]) > 1
+	}
+	if !over {
+		return
+	}
+	nodes := make([]Node, 0, len(in.Nodes))
+	for idx := range in.Nodes {
+		nodes = append(nodes, in.Nodes[idx])
+	}
+	targets := map[NodeIdx]int{} // domain → live candidate targets
+	for _, c := range Candidates(nodes, in.Live.IsLive) {
+		targets[c.domain()]++
+	}
+	n := len(c.Placement)
+	limit := hostCap(n, len(targets))
+	room := 0
+	for _, t := range targets {
+		room += min(t, limit)
+	}
+	if room < n {
+		return // no placement within the cap exists now (L-194)
+	}
+	var issues []SlotIssue
+	for _, slots := range hosts {
+		for j := len(slots) - 1; j >= limit; j-- {
+			issues = append(issues, SlotIssue{Idx: slots[j], Reason: "host over cap", Readable: readable[slots[j]]})
+		}
+	}
+	if len(issues) == 0 {
+		return
+	}
+	h.Skewed = true
+	h.Bad = append(h.Bad, issues...)
+	sort.Slice(h.Bad, func(a, b int) bool { return h.Bad[a].Idx < h.Bad[b].Idx })
 }

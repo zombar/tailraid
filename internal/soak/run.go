@@ -69,6 +69,9 @@ type Sample struct {
 	RepairPending int                        `json:"repair_pending"`
 	Unreadable    int                        `json:"unreadable"`
 	StalePolicy   int                        `json:"stale_policy"`
+	DomainSkew    int                        `json:"domain_skew"`       // chunks above the host cap (docs/14 §7)
+	Chunks        int                        `json:"chunks"`            // live chunks: the most slots one target can hold (I-9)
+	Targets       []TargetSample             `json:"targets,omitempty"` // every placement target, for the disk-spread chart
 	StoredBytes   uint64                     `json:"stored_bytes"`
 	LogicalBytes  uint64                     `json:"logical_bytes"`
 	DedupRatio    float64                    `json:"dedup_ratio"`
@@ -148,6 +151,7 @@ type Run struct {
 	gc       repair.Result         // Σ of every GC pass
 	phase    string
 	nodes    []NodeRef
+	hostOf   map[int]int // disk target → its host (docs/14), learned from status
 	failed   int
 	started  time.Time
 	stopSamp chan struct{}
@@ -394,6 +398,11 @@ func (r *Run) sample(ctx context.Context, round int) {
 	rep, node, err := r.anyStatus(ctx)
 	if err == nil {
 		s.Degraded, s.RepairPending, s.Unreadable, s.StalePolicy = rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy
+		s.DomainSkew = rep.Volume.DomainSkew
+		s.Chunks = rep.Volume.Chunks - rep.Volume.Tombstoned
+		if hasDisks(rep) {
+			s.Targets = targetsOf(rep)
+		}
 		s.StoredBytes, s.LogicalBytes, s.DedupRatio = rep.Volume.StoredBytes, rep.Volume.LogicalBytes, rep.Volume.DedupRatio
 		s.Health = rep.Health
 		s.Slots, s.LiveNodes = map[string]int{}, map[string]bool{}
@@ -506,6 +515,7 @@ func (r *Run) anyStatus(ctx context.Context) (admin.Report, string, error) {
 			last = err
 			continue
 		}
+		r.learnHosts(rep)
 		if rep.Leader != "" && rep.Node == rep.Leader {
 			return rep, n.Name, nil
 		}

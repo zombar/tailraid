@@ -50,7 +50,9 @@ content equals the post-write model from every live gateway. A third outcome is 
 
 | Failure | Survived? | Mechanism |
 |---|---|---|
-| (a) permanent loss of any m nodes' disks | yes | any k of k+m shards reconstruct (I-10); repairer re-places |
+| (a) permanent loss of any m targets (disks) | yes | any k of k+m shards reconstruct (I-10); repairer re-places |
+| (a′) loss of a whole host with several disks | yes when the policy's host tolerance ≥ 1 (always for an automatic policy on ≥ 2 hosts, I-88) | the host cap keeps ≤ m slots per host (14 §5) |
+| (a″) one disk fails or is unmounted while its host runs | yes | the disk goes dead within one probe (I-90), an unmarked mount point is never written (I-86) |
 | (b) gateway crash / power loss at any instant incl. right after ack | yes | WAL fsync per record + replay (I-7, I-37) |
 | (c) leader crash or partition at any point in Apply | yes | Raft; `BaseVersion` makes retries safe |
 | (d) corruption of ≤ m shards per stripe | yes | header hash on read (I-11), decode from others, scrub + repair |
@@ -133,6 +135,8 @@ re-placements (06 §3).
   `507`. The flusher treats it like a failed slot (re-place once, else record 0).
 - `/health` carries free bytes; the gateway doing a flush excludes nodes with < 1 shard of
   headroom, and nodes that answered `507` recently, from its own candidate list (03).
+- Each added disk has its own budget and its own `507` (14 §3); a full disk does not stop
+  its host's other targets.
 - WAL and raft.db live on the device's own disk; if that disk is full, WRITE returns
   `NFS3ERR_NOSPC` (the WAL append failed before any acknowledgement, so nothing is lost).
 

@@ -129,13 +129,17 @@ A slot `i` of chunk `c` is **bad** when any of:
    (fire-and-forget, deduplicated per key for 10 min on the sender; the leader keeps a
    bounded set). Reported slots are re-verified by a `HEAD` before repair; a slot whose
    `HEAD` succeeds is dropped from the set. This is how a lost rename, a quarantined file
-   or a stale shard gets repaired without waiting for the 1 % scrub sample.
+   or a stale shard gets repaired without waiting for the 1 % scrub sample;
+6. the chunk is **skewed** (14 §7): one host holds more than `ceil((k+m)/D)` of its slots
+   while the candidates admit a placement within that cap; the excess slots (highest
+   index first) are bad and move like draining slots.
 
 A chunk with ≥ 1 bad slot and ≥ k good live slots is **repairable**. Repair of one chunk:
 
 1. `chunk := rd.ReadChunk(hash)` (verifies the hash; needs k good shards).
 2. Determine target `(k', m')`: current policy for case 4, else the chunk's own.
-3. `newPlacement := Place(hash, liveCandidates − goodNodes(kept slots), needed)`. For case 4
+3. `newPlacement := Place(hash, liveCandidates − goodNodes(kept slots), needed)`, counting
+   the domains of the kept slots against the host cap (I-89). For case 4
    every slot is re-placed (under the new keys `hex.k'-m'.idx`, which cannot collide with
    the old files); for cases 1–3 and 5 only the bad slots, keeping good ones in place; slot
    `i` keeps index `i`.
@@ -191,7 +195,9 @@ placements stay interpretable.
 
 **`node add` / `join`** → `NodeUpsert{State: Active}`; the node is a candidate for new
 chunks at once. No data moves toward it until the repairer has a reason to (no rebalancing
-in barebones; capacity weighting in `Place` biases new writes).
+in barebones; capacity weighting in `Place` biases new writes). The one exception is the
+host cap: a host joining, or a disk added on another host, makes skewed chunks fixable,
+and §4 case 6 moves their excess slots (14 §7). `node add-disk` is a join of a target.
 
 ## 7. Policy change: automatic, or `volume set-redundancy --k K --m M`
 
@@ -199,7 +205,7 @@ In auto mode (the default from `init`) the leader proposes `SetVolume` at the st
 repair pass when the rule of 03 gives a different policy than the volume has; the steps
 below are the same as for a manual change.
 
-1. Refused unless `K + M ≤ live Active nodes (devices or S3)` and `K ≥ 1, M ≥ 0, K + M ≤
+1. Refused unless `K + M ≤ live Active targets (devices, disks or S3)` and `K ≥ 1, M ≥ 0, K + M ≤
    256`.
 2. `SetVolume{K, M}` is committed; the FSM increments `PolicyVersion` itself when `K` or
    `M` changed. From this log index every new chunk uses the new policy (small chunks use

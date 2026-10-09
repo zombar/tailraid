@@ -94,6 +94,7 @@ type ClusterNode struct {
 	// process kill would; production uses the fsynced bbolt store (docs/04 §8.1)
 	stores  *cluster.Stores
 	started bool
+	disks   nodeDisks // added disks (docs/14), kept across restarts
 }
 
 // RaftTiming is the harness's shortened Raft timing: quick elections, but a lease long
@@ -319,8 +320,12 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Net = NewFaultNet(http.DefaultTransport)
 	nd.Client = rpc.NewClient(c.CID, nd.Node.RPCAddrOf, nd.Store)
 	nd.Client.SetTransport(nd.Net)
+	nd.Client.SetDisks(nd.Node.DiskOf, nd.disks.local)
 	nd.Node.SetForwarder(nd.Client)
 	nd.Prober = cluster.NewProber(nd.Node, nd.Client, c.Clk)
+	nd.Prober.SelfHealth = func() rpc.Health {
+		return rpc.Health{Applied: nd.Node.AppliedIndex(), Disks: nd.disks.health()}
+	}
 	nd.Events = meta.NewEventRing(c.Clk, nd.Idx())
 	nd.Reader = vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nd.Cache, nil)
 	nd.Reader.Events = nd.Events
@@ -341,6 +346,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		})
 	}
 	nd.RPC, err = rpc.NewServer(rpc.Options{NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
+		Disk: nd.disks.lookup, DiskHealth: nd.disks.health,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,
 		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute})
 	if err != nil {
