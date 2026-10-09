@@ -120,7 +120,7 @@ func TestFlusher_FailedSlotReplacedOnce(t *testing.T) {
 	// find which node the placement will pick and make its first PUT fail
 	h := sha256Of(data)
 	cands := meta.Candidates(f.FSM.Nodes(), func(meta.NodeIdx) bool { return true })
-	victim := meta.Place(h, cands, 3)[1]
+	victim := meta.PlaceKM(h, cands, 3, 0)[1]
 	f.FailPutOnce(victim, 1)
 	must(t, f.Flusher().FlushInode(ctx, ino))
 	c, _ := f.FSM.GetChunk(h)

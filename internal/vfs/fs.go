@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -60,21 +61,6 @@ var (
 // ErrReadOnly is returned for metadata mutations while the cluster has no leader
 // (docs/02 Health Stale/NoLeader → NFS3ERR_ROFS).
 var ErrReadOnly = syscall.EROFS
-
-// split cleans a billy path into components relative to the root.
-func split(name string) []string { return meta.SplitPath(name) }
-
-func equalParts(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
 
 func parentOf(parts []string) ([]string, string) {
 	if len(parts) == 0 {
@@ -179,7 +165,7 @@ func landedEarlier(err error, want error) bool {
 func (f *FS) now() int64 { return f.clk.Now().UnixNano() }
 
 func (f *FS) resolve(name string) (meta.Inode, error) {
-	return f.st.Resolve(split(name))
+	return f.st.Resolve(meta.SplitPath(name))
 }
 
 // --- billy.Basic ---------------------------------------------------------------------
@@ -194,7 +180,7 @@ func (f *FS) Open(filename string) (billy.File, error) {
 
 func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
 	ctx := context.Background()
-	parts := split(filename)
+	parts := meta.SplitPath(filename)
 	if len(parts) == 0 {
 		return nil, mapErr("open", filename, meta.ErrIsDir)
 	}
@@ -280,8 +266,8 @@ func (f *FS) info(in meta.Inode) *fileInfo {
 
 func (f *FS) Rename(oldpath, newpath string) error {
 	ctx := context.Background()
-	op, on := parentOf(split(oldpath))
-	np, nn := parentOf(split(newpath))
+	op, on := parentOf(meta.SplitPath(oldpath))
+	np, nn := parentOf(meta.SplitPath(newpath))
 	if on == "" || nn == "" {
 		return mapErr("rename", oldpath, meta.ErrBadCommand)
 	}
@@ -291,7 +277,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	}
 	// a directory cannot move under itself; refuse before creating any parent (the FSM
 	// would refuse too, but only after mkdirAll had left new directories behind)
-	if oldParts := split(oldpath); len(oldParts) <= len(np) && equalParts(oldParts, np[:len(oldParts)]) {
+	if oldParts := meta.SplitPath(oldpath); len(oldParts) <= len(np) && slices.Equal(oldParts, np[:len(oldParts)]) {
 		return mapErr("rename", oldpath, meta.ErrLoop)
 	}
 	if err := f.mkdirAll(ctx, np, 0o755); err != nil {
@@ -318,7 +304,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 
 func (f *FS) Remove(filename string) error {
 	ctx := context.Background()
-	dp, name := parentOf(split(filename))
+	dp, name := parentOf(meta.SplitPath(filename))
 	if name == "" {
 		return mapErr("remove", filename, meta.ErrBadCommand)
 	}
@@ -384,7 +370,7 @@ func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
 }
 
 func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
-	if err := f.mkdirAll(context.Background(), split(filename), perm); err != nil {
+	if err := f.mkdirAll(context.Background(), meta.SplitPath(filename), perm); err != nil {
 		return mapErr("mkdir", filename, err)
 	}
 	return nil
@@ -423,7 +409,7 @@ func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) err
 
 func (f *FS) Symlink(target, link string) error {
 	ctx := context.Background()
-	dp, name := parentOf(split(link))
+	dp, name := parentOf(meta.SplitPath(link))
 	if name == "" {
 		return mapErr("symlink", link, meta.ErrBadCommand)
 	}

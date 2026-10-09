@@ -175,6 +175,9 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    len(base.Chunks)`), **zero every base byte at offset ≥ `plan.minSize`** when
    `plan.sizeSet`, and overlay the WAL extents. Clip to `eff`.
 5. **Holes.** If the assembled chunk is all zero → `ChunkWrite{i, HashZero}`; no upload.
+   An index past the base list that no write touches is not in the touched set at all:
+   the FSM grows the list with `HashZero`, so a truncate followed by a far seek costs
+   one `ChunkWrite` for the written chunk, not one per index in between (I-80).
 6. **Hash and dedup.** `h = sha256(chunk)`. If `st.GetChunk(h)` exists (live or tombstoned)
    and **at least `k` of its placement slots are present** (on a live node that answers
    `HEAD` for the shard; liveness alone is not trusted, a live node may have lost the

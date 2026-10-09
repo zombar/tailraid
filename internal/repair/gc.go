@@ -67,7 +67,7 @@ func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 	for _, v := range r.Victims {
 		g.Events.Record(v.Hash, meta.EvCollected, fmt.Sprintf("gc index %d", index))
 		for i, n := range v.Placement {
-			if n == 0 || nodes[n].Kind != meta.KindDevice || !g.live.IsLive(n) {
+			if n == 0 || nodes[n].Kind == meta.KindS3 || !g.live.IsLive(n) { // devices and disks; S3 is deferred (docs/10)
 				continue
 			}
 			err := g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index)

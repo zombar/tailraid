@@ -753,7 +753,7 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	}
 	target := host
 	if _, _, err := net.SplitHostPort(host); err != nil {
-		target = net.JoinHostPort(host, strconv.Itoa(rpc.DefaultRPCPort))
+		target = net.JoinHostPort(host, strconv.Itoa(cfg.Listen.RPC)) // the port this cluster uses, as --node assumes
 	}
 	// learn the cluster ID from the target's health endpoint before opening the transport
 	probe := rpc.NewClient([16]byte{}, nil, nil)

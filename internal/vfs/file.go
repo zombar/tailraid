@@ -102,10 +102,12 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	}
 	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
 		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReader(context.Background(), in))
-		if err != nil && !errors.Is(err, io.EOF) {
+		if err == nil || errors.Is(err, io.EOF) {
+			return n, err
+		}
+		if !errors.Is(err, meta.ErrNotExist) { // the flush committed and evicted the entry in between: the base has it all
 			return n, mapErr("read", f.name, err)
 		}
-		return n, err
 	}
 	n, err := f.fs.rd.ReadAt(context.Background(), in, p, off)
 	if err != nil && !errors.Is(err, io.EOF) {

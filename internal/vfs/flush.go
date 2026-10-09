@@ -370,8 +370,11 @@ func (f *Flusher) touched(plan *FlushPlan, base meta.Inode, partial bool) (idxs 
 		if plan.MinSize%cs != 0 {
 			touched[plan.MinSize/cs] = true // the chunk straddling the truncation point
 		}
-		for i := (plan.MinSize + cs - 1) / cs; i < n; i++ {
-			if !touched[i] && (int(i) >= len(base.Chunks) || base.Chunks[i] != meta.HashZero) {
+		// chunks the base holds past the truncation point must be rewritten as holes;
+		// chunks past the base list are holes already (the FSM grows the list with
+		// HashZero), so a truncate followed by a far seek costs no write per index
+		for i := (plan.MinSize + cs - 1) / cs; i < n && int(i) < len(base.Chunks); i++ {
+			if !touched[i] && base.Chunks[i] != meta.HashZero {
 				touched[i] = true // truncated-away bytes become holes
 			}
 		}

@@ -643,10 +643,11 @@ func setRedundancyCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "policy is automatic again: the leader applies the rule of docs/03 on its next repair pass")
 				return printRaw(cmd.OutOrStdout(), raw)
 			}
-			if k < 1 || m < 0 {
-				return errors.New("--k and --m (or --auto) are required")
+			kk, mm, err := policyFlags(k, m)
+			if err != nil {
+				return err
 			}
-			raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", K: uint8(k), M: uint8(m)})
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "set_policy", K: kk, M: mm})
 			if err != nil {
 				return err
 			}
@@ -666,4 +667,14 @@ func setRedundancyCmd() *cobra.Command {
 	c.Flags().IntVar(&m, "m", -1, "parity shards")
 	c.Flags().BoolVar(&auto, "auto", false, "let the leader choose the policy from the member table")
 	return c
+}
+
+// policyFlags checks a (k, m) from the command line before the narrowing to uint8:
+// k is 1..255, m is 0..255 and k+m is at most 256 (ec.MaxShards). --k 257 --m 0 used to
+// pin 1+0 after the cast.
+func policyFlags(k, m int) (uint8, uint8, error) {
+	if k < 1 || k > 255 || m < 0 || m > 255 || k+m > 256 {
+		return 0, 0, fmt.Errorf("bad policy k=%d m=%d: k is 1..255, m is 0..255, k+m at most 256", k, m)
+	}
+	return uint8(k), uint8(m), nil
 }

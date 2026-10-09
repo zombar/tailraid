@@ -278,7 +278,7 @@ func (s *Store) DeleteIfOlder(k ShardKey, minAge time.Duration, now time.Time) (
 		}
 		return false, 0, fmt.Errorf("chunk: stat %s: %w", k, err)
 	}
-	if fi.ModTime().After(now.Add(-minAge)) {
+	if !fi.ModTime().Before(now.Add(-minAge)) { // exactly minAge old is still young (docs/06)
 		return false, 0, nil
 	}
 	size, err = s.deleteLocked(k)

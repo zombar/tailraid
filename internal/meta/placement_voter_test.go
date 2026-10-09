@@ -68,7 +68,7 @@ func TestPlaceKM_VoterFirst_DataSlots(t *testing.T) {
 							}
 						}
 						if v < k || s == 0 { // too few voters, or everyone is a voter: the plain rendezvous order
-							if want := Place(h, c, k+m); !equalIdx(p, want) {
+							if want := place(h, c, k+m); !equalIdx(p, want) {
 								t.Fatalf("v=%d s=%d k=%d m=%d: %v, want Place %v", v, s, k, m, p, want)
 							}
 						}

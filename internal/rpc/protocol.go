@@ -19,10 +19,7 @@ const (
 )
 
 // Ports.
-const (
-	DefaultRaftPort = 20480
-	DefaultRPCPort  = 20481
-)
+const ()
 
 // Errors the client returns.
 var (

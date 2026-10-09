@@ -138,7 +138,7 @@ func TestFlusher_StragglerPut_CancelledAfterReplace(t *testing.T) {
 	must(t, f.Ov.Write(ino, 0, 0, data))
 	h := sha256Of(data)
 	cands := meta.Candidates(f.FSM.Nodes(), func(meta.NodeIdx) bool { return true })
-	victim := meta.Place(h, cands, 3)[2]
+	victim := meta.PlaceKM(h, cands, 3, 0)[2]
 	entered, release := f.StallPut(victim)
 	defer release()
 	fl := f.Flusher(func(c *vfs.Config) { c.PutDeadline = time.Second })

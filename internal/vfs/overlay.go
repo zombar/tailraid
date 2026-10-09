@@ -502,17 +502,6 @@ func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	return d.effSize(committed), true
 }
 
-// MinSize returns the truncation point when a truncate is pending (bytes at or beyond it
-// that no extent covers read as zero); without one it returns 0.
-func (o *Overlay) MinSize(ino meta.Ino) (uint64, bool) {
-	d, _ := o.get(ino, 0, false)
-	if d == nil {
-		return 0, false
-	}
-	defer d.mu.Unlock()
-	return d.minSize, true
-}
-
 // Read fills p from the overlay view of an inode whose committed size is committed:
 // base bytes below the truncation point (everywhere without one), zeros above it, and
 // WAL extents (both the in-flight plan's and fresh ones) on top. base may return fewer
@@ -525,7 +514,10 @@ func (o *Overlay) Read(ino meta.Ino, committed, off uint64, p []byte, base func(
 	}
 	size := d.effSize(committed)
 	limit := baseLimit(d.sizeSet, d.minSize)
-	covered := d.ext.covers(off, min(off+uint64(len(p)), size)) || (d.plan != nil && d.plan.Extents.covers(off, min(off+uint64(len(p)), min(size, d.planMin))))
+	end := min(off+uint64(len(p)), size)
+	// the plan's extents say nothing about bytes at or past planMin: a commit from
+	// another gateway may have grown the file there, and those bytes live in the base
+	covered := d.ext.covers(off, end) || (d.plan != nil && end <= d.planMin && d.plan.Extents.covers(off, end))
 	d.mu.Unlock()
 	if off >= size {
 		return 0, io.EOF

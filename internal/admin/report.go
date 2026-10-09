@@ -17,34 +17,33 @@ import (
 
 // NodeReport is one row of `node ls`.
 type NodeReport struct {
-	Idx        meta.NodeIdx   `json:"idx"`
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Kind       string         `json:"kind"`
-	Host       meta.NodeIdx   `json:"host,omitempty"` // disks: the device that serves it (docs/14)
-	State      string         `json:"state"`
-	Addr       string         `json:"addr"`
-	RPCPort    uint16         `json:"rpc_port"`
-	Voter      bool           `json:"voter"`
-	Leader     bool           `json:"leader"`
-	Self       bool           `json:"self"`
-	Live       bool           `json:"live"`
-	DeadFor    string         `json:"dead_for,omitempty"`
-	Lost       bool           `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
-	RTT        string         `json:"rtt,omitempty"`
-	Free       int64          `json:"free"`
-	Capacity   uint64         `json:"capacity"`
-	Version    string         `json:"version"`
-	Applied    uint64         `json:"applied"`
-	Slots      int            `json:"slots"`
-	Missing    int            `json:"missing_slots"` // slots this node should hold but is dead for
-	Dev        bool           `json:"dev,omitempty"` // /dev/* endpoints enabled
-	TSStable   string         `json:"ts_stable_id,omitempty"`
-	JoinedAt   time.Time      `json:"joined_at"`
-	DataDir    bool           `json:"data_dir,omitempty"`    // a host's own store, on a host with added disks (docs/14 §8)
-	SharedWith []string       `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
-	fs         string         // filesystem ID from the last probe
-	rawState   meta.NodeState // for sorting
+	Idx        meta.NodeIdx `json:"idx"`
+	ID         string       `json:"id"`
+	Name       string       `json:"name"`
+	Kind       string       `json:"kind"`
+	Host       meta.NodeIdx `json:"host,omitempty"` // disks: the device that serves it (docs/14)
+	State      string       `json:"state"`
+	Addr       string       `json:"addr"`
+	RPCPort    uint16       `json:"rpc_port"`
+	Voter      bool         `json:"voter"`
+	Leader     bool         `json:"leader"`
+	Self       bool         `json:"self"`
+	Live       bool         `json:"live"`
+	DeadFor    string       `json:"dead_for,omitempty"`
+	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
+	RTT        string       `json:"rtt,omitempty"`
+	Free       int64        `json:"free"`
+	Capacity   uint64       `json:"capacity"`
+	Version    string       `json:"version"`
+	Applied    uint64       `json:"applied"`
+	Slots      int          `json:"slots"`
+	Missing    int          `json:"missing_slots"` // slots this node should hold but is dead for
+	Dev        bool         `json:"dev,omitempty"` // /dev/* endpoints enabled
+	TSStable   string       `json:"ts_stable_id,omitempty"`
+	JoinedAt   time.Time    `json:"joined_at"`
+	DataDir    bool         `json:"data_dir,omitempty"`    // a host's own store, on a host with added disks (docs/14 §8)
+	SharedWith []string     `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
+	fs         string       // filesystem ID from the last probe
 }
 
 // VolumeReport is `volume describe`.
@@ -206,7 +205,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		r := NodeReport{
 			Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
-			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State,
+			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
 		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS
@@ -243,7 +242,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 // of one host on one filesystem with each other (docs/14 §8): they fail together.
 func markDisks(nodes []NodeReport) {
 	hostOf := func(n *NodeReport) meta.NodeIdx {
-		if n.Kind == "disk" {
+		if n.Kind == meta.KindDisk.String() {
 			return n.Host
 		}
 		return n.Idx
@@ -256,10 +255,10 @@ func markDisks(nodes []NodeReport) {
 	hasDisk := map[meta.NodeIdx]bool{}
 	for i := range nodes {
 		n := &nodes[i]
-		if n.State == "removed" || n.Kind == "s3" {
+		if n.State == meta.Removed.String() || n.Kind == meta.KindS3.String() {
 			continue
 		}
-		if n.Kind == "disk" {
+		if n.Kind == meta.KindDisk.String() {
 			hasDisk[n.Host] = true
 		}
 		if n.fs != "" {
@@ -268,7 +267,7 @@ func markDisks(nodes []NodeReport) {
 		}
 	}
 	for i := range nodes {
-		if nodes[i].Kind == "device" && hasDisk[nodes[i].Idx] {
+		if nodes[i].Kind == meta.KindDevice.String() && hasDisk[nodes[i].Idx] {
 			nodes[i].DataDir = true
 		}
 	}

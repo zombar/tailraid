@@ -13,3 +13,19 @@ func (f *Flusher) BackoffEntries() int {
 
 // ScheduleRetry is scheduleRetry, for a test that wants an entry to exist.
 func (f *Flusher) ScheduleRetry(ino meta.Ino) { f.scheduleRetry(ino) }
+
+// Touched is touched: the chunk indices a plan commits, for the boundary tests.
+func (f *Flusher) Touched(plan *FlushPlan, base meta.Inode) []uint64 {
+	idxs, _ := f.touched(plan, base, false)
+	return idxs
+}
+
+// MinSize returns the truncation point when a truncate is pending (tests only).
+func (o *Overlay) MinSize(ino meta.Ino) (uint64, bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return 0, false
+	}
+	defer d.mu.Unlock()
+	return d.minSize, true
+}

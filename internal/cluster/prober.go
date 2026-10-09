@@ -114,6 +114,13 @@ func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
 	}
 }
 
+// FillAfter is the MemberDown hold-down in force (repair.fill_after).
+func (p *Prober) FillAfter() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fillAfter
+}
+
 // SetHoldDowns overrides the MemberDown and MemberLost hold-downs (the configured
 // repair.fill_after and evict_after), so the prober's events agree with the repairer.
 func (p *Prober) SetHoldDowns(fillAfter, evictAfter time.Duration) {

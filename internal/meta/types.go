@@ -11,6 +11,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"maps"
 	"math"
 	"net"
@@ -133,6 +134,26 @@ func (s NodeState) String() string {
 		return "active"
 	}
 	return "active" // the zero value, written by nodes that predate the field
+}
+
+// ParseNodeState is the inverse of NodeState.String; an unknown name is an error.
+func ParseNodeState(s string) (NodeState, error) {
+	for _, st := range []NodeState{Active, Draining, Removed} {
+		if st.String() == s {
+			return st, nil
+		}
+	}
+	return 0, fmt.Errorf("meta: unknown node state %q", s)
+}
+
+// ParseNodeKind is the inverse of NodeKind.String; an unknown name is an error.
+func ParseNodeKind(s string) (NodeKind, error) {
+	for _, k := range []NodeKind{KindDevice, KindDisk, KindS3} {
+		if k.String() == s {
+			return k, nil
+		}
+	}
+	return 0, fmt.Errorf("meta: unknown node kind %q", s)
 }
 
 // String names a node kind.

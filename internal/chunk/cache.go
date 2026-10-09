@@ -211,13 +211,6 @@ func (c *Cache) memDropLocked(h [32]byte) {
 	}
 }
 
-// MemoryUsed is the size of the in-memory tier.
-func (c *Cache) MemoryUsed() int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.memUsed
-}
-
 // Put stores data (whose sha256 must be h) and evicts least-recently-used entries until
 // the cache fits in max. Entries larger than max are ignored.
 func (c *Cache) Put(h [32]byte, data []byte) {

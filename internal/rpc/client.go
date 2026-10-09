@@ -243,7 +243,10 @@ func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.
 	}
 	if t.self && t.store != nil {
 		// the same age guard as the remote fence (I-14); placement is the caller's check
-		_, _, err := t.store.DeleteIfOlder(key, c.grace, time.Now())
+		deleted, _, err := t.store.DeleteIfOlder(key, c.grace, time.Now())
+		if err == nil && !deleted && t.store.Has(key) {
+			return fmt.Errorf("%w: shard younger than the grace period", ErrFenced) // counted as refused, as a remote 412 is
+		}
 		return err
 	}
 	ctx, cancel := bound(ctx, 0)

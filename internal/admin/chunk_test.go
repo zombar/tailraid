@@ -48,9 +48,11 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 		t.Fatalf("event path %v", kinds)
 	}
 	// a hash prefix selects the same chunk; an ambiguous or malformed one is refused
-	byPrefix, err := admin.DescribeChunks(ctx, n0.Node.FSM, n0.Prober, n0.Client, n0.Events, r.Hash[:12])
-	if err != nil || len(byPrefix) != 1 || byPrefix[0].Hash != r.Hash {
-		t.Fatalf("by prefix: %v %+v", err, byPrefix)
+	for _, prefix := range []string{r.Hash[:12], r.Hash[:9]} { // an odd number of digits is a prefix too
+		byPrefix, err := admin.DescribeChunks(ctx, n0.Node.FSM, n0.Prober, n0.Client, n0.Events, prefix)
+		if err != nil || len(byPrefix) != 1 || byPrefix[0].Hash != r.Hash {
+			t.Fatalf("by prefix %q: %v %+v", prefix, err, byPrefix)
+		}
 	}
 	if _, err := admin.DescribeChunks(ctx, n0.Node.FSM, n0.Prober, n0.Client, n0.Events, "abc"); err == nil {
 		t.Fatal("short selector accepted")

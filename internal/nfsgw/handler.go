@@ -127,7 +127,7 @@ var _ nfs.CachingHandler = (*Handler)(nil)
 // so the following pages of the same READDIR(PLUS) do not list and sort the directory
 // again (docs/07).
 func (h *Handler) VerifierFor(path string, contents []iofs.FileInfo) uint64 {
-	in, err := h.st.Resolve(splitPath(path))
+	in, err := h.st.Resolve(meta.SplitPath(path))
 	if err != nil {
 		return hashListing(path, contents)
 	}
@@ -144,14 +144,12 @@ func (h *Handler) DataForVerifier(path string, verifier uint64) []iofs.FileInfo 
 	if !ok {
 		return nil
 	}
-	in, err := h.st.Resolve(splitPath(path))
+	in, err := h.st.Resolve(meta.SplitPath(path))
 	if err != nil || in.Ino != key.Ino || in.Gen != key.Gen || in.Version != key.Version {
 		return nil
 	}
 	return contents
 }
-
-func splitPath(p string) []string { return meta.SplitPath(p) }
 
 // hashListing is the verifier for a path that no longer resolves (go-nfs's own scheme).
 func hashListing(path string, contents []iofs.FileInfo) uint64 {

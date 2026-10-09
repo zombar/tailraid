@@ -69,12 +69,12 @@ func TestPlace_OneTargetPerHost_Unchanged(t *testing.T) {
 		nc := 1 + r.Intn(12)
 		c := make([]Candidate, nc)
 		for i := range c {
-			c[i] = Candidate{Idx: NodeIdx(i + 1), Weight: uint64(1 + r.Intn(100)), Voter: r.Intn(2) == 0}
+			c[i] = Candidate{Idx: NodeIdx(i + 1), Weight: uint64(1 + r.Intn(100))} // no voters: voter-first data slots are I-77, not the host cap
 		}
 		for i := range uint64(200) {
 			h := hashN(uint64(trial)*1000 + i)
 			n := 1 + r.Intn(10)
-			if got, want := Place(h, c, n), legacyPlace(h, c, n); !equalIdx(got, want) {
+			if got, want := place(h, c, n), legacyPlace(h, c, n); !equalIdx(got, want) {
 				t.Fatalf("trial %d hash %d n %d: %v != %v", trial, i, n, got, want)
 			}
 		}
@@ -99,7 +99,7 @@ func TestPlace_HostCap(t *testing.T) {
 		nodes := topology(c.disks, allVoters(len(c.disks)), 1)
 		cs := Candidates(nodes, allLive)
 		for i := range uint64(2000) {
-			p := Place(hashN(i), cs, c.n)
+			p := place(hashN(i), cs, c.n)
 			if len(p) != c.n {
 				t.Fatalf("%s: placed %d of %d", c.name, len(p), c.n)
 			}
@@ -115,7 +115,7 @@ func TestPlace_HostCap(t *testing.T) {
 	nodes := topology([]int{0, 5}, allVoters(2), 1) // host 1: its own store only; host 2: 6 targets
 	cs := Candidates(nodes, allLive)
 	for i := range uint64(500) {
-		p := Place(hashN(i), cs, 6)
+		p := place(hashN(i), cs, 6)
 		if len(p) != 6 {
 			t.Fatalf("uneven: placed %d of 6", len(p))
 		}
