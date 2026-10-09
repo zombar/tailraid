@@ -259,6 +259,7 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	if err != nil {
 		if errors.Is(err, meta.ErrNotExist) {
 			f.ov.Drop(ino)
+			f.clearRetry(ino) // nothing left to retry: the backoff entry goes with the inode
 			return nil
 		}
 		f.ov.AbortFlush(plan)

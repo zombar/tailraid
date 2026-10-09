@@ -332,6 +332,12 @@ no divergent state to merge because it never applied uncommitted entries.
   is handed to Raft at most once per proposal, and the forwarding layer itself retries only
   after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
   above; that is outside this invariant.)
+- **I-96** — `node_id` and `cluster_id` are written atomically (temp file, fsync, rename,
+  directory fsync), so a crash leaves the old file or the new one; a read error other
+  than "not found" on `node_id` is an error, never a fresh identity.
+- **I-99** — A node that fails to open or bootstrap releases its Raft listener and its
+  stores before returning the error, so the same data directory and address can be
+  opened again at once.
 - **I-95** — A proposal that may have been applied (leadership lost, timeout, cancelled
   while pending, transport error, or the leader's `500`) is reported as
   `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
@@ -351,5 +357,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
 | I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext` |
+| I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
+| I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |

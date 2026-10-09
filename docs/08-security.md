@@ -190,6 +190,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Rogue "leader" overwrites a follower's log | member check on accept (I-92) and the handshake (I-49); Raft traffic only on Tailscale IPs |
 | Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
+| A peer stalls mid-body and holds a PUT or GET slot | per-request body deadline derived from the transfer size (I-97) |
 | LAN host reaches NFS or RPC | NFS bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
 | Guest, other-user or tagged tailnet device opens the web UI | member-or-same-user WhoIs rule; tagged devices have no login (docs/13, I-68) |
@@ -230,6 +231,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   only when the caller's WhoIs StableID is that of the member it names, and changes
   nothing but that member's address; every other op from a non-member is rejected with
   403.
+- **I-97** — Reading a PUT or `apply` body and writing a GET body carry a deadline derived
+  from the largest transfer (`BodyTimeout`, default `callTimeout(MaxShard)`), so a peer
+  that stalls mid-transfer releases its slot when the deadline passes.
 - **I-94** — A join records the caller's source address and rejects a request that names
   another with 403; a re-join under a known node ID keeps the record only when it presents
   that record's StableID.
@@ -245,3 +249,4 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake` |
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID` |
+| I-97 | `TestPut_StalledBodyFreesSlot` |

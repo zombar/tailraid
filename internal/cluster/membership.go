@@ -23,7 +23,10 @@ var (
 )
 
 // AppliedIndex implements rpc.Applier.
-func (n *Node) AppliedIndex() uint64 { return n.Raft.AppliedIndex() }
+// AppliedIndex is the FSM's applied index: what this node has actually applied, which is
+// what the DELETE fence (docs/06) and the health row promise. Raft's own AppliedIndex
+// only proves dispatch to the FSM goroutine.
+func (n *Node) AppliedIndex() uint64 { return n.FSM.Applied() }
 
 // LeaderRPCAddr returns the leader's RPC address from the node table, or "".
 func (n *Node) LeaderRPCAddr() string {
@@ -65,6 +68,8 @@ func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.
 
 // Join implements the leader side of `tailraid join` (docs/02 §Bootstrap and join).
 func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse, error) {
+	n.memberMu.Lock()
+	defer n.memberMu.Unlock()
 	if !n.IsLeader() {
 		if n.LeaderRPCAddr() == "" {
 			return rpc.JoinResponse{}, ErrNoLeader
@@ -140,6 +145,8 @@ func (n *Node) SlotsHeldBy(idx meta.NodeIdx) int {
 
 // MemberOp implements remove, update_addr, set_voter, set_capacity and set_state on the leader.
 func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
+	n.memberMu.Lock()
+	defer n.memberMu.Unlock()
 	if !n.IsLeader() {
 		if n.LeaderRPCAddr() == "" {
 			return ErrNoLeader

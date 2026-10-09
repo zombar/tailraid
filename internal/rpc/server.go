@@ -109,6 +109,9 @@ type Options struct {
 	Grace      time.Duration // DELETE fence minimum shard age; default 10 min
 	PutSlots   int           // concurrent PUTs; default 16
 	GetSlots   int           // concurrent GETs; default 32
+	// BodyTimeout bounds reading a PUT or apply body and writing a GET body, so a peer
+	// that stalls mid-transfer cannot hold a slot (I-97); default callTimeout(MaxShard).
+	BodyTimeout time.Duration
 }
 
 // SlotBudget is the memory the shard RPC server may hold in request and reply bodies at
@@ -142,6 +145,9 @@ func NewServer(o Options) (*Server, error) {
 	}
 	if o.MaxShard == 0 {
 		o.MaxShard = 2 << 20
+	}
+	if o.BodyTimeout == 0 {
+		o.BodyTimeout = callTimeout(o.MaxShard)
 	}
 	if o.Grace == 0 {
 		o.Grace = 10 * time.Minute
@@ -374,6 +380,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 			return
 		}
 		defer rc.Close()
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.o.BodyTimeout)) // I-97
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
@@ -387,6 +394,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
 			return
 		}
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.o.BodyTimeout))    // a stalled body frees the slot (I-97)
 		buf := bytes.NewBuffer(make([]byte, 0, max(0, min(r.ContentLength, s.o.MaxShard))+1)) // sized by Content-Length: one allocation
 		_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
 		body := buf.Bytes()
@@ -442,6 +450,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 }
 
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.o.BodyTimeout)) // I-97
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read body")

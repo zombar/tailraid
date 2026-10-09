@@ -163,7 +163,13 @@ func (p *Prober) Tick(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range nodes {
 		nd := nodes[i]
-		if nd.Kind != meta.KindDevice || nd.State == meta.Removed {
+		if nd.State == meta.Removed { // nothing to probe, nothing to keep
+			p.mu.Lock()
+			delete(p.probes, nd.Idx)
+			p.mu.Unlock()
+			continue
+		}
+		if nd.Kind != meta.KindDevice {
 			continue
 		}
 		if nd.ID == p.node.ID {

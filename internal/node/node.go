@@ -807,7 +807,7 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 		return rpc.JoinResponse{}, err
 	}
 	auth.SetSeed(resp.Members)
-	if err := os.WriteFile(filepath.Join(cfg.Node.DataDir, "cluster_id"), []byte(h.ClusterID+"\n"), 0o600); err != nil {
+	if err := cluster.WriteClusterID(cfg.Node.DataDir, h.ClusterID); err != nil {
 		return resp, err
 	}
 	// receive the log before stopping so `serve` starts with the node table present

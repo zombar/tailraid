@@ -479,12 +479,16 @@ func TestFlusher_UnlinkedBeforeFlush_Dropped(t *testing.T) {
 	must(t, f.Ov.Write(ino, 0, 0, testharness.Pattern(int(testharness.ChunkSize), 13)))
 	f.MustApply(meta.Command{Op: meta.OpUnlink, Unlink: &meta.Unlink{Parent: meta.RootIno, Name: "a", Now: 5}})
 	before := f.Puts()
+	f.Flusher().ScheduleRetry(ino) // a pending retry from an earlier failure goes with the inode
 	must(t, f.Flusher().FlushInode(ctx, ino))
 	if f.Puts() != before {
 		t.Fatal("uploaded for a dead inode")
 	}
 	if _, ok := f.Ov.Size(ino, 0); ok {
 		t.Fatal("overlay still tracks the inode")
+	}
+	if n := f.Flusher().BackoffEntries(); n != 0 {
+		t.Fatalf("%d backoff entries kept for a dead inode", n)
 	}
 	if st := f.FSM.Stats(); st.Chunks != 0 {
 		t.Fatalf("chunk entries created: %+v", st)

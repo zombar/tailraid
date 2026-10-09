@@ -132,7 +132,10 @@ var (
 )
 
 // newEnv serves a node whose member table contains the loopback caller as member 1.
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, nil) }
+
+// newEnvWith builds the environment with mod applied to the server options first.
+func newEnvWith(t *testing.T, mod func(*Options)) *env {
 	t.Helper()
 	e := &env{t: t, app: newApplier(), clk: clock.NewFake(time.Now()), fence: fakeFence{placed: map[chunk.ShardKey]bool{}}}
 	e.cid = [16]byte{1, 2, 3}
@@ -145,11 +148,15 @@ func newEnv(t *testing.T) *env {
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
 	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
-	e.srv, err = NewServer(Options{
+	opts := Options{
 		NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
 		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
 		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) },
-	})
+	}
+	if mod != nil {
+		mod(&opts)
+	}
+	e.srv, err = NewServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
