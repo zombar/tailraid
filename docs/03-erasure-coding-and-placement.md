@@ -1,8 +1,8 @@
 # 03 — Erasure coding and placement
 
 Each chunk is one stripe: `k` data shards and `m` parity shards computed with Reed-Solomon
-over GF(2^8) (`klauspost/reedsolomon`). Shards are placed on `k+m` distinct nodes chosen by
-weighted rendezvous hashing over the live, active candidate set at write time, and the
+over GF(2^8) (`klauspost/reedsolomon`). Shards are placed on `k+m` distinct targets (devices, their added disks, or S3 nodes)
+chosen by weighted rendezvous hashing over the live, active candidate set at write time, and the
 chosen placement is recorded in the chunk entry. Reads need any `k` shards. Every chunk
 records its own `(k, m)`, which makes a later change of the volume policy a lazy migration
 rather than a rewrite.
@@ -61,8 +61,13 @@ RPCs for a few kilobytes. Space overhead of a full 1 MiB chunk at 2+1 is 1.5× p
 ### Candidates
 
 ```go
-type Candidate struct { Idx meta.NodeIdx; Weight uint64; Voter bool }   // Weight = Node.Capacity; Voter = Node.Voter
+type Candidate struct { Idx meta.NodeIdx; Weight uint64; Voter bool; Domain meta.NodeIdx }
+// Weight = Node.Capacity; Voter = the host's Voter; Domain = Host for a disk, else Idx
 ```
+
+A candidate is a **target**: a device's own store, one of its added disks, or an S3 node
+(14). Targets of one host share a **domain**; `Place` spreads a stripe across domains
+first (14 §5).
 
 At write time the flusher builds the candidate list from `State.Nodes` filtered to
 `State == Active` **and** currently live (`Peers.Live()`), with `Weight = Capacity`. Nodes
@@ -106,7 +111,9 @@ the MurmurHash3 64-bit finalizer; it is required because plain FNV-1a has no ava
 the two trailing `idx` bytes, so the `u` values of different candidates for the same hash
 were nearly equal and the weights were effectively ignored (a 2:1 weighting measured
 99984:16 before the mix). Sort candidates by `score` descending, ties broken by `idx` ascending, and take
-the first `n`. Shard `i` goes to the `i`-th selected node. Properties:
+the first `n`, skipping a candidate whose domain already holds `ceil(n/D)` picks and
+filling any slot left over from the skipped ones in the same order (the host cap, 14 §5;
+with one target per domain this is the plain top-`n`). Shard `i` goes to the `i`-th selected node. Properties:
 
 - Pure function of `(h, candidate set, n)` (I-8): every node computes the same answer from
   the same inputs, which the predecessor got wrong by sorting its own name among peer IPs.
@@ -124,8 +131,9 @@ changes where a shard lives. Reads therefore never guess.
 `Placement[i]` is the `NodeIdx` holding shard `i`, or `0` when no node holds it. A non-zero
 entry pointing at a `Removed` or `Draining` node is treated by the repairer as work to do
 but is still a valid read source while the node is live. Non-zero entries within one chunk
-are always distinct (I-9): the same node never holds two shards of one stripe, since that
-would make a single node loss cost two shards.
+are always distinct (I-9): the same target never holds two shards of one stripe, since that
+would make a single disk loss cost two shards. A host with several disks may hold several
+shards of a stripe, never more than the host cap while another placement exists (I-87).
 
 ## Writing a chunk
 
@@ -176,7 +184,9 @@ reachable; a bucket is the shard source of last resort and the off-site copy.
 
 `tailraid init` creates the volume with `Vol.Auto` set and `1+0`. In auto mode the leader
 derives the policy from the member table with `meta.AutoPolicy(nodes)`, a pure function
-of the counts of Active devices that are voters (`v`) and non-voters (`s`), `n = v + s`:
+of the counts of Active targets on voter hosts (`v`) and on non-voter hosts (`s`),
+`n = v + s` (a target is a device with a budget, an added disk, or an S3 node, 14 §6; with
+one target per device these are the device counts):
 
 - `m = 0` for `n = 1`, `1` for `n` of 2 or 3, `2` for `n ≥ 4`
 - `k = clamp(v, 1, n − m)`, capped at 6
@@ -191,10 +201,13 @@ of the counts of Active devices that are voters (`v`) and non-voters (`s`), `n =
 | 3 | 2 | 3+2 | yes |
 | 2 | 4 | 2+2 | yes |
 
+When the targets span `H ≥ 2` hosts, `k` is then lowered until `ceil((k+m)/H) ≤ m` so the
+policy survives the loss of a whole host (I-88; 14 §6 has the table for disks).
+
 `k` follows the voters so the data shards fit on always-on devices (voter-first slots
 above); `m` follows the cluster size. The leader evaluates the rule at the start of every
 repair pass (06, leader only, once a minute) and proposes `SetVolume{K, M}` when `Auto` is
-set, the rule's answer differs from `Vol.(K, M)`, and `K+M ≤` live Active devices; if a
+set, the rule's answer differs from `Vol.(K, M)`, and `K+M ≤` live Active targets; if a
 join makes a larger policy desirable while a device is asleep the change waits for a
 later pass, never forced. Membership is the only input, never liveness: the policy grows
 after a join or promotion and shrinks only after a removal or demotion, so a dead laptop
@@ -203,7 +216,7 @@ never shrinks it. A node's budget plays no part.
 `volume set-redundancy --k K --m M` clears `Auto` (`SetVolumeMode{Auto: false}`) and
 proposes `SetVolume{K, M}`; `volume set-redundancy --auto` sets `Auto` again and the next
 pass applies the rule. Either way the CLI refuses a policy whose `K+M` exceeds the number
-of **live Active nodes** (devices or S3). The FSM increments `PolicyVersion` itself. From the next flush, new chunks use the new `(K, M)`. Existing
+of **live Active targets** (devices, disks or S3). The FSM increments `PolicyVersion` itself. From the next flush, new chunks use the new `(K, M)`. Existing
 chunks keep their recorded `(K, M)` and remain fully readable. The repairer treats
 `chunk.(K,M) != Vol.(K,M)` as repair work: read `k_old` shards, decode, re-encode with the
 new policy, PUT to a fresh placement under the new keys (`hex.K-M.idx`, which never collide
@@ -221,8 +234,8 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 
 - **I-8** — `Place(h, cands, n)` is a pure function: for the same hash, the same candidate
   set (any order) and the same `n`, every node returns the identical sequence.
-- **I-9** — The non-zero entries of any committed `Placement` are pairwise distinct node
-  indices; a stripe never has two shards on one node. With `≥ k+m` candidates all `k+m`
+- **I-9** — The non-zero entries of any committed `Placement` are pairwise distinct target
+  indices; a stripe never has two shards on one target (device store, disk or S3 node). With `≥ k+m` candidates all `k+m`
   slots are non-zero.
 - **I-10** — For any chunk and any subset of `k` of its `k+m` shards,
   `Decode(subset, Size)` returns exactly the original `Size` bytes; with fewer than `k`
@@ -235,10 +248,10 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 - **I-67** — The chunk size is bounded once: `init`, `SetVolume` and the shard store all
   enforce `ChunkSize ≤ meta.MaxChunkSize` (64 MiB), so a k=1 shard of the largest chunk
   always fits `chunk.MaxPayload` and no shard is stored that cannot be read back.
-- **I-75** — `AutoPolicy(nodes)` is a pure function of the Active device voter and
-  non-voter counts (the table above), identical on every node; the leader proposes it
+- **I-75** — `AutoPolicy(nodes)` is a pure function of the Active target counts on voter and
+  non-voter hosts and the host count (the table above, 14 §6), identical on every node; the leader proposes it
   only while `Vol.Auto` is set, when it differs from the current policy and `K+M` does not
-  exceed the live Active devices; it grows after a join or promotion and shrinks only after
+  exceed the live Active targets; it grows after a join or promotion and shrinks only after
   a removal or demotion, never because of liveness.
 - **I-77** — `PlaceKM(h, cands, k, m)` is a pure function of `(h, candidate set, k, m)`
   whose data slots are drawn from voter candidates whenever at least `k` voters are

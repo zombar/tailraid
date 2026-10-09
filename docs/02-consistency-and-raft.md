@@ -268,6 +268,10 @@ and `token == Meta.JoinToken`, then forwards to the leader, which calls
 `raft.AddNonvoter` or `AddVoter` and proposes `NodeUpsert`. The joiner then starts `serve`
 and receives the state by snapshot.
 
+**Disks.** `node add-disk` (14 §2) proposes `NodeUpsert{Kind: KindDisk, Host}` through
+the leader; a disk row is a placement target, never a Raft member, and `init` registers
+the disks already in the config in its bootstrap.
+
 **Voters.** Only devices configured `voter: true` (and the `init` node) are Raft voters.
 Non-voters replicate the log, serve reads and act as gateways and storage, but do not count
 toward quorum, so sleeping laptops never stall the cluster. `status` warns when the voter

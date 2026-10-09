@@ -286,7 +286,15 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   chunks landed: every chunk fully placed, its data slots on voters, data slots spread
   among the voters in proportion to capacity within the statistical margin, and a
   per-node figure of its data and parity slots against each node's capacity share;
-  I-78, I-79, I-80, I-38, I-9, I-33, I-77). The sampler also records each sampled node's
+  I-78, I-79, I-80, I-38, I-9, I-33, I-77); 13 disks (every chunk within the host cap and no
+  disk holding two slots; drain all hosts but one so their chunks pile onto its disks with
+  no skew reported, re-activate them and watch `domain_skew` rise and drain to 0; close
+  one disk by moving its marker and restarting its host: reads stay exact, the disk is
+  dead while its host is live, repair re-places its slots within the cap after
+  `fill_after`; restore it: live again, its stale shards swept after grace; I-86, I-87,
+  I-89, I-90, L-192, L-193, L-194). The compose rig gives every node two added disks
+  (4 hosts × 3 targets); `cmd/soak -topology single` runs one node with four disks, where
+  phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure and
   disk next to the process memory. A phase the environment cannot run is recorded as
   *skipped (capability)*, never passed.
@@ -314,7 +322,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   that landed after a heal), every node's goroutine dump taken right after a failed
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
-  bytes, overlay WAL depth, slots per node, latency histograms and the FSM-hash strip.
+  bytes, overlay WAL depth, slots per node, latency histograms, the FSM-hash strip, and the data spread across disks (one lane per
+  target grouped by host, each sample coloured by the target's slot share against its
+  expected share, dead hatched, with a host-cap strip underneath that is green while no
+  chunk exceeds the cap and amber while `domain_skew > 0`).
 - `make soak` (quick, ~10 min) runs the compose profile; `make soak-full` the long one.
   Setup (two cross-compiled binaries, eight cached image layers, four joins) takes about a
   minute on an idle machine; run it on its own, since `make check` alongside it turns that

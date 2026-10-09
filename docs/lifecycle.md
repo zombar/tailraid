@@ -197,3 +197,8 @@ exactly one design doc transition table and cited by at least one test via
 | L-189 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, the inode's last flush attempt failed | Dirty | `TestNFS_WriteWhenFull_IsNOSPC`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestVFS_ClusterFull_ENOSPC` |
 | L-190 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | `TestFlusher_StragglerPut_CancelledAfterReplace` |
 | L-191 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (plan larger than `FileDirtyHi` bytes of chunks) | E-123 batch commit | Committed (the lowest-indexed batch) + Dirty (residual) | `TestFlusher_BatchCommit_ResidualStaysDirty` |
+| L-192 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot on a disk) | E-124 disk dead > fill_after, host live | Degraded → Repairing → Committed | `TestStubLifecycle_L_192` |
+| L-193 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a host above the cap, fixable) | E-125 repair pass | Degraded (`DomainSkew`) → Repairing → Committed | `TestStubLifecycle_L_193` |
+| L-194 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a host above the cap, no placement within it) | repair pass | Committed | `TestStubLifecycle_L_194` |
+| L-195 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (on a disk whose marker is missing or foreign) | serve opens stores | served or written | `TestStubLifecycle_L_195` |
+| L-196 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (repair, migration or drain) | SetPlacement | a host above the cap while a placement within it exists | `TestStubLifecycle_L_196` |

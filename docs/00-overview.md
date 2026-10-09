@@ -146,6 +146,7 @@ for a member. No TLS of our own.
 | Streaming large files: bounded flush memory, cap backpressure, streamed compaction, atomic resumable web upload, process memory in status, soak phase 12 (measured 2026-10-09: webui 0.27k, soak 0.23k, vfs 0.22k, rpc and admin 0.1k; the plan said 0.6k) | +0.8k |
 | Machine vitals in `status` and the soak report (per-OS probes 0.15k) and the large file's placement checks and figure (0.1k) | +0.25k |
 | **Through streaming large files (measured 2026-10-09)** | **≈ 20.5k** |
+| Several disks per device (docs/14: disk rows, host cap, per-target stores and budgets, disk RPC path, domain skew, `add-disk`, the Disks block, soak phase 13; planned) | ~0.8k planned |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
@@ -192,6 +193,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
 | [11-chunk-lifecycle](11-chunk-lifecycle.md) | Chunk and shard state machines, event catalogue, transition cells L-n. I-56, I-57 |
 | [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, the style guide. I-68..I-73, I-81, I-82 |
+| [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, domain skew. I-86..I-91 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged
