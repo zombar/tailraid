@@ -789,9 +789,12 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	target := host
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		target = net.JoinHostPort(host, strconv.Itoa(cfg.Listen.RPC)) // the port this cluster uses, as --node assumes
+	// a device name is looked up in the tailnet (a DNS lookup would give a LAN address
+	// no node listens on); the port is this cluster's RPC port unless one was given
+	st, _ := ts.Status(ctx)
+	target, err := ResolveJoinTarget(st, host, cfg.Listen.RPC)
+	if err != nil {
+		return rpc.JoinResponse{}, err
 	}
 	// learn the cluster ID from the target's health endpoint before opening the transport
 	probe := rpc.NewClient([16]byte{}, nil)

@@ -36,7 +36,7 @@ tailraid mount        # ~/TailRAID (T: on Windows)
 On each other device:
 
 ```sh
-tailraid join 100.64.0.11 <token>     # add --voter on other always-on devices
+tailraid join 100.64.0.11 <token>     # the first device's Tailscale IP or name; add --voter on other always-on devices
 tailraid install
 tailraid mount
 ```

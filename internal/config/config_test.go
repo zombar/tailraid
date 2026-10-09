@@ -134,4 +134,16 @@ func TestConfig_LogFile(t *testing.T) {
 	if c.LogFile() != os.Getenv("TAILRAID_LOG_FILE") {
 		t.Fatal("env override ignored")
 	}
+	// a CLI command's logger never touches the file, neither the config's nor the env's
+	c.Log.File = filepath.Join(t.TempDir(), "cli", "serve.log")
+	c.Logger().Info("from a command")
+	if _, err := os.Stat(c.Log.File); err == nil {
+		t.Fatal("Logger() created log.file")
+	}
+	if _, err := os.Stat(os.Getenv("TAILRAID_LOG_FILE")); err == nil {
+		t.Fatal("Logger() created the env log file")
+	}
+	if os.Getenv("TAILRAID_LOG_FILE") == "" {
+		t.Fatal("Logger() lost the env override")
+	}
 }

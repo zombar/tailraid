@@ -19,8 +19,10 @@ path and data directory it bound.
 | Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto depend= Tailscale`), `sc.exe failure … actions= restart/5000` | `sc.exe start|stop|delete` (elevated) | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
 
 `log.file` in the config (or `TAILRAID_LOG_FILE`) makes `serve` append to a file in the
-configured format instead of stderr; `install` sets it on macOS and Windows. `tailraid logs
-[-f] [-n N]` prints or follows the configured file, or journald on Linux.
+configured format instead of stderr; `install` sets it on macOS and Windows. Only `serve`
+opens it: every other command logs to stderr, so a user's `status` or `join` never needs
+the service's log directory (I-60). `tailraid logs [-f] [-n N]` prints or follows the
+configured file, or journald on Linux.
 
 On Windows `serve --service` runs under the service control manager (start/stop
 handshake, `SERVICE_RUNNING`); without the flag it is an ordinary console process. The
@@ -185,7 +187,11 @@ version 2, which an un-upgraded node cannot restore: upgrade the whole cluster i
 
 `tailraid init` takes no required options: the node is named after the host and the
 volume starts at `1+0` in automatic redundancy mode (03), growing as disks join.
-`tailraid join <host> <token>` is the same for a second device; `--voter` stays explicit
+`tailraid join <host> <token>` is the same for a second device: `<host>` is the first
+device's Tailscale IP, or its name as `tailscale status` shows it (host name or MagicDNS
+name), which `join` looks up in the tailnet status because a plain DNS lookup gives a LAN
+address no node listens on (I-50); an address off the tailnet is refused with the hint.
+`--voter` stays explicit
 because only the operator knows which devices are always on. `--name`, `--chunk` and
 `--token` remain for overrides and test rigs; `--k`/`--m` on `init` pin a manual policy
 for test rigs and are hidden. Disks listed under `node.disks` in the config are marked and
@@ -261,12 +267,13 @@ recovered nodes are two clusters.
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
-- **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere.
+- **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere; every command other than `serve` logs to stderr and never opens the file.
 - **I-61** — `update` replaces the binary only with an artifact whose SHA-256 matches the `sha256sums.txt` of the same release and which reports that release's version when run; on any failure the running binary is untouched and no partial file is left in its directory; a release that is not newer than a semver build is applied only when named explicitly.
 
 - **I-76** — `tailraid init` with no options bootstraps a cluster whose node is named
   after the host, whose device row carries no budget and whose volume is `1+0` with `Auto`
-  set; `tailraid join <host> <token>` with no options joins as a non-voter; both register
+  set; `tailraid join <host> <token>` with no options joins as a non-voter, resolving a
+  device name through the tailnet status and refusing an address off the tailnet; both register
   the configured disks with derived budgets (I-74, I-121).
 - **I-122** — The Linux unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only` and `PrivateTmp`, and its `ReadWritePaths` names exactly the
@@ -311,7 +318,7 @@ recovered nodes are two clusters.
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
-| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
+| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
 | I-122 | `TestSvc_SystemdHardeningAndQuoting`, `TestSvc_UnitsRouteLogs` |
