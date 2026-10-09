@@ -42,6 +42,7 @@ make lint         golangci-lint + check-invariants      make invariants  regener
 make fmt-check    gofmt                                 make vuln        govulncheck
 make check        fmt-check + vendor-check + lint + web-check + web-typecheck + test-race
 make vendor-check vendor/ matches go.mod                make deadcode    deadcode + unparam (part of lint)
+make lint-cross   golangci-lint under GOOS=linux, darwin and windows (the per-OS files; CI runs it)
 make web-typecheck typescript-go over internal/webui    make spell       misspell over docs, TS, CSS, lookdev
 make docs-check   scripts/check-docs.sh (links, anchors, I-n/L-n mentions, fences, README lists)
 make actionlint / yaml-check / yamlfmt / shell-check    workflow, YAML and shell files

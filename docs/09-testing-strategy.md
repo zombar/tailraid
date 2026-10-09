@@ -350,7 +350,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
 the committed `vendor/` matches `go.mod`, gofmt) · `lint` (golangci-lint v2 via
 `go run -mod=readonly -modfile=tools.mod`, `check-invariants.sh --check`, `make deadcode`,
 `make web-check`: the committed browser bundle matches `internal/webui/src`; the lint runs
-again under `GOOS=darwin` and `GOOS=windows` so the per-OS files are covered) · `vuln`
+again under `GOOS=linux`, `GOOS=darwin` and `GOOS=windows` with `make lint-cross`, so the per-OS files are covered on every developer machine and in CI) · `vuln`
 (govulncheck; the release job waits for it) · `test`
 matrix ubuntu/macos/windows `go test -short -race -cover ./...` (no coverage gate) · `long`
 on pushes to main and nightly (`make test-long`) · `mount` on main (ubuntu with

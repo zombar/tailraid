@@ -153,13 +153,14 @@ $(LEFTHOOK_BIN): tools.mod tools.sum
 hooks: $(LEFTHOOK_BIN)
 	$(LEFTHOOK_BIN) install
 
-## lint-cross: golangci-lint under GOOS=darwin and GOOS=windows, so the per-OS files are
+## lint-cross: golangci-lint under GOOS=linux, darwin and windows, so the per-OS files are
 ## linted too. The linter itself is built for the host first: `GOOS=darwin go run` would
 ## build a darwin linter that cannot run here.
 GOLANGCI_BIN := dist/tools/golangci-lint
 $(GOLANGCI_BIN): tools.mod tools.sum
 	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) go build -mod=readonly -modfile=tools.mod -o $@ github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 lint-cross: $(GOLANGCI_BIN)
+	GOOS=linux $(GOLANGCI_BIN) run $(PKGS)
 	GOOS=darwin $(GOLANGCI_BIN) run $(PKGS)
 	GOOS=windows $(GOLANGCI_BIN) run $(PKGS)
 
