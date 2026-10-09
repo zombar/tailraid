@@ -18,7 +18,9 @@ MISSPELL := $(TOOL) github.com/golangci/misspell/cmd/misspell
 # golangci-lint) needs rc.6, and the two release candidates differ in API.
 ACTIONLINT := go run -mod=readonly -modfile=actionlint.mod github.com/rhysd/actionlint/cmd/actionlint
 YAMLFMT := $(TOOL) github.com/google/yamlfmt/cmd/yamlfmt
-LEFTHOOK := $(TOOL) github.com/evilmartians/lefthook/v2
+# lefthook is built to a stable path: the hook scripts it installs embed the path of the
+# binary that installed them, and a `go run` binary lives in a temp dir that vanishes.
+LEFTHOOK_BIN := dist/tools/lefthook
 PKGS := ./...
 BIN := tailraid
 # Prose and markup the spell check and the docs script cover.
@@ -146,8 +148,10 @@ shell-check:
 	@for f in $(SHELL_SCRIPTS); do bash -n "$$f" || exit 1; done
 
 ## hooks: install the lefthook git hooks for this clone (pre-commit, pre-push, commit-msg)
-hooks:
-	$(LEFTHOOK) install
+$(LEFTHOOK_BIN): tools.mod tools.sum
+	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) go build -mod=readonly -modfile=tools.mod -o $@ github.com/evilmartians/lefthook/v2
+hooks: $(LEFTHOOK_BIN)
+	$(LEFTHOOK_BIN) install
 
 ## lint-cross: golangci-lint under GOOS=darwin and GOOS=windows, so the per-OS files are
 ## linted too. The linter itself is built for the host first: `GOOS=darwin go run` would

@@ -46,6 +46,7 @@ func (h *handler) Execute(_ []string, r <-chan svc.ChangeRequest, s chan<- svc.S
 				cancel()
 				<-done
 				return false, 0
+			default: // pause, continue, session and power events: not accepted (docs/12 §1)
 			}
 		}
 	}
