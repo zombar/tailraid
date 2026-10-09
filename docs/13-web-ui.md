@@ -59,7 +59,7 @@ UI; a guest device on the tailnet, another user's device and a tagged server can
 | `GET /api/stat?path=` | – | one entry plus `path` |
 | `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted |
 | `GET`, `HEAD /files/{path}` | – | the bytes through `http.ServeContent`; `?download=1` adds `Content-Disposition: attachment` |
-| `PUT /files/{path}` | required | 201 for a new file, 204 for an overwrite; `If-None-Match: *` on an existing file → 412 |
+| `PUT /files/{path}` | required | the whole file (`Content-Length` required, 411 without) or one part (`Content-Range: bytes a-b/total`): the bytes stream into `.<name>.tailraid-upload` beside the target and the last byte renames it over the target; 201 for a new file, 204 for an overwrite, 202 `{"offset"}` for a part that is not the last; a part whose `a` is not the temp's size → 409 `{"offset"}`; `If-None-Match: *` on an existing file → 412; more than four uploads at once → 503 `Retry-After: 2`; a size the volume cannot hold → 507 (§4) |
 | `POST /api/mkdir` `{"path"}` | required | 201 `{"path"}`; parents are created; an existing entry → 409 |
 
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
@@ -91,16 +91,31 @@ UI; a guest device on the tailnet, another user's device and a tagged server can
 - **ETag** is `"<ino>.<gen>.<version>"` and is sent only while the file is clean. `Version`
   bumps on commit, not on a WAL write, so a dirty file sends no validator and a zero modtime;
   a conditional GET can therefore never 304 stale bytes.
-- **Uploads** go through `OpenFile(O_WRONLY|O_CREATE|O_TRUNC)` and `Write` on the vfs, the
-  path an NFS WRITE takes: each write is a fsynced WAL record, the flusher commits chunks on
-  the idle timer or the thresholds, and the bytes are readable through the vfs at once. The
-  copy loop uses a chunk-sized buffer so one WAL record holds one chunk. When the WAL or the
-  dirty-byte cap is reached the loop waits on the clock (200 ms) for the flusher instead of
-  failing, until the request's context ends. A client that disconnects mid-body leaves what
-  was acknowledged, exactly as a dropped NFS client would.
-- A new file answers 201, an overwrite 204 after truncating. `POST /api/mkdir` creates
-  parents like `MkdirAll`. Both are refused with 503 on a stale gateway (`EROFS`) and change
-  nothing.
+- **Uploads** are atomic and resumable, and the vfs is their only state. The body streams
+  through `OpenFile(O_WRONLY|O_CREATE)`, `Seek` and `Write` on a hidden sibling
+  `.<name>.tailraid-upload` in the target's directory, the path an NFS WRITE takes: each
+  chunk-sized read is one fsynced WAL record, the flusher commits chunks on the idle timer
+  or the thresholds (a WRITE at a cap waits inside the vfs, docs/04 §3), and the bytes are
+  readable through the vfs at once. Only when every byte announced by `Content-Length` (or
+  the `Content-Range` total) has arrived does one `Rename` publish the temp over the target
+  (replacing a file, never a directory), so the previous content is untouched until the
+  upload is complete and a disconnect, a short body or any error leaves it as it was: a
+  whole-file upload loses its temp, a part is rolled back to its start so the next attempt
+  resumes there. A file larger than 32 MiB is sent by the browser as
+  sequential parts with `Content-Range: bytes a-b/total`; a part is accepted only when `a`
+  equals the temp's current size (0 when there is none), otherwise 409 with the offset the
+  client should continue from, which is also how a dropped connection resumes (the browser
+  asks `/api/stat` for the temp's size, or simply retries and reads the 409). Temps show in
+  listings with `"upload": true`, are skipped by the player, and are removed by the node's
+  hourly sweep once idle for 24 h (I-81).
+- Before any body byte is read the gateway refuses what cannot succeed: no length (411),
+  an announced size the volume cannot hold at the current policy (507, from the cached
+  status), a fifth concurrent upload (503 with `Retry-After: 2`); and it drops an upload
+  whose body sends nothing for `BodyTimeout` (60 s) together with its temp, so a vanished
+  client never pins a slot or a buffer (I-82). Memory per upload is one chunk-sized buffer
+  (docs/04 §9).
+- A new file answers 201, an overwrite 204. `POST /api/mkdir` creates parents like
+  `MkdirAll`. Both are refused with 503 on a stale gateway (`EROFS`) and change nothing.
 
 ## 5. Status cache and chunk drill-down
 
@@ -235,6 +250,10 @@ colour-alone. No dual axes, no stacked bars, no pie.
 5. Browser: nested folders, every sort both ways, names with spaces, `#`, `%`, `?` and
    non-ASCII; a 409 toast on an existing folder name; an upload of a 100 MB file with
    progress, a cancel mid-way, five files queued in order, a 507 toast on a full volume.
+   Then a 2 GB upload: `tailraid status` shows the heap flat and the WAL under its cap
+   while it runs; drop Wi‑Fi mid-way and reconnect: the row reads "resuming" and the
+   upload continues from the last part; the file's sha256 matches; cancel an overwrite
+   mid-way: the old file is intact and the temp is gone after the hourly sweep.
 6. A phone logged in as the same user: a 1 GB mp4 starts within a second and seeking
    works; the next track starts after the first tap; lock-screen controls show the name;
    an album of m4a plays through; image prev/next; no horizontal scroll on any route.
@@ -258,6 +277,17 @@ colour-alone. No dual axes, no stacked bars, no pie.
   identical bytes through the vfs at once; a new file is 201, an overwrite 204 and truncates
   first; a PUT or `POST /api/mkdir` on a stale gateway is 503 and changes nothing; a WAL or
   dirty-byte cap waits for the flusher instead of failing.
+- **I-81** — A web upload becomes visible under its name only when every byte announced by
+  `Content-Length` or the `Content-Range` total has arrived: the bytes stream into
+  `.<name>.tailraid-upload` beside the target and one `Rename` publishes them; a
+  disconnect, a short body or an error leaves the previous content untouched, removes a
+  whole-file upload's temp and rolls a part back to its start; a part whose offset is not
+  the temp's current size is refused with 409 and that size; temps idle for 24 h or more
+  are removed by the maintenance sweep.
+- **I-82** — Before reading an upload body the web gateway refuses a missing length (411),
+  an announced size the volume cannot hold (507) and more than four concurrent uploads
+  (503 with `Retry-After`); a body that sends nothing for `BodyTimeout` is dropped together
+  with its temp.
 - **I-71** — Every mutating web endpoint requires the `X-Tailraid-UI` header and is refused
   with 403 before its body is read without it; no web response carries a CORS header; every
   `/files/` response carries `Content-Security-Policy: sandbox` and
@@ -281,5 +311,7 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
 | I-72 | `TestWebUI_Paths` |
 | I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |
+| I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
+| I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
 
-`TestWebUI_Ls_Stat` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
+`TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

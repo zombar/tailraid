@@ -16,18 +16,26 @@ state. Every claim here is backed by a named test in §9.
 
 ## 2. Crash points
 
-Each point is exposed as a nil-checked field on `cluster.Hooks` so tests can crash the
-process (or the simulated node) exactly there. Production leaves every hook nil.
+C1–C5 sit inside a single fsync sequence of one file (the WAL or a shard) and are reached
+through the `sysfs.FS` seam: the fault filesystem fails or truncates at the exact step and
+the test reopens the store. C6–C7 sit between components and are exposed as nil-checked
+fields on `vfs.Hooks` so tests can crash the process (or the simulated node) exactly
+there. Production leaves every hook nil.
 
-| ID | Point | Hook | Expected outcome after restart |
+| ID | Point | How a test gets there | Expected outcome after restart |
 |---|---|---|---|
-| C1 | WAL record written, not yet fsynced | `BeforeWALSync` | record may be torn; `Replay` discards it; the WRITE was not acknowledged |
-| C2 | WAL fsynced, WRITE reply not sent | `BeforeClientAck` | record replayed; client retries the WRITE (idempotent at byte level) |
-| C3 | shard temp file written, not fsynced | `AfterShardTempWritten` | temp file swept; no visible shard; flush retries |
-| C4 | shard fsynced, not renamed | `AfterShardFsync` | temp file swept; flush retries (dedup makes re-PUT cheap) |
-| C5 | shard renamed, directory not yet fsynced; no ack sent | `AfterShardRename` | the rename may or may not survive power loss; either way no ack was sent, so the sender re-PUTs (idempotent); a surviving file is an orphan shard swept after grace or reused by the re-PUT |
-| C6 | all k+m shards acked; Commit not proposed | `AfterAllShardsAcked` | orphan shards; swept after grace if never committed (06 §3); flush retries from WAL and re-PUTs (idempotent) |
-| C7 | Raft committed, `WaitApplied` not returned / WAL not reset | `AfterRaftCommit` | FSM has the new chunk list; WAL still has the extents; the retried flush dedups to the same hashes and commits a no-op (or `ErrConflict` → rebase) |
+| C1 | WAL record written, not yet fsynced | `sysfs` torn write (`TestWAL_ReplayStopsAtTornTail`) | record may be torn; `Replay` discards it; the WRITE was not acknowledged |
+| C2 | WAL fsynced, WRITE reply not sent | `sysfs` failed sync then reopen (`TestWAL_AppendAfterFailedSync_NoResurrectedRecord`) | record replayed; client retries the WRITE (idempotent at byte level) |
+| C3 | shard temp file written, not fsynced | `sysfs` crash before rename (`TestStore_CrashBeforeRename_LeavesNoVisibleShard`) | temp file swept; no visible shard; flush retries |
+| C4 | shard fsynced, not renamed | same seam, `TestStore_TempNeverServed` | temp file swept; flush retries (dedup makes re-PUT cheap) |
+| C5 | shard renamed, directory not yet fsynced; no ack sent | `sysfs` crash before `SyncDir` (`TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`) | the rename may or may not survive power loss; either way no ack was sent, so the sender re-PUTs (idempotent); a surviving file is an orphan shard swept after grace or reused by the re-PUT |
+| C6 | all k+m shards acked; Commit not proposed | `Hooks.AfterAllShardsAcked`, `Hooks.BeforeCommit` | orphan shards; swept after grace if never committed (06 §3); flush retries from WAL and re-PUTs (idempotent) |
+| C7 | Raft committed, `WaitApplied` not returned / WAL not reset | `Hooks.AfterRaftCommit` | FSM has the new chunk list; WAL still has the extents; the retried flush dedups to the same hashes and commits a no-op (or `ErrConflict` → rebase) |
+
+"Nothing left behind" is part of the rule: after the restart, the retried flush and one
+sweep past grace, the gateway's `staging/` is empty, no node holds a `.tmp-*` file under
+`shards/` or `cache/`, and no node holds an orphan shard (I-38; `TestCrash_AtEveryPoint`
+asserts it at every point).
 
 A leader crash mid-Apply is not a gateway crash point: the entry is either committed on a
 majority and replayed, or never committed; `Propose` returns `ErrLeadershipLost` and the

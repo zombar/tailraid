@@ -1,27 +1,129 @@
 package webui
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/go-git/go-billy/v5"
-
+	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
-	"github.com/zombar/tailraid/internal/vfs"
 )
 
-// capRetry is how long an upload waits for the flusher after the WAL or dirty-byte cap
-// refused a write (docs/13 §4).
-const capRetry = 200 * time.Millisecond
+// Uploads are atomic and resumable, and the vfs is their only state (docs/13 §4, I-81,
+// I-82): the body streams into a hidden sibling of the target and one Rename publishes it
+// once every announced byte has arrived.
+const (
+	uploadSuffix = ".tailraid-upload"
+	// DefaultUploadSlots bounds concurrent uploads; each holds one chunk-sized buffer.
+	DefaultUploadSlots = 4
+	// DefaultBodyTimeout is how long an upload body may send nothing before it is dropped.
+	DefaultBodyTimeout = 60 * time.Second
+	// UploadTTL is how long an upload temp may sit untouched before the sweep removes it.
+	UploadTTL = 24 * time.Hour
+)
 
-// put stores the body as the file at path through the vfs: the NFS write path (overlay,
-// fsynced WAL, flusher), one WAL record per chunk-sized read (I-70).
+// IsUploadTemp reports whether name is an upload's temp file, ".<name>.tailraid-upload".
+func IsUploadTemp(name string) bool {
+	return len(name) > len(uploadSuffix)+1 && strings.HasPrefix(name, ".") && strings.HasSuffix(name, uploadSuffix)
+}
+
+func tempName(name string) string { return "." + name + uploadSuffix }
+
+// uploads tracks the temps being written right now (a second upload of the same path is
+// refused) and the slots.
+type uploads struct {
+	mu       sync.Mutex
+	inflight map[string]bool
+	slots    chan struct{}
+}
+
+func (u *uploads) acquire(temp string) (release func(), err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.inflight[temp] {
+		return nil, errUploadInProgress
+	}
+	select {
+	case u.slots <- struct{}{}:
+	default:
+		return nil, errUploadsBusy
+	}
+	u.inflight[temp] = true
+	return func() {
+		u.mu.Lock()
+		delete(u.inflight, temp)
+		<-u.slots
+		u.mu.Unlock()
+	}, nil
+}
+
+var (
+	errUploadInProgress = errors.New("an upload of this file is in progress")
+	errUploadsBusy      = errors.New("too many uploads in progress")
+)
+
+// partRange is one PUT's place in the file: [start, end) of total; whole means no
+// Content-Range (the request carries the entire file).
+type partRange struct {
+	start, end, total uint64
+	whole             bool
+}
+
+func (p partRange) final() bool { return p.end == p.total }
+
+// parsePart reads Content-Length and Content-Range (docs/13 §3).
+func parsePart(r *http.Request) (partRange, int, error) {
+	if r.ContentLength < 0 {
+		return partRange{}, http.StatusLengthRequired, errors.New("Content-Length is required")
+	}
+	n := uint64(r.ContentLength)
+	cr := r.Header.Get("Content-Range")
+	if cr == "" {
+		return partRange{end: n, total: n, whole: true}, 0, nil
+	}
+	var a, b, total uint64
+	rest, ok := strings.CutPrefix(cr, "bytes ")
+	if !ok {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: not a byte range", cr)
+	}
+	span, tot, ok := strings.Cut(rest, "/")
+	if !ok {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: no total", cr)
+	}
+	as, bs, ok := strings.Cut(span, "-")
+	if !ok {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: no range", cr)
+	}
+	var err error
+	if a, err = strconv.ParseUint(as, 10, 64); err != nil {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: bad start", cr)
+	}
+	if b, err = strconv.ParseUint(bs, 10, 64); err != nil {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: bad end", cr)
+	}
+	if total, err = strconv.ParseUint(tot, 10, 64); err != nil {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: the total must be a number", cr)
+	}
+	if b < a || b >= total {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Range %q: outside the total", cr)
+	}
+	if n != b-a+1 {
+		return partRange{}, http.StatusBadRequest, fmt.Errorf("Content-Length %d does not match Content-Range %q", n, cr)
+	}
+	return partRange{start: a, end: b + 1, total: total}, 0, nil
+}
+
+// put stores a whole file or one part of it (docs/13 §4): the bytes go through the vfs,
+// the NFS write path (overlay, fsynced WAL, flusher), one WAL record per chunk-sized
+// read (I-70), into the temp beside the target; the last byte renames it over the target.
 func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	parts, canonical := cleanPath(r.PathValue("path"))
 	if len(parts) == 0 {
@@ -37,38 +139,115 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	case existed && in.Type == meta.TSymlink:
 		writeErr(w, http.StatusBadRequest, "put "+canonical+": is a symlink")
 		return
-	case existed && r.Header.Get("If-None-Match") == "*":
-		writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
-		return
 	case !existed && !errors.Is(err, meta.ErrNotExist):
 		s.fail(w, err)
 		return
 	}
-	f, err := s.o.FS.OpenFile(canonical, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	part, code, err := parsePart(r)
+	if err != nil {
+		early(w)
+		writeErr(w, code, "put "+canonical+": "+err.Error())
+		return
+	}
+	noOverwrite := r.Header.Get("If-None-Match") == "*"
+	if existed && noOverwrite && (part.start == 0 || part.final()) {
+		early(w)
+		writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
+		return
+	}
+	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1]))
+	var cur uint64 // the temp's current size: where the next part must start
+	if fi, err := s.o.FS.Stat(temp); err == nil {
+		cur = uint64(fi.Size())
+	} else if !errors.Is(err, os.ErrNotExist) {
+		s.fail(w, err)
+		return
+	}
+	if !part.whole && part.start != cur {
+		early(w)
+		writeJSON(w, http.StatusConflict, map[string]any{"error": fmt.Sprintf("put %s: the upload is at offset %d, not %d", canonical, cur, part.start), "offset": cur})
+		return
+	}
+	if part.start == 0 && !s.fits(part.total) {
+		early(w)
+		writeErr(w, http.StatusInsufficientStorage, fmt.Sprintf("put %s: %d bytes do not fit in the volume's free space", canonical, part.total))
+		return
+	}
+	release, err := s.up.acquire(temp)
+	if err != nil {
+		if errors.Is(err, errUploadsBusy) {
+			w.Header().Set("Retry-After", "2")
+			early(w)
+			writeErr(w, http.StatusServiceUnavailable, "put "+canonical+": "+err.Error())
+			return
+		}
+		early(w)
+		writeErr(w, http.StatusConflict, "put "+canonical+": "+err.Error())
+		return
+	}
+	defer release()
+	flags := os.O_WRONLY | os.O_CREATE
+	if part.whole {
+		flags |= os.O_TRUNC
+	}
+	f, err := s.o.FS.OpenFile(temp, flags, 0o644)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	if _, err := f.Seek(int64(part.start), io.SeekStart); err != nil {
+		_ = f.Close()
+		s.fail(w, err)
+		return
+	}
+	// A failure leaves no half part behind: a whole-file upload loses its temp, a part is
+	// rolled back to its start so the next attempt resumes there (I-81).
+	rollback := func() {
+		if part.whole {
+			_ = f.Close()
+			_ = s.o.FS.Remove(temp)
+			return
+		}
+		_ = f.Truncate(int64(part.start))
+		_ = f.Close()
+	}
+	rc := http.NewResponseController(w)
 	buf := make([]byte, s.o.Store.Volume().ChunkSize)
-	for {
-		n, rerr := io.ReadFull(r.Body, buf)
+	for left := part.end - part.start; left > 0; {
+		_ = rc.SetReadDeadline(time.Now().Add(s.o.BodyTimeout)) // a silent client is dropped (I-82)
+		n, rerr := io.ReadFull(r.Body, buf[:min(uint64(len(buf)), left)])
 		if n > 0 {
-			if err := s.writeAll(r.Context(), f, buf[:n]); err != nil {
-				_ = f.Close()
+			if _, err := f.Write(buf[:n]); err != nil {
+				rollback()
 				s.fail(w, err)
 				return
 			}
+			left -= uint64(n)
 		}
 		if rerr != nil {
-			if errors.Is(rerr, io.EOF) || errors.Is(rerr, io.ErrUnexpectedEOF) {
-				break
+			rollback()
+			code := http.StatusBadRequest
+			var ne interface{ Timeout() bool }
+			if errors.As(rerr, &ne) && ne.Timeout() {
+				code = http.StatusRequestTimeout
 			}
-			_ = f.Close() // what was acknowledged stays, as with a dropped NFS client
-			writeErr(w, http.StatusBadRequest, "reading the body: "+rerr.Error())
+			writeErr(w, code, fmt.Sprintf("put %s: the body ended after %d of %d bytes: %v", canonical, part.end-part.start-left, part.end-part.start, rerr))
 			return
 		}
 	}
 	if err := f.Close(); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !part.final() {
+		writeJSON(w, http.StatusAccepted, map[string]any{"offset": part.end})
+		return
+	}
+	if existed && noOverwrite { // raced into existence since part 0
+		writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
+		return
+	}
+	if err := s.o.FS.Rename(temp, canonical); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -79,19 +258,24 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-// writeAll writes p, waiting on the clock for the flusher whenever a cap refuses it.
-func (s *Server) writeAll(ctx context.Context, f billy.File, p []byte) error {
-	for {
-		_, err := f.Write(p)
-		if err == nil || (!errors.Is(err, vfs.ErrWALFull) && !errors.Is(err, vfs.ErrDirtyFull)) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return err
-		case <-s.o.Clk.After(capRetry):
-		}
+// early prepares a refusal sent before the body has been read: without the read deadline
+// the server would first drain the announced body (up to its limit) and the client would
+// see the reason only after sending it; with it the reply goes out at once and the
+// connection is dropped, which a browser reports as the status (docs/13 §4, I-82).
+func early(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+	w.Header().Set("Connection", "close")
+}
+
+// fits reports whether total bytes of file data have room in the volume at the current
+// policy, from the cached status report; without a report it says yes.
+func (s *Server) fits(total uint64) bool {
+	rep, ok := s.report().(admin.Report)
+	if !ok || rep.Volume.K == 0 {
+		return true
 	}
+	need := total * uint64(rep.Volume.K+rep.Volume.M) / uint64(rep.Volume.K)
+	return need <= rep.Volume.Free
 }
 
 // mkdir creates a directory and its parents (I-70).

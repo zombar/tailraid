@@ -33,6 +33,7 @@ var phases = []phase{
 	{"9 restart storm", phaseRestartStorm},
 	{"10 partition", phasePartition},
 	{"11 automation", phaseAutomation},
+	{"12 large file", phaseLargeFile},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -266,7 +267,7 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 		r.checkAt("I-12 I-36 L-51", "corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
 	}
 	for _, n := range r.nodes {
-		ok, detail, err := r.Env.Fsck(ctx, n)
+		ok, _, detail, err := r.Env.Fsck(ctx, n)
 		if err != nil {
 			r.checkAt("I-44", "fsck on "+n.Name, false, err.Error(), "", "", n.Name)
 			continue
@@ -928,7 +929,7 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 		return err
 	}
 	r.check("L-77 L-134", "stored bytes shrink after gc", rep.Volume.StoredBytes < stored1, fmt.Sprintf("%d -> %d", stored1, rep.Volume.StoredBytes))
-	ok, detail, err := r.Env.Fsck(ctx, r.nodes[0])
+	ok, _, detail, err := r.Env.Fsck(ctx, r.nodes[0])
 	r.check("I-27 I-44", "fsck clean after gc", err == nil && ok, detail+fmt.Sprint(err))
 	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-13 I-41", "corpus exact after gc", bad == 0, first, first, "", gw.Name)

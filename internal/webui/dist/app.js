@@ -84,6 +84,7 @@ async function errorText(r) {
 }
 var getStatus = () => call("/api/status");
 var ls = (path) => call("/api/ls?path=" + encodeURIComponent(path));
+var stat = (path) => call("/api/stat?path=" + encodeURIComponent(path));
 var chunks = (path, offset, limit) => call(`/api/chunks?path=${encodeURIComponent(path)}&offset=${offset}&limit=${limit}`);
 var mkdir = (path) => call("/api/mkdir", { method: "POST", headers: { [HEADER]: "1", "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
 async function text(path) {
@@ -91,29 +92,99 @@ async function text(path) {
   if (!r.ok) throw new ApiError(r.status, await errorText(r));
   return r.text();
 }
-function upload(path, file, onProgress) {
-  const xhr = new XMLHttpRequest();
-  const promise = new Promise((resolve, reject) => {
+var PART = 32 << 20;
+var RETRIES = 5;
+function sendPart(path, blob, range, onProgress, track) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    track(xhr);
     xhr.open("PUT", fileURL(path));
     xhr.setRequestHeader(HEADER, "1");
+    if (range) xhr.setRequestHeader("Content-Range", range);
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else {
-        let msg = xhr.statusText || "upload failed";
-        try {
-          const body = JSON.parse(xhr.responseText);
-          if (body.error) msg = body.error;
-        } catch {
-        }
-        reject(new ApiError(xhr.status, `${msg} (${xhr.status})`));
+      const reply = { status: xhr.status };
+      try {
+        const body = JSON.parse(xhr.responseText);
+        reply.error = body.error;
+        reply.offset = body.offset;
+      } catch {
       }
+      resolve(reply);
     };
     xhr.onerror = () => reject(new ApiError(0, "network error"));
     xhr.onabort = () => reject(new ApiError(0, "cancelled"));
-    xhr.send(file);
+    xhr.send(blob);
   });
-  return { promise, abort: () => xhr.abort() };
+}
+function failure(r) {
+  return new ApiError(r.status, `${r.error ?? "upload failed"} (${r.status})`);
+}
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+async function uploadedSoFar(path) {
+  const i = path.lastIndexOf("/");
+  const temp = path.slice(0, i + 1) + "." + path.slice(i + 1) + ".tailraid-upload";
+  try {
+    return (await stat(temp)).size;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return 0;
+    throw e;
+  }
+}
+function upload(path, file, onProgress, onNote) {
+  let current = null;
+  let aborted = false;
+  const track = (x) => {
+    current = x;
+  };
+  const promise = (async () => {
+    if (file.size <= PART) {
+      const r = await sendPart(path, file, null, onProgress, track);
+      if (r.status < 200 || r.status >= 300) throw failure(r);
+      return;
+    }
+    let offset = 0;
+    let retries = 0;
+    while (offset < file.size) {
+      if (aborted) throw new ApiError(0, "cancelled");
+      const end = Math.min(offset + PART, file.size);
+      const base = offset;
+      let r;
+      try {
+        r = await sendPart(path, file.slice(offset, end), `bytes ${offset}-${end - 1}/${file.size}`, (loaded) => onProgress(base + loaded), track);
+      } catch (e) {
+        if (aborted || e instanceof ApiError && e.status === 0 && e.message === "cancelled") throw e;
+        r = { status: 0, error: e instanceof Error ? e.message : String(e) };
+      }
+      if (r.status >= 200 && r.status < 300) {
+        offset = end;
+        retries = 0;
+        onNote?.("");
+        continue;
+      }
+      if (r.status === 409 && typeof r.offset === "number" && r.offset !== offset) {
+        offset = r.offset;
+        continue;
+      }
+      if (r.status === 0 || r.status === 408 || r.status >= 500) {
+        if (++retries > RETRIES) throw failure(r);
+        onNote?.(`resuming ${retries}/${RETRIES}`);
+        await wait(1e3 * Math.min(8, 2 ** (retries - 1)));
+        offset = await uploadedSoFar(path);
+        continue;
+      }
+      throw failure(r);
+    }
+  })();
+  return {
+    promise,
+    abort: () => {
+      aborted = true;
+      current?.abort();
+    }
+  };
 }
 
 // internal/webui/src/status.ts
@@ -712,7 +783,7 @@ function render5(root, path) {
   draw();
   ls(dir).then(
     (r) => {
-      siblings = r.entries.filter((e) => e.type === "file");
+      siblings = r.entries.filter((e) => e.type === "file" && !e.upload);
       entry = siblings.find((e) => e.name === name);
       draw();
     },
@@ -769,10 +840,18 @@ async function runQueue() {
     if (!job) break;
     job.state = "uploading";
     onQueueChange?.();
-    job.handle = upload(join(job.dir, job.file.name), job.file, (sent) => {
-      job.sent = sent;
-      onQueueChange?.();
-    });
+    job.handle = upload(
+      join(job.dir, job.file.name),
+      job.file,
+      (sent) => {
+        job.sent = sent;
+        onQueueChange?.();
+      },
+      (note) => {
+        job.note = note;
+        onQueueChange?.();
+      }
+    );
     try {
       await job.handle.promise;
       job.state = "done";
@@ -893,10 +972,11 @@ function render6(root, dir) {
     let link;
     if (e.type === "dir") link = h("a", { href: "#/browse" + encodePathForHash(path) }, icon("dir"), e.name);
     else if (e.type === "symlink") link = h("span", { class: "linkname" }, icon("link"), e.name + " ", h("span", { class: "target" }, "\u2192 " + (e.target ?? "")));
+    else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("file"), e.name);
     else link = h("a", { href: "#/file" + encodePathForHash(path) }, icon(iconFor(e.name)), e.name);
     return h(
       "tr",
-      { class: e.dirty ? "dirty" : "" },
+      { class: e.upload ? "dim" : e.dirty ? "dirty" : "" },
       h("td", { class: "name" }, link),
       h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""),
       h("td", { class: "mtime", title: e.mtime }, when(e.mtime))
@@ -904,7 +984,7 @@ function render6(root, dir) {
   };
   const jobRow = (j) => {
     const state = h("span", { class: "state" + (j.state === "failed" ? " bad" : j.state === "done" ? " ok" : "") });
-    if (j.state === "uploading") state.append(`${bytes(j.sent)} / ${bytes(j.file.size)} `, h("button", { type: "button", onClick: () => j.handle?.abort() }, "cancel"));
+    if (j.state === "uploading") state.append(`${bytes(j.sent)} / ${bytes(j.file.size)} `, j.note ? j.note + " " : "", h("button", { type: "button", onClick: () => j.handle?.abort() }, "cancel"));
     else if (j.state === "queued") state.append("queued ", h("button", { type: "button", onClick: () => {
       j.state = "cancelled";
       onQueueChange?.();

@@ -158,7 +158,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
 	rd.Events = ring
-	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, cache, clk, vfs.DefaultConfig(), log)
+	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, vfs.DefaultConfig(), log)
 	fl.Events = ring
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
 	if runtime.GOOS == "windows" {
@@ -177,7 +177,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log, pinned: pinned}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
@@ -185,7 +185,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	status := func() any {
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
-		rep.Gateway = admin.GatewayFromDirty(ov.Dirty())
+		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov)
+		rep.Machine = admin.Vitals(cfg.Node.DataDir)
 		if webAddr != "" {
 			rep.WebURL = "http://" + webAddr + "/"
 		}
@@ -194,6 +195,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
+		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
 	if err != nil {
 		return err
@@ -341,6 +343,7 @@ type adminOps struct {
 	client   *rpc.Client
 	rd       *vfs.Reader
 	ring     *meta.EventRing
+	fs       *vfs.FS
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
@@ -482,6 +485,11 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 				a.log.Warn("sweep failed", "err", err)
 			} else if n > 0 {
 				a.log.Info("sweep", "orphans_removed", n)
+			}
+			if n, err := webui.SweepUploads(ctx, a.fs, a.node.FSM, a.clk.Now(), webui.UploadTTL); err != nil {
+				a.log.Warn("upload sweep failed", "err", err)
+			} else if n > 0 {
+				a.log.Info("sweep", "stale_uploads_removed", n)
 			}
 			sweepT.Reset(time.Hour)
 		}

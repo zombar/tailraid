@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/helper/chroot"
 
+	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 )
@@ -107,9 +108,13 @@ func mapErr(op, name string, err error) error {
 		e = syscall.EINVAL
 	case errors.Is(err, ErrIO):
 		e = syscall.EIO
+	case errors.Is(err, chunk.ErrFull):
+		// the cluster has no room for the shards: ENOSPC, "No space left on device",
+		// rather than an I/O error (I-79, L-189); the sentinels stay reachable
+		e = fmt.Errorf("%w: %w", syscall.ENOSPC, err)
 	case errors.Is(err, ErrWALFull), errors.Is(err, ErrDirtyFull):
-		// NFS3ERR_IO; the client retries once the flush drains (docs/04 §3). The sentinel
-		// stays reachable so the web UI's upload can wait instead (docs/13 §4).
+		// NFS3ERR_IO after the cap wait expired or behind a failed flush (docs/04 §3,
+		// I-79). The sentinels stay reachable for callers that tell the two apart.
 		e = fmt.Errorf("%w: %w", syscall.EIO, err)
 	case errors.Is(err, ErrFileTooLarge):
 		e = syscall.EFBIG

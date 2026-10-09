@@ -16,7 +16,7 @@ func TestFlusher_FullCoverChunks_NoBaseFetch(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	cs := int(testharness.ChunkSize)
 	// a cache-less reader, so every base fetch is a shard GET the fabric counts
-	fl := vfs.NewFlusher(f.Ov, f.FSM, f, f, f, f.ReaderNoCache(), nil, f.Clk, vfs.DefaultConfig(), nil)
+	fl := vfs.NewFlusher(f.Ov, f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, vfs.DefaultConfig(), nil)
 	ino := f.Create("a")
 	must(t, f.Ov.Write(ino, 0, 0, testharness.Pattern(2*cs, 1)))
 	must(t, fl.FlushInode(ctx, ino))

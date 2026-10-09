@@ -132,7 +132,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-124 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-111 raft.db unopenable on one node | Committed | `TestOpen_CorruptRaftDB_FailsClearly` |
 | L-125 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (shard none) | PUT begins | Temp | `TestStore_PutGetRoundTrip` |
 | L-126 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | fsync + rename | Durable | `TestStore_ConcurrentPutSameHash`, `TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`, `TestStore_PutGetRoundTrip` |
-| L-127 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | process crash | (removed) | `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead` |
+| L-127 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | process crash | (removed) | `TestCrash_AtEveryPoint`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead` |
 | L-128 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | Get | Verified | `TestStore_PutGetRoundTrip` |
 | L-129 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | bit flip / zero-fill / truncation | Corrupt → Quarantined | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
 | L-130 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Quarantined | repair PUT | Repaired (Durable) | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
@@ -177,7 +177,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-169 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | E-115 DELETE with stale fence | Durable | `TestChunkRPC_DeleteFence` |
 | L-170 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (S3 object) | E-116 leader S3 sweep | Swept | `TestStubLifecycle_L_170` |
 | L-171 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | E-117 Sweep while not `Healthy` / behind leader index | Orphan | `TestSweep_SkippedWhenNotHealthy` |
-| L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestOverlay_CommitFlushed_WithResidual`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_Compact_KeepsOnlyLive` |
+| L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestOverlay_CommitFlushed_WithResidual`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_Compact_StreamsThroughBoundedBuffer` |
 | L-173 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (`(k,m)` ≠ policy) | E-119 migration PUTs under new keys | Repairing → Committed | `TestModelCheck_Long`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | L-174 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | DELETE accepted with applied index < fence, or file younger than grace, or slot placed on self | Deleted | `TestChunkRPC_DeleteFence` |
 | L-175 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | Commit without `HasTruncate` and `NewSize` < `Size` | Committed (shrunk) | `TestFSM_Commit_RejectsImplicitShrink` |
@@ -193,3 +193,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-185 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (a missing slot, or a slot on a node dead inside `fill_after`) | repair pass with no live spare | Degraded | `TestRepair_DeadWithinFillAfter_NoRepeatProposal` |
 | L-186 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-121 per-inode WAL ≥ 128 MiB | Assembled (full flush) | `TestFlusher_WALCapTriggersFlush`, `TestOverlay_WALCap_Boundaries`, `TestOverlay_WALCap_RejectsAtCap` |
 | L-187 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (metadata mutation on a gateway that lost its leader) | E-54 leader unreachable | Committed | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale` |
+| L-188 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, flusher progressing | Dirty | `TestOverlay_WALCap_WaitsForFlush` |
+| L-189 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, the inode's last flush attempt failed | Dirty | `TestNFS_WriteWhenFull_IsNOSPC`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestVFS_ClusterFull_ENOSPC` |
+| L-190 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | `TestFlusher_StragglerPut_CancelledAfterReplace` |
+| L-191 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (plan larger than `FileDirtyHi` bytes of chunks) | E-123 batch commit | Committed (the lowest-indexed batch) + Dirty (residual) | `TestFlusher_BatchCommit_ResidualStaysDirty` |

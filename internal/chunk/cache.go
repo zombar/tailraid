@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,7 +79,12 @@ func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts
 		mtime time.Time
 	}
 	var ents []ent
-	err := walkTwoLevel(fsys, c.dir(), func(_ string, de fs.DirEntry) error {
+	err := walkTwoLevel(fsys, c.dir(), func(dir string, de fs.DirEntry) error {
+		if strings.HasPrefix(de.Name(), tmpPrefix) {
+			// a Put cut short by a crash; one process owns the cache, so nothing is
+			// mid-write at open (the same rule as the shard store's temps, L-127)
+			return fsys.Remove(filepath.Join(dir, de.Name()))
+		}
 		b, err := hex.DecodeString(de.Name())
 		if err != nil || len(b) != 32 {
 			return nil

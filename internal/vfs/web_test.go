@@ -17,7 +17,7 @@ import (
 // Invariant: I-70
 func TestVFS_CapErrorsKeepSentinels(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
-	f.RestartOverlay(vfs.WithMaxDirty(3000))
+	f.RestartOverlay(vfs.WithMaxDirty(3000), vfs.WithCapWait(0))
 	fs := f.FS()
 	write := func(name string, off int64, n int) error {
 		fh, err := fs.OpenFile(name, os.O_RDWR|os.O_CREATE, 0o644)
@@ -36,7 +36,7 @@ func TestVFS_CapErrorsKeepSentinels(t *testing.T) {
 	if !errors.Is(err, syscall.EIO) || !errors.Is(err, vfs.ErrDirtyFull) {
 		t.Fatalf("dirty cap: err=%v, want both EIO and ErrDirtyFull", err)
 	}
-	f.RestartOverlay(vfs.WithWALCap(1000))
+	f.RestartOverlay(vfs.WithWALCap(1000), vfs.WithCapWait(0))
 	fs = f.FS()
 	must(t, write("/w", 4096, 900))
 	must(t, write("/w", 4096, 900))

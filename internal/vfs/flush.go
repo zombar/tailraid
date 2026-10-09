@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -24,7 +25,8 @@ type Config struct {
 	PutDeadline    time.Duration // step 9: wait for stragglers at most this long
 	ProposeTimeout time.Duration
 	ShutdownFlush  time.Duration // FlushAll on shutdown gives up after this; the WAL keeps the rest
-	Workers        int
+	Workers        int           // inode flushes under way at once
+	ChunkWorkers   int           // chunks assembled, encoded and uploaded at once, flusher-wide (docs/04 §9)
 	RetryMin       time.Duration
 	RetryMax       time.Duration
 }
@@ -34,7 +36,7 @@ func DefaultConfig() Config {
 	return Config{
 		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20,
 		PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second, ShutdownFlush: 30 * time.Second,
-		Workers: 4, RetryMin: time.Second, RetryMax: 60 * time.Second,
+		Workers: 4, ChunkWorkers: 8, RetryMin: time.Second, RetryMax: 60 * time.Second,
 	}
 }
 
@@ -54,13 +56,16 @@ type Flusher struct {
 	peers  meta.Peers
 	shards chunk.ShardClient
 	rd     *Reader
-	cache  *chunk.Cache
 	clk    clock.Clock
 	cfg    Config
 	log    *slog.Logger
 	codecs *ec.Pool
 	Hooks  Hooks
 	Events *meta.EventRing // chunk history (nil unless dev.enabled)
+
+	sem     chan struct{} // ChunkWorkers slots: chunks in memory across every flush
+	buffers atomic.Int64  // chunk and shard bytes held right now
+	peak    atomic.Int64
 
 	mu      sync.Mutex
 	backoff map[meta.Ino]backoffState
@@ -74,13 +79,42 @@ type backoffState struct {
 
 // NewFlusher wires a flusher. log may be nil.
 func NewFlusher(ov *Overlay, st *meta.Store, prop meta.Proposer, peers meta.Peers, shards chunk.ShardClient,
-	rd *Reader, cache *chunk.Cache, clk clock.Clock, cfg Config, log *slog.Logger) *Flusher {
+	rd *Reader, clk clock.Clock, cfg Config, log *slog.Logger) *Flusher {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Flusher{ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, cache: cache, clk: clk, cfg: cfg,
-		log: log, codecs: &ec.Pool{}, backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{}}
+	return &Flusher{ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, clk: clk, cfg: cfg,
+		log: log, codecs: &ec.Pool{}, sem: make(chan struct{}, max(1, cfg.ChunkWorkers)),
+		backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{}}
 }
+
+// Buffers reports the chunk and shard bytes the flusher holds in memory right now and
+// the most it has held since start: at most ChunkWorkers chunks with their shards,
+// whatever the file or the plan (docs/04 §9, I-78).
+func (f *Flusher) Buffers() (cur, peak uint64) {
+	return uint64(max(f.buffers.Load(), 0)), uint64(max(f.peak.Load(), 0))
+}
+
+// BufferCap is the bound Buffers never exceeds at the volume's current policy:
+// ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k)) (docs/04 §9, I-78).
+func (f *Flusher) BufferCap() uint64 {
+	vol := f.st.Volume()
+	cs := int(vol.ChunkSize)
+	k := max(int(vol.K), 1)
+	return uint64(max(1, f.cfg.ChunkWorkers)) * uint64(cs+(k+int(vol.M))*ec.ShardLen(cs, k))
+}
+
+func (f *Flusher) hold(n int) {
+	cur := f.buffers.Add(int64(n))
+	for {
+		p := f.peak.Load()
+		if cur <= p || f.peak.CompareAndSwap(p, cur) {
+			return
+		}
+	}
+}
+
+func (f *Flusher) release(n int) { f.buffers.Add(-int64(n)) }
 
 // Errors returned by a flush that must be retried later.
 var (
@@ -132,8 +166,13 @@ func (f *Flusher) Run(ctx context.Context) {
 		case <-timer.C():
 		}
 		now := f.clk.Now()
-		total := f.ov.TotalDirty()
 		dirty := f.ov.Dirty()
+		// the threshold weighs what this loop can still flush: bytes in outstanding plans
+		// are already draining (they count toward MaxDirty, I-80, not toward the trigger)
+		total := f.ov.TotalDirty()
+		for _, d := range dirty {
+			total -= min(total, d.PlanBytes)
+		}
 		sort.Slice(dirty, func(i, j int) bool { return dirty[i].DirtyBytes > dirty[j].DirtyBytes })
 		for _, d := range dirty {
 			if d.Flushing {
@@ -218,15 +257,19 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 			return nil
 		}
 		f.ov.AbortFlush(plan)
+		f.ov.NoteFlush(ino, err) // a WRITE at the cap fails at once behind this (L-189)
 		return err
 	}
+	f.ov.NoteFlush(ino, nil) // before CommitFlushed, which may evict the entry
 	return f.ov.CommitFlushed(plan, newSize)
 }
 
-// chunkWork is one touched chunk of a plan.
+// chunkWork is what survives of a touched chunk once it is decided: the bytes themselves
+// live only inside processChunk (docs/04 §9, I-78).
 type chunkWork struct {
 	idx      uint64
-	data     []byte // nil for a hole
+	size     uint32 // logical length
+	hole     bool   // all zero: HashZero, nothing uploaded
 	hash     meta.Hash
 	k, m     uint8
 	place    []meta.NodeIdx
@@ -244,17 +287,17 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		// the size this flush works against follows the base of this attempt: another
 		// gateway may have grown or shrunk the file since the entry was created (L-178)
 		plan.Size = plan.sizeAgainst(base.Size)
-		works, err := f.assemble(ctx, plan, base, partial)
+		idxs, limited := f.touched(plan, base, partial)
+		// every attempt re-assembles from the WAL (step 10): holding a plan's bytes across
+		// a retry would cost a plan's worth of memory per inode (I-78)
+		works, err := f.process(ctx, plan, base, idxs, forceUpload)
 		if err != nil {
-			return 0, err
-		}
-		if err := f.resolveAndUpload(ctx, works, forceUpload); err != nil {
 			return 0, err
 		}
 		if f.Hooks.AfterAllShardsAcked != nil {
 			f.Hooks.AfterAllShardsAcked()
 		}
-		cmd := f.buildCommit(plan, base, works, partial)
+		cmd := f.buildCommit(plan, base, works, partial || limited)
 		if f.Hooks.BeforeCommit != nil {
 			f.Hooks.BeforeCommit()
 		}
@@ -273,7 +316,7 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 				return 0, err
 			}
 			for _, w := range works {
-				if w.data != nil {
+				if !w.hole {
 					f.Events.Record(w.hash, meta.EvCommitted, fmt.Sprintf("ino %d idx %d index %d", plan.Ino, w.idx, index))
 				}
 			}
@@ -284,7 +327,7 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		case errors.Is(res.Err, meta.ErrUnknownChunk):
 			f.log.Info("dedup'd chunk vanished, re-uploading", "ino", plan.Ino)
 			for _, w := range works {
-				if w.data != nil && !w.uploaded {
+				if !w.hole && !w.uploaded {
 					f.Events.Record(w.hash, meta.EvUnknownChunk, "")
 				}
 			}
@@ -302,8 +345,10 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 	return 0, errRebaseLimit
 }
 
-// assemble computes the touched chunk set (step 3) and their bytes (steps 4–5).
-func (f *Flusher) assemble(ctx context.Context, plan *FlushPlan, base meta.Inode, partial bool) ([]*chunkWork, error) {
+// touched computes the touched chunk set (step 3) in index order and cuts it to one batch
+// of at most FileDirtyHi bytes of chunks (step 10, I-80); limited reports the cut. A plan
+// with a truncate is never cut: its holes and tail rewrite must land in one Commit.
+func (f *Flusher) touched(plan *FlushPlan, base meta.Inode, partial bool) (idxs []uint64, limited bool) {
 	cs := uint64(f.st.Volume().ChunkSize)
 	n := uint64(meta.ChunkCount(plan.Size, uint32(cs)))
 	touched := map[uint64]bool{}
@@ -325,34 +370,62 @@ func (f *Flusher) assemble(ctx context.Context, plan *FlushPlan, base meta.Inode
 			}
 		}
 	}
-	idxs := make([]uint64, 0, len(touched))
+	idxs = make([]uint64, 0, len(touched))
 	for i := range touched {
 		if i < n {
 			idxs = append(idxs, i)
 		}
 	}
 	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
+	if batch := max(1, int(f.cfg.FileDirtyHi/cs)); !plan.SizeSet && len(idxs) > batch {
+		idxs, limited = idxs[:batch], true
+	}
+	return idxs, limited
+}
+
+// process runs steps 4–9 for every touched chunk, chunks in parallel; works keeps idx order.
+func (f *Flusher) process(ctx context.Context, plan *FlushPlan, base meta.Inode, idxs []uint64, forceUpload bool) ([]*chunkWork, error) {
 	works := make([]*chunkWork, len(idxs))
 	baseRead := f.rd.BaseReader(ctx, base)
-	// chunks are assembled (base fetch, WAL read, hash) in parallel; works keeps idx order
-	err := parallel(ctx, f.cfg.Workers, len(idxs), func(j int) error {
-		i := idxs[j]
-		buf := make([]byte, min(cs, plan.Size-i*cs))
-		if err := f.ov.ReadPlanRange(plan, i*cs, buf, baseRead); err != nil {
-			return fmt.Errorf("assemble chunk %d: %w", i, err)
-		}
-		w := &chunkWork{idx: i}
-		if !allZero(buf) {
-			w.data = buf
-			w.hash = sha256Sum(buf)
-		}
+	err := parallel(ctx, f.cfg.ChunkWorkers, len(idxs), func(j int) error {
+		w, err := f.processChunk(ctx, plan, baseRead, idxs[j], forceUpload)
 		works[j] = w
-		return nil
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return works, nil
+}
+
+// processChunk assembles one chunk (steps 4–5), resolves it (6–8) and uploads it (9) as
+// one pipeline under the flusher-wide semaphore. The chunk's bytes and shards exist only
+// inside this call: once the chunk is decided, nothing but the work record remains (I-78).
+func (f *Flusher) processChunk(ctx context.Context, plan *FlushPlan, baseRead func(off uint64, p []byte) error, i uint64, forceUpload bool) (*chunkWork, error) {
+	select {
+	case f.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-f.sem }()
+	cs := uint64(f.st.Volume().ChunkSize)
+	n := min(cs, plan.Size-i*cs)
+	buf := make([]byte, n)
+	f.hold(len(buf))
+	defer f.release(len(buf))
+	if err := f.ov.ReadPlanRange(plan, i*cs, buf, baseRead); err != nil {
+		return nil, fmt.Errorf("assemble chunk %d: %w", i, err)
+	}
+	w := &chunkWork{idx: i, size: uint32(n)}
+	if allZero(buf) {
+		w.hole = true
+		return w, nil
+	}
+	w.hash = sha256Sum(buf)
+	if err := f.resolve(ctx, w, buf, forceUpload); err != nil {
+		return nil, err
+	}
+	return w, nil
 }
 
 // parallel runs fn(0..n-1) on at most workers goroutines and returns the first error;
@@ -409,33 +482,27 @@ func allZero(b []byte) bool {
 	return true
 }
 
-// resolveAndUpload runs steps 6–9 for every non-hole chunk, chunks in parallel.
-func (f *Flusher) resolveAndUpload(ctx context.Context, works []*chunkWork, forceUpload bool) error {
-	vol := f.st.Volume()
-	return parallel(ctx, f.cfg.Workers, len(works), func(i int) error {
-		w := works[i]
-		if w.data == nil {
-			return nil
-		}
-		if !forceUpload {
-			if c, ok := f.st.GetChunk(w.hash); ok {
-				keep, present := f.presentSlots(ctx, c)
-				if present >= int(c.K) {
-					w.k, w.m, w.place = c.K, c.M, c.Placement
-					f.Events.Record(w.hash, meta.EvDedupHit, fmt.Sprintf("refs %d", c.Refs))
-					return nil // dedup hit, no upload (L-33, L-34)
-				}
-				// degraded, dead-holder or shard-less entry: fill its slots with the bytes in hand
-				f.Events.Record(w.hash, meta.EvFill, fmt.Sprintf("%d present of %d", present, int(c.K)+int(c.M)))
-				return f.fillSlots(ctx, w, c, keep)
+// resolve runs steps 6–9 for one non-hole chunk whose bytes are data.
+func (f *Flusher) resolve(ctx context.Context, w *chunkWork, data []byte, forceUpload bool) error {
+	if !forceUpload {
+		if c, ok := f.st.GetChunk(w.hash); ok {
+			keep, present := f.presentSlots(ctx, c)
+			if present >= int(c.K) {
+				w.k, w.m, w.place = c.K, c.M, c.Placement
+				f.Events.Record(w.hash, meta.EvDedupHit, fmt.Sprintf("refs %d", c.Refs))
+				return nil // dedup hit, no upload (L-33, L-34)
 			}
+			// degraded, dead-holder or shard-less entry: fill its slots with the bytes in hand
+			f.Events.Record(w.hash, meta.EvFill, fmt.Sprintf("%d present of %d", present, int(c.K)+int(c.M)))
+			return f.fillSlots(ctx, w, data, c, keep)
 		}
-		w.k, w.m = vol.K, vol.M
-		if meta.IsSmallChunk(uint32(len(w.data)), vol.ChunkSize) {
-			w.k = 1 // replication for small chunks (docs/03)
-		}
-		return f.upload(ctx, w, nil)
-	})
+	}
+	vol := f.st.Volume()
+	w.k, w.m = vol.K, vol.M
+	if meta.IsSmallChunk(uint32(len(data)), vol.ChunkSize) {
+		w.k = 1 // replication for small chunks (docs/03)
+	}
+	return f.upload(ctx, w, data, nil)
 }
 
 // presentSlots returns c's placement with every slot that is not both on a live node and
@@ -489,18 +556,21 @@ func (f *Flusher) candidates(exclude []meta.NodeIdx) []meta.Candidate {
 	return meta.ExcludeIdx(cands, exclude)
 }
 
-// upload encodes w and PUTs every slot (step 9). keep, when non-nil, fixes slots that
-// already hold acked shards (fill path); only nil slots are placed.
-func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx) error {
+// upload encodes data and PUTs every slot (step 9). keep, when non-nil, fixes slots that
+// already hold acked shards (fill path); only nil slots are placed. The shards exist only
+// for the duration of the call (I-78).
+func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []meta.NodeIdx) error {
 	total := int(w.k) + int(w.m)
 	codec, err := f.codecs.Get(w.k, w.m)
 	if err != nil {
 		return err
 	}
-	shards, err := codec.Encode(w.data)
+	shards, err := codec.Encode(data)
 	if err != nil {
 		return err
 	}
+	f.hold(total * len(shards[0]))
+	defer f.release(total * len(shards[0]))
 	place := make([]meta.NodeIdx, total)
 	copy(place, keep)
 	var held []meta.NodeIdx
@@ -528,14 +598,12 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 		// and the current holders
 		var exclude []meta.NodeIdx
 		for i, n := range place {
-			if n != 0 && (acked[i] || !failed[i]) {
+			if n != 0 && (acked[i] || failed[i] == nil) {
 				exclude = append(exclude, n)
 			}
 		}
 		for i := range failed {
-			if failed[i] {
-				exclude = append(exclude, place[i])
-			}
+			exclude = append(exclude, place[i])
 		}
 		for i := range place {
 			if !acked[i] {
@@ -543,7 +611,9 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 			}
 		}
 		meta.FillPlacement(w.hash, place, f.candidates(exclude), int(w.k))
-		f.putSlots(ctx, w, shards, place, acked)
+		for i, err := range f.putSlots(ctx, w, shards, place, acked) {
+			failed[i] = err
+		}
 	}
 	acks := 0
 	for i := range place {
@@ -553,11 +623,12 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 			place[i] = 0
 		}
 	}
-	if f.cache != nil {
-		f.cache.Put(w.hash, w.data)
-	}
 	if acks < int(w.k) {
-		return fmt.Errorf("%w: chunk %x: %d < %d", ErrTooFewAcks, w.hash[:8], acks, w.k)
+		err := fmt.Errorf("%w: chunk %x: %d < %d", ErrTooFewAcks, w.hash[:8], acks, w.k)
+		if len(failed) > 0 && allFull(failed) {
+			err = fmt.Errorf("%w: %w", err, chunk.ErrFull) // ENOSPC to the client, not EIO (I-79)
+		}
+		return err
 	}
 	w.place = place
 	w.uploaded = true
@@ -568,13 +639,30 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, keep []meta.NodeIdx)
 	return nil
 }
 
+func allFull(failed map[int]error) bool {
+	for _, err := range failed {
+		if !errors.Is(err, chunk.ErrFull) {
+			return false
+		}
+	}
+	return true
+}
+
 // putSlots PUTs every unacked slot with a non-zero node in parallel and waits until ≥k
-// acks and (all done or the deadline). It marks acked slots and returns the failed ones.
-func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, place []meta.NodeIdx, acked []bool) map[int]bool {
+// acks and (all done or the deadline). It marks acked slots and returns the failed ones
+// with their errors. Stragglers past the deadline are cancelled and awaited before it
+// returns, so no goroutine keeps a shard buffer alive past its chunk (L-190, I-83).
+func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, place []meta.NodeIdx, acked []bool) map[int]error {
 	type res struct {
 		slot int
 		err  error
 	}
+	pctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 	out := make(chan res, len(place))
 	pending := 0
 	for i, n := range place {
@@ -582,12 +670,14 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 			continue
 		}
 		pending++
+		wg.Add(1)
 		go func(slot int, node meta.NodeIdx) {
-			err := f.shards.Put(ctx, node, chunk.Key(w.hash, w.k, w.m, slot), shards[slot])
+			defer wg.Done()
+			err := f.shards.Put(pctx, node, chunk.Key(w.hash, w.k, w.m, slot), shards[slot])
 			out <- res{slot, err}
 		}(i, n)
 	}
-	failed := map[int]bool{}
+	failed := map[int]error{}
 	acks := 0
 	for i := range acked {
 		if acked[i] {
@@ -613,7 +703,7 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 		}
 		pending--
 		if r.err != nil {
-			failed[r.slot] = true
+			failed[r.slot] = r.err
 			if errors.Is(r.err, chunk.ErrFull) {
 				f.mu.Lock()
 				f.full[place[r.slot]] = f.clk.Now().Add(time.Minute)
@@ -632,9 +722,9 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 // fillSlots re-encodes with the entry's (k,m), PUTs every slot not in keep (missing,
 // dead or shard-less) to fresh nodes and proposes SetPlacement, so a dedup'd commit
 // never points at an unreadable chunk.
-func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, c meta.Chunk, keep []meta.NodeIdx) error {
+func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c meta.Chunk, keep []meta.NodeIdx) error {
 	w.k, w.m = c.K, c.M
-	if err := f.upload(ctx, w, keep); err != nil {
+	if err := f.upload(ctx, w, data, keep); err != nil {
 		return err
 	}
 	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place}})
@@ -652,7 +742,9 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, c meta.Chunk, kee
 	return nil
 }
 
-// buildCommit assembles the Commit command (step 10) including the NewSize rules.
+// buildCommit assembles the Commit command (step 10) including the NewSize rules. partial
+// covers both the FileDirtyHi trigger and a plan cut to one batch (I-80): either way only
+// the chunks in works are committed and the rest of the plan stays dirty.
 func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWork, partial bool) *meta.Commit {
 	cs := uint64(f.st.Volume().ChunkSize)
 	cmd := &meta.Commit{Ino: plan.Ino, BaseVersion: base.Version, Now: f.clk.Now().UnixNano()}
@@ -660,16 +752,16 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 	var lastFull uint64
 	for _, w := range works {
 		cmd.Writes = append(cmd.Writes, meta.ChunkWrite{Idx: uint32(w.idx), Hash: w.hash})
-		if w.data != nil && w.uploaded && !seen[w.hash] {
+		if !w.hole && w.uploaded && !seen[w.hash] {
 			seen[w.hash] = true
-			cmd.NewChunks = append(cmd.NewChunks, meta.ChunkDesc{Hash: w.hash, Size: uint32(len(w.data)), K: w.k, M: w.m, Placement: w.place})
+			cmd.NewChunks = append(cmd.NewChunks, meta.ChunkDesc{Hash: w.hash, Size: w.size, K: w.k, M: w.m, Placement: w.place})
 		}
 		lastFull = max(lastFull, (w.idx+1)*cs)
 	}
 	switch {
 	case partial:
 		cmd.NewSize = max(base.Size, min(lastFull, plan.Size))
-		// every dirty byte outside a committed chunk stays dirty (L-27, never L-179)
+		// every dirty byte outside a committed chunk stays dirty (L-27, L-191, never L-179)
 		committed := make([]uint64, len(works))
 		for i, w := range works {
 			committed[i] = w.idx

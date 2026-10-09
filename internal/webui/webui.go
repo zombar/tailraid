@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
@@ -44,6 +45,10 @@ type Options struct {
 	Chunks func(ctx context.Context, path string, offset, limit int) (int, []admin.ChunkReport, error)
 	Clk    clock.Clock
 	Logger *slog.Logger
+	// Uploads (docs/13 §4, I-82): concurrent uploads allowed and how long a body may send
+	// nothing; zero values take DefaultUploadSlots and DefaultBodyTimeout.
+	UploadSlots int
+	BodyTimeout time.Duration
 }
 
 // Server is the web UI handler.
@@ -51,6 +56,7 @@ type Server struct {
 	o       Options
 	handler http.Handler
 	cache   statusCache
+	up      uploads
 }
 
 // New validates the options and builds the handler.
@@ -64,7 +70,13 @@ func New(o Options) (*Server, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	s := &Server{o: o}
+	if o.UploadSlots <= 0 {
+		o.UploadSlots = DefaultUploadSlots
+	}
+	if o.BodyTimeout <= 0 {
+		o.BodyTimeout = DefaultBodyTimeout
+	}
+	s := &Server{o: o, up: uploads{inflight: map[string]bool{}, slots: make(chan struct{}, o.UploadSlots)}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /assets/{file}", s.asset)

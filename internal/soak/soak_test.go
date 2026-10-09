@@ -139,7 +139,8 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		return admin.Report{}, errors.New("node is down")
 	}
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
-	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty())
+	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov)
+	rep.Machine = admin.Vitals(nd.Dir)
 	return rep, nil
 }
 
@@ -200,17 +201,33 @@ func (e *harnessEnv) SetState(ctx context.Context, n soak.NodeRef, st meta.NodeS
 	return err
 }
 
-func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (bool, string, error) {
+func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (bool, int, string, error) {
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
-		return false, "", errors.New("node is down")
+		return false, 0, "", errors.New("node is down")
 	}
 	snap, err := nd.Node.FSM.Snapshot()
 	if err != nil {
-		return false, "", err
+		return false, 0, "", err
 	}
-	v := meta.CheckInvariants(snap.(interface{ State() *meta.State }).State())
-	return len(v) == 0, strings.Join(v, "; "), nil
+	st := snap.(interface{ State() *meta.State }).State()
+	v := meta.CheckInvariants(st)
+	// orphans as the node's fsck counts them: shards on disk the chunk table does not
+	// place here
+	orphans := 0
+	_ = nd.Store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
+		h, _, _, idx, err := chunk.ParseKey(k)
+		if err != nil {
+			orphans++
+			return nil
+		}
+		c, ok := st.Chunks[h]
+		if !ok || idx >= len(c.Placement) || c.Placement[idx] != nd.Idx() {
+			orphans++
+		}
+		return nil
+	})
+	return len(v) == 0, orphans, strings.Join(v, "; "), nil
 }
 
 func (e *harnessEnv) Chunks(ctx context.Context, n soak.NodeRef, path string) ([]admin.ChunkReport, error) {
@@ -300,7 +317,7 @@ func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) erro
 
 func harnessProfile() soak.Profile {
 	cs := int(testharness.ChunkSize)
-	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
+	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, LargeFile: 2 << 20, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
 		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second,
 		SampleEvery: 50 * time.Millisecond} // the sampler runs concurrently with the phases, as it does in production
 }
@@ -313,7 +330,7 @@ func harnessProfile() soak.Profile {
 // Invariant: I-29
 // Lifecycle: L-59, L-148
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
-	c := testharness.NewCluster(t, 4, 2, 1)
+	c := testharness.NewCluster(t, 4, 2, 1, testharness.WALCap(512<<10)) // the large-file phase meets the cap
 	defer c.Close()
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
@@ -336,7 +353,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 11 {
+	if sum.Failed != 0 || len(sum.Phases) != 12 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -360,7 +377,10 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		_ = os.WriteFile(path, html.Bytes(), 0o600)
 	}
 	for _, want := range []string{"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
-		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation"} {
+		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
+		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound",
+		"CPU on the sampled node", "Memory on the sampled node", "Data disk on the sampled node", "peak resident set",
+		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

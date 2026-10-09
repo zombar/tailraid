@@ -484,7 +484,7 @@ func TestOverlay_DropRemovesWAL(t *testing.T) {
 
 // Lifecycle: L-186
 func TestOverlay_WALCap_RejectsAtCap(t *testing.T) {
-	ov, _ := newOverlay(t, t.TempDir(), WithWALCap(1000))
+	ov, _ := newOverlay(t, t.TempDir(), WithWALCap(1000), WithCapWait(0))
 	ino := meta.Ino(31)
 	must(t, ov.Write(ino, 0, 100, bytes.Repeat([]byte("w"), 900))) // WAL below the cap
 	must(t, ov.Write(ino, 0, 100, bytes.Repeat([]byte("w"), 900))) // crosses it: accepted
@@ -513,7 +513,7 @@ func TestOverlay_WALCap_Boundaries(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			ov, _ := newOverlay(t, t.TempDir(), WithWALCap(capBytes))
+			ov, _ := newOverlay(t, t.TempDir(), WithWALCap(capBytes), WithCapWait(0))
 			ino := meta.Ino(32)
 			n := int(c.wal) - 2*recHeaderLen
 			must(t, ov.Write(ino, 0, 4096, bytes.Repeat([]byte("b"), n)))

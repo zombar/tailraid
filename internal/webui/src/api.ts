@@ -100,6 +100,7 @@ export interface Entry {
   mode: number;
   ino: number;
   dirty?: boolean;
+  upload?: boolean;
   target?: string;
   path?: string;
 }
@@ -191,29 +192,118 @@ export interface Upload {
   abort(): void;
 }
 
-/** upload PUTs a File with progress; XMLHttpRequest streams the file and reports progress everywhere, including iOS. */
-export function upload(path: string, file: File, onProgress: (sent: number) => void): Upload {
-  const xhr = new XMLHttpRequest();
-  const promise = new Promise<void>((resolve, reject) => {
+/** PART is the size of one upload request for a large file (docs/13 §4). */
+export const PART = 32 << 20;
+const RETRIES = 5;
+
+interface PartReply {
+  status: number;
+  error?: string;
+  offset?: number;
+}
+
+/** sendPart PUTs one slice; it resolves with any HTTP status and rejects only on a network error or an abort. */
+function sendPart(path: string, blob: Blob, range: string | null, onProgress: (loaded: number) => void, track: (x: XMLHttpRequest) => void): Promise<PartReply> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    track(xhr);
     xhr.open("PUT", fileURL(path));
     xhr.setRequestHeader(HEADER, "1");
+    if (range) xhr.setRequestHeader("Content-Range", range);
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else {
-        let msg = xhr.statusText || "upload failed";
-        try {
-          const body = JSON.parse(xhr.responseText) as { error?: string };
-          if (body.error) msg = body.error;
-        } catch {
-          // not JSON
-        }
-        reject(new ApiError(xhr.status, `${msg} (${xhr.status})`));
+      const reply: PartReply = { status: xhr.status };
+      try {
+        const body = JSON.parse(xhr.responseText) as { error?: string; offset?: number };
+        reply.error = body.error;
+        reply.offset = body.offset;
+      } catch {
+        // not JSON
       }
+      resolve(reply);
     };
     xhr.onerror = () => reject(new ApiError(0, "network error"));
     xhr.onabort = () => reject(new ApiError(0, "cancelled"));
-    xhr.send(file);
+    xhr.send(blob);
   });
-  return { promise, abort: () => xhr.abort() };
+}
+
+function failure(r: PartReply): ApiError {
+  return new ApiError(r.status, `${r.error ?? "upload failed"} (${r.status})`);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** uploadedSoFar asks the server how much of an upload's temp already exists (0 when none). */
+async function uploadedSoFar(path: string): Promise<number> {
+  const i = path.lastIndexOf("/");
+  const temp = path.slice(0, i + 1) + "." + path.slice(i + 1) + ".tailraid-upload";
+  try {
+    return (await stat(temp)).size;
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return 0;
+    throw e;
+  }
+}
+
+/**
+ * upload stores a File atomically and resumably (docs/13 §4): a file up to PART goes in
+ * one PUT; a larger one in sequential parts with Content-Range, each a request of its
+ * own, so a server refusal reaches the browser as a status and a dropped connection
+ * resumes from what the server already holds. onNote reports retries ("resuming 2/5").
+ */
+export function upload(path: string, file: File, onProgress: (sent: number) => void, onNote?: (note: string) => void): Upload {
+  let current: XMLHttpRequest | null = null;
+  let aborted = false;
+  const track = (x: XMLHttpRequest) => {
+    current = x;
+  };
+  const promise = (async () => {
+    if (file.size <= PART) {
+      const r = await sendPart(path, file, null, onProgress, track);
+      if (r.status < 200 || r.status >= 300) throw failure(r);
+      return;
+    }
+    let offset = 0;
+    let retries = 0;
+    while (offset < file.size) {
+      if (aborted) throw new ApiError(0, "cancelled");
+      const end = Math.min(offset + PART, file.size);
+      const base = offset;
+      let r: PartReply;
+      try {
+        r = await sendPart(path, file.slice(offset, end), `bytes ${offset}-${end - 1}/${file.size}`, (loaded) => onProgress(base + loaded), track);
+      } catch (e) {
+        if (aborted || (e instanceof ApiError && e.status === 0 && e.message === "cancelled")) throw e;
+        r = { status: 0, error: e instanceof Error ? e.message : String(e) };
+      }
+      if (r.status >= 200 && r.status < 300) {
+        offset = end;
+        retries = 0;
+        onNote?.("");
+        continue;
+      }
+      if (r.status === 409 && typeof r.offset === "number" && r.offset !== offset) {
+        offset = r.offset; // the server says where the upload really is
+        continue;
+      }
+      if (r.status === 0 || r.status === 408 || r.status >= 500) {
+        if (++retries > RETRIES) throw failure(r);
+        onNote?.(`resuming ${retries}/${RETRIES}`);
+        await wait(1000 * Math.min(8, 2 ** (retries - 1)));
+        offset = await uploadedSoFar(path);
+        continue;
+      }
+      throw failure(r);
+    }
+  })();
+  return {
+    promise,
+    abort: () => {
+      aborted = true;
+      current?.abort();
+    },
+  };
 }

@@ -114,11 +114,16 @@ func TestReader_ReadsWithOneNodeDown_AndFromCache(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatalf("content differs at %d", testharness.FirstDiff(got, data))
 	}
-	// cache hit on the issuing gateway: every node down, still readable (L-66)
+	// cache hit on the issuing gateway: a read fills the cache (the flush does not, I-78),
+	// then with every node down the chunk is still readable (L-66)
+	rd := f.Reader()
+	warm := make([]byte, len(data))
+	if _, err := rd.ReadAt(context.Background(), in, warm, 0); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
 	for _, n := range c.Placement {
 		f.SetDown(n, true)
 	}
-	rd := f.Reader()
 	got2 := make([]byte, len(data))
 	if _, err := rd.ReadAt(context.Background(), in, got2, 0); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("cache read: %v", err)

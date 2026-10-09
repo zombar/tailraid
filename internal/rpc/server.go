@@ -96,6 +96,19 @@ type Options struct {
 	GetSlots  int           // concurrent GETs; default 32
 }
 
+// SlotBudget is the memory the shard RPC server may hold in request and reply bodies at
+// once, per direction (docs/04 §9).
+const SlotBudget = 256 << 20
+
+// Slots is how many shard PUTs (and, separately, GETs) a server with the given shard
+// size may serve at once so that slots × maxShard ≤ SlotBudget, within [4, 32] (I-83).
+func Slots(maxShard int64) int {
+	if maxShard <= 0 {
+		return 32
+	}
+	return int(min(max(SlotBudget/maxShard, 4), 32))
+}
+
 // Server serves the node RPC.
 type Server struct {
 	joinMu   sync.Mutex

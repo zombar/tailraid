@@ -61,10 +61,18 @@ async function runQueue(): Promise<void> {
     if (!job) break;
     job.state = "uploading";
     onQueueChange?.();
-    job.handle = upload(join(job.dir, job.file.name), job.file, (sent) => {
-      job.sent = sent;
-      onQueueChange?.();
-    });
+    job.handle = upload(
+      join(job.dir, job.file.name),
+      job.file,
+      (sent) => {
+        job.sent = sent;
+        onQueueChange?.();
+      },
+      (note) => {
+        job.note = note;
+        onQueueChange?.();
+      },
+    );
     try {
       await job.handle.promise;
       job.state = "done";
@@ -188,10 +196,11 @@ export function render(root: HTMLElement, dir: string): () => void {
     let link: HTMLElement;
     if (e.type === "dir") link = h("a", { href: "#/browse" + encodePathForHash(path) }, icon("dir"), e.name);
     else if (e.type === "symlink") link = h("span", { class: "linkname" }, icon("link"), e.name + " ", h("span", { class: "target" }, "→ " + (e.target ?? "")));
+    else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("file"), e.name);
     else link = h("a", { href: "#/file" + encodePathForHash(path) }, icon(iconFor(e.name)), e.name);
     return h(
       "tr",
-      { class: e.dirty ? "dirty" : "" },
+      { class: e.upload ? "dim" : e.dirty ? "dirty" : "" },
       h("td", { class: "name" }, link),
       h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""),
       h("td", { class: "mtime", title: e.mtime }, when(e.mtime)),
@@ -200,7 +209,7 @@ export function render(root: HTMLElement, dir: string): () => void {
 
   const jobRow = (j: Job) => {
     const state = h("span", { class: "state" + (j.state === "failed" ? " bad" : j.state === "done" ? " ok" : "") });
-    if (j.state === "uploading") state.append(`${bytes(j.sent)} / ${bytes(j.file.size)} `, h("button", { type: "button", onClick: () => j.handle?.abort() }, "cancel"));
+    if (j.state === "uploading") state.append(`${bytes(j.sent)} / ${bytes(j.file.size)} `, j.note ? j.note + " " : "", h("button", { type: "button", onClick: () => j.handle?.abort() }, "cancel"));
     else if (j.state === "queued") state.append("queued ", h("button", { type: "button", onClick: () => { j.state = "cancelled"; onQueueChange?.(); } }, "cancel"));
     else if (j.state === "failed") state.append("failed: " + (j.message ?? ""));
     else state.append(j.state);

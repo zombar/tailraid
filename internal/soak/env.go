@@ -46,7 +46,9 @@ type Env interface {
 	GCNow(ctx context.Context) (repair.Result, error)
 	SetPolicy(ctx context.Context, k, m uint8) error
 	SetState(ctx context.Context, node NodeRef, state meta.NodeState) error
-	Fsck(ctx context.Context, node NodeRef) (ok bool, detail string, err error)
+	// Fsck runs the node's local check: ok is "no violation"; orphans counts the shards
+	// the chunk table does not place on that node (swept after grace, not a violation).
+	Fsck(ctx context.Context, node NodeRef) (ok bool, orphans int, detail string, err error)
 	Chunks(ctx context.Context, node NodeRef, path string) ([]admin.ChunkReport, error)
 	FSMHash(ctx context.Context, node NodeRef) (applied uint64, hash string, err error)
 	// Goroutines is the node's goroutine dump (/dev/goroutines), taken after a failed
