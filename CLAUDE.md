@@ -98,7 +98,7 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
 
 `init` (no options: derived budget, auto redundancy, docs/12 §7), `join`, `serve`, `token`, `reset` (wipes local Raft state only, never shards) ·
 `status` (also prints the web UI URL), `node ls|describe|promote|demote|
-drain|remove` · `check`, `repair`, `gc`, `fsck` · `volume
+drain|remove|add-disk` (docs/14: disks are targets named `<host>/<n>`) · `check`, `repair`, `gc`, `fsck` · `volume
 describe|grow|set-redundancy` · `chunk describe <hash>`
 (lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report) · `update [--check]`
 · deferred with M5: `node add-s3|keys`, `bucket ls|describe|create|rm`, `s3 keys`

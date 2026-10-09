@@ -134,8 +134,11 @@ func (s NodeState) String() string {
 
 // String names a node kind.
 func (k NodeKind) String() string {
-	if k == KindS3 {
+	switch k {
+	case KindS3:
 		return "s3"
+	case KindDisk:
+		return "disk"
 	}
 	return "device"
 }

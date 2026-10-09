@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -11,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
@@ -168,6 +171,47 @@ func (d *diskSet) refresh(nodes []meta.Node) {
 	}
 }
 
+// DiskBudget is the budget an added disk registers with: its pinned capacity, or the
+// budget derived from its filesystem (docs/14 §3).
+func DiskBudget(d config.Disk) (uint64, error) {
+	s, err := openTargetStore(filepath.Join(d.Path, "shards"), d.Capacity)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(s.Capacity()), nil
+}
+
+// DiskName is the n-th (from 1) added disk of host: "<host>/<n>".
+func DiskName(host string, n int) string { return fmt.Sprintf("%s/%d", host, n) }
+
+// RegisterDisks marks and registers every disk listed in the config, on a node that has
+// just bootstrapped the cluster (init takes the config's disks, docs/14 §2).
+func RegisterDisks(ctx context.Context, n *cluster.Node, cfg config.Config, clusterID [16]byte) error {
+	self, ok := n.SelfIdx()
+	if !ok {
+		return errors.New("node: this node is not in its own node table")
+	}
+	for i, d := range cfg.Node.Disks {
+		id, err := PrepareDisk(d.Path, clusterID, n.ID)
+		if err != nil {
+			return fmt.Errorf("disk %s: %w", d.Path, err)
+		}
+		budget, err := DiskBudget(d)
+		if err != nil {
+			return fmt.Errorf("disk %s: %w", d.Path, err)
+		}
+		disk := meta.Node{ID: id, Name: DiskName(cfg.Node.Name, i+1), Kind: meta.KindDisk, Host: self, Capacity: budget, JoinedAt: time.Now().UnixNano()}
+		res, _, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: disk}})
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			return fmt.Errorf("disk %s: register: %w", d.Path, err)
+		}
+	}
+	return nil
+}
+
 // openTargetStore opens a target's shard store: capacity pins its budget, "" derives it
 // from the filesystem (docs/01 §Node budget).
 func openTargetStore(root, capacity string) (*chunk.Store, error) {
@@ -188,6 +232,37 @@ func openTargetStore(root, capacity string) (*chunk.Store, error) {
 		}
 	}
 	return store, nil
+}
+
+// add starts tracking a disk added while serve runs (`node add-disk`); the next refresh
+// opens it once its marker and row check out. A path already tracked is ignored.
+func (d *diskSet) add(c config.Disk) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, ld := range d.disks {
+		if filepath.Clean(ld.cfg.Path) == filepath.Clean(c.Path) {
+			return
+		}
+	}
+	d.disks = append(d.disks, &localDisk{cfg: c, reason: "not opened yet"})
+}
+
+// state is "open", or why the disk at path is closed.
+func (d *diskSet) state(path string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, ld := range d.disks {
+		if filepath.Clean(ld.cfg.Path) == filepath.Clean(path) {
+			if ld.store != nil {
+				return "open"
+			}
+			return ld.reason
+		}
+	}
+	return "not configured"
 }
 
 // open lists the open disks.

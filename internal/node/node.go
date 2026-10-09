@@ -550,6 +550,13 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]string{"join_token": token}, nil
 	case "set_policy":
 		return a.setPolicy(ctx, op)
+	case "open_disk":
+		if !filepath.IsAbs(op.Path) {
+			return nil, fmt.Errorf("open_disk: %q is not an absolute path", op.Path)
+		}
+		a.disks.add(config.Disk{Path: op.Path, Capacity: op.Capacity})
+		a.disks.refresh(a.node.FSM.Nodes())
+		return map[string]string{"state": a.disks.state(op.Path)}, nil
 	case "check":
 		// --scrub runs one full-verification pass through the leader's repairer, so it
 		// uses the configured fill_after and rate limit and never overlaps a background pass

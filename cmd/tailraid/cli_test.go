@@ -68,7 +68,7 @@ func run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	root := &cobra.Command{Use: "tailraid", SilenceUsage: true, SilenceErrors: true}
 	root.PersistentFlags().String("config", "", "")
-	root.AddCommand(initCmd(), joinCmd())
+	root.AddCommand(initCmd(), joinCmd(), nodeCmd())
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
