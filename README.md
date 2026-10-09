@@ -49,17 +49,27 @@ Write a file on one device and read it on any other. `tailraid status` shows the
 
 ## Grow the volume
 
-There are three ways to add capacity:
-
 | To add capacity | Do this |
 |---|---|
 | Add a device | `tailraid join <ip> <token>` on the new device |
 | Add a disk to a device | `tailraid node add-disk /path/to/empty/dir` on that device |
-| Give a device more room | Free space on its disk. Budgets follow free space automatically. |
+| Grow a device or disk in place | See below |
 
 `tailraid volume describe` shows the volume's raw, usable and free capacity.
 
 New data spreads over the new space straight away. Existing data stays where it is.
+
+### Growing in place
+
+Each device and disk has a **budget**: how much of it tailraid may use. To grow one in place, raise its budget:
+
+- **Budget follows free space (the default):** free up space on the disk, or enlarge its partition. The budget grows within a minute, with no restart.
+- **Budget is pinned** (a `capacity:` in the config): raise the number, then restart the service:
+  ```sh
+  tailraid stop && tailraid start
+  ```
+
+`tailraid node describe <name>` shows a budget (`capacity`).
 
 ### Adding a disk
 

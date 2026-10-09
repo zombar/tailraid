@@ -437,10 +437,12 @@ func volumeCmd() *cobra.Command {
 	grow := &cobra.Command{
 		Use: "grow", Short: "How to add capacity",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprint(cmd.OutOrStdout(), `Add capacity in one of three ways:
-  add a device       tailraid join <ip> <token>                (on the new device)
-  add a disk         tailraid node add-disk <empty dir>        (on the device that has it)
-  free up space      budgets follow each disk's free space (pin one with node.capacity)
+			fmt.Fprint(cmd.OutOrStdout(), `Add capacity:
+  add a device        tailraid join <ip> <token>              (on the new device)
+  add a disk          tailraid node add-disk <empty dir>      (on the device that has it)
+  grow in place       a budget that follows free space grows by itself when the disk
+                      has more room; a pinned one (capacity: in the config) grows when
+                      you raise it and restart: tailraid stop && tailraid start
 New data spreads over the new space straight away; existing data stays where it is.
 `)
 			return nil
