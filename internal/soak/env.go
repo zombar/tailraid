@@ -48,6 +48,8 @@ type Env interface {
 	GCNow(ctx context.Context) (repair.Result, error)
 	SetPolicy(ctx context.Context, k, m uint8) error
 	SetState(ctx context.Context, node NodeRef, state meta.NodeState) error
+	// Remove takes a member out of the node table (`node remove`, no --force).
+	Remove(ctx context.Context, node NodeRef) error
 	// Fsck runs the node's local check: ok is "no violation"; orphans counts the shards
 	// the chunk table does not place on that node (swept after grace, not a violation).
 	Fsck(ctx context.Context, node NodeRef) (ok bool, orphans int, detail string, err error)
@@ -73,4 +75,6 @@ type Env interface {
 	// restarted); RestoreDisk brings it back. disk names its host (NodeRef.Host).
 	FailDisk(ctx context.Context, disk NodeRef) error
 	RestoreDisk(ctx context.Context, disk NodeRef) error
+	// AddDisk gives host one more added disk (`node add-disk` on a spare mount).
+	AddDisk(ctx context.Context, host NodeRef) error
 }

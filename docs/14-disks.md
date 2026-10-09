@@ -64,6 +64,10 @@ same bootstrap as the device row, so `init` stays option-free (12 §7). A disk i
 `<host>/<n>` in `node ls`, `node describe`, `node drain` and `node remove`; `ls` groups
 disks under their host.
 
+A disk leaves the way a node does: `node drain <host>/<n>` moves its slots off (in auto mode
+the policy follows, §6), then `node remove <host>/<n>` takes it out of the node table, which
+is refused while it still holds a slot (I-42). Its directory and marker are left as they are.
+
 A path that sits on the same filesystem as another target is accepted with a warning: the
 two share one budget (§3) and one failure.
 
@@ -155,6 +159,12 @@ most slots one host receives when each host is filled up to `ceil((k+m)/H)` and 
 spare targets take the rest, or 0 with a single host. `status`, `volume describe` and
 `set-redundancy` print it ("survives 2 disks, 1 host"); pinning a policy that survives no
 host on a cluster of two or more hosts prints a warning but is allowed.
+
+Only a volume in auto mode follows its disks: adding one grows the policy on the leader's
+next repair pass, and draining or removing one shrinks it (a draining target no longer
+counts, so draining one of two targets moves the volume to `1+0` and migrates every chunk
+off it). A pinned policy (`set-redundancy --k --m`, or `init --k --m`) is never changed;
+`set-redundancy --auto` hands it back to the rule.
 
 ## 7. Domain skew
 

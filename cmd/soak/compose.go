@@ -121,6 +121,13 @@ func (e *composeEnv) RestoreDisk(ctx context.Context, disk soak.NodeRef) error {
 	return e.moveMarker(ctx, disk, "disk_id.away", "disk_id")
 }
 
+// AddDisk runs `node add-disk` on the host's spare mount /disks/spare, which the compose
+// files mount on every node but leave out of $DISKS. The phase drains and removes it
+// again and never closes it, so it needs no diskDir mapping.
+func (e *composeEnv) AddDisk(ctx context.Context, host soak.NodeRef) error {
+	return e.compose(ctx, "exec", "-T", host.Name, "tailraid", "node", "add-disk", "/disks/spare", "--capacity", "8G")
+}
+
 func (e *composeEnv) moveMarker(ctx context.Context, disk soak.NodeRef, from, to string) error {
 	dir, err := diskDir(disk)
 	if err != nil {
