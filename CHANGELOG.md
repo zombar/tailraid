@@ -2,6 +2,12 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.3.1 (2026-10-09)
+
+### Changes
+
+- webui: one line per disk row — dot, name and warning together, the data-dir tag under the name ([98754e0](https://github.com/zombar/tailraid/commit/98754e0))
+
 ## v0.3.0 (2026-10-09)
 
 ### Changes
