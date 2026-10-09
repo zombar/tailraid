@@ -195,5 +195,5 @@ exactly one design doc transition table and cited by at least one test via
 | L-187 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (metadata mutation on a gateway that lost its leader) | E-54 leader unreachable | Committed | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale` |
 | L-188 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, flusher progressing | Dirty | `TestStub_L_188` |
 | L-189 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, the inode's last flush attempt failed | Dirty | `TestStub_L_189` |
-| L-190 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | `TestStub_L_190` |
-| L-191 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (plan larger than `FileDirtyHi` bytes of chunks) | E-123 batch commit | Committed (the lowest-indexed batch) + Dirty (residual) | `TestStub_L_191` |
+| L-190 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | `TestFlusher_StragglerPut_CancelledAfterReplace` |
+| L-191 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (plan larger than `FileDirtyHi` bytes of chunks) | E-123 batch commit | Committed (the lowest-indexed batch) + Dirty (residual) | `TestFlusher_BatchCommit_ResidualStaysDirty` |

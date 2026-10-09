@@ -385,3 +385,7 @@ the WAL cap.
 | I-36 | `TestCluster_OtherGatewaySeesPreviousVersionUntilApply`, `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` |
 | I-37 | `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
+| I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
+| I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull` |
+| I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty` |
+| I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace` |

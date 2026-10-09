@@ -158,7 +158,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
 	rd.Events = ring
-	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, cache, clk, vfs.DefaultConfig(), log)
+	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, vfs.DefaultConfig(), log)
 	fl.Events = ring
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
 	if runtime.GOOS == "windows" {

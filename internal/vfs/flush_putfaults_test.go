@@ -36,7 +36,7 @@ func TestFlusher_PutTimeout_SlotReplaced(t *testing.T) {
 	// real time) so the PUTs that do answer, including the re-placed one, land well
 	// inside their own deadline while the stalled one runs out of it.
 	testharness.Eventually(t, func() bool {
-		f.Clk.Advance(cfg.PutDeadline / 50)
+		f.Clk.Advance(cfg.PutDeadline / 200)
 		select {
 		case err = <-done:
 			return true

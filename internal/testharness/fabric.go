@@ -48,19 +48,20 @@ type Fabric struct {
 	Ov      *vfs.Overlay
 	staging string
 
-	mu          sync.Mutex
-	idx         uint64
-	down        map[meta.NodeIdx]bool
-	full        map[meta.NodeIdx]bool
-	failPutOnce map[meta.NodeIdx]int
-	failPutWith map[meta.NodeIdx]error     // every PUT to the node fails with this
-	stallPut    map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
-	putCount    int
-	gets        map[meta.NodeIdx]int
-	proposeErr  error // returned once by Propose as a transport failure
-	proposeDown error // returned by every Propose while set
-	stale       bool  // the gateway's health view given to vfs.FS
-	proposed    []meta.Op
+	mu            sync.Mutex
+	idx           uint64
+	down          map[meta.NodeIdx]bool
+	full          map[meta.NodeIdx]bool
+	failPutOnce   map[meta.NodeIdx]int
+	failPutWith   map[meta.NodeIdx]error     // every PUT to the node fails with this
+	stallPut      map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
+	cancelledPuts map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
+	putCount      int
+	gets          map[meta.NodeIdx]int
+	proposeErr    error // returned once by Propose as a transport failure
+	proposeDown   error // returned by every Propose while set
+	stale         bool  // the gateway's health view given to vfs.FS
+	proposed      []meta.Op
 }
 
 const (
@@ -214,7 +215,7 @@ func (f *Fabric) DeadFor(n meta.NodeIdx) time.Duration {
 
 var errNodeDown = errors.New("fabric: node down")
 
-func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
+func (f *Fabric) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
 	f.mu.Lock()
 	f.putCount++
 	st, ok := f.Stores[node]
@@ -234,7 +235,14 @@ func (f *Fabric) Put(_ context.Context, node meta.NodeIdx, key chunk.ShardKey, b
 		stall.inflight.Add(1)
 		defer stall.inflight.Done()
 		stall.enteredOnce.Do(func() { close(stall.entered) })
-		<-stall.release
+		select {
+		case <-stall.release:
+		case <-ctx.Done(): // the caller gave up on this PUT, as the RPC client would
+			f.mu.Lock()
+			f.cancelledPuts[node]++
+			f.mu.Unlock()
+			return ctx.Err()
+		}
 	}
 	if !ok || down {
 		return errNodeDown
@@ -333,7 +341,7 @@ func (f *Fabric) Flusher(opts ...func(*vfs.Config)) *vfs.Flusher {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return vfs.NewFlusher(f.Ov, f.FSM, f, f, f, f.Reader(), f.Cache, f.Clk, cfg, nil)
+	return vfs.NewFlusher(f.Ov, f.FSM, f, f, f, f.Reader(), f.Clk, cfg, nil)
 }
 
 // --- helpers ---
@@ -479,14 +487,22 @@ type putStall struct {
 	inflight    sync.WaitGroup // PUTs that entered the stall and have not finished
 }
 
-// StallPut makes every PUT to node block until release is called; entered closes when the
-// first one is waiting. release returns only once every stalled PUT has run to completion,
-// so a test's temp dir is not written to after the test ends.
+// CancelledPuts is the number of stalled PUTs to node that their caller cancelled.
+func (f *Fabric) CancelledPuts(node meta.NodeIdx) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cancelledPuts[node]
+}
+
+// StallPut makes every PUT to node block until release is called or the caller cancels;
+// entered closes when the first one is waiting. release returns only once every stalled
+// PUT has run to completion, so a test's temp dir is not written to after the test ends.
 func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
 	s := &putStall{entered: make(chan struct{}), release: make(chan struct{})}
 	f.mu.Lock()
 	if f.stallPut == nil {
 		f.stallPut = map[meta.NodeIdx]*putStall{}
+		f.cancelledPuts = map[meta.NodeIdx]int{}
 	}
 	f.stallPut[node] = s
 	f.mu.Unlock()
