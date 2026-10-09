@@ -36,8 +36,7 @@ jobs:
         with: { go-version-file: go.mod, cache: true }
       - run: make lint web-check
       # The per-OS files (*_windows.go, *_darwin.go) only type-check under their GOOS.
-      - run: GOOS=darwin make lint
-      - run: GOOS=windows make lint
+      - run: make lint-cross
 
   vuln:
     name: govulncheck

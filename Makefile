@@ -19,7 +19,7 @@ BIN := tailraid
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
-        release tag check invariants tidy vendor-check deadcode clean help web web-check
+        release tag check invariants tidy vendor-check deadcode lint-cross clean help web web-check
 
 # Browser UI (docs/13 §6): esbuild is a Go tool; the bundle is committed and embedded.
 WEB_SRC := internal/webui/src
@@ -104,6 +104,16 @@ lint:
 	$(GOLANGCI) run $(PKGS)
 	scripts/check-invariants.sh --check
 	$(MAKE) --no-print-directory deadcode
+
+## lint-cross: golangci-lint under GOOS=darwin and GOOS=windows, so the per-OS files are
+## linted too. The linter itself is built for the host first: `GOOS=darwin go run` would
+## build a darwin linter that cannot run here.
+GOLANGCI_BIN := dist/tools/golangci-lint
+$(GOLANGCI_BIN): tools.mod tools.sum
+	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) go build -mod=readonly -modfile=tools.mod -o $@ github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+lint-cross: $(GOLANGCI_BIN)
+	GOOS=darwin $(GOLANGCI_BIN) run $(PKGS)
+	GOOS=windows $(GOLANGCI_BIN) run $(PKGS)
 
 ## deadcode: nothing unreachable from the binaries and tests, no unused parameters
 deadcode:
