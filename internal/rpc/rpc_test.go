@@ -38,6 +38,7 @@ type fakeApplier struct {
 	idx        uint64
 	leader     bool
 	leaderAddr string
+	proposeErr error // returned by Propose after applying: the leader lost the outcome
 }
 
 func newApplier() *fakeApplier {
@@ -59,6 +60,12 @@ func (a *fakeApplier) Propose(_ context.Context, c meta.Command) (meta.Result, u
 		return meta.Result{}, 0, ErrNotLeader
 	}
 	r, i := a.apply(c)
+	a.mu.Lock()
+	perr := a.proposeErr
+	a.mu.Unlock()
+	if perr != nil {
+		return meta.Result{}, 0, perr
+	}
 	return r, i, nil
 }
 func (a *fakeApplier) IsLeader() bool        { a.mu.Lock(); defer a.mu.Unlock(); return a.leader }

@@ -4,6 +4,7 @@ package testharness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"os"
@@ -49,20 +50,21 @@ type Fabric struct {
 	Ov      *vfs.Overlay
 	staging string
 
-	mu            sync.Mutex
-	idx           uint64
-	down          map[meta.NodeIdx]bool
-	full          map[meta.NodeIdx]bool
-	failPutOnce   map[meta.NodeIdx]int
-	failPutWith   map[meta.NodeIdx]error     // every PUT to the node fails with this
-	stallPut      map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
-	cancelledPuts map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
-	putCount      int
-	gets          map[meta.NodeIdx]int
-	proposeErr    error // returned once by Propose as a transport failure
-	proposeDown   error // returned by every Propose while set
-	stale         bool  // the gateway's health view given to vfs.FS
-	proposed      []meta.Op
+	mu             sync.Mutex
+	idx            uint64
+	down           map[meta.NodeIdx]bool
+	full           map[meta.NodeIdx]bool
+	failPutOnce    map[meta.NodeIdx]int
+	failPutWith    map[meta.NodeIdx]error     // every PUT to the node fails with this
+	stallPut       map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
+	cancelledPuts  map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
+	putCount       int
+	gets           map[meta.NodeIdx]int
+	proposeErr     error // returned once by Propose as a transport failure
+	proposeDown    error // returned by every Propose while set
+	proposeUnknown int   // Propose applies the command and then reports an unknown outcome, this many times
+	stale          bool  // the gateway's health view given to vfs.FS
+	proposed       []meta.Op
 }
 
 const (
@@ -165,6 +167,10 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 		return meta.Result{}, 0, f.proposeDown
 	}
 	res := f.applyLocked(c)
+	if f.proposeUnknown > 0 { // applied, but the gateway never learns it (docs/02 §forwarding)
+		f.proposeUnknown--
+		return meta.Result{}, 0, fmt.Errorf("%w: harness", meta.ErrUnknownOutcome)
+	}
 	return res, f.idx, nil
 }
 
@@ -520,6 +526,14 @@ func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release f
 }
 
 // ProposeErrOnce makes the next Propose fail as a transport error.
+// ProposeUnknown makes the next n proposals apply and then report meta.ErrUnknownOutcome:
+// the leader did its work, the reply was lost (I-95).
+func (f *Fabric) ProposeUnknown(n int) {
+	f.mu.Lock()
+	f.proposeUnknown = n
+	f.mu.Unlock()
+}
+
 func (f *Fabric) ProposeErrOnce(err error) {
 	f.mu.Lock()
 	f.proposeErr = err

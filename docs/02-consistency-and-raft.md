@@ -243,13 +243,22 @@ when leader, otherwise forwards the encoded command to the current leader with
 
 - `ErrNotLeader` (the target was not leader when it received the command): the command was
   **not** applied; the caller retries against the new leader (bounded, with backoff).
-- `ErrLeadershipLost`, timeout, or transport error after the command was handed to Raft: the
-  outcome is **unknown**; the forwarding layer returns the error and never retries by
-  itself (I-29). *Callers* may retry commands that are idempotent by construction: for
-  `Commit`, `BaseVersion` makes a blind retry either succeed once or fail with
-  `ErrConflict`, after which the gateway reloads the inode and re-plans; for
-  `Create`/`Mkdir` a retry may hit `ErrExist`, which the gateway maps to success if the
-  existing child matches.
+- `ErrLeadershipLost`, timeout, a cancelled context while the future is pending, a
+  transport error, or the leader's `500` after it handed the command to Raft: the outcome
+  is **unknown**. Every such failure is reported as `meta.ErrUnknownOutcome` (wrapping the
+  cause); the forwarding layer never retries it by itself (I-29) and the leader's `apply`
+  handler never disguises it as "not the leader" (I-95). A context that is already expired
+  is refused before dispatch, since Raft disarms its timer for a zero timeout.
+- *Callers* resolve an unknown outcome instead of retrying blindly (I-95): the gateway
+  proposes the command once more and reads the second answer knowing a first attempt may
+  have landed. `Commit` carries `BaseVersion`, so the repeat either applies or returns
+  `ErrConflict`, after which the flusher reloads the inode and re-plans. `Create` and
+  `Mkdir` may hit `ErrExist`, which the gateway maps to success when the existing child
+  matches; a `Symlink` only when the existing link has the same target. `Unlink`, `Rmdir`
+  and `Rename` take `ErrNotExist` after an unknown outcome as the first attempt having
+  landed. `SetAttr` sets absolute values and is simply repeated. A second unknown outcome
+  in a row is `EIO`. Commands whose first proposal was *not* applied (`ErrNotLeader`,
+  `ErrNoLeader`) are retried with backoff until the gateway is stale.
 - A leader with no quorum eventually steps down; proposers see `ErrNoLeader` and the flusher
   backs off (data stays in the WAL, see 04).
 
@@ -323,6 +332,12 @@ no divergent state to merge because it never applied uncommitted entries.
   is handed to Raft at most once per proposal, and the forwarding layer itself retries only
   after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
   above; that is outside this invariant.)
+- **I-95** — A proposal that may have been applied (leadership lost, timeout, cancelled
+  while pending, transport error, or the leader's `500`) is reported as
+  `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
+  and resolves the second answer per command (`ErrExist`/`ErrNotExist` after an unknown
+  outcome count as the first attempt having landed), so an acknowledged mutation is never
+  reported as failed and a failed one is never silently repeated.
 
 ## Tests
 
@@ -335,5 +350,6 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
+| I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext` |
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |

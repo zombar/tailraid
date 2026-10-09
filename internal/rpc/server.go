@@ -458,7 +458,11 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	res, index, err := s.o.Applier.Propose(r.Context(), cmd)
 	if err != nil {
-		s.notLeader(w)
+		if errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader) {
+			s.notLeader(w) // not applied: the caller retries elsewhere
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error()) // dispatched, outcome unknown (I-95)
 		return
 	}
 	w.Header().Set(HeaderIndex, strconv.FormatUint(index, 10))

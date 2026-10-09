@@ -103,7 +103,7 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s %s: %v", ErrUnavailable, method, addr, err) //nolint:errorlint // transport error, wrapped by sentinel
+		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnavailable, method, addr, err) // a cancelled context stays matchable
 	}
 	return resp, nil
 }
@@ -138,6 +138,8 @@ func errFromStatus(resp *http.Response) error {
 		return chunk.ErrCorrupt
 	case http.StatusBadRequest:
 		return fmt.Errorf("%w: %s", ErrBadRequest, msg)
+	case http.StatusInternalServerError:
+		return fmt.Errorf("%w: %s", ErrApplyFailed, msg)
 	}
 	return fmt.Errorf("rpc: unexpected status %d: %s", resp.StatusCode, msg)
 }

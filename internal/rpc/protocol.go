@@ -35,6 +35,9 @@ var (
 	ErrTooLarge     = errors.New("rpc: body too large")
 	ErrBadRequest   = errors.New("rpc: bad request")
 	ErrUnavailable  = errors.New("rpc: node unavailable")
+	// ErrApplyFailed is a 500 from POST /v1/apply: the leader handed the command to Raft and
+	// then failed (leadership lost, timeout); the outcome is unknown (docs/02 §forwarding).
+	ErrApplyFailed = errors.New("rpc: apply failed on the leader after dispatch")
 )
 
 // Health is the unauthenticated GET /health body.
