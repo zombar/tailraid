@@ -78,7 +78,7 @@ func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) 
 	sx := func(x float64) float64 { return float64(padL) + x/maxX*iw }
 	sy := func(y float64) float64 { return float64(padT) + ih - y/maxY*ih }
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH, html.EscapeString(title))
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH+legendHeight(ss), html.EscapeString(title))
 	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
 	// phase bands, alternating shades, labelled at the top
 	for i, bd := range bands {
@@ -130,11 +130,61 @@ func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) 
 			fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="%s"/>`, sx(p[0]), sy(p[1]), color)
 		}
 		fmt.Fprintf(&b, `<path d="%s" fill="none" stroke="%s" stroke-width="1.8"/>`, strings.TrimSpace(d.String()), color)
-		fmt.Fprintf(&b, `<rect x="%d" y="%d" width="10" height="10" fill="%s"/><text x="%d" y="%d" class="tick">%s</text>`,
-			chartW-padR-150, padT+2+i*14, color, chartW-padR-136, padT+11+i*14, html.EscapeString(s.name))
 	}
+	legend(&b, ss)
 	b.WriteString("</svg>")
 	return b.String()
+}
+
+// The legend sits below the plot, outside the drawing, in rows that wrap at the chart's
+// width, so no series ever covers the data.
+const (
+	legendRow   = 16
+	legendGap   = 18
+	legendGlyph = 10
+)
+
+// legendWidth estimates an entry's width in the chart's units (the tick font is ~6.5 px
+// per character).
+func legendWidth(name string) float64 { return legendGlyph + 6 + float64(len(name))*6.5 + legendGap }
+
+// legendRows lays the entries out: each entry's row and x.
+func legendRows(ss []series) (rows []int, xs []float64, nrows int) {
+	rows, xs = make([]int, len(ss)), make([]float64, len(ss))
+	x, row := float64(padL), 0
+	for i, s := range ss {
+		w := legendWidth(s.name)
+		if x+w > float64(chartW-padR) && x > float64(padL) {
+			x, row = float64(padL), row+1
+		}
+		rows[i], xs[i] = row, x
+		x += w
+	}
+	if len(ss) > 0 {
+		nrows = row + 1
+	}
+	return rows, xs, nrows
+}
+
+func legendHeight(ss []series) int {
+	_, _, n := legendRows(ss)
+	if n == 0 {
+		return 0
+	}
+	return 6 + n*legendRow
+}
+
+func legend(b *strings.Builder, ss []series) {
+	rows, xs, _ := legendRows(ss)
+	for i, s := range ss {
+		color := s.color
+		if color == "" {
+			color = palette[i%len(palette)]
+		}
+		y := chartH + 6 + rows[i]*legendRow
+		fmt.Fprintf(b, `<rect x="%.1f" y="%d" width="%d" height="%d" fill="%s"/><text x="%.1f" y="%d" class="tick">%s</text>`,
+			xs[i], y, legendGlyph, legendGlyph, color, xs[i]+legendGlyph+6, y+legendGlyph-1, html.EscapeString(s.name))
+	}
 }
 
 // barChart draws grouped bars: one group per label, one bar per series.
@@ -151,7 +201,7 @@ func barChart(title string, labels []string, ss []series) string {
 	maxY *= 1.1
 	iw, ih := float64(chartW-padL-padR), float64(chartH-padT-padB)
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH, html.EscapeString(title))
+	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH+legendHeight(ss), html.EscapeString(title))
 	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
 	for i := 0; i <= 4; i++ {
 		y := float64(padT) + ih*float64(i)/4
@@ -180,14 +230,7 @@ func barChart(title string, labels []string, ss []series) string {
 		}
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%s</text>`, gx+gw*0.4, chartH-padB+16, html.EscapeString(label))
 	}
-	for i, s := range ss {
-		color := s.color
-		if color == "" {
-			color = palette[i%len(palette)]
-		}
-		fmt.Fprintf(&b, `<rect x="%d" y="%d" width="10" height="10" fill="%s"/><text x="%d" y="%d" class="tick">%s</text>`,
-			chartW-padR-150, padT+2+i*14, color, chartW-padR-136, padT+11+i*14, html.EscapeString(s.name))
-	}
+	legend(&b, ss)
 	b.WriteString("</svg>")
 	return b.String()
 }
