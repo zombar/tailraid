@@ -388,6 +388,31 @@ func Budget(cfg config.Config) (uint64, error) {
 	return uint64(store.Capacity()), nil
 }
 
+// openDisk opens a just-added disk. The CLI registered it through the leader a moment
+// ago, and this node may not have applied that entry yet: the marker check then finds
+// no row, so it retries for a few seconds rather than leaving the disk closed until the
+// next maintenance tick.
+func (a *adminOps) openDisk(ctx context.Context, path string) string {
+	deadline := a.clk.Now().Add(openDiskWait)
+	for {
+		a.disks.refresh(a.node.FSM.Nodes())
+		state := a.disks.state(path)
+		if state == "open" || !a.clk.Now().Before(deadline) {
+			return state
+		}
+		t := a.clk.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return state
+		case <-t.C():
+		}
+	}
+}
+
+// openDiskWait bounds how long open_disk waits for the disk's row to reach this node.
+const openDiskWait = 10 * time.Second
+
 // targets lists this host's shard stores: disk 0, then the open added disks.
 func (a *adminOps) targets() []target {
 	open := a.disks.open()
@@ -555,8 +580,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			return nil, fmt.Errorf("open_disk: %q is not an absolute path", op.Path)
 		}
 		a.disks.add(config.Disk{Path: op.Path, Capacity: op.Capacity})
-		a.disks.refresh(a.node.FSM.Nodes())
-		return map[string]string{"state": a.disks.state(op.Path)}, nil
+		return map[string]string{"state": a.openDisk(ctx, op.Path)}, nil
 	case "check":
 		// --scrub runs one full-verification pass through the leader's repairer, so it
 		// uses the configured fill_after and rate limit and never overlaps a background pass
