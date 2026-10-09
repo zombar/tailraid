@@ -190,7 +190,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
@@ -367,6 +367,7 @@ type adminOps struct {
 	clk      clock.Clock
 	log      *slog.Logger
 	pinned   bool // node.capacity is set: never re-derive the budget
+	dataDir  string
 }
 
 // openStore opens the shard store with its budget: node.capacity pins it, otherwise it is
@@ -596,6 +597,12 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]string{"join_token": token}, nil
 	case "set_policy":
 		return a.setPolicy(ctx, op)
+	case "snapshot": // docs/12 §9: the newest state, exported under the data directory for the CLI to copy out
+		dir, m, err := a.node.ExportSnapshot(filepath.Join(a.dataDir, "export"))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"dir": dir, "index": m.Index, "term": m.Term}, nil
 	case "open_disk":
 		if !filepath.IsAbs(op.Path) {
 			return nil, fmt.Errorf("open_disk: %q is not an absolute path", op.Path)

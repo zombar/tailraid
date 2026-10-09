@@ -123,33 +123,59 @@ A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
    built with `-trimpath -mod=vendor -ldflags "-s -w -X main.version=<tag>"` from the
    committed `vendor/` tree (no module download at release time), plus `sha256sums.txt`
    over them, attached to a GitHub release named after the tag whose notes are that tag's
-   `CHANGELOG.md` section.
+   `CHANGELOG.md` section, together with `sha256sums.txt.minisig`: the release job signs
+   the sums file with `cmd/tailraid-sign` under the key in the `MINISIGN_SECRET_KEY`
+   secret (a minisign unencrypted secret key file, the output of `tailraid-sign -gen`).
+   A release without the secret fails; nothing unsigned is ever published.
 3. Every artifact answers `tailraid version` with the tag, which is what the updater and
    `status` (`VERSION` column) show.
+
+**Signing (I-128).** The signature is minisign's prehashed form: ed25519 over the
+BLAKE2b-512 of `sha256sums.txt`, with a trusted comment (`timestamp:<unix>\tfile:<name>`)
+bound by a global signature over signature and comment. `cmd/tailraid-sign` makes the
+key pair (`-gen`), signs (`-sign`) and verifies (`-verify`); the formats are minisign's
+own, so `minisign -Vm sha256sums.txt -P <key>` verifies the same file. The public key is
+the constant `internal/update.ReleaseKey`:
+
+```
+RWQZh3kca5j1N8FXgFtm3kxOE8RBttUOd0MlVyZcg3Va4XXCkDWxw+E+
+```
+
+To rotate it: generate a new pair, replace the constant and the CI secret in one release,
+and update every node once more under the old key first (an old binary trusts only the
+old key).
 
 Versions are plain semver with a `v` prefix; a build from a commit prints
 `<short-sha>[-dirty]` and is never offered as an update target.
 
 ## 5. Self-update
 
-`tailraid update [--check] [--version vX.Y.Z] [--yes]` replaces the running binary with a
-release artifact (`internal/update`):
+`tailraid update [--check] [--version vX.Y.Z] [--allow-downgrade] [--yes] [--restart]
+[--rollback]` replaces the running binary with a release artifact (`internal/update`,
+I-128):
 
 1. Resolve the release: `GET /repos/zombar/tailraid/releases/latest` (or `/tags/<v>`),
    authenticated with `TAILRAID_GITHUB_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`
    when the `gh` CLI is installed (the repository is private; a public repository needs
    none). The asset is `tailraid_<GOOS>_<GOARCH>[.exe]`.
 2. Compare: a release older than or equal to the running semver is not applied unless
-   `--version` names it explicitly; a non-semver build (`dev`, `<sha>`) always updates.
-3. Download the asset and `sha256sums.txt` from the same release, into a temp file in the
-   executable's directory (same filesystem, so the swap is a rename), and verify the SHA-256
-   against the entry for that asset name. A mismatch deletes the download and fails.
-4. Run the downloaded file with `version` and require it to print the release tag.
-5. Swap atomically: rename the running binary to `<exe>.old` (Windows cannot overwrite a
+   `--version` names it explicitly, and a release older than the running one also needs
+   `--allow-downgrade` (an older node cannot read a newer snapshot, §6); a non-semver
+   build (`dev`, `<sha>`) always updates.
+3. Fetch `sha256sums.txt` and `sha256sums.txt.minisig` from the same release and verify
+   the signature under `ReleaseKey` (§4); a release without a signature, or a build
+   without an embedded key, is refused before anything is downloaded.
+4. Download the asset into a temp file in the executable's directory (same filesystem,
+   so the swap is a rename), require its size to equal the asset's announced size and its
+   SHA-256 to equal the entry for that asset name, and fsync it. A mismatch deletes the
+   download and fails.
+5. Run the downloaded file with `version` and require it to print the release tag.
+6. Swap atomically: rename the running binary to `<exe>.old` (Windows cannot overwrite a
    running image; Unix could but the same path keeps the code identical), rename the
-   download into place, remove `.old` (left behind on Windows until the next run).
-6. Print how to restart the service (`tailraid stop && tailraid start`, or `sc.exe`); the
-   running process is not restarted by `update`.
+   download into place. `.old` stays: `serve` removes it a minute into a clean start, and
+   `tailraid update --rollback` puts it back before then (or until the next update).
+7. Print how to restart the service (`tailraid stop && tailraid start`, or `sc.exe`), or
+   do it when `--restart` is given.
 
 `--check` stops after step 2 and exits 2 when an update is available.
 
@@ -212,6 +238,34 @@ until its replay is done, an isolated follower stops being ready when it loses i
 leader, and `tailraid status` exits 1 while the node it asked is not ready, so a
 supervisor or a script can wait on it (I-125).
 
+## 9. Backup, restore and quorum loss
+
+The metadata (file names, chunk hashes, placements, the member table) is replicated on
+the voters and lives in each one's Raft log and snapshots under `<data_dir>/raft`; the
+data is the shards on every device and disk. Losing any `m` targets is survived (05 §3)
+and needs nothing from this section.
+
+**Backup.** `tailraid snapshot <dir>` asks the local node for a fresh Raft snapshot
+(`/v1/admin` op `snapshot`, which the node writes under `<data_dir>/export/<id>/` with
+`state.bin` and `meta.json`, each fsynced) and copies it to `<dir>/<id>/`. It is small
+(the metadata only) and a copy outside the cluster is worth keeping; `state.bin` is the
+`DecodeState` format of 02, so a future `fsck-from-snapshot` can read it. Shards are not
+part of it.
+
+**Quorum loss (05 (h)).** When more voters are gone for good than Raft can lose, the
+survivors can never elect a leader: every gateway goes stale and read-only. On one
+surviving voter, with its service stopped, `tailraid recover --voters <id>[,<id>…]`
+rewrites that node's Raft membership to the voters named (this node must be one of them;
+IDs as `node ls` shows them) using hashicorp/raft's `RecoverCluster`: the node's newest
+snapshot and the log after it are replayed into a fresh FSM, a snapshot carrying the new
+configuration is written and the log truncated, so the next `serve` starts as the leader
+of that set with every file it knew. Files whose shards survived on the remaining targets
+read exactly; a file whose only shards died with the lost nodes is `EIO`, never garbage;
+the member table still lists the lost nodes until they are removed or `reset` and re-join.
+`recover` refuses to run while `serve` holds the data directory, on an uninitialised
+directory, and when the list leaves this node out (I-129). Run it on one node only: two
+recovered nodes are two clusters.
+
 ## Invariants
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
@@ -246,6 +300,20 @@ supervisor or a script can wait on it (I-125).
   shared by two listeners, an unknown `log.level` or `log.format` and a relative
   `mount.path`; `serve` warns when the config file or the data directory is readable by
   group or others.
+- **I-128** — `update` applies an artifact only when the release's `sha256sums.txt`
+  carries a `sha256sums.txt.minisig` that verifies under `ReleaseKey` (minisign's
+  prehashed ed25519 over BLAKE2b-512, the trusted comment bound by the global
+  signature), the download's size equals the asset's announced size and its SHA-256 the
+  sums entry, and the temp file is fsynced before the swap; a release without a
+  signature or a build without a key is refused before any download; the previous
+  binary stays as `<exe>.old` until a minute into a clean `serve` or until
+  `update --rollback` restores it; a release older than the running one needs
+  `--version` and `--allow-downgrade`.
+- **I-129** — `tailraid snapshot` exports a fresh Raft snapshot whose `state.bin`
+  decodes to the node's current metadata; `tailraid recover --voters` on a stopped node
+  rewrites its Raft membership to the voters named so it restarts as their leader with
+  every entry it had, every file whose shards survive readable and the rest `EIO`; it
+  refuses a running node, an uninitialised directory and a list without this node.
 
 ## Tests
 
@@ -263,3 +331,5 @@ supervisor or a script can wait on it (I-125).
 | I-124 | `TestLogFile_RotatesAndReopens`, `TestLimiter_OneLinePerInterval` |
 | I-125 | `TestHealth_Ready`, `TestCluster_Ready_FollowsLeaderContact` |
 | I-126 | `TestConfig_Validate_Table`, `TestConfig_ExpandHome`, `TestConfig_Warnings_Permissions` |
+| I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
+| I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |

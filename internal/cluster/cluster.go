@@ -80,10 +80,18 @@ type Stores struct {
 	Snaps  raft.SnapshotStore
 }
 
-// HasState reports whether the stores hold any Raft log.
+// HasState reports whether the stores hold any Raft state: a log, or a snapshot alone
+// (RecoverCluster truncates the log into a snapshot, docs/12 §9).
 func (s *Stores) HasState() bool {
-	last, err := s.Logs.LastIndex()
-	return err == nil && last > 0
+	if last, err := s.Logs.LastIndex(); err == nil && last > 0 {
+		return true
+	}
+	if s.Snaps != nil {
+		if l, err := s.Snaps.List(); err == nil && len(l) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Node is an open Raft member.

@@ -22,6 +22,7 @@ import (
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/svc"
+	"github.com/zombar/tailraid/internal/update"
 )
 
 func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
@@ -139,6 +140,8 @@ func serveCmd() *cobra.Command {
 				log.Warn(w)
 			}
 			go reopenLogOnSignal(ctx, lf, log)
+			forget := time.AfterFunc(time.Minute, func() { forgetOldBinary(log) }) // the update's .old, once this start has held (I-128)
+			defer forget.Stop()
 			run := func(ctx context.Context) error { return node.Serve(ctx, cfg, log, version) }
 			if asService, _ := cmd.Flags().GetBool("service"); asService {
 				return runAsService(ctx, svc.Name, run)
@@ -148,6 +151,23 @@ func serveCmd() *cobra.Command {
 	}
 	c.Flags().Bool("service", false, "run under the Windows service control manager (set by `tailraid install`)")
 	return c
+}
+
+// forgetOldBinary removes the <exe>.old an update left once this binary has served for
+// a minute: the rollback window closes with a clean start (docs/12 §5).
+func forgetOldBinary(log *slog.Logger) {
+	exe, err := executable()
+	if err != nil {
+		return
+	}
+	if _, err := os.Stat(exe + ".old"); err != nil {
+		return
+	}
+	if err := update.ForgetOld(exe); err != nil {
+		log.Warn("previous binary not removed", "err", err)
+		return
+	}
+	log.Info("previous binary removed after a clean start", "path", exe+".old")
 }
 
 // exitOnSecondSignal ends the process at once when a second interrupt arrives while the

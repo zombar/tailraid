@@ -59,7 +59,7 @@ content equals the post-write model from every live gateway. A third outcome is 
 | (e) kill -9 or power loss at any fsync step of a shard write | yes | temp + rename + directory fsync before ack; temps never served |
 | (f) loss of a Raft minority | yes | majority keeps committing; minority gateways go read-only |
 | (g) > m nodes lost before repair completes | **no** | affected chunks return EIO; everything else continues |
-| (h) permanent loss of Raft majority | **no** | metadata gone; shards remain but are not addressable (fsck-from-shards is out of scope) |
+| (h) permanent loss of Raft majority | **no** (operator action) | the survivors cannot elect; `tailraid recover` on one of them rewrites the membership from its own snapshot and log (12 §9), after which every file whose shards survive is readable; fsck-from-shards is out of scope |
 | (i) storage that acknowledges fsync without persisting | **no** | outside software control |
 | (j) silent corruption of > m shards of one stripe | **no** | detected (EIO), not recoverable |
 | (k) destruction of the issuing gateway's own disk before its WAL has flushed | **no** | documented gap (flush happens within 2 s of idle, or at the dirty thresholds while writes continue); WAL mirroring is the future fix (04 §8.2) |

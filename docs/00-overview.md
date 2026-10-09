@@ -152,6 +152,8 @@ for a member. No TLS of our own.
 | **Through the correctness review (measured 2026-10-09)** | **≈ 23.2k** |
 | Tests and the soak report (PR 3, measured 2026-10-09): the soak driver's phase runner with recovery and timeout, the undo list, skipped checks, the abort path and the Mutate gate 0.3k, the FSM path bound and the Windows directory sync under 0.05k; the rest of the PR is test code (new scenarios, size tables, fuzz targets, the skip rule) | +0.35k |
 | **Through the test review (measured 2026-10-09)** | **≈ 23.55k** |
+| Hardening (PR 4, measured 2026-10-09): minisign verification and the signing tool 0.35k, update hardening (size, fsync, rollback, downgrade guard) 0.1k, snapshot export and offline recovery 0.2k, the rotating log file, config validation and the rate limiter 0.25k, unit confinement, shutdown hand-over, readiness and the web UI host check 0.15k | +1.05k |
+| **Through the 2026-10 review (measured 2026-10-09)** | **≈ 24.6k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The

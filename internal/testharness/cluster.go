@@ -582,6 +582,21 @@ func (c *Cluster) Restart(i int) {
 	}
 }
 
+// Recover rewrites the killed node i's Raft membership to the nodes in voters (docs/12
+// §9): what `tailraid recover --voters` does on a stopped node. Restart brings it back.
+func (c *Cluster) Recover(i int, voters []int) error {
+	c.T.Helper()
+	nd := c.Nodes[i]
+	if c.isAlive(nd) {
+		c.T.Fatalf("recover n%d: the node is running", i)
+	}
+	servers := make([]raft.Server, 0, len(voters))
+	for _, v := range voters {
+		servers = append(servers, raft.Server{Suffrage: raft.Voter, ID: raft.ServerID(c.Nodes[v].ID), Address: c.Nodes[v].raddr})
+	}
+	return cluster.Recover(cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Timing: RaftTiming(), Stores: nd.stores}, servers)
+}
+
 // Partition splits the cluster into two sides (raft and RPC links cut across sides).
 func (c *Cluster) Partition(a, b []int) {
 	in := slices.Contains[[]int]
