@@ -25,7 +25,7 @@ func TestCluster_RecoverAfterLostMajority(t *testing.T) {
 		c.WriteFile(0, p, files[p])
 	}
 	c.Settle()
-	self := c.Nodes[0].Idx()
+	self := c.Nodes[0].Target() // slots name the survivor's disk (docs/14 §9)
 	onSelf := map[string]bool{}
 	for p := range files {
 		for _, ch := range c.ChunksOf(0, p) {
@@ -50,7 +50,7 @@ func TestCluster_RecoverAfterLostMajority(t *testing.T) {
 	c.Restart(0)
 	testharness.Eventually(t, func() bool { return c.Nodes[0].Node.IsLeader() }, "the recovered node leads alone")
 	c.Settle()
-	if nodes := c.Nodes[0].Node.FSM.Nodes(); len(nodes) != 3 {
+	if nodes := c.Nodes[0].Node.FSM.Nodes(); len(nodes) != 6 { // three hosts and their disks
 		t.Fatalf("the member table is the metadata, not the Raft configuration: %d nodes", len(nodes))
 	}
 	for p, want := range files {

@@ -99,9 +99,9 @@ func (e *fakeEnv) Chunks(context.Context, NodeRef, string) ([]admin.ChunkReport,
 }
 func (e *fakeEnv) FSMHash(context.Context, NodeRef) (uint64, string, error) { return 1, "h", nil }
 func (e *fakeEnv) Goroutines(context.Context, NodeRef) (string, error)      { return e.dump, nil }
-func (e *fakeEnv) Disk(context.Context, NodeRef) (DiskInfo, error)          { return DiskInfo{}, nil }
+func (e *fakeEnv) Disks(context.Context, NodeRef) ([]DiskInfo, error)       { return nil, nil }
 
-func (e *fakeEnv) Fill(ctx context.Context, n NodeRef, b uint64) error {
+func (e *fakeEnv) Fill(ctx context.Context, n NodeRef, _ string, b uint64) error {
 	e.record(ctx, fmt.Sprintf("fill %s %d", n.Name, b))
 	return nil
 }
