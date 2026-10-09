@@ -89,6 +89,13 @@ and the maintenance tick proposes `set_capacity` for each target separately, pas
 hysteresis. When several targets of one host share a filesystem, its `used + free − reserve`
 is divided equally among them. A pinned `capacity` is never re-derived.
 
+`tailraid volume grow <disk> <size>` pins a disk's budget without hand-editing the config:
+it rewrites that disk's `capacity:` (the disk named as `node ls` shows it, by its number
+or by its path), validates and saves the config, and restarts the service so the budget
+takes effect; `auto` as the size removes the pin so the budget follows free space again;
+`--no-restart` writes the config only. An unknown disk or an unparsable size changes
+nothing (I-130).
+
 ## 4. Transport and liveness
 
 The shard RPC addresses a target by index: the resolver maps a disk to its host's
@@ -256,6 +263,10 @@ runs.
 - **I-121** — `join` marks and registers the disks listed in its config exactly as `init`
   does, named `<host>/<n>` from 1; `init` and `join` with no disks print that the device
   stores no data and how to add a disk; neither registers a budget on the device row.
+- **I-130** — `volume grow <disk> <size>` rewrites exactly that disk's `capacity` in the
+  config (`auto` clears it) for a disk named by `<host>/<n>`, its number or its path,
+  saves a config that validates, and restarts the service unless `--no-restart`; an
+  unknown disk, a device without disks or an unparsable size leaves the config untouched.
 
 ## Tests
 
@@ -271,3 +282,4 @@ runs.
 | I-119 | `TestCLI_Serve_RefusesLegacyState`, `TestLegacyDeviceTargets_Table`, `TestServe_RefusesLegacyState` |
 | I-120 | `TestCluster_Diskless_WriteIsENOSPC`, `TestFlusher_NoTargets_ErrorWrapsErrFull`, `TestHasTargets_Table` |
 | I-121 | `TestCLI_Init_NoDisks_PrintsHint`, `TestCLI_Join_RegistersConfiguredDisks` |
+| I-130 | `TestCLI_VolumeGrow_EditsConfig` |
