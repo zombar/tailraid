@@ -160,6 +160,8 @@ for a member. No TLS of our own.
 | **Through the 2026-10 review (measured 2026-10-09)** | **≈ 24.6k** |
 | Disks only and diskless hosts (docs/14 §9, measured 2026-10-09 as the net diff): the device store, its budget, the `/v1/shards` route and the capacity special cases go (−0.3k); join registering config disks, the legacy-state check, per-disk `/dev/disk` and the soak's diskless voter and phase 14 come (+0.35k); the TypeScript loses its data-dir label | +0.05k |
 | **Through disks only (measured 2026-10-09)** | **≈ 24.65k** |
+| SMB gateway for Windows (docs/15, measured 2026-10-09: the adapter and server wiring in `internal/smbgw` 0.33k, `vfs.File.WriteAt` and the file info's times 0.02k, config, node, CLI and mount helpers 0.19k; minus the portmap stub and the Windows NFS path 0.25k; the server copy in `third_party/smb` is upstream code and not counted) | +0.3k |
+| **Through the SMB gateway (measured 2026-10-09)** | **≈ 24.95k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The

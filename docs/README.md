@@ -22,6 +22,6 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [14-disks.md](14-disks.md) | Several disks per device: disks as placement targets, the host as failure domain, the host cap, host-aware policy |
 | [15-smb-gateway.md](15-smb-gateway.md) | SMB2 gateway for Windows: library, adapter over the vfs, case-insensitive names, password and `net use` mount, known gaps |
 | [invariants.md](invariants.md) | Generated table: every invariant, its doc, statement and tests |
-| [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows mount path (M4) |
+| [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows SMB mount path |
 
 Status of each milestone is tracked in the repository `CLAUDE.md`.
