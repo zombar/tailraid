@@ -22,7 +22,7 @@ Download a binary from the [releases](https://github.com/zombar/tailraid/release
 
 ```sh
 git clone https://github.com/zombar/tailraid.git && cd tailraid
-make install          # → ~/.local/bin/tailraid (needs Go 1.27+)
+make install          # → ~/.local/bin/tailraid (needs Go 1.27.2+)
 ```
 
 `tailraid update` installs the latest release. The repository is private: set `GITHUB_TOKEN` or log in with `gh`.

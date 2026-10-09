@@ -1,6 +1,6 @@
 module github.com/zombar/tailraid
 
-go 1.27
+go 1.27.2
 
 require (
 	github.com/go-git/go-billy/v5 v5.9.2
@@ -11,7 +11,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/willscott/go-nfs v0.0.4
 	github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886
-	go.etcd.io/bbolt v1.4.1
+	go.etcd.io/bbolt v1.5.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/sys v0.48.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
@@ -33,5 +33,5 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/rasky/go-xdr v0.0.0-20170124162913-1a41d1a06c93 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 )

@@ -40,13 +40,20 @@ make build        static binary → dist/tailraid        make test        -short
 make test-race    -short -race (pre-commit)             make test-long   model checker etc. (minutes)
 make lint         golangci-lint + check-invariants      make invariants  regenerate docs/invariants.md, lifecycle.md
 make fmt-check    gofmt                                 make vuln        govulncheck
-make check        fmt-check + lint + test-race          make release     6 static binaries + sha256sums
+make check        fmt-check + vendor-check + lint + web-check + test-race
+make vendor-check vendor/ matches go.mod                make deadcode    deadcode + unparam (part of lint)
+make release      6 static binaries + sha256sums
 make test-mount   real NFS mount (sudo -E)              make soak        docker-compose soak → report.html
 make web          esbuild → internal/webui/dist/app.js  make web-check   fails when dist is stale (part of check)
 ```
 
-Lint and vuln tools are Go tools pinned in `tools.mod` (`go tool -modfile=tools.mod …`), so
-the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
+Runtime dependencies are vendored (`vendor/`, refreshed by `make tidy`, checked by
+`make vendor-check`); builds use `-mod=vendor`. Dev tools are pinned in `tools.mod`, so the
+main `go.mod` holds only runtime dependencies. Because the vendor tree matches `go.mod` and
+not `tools.mod`, tools run as `go run -mod=readonly -modfile=tools.mod <import path>` (the
+Makefile's `TOOL`), never `go tool -modfile` (it refuses with "inconsistent vendoring") and
+never `go run … @latest` (it edits the module file). `make deadcode` (x/tools `deadcode`
+and `unparam`) is part of `make lint`.
 
 ## How we work: docs first, then test first
 

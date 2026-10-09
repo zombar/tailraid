@@ -43,8 +43,9 @@ Rules that keep it honest:
 
 - A `_test.go` that cites an invariant lands in the same commit as, or earlier than, the
   implementation it covers.
-- `make check` (fmt-check, lint, invariants, `go test -short -race ./...`) runs in the
-  lefthook pre-commit hook and must pass before every commit.
+- `make check` (fmt-check, vendor-check, lint with invariants and dead code, web-check,
+  `go test -short -race ./...`) runs in the lefthook pre-commit hook and must pass before
+  every commit.
 - No coverage gate. `make test` prints per-package coverage so regressions are visible.
 - Review checklist (also in `CLAUDE.md`): every write-path test includes a non-zero offset;
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on
@@ -336,9 +337,12 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
 
 ## 7. CI
 
-`.github/workflows/ci.yml`: `checks` (tidy diff, gofmt) · `lint` (golangci-lint v2 via
-`go tool -modfile=tools.mod`, `check-invariants.sh --check`, `make web-check`: the committed
-browser bundle matches `internal/webui/src`) · `vuln` (govulncheck) · `test`
+`.github/workflows/ci.yml`: `checks` (`go mod verify`, tidy diff, `make vendor-check`:
+the committed `vendor/` matches `go.mod`, gofmt) · `lint` (golangci-lint v2 via
+`go run -mod=readonly -modfile=tools.mod`, `check-invariants.sh --check`, `make deadcode`,
+`make web-check`: the committed browser bundle matches `internal/webui/src`; the lint runs
+again under `GOOS=darwin` and `GOOS=windows` so the per-OS files are covered) · `vuln`
+(govulncheck; the release job waits for it) · `test`
 matrix ubuntu/macos/windows `go test -short -race -cover ./...` (no coverage gate) · `long`
 on pushes to main and nightly (`make test-long`) · `mount` on main (ubuntu with
 `nfs-common`, macos; `sudo -E make test-mount`) · `soak` nightly on ubuntu uploading

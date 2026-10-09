@@ -95,9 +95,10 @@ A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
    `changelog/<version>`, opens the pull request and stops; merge it, pull, and run the
    same command again: with nothing left to commit it creates the annotated tag and
    pushes it.
-2. CI (`release` job, after `checks`, `lint` and `test`) runs `make release
+2. CI (`release` job, after `checks`, `lint`, `vuln` and `test`) runs `make release
    VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
-   built with `-trimpath -ldflags "-s -w -X main.version=<tag>"`, plus `sha256sums.txt`
+   built with `-trimpath -mod=vendor -ldflags "-s -w -X main.version=<tag>"` from the
+   committed `vendor/` tree (no module download at release time), plus `sha256sums.txt`
    over them, attached to a GitHub release named after the tag whose notes are that tag's
    `CHANGELOG.md` section.
 3. Every artifact answers `tailraid version` with the tag, which is what the updater and

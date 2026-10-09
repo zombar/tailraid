@@ -3,8 +3,15 @@ SHELL := /bin/bash
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
-GOFLAGS_BUILD := -trimpath
-TOOL := go tool -modfile=tools.mod
+GOFLAGS_BUILD := -trimpath -mod=vendor
+# Dev tools live in tools.mod. With vendor/ present, `go tool -modfile` refuses to run
+# ("inconsistent vendoring": the vendor tree matches go.mod, not tools.mod), so tools run
+# through `go run -mod=readonly`, which ignores vendor/ and never edits a module file.
+TOOL := go run -mod=readonly -modfile=tools.mod
+GOLANGCI := $(TOOL) github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+GOVULNCHECK := $(TOOL) golang.org/x/vuln/cmd/govulncheck
+DEADCODE := $(TOOL) golang.org/x/tools/cmd/deadcode
+UNPARAM := $(TOOL) mvdan.cc/unparam
 PKGS := ./...
 BIN := tailraid
 
@@ -12,12 +19,12 @@ BIN := tailraid
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
-        release tag check invariants tidy clean help web web-check
+        release tag check invariants tidy vendor-check deadcode clean help web web-check
 
 # Browser UI (docs/13 §6): esbuild is a Go tool; the bundle is committed and embedded.
 WEB_SRC := internal/webui/src
 WEB_DIST := internal/webui/dist
-ESBUILD := $(TOOL) esbuild $(WEB_SRC)/main.ts --bundle --format=esm --target=es2022 --platform=browser \
+ESBUILD := $(TOOL) github.com/evanw/esbuild/cmd/esbuild $(WEB_SRC)/main.ts --bundle --format=esm --target=es2022 --platform=browser \
            --log-level=warning --legal-comments=none
 
 ## build: static binary for the current OS/arch into ./dist
@@ -92,32 +99,45 @@ web-check:
 	$(ESBUILD) --outfile=$$tmp/app.js && cmp -s $$tmp/app.js $(WEB_DIST)/app.js \
 	  || { echo "$(WEB_DIST)/app.js is stale; run make web"; exit 1; }
 
-## lint: golangci-lint + invariant/lifecycle citation check
+## lint: golangci-lint + invariant/lifecycle citation check + dead code
 lint:
-	$(TOOL) golangci-lint run $(PKGS)
+	$(GOLANGCI) run $(PKGS)
 	scripts/check-invariants.sh --check
+	$(MAKE) --no-print-directory deadcode
+
+## deadcode: nothing unreachable from the binaries and tests, no unused parameters
+deadcode:
+	@out="$$($(DEADCODE) -test $(PKGS))"; if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable from the binaries and tests"; exit 1; fi
+	@out="$$($(UNPARAM) $(PKGS) 2>&1 | grep -v '^exit status')"; if [ -n "$$out" ]; then echo "$$out"; echo "unparam: unused parameters or results"; exit 1; fi
 
 ## invariants: regenerate docs/invariants.md and docs/lifecycle.md
 invariants:
 	scripts/check-invariants.sh
 
-## fmt: gofmt all Go files in place
+## fmt: gofmt all Go files in place (vendor/ is upstream code, left as it is)
 fmt:
-	gofmt -w $$(git ls-files -co --exclude-standard -- '*.go')
+	gofmt -w $$(git ls-files -co --exclude-standard -- '*.go' ':!vendor')
 
 ## fmt-check: fail if any file is not gofmt-clean
 fmt-check:
-	@out="$$(git ls-files -co --exclude-standard -- '*.go' | xargs gofmt -l)"; \
+	@out="$$(git ls-files -co --exclude-standard -- '*.go' ':!vendor' | xargs gofmt -l)"; \
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 ## vuln: govulncheck over all packages
 vuln:
-	$(TOOL) govulncheck $(PKGS)
+	$(GOVULNCHECK) $(PKGS)
 
-## tidy: go mod tidy for both module files
+## tidy: go mod tidy for both module files, then refresh vendor/
 tidy:
 	go mod tidy
 	go mod tidy -modfile=tools.mod
+	go mod vendor
+
+## vendor-check: vendor/ matches go.mod (part of check and CI)
+vendor-check:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	go mod vendor -o "$$tmp/vendor" && diff -qr "$$tmp/vendor" vendor >/dev/null \
+	  || { echo "vendor/ is stale; run make tidy"; diff -qr "$$tmp/vendor" vendor | head; exit 1; }
 
 ## changelog: regenerate CHANGELOG.md from the commit log (NEXT=vX.Y.Z names the unreleased section)
 changelog:
@@ -165,7 +185,7 @@ release:
 	@cat dist/sha256sums.txt
 
 ## check: everything the pre-commit hook requires
-check: fmt-check lint web-check test-race
+check: fmt-check vendor-check lint web-check test-race
 
 clean:
 	rm -rf dist report.html results.jsonl
