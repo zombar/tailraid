@@ -27,6 +27,16 @@ func cands(weights ...uint64) []Candidate {
 	return out
 }
 
+// place is PlaceKM with k=n and m=0, the slots it could not fill trimmed: the shape these
+// tests were written against. The ranking is the production one.
+func place(h Hash, c []Candidate, n int) []NodeIdx {
+	p := PlaceKM(h, c, n, 0)
+	for len(p) > 0 && p[len(p)-1] == 0 {
+		p = p[:len(p)-1]
+	}
+	return p
+}
+
 func shuffled(r *rand.Rand, c []Candidate) []Candidate {
 	out := append([]Candidate(nil), c...)
 	r.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
@@ -39,9 +49,9 @@ func TestPlace_DeterministicAcrossNodes(t *testing.T) {
 	base := cands(1, 1, 2, 3, 5, 8, 13)
 	for i := range uint64(10000) {
 		h := hashN(i)
-		want := Place(h, base, 3)
+		want := place(h, base, 3)
 		for node := range 7 {
-			got := Place(h, shuffled(r, base), 3)
+			got := place(h, shuffled(r, base), 3)
 			if !equalIdx(got, want) {
 				t.Fatalf("hash %d node %d: %v != %v", i, node, got, want)
 			}
@@ -73,7 +83,7 @@ func TestPlace_GoldenVectors(t *testing.T) {
 			}
 			n := 1 + r.Intn(len(ws)+1)
 			h := uint64(r.Int63())
-			vecs = append(vecs, vec{Hash: h, Weights: ws, N: n, Want: Place(hashN(h), cands(ws...), n)})
+			vecs = append(vecs, vec{Hash: h, Weights: ws, N: n, Want: place(hashN(h), cands(ws...), n)})
 		}
 		b, err := json.MarshalIndent(vecs, "", " ")
 		if err != nil {
@@ -95,8 +105,8 @@ func TestPlace_GoldenVectors(t *testing.T) {
 		t.Fatalf("only %d vectors", len(vecs))
 	}
 	for i, v := range vecs {
-		if got := Place(hashN(v.Hash), cands(v.Weights...), v.N); !equalIdx(got, v.Want) {
-			t.Fatalf("vector %d: Place(%d, %v, %d) = %v, golden %v", i, v.Hash, v.Weights, v.N, got, v.Want)
+		if got := place(hashN(v.Hash), cands(v.Weights...), v.N); !equalIdx(got, v.Want) {
+			t.Fatalf("vector %d: place(%d, %v, %d) = %v, golden %v", i, v.Hash, v.Weights, v.N, got, v.Want)
 		}
 	}
 }
@@ -105,7 +115,7 @@ func TestPlace_GoldenVectors(t *testing.T) {
 func TestPlace_DistinctNodes(t *testing.T) {
 	c := cands(1, 1, 1, 1, 1, 1)
 	for i := range uint64(5000) {
-		p := Place(hashN(i), c, 6)
+		p := place(hashN(i), c, 6)
 		if len(p) != 6 {
 			t.Fatalf("len %d", len(p))
 		}
@@ -121,21 +131,21 @@ func TestPlace_DistinctNodes(t *testing.T) {
 
 func TestPlace_FewerCandidatesThanN(t *testing.T) {
 	c := cands(1, 2)
-	p := Place(hashN(1), c, 5)
+	p := place(hashN(1), c, 5)
 	if len(p) != 2 {
 		t.Fatalf("len %d want 2", len(p))
 	}
-	if got := Place(hashN(1), nil, 3); len(got) != 0 {
+	if got := place(hashN(1), nil, 3); len(got) != 0 {
 		t.Fatalf("no candidates: %v", got)
 	}
-	if got := Place(hashN(1), c, 0); len(got) != 0 {
+	if got := place(hashN(1), c, 0); len(got) != 0 {
 		t.Fatalf("n=0: %v", got)
 	}
 }
 
 func TestPlace_DuplicateCandidateIdxCollapses(t *testing.T) {
 	c := []Candidate{{Idx: 1, Weight: 1}, {Idx: 1, Weight: 1}, {Idx: 2, Weight: 1}}
-	p := Place(hashN(3), c, 3)
+	p := place(hashN(3), c, 3)
 	if len(p) != 2 || p[0] == p[1] {
 		t.Fatalf("got %v", p)
 	}
@@ -147,7 +157,7 @@ func TestPlace_CapacityWeighting(t *testing.T) {
 	const N = 100000
 	count := map[NodeIdx]int{}
 	for i := range uint64(N) {
-		count[Place(hashN(i), c, 1)[0]]++
+		count[place(hashN(i), c, 1)[0]]++
 	}
 	ratio := float64(count[2]) / float64(count[1])
 	if ratio < 1.8 || ratio > 2.2 {
@@ -157,7 +167,7 @@ func TestPlace_CapacityWeighting(t *testing.T) {
 	c3 := cands(1, 1, 2)
 	count = map[NodeIdx]int{}
 	for i := range uint64(N) {
-		count[Place(hashN(i), c3, 1)[0]]++
+		count[place(hashN(i), c3, 1)[0]]++
 	}
 	if share := float64(count[3]) / N; share < 0.45 || share > 0.55 {
 		t.Fatalf("node 3 share %.3f", share)
@@ -169,8 +179,8 @@ func TestPlace_StabilityOnRemove(t *testing.T) {
 	full := cands(1, 1, 1, 1, 1)
 	without := full[:4] // remove node 5
 	for i := range uint64(5000) {
-		a := Place(hashN(i), full, 3)
-		b := Place(hashN(i), without, 3)
+		a := place(hashN(i), full, 3)
+		b := place(hashN(i), without, 3)
 		had := false
 		for _, n := range a {
 			if n == 5 {
@@ -217,7 +227,7 @@ func TestPlace_StabilityOnAdd(t *testing.T) {
 	const N = 20000
 	moved := 0
 	for i := range uint64(N) {
-		if Place(hashN(i), before, 1)[0] != Place(hashN(i), after, 1)[0] {
+		if place(hashN(i), before, 1)[0] != place(hashN(i), after, 1)[0] {
 			moved++
 		}
 	}
@@ -279,9 +289,9 @@ func FuzzPlace_Determinism(f *testing.F) {
 			c[i] = Candidate{Idx: NodeIdx(i + 1), Weight: uint64(i%5) + 1}
 		}
 		h := hashN(hseed)
-		want := Place(h, c, int(n))
+		want := place(h, c, int(n))
 		r := rand.New(rand.NewSource(shuf))
-		got := Place(h, shuffled(r, c), int(n))
+		got := place(h, shuffled(r, c), int(n))
 		if !equalIdx(got, want) {
 			t.Fatalf("%v != %v", got, want)
 		}
@@ -301,7 +311,7 @@ func FuzzPlace_Determinism(f *testing.F) {
 func BenchmarkPlace_10Nodes(b *testing.B) {
 	c := cands(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 	for i := range b.N {
-		Place(hashN(uint64(i)), c, 3)
+		place(hashN(uint64(i)), c, 3)
 	}
 }
 
@@ -318,8 +328,8 @@ func TestExcludeIdx(t *testing.T) {
 	}
 	// Re-placing after excluding held nodes never repeats one of them.
 	for i := range uint64(2000) {
-		held := Place(hashN(i), c, 2)
-		for _, n := range Place(hashN(i), ExcludeIdx(c, held), 2) {
+		held := place(hashN(i), c, 2)
+		for _, n := range place(hashN(i), ExcludeIdx(c, held), 2) {
 			if n == held[0] || n == held[1] {
 				t.Fatalf("hash %d: re-placement %v overlaps held %v", i, n, held)
 			}

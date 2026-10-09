@@ -165,15 +165,27 @@ settable here; truncation is a `Commit`.
 
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
-to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy. The
-Raft index of the applied `SetPlacement` (or `GCDelete`) is the fence carried by the shard
-`DELETE` RPC ([06](06-gc-and-repair.md)).
+to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy.
+`Expect` is the placement the proposer planned from: the command applies only if the
+chunk still has it, else `ErrConflict` (I-102, L-197), so a flush filling slots, a repair
+pass and a `--force` removal zeroing slots cannot silently undo each other; the loser
+re-plans from the current placement or skips the chunk for this pass. The Raft index of
+the applied `SetPlacement` (or `GCDelete`) is the fence carried by the shard `DELETE` RPC
+([06](06-gc-and-repair.md)).
 
 **GCDelete.** For every chunk in `Tombs` with `TombstonedAt < Before` (and `Refs == 0`,
-which `Tombs` guarantees): delete it from `Chunks` and `Tombs` and append
-`GCVictim{Hash, Placement}` to `Result.Victims`. The leader then deletes the shards.
-Deterministic because `Before` is in the command and the victim list is emitted in hash
-order.
+which `Tombs` guarantees), in hash order and at most `Limit` of them (I-103; `0` is
+unbounded): delete it from `Chunks` and `Tombs` and append `GCVictim{Hash, Placement}` to
+`Result.Victims`. The leader then deletes the shards and proposes again while a batch
+comes back full. Deterministic because `Before` and `Limit` are in the command and the
+victim list is emitted in hash order.
+
+**Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
+disk or host) or 3 (`SetPlacement.Expect`, `GCDelete.Limit`), snapshots in version 3;
+every reader decodes every older version. `meta.CodecVersion` is the newest a binary
+writes; `/health` reports it and `join` refuses a cluster that reports a newer one
+(I-105, [12](12-operations.md) §6). An entry a binary cannot decode still advances its
+applied index (so replicas stay aligned) and is counted and logged (I-105).
 
 **Idempotency.** Raft may re-deliver entries on restore; `Apply` is pure with respect to the
 log so re-applying from a snapshot's index yields the same state (I-5).
@@ -243,13 +255,22 @@ when leader, otherwise forwards the encoded command to the current leader with
 
 - `ErrNotLeader` (the target was not leader when it received the command): the command was
   **not** applied; the caller retries against the new leader (bounded, with backoff).
-- `ErrLeadershipLost`, timeout, or transport error after the command was handed to Raft: the
-  outcome is **unknown**; the forwarding layer returns the error and never retries by
-  itself (I-29). *Callers* may retry commands that are idempotent by construction: for
-  `Commit`, `BaseVersion` makes a blind retry either succeed once or fail with
-  `ErrConflict`, after which the gateway reloads the inode and re-plans; for
-  `Create`/`Mkdir` a retry may hit `ErrExist`, which the gateway maps to success if the
-  existing child matches.
+- `ErrLeadershipLost`, timeout, a cancelled context while the future is pending, a
+  transport error, or the leader's `500` after it handed the command to Raft: the outcome
+  is **unknown**. Every such failure is reported as `meta.ErrUnknownOutcome` (wrapping the
+  cause); the forwarding layer never retries it by itself (I-29) and the leader's `apply`
+  handler never disguises it as "not the leader" (I-95). A context that is already expired
+  is refused before dispatch, since Raft disarms its timer for a zero timeout.
+- *Callers* resolve an unknown outcome instead of retrying blindly (I-95): the gateway
+  proposes the command once more and reads the second answer knowing a first attempt may
+  have landed. `Commit` carries `BaseVersion`, so the repeat either applies or returns
+  `ErrConflict`, after which the flusher reloads the inode and re-plans. `Create` and
+  `Mkdir` may hit `ErrExist`, which the gateway maps to success when the existing child
+  matches; a `Symlink` only when the existing link has the same target. `Unlink`, `Rmdir`
+  and `Rename` take `ErrNotExist` after an unknown outcome as the first attempt having
+  landed. `SetAttr` sets absolute values and is simply repeated. A second unknown outcome
+  in a row is `EIO`. Commands whose first proposal was *not* applied (`ErrNotLeader`,
+  `ErrNoLeader`) are retried with backoff until the gateway is stale.
 - A leader with no quorum eventually steps down; proposers see `ErrNoLeader` and the flusher
   backs off (data stays in the WAL, see 04).
 
@@ -323,6 +344,32 @@ no divergent state to merge because it never applied uncommitted entries.
   is handed to Raft at most once per proposal, and the forwarding layer itself retries only
   after an explicit `ErrNotLeader`. (Callers may retry idempotent commands as described
   above; that is outside this invariant.)
+- **I-96** — `node_id` and `cluster_id` are written atomically (temp file, fsync, rename,
+  directory fsync), so a crash leaves the old file or the new one; a read error other
+  than "not found" on `node_id` is an error, never a fresh identity.
+- **I-99** — A node that fails to open or bootstrap releases its Raft listener and its
+  stores before returning the error, so the same data directory and address can be
+  opened again at once.
+- **I-102** — A `SetPlacement` whose `Expect` differs from the chunk's current placement
+  is rejected with `ErrConflict` and changes nothing, so two proposers that planned from
+  different placements never overwrite each other's slots unnoticed.
+- **I-103** — A `GCDelete` removes at most `Limit` entries, the lowest hashes first, and
+  the GC worker proposes again while a batch comes back full, so a backlog of any size
+  drains in bounded applies and every replica removes the same entries per entry.
+- **I-104** — A snapshot is a deep copy of the mutable state taken under the read lock,
+  and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
+  `Commit` applied after the snapshot never changes it, and a snapshot is written and read
+  as a stream, never held whole in memory a second time.
+- **I-105** — A log entry this binary cannot decode is counted (`status` shows
+  `incompatible_entries` and a warning) and logged, while the applied index advances as on
+  every replica; `/health` reports `meta.CodecVersion`, and `join` refuses a cluster whose
+  node reports a newer one.
+- **I-95** — A proposal that may have been applied (leadership lost, timeout, cancelled
+  while pending, transport error, or the leader's `500`) is reported as
+  `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
+  and resolves the second answer per command (`ErrExist`/`ErrNotExist` after an unknown
+  outcome count as the first attempt having landed), so an acknowledged mutation is never
+  reported as failed and a failed one is never silently repeated.
 
 ## Tests
 
@@ -331,9 +378,16 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-4 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas`, `TestModelCheck_Long` |
 | I-5 | `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestSingleNode_BootstrapProposeRestart` |
 | I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits` |
-| I-26 | `FuzzDecodeCommand`, `TestErrorCode_RoundTrip`, `TestFSM_BadCommandLeavesStateUnchanged`, `TestFSM_Commit_NewSizeBounds`, `TestFSM_Commit_RejectsImplicitShrink`, `TestFSM_Create_NameBoundaries`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestVFS_RenameIntoOwnSubtree_NoSideEffects` |
+| I-26 | `FuzzDecodeCommand`, `TestEncodeCommand_BadCommandIsError`, `TestErrorCode_RoundTrip`, `TestFSM_BadCommandLeavesStateUnchanged`, `TestFSM_Commit_NewSizeBounds`, `TestFSM_Commit_RejectsImplicitShrink`, `TestFSM_Create_NameBoundaries`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestVFS_RenameIntoOwnSubtree_NoSideEffects` |
 | I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
+| I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext` |
+| I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
+| I-102 | `TestFSM_SetPlacement_ExpectConflict`, `TestEncodeCommand_Golden` |
+| I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
+| I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |
+| I-105 | `TestFSM_IncompatibleEntryCounted`, `TestCodecCompatible`, `TestMembersBadSlotHealthStatus` |
+| I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |

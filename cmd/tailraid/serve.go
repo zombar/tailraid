@@ -54,8 +54,8 @@ func initCmd() *cobra.Command {
 			if err != nil || cs == 0 || cs > meta.MaxChunkSize {
 				return fmt.Errorf("bad --chunk %q (1 byte to %d MiB)", chunkSize, meta.MaxChunkSize>>20)
 			}
-			if k < 1 || m < 0 || k+m > 256 {
-				return fmt.Errorf("bad policy k=%d m=%d", k, m)
+			if _, _, err := policyFlags(k, m); err != nil {
+				return err
 			}
 			if err := config.Save(path, cfg); err != nil {
 				return err

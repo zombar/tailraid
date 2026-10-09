@@ -22,6 +22,13 @@ var (
 	ErrNameTooLong     = errors.New("meta: name longer than MaxNameLen bytes")
 )
 
+// ErrUnknownOutcome is returned by a Proposer (never in Result.Err, so it has no wire
+// code) when a command was handed to Raft but its fate is unknown: leadership was lost,
+// the forward timed out, or the leader's reply was lost (docs/02 §forwarding, I-95).
+// The caller must not assume either outcome; it re-proposes and reads the answer, or
+// re-checks the state.
+var ErrUnknownOutcome = errors.New("meta: proposal outcome unknown")
+
 var errByCode = []error{
 	nil, // 0
 	ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,

@@ -107,6 +107,14 @@ func Home() string {
 // DefaultPath is the config file location.
 func DefaultPath() string { return filepath.Join(Home(), "config.yaml") }
 
+// The listeners' defaults (docs/08 §Loopback-only listeners, docs/12).
+const (
+	DefaultRaftPort = 20480
+	DefaultRPCPort  = 20481
+	DefaultWebPort  = 20482
+	DefaultNFSAddr  = "127.0.0.1:20490"
+)
+
 // Default returns the defaults for this OS.
 func Default() Config {
 	var c Config
@@ -114,10 +122,10 @@ func Default() Config {
 	c.Node.Name = host
 	c.Node.DataDir = filepath.Join(Home(), "data")
 	c.Node.Capacity = "" // derived
-	c.Listen.Raft = 20480
-	c.Listen.RPC = 20481
-	c.Listen.Web = 20482
-	c.Listen.NFS = "127.0.0.1:20490"
+	c.Listen.Raft = DefaultRaftPort
+	c.Listen.RPC = DefaultRPCPort
+	c.Listen.Web = DefaultWebPort
+	c.Listen.NFS = DefaultNFSAddr
 	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
 	c.Mount.Path = filepath.Join(home, "TailRAID")
@@ -213,21 +221,11 @@ func ParseBytes(s string) (uint64, error) {
 		"": 1, "B": 1, "K": 1 << 10, "KB": 1 << 10, "KIB": 1 << 10, "M": 1 << 20, "MB": 1 << 20, "MIB": 1 << 20,
 		"G": 1 << 30, "GB": 1 << 30, "GIB": 1 << 30, "T": 1 << 40, "TB": 1 << 40, "TIB": 1 << 40,
 	}
-	m, ok := mult[upper(unit)]
+	m, ok := mult[strings.ToUpper(unit)]
 	if !ok || num < 0 {
 		return 0, fmt.Errorf("bad size %q", s)
 	}
 	return uint64(num * m), nil
-}
-
-func upper(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'a' && c <= 'z' {
-			b[i] = c - 32
-		}
-	}
-	return string(b)
 }
 
 // Logger builds the process logger from config and environment. Output goes to stderr,

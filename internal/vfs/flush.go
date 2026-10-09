@@ -259,6 +259,7 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	if err != nil {
 		if errors.Is(err, meta.ErrNotExist) {
 			f.ov.Drop(ino)
+			f.clearRetry(ino) // nothing left to retry: the backoff entry goes with the inode
 			return nil
 		}
 		f.ov.AbortFlush(plan)
@@ -369,8 +370,11 @@ func (f *Flusher) touched(plan *FlushPlan, base meta.Inode, partial bool) (idxs 
 		if plan.MinSize%cs != 0 {
 			touched[plan.MinSize/cs] = true // the chunk straddling the truncation point
 		}
-		for i := (plan.MinSize + cs - 1) / cs; i < n; i++ {
-			if !touched[i] && (int(i) >= len(base.Chunks) || base.Chunks[i] != meta.HashZero) {
+		// chunks the base holds past the truncation point must be rewritten as holes;
+		// chunks past the base list are holes already (the FSM grows the list with
+		// HashZero), so a truncate followed by a far seek costs no write per index
+		for i := (plan.MinSize + cs - 1) / cs; i < n && int(i) < len(base.Chunks); i++ {
+			if !touched[i] && base.Chunks[i] != meta.HashZero {
 				touched[i] = true // truncated-away bytes become holes
 			}
 		}
@@ -730,7 +734,7 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c me
 	if err := f.upload(ctx, w, data, keep); err != nil {
 		return err
 	}
-	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place}})
+	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place, Expect: c.Placement}})
 	if err != nil {
 		return fmt.Errorf("propose set-placement: %w", err)
 	}

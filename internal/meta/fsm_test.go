@@ -38,7 +38,7 @@ func newTFSM(t *testing.T) *tfsm {
 func (tf *tfsm) apply(c Command) Result {
 	tf.t.Helper()
 	tf.idx++
-	res, ok := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+	res, ok := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	if !ok {
 		tf.t.Fatalf("Apply returned %T, want Result", res)
 	}
@@ -294,7 +294,7 @@ func TestFSM_InoGenNotReusedAfterUnlink(t *testing.T) {
 	if err := g.Restore(sink.reader()); err != nil {
 		t.Fatal(err)
 	}
-	r := g.Apply(&raft.Log{Index: tf.idx + 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "f", Type: TFile}})}).(Result)
+	r := g.Apply(&raft.Log{Index: tf.idx + 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpCreate, Create: &Create{Parent: RootIno, Name: "f", Type: TFile}})}).(Result)
 	if _, dup := seen[r.Ino]; dup {
 		t.Fatalf("ino %d reused after restore", r.Ino)
 	}
@@ -1018,7 +1018,7 @@ func TestFSM_RefCountNeverUnderflows(t *testing.T) {
 	tf.f.st.Chunks[a].Refs = 0
 	tf.f.mu.Unlock()
 	tf.idx++
-	res := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 2}})}).(Result)
+	res := tf.f.Apply(&raft.Log{Index: tf.idx, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: RootIno, Name: "f", Now: 2}})}).(Result)
 	if !errors.Is(res.Err, ErrBadCommand) {
 		t.Fatalf("underflow produced %v", res.Err)
 	}
@@ -1205,7 +1205,7 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	cur := NewFSM() // snapshot/restore path
 	var idx uint64
 	bootstrap := Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}
-	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(bootstrap)}}
+	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(bootstrap)}}
 	idx = 1
 	ref.Apply(logs[0])
 	cur.Apply(logs[0])
@@ -1214,7 +1214,7 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	for i := range n {
 		c := gen.next()
 		idx++
-		l := &raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}
+		l := &raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}
 		r1 := ref.Apply(l).(Result)
 		r2 := cur.Apply(l).(Result)
 		if !errors.Is(r1.Err, r2.Err) && (r1.Err != nil || r2.Err != nil) {
@@ -1266,11 +1266,11 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 	rng := testseed.Seed(t)
 	gen := &cmdGen{rng: rng, f: NewFSM(), now: 5}
-	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})}}
+	logs := []*raft.Log{{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})}}
 	gen.f.Apply(logs[0])
 	for i := 2; i <= 2000; i++ {
 		c := gen.next()
-		l := &raft.Log{Index: uint64(i), Type: raft.LogCommand, Data: EncodeCommand(c)}
+		l := &raft.Log{Index: uint64(i), Type: raft.LogCommand, Data: MustEncodeCommand(c)}
 		gen.f.Apply(l)
 		logs = append(logs, l)
 	}
@@ -1286,7 +1286,7 @@ func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 
 func TestFSM_Persist_ConcurrentWithApply(t *testing.T) {
 	f := NewFSM()
-	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
+	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
 	gen := &cmdGen{rng: testseed.Seed(t), f: f, now: 10}
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
@@ -1298,7 +1298,7 @@ func TestFSM_Persist_ConcurrentWithApply(t *testing.T) {
 				return
 			default:
 			}
-			f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(gen.next())})
+			f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(gen.next())})
 			idx++
 		}
 	})
@@ -1348,7 +1348,7 @@ func (s *failSink) Cancel() error             { s.cancelled = true; return nil }
 
 func TestFSM_Restore_RejectsGarbage(t *testing.T) {
 	f := NewFSM()
-	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: EncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
+	f.Apply(&raft.Log{Index: 1, Type: raft.LogCommand, Data: MustEncodeCommand(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}})})
 	before := encodeState(t, f.state())
 	if err := f.Restore(&readCloser{Reader: bytes.NewReader([]byte("nope"))}); err == nil {
 		t.Fatal("garbage restored")
@@ -1587,7 +1587,7 @@ func TestFSM_WaitApplied_ReturnsOnClose(t *testing.T) {
 func TestFSM_NodeUpsert_IdempotentByID(t *testing.T) {
 	f := NewFSM()
 	apply := func(idx uint64, c Command) Result {
-		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	}
 	apply(1, Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: 65536, K: 2, M: 1, Now: 1}})
 	nd := Node{ID: "aaaaaaaaaaaaaaaa", Name: "a", Kind: KindDevice, Addr: "10.0.0.1", RaftPort: 1, RPCPort: 2, Capacity: 10}

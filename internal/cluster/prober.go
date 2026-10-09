@@ -114,6 +114,13 @@ func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
 	}
 }
 
+// FillAfter is the MemberDown hold-down in force (repair.fill_after).
+func (p *Prober) FillAfter() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fillAfter
+}
+
 // SetHoldDowns overrides the MemberDown and MemberLost hold-downs (the configured
 // repair.fill_after and evict_after), so the prober's events agree with the repairer.
 func (p *Prober) SetHoldDowns(fillAfter, evictAfter time.Duration) {
@@ -163,7 +170,13 @@ func (p *Prober) Tick(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range nodes {
 		nd := nodes[i]
-		if nd.Kind != meta.KindDevice || nd.State == meta.Removed {
+		if nd.State == meta.Removed { // nothing to probe, nothing to keep
+			p.mu.Lock()
+			delete(p.probes, nd.Idx)
+			p.mu.Unlock()
+			continue
+		}
+		if nd.Kind != meta.KindDevice {
 			continue
 		}
 		if nd.ID == p.node.ID {

@@ -4,6 +4,7 @@ package testharness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"os"
@@ -49,20 +50,21 @@ type Fabric struct {
 	Ov      *vfs.Overlay
 	staging string
 
-	mu            sync.Mutex
-	idx           uint64
-	down          map[meta.NodeIdx]bool
-	full          map[meta.NodeIdx]bool
-	failPutOnce   map[meta.NodeIdx]int
-	failPutWith   map[meta.NodeIdx]error     // every PUT to the node fails with this
-	stallPut      map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
-	cancelledPuts map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
-	putCount      int
-	gets          map[meta.NodeIdx]int
-	proposeErr    error // returned once by Propose as a transport failure
-	proposeDown   error // returned by every Propose while set
-	stale         bool  // the gateway's health view given to vfs.FS
-	proposed      []meta.Op
+	mu             sync.Mutex
+	idx            uint64
+	down           map[meta.NodeIdx]bool
+	full           map[meta.NodeIdx]bool
+	failPutOnce    map[meta.NodeIdx]int
+	failPutWith    map[meta.NodeIdx]error     // every PUT to the node fails with this
+	stallPut       map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
+	cancelledPuts  map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
+	putCount       int
+	gets           map[meta.NodeIdx]int
+	proposeErr     error // returned once by Propose as a transport failure
+	proposeDown    error // returned by every Propose while set
+	proposeUnknown int   // Propose applies the command and then reports an unknown outcome, this many times
+	stale          bool  // the gateway's health view given to vfs.FS
+	proposed       []meta.Op
 }
 
 const (
@@ -136,7 +138,7 @@ func (f *Fabric) Apply(c meta.Command) meta.Result {
 
 func (f *Fabric) applyLocked(c meta.Command) meta.Result {
 	f.idx++
-	res := f.FSM.Apply(&raft.Log{Index: f.idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)}).(meta.Result)
+	res := f.FSM.Apply(&raft.Log{Index: f.idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)}).(meta.Result)
 	f.proposed = append(f.proposed, c.Op)
 	return res
 }
@@ -165,6 +167,10 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 		return meta.Result{}, 0, f.proposeDown
 	}
 	res := f.applyLocked(c)
+	if f.proposeUnknown > 0 { // applied, but the gateway never learns it (docs/02 §forwarding)
+		f.proposeUnknown--
+		return meta.Result{}, 0, fmt.Errorf("%w: harness", meta.ErrUnknownOutcome)
+	}
 	return res, f.idx, nil
 }
 
@@ -287,6 +293,12 @@ func (f *Fabric) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey
 	}
 	_, err := st.Delete(key)
 	return err
+}
+
+// DeleteFenced is Delete for the repair package's Shards: the harness keeps no fence,
+// so a GC delete here always lands (the fence has its own tests in rpc and chunk).
+func (f *Fabric) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, _ uint64) error {
+	return f.Delete(ctx, node, key)
 }
 
 // SetDown marks a node dead or alive for the shard client and liveness view.
@@ -520,6 +532,14 @@ func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release f
 }
 
 // ProposeErrOnce makes the next Propose fail as a transport error.
+// ProposeUnknown makes the next n proposals apply and then report meta.ErrUnknownOutcome:
+// the leader did its work, the reply was lost (I-95).
+func (f *Fabric) ProposeUnknown(n int) {
+	f.mu.Lock()
+	f.proposeUnknown = n
+	f.mu.Unlock()
+}
+
 func (f *Fabric) ProposeErrOnce(err error) {
 	f.mu.Lock()
 	f.proposeErr = err

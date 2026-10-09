@@ -116,13 +116,23 @@ var goldenCommands = []struct {
 		Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: -1}},
 		"01 0d ffffffffffffffff",
 	},
+	{
+		"SetPlacementExpect", // codec version 3: the placement the proposer planned from (I-102)
+		Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: sampleHash(0xbb), Placement: []NodeIdx{1, 0, 3}, Expect: []NodeIdx{2, 0, 3}, K: 2, M: 1}},
+		"03 0c " + repeatHex(0xbb, 32) + " 03 0100 0000 0300 03 0200 0000 0300 02 01",
+	},
+	{
+		"GCDeleteLimit", // codec version 3: at most this many victims (I-103)
+		Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: -1, Limit: 1024}},
+		"03 0d ffffffffffffffff 00040000",
+	},
 }
 
 // Invariant: I-22
 func TestEncodeCommand_Golden(t *testing.T) {
 	for _, g := range goldenCommands {
 		t.Run(g.name, func(t *testing.T) {
-			got := EncodeCommand(g.cmd)
+			got := MustEncodeCommand(g.cmd)
 			if want := h(g.hex); !bytes.Equal(got, want) {
 				t.Fatalf("encode\n got %x\nwant %x", got, want)
 			}
@@ -175,7 +185,7 @@ func TestEncodeCommand_AllOpsCovered(t *testing.T) {
 }
 
 func TestDecodeCommand_Rejects(t *testing.T) {
-	good := EncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}})
+	good := MustEncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}})
 	cases := map[string][]byte{
 		"empty":              {},
 		"version only":       {1},
@@ -201,7 +211,7 @@ func TestEncodeCommand_MissingPayloadPanics(t *testing.T) {
 			t.Fatal("expected panic for Op without payload")
 		}
 	}()
-	EncodeCommand(Command{Op: OpUnlink})
+	MustEncodeCommand(Command{Op: OpUnlink})
 }
 
 func TestResult_RoundTrip(t *testing.T) {
@@ -261,7 +271,7 @@ func FuzzDecodeCommand(f *testing.F) {
 		if err != nil {
 			return
 		}
-		out := EncodeCommand(c)
+		out := MustEncodeCommand(c)
 		if !bytes.Equal(out, in) {
 			t.Fatalf("decode/encode not identity: %x -> %x", in, out)
 		}

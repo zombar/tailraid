@@ -202,3 +202,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-194 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a host above the cap, no placement within it) | repair pass | Committed | `TestChunkState_DomainSkew`, `TestRepair_DomainSkew_UnfixableIgnored` |
 | L-195 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (on a disk whose marker is missing or foreign) | serve opens stores | served or written | `TestNode_ClosedDisk_NotServedNotSwept` |
 | L-196 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (repair, migration or drain) | SetPlacement | a host above the cap while a placement within it exists | `TestRepair_DeadDisk_RePlacesWithinCap` |
+| L-197 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed or Degraded (placement P) | SetPlacement{Expect: Q}, Q ≠ P | any change | `TestFSM_SetPlacement_ExpectConflict` |

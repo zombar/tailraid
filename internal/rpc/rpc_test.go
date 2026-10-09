@@ -38,6 +38,7 @@ type fakeApplier struct {
 	idx        uint64
 	leader     bool
 	leaderAddr string
+	proposeErr error // returned by Propose after applying: the leader lost the outcome
 }
 
 func newApplier() *fakeApplier {
@@ -50,7 +51,7 @@ func (a *fakeApplier) apply(c meta.Command) (meta.Result, uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.idx++
-	res := a.fsm.Apply(&raft.Log{Index: a.idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)}).(meta.Result)
+	res := a.fsm.Apply(&raft.Log{Index: a.idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)}).(meta.Result)
 	return res, a.idx
 }
 
@@ -59,6 +60,12 @@ func (a *fakeApplier) Propose(_ context.Context, c meta.Command) (meta.Result, u
 		return meta.Result{}, 0, ErrNotLeader
 	}
 	r, i := a.apply(c)
+	a.mu.Lock()
+	perr := a.proposeErr
+	a.mu.Unlock()
+	if perr != nil {
+		return meta.Result{}, 0, perr
+	}
 	return r, i, nil
 }
 func (a *fakeApplier) IsLeader() bool        { a.mu.Lock(); defer a.mu.Unlock(); return a.leader }
@@ -125,7 +132,10 @@ var (
 )
 
 // newEnv serves a node whose member table contains the loopback caller as member 1.
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, nil) }
+
+// newEnvWith builds the environment with mod applied to the server options first.
+func newEnvWith(t *testing.T, mod func(*Options)) *env {
 	t.Helper()
 	e := &env{t: t, app: newApplier(), clk: clock.NewFake(time.Now()), fence: fakeFence{placed: map[chunk.ShardKey]bool{}}}
 	e.cid = [16]byte{1, 2, 3}
@@ -138,11 +148,15 @@ func newEnv(t *testing.T) *env {
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
 	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
-	e.srv, err = NewServer(Options{
+	opts := Options{
 		NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
 		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
 		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) },
-	})
+	}
+	if mod != nil {
+		mod(&opts)
+	}
+	e.srv, err = NewServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +470,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 		t.Fatalf("bad slots %+v", e.bad)
 	}
 	h, err := c.Health(ctx, e.addr)
-	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() {
+	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() || h.Codec != meta.CodecVersion {
 		t.Fatalf("health %+v %v", h, err)
 	}
 	st, err := c.Call(ctx, e.addr, http.MethodGet, "/v1/status", nil)

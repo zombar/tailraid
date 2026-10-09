@@ -18,12 +18,6 @@ const (
 	HeaderNodeID   = "X-Tailraid-Node"      // responding node's raft ID
 )
 
-// Ports.
-const (
-	DefaultRaftPort = 20480
-	DefaultRPCPort  = 20481
-)
-
 // Errors the client returns.
 var (
 	ErrForbidden    = errors.New("rpc: forbidden")
@@ -35,6 +29,9 @@ var (
 	ErrTooLarge     = errors.New("rpc: body too large")
 	ErrBadRequest   = errors.New("rpc: bad request")
 	ErrUnavailable  = errors.New("rpc: node unavailable")
+	// ErrApplyFailed is a 500 from POST /v1/apply: the leader handed the command to Raft and
+	// then failed (leadership lost, timeout); the outcome is unknown (docs/02 §forwarding).
+	ErrApplyFailed = errors.New("rpc: apply failed on the leader after dispatch")
 )
 
 // Health is the unauthenticated GET /health body.
@@ -43,6 +40,7 @@ type Health struct {
 	ClusterID string       `json:"cluster_id"`
 	Version   string       `json:"version"`
 	Applied   uint64       `json:"applied"`
+	Codec     uint8        `json:"codec,omitempty"` // meta.CodecVersion of this binary (docs/12 §6)
 	Leader    bool         `json:"leader"`
 	Used      int64        `json:"used"`
 	Capacity  int64        `json:"capacity"`

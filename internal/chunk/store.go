@@ -262,10 +262,10 @@ func (s *Store) readHeader(p string) ([]byte, error) {
 	return hdr, nil
 }
 
-// DeleteIfOlder is Delete guarded by age, for deletes requested over the network (GC and
-// repair): a shard whose mtime is younger than minAge may belong to an in-flight flush and
-// is refused (deleted=false, no error). The local sweep uses plain Delete with its own
-// grace check.
+// DeleteIfOlder is Delete guarded by age, for every delete that reasoned about the shard
+// earlier (GC, repair and the local sweep): a shard whose mtime is younger than minAge may
+// belong to an in-flight flush and is refused (deleted=false, no error). The age is read
+// under the key lock, so a Put that refreshed the shard in the meantime wins (I-14).
 func (s *Store) DeleteIfOlder(k ShardKey, minAge time.Duration, now time.Time) (deleted bool, size int64, err error) {
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return false, 0, err
@@ -278,7 +278,7 @@ func (s *Store) DeleteIfOlder(k ShardKey, minAge time.Duration, now time.Time) (
 		}
 		return false, 0, fmt.Errorf("chunk: stat %s: %w", k, err)
 	}
-	if fi.ModTime().After(now.Add(-minAge)) {
+	if !fi.ModTime().Before(now.Add(-minAge)) { // exactly minAge old is still young (docs/06)
 		return false, 0, nil
 	}
 	size, err = s.deleteLocked(k)
@@ -291,6 +291,9 @@ func (s *Store) Get(k ShardKey) ([]byte, error) {
 	if _, _, _, _, err := ParseKey(k); err != nil {
 		return nil, err
 	}
+	// read, verify and quarantine under the key lock: a Put that replaces the file
+	// between the read and the quarantine would otherwise lose its good shard
+	defer s.lock(k)()
 	raw, err := s.readFile(s.path(k))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -300,7 +303,7 @@ func (s *Store) Get(k ShardKey) ([]byte, error) {
 	}
 	payload, verr := verify(raw)
 	if verr != nil {
-		s.quarantine(k)
+		s.quarantineLocked(k)
 		return nil, fmt.Errorf("%w: %s: %w", ErrCorrupt, k, verr)
 	}
 	return payload, nil
@@ -431,10 +434,10 @@ func verify(raw []byte) ([]byte, error) {
 	return payload, nil
 }
 
-// quarantine moves a corrupt shard out of the serving path, keeping at most QuarantineMax
-// files for inspection (oldest removed first). Never deletes silently.
-func (s *Store) quarantine(k ShardKey) {
-	defer s.lock(k)()
+// quarantineLocked moves a corrupt shard out of the serving path, keeping at most
+// QuarantineMax files for inspection (oldest removed first). Never deletes silently. The
+// caller holds the key lock. The budget is credited only for a file that actually left.
+func (s *Store) quarantineLocked(k ShardKey) {
 	src := s.path(k)
 	fi, err := s.fsys.Stat(src)
 	if err != nil {
@@ -445,7 +448,9 @@ func (s *Store) quarantine(k ShardKey) {
 	defer s.qmu.Unlock()
 	dst := filepath.Join(s.quarantineDir(), fmt.Sprintf("%s.%d", k, time.Now().UnixNano()))
 	if err := s.fsys.Rename(src, dst); err != nil {
-		_ = s.fsys.Remove(src) // last resort: a corrupt file must not stay serveable
+		if rerr := s.fsys.Remove(src); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) { // last resort: a corrupt file must not stay serveable
+			return // still on disk: the budget still holds it
+		}
 	}
 	s.used.Add(-size)
 	ents, err := s.fsys.ReadDir(s.quarantineDir())

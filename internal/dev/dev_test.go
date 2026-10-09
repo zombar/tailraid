@@ -20,7 +20,7 @@ import (
 func TestDev_FSMHashCorruptAndExit(t *testing.T) {
 	a, b := meta.NewFSM(), meta.NewFSM()
 	apply := func(f *meta.FSM, idx uint64, c meta.Command) {
-		f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)})
+		f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)})
 	}
 	for _, f := range []*meta.FSM{a, b} {
 		apply(f, 1, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: 65536, K: 2, M: 1, Now: 1}})

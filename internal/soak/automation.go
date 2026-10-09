@@ -172,7 +172,11 @@ func (r *Run) autoPolicyChecks(ctx context.Context, rep admin.Report) error {
 	if err != nil {
 		return err
 	}
-	wantK, wantM := meta.AutoPolicy(membersOf(rep))
+	members, err := membersOf(rep)
+	if err != nil {
+		return err
+	}
+	wantK, wantM := meta.AutoPolicy(members)
 	r.check("I-75", "policy equals the rule of the member table", rep.Volume.Auto && rep.Volume.K == wantK && rep.Volume.M == wantM,
 		fmt.Sprintf("policy %d+%d (auto %v), members call for %d+%d; was %d+%d", rep.Volume.K, rep.Volume.M, rep.Volume.Auto, wantK, wantM, k0, m0))
 	r.check("I-15 I-32", "migration to the automatic policy complete", rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0,
@@ -195,29 +199,21 @@ func (r *Run) autoPolicyChecks(ctx context.Context, rep admin.Report) error {
 	return nil
 }
 
-// membersOf rebuilds the member table AutoPolicy needs from a status report.
-func membersOf(rep admin.Report) []meta.Node {
+// membersOf rebuilds the member table AutoPolicy needs from a status report. A kind or
+// state the report spells in a way this binary does not know is an error, never a guess.
+func membersOf(rep admin.Report) ([]meta.Node, error) {
 	out := make([]meta.Node, 0, len(rep.Nodes))
 	for i := range rep.Nodes {
 		n := &rep.Nodes[i]
-		nd := meta.Node{Idx: n.Idx, Voter: n.Voter, Capacity: n.Capacity, Host: n.Host}
-		switch n.Kind {
-		case "device":
-			nd.Kind = meta.KindDevice
-		case "disk":
-			nd.Kind = meta.KindDisk
-		default:
-			nd.Kind = meta.KindS3
+		kind, err := meta.ParseNodeKind(n.Kind)
+		if err != nil {
+			return nil, err
 		}
-		switch n.State {
-		case "active":
-			nd.State = meta.Active
-		case "draining":
-			nd.State = meta.Draining
-		default:
-			nd.State = meta.Removed
+		state, err := meta.ParseNodeState(n.State)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, nd)
+		out = append(out, meta.Node{Idx: n.Idx, Voter: n.Voter, Capacity: n.Capacity, Host: n.Host, Kind: kind, State: state})
 	}
-	return out
+	return out, nil
 }

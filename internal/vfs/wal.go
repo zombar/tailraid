@@ -28,6 +28,11 @@ var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 var errWALShortRead = errors.New("vfs: wal read beyond end")
 
+// ErrWALClosed is every call on a WAL whose file could not be reopened after a failed
+// fsync or compaction (I-101): the inode's writes fail with it until the gateway restarts
+// and replays the log, rather than touching a handle that is closed or stale.
+var ErrWALClosed = errors.New("vfs: wal unusable until restart")
+
 // walRec is a record to be written by Compact: a write record names its bytes by their
 // offset and length in the log being compacted, so nothing is read ahead of the copy.
 type walRec struct {
@@ -44,10 +49,14 @@ const compactBuf = 1 << 20
 // successful append means the bytes survive a crash or power loss (I-7). All file access
 // goes through the sysfs.FS seam so tests can inject fsync failures and crashes.
 type WAL struct {
-	fs   sysfs.FS
-	path string
-	f    sysfs.File
-	size int64
+	fs     sysfs.FS
+	path   string
+	f      sysfs.File
+	size   int64
+	failed error // ErrWALClosed with its cause, once the file could not be reopened
+	// Discarded is the number of bytes Replay cut off after the last intact record: a
+	// torn tail from a crash, or everything after a record that failed its CRC.
+	Discarded int64
 }
 
 func openWAL(fsys sysfs.FS, path string) (*WAL, error) {
@@ -88,6 +97,9 @@ func encodeRecord(typ uint8, off uint64, data []byte) []byte {
 
 // append writes one record at the end and fsyncs; returns the offset of its data.
 func (w *WAL) append(typ uint8, off uint64, data []byte) (int64, error) {
+	if w.failed != nil {
+		return 0, w.failed
+	}
 	if len(data) > maxRecordData {
 		return 0, fmt.Errorf("vfs: wal record too large (%d bytes)", len(data))
 	}
@@ -96,10 +108,18 @@ func (w *WAL) append(typ uint8, off uint64, data []byte) (int64, error) {
 		return 0, fmt.Errorf("vfs: wal write: %w", err)
 	}
 	if err := w.f.Sync(); err != nil {
-		// Not acknowledged: cut the record back off so a crash cannot replay it (I-37).
-		// Best effort; the next append overwrites the same offset anyway.
+		// Not acknowledged: cut the record back off so a crash cannot replay it (I-37),
+		// then reopen the file: after a failed fsync the kernel may have dropped the
+		// dirty pages and cleared the error on this descriptor, so the next fsync on it
+		// would report success for data that never reached the disk (I-101).
 		_ = w.f.Truncate(w.size)
 		_ = w.f.Sync()
+		_ = w.f.Close()
+		if f, rerr := w.fs.OpenFile(w.path, os.O_RDWR, 0o600); rerr == nil {
+			w.f = f
+		} else {
+			w.failed = fmt.Errorf("%w: reopen after a failed fsync: %w", ErrWALClosed, rerr)
+		}
 		return 0, fmt.Errorf("vfs: wal fsync: %w", err)
 	}
 	dataOff := w.size + recHeaderLen
@@ -127,6 +147,9 @@ func (w *WAL) AppendBase(size uint64) error {
 // ReadAt fills p with logged bytes starting at walOff (a data offset returned by AppendWrite,
 // possibly advanced into the record by an extent split).
 func (w *WAL) ReadAt(p []byte, walOff int64) error {
+	if w.failed != nil {
+		return w.failed
+	}
 	if walOff < 0 || walOff+int64(len(p)) > w.size {
 		return errWALShortRead
 	}
@@ -168,6 +191,7 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 		pos += recHeaderLen + int64(n)
 	}
 	if pos < w.size {
+		w.Discarded = w.size - pos
 		if err := w.f.Truncate(pos); err != nil {
 			return fmt.Errorf("vfs: wal truncate torn tail: %w", err)
 		}
@@ -187,6 +211,9 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 // later step (directory fsync, reopen) fails, with the error, and the WAL is left open on
 // the new file whenever it can be opened at all.
 func (w *WAL) Compact(recs []walRec) ([]int64, error) {
+	if w.failed != nil {
+		return nil, w.failed
+	}
 	tmp := w.path + ".new"
 	nf, err := w.fs.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -235,6 +262,7 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 		_ = w.fs.Remove(tmp)
 		reopened, rerr := w.fs.OpenFile(w.path, os.O_RDWR, 0o600)
 		if rerr != nil {
+			w.failed = fmt.Errorf("%w: reopen after a failed compaction rename: %w", ErrWALClosed, rerr)
 			return nil, fmt.Errorf("vfs: wal compact rename: %w (reopen: %w)", err, rerr)
 		}
 		w.f = reopened
@@ -246,8 +274,11 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	}
 	reopened, err := w.fs.OpenFile(w.path, os.O_RDWR, 0o600)
 	if err != nil {
+		// the new log is on disk but this process cannot reach it: every later call on
+		// this inode fails with ErrWALClosed instead of using the closed handle (I-101)
+		w.failed = fmt.Errorf("%w: reopen after compaction: %w", ErrWALClosed, err)
 		if first == nil {
-			first = fmt.Errorf("vfs: wal compact reopen: %w", err)
+			first = w.failed
 		}
 		return nil, first
 	}

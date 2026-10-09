@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -81,7 +80,7 @@ func DescribeChunksPage(ctx context.Context, st *meta.Store, p *cluster.Prober, 
 
 func selectChunks(st *meta.Store, sel string) ([]meta.Hash, error) {
 	if strings.HasPrefix(sel, "/") {
-		in, err := st.Resolve(splitPath(sel))
+		in, err := st.Resolve(meta.SplitPath(sel))
 		if err != nil {
 			return nil, err
 		}
@@ -91,16 +90,17 @@ func selectChunks(st *meta.Store, sel string) ([]meta.Hash, error) {
 		return append([]meta.Hash(nil), in.Chunks...), nil
 	}
 	sel = strings.ToLower(sel)
-	if len(sel) < 8 || len(sel) > 64 || len(sel)%2 != 0 {
+	if len(sel) < 8 || len(sel) > 64 {
 		return nil, fmt.Errorf("admin: chunk selector %q: want a /path or 8–64 hex digits", sel)
 	}
-	prefix, err := hex.DecodeString(sel)
+	// an odd number of digits is a prefix of the hex spelling, not of the bytes
+	prefix, err := hex.DecodeString(sel + strings.Repeat("0", len(sel)%2))
 	if err != nil {
 		return nil, fmt.Errorf("admin: chunk selector %q: %w", sel, err)
 	}
 	var matches []meta.Hash
 	st.ForEachChunk(func(c meta.Chunk) bool {
-		if bytes.Equal(c.Hash[:len(prefix)], prefix) {
+		if strings.HasPrefix(hex.EncodeToString(c.Hash[:]), sel) {
 			matches = append(matches, c.Hash)
 		}
 		return len(matches) < 2
@@ -116,8 +116,6 @@ func selectChunks(st *meta.Store, sel string) ([]meta.Hash, error) {
 		return nil, ErrAmbiguous
 	}
 }
-
-func splitPath(p string) []string { return meta.SplitPath(p) }
 
 // DescribeChunk builds the report for one hash.
 func DescribeChunk(ctx context.Context, st *meta.Store, p *cluster.Prober, hc ShardChecker, ring *meta.EventRing, h meta.Hash) ChunkReport {
@@ -166,7 +164,11 @@ func DescribeChunk(ctx context.Context, st *meta.Store, p *cluster.Prober, hc Sh
 	}
 	// the same derivation status, check and the repairer use (I-56), with the presence
 	// answers folded in
-	health := meta.ChunkState(c, vol, meta.HealthInput{Nodes: nodeByIdx, Live: lv, FillAfter: cluster.FillAfter, Present: present})
+	fillAfter := cluster.FillAfter
+	if p != nil {
+		fillAfter = p.FillAfter() // the configured repair.fill_after, as status and check use it
+	}
+	health := meta.ChunkState(c, vol, meta.HealthInput{Nodes: nodeByIdx, Live: lv, FillAfter: fillAfter, Present: present})
 	rep.LiveSlots = health.Readable
 	rep.PolicyStale = health.PolicyStale
 	rep.State = health.State(c.K, c.M)

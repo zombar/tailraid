@@ -40,9 +40,11 @@ implements:
    shards or metadata. `409` is reserved for this; a refused shard `DELETE` (fence, `docs/06`)
    is `412`.
 6. Exception for address changes: `POST /v1/members {update_addr}` arrives from an IP that
-   is, by definition, not yet in the member table. It is authorized by `WhoIs(srcIP).StableID
-   == TSStableID` of the member named in the body (step 3 without step 2), and may change
-   nothing but that member's `Addr`.
+   is, by definition, not yet in the member table. When step 2 fails, the body (64 KiB at
+   most) is read to learn the op; `update_addr` is then authorized by
+   `WhoIs(srcIP).StableID == TSStableID` of the member named in the body (step 3 without
+   step 2) and may change nothing but that member's `Addr`; any other op from a non-member
+   is `403` (I-93).
 
 Endpoints and who may call them:
 
@@ -69,22 +71,43 @@ name, address, ports, suffrage request and capacity. The receiving node:
 - requires `WhoIs(src).StableID == claimed StableID` (the joiner is who it says it is),
 - after a failed attempt accepts one more from that source IP per second (`429` otherwise); successful joins are never throttled,
 - requires `token == Meta.JoinToken` from the FSM (constant-time compare),
+- records the caller's source address: a request that names another address is `403`
+  (I-94), so a token holder cannot point a member record at a different device,
 - forwards a member-add to the Raft leader; the leader adds the server to the Raft
-  configuration (voter or non-voter) and upserts the member record.
+  configuration (voter or non-voter) and upserts the member record. A re-join under a
+  known node ID keeps its index only when it presents that record's StableID; node IDs
+  are public (`/health`), the StableID is what WhoIs vouched for (I-94).
+
+The response lists the current device members. The joiner seeds its authorizer with
+them so that it accepts the leader's Raft connection while its own member table is still
+empty (the table replaces the seed as soon as the log arrives; §Raft transport).
 
 The token is 8 random base32 characters, created at `init`, shown by `tailraid token`, and
 rotated by `tailraid token rotate` (a Raft `MetaSet`). It stops accidental joins to the
 wrong cluster and joins by tailnet devices that are not meant to hold data. It is not a
 secret of high value: anyone with it is still confined to the tailnet.
 
-## Raft transport: cluster-ID handshake
+## Raft transport: member check and cluster-ID handshake
 
-hashicorp/raft's TCP transport has no authentication. A node from a different cluster
-that dials a follower could, as "leader", overwrite its log. `internal/cluster.idStream`
-wraps the `raft.StreamLayer`: on `Dial` and `Accept` each side sends its 16-byte cluster
-ID and reads the peer's; on mismatch the connection is closed and the event logged. Raft
-traffic is confined to Tailscale IPs, so the handshake only needs to defeat mistakes, not
-an active attacker inside the tailnet (that attacker already owns a member device).
+hashicorp/raft's TCP transport has no authentication: whoever can send AppendEntries or
+InstallSnapshot to a follower rewrites its metadata. `internal/cluster.idStream` wraps the
+`raft.StreamLayer` with two checks.
+
+1. **Membership on accept (I-92).** Before a byte is read, an accepted connection's source
+   IP goes through the same rule as an RPC (steps 2–3 above, the one `WhoIsAuthorizer`):
+   a member record at that address whose `TSStableID` matches `WhoIs(src)`. Anything else is
+   closed. This is what keeps a shared, guest or unrelated tailnet device out of Raft; the
+   perimeter claim of the trust model holds for Raft exactly as for RPC. A joiner's table is
+   empty until the log arrives, so `join` seeds the authorizer with the members the join
+   response listed (§Join); the leader that dials it is one of them.
+2. **Cluster ID.** Each side then sends its 16-byte cluster ID and reads the peer's; on
+   mismatch the connection is closed and the event logged (I-49). The dialer writes first
+   and the acceptor reads first, so an accepted peer learns nothing before it has shown its
+   own ID. This stops two clusters that share a tailnet from exchanging traffic; it is not
+   a secret (`/health` publishes it), the member check is the gate.
+
+Raft traffic is confined to Tailscale IPs; an attacker who controls a member device is a
+non-goal (below).
 
 ## Loopback-only listeners
 
@@ -158,13 +181,16 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 |---|---|
 | Unrelated tailnet device reads or writes shards | member table + WhoIs StableID check (I-18) |
 | Stale or replayed shard `DELETE` removes a live shard | DELETE fence: log index, placement and file age checked by the receiver (`docs/06`) |
+| Unrelated tailnet device speaks Raft to a node | member check on accept, before any byte is read (I-92) |
 | Two clusters on one tailnet cross-talk | cluster-ID handshake on Raft, `X-Tailraid-Cluster` header on RPC |
 | Tailscale IP reassigned to another device | WhoIs StableID mismatch → 403 + cache purge |
 | Removed member keeps using a warm authorizer cache | cache purged on membership change |
 | Accidental join to the wrong cluster | join token |
-| Rogue "leader" overwrites a follower's log | handshake; Raft traffic only on Tailscale IPs |
+| Token holder points a member record at another device, or takes over a known node ID | join records the caller's address; a re-join must present the record's StableID (I-94) |
+| Rogue "leader" overwrites a follower's log | member check on accept (I-92) and the handshake (I-49); Raft traffic only on Tailscale IPs |
 | Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
+| A peer stalls mid-body and holds a PUT or GET slot | per-request body deadline derived from the transfer size (I-97) |
 | LAN host reaches NFS or RPC | NFS bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
 | Guest, other-user or tagged tailnet device opens the web UI | member-or-same-user WhoIs rule; tagged devices have no login (docs/13, I-68) |
@@ -196,6 +222,21 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 - **I-50** — NFS, PMAP and all `127.0.0.1` listeners bind only loopback addresses; the
   RPC and S3 listeners bind only the node's Tailscale IP (and optionally loopback), and
   `rpc.Listen` refuses a non-loopback bind without an authorizer.
+- **I-92** — An accepted Raft connection is closed before any byte is read unless its
+  source IP is a cluster member (from the member table, or during join from the members
+  the join response listed) whose WhoIs StableID matches the record; the cluster-ID
+  handshake runs after that check, and the acceptor reads the peer's ID before sending
+  its own.
+- **I-93** — `update_addr` from an address that is not in the member table is accepted
+  only when the caller's WhoIs StableID is that of the member it names, and changes
+  nothing but that member's address; every other op from a non-member is rejected with
+  403.
+- **I-97** — Reading a PUT or `apply` body and writing a GET body carry a deadline derived
+  from the largest transfer (`BodyTimeout`, default `callTimeout(MaxShard)`), so a peer
+  that stalls mid-transfer releases its slot when the deadline passes.
+- **I-94** — A join records the caller's source address and rejects a request that names
+  another with 403; a re-join under a known node ID keeps the record only when it presents
+  that record's StableID.
 
 ## Tests
 
@@ -205,3 +246,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-48 | `TestCluster_JoinDrainRemove`, `TestJoin_RateLimitedPerSource`, `TestJoin_TokenAndIdentity`, `TestToken_Rotate` |
 | I-49 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestIDStream_RejectsForeignCluster` |
 | I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestPortmap_RefusesNonLoopback` |
+| I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake` |
+| I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
+| I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID` |
+| I-97 | `TestPut_StalledBodyFreesSlot` |

@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // Errors.
@@ -56,6 +59,13 @@ type Options struct {
 	SnapshotThreshold uint64
 	// Faults, when set, lets /dev/fault rules cut Raft traffic to and from peers.
 	Faults Faults
+	// PeerAuth gates accepted Raft connections by membership (docs/08, I-92). serve and
+	// join always set it; nil (the in-process harness, which uses an in-memory transport
+	// anyway) accepts any peer that passes the cluster-ID handshake.
+	PeerAuth PeerAuth
+	// RaftAddrFor maps a member record to its Raft address; nil uses the record's
+	// host:port. The test harness maps records to in-memory transport addresses.
+	RaftAddrFor func(meta.Node) raft.ServerAddress
 }
 
 // RaftTiming is the set of Raft timeouts a caller may override.
@@ -82,14 +92,19 @@ type Node struct {
 	Raft *raft.Raft
 	FSM  *meta.FSM
 
-	logs   raft.LogStore
-	closer io.Closer // the on-disk store; nil for injected stores
-	trans  raft.Transport
-	log    *slog.Logger
-	closed bool
+	logs        raft.LogStore
+	closer      io.Closer // the on-disk store; nil for injected stores
+	trans       raft.Transport
+	log         *slog.Logger
+	raftAddrFor func(meta.Node) raft.ServerAddress // Options.RaftAddrFor, or the record's host:port
+	closed      atomic.Bool
 
 	fwdMu sync.Mutex
 	fwd   Forwarder
+
+	// memberMu serializes Join and MemberOp on this leader: each reads a record, changes
+	// a field and upserts the whole record, so two at once would lose an update.
+	memberMu sync.Mutex
 }
 
 // RaftConfig returns the documented tuning (docs/02 §Raft configuration).
@@ -108,27 +123,73 @@ func RaftConfig(id string, logOutput io.Writer) *raft.Config {
 }
 
 // LoadOrCreateNodeID returns the persisted node ID, creating a random one on first use.
+// Only a missing file creates one (I-96): a read error of any other kind is an error,
+// never a fresh identity for a node that already has one.
 func LoadOrCreateNodeID(dataDir string) (string, error) {
 	p := filepath.Join(dataDir, "node_id")
-	if b, err := os.ReadFile(p); err == nil { //nolint:gosec // node_id in this node's data directory
+	b, err := os.ReadFile(p) //nolint:gosec // node_id in this node's data directory
+	switch {
+	case err == nil:
 		id := strings.TrimSpace(string(b))
 		if len(id) == 16 {
 			return id, nil
 		}
 		return "", fmt.Errorf("cluster: malformed %s", p)
+	case !errors.Is(err, fs.ErrNotExist):
+		return "", fmt.Errorf("cluster: read %s: %w", p, err)
 	}
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
 	}
-	id := hex.EncodeToString(b[:])
+	id := hex.EncodeToString(raw[:])
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(p, []byte(id+"\n"), 0o600); err != nil {
+	if err := writeFileSync(p, []byte(id+"\n")); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// WriteClusterID persists <data_dir>/cluster_id (bootstrap and join write it, I-96).
+func WriteClusterID(dataDir, hexID string) error {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	return writeFileSync(filepath.Join(dataDir, "cluster_id"), []byte(hexID+"\n"))
+}
+
+// writeFileSync writes an identity file so that a crash leaves either the old file or
+// the new one, never an empty or partial one: temp file, fsync, rename, directory fsync.
+func writeFileSync(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	cleanup := func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return sysfs.OS{}.SyncDir(dir) // a directory cannot be opened for fsync on Windows; the seam knows
 }
 
 // HasState reports whether the data directory holds Raft state.
@@ -190,7 +251,7 @@ func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
 	if o.Transport != nil {
 		return o.Transport, nil
 	}
-	return NewTransport(o.RaftAddr, o.ClusterID, logOutput, o.Faults)
+	return NewTransport(o.RaftAddr, o.ClusterID, logOutput, o.Faults, o.PeerAuth, o.Logger)
 }
 
 // LoadClusterID reads <data_dir>/cluster_id.
@@ -251,7 +312,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(o.DataDir, "cluster_id"), []byte(meta.HexID(cid)+"\n"), 0o600); err != nil {
+	if err := WriteClusterID(o.DataDir, meta.HexID(cid)); err != nil {
 		return nil, err
 	}
 	_, logOutput := o.logger()
@@ -268,6 +329,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	cfg := raft.Configuration{Servers: []raft.Server{{Suffrage: raft.Voter, ID: raft.ServerID(o.NodeID), Address: trans.LocalAddr()}}}
 	if err := raft.BootstrapCluster(conf, st.logs, st.stable, st.snaps, trans, cfg); err != nil {
 		st.close()
+		closeTransport(trans)
 		return nil, fmt.Errorf("cluster: bootstrap: %w", err)
 	}
 	n, err := start(o, st, trans)
@@ -360,12 +422,25 @@ func OpenFresh(o Options) (*Node, error) {
 func start(o Options, st *stores, trans raft.Transport) (*Node, error) {
 	log, logOutput := o.logger()
 	fsm := meta.NewFSM()
+	fsm.Log = log
 	r, err := raft.NewRaft(o.raftConfig(logOutput), fsm, st.logs, st.stable, st.snaps, trans)
 	if err != nil {
 		st.close()
+		closeTransport(trans) // the Raft port is free again (I-99)
 		return nil, fmt.Errorf("cluster: start raft: %w", err)
 	}
-	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, closer: st.closer, trans: trans, log: log}, nil
+	addrFor := o.RaftAddrFor
+	if addrFor == nil {
+		addrFor = raftAddrOf
+	}
+	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, closer: st.closer, trans: trans, log: log, raftAddrFor: addrFor}, nil
+}
+
+// closeTransport releases a transport's listener (raft.NetworkTransport implements Close).
+func closeTransport(t raft.Transport) {
+	if c, ok := t.(io.Closer); ok {
+		_ = c.Close()
+	}
 }
 
 // WaitLeader blocks until this node sees a leader or the timeout passes.
@@ -455,18 +530,15 @@ func (n *Node) IsLeader() bool { return n.Raft.State() == raft.Leader }
 
 // Close shuts Raft down and releases the stores.
 func (n *Node) Close() error {
-	if n.closed {
+	if n.closed.Swap(true) {
 		return nil
 	}
-	n.closed = true
 	var first error
 	if err := n.Raft.Shutdown().Error(); err != nil {
 		first = err
 	}
 	n.FSM.Close() // wake WaitApplied callers whose entry was in flight (I-29: outcome unknown)
-	if c, ok := n.trans.(io.Closer); ok {
-		_ = c.Close()
-	}
+	closeTransport(n.trans)
 	if n.closer != nil {
 		if err := n.closer.Close(); err != nil && first == nil {
 			first = err

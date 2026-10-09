@@ -66,7 +66,7 @@ type Candidate struct { Idx meta.NodeIdx; Weight uint64; Voter bool; Domain meta
 ```
 
 A candidate is a **target**: a device's own store, one of its added disks, or an S3 node
-(14). Targets of one host share a **domain**; `Place` spreads a stripe across domains
+(14). Targets of one host share a **domain**; `PlaceKM` spreads a stripe across domains
 first (14 §5).
 
 At write time the flusher builds the candidate list from `State.Nodes` filtered to
@@ -87,7 +87,7 @@ Voters are the always-on devices; non-voters are the laptops that sleep (00 glos
 least `k` of them are present, otherwise from all candidates, and then the `m` **parity**
 slots by rendezvous from the candidates not yet used, voters and non-voters alike. The
 result is still a pure function of `(h, candidate set, k, m)` (I-8, I-9 hold), and when no
-candidate is a voter it equals `Place(h, cands, k+m)`. `FillPlacement(h, place, cands, k)`
+candidate is a voter it is a plain rendezvous over all candidates (the former `Place`, which only tests called, is gone: the tests prove `PlaceKM`). `FillPlacement(h, place, cands, k)`
 refills a zero data slot from voters first and a zero parity slot from anyone.
 
 What this buys: a chunk is readable from the live voters alone whenever `k ≤` live
@@ -100,7 +100,8 @@ move because the rule changed.
 ### Rendezvous (HRW) hashing
 
 ```go
-func Place(h meta.Hash, cands []Candidate, n int) []meta.NodeIdx
+func PlaceKM(h meta.Hash, cands []Candidate, k, m int) []meta.NodeIdx          // a fresh k+m stripe
+func FillPlacement(h meta.Hash, place []meta.NodeIdx, cands []Candidate, k int, dom Domains) // the zero slots of one
 ```
 
 For each candidate compute
@@ -124,7 +125,11 @@ with one target per domain this is the plain top-`n`). Shard `i` goes to the `i`
 
 The placement is **stored** in `Chunk.Placement` by `Commit`/`SetPlacement`. Membership or
 liveness changes never move data implicitly; only the repairer, through `SetPlacement`,
-changes where a shard lives. Reads therefore never guess.
+changes where a shard lives. Reads therefore never guess. Every `SetPlacement` names the
+placement it was planned from (`Expect`), and the FSM applies it only if that is still the
+current one ([02](02-consistency-and-raft.md), I-102): the flusher filling a dedup'd
+chunk's slots, a repair pass and a forced removal zeroing slots can run at once, and the
+one that lost re-plans instead of orphaning the other's shards.
 
 ### Slot semantics
 
@@ -139,11 +144,11 @@ shards of a stripe, never more than the host cap while another placement exists 
 
 The flusher ([04](04-write-path-and-durability.md)) for a new chunk hash:
 
-1. Choose `(k, m)`; `placement = Place(h, candidates, k+m)`; `shards = Encode(chunk)`.
+1. Choose `(k, m)`; `placement = PlaceKM(h, candidates, k, m)`; `shards = Encode(chunk)`.
 2. PUT every slot in parallel (self via the local store). Each PUT carries
    `X-Shard-SHA256`; the receiver verifies before the shard becomes visible.
 3. Wait until **at least `k` slots are acknowledged** and either all PUTs finished or a
-   10 s deadline passed. Failed or late slots: retry once with `Place` over candidates minus
+   10 s deadline passed. Failed or late slots: retry once with `FillPlacement` over candidates minus
    the failed nodes **and minus every node already holding an acknowledged slot of this
    stripe** (I-9); slot `i` keeps its index and takes the `i`-th entry of the new list that
    is not already used; still failed ⇒ slot `0`. An ack is a `200` from `PUT`, which the
@@ -232,8 +237,8 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 
 ## Invariants
 
-- **I-8** — `Place(h, cands, n)` is a pure function: for the same hash, the same candidate
-  set (any order) and the same `n`, every node returns the identical sequence.
+- **I-8** — `PlaceKM(h, cands, k, m)` is a pure function: for the same hash, the same candidate
+  set (any order) and the same `(k, m)`, every node returns the identical sequence.
 - **I-9** — The non-zero entries of any committed `Placement` are pairwise distinct target
   indices; a stripe never has two shards on one target (device store, disk or S3 node). With `≥ k+m` candidates all `k+m`
   slots are non-zero.

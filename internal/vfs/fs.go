@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -61,21 +62,6 @@ var (
 // (docs/02 Health Stale/NoLeader → NFS3ERR_ROFS).
 var ErrReadOnly = syscall.EROFS
 
-// split cleans a billy path into components relative to the root.
-func split(name string) []string { return meta.SplitPath(name) }
-
-func equalParts(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func parentOf(parts []string) ([]string, string) {
 	if len(parts) == 0 {
 		return nil, ""
@@ -124,19 +110,39 @@ func mapErr(op, name string, err error) error {
 	return &fs.PathError{Op: op, Path: name, Err: e}
 }
 
-// propose applies a metadata mutation and waits for it locally.
+// propose applies a metadata mutation and waits for it locally. A proposal that was not
+// applied (no leader, leader changed) is retried with backoff until the gateway is stale.
+// A proposal whose outcome is unknown (docs/02 §forwarding, I-95) is proposed once more,
+// and the second answer is read in that light: an ErrExist or ErrNotExist after an
+// unknown outcome carries meta.ErrUnknownOutcome too, so Create and Mkdir open what is
+// there, and Remove and Rename take "already gone" as their own first attempt having
+// landed. A second unknown outcome in a row is an error (EIO on the wire).
 func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error) {
 	delay := proposeRetryMin
+	afterUnknown := false
 	for {
 		res, index, err := f.prop.Propose(ctx, cmd)
 		if err == nil {
 			if res.Err != nil {
+				if afterUnknown && (errors.Is(res.Err, meta.ErrExist) || errors.Is(res.Err, meta.ErrNotExist)) {
+					return res, fmt.Errorf("%w (%w)", res.Err, meta.ErrUnknownOutcome)
+				}
 				return res, res.Err
 			}
 			if err := f.st.WaitApplied(ctx, index); err != nil {
 				return res, err
 			}
 			return res, nil
+		}
+		if errors.Is(err, meta.ErrUnknownOutcome) {
+			if afterUnknown {
+				return meta.Result{}, fmt.Errorf("%w: %w", syscall.EIO, err)
+			}
+			afterUnknown = true
+			continue
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return meta.Result{}, err
 		}
 		if f.stale == nil || f.stale() {
 			return meta.Result{}, ErrReadOnly
@@ -150,10 +156,16 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 	}
 }
 
+// landedEarlier reports whether err says the mutation is already in effect: the entry
+// is gone (or exists) and the previous attempt's outcome was unknown.
+func landedEarlier(err, want error) bool {
+	return errors.Is(err, want) && errors.Is(err, meta.ErrUnknownOutcome)
+}
+
 func (f *FS) now() int64 { return f.clk.Now().UnixNano() }
 
 func (f *FS) resolve(name string) (meta.Inode, error) {
-	return f.st.Resolve(split(name))
+	return f.st.Resolve(meta.SplitPath(name))
 }
 
 // --- billy.Basic ---------------------------------------------------------------------
@@ -168,7 +180,7 @@ func (f *FS) Open(filename string) (billy.File, error) {
 
 func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
 	ctx := context.Background()
-	parts := split(filename)
+	parts := meta.SplitPath(filename)
 	if len(parts) == 0 {
 		return nil, mapErr("open", filename, meta.ErrIsDir)
 	}
@@ -254,8 +266,8 @@ func (f *FS) info(in meta.Inode) *fileInfo {
 
 func (f *FS) Rename(oldpath, newpath string) error {
 	ctx := context.Background()
-	op, on := parentOf(split(oldpath))
-	np, nn := parentOf(split(newpath))
+	op, on := parentOf(meta.SplitPath(oldpath))
+	np, nn := parentOf(meta.SplitPath(newpath))
 	if on == "" || nn == "" {
 		return mapErr("rename", oldpath, meta.ErrBadCommand)
 	}
@@ -265,7 +277,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	}
 	// a directory cannot move under itself; refuse before creating any parent (the FSM
 	// would refuse too, but only after mkdirAll had left new directories behind)
-	if oldParts := split(oldpath); len(oldParts) <= len(np) && equalParts(oldParts, np[:len(oldParts)]) {
+	if oldParts := meta.SplitPath(oldpath); len(oldParts) <= len(np) && slices.Equal(oldParts, np[:len(oldParts)]) {
 		return mapErr("rename", oldpath, meta.ErrLoop)
 	}
 	if err := f.mkdirAll(ctx, np, 0o755); err != nil {
@@ -281,7 +293,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	}
 	if _, err := f.propose(ctx, meta.Command{Op: meta.OpRename, Rename: &meta.Rename{
 		OldParent: oldDir.Ino, OldName: on, NewParent: newDir.Ino, NewName: nn, Now: f.now(),
-	}}); err != nil {
+	}}); err != nil && !landedEarlier(err, meta.ErrNotExist) { // the first attempt moved it
 		return mapErr("rename", oldpath, err)
 	}
 	if replaced != 0 {
@@ -292,7 +304,7 @@ func (f *FS) Rename(oldpath, newpath string) error {
 
 func (f *FS) Remove(filename string) error {
 	ctx := context.Background()
-	dp, name := parentOf(split(filename))
+	dp, name := parentOf(meta.SplitPath(filename))
 	if name == "" {
 		return mapErr("remove", filename, meta.ErrBadCommand)
 	}
@@ -310,7 +322,7 @@ func (f *FS) Remove(filename string) error {
 	} else {
 		cmd = meta.Command{Op: meta.OpUnlink, Unlink: &meta.Unlink{Parent: dir.Ino, Name: name, Now: f.now()}}
 	}
-	if _, err := f.propose(ctx, cmd); err != nil {
+	if _, err := f.propose(ctx, cmd); err != nil && !landedEarlier(err, meta.ErrNotExist) { // the first attempt removed it
 		return mapErr("remove", filename, err)
 	}
 	f.ov.Drop(in.Ino)
@@ -358,7 +370,7 @@ func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
 }
 
 func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
-	if err := f.mkdirAll(context.Background(), split(filename), perm); err != nil {
+	if err := f.mkdirAll(context.Background(), meta.SplitPath(filename), perm); err != nil {
 		return mapErr("mkdir", filename, err)
 	}
 	return nil
@@ -397,7 +409,7 @@ func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) err
 
 func (f *FS) Symlink(target, link string) error {
 	ctx := context.Background()
-	dp, name := parentOf(split(link))
+	dp, name := parentOf(meta.SplitPath(link))
 	if name == "" {
 		return mapErr("symlink", link, meta.ErrBadCommand)
 	}
@@ -411,6 +423,11 @@ func (f *FS) Symlink(target, link string) error {
 	if _, err := f.propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{
 		Parent: dir.Ino, Name: name, Type: meta.TSymlink, Mode: 0o777, Uid: f.uid, Gid: f.gid, Target: target, Now: f.now(),
 	}}); err != nil {
+		if landedEarlier(err, meta.ErrExist) { // the first attempt created it: it must be this link
+			if in, ok := f.st.Lookup(dir.Ino, name); ok && in.Type == meta.TSymlink && in.Target == target {
+				return nil
+			}
+		}
 		return mapErr("symlink", link, err)
 	}
 	return nil

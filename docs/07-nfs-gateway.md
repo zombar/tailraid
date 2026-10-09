@@ -173,6 +173,9 @@ device"), not `EIO`.
   on the next GETATTR from any gateway after commit.
 - **I-47** — READDIR/READDIRPLUS paging returns every entry exactly once for a directory that
   is not modified during the listing, for directories of any size.
+- **I-100** — When `Serve` stops, the listener and every connection it accepted are
+  closed before it returns: a mounted client is never answered by a gateway whose
+  flusher has already stopped, and a stuck NFS connection cannot keep the process alive.
 
 ## Tests
 
@@ -183,3 +186,4 @@ device"), not `EIO`.
 | I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
 | I-46 | `TestNFS_SetattrOwnerAndTimes`, `TestNFS_SetattrSizeTruncates`, `TestVFS_SymlinkAndChange` |
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
+| I-100 | `TestServe_ClosesConnectionsOnShutdown` |

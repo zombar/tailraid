@@ -274,8 +274,16 @@ func (s *Server) fits(total uint64) bool {
 	if !ok || rep.Volume.K == 0 {
 		return true
 	}
-	need := total * uint64(rep.Volume.K+rep.Volume.M) / uint64(rep.Volume.K)
-	return need <= rep.Volume.Free
+	return needBytes(total, rep.Volume.K, rep.Volume.M) <= rep.Volume.Free
+}
+
+// needBytes is the raw space total bytes of file data take at policy k+m. Each operand
+// is widened first: k+m is 256 at most, which overflows a uint8 to 0.
+func needBytes(total uint64, k, m uint8) uint64 {
+	if k == 0 {
+		return total
+	}
+	return total * (uint64(k) + uint64(m)) / uint64(k)
 }
 
 // mkdir creates a directory and its parents (I-70).

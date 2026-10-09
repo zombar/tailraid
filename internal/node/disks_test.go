@@ -160,8 +160,11 @@ func TestNode_Rebudget_PerTarget(t *testing.T) {
 	if _, ok := got[3]; ok || pinned.Capacity() != 123 {
 		t.Fatal("a pinned target was re-derived")
 	}
-	// a and b share the temp filesystem: each gets half, never the whole
-	if got[1] != got[2] || got[1]+got[2] > whole || (whole > 1 && got[1] == whole) {
+	// a and b share the temp filesystem: each gets half, never the whole. The filesystem
+	// is the real one and other tests write to it, so the second reading may differ from
+	// the one budgets() used by a few blocks: allow that drift, not a whole budget.
+	const drift = 64 << 20
+	if got[1] != got[2] || got[1]+got[2] > whole+drift || (whole > 1 && got[1] == whole) {
 		t.Fatalf("shared budgets %d, %d of %d", got[1], got[2], whole)
 	}
 	if a.Capacity() != int64(got[1]) {

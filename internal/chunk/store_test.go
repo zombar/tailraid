@@ -405,6 +405,13 @@ func TestStore_DeleteIfOlder_RefusesYoungShard(t *testing.T) {
 	if !s.Has(k) {
 		t.Fatal("young shard removed")
 	}
+	// exactly minAge old is still young (docs/06: a shard younger than or exactly grace
+	// old is kept); one tick older goes
+	edge := now.Add(-10 * time.Minute)
+	_ = os.Chtimes(shardPath(root, k), edge, edge)
+	if del, _, err := s.DeleteIfOlder(k, 10*time.Minute, now); err != nil || del {
+		t.Fatalf("shard exactly minAge old: deleted=%v err=%v", del, err)
+	}
 	old := now.Add(-time.Hour)
 	_ = os.Chtimes(shardPath(root, k), old, old)
 	if del, n, err := s.DeleteIfOlder(k, 10*time.Minute, now); err != nil || !del || n != int64(HeaderSize+100) {

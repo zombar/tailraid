@@ -76,20 +76,32 @@ func PrepareDisk(path string, clusterID [16]byte, hostID string) (string, error)
 	return id, sysfs.OS{}.SyncDir(path)
 }
 
+// readMarker parses <path>/disk_id; a marker without a disk ID is an error.
+func readMarker(path string) (diskMarker, error) {
+	b, err := os.ReadFile(filepath.Join(path, MarkerName)) //nolint:gosec // the disk path from the config
+	if err != nil {
+		return diskMarker{}, err
+	}
+	var m diskMarker
+	if err := json.Unmarshal(b, &m); err != nil {
+		return diskMarker{}, err
+	}
+	if m.DiskID == "" {
+		return diskMarker{}, errors.New("disk_id without an id")
+	}
+	return m, nil
+}
+
 // checkDisk decides whether the disk at path may be opened as one of this host's
 // targets: its marker must name this cluster and this host, and the node table must hold
 // a live (not Removed) disk row for it under this host. reason says why not (I-86).
 func checkDisk(path string, clusterID [16]byte, hostID string, host meta.NodeIdx, nodes []meta.Node) (row meta.Node, reason string) {
-	b, err := os.ReadFile(filepath.Join(path, MarkerName)) //nolint:gosec // the disk path from the config
+	m, err := readMarker(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return meta.Node{}, "disk_id missing — not mounted?"
 	case err != nil:
 		return meta.Node{}, "disk_id unreadable: " + err.Error()
-	}
-	var m diskMarker
-	if err := json.Unmarshal(b, &m); err != nil || m.DiskID == "" {
-		return meta.Node{}, "disk_id unreadable"
 	}
 	if m.ClusterID != hex.EncodeToString(clusterID[:]) {
 		return meta.Node{}, "disk_id belongs to another cluster"
@@ -315,11 +327,8 @@ func (d *diskSet) health() []rpc.DiskHealth {
 		if ld.store != nil {
 			h.Used, h.Capacity = ld.store.Used(), ld.store.Capacity()
 			h.Free = max(h.Capacity-h.Used, 0)
-		} else if b, err := os.ReadFile(filepath.Join(ld.cfg.Path, MarkerName)); err == nil {
-			var m diskMarker
-			if json.Unmarshal(b, &m) == nil {
-				h.ID = m.DiskID
-			}
+		} else if m, err := readMarker(ld.cfg.Path); err == nil {
+			h.ID = m.DiskID
 		}
 		out = append(out, h)
 	}

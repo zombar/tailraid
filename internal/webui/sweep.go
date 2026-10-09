@@ -13,7 +13,7 @@ type Remover interface {
 	Remove(name string) error
 }
 
-// SweepUploads removes every upload temp whose mtime is olderThan or more before now:
+// SweepUploads removes every upload temp whose mtime is more than olderThan before now:
 // an upload nobody resumed (docs/13 §4, I-81). It walks the FSM, so it costs nothing on
 // a volume without temps beyond the directory walk.
 func SweepUploads(ctx context.Context, fs Remover, st *meta.Store, now time.Time, olderThan time.Duration) (int, error) {
@@ -38,7 +38,7 @@ func SweepUploads(ctx context.Context, fs Remover, st *meta.Store, now time.Time
 			switch {
 			case k.Type == meta.TDir:
 				stack = append(stack, dir{k.Ino, path.Join(d.path, k.Name)})
-			case k.Type == meta.TFile && IsUploadTemp(k.Name) && now.Sub(time.Unix(0, k.Mtime)) >= olderThan:
+			case k.Type == meta.TFile && IsUploadTemp(k.Name) && now.Sub(time.Unix(0, k.Mtime)) > olderThan:
 				if err := fs.Remove(path.Join(d.path, k.Name)); err != nil {
 					return removed, err
 				}

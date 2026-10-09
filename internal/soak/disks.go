@@ -286,7 +286,12 @@ func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 			r.check("I-88", "repair "+when, false, err.Error())
 			return rep
 		}
-		wk, wm := meta.AutoPolicy(membersOf(rep))
+		members, err := membersOf(rep)
+		if err != nil {
+			r.check("I-88", "member table "+when, false, err.Error())
+			return rep
+		}
+		wk, wm := meta.AutoPolicy(members)
 		r.check("I-88 I-75", "policy follows the member table "+when, rep.Volume.Auto && rep.Volume.K == wk && rep.Volume.M == wm && rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0,
 			fmt.Sprintf("policy %d+%d, rule %d+%d, %d stale, %d degraded", rep.Volume.K, rep.Volume.M, wk, wm, rep.Volume.StalePolicy, rep.Volume.Degraded))
 		bad, first := r.verifyModel(v, m)

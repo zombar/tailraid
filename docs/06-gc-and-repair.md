@@ -43,7 +43,9 @@ func (g *GC) RunOnce(ctx context.Context) (deleted int, err error)
 ```
 
 Every `gc_interval` (default 10 min) the leader proposes
-`GCDelete{Before: fsmNow − grace}` with `grace = 10 min`, where `fsmNow = max(leader wall
+`GCDelete{Before: fsmNow − grace, Limit: 1024}` (and again while a batch comes back
+full, I-103: after an `rm -rf` of terabytes the FSM lock is held for 1024 entries at a
+time, never for all of them) with `grace = 10 min`, where `fsmNow = max(leader wall
 clock, State.LastNow)`: the leader's clock clamped by the FSM clock (02), the same clock that
 stamped every `TombstonedAt`. A leader whose clock lags the proposers therefore never stalls
 GC, and `Before` never goes backwards across leader changes. A leader whose clock runs ahead
@@ -56,12 +58,14 @@ header `X-Tailraid-Log-Index: <index of the GCDelete>` (best effort; misses are 
 `Sweep`). Because `Before` is in the command, every replica deletes the same entries at the
 same log index (I-4).
 
-**DELETE fence (device nodes).** The receiver deletes the file only if all of:
+**DELETE fence (devices and disks).** The receiver deletes the file only if all of:
 1. its own applied Raft index ≥ `X-Tailraid-Log-Index` (it has seen the GCDelete or
    SetPlacement that justifies the delete);
 2. its chunk table has no entry for the hash, or the entry's `Placement[idx] != self` under
    that key's `(k,m)`;
-3. the file's mtime is older than grace (`Store.DeleteIfOlder`).
+3. the file's mtime is older than grace (`Store.DeleteIfOlder`). One rule everywhere a
+   shard or an upload temp is aged (Sweep, GC, repair, the upload sweep, the FSM's
+   tombstones): younger than grace *or exactly grace old* is kept; one tick older goes.
 Otherwise it answers `412 Precondition Failed` and keeps the file; the sender logs and moves
 on (Sweep will reconcile). Rule 3 is what makes I-14 hold for GC as well as Sweep: a shard
 that a flusher just re-PUT for a revived or re-uploaded chunk is younger than grace and

@@ -24,6 +24,10 @@ type Authorizer interface {
 }
 
 // WhoIsAuthorizer authorizes by member table then WhoIs StableID (docs/08 steps 1–4).
+// The same object gates the Raft transport's accepted connections (cluster.PeerAuth,
+// I-92), so it can exist before the FSM does: SetMembers binds the table once the node is
+// open, and SetSeed adds the members a join response named, for the window in which a
+// joiner's own table is still empty.
 type WhoIsAuthorizer struct {
 	TS     tailscale.Client
 	Member func(addr string) (meta.Node, bool) // the device record at addr, if any (meta.Store.NodeByAddr)
@@ -32,8 +36,49 @@ type WhoIsAuthorizer struct {
 	NegTTL time.Duration // default 30 s
 
 	mu       sync.Mutex
+	seed     map[string]meta.Node // by address; consulted when Member has no record (join)
 	cache    map[netip.Addr]cacheEntry
 	inflight map[netip.Addr]chan struct{} // one WhoIs per address at a time; concurrent misses wait
+	gen      uint64                       // bumped by Purge: a lookup that started before it does not cache its answer
+}
+
+// cacheSweepAt is the cache size at which an insert first evicts expired entries, so
+// negative entries for addresses that never return cannot grow the map without bound.
+const cacheSweepAt = 1024
+
+// SetMembers binds the member table (the node's FSM) after construction.
+func (a *WhoIsAuthorizer) SetMembers(fn func(addr string) (meta.Node, bool)) {
+	a.mu.Lock()
+	a.Member = fn
+	a.mu.Unlock()
+}
+
+// SetSeed records the device members a join response listed, so the joiner accepts the
+// leader's Raft connection before its own table holds anyone. The FSM, once replicated,
+// takes precedence; the seed only ever names members the leader vouched for.
+func (a *WhoIsAuthorizer) SetSeed(members []meta.Node) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.seed = map[string]meta.Node{}
+	for i := range members {
+		if m := &members[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+			a.seed[m.Addr] = *m
+		}
+	}
+}
+
+// member is the record at addr: the table first, then the join seed.
+func (a *WhoIsAuthorizer) member(addr string) (meta.Node, bool) {
+	a.mu.Lock()
+	lookup := a.Member
+	seeded, inSeed := a.seed[addr]
+	a.mu.Unlock()
+	if lookup != nil {
+		if m, ok := lookup(addr); ok {
+			return m, true
+		}
+	}
+	return seeded, inSeed
 }
 
 type cacheEntry struct {
@@ -105,7 +150,10 @@ func (a *WhoIsAuthorizer) lookup(ctx context.Context, src netip.Addr) (cacheEntr
 				return cacheEntry{}, ctx.Err()
 			}
 		}
-		e, err := a.whois(ctx, src)
+		a.mu.Lock()
+		gen := a.gen
+		a.mu.Unlock()
+		e, err := a.whois(ctx, src, gen)
 		a.mu.Lock()
 		delete(a.inflight, src)
 		a.mu.Unlock()
@@ -114,8 +162,10 @@ func (a *WhoIsAuthorizer) lookup(ctx context.Context, src netip.Addr) (cacheEntr
 	}
 }
 
-// whois is the uncached lookup; it caches positive and not-found answers.
-func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr) (cacheEntry, error) {
+// whois is the uncached lookup; it caches positive and not-found answers unless a Purge
+// happened while it ran (gen moved on): the membership that made the purge may have
+// changed what the answer means (I-18).
+func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr, gen uint64) (cacheEntry, error) {
 	pos, neg := a.ttls()
 	w, err := a.TS.WhoIs(ctx, src)
 	e := cacheEntry{}
@@ -130,14 +180,24 @@ func (a *WhoIsAuthorizer) whois(ctx context.Context, src netip.Addr) (cacheEntry
 		e.stableID, e.login, e.expires = w.Node.StableID, w.Login(), a.now().Add(pos)
 	}
 	a.mu.Lock()
-	a.cache[src] = e
+	if a.gen == gen {
+		if len(a.cache) >= cacheSweepAt {
+			now := a.now()
+			for k, v := range a.cache {
+				if !now.Before(v.expires) {
+					delete(a.cache, k)
+				}
+			}
+		}
+		a.cache[src] = e
+	}
 	a.mu.Unlock()
 	return e, e.err
 }
 
 // Allow implements docs/08 steps 2–4: member by IP, then WhoIs StableID must match.
 func (a *WhoIsAuthorizer) Allow(ctx context.Context, src netip.Addr) (meta.Node, error) {
-	member, found := a.Member(src.String())
+	member, found := a.member(src.String())
 	if !found {
 		return meta.Node{}, fmt.Errorf("%w: %s is not a member", ErrForbidden, src)
 	}
@@ -157,6 +217,7 @@ func (a *WhoIsAuthorizer) Allow(ctx context.Context, src netip.Addr) (meta.Node,
 // Purge clears the identity cache.
 func (a *WhoIsAuthorizer) Purge() {
 	a.mu.Lock()
+	a.gen++
 	a.cache = map[netip.Addr]cacheEntry{}
 	a.mu.Unlock()
 }

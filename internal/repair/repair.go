@@ -5,6 +5,7 @@ package repair
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -413,9 +414,15 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			return outcome{bytes: moved}, nil // nothing placeable improved; nothing to commit (L-185)
 		}
 	}
-	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace}})
+	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace, Expect: c.Placement}})
 	if err == nil {
 		err = res.Err
+	}
+	if errors.Is(err, meta.ErrConflict) {
+		// re-placed by a flush or a drain since this pass read it (I-102): the next pass
+		// plans from the new placement; the shards just put are orphans the sweep clears
+		r.log.Info("placement changed under repair, skipping this pass", "chunk", fmt.Sprintf("%x", c.Hash[:8]))
+		return outcome{bytes: moved}, nil
 	}
 	if err != nil {
 		return outcome{bytes: moved}, fmt.Errorf("set placement: %w", err)
@@ -467,13 +474,19 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 		}
 		got[i] = b
 	}
-	data, err := r.rd.ReadChunk(ctx, c.Hash) // hash-verified decode
-	if err != nil {
-		return corrupt, err
-	}
 	codec, err := r.codecs.Get(c.K, c.M)
 	if err != nil {
 		return corrupt, err
+	}
+	// decode from the shards just fetched rather than fetching them again through the
+	// reader: a verified decode needs any k of them, and the hash check below is the
+	// same one the reader applies
+	data, err := codec.Decode(append([][]byte(nil), got...), int(c.Size))
+	if err != nil || sha256.Sum256(data) != c.Hash {
+		data, err = r.rd.ReadChunk(ctx, c.Hash) // a bad majority: let the reader hedge across holders
+		if err != nil {
+			return corrupt, err
+		}
 	}
 	want, err := codec.Encode(data)
 	if err != nil {

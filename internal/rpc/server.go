@@ -109,6 +109,9 @@ type Options struct {
 	Grace      time.Duration // DELETE fence minimum shard age; default 10 min
 	PutSlots   int           // concurrent PUTs; default 16
 	GetSlots   int           // concurrent GETs; default 32
+	// BodyTimeout bounds reading a PUT or apply body and writing a GET body, so a peer
+	// that stalls mid-transfer cannot hold a slot (I-97); default callTimeout(MaxShard).
+	BodyTimeout time.Duration
 }
 
 // SlotBudget is the memory the shard RPC server may hold in request and reply bodies at
@@ -143,6 +146,9 @@ func NewServer(o Options) (*Server, error) {
 	if o.MaxShard == 0 {
 		o.MaxShard = 2 << 20
 	}
+	if o.BodyTimeout == 0 {
+		o.BodyTimeout = callTimeout(o.MaxShard)
+	}
 	if o.Grace == 0 {
 		o.Grace = 10 * time.Minute
 	}
@@ -164,7 +170,7 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("/v1/shards/", s.clusterCheck(s.member(http.HandlerFunc(s.shards))))
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
-	mux.Handle("POST /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.members))))
+	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership, or the update_addr exception (docs/08 step 6, I-93)
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
 	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
@@ -291,7 +297,7 @@ func (s *Server) member(next http.Handler) http.Handler {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	h := Health{
-		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(),
+		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion,
 		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity(),
 	}
 	h.Free = max(h.Capacity-h.Used, 0)
@@ -374,6 +380,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 			return
 		}
 		defer rc.Close()
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(s.o.BodyTimeout)) // I-97
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
@@ -387,6 +394,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
 			return
 		}
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.o.BodyTimeout))    // a stalled body frees the slot (I-97)
 		buf := bytes.NewBuffer(make([]byte, 0, max(0, min(r.ContentLength, s.o.MaxShard))+1)) // sized by Content-Length: one allocation
 		_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
 		body := buf.Bytes()
@@ -442,6 +450,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 }
 
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.o.BodyTimeout)) // I-97
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read body")
@@ -458,7 +467,11 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	res, index, err := s.o.Applier.Propose(r.Context(), cmd)
 	if err != nil {
-		s.notLeader(w)
+		if errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader) {
+			s.notLeader(w) // not applied: the caller retries elsewhere
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error()) // dispatched, outcome unknown (I-95)
 		return
 	}
 	w.Header().Set(HeaderIndex, strconv.FormatUint(index, 10))
@@ -543,9 +556,13 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "join: claimed tailnet identity does not match the caller")
 		return
 	}
-	if req.Addr == "" {
-		req.Addr = src.String()
+	// the record's address is the caller's (I-94): a token holder cannot point a member
+	// record at another device
+	if req.Addr != "" && req.Addr != src.String() {
+		writeErr(w, http.StatusForbidden, "join: addr must be the caller's own address or empty")
+		return
 	}
+	req.Addr = src.String()
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "join not available")
 		return
@@ -564,11 +581,51 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// members authorizes like every other endpoint (a member, before the body is read) with
+// one exception (docs/08 step 6, I-93): update_addr arrives from an address that is, by
+// definition, not in the member table yet. A non-member's body is read (64 KiB at most)
+// only to learn the op; update_addr is then allowed when WhoIs(src) is the StableID of the
+// member named in it, and it changes nothing but that member's address.
 func (s *Server) members(w http.ResponseWriter, r *http.Request) {
+	src, ok := SourceAddr(r)
+	if !ok {
+		writeErr(w, http.StatusForbidden, "unparseable source address")
+		return
+	}
+	_, authErr := s.o.Auth.Allow(r.Context(), src)
+	if authErr != nil && errors.Is(authErr, ErrUnavailable) {
+		writeErr(w, http.StatusServiceUnavailable, authErr.Error())
+		return
+	}
 	var op MemberOp
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad member op")
 		return
+	}
+	if authErr != nil {
+		if op.Op != "update_addr" {
+			writeErr(w, http.StatusForbidden, authErr.Error())
+			return
+		}
+		id, err := s.o.Auth.Identify(r.Context(), src)
+		if err != nil {
+			writeErr(w, http.StatusForbidden, "update_addr: "+err.Error())
+			return
+		}
+		var named meta.Node
+		if s.o.Members != nil {
+			members := s.o.Members()
+			for i := range members {
+				if members[i].Idx == op.NodeIdx && members[i].State != meta.Removed {
+					named = members[i]
+				}
+			}
+		}
+		if named.Idx == 0 || named.TSStableID != id {
+			writeErr(w, http.StatusForbidden, "update_addr: the caller is not the tailnet node of the member it names")
+			return
+		}
+		op = MemberOp{Op: "update_addr", NodeIdx: op.NodeIdx, Addr: op.Addr}
 	}
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "members not available")

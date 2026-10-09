@@ -54,21 +54,42 @@ func (n *Node) Propose(ctx context.Context, cmd meta.Command) (meta.Result, uint
 	case errors.Is(err, rpc.ErrNoLeader), errors.Is(err, rpc.ErrNotLeader):
 		return meta.Result{}, 0, fmt.Errorf("%w: %v", ErrNoLeader, err) //nolint:errorlint // transport detail
 	default:
-		return meta.Result{}, 0, fmt.Errorf("cluster: forward: %w", err)
+		// a timeout, a transport error or the leader's 500: the command may have been
+		// applied (I-95); callers resolve it, never retry it blindly
+		return meta.Result{}, 0, fmt.Errorf("%w: forward: %w", meta.ErrUnknownOutcome, err)
 	}
 }
 
+// applyLocal hands cmd to Raft on the leader. An expired context is refused before
+// dispatch (raft disarms its timer for a zero timeout); a cancellation while the future
+// is pending is reported as an unknown outcome, because the entry may still commit.
 func (n *Node) applyLocal(ctx context.Context, cmd meta.Command) (meta.Result, uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return meta.Result{}, 0, err
+	}
 	timeout := 5 * time.Second
 	if d, ok := ctx.Deadline(); ok {
-		timeout = time.Until(d)
+		timeout = max(time.Until(d), time.Millisecond)
 	}
-	fut := n.Raft.Apply(meta.EncodeCommand(cmd), timeout)
-	if err := fut.Error(); err != nil {
-		if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, raft.ErrLeadershipLost) {
+	encoded, err := meta.EncodeCommand(cmd)
+	if err != nil {
+		return meta.Result{}, 0, err
+	}
+	fut := n.Raft.Apply(encoded, timeout)
+	done := make(chan error, 1)
+	go func() { done <- fut.Error() }() // raft resolves every future within its timeouts
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		return meta.Result{}, 0, fmt.Errorf("%w: %w", meta.ErrUnknownOutcome, ctx.Err())
+	}
+	if err != nil {
+		if errors.Is(err, raft.ErrNotLeader) {
 			return meta.Result{}, 0, fmt.Errorf("%w: %v", ErrNotLeader, err) //nolint:errorlint // raft detail
 		}
-		return meta.Result{}, 0, fmt.Errorf("cluster: apply: %w", err)
+		// ErrLeadershipLost, ErrEnqueueTimeout, a shutdown: dispatched or racing with a
+		// dispatch, so the outcome is unknown (I-95)
+		return meta.Result{}, 0, fmt.Errorf("%w: apply: %w", meta.ErrUnknownOutcome, err)
 	}
 	res, ok := fut.Response().(meta.Result)
 	if !ok {

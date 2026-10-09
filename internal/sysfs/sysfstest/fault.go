@@ -64,6 +64,7 @@ type Fault struct {
 	mu          sync.Mutex
 	failStep    Step
 	failErr     error
+	failSkip    int // matching calls to let through before failStep fires
 	crashStep   Step
 	tornKeep    int64 // -1 = no torn write
 	writeLimit  int64 // -1 = unlimited
@@ -81,7 +82,15 @@ func New(inner sysfs.FS) *Fault {
 func (f *Fault) FailAt(step Step, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.failStep, f.failErr = step, err
+	f.failStep, f.failErr, f.failSkip = step, err, 0
+}
+
+// FailAtNth makes the nth call (1-based) of the given step return err; the calls before
+// it succeed. A compaction opens two files, and only the second is the reopen.
+func (f *Fault) FailAtNth(step Step, n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failStep, f.failErr, f.failSkip = step, err, max(n-1, 0)
 }
 
 // WriteErrAfter makes writes succeed for the first n bytes in total and then return err
@@ -136,6 +145,10 @@ func (f *Fault) check(step Step, file *faultFile) error {
 		panic(crashSentinel{step})
 	}
 	if f.failStep == step {
+		if f.failSkip > 0 {
+			f.failSkip--
+			return nil
+		}
 		f.failStep = 0
 		err := f.failErr
 		f.failErr = nil

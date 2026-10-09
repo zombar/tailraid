@@ -22,7 +22,7 @@ func TestFlusher_PutTimeout_SlotReplaced(t *testing.T) {
 	must(t, f.Ov.Write(ino, 0, 0, data))
 	h := sha256Of(data)
 	cands := meta.Candidates(f.FSM.Nodes(), func(meta.NodeIdx) bool { return true })
-	victim := meta.Place(h, cands, 3)[2]
+	victim := meta.PlaceKM(h, cands, 3, 0)[2]
 	entered, release := f.StallPut(victim)
 	defer release()
 	cfg := vfs.DefaultConfig()
@@ -77,7 +77,7 @@ func TestFlusher_PutForbidden_SlotReplaced(t *testing.T) {
 	must(t, f.Ov.Write(ino, 0, 0, data))
 	h := sha256Of(data)
 	cands := meta.Candidates(f.FSM.Nodes(), func(meta.NodeIdx) bool { return true })
-	victim := meta.Place(h, cands, 3)[0]
+	victim := meta.PlaceKM(h, cands, 3, 0)[0]
 	f.FailPutWith(victim, rpc.ErrForbidden)
 	fl := f.Flusher()
 	fl.Events = meta.NewEventRing(f.Clk, f.SelfIdx)

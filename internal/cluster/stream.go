@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/raft"
+
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // ErrClusterMismatch is returned when a Raft peer presents a different cluster ID.
@@ -32,13 +36,23 @@ func (s *tcpStream) Accept() (net.Conn, error) { return s.l.Accept() }
 func (s *tcpStream) Close() error              { return s.l.Close() }
 func (s *tcpStream) Addr() net.Addr            { return s.advertise }
 
-// idStream wraps a StreamLayer with a 16-byte cluster-ID handshake in both directions
-// (docs/02, docs/08): two clusters that accidentally share a tailnet can never exchange
-// Raft traffic.
+// PeerAuth decides whether a Raft connection from src may proceed to the handshake
+// (docs/08 §Raft transport, I-92): the same member-by-IP plus WhoIs StableID rule the
+// RPC server applies. rpc.WhoIsAuthorizer implements it.
+type PeerAuth interface {
+	Allow(ctx context.Context, src netip.Addr) (meta.Node, error)
+}
+
+// idStream wraps a StreamLayer with the member check on accept and a 16-byte cluster-ID
+// handshake in both directions (docs/02, docs/08): a tailnet device that is not a member
+// never reaches Raft, and two clusters that accidentally share a tailnet can never
+// exchange Raft traffic.
 type idStream struct {
 	raft.StreamLayer
 	id     [16]byte
-	faults Faults // nil: no rules
+	faults Faults       // nil: no rules
+	auth   PeerAuth     // nil: accept any peer that passes the handshake (the in-process harness)
+	log    *slog.Logger // nil: refusals are not logged
 
 	once      sync.Once
 	accepted  chan net.Conn // connections that passed the handshake
@@ -50,25 +64,50 @@ type idStream struct {
 // Faults is the /dev/fault rule set (internal/dev.Faults): peers to refuse.
 type Faults interface{ Blocked(addr string) bool }
 
+// ErrHandshakeRefused is a dial the acceptor closed during the handshake: the dialer is
+// not a member there (I-92) or belongs to another cluster (I-49); the acceptor, which
+// reads first, never says which.
+var ErrHandshakeRefused = errors.New("cluster: raft peer refused the handshake (not a member there, or another cluster)")
+
 // errDropped is a dial refused by a fault rule.
 var errDropped = errors.New("cluster: raft dial dropped by a fault rule")
 
-func (s *idStream) handshake(c net.Conn) (net.Conn, error) {
+// handshake exchanges cluster IDs. The dialer (initiator) writes first; the acceptor reads
+// first, so an accepted peer learns nothing before it has shown its own ID.
+func (s *idStream) handshake(c net.Conn, initiator bool) (net.Conn, error) {
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := c.Write(s.id[:]); err != nil {
-		_ = c.Close()
-		return nil, fmt.Errorf("cluster: handshake write: %w", err)
+	write := func() error {
+		if _, err := c.Write(s.id[:]); err != nil {
+			_ = c.Close()
+			return fmt.Errorf("cluster: handshake write: %w", err)
+		}
+		return nil
 	}
 	var peer [16]byte
-	if _, err := io.ReadFull(c, peer[:]); err != nil {
-		_ = c.Close()
-		return nil, fmt.Errorf("cluster: handshake read: %w", err)
+	read := func() error {
+		if _, err := io.ReadFull(c, peer[:]); err != nil {
+			_ = c.Close()
+			if initiator && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+				return ErrHandshakeRefused // the acceptor closed without answering
+			}
+			return fmt.Errorf("cluster: handshake read: %w", err)
+		}
+		if !bytes.Equal(peer[:], s.id[:]) {
+			_ = c.Close()
+			return ErrClusterMismatch
+		}
+		return nil
+	}
+	steps := []func() error{read, write}
+	if initiator {
+		steps = []func() error{write, read}
+	}
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return nil, err
+		}
 	}
 	_ = c.SetDeadline(time.Time{})
-	if !bytes.Equal(peer[:], s.id[:]) {
-		_ = c.Close()
-		return nil, ErrClusterMismatch
-	}
 	return c, nil
 }
 
@@ -80,7 +119,27 @@ func (s *idStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Con
 	if err != nil {
 		return nil, err
 	}
-	return s.handshake(c)
+	return s.handshake(c, true)
+}
+
+// allowed is the member check on an accepted connection (I-92): before any byte is read.
+func (s *idStream) allowed(c net.Conn) bool {
+	if s.auth == nil {
+		return true
+	}
+	ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.auth.Allow(ctx, ap.Addr()); err != nil {
+		if s.log != nil {
+			s.log.Warn("raft connection refused: not a member", "from", ap.Addr(), "err", err)
+		}
+		return false
+	}
+	return true
 }
 
 // Accept hands out connections that passed the handshake. Handshakes run off the accept
@@ -116,7 +175,11 @@ func (s *idStream) pump() {
 			continue
 		}
 		go func() {
-			hc, err := s.handshake(c)
+			if !s.allowed(c) {
+				_ = c.Close()
+				return
+			}
+			hc, err := s.handshake(c, false)
 			if err != nil {
 				return
 			}
@@ -129,9 +192,11 @@ func (s *idStream) pump() {
 	}
 }
 
-// NewTransport builds the Raft TCP transport with the cluster-ID handshake; faults (may
-// be nil) refuses peers under a /dev/fault rule in both directions.
-func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults Faults) (raft.Transport, error) {
+// NewTransport builds the Raft TCP transport with the member check on accept and the
+// cluster-ID handshake; faults (may be nil) refuses peers under a /dev/fault rule in both
+// directions; auth nil accepts any peer that passes the handshake (tests only: serve and
+// join always pass the WhoIs authorizer).
+func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults Faults, auth PeerAuth, log *slog.Logger) (raft.Transport, error) {
 	var lc net.ListenConfig // raft owns the listener's lifetime through Transport.Close
 	l, err := lc.Listen(context.Background(), "tcp", bind)
 	if err != nil {
@@ -143,6 +208,6 @@ func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults F
 			adv = tcp
 		}
 	}
-	stream := &idStream{StreamLayer: &tcpStream{l: l, advertise: adv}, id: clusterID, faults: faults}
+	stream := &idStream{StreamLayer: &tcpStream{l: l, advertise: adv}, id: clusterID, faults: faults, auth: auth, log: log}
 	return raft.NewNetworkTransport(stream, 3, 10*time.Second, logOutput), nil
 }

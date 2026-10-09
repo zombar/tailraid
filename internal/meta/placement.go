@@ -143,26 +143,6 @@ func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int, dom Domain
 	}
 }
 
-// Place selects up to n distinct targets for the shards of chunk h by weighted rendezvous
-// hashing: score_i = -Weight_i / ln(u_i) with u_i derived from fnv64a(h ‖ idx), walked in
-// score order (ties by Idx ascending) skipping a target whose domain already holds
-// ceil(n/D) picks, then filling any slot left from the skipped ones in the same order
-// (I-87). It is a pure function of (h, set of candidates, n) regardless of input order
-// (I-8); with one candidate per domain it is the top-n by score. Shard i goes to
-// result[i]. With fewer than n candidates the result is shorter; duplicate Idx entries
-// count once.
-func Place(h Hash, cands []Candidate, n int) []NodeIdx {
-	if n <= 0 || len(cands) == 0 {
-		return nil
-	}
-	r := ranked(h, cands)
-	domains := map[NodeIdx]bool{}
-	for _, c := range r {
-		domains[c.domain()] = true
-	}
-	return pick(r, n, map[NodeIdx]int{}, hostCap(n, len(domains)))
-}
-
 // hostCap is ceil(n/d), the most slots of an n-slot stripe one of d domains may hold.
 func hostCap(n, d int) int {
 	if d <= 0 {

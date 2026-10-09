@@ -40,10 +40,16 @@ func Sweep(ctx context.Context, s *Store, grace time.Duration, now time.Time,
 		if err := ctx.Err(); err != nil {
 			return deleted, err
 		}
-		if _, err := s.Delete(k); err != nil {
+		// re-checked under the key lock at delete time: a flush that PUT the same key
+		// between the walk and now refreshed its mtime, and that shard is acknowledged
+		// (I-14)
+		ok, _, err := s.DeleteIfOlder(k, grace, now)
+		if err != nil {
 			return deleted, fmt.Errorf("chunk: sweep delete %s: %w", k, err)
 		}
-		deleted++
+		if ok {
+			deleted++
+		}
 	}
 	return deleted, nil
 }

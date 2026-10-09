@@ -31,6 +31,7 @@ func TestParseKey_Rejects(t *testing.T) {
 		good + ".2-1.3", // idx >= k+m
 		good + ".2-1.01", good + ".02-1.0", good + ".2-01.0", good + ".0-1.0", good + ".2.0",
 		good + ".2-1-0", good + ".200-57.0", // k+m > 256
+		good + ".256-0.0", // k is a uint8 in Key
 		good + ".2-1.256", good[:63] + ".2-1.0", good + "0.2-1.0", strings.ToUpper(good) + ".2-1.0",
 		"zz" + good[2:] + ".2-1.0", "../" + good + ".2-1.0", good + ".2-1.0/../x", ".tmp-abc",
 	} {
