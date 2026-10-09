@@ -151,6 +151,41 @@
   </section>
 
   <section>
+    <h2>Disk strip <span>a host row, cells sized by budget</span></h2>
+    <div class="disks">
+      <div class="host-row self">
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">5 targets · 12.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
+        <div class="disk-strip">
+          <div class="disk" style="flex-grow:4096" title="pike/1: 38,900 slots, expected 39,008">
+            <div class="disk-name"><span class="dot ok"></span><span>pike/1</span></div>
+            <div class="bar"><i style="width:83%"></i><b class="tick" style="left:83%"></b></div>
+            <div class="disk-val dots"><span>38,900 slots</span><span>exp 39,008</span><span>−0.3 %</span></div>
+            <div class="disk-val"><span>1.2 TiB</span><span>of 4.0 TiB</span></div>
+          </div>
+          <div class="disk warn" style="flex-grow:2048">
+            <div class="disk-name"><span class="dot ok"></span><span>pike/2</span></div>
+            <div class="bar"><i style="width:6%"></i></div>
+            <div class="disk-val"><span>1,133 slots to move</span></div>
+          </div>
+          <div class="disk bad" style="flex-grow:2048">
+            <div class="disk-name"><span class="dot bad"></span><span>pike/3</span></div>
+            <div class="bar"><i style="width:41%"></i><b class="tick" style="left:41%"></b></div>
+            <div class="disk-val dots"><span>19,510 slots</span><span>exp 19,504</span><span>+0.0 %</span></div>
+            <div class="disk-val">unknown (dead 4m10s)</div>
+          </div>
+          <div class="disk off" style="flex-grow:2048">
+            <div class="disk-name"><span class="dot off"></span><span>pike/4</span></div>
+            <div class="bar"></div>
+            <div class="disk-val">closed: disk_id missing — not mounted?</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap-note">no chunk above the host cap</div>
+      <div class="cap-note warn">11,840 chunks above the host cap (2 of 3 slots per host) · moving 340/min</div>
+    </div>
+  </section>
+
+  <section>
     <h2>File rows, breadcrumb, toolbar</h2>
     <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span></div>
     <div class="toolbar">

@@ -138,6 +138,26 @@ section { display: grid; gap: 12px; align-content: start; }
 .badges { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
 .card .meta { font-size: 12px; color: var(--dim); font-family: var(--mono); display: flex; flex-wrap: wrap; gap: 4px 12px; }
 
+/* ---- disks: one row per host, its targets as cells sized by budget (docs/14 §8) ---- */
+h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8px; }
+.disks { display: grid; gap: 12px; }
+.host-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: grid; gap: 10px; min-width: 0; }
+.host-row.self { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.host-row .host-sum { font: 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.disk-strip { display: flex; flex-wrap: wrap; gap: 2px; }
+.disk { flex: 1 1 0; min-width: 132px; background: var(--surface); border-radius: 4px; padding: 8px 10px; display: grid; gap: 6px; font-size: 12px; align-content: start; }
+.disk .disk-name { font: 600 12px var(--mono); display: flex; align-items: center; gap: 6px; min-width: 0; }
+.disk .disk-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disk .disk-val { color: var(--dim); font-family: var(--mono); font-variant-numeric: tabular-nums; display: flex; flex-wrap: wrap; column-gap: 1ch; }
+.disk .disk-val span { white-space: nowrap; }
+.disk .disk-val.dots span:not(:last-child)::after { content: " ·"; }
+.disk.warn .disk-name::after { content: "draining"; font-weight: 400; color: var(--warn); margin-left: auto; }
+.disk.bad .bar, .disk.off .bar { background: repeating-linear-gradient(135deg, var(--line) 0 4px, var(--surface) 4px 8px); }
+.disk.bad .bar > i { background: var(--bad); opacity: .5; }
+.disk.off { background: transparent; outline: 1.5px dashed var(--line); outline-offset: -1.5px; }
+.cap-note { font-size: 12px; color: var(--dim); font-family: var(--mono); }
+.cap-note.warn { color: var(--warn); }
+
 /* ---- file browser -------------------------------------------------------------- */
 .crumbs { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--mono); font-size: 14px; align-items: center; }
 .crumbs a, .crumbs span { padding: 6px 2px; }
