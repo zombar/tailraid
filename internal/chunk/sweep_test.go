@@ -105,3 +105,32 @@ func TestSweep_StopsOnCancel(t *testing.T) {
 		t.Fatalf("cancelled sweep: n=%d err=%v", n, err)
 	}
 }
+
+// A shard that a flush re-PUT between the sweep's walk and its delete (the PUT refreshed
+// its mtime and was acknowledged) is not deleted: the age is re-checked under the key
+// lock at delete time.
+//
+// Invariant: I-14
+func TestSweep_RefreshedDuringWalkKept(t *testing.T) {
+	root := t.TempDir()
+	s := openStore(t, sysfs.OS{}, root, 0)
+	now := time.Now()
+	p := payload(500, 9)
+	k := keyFor(p, 0)
+	putAged(t, s, root, 9, 0, grace+time.Hour, now)
+	refresh := func(h [32]byte, kk, mm uint8, idx int) (placed, known bool) {
+		if Key(h, kk, mm, idx) == k { // the walk is looking at it: a flush lands the same shard now
+			if _, err := s.Put(k, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return false, false
+	}
+	n, err := Sweep(context.Background(), s, grace, now, refresh)
+	if err != nil || n != 0 {
+		t.Fatalf("deleted %d err %v", n, err)
+	}
+	if !s.Has(k) {
+		t.Fatal("an acknowledged shard was swept")
+	}
+}

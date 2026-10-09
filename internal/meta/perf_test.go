@@ -21,7 +21,7 @@ func TestFSM_Commit_RefDeltaMatchesFullRecompute(t *testing.T) {
 	var idx uint64
 	apply := func(c Command) Result {
 		idx++
-		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	}
 	if res := apply(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}); res.Err != nil {
 		t.Fatal(res.Err)
@@ -94,7 +94,7 @@ func TestFSM_Stats_IncrementalMatchesRecompute(t *testing.T) {
 	var idx uint64
 	apply := func(c Command) Result {
 		idx++
-		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+		return f.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	}
 	if res := apply(Command{Op: OpSetVolume, SetVolume: &SetVolume{ChunkSize: testCS, K: 2, M: 1, Now: 1}}); res.Err != nil {
 		t.Fatal(res.Err)

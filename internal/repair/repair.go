@@ -5,6 +5,7 @@ package repair
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -467,13 +468,19 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 		}
 		got[i] = b
 	}
-	data, err := r.rd.ReadChunk(ctx, c.Hash) // hash-verified decode
-	if err != nil {
-		return corrupt, err
-	}
 	codec, err := r.codecs.Get(c.K, c.M)
 	if err != nil {
 		return corrupt, err
+	}
+	// decode from the shards just fetched rather than fetching them again through the
+	// reader: a verified decode needs any k of them, and the hash check below is the
+	// same one the reader applies
+	data, err := codec.Decode(append([][]byte(nil), got...), int(c.Size))
+	if err != nil || sha256.Sum256(data) != c.Hash {
+		data, err = r.rd.ReadChunk(ctx, c.Hash) // a bad majority: let the reader hedge across holders
+		if err != nil {
+			return corrupt, err
+		}
 	}
 	want, err := codec.Encode(data)
 	if err != nil {

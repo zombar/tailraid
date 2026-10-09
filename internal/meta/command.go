@@ -175,9 +175,29 @@ type Result struct {
 	Err     error // nil or one of the sentinel errors
 }
 
-// EncodeCommand serializes c. It panics if the payload for c.Op is nil: that is a
-// programming error on the proposer, never a wire condition.
-func EncodeCommand(c Command) []byte {
+// EncodeCommand serializes c. A command whose payload for c.Op is nil, or whose op is
+// unknown, is ErrBadCommand: a programming error on the proposer, reported rather than
+// panicking the leader (I-26).
+func EncodeCommand(c Command) (b []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			b, err = nil, fmt.Errorf("%w: %v", ErrBadCommand, r)
+		}
+	}()
+	return encodeCommand(c), nil
+}
+
+// MustEncodeCommand is EncodeCommand for tests and the harness: it panics on a bad
+// command.
+func MustEncodeCommand(c Command) []byte {
+	b, err := EncodeCommand(c)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
 	v2 := c.Op == OpNodeUpsert && c.NodeUpsert != nil && (c.NodeUpsert.Node.Kind == KindDisk || c.NodeUpsert.Node.Host != 0)
 	if v2 {

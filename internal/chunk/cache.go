@@ -108,7 +108,7 @@ func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts
 		c.idx[e.hash] = c.lru.PushBack(e.cacheEntry)
 		c.used += e.size
 	}
-	c.evictLocked()
+	c.removeEvicted(c.evictLocked())
 	return c, nil
 }
 
@@ -257,17 +257,23 @@ func (c *Cache) Put(h [32]byte, data []byte) {
 	_ = c.fsys.Chtimes(p, now, now)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if _, ok := c.idx[h]; ok { // raced with another Put of the same hash
+		c.mu.Unlock()
 		return
 	}
 	c.idx[h] = c.lru.PushFront(cacheEntry{hash: h, size: int64(len(data)), touched: now})
 	c.used += int64(len(data))
-	c.evictLocked()
+	victims := c.evictLocked()
 	c.memPutLocked(h, data)
+	c.mu.Unlock()
+	c.removeEvicted(victims)
 }
 
-func (c *Cache) evictLocked() {
+// evictLocked untracks least-recently-used entries until the cache fits in max and
+// returns them; the caller removes their files after unlocking (removeEvicted), so a
+// slow disk never holds the lock.
+func (c *Cache) evictLocked() []cacheEntry {
+	var victims []cacheEntry
 	for c.used > c.max && c.lru.Len() > 0 {
 		el := c.lru.Back()
 		e := el.Value.(cacheEntry)
@@ -275,9 +281,25 @@ func (c *Cache) evictLocked() {
 		delete(c.idx, e.hash)
 		c.memDropLocked(e.hash)
 		c.used -= e.size
-		if err := c.fsys.Remove(c.path(e.hash)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		victims = append(victims, e)
+	}
+	return victims
+}
+
+// removeEvicted deletes evicted files. One whose remove fails is tracked again (at the
+// least-recent end) so a later eviction retries it instead of leaking it until restart.
+func (c *Cache) removeEvicted(victims []cacheEntry) {
+	for _, e := range victims {
+		err := c.fsys.Remove(c.path(e.hash))
+		if err == nil || errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
+		c.mu.Lock()
+		if _, ok := c.idx[e.hash]; !ok {
+			c.idx[e.hash] = c.lru.PushBack(e)
+			c.used += e.size
+		}
+		c.mu.Unlock()
 	}
 }
 

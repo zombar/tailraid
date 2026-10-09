@@ -51,7 +51,7 @@ func (a *fakeApplier) apply(c meta.Command) (meta.Result, uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.idx++
-	res := a.fsm.Apply(&raft.Log{Index: a.idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)}).(meta.Result)
+	res := a.fsm.Apply(&raft.Log{Index: a.idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)}).(meta.Result)
 	return res, a.idx
 }
 

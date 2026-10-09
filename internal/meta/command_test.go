@@ -122,7 +122,7 @@ var goldenCommands = []struct {
 func TestEncodeCommand_Golden(t *testing.T) {
 	for _, g := range goldenCommands {
 		t.Run(g.name, func(t *testing.T) {
-			got := EncodeCommand(g.cmd)
+			got := MustEncodeCommand(g.cmd)
 			if want := h(g.hex); !bytes.Equal(got, want) {
 				t.Fatalf("encode\n got %x\nwant %x", got, want)
 			}
@@ -175,7 +175,7 @@ func TestEncodeCommand_AllOpsCovered(t *testing.T) {
 }
 
 func TestDecodeCommand_Rejects(t *testing.T) {
-	good := EncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}})
+	good := MustEncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}})
 	cases := map[string][]byte{
 		"empty":              {},
 		"version only":       {1},
@@ -201,7 +201,7 @@ func TestEncodeCommand_MissingPayloadPanics(t *testing.T) {
 			t.Fatal("expected panic for Op without payload")
 		}
 	}()
-	EncodeCommand(Command{Op: OpUnlink})
+	MustEncodeCommand(Command{Op: OpUnlink})
 }
 
 func TestResult_RoundTrip(t *testing.T) {
@@ -261,7 +261,7 @@ func FuzzDecodeCommand(f *testing.F) {
 		if err != nil {
 			return
 		}
-		out := EncodeCommand(c)
+		out := MustEncodeCommand(c)
 		if !bytes.Equal(out, in) {
 			t.Fatalf("decode/encode not identity: %x -> %x", in, out)
 		}

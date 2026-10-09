@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"path/filepath"
 	"sort"
@@ -56,6 +57,9 @@ func WithCapWait(d time.Duration) Option { return func(o *Overlay) { o.capWait =
 // WithFS routes every WAL file operation through fsys (tests inject faults); the
 // default is the real filesystem.
 func WithFS(fsys sysfs.FS) Option { return func(o *Overlay) { o.fs = fsys } }
+
+// WithLog reports what replay discarded after a crash (docs/04 §2); unset is silent.
+func WithLog(l *slog.Logger) Option { return func(o *Overlay) { o.Log = l } }
 
 // DirtyInfo describes one inode with unflushed state (docs/04 §flush triggers).
 type DirtyInfo struct {
@@ -150,6 +154,10 @@ type Overlay struct {
 	capWait   time.Duration
 	fs        sysfs.FS
 
+	// Log, when set, reports what replay discarded after a crash (docs/04 §2); nil is
+	// silent (tests).
+	Log *slog.Logger
+
 	mu    sync.RWMutex
 	files map[meta.Ino]*dirtyFile
 
@@ -227,6 +235,10 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 		}
 		return nil
 	})
+	if w.Discarded > 0 && o.Log != nil {
+		o.Log.Error("wal replay discarded bytes after the last intact record (torn tail, or a corrupt record and everything after it)",
+			"ino", ino, "bytes", w.Discarded, "kept", w.Size())
+	}
 	if err != nil {
 		_ = w.Close()
 		return err
@@ -329,18 +341,23 @@ again:
 		if !create {
 			return nil, nil
 		}
+		// the WAL is opened (and its directory fsynced) outside the global lock: every
+		// lookup on every inode would otherwise wait on this fsync; a racing opener's
+		// handle to the same file is simply closed again
+		w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
+		if err != nil {
+			return nil, err
+		}
 		o.mu.Lock()
 		d, ok = o.files[ino]
 		if !ok {
-			w, err := openWAL(o.fs, filepath.Join(o.dir, strconv.FormatUint(uint64(ino), 10)+".wal"))
-			if err != nil {
-				o.mu.Unlock()
-				return nil, err
-			}
 			d = &dirtyFile{ino: ino, wal: w}
 			o.files[ino] = d
 		}
 		o.mu.Unlock()
+		if ok {
+			_ = w.Close()
+		}
 	}
 	d.mu.Lock()
 	if d.dead { // evicted between the lookup and the lock

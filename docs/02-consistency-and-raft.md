@@ -352,7 +352,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-4 | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas`, `TestModelCheck_Long` |
 | I-5 | `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestSingleNode_BootstrapProposeRestart` |
 | I-6 | `TestCluster_SplitBrain_OnlyMajorityCommits` |
-| I-26 | `FuzzDecodeCommand`, `TestErrorCode_RoundTrip`, `TestFSM_BadCommandLeavesStateUnchanged`, `TestFSM_Commit_NewSizeBounds`, `TestFSM_Commit_RejectsImplicitShrink`, `TestFSM_Create_NameBoundaries`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestVFS_RenameIntoOwnSubtree_NoSideEffects` |
+| I-26 | `FuzzDecodeCommand`, `TestEncodeCommand_BadCommandIsError`, `TestErrorCode_RoundTrip`, `TestFSM_BadCommandLeavesStateUnchanged`, `TestFSM_Commit_NewSizeBounds`, `TestFSM_Commit_RejectsImplicitShrink`, `TestFSM_Create_NameBoundaries`, `TestFSM_NodeRemove_RefusedWhileHoldingSlots`, `TestVFS_RenameIntoOwnSubtree_NoSideEffects` |
 | I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |

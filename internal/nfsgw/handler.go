@@ -85,7 +85,7 @@ func (h *Handler) FSStat(_ context.Context, _ billy.Filesystem, s *nfs.FSStat) e
 	total, _, free := meta.Usage(h.st.Volume(), h.st.Nodes(), st)
 	s.TotalSize, s.FreeSize, s.AvailableSize = total, free, free
 	s.TotalFiles = uint64(st.Inodes)
-	s.FreeFiles = (1 << 32) - uint64(st.Inodes)
+	s.FreeFiles = uint64(max(int64(1<<32)-int64(st.Inodes), 0)) // never wraps
 	s.AvailableFiles = s.FreeFiles
 	return nil
 }
@@ -239,13 +239,17 @@ func Listen(ctx context.Context, addr string) (net.Listener, error) {
 	return lc.Listen(ctx, "tcp", addr)
 }
 
-// Serve runs the NFS server on l until ctx is done.
+// Serve runs the NFS server on l until ctx is done, then closes the listener and every
+// connection it accepted (I-100): go-nfs serves each connection on its own goroutine and
+// would otherwise keep answering a mounted client after the gateway's flusher stopped.
 func Serve(ctx context.Context, l net.Listener, h *Handler) error {
+	tl := &trackedListener{Listener: l, conns: map[net.Conn]struct{}{}}
 	errc := make(chan error, 1)
-	go func() { errc <- nfs.Serve(l, h) }()
+	go func() { errc <- nfs.Serve(tl, h) }()
 	select {
 	case <-ctx.Done():
-		_ = l.Close()
+		_ = tl.Close()
+		tl.closeConns()
 		<-errc
 		return nil
 	case err := <-errc:

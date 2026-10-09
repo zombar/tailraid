@@ -364,7 +364,7 @@ func TestPolicyAllowed_CountsTargets(t *testing.T) {
 // Invariant: I-22
 func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 	disk := Node{Idx: 0, ID: "d1", Name: "pike/1", Kind: KindDisk, Capacity: 99, Host: 3, JoinedAt: 5}
-	b := EncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: disk}})
+	b := MustEncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: disk}})
 	if b[0] != 2 {
 		t.Errorf("disk upsert written as version %d, want 2", b[0])
 	}
@@ -375,7 +375,7 @@ func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 	// a device upsert keeps the version-1 bytes, so a cluster without disks writes what an
 	// older node reads (docs/12 §6)
 	dev := Node{ID: "n1", Name: "pike", Kind: KindDevice, Capacity: 7, Voter: true}
-	b = EncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: dev}})
+	b = MustEncodeCommand(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: dev}})
 	if b[0] != 1 {
 		t.Errorf("device upsert written as version %d, want 1", b[0])
 	}

@@ -376,6 +376,11 @@ the WAL cap.
 - **I-98** — A chunk read returns as soon as k shards have arrived and cancels every GET
   it still has in flight (the hedged request and any slower holder), so a stuck holder
   never keeps a shard buffer or a server slot past the read that asked.
+- **I-101** — After a failed fsync the WAL reopens its file before the next append, so a
+  later fsync cannot report success for bytes the kernel already dropped; after a
+  compaction or reopen that fails, every call on that WAL returns `ErrWALClosed` until the
+  gateway restarts and replays the log, and replay reports the bytes it discarded after
+  the last intact record.
 
 ## Tests
 
@@ -393,3 +398,4 @@ the WAL cap.
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |
 | I-98 | `TestReader_HedgesStalledHolder` |
+| I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |

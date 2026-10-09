@@ -292,7 +292,10 @@ func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 // ApplyAt proposes a command through the node at addr (the leader, or a node that
 // redirects with 421).
 func (c *Client) ApplyAt(ctx context.Context, addr string, cmd meta.Command) (meta.Result, uint64, error) {
-	cmdBytes := meta.EncodeCommand(cmd)
+	cmdBytes, err := meta.EncodeCommand(cmd)
+	if err != nil {
+		return meta.Result{}, 0, err
+	}
 	ctx, cancel := bound(ctx, int64(len(cmdBytes)))
 	defer cancel()
 	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/apply", cmdBytes, map[string]string{"Content-Type": "application/octet-stream"})

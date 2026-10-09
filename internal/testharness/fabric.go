@@ -138,7 +138,7 @@ func (f *Fabric) Apply(c meta.Command) meta.Result {
 
 func (f *Fabric) applyLocked(c meta.Command) meta.Result {
 	f.idx++
-	res := f.FSM.Apply(&raft.Log{Index: f.idx, Type: raft.LogCommand, Data: meta.EncodeCommand(c)}).(meta.Result)
+	res := f.FSM.Apply(&raft.Log{Index: f.idx, Type: raft.LogCommand, Data: meta.MustEncodeCommand(c)}).(meta.Result)
 	f.proposed = append(f.proposed, c.Op)
 	return res
 }
@@ -293,6 +293,12 @@ func (f *Fabric) Delete(_ context.Context, node meta.NodeIdx, key chunk.ShardKey
 	}
 	_, err := st.Delete(key)
 	return err
+}
+
+// DeleteFenced is Delete for the repair package's Shards: the harness keeps no fence,
+// so a GC delete here always lands (the fence has its own tests in rpc and chunk).
+func (f *Fabric) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, _ uint64) error {
+	return f.Delete(ctx, node, key)
 }
 
 // SetDown marks a node dead or alive for the shard client and liveness view.

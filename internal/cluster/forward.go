@@ -71,10 +71,13 @@ func (n *Node) applyLocal(ctx context.Context, cmd meta.Command) (meta.Result, u
 	if d, ok := ctx.Deadline(); ok {
 		timeout = max(time.Until(d), time.Millisecond)
 	}
-	fut := n.Raft.Apply(meta.EncodeCommand(cmd), timeout)
+	encoded, err := meta.EncodeCommand(cmd)
+	if err != nil {
+		return meta.Result{}, 0, err
+	}
+	fut := n.Raft.Apply(encoded, timeout)
 	done := make(chan error, 1)
 	go func() { done <- fut.Error() }() // raft resolves every future within its timeouts
-	var err error
 	select {
 	case err = <-done:
 	case <-ctx.Done():

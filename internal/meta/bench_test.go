@@ -27,7 +27,7 @@ func newBFSM(b *testing.B) *bfsm {
 func (bf *bfsm) apply(b *testing.B, c Command) Result {
 	b.Helper()
 	bf.idx++
-	res := bf.f.Apply(&raft.Log{Index: bf.idx, Type: raft.LogCommand, Data: EncodeCommand(c)}).(Result)
+	res := bf.f.Apply(&raft.Log{Index: bf.idx, Type: raft.LogCommand, Data: MustEncodeCommand(c)}).(Result)
 	if res.Err != nil {
 		b.Fatalf("op %d: %v", c.Op, res.Err)
 	}
