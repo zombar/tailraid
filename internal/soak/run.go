@@ -843,7 +843,7 @@ func (r *Run) runPhase(ctx context.Context, ph phase) PhaseResult {
 				r.emit(Record{Kind: "dump", Node: "driver", Text: string(debug.Stack())})
 			}
 		}()
-		if err := ph.run(pctx, r); err != nil {
+		if err := ph.run(pctx, r); err != nil && pctx.Err() == nil { // after a timeout the failure is already recorded
 			r.check("", "phase completed", false, err.Error())
 		}
 	}()
@@ -859,6 +859,10 @@ func (r *Run) runPhase(ctx context.Context, ph phase) PhaseResult {
 		r.check("", "phase completed", false, fmt.Sprintf("timed out after %s", r.Profile.PhaseTimeout))
 		r.captureDumps(ctx) // what every node was doing while the phase hung
 		cancel()
+		select { // a cooperative phase returns at once; a moment's grace keeps its last records in its own phase
+		case <-done:
+		case <-time.After(time.Second):
+		}
 	}
 	r.sample(ctx, 0)
 	pr := PhaseResult{Name: ph.name, Took: r.now().Sub(t)}
