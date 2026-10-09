@@ -9,8 +9,18 @@ func TestPolicyFlags_Bounds(t *testing.T) {
 		k, m int
 		ok   bool
 	}{
-		{0, 0, false}, {1, 0, true}, {1, 255, true}, {2, 254, true}, {2, 255, false},
-		{255, 0, true}, {255, 1, true}, {256, 0, false}, {257, 0, false}, {1, 256, false}, {1, -1, false}, {-1, 1, false},
+		{0, 0, false},
+		{1, 0, true},
+		{1, 255, true},
+		{2, 254, true},
+		{2, 255, false},
+		{255, 0, true},
+		{255, 1, true},
+		{256, 0, false},
+		{257, 0, false},
+		{1, 256, false},
+		{1, -1, false},
+		{-1, 1, false},
 	} {
 		kk, mm, err := policyFlags(c.k, c.m)
 		if (err == nil) != c.ok {

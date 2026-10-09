@@ -158,7 +158,7 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 
 // landedEarlier reports whether err says the mutation is already in effect: the entry
 // is gone (or exists) and the previous attempt's outcome was unknown.
-func landedEarlier(err error, want error) bool {
+func landedEarlier(err, want error) bool {
 	return errors.Is(err, want) && errors.Is(err, meta.ErrUnknownOutcome)
 }
 

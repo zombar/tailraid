@@ -18,9 +18,6 @@ const (
 	HeaderNodeID   = "X-Tailraid-Node"      // responding node's raft ID
 )
 
-// Ports.
-const ()
-
 // Errors the client returns.
 var (
 	ErrForbidden    = errors.New("rpc: forbidden")

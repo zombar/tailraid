@@ -3,8 +3,9 @@ package admin
 import (
 	"context"
 	"encoding/json"
-	"github.com/zombar/tailraid/internal/meta"
 	"net/http"
+
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // Caller is one raw member RPC to a node by address: rpc.Client over the tailnet, or a

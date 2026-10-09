@@ -614,9 +614,10 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		}
 		var named meta.Node
 		if s.o.Members != nil {
-			for _, m := range s.o.Members() {
-				if m.Idx == op.NodeIdx && m.State != meta.Removed {
-					named = m
+			members := s.o.Members()
+			for i := range members {
+				if members[i].Idx == op.NodeIdx && members[i].State != meta.Removed {
+					named = members[i]
 				}
 			}
 		}

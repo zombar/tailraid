@@ -255,12 +255,3 @@ func (r *reader) done() error {
 	}
 	return nil
 }
-
-// readAll is a helper for stream decoders.
-func readAll(rd io.Reader) ([]byte, error) {
-	b, err := io.ReadAll(rd)
-	if err != nil {
-		return nil, fmt.Errorf("meta: read: %w", err)
-	}
-	return b, nil
-}

@@ -60,9 +60,9 @@ func (a *WhoIsAuthorizer) SetSeed(members []meta.Node) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.seed = map[string]meta.Node{}
-	for _, m := range members {
-		if m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
-			a.seed[m.Addr] = m
+	for i := range members {
+		if m := &members[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+			a.seed[m.Addr] = *m
 		}
 	}
 }

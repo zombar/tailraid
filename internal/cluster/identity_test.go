@@ -66,8 +66,10 @@ func TestOpenFresh_StartFailureFreesPortAndStores(t *testing.T) {
 	}
 	addr := l.Addr().String()
 	l.Close()
-	bad := Options{DataDir: dir, NodeID: "node-bad-00000000", ClusterID: [16]byte{1}, RaftAddr: addr,
-		Timing: &RaftTiming{Heartbeat: time.Nanosecond, Election: time.Nanosecond, LeaderLease: time.Nanosecond, Commit: time.Nanosecond}}
+	bad := Options{
+		DataDir: dir, NodeID: "node-bad-00000000", ClusterID: [16]byte{1}, RaftAddr: addr,
+		Timing: &RaftTiming{Heartbeat: time.Nanosecond, Election: time.Nanosecond, LeaderLease: time.Nanosecond, Commit: time.Nanosecond},
+	}
 	if _, err := OpenFresh(bad); err == nil {
 		t.Fatal("raft accepted a nanosecond heartbeat")
 	}
