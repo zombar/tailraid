@@ -31,6 +31,9 @@ the device's `Capacity`. Clusters created before disks existed are therefore unc
 and a device that should not store shards on its system disk pins `node.capacity: 0`.
 `NodeUpsert` refuses a `KindDisk` row whose `Host` is not an Active device
 (`ErrBadCommand`); removing a device is refused while any of its disks is not `Removed`.
+A disk is never more active than its host: while the host is Draining or Removed its disks
+count as such for placement and repair, so `node drain <host>` empties the host's disks
+too.
 
 The **domain** of a target is its `Host` for a disk and its own `Idx` for a device or an S3
 node. A device and its disks form one domain.

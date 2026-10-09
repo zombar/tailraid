@@ -108,6 +108,13 @@ func ChunkState(c Chunk, vol Volume, in HealthInput) ChunkHealth {
 			continue
 		}
 		nd, known := in.Nodes[n]
+		if known && nd.Kind == KindDisk {
+			// a disk is no more active than its host: draining or removing a host does
+			// the same to its disks (docs/14 §1)
+			if host, ok := in.Nodes[nd.Host]; ok && host.State > nd.State {
+				nd.State = host.State
+			}
+		}
 		live := in.Live.IsLive(n)
 		present, checked := in.Present[i]
 		isReadable := live && (!checked || present) && !in.Reported[i] && (!known || nd.State != Removed)

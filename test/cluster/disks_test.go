@@ -257,4 +257,40 @@ func TestRepair_DeadDisk_RePlacesWithinCap(t *testing.T) {
 	}
 }
 
+// Draining a host drains its disks too: repair moves every slot off the host's own
+// store and its disks, after which the host can be removed (disks first).
+// Invariant: I-42
+func TestRepair_DrainHost_MovesItsDisks(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	d := c.AddDisk(2)
+	c.AddDisk(0)
+	c.WriteFile(0, "/drain", testharness.Pattern(6*int(testharness.ChunkSize), 6))
+	host := c.Nodes[2].Idx()
+	onHost := func() int {
+		n := 0
+		for _, ch := range c.ChunksOf(0, "/drain") {
+			n += perHost(c, 0, ch)[host]
+		}
+		return n
+	}
+	if onHost() == 0 {
+		t.Skip("placement put nothing on host 2; the hash vectors changed")
+	}
+	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: host, State: meta.Draining}))
+	c.Settle()
+	for pass := 0; pass < 3 && onHost() > 0; pass++ {
+		_, err := newRepairer(c, c.Leader(), repairCfg()).Scan(ctx)
+		must(t, err)
+		c.Settle()
+	}
+	if n := onHost(); n != 0 {
+		t.Fatalf("%d slots still on the draining host or its disk", n)
+	}
+	// removal goes disk first, then host
+	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: d}))
+	c.Settle()
+	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: host}))
+}
+
 var _ = cluster.LiveThreshold

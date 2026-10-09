@@ -53,6 +53,24 @@ func TestChunkState_DomainSkew(t *testing.T) {
 	if h.Skewed || len(h.Bad) != 1 || h.Bad[0].Reason != "node draining" {
 		t.Fatalf("draining slot counted as skew: %+v", h)
 	}
+	// a draining host drains its disks with it; a removed host removes them (docs/14 §1)
+	n3.State = Active
+	nodes[3] = n3
+	host := nodes[1]
+	host.State = Draining
+	nodes[1] = host
+	h = ChunkState(Chunk{Size: 1 << 20, K: 2, M: 1, Refs: 1, Placement: []NodeIdx{4, 2, 3}}, vol, HealthInput{Nodes: nodes, Live: fakeLive{}, FillAfter: fa})
+	if len(h.Bad) != 2 || h.Bad[0].Reason != "node draining" || h.Bad[1].Reason != "node draining" || !h.Bad[0].Readable {
+		t.Fatalf("disks of a draining host: %+v", h)
+	}
+	host.State = Removed
+	nodes[1] = host
+	h = ChunkState(Chunk{Size: 1 << 20, K: 2, M: 1, Refs: 1, Placement: []NodeIdx{4, 2, 3}}, vol, HealthInput{Nodes: nodes, Live: fakeLive{}, FillAfter: fa})
+	if len(h.Bad) != 2 || h.Bad[0].Reason != "node removed" || h.Readable != 1 {
+		t.Fatalf("disks of a removed host: %+v", h)
+	}
+	host.State = Active
+	nodes[1] = host
 	// one target per host never skews (I-87 regression)
 	flat := map[NodeIdx]Node{1: {Idx: 1, State: Active, Capacity: 1}, 2: {Idx: 2, State: Active, Capacity: 1}, 3: {Idx: 3, State: Active, Capacity: 1}}
 	if h := ChunkState(Chunk{Size: 1 << 20, K: 2, M: 1, Refs: 1, Placement: []NodeIdx{1, 2, 3}}, vol, HealthInput{Nodes: flat, Live: fakeLive{}, FillAfter: fa}); h.Skewed {
