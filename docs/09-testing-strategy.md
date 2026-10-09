@@ -291,7 +291,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   no skew reported, re-activate them and watch `domain_skew` rise and drain to 0; close
   one disk by moving its marker and restarting its host: reads stay exact, the disk is
   dead while its host is live, repair re-places its slots within the cap after
-  `fill_after`; restore it: live again, its stale shards swept after grace; I-86, I-87,
+  `fill_after`; restore it: live again, its stale shards swept after grace; then, in auto
+  mode, add a disk to the gateway host, drain it and remove it, the policy following the
+  member table after each step with the corpus exact (the previous pin restored after); I-86, I-87,
   I-89, I-90, L-192, L-193, L-194). The compose rig gives every node two added disks
   (4 hosts × 3 targets); `cmd/soak -topology single` runs one node with four disks, where
   phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's

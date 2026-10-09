@@ -157,6 +157,11 @@ func (a *Admin) SetState(ctx context.Context, n NodeRef, state meta.NodeState) e
 	return a.leaderCall(ctx, "/v1/members", body, nil)
 }
 
+func (a *Admin) Remove(ctx context.Context, n NodeRef) error {
+	body, _ := json.Marshal(rpc.MemberOp{Op: "remove", NodeIdx: n.Idx})
+	return a.leaderCall(ctx, "/v1/members", body, nil)
+}
+
 func (a *Admin) Fsck(ctx context.Context, n NodeRef) (bool, int, string, error) {
 	var rep admin.FsckReport
 	if err := a.nodeOp(ctx, n, rpc.AdminOp{Op: "fsck"}, &rep); err != nil {

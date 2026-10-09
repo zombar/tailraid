@@ -72,6 +72,10 @@ func (e *LiveEnv) RestoreDisk(context.Context, NodeRef) error {
 	return errors.New("live: a disk is restored by mounting it on its device")
 }
 
+func (e *LiveEnv) AddDisk(context.Context, NodeRef) error {
+	return errors.New("live: a disk is added with `tailraid node add-disk` on its device")
+}
+
 func (e *LiveEnv) Volume(n NodeRef) (Volume, bool) {
 	if n.RPC != e.SelfAddr {
 		return nil, false

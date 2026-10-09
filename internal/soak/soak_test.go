@@ -334,6 +334,19 @@ func (e *harnessEnv) hostOf(disk soak.NodeRef) (int, error) {
 	return 0, fmt.Errorf("no host %q", disk.Host)
 }
 
+func (e *harnessEnv) AddDisk(_ context.Context, host soak.NodeRef) error {
+	e.c.AddDisk(e.node(host).I)
+	return nil
+}
+
+func (e *harnessEnv) Remove(ctx context.Context, n soak.NodeRef) error {
+	if err := e.c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: n.Idx}); err != nil {
+		return err
+	}
+	e.c.Settle()
+	return nil
+}
+
 func (e *harnessEnv) FailDisk(_ context.Context, disk soak.NodeRef) error {
 	i, err := e.hostOf(disk)
 	if err != nil {
@@ -424,7 +437,8 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound",
 		"CPU on the sampled node", "Memory on the sampled node", "Data disk on the sampled node", "peak resident set",
 		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity",
-		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live"} {
+		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live",
+		"policy follows the member table after a disk was added", "the drained disk holds no slots", "the removed disk is out of the node table"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

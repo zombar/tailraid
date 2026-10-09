@@ -35,6 +35,11 @@ func phaseDisks(ctx context.Context, r *Run) error {
 	} else if err := r.diskFailureChecks(ctx); err != nil {
 		return err
 	}
+	if !r.Env.Caps().Disks {
+		r.event("note", "disk add and remove skipped: the environment cannot add a disk")
+	} else if err := r.diskLifecycleChecks(ctx); err != nil {
+		return err
+	}
 	r.checkFSMAgreement(ctx, "I-4", "FSM hashes agree after the disk phase")
 	return nil
 }
@@ -252,6 +257,102 @@ func (r *Run) diskFailureChecks(ctx context.Context) error {
 	r.check("I-15", "no degraded chunk after the disk returned", rep.Volume.Degraded == 0 && rep.Volume.Unreadable == 0, fmt.Sprintf("%d degraded", rep.Volume.Degraded))
 	bad, first = r.verifyModel(v, m)
 	r.checkAt("I-12", "corpus exact after the disk returned", bad == 0, first, first, "", gw.Name)
+	return nil
+}
+
+// diskLifecycleChecks runs in auto mode: adding a disk moves the policy to the rule of the
+// new member table with every chunk migrated; draining it empties it while the policy
+// follows again; removing it leaves the node table without it; the corpus stays exact
+// throughout (I-88, I-42, I-32). A pinned volume is pinned back afterwards.
+func (r *Run) diskLifecycleChecks(ctx context.Context) error {
+	gw := r.gateways()[0]
+	v, _ := r.volume(gw)
+	m := r.corpusModel()
+	rep, _, err := r.anyStatus(ctx)
+	if err != nil {
+		return err
+	}
+	k0, m0, wasAuto := rep.Volume.K, rep.Volume.M, rep.Volume.Auto
+	if !wasAuto {
+		if err := r.Env.SetPolicyAuto(ctx); err != nil {
+			r.check("I-75", "set-redundancy --auto accepted", false, err.Error())
+			return nil
+		}
+		r.event("set-redundancy", "auto")
+	}
+	follows := func(when string) admin.Report {
+		rep, err := r.repairUntilClean(ctx)
+		if err != nil {
+			r.check("I-88", "repair "+when, false, err.Error())
+			return rep
+		}
+		wk, wm := meta.AutoPolicy(membersOf(rep))
+		r.check("I-88 I-75", "policy follows the member table "+when, rep.Volume.Auto && rep.Volume.K == wk && rep.Volume.M == wm && rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0,
+			fmt.Sprintf("policy %d+%d, rule %d+%d, %d stale, %d degraded", rep.Volume.K, rep.Volume.M, wk, wm, rep.Volume.StalePolicy, rep.Volume.Degraded))
+		bad, first := r.verifyModel(v, m)
+		r.checkAt("I-12 I-32", "corpus exact "+when, bad == 0, first, first, "", gw.Name)
+		return rep
+	}
+	before := map[meta.NodeIdx]bool{}
+	for _, d := range diskRefs(rep) {
+		before[d.Idx] = true
+	}
+	follows("in auto mode")
+	if err := r.Env.AddDisk(ctx, gw); err != nil {
+		r.check("I-90", "add-disk accepted", false, err.Error())
+		return nil
+	}
+	r.event("add disk", gw.Name)
+	if err := r.Env.Wait(ctx, cluster.ProbeInterval+time.Second); err != nil {
+		return err
+	}
+	rep = follows("after a disk was added")
+	var added NodeRef
+	for _, d := range diskRefs(rep) {
+		if !before[d.Idx] {
+			added = d
+		}
+	}
+	live := false
+	for i := range rep.Nodes {
+		if rep.Nodes[i].Idx == added.Idx {
+			live = rep.Nodes[i].Live
+		}
+	}
+	r.checkAt("I-90", "the added disk is live under its host", added.Idx != 0 && live && added.Host == gw.Name, fmt.Sprintf("disk %q on %q, live %v", added.Name, added.Host, live), "", "", added.Name)
+	if added.Idx == 0 {
+		return nil
+	}
+	if err := r.Env.SetState(ctx, added, meta.Draining); err != nil {
+		r.check("L-93", "drain of the added disk accepted", false, err.Error())
+		return nil
+	}
+	r.event("drain", added.Name)
+	rep = follows("after the disk drained")
+	r.checkAt("I-42 L-94", "the drained disk holds no slots", hostSlotsOf(rep, added.Name) == 0, fmt.Sprintf("%d slots left", hostSlotsOf(rep, added.Name)), "", "", added.Name)
+	if err := r.Env.Remove(ctx, added); err != nil {
+		r.checkAt("I-42", "remove of the drained disk accepted", false, err.Error(), "", "", added.Name)
+		return nil
+	}
+	r.event("remove", added.Name)
+	rep = follows("after the disk was removed")
+	state := ""
+	for i := range rep.Nodes {
+		if rep.Nodes[i].Idx == added.Idx {
+			state = rep.Nodes[i].State
+		}
+	}
+	r.checkAt("I-42", "the removed disk is out of the node table", state == "removed", "state "+state, "", "", added.Name)
+	if !wasAuto {
+		if err := r.Env.SetPolicy(ctx, k0, m0); err != nil {
+			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d (pin back) accepted", k0, m0), false, err.Error())
+			return nil
+		}
+		r.event("set-redundancy", fmt.Sprintf("%d+%d (pinned back)", k0, m0))
+		if _, err := r.repairUntilClean(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
