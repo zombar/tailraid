@@ -166,10 +166,10 @@ h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8
 /* spread: the block's summary, one column per target around its expected share */
 .spread { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
 .spread-axis { display: flex; flex-direction: column; justify-content: space-between; height: 96px; font: 11px var(--mono); color: var(--dim); text-align: right; }
-.spread-plot { display: flex; gap: 12px; min-width: 0; overflow-x: auto; }
-.spread-host { display: grid; gap: 4px; flex: 1 1 0; min-width: 0; }
+.spread-plot { display: flex; gap: 16px; min-width: 0; overflow-x: auto; justify-content: flex-start; }
+.spread-host { display: grid; gap: 4px; flex: 0 1 auto; min-width: 0; }
 .spread-cols { display: flex; gap: 2px; height: 96px; }
-.spread-col { position: relative; flex: 1 1 0; min-width: 6px; max-width: 28px; background: var(--surface); }
+.spread-col { position: relative; flex: 0 0 auto; width: 24px; background: var(--surface); }
 .spread-col::before { content: ""; position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: var(--text); opacity: .35; }
 .spread-col > i { position: absolute; left: 0; right: 0; background: var(--fill); }
 .spread-col > i.up { bottom: 50%; border-radius: 2px 2px 0 0; }
