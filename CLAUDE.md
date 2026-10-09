@@ -18,6 +18,7 @@ internal/ec         Reed-Solomon codec    internal/chunk    shard store, cache, 
 internal/meta       FSM, commands, codec, placement, read API
 internal/vfs        overlay+WAL, flusher, reader, billy.Filesystem
 internal/nfsgw      go-nfs handler        internal/repair   GC, repair scanner, scrub
+internal/smbgw      SMB2 gateway (Windows): adapter over vfs for third_party/smb, the in-tree copy of go-filesystems/smb with the fixes docs/15 §2 lists
 internal/cluster    raft wiring, membership, liveness, forwarding
 internal/rpc        node HTTP RPC + WhoIs authorizer   internal/tailscale  CLI shell-out + Fake
 internal/config     YAML config           internal/mount    per-OS mount helpers, PMAP stub

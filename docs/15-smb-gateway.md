@@ -33,9 +33,26 @@ trip), alternate data streams, security descriptors.
 
 The library is young (first commit September 2026, one maintainer). It was adopted after
 reading its server, file, info, directory, path and case-folding code against this
-document; the version is pinned and vendored, and the adapter is two small files so that
-a replacement server is cheap. What the library does not do is listed under §8 rather than
-hidden.
+document, and the adapter is two small files so that a replacement server is cheap. What
+the library does not do is listed under §8 rather than hidden.
+
+The tree carries its own copy of v0.7.0 in `third_party/smb` (a `replace` in every
+module file, vendored from there), with the changes this gateway needs until they are
+upstream, each with a test in the copy:
+
+- `credit.go`: the credit charge of a WRITE and a SET_INFO is measured by its payload, as
+  MS-SMB2 3.1.5.2 says, not by the whole body. Upstream counts the 48-byte WRITE header,
+  so a write of exactly 64 KiB (what Windows and the Linux client send) was refused with
+  `STATUS_INVALID_PARAMETER`; `TestSMB_WriteSize_Boundaries` found it.
+- `file.go`, `info.go`, `dir.go`, `pipe.go`: a `Timestamper` capability on a `Stat`
+  (`Times() (atime, mtime, ctime)`) fills the four timestamps a client shows, and SET_INFO
+  basic forwards the access and write times a client sets to `MetadataSetter.Chtimes`
+  (0, −1 and −2 mean "leave it", per MS-FSCC 2.4.7); without the capability the server
+  keeps reporting the time of the reply. Explorer therefore shows the FSM's modification
+  times and `robocopy /COPY:DAT` preserves them.
+
+The copy is updated by re-applying these two changes to a newer upstream; the `replace`
+goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the
 required `Filesystem` (`ReadFile`, `WriteFile`, `ListDir`, `Stat`, `ReadLink`, `MkDir`,
@@ -64,8 +81,8 @@ mount) therefore never interleave inside one command.
 | SET_INFO end-of-file, allocation | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
 | SET_INFO rename | `Rename(old, new)`; the handle follows the new path |
 | SET_INFO disposition | marks the handle delete-on-close (SMB2 has no delete command) |
-| SET_INFO basic (times, attributes) | accepted and dropped by the server (§8) |
-| QUERY_INFO file classes | `Stat(path)`: size, the type and permission bits as Windows attributes (`DIRECTORY`, `ARCHIVE`, `READONLY` when no write bit is set), the inode number as the FileId |
+| SET_INFO basic (times, attributes) | the access and write times go to `Chtimes` (0, −1 and −2 leave a time alone); attributes are dropped (§8) |
+| QUERY_INFO file classes | `Stat(path)`: size, the type and permission bits as Windows attributes (`DIRECTORY`, `ARCHIVE`, `READONLY` when no write bit is set), the inode number as the FileId, the inode's own times (creation is the change time: there is no birth time) |
 | QUERY_INFO filesystem size | the share's `WithCapacityFunc`, which the adapter answers with `meta.Usage(volume, nodes, stats)`: the same total and free bytes as NFS `FSSTAT` and `tailraid status` |
 | QUERY_DIRECTORY | `ListDir(dir)` then `Stat` of every entry, kept server-side per handle and paged with `STATUS_NO_MORE_FILES` at the end; "." and ".." are added by the server; entries are sorted case-insensitively so paging is stable |
 | SYMLINK, READLINK | Windows creates reparse points through ioctl, which the server does not implement; the adapter's `Symlink`/`ReadLink` are reachable from macOS and Linux clients only |
@@ -91,8 +108,9 @@ func Serve(ctx context.Context, l net.Listener, srv *smb.Server) error
 
 - `Stat` and `ListDir` come from `vfs.Lstat` and `vfs.ReadDir`; the inode number and the
   inode's own times are read from the `vfs` file info through small optional interfaces
-  (`Ino()`, `Times()`), the way the web UI reads `Dirty()`. The mode is the POSIX type bits
-  plus the permission bits.
+  (`Ino()`, `Times()`), the way the web UI reads `Dirty()`, and the stat result carries
+  the times for the server's `Timestamper`. The mode is the POSIX type bits plus the
+  permission bits.
 - `file` wraps `*vfs.File`: `ReadAt` and `WriteAt` are the vfs calls; `Size` is the
   overlay size while dirty, else the committed size; `Sync` returns nil (docs/04: the WAL
   fsync happened inside `WriteAt`); `Close` is the vfs close.
@@ -177,13 +195,13 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 
 ## 8. Known gaps
 
-- **Timestamps.** The server fills creation, access, write and change times with the time
-  of the reply, because the backend contract's `Stat` has no times, and it drops the times
-  a client sets at the end of a copy. Explorer therefore shows "now" as every file's date,
-  and `robocopy /COPY:DAT` cannot preserve modification times, although the FSM holds them
-  and every other gateway reports them. The adapter already exposes the inode's times; the
-  fix is a server change (an optional times interface on the stat result, and SET_INFO
-  basic forwarded to `Chtimes`) to be offered upstream and adopted when merged.
+- **Timestamps** are the FSM's through the in-tree server copy (§2); upstream v0.7.0
+  reports the time of the reply and drops the times a client sets. There is no birth
+  time: creation is reported as the change time.
+- **A delete that fails is not reported.** SMB2 deletes by marking a handle delete-on-close,
+  and the server does not carry the failure of that delete into the CLOSE reply, so a
+  delete while the gateway is stale answers success and the file stays. The next listing
+  shows it.
 - **Mode, owner, attributes.** SMB2 carries no POSIX mode or owner; the READONLY attribute
   is derived from the permission bits and a change of it is dropped. `chmod` and `chown`
   from a Windows client do not reach the FSM.
@@ -201,14 +219,17 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   `vfs.File.WriteAt`; all other bytes of the file are unchanged, the reply is sent only
   after the WAL record is fsynced (I-7), and writes of 0, 1, `MaxWriteSize−1`,
   `MaxWriteSize` and `MaxWriteSize+1` bytes at a non-zero offset read back identically.
-- **I-107** — SET_INFO end-of-file (growing and shrinking) and rename through the SMB
-  gateway are applied to the FSM and visible on every gateway after commit; an end-of-file
-  past `MaxFileSize` answers `STATUS_DISK_FULL` and changes nothing.
+- **I-107** — SET_INFO end-of-file (growing and shrinking), rename and the access and
+  write times through the SMB gateway are applied to the FSM and visible on every gateway
+  after commit; the times the gateway reports are the inode's own, never a server
+  default; an end-of-file past `MaxFileSize` answers `STATUS_DISK_FULL` and changes
+  nothing.
 - **I-108** — QUERY_DIRECTORY paging returns every entry of a directory exactly once for a
   directory not modified during the listing, for directories of any size, and every
   entry's FileId is the inode number, unchanged by a rename of the file or any ancestor.
-- **I-109** — While stale (I-39) a mutation through the SMB gateway answers
-  `STATUS_ACCESS_DENIED` and data WRITEs to existing files keep landing in the WAL; a
+- **I-109** — While stale (I-39) a metadata mutation through the SMB gateway answers
+  `STATUS_ACCESS_DENIED` while data WRITEs and end-of-file changes to existing files keep
+  landing in the WAL; a
   WRITE refused because the cluster is full answers `STATUS_DISK_FULL` (I-79); a missing
   path answers `STATUS_OBJECT_NAME_NOT_FOUND` and a colliding create
   `STATUS_OBJECT_NAME_COLLISION`; the share's total and free bytes are `meta.Usage`.
@@ -223,7 +244,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | Invariant | Tests |
 |---|---|
 | I-106 | `TestSMB_WriteSequence_MultiRequest`, `TestSMB_WriteSize_Boundaries`, `TestVFS_WriteAt_ExactOffset_PosUnchanged` |
-| I-107 | `TestSMB_SetInfo_EndOfFile`, `TestSMB_RenameKeepsFileIdAndContent` |
+| I-107 | `TestSMB_SetInfo_EndOfFile`, `TestSMB_RenameKeepsFileIdAndContent`, `TestSMB_Times_FromFSMAndSetInfo` |
 | I-108 | `TestSMB_QueryDirectory_LargeDirectory`, `TestSMB_RenameKeepsFileIdAndContent` |
 | I-109 | `TestSMB_ReadOnly_WireStatuses`, `TestSMB_WriteWhenFull_IsDiskFull`, `TestSMB_WriteAtCap_WaitsThenSucceeds`, `TestSMB_Statfs_FromUsage` |
 | I-110 | `TestSMB_Auth_WrongPasswordRefused`, `TestSMB_ListenRefusesNonLoopback`, `TestConfig_Gateways`, `TestCLI_Init_GeneratesSMBPassword` |

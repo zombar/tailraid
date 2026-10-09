@@ -1,0 +1,28 @@
+# Compiled binaries. `go build` in the repository root leaves one named after
+# the module, and `git add -A` sweeps it in. Build to /tmp instead.
+/smb
+/cover.out
+# Anything inside a command's directory that is not source. There is no cmd/
+# here today -- see below -- and the rule stays anyway, because the moment one
+# comes back is exactly the moment nobody is thinking about this file.
+/cmd/*/*
+!/cmd/*/*.go
+!/cmd/*/*.hcl
+!/cmd/*/*.md
+!/cmd/*/go.mod
+!/cmd/*/go.sum
+!/cmd/*/testdata/
+
+# The command that used to live in cmd/smb-server is now
+# github.com/go-fileshare/fileshare, so the rules that named its binary went
+# with it. The lesson they carried did not: ignore a directory by ALLOW-LIST,
+# never by the name of the artefact you already met -- a 6.5 MB binary was
+# committed here by the very change that renamed the command, because the new
+# rule named the new name.
+
+# ⛔ AND THE WAY THIS BIT US A THIRD TIME: the commit that retired the command
+# deleted the ignore rules AND ran `git add -A` in one go. Deleting a rule
+# UN-IGNORES whatever it was hiding -- the 10 MB binary was still sitting in
+# the work tree -- so it went in as a new file. Deleting an ignore rule is a
+# change to what `git add -A` will pick up; look at the WHOLE of `git status`
+# before committing one, not the first few lines of it.
