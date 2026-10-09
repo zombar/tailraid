@@ -87,7 +87,7 @@ while IFS= read -r file; do
     }
     pending && !/^[[:space:]]*\/\// { pending = 0; pi = 0; pl = 0; delete ip; delete lp }
   ' "$file"
-done < <(find . -name '*_test.go' -not -path './vendor/*' -not -path './.git/*' | sort)
+done < <(git ls-files -co --exclude-standard -- '*_test.go' | sed 's|^|./|' | sort)
 
 # ---- rule checks (shared) ---------------------------------------------------------------
 check_set() { # prefix defs cites label
@@ -130,7 +130,7 @@ check_set L "$TMP/ldefs" "$TMP/lcites" "lifecycle cells"
 # Every backticked `TestX` / `FuzzX` in a design doc (docs/10 is deferred and names planned
 # tests) must be a test function somewhere in the tree, so a doc never points at a test that
 # was renamed or never written.
-grep -rhoE '^func (Test|Fuzz)[A-Za-z0-9_]+' --include='*_test.go' . | sed 's/^func //' | sort -u > "$TMP/realnames"
+git ls-files -co --exclude-standard -- '*_test.go' | xargs grep -hoE '^func (Test|Fuzz)[A-Za-z0-9_]+' | sed 's/^func //' | sort -u > "$TMP/realnames"
 missing_names=""
 for f in docs/[0-9][0-9]-*.md; do
   case "$f" in docs/10-*) continue;; esac

@@ -95,11 +95,11 @@ invariants:
 
 ## fmt: gofmt all Go files in place
 fmt:
-	gofmt -w $$(find . -name '*.go' -not -path './vendor/*' -not -path './.git/*')
+	gofmt -w $$(git ls-files -co --exclude-standard -- '*.go')
 
 ## fmt-check: fail if any file is not gofmt-clean
 fmt-check:
-	@out="$$(find . -name '*.go' -not -path './vendor/*' -not -path './.git/*' -exec gofmt -l {} +)"; \
+	@out="$$(git ls-files -co --exclude-standard -- '*.go' | xargs gofmt -l)"; \
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 ## vuln: govulncheck over all packages

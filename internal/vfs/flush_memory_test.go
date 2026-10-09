@@ -144,11 +144,13 @@ func TestFlusher_StragglerPut_CancelledAfterReplace(t *testing.T) {
 	go func() { done <- fl.FlushInode(ctx, ino) }()
 	<-entered
 	var err error
-	// the deadline is on the fake clock, advanced slowly enough (every 2 ms of real time)
-	// that the PUTs which do answer, the re-placed one included, land inside their own
-	// deadline while the stalled one runs out of it
+	// the deadline is on the fake clock, advanced until the stalled PUT has been cancelled
+	// (the first round ending); the re-placed PUT then runs under a deadline nothing
+	// advances, so it never runs out of time however loaded the machine is
 	testharness.Eventually(t, func() bool {
-		f.Clk.Advance(time.Second / 200)
+		if f.CancelledPuts(victim) == 0 {
+			f.Clk.Advance(time.Second / 4)
+		}
 		select {
 		case err = <-done:
 			return true
