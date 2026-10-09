@@ -230,7 +230,7 @@ type Env interface {
     Wait(ctx, d time.Duration) error               // real time, or the fake clock in tests
     Caps() Caps                                    // Kill, Partition, Corrupt, MultiGateway
 }
-type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size }
+type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove, Size }  // Hash streams sha256 + size
 ```
 
 - **Compose** (`cmd/soak`, `test/soak/docker-compose.yml`): four `tailraid` containers
@@ -276,7 +276,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Truncate, Rename, Remove, Size 
   automation (every budget within the hysteresis of `/dev/disk`, a 2 GiB `/dev/fill` on
   one node moves its store cap within two ticks, the corpus's data slots sit on voters,
   `set-redundancy --auto` moves the policy to the member table's rule with the migration
-  complete and the corpus exact, then the previous pin is restored; I-74, I-75, I-77). A
+  complete and the corpus exact, then the previous pin is restored; I-74, I-75, I-77); 12
+  large file (a file many times the WAL cap, 256 MiB in the quick profile and 1 GiB in
+  full, written through the gateway in 1 MiB pieces and hashed as it goes, so the driver
+  never holds it: every write acknowledged with no `EIO` while the client outruns the
+  flusher, the WAL never past its cap plus one record, flush buffers within the I-78
+  formula and the process heap flat, the content hash exact, and afterwards an empty
+  `staging/`, no temp file, a clean `fsck` and zero orphans; I-78, I-79, I-80, I-38). A
   phase the environment cannot run is recorded as *skipped (capability)*, never passed.
   On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
   it, and once the service manager has it back it drops every peer until the phase's

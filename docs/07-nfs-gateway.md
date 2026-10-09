@@ -127,6 +127,27 @@ Why `soft`: if the gateway process dies, a hard mount would hang every process t
 mount until it returns. `soft` returns EIO after retries instead. `tailraid serve` restarts
 quickly under the service manager; the mount survives because handles are stable (I-16).
 
+**Large copies and the caps.** A local `cp` of a multi-GiB file outruns replication over
+the tailnet; the gateway then throttles the client instead of failing it: a WRITE that
+meets the WAL cap or `MaxDirty` blocks for up to `CapWait` (20 s) until the flusher has
+committed a batch (docs/04 §3, I-79). go-nfs handles one RPC at a time per connection, so
+every operation on the mount pauses for that wait; batches are at most 32 MiB of chunks so a
+wait is a few seconds even on a slow DERP path. `NFS3ERR_JUKEBOX` ("try again later")
+cannot be used: go-nfs maps the handler's error to a status itself and never emits it. The
+bound must stay inside each client's soft-mount timeout, which is what makes the wait
+transparent rather than an I/O error:
+
+| Client | Soft timeout before `EIO` | Verified |
+|---|---|---|
+| Linux (`timeo=600,retrans=2`, TCP default) | 60 s per RPC, retried twice | by the compose soak (phase 12) |
+| macOS (`timeo=600` default on TCP) | 60 s per RPC | manual check below |
+| Windows (`mtype=soft`, `Timeout`/`Retransmissions` registry defaults) | 8 s × 1 by default | `docs/windows-checklist.md` |
+
+Manual check (macOS, before a release): copy a file larger than 512 MiB onto the mount while
+the uplink is throttled to ~5 MiB/s; `cp` slows down but finishes without an I/O error and
+`sha256` matches. When the cluster is full the copy stops with `ENOSPC` ("No space left on
+device"), not `EIO`.
+
 ## Known POSIX gaps (documented, tested where they return an error)
 
 - No hard links, no `mknod`, no file locks across devices, no xattrs, no ACLs.

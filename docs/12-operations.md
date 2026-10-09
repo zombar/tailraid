@@ -149,8 +149,19 @@ likewise derives the budget; `--voter` stays explicit because only the operator 
 which devices are always on. `--name`, `--chunk` and `--token` remain for overrides and
 test rigs; `--k`/`--m` on `init` pin a manual policy for test rigs and are hidden.
 
+## 8. What `status` reports about the process
+
+Besides the cluster view (docs/06 §7), `tailraid status --json` carries what a long write
+needs watched: `process.heap_inuse`, `process.sys` and `process.goroutines` from the Go
+runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under way),
+`gateway.flush_bytes` (chunk and shard buffers held by the flusher, docs/04 §9),
+`gateway.wal_cap` and `gateway.last_flush_err`. The soak sampler records them every second
+and the report charts the heap next to the WAL depth, so a memory regression under a
+large copy is a visible line, not a guess (I-84).
+
 ## Invariants
 
+- **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-58** — The portmap stub answers `GETPORT` for programs 100003 and 100005 version 3 over TCP with the NFS gateway port and `0` for any other mapping, serves `NULL` and `DUMP`, answers `PROC_UNAVAIL` for other procedures, and binds loopback only.
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere.

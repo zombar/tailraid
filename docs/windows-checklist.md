@@ -79,6 +79,11 @@ ticking.
       attributed to it
 - [ ] Put the laptop to sleep for 15 min and wake: it rejoins, no repair was triggered
       before `fill_after`
+- [ ] Copy a file larger than 512 MB onto `T:` while the uplink is throttled to ~5 MB/s:
+      Explorer's copy slows down but completes without an I/O error (the gateway holds a
+      WRITE for up to 20 s at a cap, docs/07; the Windows client's soft `Timeout` ×
+      `Retransmissions` must exceed that, else raise them in the registry and note the
+      values here) and the file's SHA-256 matches
 
 When every box is ticked, remove the EXPERIMENTAL marker from `internal/mount` and
 `cmd/tailraid/install.go`, and record the validation date and Windows build here.

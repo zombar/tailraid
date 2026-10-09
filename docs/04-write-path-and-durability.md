@@ -118,7 +118,10 @@ Rules:
 - `Reset` happens when the extent set is empty after a successful flush. If the fresh
   extent set is non-empty (writes arrived during the flush), `Compact` rewrites the WAL to
   hold only the live extents, so a continuously written file never accumulates a WAL of
-  every byte ever written.
+  every byte ever written. The rewrite streams each live record from the old file to the
+  new one through one bounded buffer (1 MiB), never the whole live set at once, and reopens
+  the renamed file before it reports success: a failure after the rename leaves the inode
+  on the new file with correct record offsets, never on a closed handle (I-80).
 - A per-inode WAL larger than `4 × FileDirtyHi` (128 MiB by default) forces a flush of that
   inode regardless of the idle timer.
 - `OpenOverlay` replays every `staging/*.wal` at startup, so a gateway that crashed with
@@ -133,13 +136,15 @@ extents.
 |---|---|---|
 | inode idle (no WRITE for) | 2 s | flush that inode |
 | inode dirty bytes ≥ `FileDirtyHi` | 32 MiB | partial flush: its fully covered chunks now; the partial tail chunk stays dirty |
-| inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that still arrives while the WAL is at the cap fails with `NFS3ERR_IO` (`EIO`, never `EAGAIN`) and succeeds once the flush has drained it |
+| inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that arrives while the WAL is at the cap **waits** (next row) |
 | total dirty bytes ≥ `TotalDirtyHi` | 256 MiB | flush the largest inodes until below |
-| total dirty bytes ≥ `MaxDirty` | 1 GiB | every WRITE returns `NFS3ERR_IO` (`EIO`) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
+| total dirty bytes ≥ `MaxDirty` (fresh **and** in-flight plan bytes) | 1 GiB | a WRITE **waits** (next row) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
+| a WRITE meets the WAL cap or `MaxDirty` | `CapWait` 20 s | the WRITE blocks until the flusher frees room (a Commit applied, an inode evicted) and then proceeds; it fails only when `CapWait` expires (`NFS3ERR_IO`, `EIO`) or when that inode's last flush attempt failed (`EIO` at once, `ENOSPC` when the cluster was full), so a client that outruns replication is throttled to it rather than told the disk is broken (I-79). go-nfs serves one RPC at a time per connection, so the mount pauses for the wait; `CapWait` is therefore shorter than the clients' soft-mount timeouts (docs/07) |
 | shutdown | 30 s (`ShutdownFlush`) | `FlushAll` with that deadline, then exit; whatever did not flush stays in the WAL and flushes on the next start |
 
 Flush workers run per inode from a bounded pool (default 4) so a big copy does not starve
-small files.
+small files; across all of them at most `ChunkWorkers` (default 8) chunks are in memory at
+once (§9).
 
 ## 4. `FlushInode` — the exact procedure
 
@@ -185,18 +190,32 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    candidates exclude `Draining`/`Removed` nodes and nodes that answered `ErrFull`, built
    from this gateway's own prober view.
 9. **Encode and PUT.** `shards = codec.Encode(chunk)`; PUT every slot in parallel (self via
-   `local.Put`) under key `hex.k-m.idx`; always `cache.Put(h, chunk)`. Wait until **≥ k acks
-   AND (all PUTs finished OR 10 s elapsed)**. Slots that failed are re-placed once
-   (excluding failed nodes and nodes already holding an acked slot of this stripe; slot `i`
-   keeps index `i`) and PUT again. Slots still missing are recorded as `0` (degraded). If
-   acks < k → return an error; the plan stays dirty and is retried with backoff (1 s
-   doubling to 60 s). An ack means the receiver fsynced file and directory (I-7).
-10. **Commit.** `Propose(Commit{Ino, BaseVersion: base.Version, HasTruncate: plan.sizeSet,
-    TruncateTo: plan.minSize, NewSize, Writes, NewChunks, Now})` where `NewSize` is:
+   `local.Put`) under key `hex.k-m.idx`. Wait until **≥ k acks AND (all PUTs finished OR
+   10 s elapsed)**. Slots that failed are re-placed once (excluding failed nodes and nodes
+   already holding an acked slot of this stripe; slot `i` keeps index `i`) and PUT again;
+   the original PUTs of re-placed slots are **cancelled** and the chunk waits for every PUT
+   goroutine to return before it is decided, so no straggler keeps a shard buffer alive
+   past its chunk (a late shard that landed anyway is an orphan swept after grace, L-190,
+   I-83). Slots still missing are recorded as `0` (degraded). If acks < k → return an
+   error; the plan stays dirty and is retried with backoff (1 s doubling to 60 s); when
+   every failed slot was `ErrFull` the error wraps `chunk.ErrFull` so the client sees
+   `ENOSPC` rather than `EIO` (I-79). An ack means the receiver fsynced file and directory
+   (I-7). Steps 4–9 run per chunk as one pipeline under a flusher-wide semaphore of
+   `ChunkWorkers`: the chunk's bytes and shards are released the moment it is decided, and
+   nothing of it but `(idx, hash, k, m, placement)` survives into step 10 (I-78). The flush
+   does not populate the read cache; the first read after a flush fetches shards and the
+   `Reader` caches then, so a bulk upload never evicts the hot set.
+10. **Commit.** A plan is committed in **batches** of at most `FileDirtyHi` bytes of chunks
+    (32 at 1 MiB): `assemble` keeps the lowest-indexed touched chunks that fit and leaves
+    the rest dirty as residual, exactly like a partial flush; a plan with a truncate is
+    never split (I-80, L-191). Then `Propose(Commit{Ino, BaseVersion: base.Version,
+    HasTruncate: plan.sizeSet, TruncateTo: plan.minSize, NewSize, Writes, NewChunks, Now})`
+    where `NewSize` is:
     - full flush, no truncate: `max(base.Size, maxExtentEnd)`;
     - full flush with truncate: `max(plan.minSize, maxExtentEnd)`;
-    - partial flush: `max(base.Size, end of the last fully flushed chunk)`; the dirty tail
-      beyond it stays in the overlay and is committed by the next flush.
+    - partial or batched flush: `max(base.Size, min(end of the last committed chunk,
+      plan.size))`; the dirty tail beyond it stays in the overlay and is committed by the
+      next flush, so the committed size is never ahead of committed data.
     Error handling:
     - `ErrConflict`: another gateway committed first. Reload `base`, recompute steps 3–9 for
       the same plan (dedup makes untouched chunks free), propose again with `NewSize`
@@ -207,16 +226,22 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
     - `ErrUnknownChunk`: a dedup'd chunk was GC'd between step 6 and commit. Upload it (steps
       7–9 for that chunk) and propose again.
     - Any retry of the Commit (conflict, unknown chunk, `ErrLeadershipLost`, timeout)
-      re-runs steps 6–9 for every chunk of the plan: a chunk is registered only by the
-      Commit that applies, so the dedup lookup misses and the PUTs are repeated. PUTs are
-      idempotent and refresh the shards' mtime, which guarantees the orphan-shard sweep
-      (06) cannot have removed them in the meantime however late the retry.
+      re-runs steps 4–9 for every chunk of the plan: the bytes are **re-assembled from the
+      plan's WAL extents** (the WAL is untouched until step 11) over the base as it is now,
+      and since a chunk is registered only by the Commit that applies, the dedup lookup
+      misses and the PUTs are repeated. PUTs are idempotent and refresh the shards' mtime,
+      which guarantees the orphan-shard sweep (06) cannot have removed them in the meantime
+      however late the retry. Holding the assembled bytes across the retry would cost a
+      plan's worth of memory per inode for nothing (I-78).
     - `ErrNotExist`: inode gone → `ov.Drop(ino)`, return nil.
     - `ErrNeedTailRewrite`: programming error in step 3; log at error level and retry with
       the tail chunk included.
 11. **Wait and clear.** `st.WaitApplied(index)`; `ov.commitFlushed(ino, plan)` removes the
     plan's extents from the file's bookkeeping; if no extents remain, the inode leaves the
-    overlay and its WAL file is removed (`evict`).
+    overlay and its WAL file is removed (`evict`); otherwise the WAL is compacted by
+    streaming (§2). Either way the flusher reports the attempt's outcome to the overlay
+    (`NoteFlush`), which is what a waiting WRITE consults (§3), and wakes every WRITE
+    waiting at a cap.
 
 Step 9's "≥ k acks" is the user's chosen degraded-write policy (see 05 §5). Full
 redundancy is restored by the repairer (06).
@@ -312,6 +337,29 @@ one live peer (`POST /v1/wal/<ino>`) before the WRITE reply, and replaying mirro
 on the peer when the gateway does not come back. Cost: one tailnet round trip per WRITE.
 It is deliberately not in the barebones scope; the seam is `WAL.AppendWrite`.
 
+## 9. Memory model of the write path
+
+The volume is used for media: a single file is routinely tens of GiB. Every stage of the
+write path is bounded by a constant of the configuration, never by the file or by how much
+of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process holds is:
+
+| Stage | Bytes in memory | Bound (defaults) | Released by |
+|---|---|---|---|
+| NFS WRITE in flight | one request body per connection (go-nfs decodes it, hands it to `Write`) | connections × wsize (≤ 1 MiB) | the reply |
+| web upload in flight | one chunk-sized buffer per upload | `uploadSlots` (4) × ChunkSize | the response (docs/13 §4) |
+| WAL append | one record copy | ChunkSize (one WRITE) | the fsync |
+| overlay bookkeeping | 24 B per extent | WALCap / wsize extents per inode | compaction |
+| flush: assemble + encode | the chunk and its `(k+m)` shards, per chunk in the pipeline | `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))` = 8 × 2.5 MiB = **20 MiB** at 1 MiB and (2,1) | the chunk being decided (step 9) |
+| compaction | one streaming buffer | 1 MiB | the rewrite |
+| shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 1 MiB, 4 at 64 MiB) | the reply |
+| read cache, memory tier | hot decoded chunks | 64 MiB | LRU |
+| FSM | the chunk list of every file, 32 B per chunk | docs/01 | – |
+
+`Flusher.Buffers()` reports the flush row live and its peak since start; `status` shows it
+with the overlay's plan bytes and WAL bytes (docs/12), and the soak suite's large-file
+phase (docs/09 §6) asserts the row's bound and a flat heap while writing a file many times
+the WAL cap.
+
 ## Invariants
 
 - **I-7** — A WRITE is acknowledged only after its bytes are fsynced to the WAL, and a Commit is proposed only after ≥ k shards of every new chunk are durable (file and directory fsynced) on distinct nodes; the Commit becomes visible only after Raft commit.
@@ -321,6 +369,10 @@ It is deliberately not in the barebones scope; the seam is `WAL.AppendWrite`.
 - **I-36** — Other gateways observe either the previous committed chunk list or the new one, never a mixture.
 - **I-37** — WAL replay after a crash restores exactly the records whose CRC verifies, in order, and discards the torn tail; replayed bytes equal the acknowledged bytes.
 - **I-63** — A WRITE is acknowledged only when every file its durability depends on has a durable directory entry: a newly created WAL file's directory is fsynced before its first record is appended.
+- **I-78** — The bytes a gateway holds in memory for flushing are bounded independently of file and plan size: at most `ChunkWorkers` chunks are assembled at once, a chunk's buffer and shards are released once its PUTs are decided (acked, failed or cancelled), a Commit retry re-assembles from the WAL, and `Flusher.Buffers()` never exceeds `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))`.
+- **I-79** — A WRITE that meets the per-inode WAL cap or the gateway dirty-byte cap waits for the flusher up to `CapWait` and succeeds as soon as the cap clears; it fails (`EIO`, or `ENOSPC` when the inode's last flush error was the cluster being full) only when `CapWait` expires or that inode's last flush attempt failed; acknowledged bytes are never affected by the wait or the failure.
+- **I-80** — A flush commits at most `FileDirtyHi` bytes of chunks per Commit and leaves the rest dirty as residual; the gateway's total dirty count includes the bytes of outstanding plans; compaction streams live records through a bounded buffer and leaves the inode on an open, correctly indexed WAL even when a step after the rename fails; a per-inode WAL file never exceeds `WALCap` plus one record.
+- **I-83** — A shard PUT's deadline scales with its size, the RPC server's concurrent PUT and GET slots satisfy `slots × MaxShard ≤ 256 MiB`, and a PUT whose slot was re-placed or whose chunk has been decided is cancelled and awaited, so no goroutine keeps a shard buffer alive past its chunk.
 
 ## Tests
 
