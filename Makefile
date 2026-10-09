@@ -26,8 +26,10 @@ build:
 
 ## install: build and copy the binary to INSTALL_DIR (default ~/.local/bin)
 INSTALL_DIR ?= $(HOME)/.local/bin
+# copy beside, then rename: overwriting the file in place keeps its inode, and macOS
+# kills the new binary on launch because the kernel cached the old code signature for it
 install: build
-	@mkdir -p "$(INSTALL_DIR)" && cp dist/$(BIN) "$(INSTALL_DIR)/$(BIN)" && echo "installed $(INSTALL_DIR)/$(BIN) ($(VERSION))"
+	@mkdir -p "$(INSTALL_DIR)" && cp dist/$(BIN) "$(INSTALL_DIR)/.$(BIN).new" && mv -f "$(INSTALL_DIR)/.$(BIN).new" "$(INSTALL_DIR)/$(BIN)" && echo "installed $(INSTALL_DIR)/$(BIN) ($(VERSION))"
 
 ## test: fast suite with per-package coverage (what CI runs on every platform, minus -race)
 test:
