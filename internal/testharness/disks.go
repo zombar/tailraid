@@ -63,9 +63,9 @@ func (d *nodeDisks) health() []rpc.DiskHealth {
 	return out
 }
 
-// AddDisk gives node i one more added disk, registered through the leader with the
-// add_disk member op, and returns its target index. Every node probes once afterwards
-// so the disk is live everywhere.
+// AddDisk gives node i one more disk, registered through the leader with the add_disk
+// member op, and returns its target index. Every node probes once afterwards so the disk
+// is live everywhere. A node's first disk is its default disk: its Store (docs/14 §9).
 func (c *Cluster) AddDisk(i int) meta.NodeIdx {
 	c.T.Helper()
 	nd := c.Nodes[i]
@@ -92,9 +92,24 @@ func (c *Cluster) AddDisk(i int) meta.NodeIdx {
 	}
 	nd.disks.mu.Lock()
 	hd.idx = row.Idx
+	if n == 1 {
+		nd.Store = store
+	}
 	nd.disks.mu.Unlock()
 	c.Probe()
 	return row.Idx
+}
+
+// StoreOf is the shard store behind placement target s (a disk), or nil.
+func (c *Cluster) StoreOf(s meta.NodeIdx) *chunk.Store {
+	st, _ := c.Target(s)
+	return st
+}
+
+// HostOf is the index (in c.Nodes) of the node that hosts target s, or -1.
+func (c *Cluster) HostOf(s meta.NodeIdx) int {
+	_, i := c.Target(s)
+	return i
 }
 
 // FailDisk closes (failed) or reopens one of node i's added disks: its host keeps
@@ -126,13 +141,10 @@ func (c *Cluster) DiskStore(i int, disk meta.NodeIdx) *chunk.Store {
 	return nil
 }
 
-// Target resolves a placement target to its shard store and the index (in c.Nodes) of
-// the node that hosts it: a node's own store, or one of its added disks.
+// Target resolves a placement target (a disk) to its shard store and the index (in
+// c.Nodes) of the node that hosts it.
 func (c *Cluster) Target(s meta.NodeIdx) (*chunk.Store, int) {
 	for i, nd := range c.Nodes {
-		if nd.Idx() == s {
-			return nd.Store, i
-		}
 		nd.disks.mu.Lock()
 		for _, hd := range nd.disks.disks {
 			if hd.idx == s {

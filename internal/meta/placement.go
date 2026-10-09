@@ -6,8 +6,8 @@ import (
 	"sort"
 )
 
-// Candidate is a target eligible to receive a shard: a device's own store, an added disk
-// or an S3 node. Weight is its Capacity; Voter marks a target on an always-on device,
+// Candidate is a target eligible to receive a shard: a disk or an S3 node, never a device
+// row (docs/14 §9). Weight is its Capacity; Voter marks a target on an always-on device,
 // which the data slots prefer (docs/03 §Voter-first slots); Domain is the failure domain,
 // the host for a disk and the target itself otherwise (0 means Idx) (docs/14 §5).
 type Candidate struct {
@@ -49,7 +49,8 @@ func DomainsOf(nodes []Node) Domains {
 
 // Candidates filters the node table to placement candidates: Active, live, with
 // non-zero capacity; a disk also needs its host Active, and takes the host's voter bit
-// and the host as its domain. Device, disk and S3 targets qualify. Sorted by Idx.
+// and the host as its domain. Disk and S3 targets qualify; a device row never does
+// (docs/14 §9, I-118). Sorted by Idx.
 func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 	hosts := make(map[NodeIdx]*Node, len(nodes))
 	for i := range nodes {
@@ -60,10 +61,10 @@ func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 	out := make([]Candidate, 0, len(nodes))
 	for i := range nodes {
 		n := &nodes[i]
-		if n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
+		if n.Kind == KindDevice || n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
 			continue
 		}
-		c := Candidate{Idx: n.Idx, Weight: n.Capacity, Voter: n.Voter && n.Kind == KindDevice}
+		c := Candidate{Idx: n.Idx, Weight: n.Capacity}
 		if n.Kind == KindDisk {
 			h := hosts[n.Host]
 			if h == nil || h.State != Active {

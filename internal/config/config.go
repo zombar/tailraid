@@ -22,11 +22,10 @@ import (
 // it lives in the replicated metadata and is set by `init`.
 type Config struct {
 	Node struct {
-		Name     string `yaml:"name"`
-		DataDir  string `yaml:"data_dir"`
-		Capacity string `yaml:"capacity"` // "" derives the shard budget from the data disk (docs/01); "500G" pins it
-		Voter    bool   `yaml:"voter"`
-		Disks    []Disk `yaml:"disks"` // added disks, each a placement target of its own (docs/14)
+		Name    string `yaml:"name"`
+		DataDir string `yaml:"data_dir"`
+		Voter   bool   `yaml:"voter"`
+		Disks   []Disk `yaml:"disks"` // added disks, each a placement target of its own (docs/14)
 	} `yaml:"node"`
 	Listen struct {
 		Raft int    `yaml:"raft"` // tailnet TCP port
@@ -124,7 +123,6 @@ func Default() Config {
 	host, _ := os.Hostname()
 	c.Node.Name = host
 	c.Node.DataDir = filepath.Join(Home(), "data")
-	c.Node.Capacity = "" // derived
 	c.Listen.Raft = DefaultRaftPort
 	c.Listen.RPC = DefaultRPCPort
 	c.Listen.Web = DefaultWebPort
@@ -203,11 +201,6 @@ func (c Config) Validate() error {
 	}
 	if c.Listen.NFS == "" {
 		return errors.New("config: listen.nfs is required")
-	}
-	if c.Node.Capacity != "" { // "" = derived from the data disk
-		if _, err := ParseBytes(c.Node.Capacity); err != nil {
-			return fmt.Errorf("config: node.capacity: %w", err)
-		}
 	}
 	seen := map[string]bool{}
 	for i, d := range c.Node.Disks {

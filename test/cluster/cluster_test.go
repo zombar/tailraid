@@ -42,7 +42,7 @@ func shardHolders(c *testharness.Cluster, path string, gateway int) (meta.Chunk,
 	var holders []int
 	for i, nd := range c.Nodes {
 		for _, slot := range ch.Placement {
-			if slot == nd.Idx() {
+			if slot == nd.Target() { // slots name disks; the holder is the disk's host (docs/14 §9)
 				holders = append(holders, i)
 			}
 		}
@@ -328,7 +328,7 @@ func TestCluster_JoinDrainRemove(t *testing.T) {
 	c.WriteFile(0, "/f", testharness.Pattern(2*int(testharness.ChunkSize), 4))
 	c.Settle()
 	nodes := c.Leader().Node.FSM.Nodes()
-	if len(nodes) != 3 {
+	if len(nodes) != 6 { // three hosts, each with its disk (docs/14 §9)
 		t.Fatalf("members %d", len(nodes))
 	}
 	// drain node 2: new writes avoid it
@@ -338,18 +338,23 @@ func TestCluster_JoinDrainRemove(t *testing.T) {
 	c.WriteFile(0, "/g", testharness.Pattern(2*int(testharness.ChunkSize), 5))
 	for _, ch := range c.ChunksOf(0, "/g") {
 		for _, s := range ch.Placement {
-			if s == c.Nodes[2].Idx() {
+			if s == c.Nodes[2].Target() { // a draining host drains its disk with it (docs/14 §1)
 				t.Fatalf("draining node received a new slot: %v", ch.Placement)
 			}
 		}
 	}
-	// remove is refused while it holds slots (the FSM's rule, L-95); with --force every
-	// slot on the node is zeroed first (L-96)
-	err := leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Idx()})
+	// remove is refused while the host's disk holds slots (the FSM's rule, L-95); with
+	// --force every slot on the disk is zeroed first (L-96); the host itself goes once its
+	// disks are removed (docs/14 §1, §9)
+	disk := c.Nodes[2].Target()
+	err := leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: disk})
 	if !errors.Is(err, meta.ErrNodeNotEmpty) {
 		t.Fatalf("remove with slots: %v", err)
 	}
-	held := leader.Node.SlotsHeldBy(c.Nodes[2].Idx())
+	if err := leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Idx()}); err == nil {
+		t.Fatal("a host was removed while its disk was not")
+	}
+	held := leader.Node.SlotsHeldBy(disk)
 	if held == 0 {
 		t.Fatal("test needs the node to hold slots")
 	}
@@ -367,14 +372,16 @@ func TestCluster_JoinDrainRemove(t *testing.T) {
 		return n
 	}
 	before := zeroSlots() // /g was written with two candidates for three slots
-	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Idx(), Force: true}))
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: disk, Force: true}))
 	c.Settle()
-	if n := leader.Node.SlotsHeldBy(c.Nodes[2].Idx()); n != 0 {
-		t.Fatalf("%d slots still name the removed node", n)
+	if n := leader.Node.SlotsHeldBy(disk); n != 0 {
+		t.Fatalf("%d slots still name the removed disk", n)
 	}
 	if zeroed := zeroSlots() - before; zeroed != held {
 		t.Fatalf("%d slots zeroed by --force, want %d", zeroed, held)
 	}
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Idx()}))
+	c.Settle()
 	// the removed node cannot join again until it is reset
 	removedID := ""
 	for _, nd := range leader.Node.FSM.Nodes() {
@@ -382,7 +389,7 @@ func TestCluster_JoinDrainRemove(t *testing.T) {
 			removedID = nd.ID
 		}
 	}
-	_, err = leader.Node.Join(ctx, rpc.JoinRequest{NodeID: removedID, Name: "again", Addr: "1.1.1.1", RaftPort: 1, RPCPort: 2, Capacity: 1})
+	_, err = leader.Node.Join(ctx, rpc.JoinRequest{NodeID: removedID, Name: "again", Addr: "1.1.1.1", RaftPort: 1, RPCPort: 2})
 	if !errors.Is(err, cluster.ErrBadMemberOp) {
 		t.Fatalf("rejoin of a removed node: %v", err)
 	}
@@ -396,12 +403,12 @@ func TestCluster_JoinDrainRemove(t *testing.T) {
 			t.Fatalf("node state %v", nd.State)
 		}
 	}
-	// set_capacity and set_voter round trip
-	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: c.Nodes[1].Idx(), Capacity: 42}))
+	// set_capacity (on the disk) and set_voter (on the device) round trip
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: c.Nodes[1].Target(), Capacity: 42}))
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_voter", NodeIdx: c.Nodes[1].Idx(), Voter: false}))
 	c.Settle()
 	for _, nd := range leader.Node.FSM.Nodes() {
-		if nd.Idx == c.Nodes[1].Idx() && (nd.Capacity != 42 || nd.Voter) {
+		if (nd.Idx == c.Nodes[1].Target() && nd.Capacity != 42) || (nd.Idx == c.Nodes[1].Idx() && (nd.Voter || nd.Capacity != 0)) {
 			t.Fatalf("node %+v", nd)
 		}
 	}
@@ -538,7 +545,7 @@ func TestCluster_SetCapacityDoesNotMoveData(t *testing.T) {
 	}
 	invBefore, plBefore := inventory(), placements()
 	leader := c.Leader()
-	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: c.Nodes[(leader.I+1)%3].Idx(), Capacity: 7}))
+	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: c.Nodes[(leader.I+1)%3].Target(), Capacity: 7}))
 	c.Settle()
 	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
 	must(t, err)
@@ -570,7 +577,7 @@ func TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO(t *testing.T) {
 	if len(chunks) != 2 || chunks[0].K != 1 || chunks[0].M != 0 || len(chunks[0].Placement) != 1 {
 		t.Fatalf("chunks %+v", chunks)
 	}
-	holder := int(chunks[0].Placement[0]) - 1
+	holder := c.HostOf(chunks[0].Placement[0])
 	reader := (holder + 1) % 3
 	c.Kill(holder)
 	c.Restart(holder)

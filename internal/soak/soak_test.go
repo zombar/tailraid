@@ -42,19 +42,25 @@ type harnessEnv struct {
 // that: a 20 TiB filesystem (2 TiB reserve) with 3 TiB free minus what is held or filled.
 const harnessDiskTotal = uint64(20) << 40
 
-func (e *harnessEnv) Disk(_ context.Context, n soak.NodeRef) (soak.DiskInfo, error) {
+// Disks is the node's default disk (its Store) as its fake budget sees it; a diskless
+// node has none (docs/14 §9).
+func (e *harnessEnv) Disks(_ context.Context, n soak.NodeRef) ([]soak.DiskInfo, error) {
 	nd := e.node(n)
+	if nd.Store == nil {
+		return nil, nil
+	}
 	e.mu.RLock()
 	fill := e.fill[nd.I]
 	e.mu.RUnlock()
 	used := uint64(max(nd.Store.Used(), 0))
-	return soak.DiskInfo{Used: used, Free: uint64(3)<<40 - used - fill, Total: harnessDiskTotal}, nil
+	row, _ := nd.Node.FSM.Node(nd.Target())
+	return []soak.DiskInfo{{ID: row.ID, Name: row.Name, Used: used, Free: uint64(3)<<40 - used - fill, Total: harnessDiskTotal}}, nil
 }
 
 // Fill does on the fake disk what a scratch file and serve's next budget tick do on a real
 // one: the free space moves, the store's cap follows, and a change past the hysteresis is
 // registered through the leader.
-func (e *harnessEnv) Fill(ctx context.Context, n soak.NodeRef, size uint64) error {
+func (e *harnessEnv) Fill(ctx context.Context, n soak.NodeRef, _ string, size uint64) error {
 	nd := e.node(n)
 	e.mu.Lock()
 	if e.fill == nil {
@@ -62,11 +68,15 @@ func (e *harnessEnv) Fill(ctx context.Context, n soak.NodeRef, size uint64) erro
 	}
 	e.fill[nd.I] = size
 	e.mu.Unlock()
-	d, _ := e.Disk(ctx, n)
+	ds, _ := e.Disks(ctx, n)
+	if len(ds) == 0 {
+		return nil
+	}
+	d := ds[0]
 	b := chunk.Budget(d.Used, d.Free, d.Total)
 	nd.Store.SetCapacity(int64(b))
-	if cur, ok := nd.Node.FSM.Node(n.Idx); ok && chunk.BudgetChanged(cur.Capacity, b) {
-		return e.c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: n.Idx, Capacity: b})
+	if cur, ok := nd.Node.FSM.Node(nd.Target()); ok && chunk.BudgetChanged(cur.Capacity, b) {
+		return e.c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "set_capacity", NodeIdx: nd.Target(), Capacity: b})
 	}
 	return nil
 }
@@ -89,7 +99,17 @@ func (e *harnessEnv) Nodes(context.Context) ([]soak.NodeRef, error) {
 	return out, nil
 }
 
-func (e *harnessEnv) node(n soak.NodeRef) *testharness.ClusterNode { return e.c.Nodes[int(n.Idx)-1] }
+// node finds the harness node behind a ref: device indices are not positions once disks
+// share the index space (docs/14 §9), so the match is by index.
+func (e *harnessEnv) node(n soak.NodeRef) *testharness.ClusterNode {
+	for _, nd := range e.c.Nodes {
+		if nd.Idx() == n.Idx {
+			return nd
+		}
+	}
+	e.t.Fatalf("soak: no harness node with index %d", n.Idx)
+	return nil
+}
 
 func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 	nd := e.node(n)
@@ -213,21 +233,23 @@ func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (bool, int, string,
 	}
 	st := snap.(interface{ State() *meta.State }).State()
 	v := meta.CheckInvariants(st)
-	// orphans as the node's fsck counts them: shards on disk the chunk table does not
-	// place here
+	// orphans as the node's fsck counts them: shards on its disk the chunk table does not
+	// place there (a diskless node has none, docs/14 §9)
 	orphans := 0
-	_ = nd.Store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
-		h, _, _, idx, err := chunk.ParseKey(k)
-		if err != nil {
-			orphans++
+	if nd.Store != nil {
+		_ = nd.Store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
+			h, _, _, idx, err := chunk.ParseKey(k)
+			if err != nil {
+				orphans++
+				return nil
+			}
+			c, ok := st.Chunks[h]
+			if !ok || idx >= len(c.Placement) || c.Placement[idx] != nd.Target() {
+				orphans++
+			}
 			return nil
-		}
-		c, ok := st.Chunks[h]
-		if !ok || idx >= len(c.Placement) || c.Placement[idx] != nd.Idx() {
-			orphans++
-		}
-		return nil
-	})
+		})
+	}
 	return len(v) == 0, orphans, strings.Join(v, "; "), nil
 }
 
@@ -387,10 +409,11 @@ func harnessProfile() soak.Profile {
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1, testharness.WALCap(512<<10)) // the large-file phase meets the cap
 	defer c.Close()
-	for i := range c.Nodes { // 4 hosts × 3 targets, as the compose rig (docs/14)
+	for i := range c.Nodes { // 4 hosts × 3 targets plus a diskless voter, as the compose rig (docs/14)
 		c.AddDisk(i)
 		c.AddDisk(i)
 	}
+	c.AddDisklessNode(true)
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
@@ -412,7 +435,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("%s has no checks", ph.Name)
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 13 {
+	if sum.Failed != 0 || len(sum.Phases) != 14 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -437,12 +460,13 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	}
 	for _, want := range []string{
 		"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
-		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
+		"policy 2&#43;1, chunk", "5 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
 		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound",
 		"CPU on the sampled node", "Memory on the sampled node", "Data disk on the sampled node", "peak resident set",
 		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity",
 		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live",
 		"policy follows the member table after a disk was added", "the drained disk holds no slots", "the removed disk is out of the node table",
+		"14 diskless host", "status reports the host diskless with no budget", "no slot names the diskless host or a disk of it",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
@@ -456,7 +480,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			t.Errorf("report lacks %q", want)
 		}
 	}
-	if sum.Partial || sum.K != 2 || sum.M != 1 || sum.NodeCount != 4 || sum.Totals.BytesWritten == 0 || sum.Totals.Repair.Scanned == 0 || sum.Totals.GC.Victims == 0 || len(sum.Coverage) < 30 {
+	if sum.Partial || sum.K != 2 || sum.M != 1 || sum.NodeCount != 5 || sum.Totals.BytesWritten == 0 || sum.Totals.Repair.Scanned == 0 || sum.Totals.GC.Victims == 0 || len(sum.Coverage) < 30 {
 		t.Errorf("summary metadata: partial=%v %d+%d nodes=%d totals=%+v coverage=%d", sum.Partial, sum.K, sum.M, sum.NodeCount, sum.Totals, len(sum.Coverage))
 	}
 	for i, rec := range sum.Records {

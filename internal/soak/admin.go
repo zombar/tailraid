@@ -141,16 +141,18 @@ func (a *Admin) SetPolicyAuto(ctx context.Context) error {
 	return a.leaderOp(ctx, rpc.AdminOp{Op: "set_policy", Auto: true}, nil)
 }
 
-// Disk is the node's data disk as its budget sees it (/dev/disk, dev.enabled only).
-func (a *Admin) Disk(ctx context.Context, n NodeRef) (DiskInfo, error) {
-	var d DiskInfo
-	err := a.call(ctx, n.RPC, http.MethodGet, "/dev/disk", nil, &d)
-	return d, err
+// Disks is the node's open disks as their budgets see them (/dev/disk, dev.enabled only).
+func (a *Admin) Disks(ctx context.Context, n NodeRef) ([]DiskInfo, error) {
+	var body struct {
+		Disks []DiskInfo `json:"disks"`
+	}
+	err := a.call(ctx, n.RPC, http.MethodGet, "/dev/disk", nil, &body)
+	return body.Disks, err
 }
 
-// Fill makes the node consume bytes of its data disk with a scratch file (0 removes it).
-func (a *Admin) Fill(ctx context.Context, n NodeRef, bytes uint64) error {
-	return a.call(ctx, n.RPC, http.MethodPost, fmt.Sprintf("/dev/fill?bytes=%d", bytes), nil, nil)
+// Fill makes the node consume bytes of one disk with a scratch file (0 removes it).
+func (a *Admin) Fill(ctx context.Context, n NodeRef, disk string, bytes uint64) error {
+	return a.call(ctx, n.RPC, http.MethodPost, fmt.Sprintf("/dev/fill?bytes=%d&disk=%s", bytes, disk), nil, nil)
 }
 
 func (a *Admin) SetState(ctx context.Context, n NodeRef, state meta.NodeState) error {

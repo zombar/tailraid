@@ -321,7 +321,7 @@ func (s *Stats) chunkOut(c *Chunk, wasLive bool) {
 func Usage(vol Volume, nodes []Node, st Stats) (total, used, free uint64) {
 	var capacity uint64
 	for i := range nodes {
-		if nodes[i].State == Active {
+		if nodes[i].State == Active && nodes[i].Kind != KindDevice { // a device stores nothing (docs/14 §9)
 			capacity += nodes[i].Capacity
 		}
 	}

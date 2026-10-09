@@ -20,29 +20,28 @@ import (
 // Resolver maps a node index to its RPC address; self reports whether it is this node.
 type Resolver func(idx meta.NodeIdx) (addr string, self bool, ok bool)
 
-// Client talks to other nodes. It implements chunk.ShardClient (self traffic goes to
-// the local store) and the leader-forwarding and join calls.
+// Client talks to other nodes. It implements chunk.ShardClient (traffic to this host's
+// own disks goes straight to their stores) and the leader-forwarding and join calls.
 type Client struct {
 	http    *http.Client
 	clusID  string
 	resolve Resolver
-	local   ShardStore
 	grace   time.Duration // age guard for self-targeted deletes (same rule as the fence)
-	// added disks (docs/14 §4): diskOf names a target's disk ID (false for disk 0 and
-	// other kinds), localDisk opens one of this host's disks (nil when closed)
+	// disks (docs/14 §4): diskOf names a target's disk ID (false for any other row),
+	// localDisk opens one of this host's disks (nil when closed)
 	diskOf    func(meta.NodeIdx) (string, bool)
 	localDisk func(id string) ShardStore
 }
 
-// SetDisks wires added-disk routing: the disk ID of a target, and this host's open disks.
+// SetDisks wires disk routing: the disk ID of a target, and this host's open disks.
 func (c *Client) SetDisks(diskOf func(meta.NodeIdx) (string, bool), local func(id string) ShardStore) {
 	c.diskOf, c.localDisk = diskOf, local
 }
 
 var _ chunk.ShardClient = (*Client)(nil)
 
-// NewClient builds a client; local may be nil when this node stores no shards.
-func NewClient(clusterID [16]byte, resolve Resolver, local ShardStore) *Client {
+// NewClient builds a client; resolve may be nil for a client that only joins or probes.
+func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 	tr := &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
 		MaxIdleConnsPerHost:   32, // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
@@ -52,7 +51,7 @@ func NewClient(clusterID [16]byte, resolve Resolver, local ShardStore) *Client {
 	// no whole-request timeout on the client: a shard call's deadline scales with its
 	// size (callTimeout), the rest get callTimeout(0); ResponseHeaderTimeout bounds a
 	// dead peer either way (I-83)
-	return &Client{http: &http.Client{Transport: tr}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, local: local, grace: 10 * time.Minute}
+	return &Client{http: &http.Client{Transport: tr}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute}
 }
 
 // transferRate is the slowest tailnet path a shard transfer is given: a DERP relay at
@@ -159,17 +158,24 @@ func (c *Client) target(node meta.NodeIdx) (shardTarget, error) {
 	if !ok {
 		return shardTarget{}, fmt.Errorf("%w: node %d has no address", ErrUnavailable, node)
 	}
-	t := shardTarget{addr: addr, prefix: "/v1/shards/", self: self, store: c.local}
+	// only a disk holds shards (docs/14 §9): a device or unknown index is unavailable,
+	// never "absent", so a caller counts it as a slot it cannot reach
+	var id string
 	if c.diskOf != nil {
-		if id, isDisk := c.diskOf(node); isDisk {
-			t.prefix = "/v1/disks/" + id + "/shards/"
-			t.store = nil
-			if self && c.localDisk != nil {
-				t.store = c.localDisk(id)
-			}
-			if self && t.store == nil {
-				return shardTarget{}, fmt.Errorf("%w: disk %s is not open on this host", ErrUnavailable, id)
-			}
+		var isDisk bool
+		if id, isDisk = c.diskOf(node); !isDisk {
+			return shardTarget{}, fmt.Errorf("%w: node %d is not a placement target", ErrUnavailable, node)
+		}
+	} else {
+		return shardTarget{}, fmt.Errorf("%w: node %d is not a placement target", ErrUnavailable, node)
+	}
+	t := shardTarget{addr: addr, prefix: "/v1/disks/" + id + "/shards/", self: self}
+	if self {
+		if c.localDisk != nil {
+			t.store = c.localDisk(id)
+		}
+		if t.store == nil {
+			return shardTarget{}, fmt.Errorf("%w: disk %s is not open on this host", ErrUnavailable, id)
 		}
 	}
 	return t, nil

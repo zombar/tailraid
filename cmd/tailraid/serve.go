@@ -74,16 +74,12 @@ func initCmd() *cobra.Command {
 			if token == "" {
 				token = meta.NewJoinToken()
 			}
-			budget, err := node.Budget(cfg) // pinned by node.capacity, else derived from the data disk (docs/01)
-			if err != nil {
-				return err
-			}
-			// --k/--m pin a manual policy (test rigs); otherwise the leader grows it as devices join (docs/03)
+			// --k/--m pin a manual policy (test rigs); otherwise the leader grows it as disks join (docs/03)
 			auto := !cmd.Flags().Changed("k") && !cmd.Flags().Changed("m")
 			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
-				meta.Node{
-					Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: budget,
+				meta.Node{ // no budget: a device stores nothing, its disks do (docs/14 §9)
+					Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true,
 					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano(),
 				},
 				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, auto, token)
@@ -96,18 +92,17 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := node.RegisterDisks(cmd.Context(), n, cfg, cid); err != nil {
+			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid)
+			if err != nil {
 				return err
 			}
 			mode := "manual"
 			if auto {
-				mode = "auto, grows as devices join"
+				mode = "auto, grows as disks join"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, budget %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
-				cfg.Node.DataDir, id, ident.IP, bytesStr(budget), k, m, mode, chunkSize, path, ident.IP, token)
-			for i, d := range cfg.Node.Disks {
-				fmt.Fprintf(cmd.OutOrStdout(), "disk %s: %s\n", node.DiskName(cfg.Node.Name, i+1), d.Path)
-			}
+			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
+				cfg.Node.DataDir, id, ident.IP, k, m, mode, chunkSize, path, ident.IP, token)
+			printDisks(cmd.OutOrStdout(), cfg, disks)
 			return nil
 		},
 	}

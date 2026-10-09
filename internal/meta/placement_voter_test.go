@@ -132,16 +132,18 @@ func TestFillPlacement_KeepsSlotClass(t *testing.T) {
 	}
 }
 
-// Candidates carries the voter bit for devices only.
+// Candidates carries the voter bit of a disk's host; a bucket has none.
 // Invariant: I-77
 func TestCandidates_VoterBit(t *testing.T) {
 	nodes := []Node{
-		{Idx: 1, Kind: KindDevice, State: Active, Capacity: 10, Voter: true},
-		{Idx: 2, Kind: KindDevice, State: Active, Capacity: 10, Voter: false},
+		{Idx: 1, Kind: KindDevice, State: Active, Voter: true},
+		{Idx: 2, Kind: KindDevice, State: Active, Voter: false},
 		{Idx: 3, Kind: KindS3, State: Active, Capacity: 10, Voter: true}, // meaningless on a bucket
+		{Idx: 4, Kind: KindDisk, State: Active, Capacity: 10, Host: 1},
+		{Idx: 5, Kind: KindDisk, State: Active, Capacity: 10, Host: 2},
 	}
 	got := Candidates(nodes, func(NodeIdx) bool { return true })
-	if len(got) != 3 || !got[0].Voter || got[1].Voter || got[2].Voter {
+	if len(got) != 3 || got[0].Idx != 3 || got[0].Voter || got[1].Idx != 4 || !got[1].Voter || got[2].Idx != 5 || got[2].Voter {
 		t.Fatalf("candidates %+v", got)
 	}
 }

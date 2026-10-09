@@ -37,6 +37,7 @@ var phases = []phase{
 	{"11 automation", phaseAutomation},
 	{"12 large file", phaseLargeFile},
 	{"13 disks", phaseDisks},
+	{"14 diskless host", phaseDiskless},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -412,16 +413,22 @@ func phaseParity(ctx context.Context, r *Run) error {
 	}
 	m := r.corpusModel()
 	k, mm := int(rep.Volume.K), int(rep.Volume.M)
-	// victims: the last nodes, never the gateway we read through
+	// victims: the last hosts that hold slots, never the gateway we read through; a
+	// diskless host holds nothing, so losing it degrades no chunk (docs/14 §9)
 	gw := r.gateways()[0]
 	var victims []NodeRef
-	for i := len(r.nodes) - 1; i >= 0 && len(victims) < mm+1; i-- {
-		if r.nodes[i].Idx != gw.Idx {
-			victims = append(victims, r.nodes[i])
+	holders := 0
+	for _, n := range slices.Backward(r.nodes) {
+		if hostSlots(rep, int(n.Idx)) == 0 {
+			continue
+		}
+		holders++
+		if n.Idx != gw.Idx && len(victims) < mm+1 {
+			victims = append(victims, n)
 		}
 	}
-	if len(victims) < mm+1 || len(r.nodes) < k+mm+1 {
-		r.skip(fmt.Sprintf("need %d nodes besides the gateway to lose m+1, have %d", mm+1, len(victims)))
+	if len(victims) < mm+1 || holders < k+mm+1 {
+		r.skip(fmt.Sprintf("need %d hosts with slots besides the gateway to lose m+1, have %d", mm+1, len(victims)))
 		return nil
 	}
 	v := r.volume(gw)
@@ -865,9 +872,18 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		r.event("note", "drain skipped: no spare node beyond k+m, or no node besides the gateway")
 		return nil
 	}
-	victim := r.nodes[len(r.nodes)-1]
-	if victim.Idx == gw.Idx {
-		victim = r.nodes[len(r.nodes)-2]
+	// the last host that holds slots, never the gateway: draining a diskless host would
+	// move nothing (docs/14 §9)
+	var victim NodeRef
+	for _, n := range slices.Backward(r.nodes) {
+		if n.Idx != gw.Idx && hostSlots(rep, int(n.Idx)) > 0 {
+			victim = n
+			break
+		}
+	}
+	if victim.Idx == 0 {
+		r.event("note", "drain skipped: no host besides the gateway holds slots")
+		return nil
 	}
 	if err := r.Env.SetState(ctx, victim, meta.Draining); err != nil {
 		r.check("L-93", "drain accepted", false, err.Error())

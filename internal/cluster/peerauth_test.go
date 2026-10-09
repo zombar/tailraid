@@ -126,5 +126,5 @@ func TestJoin_RejoinRequiresSameStableID(t *testing.T) {
 }
 
 func joinRequest(nd meta.Node) rpc.JoinRequest {
-	return rpc.JoinRequest{NodeID: nd.ID, Name: nd.Name, TSStableID: nd.TSStableID, Addr: nd.Addr, RaftPort: nd.RaftPort, RPCPort: nd.RPCPort, Capacity: nd.Capacity}
+	return rpc.JoinRequest{NodeID: nd.ID, Name: nd.Name, TSStableID: nd.TSStableID, Addr: nd.Addr, RaftPort: nd.RaftPort, RPCPort: nd.RPCPort}
 }

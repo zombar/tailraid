@@ -162,7 +162,7 @@ func TestReader_CorruptShard_DecodesFromOthers_AndReports(t *testing.T) {
 	// corrupt the slot held by this gateway: Rank puts self first, so it is always read
 	slot := -1
 	for i, n := range c.Placement {
-		if n == f.SelfIdx {
+		if n == f.Target(f.SelfIdx) { // this gateway's own disk (docs/14 §9)
 			slot = i
 		}
 	}
