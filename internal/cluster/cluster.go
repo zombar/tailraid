@@ -26,6 +26,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // Errors.
@@ -188,12 +189,7 @@ func writeFileSync(path string, data []byte) error {
 		_ = os.Remove(tmp.Name())
 		return err
 	}
-	d, err := os.Open(dir) //nolint:gosec // the data directory
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return sysfs.OS{}.SyncDir(dir) // a directory cannot be opened for fsync on Windows; the seam knows
 }
 
 // HasState reports whether the data directory holds Raft state.
