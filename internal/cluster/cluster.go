@@ -533,6 +533,13 @@ func (n *Node) Close() error {
 	if n.closed.Swap(true) {
 		return nil
 	}
+	// A leader drains what it has committed into the FSM before Raft stops: raft's FSM
+	// loop exits on shutdown with its queue unanswered, and a proposal's future for an
+	// entry committed but not yet applied would then never resolve (I-95). closed is
+	// already set, so no new proposal is enqueued behind the barrier.
+	if n.IsLeader() {
+		_ = n.Raft.Barrier(5 * time.Second).Error()
+	}
 	var first error
 	if err := n.Raft.Shutdown().Error(); err != nil {
 		first = err

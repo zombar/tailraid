@@ -369,7 +369,11 @@ no divergent state to merge because it never applied uncommitted entries.
   `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
   and resolves the second answer per command (`ErrExist`/`ErrNotExist` after an unknown
   outcome count as the first attempt having landed), so an acknowledged mutation is never
-  reported as failed and a failed one is never silently repeated.
+  reported as failed and a failed one is never silently repeated. No proposal outlives
+  its node: `Close` refuses new proposals and, on a leader, drains what Raft committed
+  into the FSM (a barrier) before Raft stops, since raft's FSM loop drops its queue on
+  shutdown and a future for a committed-but-unapplied entry would otherwise never
+  resolve; every waiter returns and no goroutine is left behind.
 
 ## Tests
 
@@ -382,7 +386,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
-| I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext` |
+| I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext`, `TestCluster_CloseWhileApplying_EveryWaiterResolves` |
 | I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
 | I-102 | `TestFSM_SetPlacement_ExpectConflict`, `TestEncodeCommand_Golden` |
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
