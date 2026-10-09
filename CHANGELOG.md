@@ -2,6 +2,53 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.3.2 (2026-10-09)
+
+### Changes
+
+- testharness: hold a node's RPC port from allocation to its first start ([473566d](https://github.com/zombar/tailraid/commit/473566d))
+- config: an off gateway listener is "" and takes no port; SMB's port joins the distinct-port check ([80e8709](https://github.com/zombar/tailraid/commit/80e8709))
+- config, node, mount, cli: Windows mounts the SMB gateway; the portmap stub goes ([07c73da](https://github.com/zombar/tailraid/commit/07c73da))
+- smbgw: SMB2 gateway over the vfs, with an in-tree copy of go-filesystems/smb ([ad9d9f0](https://github.com/zombar/tailraid/commit/ad9d9f0))
+- vfs: File.WriteAt; the file info exposes Ino and Times ([1a7fb16](https://github.com/zombar/tailraid/commit/1a7fb16))
+- soak: a diskless voter in the compose rig, join registers config disks, phase 14 (docs/14 §9) ([b97a79d](https://github.com/zombar/tailraid/commit/b97a79d))
+- webui: a host's targets are its disks; a diskless host is a card with a note (docs/14 §9) ([8b84171](https://github.com/zombar/tailraid/commit/8b84171))
+- node: devices are never placement targets; diskless hosts; serve refuses legacy state (docs/14 §9) ([4b8ec89](https://github.com/zombar/tailraid/commit/4b8ec89))
+- update: minisign-signed releases with rollback and a downgrade guard; snapshot export and offline recovery ([3674559](https://github.com/zombar/tailraid/commit/3674559))
+- ops: confined units, leadership hand-over on shutdown, rotating logs, readiness, config validation, web UI host check ([0eae3e0](https://github.com/zombar/tailraid/commit/0eae3e0))
+- soak: a timed-out phase's late return is not recorded into the next phase ([f3cdc9d](https://github.com/zombar/tailraid/commit/f3cdc9d))
+- soak: phases survive panics and timeouts, restore what they changed, --destructive gates mutations, skipped checks and aborted runs render ([cd0c557](https://github.com/zombar/tailraid/commit/cd0c557))
+- cluster: a closing leader drains committed entries into the FSM before Raft stops, so no apply waiter is left behind ([41ded3e](https://github.com/zombar/tailraid/commit/41ded3e))
+- cluster: identity files sync their directory through the sysfs seam, so Windows can write them ([ce469f9](https://github.com/zombar/tailraid/commit/ce469f9))
+- lint: gocritic, gofumpt and an unused helper in the review's new code ([8edddf8](https://github.com/zombar/tailraid/commit/8edddf8))
+- meta: SetPlacement names the placement it planned from, GCDelete runs in batches, snapshots stream, undecodable entries are loud ([c7a5ef9](https://github.com/zombar/tailraid/commit/c7a5ef9))
+- meta: off-by-one boundaries, half-wired features, one implementation per helper, dead code ([8233dbe](https://github.com/zombar/tailraid/commit/8233dbe))
+- chunk: sweep re-checks age at delete time, WAL survives fsync and reopen failures, scrub fetches once, NFS closes its connections ([dbcb7b7](https://github.com/zombar/tailraid/commit/dbcb7b7))
+- cluster: atomic identity files, startup failures free the port, body deadlines, cancelled hedges, cache races ([3335816](https://github.com/zombar/tailraid/commit/3335816))
+- vfs: a proposal with an unknown outcome is resolved per command, never retried blindly ([97e9f54](https://github.com/zombar/tailraid/commit/97e9f54))
+- cluster: the Raft transport accepts members only; update_addr and join are bound to the caller ([5e5c8a1](https://github.com/zombar/tailraid/commit/5e5c8a1))
+- lint: fix what the new linters found ([3d77ee0](https://github.com/zombar/tailraid/commit/3d77ee0))
+- cleanup: drop dead code found by deadcode and unparam ([5b10899](https://github.com/zombar/tailraid/commit/5b10899))
+- build: Go 1.27.2, bbolt 1.5.0, vendored dependencies, tools via go run, CI pinned to SHAs ([feb722d](https://github.com/zombar/tailraid/commit/feb722d))
+
+### Documentation
+
+- docs: Windows checklist for the SMB mount; size table through the SMB gateway ([5604d26](https://github.com/zombar/tailraid/commit/5604d26))
+- docs: SMB gateway for Windows (docs/15); NFS stays on macOS and Linux ([c6a4266](https://github.com/zombar/tailraid/commit/c6a4266))
+- docs: devices are never placement targets; diskless hosts (docs/14 §9) ([3120186](https://github.com/zombar/tailraid/commit/3120186))
+
+### Tooling
+
+- test: the model checker never adds a disk to the host it is draining ([dfdc0f1](https://github.com/zombar/tailraid/commit/dfdc0f1))
+- ci: tidy the tool module files; the Windows and scheduling failures of the review's new tests ([b110e49](https://github.com/zombar/tailraid/commit/b110e49))
+- test: the review's new tests on a disks-only tree ([d180697](https://github.com/zombar/tailraid/commit/d180697))
+- tests: the review checklist across the suite, size tables, new scenarios, fuzz targets, no unconditional skips ([f5b6355](https://github.com/zombar/tailraid/commit/f5b6355))
+- ci: quote the release job's tag variable (shellcheck SC2086 through actionlint on the runner) ([f2aa388](https://github.com/zombar/tailraid/commit/f2aa388))
+- ci: lint-cross covers GOOS=linux too; the Linux vitals reads are marked for gosec ([b621339](https://github.com/zombar/tailraid/commit/b621339))
+- ci: hooks call a lefthook built to dist/tools; the Windows service switch has a default ([38b8a4e](https://github.com/zombar/tailraid/commit/38b8a4e))
+- ci: linters and hooks for Go, TypeScript, CSS, the docs, YAML and the workflow ([7a2abf6](https://github.com/zombar/tailraid/commit/7a2abf6))
+- ci: build the linter for the host before linting under GOOS=darwin and GOOS=windows ([0c0a36d](https://github.com/zombar/tailraid/commit/0c0a36d))
+
 ## v0.3.1 (2026-10-09)
 
 ### Changes
