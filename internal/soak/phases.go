@@ -425,11 +425,14 @@ func phaseParity(ctx context.Context, r *Run) error {
 		return nil
 	}
 	v := r.volume(gw)
+	u := r.undoer(ctx)
+	defer u.run()
 	// lose m
 	for _, n := range victims[:mm] {
 		if err := r.Env.Kill(ctx, n); err != nil {
 			return err
 		}
+		u.add("start "+n.Name, func(c context.Context) error { return r.Env.Start(c, n) })
 		r.event("kill", n.Name)
 	}
 	if err := r.Env.Wait(ctx, 2*time.Second); err != nil {
@@ -459,6 +462,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		if err := r.Env.Start(ctx, n); err != nil {
 			return err
 		}
+		u.done("start " + n.Name)
 		r.event("start", n.Name)
 	}
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
@@ -475,6 +479,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		if err := r.Env.Kill(ctx, n); err != nil {
 			return err
 		}
+		u.add("start "+n.Name, func(c context.Context) error { return r.Env.Start(c, n) })
 		r.event("kill", n.Name)
 	}
 	if err := r.Env.Wait(ctx, 2*time.Second); err != nil {
@@ -496,6 +501,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		if err := r.Env.Start(ctx, n); err != nil {
 			return err
 		}
+		u.done("start " + n.Name)
 		r.event("start", n.Name)
 	}
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
@@ -545,6 +551,9 @@ func liveSlots(c admin.ChunkReport) int {
 
 // slotTable prints a chunk's slots for a check's detail: "0:n3 live present, 1:n1 live absent".
 func slotTable(c admin.ChunkReport) string {
+	if len(c.Hash) < 12 {
+		return fmt.Sprintf("chunk %q: malformed hash", c.Hash)
+	}
 	parts := make([]string, 0, len(c.Slots))
 	for i, s := range c.Slots {
 		state := "missing"
@@ -715,6 +724,8 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		return nil
 	}
 	m := r.corpusModel()
+	u := r.undoer(ctx)
+	defer u.run()
 	for round := range r.Profile.LeaderKills {
 		rep, _, err := r.anyStatus(ctx)
 		if err != nil {
@@ -757,6 +768,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 				if err := r.Env.Kill(ctx, leader); err != nil {
 					return err
 				}
+				u.add("start "+leader.Name, func(c context.Context) error { return r.Env.Start(c, leader) })
 				r.event("kill leader", leader.Name)
 			}
 			p := join(dir, fmt.Sprintf("r%d-%d.bin", round, i))
@@ -770,6 +782,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		if err := r.Env.Start(ctx, leader); err != nil {
 			return err
 		}
+		u.done("start " + leader.Name)
 		r.event("start", leader.Name)
 		healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
 		r.check("L-61", "cluster healthy after the leader returned", healthy, hdetail)
@@ -789,6 +802,10 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 // --- 7 membership --------------------------------------------------------------------------
 
 func phaseMembership(ctx context.Context, r *Run) error {
+	if !r.Env.Caps().Mutate {
+		r.skip("policy changes and drains need --destructive on a live cluster")
+		return nil
+	}
 	rep, _, err := r.anyStatus(ctx)
 	if err != nil {
 		return err
@@ -814,10 +831,17 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		r.skip("no alternative policy fits the live node count")
 		return nil
 	}
+	u := r.undoer(ctx)
+	defer u.run()
 	for _, pol := range [][2]uint8{{k1, m1}, {k0, m0}} {
 		if err := r.Env.SetPolicy(ctx, pol[0], pol[1]); err != nil {
 			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
 			return nil
+		}
+		if pol == [2]uint8{k1, m1} {
+			u.add("set-redundancy back", func(c context.Context) error { return r.Env.SetPolicy(c, k0, m0) })
+		} else {
+			u.done("set-redundancy back")
 		}
 		r.event("set-redundancy", fmt.Sprintf("%d+%d", pol[0], pol[1]))
 		// writes under the new policy while the migration runs
@@ -849,6 +873,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		r.check("L-93", "drain accepted", false, err.Error())
 		return nil
 	}
+	u.add("activate "+victim.Name, func(c context.Context) error { return r.Env.SetState(c, victim, meta.Active) })
 	r.event("drain", victim.Name)
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
@@ -860,6 +885,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	if err := r.Env.SetState(ctx, victim, meta.Active); err != nil {
 		return err
 	}
+	u.done("activate " + victim.Name)
 	r.event("activate", victim.Name)
 	return nil
 }
@@ -952,6 +978,18 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 				acked[p] = data
 			}
 		}
+		// a read-modify-write across a chunk boundary of a two-chunk file: what the WAL
+		// replays after the restart is a partial overwrite, not a fresh file
+		cs := r.Profile.ChunkSize
+		p := join(dir, gw.Name+"-rmw.bin")
+		base := r.randomBytes(2*cs + 5)
+		if err := v.WriteAt(p, 0, base); err == nil {
+			patch := r.randomBytes(cs / 2)
+			off := int64(cs - 7)
+			if err := v.WriteAt(p, off, patch); err == nil {
+				acked[p] = overwrite(base, off, patch)
+			}
+		}
 	}
 	// restart everything while those writes may still sit in the WALs
 	if err := r.Env.Restart(ctx, r.nodes); err != nil {
@@ -965,10 +1003,14 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	}
 	gw := r.gateways()[len(r.gateways())-1]
 	v := r.volume(gw)
-	bad, first := r.verifyModel(v, acked)
-	r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
+	if len(acked) == 0 {
+		r.checkSkipped("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", "no write was acknowledged before the restart: nothing to verify")
+	} else {
+		bad, first := r.verifyModel(v, acked)
+		r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
+	}
 	maps.Copy(m, acked)
-	bad, first = r.verifyModel(v, m)
+	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-12 L-120", "whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
 	r.checkFSMAgreement(ctx, "I-4 I-5", "FSM hashes agree after the restart storm")
 	return nil
@@ -1041,10 +1083,13 @@ func phasePartition(ctx context.Context, r *Run) error {
 		return strings.Join(out, ",")
 	}
 
+	u := r.undoer(ctx)
+	defer u.run()
 	// step 1: a minority is cut off
 	if err := r.Env.Partition(ctx, minority, majority); err != nil {
 		return err
 	}
+	u.add("heal", r.Env.Heal)
 	r.event("partition", names(minority)+" | "+names(majority))
 	led, ldetail := r.awaitLeader(ctx, majority, r.Profile.RestartSettle+30*time.Second)
 	r.check("I-6", "the majority side elects a leader", led, ldetail)
@@ -1083,6 +1128,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if err := r.Env.Heal(ctx); err != nil {
 		return err
 	}
+	u.done("heal")
 	r.event("heal", "")
 	healthy, hdetail := r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
 	r.check("L-132", "cluster healthy after the heal", healthy, hdetail)
@@ -1103,6 +1149,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if err := r.Env.Partition(ctx, []NodeRef{gw}, others); err != nil {
 		return err
 	}
+	u.add("heal", r.Env.Heal)
 	r.event("partition", gw.Name+" | "+names(others))
 	refused = join(dir, "self-dir")
 	merr := v.Mkdir(refused)
@@ -1118,6 +1165,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	if err := r.Env.Heal(ctx); err != nil {
 		return err
 	}
+	u.done("heal")
 	r.event("heal", "")
 	healthy, hdetail = r.waitHealthy(ctx, r.Profile.RestartSettle+30*time.Second)
 	r.check("L-132", "cluster healthy after the gateway rejoins", healthy, hdetail)

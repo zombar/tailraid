@@ -108,6 +108,9 @@ func coverage(phases []PhaseResult) []CoverageRow {
 	for _, ph := range phases {
 		for i := range ph.Checks {
 			c := &ph.Checks[i]
+			if c.Skip {
+				continue // measured nothing: covers nothing
+			}
 			for id := range strings.FieldsSeq(c.Cites) {
 				row, ok := rows[id]
 				if !ok {

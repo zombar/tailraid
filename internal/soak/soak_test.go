@@ -100,7 +100,7 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true}
 }
 
 func (e *harnessEnv) quorum() bool {

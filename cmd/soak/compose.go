@@ -97,7 +97,7 @@ func (e *composeEnv) node(ref soak.NodeRef) composeNode {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true}
 }
 
 // diskDir is where an added disk named "<host>/<n>" is mounted in its container: the

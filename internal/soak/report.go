@@ -25,7 +25,8 @@ type reportData struct {
 	Policy     string // "2+1, chunk 1.0 MiB, 4 nodes"
 	Started    string
 	Duration   string
-	Verdict    string // PASS | FAIL | PARTIAL
+	Verdict    string // PASS | FAIL | PARTIAL | ABORTED
+	Aborted    string // why, when ABORTED
 	Failed     int
 	Checks     int
 	Skipped    []string
@@ -63,10 +64,11 @@ type phaseView struct {
 }
 
 type checkView struct {
-	Name  string
-	Cites string
-	OK    bool
-	Text  string
+	Name    string
+	Cites   string
+	OK      bool
+	Skipped bool // could not be measured; neither pass nor fail
+	Text    string
 }
 
 type issueView struct {
@@ -115,6 +117,8 @@ func buildReport(s Summary) reportData {
 	for _, ph := range s.Phases {
 		pv := phaseView{Name: ph.Name, Took: ph.Took.Round(time.Millisecond).String(), Reason: ph.Reason}
 		switch {
+		case ph.NotRun:
+			pv.Status, pv.Took = "NOT RUN", ""
 		case ph.Skipped:
 			pv.Status = "SKIPPED"
 			d.Skipped = append(d.Skipped, ph.Name)
@@ -125,6 +129,10 @@ func buildReport(s Summary) reportData {
 		}
 		for i := range ph.Checks {
 			c := &ph.Checks[i]
+			if c.Skip {
+				pv.Checks = append(pv.Checks, checkView{Name: c.Name, Cites: c.Cites, Skipped: true, Text: c.Text})
+				continue
+			}
 			ok := c.OK == nil || *c.OK
 			pv.Checks = append(pv.Checks, checkView{Name: c.Name, Cites: c.Cites, OK: ok, Text: c.Text})
 			d.Checks++
@@ -135,6 +143,8 @@ func buildReport(s Summary) reportData {
 		d.Phases = append(d.Phases, pv)
 	}
 	switch {
+	case s.Aborted != "":
+		d.Verdict, d.Aborted = "ABORTED", s.Aborted
 	case d.Failed > 0:
 		d.Verdict = "FAIL"
 	case s.Partial:
@@ -453,13 +463,13 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 </style></head><body>
 <h1>{{.Mark}}<span>tail<span style="color:#2563eb">raid</span> soak report</span></h1>
 <div class="meta">target: <b>{{.Env}}</b> · profile <b>{{.Profile}}</b> · policy {{.Policy}} · seed <code>{{.Seed}}</code> · flags {{.Flags}}<br>started {{.Started}} · duration {{.Duration}} · generated {{.Generated}}</div>
-<div class="banner {{if eq .Verdict "PASS"}}pass{{else if eq .Verdict "FAIL"}}fail{{else}}partial{{end}}">{{.Verdict}} — {{.Checks}} checks, {{.Failed}} failed{{if .Skipped}}, skipped: {{join .Skipped ", "}}{{end}} · {{.Throughput}}</div>
+<div class="banner {{if eq .Verdict "PASS"}}pass{{else if eq .Verdict "PARTIAL"}}partial{{else}}fail{{end}}">{{.Verdict}} — {{.Checks}} checks, {{.Failed}} failed{{if .Skipped}}, skipped: {{join .Skipped ", "}}{{end}}{{if .Aborted}} · {{.Aborted}}{{end}} · {{.Throughput}}</div>
 <h2>Phases</h2>
 <table><tr><th>Phase</th><th>Result</th><th>Checks</th><th>Took</th></tr>
 {{range .Phases}}<tr><td>{{.Name}}</td><td class="{{if eq .Status "PASS"}}ok{{else if eq .Status "FAIL"}}bad{{else}}skip{{end}}">{{.Status}}{{if .Reason}} ({{.Reason}}){{end}}</td><td>{{len .Checks}}</td><td>{{.Took}}</td></tr>{{end}}
 </table>
 {{range .Phases}}<details{{if eq .Status "FAIL"}} open{{end}}><summary>{{.Name}} — {{.Status}}</summary>
-<table class="checks">{{range .Checks}}<tr><td>{{.Name}}</td><td class="cites">{{.Cites}}</td><td class="{{if .OK}}ok{{else}}bad{{end}}">{{if .OK}}ok{{else}}FAIL{{end}}</td><td>{{.Text}}</td></tr>{{end}}</table></details>{{end}}
+<table class="checks">{{range .Checks}}<tr><td>{{.Name}}</td><td class="cites">{{.Cites}}</td><td class="{{if .Skipped}}dim{{else if .OK}}ok{{else}}bad{{end}}">{{if .Skipped}}SKIPPED{{else if .OK}}ok{{else}}FAIL{{end}}</td><td>{{.Text}}</td></tr>{{end}}</table></details>{{end}}
 <h2>Inconsistencies</h2>
 {{if .Issues}}<table><tr><th>Phase</th><th>Check</th><th>Detail</th><th>File</th><th>Chunk</th><th>Node</th><th>Record</th></tr>
 {{range .Issues}}<tr><td>{{.Phase}}</td><td>{{.Name}}</td><td>{{.Text}}</td><td>{{.File}}</td><td>{{.Chunk}}</td><td>{{.Node}}</td><td><code>{{.Where}}</code></td></tr>{{end}}</table>

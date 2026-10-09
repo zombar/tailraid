@@ -72,10 +72,9 @@ func run() int {
 	}
 	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed} //nolint:gosec // workload
 	log.Info("soak run", "profile", p.Name, "seed", *seed, "topology", *topology, "nodes", n)
-	sum, err := r.Execute(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	sum, runErr := r.Execute(ctx) // an aborted or cancelled run still renders its partial report
+	if runErr != nil {
+		fmt.Fprintln(os.Stderr, runErr)
 	}
 	rf, err := os.Create(*out)
 	if err != nil {
@@ -90,6 +89,8 @@ func run() int {
 	for _, ph := range sum.Phases {
 		state := "PASS"
 		switch {
+		case ph.NotRun:
+			state = "NOT RUN"
 		case ph.Skipped:
 			state = "SKIPPED (" + ph.Reason + ")"
 		case ph.Failed > 0:
@@ -98,7 +99,7 @@ func run() int {
 		fmt.Printf("%-28s %s  %s\n", ph.Name, state, ph.Took.Round(time.Millisecond))
 	}
 	fmt.Printf("%d failed checks; report: %s\n", sum.Failed, *out)
-	if sum.Failed > 0 {
+	if sum.Failed > 0 || runErr != nil {
 		return 1
 	}
 	return 0

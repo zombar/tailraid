@@ -30,14 +30,18 @@ func phaseAutomation(ctx context.Context, r *Run) error {
 	if err != nil {
 		return err
 	}
-	if r.Env.Caps().Corrupt { // the dev endpoints are reachable: budgets can be measured
+	if r.Env.Caps().Corrupt && r.Env.Caps().Mutate { // the dev endpoints are reachable: budgets can be measured
 		if err := r.budgetChecks(ctx, rep); err != nil {
 			return err
 		}
 	} else {
-		r.event("note", "budget checks need the dev endpoints (run with dev.enabled and --destructive)")
+		r.checkSkipped("I-74", "the store's cap follows the disk", "budget checks need the dev endpoints (run with dev.enabled and --destructive)")
 	}
 	r.voterFirstChecks(ctx, rep)
+	if !r.Env.Caps().Mutate {
+		r.checkSkipped("I-75", "policy equals the rule of the member table", "a policy change needs --destructive on a live cluster")
+		return nil
+	}
 	return r.autoPolicyChecks(ctx, rep)
 }
 
@@ -85,13 +89,16 @@ func (r *Run) budgetChecks(ctx context.Context, rep admin.Report) error {
 		return nil
 	}
 	r.event("fill", fmt.Sprintf("%s on %s (free was %s)", humanBytes(fillBytes), victim.Name, humanBytes(float64(victimDisk.Free))))
-	defer func() { _ = r.Env.Fill(ctx, victim, 0) }()
+	u := r.undoer(ctx)
+	defer u.run()
+	u.add("unfill "+victim.Name, func(c context.Context) error { return r.Env.Fill(c, victim, 0) })
 	deadline := r.now().Add(fillWait)
 	var after admin.NodeReport
+	answered := false
 	for {
 		if rep, err := r.Env.Status(ctx, victim); err == nil {
 			if nr, ok := reportNode(rep, victim.Idx); ok {
-				after = nr
+				after, answered = nr, true
 				if before.Free-after.Free >= fillBytes/2 {
 					break
 				}
@@ -103,6 +110,10 @@ func (r *Run) budgetChecks(ctx context.Context, rep admin.Report) error {
 		if err := r.Env.Wait(ctx, fillStep); err != nil {
 			return err
 		}
+	}
+	if !answered { // a victim that never answered status is not a pass, and not a budget finding either
+		r.checkSkipped("I-74", "the store's cap follows the disk within two ticks", victim.Name+" did not answer status while filled")
+		return nil
 	}
 	r.checkAt("I-74", "the store's cap follows the disk within two ticks", before.Free-after.Free >= fillBytes/2,
 		fmt.Sprintf("free %s → %s after a %s fill", humanBytes(float64(before.Free)), humanBytes(float64(after.Free)), humanBytes(fillBytes)), "", "", victim.Name)
@@ -167,6 +178,11 @@ func (r *Run) autoPolicyChecks(ctx context.Context, rep admin.Report) error {
 		r.check("I-75", "set-redundancy --auto accepted", false, err.Error())
 		return nil
 	}
+	u := r.undoer(ctx)
+	defer u.run()
+	if !wasAuto {
+		u.add("pin the policy back", func(c context.Context) error { return r.Env.SetPolicy(c, k0, m0) })
+	}
 	r.event("set-redundancy", "auto")
 	rep, err := r.repairUntilClean(ctx)
 	if err != nil {
@@ -190,6 +206,7 @@ func (r *Run) autoPolicyChecks(ctx context.Context, rep admin.Report) error {
 		r.check("L-100", fmt.Sprintf("set-redundancy %d+%d (pin back) accepted", k0, m0), false, err.Error())
 		return nil
 	}
+	u.done("pin the policy back")
 	r.event("set-redundancy", fmt.Sprintf("%d+%d (pinned back)", k0, m0))
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err

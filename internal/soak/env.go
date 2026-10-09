@@ -31,6 +31,10 @@ type Caps struct {
 	Corrupt      bool
 	MultiGateway bool // Volume available on more than one node
 	Disks        bool // FailDisk/RestoreDisk on the hosts' added disks (docs/14)
+	// Mutate allows the phases that change the cluster itself rather than its files:
+	// policy changes, drains and removals, filling a node's disk. A live cluster allows
+	// them only with --destructive.
+	Mutate bool
 }
 
 // Env is one target cluster (docs/09 §6).

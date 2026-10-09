@@ -144,9 +144,13 @@ func TestSummary_LatencyWindowsAndCoverage(t *testing.T) {
 // Every invariant and lifecycle cell a phase cites is defined in the design docs, so the
 // report's coverage table never names an ID that does not exist.
 func TestPhases_CitesAreDefined(t *testing.T) {
-	src, err := os.ReadFile("phases.go")
-	if err != nil {
-		t.Fatal(err)
+	var src []byte
+	for _, f := range []string{"phases.go", "automation.go", "largefile.go", "disks.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src = append(src, b...)
 	}
 	defined := map[string]bool{}
 	for _, doc := range []string{"../../docs/invariants.md", "../../docs/lifecycle.md"} {
@@ -161,13 +165,13 @@ func TestPhases_CitesAreDefined(t *testing.T) {
 	if len(defined) < 100 {
 		t.Fatalf("only %d IDs found in the generated docs", len(defined))
 	}
-	cites := regexp.MustCompile(`r\.check(?:At|FSMAgreement\(ctx, |\()"([^"]*)"`)
+	cites := regexp.MustCompile(`r\.check(?:At|Skipped|FSMAgreement\(ctx, |\()"([^"]*)"`)
 	n := 0
 	for _, m := range cites.FindAllStringSubmatch(string(src), -1) {
 		for id := range strings.FieldsSeq(m[1]) {
 			n++
 			if !defined[id] {
-				t.Errorf("phases.go cites %s, which no design doc defines", id)
+				t.Errorf("a phase cites %s, which no design doc defines", id)
 			}
 		}
 	}
