@@ -117,6 +117,7 @@ type localDisk struct {
 	idx    meta.NodeIdx
 	id     string
 	store  *chunk.Store
+	fs     string // filesystem ID of the store's directory (docs/14 §8)
 	reason string
 }
 
@@ -167,6 +168,7 @@ func (d *diskSet) refresh(nodes []meta.Node) {
 			continue
 		}
 		ld.idx, ld.id, ld.store, ld.reason = row.Idx, row.ID, store, ""
+		ld.fs, _ = sysfs.FilesystemID(store.Root())
 		d.log.Info("disk open", "path", ld.cfg.Path, "disk", row.Name, "idx", row.Idx)
 	}
 }
@@ -309,7 +311,7 @@ func (d *diskSet) health() []rpc.DiskHealth {
 	defer d.mu.RUnlock()
 	out := make([]rpc.DiskHealth, 0, len(d.disks))
 	for _, ld := range d.disks {
-		h := rpc.DiskHealth{ID: ld.id, OK: ld.store != nil, Reason: ld.reason}
+		h := rpc.DiskHealth{ID: ld.id, OK: ld.store != nil, Reason: ld.reason, FS: ld.fs}
 		if ld.store != nil {
 			h.Used, h.Capacity = ld.store.Used(), ld.store.Capacity()
 			h.Free = max(h.Capacity-h.Used, 0)

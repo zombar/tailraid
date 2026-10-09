@@ -91,6 +91,7 @@ type Options struct {
 	// DiskHealth lists every configured disk for /health. Both nil without disks.
 	Disk       func(id string) (ShardStore, meta.NodeIdx, bool)
 	DiskHealth func() []DiskHealth
+	StoreFS    string // filesystem ID of Store's directory, reported in /health
 	Applier    Applier
 	Fence      Fence
 	Joiner     Joiner
@@ -291,6 +292,7 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	h := Health{NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(),
 		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity()}
 	h.Free = max(h.Capacity-h.Used, 0)
+	h.FS = s.o.StoreFS
 	if s.o.DiskHealth != nil {
 		h.Disks = s.o.DiskHealth()
 	}

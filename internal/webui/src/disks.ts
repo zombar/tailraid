@@ -113,12 +113,40 @@ function hostCard(g: Host, sh: ReturnType<typeof shares>, scale: number): HTMLEl
   const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (n.live ? "ok" : "bad") }), h("span", { class: "name" }, n.name), h("span", { class: "host-sum" }, sum), badges);
   const strip = h("div", { class: "disk-strip" });
   for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
-  return h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
+  const card = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
+  for (const group of sharedGroups(g.targets)) {
+    card.append(h("div", { class: "host-note" }, h("span", { class: "warn-icon" }), `${listOf(group)} are on one physical disk: they fail together, so data spread across them is not redundant`));
+  }
+  return card;
+}
+
+/** label names a target for a person: a host's own store reads "<host> (data dir)" once it has disks. */
+function label(t: NodeReport): string {
+  return t.data_dir ? `${t.name} (data dir)` : t.name;
+}
+
+function listOf(names: string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** sharedGroups are the host's targets that sit on one physical disk, as label groups. */
+function sharedGroups(targets: NodeReport[]): string[][] {
+  const seen = new Set<string>();
+  const out: string[][] = [];
+  for (const t of targets) {
+    if (!t.shared_with?.length || seen.has(t.name)) continue;
+    const names = [t.name, ...t.shared_with].sort();
+    for (const n of names) seen.add(n);
+    out.push(names.map((n) => label(targets.find((x) => x.name === n) ?? t)));
+  }
+  return out;
 }
 
 function diskRow(t: NodeReport, share: { expected: number; deviation: number } | undefined, scale: number): HTMLElement {
   const dot = off(t) ? "off" : t.live ? "ok" : "bad";
-  const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", null, t.name));
+  const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", { class: "n" }, t.name));
+  if (t.data_dir) name.append(h("span", { class: "tag" }, "data dir"));
+  if (t.shared_with?.length) name.append(h("span", { class: "warn-icon", title: `on the same physical disk as ${t.shared_with.join(", ")}: they fail together` }));
   if (off(t)) {
     return h("div", { class: "disk off", title: `${t.name}: no budget (capacity 0)` }, name, h("div", { class: "bar" }), h("div", { class: "disk-val" }, "no budget (capacity 0)"));
   }

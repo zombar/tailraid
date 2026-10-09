@@ -26,8 +26,8 @@
 5      pike/1            disk    active              false  yes   30840   819.0 GiB  self, shares disk with pike/2
 6      pike/2            disk    active              false  yes   29950   825.0 GiB  self, shares disk with pike/1
 7    nomad               device  active  100.64.0.40 false  yes   7210    204.0 GiB
-! atlas (data dir) and atlas/2 are on one physical disk: they fail together, so a stripe on both is not redundant
-! pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</pre>
+! atlas (data dir) and atlas/2 are on one physical disk: they fail together, so data spread across them is not redundant
+! pike/1 and pike/2 are on one physical disk: they fail together, so data spread across them is not redundant</pre>
   <div class="fixture">fixture A — 4 hosts × 3 targets, auto 6+2; lumen dead, nomad/2 draining</div>
   <section>
 <h2>Disks<span class="h-sub">survives 2 disks, 1 host · auto 6+2 · 4 hosts × 3 targets</span></h2>
@@ -92,7 +92,7 @@
         <div class="disk-val"><span>402.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
     </div>
-    <div class="host-note"><span class="warn-icon"></span>atlas (data dir) and atlas/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
+    <div class="host-note"><span class="warn-icon"></span>atlas (data dir) and atlas/2 are on one physical disk: they fail together, so data spread across them is not redundant</div>
   </div>
   <div class="host-row self">
     <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">3 targets · 2.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
@@ -116,7 +116,7 @@
         <div class="disk-val"><span>199.0 GiB</span><span>of 1.0 TiB</span></div>
       </div>
     </div>
-    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
+    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so data spread across them is not redundant</div>
   </div>
   <div class="host-row">
     <div class="name-row"><span class="dot bad"></span><span class="name">lumen</span><span class="host-sum">3 targets · 4.5 TiB · dead 3m0s</span><span class="badges"><span class="badge strong">voter</span></span></div>
@@ -218,7 +218,7 @@
         <div class="disk-val">closed: disk_id missing — not mounted?</div>
       </div>
     </div>
-    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
+    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so data spread across them is not redundant</div>
   </div>
 </div>
   </section>
@@ -269,7 +269,7 @@
         <div class="disk-val"><span>505.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
     </div>
-    <div class="host-note"><span class="warn-icon"></span>atlas (data dir) and atlas/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
+    <div class="host-note"><span class="warn-icon"></span>atlas (data dir) and atlas/2 are on one physical disk: they fail together, so data spread across them is not redundant</div>
   </div>
   <div class="host-row self">
     <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">2 targets · 2.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
@@ -287,7 +287,7 @@
         <div class="disk-val"><span>22.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
     </div>
-    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
+    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so data spread across them is not redundant</div>
   </div>
 </div>
   </section>

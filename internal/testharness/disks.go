@@ -51,6 +51,7 @@ func (d *nodeDisks) health() []rpc.DiskHealth {
 	out := make([]rpc.DiskHealth, 0, len(d.disks))
 	for _, hd := range d.disks {
 		h := rpc.DiskHealth{ID: hd.id, OK: !hd.failed}
+		h.FS, _ = sysfs.FilesystemID(hd.store.Root())
 		if hd.failed {
 			h.Reason = "failed (harness)"
 		} else {
