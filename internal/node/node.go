@@ -125,8 +125,19 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer node.Shutdown(5 * time.Second) //nolint:errcheck // a leader hands over first (I-123); the close error is logged by Close's callers elsewhere
 	auth.SetMembers(node.FSM.NodeByAddr)
+	// a node whose join ended before the log arrived still accepts the leader: the
+	// members the join response listed stand in until the table is here (I-92)
+	if seed, err := cluster.LoadMemberSeed(cfg.Node.DataDir); err != nil {
+		log.Warn("member seed unreadable; the leader is accepted once the table arrives", "err", err)
+	} else if len(seed) > 0 {
+		auth.SetSeed(seed)
+	}
 	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 		return fmt.Errorf("waiting for raft: %w", err)
+	}
+	if len(node.FSM.Nodes()) > 0 { // the table has taken over from the seed
+		auth.SetSeed(nil)
+		_ = cluster.ForgetMemberSeed(cfg.Node.DataDir)
 	}
 	selfIdx, ok := node.SelfIdx()
 	if !ok {
@@ -815,6 +826,16 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	// the transport accepts the leader's Raft connection only from a member (I-92); the
 	// joiner's own table is empty until the log arrives, so the join response seeds it
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	// the target is the leader or will name it: its Raft connection must be accepted
+	// from the first attempt, before the join response lists the members, so it is
+	// seeded from WhoIs now (I-92)
+	if targetHost, _, err := net.SplitHostPort(target); err == nil {
+		if ip, err := netip.ParseAddr(targetHost); err == nil {
+			if w, err := ts.WhoIs(ctx, ip); err == nil && w.Node.StableID != "" {
+				auth.SetSeed([]meta.Node{{ID: "join-target", Kind: meta.KindDevice, Addr: ip.String(), TSStableID: w.Node.StableID, State: meta.Active}})
+			}
+		}
+	}
 	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log, PeerAuth: auth})
 	if err != nil {
 		return rpc.JoinResponse{}, err
@@ -851,6 +872,11 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 		return rpc.JoinResponse{}, err
 	}
 	auth.SetSeed(resp.Members)
+	// persisted for serve: if this process stops before the log has arrived, serve's
+	// own member check would otherwise refuse the leader for good (I-92)
+	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, resp.Members); err != nil {
+		return resp, err
+	}
 	if err := cluster.WriteClusterID(cfg.Node.DataDir, h.ClusterID); err != nil {
 		return resp, err
 	}

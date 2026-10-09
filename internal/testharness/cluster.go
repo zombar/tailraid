@@ -638,6 +638,37 @@ func (c *Cluster) Recover(i int, voters []int) error {
 	return cluster.Recover(cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Timing: RaftTiming(), Stores: nd.stores}, servers)
 }
 
+// ResetAndRejoin does what `tailraid reset` then `tailraid join` do on a device: the
+// node is stopped, its Raft state and identity dropped (a fresh node ID at the same
+// address), and it joins the leader again (docs/08 §Join, I-94).
+func (c *Cluster) ResetAndRejoin(i int) {
+	c.T.Helper()
+	nd := c.Nodes[i]
+	c.Kill(i)
+	nd.stores = nil
+	nd.started = false
+	for _, f := range []string{"node_id", "cluster_id"} {
+		_ = os.Remove(filepath.Join(nd.Dir, f))
+	}
+	id, err := cluster.LoadOrCreateNodeID(nd.Dir)
+	if err != nil {
+		c.T.Fatal(err)
+	}
+	inmemMu.Lock()
+	delete(inmemAddrs, nd.ID)
+	inmemAddrs[id] = nd.raddr // the same Raft address under a new identity
+	inmemMu.Unlock()
+	nd.ID = id
+	nd.start(c, false, meta.SetVolume{})
+	for _, other := range c.Nodes {
+		if c.isAlive(other) {
+			other.Net.Cut(nd.RPCAddr(), false)
+		}
+	}
+	c.join(nd)
+	c.Settle()
+}
+
 // Partition splits the cluster into two sides (raft and RPC links cut across sides).
 func (c *Cluster) Partition(a, b []int) {
 	in := slices.Contains[[]int]

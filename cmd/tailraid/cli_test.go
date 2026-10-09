@@ -194,6 +194,14 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	if !strings.Contains(out, "joined cluster") {
 		t.Fatalf("join output: %s", out)
 	}
+	// the members the response listed are persisted for serve (I-92)
+	cfgB, err := config.Load(pathB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seed, err := cluster.LoadMemberSeed(cfgB.Node.DataDir); err != nil || len(seed) == 0 || seed[0].Addr != "127.0.0.1" {
+		t.Fatalf("member seed after join: %+v %v", seed, err)
+	}
 	cid, err := cluster.LoadClusterID(cfgA.Node.DataDir)
 	if err != nil {
 		t.Fatal(err)

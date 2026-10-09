@@ -83,7 +83,15 @@ name, address, ports, suffrage request and capacity. The receiving node:
 
 The response lists the current device members. The joiner seeds its authorizer with
 them so that it accepts the leader's Raft connection while its own member table is still
-empty (the table replaces the seed as soon as the log arrives; §Raft transport).
+empty (the table replaces the seed as soon as the log arrives; §Raft transport); before
+the request it seeds the target itself from WhoIs, so the leader's first connection is
+not refused, and it persists the response's members as `<data_dir>/members.seed`, which
+`serve` loads until its table is present and then removes (`reset` removes it too). Without
+that, a join that ended before the log arrived left a `serve` that refused the leader for
+good. A join from the Raft address of a known server under a new node ID (a device that
+was `reset`) removes that server and re-keys the device's row to the new ID, so its disks
+and their shards stay registered under it, when the caller presents the row's StableID; a
+different tailnet device at a known address is refused (I-94).
 
 The token is 8 random base32 characters, created at `init`, shown by `tailraid token`, and
 rotated by `tailraid token rotate` (a Raft `MetaSet`). It stops accidental joins to the
@@ -233,8 +241,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   RPC and S3 listeners bind only the node's Tailscale IP (and optionally loopback), and
   `rpc.Listen` refuses a non-loopback bind without an authorizer.
 - **I-92** — An accepted Raft connection is closed before any byte is read unless its
-  source IP is a cluster member (from the member table, or during join from the members
-  the join response listed) whose WhoIs StableID matches the record; the cluster-ID
+  source IP is a cluster member (from the member table, or until the table has arrived
+  from the seed: the join target as WhoIs names it, then the members the join response
+  listed, persisted for `serve`) whose WhoIs StableID matches the record; the cluster-ID
   handshake runs after that check, and the acceptor reads the peer's ID before sending
   its own.
 - **I-93** — `update_addr` from an address that is not in the member table is accepted
@@ -246,7 +255,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   that stalls mid-transfer releases its slot when the deadline passes.
 - **I-94** — A join records the caller's source address and rejects a request that names
   another with 403; a re-join under a known node ID keeps the record only when it presents
-  that record's StableID.
+  that record's StableID; a join from the Raft address of a known server under a new node
+  ID removes that server and re-keys its row to the new ID only when it presents the
+  row's StableID, and is refused otherwise.
 
 ## Tests
 
@@ -256,8 +267,8 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-48 | `TestCluster_JoinDrainRemove`, `TestJoin_RateLimitedPerSource`, `TestJoin_TokenAndIdentity`, `TestToken_Rotate` |
 | I-49 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestIDStream_RejectsForeignCluster` |
 | I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestSMB_ListenRefusesNonLoopback` |
-| I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake` |
+| I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake`, `TestMemberSeed_RoundTrip`, `TestCLI_Join_NoFlags` |
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
-| I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID` |
+| I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
 | I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap` |
