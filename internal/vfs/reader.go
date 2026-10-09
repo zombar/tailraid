@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -75,7 +75,7 @@ func (r *latencyRing) hedgeDelay() time.Duration {
 	if n == 0 {
 		return hedgeDefault
 	}
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	slices.Sort(s)
 	return min(max(s[(n*95+99)/100-1], hedgeMin), hedgeMax)
 }
 

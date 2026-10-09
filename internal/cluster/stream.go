@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,8 +23,10 @@ type tcpStream struct {
 	advertise net.Addr
 }
 
+// Dial is raft's StreamLayer.Dial: no context reaches it, so the timeout is the only bound.
 func (s *tcpStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
-	return net.DialTimeout("tcp", string(addr), timeout)
+	d := net.Dialer{Timeout: timeout}
+	return d.DialContext(context.Background(), "tcp", string(addr))
 }
 func (s *tcpStream) Accept() (net.Conn, error) { return s.l.Accept() }
 func (s *tcpStream) Close() error              { return s.l.Close() }
@@ -129,7 +132,8 @@ func (s *idStream) pump() {
 // NewTransport builds the Raft TCP transport with the cluster-ID handshake; faults (may
 // be nil) refuses peers under a /dev/fault rule in both directions.
 func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults Faults) (raft.Transport, error) {
-	l, err := net.Listen("tcp", bind)
+	var lc net.ListenConfig // raft owns the listener's lifetime through Transport.Close
+	l, err := lc.Listen(context.Background(), "tcp", bind)
 	if err != nil {
 		return nil, fmt.Errorf("cluster: raft listen %s: %w", bind, err)
 	}

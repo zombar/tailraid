@@ -351,7 +351,7 @@ func (s *Store) Walk(fn func(k ShardKey, size int64, mtime time.Time) error) err
 			return nil
 		}
 		if _, _, _, _, err := ParseKey(ShardKey(name)); err != nil {
-			return nil // foreign file; not ours to report
+			return nil //nolint:nilerr // foreign file; not ours to report
 		}
 		fi, err := de.Info()
 		if err != nil {
@@ -463,12 +463,12 @@ func (s *Store) quarantine(k ShardKey) {
 }
 
 func suffixNano(name string) int64 {
-	i := strings.LastIndexByte(name, '.')
-	if i < 0 {
+	_, after, ok := strings.CutLast(name, ".")
+	if !ok {
 		return 0
 	}
 	var n int64
-	for _, c := range name[i+1:] {
+	for _, c := range after {
 		if c < '0' || c > '9' {
 			return 0
 		}

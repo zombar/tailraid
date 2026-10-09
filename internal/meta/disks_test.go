@@ -18,7 +18,7 @@ func topology(disks []int, voter []bool, deviceCap uint64) []Node {
 		host := idx
 		out = append(out, Node{Idx: host, ID: "host", Kind: KindDevice, State: Active, Capacity: deviceCap, Voter: voter[h]})
 		idx++
-		for d := 0; d < nd; d++ {
+		for range nd {
 			out = append(out, Node{Idx: idx, ID: "disk", Kind: KindDisk, State: Active, Capacity: 2, Host: host})
 			idx++
 		}
@@ -65,13 +65,13 @@ func legacyPlace(h Hash, cands []Candidate, n int) []NodeIdx {
 // Invariant: I-87
 func TestPlace_OneTargetPerHost_Unchanged(t *testing.T) {
 	r := testseed.Seed(t)
-	for trial := 0; trial < 200; trial++ {
+	for trial := range 200 {
 		nc := 1 + r.Intn(12)
 		c := make([]Candidate, nc)
 		for i := range c {
 			c[i] = Candidate{Idx: NodeIdx(i + 1), Weight: uint64(1 + r.Intn(100)), Voter: r.Intn(2) == 0}
 		}
-		for i := uint64(0); i < 200; i++ {
+		for i := range uint64(200) {
 			h := hashN(uint64(trial)*1000 + i)
 			n := 1 + r.Intn(10)
 			if got, want := Place(h, c, n), legacyPlace(h, c, n); !equalIdx(got, want) {
@@ -98,7 +98,7 @@ func TestPlace_HostCap(t *testing.T) {
 	for _, c := range cases {
 		nodes := topology(c.disks, allVoters(len(c.disks)), 1)
 		cs := Candidates(nodes, allLive)
-		for i := uint64(0); i < 2000; i++ {
+		for i := range uint64(2000) {
 			p := Place(hashN(i), cs, c.n)
 			if len(p) != c.n {
 				t.Fatalf("%s: placed %d of %d", c.name, len(p), c.n)
@@ -114,7 +114,7 @@ func TestPlace_HostCap(t *testing.T) {
 	// a host with too few targets: the cap cannot hold, the second pass fills from the rest
 	nodes := topology([]int{0, 5}, allVoters(2), 1) // host 1: its own store only; host 2: 6 targets
 	cs := Candidates(nodes, allLive)
-	for i := uint64(0); i < 500; i++ {
+	for i := range uint64(500) {
 		p := Place(hashN(i), cs, 6)
 		if len(p) != 6 {
 			t.Fatalf("uneven: placed %d of 6", len(p))
@@ -128,10 +128,10 @@ func TestPlace_HostCap_NNodeDeterminism(t *testing.T) {
 	r := testseed.Seed(t)
 	nodes := topology([]int{2, 3, 1, 4}, []bool{true, true, false, true}, 3)
 	base := Candidates(nodes, allLive)
-	for i := uint64(0); i < 3000; i++ {
+	for i := range uint64(3000) {
 		h := hashN(i)
 		want := PlaceKM(h, base, 4, 2)
-		for node := 0; node < 5; node++ {
+		for node := range 5 {
 			if got := PlaceKM(h, shuffled(r, base), 4, 2); !equalIdx(got, want) {
 				t.Fatalf("hash %d node %d: %v != %v", i, node, got, want)
 			}
@@ -146,7 +146,7 @@ func TestFillPlacement_HostCap(t *testing.T) {
 	nodes := topology([]int{2, 2}, allVoters(2), 2)
 	dom := DomainsOf(nodes)
 	cs := Candidates(nodes, allLive)
-	for i := uint64(0); i < 2000; i++ {
+	for i := range uint64(2000) {
 		h := hashN(i)
 		place := []NodeIdx{1, 0, 0, 0}
 		FillPlacement(h, place, ExcludeIdx(cs, place), 2, dom)
@@ -180,8 +180,10 @@ func TestCandidates_DiskDomainAndVoter(t *testing.T) {
 		Node{Idx: 7, Kind: KindDisk, State: Active, Capacity: 0, Host: 1})
 	cs := Candidates(nodes, allLive)
 	want := []Candidate{
-		{Idx: 1, Weight: 1, Voter: true}, {Idx: 2, Weight: 2, Voter: true, Domain: 1},
-		{Idx: 3, Weight: 2, Voter: true, Domain: 1}, {Idx: 4, Weight: 1, Voter: false},
+		{Idx: 1, Weight: 1, Voter: true},
+		{Idx: 2, Weight: 2, Voter: true, Domain: 1},
+		{Idx: 3, Weight: 2, Voter: true, Domain: 1},
+		{Idx: 4, Weight: 1, Voter: false},
 		{Idx: 5, Weight: 2, Voter: false, Domain: 4},
 	}
 	if len(cs) != len(want) {
@@ -256,8 +258,8 @@ func TestAutoPolicy_OneTargetPerHost_Unchanged(t *testing.T) {
 		k := max(min(max(v, 1), n-m, MaxAutoK), 1)
 		return uint8(k), uint8(m)
 	}
-	for v := 0; v <= 9; v++ {
-		for s := 0; s <= 9; s++ {
+	for v := range 10 {
+		for s := range 10 {
 			if v+s == 0 {
 				continue
 			}
@@ -272,7 +274,7 @@ func TestAutoPolicy_OneTargetPerHost_Unchanged(t *testing.T) {
 // Invariant: I-88
 func TestAutoPolicy_SurvivesOneHost(t *testing.T) {
 	r := testseed.Seed(t)
-	for trial := 0; trial < 500; trial++ {
+	for range 500 {
 		hosts := 2 + r.Intn(5)
 		disks := make([]int, hosts)
 		voter := make([]bool, hosts)

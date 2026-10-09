@@ -29,7 +29,7 @@ type LiveEnv struct {
 
 // NewLiveEnv wires the admin surface to this device's node.
 func NewLiveEnv(client *rpc.Client, selfAddr, mountPath, clusterID string, destructive, restarts bool) *LiveEnv {
-	return &LiveEnv{Admin: Admin{Caller: client, Seeds: []string{selfAddr}}, SelfAddr: selfAddr, MountPath: mountPath, ClusterID: clusterID, Destructive: destructive, Restarts: restarts}
+	return &LiveEnv{Caller: client, Seeds: []string{selfAddr}, SelfAddr: selfAddr, MountPath: mountPath, ClusterID: clusterID, Destructive: destructive, Restarts: restarts}
 }
 
 func (e *LiveEnv) Name() string { return "live cluster " + e.ClusterID }

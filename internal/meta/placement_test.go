@@ -37,10 +37,10 @@ func shuffled(r *rand.Rand, c []Candidate) []Candidate {
 func TestPlace_DeterministicAcrossNodes(t *testing.T) {
 	r := testseed.Seed(t)
 	base := cands(1, 1, 2, 3, 5, 8, 13)
-	for i := uint64(0); i < 10000; i++ {
+	for i := range uint64(10000) {
 		h := hashN(i)
 		want := Place(h, base, 3)
-		for node := 0; node < 7; node++ {
+		for node := range 7 {
 			got := Place(h, shuffled(r, base), 3)
 			if !equalIdx(got, want) {
 				t.Fatalf("hash %d node %d: %v != %v", i, node, got, want)
@@ -66,7 +66,7 @@ func TestPlace_GoldenVectors(t *testing.T) {
 	if *updateGolden {
 		r := rand.New(rand.NewSource(20261008)) //nolint:gosec // fixed: the vectors are the point
 		var vecs []vec
-		for i := 0; i < 96; i++ {
+		for range 96 {
 			ws := make([]uint64, 2+r.Intn(12))
 			for j := range ws {
 				ws[j] = uint64(1 + r.Intn(64))
@@ -104,7 +104,7 @@ func TestPlace_GoldenVectors(t *testing.T) {
 // Invariant: I-9
 func TestPlace_DistinctNodes(t *testing.T) {
 	c := cands(1, 1, 1, 1, 1, 1)
-	for i := uint64(0); i < 5000; i++ {
+	for i := range uint64(5000) {
 		p := Place(hashN(i), c, 6)
 		if len(p) != 6 {
 			t.Fatalf("len %d", len(p))
@@ -146,7 +146,7 @@ func TestPlace_CapacityWeighting(t *testing.T) {
 	c := cands(1, 2) // node 2 has twice the weight
 	const N = 100000
 	count := map[NodeIdx]int{}
-	for i := uint64(0); i < N; i++ {
+	for i := range uint64(N) {
 		count[Place(hashN(i), c, 1)[0]]++
 	}
 	ratio := float64(count[2]) / float64(count[1])
@@ -156,7 +156,7 @@ func TestPlace_CapacityWeighting(t *testing.T) {
 	// Three nodes 1:1:2 → share of node 3 ≈ 50 %.
 	c3 := cands(1, 1, 2)
 	count = map[NodeIdx]int{}
-	for i := uint64(0); i < N; i++ {
+	for i := range uint64(N) {
 		count[Place(hashN(i), c3, 1)[0]]++
 	}
 	if share := float64(count[3]) / N; share < 0.45 || share > 0.55 {
@@ -168,7 +168,7 @@ func TestPlace_CapacityWeighting(t *testing.T) {
 func TestPlace_StabilityOnRemove(t *testing.T) {
 	full := cands(1, 1, 1, 1, 1)
 	without := full[:4] // remove node 5
-	for i := uint64(0); i < 5000; i++ {
+	for i := range uint64(5000) {
 		a := Place(hashN(i), full, 3)
 		b := Place(hashN(i), without, 3)
 		had := false
@@ -216,7 +216,7 @@ func TestPlace_StabilityOnAdd(t *testing.T) {
 	after := cands(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 	const N = 20000
 	moved := 0
-	for i := uint64(0); i < N; i++ {
+	for i := range uint64(N) {
 		if Place(hashN(i), before, 1)[0] != Place(hashN(i), after, 1)[0] {
 			moved++
 		}
@@ -300,7 +300,7 @@ func FuzzPlace_Determinism(f *testing.F) {
 
 func BenchmarkPlace_10Nodes(b *testing.B) {
 	c := cands(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		Place(hashN(uint64(i)), c, 3)
 	}
 }
@@ -317,7 +317,7 @@ func TestExcludeIdx(t *testing.T) {
 		t.Fatalf("nil held: %d", n)
 	}
 	// Re-placing after excluding held nodes never repeats one of them.
-	for i := uint64(0); i < 2000; i++ {
+	for i := range uint64(2000) {
 		held := Place(hashN(i), c, 2)
 		for _, n := range Place(hashN(i), ExcludeIdx(c, held), 2) {
 			if n == held[0] || n == held[1] {

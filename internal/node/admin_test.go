@@ -2,9 +2,10 @@ package node
 
 import (
 	"context"
-	"go.uber.org/goleak"
 	"log/slog"
 	"testing"
+
+	"go.uber.org/goleak"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
@@ -26,8 +27,10 @@ func opsFor(c *testharness.Cluster, nd *testharness.ClusterNode) *adminOps {
 	cfg.RateBytes = 0
 	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
 	r.Events = nd.Events
-	return &adminOps{node: nd.Node, prober: nd.Prober, repairer: r, store: nd.Store, client: nd.Client, rd: nd.Reader,
-		ring: nd.Events, self: nd.Idx(), clk: c.Clk, log: slog.Default()}
+	return &adminOps{
+		node: nd.Node, prober: nd.Prober, repairer: r, store: nd.Store, client: nd.Client, rd: nd.Reader,
+		ring: nd.Events, self: nd.Idx(), clk: c.Clk, log: slog.Default(),
+	}
 }
 
 // On a cluster where writes, a dedup hit, an unlink and a flush all happened, fsck finds

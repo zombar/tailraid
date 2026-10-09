@@ -100,9 +100,11 @@ type latencyView struct {
 type kv struct{ K, V string }
 
 func buildReport(s Summary) reportData {
-	d := reportData{Title: "tailraid soak report", Env: s.Env, Profile: s.Profile, Seed: s.Seed, Flags: strings.Join(s.Flags, ", "),
+	d := reportData{
+		Title: "tailraid soak report", Env: s.Env, Profile: s.Profile, Seed: s.Seed, Flags: strings.Join(s.Flags, ", "),
 		Started: s.Started.UTC().Format(time.RFC3339), Duration: s.Duration.Round(time.Second).String(),
-		Generated: time.Now().UTC().Format(time.RFC3339), Failed: s.Failed, Coverage: s.Coverage}
+		Generated: time.Now().UTC().Format(time.RFC3339), Failed: s.Failed, Coverage: s.Coverage,
+	}
 	if d.Flags == "" {
 		d.Flags = "none"
 	}
@@ -154,8 +156,10 @@ func buildReport(s Summary) reportData {
 		if row.UnderFaults {
 			w = "under faults"
 		}
-		d.Latency = append(d.Latency, latencyView{Phase: row.Phase, Kind: row.Kind, Window: w, N: row.N,
-			P50: row.P50.Round(100 * time.Microsecond).String(), P99: row.P99.Round(100 * time.Microsecond).String(), Max: row.Max.Round(100 * time.Microsecond).String()})
+		d.Latency = append(d.Latency, latencyView{
+			Phase: row.Phase, Kind: row.Kind, Window: w, N: row.N,
+			P50: row.P50.Round(100 * time.Microsecond).String(), P99: row.P99.Round(100 * time.Microsecond).String(), Max: row.Max.Round(100 * time.Microsecond).String(),
+		})
 	}
 	t := s.Totals
 	d.Totals = []kv{

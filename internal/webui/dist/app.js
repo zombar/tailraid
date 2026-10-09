@@ -461,7 +461,7 @@ function card(n, share, scale) {
     if (!Number.isNaN(dev)) val.append(" \xB7 " + signedPct(dev));
     if (n.missing_slots > 0) {
       val.append(" \xB7 ");
-      val.append(h("span", { class: "bad-text" }, `${count(n.missing_slots)} missing`));
+      val.append(h("span", { class: "text-bad" }, `${count(n.missing_slots)} missing`));
     }
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -16,8 +17,10 @@ import (
 // meta.ErrNodeNotEmpty, enforced by the FSM itself (docs/02).
 var ErrBadMemberOp = errors.New("cluster: bad member operation")
 
-var _ rpc.Joiner = (*Node)(nil)
-var _ rpc.Applier = (*Node)(nil)
+var (
+	_ rpc.Joiner  = (*Node)(nil)
+	_ rpc.Applier = (*Node)(nil)
+)
 
 // AppliedIndex implements rpc.Applier.
 func (n *Node) AppliedIndex() uint64 { return n.Raft.AppliedIndex() }
@@ -74,8 +77,10 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	if len(req.NodeID) != 16 || req.Addr == "" || req.RaftPort == 0 || req.RPCPort == 0 {
 		return rpc.JoinResponse{}, fmt.Errorf("%w: node_id, addr and ports are required", ErrBadMemberOp)
 	}
-	nd := meta.Node{ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
-		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano()}
+	nd := meta.Node{
+		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr,
+		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano(),
+	}
 	var err error
 	// re-join of a known node keeps its index; a removed record refuses the ID
 	n.FSM.ForEachNode(func(cur meta.Node) bool {
@@ -256,11 +261,8 @@ func (n *Node) diskName(op rpc.MemberOp) string {
 func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) error {
 	var victims []meta.Chunk
 	n.FSM.ForEachChunk(func(c meta.Chunk) bool {
-		for _, s := range c.Placement {
-			if s == idx {
-				victims = append(victims, c)
-				break
-			}
+		if slices.Contains(c.Placement, idx) {
+			victims = append(victims, c)
 		}
 		return true
 	})

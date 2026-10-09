@@ -107,7 +107,7 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
     if (!Number.isNaN(dev)) val.append(" · " + signedPct(dev));
     if (n.missing_slots > 0) {
       val.append(" · ");
-      val.append(h("span", { class: "bad-text" }, `${count(n.missing_slots)} missing`));
+      val.append(h("span", { class: "text-bad" }, `${count(n.missing_slots)} missing`));
     }
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }

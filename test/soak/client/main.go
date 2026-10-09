@@ -105,7 +105,7 @@ func (w *worker) target() (*nfsc.Target, uint64, error) {
 		nfsrpc.Header
 		Dirpath string
 	}
-	res, err := cl.Call(&mountArgs{Header: nfsrpc.Header{Rpcvers: 2, Prog: nfsc.MountProg, Vers: nfsc.MountVers, Proc: nfsc.MountProc3MNT, Cred: nfsrpc.AuthNull, Verf: nfsrpc.AuthNull}, Dirpath: "/"})
+	res, err := cl.Call(&mountArgs{Rpcvers: 2, Prog: nfsc.MountProg, Vers: nfsc.MountVers, Proc: nfsc.MountProc3MNT, Cred: nfsrpc.AuthNull, Verf: nfsrpc.AuthNull, Dirpath: "/"})
 	if err != nil {
 		cl.Close()
 		return nil, 0, err
@@ -356,9 +356,9 @@ func rename(t *nfsc.Target, from, to string) error {
 		To   nfsc.Diropargs3
 	}
 	res, err := t.Call(&renameArgs{
-		Header: nfsrpc.Header{Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3Rename, Cred: nfsrpc.NewAuthUnix("soak", 0, 0).Auth(), Verf: nfsrpc.AuthNull},
-		From:   nfsc.Diropargs3{FH: ffh, Filename: fromName},
-		To:     nfsc.Diropargs3{FH: tfh, Filename: toName},
+		Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3Rename, Cred: nfsrpc.NewAuthUnix("soak", 0, 0).Auth(), Verf: nfsrpc.AuthNull,
+		From: nfsc.Diropargs3{FH: ffh, Filename: fromName},
+		To:   nfsc.Diropargs3{FH: tfh, Filename: toName},
 	})
 	if err != nil {
 		return err
@@ -369,7 +369,7 @@ func rename(t *nfsc.Target, from, to string) error {
 
 func mkdirAll(t *nfsc.Target, p string) error {
 	cur := "/"
-	for _, part := range strings.Split(strings.Trim(p, "/"), "/") {
+	for part := range strings.SplitSeq(strings.Trim(p, "/"), "/") {
 		if part == "" {
 			continue
 		}
@@ -455,7 +455,7 @@ func (w *worker) ready(rw http.ResponseWriter, r *http.Request) {
 // --- partitions (iptables chain SOAK on INPUT and OUTPUT) ---------------------------------
 
 func iptables(args ...string) error {
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), "iptables", args...).CombinedOutput() //nolint:gosec // the soak client partitions its own container
 	if err != nil {
 		return fmt.Errorf("iptables %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
 	}

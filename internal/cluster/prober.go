@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -107,8 +108,10 @@ var _ meta.Peers = (*Prober)(nil)
 
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
-	return &Prober{node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
-		fillAfter: FillAfter, evictAfter: EvictAfter}
+	return &Prober{
+		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
+		fillAfter: FillAfter, evictAfter: EvictAfter,
+	}
 }
 
 // SetHoldDowns overrides the MemberDown and MemberLost hold-downs (the configured
@@ -334,7 +337,7 @@ func (p *Prober) Live() []meta.NodeIdx {
 		}
 		return true
 	})
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 

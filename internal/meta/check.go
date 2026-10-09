@@ -2,6 +2,7 @@ package meta
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -10,7 +11,7 @@ import (
 // by tests after every command and by `tailraid fsck`.
 func CheckInvariants(st *State) []string {
 	var v []string
-	bad := func(format string, args ...interface{}) { v = append(v, fmt.Sprintf(format, args...)) }
+	bad := func(format string, args ...any) { v = append(v, fmt.Sprintf(format, args...)) }
 
 	// Inodes: parent/child agreement, chunk counts, nlink, NextIno.
 	subdirs := map[Ino]int{}
@@ -19,7 +20,7 @@ func CheckInvariants(st *State) []string {
 	for ino := range st.Inodes {
 		inos = append(inos, ino)
 	}
-	sort.Slice(inos, func(i, j int) bool { return inos[i] < inos[j] })
+	slices.Sort(inos)
 	refs := map[Hash]int{}
 	for _, ino := range inos {
 		in := st.Inodes[ino]

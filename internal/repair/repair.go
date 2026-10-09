@@ -51,8 +51,10 @@ type Config struct {
 
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
-	return Config{FillAfter: 10 * time.Minute, ScrubShare: 100, RateBytes: 50 << 20, Grace: 10 * time.Minute,
-		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute}
+	return Config{
+		FillAfter: 10 * time.Minute, ScrubShare: 100, RateBytes: 50 << 20, Grace: 10 * time.Minute,
+		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute,
+	}
 }
 
 // Stats summarises one scan pass (admin.RepairStatus).
@@ -97,8 +99,10 @@ func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd Ch
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Repairer{st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
-		limit: newLimiter(cfg.RateBytes, clk), reported: map[chunk.ShardKey]time.Time{}}
+	return &Repairer{
+		st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
+		limit: newLimiter(cfg.RateBytes, clk), reported: map[chunk.ShardKey]time.Time{},
+	}
 }
 
 // ReportBad records a reader's bad-slot report (docs/06 §4 case 5); bounded and expiring.

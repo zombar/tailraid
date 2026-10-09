@@ -20,7 +20,7 @@ func TestCluster_AutoPolicy_AddDrainRemoveDisk(t *testing.T) {
 	c.WriteFile(0, "/f", data)
 	pass := func() {
 		t.Helper()
-		for i := 0; i < 4; i++ {
+		for range 4 {
 			_, err := newRepairer(c, c.Leader(), repairCfg()).Scan(ctx)
 			must(t, err)
 			c.Settle()

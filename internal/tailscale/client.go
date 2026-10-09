@@ -148,7 +148,7 @@ func Find(override string) (string, error) {
 		candidates = []string{"/usr/bin/tailscale", "/usr/local/bin/tailscale", "/usr/sbin/tailscale"}
 	}
 	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
+		if _, err := os.Stat(c); err == nil { //nolint:gosec // the candidate paths are the fixed install locations above
 			return c, nil
 		}
 	}
@@ -162,7 +162,7 @@ func (c *CLI) run(ctx context.Context, args ...string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, c.Path, args...)
+	cmd := exec.CommandContext(ctx, c.Path, args...) //nolint:gosec // the tailscale CLI is the seam (docs/08)
 	cmd.Env = cliEnv(os.Environ())
 	cmd.WaitDelay = 500 * time.Millisecond // do not hang on grandchildren holding the pipes
 	var stdout, stderr bytes.Buffer
@@ -238,8 +238,10 @@ var _ Client = (*Fake)(nil)
 // NewFake builds a running tailnet with the given self address and peers (addr → stable ID).
 func NewFake(self netip.Addr, selfID string, peers map[netip.Addr]string) *Fake {
 	f := &Fake{Nodes: map[netip.Addr]WhoIs{}}
-	f.St = Status{BackendState: "Running", TailscaleIPs: []netip.Addr{self}, MagicDNSSuffix: "fake.ts.net",
-		Self: PeerStatus{ID: selfID, HostName: "self", TailscaleIPs: []netip.Addr{self}, Online: true}, Peer: map[string]PeerStatus{}}
+	f.St = Status{
+		BackendState: "Running", TailscaleIPs: []netip.Addr{self}, MagicDNSSuffix: "fake.ts.net",
+		Self: PeerStatus{ID: selfID, HostName: "self", TailscaleIPs: []netip.Addr{self}, Online: true}, Peer: map[string]PeerStatus{},
+	}
 	f.Add(self, selfID, "self")
 	for addr, id := range peers {
 		f.Add(addr, id, "peer-"+id)
@@ -302,7 +304,7 @@ func (f *Fake) WhoIs(_ context.Context, ip netip.Addr) (*WhoIs, error) {
 // LoadFake reads a Fake from a JSON file of the form {"status": <status>, "whois": {"<ip>": <whois>}}
 // for `--dev` runs without a tailnet (docker-compose soak).
 func LoadFake(path string) (*Fake, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // the fake's file is named on the command line
 	if err != nil {
 		return nil, err
 	}

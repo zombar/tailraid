@@ -133,16 +133,13 @@ func Fill(dir string, n uint64) error {
 		}
 		return nil
 	}
-	f, err := os.Create(p)
+	f, err := os.Create(p) //nolint:gosec // the fill file lives in this node's data directory
 	if err != nil {
 		return err
 	}
 	block := make([]byte, 1<<20)
 	for left := n; left > 0; {
-		w := uint64(len(block))
-		if left < w {
-			w = left
-		}
+		w := min(left, uint64(len(block)))
 		if _, err := f.Write(block[:w]); err != nil {
 			_ = f.Close()
 			return err
@@ -174,7 +171,7 @@ func Hash(st *meta.Store) (FSMHash, error) {
 // Corrupt flips the last payload byte of a shard file in place: the header hash no longer
 // matches, so the store reports ErrCorrupt and quarantines it on the next read.
 func Corrupt(path string) error {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // a shard inside this node's data directory
 	if err != nil {
 		return err
 	}
@@ -182,5 +179,5 @@ func Corrupt(path string) error {
 		return os.ErrInvalid
 	}
 	b[len(b)-1] ^= 0xff
-	return os.WriteFile(path, b, 0o600)
+	return os.WriteFile(path, b, 0o600) //nolint:gosec // path is a shard inside this node's own data directory
 }

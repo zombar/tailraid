@@ -227,7 +227,7 @@ func (c *dirCache) get(v uint64) (dirKey, []iofs.FileInfo, bool) {
 func (h *Handler) HandleLimit() int { return 1 << 20 }
 
 // Listen binds the gateway listener. addr must be a loopback address (docs/08).
-func Listen(addr string) (net.Listener, error) {
+func Listen(ctx context.Context, addr string) (net.Listener, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("nfsgw: listen address: %w", err)
@@ -235,7 +235,8 @@ func Listen(addr string) (net.Listener, error) {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return nil, fmt.Errorf("nfsgw: refusing to listen on non-loopback address %q", addr)
 	}
-	return net.Listen("tcp", addr)
+	var lc net.ListenConfig
+	return lc.Listen(ctx, "tcp", addr)
 }
 
 // Serve runs the NFS server on l until ctx is done.

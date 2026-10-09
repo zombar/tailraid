@@ -196,7 +196,8 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 			return nil, mapErr("open", filename, err)
 		}
 		res, err := f.propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{
-			Parent: parent.Ino, Name: base, Type: meta.TFile, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: f.now()}})
+			Parent: parent.Ino, Name: base, Type: meta.TFile, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: f.now(),
+		}})
 		if err != nil {
 			if errors.Is(err, meta.ErrExist) { // lost a create race; open what is there
 				in, err = f.resolve(filename)
@@ -279,7 +280,8 @@ func (f *FS) Rename(oldpath, newpath string) error {
 		replaced = dst.Ino
 	}
 	if _, err := f.propose(ctx, meta.Command{Op: meta.OpRename, Rename: &meta.Rename{
-		OldParent: oldDir.Ino, OldName: on, NewParent: newDir.Ino, NewName: nn, Now: f.now()}}); err != nil {
+		OldParent: oldDir.Ino, OldName: on, NewParent: newDir.Ino, NewName: nn, Now: f.now(),
+	}}); err != nil {
 		return mapErr("rename", oldpath, err)
 	}
 	if replaced != 0 {
@@ -323,7 +325,7 @@ func (f *FS) Join(elem ...string) string { return filepath.Join(elem...) }
 
 func (f *FS) TempFile(dir, prefix string) (billy.File, error) {
 	var b [8]byte
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_, _ = rand.Read(b[:])
 		name := f.Join(dir, prefix+hex.EncodeToString(b[:]))
 		file, err := f.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
@@ -374,7 +376,8 @@ func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) err
 			continue
 		}
 		res, err := f.propose(ctx, meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{
-			Parent: cur, Name: name, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: f.now()}})
+			Parent: cur, Name: name, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: f.now(),
+		}})
 		if err != nil {
 			if errors.Is(err, meta.ErrExist) {
 				if child, ok := f.st.Lookup(cur, name); ok && child.Type == meta.TDir {
@@ -406,7 +409,8 @@ func (f *FS) Symlink(target, link string) error {
 		return mapErr("symlink", link, err)
 	}
 	if _, err := f.propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{
-		Parent: dir.Ino, Name: name, Type: meta.TSymlink, Mode: 0o777, Uid: f.uid, Gid: f.gid, Target: target, Now: f.now()}}); err != nil {
+		Parent: dir.Ino, Name: name, Type: meta.TSymlink, Mode: 0o777, Uid: f.uid, Gid: f.gid, Target: target, Now: f.now(),
+	}}); err != nil {
 		return mapErr("symlink", link, err)
 	}
 	return nil

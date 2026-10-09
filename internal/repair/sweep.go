@@ -14,7 +14,8 @@ import (
 // the scan began; otherwise it returns 0 and nil, since a stale chunk table would call
 // committed shards orphans (I-13). applied and leaderApplied are Raft indexes.
 func SweepLocal(ctx context.Context, store *chunk.Store, st *meta.Store, self meta.NodeIdx, grace time.Duration, clk clock.Clock,
-	healthy func() bool, applied func() uint64, leaderApplied func() (uint64, bool)) (int, error) {
+	healthy func() bool, applied func() uint64, leaderApplied func() (uint64, bool),
+) (int, error) {
 	if !healthy() {
 		return 0, nil
 	}

@@ -91,16 +91,22 @@ func sampleState() *State {
 	s.Meta = Meta{ClusterID: [16]byte{1, 2, 3}, JoinToken: "abcdefgh", CreatedAt: 100}
 	s.Applied = 7
 	s.LastNow = 99
-	s.Nodes[1] = &Node{Idx: 1, ID: "0123456789abcdef", Name: "node1", Kind: KindDevice, State: Active,
-		Capacity: 1 << 40, Voter: true, TSStableID: "27", Addr: "100.64.0.11", RaftPort: 20480, RPCPort: 20481, Version: "v1", JoinedAt: 5}
-	s.Nodes[2] = &Node{Idx: 2, ID: "fedcba9876543210", Name: "bucket", Kind: KindS3, State: Active,
-		Capacity: 1 << 41, S3Endpoint: "https://s3.example", S3Bucket: "b", S3Prefix: "p/", S3Region: "us-west-004", S3PathStyle: true, JoinedAt: 6}
+	s.Nodes[1] = &Node{
+		Idx: 1, ID: "0123456789abcdef", Name: "node1", Kind: KindDevice, State: Active,
+		Capacity: 1 << 40, Voter: true, TSStableID: "27", Addr: "100.64.0.11", RaftPort: 20480, RPCPort: 20481, Version: "v1", JoinedAt: 5,
+	}
+	s.Nodes[2] = &Node{
+		Idx: 2, ID: "fedcba9876543210", Name: "bucket", Kind: KindS3, State: Active,
+		Capacity: 1 << 41, S3Endpoint: "https://s3.example", S3Bucket: "b", S3Prefix: "p/", S3Region: "us-west-004", S3PathStyle: true, JoinedAt: 6,
+	}
 	s.NextNode = 3
 	s.Chunks[sampleHash(1)] = &Chunk{Hash: sampleHash(1), Size: 1 << 20, K: 2, M: 1, Refs: 1, Placement: []NodeIdx{1, 2, 0}}
 	s.Chunks[sampleHash(2)] = &Chunk{Hash: sampleHash(2), Size: 10, K: 1, M: 1, Refs: 0, Placement: []NodeIdx{2, 1}, TombstonedAt: 50}
 	s.Tombs[sampleHash(2)] = struct{}{}
-	s.Inodes[2] = &Inode{Ino: 2, Gen: 3, Type: TFile, Mode: 0o644, Uid: 501, Gid: 20, Size: 1<<20 + 5,
-		Atime: 1, Mtime: 2, Ctime: 3, Nlink: 1, Version: 4, Parent: RootIno, Name: "f", Chunks: []Hash{sampleHash(1), HashZero}}
+	s.Inodes[2] = &Inode{
+		Ino: 2, Gen: 3, Type: TFile, Mode: 0o644, Uid: 501, Gid: 20, Size: 1<<20 + 5,
+		Atime: 1, Mtime: 2, Ctime: 3, Nlink: 1, Version: 4, Parent: RootIno, Name: "f", Chunks: []Hash{sampleHash(1), HashZero},
+	}
 	s.Inodes[3] = &Inode{Ino: 3, Gen: 4, Type: TDir, Mode: 0o755, Nlink: 2, Parent: RootIno, Name: "d", Children: map[string]Ino{}}
 	s.Inodes[4] = &Inode{Ino: 4, Gen: 5, Type: TSymlink, Mode: 0o777, Nlink: 1, Parent: RootIno, Name: "l", Target: "/f"}
 	s.Inodes[RootIno].Children = map[string]Ino{"f": 2, "d": 3, "l": 4}

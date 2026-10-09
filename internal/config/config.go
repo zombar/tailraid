@@ -131,7 +131,7 @@ func Default() Config {
 // Load reads a config file strictly (unknown keys are errors) over the defaults.
 func Load(path string) (Config, error) {
 	c := Default()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // the config file the operator named
 	if err != nil {
 		return c, err
 	}
@@ -209,8 +209,10 @@ func ParseBytes(s string) (uint64, error) {
 			return 0, fmt.Errorf("bad size %q", s)
 		}
 	}
-	mult := map[string]float64{"": 1, "B": 1, "K": 1 << 10, "KB": 1 << 10, "KIB": 1 << 10, "M": 1 << 20, "MB": 1 << 20, "MIB": 1 << 20,
-		"G": 1 << 30, "GB": 1 << 30, "GIB": 1 << 30, "T": 1 << 40, "TB": 1 << 40, "TIB": 1 << 40}
+	mult := map[string]float64{
+		"": 1, "B": 1, "K": 1 << 10, "KB": 1 << 10, "KIB": 1 << 10, "M": 1 << 20, "MB": 1 << 20, "MIB": 1 << 20,
+		"G": 1 << 30, "GB": 1 << 30, "GIB": 1 << 30, "T": 1 << 40, "TB": 1 << 40, "TIB": 1 << 40,
+	}
 	m, ok := mult[upper(unit)]
 	if !ok || num < 0 {
 		return 0, fmt.Errorf("bad size %q", s)
@@ -285,5 +287,5 @@ func openLogFile(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // log.file from the config
 }

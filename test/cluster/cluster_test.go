@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zombar/tailraid/internal/chunk"
 	"io"
 	"os"
 	"reflect"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/chunk"
 
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
@@ -151,12 +152,12 @@ func TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits(t *testing.T) {
 	const n = 300
 	var wg sync.WaitGroup
 	results := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			name := fmt.Sprintf("f%03d", i)
-			for attempt := 0; attempt < 150; attempt++ { // an election after the kill takes a few seconds
+			for range 150 { // an election after the kill takes a few seconds
 				nd := c.Nodes[i%3]
 				if !c.Alive(i % 3) {
 					nd = c.Leader()
@@ -239,7 +240,7 @@ func TestCluster_RejoinAfterLongAbsence_SnapshotInstall(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1, testharness.SnapshotThreshold(40))
 	defer c.Close()
 	c.Kill(2)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		mkdirRetry(t, c, fmt.Sprintf("/d%03d", i))
 	}
 	c.WriteFile(c.Leader().I, "/payload", testharness.Pattern(5000, 3))
@@ -309,8 +310,7 @@ func TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed(t *testing.T) {
 }
 
 func isReadOnly(err error) bool {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*os.PathError](err); ok {
 		return errors.Is(pe.Err, cluster.ErrNoLeader) || pe.Err.Error() == "read-only file system"
 	}
 	return false
@@ -318,7 +318,7 @@ func isReadOnly(err error) bool {
 
 func otherNodes(n, except int) []int {
 	var out []int
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i != except {
 			out = append(out, i)
 		}
@@ -424,7 +424,7 @@ func must(t *testing.T, err error) {
 func mkdirRetry(t *testing.T, c *testharness.Cluster, path string) {
 	t.Helper()
 	var err error
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		if err = c.Leader().FS.MkdirAll(path, 0o755); err == nil {
 			return
 		}
@@ -436,7 +436,7 @@ func mkdirRetry(t *testing.T, c *testharness.Cluster, path string) {
 func mkdirRetryOn(t *testing.T, nd *testharness.ClusterNode, path string) {
 	t.Helper()
 	var err error
-	for attempt := 0; attempt < 100; attempt++ {
+	for range 100 {
 		if err = nd.FS.MkdirAll(path, 0o755); err == nil {
 			return
 		}
@@ -521,7 +521,7 @@ func TestCluster_OtherGatewaySeesPreviousVersionUntilApply(t *testing.T) {
 func TestCluster_SetCapacityDoesNotMoveData(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		c.WriteFile(i, "/f"+string(rune('a'+i)), testharness.Pattern(int(testharness.ChunkSize)+i, byte(65+i)))
 	}
 	c.Settle()
@@ -535,7 +535,7 @@ func TestCluster_SetCapacityDoesNotMoveData(t *testing.T) {
 	}
 	placements := func() [][]meta.NodeIdx {
 		var out [][]meta.NodeIdx
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			for _, ch := range c.ChunksOf(0, "/f"+string(rune('a'+i))) {
 				out = append(out, ch.Placement)
 			}

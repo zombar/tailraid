@@ -41,7 +41,7 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	defer tb.(*raft.NetworkTransport).Close()
 	ping := func(from, to raft.Transport) error {
 		var resp raft.AppendEntriesResponse
-		return from.(*raft.NetworkTransport).AppendEntries("", to.LocalAddr(), &raft.AppendEntriesRequest{RPCHeader: raft.RPCHeader{ProtocolVersion: raft.ProtocolVersionMax}}, &resp)
+		return from.(*raft.NetworkTransport).AppendEntries("", to.LocalAddr(), &raft.AppendEntriesRequest{ProtocolVersion: raft.ProtocolVersionMax}, &resp)
 	}
 	faults.Set([]string{"127.0.0.1"})
 	if err := ping(ta, tb); err == nil || !isDrop(err) {
@@ -66,8 +66,10 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := rpc.NewServer(rpc.Options{NodeID: "a", ClusterID: cid, Store: store, Applier: fakeApplier{}, Auth: rpc.AllowAll{},
-		Members: func() []meta.Node { return nil }, Blocked: faults.Blocked})
+	srv, err := rpc.NewServer(rpc.Options{
+		NodeID: "a", ClusterID: cid, Store: store, Applier: fakeApplier{}, Auth: rpc.AllowAll{},
+		Members: func() []meta.Node { return nil }, Blocked: faults.Blocked,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

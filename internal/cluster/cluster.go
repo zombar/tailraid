@@ -110,7 +110,7 @@ func RaftConfig(id string, logOutput io.Writer) *raft.Config {
 // LoadOrCreateNodeID returns the persisted node ID, creating a random one on first use.
 func LoadOrCreateNodeID(dataDir string) (string, error) {
 	p := filepath.Join(dataDir, "node_id")
-	if b, err := os.ReadFile(p); err == nil {
+	if b, err := os.ReadFile(p); err == nil { //nolint:gosec // node_id in this node's data directory
 		id := strings.TrimSpace(string(b))
 		if len(id) == 16 {
 			return id, nil
@@ -196,7 +196,7 @@ func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
 // LoadClusterID reads <data_dir>/cluster_id.
 func LoadClusterID(dataDir string) ([16]byte, error) {
 	var id [16]byte
-	b, err := os.ReadFile(filepath.Join(dataDir, "cluster_id"))
+	b, err := os.ReadFile(filepath.Join(dataDir, "cluster_id")) //nolint:gosec // cluster_id in this node's data directory
 	if err != nil {
 		return id, err
 	}

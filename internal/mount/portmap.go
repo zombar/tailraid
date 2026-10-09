@@ -50,11 +50,12 @@ func (p *Portmap) Serve(ctx context.Context, addr string) error {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return ErrNotLoopback
 	}
-	tl, err := net.Listen("tcp", addr)
+	var lc net.ListenConfig
+	tl, err := lc.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("portmap: tcp %s: %w", addr, err)
 	}
-	ul, err := net.ListenPacket("udp", addr)
+	ul, err := lc.ListenPacket(ctx, "udp", addr)
 	if err != nil {
 		_ = tl.Close()
 		return fmt.Errorf("portmap: udp %s: %w", addr, err)
@@ -131,7 +132,7 @@ func (p *Portmap) handle(msg []byte) []byte {
 	xid, mtype, rpcvers := r.u32(), r.u32(), r.u32()
 	prog, vers, proc := r.u32(), r.u32(), r.u32()
 	// credentials and verifier: flavor, length, body (skipped)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		r.u32()
 		r.skip(r.u32())
 	}

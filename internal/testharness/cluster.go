@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,8 +102,10 @@ type ClusterNode struct {
 // enough that a leader under the race detector's load does not lose it to a slow
 // follower (CI showed 25 ms contact times stepping a 25 ms lease into permanent churn).
 func RaftTiming() *cluster.RaftTiming {
-	return &cluster.RaftTiming{Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond,
-		Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond}
+	return &cluster.RaftTiming{
+		Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond,
+		Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond,
+	}
 }
 
 // Cluster is an in-process multi-node tailraid.
@@ -224,7 +227,7 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 		f(&o)
 	}
 	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters, auto: o.auto, walCap: o.walCap}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
 	first := c.Nodes[0]
@@ -259,8 +262,10 @@ func (c *Cluster) newNode(i int) *ClusterNode {
 }
 
 func (nd *ClusterNode) record(c *Cluster) meta.Node {
-	return meta.Node{ID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), Kind: meta.KindDevice, TSStableID: harnessStableID, Addr: "127.0.0.1",
-		RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40}
+	return meta.Node{
+		ID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), Kind: meta.KindDevice, TSStableID: harnessStableID, Addr: "127.0.0.1",
+		RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40,
+	}
 }
 
 // start opens stores and raft (bootstrap or fresh/reopen) and brings up the stack.
@@ -338,6 +343,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	if c.retryUntilStale {
 		nd.FS.SetHealth(func() bool {
 			switch h := nd.Node.Health(c.Clk, nd.Prober); h.State {
+			case cluster.Healthy:
 			case cluster.Stale:
 				return true
 			case cluster.NoLeader:
@@ -346,10 +352,12 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 			return false
 		})
 	}
-	nd.RPC, err = rpc.NewServer(rpc.Options{NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
+	nd.RPC, err = rpc.NewServer(rpc.Options{
+		NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
 		Disk: nd.disks.lookup, DiskHealth: nd.disks.health,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,
-		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute})
+		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute,
+	})
 	if err != nil {
 		c.T.Fatal(err)
 	}
@@ -395,10 +403,12 @@ func (c *Cluster) connectAll() {
 func (c *Cluster) join(nd *ClusterNode) {
 	c.T.Helper()
 	leader := c.Leader()
-	req := rpc.JoinRequest{Token: "harness-token", NodeID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), TSStableID: harnessStableID,
-		Addr: "127.0.0.1", RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40, Version: "harness"}
+	req := rpc.JoinRequest{
+		Token: "harness-token", NodeID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), TSStableID: harnessStableID,
+		Addr: "127.0.0.1", RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40, Version: "harness",
+	}
 	var last error
-	for attempt := 0; attempt < 50; attempt++ {
+	for range 50 {
 		_, last = nd.Client.Join(context.Background(), leader.RPCAddr(), req)
 		if last == nil {
 			return
@@ -477,7 +487,7 @@ func (c *Cluster) Settle() {
 	// a barrier can fail when leadership moves under load; re-find the leader and retry
 	var leader *ClusterNode
 	var err error
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		leader = c.Leader()
 		if err = leader.Node.Raft.Barrier(5 * time.Second).Error(); err == nil {
 			break
@@ -575,14 +585,7 @@ func (c *Cluster) Restart(i int) {
 
 // Partition splits the cluster into two sides (raft and RPC links cut across sides).
 func (c *Cluster) Partition(a, b []int) {
-	in := func(set []int, i int) bool {
-		for _, x := range set {
-			if x == i {
-				return true
-			}
-		}
-		return false
-	}
+	in := slices.Contains[[]int]
 	for _, x := range a {
 		for _, y := range b {
 			nx, ny := c.Nodes[x], c.Nodes[y]
@@ -650,7 +653,7 @@ func (c *Cluster) WriteFile(i int, path string, data []byte) {
 		c.T.Fatalf("n%d write %s: %v", i, path, err)
 	}
 	_ = f.Close()
-	for attempt := 0; attempt < 30; attempt++ { // a flush fails across a leadership change and is retried
+	for range 30 { // a flush fails across a leadership change and is retried
 		if err = nd.Flush.FlushAll(context.Background()); err == nil {
 			return
 		}

@@ -85,7 +85,8 @@ func (j *fakeJoiner) Join(_ context.Context, req JoinRequest) (JoinResponse, err
 		return JoinResponse{}, ErrNotLeader
 	}
 	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
-		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity}}})
+		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity,
+	}}})
 	if res.Err != nil {
 		return JoinResponse{}, res.Err
 	}
@@ -137,9 +138,11 @@ func newEnv(t *testing.T) *env {
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
 	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
-	e.srv, err = NewServer(Options{NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
+	e.srv, err = NewServer(Options{
+		NodeID: "n1", ClusterID: e.cid, Version: "t", Store: e.store, Applier: e.app, Fence: e.fence, Joiner: e.joiner,
 		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
-		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) }})
+		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,10 +473,10 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 
 // Invariant: I-50
 func TestListen_RefusesNonLoopbackWithoutAuthorizer(t *testing.T) {
-	if _, err := Listen("0.0.0.0:0", AllowAll{}); err == nil {
+	if _, err := Listen(t.Context(), "0.0.0.0:0", AllowAll{}); err == nil {
 		t.Fatal("bound without authorizer")
 	}
-	l, err := Listen("127.0.0.1:0", AllowAll{})
+	l, err := Listen(t.Context(), "127.0.0.1:0", AllowAll{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -95,7 +95,7 @@ func TestSweep_StopsOnCancel(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 0)
 	now := time.Now()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		putAged(t, s, root, int64(10+i), 0, grace+time.Hour, now)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

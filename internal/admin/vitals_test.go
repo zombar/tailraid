@@ -17,7 +17,7 @@ func TestVitals_RealMeasurementsOrAbsent(t *testing.T) {
 	first := admin.Vitals(t.TempDir())
 	// burn some CPU so the process counter moves
 	sum := sha256.Sum256([]byte("x"))
-	for i := 0; i < 200_000; i++ {
+	for range 200_000 {
 		sum = sha256.Sum256(sum[:])
 	}
 	m := admin.Vitals(t.TempDir())

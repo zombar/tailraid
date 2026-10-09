@@ -39,6 +39,7 @@ interface Job {
   sent: number;
   state: "queued" | "uploading" | "done" | "failed" | "cancelled";
   message?: string;
+  note?: string; // upload's onNote: "resuming 2/5" while it retries, "" once it is back
   handle?: Upload;
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -38,8 +39,8 @@ func (c *checkTB) Cleanup(f func())                  { c.cleanups = append(c.cle
 func (c *checkTB) Fatal(args ...any)                 { c.C.Fatal(args...) }
 func (c *checkTB) Fatalf(format string, args ...any) { c.C.Fatalf(format, args...) }
 func (c *checkTB) runCleanups() {
-	for i := len(c.cleanups) - 1; i >= 0; i-- {
-		c.cleanups[i]()
+	for _, v := range slices.Backward(c.cleanups) {
+		v()
 	}
 }
 
@@ -303,7 +304,7 @@ func TestVFS_OracleRandomOps(t *testing.T) {
 			}
 		}
 	}
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		name := pickName()
 		cur, exists := model[name]
 		switch r := rng.Intn(12); {

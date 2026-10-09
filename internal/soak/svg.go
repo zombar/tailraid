@@ -93,13 +93,13 @@ func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) 
 		}
 	}
 	// grid and axes
-	for i := 0; i <= 4; i++ {
+	for i := range 5 {
 		y := float64(padT) + ih*float64(i)/4
 		v := maxY * float64(4-i) / 4
 		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
 			padL, y, chartW-padR, y, padL-6, y+4, fmtNum(v))
 	}
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, chartH-padB+16, fmtNum(maxX*float64(i)/6))
 	}
@@ -203,7 +203,7 @@ func barChart(title string, labels []string, ss []series) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, chartW, chartH+legendHeight(ss), html.EscapeString(title))
 	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
-	for i := 0; i <= 4; i++ {
+	for i := range 5 {
 		y := float64(padT) + ih*float64(i)/4
 		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
 			padL, y, chartW-padR, y, padL-6, y+4, fmtNum(maxY*float64(4-i)/4))
@@ -262,7 +262,7 @@ func lanes(title string, maxX float64, names []string, cells map[string][][2]flo
 			fmt.Fprintf(&b, `<rect x="%.1f" y="%d" width="4" height="%d" fill="%s"/>`, x-2, y+2, rowH-4, colors[name][i])
 		}
 	}
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, h-6, fmtNum(maxX*float64(i)/6))
 	}
@@ -284,7 +284,7 @@ func strip(title string, maxX float64, cells [][2]float64, colors []string) stri
 		x := float64(padL) + c[0]/maxX*iw
 		fmt.Fprintf(&b, `<rect x="%.1f" y="28" width="6" height="20" fill="%s"/>`, x-3, colors[i])
 	}
-	for i := 0; i <= 6; i++ {
+	for i := range 7 {
 		x := float64(padL) + iw*float64(i)/6
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%ss</text>`, x, h-6, fmtNum(maxX*float64(i)/6))
 	}

@@ -155,7 +155,7 @@ func Newer(current, tag string) bool {
 	if !ok {
 		return false
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if next[i] != cur[i] {
 			return next[i] > cur[i]
 		}
@@ -230,7 +230,7 @@ func (u *Updater) Apply(ctx context.Context, rel *Release, exe, current, goos, g
 		cleanup()
 		return fmt.Errorf("%w: %s: got %s want %s", ErrChecksum, name, got, want)
 	}
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
+	if err := os.Chmod(tmpPath, 0o755); err != nil { //nolint:gosec // it is the new binary; it must be executable
 		cleanup()
 		return err
 	}
@@ -338,7 +338,7 @@ func Token(ctx context.Context) string {
 	if gh, err := exec.LookPath("gh"); err == nil {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if out, err := exec.CommandContext(ctx, gh, "auth", "token").Output(); err == nil {
+		if out, err := exec.CommandContext(ctx, gh, "auth", "token").Output(); err == nil { //nolint:gosec // gh is looked up on PATH; its token is the documented fallback (docs/12 §5)
 			return strings.TrimSpace(string(out))
 		}
 	}

@@ -35,50 +35,50 @@ x-worker: &worker
 
 services:
   n1:
-    <<: *node
-    environment: {<<: *env, ROLE: init, SELF_IP: 172.30.0.11, NODE_NAME: n1}
+    !!merge <<: *node
+    environment: {!!merge <<: *env, ROLE: init, SELF_IP: 172.30.0.11, NODE_NAME: n1}
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
     ports: ["127.0.0.1:20501:20495"]
-    volumes: [n1:/var/lib/tailraid, n1-d1:/disks/d1, n1-d2:/disks/d2, n1-spare:/disks/spare]
+    volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-spare:/disks/spare']
   n2:
-    <<: *node
-    environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2}
+    !!merge <<: *node
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2}
     networks: {tailraid: {ipv4_address: 172.30.0.12}}
     ports: ["127.0.0.1:20502:20495"]
-    volumes: [n2:/var/lib/tailraid, n2-d1:/disks/d1, n2-d2:/disks/d2, n2-spare:/disks/spare]
+    volumes: ['n2:/var/lib/tailraid', 'n2-d1:/disks/d1', 'n2-d2:/disks/d2', 'n2-spare:/disks/spare']
     depends_on: [n1]
   n3:
-    <<: *node
-    environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3}
+    !!merge <<: *node
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3}
     networks: {tailraid: {ipv4_address: 172.30.0.13}}
     ports: ["127.0.0.1:20503:20495"]
-    volumes: [n3:/var/lib/tailraid, n3-d1:/disks/d1, n3-d2:/disks/d2, n3-spare:/disks/spare]
+    volumes: ['n3:/var/lib/tailraid', 'n3-d1:/disks/d1', 'n3-d2:/disks/d2', 'n3-spare:/disks/spare']
     depends_on: [n2]
   n4:
-    <<: *node
-    environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.14, NODE_NAME: n4, VOTER: "false"}
+    !!merge <<: *node
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.14, NODE_NAME: n4, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.14}}
     ports: ["127.0.0.1:20504:20495"]
-    volumes: [n4:/var/lib/tailraid, n4-d1:/disks/d1, n4-d2:/disks/d2, n4-spare:/disks/spare]
+    volumes: ['n4:/var/lib/tailraid', 'n4-d1:/disks/d1', 'n4-d2:/disks/d2', 'n4-spare:/disks/spare']
     depends_on: [n3]
 
   w1:
-    <<: *worker
+    !!merge <<: *worker
     network_mode: "service:n1"
     command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.11:20481"]
     depends_on: [n1]
   w2:
-    <<: *worker
+    !!merge <<: *worker
     network_mode: "service:n2"
     command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.12:20481"]
     depends_on: [n2]
   w3:
-    <<: *worker
+    !!merge <<: *worker
     network_mode: "service:n3"
     command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.13:20481"]
     depends_on: [n3]
   w4:
-    <<: *worker
+    !!merge <<: *worker
     network_mode: "service:n4"
     command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.14:20481"]
     depends_on: [n4]

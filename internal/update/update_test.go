@@ -67,8 +67,10 @@ func TestUpdate_AppliesVerifiedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	var verified string
-	u := &Updater{Owner: "zombar", Repo: "tailraid", BaseURL: gh.URL, Token: "tok",
-		Verify: func(_ context.Context, path, tag string) error { verified = tag; return nil }}
+	u := &Updater{
+		Owner: "zombar", Repo: "tailraid", BaseURL: gh.URL, Token: "tok",
+		Verify: func(_ context.Context, path, tag string) error { verified = tag; return nil },
+	}
 	ctx := context.Background()
 	if _, err := (&Updater{Owner: "zombar", Repo: "tailraid", BaseURL: gh.URL}).Resolve(ctx, ""); !errors.Is(err, ErrNoToken) {
 		t.Fatalf("anonymous on a private repo: %v", err)

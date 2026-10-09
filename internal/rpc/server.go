@@ -191,7 +191,7 @@ func NewServer(o Options) (*Server, error) {
 func (s *Server) Handler() http.Handler { return s.handler }
 
 // Listen binds the RPC listener. A non-loopback bind requires a real authorizer.
-func Listen(addr string, auth Authorizer) (net.Listener, error) {
+func Listen(ctx context.Context, addr string, auth Authorizer) (net.Listener, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("rpc: listen address: %w", err)
@@ -200,7 +200,8 @@ func Listen(addr string, auth Authorizer) (net.Listener, error) {
 	if _, loopbackOnly := auth.(AllowAll); loopbackOnly && (ip == nil || !ip.IsLoopback()) {
 		return nil, fmt.Errorf("rpc: refusing to bind %q without an authorizer", addr)
 	}
-	return net.Listen("tcp", addr)
+	var lc net.ListenConfig
+	return lc.Listen(ctx, "tcp", addr)
 }
 
 // Serve runs the HTTP server on l until ctx is done.
@@ -289,8 +290,10 @@ func (s *Server) member(next http.Handler) http.Handler {
 // --- handlers ---------------------------------------------------------------------
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	h := Health{NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(),
-		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity()}
+	h := Health{
+		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(),
+		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity(),
+	}
 	h.Free = max(h.Capacity-h.Used, 0)
 	h.FS = s.o.StoreFS
 	if s.o.DiskHealth != nil {
@@ -388,8 +391,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		_, err := buf.ReadFrom(http.MaxBytesReader(w, r.Body, s.o.MaxShard))
 		body := buf.Bytes()
 		if err != nil {
-			var mbe *http.MaxBytesError
-			if errors.As(err, &mbe) {
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
 				return
 			}

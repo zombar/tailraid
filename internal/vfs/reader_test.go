@@ -197,8 +197,10 @@ func TestReader_DecodedHashMismatch_EIO(t *testing.T) {
 	must(t, f.Put(ctx, 1, key0, data))
 	must(t, f.Put(ctx, 2, key1, data))
 	ino := f.Create("x")
-	f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{Ino: ino, NewSize: 1000, Writes: []meta.ChunkWrite{{Idx: 0, Hash: wrong}},
-		NewChunks: []meta.ChunkDesc{{Hash: wrong, Size: 1000, K: 1, M: 1, Placement: []meta.NodeIdx{1, 2}}}, Now: 2}})
+	f.MustApply(meta.Command{Op: meta.OpCommit, Commit: &meta.Commit{
+		Ino: ino, NewSize: 1000, Writes: []meta.ChunkWrite{{Idx: 0, Hash: wrong}},
+		NewChunks: []meta.ChunkDesc{{Hash: wrong, Size: 1000, K: 1, M: 1, Placement: []meta.NodeIdx{1, 2}}}, Now: 2,
+	}})
 	_, err := f.ReaderNoCache().ReadChunk(ctx, wrong)
 	if !errors.Is(err, vfs.ErrIO) {
 		t.Fatalf("got %v, want vfs.ErrIO", err)

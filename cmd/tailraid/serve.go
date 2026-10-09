@@ -80,8 +80,10 @@ func initCmd() *cobra.Command {
 			auto := !cmd.Flags().Changed("k") && !cmd.Flags().Changed("m")
 			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
-				meta.Node{Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: budget,
-					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano()},
+				meta.Node{
+					Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true, Capacity: budget,
+					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano(),
+				},
 				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, auto, token)
 			if err != nil {
 				return err
@@ -157,7 +159,7 @@ func mountCmd() *cobra.Command {
 				target = args[0]
 			}
 			if runtime.GOOS != "windows" {
-				if err := os.MkdirAll(target, 0o755); err != nil {
+				if err := os.MkdirAll(target, 0o750); err != nil {
 					return err
 				}
 			}

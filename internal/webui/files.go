@@ -107,6 +107,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case meta.TSymlink:
 		writeErr(w, http.StatusBadRequest, "get "+canonical+": is a symlink")
 		return
+	case meta.TFile:
 	}
 	f, err := s.o.FS.Open(canonical)
 	if err != nil {

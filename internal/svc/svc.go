@@ -215,7 +215,7 @@ func Print(w io.Writer, pl Plan) {
 // "stop" before install is tolerated (nothing was loaded yet).
 func Apply(ctx context.Context, w io.Writer, pl Plan) error {
 	for _, f := range pl.Files {
-		if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(f.Path), 0o750); err != nil {
 			return err
 		}
 		if err := os.WriteFile(f.Path, []byte(f.Content), f.Mode); err != nil {
@@ -225,15 +225,14 @@ func Apply(ctx context.Context, w io.Writer, pl Plan) error {
 	}
 	for i, c := range pl.Commands {
 		fmt.Fprintf(w, "+ %s\n", strings.Join(c, " "))
-		cmd := exec.CommandContext(ctx, c[0], c[1:]...)
+		cmd := exec.CommandContext(ctx, c[0], c[1:]...) //nolint:gosec // the plan's commands are launchctl, systemctl and sc.exe (docs/12 §1)
 		cmd.Stdout, cmd.Stderr, cmd.Stdin = w, w, os.Stdin
 		if err := cmd.Run(); err != nil {
 			tolerated := i == 0 && (c[1] == "bootout" || c[1] == "stop")
 			if tolerated {
 				continue
 			}
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
+			if _, ok := errors.AsType[*exec.ExitError](err); ok {
 				return fmt.Errorf("%s: %w", strings.Join(c, " "), err)
 			}
 			return err

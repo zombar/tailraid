@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -180,7 +181,7 @@ func (f *Fabric) Live() []meta.NodeIdx {
 			out = append(out, idx)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -367,14 +368,14 @@ func (f *Fabric) Inode(ino meta.Ino) meta.Inode {
 func (f *Fabric) ShardsOn(h meta.Hash, k, m uint8) []meta.NodeIdx {
 	var out []meta.NodeIdx
 	for idx, st := range f.Stores {
-		for i := 0; i < int(k)+int(m); i++ {
+		for i := range int(k) + int(m) {
 			if st.Has(chunk.Key(h, k, m, i)) {
 				out = append(out, idx)
 				break
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 

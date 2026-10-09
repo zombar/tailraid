@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -62,7 +63,7 @@ func (r *Run) corpus(dir string) model {
 	copy(sparse, r.randomBytes(100))
 	copy(sparse[len(sparse)-100:], r.randomBytes(100))
 	m[join(dir, "sparse.bin")] = sparse
-	for i := 0; i < r.Profile.SmallFiles; i++ {
+	for i := range r.Profile.SmallFiles {
 		m[join(dir, "small", fmt.Sprintf("f%03d.txt", i))] = []byte(fmt.Sprintf("file %d\n", i))
 	}
 	return m
@@ -221,7 +222,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ..
 
 // repairUntilClean runs repair passes until one finds nothing to do (or 8 passes).
 func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
-	for pass := 0; pass < 8; pass++ {
+	for range 8 {
 		st, err := r.repairNow(ctx)
 		if err != nil {
 			return admin.Report{}, err
@@ -316,7 +317,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 			names[i] = join(dir, fmt.Sprintf("f%d", i))
 		}
 		errs := 0
-		for op := 0; op < r.Profile.ChurnOps; op++ {
+		for range r.Profile.ChurnOps {
 			name := names[r.Rng.Intn(len(names))]
 			cur := m[name]
 			switch x := r.Rng.Intn(10); {
@@ -382,9 +383,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 			}
 		}
 		r.check("I-45 L-2 L-3 L-5 L-6", "churn ops acknowledged via "+gw.Name, errs == 0, fmt.Sprintf("%d of %d ops failed", errs, r.Profile.ChurnOps))
-		for p, d := range m {
-			all[p] = d
-		}
+		maps.Copy(all, m)
 		_ = wi
 	}
 	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
@@ -614,7 +613,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	var key string
 	var cerr error
 	slot := -1
-	for attempt := 0; attempt < 3; attempt++ { // a repair may move the slot between lookup and corrupt
+	for range 3 { // a repair may move the slot between lookup and corrupt
 		reps, err := r.chunksOf(ctx, target)
 		if err != nil || len(reps) == 0 {
 			return fmt.Errorf("chunks of %s: %w", target, err)
@@ -716,7 +715,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		return nil
 	}
 	m := r.corpusModel()
-	for round := 0; round < r.Profile.LeaderKills; round++ {
+	for round := range r.Profile.LeaderKills {
 		rep, _, err := r.anyStatus(ctx)
 		if err != nil {
 			return err
@@ -753,7 +752,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		}
 		acked := model{}
 		// writes before, during and after the leader loss: every acknowledged one must persist
-		for i := 0; i < 6; i++ {
+		for i := range 6 {
 			if i == 2 {
 				if err := r.Env.Kill(ctx, leader); err != nil {
 					return err
@@ -781,9 +780,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 		rv := r.volume(reader)
 		bad, first := r.verifyModel(rv, acked)
 		r.checkAt("I-7 I-12 L-57 L-58 L-61", fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
-		for p, d := range acked {
-			m[p] = d
-		}
+		maps.Copy(m, acked)
 	}
 	r.checkFSMAgreement(ctx, "I-4 I-29", "FSM hashes agree after leader losses")
 	return nil
@@ -896,9 +893,7 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	}
 	grew := storedDelta(before, rep.Volume.StoredBytes)
 	r.check("I-2 L-19 L-33", "second copy of the corpus adds < 1% stored bytes", before > 0 && grew*100 < int64(before), fmt.Sprintf("%+d bytes on %d (dedup %.2fx)", grew, before, rep.Volume.DedupRatio))
-	for p, d := range copyM {
-		m[p] = d
-	}
+	maps.Copy(m, copyM)
 	// a unique file is removed; after the grace GC reclaims its shards
 	p := join(r.Root, "gc.bin")
 	data := r.randomBytes(r.Profile.BigFile)
@@ -950,7 +945,7 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 		if err := v.Mkdir(dir); err != nil {
 			return err
 		}
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			p := join(dir, fmt.Sprintf("%s-%d.bin", gw.Name, i))
 			data := r.randomBytes(1 + r.Rng.Intn(r.Profile.ChunkSize))
 			if err := v.WriteAt(p, 0, data); err == nil {
@@ -972,9 +967,7 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	v := r.volume(gw)
 	bad, first := r.verifyModel(v, acked)
 	r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
-	for p, d := range acked {
-		m[p] = d
-	}
+	maps.Copy(m, acked)
 	bad, first = r.verifyModel(v, m)
 	r.checkAt("I-12 L-120", "whole corpus exact after the restart storm", bad == 0, first, first, "", gw.Name)
 	r.checkFSMAgreement(ctx, "I-4 I-5", "FSM hashes agree after the restart storm")
@@ -1009,8 +1002,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	// least k nodes on the majority side
 	budget := min((voters-1)/2, len(r.nodes)-k)
 	var minority, majority []NodeRef
-	for i := len(r.nodes) - 1; i >= 0; i-- {
-		n := r.nodes[i]
+	for _, n := range slices.Backward(r.nodes) {
 		if n.Idx != gw.Idx && len(minority) < budget {
 			minority = append(minority, n)
 		} else {

@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/zombar/tailraid/internal/testseed"
 	"os"
 	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/testseed"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
@@ -369,9 +370,11 @@ func (e *harnessEnv) RestoreDisk(_ context.Context, disk soak.NodeRef) error {
 
 func harnessProfile() soak.Profile {
 	cs := int(testharness.ChunkSize)
-	return soak.Profile{Name: "harness", BigFile: 3*cs + 1000, LargeFile: 2 << 20, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
+	return soak.Profile{
+		Name: "harness", BigFile: 3*cs + 1000, LargeFile: 2 << 20, SmallFiles: 8, ChurnOps: 40, LeaderKills: 1, ChunkSize: cs,
 		FlushIdle: time.Second, FillAfter: cluster.FillAfter + time.Second, Grace: 10*time.Minute + time.Second, RestartSettle: time.Second,
-		SampleEvery: 50 * time.Millisecond} // the sampler runs concurrently with the phases, as it does in production
+		SampleEvery: 50 * time.Millisecond,
+	} // the sampler runs concurrently with the phases, as it does in production
 }
 
 // The whole scenario sequence runs green against the in-process cluster, every phase
@@ -432,13 +435,15 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	if path := os.Getenv("SOAK_REPORT_OUT"); path != "" { // for eyeballing the report
 		_ = os.WriteFile(path, html.Bytes(), 0o600)
 	}
-	for _, want := range []string{"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
+	for _, want := range []string{
+		"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
 		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
 		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound",
 		"CPU on the sampled node", "Memory on the sampled node", "Data disk on the sampled node", "peak resident set",
 		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity",
 		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live",
-		"policy follows the member table after a disk was added", "the drained disk holds no slots", "the removed disk is out of the node table"} {
+		"policy follows the member table after a disk was added", "the drained disk holds no slots", "the removed disk is out of the node table",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

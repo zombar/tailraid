@@ -73,7 +73,8 @@ func TestProber_LivenessAndHoldDowns(t *testing.T) {
 	// three device members: self (idx 1) plus two peers with fake RPC addresses
 	for i, name := range []string{"b", "c"} {
 		r, _, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
-			ID: "peer-" + name + "000000000000", Name: name, Kind: meta.KindDevice, Addr: "10.0.0." + string(rune('2'+i)), RPCPort: 1, RaftPort: 1, Capacity: 1}}})
+			ID: "peer-" + name + "000000000000", Name: name, Kind: meta.KindDevice, Addr: "10.0.0." + string(rune('2'+i)), RPCPort: 1, RaftPort: 1, Capacity: 1,
+		}}})
 		if err != nil || r.Err != nil {
 			t.Fatal(err, r.Err)
 		}

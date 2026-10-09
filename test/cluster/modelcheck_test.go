@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -27,9 +28,7 @@ type world map[string][]byte
 
 func (w world) clone() world {
 	c := make(world, len(w))
-	for k, v := range w {
-		c[k] = v
-	}
+	maps.Copy(c, w)
 	return c
 }
 
@@ -413,7 +412,7 @@ func TestModelCheck_Long(t *testing.T) {
 			quorumUp()
 			restoreDisks()
 			for i := range c.Nodes {
-				for attempt := 0; attempt < 30; attempt++ {
+				for range 30 {
 					if err := c.Nodes[i].Flush.FlushAll(ctx); err == nil {
 						break
 					}

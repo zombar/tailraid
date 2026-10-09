@@ -339,7 +339,7 @@ func slotOf(ch meta.Chunk, idx meta.NodeIdx) int {
 func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		c.WriteFile(0, "/f"+string(rune('a'+i)), testharness.Pattern(int(testharness.ChunkSize)+1, byte(i)))
 	}
 	c.Settle()
@@ -373,7 +373,7 @@ func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	// now remove succeeds without --force, and every file still reads
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[drained].Idx()}))
 	c.Settle()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if got, err := c.ReadFileCold(0, "/f"+string(rune('a'+i))); err != nil || !bytes.Equal(got, testharness.Pattern(int(testharness.ChunkSize)+1, byte(i))) {
 			t.Fatalf("file %d after remove: %v", i, err)
 		}
@@ -459,7 +459,7 @@ func TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, ch := range c.ChunksOf(0, "/f") {
-			for slot := 0; slot < 3; slot++ {
+			for slot := range 3 {
 				if c.Nodes[i].Store.Has(chunk.Key(ch.Hash, 2, 1, slot)) {
 					t.Fatalf("old shard slot %d still on n%d after sweep", slot, i)
 				}
@@ -831,7 +831,7 @@ func TestRepair_MigrationCrash_Resumes(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
 	var data [][]byte
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		data = append(data, testharness.Pattern(int(testharness.ChunkSize), byte(70+i)))
 		c.WriteFile(0, "/f"+string(rune('a'+i)), data[i])
 	}
@@ -858,7 +858,7 @@ func TestRepair_MigrationCrash_Resumes(t *testing.T) {
 	if st.Migrated != 2 || st.Partial != 2 || st.PolicyStale != 0 || st.Deferred != 0 || st.Unrepairable != 0 {
 		t.Fatalf("the next leader's pass: %+v", st)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		for _, ch := range c.ChunksOf(next.I, "/f"+string(rune('a'+i))) {
 			if ch.K != 3 || ch.M != 1 || len(ch.Placement) != 4 {
 				t.Fatalf("chunk of file %d on %d+%d with %d slots", i, ch.K, ch.M, len(ch.Placement))

@@ -28,6 +28,7 @@ func (w *writer) i64(v int64)  { w.u64(uint64(v)) }
 func (w *writer) uvarint(v uint64) {
 	w.b = binary.AppendUvarint(w.b, v)
 }
+
 func (w *writer) bytes(p []byte) {
 	w.uvarint(uint64(len(p)))
 	w.b = append(w.b, p...)
@@ -41,6 +42,7 @@ func (w *writer) bool(v bool) {
 		w.u8(0)
 	}
 }
+
 func (w *writer) nodeIdxs(p []NodeIdx) {
 	w.uvarint(uint64(len(p)))
 	for _, n := range p {
@@ -80,6 +82,7 @@ func (r *reader) u8() uint8 {
 	}
 	return p[0]
 }
+
 func (r *reader) u16() uint16 {
 	p := r.take(2)
 	if p == nil {
@@ -87,6 +90,7 @@ func (r *reader) u16() uint16 {
 	}
 	return binary.LittleEndian.Uint16(p)
 }
+
 func (r *reader) u32() uint32 {
 	p := r.take(4)
 	if p == nil {
@@ -94,6 +98,7 @@ func (r *reader) u32() uint32 {
 	}
 	return binary.LittleEndian.Uint32(p)
 }
+
 func (r *reader) u64() uint64 {
 	p := r.take(8)
 	if p == nil {
@@ -120,6 +125,7 @@ func (r *reader) uvarint() uint64 {
 	r.pos += n
 	return v
 }
+
 func (r *reader) length(limit int) int {
 	n := r.uvarint()
 	if r.err != nil {
@@ -131,6 +137,7 @@ func (r *reader) length(limit int) int {
 	}
 	return int(n)
 }
+
 func (r *reader) bytes() []byte {
 	n := r.length(maxStringLen)
 	p := r.take(n)
@@ -145,6 +152,7 @@ func (r *reader) hash() Hash {
 	copy(h[:], r.take(32))
 	return h
 }
+
 func (r *reader) bool() bool {
 	switch r.u8() {
 	case 0:
@@ -156,6 +164,7 @@ func (r *reader) bool() bool {
 		return false
 	}
 }
+
 func (r *reader) nodeIdxs() []NodeIdx {
 	n := r.length(256)
 	if r.err != nil || n == 0 {

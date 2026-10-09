@@ -28,7 +28,7 @@ func TestCluster_ReadableWithNonVotersAsleep(t *testing.T) {
 	chunks := 0
 	c.Nodes[0].Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
 		chunks++
-		for i := 0; i < int(ch.K); i++ {
+		for i := range ch.K {
 			if n := ch.Placement[i]; !voters[n] {
 				t.Fatalf("chunk %x data slot %d on non-voter %d (placement %v)", ch.Hash[:4], i, n, ch.Placement)
 			}

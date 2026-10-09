@@ -39,7 +39,7 @@ func TestCache_LRUEvictsBySize(t *testing.T) {
 		t.Fatal(err)
 	}
 	var hs [][32]byte
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := payload(1000, int64(i))
 		h := sha256.Sum256(p)
 		hs = append(hs, h)
@@ -79,7 +79,7 @@ func TestCache_RebuildsOrderOnOpen(t *testing.T) {
 	fc := clock.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	c, _ := OpenCache(sysfs.OS{}, root, 10_000, fc)
 	var hs [][32]byte
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := payload(1000, int64(i))
 		h := sha256.Sum256(p)
 		hs = append(hs, h)
@@ -141,7 +141,7 @@ func TestCache_MemoryTier(t *testing.T) {
 		t.Fatal(err)
 	}
 	var hs [][32]byte
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := payload(1000, int64(i))
 		hs = append(hs, sha256.Sum256(p))
 		c.Put(hs[i], p)
@@ -164,7 +164,7 @@ func TestCache_MemoryTier(t *testing.T) {
 	}
 	// a disk eviction drops the memory copy as well
 	c2, _ := OpenCache(sysfs.OS{}, t.TempDir(), 2500, fc, WithMemory(10_000))
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := payload(1000, int64(i))
 		c2.Put(sha256.Sum256(p), p)
 		fc.Advance(time.Second)

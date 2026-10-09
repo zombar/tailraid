@@ -9,26 +9,26 @@ import (
 	"time"
 )
 
-func boolp(b bool) *bool { return &b }
-
 // Node names, check text and file names from the environment are untrusted: the report
 // escapes them everywhere they appear, including inside the SVG charts.
 func TestRender_EscapesHostileNodeNamesAndErrors(t *testing.T) {
 	hostile := `<script>alert(1)</script>`
 	start := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	s := Summary{Env: "env " + hostile, Started: start, Duration: 10 * time.Second, Seed: 7, Versions: map[string]string{hostile: "v" + hostile},
+	s := Summary{
+		Env: "env " + hostile, Started: start, Duration: 10 * time.Second, Seed: 7, Versions: map[string]string{hostile: "v" + hostile},
 		Nodes:  []NodeRef{{Name: hostile, Idx: 1, RPC: "1.2.3.4:1"}},
-		Phases: []PhaseResult{{Name: "1 x", Failed: 1, Checks: []Record{{Kind: "check", Name: "chk " + hostile, Cites: "I-1", OK: boolp(false), Text: "err " + hostile, File: "/f/" + hostile, Node: hostile, Line: 3}}}},
+		Phases: []PhaseResult{{Name: "1 x", Failed: 1, Checks: []Record{{Kind: "check", Name: "chk " + hostile, Cites: "I-1", OK: new(false), Text: "err " + hostile, File: "/f/" + hostile, Node: hostile, Line: 3}}}},
 		Records: []Record{
 			{T: start, Kind: "phase", Name: "1 x", Text: "start"},
-			{T: start.Add(time.Second), Kind: "sample", S: &Sample{Slots: map[string]int{hostile: 3}, LiveNodes: map[string]bool{hostile: true}, FSMAgree: boolp(true)}},
+			{T: start.Add(time.Second), Kind: "sample", S: &Sample{Slots: map[string]int{hostile: 3}, LiveNodes: map[string]bool{hostile: true}, FSMAgree: new(true)}},
 			{T: start.Add(2 * time.Second), Kind: "event", Name: "kill", Text: hostile},
 			{T: start.Add(3 * time.Second), Kind: "event", Name: "note", Text: "note " + hostile},
 			{T: start.Add(4 * time.Second), Kind: "sample", S: &Sample{BytesWritten: 1 << 20, Slots: map[string]int{hostile: 2}, LiveNodes: map[string]bool{hostile: false}}},
 			{T: start.Add(5 * time.Second), Kind: "dump", Phase: "1 x", Node: hostile, Text: "goroutine 1 [select]:\nmain.main()\n" + hostile + "\n"},
 		},
 		Latency:  []LatencyRow{{Phase: "1 x", Kind: "write", N: 1, P50: time.Millisecond, P99: time.Millisecond, Max: time.Millisecond}},
-		Coverage: []CoverageRow{{ID: "I-1", Failed: 1}}}
+		Coverage: []CoverageRow{{ID: "I-1", Failed: 1}},
+	}
 	var out bytes.Buffer
 	if err := Render(&out, s); err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestSummary_LatencyWindowsAndCoverage(t *testing.T) {
 		}
 	}
 	cov := coverage([]PhaseResult{{Checks: []Record{
-		{Cites: "L-10 I-12", OK: boolp(true)}, {Cites: "I-2 L-10", OK: boolp(false)}, {Cites: "I-12"},
+		{Cites: "L-10 I-12", OK: new(true)}, {Cites: "I-2 L-10", OK: new(false)}, {Cites: "I-12"},
 	}}})
 	wantCov := []CoverageRow{{ID: "I-2", Failed: 1}, {ID: "I-12", Passed: 2}, {ID: "L-10", Passed: 1, Failed: 1}}
 	if len(cov) != len(wantCov) {
@@ -164,7 +164,7 @@ func TestPhases_CitesAreDefined(t *testing.T) {
 	cites := regexp.MustCompile(`r\.check(?:At|FSMAgreement\(ctx, |\()"([^"]*)"`)
 	n := 0
 	for _, m := range cites.FindAllStringSubmatch(string(src), -1) {
-		for _, id := range strings.Fields(m[1]) {
+		for id := range strings.FieldsSeq(m[1]) {
 			n++
 			if !defined[id] {
 				t.Errorf("phases.go cites %s, which no design doc defines", id)

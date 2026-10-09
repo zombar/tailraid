@@ -12,7 +12,8 @@ import (
 // Shards younger than grace are never touched (I-14): they may belong to an in-flight
 // flush whose Commit has not yet been applied locally.
 func Sweep(ctx context.Context, s *Store, grace time.Duration, now time.Time,
-	placedHere func(hash [32]byte, k, m uint8, idx int) (placed, known bool)) (deleted int, err error) {
+	placedHere func(hash [32]byte, k, m uint8, idx int) (placed, known bool),
+) (deleted int, err error) {
 	cutoff := now.Add(-grace)
 	var victims []ShardKey
 	err = s.Walk(func(k ShardKey, _ int64, mtime time.Time) error {
@@ -24,7 +25,7 @@ func Sweep(ctx context.Context, s *Store, grace time.Duration, now time.Time,
 		}
 		h, kk, mm, idx, err := ParseKey(k)
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // not a shard key: the sweep only touches shards
 		}
 		placed, known := placedHere(h, kk, mm, idx)
 		if !known || !placed {

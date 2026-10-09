@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -79,13 +81,16 @@ type backoffState struct {
 
 // NewFlusher wires a flusher. log may be nil.
 func NewFlusher(ov *Overlay, st *meta.Store, prop meta.Proposer, peers meta.Peers, shards chunk.ShardClient,
-	rd *Reader, clk clock.Clock, cfg Config, log *slog.Logger) *Flusher {
+	rd *Reader, clk clock.Clock, cfg Config, log *slog.Logger,
+) *Flusher {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Flusher{ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, clk: clk, cfg: cfg,
+	return &Flusher{
+		ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, clk: clk, cfg: cfg,
 		log: log, codecs: &ec.Pool{}, sem: make(chan struct{}, max(1, cfg.ChunkWorkers)),
-		backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{}}
+		backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{},
+	}
 }
 
 // Buffers reports the chunk and shard bytes the flusher holds in memory right now and
@@ -279,7 +284,7 @@ type chunkWork struct {
 // commitPlan runs steps 2–11 for a plan, including rebases, and returns the committed size.
 func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool) (uint64, error) {
 	forceUpload := false
-	for attempt := 0; attempt < 16; attempt++ {
+	for range 16 {
 		base, ok := f.st.GetInode(plan.Ino)
 		if !ok || base.Type != meta.TFile {
 			return 0, meta.ErrNotExist
@@ -376,7 +381,7 @@ func (f *Flusher) touched(plan *FlushPlan, base meta.Inode, partial bool) (idxs 
 			idxs = append(idxs, i)
 		}
 	}
-	sort.Slice(idxs, func(a, b int) bool { return idxs[a] < idxs[b] })
+	slices.Sort(idxs)
 	if batch := max(1, int(f.cfg.FileDirtyHi/cs)); !plan.SizeSet && len(idxs) > batch {
 		idxs, limited = idxs[:batch], true
 	}
@@ -611,9 +616,7 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 			}
 		}
 		meta.FillPlacement(w.hash, place, f.candidates(exclude), int(w.k), meta.DomainsOf(f.st.Nodes()))
-		for i, err := range f.putSlots(ctx, w, shards, place, acked) {
-			failed[i] = err
-		}
+		maps.Copy(failed, f.putSlots(ctx, w, shards, place, acked))
 	}
 	acks := 0
 	for i := range place {
@@ -769,10 +772,9 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 		plan.Residual = plan.Extents.without(committed, cs)
 	case plan.SizeSet:
 		cmd.HasTruncate, cmd.TruncateTo = true, plan.MinSize
-		cmd.NewSize = max(plan.MinSize, plan.Extents.maxEnd())
-		if plan.Size > cmd.NewSize { // truncate-up without writes
-			cmd.NewSize = plan.Size
-		}
+		cmd.NewSize = max(plan.Size,
+			// truncate-up without writes
+			max(plan.MinSize, plan.Extents.maxEnd()))
 	default:
 		cmd.NewSize = max(base.Size, plan.Extents.maxEnd())
 	}

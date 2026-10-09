@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -84,7 +85,7 @@ func (a *Admin) leaderCall(ctx context.Context, path string, body []byte, out an
 		return err
 	}
 	var last error
-	for attempt := 0; attempt < 6; attempt++ { // the leader may move between lookup and call
+	for range 6 { // the leader may move between lookup and call
 		err := a.call(ctx, addr, http.MethodPost, path, body, out)
 		if err == nil {
 			return nil
@@ -167,11 +168,12 @@ func (a *Admin) Fsck(ctx context.Context, n NodeRef) (bool, int, string, error) 
 	if err := a.nodeOp(ctx, n, rpc.AdminOp{Op: "fsck"}, &rep); err != nil {
 		return false, 0, "", err
 	}
-	text := fmt.Sprintf("%d violations, %d orphan shards", len(rep.Violations), rep.OrphanShards)
+	var text strings.Builder
+	fmt.Fprintf(&text, "%d violations, %d orphan shards", len(rep.Violations), rep.OrphanShards)
 	for _, v := range rep.Violations {
-		text += "; " + v
+		text.WriteString("; " + v)
 	}
-	return rep.OK, rep.OrphanShards, text, nil
+	return rep.OK, rep.OrphanShards, text.String(), nil
 }
 
 func (a *Admin) Chunks(ctx context.Context, n NodeRef, path string) ([]admin.ChunkReport, error) {

@@ -181,6 +181,7 @@ func (fi *fileInfo) Mode() os.FileMode {
 		m |= os.ModeDir
 	case meta.TSymlink:
 		m |= os.ModeSymlink
+	case meta.TFile:
 	}
 	return m
 }

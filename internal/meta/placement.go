@@ -221,7 +221,7 @@ func ranked(h Hash, cands []Candidate) []Candidate {
 		buf[32] = byte(c.Idx)
 		buf[33] = byte(c.Idx >> 8)
 		f := fnv.New64a()
-		f.Write(buf[:])
+		_, _ = f.Write(buf[:]) // hash.Hash never fails
 		// FNV-1a has almost no avalanche on its last input bytes: hashes for adjacent
 		// idx values differ by a small multiple of the FNV prime, which made the weight
 		// term dominate. The murmur3 finalizer fixes that while keeping the function pure.

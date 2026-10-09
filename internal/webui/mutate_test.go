@@ -247,7 +247,7 @@ func TestWebUI_Mutations_StaleIs503(t *testing.T) {
 // Invariant: I-73
 func TestWebUI_StatusCached(t *testing.T) {
 	u := newUI(t)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		code, h, body := u.get("/api/status")
 		if code != 200 || h.Get("Content-Type") != "application/json" || h.Get("Cache-Control") != "no-store" || !strings.Contains(string(body), `"node":"one"`) {
 			t.Fatalf("status: %d %v %s", code, h, body)

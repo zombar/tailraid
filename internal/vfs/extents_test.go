@@ -78,7 +78,7 @@ func TestExtents_InsertOverlap_Property(t *testing.T) {
 	if testing.Short() {
 		iters = 100
 	}
-	for it := 0; it < iters; it++ {
+	for range iters {
 		var e extents
 		o := &oracle{}
 		origOff := map[uint32]uint64{}
@@ -195,12 +195,24 @@ func TestExtents_Without(t *testing.T) {
 	}{
 		{"nothing committed", extents{ext(150, 100, 0)}, nil, extents{ext(150, 100, 0)}},
 		{"extent inside one chunk", extents{ext(120, 50, 7)}, []uint64{1}, nil},
-		{"head and tail around a run", extents{ext(150, 400, 0)}, []uint64{2, 3, 4},
-			extents{ext(150, 50, 0), ext(500, 50, 350)}},
-		{"gap between committed chunks", extents{ext(0, 1000, 0)}, []uint64{0, 1, 5, 6},
-			extents{ext(200, 300, 200), ext(700, 300, 700)}},
-		{"two extents, second starts mid-chunk", extents{ext(0, 200, 0), ext(350, 250, 200)}, []uint64{0, 1, 4, 5},
-			extents{ext(350, 50, 200)}},
+		{
+			"head and tail around a run",
+			extents{ext(150, 400, 0)},
+			[]uint64{2, 3, 4},
+			extents{ext(150, 50, 0), ext(500, 50, 350)},
+		},
+		{
+			"gap between committed chunks",
+			extents{ext(0, 1000, 0)},
+			[]uint64{0, 1, 5, 6},
+			extents{ext(200, 300, 200), ext(700, 300, 700)},
+		},
+		{
+			"two extents, second starts mid-chunk",
+			extents{ext(0, 200, 0), ext(350, 250, 200)},
+			[]uint64{0, 1, 4, 5},
+			extents{ext(350, 50, 200)},
+		},
 		{"chunk boundary exactly", extents{ext(100, 100, 3)}, []uint64{0, 2}, extents{ext(100, 100, 3)}},
 		{"chunks beyond every extent", extents{ext(0, 50, 0)}, []uint64{3, 4}, extents{ext(0, 50, 0)}},
 	}

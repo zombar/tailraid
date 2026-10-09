@@ -85,11 +85,13 @@ func newUIWith(t *testing.T, prep func(*testharness.Fabric), opts ...func(*webui
 		}
 		return meta.Node{}, false
 	}}
-	o := webui.Options{FS: u.fs, Store: f.FSM, Auth: u.auth, Login: login, Clk: f.Clk, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	o := webui.Options{
+		FS: u.fs, Store: f.FSM, Auth: u.auth, Login: login, Clk: f.Clk, Logger: slog.New(slog.DiscardHandler),
 		Status: func() any { u.statusCalls.Add(1); return map[string]any{"node": "one"} },
 		Chunks: func(ctx context.Context, p string, off, lim int) (int, []admin.ChunkReport, error) {
 			return admin.DescribeChunksPage(ctx, f.FSM, nil, f, nil, p, off, lim)
-		}}
+		},
+	}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -409,10 +411,18 @@ func TestWebUI_Get_DirtyOverlayReadYourWrites(t *testing.T) {
 func TestWebUI_Get_ContentTypes(t *testing.T) {
 	u := newUI(t)
 	cases := []struct{ name, typ string }{
-		{"a.mkv", "video/x-matroska"}, {"a.mp4", "video/mp4"}, {"a.m4a", "audio/mp4"}, {"a.flac", "audio/flac"},
-		{"a.txt", "text/plain; charset=utf-8"}, {"a.md", "text/markdown; charset=utf-8"}, {"a.json", "application/json"},
-		{"a.html", "text/html; charset=utf-8"}, {"a.svg", "image/svg+xml"}, {"a.bin", "application/octet-stream"},
-		{"noext", "application/octet-stream"}, {"a.ts", "application/octet-stream"},
+		{"a.mkv", "video/x-matroska"},
+		{"a.mp4", "video/mp4"},
+		{"a.m4a", "audio/mp4"},
+		{"a.flac", "audio/flac"},
+		{"a.txt", "text/plain; charset=utf-8"},
+		{"a.md", "text/markdown; charset=utf-8"},
+		{"a.json", "application/json"},
+		{"a.html", "text/html; charset=utf-8"},
+		{"a.svg", "image/svg+xml"},
+		{"a.bin", "application/octet-stream"},
+		{"noext", "application/octet-stream"},
+		{"a.ts", "application/octet-stream"},
 	}
 	for _, c := range cases {
 		u.write("/"+c.name, 0, []byte("x"))

@@ -35,8 +35,10 @@ type Profile struct {
 
 // Quick is the compose profile (~10 min).
 func Quick() Profile {
-	return Profile{Name: "quick", BigFile: 3_000_000, LargeFile: 256 << 20, SmallFiles: 150, ChurnOps: 300, LeaderKills: 3, ChunkSize: 256 << 10,
-		FlushIdle: 4 * time.Second, FillAfter: 20 * time.Second, Grace: 20 * time.Second, SampleEvery: time.Second, RestartSettle: 15 * time.Second}
+	return Profile{
+		Name: "quick", BigFile: 3_000_000, LargeFile: 256 << 20, SmallFiles: 150, ChurnOps: 300, LeaderKills: 3, ChunkSize: 256 << 10,
+		FlushIdle: 4 * time.Second, FillAfter: 20 * time.Second, Grace: 20 * time.Second, SampleEvery: time.Second, RestartSettle: 15 * time.Second,
+	}
 }
 
 // Record is one line of results.jsonl.
@@ -123,7 +125,7 @@ var latencyBuckets = [14]float64{0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 
 
 func bucket(d time.Duration) int {
 	ms := float64(d) / float64(time.Millisecond)
-	for i := 0; i < len(latencyBuckets)-1; i++ {
+	for i := range len(latencyBuckets) - 1 {
 		if ms <= latencyBuckets[i] {
 			return i
 		}
@@ -564,7 +566,7 @@ func (r *Run) fsmAgreement(ctx context.Context) (agree bool, detail string, ok b
 // fsmAgreementSettled retries until every node answers at one index (quiescent cluster).
 // available is false when fewer than two nodes serve /dev/fsm-hash at all.
 func (r *Run) fsmAgreementSettled(ctx context.Context) (agree bool, detail string, available bool) {
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		var ok bool
 		agree, detail, ok = r.fsmAgreement(ctx)
 		if ok {
@@ -636,8 +638,10 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 		}
 		r.Profile.ChunkSize = int(rep.Volume.ChunkSize)
 	}
-	sum := Summary{Env: r.Env.Name(), Profile: r.Profile.Name, Seed: r.Seed, Flags: r.Flags, Started: r.started, Nodes: nodes,
-		K: rep.Volume.K, M: rep.Volume.M, ChunkSize: r.Profile.ChunkSize, NodeCount: len(nodes), Versions: map[string]string{}}
+	sum := Summary{
+		Env: r.Env.Name(), Profile: r.Profile.Name, Seed: r.Seed, Flags: r.Flags, Started: r.started, Nodes: nodes,
+		K: rep.Volume.K, M: rep.Volume.M, ChunkSize: r.Profile.ChunkSize, NodeCount: len(nodes), Versions: map[string]string{},
+	}
 	for i := range rep.Nodes {
 		sum.Versions[rep.Nodes[i].Name] = rep.Nodes[i].Version
 	}
@@ -646,7 +650,7 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	}
 	gw := r.gateways()[0]
 	v := r.volume(gw)
-	for attempt := 0; attempt < 30; attempt++ { // a fresh cluster may still be electing (EROFS)
+	for range 30 { // a fresh cluster may still be electing (EROFS)
 		if err = v.Mkdir(r.Root); err == nil {
 			break
 		}

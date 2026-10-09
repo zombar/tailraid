@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -38,14 +39,14 @@ func NewFSM() *FSM {
 func (f *FSM) state() *State { return f.st }
 
 // Apply implements raft.FSM. Non-command logs advance the applied index only.
-func (f *FSM) Apply(l *raft.Log) interface{} {
+func (f *FSM) Apply(l *raft.Log) any {
 	var cmd Command
 	var decodeErr error
 	if l.Type == raft.LogCommand {
 		cmd, decodeErr = DecodeCommand(l.Data) // outside the lock: readers are not held up by decoding
 	}
 	f.mu.Lock()
-	var res interface{}
+	var res any
 	if l.Type == raft.LogCommand {
 		res = f.applyLocked(cmd, decodeErr, l.Index)
 	}
@@ -265,10 +266,8 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 		// Every slot is the sole copy of its shard index (I-9): a node that still holds
 		// one cannot leave the table (docs/02). `node remove --force` zeroes the slots first.
 		for _, ch := range a.st.Chunks {
-			for _, s := range ch.Placement {
-				if s == c.Idx {
-					return ErrNodeNotEmpty
-				}
+			if slices.Contains(ch.Placement, c.Idx) {
+				return ErrNodeNotEmpty
 			}
 		}
 	}

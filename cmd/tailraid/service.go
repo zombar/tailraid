@@ -148,7 +148,7 @@ func logsCmd() *cobra.Command {
 
 // tailFile prints the last n lines of path and, with follow, keeps printing appended lines.
 func tailFile(cmd *cobra.Command, path string, follow bool, n int) error {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // log.file from the config
 	if err != nil {
 		return fmt.Errorf("log file %s: %w (is the service installed?)", path, err)
 	}

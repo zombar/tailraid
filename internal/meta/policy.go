@@ -2,7 +2,7 @@ package meta
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 )
 
 // MaxAutoK caps the data shard count the automatic policy chooses.
@@ -54,7 +54,7 @@ func perHost(ts []target) []int {
 	for h := range m {
 		hosts = append(hosts, h)
 	}
-	sort.Slice(hosts, func(i, j int) bool { return hosts[i] < hosts[j] })
+	slices.Sort(hosts)
 	out := make([]int, len(hosts))
 	for i, h := range hosts {
 		out[i] = m[h]

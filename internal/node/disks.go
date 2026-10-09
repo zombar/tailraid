@@ -58,16 +58,16 @@ func PrepareDisk(path string, clusterID [16]byte, hostID string) (string, error)
 	}
 	id := hex.EncodeToString(b[:])
 	data, _ := json.Marshal(diskMarker{ClusterID: hex.EncodeToString(clusterID[:]), DiskID: id, HostID: hostID})
-	f, err := os.OpenFile(filepath.Join(path, MarkerName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(filepath.Join(path, MarkerName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // the disk path the operator added
 	if err != nil {
 		return "", err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return "", err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return "", err
 	}
 	if err := f.Close(); err != nil {
@@ -80,7 +80,7 @@ func PrepareDisk(path string, clusterID [16]byte, hostID string) (string, error)
 // targets: its marker must name this cluster and this host, and the node table must hold
 // a live (not Removed) disk row for it under this host. reason says why not (I-86).
 func checkDisk(path string, clusterID [16]byte, hostID string, host meta.NodeIdx, nodes []meta.Node) (row meta.Node, reason string) {
-	b, err := os.ReadFile(filepath.Join(path, MarkerName))
+	b, err := os.ReadFile(filepath.Join(path, MarkerName)) //nolint:gosec // the disk path from the config
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return meta.Node{}, "disk_id missing — not mounted?"

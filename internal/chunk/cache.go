@@ -66,8 +66,10 @@ func WithMemory(n int64) CacheOption { return func(c *Cache) { c.memMax = n } }
 // OpenCache scans root/cache and rebuilds the LRU order from file mtimes, evicting down
 // to max if the directory holds more than that.
 func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts ...CacheOption) (*Cache, error) {
-	c := &Cache{fsys: fsys, root: root, max: maxBytes, clk: clk, lru: list.New(), idx: map[[32]byte]*list.Element{},
-		memMax: DefaultMemory, mem: list.New(), memIdx: map[[32]byte]*list.Element{}}
+	c := &Cache{
+		fsys: fsys, root: root, max: maxBytes, clk: clk, lru: list.New(), idx: map[[32]byte]*list.Element{},
+		memMax: DefaultMemory, mem: list.New(), memIdx: map[[32]byte]*list.Element{},
+	}
 	for _, o := range opts {
 		o(c)
 	}
@@ -87,11 +89,11 @@ func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts
 		}
 		b, err := hex.DecodeString(de.Name())
 		if err != nil || len(b) != 32 {
-			return nil
+			return nil //nolint:nilerr // a name that is not a hash is a foreign file: skipped, not an error
 		}
 		fi, err := de.Info()
 		if err != nil {
-			return nil
+			return nil //nolint:nilerr // vanished between readdir and stat: nothing to account
 		}
 		var h [32]byte
 		copy(h[:], b)

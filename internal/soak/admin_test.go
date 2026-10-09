@@ -58,8 +58,10 @@ func report(leader string, addrs ...string) admin.Report {
 // The leader is found through the first seed that answers; a stale leader's 421 is
 // followed to the node it names; fsck and check replies decode into the admin types.
 func TestAdmin_SeedsRedirectsAndReplies(t *testing.T) {
-	fc := &fakeCaller{rep: report("10.0.0.2:20481", "10.0.0.1:20481", "10.0.0.2:20481", "10.0.0.3:20481"),
-		down: map[string]bool{"10.0.0.1:20481": true}, redirect: map[string]string{"10.0.0.2:20481": "10.0.0.3:20481"}}
+	fc := &fakeCaller{
+		rep:  report("10.0.0.2:20481", "10.0.0.1:20481", "10.0.0.2:20481", "10.0.0.3:20481"),
+		down: map[string]bool{"10.0.0.1:20481": true}, redirect: map[string]string{"10.0.0.2:20481": "10.0.0.3:20481"},
+	}
 	a := &Admin{Caller: fc, Seeds: []string{"10.0.0.1:20481", "10.0.0.2:20481"}}
 	ctx := context.Background()
 	if l, err := a.LeaderAddr(ctx); err != nil || l != "10.0.0.2:20481" {

@@ -40,15 +40,15 @@ func distinctNonZero(t *testing.T, p []NodeIdx, what string) {
 
 // Invariant: I-77, I-9
 func TestPlaceKM_VoterFirst_DataSlots(t *testing.T) {
-	for v := 0; v <= 5; v++ {
-		for s := 0; s <= 5; s++ {
+	for v := range 6 {
+		for s := range 6 {
 			c := vcands(v, s)
 			for k := 1; k <= 3; k++ {
-				for m := 0; m <= 2; m++ {
+				for m := range 3 {
 					if k+m > v+s {
 						continue
 					}
-					for i := uint64(0); i < 50; i++ {
+					for i := range uint64(50) {
 						h := hashN(i*131 + uint64(v*7+s))
 						p := PlaceKM(h, c, k, m)
 						if len(p) != k+m {
@@ -88,10 +88,10 @@ func TestPlaceKM_VoterFirst_DataSlots(t *testing.T) {
 func TestPlaceKM_VoterFirst_NNodeDeterminism(t *testing.T) {
 	r := testseed.Seed(t)
 	base := vcands(3, 4)
-	for i := uint64(0); i < 2000; i++ {
+	for i := range uint64(2000) {
 		h := hashN(i)
 		want := PlaceKM(h, base, 2, 2)
-		for n := 0; n < 4; n++ {
+		for n := range 4 {
 			if got := PlaceKM(h, shuffled(r, base), 2, 2); !equalIdx(got, want) {
 				t.Fatalf("hash %d: node %d placed %v, node 0 placed %v", i, n, got, want)
 			}
@@ -103,7 +103,7 @@ func TestPlaceKM_VoterFirst_NNodeDeterminism(t *testing.T) {
 func TestFillPlacement_KeepsSlotClass(t *testing.T) {
 	all := vcands(3, 3) // voters 1..3, non-voters 4..6
 	const k, m = 2, 2
-	for i := uint64(0); i < 200; i++ {
+	for i := range uint64(200) {
 		h := hashN(i)
 		// a fresh fill equals PlaceKM
 		fresh := make([]NodeIdx, k+m)

@@ -105,11 +105,11 @@ func TestSingleNode_BootstrapProposeRestart(t *testing.T) {
 func TestOpen_WaitReadyReplaysLogBeforeReads(t *testing.T) {
 	dir := t.TempDir()
 	n := bootstrap(t, dir)
-	for i := 0; i < 50; i++ { // enough entries that replay is observable
+	for i := range 50 { // enough entries that replay is observable
 		_, _, _ = n.Propose(ctx, meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{Parent: meta.RootIno, Name: string(rune('a'+i%26)) + string(rune('a'+i/26)), Mode: 0o755, Now: int64(i)}})
 	}
 	must(t, n.Close())
-	for round := 0; round < 3; round++ {
+	for round := range 3 {
 		n2, err := Open(opts(t, dir))
 		if err != nil {
 			t.Fatal(err)

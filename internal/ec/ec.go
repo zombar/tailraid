@@ -86,7 +86,7 @@ func (c *Codec) Encode(chunk []byte) ([][]byte, error) {
 		}
 		return shards, nil
 	}
-	for i := 0; i < c.k; i++ {
+	for i := range c.k {
 		lo := i * sl
 		if lo >= len(chunk) {
 			break

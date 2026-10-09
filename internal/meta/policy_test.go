@@ -18,8 +18,21 @@ func devices(voters, nonVoters int) []Node {
 func TestAutoPolicy_Table(t *testing.T) {
 	// the table of docs/03, then the general rule over the whole grid
 	cases := []struct{ v, s, k, m int }{
-		{1, 0, 1, 0}, {1, 1, 1, 1}, {1, 3, 1, 2}, {2, 1, 2, 1}, {3, 0, 2, 1}, {3, 2, 3, 2}, {2, 4, 2, 2},
-		{0, 1, 1, 0}, {0, 2, 1, 1}, {0, 5, 1, 2}, {2, 0, 1, 1}, {4, 0, 2, 2}, {5, 0, 3, 2}, {8, 0, 6, 2}, {9, 3, 6, 2},
+		{1, 0, 1, 0},
+		{1, 1, 1, 1},
+		{1, 3, 1, 2},
+		{2, 1, 2, 1},
+		{3, 0, 2, 1},
+		{3, 2, 3, 2},
+		{2, 4, 2, 2},
+		{0, 1, 1, 0},
+		{0, 2, 1, 1},
+		{0, 5, 1, 2},
+		{2, 0, 1, 1},
+		{4, 0, 2, 2},
+		{5, 0, 3, 2},
+		{8, 0, 6, 2},
+		{9, 3, 6, 2},
 	}
 	for _, c := range cases {
 		k, m := AutoPolicy(devices(c.v, c.s))
@@ -27,8 +40,8 @@ func TestAutoPolicy_Table(t *testing.T) {
 			t.Errorf("v=%d s=%d: %d+%d, want %d+%d", c.v, c.s, k, m, c.k, c.m)
 		}
 	}
-	for v := 0; v <= 9; v++ {
-		for s := 0; s <= 9; s++ {
+	for v := range 10 {
+		for s := range 10 {
 			if v+s == 0 {
 				continue
 			}
@@ -59,7 +72,7 @@ func TestAutoPolicy_NNodeDeterminism(t *testing.T) {
 	r := testseed.Seed(t)
 	base := devices(3, 4)
 	wk, wm := AutoPolicy(base)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		sh := append([]Node(nil), base...)
 		r.Shuffle(len(sh), func(a, b int) { sh[a], sh[b] = sh[b], sh[a] })
 		if k, m := AutoPolicy(sh); k != wk || m != wm {

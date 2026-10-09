@@ -54,7 +54,7 @@ matching the uid/gid the gateway reports. See docs/windows-checklist.md.`
 // non-root user is retried through sudo so the user sees exactly what is elevated.
 func Run(ctx context.Context, out io.Writer, goos, prog string, args []string) error {
 	fmt.Fprintf(out, "+ %s %s\n", prog, strings.Join(args, " "))
-	cmd := exec.CommandContext(ctx, prog, args...)
+	cmd := exec.CommandContext(ctx, prog, args...) //nolint:gosec // the mount helper runs the OS mount command the caller chose (docs/07)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = out, out, os.Stdin
 	err := cmd.Run()
 	if err == nil {
@@ -63,7 +63,7 @@ func Run(ctx context.Context, out io.Writer, goos, prog string, args []string) e
 	var ee *exec.ExitError
 	if goos != "windows" && errors.As(err, &ee) && os.Geteuid() != 0 {
 		fmt.Fprintf(out, "+ sudo %s %s\n", prog, strings.Join(args, " "))
-		cmd = exec.CommandContext(ctx, "sudo", append([]string{prog}, args...)...)
+		cmd = exec.CommandContext(ctx, "sudo", append([]string{prog}, args...)...) //nolint:gosec // as Run
 		cmd.Stdout, cmd.Stderr, cmd.Stdin = out, out, os.Stdin
 		return cmd.Run()
 	}

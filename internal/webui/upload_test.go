@@ -249,7 +249,7 @@ func TestWebUI_Put_Concurrency_503(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		conn := u.rawPut(fmt.Sprintf("/slot%d", i), 10, nil)
 		conns = append(conns, conn)
 		name := fmt.Sprintf("/.slot%d.tailraid-upload", i) // the temp exists once the handler holds a slot

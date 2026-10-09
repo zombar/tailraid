@@ -58,7 +58,7 @@ the cluster's repair.grace.`,
 				p.ChunkSize = cs
 			}
 			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), destructive, restarts)
-			rf, err := os.Create(resultsPath)
+			rf, err := os.Create(resultsPath) //nolint:gosec // --results names the file
 			if err != nil {
 				return err
 			}
@@ -77,7 +77,7 @@ the cluster's repair.grace.`,
 			if err != nil {
 				return err
 			}
-			f, err := os.Create(out)
+			f, err := os.Create(out) //nolint:gosec // --report names the file
 			if err != nil {
 				return err
 			}

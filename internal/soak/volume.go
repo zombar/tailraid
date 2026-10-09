@@ -41,10 +41,10 @@ type OSVolume struct{ Root string }
 
 func (v OSVolume) abs(p string) string { return filepath.Join(v.Root, filepath.FromSlash(p)) }
 
-func (v OSVolume) Mkdir(p string) error { return os.MkdirAll(v.abs(p), 0o755) }
+func (v OSVolume) Mkdir(p string) error { return os.MkdirAll(v.abs(p), 0o750) }
 
 func (v OSVolume) WriteAt(p string, off int64, data []byte) error {
-	f, err := os.OpenFile(v.abs(p), os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(v.abs(p), os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}

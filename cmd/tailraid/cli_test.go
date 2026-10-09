@@ -30,7 +30,7 @@ const fakeTailnet = `{"status":{"BackendState":"Running","TailscaleIPs":["127.0.
 func freePorts(t *testing.T, n int) []int {
 	t.Helper()
 	out := make([]int, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)

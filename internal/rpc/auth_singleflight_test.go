@@ -36,7 +36,7 @@ func TestWhoIs_ConcurrentMissesShareOneCall(t *testing.T) {
 	const callers = 6
 	ids := make(chan string, callers)
 	errs := make(chan error, callers)
-	for i := 0; i < callers; i++ {
+	for range callers {
 		go func() {
 			id, err := a.Identify(context.Background(), ip)
 			ids <- id
@@ -45,7 +45,7 @@ func TestWhoIs_ConcurrentMissesShareOneCall(t *testing.T) {
 	}
 	<-g.entered // one call is in flight; the others must be waiting for it
 	close(g.release)
-	for i := 0; i < callers; i++ {
+	for range callers {
 		if err := <-errs; err != nil {
 			t.Fatal(err)
 		}

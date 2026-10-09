@@ -108,7 +108,7 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 func hashOf(t *testing.T, hexs string) meta.Hash {
 	t.Helper()
 	var h meta.Hash
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		var b byte
 		for _, c := range hexs[2*i : 2*i+2] {
 			b <<= 4

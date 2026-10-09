@@ -150,8 +150,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	prober := cluster.NewProber(node, client, clk)
 	prober.SelfHealth = func() rpc.Health {
 		used, capacity := store.Used(), store.Capacity()
-		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled,
-			FS: storeFS, Disks: disks.health()}
+		return rpc.Health{
+			NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled,
+			FS: storeFS, Disks: disks.health(),
+		}
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
@@ -198,11 +200,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		return rep
 	}
-	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Disk: disks.lookup, DiskHealth: disks.health, StoreFS: storeFS, Applier: node, Fence: fence{node, selfIdx},
+	srv, err := rpc.NewServer(rpc.Options{
+		NodeID: id, ClusterID: clusterID, Version: version, Store: store, Disk: disks.lookup, DiskHealth: disks.health, StoreFS: storeFS, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
-		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked})
+		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked,
+	})
 	if err != nil {
 		return err
 	}
@@ -213,10 +217,12 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		if login != "" {
 			webUsers = login
 		}
-		web, err = webui.New(webui.Options{FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status,
+		web, err = webui.New(webui.Options{
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status,
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
-			}, Clk: clk, Logger: log})
+			}, Clk: clk, Logger: log,
+		})
 		if err != nil {
 			return err
 		}
@@ -232,18 +238,19 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			_ = client.ReportBadSlot(rctx, addr, key, bad)
 		}
 	}
-	rl, err := rpc.Listen(rpcAddr, auth)
+	rl, err := rpc.Listen(ctx, rpcAddr, auth)
 	if err != nil {
 		return err
 	}
-	nl, err := nfsgw.Listen(cfg.Listen.NFS)
+	nl, err := nfsgw.Listen(ctx, cfg.Listen.NFS)
 	if err != nil {
 		_ = rl.Close()
 		return err
 	}
 	var wl net.Listener
 	if web != nil {
-		if wl, err = net.Listen("tcp", webAddr); err != nil {
+		var lc net.ListenConfig
+		if wl, err = lc.Listen(ctx, "tcp", webAddr); err != nil {
 			_ = rl.Close()
 			_ = nl.Close()
 			return fmt.Errorf("web ui listener: %w", err)
@@ -301,7 +308,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	err = nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM))
 	cancelBg()
-	for i := 0; i < loops; i++ {
+	for range loops {
 		<-done
 	}
 	if addrChanged.Load() {
@@ -330,6 +337,7 @@ func staleFor(node *cluster.Node, prober *cluster.Prober, clk clock.Clock) bool 
 		return true
 	case cluster.NoLeader:
 		return clk.Now().Sub(node.Raft.LastContact()) >= cluster.StaleThreshold
+	case cluster.Healthy:
 	}
 	return false
 }
@@ -615,7 +623,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 				h, kk, mm, idx, err := chunk.ParseKey(k)
 				if err != nil {
 					rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
-					return nil
+					return nil         //nolint:nilerr // counted above; the walk goes on
 				}
 				c, ok := a.node.FSM.GetChunk(h)
 				if !ok || c.K != kk || c.M != mm || idx >= len(c.Placement) || c.Placement[idx] != t.idx {
@@ -763,10 +771,12 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	}
 	defer n.Close()
 	client := rpc.NewClient(cid, nil, nil)
-	req := rpc.JoinRequest{Token: token, NodeID: id, Name: cfg.Node.Name, TSStableID: ident.StableID, Addr: ident.IP.String(),
-		RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Voter: voter, Capacity: capBytes, Version: version}
+	req := rpc.JoinRequest{
+		Token: token, NodeID: id, Name: cfg.Node.Name, TSStableID: ident.StableID, Addr: ident.IP.String(),
+		RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Voter: voter, Capacity: capBytes, Version: version,
+	}
 	var resp rpc.JoinResponse
-	for attempt := 0; attempt < 5; attempt++ {
+	for range 5 {
 		resp, err = client.Join(ctx, target, req)
 		if err == nil {
 			break

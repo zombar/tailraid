@@ -11,8 +11,10 @@ import (
 // stderr; each unit restarts the process and runs the same binary with the same config.
 // Invariant: I-60
 func TestSvc_UnitsRouteLogs(t *testing.T) {
-	p := Params{Exe: "/opt/tailraid", ConfigPath: "/home/u/.config/tailraid/config.yaml", Home: "/Users/u/Library/Application Support/tailraid",
-		LogFile: "/var/log/tailraid.log", User: "u", UID: 501}
+	p := Params{
+		Exe: "/opt/tailraid", ConfigPath: "/home/u/.config/tailraid/config.yaml", Home: "/Users/u/Library/Application Support/tailraid",
+		LogFile: "/var/log/tailraid.log", User: "u", UID: 501,
+	}
 	p.GOOS = "darwin"
 	pl, err := Install(p)
 	if err != nil || len(pl.Files) != 1 {

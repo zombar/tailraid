@@ -109,14 +109,14 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		r.checkAt("I-78", "the heap stayed flat", peak.heap <= budget, fmt.Sprintf("peak heap in use %s, baseline %s, budget %s", humanBytes(float64(peak.heap)), humanBytes(float64(baseHeap)), humanBytes(float64(budget))), p, "", gw.Name)
 	}
 	if writeErr != nil {
-		return nil
+		return nil //nolint:nilerr // the failed check above carries the error; the phase itself completed
 	}
 	// let the idle flush commit the tail, then the overlay must be empty
 	if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 		return err
 	}
 	var rep admin.Report
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if rep, err = r.Env.Status(ctx, gw); err == nil && rep.Gateway != nil && rep.Gateway.DirtyInodes == 0 {
 			break
 		}

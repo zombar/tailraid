@@ -226,7 +226,7 @@ func TestStore_QuarantineCapped(t *testing.T) {
 	s := openStore(t, sysfs.OS{}, root, 0)
 	p := payload(100, 1)
 	k := keyFor(p, 0)
-	for i := 0; i < QuarantineMax+10; i++ {
+	for range QuarantineMax + 10 {
 		_, _ = s.Put(k, p)
 		raw, _ := os.ReadFile(shardPath(root, k))
 		raw[HeaderSize] ^= 1
@@ -464,10 +464,8 @@ func TestStore_ConcurrentPutSameHash(t *testing.T) {
 	var wg sync.WaitGroup
 	var total int64
 	var mu sync.Mutex
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 32 {
+		wg.Go(func() {
 			added, err := s.Put(k, p)
 			if err != nil {
 				t.Error(err)
@@ -475,7 +473,7 @@ func TestStore_ConcurrentPutSameHash(t *testing.T) {
 			mu.Lock()
 			total += added
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	if total != int64(HeaderSize+len(p)) {
@@ -566,7 +564,7 @@ func TestStore_ConcurrentPutsNearCapacity_NeverExceed(t *testing.T) {
 	var wg sync.WaitGroup
 	var okCount, fullCount atomic.Int32
 	var otherErr atomic.Value
-	for i := 0; i < writers; i++ {
+	for i := range writers {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -611,7 +609,7 @@ func TestStore_ConcurrentPutsNearCapacity_NeverExceed(t *testing.T) {
 func TestStore_CapacityEnforced(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 3*(HeaderSize+100))
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		p := payload(100, int64(100+i))
 		if _, err := s.Put(keyFor(p, 0), p); err != nil {
 			t.Fatal(err)
@@ -650,7 +648,7 @@ func TestStore_CapacityAccounting(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 0)
 	var keys []ShardKey
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		p := payload(1000+i, int64(i))
 		k := keyFor(p, i%3)
 		keys = append(keys, k)
@@ -696,7 +694,7 @@ func TestStore_WalkListsAll(t *testing.T) {
 	root := t.TempDir()
 	s := openStore(t, sysfs.OS{}, root, 0)
 	want := map[ShardKey]int64{}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		p := payload(10*i, int64(i))
 		k := keyFor(p, i%3)
 		want[k] = int64(HeaderSize + len(p))

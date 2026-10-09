@@ -135,7 +135,7 @@ func TestDurability_AckImpliesReadableFromKSurvivors(t *testing.T) {
 	}
 	c := testharness.NewCluster(t, 4, 2, 1)
 	defer c.Close()
-	for i := 0; i < iters; i++ {
+	for i := range iters {
 		gw := i % 4
 		if !c.Alive(gw) {
 			c.Restart(gw)
@@ -181,7 +181,7 @@ func writeAt(t *testing.T, c *testharness.Cluster, i int, path string, off int, 
 func flushAll(t *testing.T, c *testharness.Cluster, i int) {
 	t.Helper()
 	var err error
-	for attempt := 0; attempt < 30; attempt++ {
+	for range 30 {
 		if err = c.Nodes[i].Flush.FlushAll(ctx); err == nil {
 			c.Settle()
 			return

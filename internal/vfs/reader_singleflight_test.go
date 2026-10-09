@@ -46,7 +46,7 @@ func TestReader_ConcurrentReadsOfOneChunk_FetchOnce(t *testing.T) {
 	const readers = 8
 	results := make(chan []byte, readers)
 	errs := make(chan error, readers)
-	for i := 0; i < readers; i++ {
+	for range readers {
 		go func() {
 			b, err := rd.ReadChunk(ctx, in.Chunks[0])
 			results <- b
@@ -55,7 +55,7 @@ func TestReader_ConcurrentReadsOfOneChunk_FetchOnce(t *testing.T) {
 	}
 	<-g.entered // one fetch is in flight; the others must be waiting on it, not fetching
 	close(g.release)
-	for i := 0; i < readers; i++ {
+	for i := range readers {
 		must(t, <-errs)
 		if got := <-results; !bytes.Equal(got, data) {
 			t.Fatalf("reader %d: differs at %d", i, testharness.FirstDiff(got, data))

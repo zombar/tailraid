@@ -45,7 +45,7 @@ a:hover { text-decoration: underline; }
 h1, h2, h3 { font-family: var(--mono); font-weight: 600; margin: 0; text-wrap: balance; }
 h2 { font-size: 17px; padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
 h3 { font-size: 15px; }
-.mono, .num, .name, .path, code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.mono, .num, .name, code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
 .small { font-size: 13px; }
 .text-bad { color: var(--bad); }

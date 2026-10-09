@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 )
 
@@ -74,7 +75,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 	for ino := range s.Inodes {
 		inos = append(inos, uint64(ino))
 	}
-	sort.Slice(inos, func(i, j int) bool { return inos[i] < inos[j] })
+	slices.Sort(inos)
 	w.uvarint(uint64(len(inos)))
 	for _, ino := range inos {
 		in := s.Inodes[Ino(ino)]
@@ -186,8 +187,10 @@ func DecodeState(rd io.Reader) (*State, error) {
 	n = r.length(maxListLen)
 	var prevIno Ino
 	for i := 0; i < n && r.err == nil; i++ {
-		in := &Inode{Ino: Ino(r.u64()), Gen: r.u32(), Type: FileType(r.u8()), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(),
-			Size: r.u64(), Atime: r.i64(), Mtime: r.i64(), Ctime: r.i64(), Nlink: r.u16(), Version: r.u64(), Parent: Ino(r.u64()), Name: r.str()}
+		in := &Inode{
+			Ino: Ino(r.u64()), Gen: r.u32(), Type: FileType(r.u8()), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(),
+			Size: r.u64(), Atime: r.i64(), Mtime: r.i64(), Ctime: r.i64(), Nlink: r.u16(), Version: r.u64(), Parent: Ino(r.u64()), Name: r.str(),
+		}
 		if i > 0 && in.Ino <= prevIno {
 			return nil, fmt.Errorf("meta: inodes not in canonical order")
 		}
