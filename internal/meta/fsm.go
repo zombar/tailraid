@@ -34,7 +34,7 @@ func NewFSM() *FSM {
 	return &FSM{st: NewState(), waitCh: make(chan struct{})}
 }
 
-// state returns the live state; callers hold f.mu. Tests use it directly.
+// state returns the live state; callers hold f.mu. Only the package's tests use it.
 func (f *FSM) state() *State { return f.st }
 
 // Apply implements raft.FSM. Non-command logs advance the applied index only.

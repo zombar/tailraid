@@ -187,7 +187,7 @@ func NewServer(o Options) (*Server, error) {
 	return s, nil
 }
 
-// Handler returns the HTTP handler.
+// Handler returns the HTTP handler (the test harness serves it on its own listener).
 func (s *Server) Handler() http.Handler { return s.handler }
 
 // Listen binds the RPC listener. A non-loopback bind requires a real authorizer.

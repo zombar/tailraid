@@ -160,7 +160,7 @@ func (r *Run) skewChecks(ctx context.Context, rep admin.Report) error {
 	r.check("I-89 L-193", "repair moves every skewed chunk within the cap", rep.Volume.DomainSkew == 0 && rep.Volume.Degraded == 0,
 		fmt.Sprintf("%d skewed, %d degraded", rep.Volume.DomainSkew, rep.Volume.Degraded))
 	r.capChecks(ctx, rep, "after the skew moves")
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	bad, first := r.verifyModel(v, r.corpusModel())
 	r.checkAt("I-89 I-32", "corpus exact after the skew moves", bad == 0, first, first, "", gw.Name)
 	return nil
@@ -217,7 +217,7 @@ func (r *Run) diskFailureChecks(ctx context.Context) error {
 		}
 	}
 	r.checkAt("I-90 L-192", "the closed disk is dead while its host is live", !diskLive && hostLive, fmt.Sprintf("disk live %v, host live %v", diskLive, hostLive), "", "", victim.Name)
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	m := r.corpusModel()
 	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-90 I-12", "reads exact with a disk closed", bad == 0, first, first, "", gw.Name)
@@ -266,7 +266,7 @@ func (r *Run) diskFailureChecks(ctx context.Context) error {
 // throughout (I-88, I-42, I-32). A pinned volume is pinned back afterwards.
 func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	m := r.corpusModel()
 	rep, _, err := r.anyStatus(ctx)
 	if err != nil {

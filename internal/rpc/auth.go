@@ -161,8 +161,9 @@ func (a *WhoIsAuthorizer) Purge() {
 	a.mu.Unlock()
 }
 
-// AllowAll is the loopback/dev authorizer: every source is member idx 1 with the given
-// StableID. Only used by tests and single-node serve.
+// AllowAll answers every source with the given member and StableID. It is a test fake
+// (the harness and the webui, dev and rpc tests); nothing in production uses it, and
+// Listen refuses a non-loopback bind without a real authorizer.
 type AllowAll struct{ Node meta.Node }
 
 func (AllowAll) Purge() {}

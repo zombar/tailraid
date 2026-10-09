@@ -241,7 +241,7 @@ func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
 
 func phaseBaseline(ctx context.Context, r *Run) error {
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	m := r.corpus(join(r.Root, "corpus"))
 	before := r.snapshotCounters()
 	t := time.Now()
@@ -265,7 +265,7 @@ func phaseBaseline(ctx context.Context, r *Run) error {
 func phaseIntegrity(ctx context.Context, r *Run) error {
 	m := r.corpusModel()
 	for _, gw := range r.gateways() {
-		v, _ := r.volume(gw)
+		v := r.volume(gw)
 		bad, first := r.verifyModel(v, m)
 		r.checkAt("I-12 I-36 L-51", "corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
 	}
@@ -305,7 +305,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 	cs := r.Profile.ChunkSize
 	all := model{}
 	for wi, gw := range writers {
-		v, _ := r.volume(gw)
+		v := r.volume(gw)
 		dir := join(r.Root, "churn", gw.Name)
 		if err := v.Mkdir(dir); err != nil {
 			return err
@@ -391,7 +391,7 @@ func phaseChurn(ctx context.Context, r *Run) error {
 		return err
 	}
 	reader := gws[len(gws)-1]
-	v, _ := r.volume(reader)
+	v := r.volume(reader)
 	bad, first := r.verifyModel(v, all)
 	r.checkAt("I-12 I-36 L-21", "churn result identical via "+reader.Name, bad == 0, fmt.Sprintf("%d files differ: %s", bad, first), first, "", reader.Name)
 	for p := range all {
@@ -425,7 +425,7 @@ func phaseParity(ctx context.Context, r *Run) error {
 		r.skip(fmt.Sprintf("need %d nodes besides the gateway to lose m+1, have %d", mm+1, len(victims)))
 		return nil
 	}
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	// lose m
 	for _, n := range victims[:mm] {
 		if err := r.Env.Kill(ctx, n); err != nil {
@@ -605,7 +605,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 		return nil
 	}
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	m := r.corpusModel()
 	// one shard (≤ m) of a committed chunk: reads stay exact, scrub repairs it
 	target := join(r.Root, "corpus", "big.bin")
@@ -698,7 +698,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 			break
 		}
 	}
-	rv, _ := r.volume(reader)
+	rv := r.volume(reader)
 	got, err = rv.ReadAll(p)
 	ok, text := corruptionVerdict(corrupted, int(c.M), reader.Idx != gw.Idx, err, bytes.Equal(got, data))
 	r.checkAt("I-40 L-106", fmt.Sprintf("m+1=%d corrupt shards: error, never garbage", int(c.M)+1), ok, text, p, c.Hash, reader.Name)
@@ -746,7 +746,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 			r.event("note", fmt.Sprintf("round %d skipped: the only gateway (%s) now leads", round, leader.Name))
 			break
 		}
-		v, _ := r.volume(gw)
+		v := r.volume(gw)
 		dir := join(r.Root, "consensus")
 		if err := v.Mkdir(dir); err != nil {
 			return err
@@ -778,7 +778,7 @@ func phaseConsensus(ctx context.Context, r *Run) error {
 			return err
 		}
 		reader := r.gateways()[len(r.gateways())-1]
-		rv, _ := r.volume(reader)
+		rv := r.volume(reader)
 		bad, first := r.verifyModel(rv, acked)
 		r.checkAt("I-7 I-12 L-57 L-58 L-61", fmt.Sprintf("round %d: acknowledged writes persist across the leader loss", round), bad == 0, fmt.Sprintf("%d acked, %s", len(acked), first), first, "", reader.Name)
 		for p, d := range acked {
@@ -798,7 +798,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	}
 	m := r.corpusModel()
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	k0, m0 := rep.Volume.K, rep.Volume.M
 	active := 0
 	for i := range rep.Nodes {
@@ -871,7 +871,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 
 func phaseDedupGC(ctx context.Context, r *Run) error {
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	m := r.corpusModel()
 	rep, _, err := r.anyStatus(ctx)
 	if err != nil {
@@ -946,7 +946,7 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 	dir := join(r.Root, "storm")
 	acked := model{}
 	for _, gw := range r.gateways() {
-		v, _ := r.volume(gw)
+		v := r.volume(gw)
 		if err := v.Mkdir(dir); err != nil {
 			return err
 		}
@@ -969,7 +969,7 @@ func phaseRestartStorm(ctx context.Context, r *Run) error {
 		return err
 	}
 	gw := r.gateways()[len(r.gateways())-1]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	bad, first := r.verifyModel(v, acked)
 	r.checkAt("I-7 I-37 L-114 L-121", "writes acknowledged before the restart persist", bad == 0, first, first, "", gw.Name)
 	for p, d := range acked {
@@ -1022,7 +1022,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 		return nil
 	}
 	m := r.corpusModel()
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	dir := join(r.Root, "partition")
 	if err := v.Mkdir(dir); err != nil {
 		return err
@@ -1074,7 +1074,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	minor := join(dir, "minor.bin")
 	refused := join(dir, "minor-dir")
 	if minorGW != nil {
-		mv, _ := r.volume(*minorGW)
+		mv := r.volume(*minorGW)
 		merr := mv.Mkdir(refused)
 		r.checkAt("I-6 I-39 L-59", "metadata operation on the cut-off side is refused", merr != nil, fmt.Sprint(merr), refused, "", minorGW.Name)
 		tail := r.randomBytes(cs / 2)
@@ -1133,7 +1133,7 @@ func phasePartition(ctx context.Context, r *Run) error {
 	r.checkAt("I-7 L-59", "bytes buffered on the cut-off gateway are committed after the heal", ok, detail, self, "", gw.Name)
 	r.noteRefused(v, refused)
 	for _, g := range gws {
-		rv, _ := r.volume(g)
+		rv := r.volume(g)
 		bad, first := r.verifyModel(rv, m)
 		r.checkAt("I-12 I-29 L-148", "corpus exact after the gateway rejoins", bad == 0, first, first, "", g.Name)
 	}
@@ -1210,7 +1210,7 @@ func (r *Run) awaitCommitted(ctx context.Context, gw NodeRef, path string, want 
 				}
 				total += int(reps[i].Size)
 			}
-			v, _ := r.volume(gw)
+			v := r.volume(gw)
 			got, rerr := v.ReadAll(path)
 			switch {
 			case !committed || total != len(want):

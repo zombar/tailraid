@@ -272,14 +272,12 @@ func (r *Run) event(name, text string) { r.emit(Record{Kind: "event", Name: name
 
 // check records a pass/fail with the invariants and lifecycle cells it exercises; failed
 // checks may name the file, chunk and node involved.
-func (r *Run) check(cites, name string, ok bool, text string) bool {
+func (r *Run) check(cites, name string, ok bool, text string) {
 	r.emit(Record{Kind: "check", Name: name, Cites: cites, OK: &ok, Text: text})
-	return ok
 }
 
-func (r *Run) checkAt(cites, name string, ok bool, text, file, chunk, node string) bool {
+func (r *Run) checkAt(cites, name string, ok bool, text, file, chunk, node string) {
 	r.emit(Record{Kind: "check", Name: name, Cites: cites, OK: &ok, Text: text, File: file, Chunk: chunk, Node: node})
-	return ok
 }
 
 // repairNow, scrub and gcNow run the maintenance passes and keep the run's totals.
@@ -371,13 +369,13 @@ func (m measured) Hash(p string) ([32]byte, int64, error) {
 	return sum, n, err
 }
 
-// volume returns the measured gateway of node, if the env reaches it.
-func (r *Run) volume(node NodeRef) (Volume, bool) {
+// volume returns the measured gateway of node, or nil when the env does not reach it.
+func (r *Run) volume(node NodeRef) Volume {
 	v, ok := r.Env.Volume(node)
 	if !ok {
-		return nil, false
+		return nil
 	}
-	return measured{v, r}, true
+	return measured{v, r}
 }
 
 // gateways lists the nodes whose gateway this driver can use.
@@ -647,7 +645,7 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 		return Summary{}, fmt.Errorf("soak: no gateway reachable in %s", r.Env.Name())
 	}
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	for attempt := 0; attempt < 30; attempt++ { // a fresh cluster may still be electing (EROFS)
 		if err = v.Mkdir(r.Root); err == nil {
 			break
@@ -755,7 +753,7 @@ func (r *Run) cleanup(ctx context.Context) {
 	if len(gws) == 0 {
 		return
 	}
-	v, _ := r.volume(gws[0])
+	v := r.volume(gws[0])
 	removeTree(v, r.Root)
 }
 

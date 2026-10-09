@@ -160,7 +160,7 @@ func (r *Run) voterFirstChecks(ctx context.Context, rep admin.Report) {
 // back afterwards so the rest of the run (and a user's cluster) is as it was.
 func (r *Run) autoPolicyChecks(ctx context.Context, rep admin.Report) error {
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	m := r.corpusModel()
 	k0, m0, wasAuto := rep.Volume.K, rep.Volume.M, rep.Volume.Auto
 	if err := r.Env.SetPolicyAuto(ctx); err != nil {
