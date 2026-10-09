@@ -22,6 +22,16 @@ func Budget(used, free, total uint64) uint64 {
 	return avail - reserve
 }
 
+// SharedBudget is the budget of each of n targets whose stores share one filesystem: the
+// Budget of their summed used bytes and the filesystem's free and total, divided equally,
+// so the targets never promise more than the disk can give (docs/14 §3, I-91).
+func SharedBudget(used, free, total uint64, n int) uint64 {
+	if n <= 0 {
+		return 0
+	}
+	return Budget(used, free, total) / uint64(n)
+}
+
 // BudgetChanged reports whether a re-derived budget moved enough to be worth a Raft
 // proposal: more than max(5 % of the old value, 1 GiB) either way.
 func BudgetChanged(old, cur uint64) bool {
@@ -40,6 +50,9 @@ func (s *Store) Disk() (used, free, total uint64, err error) {
 	}
 	return uint64(max(s.Used(), 0)), free, total, nil
 }
+
+// Root is the store's directory.
+func (s *Store) Root() string { return s.root }
 
 // Rebudget measures the data disk, derives the budget and sets the store's cap to it.
 func (s *Store) Rebudget() (uint64, error) {

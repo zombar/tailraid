@@ -200,5 +200,5 @@ exactly one design doc transition table and cited by at least one test via
 | L-192 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot on a disk) | E-124 disk dead > fill_after, host live | Degraded → Repairing → Committed | `TestStubLifecycle_L_192` |
 | L-193 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a host above the cap, fixable) | E-125 repair pass | Degraded (`DomainSkew`) → Repairing → Committed | `TestStubLifecycle_L_193` |
 | L-194 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a host above the cap, no placement within it) | repair pass | Committed | `TestStubLifecycle_L_194` |
-| L-195 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (on a disk whose marker is missing or foreign) | serve opens stores | served or written | `TestStubLifecycle_L_195` |
+| L-195 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (on a disk whose marker is missing or foreign) | serve opens stores | served or written | `TestNode_ClosedDisk_NotServedNotSwept` |
 | L-196 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (repair, migration or drain) | SetPlacement | a host above the cap while a placement within it exists | `TestStubLifecycle_L_196` |

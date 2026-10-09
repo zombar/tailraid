@@ -34,13 +34,26 @@ func (n *Node) LeaderRPCAddr() string {
 	return ""
 }
 
-// RPCAddrOf resolves a node index to its RPC address (rpc.Resolver).
+// RPCAddrOf resolves a target index to its RPC address (rpc.Resolver): a disk resolves
+// to its host's (docs/14 §4).
 func (n *Node) RPCAddrOf(idx meta.NodeIdx) (addr string, self, ok bool) {
 	nd, found := n.FSM.Node(idx)
+	if found && nd.Kind == meta.KindDisk {
+		nd, found = n.FSM.Node(nd.Host)
+	}
 	if !found || nd.Kind != meta.KindDevice || nd.Addr == "" {
 		return "", false, false
 	}
 	return nd.RPCAddr(), nd.ID == n.ID, true
+}
+
+// DiskOf names the disk ID of an added-disk target (false for every other kind).
+func (n *Node) DiskOf(idx meta.NodeIdx) (string, bool) {
+	nd, found := n.FSM.Node(idx)
+	if !found || nd.Kind != meta.KindDisk {
+		return "", false
+	}
+	return nd.ID, true
 }
 
 func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) { return n.FSM.Node(idx) }
@@ -169,6 +182,14 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 	case "set_capacity":
 		nd.Capacity = op.Capacity
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
+	case "add_disk":
+		// node add-disk on the host: a disk row under it, keyed by the marker's disk ID
+		// so a retry updates the row rather than adding a second (docs/14 §2)
+		if op.DiskID == "" {
+			return fmt.Errorf("%w: add_disk needs disk_id", ErrBadMemberOp)
+		}
+		disk := meta.Node{ID: op.DiskID, Name: op.Name, Kind: meta.KindDisk, Host: op.NodeIdx, Capacity: op.Capacity, JoinedAt: time.Now().UnixNano()}
+		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: disk}})
 	case "set_voter":
 		if nd.Kind != meta.KindDevice {
 			return fmt.Errorf("%w: only devices vote", ErrBadMemberOp)

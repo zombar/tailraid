@@ -28,6 +28,15 @@ type Client struct {
 	resolve Resolver
 	local   ShardStore
 	grace   time.Duration // age guard for self-targeted deletes (same rule as the fence)
+	// added disks (docs/14 §4): diskOf names a target's disk ID (false for disk 0 and
+	// other kinds), localDisk opens one of this host's disks (nil when closed)
+	diskOf    func(meta.NodeIdx) (string, bool)
+	localDisk func(id string) ShardStore
+}
+
+// SetDisks wires added-disk routing: the disk ID of a target, and this host's open disks.
+func (c *Client) SetDisks(diskOf func(meta.NodeIdx) (string, bool), local func(id string) ShardStore) {
+	c.diskOf, c.localDisk = diskOf, local
 }
 
 var _ chunk.ShardClient = (*Client)(nil)
@@ -121,6 +130,9 @@ func errFromStatus(resp *http.Response) error {
 	case http.StatusInsufficientStorage:
 		return chunk.ErrFull
 	case http.StatusNotFound:
+		if resp.Header.Get(HeaderDisk) != "" {
+			return fmt.Errorf("%w: %s", ErrUnavailable, msg) // the disk is closed, not the shard absent (I-90)
+		}
 		return chunk.ErrNotFound
 	case http.StatusUnprocessableEntity:
 		return chunk.ErrCorrupt
@@ -132,27 +144,48 @@ func errFromStatus(resp *http.Response) error {
 
 // --- chunk.ShardClient --------------------------------------------------------------
 
-func (c *Client) target(node meta.NodeIdx) (string, bool, error) {
+// shardTarget is where one target's shards live: the host's address, the URL prefix of
+// the target's shard endpoint, and, on this host, its store (nil when it is closed).
+type shardTarget struct {
+	addr, prefix string
+	self         bool
+	store        ShardStore
+}
+
+func (c *Client) target(node meta.NodeIdx) (shardTarget, error) {
 	addr, self, ok := c.resolve(node)
 	if !ok {
-		return "", false, fmt.Errorf("%w: node %d has no address", ErrUnavailable, node)
+		return shardTarget{}, fmt.Errorf("%w: node %d has no address", ErrUnavailable, node)
 	}
-	return addr, self, nil
+	t := shardTarget{addr: addr, prefix: "/v1/shards/", self: self, store: c.local}
+	if c.diskOf != nil {
+		if id, isDisk := c.diskOf(node); isDisk {
+			t.prefix = "/v1/disks/" + id + "/shards/"
+			t.store = nil
+			if self && c.localDisk != nil {
+				t.store = c.localDisk(id)
+			}
+			if self && t.store == nil {
+				return shardTarget{}, fmt.Errorf("%w: disk %s is not open on this host", ErrUnavailable, id)
+			}
+		}
+	}
+	return t, nil
 }
 
 func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
-	addr, self, err := c.target(node)
+	t, err := c.target(node)
 	if err != nil {
 		return err
 	}
 	sum := sha256.Sum256(body)
-	if self && c.local != nil {
-		_, err := c.local.PutVerified(key, body, sum)
+	if t.self && t.store != nil {
+		_, err := t.store.PutVerified(key, body, sum)
 		return err
 	}
 	ctx, cancel := bound(ctx, int64(len(body)))
 	defer cancel()
-	resp, err := c.do(ctx, http.MethodPut, addr, "/v1/shards/"+string(key), body, map[string]string{HeaderShardSum: hex.EncodeToString(sum[:])})
+	resp, err := c.do(ctx, http.MethodPut, t.addr, t.prefix+string(key), body, map[string]string{HeaderShardSum: hex.EncodeToString(sum[:])})
 	if err != nil {
 		return err
 	}
@@ -164,21 +197,21 @@ func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 }
 
 func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
-	addr, self, err := c.target(node)
+	t, err := c.target(node)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := bound(ctx, chunk.MaxPayload) // the reply is up to a shard
 	defer cancel()
-	if self && c.local != nil {
-		rc, _, err := c.local.Open(key)
+	if t.self && t.store != nil {
+		rc, _, err := t.store.Open(key)
 		if err != nil {
 			return nil, err
 		}
 		defer rc.Close()
 		return io.ReadAll(rc)
 	}
-	resp, err := c.do(ctx, http.MethodGet, addr, "/v1/shards/"+string(key), nil, nil)
+	resp, err := c.do(ctx, http.MethodGet, t.addr, t.prefix+string(key), nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -202,18 +235,18 @@ func (c *Client) Delete(ctx context.Context, node meta.NodeIdx, key chunk.ShardK
 
 // DeleteFenced deletes a shard on node with the docs/06 fence (GCDelete/SetPlacement index).
 func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, index uint64) error {
-	addr, self, err := c.target(node)
+	t, err := c.target(node)
 	if err != nil {
 		return err
 	}
-	if self && c.local != nil {
+	if t.self && t.store != nil {
 		// the same age guard as the remote fence (I-14); placement is the caller's check
-		_, _, err := c.local.DeleteIfOlder(key, c.grace, time.Now())
+		_, _, err := t.store.DeleteIfOlder(key, c.grace, time.Now())
 		return err
 	}
 	ctx, cancel := bound(ctx, 0)
 	defer cancel()
-	resp, err := c.do(ctx, http.MethodDelete, addr, "/v1/shards/"+string(key), nil, map[string]string{HeaderLogIndex: strconv.FormatUint(index, 10)})
+	resp, err := c.do(ctx, http.MethodDelete, t.addr, t.prefix+string(key), nil, map[string]string{HeaderLogIndex: strconv.FormatUint(index, 10)})
 	if err != nil {
 		return err
 	}
@@ -226,16 +259,16 @@ func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.
 
 // Has checks shard presence on a node.
 func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error) {
-	addr, self, err := c.target(node)
+	t, err := c.target(node)
 	if err != nil {
 		return false, err
 	}
-	if self && c.local != nil {
-		return c.local.Has(key), nil
+	if t.self && t.store != nil {
+		return t.store.Has(key), nil
 	}
 	ctx, cancel := bound(ctx, 0)
 	defer cancel()
-	resp, err := c.do(ctx, http.MethodHead, addr, "/v1/shards/"+string(key), nil, nil)
+	resp, err := c.do(ctx, http.MethodHead, t.addr, t.prefix+string(key), nil, nil)
 	if err != nil {
 		return false, err
 	}
@@ -244,6 +277,9 @@ func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	case http.StatusOK:
 		return true, nil
 	case http.StatusNotFound:
+		if resp.Header.Get(HeaderDisk) != "" {
+			return false, fmt.Errorf("%w: disk closed on its host", ErrUnavailable)
+		}
 		return false, nil
 	}
 	return false, errFromStatus(resp)

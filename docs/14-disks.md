@@ -206,9 +206,9 @@ writes and repairs only (06 §6).
 
 | Invariant | Tests |
 |---|---|
-| I-86 | `TestStub_I_86` |
+| I-86 | `TestChunkRPC_DiskPath_RoundTrip`, `TestClient_LocalDiskRouting`, `TestDiskMarker_Table`, `TestNode_ClosedDisk_NotServedNotSwept` |
 | I-87 | `TestCandidates_DiskDomainAndVoter`, `TestFillPlacement_HostCap`, `TestPlace_HostCap`, `TestPlace_HostCap_NNodeDeterminism`, `TestPlace_OneTargetPerHost_Unchanged` |
 | I-88 | `TestAutoPolicy_Disks_Table`, `TestAutoPolicy_OneTargetPerHost_Unchanged`, `TestAutoPolicy_SurvivesOneHost`, `TestPolicyAllowed_CountsTargets`, `TestTolerance_Table` |
 | I-89 | `TestStub_I_89` |
-| I-90 | `TestStub_I_90` |
-| I-91 | `TestStub_I_91` |
+| I-90 | `TestChunkRPC_DiskPath_RoundTrip`, `TestMember_AddDisk_ResolvesToHost`, `TestProber_DiskLiveness` |
+| I-91 | `TestBudget_PerDisk_SharedFilesystem`, `TestNode_Rebudget_PerTarget` |

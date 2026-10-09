@@ -23,6 +23,7 @@ type Config struct {
 		DataDir  string `yaml:"data_dir"`
 		Capacity string `yaml:"capacity"` // "" derives the shard budget from the data disk (docs/01); "500G" pins it
 		Voter    bool   `yaml:"voter"`
+		Disks    []Disk `yaml:"disks"` // added disks, each a placement target of its own (docs/14)
 	} `yaml:"node"`
 	Listen struct {
 		Raft int    `yaml:"raft"` // tailnet TCP port
@@ -49,6 +50,12 @@ type Config struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
+}
+
+// Disk is one added disk: its mount path and its budget ("" derives it from the disk).
+type Disk struct {
+	Path     string `yaml:"path"`
+	Capacity string `yaml:"capacity"`
 }
 
 // RepairDurations parses the repair knobs (empty = default).
@@ -164,6 +171,22 @@ func (c Config) Validate() error {
 	if c.Node.Capacity != "" { // "" = derived from the data disk
 		if _, err := ParseBytes(c.Node.Capacity); err != nil {
 			return fmt.Errorf("config: node.capacity: %w", err)
+		}
+	}
+	seen := map[string]bool{}
+	for i, d := range c.Node.Disks {
+		if d.Path == "" || !filepath.IsAbs(d.Path) {
+			return fmt.Errorf("config: node.disks[%d].path %q: want an absolute path", i, d.Path)
+		}
+		p := filepath.Clean(d.Path)
+		if seen[p] || p == filepath.Clean(c.Node.DataDir) {
+			return fmt.Errorf("config: node.disks[%d].path %q is listed twice or is the data directory", i, d.Path)
+		}
+		seen[p] = true
+		if d.Capacity != "" {
+			if _, err := ParseBytes(d.Capacity); err != nil {
+				return fmt.Errorf("config: node.disks[%d].capacity: %w", i, err)
+			}
 		}
 	}
 	if w := c.Listen.Web; w < 0 || w > 65535 {

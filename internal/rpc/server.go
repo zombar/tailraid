@@ -60,6 +60,16 @@ type Fence interface {
 	PlacedOnSelf(key chunk.ShardKey) (placed, known bool)
 }
 
+// DiskFence answers the same question for an added disk (docs/14 §4). A server whose
+// Fence does not implement it refuses every DELETE on an added disk.
+type DiskFence interface {
+	PlacedOn(target meta.NodeIdx, key chunk.ShardKey) bool
+}
+
+// HeaderDisk marks a 404 for an added disk that is not open on this host, so the caller
+// reads it as an unavailable target, never as an absent shard (I-90).
+const HeaderDisk = "X-Tailraid-Disk"
+
 // Joiner performs the leader-side join and member operations (cluster package).
 type Joiner interface {
 	Join(ctx context.Context, req JoinRequest) (JoinResponse, error)
@@ -77,23 +87,27 @@ type Options struct {
 	ClusterID [16]byte
 	Version   string
 	Store     ShardStore
-	Applier   Applier
-	Fence     Fence
-	Joiner    Joiner
-	Admin     Admin
-	Auth      Authorizer
-	Members   func() []meta.Node
-	JoinToken func() string
-	Status    func() any // GET /v1/status body (admin report)
-	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
-	Dev       http.Handler           // /dev/* (docs/08): nil unless dev.enabled
-	Blocked   func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
-	Clk       clock.Clock
-	Logger    *slog.Logger
-	MaxShard  int64         // PUT body cap; default 2 MiB
-	Grace     time.Duration // DELETE fence minimum shard age; default 10 min
-	PutSlots  int           // concurrent PUTs; default 16
-	GetSlots  int           // concurrent GETs; default 32
+	// Disk looks up an added disk open on this host by its ID, with its target index;
+	// DiskHealth lists every configured disk for /health. Both nil without disks.
+	Disk       func(id string) (ShardStore, meta.NodeIdx, bool)
+	DiskHealth func() []DiskHealth
+	Applier    Applier
+	Fence      Fence
+	Joiner     Joiner
+	Admin      Admin
+	Auth       Authorizer
+	Members    func() []meta.Node
+	JoinToken  func() string
+	Status     func() any // GET /v1/status body (admin report)
+	BadSlot    func(key chunk.ShardKey, node meta.NodeIdx)
+	Dev        http.Handler           // /dev/* (docs/08): nil unless dev.enabled
+	Blocked    func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
+	Clk        clock.Clock
+	Logger     *slog.Logger
+	MaxShard   int64         // PUT body cap; default 2 MiB
+	Grace      time.Duration // DELETE fence minimum shard age; default 10 min
+	PutSlots   int           // concurrent PUTs; default 16
+	GetSlots   int           // concurrent GETs; default 32
 }
 
 // SlotBudget is the memory the shard RPC server may hold in request and reply bodies at
@@ -147,6 +161,7 @@ func NewServer(o Options) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.Handle("/v1/shards/", s.clusterCheck(s.member(http.HandlerFunc(s.shards))))
+	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
 	mux.Handle("POST /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.members))))
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
@@ -276,19 +291,61 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	h := Health{NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(),
 		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity()}
 	h.Free = max(h.Capacity-h.Used, 0)
+	if s.o.DiskHealth != nil {
+		h.Disks = s.o.DiskHealth()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h)
 }
 
 func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 	key := chunk.ShardKey(strings.TrimPrefix(r.URL.Path, "/v1/shards/"))
+	placed := func() bool {
+		if s.o.Fence == nil {
+			return false
+		}
+		p, _ := s.o.Fence.PlacedOnSelf(key)
+		return p
+	}
+	s.serveShard(w, r, s.o.Store, key, placed)
+}
+
+// diskShards serves /v1/disks/{id}/shards/{key}: the shard endpoint of an added disk.
+func (s *Server) diskShards(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/v1/disks/")
+	id, k, ok := strings.Cut(rest, "/shards/")
+	if !ok || id == "" {
+		writeErr(w, http.StatusNotFound, "no such endpoint")
+		return
+	}
+	var store ShardStore
+	var target meta.NodeIdx
+	if s.o.Disk != nil {
+		store, target, ok = s.o.Disk(id)
+	}
+	if !ok || store == nil {
+		w.Header().Set(HeaderDisk, "closed")
+		writeErr(w, http.StatusNotFound, "disk "+id+" is not open on this host")
+		return
+	}
+	key := chunk.ShardKey(k)
+	placed := func() bool {
+		df, ok := s.o.Fence.(DiskFence)
+		return !ok || df.PlacedOn(target, key) // no answer for disks: refuse the delete
+	}
+	s.serveShard(w, r, store, key, placed)
+}
+
+// serveShard is the shard endpoint over one store; placed is the DELETE fence's
+// "placed on this target" question.
+func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardStore, key chunk.ShardKey, placed func() bool) {
 	if _, _, _, _, err := chunk.ParseKey(key); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad shard key")
 		return
 	}
 	switch r.Method {
 	case http.MethodHead:
-		if !s.o.Store.Has(key) {
+		if !store.Has(key) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -299,7 +356,7 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer func() { <-s.getSem }()
-		rc, size, err := s.o.Store.Open(key)
+		rc, size, err := store.Open(key)
 		switch {
 		case errors.Is(err, chunk.ErrNotFound):
 			writeErr(w, http.StatusNotFound, "no such shard")
@@ -342,7 +399,7 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "shard hash mismatch")
 			return
 		}
-		if _, err := s.o.Store.PutVerified(key, body, sum); err != nil {
+		if _, err := store.PutVerified(key, body, sum); err != nil {
 			if errors.Is(err, chunk.ErrFull) {
 				writeErr(w, http.StatusInsufficientStorage, "no space")
 				return
@@ -361,18 +418,16 @@ func (s *Server) shards(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusPreconditionFailed, "fence: log index not yet applied here")
 			return
 		}
-		if s.o.Fence != nil {
-			if placed, _ := s.o.Fence.PlacedOnSelf(key); placed {
-				writeErr(w, http.StatusPreconditionFailed, "fence: shard is placed on this node")
-				return
-			}
+		if placed() {
+			writeErr(w, http.StatusPreconditionFailed, "fence: shard is placed on this node")
+			return
 		}
-		deleted, _, err := s.o.Store.DeleteIfOlder(key, s.o.Grace, s.o.Clk.Now())
+		deleted, _, err := store.DeleteIfOlder(key, s.o.Grace, s.o.Clk.Now())
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if !deleted && s.o.Store.Has(key) {
+		if !deleted && store.Has(key) {
 			writeErr(w, http.StatusPreconditionFailed, "fence: shard younger than grace")
 			return
 		}
