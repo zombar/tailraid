@@ -66,6 +66,36 @@ func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) { return n.FSM.Node
 
 func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.RaftAddr()) }
 
+// replaceStaleServer removes a Raft server that holds the joiner's address under
+// another node ID (a device that was reset), after checking that the server's member row
+// names the joiner's tailnet device; a different device at a known address is refused
+// (I-94). It returns that row's index so the join re-keys the row to the new ID instead
+// of retiring it: the device's disks and their shards stay registered under it. Nothing
+// to replace returns 0.
+func (n *Node) replaceStaleServer(req rpc.JoinRequest, addr raft.ServerAddress) (meta.NodeIdx, error) {
+	cfg := n.Raft.GetConfiguration()
+	if err := cfg.Error(); err != nil {
+		return 0, raftErr("read configuration", err)
+	}
+	var idx meta.NodeIdx
+	for _, s := range cfg.Configuration().Servers {
+		if s.Address != addr || string(s.ID) == req.NodeID {
+			continue
+		}
+		if old, known := n.FSM.NodeByID(string(s.ID)); known {
+			if old.TSStableID != "" && old.TSStableID != req.TSStableID {
+				return 0, fmt.Errorf("%w: address %s belongs to node %s of tailnet node %s, not %s", ErrBadMemberOp, req.Addr, old.ID, old.TSStableID, req.TSStableID)
+			}
+			idx = old.Idx
+		}
+		if err := n.Raft.RemoveServer(s.ID, 0, 10*time.Second).Error(); err != nil {
+			return 0, raftErr("remove stale raft server", err)
+		}
+		n.log.Info("replaced the raft server at the joiner's address", "old", s.ID, "new", req.NodeID, "addr", addr)
+	}
+	return idx, nil
+}
+
 // Join implements the leader side of `tailraid join` (docs/02 §Bootstrap and join).
 func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse, error) {
 	n.memberMu.Lock()
@@ -105,6 +135,15 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	})
 	if err != nil {
 		return rpc.JoinResponse{}, err
+	}
+	// a device that was reset joins again from its old Raft address under a new node ID:
+	// the old server would make the configuration refuse the address, so it is removed
+	// and the old row re-keyed to the new ID (its disks stay its disks), provided the
+	// caller is the same tailnet device the row named (I-94)
+	if idx, err := n.replaceStaleServer(req, n.raftAddrFor(nd)); err != nil {
+		return rpc.JoinResponse{}, err
+	} else if idx != 0 && nd.Idx == 0 {
+		nd.Idx = idx
 	}
 	var fut raft.IndexFuture
 	if req.Voter {

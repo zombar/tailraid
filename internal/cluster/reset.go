@@ -39,7 +39,7 @@ func Reset(dataDir string, discardDirty bool) error {
 	if len(wals) > 0 && !discardDirty {
 		return fmt.Errorf("%w (%d logs)", ErrDirtyWAL, len(wals))
 	}
-	for _, p := range []string{filepath.Join(dataDir, "raft"), filepath.Join(dataDir, "node_id"), filepath.Join(dataDir, "cluster_id")} {
+	for _, p := range []string{filepath.Join(dataDir, "raft"), filepath.Join(dataDir, "node_id"), filepath.Join(dataDir, "cluster_id"), filepath.Join(dataDir, seedFile)} {
 		if err := os.RemoveAll(p); err != nil {
 			return fmt.Errorf("cluster: reset %s: %w", p, err)
 		}
