@@ -6,6 +6,11 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- build: make tag names the changelog branch after the commit and stops on any failed step ([5568caf](https://github.com/zombar/tailraid/commit/5568caf))
+- soak: judge the data-slot spread only where it can be judged ([06660f7](https://github.com/zombar/tailraid/commit/06660f7))
+- admin, node: gofmt and range by index — make check green ([a7196e2](https://github.com/zombar/tailraid/commit/a7196e2))
+- admin, cli, webui: the data-dir store labelled, targets on one physical disk flagged ([01648df](https://github.com/zombar/tailraid/commit/01648df))
+- lookdev: the data-dir store labelled, targets on one physical disk flagged ([a717ce5](https://github.com/zombar/tailraid/commit/a717ce5))
 - node: a pinned budget reaches the cluster when it changes — growing a device in place ([50cf821](https://github.com/zombar/tailraid/commit/50cf821))
 - node: open_disk waits for the disk's row instead of leaving it closed for a tick ([425e61f](https://github.com/zombar/tailraid/commit/425e61f))
 - soak: phase 13 adds, drains and removes a disk in auto mode; the policy follows each step ([162fa8f](https://github.com/zombar/tailraid/commit/162fa8f))
