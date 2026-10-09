@@ -88,6 +88,7 @@ type ClusterNode struct {
 	RPC    *rpc.Server
 	srv    *httptest.Server
 	port   int
+	first  net.Listener // the RPC port, held from allocation until the first start so no other process can take it
 	trans  *raft.InmemTransport
 	raddr  raft.ServerAddress
 	alive  bool // guarded by Cluster.mu
@@ -294,13 +295,14 @@ func (c *Cluster) newNode(i int) *ClusterNode {
 	if err != nil {
 		c.T.Fatal(err)
 	}
+	// the listener stays open until the node first serves: a port reserved by listen and
+	// close can be handed to another test process in between (packages test in parallel)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		c.T.Fatal(err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	nd := &ClusterNode{I: i, ID: id, Dir: dir, port: port, idx: meta.NodeIdx(i + 1)} // idx is final once the node has joined
+	nd := &ClusterNode{I: i, ID: id, Dir: dir, port: port, first: l, idx: meta.NodeIdx(i + 1)} // idx is final once the node has joined
 	nd.raddr, nd.trans = raft.NewInmemTransportWithTimeout(raft.ServerAddress(id), 10*time.Second)
 	inmemMu.Lock()
 	inmemAddrs[id] = nd.raddr
@@ -403,9 +405,16 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	if err != nil {
 		c.T.Fatal(err)
 	}
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", nd.port))
-	if err != nil {
-		c.T.Fatal(err)
+	l := nd.first
+	nd.first = nil
+	if l == nil {
+		// a restart binds the port the other nodes know; the previous server's socket may
+		// still be closing, so wait for it rather than fail
+		Eventually(c.T, func() bool {
+			var err error
+			l, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", nd.port))
+			return err == nil
+		}, fmt.Sprintf("n%d: port %d stayed busy across a restart", nd.I, nd.port))
 	}
 	nd.srv = &httptest.Server{Listener: l, Config: &http.Server{Handler: nd.RPC.Handler(), ReadHeaderTimeout: 5 * time.Second}}
 	nd.srv.Start()
