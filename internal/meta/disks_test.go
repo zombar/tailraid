@@ -321,6 +321,25 @@ func TestTolerance_Table(t *testing.T) {
 	}
 }
 
+// set-redundancy needs k+m live Active nodes at the moment it is set (moved from the
+// admin package, which only wrapped PolicyAllowed).
+func TestPolicyAllowed_LiveCountBoundary(t *testing.T) {
+	dev := KindDevice
+	nodes := []Node{{Idx: 1, Kind: dev, State: Active}, {Idx: 2, Kind: dev, State: Active}, {Idx: 3, Kind: dev, State: Active}, {Idx: 4, Kind: dev, State: Draining}}
+	cases := []struct {
+		k, m uint8
+		ok   bool
+	}{
+		{1, 1, true}, {2, 0, true}, {2, 1, true}, {3, 0, true}, {2, 2, false}, {4, 0, false}, {0, 1, false}, {200, 57, false},
+	}
+	for _, c := range cases {
+		err := PolicyAllowed(nodes, allLiveness{}, c.k, c.m)
+		if (err == nil) != c.ok {
+			t.Fatalf("policy %d+%d with 3 live active nodes: err=%v, want ok=%v", c.k, c.m, err, c.ok)
+		}
+	}
+}
+
 // Invariant: I-88
 func TestPolicyAllowed_CountsTargets(t *testing.T) {
 	nodes := topology([]int{3}, allVoters(1), 1) // 4 targets on one host

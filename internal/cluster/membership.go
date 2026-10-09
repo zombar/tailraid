@@ -158,7 +158,7 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 			if op.Force {
 				// make the degradation explicit: zero every slot on the node, then the
 				// repairer fills them from the other copies (docs/02, L-96)
-				if err := n.zeroSlots(ctx, op.NodeIdx, propose); err != nil {
+				if err := n.zeroSlots(op.NodeIdx, propose); err != nil {
 					return err
 				}
 			} else if held := n.SlotsHeldBy(op.NodeIdx); held > 0 {
@@ -253,7 +253,7 @@ func (n *Node) diskName(op rpc.MemberOp) string {
 }
 
 // zeroSlots proposes SetPlacement with slot 0 for every chunk that places a shard on idx.
-func (n *Node) zeroSlots(ctx context.Context, idx meta.NodeIdx, propose func(meta.Command) error) error {
+func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) error {
 	var victims []meta.Chunk
 	n.FSM.ForEachChunk(func(c meta.Chunk) bool {
 		for _, s := range c.Placement {

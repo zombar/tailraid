@@ -40,7 +40,7 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		return nil
 	}
 	gw := r.gateways()[0]
-	v, _ := r.volume(gw)
+	v := r.volume(gw)
 	p := join(r.Root, "large.bin")
 	base, err := r.Env.Status(ctx, gw)
 	if err != nil {
@@ -137,7 +137,7 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	sum, n, err := v.Hash(p)
 	r.checkAt("I-7 I-34", "content hash exact on the writing gateway", err == nil && n == int64(size) && sum == want, fmt.Sprintf("%d bytes, %v", n, err), p, "", gw.Name)
 	if gws := r.gateways(); len(gws) > 1 {
-		other, _ := r.volume(gws[1])
+		other := r.volume(gws[1])
 		sum, n, err := other.Hash(p)
 		r.checkAt("I-12", "content hash exact on another gateway", err == nil && n == int64(size) && sum == want, fmt.Sprintf("%d bytes via %s, %v", n, gws[1].Name, err), p, "", gws[1].Name)
 	}

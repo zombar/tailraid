@@ -91,7 +91,7 @@ func New(o Options) (*Server, error) {
 	return s, nil
 }
 
-// Handler returns the HTTP handler.
+// Handler returns the HTTP handler (the tests drive it through httptest).
 func (s *Server) Handler() http.Handler { return s.handler }
 
 // Serve runs the handler on l until ctx is done.

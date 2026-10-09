@@ -4,9 +4,7 @@ package soak
 
 import (
 	"crypto/sha256"
-	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -170,11 +168,6 @@ func (v BillyVolume) Size(p string) (int64, error) {
 		return 0, err
 	}
 	return st.Size(), nil
-}
-
-// IsNotExist reports whether err means the path is gone (any Volume).
-func IsNotExist(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist)
 }
 
 // join builds a volume path.

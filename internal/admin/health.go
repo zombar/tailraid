@@ -67,12 +67,6 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 	return v
 }
 
-// PolicyAllowed is the `volume set-redundancy` precondition (meta.PolicyAllowed: k ≥ 1,
-// k+m ≤ 256 and at least k+m live Active nodes).
-func PolicyAllowed(nodes []meta.Node, live meta.Liveness, k, m uint8) error {
-	return meta.PolicyAllowed(nodes, live, k, m)
-}
-
 // CheckReport is the `check` reply.
 type CheckReport struct {
 	Scan          repair.Stats `json:"scan"`
