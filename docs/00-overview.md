@@ -2,8 +2,9 @@
 
 `tailraid` turns the devices on a Tailscale tailnet into one shared volume that behaves like
 a modern RAID array: file data is Reed-Solomon erasure-coded into shards spread across
-devices, identical content is stored once, and the volume is mounted locally on Windows,
-macOS and Linux through the operating system's own NFSv3 client. Metadata is kept
+devices, identical content is stored once, and the volume is mounted locally on macOS
+and Linux through the operating system's own NFSv3 client and on Windows through its SMB
+client. Metadata is kept
 consistent by a Raft-replicated state machine, so there is one coherent volume and no
 split-brain.
 
@@ -33,7 +34,8 @@ SSE, object lock, presigned POST); web UI beyond the dashboard and file browser 
 (no user management, no mutating admin operations from the browser); metrics stack (a
 `status` JSON instead);
 encryption at rest (WireGuard covers transit); quotas; file versioning / recycle bin;
-xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; multiple
+xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; SMB encryption,
+dialect 3.1.1, oplocks and leases, SMB security descriptors; Windows before 11 24H2; multiple
 independent volumes (S3 buckets are top-level directories of the one volume);
 content-defined chunking; compression (hook left); tiering; fsck-from-shards metadata
 reconstruction; WAL mirroring to a peer before ack (noted as a later option).
@@ -54,7 +56,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **slot** | Position `idx` in a chunk's `Placement []NodeIdx`. Slot value 0 means "no node holds this shard yet" (degraded). |
 | **placement** | The `k+m` node indices that hold a chunk's shards, chosen by rendezvous hashing at write time and **stored** in the chunk table. |
 | **policy version** | `Volume.PolicyVersion`, bumped by `volume set-redundancy`. Chunks whose `(K,M)` differ from the current policy are migrated lazily by the repairer. |
-| **gateway** | The NFS (and later S3) front end running on a device; any device is a gateway for its own user. |
+| **gateway** | The NFS or SMB (and later S3) front end running on a device; any device is a gateway for its own user. |
 | **diskless host** | A device with no disks: a member, voter if configured, and gateway whose reads and writes go to other hosts' disks (docs/14 §9). |
 | **live** | A node that answered `/health` within the last 15 s (probed every 5 s). Not stored in Raft. |
 | **WAL** | Per-inode write-ahead log on the gateway's disk that makes NFS `FILE_SYNC` honest before the chunk is flushed to the cluster. |
@@ -63,6 +65,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 
 ```
  NFS client (OS)  ──127.0.0.1──▶  nfsgw (go-nfs Handler, handles = ino+gen)
+ SMB client (Win) ──127.0.0.1──▶  smbgw (go-filesystems/smb over a vfs adapter, docs/15)
                                       │ billy.Filesystem
                                       ▼
                                    vfs: Overlay (dirty extents + per-inode WAL, fsync)
@@ -88,7 +91,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 
 Ports: Raft `<tsIP>:20480`, node RPC `<tsIP>:20481`, web UI `<tsIP>:20482`, S3 gateway
 `<tsIP>:20443`, NFS
-`127.0.0.1:20490` (Windows: `127.0.0.1:2049` plus a portmapper stub on `127.0.0.1:111`).
+`127.0.0.1:20490` (macOS, Linux), SMB `127.0.0.1:20445` (Windows).
 
 Identity and transport security come from Tailscale: every RPC connection is authorized by
 resolving the source IP with `tailscale whois` and matching the Tailscale stable ID recorded
@@ -197,7 +200,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83 |
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived. I-12, I-38..I-40 |
 | [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, DELETE fence, sweep, repair scanner, scrub, drain, migration. I-13..I-15, I-41..I-44 |
-| [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, per-OS mount. I-16, I-17, I-45..I-47 |
+| [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, macOS and Linux mounts. I-16, I-17, I-45..I-47 |
 | [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys. I-18, I-48..I-50 |
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
 | [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
@@ -205,6 +208,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [12-operations](12-operations.md) | Service install per OS, log files, the Windows portmap stub, `/dev/*` fault injection, releases, self-update, `init` without options, machine vitals. I-58..I-61, I-76, I-84, I-85 |
 | [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, the style guide. I-68..I-73, I-81, I-82 |
 | [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, domain skew. I-86..I-91 |
+| [15-smb-gateway](15-smb-gateway.md) | SMB2 gateway for Windows: the library and its backend contract, the adapter over the vfs, case-insensitive names, password and `net use` mount, caps, known gaps. I-106..I-110 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged

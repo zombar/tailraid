@@ -7,10 +7,10 @@
 
 tailraid turns the devices on your tailnet into one shared volume that behaves like a RAID array.
 
-It is redundant: files are split into chunks, each chunk is erasure-coded across devices and disks, and any `m` of them can fail while the volume keeps working. It is deduplicated: identical content is stored once. It is mountable: the volume appears as a normal folder on macOS, Linux and Windows through the OS's own NFS client. And it is one binary: the same static executable is the daemon, the gateway and the CLI, and data never leaves your tailnet.
+It is redundant: files are split into chunks, each chunk is erasure-coded across devices and disks, and any `m` of them can fail while the volume keeps working. It is deduplicated: identical content is stored once. It is mountable: the volume appears as a normal folder on macOS and Linux through the OS's own NFS client, and on Windows through its SMB client. And it is one binary: the same static executable is the daemon, the gateway and the CLI, and data never leaves your tailnet.
 
 > [!IMPORTANT]
-> Every device needs Tailscale (headscale works). Windows needs Pro, Enterprise or Education, since Home has no NFS client; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md).
+> Every device needs Tailscale (headscale works). Windows needs Windows 11 24H2 or newer (its SMB client can be told the port tailraid listens on); the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md).
 
 ## Install
 

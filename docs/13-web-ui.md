@@ -1,6 +1,6 @@
 # 13 — Web UI: dashboard and file browser
 
-The web UI is a second gateway next to the NFS gateway (docs/07): one `http.Handler` over
+The web UI is another gateway next to the NFS and SMB gateways (docs/07, docs/15): one `http.Handler` over
 the same vfs and FSM, on its own tailnet listener `<tsIP>:20482`. It shows the cluster the
 way `tailraid status --json` reports it (data balance across nodes, chunk integrity, the
 repairer's state) and lets a browser on any of the user's tailnet devices browse the volume,
