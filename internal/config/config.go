@@ -255,21 +255,36 @@ func (c Config) Validate() error {
 	}
 	// the rest of I-126: every port in range and distinct, known log settings, an
 	// absolute mount path
-	_, nfsPort, err := net.SplitHostPort(c.Listen.NFS)
-	if err != nil {
-		return fmt.Errorf("config: listen.nfs %q: want host:port", c.Listen.NFS)
+	// a gateway listener is "" when that gateway is off (docs/15 §4); a set one is host:port
+	gatewayPort := func(name, addr string) (int, error) {
+		if addr == "" {
+			return 0, nil
+		}
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return 0, fmt.Errorf("config: %s %q: want host:port", name, addr)
+		}
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return 0, fmt.Errorf("config: %s %q: want a TCP port", name, addr)
+		}
+		return n, nil
 	}
-	np, err := strconv.Atoi(nfsPort)
-	if err != nil || np < 1 || np > 65535 {
-		return fmt.Errorf("config: listen.nfs %q: want a TCP port", c.Listen.NFS)
+	np, err := gatewayPort("listen.nfs", c.Listen.NFS)
+	if err != nil {
+		return err
+	}
+	sp, err := gatewayPort("listen.smb", c.Listen.SMB)
+	if err != nil {
+		return err
 	}
 	used := map[int]string{}
 	for _, l := range []struct {
 		name string
 		port int
-	}{{"listen.raft", c.Listen.Raft}, {"listen.rpc", c.Listen.RPC}, {"listen.nfs", np}, {"listen.web", c.Listen.Web}} {
-		if l.name == "listen.web" && l.port == 0 {
-			continue
+	}{{"listen.raft", c.Listen.Raft}, {"listen.rpc", c.Listen.RPC}, {"listen.nfs", np}, {"listen.smb", sp}, {"listen.web", c.Listen.Web}} {
+		if l.port == 0 && (l.name == "listen.web" || l.name == "listen.nfs" || l.name == "listen.smb") {
+			continue // off
 		}
 		if l.port < 1 || l.port > 65535 {
 			return fmt.Errorf("config: %s %d: want a TCP port", l.name, l.port)
