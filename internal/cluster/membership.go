@@ -188,7 +188,7 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		if op.DiskID == "" {
 			return fmt.Errorf("%w: add_disk needs disk_id", ErrBadMemberOp)
 		}
-		disk := meta.Node{ID: op.DiskID, Name: op.Name, Kind: meta.KindDisk, Host: op.NodeIdx, Capacity: op.Capacity, JoinedAt: time.Now().UnixNano()}
+		disk := meta.Node{ID: op.DiskID, Name: n.diskName(op), Kind: meta.KindDisk, Host: op.NodeIdx, Capacity: op.Capacity, JoinedAt: time.Now().UnixNano()}
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: disk}})
 	case "set_voter":
 		if nd.Kind != meta.KindDevice {
@@ -222,6 +222,34 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	}
 	return fmt.Errorf("%w: unknown op %q", ErrBadMemberOp, op.Op)
+}
+
+// diskName is the name the leader gives a disk: the one it already has on a retry, else
+// the requested name if no other disk has it, else "<host>/<n>" with the first free n.
+// The caller's name comes from a status report that may be a moment old, so the leader,
+// which sees every add, settles it.
+func (n *Node) diskName(op rpc.MemberOp) string {
+	taken := map[string]bool{}
+	nodes := n.FSM.Nodes()
+	for i := range nodes {
+		nd := &nodes[i]
+		if nd.Kind != meta.KindDisk {
+			continue
+		}
+		if nd.ID == op.DiskID {
+			return nd.Name
+		}
+		taken[nd.Name] = true
+	}
+	if op.Name != "" && !taken[op.Name] {
+		return op.Name
+	}
+	host, _ := n.nodeByIdx(op.NodeIdx)
+	for i := 1; ; i++ {
+		if name := fmt.Sprintf("%s/%d", host.Name, i); !taken[name] {
+			return name
+		}
+	}
 }
 
 // zeroSlots proposes SetPlacement with slot 0 for every chunk that places a shard on idx.

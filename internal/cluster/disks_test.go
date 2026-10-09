@@ -46,6 +46,20 @@ func TestMember_AddDisk_ResolvesToHost(t *testing.T) {
 	if _, ok := n.DiskOf(self); ok {
 		t.Fatal("a device is not a disk")
 	}
+	// the leader names disks: a second add with a stale name gets the next free number,
+	// so two quick add-disks on one host never share a name (docs/14 §2)
+	if err := n.MemberOp(ctx, rpc.MemberOp{Op: "add_disk", NodeIdx: self, DiskID: "abcd0123abcd0124", Name: "a/1", Capacity: 7}); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]int{}
+	for _, nd := range n.FSM.Nodes() {
+		if nd.Kind == meta.KindDisk {
+			names[nd.Name]++
+		}
+	}
+	if len(names) != 2 || names["a/1"] != 1 {
+		t.Fatalf("disk names %v", names)
+	}
 	// a disk needs an Active device host
 	if err := n.MemberOp(ctx, rpc.MemberOp{Op: "add_disk", NodeIdx: disk.Idx, DiskID: "ffff0000ffff0000"}); !errors.Is(err, meta.ErrBadCommand) {
 		t.Fatalf("disk on a disk: %v", err)

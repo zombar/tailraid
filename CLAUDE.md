@@ -86,8 +86,8 @@ the main `go.mod` holds only runtime dependencies. `make tidy` tidies both.
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on every
   node" function has an **N-node determinism** test; every randomized test takes `-seed` and
   prints it on failure; `goleak.VerifyTestMain` in packages that start goroutines.
-- Prefer deleting over abstracting. Production code is ≈ 20.5k lines through streaming large files and machine vitals (measured 2026-10-09; 19.4k through init-without-flags, 18.1k through M4; the plan's 8k was optimistic,
-  see docs/00), plus 1.5k lines of TypeScript. If a feature needs far more than its row in docs/00, the design is wrong.
+- Prefer deleting over abstracting. Production code is ≈ 22.4k lines through several disks per device (measured 2026-10-09; 20.5k through streaming large files and machine vitals, 19.4k through init-without-flags, 18.1k through M4; the plan's 8k was optimistic,
+  see docs/00), plus 1.7k lines of TypeScript. If a feature needs far more than its row in docs/00, the design is wrong.
 - Logging with `log/slog`; no metrics library (`tailraid status --json` instead).
 - Browser UI: TypeScript in `internal/webui/src`, no framework, no node/npm; esbuild is a Go
   tool in `tools.mod`. Run `make web` after touching `src/`; `make web-check` fails the commit

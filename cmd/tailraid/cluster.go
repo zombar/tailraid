@@ -374,6 +374,13 @@ func addDiskCmd() *cobra.Command {
 				State string `json:"state"`
 			}
 			_ = json.Unmarshal(raw, &st)
+			if rep, _, _, err := fetchReport(cmd.Context(), cmd); err == nil { // the leader settles the name
+				for i := range rep.Nodes {
+					if rep.Nodes[i].ID == id {
+						name = rep.Nodes[i].Name
+					}
+				}
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added disk %s at %s (budget %s): %s\n", name, disk.Path, bytesStr(budget), st.State)
 			return nil
 		},

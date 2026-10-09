@@ -146,7 +146,8 @@ for a member. No TLS of our own.
 | Streaming large files: bounded flush memory, cap backpressure, streamed compaction, atomic resumable web upload, process memory in status, soak phase 12 (measured 2026-10-09: webui 0.27k, soak 0.23k, vfs 0.22k, rpc and admin 0.1k; the plan said 0.6k) | +0.8k |
 | Machine vitals in `status` and the soak report (per-OS probes 0.15k) and the large file's placement checks and figure (0.1k) | +0.25k |
 | **Through streaming large files (measured 2026-10-09)** | **≈ 20.5k** |
-| Several disks per device (docs/14: disk rows, host cap, per-target stores and budgets, disk RPC path, domain skew, `add-disk`, the Disks block, soak phase 13; planned) | ~0.8k planned |
+| Several disks per device (docs/14, measured 2026-10-09: node disk set, marker and per-target budgets 0.44k, meta placement, policy, skew and codec 0.37k, CLI 0.15k, rpc and prober 0.2k, soak phase 13, targets and the spread chart 0.7k; the TypeScript Disks block 0.2k, not Go; the plan said 0.8k: the soak and the node's disk lifecycle were sized optimistically) | +1.9k |
+| **Through several disks per device (measured 2026-10-09)** | **≈ 22.4k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
