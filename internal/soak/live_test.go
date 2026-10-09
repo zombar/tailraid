@@ -37,3 +37,24 @@ func TestLiveEnv_HoldDownRules(t *testing.T) {
 		t.Fatalf("released: %q", got)
 	}
 }
+
+// A live run's capabilities follow its flags: nothing destructive without --destructive,
+// and no kill, restart or partition without --restarts as well.
+//
+// Invariant: I-113
+func TestLiveEnv_CapsFollowFlags(t *testing.T) {
+	for _, c := range []struct {
+		destructive, restarts bool
+		want                  Caps
+	}{
+		{false, false, Caps{}},
+		{true, false, Caps{Corrupt: true, Mutate: true}},
+		{true, true, Caps{Corrupt: true, Mutate: true, Kill: true, Partition: true}},
+		{false, true, Caps{}}, // verify refuses the combination; the env is safe anyway
+	} {
+		e := &LiveEnv{Destructive: c.destructive, Restarts: c.restarts}
+		if got := e.Caps(); got != c.want {
+			t.Errorf("destructive=%v restarts=%v: caps %+v, want %+v", c.destructive, c.restarts, got, c.want)
+		}
+	}
+}

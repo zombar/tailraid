@@ -6,10 +6,15 @@ import (
 	"github.com/zombar/tailraid/internal/testseed"
 )
 
+// devices builds voters+nonVoters hosts with one disk each (a device row is never a
+// target, docs/14 §9): host i is device 2i-1 with disk 2i.
 func devices(voters, nonVoters int) []Node {
 	var out []Node
 	for i := 1; i <= voters+nonVoters; i++ {
-		out = append(out, Node{Idx: NodeIdx(i), Kind: KindDevice, State: Active, Capacity: 1, Voter: i <= voters})
+		host := NodeIdx(2*i - 1)
+		out = append(out,
+			Node{Idx: host, Kind: KindDevice, State: Active, Voter: i <= voters},
+			Node{Idx: host + 1, Kind: KindDisk, State: Active, Capacity: 1, Host: host})
 	}
 	return out
 }

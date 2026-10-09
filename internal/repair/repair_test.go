@@ -85,7 +85,7 @@ func TestScrub_DecodesFromFetchedShards(t *testing.T) {
 		t.Fatalf("%d GETs for a scrub and one repair, want %d..%d", gets, lo, hi)
 	}
 	// the replaced shard verifies again
-	if _, err := f.Stores[victim].Get(chunk.Key(c.Hash, c.K, c.M, 1)); err != nil {
+	if _, err := f.StoreOf(victim).Get(chunk.Key(c.Hash, c.K, c.M, 1)); err != nil {
 		t.Fatalf("repaired slot: %v", err)
 	}
 }

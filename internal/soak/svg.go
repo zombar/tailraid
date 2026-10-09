@@ -51,9 +51,39 @@ func fmtNum(v float64) string {
 	}
 }
 
+// markerLabelMax bounds a rotated event label so it stays inside the chart.
+const markerLabelMax = 40
+
+// truncate cuts s to n runes with an ellipsis.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// finitePoints drops NaN and Inf points: one bad vital from a node would otherwise make
+// every coordinate of the chart NaN.
+func finitePoints(ss []series) []series {
+	out := make([]series, len(ss))
+	for i, s := range ss {
+		out[i] = s
+		out[i].points = nil
+		for _, p := range s.points {
+			if math.IsNaN(p[0]) || math.IsInf(p[0], 0) || math.IsNaN(p[1]) || math.IsInf(p[1], 0) {
+				continue
+			}
+			out[i].points = append(out[i].points, p)
+		}
+	}
+	return out
+}
+
 // lineChart draws series over a shared time axis with phase bands behind them and
 // vertical event markers.
 func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) string {
+	ss = finitePoints(ss)
 	var maxX, maxY float64
 	for _, s := range ss {
 		for _, p := range s.points {
@@ -109,7 +139,7 @@ func lineChart(title, yLabel string, ss []series, marks []marker, bands []band) 
 		x := sx(m.x)
 		y := chartH - padB - 4 - (i%3)*40
 		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"><title>%s</title></line><text x="%.1f" y="%d" class="marklabel" transform="rotate(-90 %.1f %d)">%s</text>`,
-			x, padT, x, chartH-padB, html.EscapeString(m.label), x+3, y, x+3, y, html.EscapeString(m.label))
+			x, padT, x, chartH-padB, html.EscapeString(m.label), x+3, y, x+3, y, html.EscapeString(truncate(m.label, markerLabelMax)))
 	}
 	// series
 	for i, s := range ss {

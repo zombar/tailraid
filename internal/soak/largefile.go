@@ -47,6 +47,7 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		return err
 	}
 	var baseHeap uint64
+	samples := 0 // status samples that landed during the write
 	if base.Process != nil {
 		baseHeap = base.Process.HeapInuse
 	}
@@ -84,6 +85,7 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		if err != nil {
 			continue
 		}
+		samples++
 		if rep.Process != nil {
 			peak.heap = max(peak.heap, rep.Process.HeapInuse)
 		}
@@ -103,10 +105,19 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	mb := float64(size) / (1 << 20)
 	r.event("large file written", fmt.Sprintf("%.0f MiB in %s (%.1f MiB/s) via %s", mb, took.Round(time.Millisecond), mb/took.Seconds(), gw.Name))
 	r.checkAt("I-79", "every write acknowledged while outrunning the flusher", writeErr == nil, fmt.Sprintf("%d pieces of %s; %v", pieces, humanBytes(largePiece), writeErr), p, "", gw.Name)
-	r.checkAt("I-80", "the WAL stayed within its cap", peak.walOver == 0, fmt.Sprintf("deepest WAL %s against a cap of %s; %d samples over", humanBytes(float64(peak.wal)), humanBytes(float64(bounds.WALCap)), peak.walOver), p, "", gw.Name)
-	if baseHeap > 0 {
+	switch {
+	case bounds.WALCap == 0:
+		r.checkSkipped("I-80", "the WAL stayed within its cap", "the gateway reports no WAL cap (status without the gateway section)")
+	case samples == 0:
+		r.checkSkipped("I-80", "the WAL stayed within its cap", "no status sample landed during the write")
+	default:
+		r.checkAt("I-80", "the WAL stayed within its cap", peak.walOver == 0, fmt.Sprintf("deepest WAL %s against a cap of %s; %d samples over %d", humanBytes(float64(peak.wal)), humanBytes(float64(bounds.WALCap)), peak.walOver, samples), p, "", gw.Name)
+	}
+	if baseHeap > 0 && samples > 0 {
 		budget := baseHeap + bounds.FlushCap + largeHeapGap
 		r.checkAt("I-78", "the heap stayed flat", peak.heap <= budget, fmt.Sprintf("peak heap in use %s, baseline %s, budget %s", humanBytes(float64(peak.heap)), humanBytes(float64(baseHeap)), humanBytes(float64(budget))), p, "", gw.Name)
+	} else {
+		r.checkSkipped("I-78", "the heap stayed flat", "no process vitals from the gateway (status without the process section, or no sample during the write)")
 	}
 	if writeErr != nil {
 		return nil //nolint:nilerr // the failed check above carries the error; the phase itself completed
@@ -256,6 +267,7 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 		}
 	}
 	tooFew := false
+	judged := 0
 	for idx, info := range nodes {
 		if capAll > 0 {
 			attrs[info.name] = fmt.Sprintf("%d/%d/%.0f", data[idx], parity[idx], allShare[idx])
@@ -268,6 +280,7 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 			tooFew = true
 			continue
 		}
+		judged++
 		margin := max(0.1*want, spreadSigmas*math.Sqrt(want))
 		if got := float64(data[idx]); math.Abs(got-want) > margin {
 			balanced = false
@@ -278,7 +291,11 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 	if tooFew {
 		detail += fmt.Sprintf(" (targets expecting fewer than %d data slots are too few to judge)", minJudged)
 	}
-	r.checkAt("I-33", "data slots of the large file spread among voters by capacity", balanced, detail, p, "", "")
+	if judged == 0 {
+		r.checkSkipped("I-33", "data slots of the large file spread among voters by capacity", fmt.Sprintf("no voter target expects %d data slots or more; the file is too small to judge the spread", minJudged))
+	} else {
+		r.checkAt("I-33", "data slots of the large file spread among voters by capacity", balanced, detail, p, "", "")
+	}
 	r.emit(Record{Kind: "event", Name: placementEvent, Text: fmt.Sprintf("%d chunks, %s", len(reps), humanBytes(float64(size))), Attrs: attrs})
 }
 

@@ -402,7 +402,7 @@ func (w *worker) rpcClient(ctx context.Context) (*rpc.Client, error) {
 	if w.client != nil {
 		return w.client, nil
 	}
-	probe := rpc.NewClient([16]byte{}, nil, nil)
+	probe := rpc.NewClient([16]byte{}, nil)
 	h, err := probe.Health(ctx, w.rpcAddr)
 	if err != nil {
 		return nil, err
@@ -413,7 +413,7 @@ func (w *worker) rpcClient(ctx context.Context) (*rpc.Client, error) {
 	}
 	var id [16]byte
 	copy(id[:], cid)
-	w.client = rpc.NewClient(id, nil, nil)
+	w.client = rpc.NewClient(id, nil)
 	return w.client, nil
 }
 

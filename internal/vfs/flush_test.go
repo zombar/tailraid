@@ -220,7 +220,7 @@ func TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit(t *testing.T) {
 	// two of three holders die; one spare joins
 	f.SetDown(c.Placement[1], true)
 	f.SetDown(c.Placement[2], true)
-	spare := f.AddNode()
+	spare := f.Target(f.AddNode()) // the new host's disk is the spare target
 	b := f.Create("b")
 	must(t, f.Ov.Write(b, 0, 0, data))
 	must(t, f.Flusher().FlushInode(ctx, b))
@@ -264,7 +264,7 @@ func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
 	key := func(slot int) chunk.ShardKey { return chunk.Key(h, c.K, c.M, slot) }
 
 	// one holder lost its file: still k present → dedup, no PUT
-	if _, err := f.Stores[c.Placement[0]].Delete(key(0)); err != nil {
+	if _, err := f.StoreOf(c.Placement[0]).Delete(key(0)); err != nil {
 		t.Fatal(err)
 	}
 	before := f.Puts()
@@ -277,7 +277,7 @@ func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
 	}
 
 	// a second holder lost its file: fewer than k present → fill before the commit
-	if _, err := f.Stores[c.Placement[1]].Delete(key(1)); err != nil {
+	if _, err := f.StoreOf(c.Placement[1]).Delete(key(1)); err != nil {
 		t.Fatal(err)
 	}
 	before = f.Puts()
@@ -293,7 +293,7 @@ func TestFlusher_DedupHit_LiveButMissingShards_RePuts(t *testing.T) {
 	}
 	c2, _ := f.FSM.GetChunk(h)
 	for i, n := range c2.Placement {
-		if n == 0 || !f.Stores[n].Has(chunk.Key(h, c2.K, c2.M, i)) {
+		if n == 0 || !f.StoreOf(n).Has(chunk.Key(h, c2.K, c2.M, i)) {
 			t.Fatalf("slot %d node %d not present after fill: %v", i, n, c2.Placement)
 		}
 	}

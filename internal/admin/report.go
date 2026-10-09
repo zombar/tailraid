@@ -41,7 +41,7 @@ type NodeReport struct {
 	Dev        bool         `json:"dev,omitempty"` // /dev/* endpoints enabled
 	TSStable   string       `json:"ts_stable_id,omitempty"`
 	JoinedAt   time.Time    `json:"joined_at"`
-	DataDir    bool         `json:"data_dir,omitempty"`    // a host's own store, on a host with added disks (docs/14 §8)
+	Diskless   bool         `json:"diskless,omitempty"`    // a device with no disk rows: a gateway-only host (docs/14 §9)
 	SharedWith []string     `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
 	fs         string       // filesystem ID from the last probe
 }
@@ -129,6 +129,7 @@ type Report struct {
 	Node        string         `json:"node"`
 	ClusterID   string         `json:"cluster_id"`
 	Health      string         `json:"health"`
+	Ready       bool           `json:"ready"` // this node knows a leader and has applied every committed entry (I-125)
 	Leader      string         `json:"leader"`
 	LastContact string         `json:"last_contact,omitempty"`
 	Voters      int            `json:"voters"`
@@ -162,6 +163,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now, Process: processReport()}
 	h := n.Health(clk, p)
 	rep.Health, rep.Leader, rep.Voters, rep.LiveVoters = h.State.String(), h.Leader, h.Voters, h.LiveVoters
+	rep.Ready = n.Ready()
 	if h.LastContact > 0 {
 		rep.LastContact = h.LastContact.Round(time.Millisecond).String()
 	}
@@ -225,7 +227,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 				r.Lost = pr.Lost
 			}
 		}
-		if nd.State == meta.Active {
+		if nd.State == meta.Active && nd.Kind != meta.KindDevice { // a device stores nothing (docs/14 §9)
 			rep.Volume.Capacity += nd.Capacity
 		}
 		rep.Nodes = append(rep.Nodes, r)
@@ -245,15 +247,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	return rep
 }
 
-// markDisks labels each host's own store when it has added disks, and lists the targets
-// of one host on one filesystem with each other (docs/14 §8): they fail together.
+// markDisks flags each device with no disks as diskless (docs/14 §9), and lists the
+// disks of one host on one filesystem with each other (docs/14 §8): they fail together.
 func markDisks(nodes []NodeReport) {
-	hostOf := func(n *NodeReport) meta.NodeIdx {
-		if n.Kind == meta.KindDisk.String() {
-			return n.Host
-		}
-		return n.Idx
-	}
 	type key struct {
 		host meta.NodeIdx
 		fs   string
@@ -262,20 +258,18 @@ func markDisks(nodes []NodeReport) {
 	hasDisk := map[meta.NodeIdx]bool{}
 	for i := range nodes {
 		n := &nodes[i]
-		if n.State == meta.Removed.String() || n.Kind == meta.KindS3.String() {
+		if n.State == meta.Removed.String() || n.Kind != meta.KindDisk.String() {
 			continue
 		}
-		if n.Kind == meta.KindDisk.String() {
-			hasDisk[n.Host] = true
-		}
+		hasDisk[n.Host] = true
 		if n.fs != "" {
-			k := key{hostOf(n), n.fs}
+			k := key{n.Host, n.fs}
 			groups[k] = append(groups[k], i)
 		}
 	}
 	for i := range nodes {
-		if nodes[i].Kind == meta.KindDevice.String() && hasDisk[nodes[i].Idx] {
-			nodes[i].DataDir = true
+		if nodes[i].Kind == meta.KindDevice.String() && nodes[i].State != meta.Removed.String() && !hasDisk[nodes[i].Idx] {
+			nodes[i].Diskless = true
 		}
 	}
 	for _, members := range groups {
@@ -293,21 +287,8 @@ func markDisks(nodes []NodeReport) {
 	}
 }
 
-// Label is how a target is named to a person: a host's own store reads "<host> (data
-// dir)" once the host has added disks.
-func (n NodeReport) Label() string {
-	if n.DataDir {
-		return n.Name + " (data dir)"
-	}
-	return n.Name
-}
-
 // sharedDiskWarnings is one line per group of targets on one physical disk.
 func sharedDiskWarnings(nodes []NodeReport) []string {
-	byName := map[string]*NodeReport{}
-	for i := range nodes {
-		byName[nodes[i].Name] = &nodes[i]
-	}
 	seen := map[string]bool{}
 	var out []string
 	for i := range nodes {
@@ -317,12 +298,10 @@ func sharedDiskWarnings(nodes []NodeReport) []string {
 		}
 		names := append([]string{n.Name}, n.SharedWith...)
 		sort.Strings(names)
-		labels := make([]string, 0, len(names))
 		for _, name := range names {
 			seen[name] = true
-			labels = append(labels, byName[name].Label())
 		}
-		list := strings.Join(labels[:len(labels)-1], ", ") + " and " + labels[len(labels)-1]
+		list := strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 		out = append(out, list+" are on one physical disk: they fail together, so data spread across them is not redundant")
 	}
 	return out

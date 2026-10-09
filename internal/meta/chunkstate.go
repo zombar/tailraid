@@ -12,6 +12,12 @@ const MaxChunkSize = 64 << 20
 // MaxNameLen is the longest directory entry name in bytes (I-66), the NFS limit.
 const MaxNameLen = 255
 
+// MaxPathLen bounds the byte length of an entry's path from the root ("/a/b" is 4
+// bytes), the PATH_MAX of Linux (I-115): Create, Mkdir and Rename refuse an entry whose
+// own path would be longer with ErrNameTooLong. The bound is on the entry a command
+// names; the descendants of a renamed directory are not re-measured.
+const MaxPathLen = 4096
+
 // SmallChunkMax is the small-chunk threshold of docs/03: a chunk shorter than a full chunk
 // and at most this many bytes is replicated (k=1, m=Vol.M) instead of striped.
 const SmallChunkMax = 64 << 10

@@ -158,7 +158,7 @@ device"), not `EIO`.
 - Cross-device visibility is eventually consistent within the client's attribute cache
 - **atime and ctime on the wire are the mtime.** go-nfs fills every reply's `atime`, `mtime` and `ctime` from the billy `ModTime()`; a client-supplied atime is stored in the FSM (and seen by every gateway through `tailraid` itself) but GETATTR reports it as the mtime. No consumer of this volume is known to depend on atime.
   window; the FSM itself is linearizable through Raft.
-- **Name length.** go-nfs refuses a name longer than 255 bytes with `NFS3ERR_NAMETOOLONG` before it reaches the volume; the FSM enforces the same limit (I-66) for every other proposer.
+- **Name length.** go-nfs refuses a name longer than 255 bytes with `NFS3ERR_NAMETOOLONG` before it reaches the volume; the FSM enforces the same limit (I-66) for every other proposer. A path longer than 4096 bytes is refused the same way at CREATE, MKDIR, SYMLINK and RENAME (I-115, docs/01); depth alone is not limited, each LOOKUP resolves one component.
 
 ## Invariants
 
@@ -181,8 +181,8 @@ device"), not `EIO`.
 
 | Invariant | Tests |
 |---|---|
-| I-16 | `TestHandle_RoundTrip_BigEndian`, `TestNFS_RenameKeepsHandleValid` |
-| I-17 | `TestNFS_RemovedHandleIsStale` |
+| I-16 | `FuzzDecodeHandle`, `TestHandle_RoundTrip_BigEndian`, `TestNFS_RenameKeepsHandleValid` |
+| I-17 | `FuzzDecodeHandle`, `TestNFS_RemovedHandleIsStale` |
 | I-45 | `TestNFS_WriteSequence_MultiRPC`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
 | I-46 | `TestNFS_SetattrOwnerAndTimes`, `TestNFS_SetattrSizeTruncates`, `TestVFS_SymlinkAndChange` |
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |

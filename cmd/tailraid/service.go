@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,7 +34,10 @@ func svcParams(cmd *cobra.Command) (svc.Params, config.Config, string, error) {
 	if strings.Contains(exe, "go-build") { // `go run` binaries vanish; the unit would point at nothing
 		return svc.Params{}, cfg, "", fmt.Errorf("install needs a stable binary path, not %s (make build, then copy dist/tailraid somewhere permanent)", exe)
 	}
-	p := svc.Params{GOOS: runtime.GOOS, Exe: exe, ConfigPath: path, Home: config.Home(), LogFile: cfg.LogFile()}
+	p := svc.Params{GOOS: runtime.GOOS, Exe: exe, ConfigPath: path, Home: config.Home(), LogFile: cfg.LogFile(), DataDir: cfg.Node.DataDir}
+	for _, d := range cfg.Node.Disks {
+		p.Disks = append(p.Disks, d.Path)
+	}
 	if u, err := user.Current(); err == nil {
 		p.User = u.Username
 		p.UID, _ = strconv.Atoi(u.Uid)
@@ -59,6 +63,14 @@ func installCmd() *cobra.Command {
 			p, cfg, path, err := svcParams(cmd)
 			if err != nil {
 				return err
+			}
+			if runtime.GOOS == "linux" { // the unit is staged in a directory nobody else can pre-create (I-122)
+				stage, err := os.MkdirTemp("", "tailraid-install-")
+				if err != nil {
+					return err
+				}
+				defer os.RemoveAll(stage)
+				p.Stage = stage
 			}
 			plan, err := svc.Install(p)
 			if err != nil {
@@ -169,6 +181,7 @@ func tailFile(cmd *cobra.Command, path string, follow bool, n int) error {
 	if !follow {
 		return nil
 	}
+	rd := bufio.NewReader(f) // one reader: a fresh one per tick would drop the bytes the previous one buffered
 	for {
 		select {
 		case <-cmd.Context().Done():
@@ -176,12 +189,12 @@ func tailFile(cmd *cobra.Command, path string, follow bool, n int) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 		for {
-			line, err := bufio.NewReader(f).ReadString('\n')
+			line, err := rd.ReadString('\n')
 			if line != "" {
 				fmt.Fprint(w, line)
 			}
 			if err != nil {
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				return err

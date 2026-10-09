@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,8 +24,11 @@ func verifyCmd() *cobra.Command {
 		Long: `verify writes, reads, churns, deduplicates and garbage-collects under /_soak/<timestamp>/ on
 this device's mount, compares every node's FSM state, and records the result in an HTML
 report (docs/09 §6). Phases that need node kills or partitions are reported as skipped;
---destructive adds shard corruption on nodes that run with dev.enabled. The GC phase waits
-the cluster's repair.grace.`,
+--destructive adds shard corruption on nodes that run with dev.enabled and allows the
+phases that change the cluster itself (policy changes, drains, a disk fill); without it
+the volume's files are the only thing touched. The GC phase waits the cluster's
+repair.grace. Ctrl-C stops after the current phase, restores what it changed and writes
+the partial report.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			cl, addr, cfg, err := localClient(ctx, cmd)
@@ -73,23 +79,29 @@ the cluster's repair.grace.`,
 			}
 			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed)), Seed: seed, Flags: flags} //nolint:gosec // workload
 			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive, "restarts", restarts)
-			sum, err := run.Execute(ctx)
-			if err != nil {
-				return err
+			// Ctrl-C ends the run after the current phase: the phase restores what it
+			// changed, the run directory is removed and the partial report is written
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			sum, runErr := run.Execute(ctx)
+			if sum.Aborted != "" {
+				log.Warn("verify stopped early", "reason", sum.Aborted)
 			}
 			f, err := os.Create(out) //nolint:gosec // --report names the file
 			if err != nil {
-				return err
+				return errors.Join(runErr, err)
 			}
 			if err := soak.Render(f, sum); err != nil {
 				_ = f.Close()
-				return err
+				return errors.Join(runErr, err)
 			}
 			_ = f.Close()
 			w := cmd.OutOrStdout()
 			for _, ph := range sum.Phases {
 				state := "PASS"
 				switch {
+				case ph.NotRun:
+					state = "NOT RUN"
 				case ph.Skipped:
 					state = "SKIPPED (" + ph.Reason + ")"
 				case ph.Failed > 0:
@@ -99,6 +111,9 @@ the cluster's repair.grace.`,
 			}
 			abs, _ := filepath.Abs(out)
 			fmt.Fprintf(w, "%d failed checks; report: %s\n", sum.Failed, abs)
+			if runErr != nil {
+				return fmt.Errorf("verify aborted: %w (partial report: %s)", runErr, abs)
+			}
 			if sum.Failed > 0 {
 				return fmt.Errorf("verify found %d failed checks", sum.Failed)
 			}

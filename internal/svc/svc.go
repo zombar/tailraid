@@ -21,13 +21,16 @@ const Name = "tailraid"
 // Params describe the installation target.
 type Params struct {
 	GOOS       string
-	Exe        string // absolute path of the tailraid binary
-	ConfigPath string // the config file serve will read
-	Home       string // config.Home() of the installing user
-	LogFile    string // where serve's output goes (macOS, Windows)
-	User       string // the installing user (Linux unit User=)
-	UID        int    // the installing user's uid (macOS launchctl domain)
-	Root       bool   // running as root/elevated already (no sudo prefix)
+	Exe        string   // absolute path of the tailraid binary
+	ConfigPath string   // the config file serve will read
+	Home       string   // config.Home() of the installing user
+	LogFile    string   // where serve's output goes (macOS, Windows)
+	User       string   // the installing user (Linux unit User=)
+	UID        int      // the installing user's uid (macOS launchctl domain)
+	Root       bool     // running as root/elevated already (no sudo prefix)
+	DataDir    string   // the node's data directory (Linux: the unit may write there, I-122)
+	Disks      []string // added disk paths (Linux: likewise)
+	Stage      string   // Linux: a private directory the unit file is staged in before `install` copies it; "" uses os.TempDir()
 }
 
 // File is a unit file to write.
@@ -60,7 +63,11 @@ func Install(p Params) (Plan, error) {
 		}, nil
 	case "linux":
 		unit := "/etc/systemd/system/tailraid.service"
-		tmp := filepath.Join(os.TempDir(), "tailraid.service")
+		stage := p.Stage
+		if stage == "" {
+			stage = os.TempDir()
+		}
+		tmp := filepath.Join(stage, "tailraid.service")
 		sudo := sudoPrefix(p)
 		return Plan{
 			Files: []File{{Path: tmp, Mode: 0o644, Content: systemdUnit(p)}},
@@ -169,7 +176,7 @@ func launchdPlist(p Params) string {
   <key>ProgramArguments</key>
   <array><string>%s</string><string>serve</string><string>--config</string><string>%s</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>5</integer>
   <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>%s</string>
@@ -179,7 +186,25 @@ func launchdPlist(p Params) string {
 `, p.Exe, p.ConfigPath, p.LogFile, p.LogFile)
 }
 
+// systemdUnit is the Linux unit (docs/12 §1, I-122): the process may write only its
+// data directory, its disks and its config directory (ProtectSystem=strict with
+// ReadWritePaths), never gains privileges, sees a private /tmp, and gets 45 s to stop
+// (the final flush is capped at 30 s and a leader hands over first).
 func systemdUnit(p Params) string {
+	rw := []string{p.DataDir, filepath.Dir(p.ConfigPath)}
+	rw = append(rw, p.Disks...)
+	if p.LogFile != "" {
+		rw = append(rw, filepath.Dir(p.LogFile))
+	}
+	var paths []string
+	seen := map[string]bool{}
+	for _, d := range rw {
+		if d == "" || d == "." || seen[d] {
+			continue
+		}
+		seen[d] = true
+		paths = append(paths, unitQuote(d))
+	}
 	return fmt.Sprintf(`[Unit]
 Description=tailraid node: metadata, shard store and NFS gateway
 After=network-online.target tailscaled.service
@@ -188,14 +213,28 @@ Wants=network-online.target
 [Service]
 ExecStart=%s serve --config %s
 User=%s
-Environment=TAILRAID_HOME=%s
+Environment=%s
 Restart=always
 RestartSec=2
+TimeoutStopSec=45
 LimitNOFILE=65536
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%s
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
-`, p.Exe, p.ConfigPath, p.User, p.Home)
+`, unitQuote(p.Exe), unitQuote(p.ConfigPath), p.User, unitQuote("TAILRAID_HOME="+p.Home), strings.Join(paths, " "))
+}
+
+// unitQuote quotes a path for a systemd unit when it holds a space or a quote.
+func unitQuote(s string) string {
+	if !strings.ContainsAny(s, " \t\"'\\") {
+		return s
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
 }
 
 // Print writes the plan in a readable form.

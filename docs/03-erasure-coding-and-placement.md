@@ -65,8 +65,8 @@ type Candidate struct { Idx meta.NodeIdx; Weight uint64; Voter bool; Domain meta
 // Weight = Node.Capacity; Voter = the host's Voter; Domain = Host for a disk, else Idx
 ```
 
-A candidate is a **target**: a device's own store, one of its added disks, or an S3 node
-(14). Targets of one host share a **domain**; `PlaceKM` spreads a stripe across domains
+A candidate is a **target**: one of a device's disks, or an S3 node (14); a device row
+itself is never one (14 §9). Targets of one host share a **domain**; `PlaceKM` spreads a stripe across domains
 first (14 §5).
 
 At write time the flusher builds the candidate list from `State.Nodes` filtered to
@@ -190,8 +190,7 @@ reachable; a bucket is the shard source of last resort and the off-site copy.
 `tailraid init` creates the volume with `Vol.Auto` set and `1+0`. In auto mode the leader
 derives the policy from the member table with `meta.AutoPolicy(nodes)`, a pure function
 of the counts of Active targets on voter hosts (`v`) and on non-voter hosts (`s`),
-`n = v + s` (a target is a device with a budget, an added disk, or an S3 node, 14 §6; with
-one target per device these are the device counts):
+`n = v + s` (a target is a disk or an S3 node, 14 §6):
 
 - `m = 0` for `n = 1`, `1` for `n` of 2 or 3, `2` for `n ≥ 4`
 - `k = clamp(v, 1, n − m)`, capped at 6
@@ -236,6 +235,10 @@ no sole copies.
 The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-and-durability.md`).
 
 ## Invariants
+- **I-117** — The FSM accepts exactly the policies the codec accepts: `SetVolume` and
+  `validPlacement` require `1 ≤ k` and `k+m ≤ ec.MaxShards` (256), so `255+1` is applied
+  and `255+2` is `ErrPolicy`; the CLI checks the same bounds before narrowing `--k` and
+  `--m` to a byte.
 
 - **I-8** — `PlaceKM(h, cands, k, m)` is a pure function: for the same hash, the same candidate
   set (any order) and the same `(k, m)`, every node returns the identical sequence.
@@ -279,3 +282,4 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |
 | I-75 | `TestAutoPolicy_Table`, `TestAutoPolicy_NNodeDeterminism`, `TestCluster_AutoPolicy_GrowsOnJoin_DefersWhileAsleep`, `TestCluster_AutoPolicy_ShrinksOnRemoveNotOnDeath`, `TestAutoPolicy_ManualPins`, `TestFSM_SetVolumeMode` |
 | I-77 | `TestPlaceKM_VoterFirst_DataSlots`, `TestPlaceKM_VoterFirst_NNodeDeterminism`, `TestFillPlacement_KeepsSlotClass`, `TestCandidates_VoterBit`, `TestCluster_ReadableWithNonVotersAsleep` |
+| I-117 | `TestFSM_SetVolume_ShardCountBoundaries`, `TestPolicyFlags_Bounds` |

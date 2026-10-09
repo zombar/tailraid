@@ -49,7 +49,7 @@ func TestMount_Workload(t *testing.T) {
 	home := t.TempDir()
 	cfg := config.Default()
 	cfg.Node.DataDir = filepath.Join(home, "data")
-	cfg.Node.Capacity = "20G"
+	cfg.Node.Disks = []config.Disk{{Path: filepath.Join(home, "disk"), Capacity: "20G"}} // the volume's one disk (docs/14 §9)
 	cfg.Listen.NFS = "127.0.0.1:20491"
 	cfg.Listen.Raft = 20482
 	cfg.Listen.RPC = 20483
@@ -68,9 +68,16 @@ func TestMount_Workload(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, err := cluster.Bootstrap(context.Background(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: "127.0.0.1:20482"},
-		meta.Node{Name: "mounttest", Kind: meta.KindDevice, Capacity: 20 << 30, Voter: true},
+		meta.Node{Name: "mounttest", Kind: meta.KindDevice, Voter: true},
 		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: time.Now().UnixNano()}, false, "t")
 	if err != nil {
+		t.Fatal(err)
+	}
+	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.RegisterDisks(context.Background(), n, cfg, cid); err != nil {
 		t.Fatal(err)
 	}
 	_ = n.Close()

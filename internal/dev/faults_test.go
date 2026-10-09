@@ -5,19 +5,16 @@ import (
 	"errors"
 	"net"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/raft"
 
-	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/dev"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/sysfs"
 )
 
 // A drop rule cuts all four paths on the node holding it: Raft dials to the peer, Raft
@@ -62,12 +59,8 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	}
 
 	// RPC: a server with the rules answers 503 to the peer; a client with the rules refuses
-	store, err := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "shards"), 1<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
 	srv, err := rpc.NewServer(rpc.Options{
-		NodeID: "a", ClusterID: cid, Store: store, Applier: fakeApplier{}, Auth: rpc.AllowAll{},
+		NodeID: "a", ClusterID: cid, Applier: fakeApplier{}, Auth: rpc.AllowAll{},
 		Members: func() []meta.Node { return nil }, Blocked: faults.Blocked,
 	})
 	if err != nil {
@@ -76,7 +69,7 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	hs := httptest.NewServer(srv.Handler())
 	defer hs.Close()
 	addr := hs.Listener.Addr().String()
-	cl := rpc.NewClient(cid, nil, nil)
+	cl := rpc.NewClient(cid, nil)
 	cl.WrapTransport(faults.Transport)
 	ctx := context.Background()
 	if _, err := cl.Health(ctx, addr); err != nil {
@@ -86,7 +79,7 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	if _, err := cl.Health(ctx, addr); err == nil || !strings.Contains(err.Error(), dev.ErrDropped.Error()) {
 		t.Fatalf("outbound with a rule: %v", err)
 	}
-	plain := rpc.NewClient(cid, nil, nil)
+	plain := rpc.NewClient(cid, nil)
 	if _, err := plain.Health(ctx, addr); err == nil {
 		t.Fatal("inbound from a blocked peer answered")
 	}
@@ -108,3 +101,4 @@ func (fakeApplier) Propose(context.Context, meta.Command) (meta.Result, uint64, 
 func (fakeApplier) AppliedIndex() uint64  { return 0 }
 func (fakeApplier) IsLeader() bool        { return true }
 func (fakeApplier) LeaderRPCAddr() string { return "" }
+func (fakeApplier) Ready() bool           { return true }

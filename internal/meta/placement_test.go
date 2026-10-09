@@ -246,16 +246,17 @@ func TestPlace_StabilityOnMembershipChange(t *testing.T) {
 // Lifecycle: L-156
 func TestCandidates_Filter(t *testing.T) {
 	nodes := []Node{
-		{Idx: 1, State: Active, Kind: KindDevice, Capacity: 10},
-		{Idx: 2, State: Draining, Kind: KindDevice, Capacity: 10},
-		{Idx: 3, State: Removed, Kind: KindDevice, Capacity: 10},
-		{Idx: 4, State: Active, Kind: KindDevice, Capacity: 0},
+		{Idx: 10, State: Active, Kind: KindDevice, Capacity: 99}, // the host; a legacy budget on it is not a target
+		{Idx: 1, State: Active, Kind: KindDisk, Capacity: 10, Host: 10},
+		{Idx: 2, State: Draining, Kind: KindDisk, Capacity: 10, Host: 10},
+		{Idx: 3, State: Removed, Kind: KindDisk, Capacity: 10, Host: 10},
+		{Idx: 4, State: Active, Kind: KindDisk, Capacity: 0, Host: 10},
 		{Idx: 5, State: Active, Kind: KindS3, Capacity: 7},
-		{Idx: 6, State: Active, Kind: KindDevice, Capacity: 3}, // dead
+		{Idx: 6, State: Active, Kind: KindDisk, Capacity: 3, Host: 10}, // dead
 	}
 	live := func(i NodeIdx) bool { return i != 6 }
 	got := Candidates(nodes, live)
-	want := []Candidate{{Idx: 1, Weight: 10}, {Idx: 5, Weight: 7}}
+	want := []Candidate{{Idx: 1, Weight: 10, Domain: 10}, {Idx: 5, Weight: 7}}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}

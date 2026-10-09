@@ -80,10 +80,18 @@ type Stores struct {
 	Snaps  raft.SnapshotStore
 }
 
-// HasState reports whether the stores hold any Raft log.
+// HasState reports whether the stores hold any Raft state: a log, or a snapshot alone
+// (RecoverCluster truncates the log into a snapshot, docs/12 §9).
 func (s *Stores) HasState() bool {
-	last, err := s.Logs.LastIndex()
-	return err == nil && last > 0
+	if last, err := s.Logs.LastIndex(); err == nil && last > 0 {
+		return true
+	}
+	if s.Snaps != nil {
+		if l, err := s.Snaps.List(); err == nil && len(l) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Node is an open Raft member.
@@ -527,6 +535,39 @@ func (n *Node) lastCommandIndex() (uint64, error) {
 
 // IsLeader reports whether this node currently leads.
 func (n *Node) IsLeader() bool { return n.Raft.State() == raft.Leader }
+
+// Ready reports whether this node can serve: it knows a leader and Raft has handed the
+// FSM every entry it has committed (docs/12 §8, I-125). A node that lost its leader, or
+// is still replaying after a restart, is not ready.
+func (n *Node) Ready() bool {
+	if n.closed.Load() {
+		return false
+	}
+	_, id := n.Raft.LeaderWithID()
+	return id != "" && n.Raft.AppliedIndex() >= n.Raft.CommitIndex()
+}
+
+// Shutdown is Close with a leadership transfer first (docs/12 §1, I-123): a leader hands
+// the term to another voter before its Raft stops, so the cluster keeps committing
+// without waiting for an election timeout. The transfer is bounded by timeout; a lone
+// voter or a failed transfer just closes.
+func (n *Node) Shutdown(timeout time.Duration) error {
+	if n.IsLeader() && !n.closed.Load() {
+		done := make(chan error, 1)
+		go func() { done <- n.Raft.LeadershipTransfer().Error() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				n.log.Info("leadership transfer before shutdown did not complete", "err", err)
+			} else {
+				n.log.Info("leadership transferred before shutdown")
+			}
+		case <-time.After(timeout):
+			n.log.Warn("leadership transfer before shutdown timed out", "timeout", timeout)
+		}
+	}
+	return n.Close()
+}
 
 // Close shuts Raft down and releases the stores.
 func (n *Node) Close() error {

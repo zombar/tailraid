@@ -3,6 +3,7 @@ package cluster_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -267,15 +268,23 @@ func TestRepair_DrainHost_MovesItsDisks(t *testing.T) {
 	c.AddDisk(0)
 	c.WriteFile(0, "/drain", testharness.Pattern(6*int(testharness.ChunkSize), 6))
 	host := c.Nodes[2].Idx()
+	paths := []string{"/drain"}
 	onHost := func() int {
 		n := 0
-		for _, ch := range c.ChunksOf(0, "/drain") {
-			n += perHost(c, 0, ch)[host]
+		for _, p := range paths {
+			for _, ch := range c.ChunksOf(0, p) {
+				n += perHost(c, 0, ch)[host]
+			}
 		}
 		return n
 	}
-	if onHost() == 0 {
-		t.Skip("placement put nothing on host 2; the hash vectors changed")
+	for i := 0; onHost() == 0; i++ { // never skip: more files until the host holds a slot
+		if i == 4 {
+			t.Fatalf("no chunk of %d six-chunk files placed a slot on host 2", i+1)
+		}
+		p := fmt.Sprintf("/drain%d", i)
+		c.WriteFile(0, p, testharness.Pattern(6*int(testharness.ChunkSize), byte(7+i)))
+		paths = append(paths, p)
 	}
 	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: host, State: meta.Draining}))
 	c.Settle()
@@ -287,8 +296,9 @@ func TestRepair_DrainHost_MovesItsDisks(t *testing.T) {
 	if n := onHost(); n != 0 {
 		t.Fatalf("%d slots still on the draining host or its disk", n)
 	}
-	// removal goes disk first, then host
+	// removal goes disks first (both of the host's), then host
 	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: d}))
+	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[2].Target()}))
 	c.Settle()
 	must(t, c.Leader().Node.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: host}))
 }

@@ -62,7 +62,7 @@ func (f *fakeHealth) Health(_ context.Context, addr string) (rpc.Health, error) 
 	if f.down[addr] {
 		return rpc.Health{}, errors.New("down")
 	}
-	return rpc.Health{Free: 1}, nil
+	return rpc.Health{}, nil
 }
 
 // Lifecycle: L-86, L-87, L-88, L-92, L-131, L-132

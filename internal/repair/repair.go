@@ -16,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -75,17 +76,19 @@ type Stats struct {
 
 // Repairer is the leader's scanner.
 type Repairer struct {
-	st     *meta.Store
-	prop   meta.Proposer
-	live   Liveness
-	shards Shards
-	rd     ChunkReader
-	clk    clock.Clock
-	cfg    Config
-	log    *slog.Logger
-	codecs *ec.Pool
-	limit  *limiter
-	Events *meta.EventRing // chunk history (nil unless dev.enabled)
+	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
+	warnRepair, warnPut logx.Limiter
+	st                  *meta.Store
+	prop                meta.Proposer
+	live                Liveness
+	shards              Shards
+	rd                  ChunkReader
+	clk                 clock.Clock
+	cfg                 Config
+	log                 *slog.Logger
+	codecs              *ec.Pool
+	limit               *limiter
+	Events              *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	scanMu   sync.Mutex // one pass at a time: `check --scrub` never overlaps the background loop
 	mu       sync.Mutex
@@ -296,7 +299,7 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
 		if err != nil {
 			st.Errors++
-			r.log.Warn("repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+			r.warnRepair.Warn(r.log, "repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
 			continue
 		}
 		st.BytesMoved += outcome.bytes
@@ -393,7 +396,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 		}
 		r.limit.wait(ctx, int64(len(shards[i])))
 		if err := r.shards.Put(ctx, n, chunk.Key(c.Hash, k, m, i), shards[i]); err != nil {
-			r.log.Warn("repair put failed", "node", n, "slot", i, "err", err)
+			r.warnPut.Warn(r.log, "repair put failed", "node", n, "slot", i, "err", err)
 			newPlace[i] = 0
 			continue
 		}

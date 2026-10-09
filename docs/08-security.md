@@ -51,7 +51,7 @@ Endpoints and who may call them:
 | Endpoint | Caller | Note |
 |---|---|---|
 | `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body |
-| `GET/HEAD/PUT/DELETE /v1/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412` |
+| `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412` |
 | `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |
@@ -61,7 +61,10 @@ Endpoints and who may call them:
 
 Authorization is checked before any request body is consumed (`http.MaxBytesReader` is
 installed after the check). A rejected PUT therefore costs the attacker's bandwidth, not
-the node's disk.
+the node's disk. Every body is bounded (I-116): a shard PUT by the chunk size, `/v1/apply`
+at 4 MiB, the JSON of `/v1/join`, `/v1/members`, `/v1/admin` and `/dev/fault` at 64 KiB,
+`/v1/bad-slot` and the web UI's `POST /api/mkdir` at 4 KiB; a body past its bound is a
+`400` before anything is decoded.
 
 ## Join
 
@@ -210,6 +213,10 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 - Protecting the local mount from other users of the same device.
 
 ## Invariants
+- **I-116** — Every request body a node reads is bounded before it is decoded: 4 MiB for
+  `/v1/apply`, 64 KiB for `/v1/join`, `/v1/members`, `/v1/admin` and `/dev/fault`, 4 KiB
+  for `/v1/bad-slot` and the web UI's `POST /api/mkdir`, the chunk size for a shard PUT;
+  a body one byte past its bound is refused with `400` and nothing of it is applied.
 
 - **I-18** — An RPC whose source IP is not a cluster member with a matching Tailscale
   StableID is rejected with 403 before any request body is read; a request whose
@@ -250,3 +257,4 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
+| I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap` |

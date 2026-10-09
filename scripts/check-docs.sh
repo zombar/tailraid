@@ -20,7 +20,7 @@ export LC_ALL=C
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-README_MAX_LISTS=9 # the 2026-10 review's PR 4 rewrites README.md and lowers this to 2
+README_MAX_LISTS=2 # README.md is prose and tables; the two lists are the release steps and nothing else
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 errs="$TMP/errs"; : > "$errs"
@@ -29,8 +29,8 @@ err() { echo "docs: $*" >> "$errs"; }
 files=(README.md CLAUDE.md docs/README.md docs/windows-checklist.md)
 for f in docs/[0-9][0-9]-*.md; do files+=("$f"); done
 
-slug() { # GitHub heading anchor
-  printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g'
+slug() { # GitHub heading anchor (one per line: anchors_of feeds grep -x)
+  printf '%s\n' "$1" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g'
 }
 
 anchors_of() { # file → one slug per line
@@ -56,7 +56,8 @@ for f in "${files[@]}"; do
       resolved=$f
     fi
     if [ -n "$anchor" ] && [[ "$resolved" == *.md ]]; then
-      anchors_of "$resolved" | grep -qx -- "$anchor" || err "$f: no heading for anchor: $target"
+      # grep -x without -q: under pipefail a -q that exits early would fail the pipeline on the match
+      anchors_of "$resolved" | grep -x -- "$anchor" > /dev/null || err "$f: no heading for anchor: $target"
     fi
   done < "$TMP/links"
 done

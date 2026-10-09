@@ -13,6 +13,7 @@ require (
 	github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/goleak v1.3.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 )

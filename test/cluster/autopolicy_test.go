@@ -91,6 +91,10 @@ func TestCluster_AutoPolicy_ShrinksOnRemoveNotOnDeath(t *testing.T) {
 	c.Probe()
 	scanLeader(t, c)
 	expect(t, c, 2, 2, "a dead laptop")
+	// the laptop's disk goes first (its slots zeroed, it is dead), then the laptop
+	if err := c.Leader().Node.MemberOp(context.Background(), rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[3].Target(), Force: true}); err != nil {
+		t.Fatalf("remove disk: %v", err)
+	}
 	if err := c.Leader().Node.MemberOp(context.Background(), rpc.MemberOp{Op: "remove", NodeIdx: c.Nodes[3].Idx()}); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
