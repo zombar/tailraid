@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -191,10 +192,11 @@ func launchdPlist(p Params) string {
 // ReadWritePaths), never gains privileges, sees a private /tmp, and gets 45 s to stop
 // (the final flush is capped at 30 s and a leader hands over first).
 func systemdUnit(p Params) string {
-	rw := []string{p.DataDir, filepath.Dir(p.ConfigPath)}
+	// the unit is Linux's whatever OS builds it (Params.GOOS), so its paths are slash paths
+	rw := []string{p.DataDir, path.Dir(filepath.ToSlash(p.ConfigPath))}
 	rw = append(rw, p.Disks...)
 	if p.LogFile != "" {
-		rw = append(rw, filepath.Dir(p.LogFile))
+		rw = append(rw, path.Dir(filepath.ToSlash(p.LogFile)))
 	}
 	var paths []string
 	seen := map[string]bool{}

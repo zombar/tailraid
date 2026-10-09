@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,7 @@ func TestLogFile_RotatesAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = lf.Close() }) // Windows cannot remove the temp dir while the file is open
 	lf.maxSize, lf.keep = 100, 3
 	line := []byte(strings.Repeat("x", 39) + "\n") // 40 bytes: two fit, the third rotates
 	size := func(p string) int64 {
@@ -50,6 +52,14 @@ func TestLogFile_RotatesAndReopens(t *testing.T) {
 		t.Fatal("a fourth generation exists")
 	}
 	// an external rotation renames the file away: lines keep landing in it until Reopen
+	// (a Unix idiom: Windows refuses to rename an open file, and nothing rotates logs
+	// that way there; the service's own rotation closes the file first)
+	if runtime.GOOS == "windows" {
+		if err := lf.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	if err := os.Rename(path, path+".moved"); err != nil {
 		t.Fatal(err)
 	}

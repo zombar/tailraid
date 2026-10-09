@@ -38,7 +38,10 @@ func TestReader_ConcurrentReadsOfOneChunk_FetchOnce(t *testing.T) {
 	must(t, f.Flusher().FlushInode(ctx, ino))
 	in := f.Inode(ino)
 	g := &gate{ShardClient: f, entered: make(chan struct{}), release: make(chan struct{})}
-	rd := vfs.NewReader(f.FSM, f, g, nil, nil)
+	// with the fabric's cache: a reader that reaches the chunk only after the shared fetch
+	// completed (the goroutines start in any order) is served from it, so the GET count
+	// is exact whatever the scheduling
+	rd := vfs.NewReader(f.FSM, f, g, f.Cache, nil)
 	before := 0
 	for n := meta.NodeIdx(1); n <= 3; n++ {
 		before += f.Gets(n)

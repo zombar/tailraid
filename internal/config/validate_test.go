@@ -27,7 +27,7 @@ func TestConfig_Validate_Table(t *testing.T) {
 		{"nfs equals raft", func(c *Config) { c.Listen.NFS = "127.0.0.1:20480" }, "both use port"},
 		{"nfs without a port", func(c *Config) { c.Listen.NFS = "127.0.0.1" }, "listen.nfs"},
 		{"nfs port 0", func(c *Config) { c.Listen.NFS = "127.0.0.1:0" }, "listen.nfs"},
-		{"web equals nfs", func(c *Config) { c.Listen.Web = 20490 }, "both use port"},
+		{"web equals nfs", func(c *Config) { c.Listen.NFS, c.Listen.Web = "127.0.0.1:20490", 20490 }, "both use port"}, // the NFS default differs per OS
 		{"web off", func(c *Config) { c.Listen.Web = 0 }, ""},
 		{"level warning", func(c *Config) { c.Log.Level = "warning" }, ""},
 		{"level DEBUG", func(c *Config) { c.Log.Level = "DEBUG" }, ""},
