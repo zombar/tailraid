@@ -157,8 +157,13 @@ func (f *Flusher) Run(ctx context.Context) {
 		case <-timer.C():
 		}
 		now := f.clk.Now()
-		total := f.ov.TotalDirty()
 		dirty := f.ov.Dirty()
+		// the threshold weighs what this loop can still flush: bytes in outstanding plans
+		// are already draining (they count toward MaxDirty, I-80, not toward the trigger)
+		total := f.ov.TotalDirty()
+		for _, d := range dirty {
+			total -= min(total, d.PlanBytes)
+		}
 		sort.Slice(dirty, func(i, j int) bool { return dirty[i].DirtyBytes > dirty[j].DirtyBytes })
 		for _, d := range dirty {
 			if d.Flushing {
@@ -243,8 +248,10 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 			return nil
 		}
 		f.ov.AbortFlush(plan)
+		f.ov.NoteFlush(ino, err) // a WRITE at the cap fails at once behind this (L-189)
 		return err
 	}
+	f.ov.NoteFlush(ino, nil) // before CommitFlushed, which may evict the entry
 	return f.ov.CommitFlushed(plan, newSize)
 }
 

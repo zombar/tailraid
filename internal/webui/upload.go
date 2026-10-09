@@ -1,27 +1,19 @@
 package webui
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"time"
-
-	"github.com/go-git/go-billy/v5"
 
 	"github.com/zombar/tailraid/internal/meta"
-	"github.com/zombar/tailraid/internal/vfs"
 )
 
-// capRetry is how long an upload waits for the flusher after the WAL or dirty-byte cap
-// refused a write (docs/13 §4).
-const capRetry = 200 * time.Millisecond
-
 // put stores the body as the file at path through the vfs: the NFS write path (overlay,
-// fsynced WAL, flusher), one WAL record per chunk-sized read (I-70).
+// fsynced WAL, flusher), one WAL record per chunk-sized read (I-70). A write that meets
+// the WAL or dirty-byte cap waits for the flusher inside the vfs (docs/04 §3).
 func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	parts, canonical := cleanPath(r.PathValue("path"))
 	if len(parts) == 0 {
@@ -53,7 +45,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	for {
 		n, rerr := io.ReadFull(r.Body, buf)
 		if n > 0 {
-			if err := s.writeAll(r.Context(), f, buf[:n]); err != nil {
+			if _, err := f.Write(buf[:n]); err != nil {
 				_ = f.Close()
 				s.fail(w, err)
 				return
@@ -77,21 +69,6 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-}
-
-// writeAll writes p, waiting on the clock for the flusher whenever a cap refuses it.
-func (s *Server) writeAll(ctx context.Context, f billy.File, p []byte) error {
-	for {
-		_, err := f.Write(p)
-		if err == nil || (!errors.Is(err, vfs.ErrWALFull) && !errors.Is(err, vfs.ErrDirtyFull)) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return err
-		case <-s.o.Clk.After(capRetry):
-		}
-	}
 }
 
 // mkdir creates a directory and its parents (I-70).

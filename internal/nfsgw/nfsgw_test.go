@@ -42,7 +42,11 @@ type gateway struct {
 
 // startGateway serves a fabric over NFS on a random loopback port and mounts it through
 // the client library on the same connection (go-nfs serves MOUNT and NFS on one port).
-func startGateway(t *testing.T) *gateway {
+func startGateway(t *testing.T) *gateway { return startGatewayWith(t, nil) }
+
+// startGatewayWith runs prep on the fabric (overlay options, faults) before the
+// filesystem is built.
+func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		// go-nfs-client binds explicit local ports that fall inside Windows' reserved
@@ -51,6 +55,9 @@ func startGateway(t *testing.T) *gateway {
 		t.Skip("NFS client library cannot bind local ports on Windows runners")
 	}
 	f := testharness.NewFabric(t, 3, 2, 1)
+	if prep != nil {
+		prep(f)
+	}
 	h := nfsgw.New(f.FS(), f.FSM)
 	l, err := nfsgw.Listen("127.0.0.1:0")
 	if err != nil {

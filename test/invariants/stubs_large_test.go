@@ -16,11 +16,3 @@ func TestStub_I_82(t *testing.T) { t.Skip("stub until the upload limits land; do
 // Invariant: I-84
 // Becomes: TestReport_ProcessAndFlushFields.
 func TestStub_I_84(t *testing.T) { t.Skip("stub until the process fields land; docs/12 §8") }
-
-// Lifecycle: L-188
-// Becomes: TestOverlay_WALCap_WaitsForFlush.
-func TestStub_L_188(t *testing.T) { t.Skip("stub until cap backpressure lands") }
-
-// Lifecycle: L-189
-// Becomes: TestOverlay_WALCap_FailsFastWhenFlushFailed.
-func TestStub_L_189(t *testing.T) { t.Skip("stub until cap backpressure lands") }
