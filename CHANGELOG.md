@@ -2,6 +2,10 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.1 (2026-10-09)
+
+No changes recorded since the previous release.
+
 ## v0.4.0 (2026-10-09)
 
 ### Changes
