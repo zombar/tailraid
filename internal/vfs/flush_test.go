@@ -811,9 +811,11 @@ func TestFlusher_TotalDirtyHiTrigger(t *testing.T) {
 	go func() { fl.Run(rctx); close(done) }()
 	// tick the run loop until it has evaluated the trigger (its timer is armed once the
 	// goroutine is up); extra ticks change nothing: the total is then below the threshold
+	// the version bumps when the Commit applies; the entries leave the overlay a moment
+	// later, once CommitFlushed has run, so wait for both
 	testharness.Eventually(t, func() bool {
 		f.Clk.Advance(250 * time.Millisecond)
-		return f.Inode(big).Version == 1 && f.Inode(mid).Version == 1
+		return f.Inode(big).Version == 1 && f.Inode(mid).Version == 1 && len(f.Ov.Dirty()) == 1
 	}, "largest two flushed")
 	if v := f.Inode(small).Version; v != 0 {
 		t.Fatalf("small file flushed (version %d) although the total was already below the threshold", v)
