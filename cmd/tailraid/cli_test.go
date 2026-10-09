@@ -221,4 +221,24 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	if !rep.Volume.Auto {
 		t.Fatal("status does not report auto mode")
 	}
+	// the joined node serves: a fresh follower has no snapshot, so its table is empty
+	// until the leader connects, and the leader must be accepted before that (I-92)
+	ctxB, cancelB := context.WithCancel(context.Background())
+	doneB := make(chan error, 1)
+	go func() { doneB <- node.Serve(ctxB, cfgB, slog.Default(), "test") }()
+	t.Cleanup(func() {
+		cancelB()
+		if err := <-doneB; err != nil {
+			t.Errorf("serve B: %v", err)
+		}
+	})
+	addrB := fmt.Sprintf("127.0.0.1:%d", cfgB.Listen.RPC)
+	testharness.Eventually(t, func() bool {
+		h, err := probe.Health(ctx, addrB)
+		return err == nil && h.Ready
+	}, "the joined node never became ready")
+	testharness.Eventually(t, func() bool {
+		rep, err := admin.FetchStatus(ctx, rpc.NewClient(cid, nil), addrA)
+		return err == nil && len(rep.Nodes) == 2 && rep.Nodes[1].Live
+	}, "the leader never saw the joined node live")
 }

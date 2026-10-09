@@ -86,9 +86,11 @@ them so that it accepts the leader's Raft connection while its own member table 
 empty (the table replaces the seed as soon as the log arrives; §Raft transport); before
 the request it seeds the target itself from WhoIs, so the leader's first connection is
 not refused, and it persists the response's members as `<data_dir>/members.seed`, which
-`serve` loads until its table is present and then removes (`reset` removes it too). Without
-that, a join that ended before the log arrived left a `serve` that refused the leader for
-good. A join from the Raft address of a known server under a new node ID (a device that
+`serve` loads at start and keeps current from its table once a minute (`reset` removes
+it). The file matters on every restart, not only the first: Raft restores a follower's
+table at open from a snapshot only, so a node restarted before its first snapshot has an
+empty table until the leader connects, and the leader was accepted only by that table;
+`join` also takes a snapshot once the log has arrived. A join from the Raft address of a known server under a new node ID (a device that
 was `reset`) removes that server and re-keys the device's row to the new ID, so its disks
 and their shards stay registered under it, when the caller presents the row's StableID; a
 different tailnet device at a known address is refused (I-94).
@@ -242,8 +244,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   `rpc.Listen` refuses a non-loopback bind without an authorizer.
 - **I-92** — An accepted Raft connection is closed before any byte is read unless its
   source IP is a cluster member (from the member table, or until the table has arrived
-  from the seed: the join target as WhoIs names it, then the members the join response
-  listed, persisted for `serve`) whose WhoIs StableID matches the record; the cluster-ID
+  from the seed: the join target as WhoIs names it, then the device members `serve` keeps
+  persisted from its table, starting with those the join response listed) whose WhoIs
+  StableID matches the record; the cluster-ID
   handshake runs after that check, and the acceptor reads the peer's ID before sending
   its own.
 - **I-93** — `update_addr` from an address that is not in the member table is accepted
