@@ -125,10 +125,13 @@ a host above the cap when another placement exists (I-89).
 ## 6. Policy
 
 `AutoPolicy` (03 §Choosing the policy) counts **targets**, not devices: every Active
-device with `Capacity > 0`, every Active disk, and S3 nodes as before; `v` counts the
-targets on voter hosts. The thresholds for `m` and the cap `k ≤ 6` are unchanged. One step
+device (its own store) except one with `Capacity == 0` that has disks of its own (it opted
+its system disk out), and every Active disk of an Active device; S3 nodes are not counted,
+as before. `v` counts the targets on voter hosts. The thresholds for `m` and the cap `k ≤ 6` are unchanged. One step
 is added when there are `H ≥ 2` hosts with a target: `k` is lowered (never below 1) until
-`ceil((k+m)/H) ≤ m`, so an automatic policy always survives the loss of one whole host.
+no host would hold more than `m` slots of a stripe under the host cap (so `ceil((k+m)/H) ≤
+m` when every host has the targets), and an automatic policy survives the loss of one whole
+host.
 
 | hosts × targets | v | rule before the host step | policy | survives |
 |---|---|---|---|---|
@@ -142,9 +145,11 @@ is added when there are `H ≥ 2` hosts with a target: `k` is lowered (never bel
 With one target per host the step never changes the rule's answer (`ceil((k+m)/H) = 1 ≤ m`
 whenever `m ≥ 1`), so existing clusters keep their policy.
 
-`PolicyAllowed` counts live Active targets (a disk is live per §4). `meta.Tolerance(nodes,
-k, m)` returns the disks and hosts a policy survives: `m` disks; `floor(m / c)` hosts with
-`c = ceil((k+m)/H)`, or 0 with a single host. `status`, `volume describe` and
+`PolicyAllowed` counts the same targets that are live (a disk is live per §4, and only
+while its host is), plus live Active S3 nodes. `meta.Tolerance(nodes,
+k, m)` returns the disks and hosts a policy survives: `m` disks; `floor(m / w)` hosts, `w` being the
+most slots one host receives when each host is filled up to `ceil((k+m)/H)` and hosts with
+spare targets take the rest, or 0 with a single host. `status`, `volume describe` and
 `set-redundancy` print it ("survives 2 disks, 1 host"); pinning a policy that survives no
 host on a cluster of two or more hosts prints a warning but is allowed.
 
@@ -202,8 +207,8 @@ writes and repairs only (06 §6).
 | Invariant | Tests |
 |---|---|
 | I-86 | `TestStub_I_86` |
-| I-87 | `TestStub_I_87` |
-| I-88 | `TestStub_I_88` |
+| I-87 | `TestCandidates_DiskDomainAndVoter`, `TestFillPlacement_HostCap`, `TestPlace_HostCap`, `TestPlace_HostCap_NNodeDeterminism`, `TestPlace_OneTargetPerHost_Unchanged` |
+| I-88 | `TestAutoPolicy_Disks_Table`, `TestAutoPolicy_OneTargetPerHost_Unchanged`, `TestAutoPolicy_SurvivesOneHost`, `TestPolicyAllowed_CountsTargets`, `TestTolerance_Table` |
 | I-89 | `TestStub_I_89` |
 | I-90 | `TestStub_I_90` |
 | I-91 | `TestStub_I_91` |

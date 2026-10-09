@@ -8,12 +8,6 @@ import "testing"
 // Invariant: I-86
 func TestStub_I_86(t *testing.T) { t.Skip("stub until disks land; see docs/14-disks.md") }
 
-// Invariant: I-87
-func TestStub_I_87(t *testing.T) { t.Skip("stub until disks land; see docs/14-disks.md") }
-
-// Invariant: I-88
-func TestStub_I_88(t *testing.T) { t.Skip("stub until disks land; see docs/14-disks.md") }
-
 // Invariant: I-89
 func TestStub_I_89(t *testing.T) { t.Skip("stub until disks land; see docs/14-disks.md") }
 

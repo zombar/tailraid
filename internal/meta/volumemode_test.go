@@ -30,29 +30,33 @@ func TestFSM_SetVolumeMode(t *testing.T) {
 // Invariant: I-22
 func TestCodec_ReadsVersion1Snapshot(t *testing.T) {
 	s := sampleState()
+	s.Vol.Auto = false // version 1 has no Auto byte
 	var buf bytes.Buffer
-	if err := EncodeState(&buf, s); err != nil {
+	if err := encodeStateVersion(&buf, s, stateVersionV1); err != nil {
 		t.Fatal(err)
 	}
-	v2 := buf.Bytes()
-	// strip the Auto byte: magic 4 + version 1 + Applied 8 + LastNow 8 + ChunkSize 4 + K 1 + M 1 + PolicyVersion 4
-	const autoAt = 4 + 1 + 8 + 8 + 4 + 1 + 1 + 4
-	v1 := append([]byte{}, v2[:autoAt]...)
-	v1 = append(v1, v2[autoAt+1:]...)
-	v1[4] = 1
-	got, err := DecodeState(bytes.NewReader(v1))
+	got, err := DecodeState(bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		t.Fatalf("version 1: %v", err)
 	}
 	if got.Vol.Auto || got.Vol.K != s.Vol.K || got.Vol.PolicyVersion != s.Vol.PolicyVersion || len(got.Nodes) != len(s.Nodes) {
 		t.Fatalf("version 1 decoded %+v", got.Vol)
 	}
-	// re-encoding writes version 2, and the state round-trips byte for byte from then on
+	// re-encoding writes the current version
 	buf.Reset()
 	if err := EncodeState(&buf, got); err != nil {
 		t.Fatal(err)
 	}
-	if buf.Bytes()[4] != 2 {
+	if buf.Bytes()[4] != stateVersion {
 		t.Fatalf("re-encoded version %d", buf.Bytes()[4])
+	}
+	// a version-2 snapshot (Auto, no Host) reads too
+	s.Vol.Auto = true
+	buf.Reset()
+	if err := encodeStateVersion(&buf, s, stateVersionV2); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DecodeState(bytes.NewReader(buf.Bytes())); err != nil || !got.Vol.Auto || len(got.Nodes) != len(s.Nodes) {
+		t.Fatalf("version 2: %v", err)
 	}
 }

@@ -9,26 +9,34 @@ import (
 
 var stateMagic = []byte("TRM1")
 
-// stateVersion 2 adds Volume.Auto; a version-1 snapshot is still read (Auto = false) so
-// a cluster upgrades without a format break (docs/12 §6).
+// stateVersion 2 adds Volume.Auto and 3 adds Node.Host; older snapshots are still read
+// (Auto = false, Host = 0) so a cluster upgrades without a format break (docs/12 §6).
 const (
-	stateVersion   = 2
+	stateVersion   = 3
+	stateVersionV2 = 2
 	stateVersionV1 = 1
 )
 
 // EncodeState writes a canonical snapshot of s: maps in sorted key order, so equal states
 // produce byte-identical output (I-22). Tombs is not written; it is rebuilt on decode.
-func EncodeState(wr io.Writer, s *State) error {
+func EncodeState(wr io.Writer, s *State) error { return encodeStateVersion(wr, s, stateVersion) }
+
+// encodeStateVersion writes s in the given snapshot version; only the current one is
+// ever written in production, and the older ones exist so the decoder's compatibility
+// paths are tested against real bytes.
+func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 	w := &writer{b: make([]byte, 0, 1024)}
 	w.b = append(w.b, stateMagic...)
-	w.u8(stateVersion)
+	w.u8(version)
 	w.u64(s.Applied)
 	w.i64(s.LastNow)
 	w.u32(s.Vol.ChunkSize)
 	w.u8(s.Vol.K)
 	w.u8(s.Vol.M)
 	w.u32(s.Vol.PolicyVersion)
-	w.bool(s.Vol.Auto)
+	if version >= stateVersionV2 {
+		w.bool(s.Vol.Auto)
+	}
 	w.b = append(w.b, s.Meta.ClusterID[:]...)
 	w.str(s.Meta.JoinToken)
 	w.i64(s.Meta.CreatedAt)
@@ -42,7 +50,7 @@ func EncodeState(wr io.Writer, s *State) error {
 	sort.Ints(nodeIdx)
 	w.uvarint(uint64(len(nodeIdx)))
 	for _, idx := range nodeIdx {
-		writeNode(w, s.Nodes[NodeIdx(idx)])
+		writeNode(w, s.Nodes[NodeIdx(idx)], version >= stateVersion)
 	}
 
 	hashes := make([]Hash, 0, len(s.Chunks))
@@ -124,7 +132,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
-	if r.err == nil && version != stateVersion && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
@@ -136,7 +144,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 	s.Applied = r.u64()
 	s.LastNow = r.i64()
 	s.Vol = Volume{ChunkSize: r.u32(), K: r.u8(), M: r.u8(), PolicyVersion: r.u32()}
-	if version >= stateVersion {
+	if version >= stateVersionV2 {
 		s.Vol.Auto = r.bool()
 	}
 	copy(s.Meta.ClusterID[:], r.take(16))
@@ -148,7 +156,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 	n := r.length(maxListLen)
 	var prevIdx NodeIdx
 	for i := 0; i < n && r.err == nil; i++ {
-		node := readNode(r)
+		node := readNode(r, version >= stateVersion)
 		if i > 0 && node.Idx <= prevIdx {
 			return nil, fmt.Errorf("meta: nodes not in canonical order")
 		}
