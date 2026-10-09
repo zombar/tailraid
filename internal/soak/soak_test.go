@@ -200,17 +200,33 @@ func (e *harnessEnv) SetState(ctx context.Context, n soak.NodeRef, st meta.NodeS
 	return err
 }
 
-func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (bool, string, error) {
+func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (bool, int, string, error) {
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
-		return false, "", errors.New("node is down")
+		return false, 0, "", errors.New("node is down")
 	}
 	snap, err := nd.Node.FSM.Snapshot()
 	if err != nil {
-		return false, "", err
+		return false, 0, "", err
 	}
-	v := meta.CheckInvariants(snap.(interface{ State() *meta.State }).State())
-	return len(v) == 0, strings.Join(v, "; "), nil
+	st := snap.(interface{ State() *meta.State }).State()
+	v := meta.CheckInvariants(st)
+	// orphans as the node's fsck counts them: shards on disk the chunk table does not
+	// place here
+	orphans := 0
+	_ = nd.Store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
+		h, _, _, idx, err := chunk.ParseKey(k)
+		if err != nil {
+			orphans++
+			return nil
+		}
+		c, ok := st.Chunks[h]
+		if !ok || idx >= len(c.Placement) || c.Placement[idx] != nd.Idx() {
+			orphans++
+		}
+		return nil
+	})
+	return len(v) == 0, orphans, strings.Join(v, "; "), nil
 }
 
 func (e *harnessEnv) Chunks(ctx context.Context, n soak.NodeRef, path string) ([]admin.ChunkReport, error) {

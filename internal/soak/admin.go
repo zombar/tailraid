@@ -157,16 +157,16 @@ func (a *Admin) SetState(ctx context.Context, n NodeRef, state meta.NodeState) e
 	return a.leaderCall(ctx, "/v1/members", body, nil)
 }
 
-func (a *Admin) Fsck(ctx context.Context, n NodeRef) (bool, string, error) {
+func (a *Admin) Fsck(ctx context.Context, n NodeRef) (bool, int, string, error) {
 	var rep admin.FsckReport
 	if err := a.nodeOp(ctx, n, rpc.AdminOp{Op: "fsck"}, &rep); err != nil {
-		return false, "", err
+		return false, 0, "", err
 	}
 	text := fmt.Sprintf("%d violations, %d orphan shards", len(rep.Violations), rep.OrphanShards)
 	for _, v := range rep.Violations {
 		text += "; " + v
 	}
-	return rep.OK, text, nil
+	return rep.OK, rep.OrphanShards, text, nil
 }
 
 func (a *Admin) Chunks(ctx context.Context, n NodeRef, path string) ([]admin.ChunkReport, error) {

@@ -75,9 +75,9 @@ func TestAdmin_SeedsRedirectsAndReplies(t *testing.T) {
 		t.Fatalf("calls %v", got)
 	}
 	fc.reply = admin.FsckReport{Violations: []string{"I-1: refcount"}, OrphanShards: 2}
-	ok, text, err := a.Fsck(ctx, NodeRef{Name: "n3", RPC: "10.0.0.3:20481"})
-	if err != nil || ok || text != "1 violations, 2 orphan shards; I-1: refcount" {
-		t.Fatalf("fsck %v %q %v", ok, text, err)
+	ok, orphans, text, err := a.Fsck(ctx, NodeRef{Name: "n3", RPC: "10.0.0.3:20481"})
+	if err != nil || ok || orphans != 2 || text != "1 violations, 2 orphan shards; I-1: refcount" {
+		t.Fatalf("fsck %v %d %q %v", ok, orphans, text, err)
 	}
 	if fc.calls[len(fc.calls)-1] != http.MethodPost+" 10.0.0.3:20481/v1/admin" {
 		t.Fatalf("fsck went to %s", fc.calls[len(fc.calls)-1])

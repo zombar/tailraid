@@ -41,6 +41,9 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	if base.Process != nil {
 		baseHeap = base.Process.HeapInuse
 	}
+	// orphans before the phase belong to earlier phases (migrations, restarts) and go
+	// with the hourly sweep; the large file must add none
+	_, orphans0, _, _ := r.Env.Fsck(ctx, gw)
 	h := sha256.New()
 	var peak struct {
 		heap, flush, plan  uint64
@@ -76,11 +79,13 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 			peak.heap = max(peak.heap, rep.Process.HeapInuse)
 		}
 		if g := rep.Gateway; g != nil {
-			peak.wal, peak.flush, peak.plan = max(peak.wal, g.WALBytes), max(peak.flush, g.FlushBytes), max(peak.plan, g.PlanBytes)
+			// the flusher's own peak since start, not the sampled instant: a sample lands
+			// between chunks as often as on one
+			peak.wal, peak.flush, peak.plan = max(peak.wal, g.WALBytes), max(peak.flush, g.FlushPeak), max(peak.plan, g.PlanBytes)
 			if bounds.WALCap > 0 && uint64(g.WALBytes) > uint64(g.DirtyInodes)*(bounds.WALCap+uint64(r.Profile.ChunkSize)+64) {
 				peak.walOver++
 			}
-			if g.FlushCap > 0 && g.FlushBytes > g.FlushCap {
+			if g.FlushCap > 0 && g.FlushPeak > g.FlushCap {
 				peak.flushOver++
 			}
 		}
@@ -90,7 +95,6 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	r.event("large file written", fmt.Sprintf("%.0f MiB in %s (%.1f MiB/s) via %s", mb, took.Round(time.Millisecond), mb/took.Seconds(), gw.Name))
 	r.checkAt("I-79", "every write acknowledged while outrunning the flusher", writeErr == nil, fmt.Sprintf("%d pieces of %s; %v", pieces, humanBytes(largePiece), writeErr), p, "", gw.Name)
 	r.checkAt("I-80", "the WAL stayed within its cap", peak.walOver == 0, fmt.Sprintf("deepest WAL %s against a cap of %s; %d samples over", humanBytes(float64(peak.wal)), humanBytes(float64(bounds.WALCap)), peak.walOver), p, "", gw.Name)
-	r.checkAt("I-78", "flush buffers stayed within the bound", peak.flushOver == 0, fmt.Sprintf("peak %s against %s (plan bytes up to %s); %d samples over", humanBytes(float64(peak.flush)), humanBytes(float64(bounds.FlushCap)), humanBytes(float64(peak.plan)), peak.flushOver), p, "", gw.Name)
 	if baseHeap > 0 {
 		budget := baseHeap + bounds.FlushCap + largeHeapGap
 		r.checkAt("I-78", "the heap stayed flat", peak.heap <= budget, fmt.Sprintf("peak heap in use %s, baseline %s, budget %s", humanBytes(float64(peak.heap)), humanBytes(float64(baseHeap)), humanBytes(float64(budget))), p, "", gw.Name)
@@ -113,6 +117,13 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	}
 	drained := err == nil && rep.Gateway != nil && rep.Gateway.DirtyInodes == 0 && rep.Gateway.WALBytes == 0
 	r.checkAt("I-80 L-13", "overlay and WAL empty after the idle flush", drained, fmt.Sprintf("%+v", rep.Gateway), p, "", gw.Name)
+	if g := rep.Gateway; g != nil { // the flush of the tail counts too
+		peak.flush = max(peak.flush, g.FlushPeak)
+		if g.FlushCap > 0 && g.FlushPeak > g.FlushCap {
+			peak.flushOver++
+		}
+	}
+	r.checkAt("I-78", "flush buffers stayed within the bound", peak.flushOver == 0, fmt.Sprintf("peak %s against %s (plan bytes up to %s); %d samples over", humanBytes(float64(peak.flush)), humanBytes(float64(bounds.FlushCap)), humanBytes(float64(peak.plan)), peak.flushOver), p, "", gw.Name)
 	want := [32]byte(h.Sum(nil))
 	sum, n, err := v.Hash(p)
 	r.checkAt("I-7 I-34", "content hash exact on the writing gateway", err == nil && n == int64(size) && sum == want, fmt.Sprintf("%d bytes, %v", n, err), p, "", gw.Name)
@@ -129,7 +140,15 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		}
 	}
 	r.check("I-81", "no temp file left in the run's directory", err == nil && temps == 0, fmt.Sprintf("%d temps among %d entries, %v", temps, len(names), err))
-	ok, detail, err := r.Env.Fsck(ctx, gw)
-	r.checkAt("I-44 I-38", "fsck clean, no orphans, after the large file", err == nil && ok, detail+fmt.Sprint(err), "", "", gw.Name)
+	ok, orphans1, detail, err := r.Env.Fsck(ctx, gw)
+	r.checkAt("I-44 I-38", "fsck clean and no new orphans after the large file", err == nil && ok && orphans1 <= orphans0,
+		fmt.Sprintf("%s; %d orphans before the phase%v", detail, orphans0, errText(err)), "", "", gw.Name)
 	return nil
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "; " + err.Error()
 }
