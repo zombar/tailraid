@@ -35,8 +35,14 @@ func TestFlusher_PutTimeout_SlotReplaced(t *testing.T) {
 	// The deadline is on the fake clock. It is advanced in small steps (every 2 ms of
 	// real time) so the PUTs that do answer, including the re-placed one, land well
 	// inside their own deadline while the stalled one runs out of it.
+	// The deadline is on the fake clock. It is advanced until the stalled PUT has been
+	// cancelled, which is the first round ending; the re-placed PUT then runs under a
+	// deadline nothing advances, so it can never run out of time however loaded the
+	// machine is.
 	testharness.Eventually(t, func() bool {
-		f.Clk.Advance(cfg.PutDeadline / 200)
+		if f.CancelledPuts(victim) == 0 {
+			f.Clk.Advance(cfg.PutDeadline / 4)
+		}
 		select {
 		case err = <-done:
 			return true
