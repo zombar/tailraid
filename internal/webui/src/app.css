@@ -163,6 +163,24 @@ h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8
 }
 .cap-note { font-size: 12px; color: var(--dim); font-family: var(--mono); }
 .cap-note.warn { color: var(--warn); }
+/* spread: the block's summary, one column per target around its expected share */
+.spread { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+.spread-axis { display: flex; flex-direction: column; justify-content: space-between; height: 96px; font: 11px var(--mono); color: var(--dim); text-align: right; }
+.spread-plot { display: flex; gap: 12px; min-width: 0; overflow-x: auto; }
+.spread-host { display: grid; gap: 4px; flex: 1 1 0; min-width: 0; }
+.spread-cols { display: flex; gap: 2px; height: 96px; }
+.spread-col { position: relative; flex: 1 1 0; min-width: 6px; max-width: 28px; background: var(--surface); }
+.spread-col::before { content: ""; position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: var(--text); opacity: .35; }
+.spread-col > i { position: absolute; left: 0; right: 0; background: var(--fill); }
+.spread-col > i.up { bottom: 50%; border-radius: 2px 2px 0 0; }
+.spread-col > i.down { top: 50%; border-radius: 0 0 2px 2px; }
+.spread-col.warn > i { background: var(--warn); }
+.spread-col.bad > i { background: var(--bad); }
+.spread-col.dead { background: repeating-linear-gradient(135deg, var(--line) 0 4px, var(--surface) 4px 8px); }
+.spread-col.dead > i { background: var(--bad); opacity: .5; }
+.spread-col.drain { background: color-mix(in srgb, var(--warn) 12%, var(--bg)); }
+.spread-col.off { background: transparent; outline: 1.5px dashed var(--line); outline-offset: -1.5px; }
+.spread-label { font: 12px var(--mono); color: var(--dim); display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- file browser -------------------------------------------------------------- */
 .crumbs { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--mono); font-size: 14px; align-items: center; }

@@ -167,7 +167,8 @@ writes and repairs only (06 §6).
 
 - `node ls` groups disks under their host; `status` and the web UI show per-target used,
   budget, slots and liveness, and the volume's "survives N disks, M hosts".
-- The web UI's **Disks** block (13 §Design) draws each host as a card with one row per
+- The web UI's **Disks** block (13 §Design) opens with a spread summary (one column per
+  target, grouped by host, above or below its expected share) and then draws each host as a card with one row per
   target: its slots on one shared scale against the expected-share tick, and its used
   bytes of budget.
 - The soak report's **data spread across disks** chart (09 §soak) draws one lane per disk
