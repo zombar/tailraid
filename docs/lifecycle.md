@@ -132,7 +132,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-124 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-111 raft.db unopenable on one node | Committed | `TestOpen_CorruptRaftDB_FailsClearly` |
 | L-125 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | (shard none) | PUT begins | Temp | `TestStore_PutGetRoundTrip` |
 | L-126 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | fsync + rename | Durable | `TestStore_ConcurrentPutSameHash`, `TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`, `TestStore_PutGetRoundTrip` |
-| L-127 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | process crash | (removed) | `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead` |
+| L-127 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | process crash | (removed) | `TestCrash_AtEveryPoint`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead` |
 | L-128 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | Get | Verified | `TestStore_PutGetRoundTrip` |
 | L-129 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | bit flip / zero-fill / truncation | Corrupt → Quarantined | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
 | L-130 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Quarantined | repair PUT | Repaired (Durable) | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |

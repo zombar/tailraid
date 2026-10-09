@@ -317,7 +317,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-124 | Committed | E-111 raft.db unopenable on one node | Committed | that node fails to start with a clear error naming the file; others unaffected | `TestOpen_CorruptRaftDB_FailsClearly` |
 | L-125 | (shard none) | PUT begins | Temp | `.tmp-*` in target dir; not listed by `Walk` | `TestStore_PutGetRoundTrip` |
 | L-126 | Temp | fsync + rename | Durable | visible; `Has` true; `Used` += size | `TestStore_ConcurrentPutSameHash`, `TestStore_CrashAfterRenameBeforeDirSync_ShardStillValid`, `TestStore_PutGetRoundTrip` |
-| L-127 | Temp | process crash | (removed) | `Store.Open` deletes `.tmp-*` | `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead` |
+| L-127 | Temp | process crash | (removed) | `Store.Open` deletes `.tmp-*` | `TestCrash_AtEveryPoint`, `TestStore_CrashBeforeRename_LeavesNoVisibleShard`, `TestStore_TornWrite_DetectedOnRead` |
 | L-128 | Durable | Get | Verified | header hash recomputed and matched on every read | `TestStore_PutGetRoundTrip` |
 | L-129 | Durable | bit flip / zero-fill / truncation | Corrupt → Quarantined | `ErrCorrupt`; file moved to `quarantine/<key>.<unixnano>` (cap 64, oldest removed), never served; `shards_corrupt` +1 | `TestStore_GetVerifiesHash_Corrupted`, `TestStore_TornWrite_DetectedOnRead` |
 | L-130 | Quarantined | repair PUT | Repaired (Durable) | same key rewritten; slot reachable again | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |

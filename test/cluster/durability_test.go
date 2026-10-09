@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,9 +32,11 @@ var crashPoints = []crashPoint{
 // The two-outcome rule (I-38): after a crash at any point, the file is either exactly
 // the old content with no visible orphans, or exactly the new content on every gateway.
 // The write starts mid-chunk, so the flush reads the base chunk back (read-modify-write)
-// before it crashes.
+// before it crashes. And nothing is left behind (docs/05 §2): after the restart, the
+// retried flush and one sweep past grace, the gateway's staging is empty, no node holds
+// a temp file and no node holds an orphan shard.
 // Invariant: I-7, I-12, I-38
-// Lifecycle: L-115, L-116, L-118, L-119, L-121
+// Lifecycle: L-115, L-116, L-118, L-119, L-121, L-127
 func TestCrash_AtEveryPoint(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1) // one cluster: every round restarts the gateway
 	defer c.Close()
@@ -92,6 +96,28 @@ func TestCrash_AtEveryPoint(t *testing.T) {
 				got, err := c.ReadFileCold(i, path)
 				if err != nil || !bytes.Equal(got, newData) {
 					t.Fatalf("after restart n%d: %v (acknowledged write lost)", i, err)
+				}
+			}
+			// nothing left behind: the committed flush released the WAL, the crash left
+			// no temp file, and the shards the crashed flush uploaded were adopted by the
+			// retried one rather than orphaned
+			if ents, err := os.ReadDir(filepath.Join(c.Nodes[0].Dir, "staging")); err != nil || len(ents) != 0 {
+				t.Fatalf("staging after the restart flush: %d entries, %v", len(ents), err)
+			}
+			c.Clk.Advance(10*time.Minute + time.Second)
+			for i := range c.Nodes {
+				if n, err := sweepNode(c, i); err != nil || n != 0 {
+					t.Fatalf("n%d: the sweep removed %d orphans (%v)", i, n, err)
+				}
+				var temps []string
+				must(t, filepath.WalkDir(c.Nodes[i].Dir, func(p string, d os.DirEntry, err error) error {
+					if err == nil && !d.IsDir() && (strings.HasPrefix(d.Name(), ".tmp-") || strings.HasSuffix(d.Name(), ".wal.new")) {
+						temps = append(temps, p)
+					}
+					return nil
+				}))
+				if len(temps) != 0 {
+					t.Fatalf("n%d: temp files left: %v", i, temps)
 				}
 			}
 		})
