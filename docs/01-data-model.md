@@ -273,7 +273,9 @@ member record is written; `serve` re-derives it on every maintenance tick (one m
 sets the store's cap at once, and proposes `set_capacity` for itself through the leader
 only when the value moved by more than `max(5 %, 1 GiB)`, so placement weights stay still
 while a disk breathes. `Capacity == 0` (a full disk) takes the node out of the candidate
-set without touching what it already holds.
+set without touching what it already holds. A pinned budget changes only when the pin
+does: raise `node.capacity` (or a disk's `capacity`), restart the service, and the next
+tick registers the new value with the cluster.
 
 ## Invariants
 
@@ -297,7 +299,10 @@ defined in `04-write-path-and-durability.md`.
 - **I-74** — A device's derived budget is `used + free − reserve` of the data directory's
   filesystem (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
   store's cap following at once and a `set_capacity` proposal only past the hysteresis
-  `max(5 %, 1 GiB)`; a node pinned by `node.capacity` is never re-derived.
+  `max(5 %, 1 GiB)`; a node pinned by `node.capacity` is never re-derived, and its pinned
+  value is proposed on the next tick whenever the cluster holds a different one, so a
+  device grown in place (the pin raised, the service restarted) is placed by its new
+  budget.
 
 ## Tests
 
@@ -307,5 +312,5 @@ defined in `04-write-path-and-durability.md`.
 | I-2 | `TestFSM_Commit_Errors`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestReader_DecodedHashMismatch_EIO` |
 | I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestInoGen_RootIsOne_ZeroIsNever` |
 | I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
-| I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestBudget_PinnedOrDerived`, `TestConfig_CapacityAuto` |
+| I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestBudget_PinnedOrDerived`, `TestConfig_CapacityAuto`, `TestNode_Rebudget_PinnedChangeRegistered` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |

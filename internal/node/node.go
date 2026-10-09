@@ -434,9 +434,17 @@ func (a *adminOps) rebudget(ctx context.Context) {
 		a.log.Warn("budget: measuring a disk failed", "err", err)
 		return
 	}
+	// a pinned budget is exact: register it whenever the cluster holds another value, so a
+	// device grown in place (node.capacity raised, then a restart) is seen at once
+	pinned := map[meta.NodeIdx]bool{}
+	for _, t := range a.targets() {
+		if t.pinned {
+			bs[t.idx], pinned[t.idx] = uint64(max(t.store.Capacity(), 0)), true
+		}
+	}
 	for idx, b := range bs {
 		nd, ok := a.node.FSM.Node(idx)
-		if !ok || !chunk.BudgetChanged(nd.Capacity, b) {
+		if !ok || nd.Capacity == b || (!pinned[idx] && !chunk.BudgetChanged(nd.Capacity, b)) {
 			continue
 		}
 		op := rpc.MemberOp{Op: "set_capacity", NodeIdx: idx, Capacity: b}
@@ -451,7 +459,7 @@ func (a *adminOps) rebudget(ctx context.Context) {
 			a.log.Warn("budget: update failed, will retry", "target", nd.Name, "err", err)
 			continue
 		}
-		a.log.Info("budget re-derived", "target", nd.Name, "was", nd.Capacity, "now", b)
+		a.log.Info("budget registered", "target", nd.Name, "was", nd.Capacity, "now", b, "pinned", pinned[idx])
 	}
 }
 
@@ -513,7 +521,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 		case <-ctx.Done():
 			return
 		case <-budgetT.C():
-			a.rebudget(ctx) // pinned targets are skipped inside; disks are refreshed either way
+			a.rebudget(ctx) // derived budgets past the hysteresis, pinned ones whenever they differ
 			budgetT.Reset(cfg.ScanInterval)
 		case <-gcT.C():
 			if a.node.IsLeader() && a.healthy() {
