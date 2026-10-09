@@ -21,9 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
-      - run: go mod verify && go mod verify -modfile=tools.mod
-      - run: go mod tidy && go mod tidy -modfile=tools.mod && git diff --exit-code -- go.mod go.sum tools.mod tools.sum
+        with: {go-version-file: go.mod, cache: true}
+      - run: go mod verify && go mod verify -modfile=tools.mod && go mod verify -modfile=actionlint.mod
+      - run: go mod tidy && go mod tidy -modfile=tools.mod && go mod tidy -modfile=actionlint.mod && git diff --exit-code -- go.mod go.sum tools.mod tools.sum actionlint.mod actionlint.sum
       - run: make vendor-check
       - run: make fmt-check
 
@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - run: make lint web-check
       # The per-OS files (*_windows.go, *_darwin.go) only type-check under their GOOS.
       - run: make lint-cross
@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - run: make vuln
 
   test:
@@ -57,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - run: go test -short -race -cover ./...
         shell: bash
 
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - run: make test-long
 
   mount:
@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y nfs-common
       - run: sudo -E env "PATH=$PATH" make test-mount
@@ -97,7 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - run: make soak
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -117,7 +117,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: { go-version-file: go.mod, cache: true }
+        with: {go-version-file: go.mod, cache: true}
       - run: make release VERSION=${GITHUB_REF_NAME}
       - run: scripts/changelog.sh notes ${GITHUB_REF_NAME} > dist/release-notes.md && cat dist/release-notes.md
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

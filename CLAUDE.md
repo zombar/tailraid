@@ -40,8 +40,12 @@ make build        static binary → dist/tailraid        make test        -short
 make test-race    -short -race (pre-commit)             make test-long   model checker etc. (minutes)
 make lint         golangci-lint + check-invariants      make invariants  regenerate docs/invariants.md, lifecycle.md
 make fmt-check    gofmt                                 make vuln        govulncheck
-make check        fmt-check + vendor-check + lint + web-check + test-race
+make check        fmt-check + vendor-check + lint + web-check + web-typecheck + test-race
 make vendor-check vendor/ matches go.mod                make deadcode    deadcode + unparam (part of lint)
+make web-typecheck typescript-go over internal/webui    make spell       misspell over docs, TS, CSS, lookdev
+make docs-check   scripts/check-docs.sh (links, anchors, I-n/L-n mentions, fences, README lists)
+make actionlint / yaml-check / yamlfmt / shell-check    workflow, YAML and shell files
+make hooks        install the lefthook hooks (pre-commit = check, pre-push = vuln, commit-msg = scope)
 make release      6 static binaries + sha256sums
 make test-mount   real NFS mount (sudo -E)              make soak        docker-compose soak → report.html
 make web          esbuild → internal/webui/dist/app.js  make web-check   fails when dist is stale (part of check)
@@ -53,7 +57,12 @@ main `go.mod` holds only runtime dependencies. Because the vendor tree matches `
 not `tools.mod`, tools run as `go run -mod=readonly -modfile=tools.mod <import path>` (the
 Makefile's `TOOL`), never `go tool -modfile` (it refuses with "inconsistent vendoring") and
 never `go run … @latest` (it edits the module file). `make deadcode` (x/tools `deadcode`
-and `unparam`) is part of `make lint`.
+and `unparam`) is part of `make lint`. actionlint alone lives in `actionlint.mod`: its YAML
+library version conflicts with gosec's. The TypeScript is type-checked by typescript-go
+(`make web-typecheck`); CSS and the lookdev are checked by `internal/webui/static_test.go`
+(every class the TypeScript emits exists in `app.css` or the lookdev, every class the CSS
+defines is used); the prose by `scripts/check-docs.sh` and misspell (`make docs-check`,
+`make spell`). `make hooks` installs the lefthook hooks (lefthook is in `tools.mod`).
 
 ## How we work: docs first, then test first
 

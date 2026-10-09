@@ -193,6 +193,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
 | [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
 | [11-chunk-lifecycle](11-chunk-lifecycle.md) | Chunk and shard state machines, event catalogue, transition cells L-n. I-56, I-57 |
+| [12-operations](12-operations.md) | Service install per OS, log files, the Windows portmap stub, `/dev/*` fault injection, releases, self-update, `init` without options, machine vitals. I-58..I-61, I-76, I-84, I-85 |
 | [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, the style guide. I-68..I-73, I-81, I-82 |
 | [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, domain skew. I-86..I-91 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |

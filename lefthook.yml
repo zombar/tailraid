@@ -1,7 +1,33 @@
-# Pre-commit gate (docs/09 §2): formatting, lint, invariant/lifecycle citations, fast race suite.
-# Install once per clone: `lefthook install` (https://github.com/evilmartians/lefthook).
+# Git hooks (docs/09 §2). Install once per clone: `make hooks` (lefthook is a Go tool in
+# tools.mod, so nothing else to install). Every command is a Make target that CI runs too,
+# so the hook and CI cannot drift.
 pre-commit:
-  parallel: false
+  parallel: true
   commands:
-    check:
-      run: make check
+    fmt:
+      run: make fmt-check
+    vendor:
+      run: make vendor-check
+    lint:
+      run: make lint # golangci-lint, invariants, dead code, docs, spelling, workflows, YAML, shell
+    web:
+      run: make web-check web-typecheck
+    test:
+      run: make test-race
+
+pre-push:
+  commands:
+    vuln:
+      run: make vuln
+
+commit-msg:
+  commands:
+    # scripts/changelog.sh groups entries by the subject's "scope: " prefix; a subject
+    # without one lands in the changelog unsorted. Merges and the make tag commits pass.
+    scope:
+      run: |
+        subject=$(head -n1 "{1}")
+        case "$subject" in
+          "Merge "*|"changelog: v"*|[a-z][a-z0-9/-]*": "*) exit 0 ;;
+          *) echo "commit subject needs a 'scope: subject' prefix (build:, ci:, docs:, tests:, vfs:, …): $subject"; exit 1 ;;
+        esac

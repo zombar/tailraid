@@ -43,9 +43,18 @@ Rules that keep it honest:
 
 - A `_test.go` that cites an invariant lands in the same commit as, or earlier than, the
   implementation it covers.
-- `make check` (fmt-check, vendor-check, lint with invariants and dead code, web-check,
-  `go test -short -race ./...`) runs in the lefthook pre-commit hook and must pass before
-  every commit.
+- `make check` runs in the lefthook pre-commit hook (`make hooks` installs it; lefthook is
+  a Go tool in `tools.mod`) and must pass before every commit: `fmt-check`,
+  `vendor-check`, `lint` (golangci-lint with the linters listed in `.golangci.yml`,
+  `check-invariants.sh --check`, `deadcode`, `docs-check` for links, anchors and invariant
+  mentions in the prose, `spell` with misspell over docs, TypeScript, CSS and the lookdev
+  HTML, `actionlint` for the workflow, `yaml-check` and `shell-check`), `web-check` (the
+  committed bundle), `web-typecheck` (typescript-go over `internal/webui/tsconfig.json`,
+  since esbuild only bundles) and `go test -short -race ./...`. The CSS and the lookdev
+  have no linter as a Go module, so `internal/webui/static_test.go` is theirs: every class
+  the TypeScript emits exists in `app.css` or the lookdev, and every class `app.css`
+  defines is used. The `commit-msg` hook requires the `scope: subject` form that
+  `scripts/changelog.sh` groups by; `pre-push` runs `make vuln`.
 - No coverage gate. `make test` prints per-package coverage so regressions are visible.
 - Review checklist (also in `CLAUDE.md`): every write-path test includes a non-zero offset;
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on
