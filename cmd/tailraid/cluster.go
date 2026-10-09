@@ -467,21 +467,84 @@ func volumeCmd() *cobra.Command {
 	}
 	addNodeFlags(describe)
 	grow := &cobra.Command{
-		Use: "grow", Short: "How to add capacity",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprint(cmd.OutOrStdout(), `Add capacity:
+		Use: "grow [<disk> <size>|auto]", Short: "Raise a disk's pinned budget (edits the config and restarts the service), or explain how to add capacity",
+		Long: `grow with no arguments explains the ways to add capacity. With a disk and a size it
+pins that disk's budget in the config (capacity:) and restarts the service so the new
+budget takes effect; "auto" removes the pin so the budget follows the disk's free space
+again. The disk is named as "node ls" shows it (<host>/<n>), by its number, or by its
+path. --no-restart writes the config only.`,
+		Args: cobra.MaximumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				fmt.Fprint(cmd.OutOrStdout(), `Add capacity:
   add a device        tailraid join <ip> <token>              (on the new device)
   add a disk          tailraid node add-disk <empty dir>      (on the device that has it)
-  grow in place       a budget that follows free space grows by itself when the disk
-                      has more room; a pinned one (capacity: in the config) grows when
-                      you raise it and restart: tailraid stop && tailraid start
+  grow in place       tailraid volume grow <disk> <size>      (pins the budget, restarts the service)
+                      tailraid volume grow <disk> auto        (the budget follows free space again)
 New data spreads over the new space straight away; existing data stays where it is.
 `)
-			return nil
+				return nil
+			}
+			if len(args) != 2 {
+				return errors.New("grow takes a disk and a size (or auto): tailraid volume grow <disk> <size>")
+			}
+			cfg, path, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			i, err := findDisk(cfg, args[0])
+			if err != nil {
+				return err
+			}
+			size := args[1]
+			if strings.EqualFold(size, "auto") {
+				size = ""
+			} else if _, err := config.ParseBytes(size); err != nil {
+				return fmt.Errorf("size %q: %w (examples: 500G, 1.5T, auto)", size, err)
+			}
+			next := cfg
+			next.Node.Disks = append([]config.Disk(nil), cfg.Node.Disks...)
+			next.Node.Disks[i].Capacity = size
+			if err := next.Validate(); err != nil {
+				return err
+			}
+			if err := config.Save(path, next); err != nil {
+				return err
+			}
+			name := node.DiskName(cfg.Node.Name, i+1)
+			if size == "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: budget follows the disk's free space again (%s)\n", name, path)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: budget pinned at %s (%s)\n", name, size, path)
+			}
+			noRestart, _ := cmd.Flags().GetBool("no-restart")
+			if noRestart {
+				fmt.Fprintln(cmd.OutOrStdout(), "restart the service to apply it: tailraid stop && tailraid start")
+				return nil
+			}
+			return restartService(cmd, true)
 		},
 	}
+	grow.Flags().Bool("no-restart", false, "write the config only; the budget applies at the next restart")
 	c.AddCommand(describe, grow, setRedundancyCmd())
 	return c
+}
+
+// findDisk resolves a disk of this device from the config by its name (<host>/<n>), its
+// number or its path.
+func findDisk(cfg config.Config, want string) (int, error) {
+	if len(cfg.Node.Disks) == 0 {
+		return 0, errors.New("this device has no disks (tailraid node add-disk <empty dir> adds one)")
+	}
+	var names []string
+	for i, d := range cfg.Node.Disks {
+		name := node.DiskName(cfg.Node.Name, i+1)
+		names = append(names, name)
+		if want == name || want == strconv.Itoa(i+1) || filepath.Clean(want) == filepath.Clean(d.Path) {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("no disk %q on this device; it has %s", want, strings.Join(names, ", "))
 }
 
 func resetCmd() *cobra.Command {

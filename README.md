@@ -57,10 +57,11 @@ New data spreads over the new space straight away. Existing data stays where it 
 
 ### Growing in place
 
-Each device and disk has a **budget**: how much of it tailraid may use. To grow one in place, raise its budget. When the budget follows free space, which is the default, free up space on the disk or enlarge its partition and the budget grows within a minute with no restart. When the budget is pinned with a `capacity:` in the config, raise the number and restart the service:
+Each disk has a **budget**: how much of it tailraid may use. When the budget follows free space, which is the default, free up space on the disk or enlarge its partition and the budget grows within a minute with no restart. When the budget is pinned, raise it with one command, which rewrites the config and restarts the service:
 
 ```sh
-tailraid stop && tailraid start
+tailraid volume grow jockey/1 500G     # pin the budget of disk 1
+tailraid volume grow jockey/1 auto     # follow free space again
 ```
 
 `tailraid node describe <name>` shows a budget (`capacity`).
