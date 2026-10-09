@@ -14,9 +14,6 @@ func TestSMB_WriteSequence_MultiRequest(t *testing.T) { t.Skip(smbStub) }
 // Invariant: I-106
 func TestSMB_WriteSize_Boundaries(t *testing.T) { t.Skip(smbStub) }
 
-// Invariant: I-106
-func TestVFS_WriteAt_ExactOffset_PosUnchanged(t *testing.T) { t.Skip(smbStub) }
-
 // Invariant: I-107
 func TestSMB_SetInfo_EndOfFile(t *testing.T) { t.Skip(smbStub) }
 
