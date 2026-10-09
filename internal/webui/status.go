@@ -15,7 +15,28 @@ const statusTTL = 2 * time.Second
 type statusCache struct {
 	mu   sync.Mutex
 	at   time.Time
+	rep  any
 	body []byte
+}
+
+// report returns the cached status report, rebuilding it after statusTTL; nil without a
+// status closure.
+func (s *Server) report() any {
+	if s.o.Status == nil {
+		return nil
+	}
+	s.cache.mu.Lock() // held while building: concurrent misses wait for one build
+	defer s.cache.mu.Unlock()
+	now := s.o.Clk.Now()
+	if s.cache.body == nil || now.Sub(s.cache.at) >= statusTTL {
+		rep := s.o.Status()
+		b, err := json.Marshal(rep)
+		if err != nil {
+			return nil
+		}
+		s.cache.rep, s.cache.body, s.cache.at = rep, b, now
+	}
+	return s.cache.rep
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
@@ -23,21 +44,17 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "status is not wired on this node")
 		return
 	}
-	s.cache.mu.Lock() // held while building: concurrent misses wait for one build
-	defer s.cache.mu.Unlock()
-	now := s.o.Clk.Now()
-	if s.cache.body == nil || now.Sub(s.cache.at) >= statusTTL {
-		b, err := json.Marshal(s.o.Status())
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		s.cache.body, s.cache.at = b, now
+	if s.report() == nil {
+		writeErr(w, http.StatusInternalServerError, "status could not be encoded")
+		return
 	}
+	s.cache.mu.Lock()
+	body := s.cache.body
+	s.cache.mu.Unlock()
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Set("Cache-Control", "no-store")
-	_, _ = w.Write(s.cache.body)
+	_, _ = w.Write(body)
 }
 
 const (

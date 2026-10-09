@@ -142,7 +142,7 @@ export function render(root: HTMLElement, path: string): () => void {
   draw();
   ls(dir).then(
     (r) => {
-      siblings = r.entries.filter((e) => e.type === "file");
+      siblings = r.entries.filter((e) => e.type === "file" && !e.upload);
       entry = siblings.find((e) => e.name === name);
       draw();
     },

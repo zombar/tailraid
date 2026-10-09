@@ -177,7 +177,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, self: selfIdx, clk: clk, log: log, pinned: pinned}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
 	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
@@ -342,6 +342,7 @@ type adminOps struct {
 	client   *rpc.Client
 	rd       *vfs.Reader
 	ring     *meta.EventRing
+	fs       *vfs.FS
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
@@ -483,6 +484,11 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 				a.log.Warn("sweep failed", "err", err)
 			} else if n > 0 {
 				a.log.Info("sweep", "orphans_removed", n)
+			}
+			if n, err := webui.SweepUploads(ctx, a.fs, a.node.FSM, a.clk.Now(), webui.UploadTTL); err != nil {
+				a.log.Warn("upload sweep failed", "err", err)
+			} else if n > 0 {
+				a.log.Info("sweep", "stale_uploads_removed", n)
 			}
 			sweepT.Reset(time.Hour)
 		}

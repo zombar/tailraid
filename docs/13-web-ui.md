@@ -99,8 +99,9 @@ UI; a guest device on the tailnet, another user's device and a tagged server can
   readable through the vfs at once. Only when every byte announced by `Content-Length` (or
   the `Content-Range` total) has arrived does one `Rename` publish the temp over the target
   (replacing a file, never a directory), so the previous content is untouched until the
-  upload is complete and a disconnect, a short body or any error leaves it as it was and
-  removes nothing but the temp. A file larger than 32 MiB is sent by the browser as
+  upload is complete and a disconnect, a short body or any error leaves it as it was: a
+  whole-file upload loses its temp, a part is rolled back to its start so the next attempt
+  resumes there. A file larger than 32 MiB is sent by the browser as
   sequential parts with `Content-Range: bytes a-b/total`; a part is accepted only when `a`
   equals the temp's current size (0 when there is none), otherwise 409 with the offset the
   client should continue from, which is also how a dropped connection resumes (the browser
@@ -279,9 +280,10 @@ colour-alone. No dual axes, no stacked bars, no pie.
 - **I-81** — A web upload becomes visible under its name only when every byte announced by
   `Content-Length` or the `Content-Range` total has arrived: the bytes stream into
   `.<name>.tailraid-upload` beside the target and one `Rename` publishes them; a
-  disconnect, a short body or an error leaves the previous content untouched and removes
-  only the temp; a part whose offset is not the temp's current size is refused with 409 and
-  that size; temps idle for longer than 24 h are removed by the maintenance sweep.
+  disconnect, a short body or an error leaves the previous content untouched, removes a
+  whole-file upload's temp and rolls a part back to its start; a part whose offset is not
+  the temp's current size is refused with 409 and that size; temps idle for 24 h or more
+  are removed by the maintenance sweep.
 - **I-82** — Before reading an upload body the web gateway refuses a missing length (411),
   an announced size the volume cannot hold (507) and more than four concurrent uploads
   (503 with `Retry-After`); a body that sends nothing for `BodyTimeout` is dropped together
@@ -309,5 +311,7 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
 | I-72 | `TestWebUI_Paths` |
 | I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |
+| I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
+| I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
 
-`TestWebUI_Ls_Stat` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
+`TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

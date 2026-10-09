@@ -20,6 +20,7 @@ type Entry struct {
 	Mode   uint32    `json:"mode"`
 	Ino    uint64    `json:"ino"`
 	Dirty  bool      `json:"dirty,omitempty"`  // acknowledged bytes not yet committed (files)
+	Upload bool      `json:"upload,omitempty"` // an upload's temp, ".<name>.tailraid-upload"
 	Target string    `json:"target,omitempty"` // symlinks
 	Path   string    `json:"path,omitempty"`   // stat only
 }
@@ -40,6 +41,7 @@ func (s *Server) entry(in meta.Inode, canonical string) Entry {
 		e.Type = "symlink"
 	default:
 		e.Type = "file"
+		e.Upload = IsUploadTemp(in.Name)
 		if fi, err := s.o.FS.Stat(canonical); err == nil { // the overlay's size and dirty flag
 			e.Size = uint64(fi.Size())
 			if d, ok := fi.(interface{ Dirty() bool }); ok {
