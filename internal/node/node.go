@@ -112,11 +112,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		faults = dev.NewFaults()
 		raftFaults = faults
 	}
-	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log, Faults: raftFaults})
+	// the authorizer exists before the cluster node: the Raft transport gates accepted
+	// connections with it (I-92); the member table is bound as soon as the FSM exists
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log, Faults: raftFaults, PeerAuth: auth})
 	if err != nil {
 		return err
 	}
 	defer node.Close()
+	auth.SetMembers(node.FSM.NodeByAddr)
 	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 		return fmt.Errorf("waiting for raft: %w", err)
 	}
@@ -186,7 +190,6 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, store: store, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, pinned: pinned}
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Member: node.FSM.NodeByAddr, Clk: clk}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
@@ -740,7 +743,7 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	_, ident, err := Tailnet(ctx, cfg)
+	ts, ident, err := Tailnet(ctx, cfg)
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
@@ -765,11 +768,15 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 		return rpc.JoinResponse{}, fmt.Errorf("bad cluster id from %s", target)
 	}
 	raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
-	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log})
+	// the transport accepts the leader's Raft connection only from a member (I-92); the
+	// joiner's own table is empty until the log arrives, so the join response seeds it
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log, PeerAuth: auth})
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
 	defer n.Close()
+	auth.SetMembers(n.FSM.NodeByAddr)
 	client := rpc.NewClient(cid, nil, nil)
 	req := rpc.JoinRequest{
 		Token: token, NodeID: id, Name: cfg.Node.Name, TSStableID: ident.StableID, Addr: ident.IP.String(),
@@ -799,6 +806,7 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
+	auth.SetSeed(resp.Members)
 	if err := os.WriteFile(filepath.Join(cfg.Node.DataDir, "cluster_id"), []byte(h.ClusterID+"\n"), 0o600); err != nil {
 		return resp, err
 	}

@@ -56,6 +56,13 @@ type Options struct {
 	SnapshotThreshold uint64
 	// Faults, when set, lets /dev/fault rules cut Raft traffic to and from peers.
 	Faults Faults
+	// PeerAuth gates accepted Raft connections by membership (docs/08, I-92). serve and
+	// join always set it; nil (the in-process harness, which uses an in-memory transport
+	// anyway) accepts any peer that passes the cluster-ID handshake.
+	PeerAuth PeerAuth
+	// RaftAddrFor maps a member record to its Raft address; nil uses the record's
+	// host:port. The test harness maps records to in-memory transport addresses.
+	RaftAddrFor func(meta.Node) raft.ServerAddress
 }
 
 // RaftTiming is the set of Raft timeouts a caller may override.
@@ -82,11 +89,12 @@ type Node struct {
 	Raft *raft.Raft
 	FSM  *meta.FSM
 
-	logs   raft.LogStore
-	closer io.Closer // the on-disk store; nil for injected stores
-	trans  raft.Transport
-	log    *slog.Logger
-	closed bool
+	logs        raft.LogStore
+	closer      io.Closer // the on-disk store; nil for injected stores
+	trans       raft.Transport
+	log         *slog.Logger
+	raftAddrFor func(meta.Node) raft.ServerAddress // Options.RaftAddrFor, or the record's host:port
+	closed      bool
 
 	fwdMu sync.Mutex
 	fwd   Forwarder
@@ -190,7 +198,7 @@ func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
 	if o.Transport != nil {
 		return o.Transport, nil
 	}
-	return NewTransport(o.RaftAddr, o.ClusterID, logOutput, o.Faults)
+	return NewTransport(o.RaftAddr, o.ClusterID, logOutput, o.Faults, o.PeerAuth, o.Logger)
 }
 
 // LoadClusterID reads <data_dir>/cluster_id.
@@ -365,7 +373,11 @@ func start(o Options, st *stores, trans raft.Transport) (*Node, error) {
 		st.close()
 		return nil, fmt.Errorf("cluster: start raft: %w", err)
 	}
-	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, closer: st.closer, trans: trans, log: log}, nil
+	addrFor := o.RaftAddrFor
+	if addrFor == nil {
+		addrFor = raftAddrOf
+	}
+	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, closer: st.closer, trans: trans, log: log, raftAddrFor: addrFor}, nil
 }
 
 // WaitLeader blocks until this node sees a leader or the timeout passes.

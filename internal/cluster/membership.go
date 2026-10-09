@@ -63,9 +63,6 @@ func (n *Node) nodeByIdx(idx meta.NodeIdx) (meta.Node, bool) { return n.FSM.Node
 
 func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.RaftAddr()) }
 
-// RaftAddrFor lets tests substitute in-memory transport addresses for node records.
-var RaftAddrFor = raftAddrOf
-
 // Join implements the leader side of `tailraid join` (docs/02 §Bootstrap and join).
 func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse, error) {
 	if !n.IsLeader() {
@@ -82,12 +79,19 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Capacity: req.Capacity, Version: req.Version, JoinedAt: time.Now().UnixNano(),
 	}
 	var err error
-	// re-join of a known node keeps its index; a removed record refuses the ID
+	// re-join of a known node keeps its index; a removed record refuses the ID, and so
+	// does a different tailnet identity (I-94): node IDs are public (/health), the
+	// StableID is what WhoIs vouched for
 	n.FSM.ForEachNode(func(cur meta.Node) bool {
 		if cur.ID == req.NodeID {
 			if cur.State == meta.Removed {
 				nd.Idx = 0
 				err = fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
+				return false
+			}
+			if cur.TSStableID != "" && cur.TSStableID != req.TSStableID {
+				nd.Idx = 0
+				err = fmt.Errorf("%w: node %s belongs to tailnet node %s, not %s", ErrBadMemberOp, req.NodeID, cur.TSStableID, req.TSStableID)
 				return false
 			}
 			nd.Idx = cur.Idx
@@ -99,9 +103,9 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	}
 	var fut raft.IndexFuture
 	if req.Voter {
-		fut = n.Raft.AddVoter(raft.ServerID(req.NodeID), RaftAddrFor(nd), 0, 10*time.Second)
+		fut = n.Raft.AddVoter(raft.ServerID(req.NodeID), n.raftAddrFor(nd), 0, 10*time.Second)
 	} else {
-		fut = n.Raft.AddNonvoter(raft.ServerID(req.NodeID), RaftAddrFor(nd), 0, 10*time.Second)
+		fut = n.Raft.AddNonvoter(raft.ServerID(req.NodeID), n.raftAddrFor(nd), 0, 10*time.Second)
 	}
 	if err := fut.Error(); err != nil {
 		return rpc.JoinResponse{}, raftErr("add raft server", err)
@@ -201,9 +205,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		var fut raft.IndexFuture
 		if op.Voter {
-			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		} else {
-			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		}
 		if err := fut.Error(); err != nil {
 			return raftErr("change suffrage", err)
@@ -217,9 +221,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		nd.Addr = op.Addr
 		var fut raft.IndexFuture
 		if nd.Voter {
-			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		} else {
-			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), RaftAddrFor(nd), 0, 10*time.Second)
+			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
 		}
 		if err := fut.Error(); err != nil {
 			return raftErr("update raft address", err)

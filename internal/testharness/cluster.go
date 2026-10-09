@@ -151,21 +151,20 @@ func (n *ClusterNode) Idx() meta.NodeIdx { return meta.NodeIdx(n.I + 1) }
 
 const harnessStableID = "harness"
 
-// inmem transport addresses by raft ID, so RaftAddrFor resolves records to them
+// inmem transport addresses by raft ID; cluster.Options.RaftAddrFor resolves records to
+// them (every node of a harness cluster shares the map)
 var (
 	inmemMu    sync.Mutex
 	inmemAddrs = map[string]raft.ServerAddress{}
 )
 
-func init() {
-	cluster.RaftAddrFor = func(nd meta.Node) raft.ServerAddress {
-		inmemMu.Lock()
-		defer inmemMu.Unlock()
-		if a, ok := inmemAddrs[nd.ID]; ok {
-			return a
-		}
-		return raft.ServerAddress(nd.RaftAddr())
+func inmemAddrFor(nd meta.Node) raft.ServerAddress {
+	inmemMu.Lock()
+	defer inmemMu.Unlock()
+	if a, ok := inmemAddrs[nd.ID]; ok {
+		return a
 	}
+	return raft.ServerAddress(nd.RaftAddr())
 }
 
 // ClusterOption tunes NewCluster.
@@ -280,7 +279,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		st := raft.NewInmemStore()
 		nd.stores = &cluster.Stores{Logs: st, Stable: st, Snaps: raft.NewInmemSnapshotStore()}
 	}
-	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Timing: RaftTiming(), Stores: nd.stores, SnapshotThreshold: c.snap}
+	opts := cluster.Options{DataDir: nd.Dir, NodeID: nd.ID, ClusterID: c.CID, Transport: nd.trans, Timing: RaftTiming(), Stores: nd.stores, SnapshotThreshold: c.snap, RaftAddrFor: inmemAddrFor}
 	if os.Getenv("TAILRAID_HARNESS_DEBUG") != "" {
 		opts.Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})).With("node", fmt.Sprintf("n%d", nd.I))
 	}

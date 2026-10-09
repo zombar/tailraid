@@ -36,7 +36,7 @@ func TestIDStream_RejectsForeignCluster(t *testing.T) {
 		}
 		accepted <- err
 	}()
-	if _, err := c.Dial(raft.ServerAddress(baddr), time.Second); !errors.Is(err, ErrClusterMismatch) {
+	if _, err := c.Dial(raft.ServerAddress(baddr), time.Second); !errors.Is(err, ErrHandshakeRefused) { // the acceptor reads first and closes: the dialer never learns why
 		t.Fatalf("foreign dial: %v", err)
 	}
 	conn, err := a.Dial(raft.ServerAddress(baddr), time.Second)

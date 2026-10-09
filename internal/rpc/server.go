@@ -164,7 +164,7 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("/v1/shards/", s.clusterCheck(s.member(http.HandlerFunc(s.shards))))
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
-	mux.Handle("POST /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.members))))
+	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership, or the update_addr exception (docs/08 step 6, I-93)
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
 	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
@@ -543,9 +543,13 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "join: claimed tailnet identity does not match the caller")
 		return
 	}
-	if req.Addr == "" {
-		req.Addr = src.String()
+	// the record's address is the caller's (I-94): a token holder cannot point a member
+	// record at another device
+	if req.Addr != "" && req.Addr != src.String() {
+		writeErr(w, http.StatusForbidden, "join: addr must be the caller's own address or empty")
+		return
 	}
+	req.Addr = src.String()
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "join not available")
 		return
@@ -564,11 +568,50 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// members authorizes like every other endpoint (a member, before the body is read) with
+// one exception (docs/08 step 6, I-93): update_addr arrives from an address that is, by
+// definition, not in the member table yet. A non-member's body is read (64 KiB at most)
+// only to learn the op; update_addr is then allowed when WhoIs(src) is the StableID of the
+// member named in it, and it changes nothing but that member's address.
 func (s *Server) members(w http.ResponseWriter, r *http.Request) {
+	src, ok := SourceAddr(r)
+	if !ok {
+		writeErr(w, http.StatusForbidden, "unparseable source address")
+		return
+	}
+	_, authErr := s.o.Auth.Allow(r.Context(), src)
+	if authErr != nil && errors.Is(authErr, ErrUnavailable) {
+		writeErr(w, http.StatusServiceUnavailable, authErr.Error())
+		return
+	}
 	var op MemberOp
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad member op")
 		return
+	}
+	if authErr != nil {
+		if op.Op != "update_addr" {
+			writeErr(w, http.StatusForbidden, authErr.Error())
+			return
+		}
+		id, err := s.o.Auth.Identify(r.Context(), src)
+		if err != nil {
+			writeErr(w, http.StatusForbidden, "update_addr: "+err.Error())
+			return
+		}
+		var named meta.Node
+		if s.o.Members != nil {
+			for _, m := range s.o.Members() {
+				if m.Idx == op.NodeIdx && m.State != meta.Removed {
+					named = m
+				}
+			}
+		}
+		if named.Idx == 0 || named.TSStableID != id {
+			writeErr(w, http.StatusForbidden, "update_addr: the caller is not the tailnet node of the member it names")
+			return
+		}
+		op = MemberOp{Op: "update_addr", NodeIdx: op.NodeIdx, Addr: op.Addr}
 	}
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "members not available")
