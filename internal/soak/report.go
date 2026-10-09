@@ -38,6 +38,8 @@ type reportData struct {
 	Totals     []kv
 	Coverage   []CoverageRow
 	Charts     []template.HTML
+	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
+	PeakSkew   int        // most chunks above the host cap in any sample
 	Generated  string
 	Throughput string
 	Mark       template.HTML // the logo mark, inline
@@ -171,6 +173,13 @@ func buildReport(s Summary) reportData {
 		{"gc", fmt.Sprintf("%d chunk entries collected, %d shards deleted, %d deletes refused", t.GC.Victims, t.GC.Deleted, t.GC.Refused)},
 	}
 	d.Charts, d.Throughput = charts(s)
+	var spread []*Sample
+	for i := range s.Records {
+		if s.Records[i].Kind == "sample" && s.Records[i].S != nil {
+			spread = append(spread, s.Records[i].S)
+		}
+	}
+	d.Disks, d.PeakSkew = disksTable(spread)
 	d.Mark = template.HTML(logoMark) //nolint:gosec // constant SVG
 	d.Favicon = url.PathEscape(strings.Replace(logoMark, `fill="currentColor"`, `fill="#0f172a"`, 2))
 	return d
@@ -370,6 +379,15 @@ func charts(s Summary) ([]template.HTML, string) {
 	if placement != nil {
 		out = append(out, template.HTML(placementChart(placement))) //nolint:gosec // generated SVG
 	}
+	xs := make([]float64, 0, len(samples))
+	spread := make([]*Sample, 0, len(samples))
+	for i := range samples {
+		xs = append(xs, x(&samples[i]))
+		spread = append(spread, samples[i].S)
+	}
+	if svg := diskSpread(maxX, xs, spread); svg != "" {
+		out = append(out, template.HTML(svg)) //nolint:gosec // generated SVG
+	}
 	ns := make([]series, 0, len(nodeNames))
 	for _, n := range nodeNames {
 		ns = append(ns, *nodeSeries[n])
@@ -457,6 +475,10 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 {{if .Notes}}<table><tr><th>Phase</th><th>Note</th></tr>{{range .Notes}}<tr><td>{{.Phase}}</td><td>{{.Text}}</td></tr>{{end}}</table>{{else}}<p class="meta">none</p>{{end}}
 <h2>Charts</h2>
 {{range .Charts}}{{.}}{{end}}
+{{if .Disks}}<h2>Disks</h2>
+<p class="meta">every placement target as of the last sample that held data, grouped by host (docs/14); expected is the capacity share capped at one slot per chunk; most chunks above the host cap in any sample: {{.PeakSkew}}</p>
+<table><tr><th>Host</th><th>Target</th><th class="num">Budget</th><th class="num">Slots</th><th class="num">Expected</th><th class="num">Δ</th><th>State</th></tr>
+{{range .Disks}}<tr><td>{{.Host}}</td><td>{{.Name}}</td><td class="num">{{.Budget}}</td><td class="num">{{.Slots}}</td><td class="num">{{.Expected}}</td><td class="num">{{.Delta}}</td><td>{{.State}}</td></tr>{{end}}</table>{{end}}
 <h2>Nodes</h2>
 <table><tr><th>Name</th><th>Idx</th><th>RPC</th><th>Version</th></tr>{{range .Nodes}}<tr><td>{{.Name}}</td><td>{{.Idx}}</td><td>{{.RPC}}</td><td>{{.Version}}</td></tr>{{end}}</table>
 </body></html>

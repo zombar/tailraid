@@ -26,7 +26,8 @@ func run() int {
 	out := flag.String("out", "report.html", "HTML report path")
 	results := flag.String("results", "results.jsonl", "results stream path")
 	dir := flag.String("compose-dir", "test/soak", "compose project directory")
-	nodes := flag.Int("nodes", 4, "number of nodes in the compose file")
+	topology := flag.String("topology", "multi", "multi (4 hosts × 3 targets) | single (one host, four disks)")
+	nodes := flag.Int("nodes", 0, "number of nodes in the compose file (default: 4 for multi, 1 for single)")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "workload seed")
 	flag.Parse()
 
@@ -50,7 +51,19 @@ func run() int {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	env := newComposeEnv(*dir, *nodes)
+	file, n := "docker-compose.yml", 4
+	switch *topology {
+	case "multi":
+	case "single":
+		file, n = "docker-compose.single.yml", 1
+	default:
+		fmt.Fprintln(os.Stderr, "unknown topology", *topology)
+		return 2
+	}
+	if *nodes > 0 {
+		n = *nodes
+	}
+	env := newComposeEnv(*dir, file, n)
 	for _, n := range env.nodes { // every worker must answer before the run starts
 		if err := env.waitReady(ctx, n.ref, 120*time.Second); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -58,7 +71,7 @@ func run() int {
 		}
 	}
 	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed} //nolint:gosec // workload
-	log.Info("soak run", "profile", p.Name, "seed", *seed, "nodes", *nodes)
+	log.Info("soak run", "profile", p.Name, "seed", *seed, "topology", *topology, "nodes", n)
 	sum, err := r.Execute(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

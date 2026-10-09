@@ -169,14 +169,15 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 	nodes := map[int]nodeInfo{}
 	var capAll, capVoters uint64
 	liveVoters := 0
+	vt := voterTargets(rep) // per target: a disk of a voter is a voter target (docs/14 §5)
 	for i := range rep.Nodes {
 		n := &rep.Nodes[i]
 		if n.State != "active" {
 			continue
 		}
-		nodes[int(n.Idx)] = nodeInfo{n.Name, n.Capacity, n.Voter, n.Live}
+		nodes[int(n.Idx)] = nodeInfo{n.Name, n.Capacity, vt[int(n.Idx)], n.Live}
 		capAll += n.Capacity
-		if n.Voter {
+		if vt[int(n.Idx)] {
 			capVoters += n.Capacity
 			if n.Live {
 				liveVoters++

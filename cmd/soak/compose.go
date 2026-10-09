@@ -29,12 +29,13 @@ type composeNode struct {
 type composeEnv struct {
 	soak.Admin
 	dir   string // compose project directory
+	file  string // compose file in dir: docker-compose.yml (4 hosts) or docker-compose.single.yml
 	nodes []composeNode
 	http  *http.Client
 }
 
-func newComposeEnv(dir string, n int) *composeEnv {
-	e := &composeEnv{dir: dir, http: &http.Client{Timeout: 90 * time.Second}}
+func newComposeEnv(dir, file string, n int) *composeEnv {
+	e := &composeEnv{dir: dir, file: file, http: &http.Client{Timeout: 90 * time.Second}}
 	for i := 1; i <= n; i++ {
 		e.nodes = append(e.nodes, composeNode{
 			ref:    soak.NodeRef{Name: fmt.Sprintf("n%d", i), Idx: meta.NodeIdx(i), RPC: fmt.Sprintf("172.30.0.%d:20481", 10+i)},
@@ -47,7 +48,9 @@ func newComposeEnv(dir string, n int) *composeEnv {
 	return e
 }
 
-func (e *composeEnv) Name() string { return fmt.Sprintf("docker compose, %d nodes", len(e.nodes)) }
+func (e *composeEnv) Name() string {
+	return fmt.Sprintf("docker compose (%s), %d nodes", strings.TrimSuffix(e.file, ".yml"), len(e.nodes))
+}
 
 // Nodes returns the compose nodes with the indices the cluster gave them. The containers
 // join in whatever order they come up, so n2 may well be node 4: the index is read from
@@ -94,7 +97,40 @@ func (e *composeEnv) node(ref soak.NodeRef) composeNode {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true}
+}
+
+// diskDir is where an added disk named "<host>/<n>" is mounted in its container: the
+// compose files mount the n-th entry of $DISKS at /disks/d<n> (test/soak/entry.sh).
+func diskDir(disk soak.NodeRef) (string, error) {
+	_, num, ok := strings.Cut(disk.Name, "/")
+	if !ok || num == "" {
+		return "", fmt.Errorf("compose: %q is not a disk name", disk.Name)
+	}
+	return "/disks/d" + num, nil
+}
+
+// FailDisk hides the disk's marker and restarts its host, as an unmounted disk looks
+// after a reboot: the host serves on and reports the disk not OK (docs/14 §3).
+func (e *composeEnv) FailDisk(ctx context.Context, disk soak.NodeRef) error {
+	return e.moveMarker(ctx, disk, "disk_id", "disk_id.away")
+}
+
+// RestoreDisk puts the marker back and restarts the host.
+func (e *composeEnv) RestoreDisk(ctx context.Context, disk soak.NodeRef) error {
+	return e.moveMarker(ctx, disk, "disk_id.away", "disk_id")
+}
+
+func (e *composeEnv) moveMarker(ctx context.Context, disk soak.NodeRef, from, to string) error {
+	dir, err := diskDir(disk)
+	if err != nil {
+		return err
+	}
+	host := soak.NodeRef{Name: disk.Host}
+	if err := e.compose(ctx, "exec", "-T", disk.Host, "mv", dir+"/"+from, dir+"/"+to); err != nil {
+		return err
+	}
+	return e.Restart(ctx, []soak.NodeRef{e.node(host).ref})
 }
 
 // --- worker calls --------------------------------------------------------------------------
@@ -272,7 +308,7 @@ func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, 
 // --- faults through docker compose and the workers ----------------------------------------
 
 func (e *composeEnv) compose(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose"}, args...)...)
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...)
 	cmd.Dir = e.dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

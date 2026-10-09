@@ -112,11 +112,12 @@ func (r *Run) budgetChecks(ctx context.Context, rep admin.Report) error {
 // voterFirstChecks: for the corpus this run wrote, every chunk's data slots sit on voters
 // while at least k voters are live (I-77).
 func (r *Run) voterFirstChecks(ctx context.Context, rep admin.Report) {
+	vt := voterTargets(rep) // a disk of a voter is a voter target (docs/14 §5)
 	voters := map[int]bool{}
 	liveVoters := 0
 	for i := range rep.Nodes {
 		n := &rep.Nodes[i]
-		if n.Voter && n.State == "active" {
+		if vt[int(n.Idx)] && n.State == "active" {
 			voters[int(n.Idx)] = true
 			if n.Live {
 				liveVoters++
@@ -199,10 +200,13 @@ func membersOf(rep admin.Report) []meta.Node {
 	out := make([]meta.Node, 0, len(rep.Nodes))
 	for i := range rep.Nodes {
 		n := &rep.Nodes[i]
-		nd := meta.Node{Idx: n.Idx, Voter: n.Voter, Capacity: n.Capacity}
-		if n.Kind == "device" {
+		nd := meta.Node{Idx: n.Idx, Voter: n.Voter, Capacity: n.Capacity, Host: n.Host}
+		switch n.Kind {
+		case "device":
 			nd.Kind = meta.KindDevice
-		} else {
+		case "disk":
+			nd.Kind = meta.KindDisk
+		default:
 			nd.Kind = meta.KindS3
 		}
 		switch n.State {

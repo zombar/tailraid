@@ -1,7 +1,9 @@
 # Four tailraid nodes (n1–n3 voters, n4 non-voter) on a private network with fake tailnet
 # identities, each with a worker sidecar sharing its network namespace: the sidecar reaches
 # the node's loopback NFS gateway and its RPC, and exposes both to the host driver
-# (cmd/soak) on a published port. Build the binaries first: make soak-binary.
+# (cmd/soak) on a published port. Every node also has two added disks (docs/14), named
+# volumes at /disks/d1 and /disks/d2, so the volume is 4 hosts × 3 targets. Build the
+# binaries first: make soak-binary. docker-compose.single.yml is one host with four disks.
 x-node: &node
   build: .
   cap_add: [NET_ADMIN]
@@ -15,6 +17,10 @@ x-node: &node
     CHUNK: 256K
     REPAIR_GRACE: 20s
     FILL_AFTER: 20s
+    # added disks: the named volumes all share the Docker VM's filesystem, so their
+    # budgets are pinned; the device's own store keeps its derived budget (phase 11)
+    DISKS: /disks/d1 /disks/d2
+    DISK_CAPACITY: 8G
   healthcheck:
     test: ["CMD-SHELL", "curl -fsS http://$$SELF_IP:20481/health"]
     interval: 2s
@@ -32,27 +38,27 @@ services:
     environment: {<<: *env, ROLE: init, SELF_IP: 172.30.0.11, NODE_NAME: n1}
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
     ports: ["127.0.0.1:20501:20495"]
-    volumes: [n1:/var/lib/tailraid]
+    volumes: [n1:/var/lib/tailraid, n1-d1:/disks/d1, n1-d2:/disks/d2]
   n2:
     <<: *node
     environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2}
     networks: {tailraid: {ipv4_address: 172.30.0.12}}
     ports: ["127.0.0.1:20502:20495"]
-    volumes: [n2:/var/lib/tailraid]
+    volumes: [n2:/var/lib/tailraid, n2-d1:/disks/d1, n2-d2:/disks/d2]
     depends_on: [n1]
   n3:
     <<: *node
     environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3}
     networks: {tailraid: {ipv4_address: 172.30.0.13}}
     ports: ["127.0.0.1:20503:20495"]
-    volumes: [n3:/var/lib/tailraid]
+    volumes: [n3:/var/lib/tailraid, n3-d1:/disks/d1, n3-d2:/disks/d2]
     depends_on: [n2]
   n4:
     <<: *node
     environment: {<<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.14, NODE_NAME: n4, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.14}}
     ports: ["127.0.0.1:20504:20495"]
-    volumes: [n4:/var/lib/tailraid]
+    volumes: [n4:/var/lib/tailraid, n4-d1:/disks/d1, n4-d2:/disks/d2]
     depends_on: [n3]
 
   w1:
@@ -86,3 +92,11 @@ volumes:
   n2: {}
   n3: {}
   n4: {}
+  n1-d1: {}
+  n1-d2: {}
+  n2-d1: {}
+  n2-d2: {}
+  n3-d1: {}
+  n3-d2: {}
+  n4-d1: {}
+  n4-d2: {}

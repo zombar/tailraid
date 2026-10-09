@@ -11,7 +11,7 @@ BIN := tailraid
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: build install changelog test test-race test-long test-mount soak soak-full fuzz lint fmt fmt-check vuln \
+.PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
         release tag check invariants tidy clean help web web-check
 
 # Browser UI (docs/13 §6): esbuild is a Go tool; the bundle is committed and embedded.
@@ -49,7 +49,7 @@ bench:
 test-mount:
 	TAILRAID_MOUNT_TEST=1 go test -v -count=1 -run 'TestMount' -timeout 20m ./test/mount/
 
-## soak: four-node docker-compose cluster, scenario driver, report.html + results.jsonl (needs Docker)
+## soak: four-node docker-compose cluster (two added disks each), scenario driver, report.html + results.jsonl (needs Docker)
 soak: soak-binary
 	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
@@ -59,6 +59,12 @@ soak: soak-binary
 soak-binary:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$$(docker version --format '{{.Server.Arch}}') go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o test/soak/tailraid-linux-arm64 ./cmd/tailraid
 	CGO_ENABLED=0 GOOS=linux GOARCH=$$(docker version --format '{{.Server.Arch}}') go build -trimpath -ldflags "-s -w" -o test/soak/soak-client-linux-arm64 ./test/soak/client
+
+## soak-single: one node with four added disks (docs/14), the single-machine volume
+soak-single: soak-binary
+	cd test/soak && docker compose -f docker-compose.single.yml up -d --build
+	go run ./cmd/soak --profile quick --topology single --out report-single.html --results results-single.jsonl; \
+	status=$$?; cd test/soak && docker compose -f docker-compose.single.yml exec -T n1 tailraid status; docker compose -f docker-compose.single.yml down -v >/dev/null; exit $$status
 
 ## soak-full: the long profile (~1 h)
 soak-full: soak-binary

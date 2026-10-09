@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ var phases = []phase{
 	{"10 partition", phasePartition},
 	{"11 automation", phaseAutomation},
 	{"12 large file", phaseLargeFile},
+	{"13 disks", phaseDisks},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -191,9 +193,10 @@ func (r *Run) checkFSMAgreement(ctx context.Context, cites, name string) {
 	r.check(cites, name, agree, detail)
 }
 
-// waitHealthy polls status until the cluster is healthy with every node live; the
-// detail describes the last view.
-func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration) (bool, string) {
+// waitHealthy polls status until the cluster is healthy with every node live (except the
+// targets named in excused, such as a disk the phase closed); the detail describes the
+// last view.
+func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ...string) (bool, string) {
 	deadline := time.Now().Add(timeout)
 	for attempt := 0; ; attempt++ {
 		rep, from, err := r.anyStatus(ctx)
@@ -201,7 +204,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration) (bool, str
 		if err == nil {
 			var down []string
 			for i := range rep.Nodes {
-				if !rep.Nodes[i].Live {
+				if !rep.Nodes[i].Live && !slices.Contains(excused, rep.Nodes[i].Name) {
 					down = append(down, rep.Nodes[i].Name)
 				}
 			}
@@ -565,8 +568,9 @@ func slotTable(c admin.ChunkReport) string {
 }
 
 func (r *Run) nodeByIdx(idx int) (NodeRef, bool) {
+	host := r.hostIdx(idx) // a slot on a disk is served by the disk's host (docs/14)
 	for _, n := range r.nodes {
-		if int(n.Idx) == idx {
+		if int(n.Idx) == host {
 			return n, true
 		}
 	}
@@ -852,12 +856,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	if rep, err = r.repairUntilClean(ctx); err != nil {
 		return err
 	}
-	slots := -1
-	for i := range rep.Nodes {
-		if rep.Nodes[i].Idx == victim.Idx {
-			slots = rep.Nodes[i].Slots
-		}
-	}
+	slots := hostSlots(rep, int(victim.Idx)) // its own store and its disks (docs/14 §1)
 	r.checkAt("I-42 L-94", "drained node holds no slots", slots == 0, fmt.Sprintf("%d slots left", slots), "", "", victim.Name)
 	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-32", "corpus exact after the drain", bad == 0, first, first, "", gw.Name)
