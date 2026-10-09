@@ -140,7 +140,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer ov.Close()
 
-	storeFS, _ := sysfs.FilesystemID(store.Root()) // to spot targets on one physical disk (docs/14 §8)
+	storeFS, _ := sysfs.FilesystemID(store.Root())        // to spot targets on one physical disk (docs/14 §8)
 	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // added disks (docs/14 §3)
 	disks.refresh(node.FSM.Nodes())
 

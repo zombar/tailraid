@@ -294,13 +294,14 @@ func (n NodeReport) Label() string {
 
 // sharedDiskWarnings is one line per group of targets on one physical disk.
 func sharedDiskWarnings(nodes []NodeReport) []string {
-	byName := map[string]NodeReport{}
-	for _, n := range nodes {
-		byName[n.Name] = n
+	byName := map[string]*NodeReport{}
+	for i := range nodes {
+		byName[nodes[i].Name] = &nodes[i]
 	}
 	seen := map[string]bool{}
 	var out []string
-	for _, n := range nodes {
+	for i := range nodes {
+		n := &nodes[i]
 		if len(n.SharedWith) == 0 || seen[n.Name] {
 			continue
 		}
