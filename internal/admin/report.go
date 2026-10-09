@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/clock"
@@ -16,31 +17,34 @@ import (
 
 // NodeReport is one row of `node ls`.
 type NodeReport struct {
-	Idx      meta.NodeIdx   `json:"idx"`
-	ID       string         `json:"id"`
-	Name     string         `json:"name"`
-	Kind     string         `json:"kind"`
-	Host     meta.NodeIdx   `json:"host,omitempty"` // disks: the device that serves it (docs/14)
-	State    string         `json:"state"`
-	Addr     string         `json:"addr"`
-	RPCPort  uint16         `json:"rpc_port"`
-	Voter    bool           `json:"voter"`
-	Leader   bool           `json:"leader"`
-	Self     bool           `json:"self"`
-	Live     bool           `json:"live"`
-	DeadFor  string         `json:"dead_for,omitempty"`
-	Lost     bool           `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
-	RTT      string         `json:"rtt,omitempty"`
-	Free     int64          `json:"free"`
-	Capacity uint64         `json:"capacity"`
-	Version  string         `json:"version"`
-	Applied  uint64         `json:"applied"`
-	Slots    int            `json:"slots"`
-	Missing  int            `json:"missing_slots"` // slots this node should hold but is dead for
-	Dev      bool           `json:"dev,omitempty"` // /dev/* endpoints enabled
-	TSStable string         `json:"ts_stable_id,omitempty"`
-	JoinedAt time.Time      `json:"joined_at"`
-	rawState meta.NodeState // for sorting
+	Idx        meta.NodeIdx   `json:"idx"`
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Kind       string         `json:"kind"`
+	Host       meta.NodeIdx   `json:"host,omitempty"` // disks: the device that serves it (docs/14)
+	State      string         `json:"state"`
+	Addr       string         `json:"addr"`
+	RPCPort    uint16         `json:"rpc_port"`
+	Voter      bool           `json:"voter"`
+	Leader     bool           `json:"leader"`
+	Self       bool           `json:"self"`
+	Live       bool           `json:"live"`
+	DeadFor    string         `json:"dead_for,omitempty"`
+	Lost       bool           `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
+	RTT        string         `json:"rtt,omitempty"`
+	Free       int64          `json:"free"`
+	Capacity   uint64         `json:"capacity"`
+	Version    string         `json:"version"`
+	Applied    uint64         `json:"applied"`
+	Slots      int            `json:"slots"`
+	Missing    int            `json:"missing_slots"` // slots this node should hold but is dead for
+	Dev        bool           `json:"dev,omitempty"` // /dev/* endpoints enabled
+	TSStable   string         `json:"ts_stable_id,omitempty"`
+	JoinedAt   time.Time      `json:"joined_at"`
+	DataDir    bool           `json:"data_dir,omitempty"`    // a host's own store, on a host with added disks (docs/14 §8)
+	SharedWith []string       `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
+	fs         string         // filesystem ID from the last probe
+	rawState   meta.NodeState // for sorting
 }
 
 // VolumeReport is `volume describe`.
@@ -201,6 +205,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
 			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt), rawState: nd.State}
 		if pr, ok := probes[nd.Idx]; ok {
+			r.fs = pr.FS
 			r.Free, r.Applied, r.Dev = pr.Free, pr.Applied, pr.Dev
 			if !pr.LastOK.IsZero() {
 				r.RTT = pr.RTT.Round(time.Millisecond).String()
@@ -225,8 +230,92 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		st, at := rp.Last()
 		rep.Repair = &RepairStatus{LastScan: at, Stats: st, Reported: rp.Reported()}
 	}
+	markDisks(rep.Nodes)
 	rep.Warnings = warnings(rep)
 	return rep
+}
+
+// markDisks labels each host's own store when it has added disks, and lists the targets
+// of one host on one filesystem with each other (docs/14 §8): they fail together.
+func markDisks(nodes []NodeReport) {
+	hostOf := func(n *NodeReport) meta.NodeIdx {
+		if n.Kind == "disk" {
+			return n.Host
+		}
+		return n.Idx
+	}
+	type key struct {
+		host meta.NodeIdx
+		fs   string
+	}
+	groups := map[key][]int{}
+	hasDisk := map[meta.NodeIdx]bool{}
+	for i := range nodes {
+		n := &nodes[i]
+		if n.State == "removed" || n.Kind == "s3" {
+			continue
+		}
+		if n.Kind == "disk" {
+			hasDisk[n.Host] = true
+		}
+		if n.fs != "" {
+			k := key{hostOf(n), n.fs}
+			groups[k] = append(groups[k], i)
+		}
+	}
+	for i := range nodes {
+		if nodes[i].Kind == "device" && hasDisk[nodes[i].Idx] {
+			nodes[i].DataDir = true
+		}
+	}
+	for _, members := range groups {
+		if len(members) < 2 {
+			continue
+		}
+		for _, i := range members {
+			for _, j := range members {
+				if i != j {
+					nodes[i].SharedWith = append(nodes[i].SharedWith, nodes[j].Name)
+				}
+			}
+			sort.Strings(nodes[i].SharedWith)
+		}
+	}
+}
+
+// Label is how a target is named to a person: a host's own store reads "<host> (data
+// dir)" once the host has added disks.
+func (n NodeReport) Label() string {
+	if n.DataDir {
+		return n.Name + " (data dir)"
+	}
+	return n.Name
+}
+
+// sharedDiskWarnings is one line per group of targets on one physical disk.
+func sharedDiskWarnings(nodes []NodeReport) []string {
+	byName := map[string]*NodeReport{}
+	for i := range nodes {
+		byName[nodes[i].Name] = &nodes[i]
+	}
+	seen := map[string]bool{}
+	var out []string
+	for i := range nodes {
+		n := &nodes[i]
+		if len(n.SharedWith) == 0 || seen[n.Name] {
+			continue
+		}
+		names := append([]string{n.Name}, n.SharedWith...)
+		sort.Strings(names)
+		labels := make([]string, 0, len(names))
+		for _, name := range names {
+			seen[name] = true
+			labels = append(labels, byName[name].Label())
+		}
+		list := strings.Join(labels[:len(labels)-1], ", ") + " and " + labels[len(labels)-1]
+		out = append(out, list+" are on one physical disk: they fail together, so data spread across them is not redundant")
+	}
+	return out
 }
 
 func warnings(r Report) []string {
@@ -251,6 +340,7 @@ func warnings(r Report) []string {
 	if r.Volume.Degraded > 0 {
 		w = append(w, "some chunks are under-replicated; repair fills them once a live spare exists")
 	}
+	w = append(w, sharedDiskWarnings(r.Nodes)...)
 	for i := range r.Nodes {
 		n := &r.Nodes[i]
 		if n.State == "removed" {

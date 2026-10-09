@@ -140,6 +140,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer ov.Close()
 
+	storeFS, _ := sysfs.FilesystemID(store.Root())        // to spot targets on one physical disk (docs/14 §8)
 	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // added disks (docs/14 §3)
 	disks.refresh(node.FSM.Nodes())
 
@@ -150,7 +151,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	prober.SelfHealth = func() rpc.Health {
 		used, capacity := store.Used(), store.Capacity()
 		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Used: used, Capacity: capacity, Free: max(capacity-used, 0), Dev: cfg.Dev.Enabled,
-			Disks: disks.health()}
+			FS: storeFS, Disks: disks.health()}
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
@@ -197,7 +198,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		return rep
 	}
-	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node, selfIdx},
+	srv, err := rpc.NewServer(rpc.Options{NodeID: id, ClusterID: clusterID, Version: version, Store: store, Disk: disks.lookup, DiskHealth: disks.health, StoreFS: storeFS, Applier: node, Fence: fence{node, selfIdx},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),

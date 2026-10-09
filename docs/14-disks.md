@@ -192,6 +192,17 @@ writes and repairs only (06 §6).
 - The soak report's **data spread across disks** chart (09 §soak) draws one lane per disk
   over time, coloured by each disk's slot share against its expected share, with a host-cap
   strip underneath.
+- **The data-dir store is labelled.** On a host with added disks, the device's own store
+  (disk 0, in `<data_dir>/shards`) is shown as `<host> (data dir)` in `node ls` and with a
+  `data dir` tag in the web UI, so it is not mistaken for the host itself. A host without
+  added disks is shown as before.
+- **Targets on one physical disk are flagged.** Each host reports the filesystem ID of
+  every target it serves (`fs` in `/health`, from the device number on Unix and the volume
+  on Windows); `status` marks targets of one host that share a filesystem with
+  `shared_with`, the names of the others. They fail together, so redundancy between them
+  is illusory: `node ls` shows `shares disk with <names>` in its flags, `status` adds a
+  warning line, and the web UI puts the warning icon (the amber `!` of the warnings strip)
+  beside each such target, its title naming the others.
 
 ## Invariants
 

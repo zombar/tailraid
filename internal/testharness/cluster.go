@@ -324,7 +324,8 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Node.SetForwarder(nd.Client)
 	nd.Prober = cluster.NewProber(nd.Node, nd.Client, c.Clk)
 	nd.Prober.SelfHealth = func() rpc.Health {
-		return rpc.Health{Applied: nd.Node.AppliedIndex(), Disks: nd.disks.health()}
+		fs, _ := sysfs.FilesystemID(nd.Store.Root())
+		return rpc.Health{Applied: nd.Node.AppliedIndex(), FS: fs, Disks: nd.disks.health()}
 	}
 	nd.Events = meta.NewEventRing(c.Clk, nd.Idx())
 	nd.Reader = vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nd.Cache, nil)

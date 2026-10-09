@@ -76,6 +76,7 @@ type Probe struct {
 	Applied   uint64
 	Version   string
 	Dev       bool      // /dev/* enabled on that node (docs/08)
+	FS        string    // filesystem holding the target's store (docs/14 §8)
 	DeadSince time.Time // zero while live
 	Down      bool      // MemberDown already emitted
 	Lost      bool      // MemberLost already emitted
@@ -204,7 +205,7 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 	}
 	if ok {
 		wasDead := !pr.DeadSince.IsZero()
-		pr.LastOK, pr.RTT, pr.Free, pr.Applied, pr.Version, pr.Dev = now, rtt, h.Free, h.Applied, h.Version, h.Dev
+		pr.LastOK, pr.RTT, pr.Free, pr.Applied, pr.Version, pr.Dev, pr.FS = now, rtt, h.Free, h.Applied, h.Version, h.Dev, h.FS
 		pr.DeadSince, pr.Down, pr.Lost = time.Time{}, false, false
 		if wasDead {
 			p.emit(Event{Kind: MemberUp, Idx: idx, Since: now})
@@ -233,7 +234,7 @@ func (p *Prober) recordDisks(ds []meta.Node, now time.Time, rtt time.Duration, h
 			}
 		}
 		if dh != nil && dh.OK {
-			p.record(d.Idx, now, rtt, true, rpc.Health{Free: dh.Free, Applied: h.Applied, Version: h.Version, Dev: h.Dev})
+			p.record(d.Idx, now, rtt, true, rpc.Health{Free: dh.Free, Applied: h.Applied, Version: h.Version, Dev: h.Dev, FS: dh.FS})
 			continue
 		}
 		p.mu.Lock()

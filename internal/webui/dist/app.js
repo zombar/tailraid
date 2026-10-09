@@ -328,8 +328,8 @@ function bar(frac, tone = "", tickFrac, tall = false) {
   }
   return el;
 }
-function barRow(label, b, value) {
-  return h("div", { class: "bar-row" }, h("span", { class: "bar-label" }, label), b, h("span", { class: "bar-val" }, value));
+function barRow(label2, b, value) {
+  return h("div", { class: "bar-row" }, h("span", { class: "bar-label" }, label2), b, h("span", { class: "bar-val" }, value));
 }
 function fillTone(frac) {
   return frac > 0.95 ? "bad" : frac > 0.8 ? "warn" : "";
@@ -537,8 +537,8 @@ function spread(groups, sh) {
       col.append(fill);
       cols.append(col);
     }
-    const label = h("div", { class: "spread-label" }, h("span", { class: "dot " + (g.node.live ? "ok" : "bad") }), g.node.name);
-    plot.append(h("div", { class: "spread-host" }, cols, label));
+    const label2 = h("div", { class: "spread-label" }, h("span", { class: "dot " + (g.node.live ? "ok" : "bad") }), g.node.name);
+    plot.append(h("div", { class: "spread-host" }, cols, label2));
   }
   return h(
     "div",
@@ -560,11 +560,34 @@ function hostCard(g, sh, scale) {
   const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (n.live ? "ok" : "bad") }), h("span", { class: "name" }, n.name), h("span", { class: "host-sum" }, sum), badges);
   const strip = h("div", { class: "disk-strip" });
   for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
-  return h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
+  const card2 = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
+  for (const group of sharedGroups(g.targets)) {
+    card2.append(h("div", { class: "host-note" }, h("span", { class: "warn-icon" }), `${listOf(group)} are on one physical disk: they fail together, so data spread across them is not redundant`));
+  }
+  return card2;
+}
+function label(t) {
+  return t.data_dir ? `${t.name} (data dir)` : t.name;
+}
+function listOf(names) {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+function sharedGroups(targets) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const t of targets) {
+    if (!t.shared_with?.length || seen.has(t.name)) continue;
+    const names = [t.name, ...t.shared_with].sort();
+    for (const n of names) seen.add(n);
+    out.push(names.map((n) => label(targets.find((x) => x.name === n) ?? t)));
+  }
+  return out;
 }
 function diskRow(t, share, scale) {
   const dot = off(t) ? "off" : t.live ? "ok" : "bad";
-  const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", null, t.name));
+  const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", { class: "n" }, t.name));
+  if (t.data_dir) name.append(h("span", { class: "tag" }, "data dir"));
+  if (t.shared_with?.length) name.append(h("span", { class: "warn-icon", title: `on the same physical disk as ${t.shared_with.join(", ")}: they fail together` }));
   if (off(t)) {
     return h("div", { class: "disk off", title: `${t.name}: no budget (capacity 0)` }, name, h("div", { class: "bar" }), h("div", { class: "disk-val" }, "no budget (capacity 0)"));
   }
@@ -627,11 +650,11 @@ function render3(root, r, history) {
   }
   root.append(section);
 }
-function tile(label, value, sub, tone) {
+function tile(label2, value, sub, tone) {
   const zero = value === 0;
   const lab = h("div", { class: "label" });
   if (!zero) lab.append(h("span", { class: "dot " + tone }));
-  lab.append(label);
+  lab.append(label2);
   return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub));
 }
 function repair(r) {
@@ -700,8 +723,8 @@ function volume(root, r) {
   );
   root.append(h("section", null, h("h2", null, "Volume"), tiles, compare2));
 }
-function tile2(label, value, sub) {
-  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
+function tile2(label2, value, sub) {
+  return h("div", { class: "tile" }, h("div", { class: "label" }, label2), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
 }
 
 // internal/webui/src/chunks.ts
@@ -894,14 +917,14 @@ function render6(root, path) {
       viewer.append(h("div", { class: "placeholder" }, info || name, h("a", { class: "btn", href: fileURL(path, true) }, "Download")));
     }
     if (group.length > 1 && kind !== "text" && kind !== "other" && kind !== "pdf") {
-      const label = kind === "image" ? "image" : "track";
+      const label2 = kind === "image" ? "image" : "track";
       section.append(
         h(
           "div",
           { class: "controls" },
           h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, "\u25C0 Previous"),
           h("button", { type: "button", disabled: !next, onClick: () => go(next) }, "Next \u25B6"),
-          h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next ? ` \xB7 next: ${next.name}` : ""))
+          h("span", { class: "track" }, `${label2} ${index + 1} of ${group.length}` + (next ? ` \xB7 next: ${next.name}` : ""))
         )
       );
     }
@@ -1093,10 +1116,10 @@ function render7(root, dir) {
   };
   const table = () => {
     const sorted = [...entries].sort((a, b) => compare(a, b, sort));
-    const th = (key, label, cls) => {
+    const th = (key, label2, cls) => {
       const attrs = { class: cls ?? "" };
       if (sort.key === key) attrs["aria-sort"] = sort.desc ? "descending" : "ascending";
-      const el = h("th", attrs, label);
+      const el = h("th", attrs, label2);
       el.addEventListener("click", () => {
         sort = sort.key === key ? { key, desc: !sort.desc } : { key, desc: key !== "name" };
         saveSort(sort);

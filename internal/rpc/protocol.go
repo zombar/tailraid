@@ -48,6 +48,7 @@ type Health struct {
 	Capacity  int64        `json:"capacity"`
 	Free      int64        `json:"free"`
 	Dev       bool         `json:"dev,omitempty"`   // /dev/* endpoints enabled on this node
+	FS        string       `json:"fs,omitempty"`    // filesystem holding disk 0, to spot targets on one physical disk (docs/14 §8)
 	Disks     []DiskHealth `json:"disks,omitempty"` // added disks (docs/14 §4); the fields above are disk 0
 }
 
@@ -60,6 +61,7 @@ type DiskHealth struct {
 	Free     int64  `json:"free"`
 	OK       bool   `json:"ok"`
 	Reason   string `json:"reason,omitempty"`
+	FS       string `json:"fs,omitempty"` // filesystem holding this disk
 }
 
 // JoinRequest is POST /v1/join.

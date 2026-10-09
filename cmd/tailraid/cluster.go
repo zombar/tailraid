@@ -173,8 +173,9 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 	nodes = hostOrder(nodes)
 	for i := range nodes {
 		n := &nodes[i]
+		name := n.Label() // "<host> (data dir)" once the host has added disks
 		if n.Kind == "disk" {
-			n.Name = "  " + n.Name // indented under its host
+			name = "  " + name // indented under its host
 		}
 		var flags []string
 		if n.Leader {
@@ -183,6 +184,9 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 		if n.Self {
 			flags = append(flags, "self")
 		}
+		if len(n.SharedWith) > 0 {
+			flags = append(flags, "shares disk with "+strings.Join(n.SharedWith, ", "))
+		}
 		live := "yes"
 		if !n.Live {
 			live = "no"
@@ -190,7 +194,7 @@ func printNodes(w io.Writer, nodes []admin.NodeReport) {
 				live = "dead " + n.DeadFor
 			}
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, n.Name, n.Kind, n.State, n.Addr, n.Voter, live, n.Slots, bytesStr(uint64(max(n.Free, 0))), n.Version, strings.Join(flags, ","))
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, n.Addr, n.Voter, live, n.Slots, bytesStr(uint64(max(n.Free, 0))), n.Version, strings.Join(flags, ", "))
 	}
 	_ = tw.Flush()
 }
