@@ -279,15 +279,17 @@ when leader, otherwise forwards the encoded command to the current leader with
 **Bootstrap** (`tailraid init`): refuses if `<data_dir>/raft` has state. Generates
 `node_id`, `cluster_id`; `raft.BootstrapCluster` with self as the only voter; applies
 `MetaSet`, `SetVolume{ChunkSize, 1, 0}`, `SetVolumeMode{Auto: true}`, `NodeUpsert(self)`
-with the budget derived from the data directory's free space (01). The node is named after
-the host; `--name`, `--chunk` and `--token` are the only options.
+(no budget: a device stores nothing, 14 §1) and a `NodeUpsert` per configured disk with
+its derived budget (01). The node is named after the host; `--name`, `--chunk` and
+`--token` are the only options.
 
 **Join** (`tailraid join <host> <token> [--voter]`): refuses if local Raft state exists.
 Generates `node_id`; `POST /v1/join` with `{token, node_id, name, ts_stable_id, addr, ports,
-voter, capacity (derived, 01), version}`. The receiver requires `WhoIs(srcIP).StableID == ts_stable_id`
+voter, version}`. The receiver requires `WhoIs(srcIP).StableID == ts_stable_id`
 and `token == Meta.JoinToken`, then forwards to the leader, which calls
 `raft.AddNonvoter` or `AddVoter` and proposes `NodeUpsert`. The joiner then starts `serve`
-and receives the state by snapshot.
+and receives the state by snapshot, after registering its configured disks through the
+leader's `add_disk` member op (14 §2, I-121).
 
 **Disks.** `node add-disk` (14 §2) proposes `NodeUpsert{Kind: KindDisk, Host}` through
 the leader; a disk row is a placement target, never a Raft member, and `init` registers
@@ -299,8 +301,8 @@ toward quorum, so sleeping laptops never stall the cluster. `status` warns when 
 count is 1 or even.
 
 **Lifecycle commands** (all day-zero): `node promote|demote` (`AddVoter`/`AddNonvoter` on the
-same ID), a node's own budget (`set_capacity` → `NodeUpsert`, proposed by the node itself
-as its free disk changes, 01), `node drain` (`NodeSetState Draining`:
+same ID), a disk's budget (`set_capacity` → `NodeUpsert`, proposed by the disk's host as
+its free space changes, 01; refused for a device row, I-118), `node drain` (`NodeSetState Draining`:
 excluded from new placement; repairer re-places its slots), `node remove`
 (`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`
 after `SetVolumeMode{false}`; `--auto` is `SetVolumeMode{true}`),

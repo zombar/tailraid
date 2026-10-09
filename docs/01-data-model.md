@@ -158,7 +158,7 @@ offset  size  field
 40      n     payload (the shard bytes)
 ```
 
-Path: `<data_dir>/shards/<hh>/<hex>.<k>-<m>.<idx>` where `hh` = first two hex characters
+Path: `<disk>/shards/<hh>/<hex>.<k>-<m>.<idx>` (14 §3) where `hh` = first two hex characters
 of the chunk hash. Written as `<dir>/.tmp-<random>` → `write` → `fsync` → `close` →
 `rename` → `fsync(dir)`; `Put` returns only after the directory fsync, so a PUT ack means the
 shard survives power loss. `Store.Open` deletes every `.tmp-*` file it finds, regardless of
@@ -263,19 +263,19 @@ gateways on different devices (they encode cluster-wide identity, not a path).
 
 ## Node budget
 
-A target's `Capacity` is its shard-byte budget (a device's own store here; an added disk
-derives its own from its filesystem the same way, 14 §3): the local shard store refuses a PUT that
-would exceed it (`ErrFull`, HTTP 507) and placement weights by it. Unless `node.capacity`
-is set in the config (a pin), the budget is **derived**: `used + free − reserve` of the
-filesystem holding the data directory, with `reserve = max(10 % of the filesystem, 8 GiB)`
-so the volume never drives the disk to `ENOSPC`. `init` and `join` derive it before the
-member record is written; `serve` re-derives it on every maintenance tick (one minute),
-sets the store's cap at once, and proposes `set_capacity` for itself through the leader
-only when the value moved by more than `max(5 %, 1 GiB)`, so placement weights stay still
-while a disk breathes. `Capacity == 0` (a full disk) takes the node out of the candidate
-set without touching what it already holds. A pinned budget changes only when the pin
-does: raise `node.capacity` (or a disk's `capacity`), restart the service, and the next
-tick registers the new value with the cluster.
+A disk's `Capacity` is its shard-byte budget (14 §3): the disk's store refuses a PUT that
+would exceed it (`ErrFull`, HTTP 507) and placement weights by it. Unless the disk's
+`capacity` is set in the config (a pin), the budget is **derived**: `used + free − reserve`
+of the filesystem holding the disk's store, with `reserve = max(10 % of the filesystem,
+8 GiB)` so the volume never drives the disk to `ENOSPC`. `init` and `join` derive it
+before the disk row is written; `serve` re-derives it on every maintenance tick (one
+minute), sets the store's cap at once, and proposes `set_capacity` for the disk through
+the leader only when the value moved by more than `max(5 %, 1 GiB)`, so placement weights
+stay still while a disk breathes. `Capacity == 0` (a full disk) takes the disk out of the
+candidate set without touching what it already holds. A pinned budget changes only when
+the pin does: raise the disk's `capacity`, restart the service, and the next tick
+registers the new value with the cluster. A device row carries no budget: the data
+directory holds no shards (14 §1).
 
 ## Invariants
 
@@ -301,12 +301,12 @@ tick registers the new value with the cluster.
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
 
-- **I-74** — A device's derived budget is `used + free − reserve` of the data directory's
-  filesystem (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
+- **I-74** — A disk's derived budget is `used + free − reserve` of the filesystem holding
+  its store (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
   store's cap following at once and a `set_capacity` proposal only past the hysteresis
-  `max(5 %, 1 GiB)`; a node pinned by `node.capacity` is never re-derived, and its pinned
+  `max(5 %, 1 GiB)`; a disk pinned by its `capacity` is never re-derived, and its pinned
   value is proposed on the next tick whenever the cluster holds a different one, so a
-  device grown in place (the pin raised, the service restarted) is placed by its new
+  disk grown in place (the pin raised, the service restarted) is placed by its new
   budget.
 
 ## Tests

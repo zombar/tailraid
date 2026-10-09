@@ -312,9 +312,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `fill_after`; restore it: live again, its stale shards swept after grace; then, in auto
   mode, add a disk to the gateway host, drain it and remove it, the policy following the
   member table after each step with the corpus exact (the previous pin restored after); I-86, I-87,
-  I-89, I-90, L-192, L-193, L-194). The compose rig gives every node two added disks
-  (4 hosts × 3 targets); `cmd/soak -topology single` runs one node with four disks, where
-  phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
+  I-89, I-90, L-192, L-193, L-194). The compose rig gives four nodes two disks each, one
+  derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
+  host; phase 14 writes through it); `cmd/soak -topology single` runs one node with four
+  disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure and
   disk next to the process memory. A phase the environment cannot run is recorded as
   *skipped (capability)*, never passed.
