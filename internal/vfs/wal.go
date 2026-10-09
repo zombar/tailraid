@@ -28,12 +28,17 @@ var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 var errWALShortRead = errors.New("vfs: wal read beyond end")
 
-// walRec is a record to be written by Compact.
+// walRec is a record to be written by Compact: a write record names its bytes by their
+// offset and length in the log being compacted, so nothing is read ahead of the copy.
 type walRec struct {
-	typ  uint8
-	off  uint64
-	data []byte
+	typ uint8
+	off uint64
+	src int64  // data offset in the current log (recWrite)
+	n   uint64 // data length (recWrite)
 }
+
+// compactBuf bounds the copy of one record during a compaction (docs/04 §2, I-80).
+const compactBuf = 1 << 20
 
 // WAL is a per-inode append-only log. Every append is fsynced before it returns, so a
 // successful append means the bytes survive a crash or power loss (I-7). All file access
@@ -175,29 +180,51 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 }
 
 // Compact atomically replaces the log with exactly recs, returning each record's data
-// offset in the new log. The data slices must have been read out before the call.
+// offset in the new log. A write record's bytes are streamed from the current log
+// through one bounded buffer, so a compaction never holds the live set in memory (I-80).
+//
+// Once the rename has happened the new log is the log: offs is then returned even when a
+// later step (directory fsync, reopen) fails, with the error, and the WAL is left open on
+// the new file whenever it can be opened at all.
 func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	tmp := w.path + ".new"
 	nf, err := w.fs.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: wal compact: %w", err)
 	}
-	offs := make([]int64, len(recs))
-	var pos int64
-	for i, r := range recs {
-		buf := encodeRecord(r.typ, r.off, r.data)
-		if _, err := nf.WriteAt(buf, pos); err != nil {
-			_ = nf.Close()
-			_ = w.fs.Remove(tmp)
-			return nil, fmt.Errorf("vfs: wal compact write: %w", err)
-		}
-		offs[i] = pos + recHeaderLen
-		pos += int64(len(buf))
-	}
-	if err := nf.Sync(); err != nil {
+	abort := func(step string, err error) ([]int64, error) {
 		_ = nf.Close()
 		_ = w.fs.Remove(tmp)
-		return nil, fmt.Errorf("vfs: wal compact fsync: %w", err)
+		return nil, fmt.Errorf("vfs: wal compact %s: %w", step, err)
+	}
+	offs := make([]int64, len(recs))
+	buf := make([]byte, compactBuf)
+	var pos int64
+	for i, r := range recs {
+		hdr := encodeRecord(r.typ, r.off, nil)
+		binary.LittleEndian.PutUint32(hdr[13:], uint32(r.n))
+		crc := crc32.Checksum(hdr[4:], crcTable)
+		dataPos := pos + recHeaderLen
+		for copied := int64(0); copied < int64(r.n); {
+			chunk := buf[:min(int64(len(buf)), int64(r.n)-copied)]
+			if err := w.ReadAt(chunk, r.src+copied); err != nil {
+				return abort("read", err)
+			}
+			if _, err := nf.WriteAt(chunk, dataPos+copied); err != nil {
+				return abort("write", err)
+			}
+			crc = crc32.Update(crc, crcTable, chunk)
+			copied += int64(len(chunk))
+		}
+		binary.LittleEndian.PutUint32(hdr[0:], crc)
+		if _, err := nf.WriteAt(hdr, pos); err != nil {
+			return abort("write", err)
+		}
+		offs[i] = dataPos
+		pos = dataPos + int64(r.n)
+	}
+	if err := nf.Sync(); err != nil {
+		return abort("fsync", err)
 	}
 	// Both handles are closed before the rename: Windows refuses to replace or rename a
 	// file that has an open handle. The data is already fsynced, so the only window is
@@ -213,14 +240,18 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 		w.f = reopened
 		return nil, fmt.Errorf("vfs: wal compact rename: %w", err)
 	}
+	var first error
 	if err := w.fs.SyncDir(filepath.Dir(w.path)); err != nil {
-		return nil, fmt.Errorf("vfs: wal compact fsync dir: %w", err)
+		first = fmt.Errorf("vfs: wal compact fsync dir: %w", err)
 	}
 	reopened, err := w.fs.OpenFile(w.path, os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("vfs: wal compact reopen: %w", err)
+		if first == nil {
+			first = fmt.Errorf("vfs: wal compact reopen: %w", err)
+		}
+		return nil, first
 	}
 	w.f = reopened
 	w.size = pos
-	return offs, nil
+	return offs, first
 }

@@ -735,19 +735,14 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		}
 	}
 	for _, x := range d.ext {
-		data := make([]byte, x.n)
-		if err := d.wal.ReadAt(data, x.walOff); err != nil {
-			return err
-		}
-		recs = append(recs, walRec{typ: recWrite, off: x.off, data: data})
+		recs = append(recs, walRec{typ: recWrite, off: x.off, src: x.walOff, n: x.n})
 	}
 	offs, err := d.wal.Compact(recs)
-	if err != nil {
-		return err
+	if offs != nil { // the new log is in place even when a step after the rename failed
+		first := len(recs) - len(d.ext)
+		for i := range d.ext {
+			d.ext[i].walOff = offs[first+i]
+		}
 	}
-	first := len(recs) - len(d.ext)
-	for i := range d.ext {
-		d.ext[i].walOff = offs[first+i]
-	}
-	return nil
+	return err
 }

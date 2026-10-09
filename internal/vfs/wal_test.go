@@ -178,8 +178,8 @@ func TestWAL_Compact_KeepsOnlyLive(t *testing.T) {
 	recs := []walRec{
 		{typ: recBase, off: 777},
 		{typ: recTruncate, off: 120},
-		{typ: recWrite, off: 52, data: readWAL(t, w, live1+2, 4)}, // split extent: "ve-o"
-		{typ: recWrite, off: 200, data: readWAL(t, w, live2, 8)},
+		{typ: recWrite, off: 52, src: live1 + 2, n: 4}, // split extent: "ve-o"
+		{typ: recWrite, off: 200, src: live2, n: 8},
 	}
 	offs, err := w.Compact(recs)
 	if err != nil {
