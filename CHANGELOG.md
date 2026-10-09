@@ -2,6 +2,51 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.2.1 (2026-10-09)
+
+### Changes
+
+- vfs: the two PUT-deadline tests stop advancing the clock once the straggler is cancelled ([f20dbd3](https://github.com/zombar/tailraid/commit/f20dbd3))
+- build: the format check and the invariant script enumerate files through ls-files, skipping nested worktrees ([4d8a22c](https://github.com/zombar/tailraid/commit/4d8a22c))
+- gitignore: the .claude directory (linked worktrees), so make tag sees a clean tree ([ef7d16e](https://github.com/zombar/tailraid/commit/ef7d16e))
+- vfs: the total-dirty trigger test waits for the entries to leave the overlay ([d6d8db4](https://github.com/zombar/tailraid/commit/d6d8db4))
+- soak: legends below the charts; rates carried across intervals too short to divide by ([6f681c9](https://github.com/zombar/tailraid/commit/6f681c9))
+- admin, soak: machine vitals in status and the report; where the large file's chunks landed ([ef4d758](https://github.com/zombar/tailraid/commit/ef4d758))
+- soak: phase 12 counts orphans before and after, and judges the flusher's own peak ([3e8f241](https://github.com/zombar/tailraid/commit/3e8f241))
+- admin, soak: process memory and flush bounds in status; phase 12 writes a file many times the WAL cap ([33ebd8e](https://github.com/zombar/tailraid/commit/33ebd8e))
+- webui: atomic, resumable uploads — a temp beside the target, parts with Content-Range, limits ([0796ca5](https://github.com/zombar/tailraid/commit/0796ca5))
+- rpc, node: shard call deadlines scale with size; server slots within a byte budget ([0c2607f](https://github.com/zombar/tailraid/commit/0c2607f))
+- vfs, chunk: streamed compaction; the WAL survives a failed step after the rename; cache temps swept ([c43657f](https://github.com/zombar/tailraid/commit/c43657f))
+- vfs: a WRITE at a cap waits for the flusher; ENOSPC when the cluster is full ([ef6a7c7](https://github.com/zombar/tailraid/commit/ef6a7c7))
+- vfs: chunk pipeline — bounded flush memory, batch commits, cancelled stragglers ([5c12686](https://github.com/zombar/tailraid/commit/5c12686))
+- soak: phase 11 automation — budgets, voter-first placement and the automatic policy in the report ([936f718](https://github.com/zombar/tailraid/commit/936f718))
+- cmd, admin, webui: set-redundancy --auto; the mode in describe, status and the dashboard; CLI tests ([6d61b51](https://github.com/zombar/tailraid/commit/6d61b51))
+- meta, repair: automatic redundancy — the leader picks the policy from the member table ([96a6291](https://github.com/zombar/tailraid/commit/96a6291))
+- node, config, cmd: the budget is derived from the data disk; init and join take no --capacity ([c5d4e14](https://github.com/zombar/tailraid/commit/c5d4e14))
+- meta: Volume.Auto, the SetVolumeMode op, snapshot codec v2 that still reads v1 ([9aa223f](https://github.com/zombar/tailraid/commit/9aa223f))
+- sysfs, chunk: free-space probe, the derived budget and a store cap that follows it ([1a3a80d](https://github.com/zombar/tailraid/commit/1a3a80d))
+- meta: voter-first placement — data slots on always-on devices ([b95e34e](https://github.com/zombar/tailraid/commit/b95e34e))
+- webui: the TypeScript app — shell, dashboard (balance, integrity), file browser, player, chunk panel ([028479b](https://github.com/zombar/tailraid/commit/028479b))
+- build: esbuild as a Go tool; make web and web-check; the bundle is committed and embedded ([1bcec14](https://github.com/zombar/tailraid/commit/1bcec14))
+- node, cmd: web UI listener on <tsIP>:listen.web, own login via WhoIs, web_url in status ([c3723f6](https://github.com/zombar/tailraid/commit/c3723f6))
+- webui: the handler — member-or-same-user auth, CSRF header, paths, ls/stat, Range reads, uploads, mkdir, status cache, chunk paging, static shell ([6363dbe](https://github.com/zombar/tailraid/commit/6363dbe))
+- admin, vfs, config: chunk report paging, dirty file info, WAL sentinels, listen.web ([c0f07de](https://github.com/zombar/tailraid/commit/c0f07de))
+- tailscale, rpc: WhoIs login behind the identity cache; SourceAddr and ServeHTTP exported ([a11dbc5](https://github.com/zombar/tailraid/commit/a11dbc5))
+
+### Documentation
+
+- docs: measured size through streaming large files ([b3e6ccb](https://github.com/zombar/tailraid/commit/b3e6ccb))
+- docs: streaming large files — memory model, cap backpressure, atomic resumable uploads ([dbd8c6b](https://github.com/zombar/tailraid/commit/dbd8c6b))
+- docs: measured size through init-without-flags ([be2dd7f](https://github.com/zombar/tailraid/commit/be2dd7f))
+- docs: init without flags — voter-first placement, derived capacity, automatic redundancy ([66505d1](https://github.com/zombar/tailraid/commit/66505d1))
+- docs: measured size through the web UI; manual checks for the real tailnet ([93c4a10](https://github.com/zombar/tailraid/commit/93c4a10))
+- docs: web UI design (docs/13), style guide and lookdev, invariants I-68..I-73 ([3ba0313](https://github.com/zombar/tailraid/commit/3ba0313))
+- docs: README explains how to cut a release ([535fdab](https://github.com/zombar/tailraid/commit/535fdab))
+
+### Tooling
+
+- test: a crash at any point leaves nothing behind ([c2d3ade](https://github.com/zombar/tailraid/commit/c2d3ade))
+
 ## v0.2.0 (2026-10-08)
 
 ### Changes
