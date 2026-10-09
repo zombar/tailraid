@@ -73,7 +73,7 @@ bench:
 test-mount:
 	TAILRAID_MOUNT_TEST=1 go test -v -count=1 -run 'TestMount' -timeout 20m ./test/mount/
 
-## soak: four-node docker-compose cluster (two added disks each), scenario driver, report.html + results.jsonl (needs Docker)
+## soak: five-node docker-compose cluster (two disks each, one diskless voter), scenario driver, report.html + results.jsonl (needs Docker)
 soak: soak-binary
 	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \

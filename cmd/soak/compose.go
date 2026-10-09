@@ -29,7 +29,7 @@ type composeNode struct {
 type composeEnv struct {
 	soak.Admin
 	dir   string // compose project directory
-	file  string // compose file in dir: docker-compose.yml (4 hosts) or docker-compose.single.yml
+	file  string // compose file in dir: docker-compose.yml (4 hosts with disks + a diskless one) or docker-compose.single.yml
 	nodes []composeNode
 	http  *http.Client
 }
