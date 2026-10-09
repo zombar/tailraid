@@ -12,10 +12,22 @@
   .frame { background: var(--bg); color: var(--text); padding: 0 0 48px; }
   .frame > .sheet { display: grid; gap: 24px; padding: var(--gutter); max-width: 1100px; margin: 0 auto; }
   .fixture { font: 12px var(--mono); color: var(--dim); border-top: 1px dashed var(--line); padding-top: 8px; }
+  .cli { font: 12px/1.5 var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 0; }
 </style>
 </head>
 <body>
 <div class="frame theme-light"><div class="sheet" id="sheet">
+  <div class="fixture">node ls — the data-dir store is labelled on a host with disks; targets on one physical disk are flagged</div>
+  <pre class="cli">IDX  NAME                KIND    STATE   ADDR        VOTER  LIVE  SLOTS   FREE       FLAGS
+1    atlas (data dir)    device  active  100.64.0.3  true   yes   15020   405.0 GiB  leader, shares disk with atlas/2
+2      atlas/1           disk    active              false  yes   61210   1.6 TiB
+3      atlas/2           disk    active              false  yes   60390   1.6 TiB    shares disk with atlas
+4    pike (data dir)     device  active  100.64.0.12 true   yes   15380   402.0 GiB  self
+5      pike/1            disk    active              false  yes   30840   819.0 GiB  self, shares disk with pike/2
+6      pike/2            disk    active              false  yes   29950   825.0 GiB  self, shares disk with pike/1
+7    nomad               device  active  100.64.0.40 false  yes   7210    204.0 GiB
+! atlas (data dir) and atlas/2 are on one physical disk: they fail together, so a stripe on both is not redundant
+! pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</pre>
   <div class="fixture">fixture A — 4 hosts × 3 targets, auto 6+2; lumen dead, nomad/2 draining</div>
   <section>
 <h2>Disks<span class="h-sub">survives 2 disks, 1 host · auto 6+2 · 4 hosts × 3 targets</span></h2>
@@ -62,65 +74,67 @@
     <div class="name-row"><span class="dot ok"></span><span class="name">atlas</span><span class="host-sum">3 targets · 4.5 TiB</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span></span></div>
     <div class="disk-strip">
       <div class="disk" title="atlas: 15,020 slots, expected 14,900; 95.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>atlas</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">atlas</span><span class="tag">data dir</span><span class="warn-icon" title="on the same physical disk as atlas/2: they fail together"></span></div>
         <div class="bar"><i style="width:22%"></i><b class="tick" style="left:22%"></b></div>
         <div class="disk-val dots"><span>15,020 slots</span><span>exp 14,900</span><span>+0.8 %</span></div>
         <div class="disk-val"><span>95.0 GiB</span><span>of 500.0 GiB</span></div>
       </div>
       <div class="disk" title="atlas/1: 61,210 slots, expected 61,031; 410.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>atlas/1</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">atlas/1</span></div>
         <div class="bar"><i style="width:91%"></i><b class="tick" style="left:91%"></b></div>
         <div class="disk-val dots"><span>61,210 slots</span><span>exp 61,031</span><span>+0.3 %</span></div>
         <div class="disk-val"><span>410.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
       <div class="disk" title="atlas/2: 60,390 slots, expected 61,031; 402.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>atlas/2</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">atlas/2</span><span class="warn-icon" title="on the same physical disk as atlas (data dir): they fail together"></span></div>
         <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
         <div class="disk-val dots"><span>60,390 slots</span><span>exp 61,031</span><span>−1.1 %</span></div>
         <div class="disk-val"><span>402.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
     </div>
+    <div class="host-note"><span class="warn-icon"></span>atlas (data dir) and atlas/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
   </div>
   <div class="host-row self">
     <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">3 targets · 2.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
     <div class="disk-strip">
       <div class="disk" title="pike: 15,380 slots, expected 14,900; 98.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike</span><span class="tag">data dir</span></div>
         <div class="bar"><i style="width:23%"></i><b class="tick" style="left:22%"></b></div>
         <div class="disk-val dots"><span>15,380 slots</span><span>exp 14,900</span><span>+3.2 %</span></div>
         <div class="disk-val"><span>98.0 GiB</span><span>of 500.0 GiB</span></div>
       </div>
       <div class="disk" title="pike/1: 30,840 slots, expected 30,515; 205.0 GiB used of 1.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike/1</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike/1</span><span class="warn-icon" title="on the same physical disk as pike/2: they fail together"></span></div>
         <div class="bar"><i style="width:46%"></i><b class="tick" style="left:45%"></b></div>
         <div class="disk-val dots"><span>30,840 slots</span><span>exp 30,515</span><span>+1.1 %</span></div>
         <div class="disk-val"><span>205.0 GiB</span><span>of 1.0 TiB</span></div>
       </div>
       <div class="disk" title="pike/2: 29,950 slots, expected 30,515; 199.0 GiB used of 1.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike/2</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike/2</span><span class="warn-icon" title="on the same physical disk as pike/1: they fail together"></span></div>
         <div class="bar"><i style="width:44%"></i><b class="tick" style="left:45%"></b></div>
         <div class="disk-val dots"><span>29,950 slots</span><span>exp 30,515</span><span>−1.9 %</span></div>
         <div class="disk-val"><span>199.0 GiB</span><span>of 1.0 TiB</span></div>
       </div>
     </div>
+    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
   </div>
   <div class="host-row">
     <div class="name-row"><span class="dot bad"></span><span class="name">lumen</span><span class="host-sum">3 targets · 4.5 TiB · dead 3m0s</span><span class="badges"><span class="badge strong">voter</span></span></div>
     <div class="disk-strip">
       <div class="disk bad" title="lumen: 15,110 slots, expected 14,900; 96.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot bad"></span><span>lumen</span></div>
+        <div class="disk-name"><span class="dot bad"></span><span class="n">lumen</span><span class="tag">data dir</span></div>
         <div class="bar"><i style="width:22%"></i><b class="tick" style="left:22%"></b></div>
         <div class="disk-val dots"><span>15,110 slots</span><span>exp 14,900</span><span>+1.4 %</span></div>
         <div class="disk-val">unknown (dead 3m0s)</div>
       </div>
       <div class="disk bad" title="lumen/1: 60,880 slots, expected 61,031; 407.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot bad"></span><span>lumen/1</span></div>
+        <div class="disk-name"><span class="dot bad"></span><span class="n">lumen/1</span></div>
         <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
         <div class="disk-val dots"><span>60,880 slots</span><span>exp 61,031</span><span>−0.2 %</span></div>
         <div class="disk-val">unknown (dead 3m0s)</div>
       </div>
       <div class="disk bad" title="lumen/2: 60,620 slots, expected 61,031; 405.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot bad"></span><span>lumen/2</span></div>
+        <div class="disk-name"><span class="dot bad"></span><span class="n">lumen/2</span></div>
         <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
         <div class="disk-val dots"><span>60,620 slots</span><span>exp 61,031</span><span>−0.7 %</span></div>
         <div class="disk-val">unknown (dead 3m0s)</div>
@@ -131,19 +145,19 @@
     <div class="name-row"><span class="dot ok"></span><span class="name">nomad</span><span class="host-sum">3 targets · 1.2 TiB</span><span class="badges"><span class="badge">non-voter</span></span></div>
     <div class="disk-strip">
       <div class="disk" title="nomad: 7,210 slots, expected 7,450; 46.0 GiB used of 250.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>nomad</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">nomad</span><span class="tag">data dir</span></div>
         <div class="bar"><i style="width:11%"></i><b class="tick" style="left:11%"></b></div>
         <div class="disk-val dots"><span>7,210 slots</span><span>exp 7,450</span><span>−3.2 %</span></div>
         <div class="disk-val"><span>46.0 GiB</span><span>of 250.0 GiB</span></div>
       </div>
       <div class="disk" title="nomad/1: 14,460 slots, expected 14,900; 90.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>nomad/1</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">nomad/1</span></div>
         <div class="bar"><i style="width:21%"></i><b class="tick" style="left:22%"></b></div>
         <div class="disk-val dots"><span>14,460 slots</span><span>exp 14,900</span><span>−3.0 %</span></div>
         <div class="disk-val"><span>90.0 GiB</span><span>of 500.0 GiB</span></div>
       </div>
       <div class="disk warn" title="nomad/2: 1,133 slots, expected 0; 9.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>nomad/2</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">nomad/2</span></div>
         <div class="bar"><i style="width:2%"></i></div>
         <div class="disk-val dots"><span class="text-warn">draining</span><span>1,133 slots to move</span></div>
         <div class="disk-val"><span>9.0 GiB</span><span>of 500.0 GiB</span></div>
@@ -176,34 +190,35 @@
     <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">5 targets · 12.5 TiB</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
     <div class="disk-strip">
       <div class="disk off" title="pike: no budget (capacity 0)">
-        <div class="disk-name"><span class="dot off"></span><span>pike</span></div>
+        <div class="disk-name"><span class="dot off"></span><span class="n">pike</span><span class="tag">data dir</span></div>
         <div class="bar"></div>
         <div class="disk-val">no budget (capacity 0)</div>
       </div>
       <div class="disk" title="pike/1: 38,900 slots, expected 39,008; 1.2 TiB used of 4.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike/1</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike/1</span><span class="warn-icon" title="on the same physical disk as pike/2: they fail together"></span></div>
         <div class="bar"><i style="width:90%"></i><b class="tick" style="left:91%"></b></div>
         <div class="disk-val dots"><span>38,900 slots</span><span>exp 39,008</span><span>−0.3 %</span></div>
         <div class="disk-val"><span>1.2 TiB</span><span>of 4.0 TiB</span></div>
       </div>
       <div class="disk" title="pike/2: 39,110 slots, expected 39,008; 1.2 TiB used of 4.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike/2</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike/2</span><span class="warn-icon" title="on the same physical disk as pike/1: they fail together"></span></div>
         <div class="bar"><i style="width:91%"></i><b class="tick" style="left:91%"></b></div>
         <div class="disk-val dots"><span>39,110 slots</span><span>exp 39,008</span><span>+0.3 %</span></div>
         <div class="disk-val"><span>1.2 TiB</span><span>of 4.0 TiB</span></div>
       </div>
       <div class="disk bad" title="pike/3: 19,510 slots, expected 19,504; 614.4 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot bad"></span><span>pike/3</span></div>
+        <div class="disk-name"><span class="dot bad"></span><span class="n">pike/3</span></div>
         <div class="bar"><i style="width:45%"></i><b class="tick" style="left:45%"></b></div>
         <div class="disk-val dots"><span>19,510 slots</span><span>exp 19,504</span><span>+0.0 %</span></div>
         <div class="disk-val">unknown (dead 4m10s)</div>
       </div>
       <div class="disk off" title="pike/4: closed: disk_id missing — not mounted?">
-        <div class="disk-name"><span class="dot off"></span><span>pike/4</span></div>
+        <div class="disk-name"><span class="dot off"></span><span class="n">pike/4</span></div>
         <div class="bar"></div>
         <div class="disk-val">closed: disk_id missing — not mounted?</div>
       </div>
     </div>
+    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
   </div>
 </div>
   </section>
@@ -236,41 +251,43 @@
     <div class="name-row"><span class="dot ok"></span><span class="name">atlas</span><span class="host-sum">3 targets · 4.5 TiB</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span></span></div>
     <div class="disk-strip">
       <div class="disk" title="atlas: 9,100 slots, expected 6,538; 120.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>atlas</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">atlas</span><span class="tag">data dir</span><span class="warn-icon" title="on the same physical disk as atlas/2: they fail together"></span></div>
         <div class="bar bad"><i style="width:21%"></i><b class="tick" style="left:15%"></b></div>
         <div class="disk-val dots"><span>9,100 slots</span><span>exp 6,538</span><span>+39.2 %</span></div>
         <div class="disk-val"><span>120.0 GiB</span><span>of 500.0 GiB</span></div>
       </div>
       <div class="disk" title="atlas/1: 40,210 slots, expected 26,778; 512.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>atlas/1</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">atlas/1</span></div>
         <div class="bar bad"><i style="width:91%"></i><b class="tick" style="left:61%"></b></div>
         <div class="disk-val dots"><span>40,210 slots</span><span>exp 26,778</span><span>+50.2 %</span></div>
         <div class="disk-val"><span>512.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
       <div class="disk" title="atlas/2: 39,870 slots, expected 26,778; 505.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>atlas/2</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">atlas/2</span><span class="warn-icon" title="on the same physical disk as atlas (data dir): they fail together"></span></div>
         <div class="bar bad"><i style="width:90%"></i><b class="tick" style="left:61%"></b></div>
         <div class="disk-val dots"><span>39,870 slots</span><span>exp 26,778</span><span>+48.9 %</span></div>
         <div class="disk-val"><span>505.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
     </div>
+    <div class="host-note"><span class="warn-icon"></span>atlas (data dir) and atlas/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
   </div>
   <div class="host-row self">
     <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">2 targets · 2.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
     <div class="disk-strip">
       <div class="disk" title="pike: 820 slots, expected 6,538; 5.0 GiB used of 500.0 GiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike</span><span class="tag">data dir</span></div>
         <div class="bar bad"><i style="width:2%"></i><b class="tick" style="left:15%"></b></div>
         <div class="disk-val dots"><span>820 slots</span><span>exp 6,538</span><span>−87.5 %</span></div>
         <div class="disk-val"><span>5.0 GiB</span><span>of 500.0 GiB</span></div>
       </div>
       <div class="disk" title="pike/1: 3,410 slots, expected 26,778; 22.0 GiB used of 2.0 TiB">
-        <div class="disk-name"><span class="dot ok"></span><span>pike/1</span></div>
+        <div class="disk-name"><span class="dot ok"></span><span class="n">pike/1</span><span class="warn-icon" title="on the same physical disk as pike/2: they fail together"></span></div>
         <div class="bar bad"><i style="width:8%"></i><b class="tick" style="left:61%"></b></div>
         <div class="disk-val dots"><span>3,410 slots</span><span>exp 26,778</span><span>−87.3 %</span></div>
         <div class="disk-val"><span>22.0 GiB</span><span>of 2.0 TiB</span></div>
       </div>
     </div>
+    <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
   </div>
 </div>
   </section>

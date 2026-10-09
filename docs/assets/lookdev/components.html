@@ -193,29 +193,36 @@
       <div class="host-row self">
         <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">5 targets · 12.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
         <div class="disk-strip">
+          <div class="disk" title="pike: 15,380 slots, expected 15,124; its store in the data directory">
+            <div class="disk-name"><span class="dot ok"></span><span class="n">pike</span><span class="tag">data dir</span></div>
+            <div class="bar"><i style="width:33%"></i><b class="tick" style="left:32%"></b></div>
+            <div class="disk-val dots"><span>15,380 slots</span><span>exp 15,124</span><span>+1.7 %</span></div>
+            <div class="disk-val"><span>98.0 GiB</span><span>of 500.0 GiB</span></div>
+          </div>
           <div class="disk" title="pike/1: 38,900 slots, expected 39,008">
-            <div class="disk-name"><span class="dot ok"></span><span>pike/1</span></div>
+            <div class="disk-name"><span class="dot ok"></span><span class="n">pike/1</span><span class="warn-icon" title="on the same physical disk as pike/2: they fail together"></span></div>
             <div class="bar"><i style="width:83%"></i><b class="tick" style="left:83%"></b></div>
             <div class="disk-val dots"><span>38,900 slots</span><span>exp 39,008</span><span>−0.3 %</span></div>
             <div class="disk-val"><span>1.2 TiB</span><span>of 4.0 TiB</span></div>
           </div>
           <div class="disk warn">
-            <div class="disk-name"><span class="dot ok"></span><span>pike/2</span></div>
+            <div class="disk-name"><span class="dot ok"></span><span class="n">pike/2</span><span class="warn-icon" title="on the same physical disk as pike/1: they fail together"></span></div>
             <div class="bar"><i style="width:6%"></i></div>
             <div class="disk-val dots"><span class="text-warn">draining</span><span>1,133 slots to move</span></div>
           </div>
           <div class="disk bad">
-            <div class="disk-name"><span class="dot bad"></span><span>pike/3</span></div>
+            <div class="disk-name"><span class="dot bad"></span><span class="n">pike/3</span></div>
             <div class="bar"><i style="width:41%"></i><b class="tick" style="left:41%"></b></div>
             <div class="disk-val dots"><span>19,510 slots</span><span>exp 19,504</span><span>+0.0 %</span></div>
             <div class="disk-val">unknown (dead 4m10s)</div>
           </div>
           <div class="disk off">
-            <div class="disk-name"><span class="dot off"></span><span>pike/4</span></div>
+            <div class="disk-name"><span class="dot off"></span><span class="n">pike/4</span></div>
             <div class="bar"></div>
             <div class="disk-val">closed: disk_id missing — not mounted?</div>
           </div>
         </div>
+        <div class="host-note"><span class="warn-icon"></span>pike/1 and pike/2 are on one physical disk: they fail together, so a stripe on both is not redundant</div>
       </div>
       <div class="cap-note">no chunk above the host cap</div>
       <div class="cap-note warn">11,840 chunks above the host cap (2 of 3 slots per host) · moving 340/min</div>
