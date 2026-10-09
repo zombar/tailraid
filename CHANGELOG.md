@@ -2,6 +2,13 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.0 (2026-10-09)
+
+### Changes
+
+- cli: join resolves a device name through the tailnet, and only serve opens log.file ([0e611b5](https://github.com/zombar/tailraid/commit/0e611b5))
+- cli: volume grow <disk> <size>|auto pins a disk's budget in the config and restarts the service ([2905a51](https://github.com/zombar/tailraid/commit/2905a51))
+
 ## v0.3.2 (2026-10-09)
 
 ### Changes
