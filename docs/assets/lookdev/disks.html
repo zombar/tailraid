@@ -222,6 +222,67 @@
   </div>
 </div>
   </section>
+  <div class="fixture">fixture D — long names: one line per target (dot, name, warning), the name shortened with … rather than wrapped, the data-dir tag underneath</div>
+  <section>
+<h2>Disks<span class="h-sub">survives 1 disk, 0 hosts · manual 1+1 · 2 hosts</span></h2>
+<div class="disks">
+  <div class="spread" role="img" aria-label="slot share of each target against its expected share">
+    <div class="spread-axis"><span>+25 %</span><span>expected</span><span>−25 %</span></div>
+    <div class="spread-plot">
+      <div class="spread-host">
+        <div class="spread-cols">
+          <div class="spread-col" title="jockey.local: +0.0 % of expected (11 of 11 slots)"><i class="up" style="height:0.0%"></i></div>
+          <div class="spread-col" title="jockey.local/1: +0.0 % of expected (11 of 11 slots)"><i class="up" style="height:0.0%"></i></div>
+        </div>
+        <div class="spread-label"><span class="dot ok"></span>jockey.local</div>
+      </div>
+      <div class="spread-host">
+        <div class="spread-cols">
+          <div class="spread-col" title="studio-mac-mini-upstairs.tail1234.ts.net: −9.1 % of expected (10 of 11 slots)"><i class="down" style="height:18.2%"></i></div>
+          <div class="spread-col" title="studio-mac-mini-upstairs.tail1234.ts.net/1: +9.1 % of expected (12 of 11 slots)"><i class="up" style="height:18.2%"></i></div>
+        </div>
+        <div class="spread-label"><span class="dot ok"></span>studio-mac-mini-upstairs.tail1234.ts.net</div>
+      </div>
+    </div>
+  </div>
+  <div class="cap-note">no chunk above the host cap (1 of 2 slots per host)</div>
+  <div class="host-row self">
+    <div class="name-row"><span class="dot ok"></span><span class="name">jockey.local</span><span class="host-sum">2 targets · 40.0 GiB</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
+    <div class="disk-strip">
+      <div class="disk" title="jockey.local: 11 slots, expected 11; 0.0 GiB used of 20.0 GiB">
+        <div class="disk-name"><span class="dot ok"></span><span class="n">jockey.local</span><span class="tag">data dir</span><span class="warn-icon" title="on the same physical disk as jockey.local/1: they fail together"></span></div>
+        <div class="bar"><i style="width:83%"></i><b class="tick" style="left:83%"></b></div>
+        <div class="disk-val dots"><span>11 slots</span><span>exp 11</span><span>+0.0 %</span></div>
+        <div class="disk-val"><span>0.0 GiB</span><span>of 20.0 GiB</span></div>
+      </div>
+      <div class="disk" title="jockey.local/1: 11 slots, expected 11; 0.0 GiB used of 20.0 GiB">
+        <div class="disk-name"><span class="dot ok"></span><span class="n">jockey.local/1</span><span class="warn-icon" title="on the same physical disk as jockey.local (data dir): they fail together"></span></div>
+        <div class="bar"><i style="width:83%"></i><b class="tick" style="left:83%"></b></div>
+        <div class="disk-val dots"><span>11 slots</span><span>exp 11</span><span>+0.0 %</span></div>
+        <div class="disk-val"><span>0.0 GiB</span><span>of 20.0 GiB</span></div>
+      </div>
+    </div>
+    <div class="host-note"><span class="warn-icon"></span>jockey.local (data dir) and jockey.local/1 are on one physical disk: they fail together, so data spread across them is not redundant</div>
+  </div>
+  <div class="host-row">
+    <div class="name-row"><span class="dot ok"></span><span class="name">studio-mac-mini-upstairs.tail1234.ts.net</span><span class="host-sum">2 targets · 40.0 GiB</span><span class="badges"><span class="badge strong">voter</span></span></div>
+    <div class="disk-strip">
+      <div class="disk" title="studio-mac-mini-upstairs.tail1234.ts.net: 10 slots, expected 11; 0.0 GiB used of 20.0 GiB">
+        <div class="disk-name"><span class="dot ok"></span><span class="n">studio-mac-mini-upstairs.tail1234.ts.net</span><span class="tag">data dir</span></div>
+        <div class="bar"><i style="width:76%"></i><b class="tick" style="left:83%"></b></div>
+        <div class="disk-val dots"><span>10 slots</span><span>exp 11</span><span>−9.1 %</span></div>
+        <div class="disk-val"><span>0.0 GiB</span><span>of 20.0 GiB</span></div>
+      </div>
+      <div class="disk" title="studio-mac-mini-upstairs.tail1234.ts.net/1: 12 slots, expected 11; 0.0 GiB used of 20.0 GiB">
+        <div class="disk-name"><span class="dot ok"></span><span class="n">studio-mac-mini-upstairs.tail1234.ts.net/1</span></div>
+        <div class="bar"><i style="width:91%"></i><b class="tick" style="left:83%"></b></div>
+        <div class="disk-val dots"><span>12 slots</span><span>exp 11</span><span>+9.1 %</span></div>
+        <div class="disk-val"><span>0.0 GiB</span><span>of 20.0 GiB</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+  </section>
   <div class="fixture">fixture C — a second host just joined: chunks written on atlas alone are above the host cap and moving</div>
   <section>
 <h2>Disks<span class="h-sub">survives 1 disk, 1 host · auto 2+1 · 2 hosts</span></h2>
