@@ -14,8 +14,8 @@ every mutating admin operation stays in the CLI.
   the repairer's last pass, the gateway's dirty bytes and WAL) polled every 5 s, plus a
   per-file drill-down from `admin.DescribeChunks`: each chunk's hash, (k,m), live slots and
   which node holds each shard. A **Disks** block under Volume draws the data spread
-  across targets: each host a row of disk cells sized by budget, each cell's slots against
-  its expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
+  across targets: each host a card with one row per disk, each row's slots against its
+  expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
   no added disk show one cell, their own store; the block is drawn whenever any host has
   more than one target.
 - **File browser**: list, stat, stream (HTTP Range), download, upload (`PUT`) and make
@@ -219,7 +219,7 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Upload row | `.upload` | queued (dim), uploading (bar), done `ok`, failed `bad` with the server's message |
 | Inline form | `.inline-form` | the new-folder input; Enter submits, Escape cancels |
 | Toast | `.toast` | `ok` / `bad`, bottom right, 6 s, click to dismiss, `aria-live="polite"` |
-| Disk strip | `.disks` > `.host-row` > `.disk` | one row per host (name, live dot, voter badge), its disks as cells whose widths follow their budgets (min 56 px); a cell holds the disk name, a slots bar with the expected-share tick and the used/budget text; `bad` dead (hatched track, `×`), `warn` draining, `off` closed (marker missing); `self` outlines the host row |
+| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), then the slot counts and used of budget; at ≤ 480 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
 | Slot cell | `.cell` | present (green), `warn` `!` live but absent, `bad` `×` dead, `unplaced` dashed, `unverified` 50 % |
 | Panel | `details.panel` | collapsed by default; summary names the count |
 | Empty / error | `.empty`, `.error` | "empty folder"; the error block quotes the server's `error` string and status |
