@@ -1,4 +1,4 @@
-# 12 — Operations: service install, logs, Windows portmap, fault injection, releases
+# 12 — Operations: service install, logs, the Windows mount, fault injection, releases
 
 What a device needs beyond the binary so that `tailraid serve` runs unattended, logs land
 somewhere, Windows can mount, a live cluster can be exercised by `tailraid verify
@@ -51,7 +51,7 @@ exit (non-zero) still restarts it.
 
 **Shutdown.** On SIGTERM or SIGINT a leader first transfers leadership to another voter
 (bounded by 5 s) and then stops Raft, so the rest of the cluster keeps committing
-without an election timeout; the NFS listener closes, the flusher's final flush runs
+without an election timeout; the NFS and SMB listeners close, the flusher's final flush runs
 (capped at 30 s), then the stores close. A second signal ends the process at once. The
 Windows handler reports a stop wait hint of 45 s and the unit's `TimeoutStopSec` is the
 same figure (I-123).
@@ -63,23 +63,11 @@ that fails for every dirty inode, a repair that fails for every chunk, a refused
 request per probe) are rate-limited to one line a minute per site with a `suppressed`
 count on the next line (I-124).
 
-## 2. Windows portmap stub
+## 2. Windows mount
 
-`mount.exe` has no port option: it asks the portmapper on 111 where MOUNT (100005 v3)
-and NFS (100003 v3) live. On Windows `serve` therefore binds the gateway on
-`127.0.0.1:2049` and runs `internal/mount.Portmap` on `127.0.0.1:111`, TCP (record
-marking) and UDP, answering ONC RPC v2 program 100000 version 2:
-
-| Proc | Reply |
-|---|---|
-| 0 `NULL` | void |
-| 3 `GETPORT` | `2049` for prog ∈ {100003, 100005}, vers 3, prot TCP (6); `0` otherwise |
-| 4 `DUMP` | the two mappings |
-| other | `PROC_UNAVAIL` |
-
-Nothing else is implemented (no SET/UNSET, no v3/v4 rpcbind). The stub is loopback-only
-and refuses any other bind address. It is compiled on every OS so its tests run everywhere;
-`serve` starts it only on Windows.
+Windows mounts the SMB gateway (docs/15): `tailraid mount T:` runs `net use` with the
+gateway's port, which needs Windows 11 24H2 or newer. There is no portmapper and no NFS
+client to enable.
 
 ## 3. Fault injection on a live cluster (`dev.enabled`)
 
@@ -272,7 +260,6 @@ recovered nodes are two clusters.
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
-- **I-58** — The portmap stub answers `GETPORT` for programs 100003 and 100005 version 3 over TCP with the NFS gateway port and `0` for any other mapping, serves `NULL` and `DUMP`, answers `PROC_UNAVAIL` for other procedures, and binds loopback only.
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere.
 - **I-61** — `update` replaces the binary only with an artifact whose SHA-256 matches the `sha256sums.txt` of the same release and which reports that release's version when run; on any failure the running binary is untouched and no partial file is left in its directory; a release that is not newer than a semver build is applied only when named explicitly.
@@ -321,7 +308,6 @@ recovered nodes are two clusters.
 
 | ID | Tests |
 |---|---|
-| I-58 | `TestPortmap_GetportDumpNull`, `TestPortmap_RefusesNonLoopback` |
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |

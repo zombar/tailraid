@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"io"
@@ -31,11 +33,15 @@ type Config struct {
 		Raft int    `yaml:"raft"` // tailnet TCP port
 		RPC  int    `yaml:"rpc"`  // tailnet TCP port
 		Web  int    `yaml:"web"`  // tailnet TCP port of the browser UI (docs/13); 0 disables it
-		NFS  string `yaml:"nfs"`  // loopback host:port
+		NFS  string `yaml:"nfs"`  // loopback host:port of the NFS gateway (macOS, Linux; docs/07); "" disables it
+		SMB  string `yaml:"smb"`  // loopback host:port of the SMB gateway (Windows; docs/15); "" disables it
 	} `yaml:"listen"`
 	Mount struct {
 		Path string `yaml:"path"`
 	} `yaml:"mount"`
+	SMB struct {
+		Password string `yaml:"password"` // the share's password; init and join generate one when listen.smb is set (docs/15 §6)
+	} `yaml:"smb"`
 	Tailscale struct {
 		CLI string `yaml:"cli"` // path override for the tailscale binary
 	} `yaml:"tailscale"`
@@ -130,11 +136,35 @@ func Default() Config {
 	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
 	c.Mount.Path = filepath.Join(home, "TailRAID")
-	if runtime.GOOS == "windows" {
-		c.Listen.NFS = "127.0.0.1:2049"
+	if runtime.GOOS == "windows" { // Windows mounts over SMB (docs/15)
+		c.Listen.NFS = ""
+		c.Listen.SMB = DefaultSMBAddr
 		c.Mount.Path = "T:"
 	}
 	return c
+}
+
+// DefaultSMBAddr is the SMB gateway's loopback address: not 445, which Windows' own
+// Server service owns (docs/15 §1).
+const DefaultSMBAddr = "127.0.0.1:20445"
+
+// NewSMBPassword is a fresh share password: 24 base32 characters from 15 random bytes.
+func NewSMBPassword() string {
+	var b [15]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("config: crypto/rand: " + err.Error())
+	}
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:])
+}
+
+// EnsureSMBPassword generates the share password when the SMB gateway is enabled and the
+// config has none (init and join call it before saving); it reports whether it did.
+func (c *Config) EnsureSMBPassword() bool {
+	if c.Listen.SMB == "" || c.SMB.Password != "" {
+		return false
+	}
+	c.SMB.Password = NewSMBPassword()
+	return true
 }
 
 // Load reads a config file strictly (unknown keys are errors) over the defaults.
@@ -199,8 +229,8 @@ func (c Config) Validate() error {
 	if c.Node.DataDir == "" {
 		return errors.New("config: node.data_dir is required")
 	}
-	if c.Listen.NFS == "" {
-		return errors.New("config: listen.nfs is required")
+	if c.Listen.NFS == "" && c.Listen.SMB == "" {
+		return errors.New("config: one of listen.nfs or listen.smb is required")
 	}
 	seen := map[string]bool{}
 	for i, d := range c.Node.Disks {

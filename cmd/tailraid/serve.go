@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -59,6 +60,7 @@ func initCmd() *cobra.Command {
 			if _, _, err := policyFlags(k, m); err != nil {
 				return err
 			}
+			cfg.EnsureSMBPassword() // the share password, when this device serves SMB (docs/15 §6)
 			if err := config.Save(path, cfg); err != nil {
 				return err
 			}
@@ -180,7 +182,7 @@ func exitOnSecondSignal(ctx context.Context, w io.Writer) {
 func mountCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "mount [path]",
-		Short: "Mount the running gateway (uses the OS NFS client)",
+		Short: "Mount the running gateway (the OS NFS client on macOS and Linux, the SMB client on Windows)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, _, err := loadConfig(cmd)
@@ -196,11 +198,30 @@ func mountCmd() *cobra.Command {
 					return err
 				}
 			}
-			prog, margs, err := mount.Command(runtime.GOOS, cfg.Listen.NFS, target)
+			// NFS where it is served (macOS, Linux); the SMB gateway otherwise, which is
+			// Windows' only mount and an opt-in elsewhere (docs/15 §6)
+			if cfg.Listen.NFS != "" && runtime.GOOS != "windows" {
+				prog, margs, err := mount.Command(runtime.GOOS, cfg.Listen.NFS, target)
+				if err != nil {
+					return err
+				}
+				return mount.Run(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs)
+			}
+			if cfg.Listen.SMB == "" {
+				return errors.New("listen.smb is not set: Windows mounts over SMB (docs/15)")
+			}
+			if err := mount.CheckWindowsBuild(mount.WindowsBuild()); err != nil {
+				return err
+			}
+			prog, margs, err := mount.SMBCommand(runtime.GOOS, cfg.Listen.SMB, target)
 			if err != nil {
 				return err
 			}
-			return mount.Run(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs)
+			var stdin io.Reader // Windows' `net use … *` reads the password here; the others prompt
+			if runtime.GOOS == "windows" {
+				stdin = strings.NewReader(cfg.SMB.Password + "\r\n")
+			}
+			return mount.RunWithInput(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, stdin)
 		},
 	}
 }

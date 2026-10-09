@@ -149,9 +149,9 @@ mount:
   path: "T:"
 ```
 
-At least one gateway must be set. `listen.smb` requires `smb.password`; `init` and `join`
-generate one (24 base32 characters from `crypto/rand`) when the config has none and save
-it in the 0600 config file. The password is the SMB client's requirement, not a security
+At least one gateway must be set. `init` and `join` generate `smb.password` (24 base32
+characters from `crypto/rand`) when `listen.smb` is set and the config has none, and save
+it in the 0600 config file; `serve` refuses to start the SMB gateway without one. The password is the SMB client's requirement, not a security
 boundary of ours: the listener is loopback-only and the OS is the boundary (docs/08). It
 is never logged and never part of `status`; the `mount with` log line prints it as
 `<smb.password>`.

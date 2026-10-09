@@ -21,7 +21,7 @@ internal/nfsgw      go-nfs handler        internal/repair   GC, repair scanner, 
 internal/smbgw      SMB2 gateway (Windows): adapter over vfs for third_party/smb, the in-tree copy of go-filesystems/smb with the fixes docs/15 §2 lists
 internal/cluster    raft wiring, membership, liveness, forwarding
 internal/rpc        node HTTP RPC + WhoIs authorizer   internal/tailscale  CLI shell-out + Fake
-internal/config     YAML config           internal/mount    per-OS mount helpers, PMAP stub
+internal/config     YAML config           internal/mount    per-OS mount helpers (NFS; SMB via net use on Windows)
 internal/svc        service install       internal/admin    status/check/describe reports
 internal/dev        /dev/* endpoints, only with dev.enabled
 internal/webui      browser UI: Go handler over vfs + admin; src/ TypeScript (no framework), src/app.css, dist/app.js (esbuild, committed)

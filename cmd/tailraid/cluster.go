@@ -81,6 +81,7 @@ func joinCmd() *cobra.Command {
 				cfg.Node.Name = name
 			}
 			cfg.Node.Voter = voter
+			cfg.EnsureSMBPassword() // the share password, when this device serves SMB (docs/15 §6)
 			if err := config.Save(path, cfg); err != nil {
 				return err
 			}

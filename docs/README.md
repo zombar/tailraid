@@ -17,7 +17,7 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [09-testing-strategy.md](09-testing-strategy.md) | Invariant discipline, TDD workflow, seams, test pyramid, soak suite, CI |
 | [10-s3.md](10-s3.md) | *Deferred.* Our S3 implementation: API gateway over the vfs and remote S3 buckets as storage nodes |
 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Chunk and shard state machines, the event catalogue, transition cells `L-n` |
-| [12-operations.md](12-operations.md) | Service install per OS, log files, the Windows portmap stub, /dev fault injection for live soak runs, releases |
+| [12-operations.md](12-operations.md) | Service install per OS, log files, the Windows mount, /dev fault injection for live soak runs, releases |
 | [13-web-ui.md](13-web-ui.md) | Browser dashboard (balance, integrity) and file browser with media playback on a tailnet listener; same-user authorization; the style guide and lookdev |
 | [14-disks.md](14-disks.md) | Several disks per device: disks as placement targets, the host as failure domain, the host cap, host-aware policy |
 | [15-smb-gateway.md](15-smb-gateway.md) | SMB2 gateway for Windows: library, adapter over the vfs, case-insensitive names, password and `net use` mount, known gaps |

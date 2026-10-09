@@ -158,6 +158,7 @@ node:
     - path: /Volumes/Big/tailraid   # later ones need: tailraid node add-disk
 listen:
   web: 20482            # browser UI port; 0 turns it off
+  nfs: 127.0.0.1:20490  # NFS gateway (macOS, Linux); Windows serves SMB on 127.0.0.1:20445 instead
 mount:
   path: ~/TailRAID      # ~ is expanded
 repair:
