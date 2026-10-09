@@ -226,15 +226,35 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 	for _, n := range parity {
 		totalSlots += n
 	}
+	// expected shares by capacity, no target expecting more than one slot per chunk (I-9):
+	// a big target cannot take a second slot of a stripe, so the rest goes to the others
+	allShare, voterShare := map[int]float64{}, map[int]float64{}
+	{
+		var all, vot []TargetSample
+		var allIdx, votIdx []int
+		for idx, info := range nodes {
+			all = append(all, TargetSample{Capacity: info.cap, Slots: data[idx] + parity[idx], Active: true, Live: true})
+			allIdx = append(allIdx, idx)
+			if info.voter {
+				vot = append(vot, TargetSample{Capacity: info.cap, Slots: data[idx], Active: true, Live: true})
+				votIdx = append(votIdx, idx)
+			}
+		}
+		for i, e := range expectedShares(all, len(reps)) {
+			allShare[allIdx[i]] = e
+		}
+		for i, e := range expectedShares(vot, len(reps)) {
+			voterShare[votIdx[i]] = e
+		}
+	}
 	for idx, info := range nodes {
 		if capAll > 0 {
-			share := float64(totalSlots) * float64(info.cap) / float64(capAll)
-			attrs[info.name] = fmt.Sprintf("%d/%d/%.0f", data[idx], parity[idx], share)
+			attrs[info.name] = fmt.Sprintf("%d/%d/%.0f", data[idx], parity[idx], allShare[idx])
 		}
 		if !info.voter || capVoters == 0 {
 			continue
 		}
-		want := float64(totalData) * float64(info.cap) / float64(capVoters)
+		want := voterShare[idx]
 		margin := max(0.1*want, 3*math.Sqrt(want))
 		if got := float64(data[idx]); math.Abs(got-want) > margin {
 			balanced = false

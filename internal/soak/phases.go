@@ -840,8 +840,8 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		r.checkAt("I-12 I-15 L-173", fmt.Sprintf("corpus exact under %d+%d", pol[0], pol[1]), bad == 0, first, first, "", gw.Name)
 	}
 	// drain the last node (needs a spare), then put it back
-	if active <= int(k0)+int(m0) {
-		r.event("note", "drain skipped: no spare node beyond k+m")
+	if active <= int(k0)+int(m0) || len(r.nodes) < 2 {
+		r.event("note", "drain skipped: no spare node beyond k+m, or no node besides the gateway")
 		return nil
 	}
 	victim := r.nodes[len(r.nodes)-1]
