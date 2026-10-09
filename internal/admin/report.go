@@ -140,9 +140,12 @@ type Report struct {
 	Repair      *RepairStatus  `json:"repair,omitempty"`
 	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
 	Process     *ProcessReport `json:"process,omitempty"` // this node's runtime (docs/12 §8)
-	Machine     *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
-	WebURL      string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
-	GeneratedAt time.Time      `json:"generated_at"`
+	// IncompatibleEntries counts log entries this binary could not decode: a newer release
+	// is writing to the cluster and this node must be updated (docs/12 §6, I-105).
+	IncompatibleEntries uint64         `json:"incompatible_entries,omitempty"`
+	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
+	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
+	GeneratedAt         time.Time      `json:"generated_at"`
 }
 
 // RepairStatus is the leader's last scan (nil on followers).
@@ -163,6 +166,10 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		rep.LastContact = h.LastContact.Round(time.Millisecond).String()
 	}
 	rep.JoinToken = st.Meta().JoinToken
+	rep.IncompatibleEntries = st.Incompatible()
+	if rep.IncompatibleEntries > 0 {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("%d log entries from a newer release could not be decoded: update this node", rep.IncompatibleEntries))
+	}
 
 	vol := st.Volume()
 	stats := st.Stats()

@@ -470,7 +470,7 @@ func TestMembersBadSlotHealthStatus(t *testing.T) {
 		t.Fatalf("bad slots %+v", e.bad)
 	}
 	h, err := c.Health(ctx, e.addr)
-	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() {
+	if err != nil || h.NodeID != "n1" || !h.Leader || h.Capacity != 1<<30 || h.Applied != e.app.AppliedIndex() || h.Codec != meta.CodecVersion {
 		t.Fatalf("health %+v %v", h, err)
 	}
 	st, err := c.Call(ctx, e.addr, http.MethodGet, "/v1/status", nil)

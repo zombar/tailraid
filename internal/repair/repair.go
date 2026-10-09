@@ -414,9 +414,15 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			return outcome{bytes: moved}, nil // nothing placeable improved; nothing to commit (L-185)
 		}
 	}
-	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace}})
+	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace, Expect: c.Placement}})
 	if err == nil {
 		err = res.Err
+	}
+	if errors.Is(err, meta.ErrConflict) {
+		// re-placed by a flush or a drain since this pass read it (I-102): the next pass
+		// plans from the new placement; the shards just put are orphans the sweep clears
+		r.log.Info("placement changed under repair, skipping this pass", "chunk", fmt.Sprintf("%x", c.Hash[:8]))
+		return outcome{bytes: moved}, nil
 	}
 	if err != nil {
 		return outcome{bytes: moved}, fmt.Errorf("set placement: %w", err)

@@ -165,15 +165,27 @@ settable here; truncation is a `Commit`.
 
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
-to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy. The
-Raft index of the applied `SetPlacement` (or `GCDelete`) is the fence carried by the shard
-`DELETE` RPC ([06](06-gc-and-repair.md)).
+to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy.
+`Expect` is the placement the proposer planned from: the command applies only if the
+chunk still has it, else `ErrConflict` (I-102, L-197), so a flush filling slots, a repair
+pass and a `--force` removal zeroing slots cannot silently undo each other; the loser
+re-plans from the current placement or skips the chunk for this pass. The Raft index of
+the applied `SetPlacement` (or `GCDelete`) is the fence carried by the shard `DELETE` RPC
+([06](06-gc-and-repair.md)).
 
 **GCDelete.** For every chunk in `Tombs` with `TombstonedAt < Before` (and `Refs == 0`,
-which `Tombs` guarantees): delete it from `Chunks` and `Tombs` and append
-`GCVictim{Hash, Placement}` to `Result.Victims`. The leader then deletes the shards.
-Deterministic because `Before` is in the command and the victim list is emitted in hash
-order.
+which `Tombs` guarantees), in hash order and at most `Limit` of them (I-103; `0` is
+unbounded): delete it from `Chunks` and `Tombs` and append `GCVictim{Hash, Placement}` to
+`Result.Victims`. The leader then deletes the shards and proposes again while a batch
+comes back full. Deterministic because `Before` and `Limit` are in the command and the
+victim list is emitted in hash order.
+
+**Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
+disk or host) or 3 (`SetPlacement.Expect`, `GCDelete.Limit`), snapshots in version 3;
+every reader decodes every older version. `meta.CodecVersion` is the newest a binary
+writes; `/health` reports it and `join` refuses a cluster that reports a newer one
+(I-105, [12](12-operations.md) §6). An entry a binary cannot decode still advances its
+applied index (so replicas stay aligned) and is counted and logged (I-105).
 
 **Idempotency.** Raft may re-deliver entries on restore; `Apply` is pure with respect to the
 log so re-applying from a snapshot's index yields the same state (I-5).
@@ -338,6 +350,20 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-99** — A node that fails to open or bootstrap releases its Raft listener and its
   stores before returning the error, so the same data directory and address can be
   opened again at once.
+- **I-102** — A `SetPlacement` whose `Expect` differs from the chunk's current placement
+  is rejected with `ErrConflict` and changes nothing, so two proposers that planned from
+  different placements never overwrite each other's slots unnoticed.
+- **I-103** — A `GCDelete` removes at most `Limit` entries, the lowest hashes first, and
+  the GC worker proposes again while a batch comes back full, so a backlog of any size
+  drains in bounded applies and every replica removes the same entries per entry.
+- **I-104** — A snapshot is a deep copy of the mutable state taken under the read lock,
+  and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
+  `Commit` applied after the snapshot never changes it, and a snapshot is written and read
+  as a stream, never held whole in memory a second time.
+- **I-105** — A log entry this binary cannot decode is counted (`status` shows
+  `incompatible_entries` and a warning) and logged, while the applied index advances as on
+  every replica; `/health` reports `meta.CodecVersion`, and `join` refuses a cluster whose
+  node reports a newer one.
 - **I-95** — A proposal that may have been applied (leadership lost, timeout, cancelled
   while pending, transport error, or the leader's `500`) is reported as
   `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
@@ -358,6 +384,10 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
 | I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext` |
 | I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
+| I-102 | `TestFSM_SetPlacement_ExpectConflict`, `TestEncodeCommand_Golden` |
+| I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
+| I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |
+| I-105 | `TestFSM_IncompatibleEntryCounted`, `TestCodecCompatible`, `TestMembersBadSlotHealthStatus` |
 | I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |

@@ -116,6 +116,16 @@ var goldenCommands = []struct {
 		Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: -1}},
 		"01 0d ffffffffffffffff",
 	},
+	{
+		"SetPlacementExpect", // codec version 3: the placement the proposer planned from (I-102)
+		Command{Op: OpSetPlacement, SetPlacement: &SetPlacement{Hash: sampleHash(0xbb), Placement: []NodeIdx{1, 0, 3}, Expect: []NodeIdx{2, 0, 3}, K: 2, M: 1}},
+		"03 0c " + repeatHex(0xbb, 32) + " 03 0100 0000 0300 03 0200 0000 0300 02 01",
+	},
+	{
+		"GCDeleteLimit", // codec version 3: at most this many victims (I-103)
+		Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: -1, Limit: 1024}},
+		"03 0d ffffffffffffffff 00040000",
+	},
 }
 
 // Invariant: I-22

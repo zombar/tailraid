@@ -18,7 +18,40 @@ const (
 
 var errShort = errors.New("meta: truncated input")
 
-type writer struct{ b []byte }
+type writer struct {
+	b   []byte
+	out io.Writer // when set, spill() hands full buffers to it (snapshots, I-104)
+	err error
+}
+
+// spillAt is the buffer size at which a streaming writer hands bytes to its sink.
+const spillAt = 1 << 20
+
+// spill writes the buffer to out when it is large; the state codec calls it after each
+// record so a snapshot of a million chunks never sits in memory twice.
+func (w *writer) spill() {
+	if w.out == nil || w.err != nil || len(w.b) < spillAt {
+		return
+	}
+	if _, err := w.out.Write(w.b); err != nil {
+		w.err = err
+	}
+	w.b = w.b[:0]
+}
+
+// flush writes whatever is buffered to out.
+func (w *writer) flush() error {
+	if w.err != nil {
+		return w.err
+	}
+	if w.out != nil && len(w.b) > 0 {
+		if _, err := w.out.Write(w.b); err != nil {
+			return err
+		}
+		w.b = w.b[:0]
+	}
+	return nil
+}
 
 func (w *writer) u8(v uint8)   { w.b = append(w.b, v) }
 func (w *writer) u16(v uint16) { w.b = binary.LittleEndian.AppendUint16(w.b, v) }
@@ -54,6 +87,33 @@ type reader struct {
 	b   []byte
 	pos int
 	err error
+	src io.Reader // when set, fill() pulls more bytes as take() needs them (snapshots)
+}
+
+// fill makes at least n bytes available from pos when a source is set, compacting the
+// consumed prefix first. At end of input fewer bytes stay available and take() reports
+// errShort as before.
+func (r *reader) fill(n int) {
+	if r.src == nil || r.err != nil || r.pos+n <= len(r.b) {
+		return
+	}
+	rem := copy(r.b, r.b[r.pos:])
+	r.b, r.pos = r.b[:rem], 0
+	for len(r.b) < n {
+		if cap(r.b) < n {
+			nb := make([]byte, len(r.b), max(n, 2*cap(r.b), 64<<10))
+			copy(nb, r.b)
+			r.b = nb
+		}
+		m, err := r.src.Read(r.b[len(r.b):cap(r.b)])
+		r.b = r.b[:len(r.b)+m]
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				r.fail(fmt.Errorf("meta: read: %w", err))
+			}
+			return
+		}
+	}
 }
 
 func (r *reader) fail(err error) {
@@ -65,6 +125,9 @@ func (r *reader) fail(err error) {
 func (r *reader) take(n int) []byte {
 	if r.err != nil {
 		return nil
+	}
+	if n >= 0 {
+		r.fill(n)
 	}
 	if n < 0 || r.pos+n > len(r.b) {
 		r.fail(errShort)
@@ -111,6 +174,7 @@ func (r *reader) uvarint() uint64 {
 	if r.err != nil {
 		return 0
 	}
+	r.fill(binary.MaxVarintLen64)
 	v, n := binary.Uvarint(r.b[r.pos:])
 	if n <= 0 {
 		r.fail(fmt.Errorf("meta: bad uvarint"))
@@ -130,6 +194,9 @@ func (r *reader) length(limit int) int {
 	n := r.uvarint()
 	if r.err != nil {
 		return 0
+	}
+	if n <= uint64(limit) {
+		r.fill(int(n)) // a streaming source: the bytes must be there, not merely buffered
 	}
 	if n > uint64(limit) || n > uint64(len(r.b)-r.pos) {
 		r.fail(fmt.Errorf("meta: length %d out of range", n))
@@ -182,6 +249,7 @@ func (r *reader) done() error {
 	if r.err != nil {
 		return r.err
 	}
+	r.fill(1) // a source: is there anything after the last record?
 	if r.pos != len(r.b) {
 		return fmt.Errorf("meta: %d trailing bytes", len(r.b)-r.pos)
 	}

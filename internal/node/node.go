@@ -767,6 +767,9 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	} else {
 		return rpc.JoinResponse{}, fmt.Errorf("bad cluster id from %s", target)
 	}
+	if err := codecCompatible(h.Codec); err != nil {
+		return rpc.JoinResponse{}, err
+	}
 	raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 	// the transport accepts the leader's Raft connection only from a member (I-92); the
 	// joiner's own table is empty until the log arrives, so the join response seeds it
@@ -815,6 +818,16 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 		log.Warn("joined, but the log has not fully replicated yet; serve will finish it", "err", err)
 	}
 	return resp, nil
+}
+
+// codecCompatible refuses to join a cluster whose node writes a newer log and snapshot
+// format than this binary reads (docs/12 §6, I-105): every entry it sent would be
+// undecodable here. A target that reports no codec predates the field and is older.
+func codecCompatible(leader uint8) error {
+	if leader > meta.CodecVersion {
+		return fmt.Errorf("the cluster writes codec version %d and this binary reads up to %d: update this node first (tailraid update)", leader, meta.CodecVersion)
+	}
+	return nil
 }
 
 func decodeHex(s string) ([]byte, error) {

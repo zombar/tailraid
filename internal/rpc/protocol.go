@@ -43,6 +43,7 @@ type Health struct {
 	ClusterID string       `json:"cluster_id"`
 	Version   string       `json:"version"`
 	Applied   uint64       `json:"applied"`
+	Codec     uint8        `json:"codec,omitempty"` // meta.CodecVersion of this binary (docs/12 §6)
 	Leader    bool         `json:"leader"`
 	Used      int64        `json:"used"`
 	Capacity  int64        `json:"capacity"`

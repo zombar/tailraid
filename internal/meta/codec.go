@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -26,7 +27,7 @@ func EncodeState(wr io.Writer, s *State) error { return encodeStateVersion(wr, s
 // ever written in production, and the older ones exist so the decoder's compatibility
 // paths are tested against real bytes.
 func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
-	w := &writer{b: make([]byte, 0, 1024)}
+	w := &writer{b: make([]byte, 0, 64<<10), out: wr}
 	w.b = append(w.b, stateMagic...)
 	w.u8(version)
 	w.u64(s.Applied)
@@ -52,6 +53,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 	w.uvarint(uint64(len(nodeIdx)))
 	for _, idx := range nodeIdx {
 		writeNode(w, s.Nodes[NodeIdx(idx)], version >= stateVersion)
+		w.spill()
 	}
 
 	hashes := make([]Hash, 0, len(s.Chunks))
@@ -69,6 +71,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.u32(c.Refs)
 		w.nodeIdxs(c.Placement)
 		w.i64(c.TombstonedAt)
+		w.spill()
 	}
 
 	inos := make([]uint64, 0, len(s.Inodes))
@@ -115,20 +118,16 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		default:
 			return fmt.Errorf("meta: inode %d has invalid type %d", in.Ino, in.Type)
 		}
+		w.spill()
 	}
-	_, err := wr.Write(w.b)
-	return err
+	return w.flush()
 }
 
 // DecodeState parses a snapshot written by EncodeState. It rejects unknown versions,
 // truncation, trailing bytes, and structurally invalid states (HashZero chunk entries,
 // invalid inode types, non-canonical order).
 func DecodeState(rd io.Reader) (*State, error) {
-	b, err := readAll(rd)
-	if err != nil {
-		return nil, err
-	}
-	r := &reader{b: b}
+	r := &reader{src: bufio.NewReaderSize(rd, 1<<20)} // streamed: never the whole snapshot in memory at once (I-104)
 	if !bytes.Equal(r.take(4), stateMagic) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}

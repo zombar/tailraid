@@ -426,6 +426,7 @@ func OpenFresh(o Options) (*Node, error) {
 func start(o Options, st *stores, trans raft.Transport) (*Node, error) {
 	log, logOutput := o.logger()
 	fsm := meta.NewFSM()
+	fsm.Log = log
 	r, err := raft.NewRaft(o.raftConfig(logOutput), fsm, st.logs, st.stable, st.snaps, trans)
 	if err != nil {
 		st.close()

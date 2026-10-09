@@ -734,7 +734,7 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c me
 	if err := f.upload(ctx, w, data, keep); err != nil {
 		return err
 	}
-	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place}})
+	res, index, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: w.hash, K: w.k, M: w.m, Placement: w.place, Expect: c.Placement}})
 	if err != nil {
 		return fmt.Errorf("propose set-placement: %w", err)
 	}

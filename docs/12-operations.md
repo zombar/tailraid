@@ -132,8 +132,11 @@ release artifact (`internal/update`):
 
 ## 6. Mixed versions
 
-Log entries carry codec version 1 and snapshots version 2 (01; a version-1 snapshot is
-still read). A release that adds a rule the FSM enforces (a name longer than 255 bytes, a
+Log entries carry codec version 1, 2 or 3 and snapshots version 3 (02 §Codec versions;
+every older version is still read). `/health` reports the newest version a node writes
+(`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
+node that meets an entry it cannot decode counts it (`status` shows
+`incompatible_entries` and a warning) and logs it once a minute (I-105). A release that adds a rule the FSM enforces (a name longer than 255 bytes, a
 chunk size above 64 MiB, a Commit past `MaxFileSize`), an op (`SetVolumeMode`, 02) or a
 snapshot field can reject what an older node wrote or sends, so upgrade every node
 (`tailraid update`, §5) before relying on the new feature; every such rule is also checked

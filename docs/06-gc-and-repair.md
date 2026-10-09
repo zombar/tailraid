@@ -43,7 +43,9 @@ func (g *GC) RunOnce(ctx context.Context) (deleted int, err error)
 ```
 
 Every `gc_interval` (default 10 min) the leader proposes
-`GCDelete{Before: fsmNow − grace}` with `grace = 10 min`, where `fsmNow = max(leader wall
+`GCDelete{Before: fsmNow − grace, Limit: 1024}` (and again while a batch comes back
+full, I-103: after an `rm -rf` of terabytes the FSM lock is held for 1024 entries at a
+time, never for all of them) with `grace = 10 min`, where `fsmNow = max(leader wall
 clock, State.LastNow)`: the leader's clock clamped by the FSM clock (02), the same clock that
 stamped every `TombstonedAt`. A leader whose clock lags the proposers therefore never stalls
 GC, and `Before` never goes backwards across leader changes. A leader whose clock runs ahead

@@ -284,7 +284,11 @@ func (n *Node) zeroSlots(idx meta.NodeIdx, propose func(meta.Command) error) err
 				place[i] = 0
 			}
 		}
-		if err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place}}); err != nil {
+		err := propose(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place, Expect: c.Placement}})
+		if errors.Is(err, meta.ErrConflict) {
+			continue // re-placed meanwhile (I-102): whatever landed no longer names idx, or the repairer will see it
+		}
+		if err != nil {
 			return fmt.Errorf("zero slots of %x: %w", c.Hash[:8], err)
 		}
 	}

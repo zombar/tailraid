@@ -148,6 +148,8 @@ for a member. No TLS of our own.
 | **Through streaming large files (measured 2026-10-09)** | **≈ 20.5k** |
 | Several disks per device (docs/14, measured 2026-10-09: node disk set, marker and per-target budgets 0.44k, meta placement, policy, skew and codec 0.37k, CLI 0.15k, rpc and prober 0.2k, soak phase 13, targets and the spread chart 0.7k; the TypeScript Disks block 0.2k, not Go; the plan said 0.8k: the soak and the node's disk lifecycle were sized optimistically) | +1.9k |
 | **Through several disks per device (measured 2026-10-09)** | **≈ 22.4k** |
+| The 2026-10 review, correctness (PR 2, measured 2026-10-09 as the net diff): the Raft accept check and join binding 0.15k, unknown-outcome resolution 0.1k, identity files, body deadlines and cache races 0.15k, WAL failure state, streamed snapshots and the tracked NFS listener 0.2k, placement conflicts, GC batches and codec version 3 0.15k; minus the removed `Place`, wrappers and dead code | +0.8k |
+| **Through the correctness review (measured 2026-10-09)** | **≈ 23.2k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
