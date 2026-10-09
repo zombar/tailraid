@@ -56,6 +56,11 @@ Rules that keep it honest:
   defines is used. The `commit-msg` hook requires the `scope: subject` form that
   `scripts/changelog.sh` groups by; `pre-push` runs `make vuln`.
 - No coverage gate. `make test` prints per-package coverage so regressions are visible.
+- A cited test never skips unconditionally: `check-invariants.sh` refuses a `t.Skip` at
+  the top level of a test body outside `test/invariants`, so an invariant cannot count as
+  covered by a test that proves nothing; a skip inside a condition (`-short`, an OS, a
+  missing tool) is fine, and a test whose precondition depends on a hash vector writes
+  until the precondition holds instead of skipping.
 - Review checklist (also in `CLAUDE.md`): every write-path test includes a non-zero offset;
   every size-bounded path has a `{0, 1, max−1, max, max+1}` table; every "same answer on
   every node" function has an N-node determinism test; every error path returns a typed
@@ -107,7 +112,7 @@ rename table (`over file`, `over empty dir`, `over non-empty dir`, `into own sub
 `TestFSM_RefCountNeverUnderflows`;
 `TestFSM_SetVolume_PolicyVersionBumps`; invariant checker used by every FSM test
 (Σrefs = references from inodes, `len(Chunks) == ceil(Size/CS)`, parent chains reach root,
-`Tombs ⇔ Refs==0`); `FuzzDecodeCommand`.
+`Tombs ⇔ Refs==0`); `FuzzDecodeCommand`, `FuzzDecodeHandle`. Every parsing surface has a fuzz target (`make fuzz` runs them all for 30 s each): commands, snapshots, placement, shard keys and headers, NFS handles, the WAL (`FuzzWALReplay`), the release checksum file (`FuzzParseSums`).
 
 **`internal/meta` placement** — `TestPlace_DeterministicAcrossNodes` (7 instances, shuffled
 candidate order, 10k hashes → identical); `TestPlace_DistinctNodes`;
@@ -259,7 +264,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
   uses the device's tailnet IP. Non-destructive by default: transfer, integrity across every
   node's FSM hash, churn, dedup and GC, repair backlog; the only thing a non-destructive
-  run changes is the files under its own directory (I-108). `--destructive` adds corruption
+  run changes is the files under its own directory (I-113). `--destructive` adds corruption
   (`/dev/corrupt`, needs `dev.enabled` on the targets) and the steps that change the
   cluster itself (`Caps.Mutate`: policy changes, drains and removals, a disk fill);
   `--destructive --restarts` declares
@@ -321,14 +326,14 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
 - **Driver rules.** A phase runs in its own goroutine under the profile's `PhaseTimeout`
   (20 min in the quick profile; 0 is no limit): a phase that panics or overruns is one
   failed "phase completed" check with the driver's stack or every node's goroutine dump
-  behind it, and the run continues with the next phase (I-106). A phase that recorded no
+  behind it, and the run continues with the next phase (I-111). A phase that recorded no
   check and did not skip fails too: silence is not a pass. A check that could not be
   measured (no sample landed, the gateway reports no WAL cap, the file is too small to
   judge a spread, a victim never answered) is recorded `skipped` with its reason, counts
-  as neither pass nor fail and covers nothing (I-109). Every phase that kills, cuts,
+  as neither pass nor fail and covers nothing (I-114). Every phase that kills, cuts,
   drains, fills or re-pins registers the restore with an `undo` list and runs whatever it
   did not get to on its way out, on a context that outlives a cancellation, so a failed,
-  timed-out or interrupted phase leaves the cluster as it found it (I-107). `Execute`
+  timed-out or interrupted phase leaves the cluster as it found it (I-112). `Execute`
   always returns a summary: a run that stops before its first phase (no node, no status,
   no gateway, the run directory refused) or is cancelled between phases carries
   `Aborted` and the phases it never reached as *NOT RUN*, the report renders with an
@@ -384,18 +389,18 @@ from `go.mod`.
 The soak driver's own rules (§6 "Driver rules"); the phases cite the invariants of the
 components they exercise.
 
-- **I-106** — A phase that panics or runs past `PhaseTimeout` is recorded as one failed
+- **I-111** — A phase that panics or runs past `PhaseTimeout` is recorded as one failed
   check of that phase, with the driver's stack or every node's goroutine dump as a dump
   record, and the run continues with the next phase; a phase that records no check and
   does not skip is failed as well.
-- **I-107** — Every change a phase makes to the cluster (a killed node, a cut, a drained
+- **I-112** — Every change a phase makes to the cluster (a killed node, a cut, a drained
   or removed member, a filled disk, a policy change) is restored before the phase's result
   is recorded, whether the phase completed, failed, panicked, timed out or was cancelled,
   on a context that outlives the cancellation.
-- **I-108** — A live run without `--destructive` changes nothing but the files under its
+- **I-113** — A live run without `--destructive` changes nothing but the files under its
   own run directory: no policy change, drain, removal, fill, corruption, kill or cut is
   issued, and each such step is recorded skipped with its reason.
-- **I-109** — A check that could not be measured is recorded skipped with its reason and
+- **I-114** — A check that could not be measured is recorded skipped with its reason and
   counts as neither pass nor fail; a run that stops before or between phases returns a
   summary with the reason and the unreached phases as not run, and the report renders it
   with an `ABORTED` verdict, never `PASS`.
@@ -404,7 +409,7 @@ components they exercise.
 
 | Invariant | Tests |
 |---|---|
-| I-106 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
-| I-107 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores` |
-| I-108 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
-| I-109 | `TestExecute_AbortBeforePhases`, `TestExecute_CancelMarksNotRun`, `TestRender_ZeroPhasesAborted`, `TestRender_NotRunPhases`, `TestSummary_SkippedCheckCoversNothing` |
+| I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
+| I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores` |
+| I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
+| I-114 | `TestExecute_AbortBeforePhases`, `TestExecute_CancelMarksNotRun`, `TestRender_ZeroPhasesAborted`, `TestRender_NotRunPhases`, `TestSummary_SkippedCheckCoversNothing` |

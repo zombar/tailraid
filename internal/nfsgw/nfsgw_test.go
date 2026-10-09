@@ -435,16 +435,21 @@ func TestNFS_ReadDirPlusLargeDirectory(t *testing.T) {
 	if _, err := g.tgt.Mkdir("/big", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The client library re-reads the whole directory on every lookup, so keep the short
-	// run small; 300 entries still spans several READDIRPLUS pages.
+	// The client library re-reads the whole directory on every lookup, so the short run
+	// creates 300 entries through it (several READDIRPLUS pages); the long run adds
+	// entries straight into the FSM up to 100k and lists them all through the wire.
 	n := 300
-	if !testing.Short() {
-		n = 5000
-	}
 	for i := range n {
 		if _, err := g.tgt.Create(fmt.Sprintf("/big/f%04d", i), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if !testing.Short() {
+		dir := g.f.InodeOf(g.f.FS(), "/big")
+		for i := n; i < 100_000; i++ {
+			g.f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: dir, Name: fmt.Sprintf("f%06d", i), Type: meta.TFile, Mode: 0o644, Now: 1}})
+		}
+		n = 100_000
 	}
 	ents, err := g.tgt.ReadDirPlus("/big")
 	if err != nil {

@@ -41,7 +41,7 @@ func TestLiveEnv_HoldDownRules(t *testing.T) {
 // A live run's capabilities follow its flags: nothing destructive without --destructive,
 // and no kill, restart or partition without --restarts as well.
 //
-// Invariant: I-108
+// Invariant: I-113
 func TestLiveEnv_CapsFollowFlags(t *testing.T) {
 	for _, c := range []struct {
 		destructive, restarts bool

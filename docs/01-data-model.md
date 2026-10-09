@@ -292,6 +292,11 @@ tick registers the new value with the cluster.
 - **I-66** — A directory entry name is 1 to `MaxNameLen` (255) bytes and contains neither
   `/` nor NUL; `Create`, `Mkdir`, `Symlink` and `Rename` reject anything else before touching
   state (`ErrNameTooLong` → `ENAMETOOLONG` / `NFS3ERR_NAMETOOLONG`, otherwise `ErrBadCommand`).
+- **I-115** — The path of any entry from the root (`/a/b` is 4 bytes) is at most
+  `MaxPathLen` (4096) bytes: `Create`, `Mkdir` and `Rename` refuse an entry whose own path
+  would be longer with `ErrNameTooLong`, computed from the FSM's parent chain so every
+  node decides alike; the bound is on the entry a command names, not on the descendants
+  of a renamed directory. Depth alone is unbounded (a thousand levels resolve).
 
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
@@ -314,3 +319,4 @@ defined in `04-write-path-and-durability.md`.
 | I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
 | I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestBudget_PinnedOrDerived`, `TestConfig_CapacityAuto`, `TestNode_Rebudget_PinnedChangeRegistered` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
+| I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |

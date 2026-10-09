@@ -198,7 +198,7 @@ and disk charts for the sampled node, with peaks in the totals table.
 | I-58 | `TestPortmap_GetportDumpNull`, `TestPortmap_RefusesNonLoopback` |
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
-| I-61 | `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
+| I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |

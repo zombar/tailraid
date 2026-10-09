@@ -171,7 +171,7 @@ func okPhase(name string) Phase {
 // A phase that panics is one failed "phase completed" check with the driver's stack as a
 // dump; the next phase still runs and the run returns a summary, not a dead driver.
 //
-// Invariant: I-106
+// Invariant: I-111
 func TestExecute_PhasePanicIsFailure(t *testing.T) {
 	e := newFakeEnv(1)
 	var out bytes.Buffer
@@ -208,7 +208,7 @@ func TestExecute_PhasePanicIsFailure(t *testing.T) {
 // A phase that runs past PhaseTimeout is failed with every node's goroutine dump, its
 // context is cancelled and the run moves on.
 //
-// Invariant: I-106
+// Invariant: I-111
 func TestExecute_PhaseTimeoutIsFailure(t *testing.T) {
 	e := newFakeEnv(2)
 	var out bytes.Buffer
@@ -250,7 +250,7 @@ func TestExecute_PhaseTimeoutIsFailure(t *testing.T) {
 // A phase that returns without recording a check and without skipping is a failure: a
 // phase that asserted nothing has not passed. A skipped phase is not.
 //
-// Invariant: I-106
+// Invariant: I-111
 func TestExecute_SilentPhaseFails(t *testing.T) {
 	e := newFakeEnv(1)
 	var out bytes.Buffer
@@ -272,7 +272,7 @@ func TestExecute_SilentPhaseFails(t *testing.T) {
 // A run that cannot start (status fails) returns a summary with the reason and no
 // phases, and the error; the report of that summary is ABORTED.
 //
-// Invariant: I-109
+// Invariant: I-114
 func TestExecute_AbortBeforePhases(t *testing.T) {
 	e := newFakeEnv(1)
 	e.statusErr = errors.New("connection refused")
@@ -297,7 +297,7 @@ func TestExecute_AbortBeforePhases(t *testing.T) {
 // A run cancelled during a phase stops after it: the phases it never reached are NOT RUN,
 // the summary says why, the run directory is still removed and Execute returns an error.
 //
-// Invariant: I-109
+// Invariant: I-114
 func TestExecute_CancelMarksNotRun(t *testing.T) {
 	e := newFakeEnv(1)
 	var out bytes.Buffer
@@ -335,7 +335,7 @@ func TestExecute_CancelMarksNotRun(t *testing.T) {
 // A phase interrupted after it killed a node still starts it again, on a context that
 // outlives the cancellation.
 //
-// Invariant: I-107
+// Invariant: I-112
 func TestExecute_CancelledPhaseRestores(t *testing.T) {
 	e := newFakeEnv(2)
 	var out bytes.Buffer
@@ -365,7 +365,7 @@ func TestExecute_CancelledPhaseRestores(t *testing.T) {
 // The undo list runs the steps the phase did not get to, in reverse order, skips the ones
 // marked done, and a failing step is noted while the rest still run.
 //
-// Invariant: I-107
+// Invariant: I-112
 func TestUndo_RunsRemainingStepsInReverse(t *testing.T) {
 	var out bytes.Buffer
 	r := &Run{Out: &out}
@@ -403,7 +403,7 @@ func TestUndo_RunsRemainingStepsInReverse(t *testing.T) {
 // automation phase records its policy and budget checks skipped: no policy change, drain,
 // fill or removal reaches the environment.
 //
-// Invariant: I-108
+// Invariant: I-113
 func TestPhases_MutatingStepsGated(t *testing.T) {
 	e := newFakeEnv(3)
 	e.caps = Caps{Corrupt: true, Kill: true, Partition: true, MultiGateway: true, Disks: true} // everything but Mutate

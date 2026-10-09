@@ -300,6 +300,18 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 
 // validName enforces I-66: a name is 1..MaxNameLen bytes, not "." or "..", and holds
 // neither '/' nor NUL. Too long is its own error so the gateway can say NAMETOOLONG.
+// pathLen is the byte length of the path a new entry name under dir would have, "/" and
+// the name included (I-115). A missing dir counts as the root; the caller reports it.
+func (a *applier) pathLen(dir Ino, name string) int {
+	n := 1 + len(name)
+	in, ok := a.st.Inodes[dir]
+	for steps := 0; ok && in.Ino != RootIno && steps <= len(a.st.Inodes); steps++ {
+		n += 1 + len(in.Name)
+		in, ok = a.st.Inodes[in.Parent]
+	}
+	return n
+}
+
 func validName(name string) error {
 	switch {
 	case len(name) > MaxNameLen:
@@ -342,6 +354,9 @@ func (a *applier) create(c *Create) (Result, error) {
 	if err := validName(c.Name); err != nil {
 		return Result{}, err
 	}
+	if a.pathLen(c.Parent, c.Name) > MaxPathLen {
+		return Result{}, ErrNameTooLong
+	}
 	if c.Type != TFile && c.Type != TSymlink {
 		return Result{}, ErrBadCommand
 	}
@@ -370,6 +385,9 @@ func (a *applier) mkdir(c *Mkdir) (Result, error) {
 	}
 	if err := validName(c.Name); err != nil {
 		return Result{}, err
+	}
+	if a.pathLen(c.Parent, c.Name) > MaxPathLen {
+		return Result{}, ErrNameTooLong
 	}
 	p, err := a.dir(c.Parent)
 	if err != nil {
@@ -527,6 +545,9 @@ func (a *applier) rename(c *Rename) error {
 	}
 	if err := validName(c.NewName); err != nil {
 		return err
+	}
+	if a.pathLen(c.NewParent, c.NewName) > MaxPathLen {
+		return ErrNameTooLong
 	}
 	st := a.st
 	op, err := a.dir(c.OldParent)

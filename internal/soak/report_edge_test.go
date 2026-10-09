@@ -14,7 +14,7 @@ import (
 // A summary with no phases and an abort reason renders as ABORTED with the reason, never
 // PASS: zero failed checks over zero phases is not a green run.
 //
-// Invariant: I-109
+// Invariant: I-114
 func TestRender_ZeroPhasesAborted(t *testing.T) {
 	for _, s := range []Summary{
 		{Aborted: "soak: status: no route to host"},
@@ -41,7 +41,7 @@ func TestRender_ZeroPhasesAborted(t *testing.T) {
 // Phases the run never reached are NOT RUN in the matrix: not skipped (that is a
 // capability the environment lacks), not passed, no duration.
 //
-// Invariant: I-109
+// Invariant: I-114
 func TestRender_NotRunPhases(t *testing.T) {
 	s := Summary{Aborted: "cancelled", Phases: []PhaseResult{
 		{Name: "1 baseline", Checks: []Record{{Kind: "check", Name: "ok", OK: new(true)}}, Took: time.Second},
@@ -63,7 +63,7 @@ func TestRender_NotRunPhases(t *testing.T) {
 // A skipped check is neither a pass nor a fail: it is not counted, it covers nothing, and
 // the matrix shows SKIPPED with the reason.
 //
-// Invariant: I-109
+// Invariant: I-114
 func TestSummary_SkippedCheckCoversNothing(t *testing.T) {
 	ph := PhaseResult{Name: "12 large file", Checks: []Record{
 		{Kind: "check", Name: "the WAL stayed within its cap", Cites: "I-80", Skip: true, Text: "no sample landed"},

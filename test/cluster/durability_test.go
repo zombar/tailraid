@@ -145,6 +145,7 @@ func TestDurability_AckImpliesReadableFromKSurvivors(t *testing.T) {
 		path := fmt.Sprintf("/f%02d", i)
 		c.WriteFile(gw, path, data) // ack + flush
 		c.Settle()
+		data = rmw(t, c, gw, path, data, int(testharness.ChunkSize)/2+i, testharness.Pattern(64, byte(i+1)))
 		// kill the gateway (m = 1 loss, and it may hold a slot); every survivor reads it cold
 		c.Kill(gw)
 		c.Clk.Advance(cluster.LiveThreshold + time.Second)

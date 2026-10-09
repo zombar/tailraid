@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -348,12 +349,15 @@ func TestRepair_DrainMovesAllSlotsBeforeRemove(t *testing.T) {
 	if leader.I == 3 {
 		drained = 2
 	}
+	for i := 0; leader.Node.SlotsHeldBy(c.Nodes[drained].Idx()) == 0; i++ { // never skip: more files until the node holds a slot
+		if i == 8 {
+			t.Fatal("placement avoided the node to be drained across twelve files")
+		}
+		c.WriteFile(0, fmt.Sprintf("/g%d", i), testharness.Pattern(int(testharness.ChunkSize)+1, byte(10+i)))
+		c.Settle()
+	}
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_state", NodeIdx: c.Nodes[drained].Idx(), State: meta.Draining}))
 	c.Settle()
-	before := leader.Node.SlotsHeldBy(c.Nodes[drained].Idx())
-	if before == 0 {
-		t.Skip("placement happened to avoid the drained node")
-	}
 	st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
 	must(t, err)
 	if leader.Node.SlotsHeldBy(c.Nodes[drained].Idx()) != 0 {

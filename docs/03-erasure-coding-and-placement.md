@@ -236,6 +236,10 @@ no sole copies.
 The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-and-durability.md`).
 
 ## Invariants
+- **I-117** — The FSM accepts exactly the policies the codec accepts: `SetVolume` and
+  `validPlacement` require `1 ≤ k` and `k+m ≤ ec.MaxShards` (256), so `255+1` is applied
+  and `255+2` is `ErrPolicy`; the CLI checks the same bounds before narrowing `--k` and
+  `--m` to a byte.
 
 - **I-8** — `PlaceKM(h, cands, k, m)` is a pure function: for the same hash, the same candidate
   set (any order) and the same `(k, m)`, every node returns the identical sequence.
@@ -279,3 +283,4 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |
 | I-75 | `TestAutoPolicy_Table`, `TestAutoPolicy_NNodeDeterminism`, `TestCluster_AutoPolicy_GrowsOnJoin_DefersWhileAsleep`, `TestCluster_AutoPolicy_ShrinksOnRemoveNotOnDeath`, `TestAutoPolicy_ManualPins`, `TestFSM_SetVolumeMode` |
 | I-77 | `TestPlaceKM_VoterFirst_DataSlots`, `TestPlaceKM_VoterFirst_NNodeDeterminism`, `TestFillPlacement_KeepsSlotClass`, `TestCandidates_VoterBit`, `TestCluster_ReadableWithNonVotersAsleep` |
+| I-117 | `TestFSM_SetVolume_ShardCountBoundaries`, `TestPolicyFlags_Bounds` |

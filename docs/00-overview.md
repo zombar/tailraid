@@ -150,6 +150,8 @@ for a member. No TLS of our own.
 | **Through several disks per device (measured 2026-10-09)** | **≈ 22.4k** |
 | The 2026-10 review, correctness (PR 2, measured 2026-10-09 as the net diff): the Raft accept check and join binding 0.15k, unknown-outcome resolution 0.1k, identity files, body deadlines and cache races 0.15k, WAL failure state, streamed snapshots and the tracked NFS listener 0.2k, placement conflicts, GC batches and codec version 3 0.15k; minus the removed `Place`, wrappers and dead code | +0.8k |
 | **Through the correctness review (measured 2026-10-09)** | **≈ 23.2k** |
+| Tests and the soak report (PR 3, measured 2026-10-09): the soak driver's phase runner with recovery and timeout, the undo list, skipped checks, the abort path and the Mutate gate 0.3k, the FSM path bound and the Windows directory sync under 0.05k; the rest of the PR is test code (new scenarios, size tables, fuzz targets, the skip rule) | +0.35k |
+| **Through the test review (measured 2026-10-09)** | **≈ 23.55k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The

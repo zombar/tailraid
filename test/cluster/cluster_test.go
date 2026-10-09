@@ -58,6 +58,7 @@ func TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes(t *testing.T) {
 	data := testharness.Pattern(int(testharness.ChunkSize)+1234, 1)
 	c.WriteFile(0, "/f", data)
 	c.Settle()
+	data = rmw(t, c, 0, "/f", data, int(testharness.ChunkSize)/3, testharness.Pattern(200, 11))
 	for i := range c.Nodes {
 		got, err := c.ReadFile(i, "/f")
 		if err != nil || !bytes.Equal(got, data) {
@@ -83,12 +84,14 @@ func TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO(t *testing.T) {
 	data := testharness.Pattern(3*int(testharness.ChunkSize), 2)
 	c.WriteFile(0, "/f", data)
 	c.Settle()
-	// kill one non-gateway node (m = 1): every surviving gateway still reads the file
+	data = rmw(t, c, 0, "/f", data, int(testharness.ChunkSize)+int(testharness.ChunkSize)/2, testharness.Pattern(300, 12))
+	// 2+1 over three nodes places a slot on every node: the two non-gateway holders are
+	// the victims, so the read drops from k to k-1 shards without killing the gateway
 	_, holders := shardHolders(c, "/f", 0)
-	victim := holders[len(holders)-1]
-	if victim == 0 {
-		victim = holders[0]
+	if len(holders) != 3 {
+		t.Fatalf("holders %v, want every node", holders)
 	}
+	victim, second := 1, 2
 	c.Kill(victim)
 	c.Probe()
 	for i := range c.Nodes {
@@ -102,16 +105,7 @@ func TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO(t *testing.T) {
 	}
 	// writes continue degraded on the surviving majority
 	c.WriteFile(0, "/g", []byte("still writable"))
-	// kill a second holder: reads fail cleanly with EIO, nothing panics
-	var second int
-	for _, h := range holders {
-		if h != victim && h != 0 {
-			second = h
-		}
-	}
-	if second == 0 { // gateway itself is the only other holder; read from it must still work locally
-		t.Skip("gateway holds a shard; cannot drop below k without killing the gateway")
-	}
+	// kill the second holder: reads fail cleanly with EIO, nothing panics
 	c.Kill(second)
 	c.Probe()
 	_, err := c.ReadFileCold(0, "/f")
@@ -566,6 +560,7 @@ func TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO(t *testing.T) {
 	data := testharness.Pattern(int(testharness.ChunkSize)+7, 73)
 	c.WriteFile(0, "/f", data)
 	c.Settle()
+	data = rmw(t, c, 0, "/f", data, int(testharness.ChunkSize)/2, testharness.Pattern(99, 74)) // chunk 0, the copy corrupted below
 	for i := range c.Nodes {
 		if got, err := c.ReadFileCold(i, "/f"); err != nil || !bytes.Equal(got, data) {
 			t.Fatalf("n%d: %v", i, err)
