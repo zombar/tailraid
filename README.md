@@ -5,161 +5,197 @@
   </picture>
 </p>
 
-tailraid turns the devices on your tailnet into one shared volume that behaves like a
-RAID array. Files are cut into chunks, each chunk is erasure-coded into `k` data and `m`
-parity shards on different devices, so any `m` devices can be off, lost or corrupted and
-the volume stays readable and writable. Identical content is stored once. The volume
-mounts as a normal filesystem on macOS, Linux and Windows through the OS's own NFS client.
-One static binary is the node daemon, the gateway and the management CLI; metadata is
-Raft-replicated across your always-on devices, and data never leaves your tailnet.
+tailraid turns the devices on your tailnet into one shared volume that behaves like a RAID array.
+
+- **Redundant.** Files are split into chunks, and each chunk is erasure-coded across devices and disks. Any `m` of them can fail and the volume keeps working.
+- **Deduplicated.** Identical content is stored once.
+- **Mountable.** It mounts as a normal folder on macOS, Linux and Windows, using the OS's own NFS client.
+- **One binary.** The same static binary is the daemon, the gateway and the CLI. Data never leaves your tailnet.
 
 > [!IMPORTANT]
-> Every device runs Tailscale (headscale works; tailraid only shells out to the
-> `tailscale` CLI). Give the metadata an odd number of always-on **voters** — one to start,
-> three is the sensible shape; laptops join as non-voters and come and go. Windows needs
-> Pro/Enterprise/Education (Home has no NFS client); the Windows mount path is
-> experimental, see [docs/windows-checklist.md](docs/windows-checklist.md).
+> - Every device needs Tailscale (headscale works).
+> - Windows needs Pro, Enterprise or Education (Home has no NFS client). The Windows mount is experimental: see [docs/windows-checklist.md](docs/windows-checklist.md).
 
 ## Install
 
-Download the binary for your OS/arch from the [releases](https://github.com/zombar/tailraid/releases)
-(six static binaries plus `sha256sums.txt`) and put it on your `PATH`, or build it:
+Download a binary from the [releases](https://github.com/zombar/tailraid/releases) and put it on your `PATH`, or build it:
 
 ```sh
 git clone https://github.com/zombar/tailraid.git && cd tailraid
-make install                     # → ~/.local/bin/tailraid (Go 1.27+, no C toolchain)
+make install          # → ~/.local/bin/tailraid (needs Go 1.27+)
 ```
 
-`tailraid update` replaces the binary with the latest release after verifying its
-checksum. The repository is private: set `GITHUB_TOKEN` or be logged in with `gh`.
+`tailraid update` installs the latest release. The repository is private: set `GITHUB_TOKEN` or log in with `gh`.
 
-## First use
+## Set up a volume
 
-On the always-on device that will hold the first metadata copy:
+On the first always-on device:
 
 ```sh
-tailraid init                                              # creates the volume, prints the join token
-tailraid install                                           # runs `serve` under launchd / systemd / SCM
-tailraid mount                                             # ~/TailRAID (T: on Windows)
+tailraid init         # creates the volume and prints a join token
+tailraid install      # runs tailraid as a service (launchd / systemd / Windows service)
+tailraid mount        # ~/TailRAID (T: on Windows)
 ```
 
-On every other device:
+On each other device:
 
 ```sh
-tailraid join 100.64.0.11 <token>                          # --voter on other always-on boxes
+tailraid join 100.64.0.11 <token>     # add --voter on other always-on devices
 tailraid install
 tailraid mount
 ```
 
-Write on one device, read on any other. `tailraid status` shows the cluster.
+Write a file on one device and read it on any other. `tailraid status` shows the whole cluster.
 
-Redundancy is automatic: the volume starts as a single copy and the leader raises the
-policy as devices join, from the count of always-on devices (voters) and laptops, so the
-data shards sit on the always-on devices and a closed laptop never blocks a write (see
-docs/03). Each device's storage budget follows the free space of its data disk. `tailraid
-volume set-redundancy --k 3 --m 2` pins a policy by hand (`2+1` survives one lost device
-at 1.5× storage, `3+2` survives two at 1.67×); `--auto` hands it back. Existing data
-migrates in the background either way. The chunk size (1 MiB by default) is fixed at
-`init`.
+## Grow the volume
 
-## Configuration
+There are three ways to add capacity:
 
-`init` and `join` write the config file: `~/Library/Application Support/tailraid/config.yaml`
-on macOS, `~/.config/tailraid/config.yaml` on Linux, `%ProgramData%\tailraid\config.yaml`
-on Windows (`$TAILRAID_HOME` overrides the directory). The keys you may want to touch:
+| To add capacity | Do this |
+|---|---|
+| Add a device | `tailraid join <ip> <token>` on the new device |
+| Add a disk to a device | `tailraid node add-disk /path/to/empty/dir` on that device |
+| Give a device more room | Free space on its disk. Budgets follow free space automatically. |
 
-```yaml
-node:
-  capacity: 500G          # pins this device's shard budget; delete the line to derive it from free disk space
-  voter: true             # always-on devices only
-listen:
-  raft: 20480             # tailnet TCP
-  rpc: 20481              # tailnet TCP
-  web: 20482              # tailnet TCP; the browser UI, 0 disables it
-  nfs: 127.0.0.1:20490    # loopback only (2049 on Windows)
-mount:
-  path: ~/TailRAID
-repair:
-  grace: 10m              # deleted data is reclaimed after this
-  fill_after: 10m         # a dead device's shards are re-placed after this (laptop lids!)
-log:
-  level: info             # debug | info | warn | error
-  format: text            # json | text
-  file: ""                # append to a file instead of stderr
-```
+`tailraid volume describe` shows the volume's raw, usable and free capacity.
 
-Environment overrides: `TAILRAID_LOG_LEVEL`, `TAILRAID_LOG_FORMAT`, `TAILRAID_LOG_FILE`.
+New data spreads over the new space straight away. Existing data stays where it is.
 
-## Day to day
+### Adding a disk
 
 ```sh
-tailraid status                        # health, leader, members, usage, warnings
-tailraid check                         # replication health; exit 1 if anything is degraded
-tailraid repair                        # repair pass now (it also runs every minute on the leader)
-tailraid chunk describe /path/or/hash  # state, placement and history of a file's chunks
-tailraid volume describe               # k+m, chunk size, stored vs logical bytes, dedup, headroom
-tailraid volume set-redundancy --k 3 --m 2   # or --auto to let the cluster choose
-tailraid node drain oldbox && tailraid node remove oldbox
-tailraid logs -f                       # the service log
+tailraid node add-disk /Volumes/Big/tailraid              # budget follows the disk's free space
+tailraid node add-disk /Volumes/Big/tailraid --capacity 500G
 ```
 
-Every command takes `--json` and `--node <ip>` to address another device.
+- The directory must be empty and should be on a different physical disk.
+- The disk joins as `<device>/1`, `<device>/2` and so on, listed under its device.
+- A single machine with several disks makes a complete volume. Redundancy is then across its disks.
+- If a disk is unplugged or not mounted, tailraid notices. It stops using that disk and repairs from the other copies.
+
+Details: [docs/14-disks.md](docs/14-disks.md).
+
+## Shrink the volume
+
+Drain first so the data moves off, then remove:
+
+```sh
+tailraid node drain jockey/1      # a disk, or a whole device: node drain oldbox
+tailraid node remove jockey/1     # refused while it still holds data
+```
+
+Draining a device drains its disks too.
+
+## Redundancy
+
+By default the cluster picks the redundancy (`k+m`) itself and adjusts it as devices and disks come and go:
+
+| Setup | Policy | Survives |
+|---|---|---|
+| 1 device, no extra disks | 1+0 | nothing |
+| 1 device + 3 disks | 2+2 | 2 disks |
+| 3 devices | 2+1 | 1 device |
+| 4 hosts × 3 disks | 6+2 | 2 disks, or 1 whole host |
+
+To pin it by hand, or to hand it back:
+
+```sh
+tailraid volume set-redundancy --k 3 --m 2    # pin: 3 data + 2 parity
+tailraid volume set-redundancy --auto         # let the cluster choose again
+```
+
+- A pinned policy is never changed automatically, even when you add disks.
+- Existing data migrates to a new policy in the background.
+- `tailraid status` prints what the current policy survives.
+
+## Voters and non-voters
+
+The metadata lives on **voters**. Pick always-on devices for them, in an odd number: 1 to start, 3 is a good size.
+
+Laptops should be **non-voters**. They store data and serve files, but a closed lid never stalls the cluster.
+
+```sh
+tailraid node demote laptop       # make a member a non-voter
+tailraid node promote nas         # make a member a voter
+```
+
+Run these from any member. `tailraid node ls` shows who votes.
+
+## Everyday commands
+
+```sh
+tailraid status                    # health, leader, members, usage, warnings
+tailraid node ls                   # devices and their disks
+tailraid check                     # exit 1 if anything is degraded
+tailraid repair                    # repair now (it also runs every minute)
+tailraid volume describe           # policy, usage, dedup, free space
+tailraid chunk describe <path>     # where a file's chunks live
+tailraid logs -f                   # the service log
+```
+
+Every command takes `--json`, and `--node <ip>` to talk to another device.
 
 ## Browser UI
 
-Every device that runs `serve` also serves a small web page on its Tailscale IP,
-`http://<tsIP>:20482/` (`tailraid status` prints it): a dashboard of data balance and
-integrity, and a file browser that streams audio, video and images, uploads files and makes
-folders. It is open to the cluster's devices and to any tailnet device logged in as the same
-user, so a phone works; other users' devices and tagged servers are refused. Cluster
-administration stays in the CLI. Design in [docs/13](docs/13-web-ui.md).
+Each device serves a web page at `http://<tailscale-ip>:20482/`. `tailraid status` prints the address. It has:
 
-## Verifying your cluster
+- a dashboard: balance across devices and disks, and integrity;
+- a file browser: stream audio, video and images, upload files, make folders.
+
+Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
+
+## Configuration
+
+`init` and `join` write the config file. It lives at:
+
+- **macOS:** `~/Library/Application Support/tailraid/config.yaml`
+- **Linux:** `~/.config/tailraid/config.yaml`
+- **Windows:** `%ProgramData%\tailraid\config.yaml`
+
+`$TAILRAID_HOME` overrides the directory. The keys you might change:
+
+```yaml
+node:
+  capacity: 500G        # pin this device's budget (omit to follow free space; "0" stores nothing here)
+  voter: true           # always-on devices only
+  disks:                # disks listed here before `init` are added by it;
+    - path: /Volumes/Big/tailraid   # later ones need: tailraid node add-disk
+listen:
+  web: 20482            # browser UI port; 0 turns it off
+mount:
+  path: ~/TailRAID
+repair:
+  fill_after: 10m       # how long a device may be away before its data is re-copied
+log:
+  level: info           # debug | info | warn | error
+```
+
+## Check your cluster
 
 ```sh
 tailraid verify --report out.html
 ```
 
-runs the soak scenarios (transfer, cross-device integrity, random-access churn, dedup
-and garbage collection, metadata agreement across every node, and the automation: budgets
-that follow each disk, data shards on the always-on devices, the automatic policy) against your live cluster
-through this device's mount and writes a self-contained HTML report with charts; add
-`--destructive --restarts` to include corruption, node kills and partitions on devices
-that run with `dev.enabled`. The same scenarios run nightly against a four-node Docker
-cluster in CI, including parity loss, leader kills, redundancy changes and restart storms.
+This runs the soak scenarios against your live cluster and writes an HTML report: transfer, integrity, churn, dedup, repair and the disk checks. Add `--destructive --restarts` to also test corruption, kills and partitions on devices running with `dev.enabled`.
 
-**[Latest report](docs/reports/latest.html)** (download and open; GitHub does not render
-HTML).
+CI runs the same scenarios against Docker clusters: four hosts with three disks each, and one host with four disks. See the **[latest report](docs/reports/latest.html)** (download it; GitHub doesn't render HTML).
 
 ## Releasing
 
-A release is a tag on `main`; CI builds and publishes it. From an up-to-date `main`:
-
 ```sh
-make tag VERSION=v0.2.0
+make tag VERSION=v0.3.0
 ```
 
-The target refuses a dirty tree or an existing tag, runs `make check`, and regenerates
-`CHANGELOG.md` from the commit subjects since the last tag (so write subjects as
-`scope: what changed`). `main` only takes pull requests, so the first run commits the
-changelog on `changelog/<version>`, opens that pull request and stops; merge it, `git
-pull`, and run the same command again. With nothing left to commit it creates the
-annotated tag and pushes it, which starts the `release` job: six static binaries
-(`linux`, `darwin`, `windows` × `amd64`, `arm64`), `sha256sums.txt`, and a GitHub release
-named after the tag with that version's changelog section as the notes. Every binary
-answers `tailraid version` with the tag, and `tailraid update` on a device offers it.
-Versions are semver with a `v` prefix; a build from a bare commit prints a short SHA and
-is never offered as an update. Details in [docs/12-operations.md](docs/12-operations.md) §4.
+1. The first run opens a pull request with the changelog. Merge it and `git pull`.
+2. Run the same command again. It tags the release, and CI publishes six binaries.
+
+Details: [docs/12-operations.md](docs/12-operations.md) §4.
 
 ## Documentation
 
-- [docs/README.md](docs/README.md) — the design documents in reading order: data model,
-  consistency and Raft, erasure coding and placement, the write path and durability
-  contract, failure model, repair and GC, the NFS gateway, security, testing, operations.
-- [docs/05-failure-model.md](docs/05-failure-model.md) — exactly what "no data loss"
-  covers and what it does not.
-- [docs/12-operations.md](docs/12-operations.md) — service install per OS, logs, the
-  Windows portmap stub, fault injection, releases and self-update.
-- [docs/invariants.md](docs/invariants.md) and [docs/lifecycle.md](docs/lifecycle.md) —
-  every promise the system makes and the tests that prove it.
-- [CLAUDE.md](CLAUDE.md) — how the code is written and tested.
+- [docs/README.md](docs/README.md): the design, in reading order.
+- [docs/05-failure-model.md](docs/05-failure-model.md): exactly what "no data loss" covers.
+- [docs/14-disks.md](docs/14-disks.md): several disks per device.
+- [docs/12-operations.md](docs/12-operations.md): services, logs, releases, self-update.
+- [docs/invariants.md](docs/invariants.md): every promise the system makes, and the tests that prove it.
+- [CLAUDE.md](CLAUDE.md): how the code is written and tested.
