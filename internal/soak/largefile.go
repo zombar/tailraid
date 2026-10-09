@@ -11,6 +11,14 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 )
 
+// The data-slot spread check (I-33) judges a target only once it expects minJudged data
+// slots (a Poisson count below that is too noisy to call), within spreadSigmas standard
+// deviations: with a dozen targets per run, 3σ would flag one run in twenty by chance.
+const (
+	minJudged    = 10
+	spreadSigmas = 3.5
+)
+
 // --- 12 large file ---------------------------------------------------------------------------
 //
 // One file many times the WAL cap, written through the gateway in pieces and hashed as it
@@ -247,6 +255,7 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 			voterShare[votIdx[i]] = e
 		}
 	}
+	tooFew := false
 	for idx, info := range nodes {
 		if capAll > 0 {
 			attrs[info.name] = fmt.Sprintf("%d/%d/%.0f", data[idx], parity[idx], allShare[idx])
@@ -255,13 +264,21 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 			continue
 		}
 		want := voterShare[idx]
-		margin := max(0.1*want, 3*math.Sqrt(want))
+		if want < minJudged {
+			tooFew = true
+			continue
+		}
+		margin := max(0.1*want, spreadSigmas*math.Sqrt(want))
 		if got := float64(data[idx]); math.Abs(got-want) > margin {
 			balanced = false
 			worst = fmt.Sprintf("%s holds %d data slots, expected %.0f ± %.0f", info.name, data[idx], want, margin)
 		}
 	}
-	r.checkAt("I-33", "data slots of the large file spread among voters by capacity", balanced, fmt.Sprintf("%d data slots over %d voters; %s", totalData, len(data), worst), p, "", "")
+	detail := fmt.Sprintf("%d data slots over %d voters; %s", totalData, len(data), worst)
+	if tooFew {
+		detail += fmt.Sprintf(" (targets expecting fewer than %d data slots are too few to judge)", minJudged)
+	}
+	r.checkAt("I-33", "data slots of the large file spread among voters by capacity", balanced, detail, p, "", "")
 	r.emit(Record{Kind: "event", Name: placementEvent, Text: fmt.Sprintf("%d chunks, %s", len(reps), humanBytes(float64(size))), Attrs: attrs})
 }
 
