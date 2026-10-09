@@ -392,8 +392,17 @@ func (c Config) OpenLogger() (*slog.Logger, *LogFile) {
 	return slog.New(slog.NewTextHandler(out, opts)), lf
 }
 
-// Logger is OpenLogger without the closer: the log file stays open for the process.
+// Logger is the logger for a CLI command: the configured level and format, always to
+// stderr. Only `serve` opens log.file (OpenLogger); a command run by a user must not need
+// the service's log directory (%ProgramData% on Windows is writable by administrators
+// only) and must not interleave its lines with the service's.
 func (c Config) Logger() *slog.Logger {
+	c.Log.File = ""
+	saved := os.Getenv("TAILRAID_LOG_FILE")
+	if saved != "" {
+		_ = os.Unsetenv("TAILRAID_LOG_FILE")
+		defer func() { _ = os.Setenv("TAILRAID_LOG_FILE", saved) }()
+	}
 	l, _ := c.OpenLogger()
 	return l
 }
