@@ -85,6 +85,25 @@ type Sample struct {
 	HeapInuse     uint64                     `json:"heap_inuse"`  // the sampled node's process (docs/12 §8)
 	Sys           uint64                     `json:"sys"`
 	Goroutines    int                        `json:"goroutines"`
+	// the sampled node's machine vitals (docs/12 §8); rates are between this node's
+	// consecutive samples, zero when the OS does not expose the counter
+	CPUPct       float64 `json:"cpu_pct"`     // the process, percent of one CPU
+	MachinePct   float64 `json:"machine_pct"` // every CPU, percent
+	Load1        float64 `json:"load1"`
+	RSS          uint64  `json:"rss"`
+	MemAvailable uint64  `json:"mem_available"`
+	MemTotal     uint64  `json:"mem_total"`
+	MemPressure  float64 `json:"mem_pressure"`
+	DiskFree     uint64  `json:"disk_free"`
+	DiskTotal    uint64  `json:"disk_total"`
+	DiskWriteBps float64 `json:"disk_write_bps"`
+	DiskReadBps  float64 `json:"disk_read_bps"`
+}
+
+// vitalsPrev is the last machine report of one node, for the rates.
+type vitalsPrev struct {
+	t time.Time
+	m admin.MachineReport
 }
 
 // latencyBuckets are the fixed upper bounds of the latency histogram in ms (log-spaced,
@@ -116,8 +135,9 @@ type Run struct {
 	records  []Record
 	counters Sample
 	lats     []opLatency
-	repair   repair.Stats  // Σ of every repair and scrub pass the run asked for
-	gc       repair.Result // Σ of every GC pass
+	vitals   map[string]vitalsPrev // per sampled node, for the rates
+	repair   repair.Stats          // Σ of every repair and scrub pass the run asked for
+	gc       repair.Result         // Σ of every GC pass
 	phase    string
 	nodes    []NodeRef
 	failed   int
@@ -189,6 +209,9 @@ type Totals struct {
 	MaxWALBytes  int64   // deepest overlay WAL seen in a sample
 	MaxFlush     uint64  // most flush buffer bytes seen in a sample
 	MaxHeap      uint64  // highest heap in use seen in a sample
+	MaxRSS       uint64  // highest resident set seen in a sample (docs/12 §8)
+	MaxCPUPct    float64 // the process's busiest sample interval
+	MinDiskFree  uint64  // least free space on the sampled node's data disk (0 = not sampled)
 	Repair       repair.Stats
 	GC           repair.Result
 }
@@ -380,6 +403,9 @@ func (r *Run) sample(ctx context.Context, round int) {
 		if rep.Process != nil {
 			s.HeapInuse, s.Sys, s.Goroutines = rep.Process.HeapInuse, rep.Process.Sys, rep.Process.Goroutines
 		}
+		if rep.Machine != nil {
+			r.vitalsSample(&s, node, *rep.Machine)
+		}
 	}
 	if round%5 == 0 {
 		if agree, _, ok := r.fsmAgreement(ctx); ok {
@@ -387,6 +413,42 @@ func (r *Run) sample(ctx context.Context, round int) {
 		}
 	}
 	r.emit(Record{Kind: "sample", S: &s, Node: node})
+}
+
+// vitalsSample copies a node's machine vitals into the sample and turns its cumulative
+// counters into rates against that node's previous sample (docs/12 §8).
+func (r *Run) vitalsSample(s *Sample, node string, m admin.MachineReport) {
+	now := r.now()
+	s.Load1, s.RSS, s.MemAvailable, s.MemTotal, s.MemPressure, s.DiskFree, s.DiskTotal = m.Load1, m.RSS, m.MemAvailable, m.MemTotal, m.MemPressure, m.DiskFree, m.DiskTotal
+	if s.RSS == 0 {
+		s.RSS = m.RSSPeak // the peak is the best a macOS node offers
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.vitals == nil {
+		r.vitals = map[string]vitalsPrev{}
+	}
+	prev, ok := r.vitals[node]
+	r.vitals[node] = vitalsPrev{t: now, m: m}
+	if !ok {
+		return
+	}
+	dt := now.Sub(prev.t).Seconds()
+	if dt <= 0 {
+		return
+	}
+	if m.CPUSeconds >= prev.m.CPUSeconds {
+		s.CPUPct = (m.CPUSeconds - prev.m.CPUSeconds) / dt * 100
+	}
+	if m.MachineTotal > prev.m.MachineTotal && m.MachineBusy >= prev.m.MachineBusy {
+		s.MachinePct = float64(m.MachineBusy-prev.m.MachineBusy) / float64(m.MachineTotal-prev.m.MachineTotal) * 100
+	}
+	if m.DiskWritten >= prev.m.DiskWritten {
+		s.DiskWriteBps = float64(m.DiskWritten-prev.m.DiskWritten) / dt
+	}
+	if m.DiskRead >= prev.m.DiskRead {
+		s.DiskReadBps = float64(m.DiskRead-prev.m.DiskRead) / dt
+	}
 }
 
 func (r *Run) snapshotCounters() Sample {
@@ -623,13 +685,20 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	sum.Coverage = coverage(results)
 	sum.Totals = Totals{BytesWritten: r.counters.BytesWritten, BytesRead: r.counters.BytesRead, Writes: r.counters.Writes, Reads: r.counters.Reads, Repair: r.repair, GC: r.gc}
 	for i := range sum.Records {
-		if s := sum.Records[i].S; s != nil {
-			sum.Totals.MaxWALBytes = max(sum.Totals.MaxWALBytes, s.WALBytes)
-			sum.Totals.MaxFlush = max(sum.Totals.MaxFlush, s.FlushBytes)
-			sum.Totals.MaxHeap = max(sum.Totals.MaxHeap, s.HeapInuse)
-			if s.DedupRatio > 0 {
-				sum.Totals.DedupRatio = s.DedupRatio
-			}
+		s := sum.Records[i].S
+		if s == nil {
+			continue
+		}
+		sum.Totals.MaxWALBytes = max(sum.Totals.MaxWALBytes, s.WALBytes)
+		sum.Totals.MaxFlush = max(sum.Totals.MaxFlush, s.FlushBytes)
+		sum.Totals.MaxHeap = max(sum.Totals.MaxHeap, s.HeapInuse)
+		sum.Totals.MaxRSS = max(sum.Totals.MaxRSS, s.RSS)
+		sum.Totals.MaxCPUPct = max(sum.Totals.MaxCPUPct, s.CPUPct)
+		if s.DiskFree > 0 && (sum.Totals.MinDiskFree == 0 || s.DiskFree < sum.Totals.MinDiskFree) {
+			sum.Totals.MinDiskFree = s.DiskFree
+		}
+		if s.DedupRatio > 0 {
+			sum.Totals.DedupRatio = s.DedupRatio
 		}
 	}
 	return sum, nil

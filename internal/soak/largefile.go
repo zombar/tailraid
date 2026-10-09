@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -143,7 +144,104 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	ok, orphans1, detail, err := r.Env.Fsck(ctx, gw)
 	r.checkAt("I-44 I-38", "fsck clean and no new orphans after the large file", err == nil && ok && orphans1 <= orphans0,
 		fmt.Sprintf("%s; %d orphans before the phase%v", detail, orphans0, errText(err)), "", "", gw.Name)
+	r.placementChecks(ctx, p, size, rep)
 	return nil
+}
+
+// placementEvent carries the large file's per-node slot counts to the report's figure.
+const placementEvent = "large file placement"
+
+// placementChecks: where the large file's chunks landed (docs/09 §6): every chunk fully
+// placed (I-9), its data slots on voters (I-77), data slots spread among the voters in
+// proportion to capacity within the statistical margin (I-33), and the figure.
+func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin.Report) {
+	reps, err := r.chunksOf(ctx, p)
+	if err != nil {
+		r.check("I-9", "chunk reports of the large file", false, err.Error())
+		return
+	}
+	type nodeInfo struct {
+		name  string
+		cap   uint64
+		voter bool
+		live  bool
+	}
+	nodes := map[int]nodeInfo{}
+	var capAll, capVoters uint64
+	liveVoters := 0
+	for i := range rep.Nodes {
+		n := &rep.Nodes[i]
+		if n.State != "active" {
+			continue
+		}
+		nodes[int(n.Idx)] = nodeInfo{n.Name, n.Capacity, n.Voter, n.Live}
+		capAll += n.Capacity
+		if n.Voter {
+			capVoters += n.Capacity
+			if n.Live {
+				liveVoters++
+			}
+		}
+	}
+	data, parity := map[int]int{}, map[int]int{}
+	missing, dataOffVoters, k := 0, 0, 0
+	for i := range reps {
+		c := &reps[i]
+		k = int(c.K)
+		for j, s := range c.Slots {
+			if s.Node == 0 {
+				missing++
+				continue
+			}
+			if j < int(c.K) {
+				data[s.Node]++
+				if !nodes[s.Node].voter {
+					dataOffVoters++
+				}
+			} else {
+				parity[s.Node]++
+			}
+		}
+	}
+	wantChunks := (size + r.Profile.ChunkSize - 1) / r.Profile.ChunkSize
+	r.checkAt("I-9", "every chunk of the large file fully placed", len(reps) == wantChunks && missing == 0,
+		fmt.Sprintf("%d chunks (want %d), %d missing slots", len(reps), wantChunks, missing), p, "", "")
+	if liveVoters >= k && k > 0 {
+		r.checkAt("I-77", "data slots of the large file on voters", dataOffVoters == 0, fmt.Sprintf("%d data slots off the voters (%d live voters, k=%d)", dataOffVoters, liveVoters, k), p, "", "")
+	}
+	// data slots among voters: proportional to capacity within 10 % or three standard
+	// deviations of a binomial draw, whichever is wider (small files are noisy)
+	totalData := 0
+	for _, n := range data {
+		totalData += n
+	}
+	worst := ""
+	balanced := true
+	attrs := map[string]string{}
+	totalSlots := 0
+	for _, n := range data {
+		totalSlots += n
+	}
+	for _, n := range parity {
+		totalSlots += n
+	}
+	for idx, info := range nodes {
+		if capAll > 0 {
+			share := float64(totalSlots) * float64(info.cap) / float64(capAll)
+			attrs[info.name] = fmt.Sprintf("%d/%d/%.0f", data[idx], parity[idx], share)
+		}
+		if !info.voter || capVoters == 0 {
+			continue
+		}
+		want := float64(totalData) * float64(info.cap) / float64(capVoters)
+		margin := max(0.1*want, 3*math.Sqrt(want))
+		if got := float64(data[idx]); math.Abs(got-want) > margin {
+			balanced = false
+			worst = fmt.Sprintf("%s holds %d data slots, expected %.0f ± %.0f", info.name, data[idx], want, margin)
+		}
+	}
+	r.checkAt("I-33", "data slots of the large file spread among voters by capacity", balanced, fmt.Sprintf("%d data slots over %d voters; %s", totalData, len(data), worst), p, "", "")
+	r.emit(Record{Kind: "event", Name: placementEvent, Text: fmt.Sprintf("%d chunks, %s", len(reps), humanBytes(float64(size))), Attrs: attrs})
 }
 
 func errText(err error) string {

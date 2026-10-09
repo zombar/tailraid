@@ -159,9 +159,21 @@ runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under w
 and the report charts the heap next to the WAL depth, so a memory regression under a
 large copy is a visible line, not a guess (I-84).
 
+**Machine vitals.** `status --json` also carries `machine`, what the operating system
+exposes about the node without a C library (the binary stays pure Go): the process's CPU
+seconds (every OS) and its resident set (Linux; its peak on macOS), the machine's load
+average, total and available memory, the data disk's free and total bytes, and on Linux
+the machine's busy and total CPU ticks, the memory-pressure stall share
+(`/proc/pressure/memory`, `some avg10`) and the cumulative bytes written and read on
+every disk. Every field is a real measurement or absent: a value the OS does not expose
+is omitted from the JSON, never reported as zero (I-85). The sampler turns the cumulative
+counters into rates between its ticks, and the report draws CPU, memory, memory pressure
+and disk charts for the sampled node, with peaks in the totals table.
+
 ## Invariants
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
+- **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
 - **I-58** — The portmap stub answers `GETPORT` for programs 100003 and 100005 version 3 over TCP with the NFS gateway port and `0` for any other mapping, serves `NULL` and `DUMP`, answers `PROC_UNAVAIL` for other procedures, and binds loopback only.
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere.
@@ -182,3 +194,4 @@ large copy is a visible line, not a guess (I-84).
 | I-61 | `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
+| I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |

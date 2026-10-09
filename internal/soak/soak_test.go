@@ -140,6 +140,7 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 	}
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
 	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov)
+	rep.Machine = admin.Vitals(nd.Dir)
 	return rep, nil
 }
 
@@ -377,7 +378,9 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	}
 	for _, want := range []string{"<svg", "9 restart storm", "10 partition", ">PASS —", "FSM-hash agreement", "Throughput", fmt.Sprintf("seed <code>%d</code>", seed),
 		"policy 2&#43;1, chunk", "4 nodes", "Node liveness", "under faults", "I-12", "L-59", "Overlay WAL depth", "refused metadata operation",
-		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound"} {
+		"12 large file", "Process memory", "peak heap in use", "flush buffers stayed within the bound",
+		"CPU on the sampled node", "Memory on the sampled node", "Data disk on the sampled node", "peak resident set",
+		"Large file: shard slots per node", "data slots of the large file spread among voters by capacity"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
 		}

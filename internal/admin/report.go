@@ -133,6 +133,7 @@ type Report struct {
 	Repair      *RepairStatus  `json:"repair,omitempty"`
 	Gateway     *GatewayReport `json:"gateway,omitempty"` // this node's overlay (docs/04 §8)
 	Process     *ProcessReport `json:"process,omitempty"` // this node's runtime (docs/12 §8)
+	Machine     *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
 	WebURL      string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	GeneratedAt time.Time      `json:"generated_at"`
 }

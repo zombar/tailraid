@@ -163,6 +163,9 @@ func buildReport(s Summary) reportData {
 		{"deepest overlay WAL", humanBytes(float64(t.MaxWALBytes))},
 		{"peak flush buffers", humanBytes(float64(t.MaxFlush))},
 		{"peak heap in use", humanBytes(float64(t.MaxHeap))},
+		{"peak resident set", humanBytes(float64(t.MaxRSS))},
+		{"peak process CPU", fmt.Sprintf("%.0f %% of one CPU", t.MaxCPUPct)},
+		{"least free disk on the sampled node", humanBytes(float64(t.MinDiskFree))},
 		{"repair", fmt.Sprintf("%d scanned, %d repaired, %d partial, %d unrepairable, %d migrated, %d deferred, %d scrubbed, %d corrupt, %s moved, %d errors",
 			t.Repair.Scanned, t.Repair.Repaired, t.Repair.Partial, t.Repair.Unrepairable, t.Repair.Migrated, t.Repair.Deferred, t.Repair.Scrubbed, t.Repair.ScrubBad, humanBytes(float64(t.Repair.BytesMoved)), t.Repair.Errors)},
 		{"gc", fmt.Sprintf("%d chunk entries collected, %d shards deleted, %d deletes refused", t.GC.Victims, t.GC.Deleted, t.GC.Refused)},
@@ -171,6 +174,25 @@ func buildReport(s Summary) reportData {
 	d.Mark = template.HTML(logoMark) //nolint:gosec // constant SVG
 	d.Favicon = url.PathEscape(strings.Replace(logoMark, `fill="currentColor"`, `fill="#0f172a"`, 2))
 	return d
+}
+
+// placementChart draws the large file's shard slots per node (phase 12): data and parity
+// slots held, against the node's capacity share of all its slots.
+func placementChart(rec *Record) string {
+	names := make([]string, 0, len(rec.Attrs))
+	for n := range rec.Attrs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	data, parity, expected := series{name: "data slots"}, series{name: "parity slots"}, series{name: "capacity share", color: "#94a3b8"}
+	for _, n := range names {
+		var d, p, e float64
+		_, _ = fmt.Sscanf(rec.Attrs[n], "%f/%f/%f", &d, &p, &e)
+		data.points = append(data.points, [2]float64{0, d})
+		parity.points = append(parity.points, [2]float64{0, p})
+		expected.points = append(expected.points, [2]float64{0, e})
+	}
+	return barChart("Large file: shard slots per node ("+rec.Text+")", names, []series{data, parity, expected})
 }
 
 func humanBytes(b float64) string {
@@ -190,6 +212,7 @@ func charts(s Summary) ([]template.HTML, string) {
 	var samples []Record
 	var marks []marker
 	var bands []band
+	var placement *Record // the large file's per-node slot counts (phase 12)
 	x := func(rec *Record) float64 { return rec.T.Sub(s.Started).Seconds() }
 	for i := range s.Records {
 		rec := &s.Records[i]
@@ -199,6 +222,10 @@ func charts(s Summary) ([]template.HTML, string) {
 				samples = append(samples, *rec)
 			}
 		case "event":
+			if rec.Name == placementEvent {
+				placement = rec
+				continue
+			}
 			if rec.Name != "note" && rec.Name != "baseline written" {
 				marks = append(marks, marker{x: x(rec), label: strings.TrimSpace(rec.Name + " " + rec.Text)})
 			}
@@ -240,6 +267,12 @@ func charts(s Summary) ([]template.HTML, string) {
 	plan, flush := series{name: "plan bytes"}, series{name: "flush buffers"}
 	heap, sys := series{name: "heap in use"}, series{name: "sys"}
 	haveMem := false
+	cpu, mcpu, load := series{name: "process % of one CPU"}, series{name: "machine % busy"}, series{name: "load (1 min)"}
+	rss, avail := series{name: "resident set"}, series{name: "memory available"}
+	pressure := series{name: "memory pressure (PSI some, avg10 %)"}
+	free := series{name: "data disk free"}
+	dwr, drd := series{name: "disk write MiB/s"}, series{name: "disk read MiB/s"}
+	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO := false, false, false, false, false
 	nodeSeries := map[string]*series{}
 	var nodeNames []string
 	liveCells, liveColors := map[string][][2]float64{}, map[string][]string{}
@@ -263,6 +296,20 @@ func charts(s Summary) ([]template.HTML, string) {
 		sys.points = append(sys.points, [2]float64{x(rec), float64(sm.Sys)})
 		haveWAL = haveWAL || sm.WALBytes > 0 || sm.DirtyBytes > 0
 		haveMem = haveMem || sm.HeapInuse > 0
+		cpu.points = append(cpu.points, [2]float64{x(rec), sm.CPUPct})
+		mcpu.points = append(mcpu.points, [2]float64{x(rec), sm.MachinePct})
+		load.points = append(load.points, [2]float64{x(rec), sm.Load1})
+		rss.points = append(rss.points, [2]float64{x(rec), float64(sm.RSS)})
+		avail.points = append(avail.points, [2]float64{x(rec), float64(sm.MemAvailable)})
+		pressure.points = append(pressure.points, [2]float64{x(rec), sm.MemPressure})
+		free.points = append(free.points, [2]float64{x(rec), float64(sm.DiskFree)})
+		dwr.points = append(dwr.points, [2]float64{x(rec), sm.DiskWriteBps / (1 << 20)})
+		drd.points = append(drd.points, [2]float64{x(rec), sm.DiskReadBps / (1 << 20)})
+		haveCPU = haveCPU || sm.CPUPct > 0 || sm.MachinePct > 0
+		haveRSS = haveRSS || sm.RSS > 0 || sm.MemAvailable > 0
+		havePressure = havePressure || sm.MemPressure > 0
+		haveDisk = haveDisk || sm.DiskFree > 0
+		haveDiskIO = haveDiskIO || sm.DiskWriteBps > 0 || sm.DiskReadBps > 0
 		for name, slots := range sm.Slots {
 			ns, ok := nodeSeries[name]
 			if !ok {
@@ -303,6 +350,25 @@ func charts(s Summary) ([]template.HTML, string) {
 	}
 	if haveMem {
 		out = append(out, template.HTML(lineChart("Process memory on the sampled node", "bytes", []series{heap, sys}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	// machine vitals (docs/12 §8): each chart only when some node reported the measure
+	if haveCPU {
+		out = append(out, template.HTML(lineChart("CPU on the sampled node", "% / load", []series{cpu, mcpu, load}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	if haveRSS {
+		out = append(out, template.HTML(lineChart("Memory on the sampled node", "bytes", []series{rss, avail}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	if havePressure {
+		out = append(out, template.HTML(lineChart("Memory pressure on the sampled node", "%", []series{pressure}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	if haveDisk {
+		out = append(out, template.HTML(lineChart("Data disk on the sampled node", "bytes", []series{free}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	if haveDiskIO {
+		out = append(out, template.HTML(lineChart("Disk throughput on the sampled node (every disk)", "MiB/s", []series{dwr, drd}, marks, bands))) //nolint:gosec // generated SVG
+	}
+	if placement != nil {
+		out = append(out, template.HTML(placementChart(placement))) //nolint:gosec // generated SVG
 	}
 	ns := make([]series, 0, len(nodeNames))
 	for _, n := range nodeNames {
