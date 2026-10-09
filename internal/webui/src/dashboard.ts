@@ -1,10 +1,12 @@
-// Dashboard: the volume summary, then Balance and Integrity. Re-rendered on every poll.
+// Dashboard: the volume summary, Disks (when a host has added disks), Balance and
+// Integrity. Re-rendered on every poll.
 
 import { clear, h } from "./dom.ts";
 import { bar, barRow, fillTone } from "./chart.ts";
 import { bytes, count } from "./fmt.ts";
 import { status } from "./status.ts";
 import * as balance from "./balance.ts";
+import * as disks from "./disks.ts";
 import * as integrity from "./integrity.ts";
 import type { Report } from "./api.ts";
 
@@ -17,6 +19,7 @@ export function render(root: HTMLElement): () => void {
       return;
     }
     volume(root, r);
+    disks.render(root, r);
     balance.render(root, r);
     integrity.render(root, r, status.history);
   };

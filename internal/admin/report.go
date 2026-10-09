@@ -244,7 +244,7 @@ func warnings(r Report) []string {
 		w = append(w, "some chunks have fewer than k live shards and cannot be read right now")
 	}
 	for i := range r.Nodes {
-		if r.Nodes[i].Dev {
+		if r.Nodes[i].Dev && r.Nodes[i].Kind != "disk" { // a disk reports its host's flag
 			w = append(w, "node "+r.Nodes[i].Name+" has the /dev/* endpoints enabled (dev.enabled): test rigs only")
 		}
 	}

@@ -20,6 +20,7 @@ export function render(root: HTMLElement, r: Report, history: Sample[]): void {
     tile("Repair pending", v.repair_pending, "waiting for fill_after", "warn"),
     tile("Unreadable", v.unreadable_chunks, `chunks with fewer than ${v.k} live slots`, "bad"),
     tile("Stale policy", v.stale_policy_chunks, `chunks not yet at ${v.k}+${v.m}`, "warn"),
+    tile("Host skew", v.domain_skew, "chunks above the host cap", "warn"),
   );
   const last = history[history.length - 1];
   const lastTone = last && last.degraded + last.pending > 0 ? "warn" : "";
