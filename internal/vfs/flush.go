@@ -636,8 +636,10 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 	}
 	if acks < int(w.k) {
 		err := fmt.Errorf("%w: chunk %x: %d < %d", ErrTooFewAcks, w.hash[:8], acks, w.k)
-		if len(failed) > 0 && allFull(failed) {
-			err = fmt.Errorf("%w: %w", err, chunk.ErrFull) // ENOSPC to the client, not EIO (I-79)
+		if (len(failed) > 0 && allFull(failed)) || !meta.HasTargets(f.st.Nodes()) {
+			// ENOSPC to the client, not EIO: every holder is full (I-79), or the volume has
+			// no disk to hold anything (docs/14 §9, I-120)
+			err = fmt.Errorf("%w: %w", err, chunk.ErrFull)
 		}
 		return err
 	}

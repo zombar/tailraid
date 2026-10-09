@@ -95,7 +95,8 @@ type ClusterNode struct {
 	// process kill would; production uses the fsynced bbolt store (docs/04 §8.1)
 	stores  *cluster.Stores
 	started bool
-	disks   nodeDisks // added disks (docs/14), kept across restarts
+	disks   nodeDisks    // the node's disks (docs/14), kept across restarts; the first is its Store
+	idx     meta.NodeIdx // the device row's index, recorded at bootstrap or join
 }
 
 // RaftTiming is the harness's shortened Raft timing: quick elections, but a lease long
@@ -121,7 +122,8 @@ type Cluster struct {
 	retryUntilStale bool
 	nonVoters       map[int]bool
 	auto            bool
-	walCap          int64 // per-inode WAL cap for every gateway (0 = default)
+	walCap          int64        // per-inode WAL cap for every gateway (0 = default)
+	diskless        map[int]bool // nodes that get no default disk (docs/14 §9)
 }
 
 // Voter reports whether node i joins as a Raft voter (all do unless NonVoters says otherwise).
@@ -143,11 +145,36 @@ func (c *Cluster) AddNode(voter bool) int {
 	nd.start(c, false, meta.SetVolume{})
 	c.join(nd)
 	c.Settle()
+	if !c.diskless[i] {
+		c.AddDisk(i)
+	}
 	return i
 }
 
-// Idx is the node's FSM index (1-based, same as creation order).
-func (n *ClusterNode) Idx() meta.NodeIdx { return meta.NodeIdx(n.I + 1) }
+// AddDisklessNode joins a node that gets no disk: a gateway-only host (docs/14 §9).
+func (c *Cluster) AddDisklessNode(voter bool) int {
+	c.T.Helper()
+	if c.diskless == nil {
+		c.diskless = map[int]bool{}
+	}
+	c.diskless[len(c.Nodes)] = true
+	return c.AddNode(voter)
+}
+
+// Idx is the node's FSM index: the device row, which is a Raft member, never a target.
+// Device rows and disk rows share one index space, so this is only the creation order
+// while no disk has been added; the harness records it at join.
+func (n *ClusterNode) Idx() meta.NodeIdx { return n.idx }
+
+// Target is the index of the node's default disk (its Store), 0 for a diskless node.
+func (n *ClusterNode) Target() meta.NodeIdx {
+	n.disks.mu.Lock()
+	defer n.disks.mu.Unlock()
+	if len(n.disks.disks) == 0 {
+		return 0
+	}
+	return n.disks.disks[0].idx
+}
 
 const harnessStableID = "harness"
 
@@ -177,6 +204,7 @@ type clusterOpts struct {
 	nonVoters         map[int]bool
 	auto              bool
 	walCap            int64
+	diskless          map[int]bool
 }
 
 // WALCap sets every gateway's per-inode WAL cap, so a run with small files still meets
@@ -217,15 +245,30 @@ func NonVoters(idx ...int) ClusterOption {
 	}
 }
 
+// Diskless makes the listed nodes (by creation index) hosts with no disk: members and
+// gateways that store nothing (docs/14 §9). Every other node gets one default disk,
+// n<i>/1, whose store is its Store.
+func Diskless(idx ...int) ClusterOption {
+	return func(o *clusterOpts) {
+		if o.diskless == nil {
+			o.diskless = map[int]bool{}
+		}
+		for _, i := range idx {
+			o.diskless[i] = true
+		}
+	}
+}
+
 // NewCluster bootstraps node 0 and joins n-1 more through the real RPC join; all are
-// voters. Returns once every node sees the same leader and membership.
+// voters, and each (unless Diskless) gets one disk. Returns once every node sees the
+// same leader and membership.
 func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster {
 	t.Helper()
 	o := clusterOpts{chunkSize: ChunkSize}
 	for _, f := range opts {
 		f(&o)
 	}
-	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters, auto: o.auto, walCap: o.walCap}
+	c := &Cluster{T: t, Clk: clock.NewFake(time.Now()), K: k, M: m, snap: o.snapshotThreshold, retryUntilStale: o.retryUntilStale, nonVoters: o.nonVoters, auto: o.auto, walCap: o.walCap, diskless: o.diskless}
 	for i := range n {
 		c.Nodes = append(c.Nodes, c.newNode(i))
 	}
@@ -236,6 +279,11 @@ func NewCluster(t *testing.T, n int, k, m uint8, opts ...ClusterOption) *Cluster
 		c.join(nd)
 	}
 	c.Settle()
+	for i := range n {
+		if !c.diskless[i] {
+			c.AddDisk(i)
+		}
+	}
 	return c
 }
 
@@ -252,7 +300,7 @@ func (c *Cluster) newNode(i int) *ClusterNode {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	nd := &ClusterNode{I: i, ID: id, Dir: dir, port: port}
+	nd := &ClusterNode{I: i, ID: id, Dir: dir, port: port, idx: meta.NodeIdx(i + 1)} // idx is final once the node has joined
 	nd.raddr, nd.trans = raft.NewInmemTransportWithTimeout(raft.ServerAddress(id), 10*time.Second)
 	inmemMu.Lock()
 	inmemAddrs[id] = nd.raddr
@@ -263,7 +311,7 @@ func (c *Cluster) newNode(i int) *ClusterNode {
 func (nd *ClusterNode) record(c *Cluster) meta.Node {
 	return meta.Node{
 		ID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), Kind: meta.KindDevice, TSStableID: harnessStableID, Addr: "127.0.0.1",
-		RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40,
+		RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), // no budget: a device stores nothing (docs/14 §9)
 	}
 }
 
@@ -301,10 +349,6 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 			c.T.Fatal(err)
 		}
 	}
-	nd.Store, err = chunk.Open(sysfs.OS{}, filepath.Join(nd.Dir, "shards"), 1<<40)
-	if err != nil {
-		c.T.Fatal(err)
-	}
 	nd.Cache, err = chunk.OpenCache(sysfs.OS{}, filepath.Join(nd.Dir, "cache"), 1<<30, c.Clk)
 	if err != nil {
 		c.T.Fatal(err)
@@ -322,14 +366,13 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		c.T.Fatal(err)
 	}
 	nd.Net = NewFaultNet(http.DefaultTransport)
-	nd.Client = rpc.NewClient(c.CID, nd.Node.RPCAddrOf, nd.Store)
+	nd.Client = rpc.NewClient(c.CID, nd.Node.RPCAddrOf)
 	nd.Client.SetTransport(nd.Net)
 	nd.Client.SetDisks(nd.Node.DiskOf, nd.disks.local)
 	nd.Node.SetForwarder(nd.Client)
 	nd.Prober = cluster.NewProber(nd.Node, nd.Client, c.Clk)
 	nd.Prober.SelfHealth = func() rpc.Health {
-		fs, _ := sysfs.FilesystemID(nd.Store.Root())
-		return rpc.Health{Applied: nd.Node.AppliedIndex(), FS: fs, Disks: nd.disks.health()}
+		return rpc.Health{Applied: nd.Node.AppliedIndex(), Disks: nd.disks.health()}
 	}
 	nd.Events = meta.NewEventRing(c.Clk, nd.Idx())
 	nd.Reader = vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nd.Cache, nil)
@@ -352,7 +395,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		})
 	}
 	nd.RPC, err = rpc.NewServer(rpc.Options{
-		NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Store: nd.Store, Applier: nd.Node,
+		NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Applier: nd.Node,
 		Disk: nd.disks.lookup, DiskHealth: nd.disks.health,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,
 		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute,
@@ -370,19 +413,6 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 }
 
 type fence struct{ nd *ClusterNode }
-
-func (f fence) PlacedOnSelf(key chunk.ShardKey) (bool, bool) {
-	h, k, m, idx, err := chunk.ParseKey(key)
-	if err != nil {
-		return false, false
-	}
-	c, ok := f.nd.Node.FSM.GetChunk(h)
-	if !ok || c.K != k || c.M != m || idx >= len(c.Placement) {
-		return false, ok
-	}
-	self, _ := f.nd.Node.SelfIdx()
-	return c.Placement[idx] == self, true
-}
 
 // connectAll links every live in-memory raft transport pairwise.
 func (c *Cluster) connectAll() {
@@ -404,12 +434,14 @@ func (c *Cluster) join(nd *ClusterNode) {
 	leader := c.Leader()
 	req := rpc.JoinRequest{
 		Token: "harness-token", NodeID: nd.ID, Name: fmt.Sprintf("n%d", nd.I), TSStableID: harnessStableID,
-		Addr: "127.0.0.1", RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Capacity: 1 << 40, Version: "harness",
+		Addr: "127.0.0.1", RaftPort: 1, RPCPort: uint16(nd.port), Voter: c.Voter(nd.I), Version: "harness",
 	}
 	var last error
 	for range 50 {
-		_, last = nd.Client.Join(context.Background(), leader.RPCAddr(), req)
+		var resp rpc.JoinResponse
+		resp, last = nd.Client.Join(context.Background(), leader.RPCAddr(), req)
 		if last == nil {
+			nd.idx = resp.NodeIdx
 			return
 		}
 		if !errors.Is(last, rpc.ErrNotLeader) && !errors.Is(last, rpc.ErrNoLeader) && !errors.Is(last, rpc.ErrUnavailable) {

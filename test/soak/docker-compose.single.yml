@@ -16,8 +16,7 @@ services:
       CHUNK: 256K
       REPAIR_GRACE: 20s
       FILL_AFTER: 20s
-      DISKS: /disks/d1 /disks/d2 /disks/d3 /disks/d4
-      DISK_CAPACITY: 8G
+      DISKS: /disks/d1=8G /disks/d2=8G /disks/d3=8G /disks/d4=8G
       ROLE: init
       SELF_IP: 172.30.0.11
       NODE_NAME: n1

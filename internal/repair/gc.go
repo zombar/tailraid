@@ -88,7 +88,7 @@ func (g *GC) deleteShards(ctx context.Context, victims []meta.GCVictim, index ui
 	for _, v := range victims {
 		g.Events.Record(v.Hash, meta.EvCollected, fmt.Sprintf("gc index %d", index))
 		for i, n := range v.Placement {
-			if n == 0 || nodes[n].Kind == meta.KindS3 || !g.live.IsLive(n) { // devices and disks; S3 is deferred (docs/10)
+			if n == 0 || nodes[n].Kind != meta.KindDisk || !g.live.IsLive(n) { // only disks hold shards (docs/14 §9); S3 is deferred (docs/10)
 				continue
 			}
 			err := g.shards.DeleteFenced(ctx, n, chunk.Key(v.Hash, v.K, v.M, i), index)

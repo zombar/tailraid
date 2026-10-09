@@ -51,7 +51,7 @@ Endpoints and who may call them:
 | Endpoint | Caller | Note |
 |---|---|---|
 | `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body |
-| `GET/HEAD/PUT/DELETE /v1/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412` |
+| `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412` |
 | `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |

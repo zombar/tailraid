@@ -143,14 +143,16 @@ h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8
 .disks { display: grid; gap: 12px; }
 .host-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: grid; gap: 10px; min-width: 0; }
 .host-row.self { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+/* a host with no disks: a gateway-only member, drawn as an outline (docs/14 §9) */
+.host-row.diskless { border-style: dashed; }
+.host-row.diskless .host-note { background: var(--surface); color: var(--dim); }
 .host-row .host-sum { font: 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
 .disk-strip { display: grid; gap: 2px; }
 .disk { display: grid; grid-template-columns: minmax(96px, 200px) minmax(64px, 1fr) minmax(0, 1.2fr); column-gap: 12px; row-gap: 2px; align-items: center; background: var(--surface); border-radius: 4px; padding: 8px 10px; font-size: 12px; min-width: 0; }
 /* the name cell: dot, name (shortened with … when long, never wrapped) and the warning icon
-   on one line, the data-dir tag under the name */
+   on one line */
 .disk .disk-name { grid-row: 1 / span 2; font: 600 12px var(--mono); display: grid; grid-template-columns: auto minmax(0, max-content) auto; justify-content: start; align-items: center; column-gap: 6px; row-gap: 2px; min-width: 0; }
 .disk .disk-name .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.disk .disk-name .tag { grid-column: 2 / -1; grid-row: 2; font-weight: 400; color: var(--dim); white-space: nowrap; }
 .disk .disk-name .warn-icon { grid-column: 3; grid-row: 1; }
 .warn-icon { display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); color: var(--bg); font: 600 10px/14px var(--mono); text-align: center; cursor: help; }
 .warn-icon::before { content: "!"; }

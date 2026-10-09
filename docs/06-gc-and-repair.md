@@ -53,7 +53,7 @@ by Δ shortens grace by Δ (bounded by the skew assumption in 05 §7); the only 
 that a flusher mid-dedup gets `ErrUnknownChunk` and re-uploads, never data loss. The FSM
 deletes every chunk entry with `Refs == 0 &&
 TombstonedAt < Before` and returns the victims `[]{Hash, K, M, Placement}`. The worker
-then issues `DELETE /v1/shards/{key}` for each victim slot on **device** nodes with the
+then issues `DELETE /v1/disks/{id}/shards/{key}` for each victim slot on **disk** rows with the
 header `X-Tailraid-Log-Index: <index of the GCDelete>` (best effort; misses are caught by
 `Sweep`). Because `Before` is in the command, every replica deletes the same entries at the
 same log index (I-4).

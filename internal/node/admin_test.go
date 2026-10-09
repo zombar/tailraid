@@ -27,10 +27,17 @@ func opsFor(c *testharness.Cluster, nd *testharness.ClusterNode) *adminOps {
 	cfg.RateBytes = 0
 	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
 	r.Events = nd.Events
-	return &adminOps{
-		node: nd.Node, prober: nd.Prober, repairer: r, store: nd.Store, client: nd.Client, rd: nd.Reader,
+	ops := &adminOps{
+		node: nd.Node, prober: nd.Prober, repairer: r, client: nd.Client, rd: nd.Reader,
 		ring: nd.Events, self: nd.Idx(), clk: c.Clk, log: slog.Default(),
+		disks: &diskSet{clusterID: c.CID, hostID: nd.ID, host: nd.Idx(), log: slog.Default()},
 	}
+	// the harness node's default disk is this host's one open disk (docs/14 §9)
+	if nd.Store != nil {
+		row, _ := nd.Node.FSM.Node(nd.Target())
+		ops.disks.disks = append(ops.disks.disks, &localDisk{idx: nd.Target(), id: row.ID, store: nd.Store})
+	}
+	return ops
 }
 
 // On a cluster where writes, a dedup hit, an unlink and a flush all happened, fsck finds

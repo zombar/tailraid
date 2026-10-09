@@ -328,8 +328,8 @@ function bar(frac, tone = "", tickFrac, tall = false) {
   }
   return el;
 }
-function barRow(label2, b, value) {
-  return h("div", { class: "bar-row" }, h("span", { class: "bar-label" }, label2), b, h("span", { class: "bar-val" }, value));
+function barRow(label, b, value) {
+  return h("div", { class: "bar-row" }, h("span", { class: "bar-label" }, label), b, h("span", { class: "bar-val" }, value));
 }
 function fillTone(frac) {
   return frac > 0.95 ? "bad" : frac > 0.8 ? "warn" : "";
@@ -422,7 +422,7 @@ function withDisks(nodes) {
 function render(root, r) {
   const nodes = withDisks(r.nodes);
   const per = chunksPerTarget(r);
-  const targetsOf = (n) => 1 + r.nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state === "active" && d.capacity > 0).length;
+  const targetsOf = (n) => n.kind === "s3" ? 1 : r.nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state === "active" && d.capacity > 0).length;
   const sh = shares(nodes, (n) => per * targetsOf(n));
   const scale = Math.max(1, ...nodes.map((n) => Math.max(n.slots, sh.get(n.idx)?.expected ?? 0)));
   const cards = h("div", { class: "cards" });
@@ -445,7 +445,7 @@ function card(n, share, scale) {
   if (!n.live) {
     capacity = barRow("capacity", bar(0, "off"), "unknown (dead " + (n.dead_for ?? "?") + ")");
   } else if (n.capacity === 0) {
-    capacity = barRow("capacity", bar(0), "no capacity");
+    capacity = barRow("capacity", bar(0), n.kind === "device" ? "no disks" : "no capacity");
   } else {
     const used = Math.max(0, n.capacity - n.free);
     const frac = used / n.capacity;
@@ -479,7 +479,7 @@ function card(n, share, scale) {
 
 // internal/webui/src/disks.ts
 function hosts(nodes) {
-  return nodes.filter((n) => n.kind === "device" && n.state !== "removed").map((n) => ({ node: n, targets: [n, ...nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed")] }));
+  return nodes.filter((n) => n.kind === "device" && n.state !== "removed").map((n) => ({ node: n, targets: nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed") }));
 }
 function devTone(dev) {
   return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
@@ -516,6 +516,7 @@ function spread(groups, sh) {
   const pctLabel = (x) => `${Math.round(x * 100)} %`;
   const plot = h("div", { class: "spread-plot" });
   for (const g of groups) {
+    if (g.targets.length === 0) continue;
     const cols = h("div", { class: "spread-cols" });
     for (const t of g.targets) {
       const share = sh.get(t.idx);
@@ -537,8 +538,8 @@ function spread(groups, sh) {
       col.append(fill);
       cols.append(col);
     }
-    const label2 = h("div", { class: "spread-label" }, h("span", { class: "dot " + (g.node.live ? "ok" : "bad") }), g.node.name);
-    plot.append(h("div", { class: "spread-host" }, cols, label2));
+    const label = h("div", { class: "spread-label" }, h("span", { class: "dot " + (g.node.live ? "ok" : "bad") }), g.node.name);
+    plot.append(h("div", { class: "spread-host" }, cols, label));
   }
   return h(
     "div",
@@ -555,9 +556,12 @@ function hostCard(g, sh, scale) {
   if (n.self) badges.append(h("span", { class: "badge self" }, "self"));
   if (n.state === "draining") badges.append(h("span", { class: "badge warn" }, "draining"));
   const budget = g.targets.reduce((s, t) => s + t.capacity, 0);
-  let sum = `${plural(g.targets.length, "target")} \xB7 ${bytes(budget)}`;
+  let sum = g.targets.length === 0 ? "no disks" : `${plural(g.targets.length, "disk")} \xB7 ${bytes(budget)}`;
   if (!n.live) sum += " \xB7 dead " + (n.dead_for ?? "?");
   const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (n.live ? "ok" : "bad") }), h("span", { class: "name" }, n.name), h("span", { class: "host-sum" }, sum), badges);
+  if (g.targets.length === 0) {
+    return h("div", { class: "host-row diskless" + (n.self ? " self" : "") }, head, h("div", { class: "host-note" }, "gateway only \xB7 no disks"));
+  }
   const strip = h("div", { class: "disk-strip" });
   for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
   const card2 = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
@@ -565,9 +569,6 @@ function hostCard(g, sh, scale) {
     card2.append(h("div", { class: "host-note" }, h("span", { class: "warn-icon" }), `${listOf(group)} are on one physical disk: they fail together, so data spread across them is not redundant`));
   }
   return card2;
-}
-function label(t) {
-  return t.data_dir ? `${t.name} (data dir)` : t.name;
 }
 function listOf(names) {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
@@ -579,14 +580,13 @@ function sharedGroups(targets) {
     if (!t.shared_with?.length || seen.has(t.name)) continue;
     const names = [t.name, ...t.shared_with].sort();
     for (const n of names) seen.add(n);
-    out.push(names.map((n) => label(targets.find((x) => x.name === n) ?? t)));
+    out.push(names);
   }
   return out;
 }
 function diskRow(t, share, scale) {
   const dot = off(t) ? "off" : t.live ? "ok" : "bad";
   const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + dot }), h("span", { class: "n" }, t.name));
-  if (t.data_dir) name.append(h("span", { class: "tag" }, "data dir"));
   if (t.shared_with?.length) name.append(h("span", { class: "warn-icon", title: `on the same physical disk as ${t.shared_with.join(", ")}: they fail together` }));
   if (off(t)) {
     return h("div", { class: "disk off", title: `${t.name}: no budget (capacity 0)` }, name, h("div", { class: "bar" }), h("div", { class: "disk-val" }, "no budget (capacity 0)"));
@@ -650,11 +650,11 @@ function render3(root, r, history) {
   }
   root.append(section);
 }
-function tile(label2, value, sub, tone) {
+function tile(label, value, sub, tone) {
   const zero = value === 0;
   const lab = h("div", { class: "label" });
   if (!zero) lab.append(h("span", { class: "dot " + tone }));
-  lab.append(label2);
+  lab.append(label);
   return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub));
 }
 function repair(r) {
@@ -723,8 +723,8 @@ function volume(root, r) {
   );
   root.append(h("section", null, h("h2", null, "Volume"), tiles, compare2));
 }
-function tile2(label2, value, sub) {
-  return h("div", { class: "tile" }, h("div", { class: "label" }, label2), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
+function tile2(label, value, sub) {
+  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
 }
 
 // internal/webui/src/chunks.ts
@@ -917,14 +917,14 @@ function render6(root, path) {
       viewer.append(h("div", { class: "placeholder" }, info || name, h("a", { class: "btn", href: fileURL(path, true) }, "Download")));
     }
     if (group.length > 1 && kind !== "text" && kind !== "other" && kind !== "pdf") {
-      const label2 = kind === "image" ? "image" : "track";
+      const label = kind === "image" ? "image" : "track";
       section.append(
         h(
           "div",
           { class: "controls" },
           h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, "\u25C0 Previous"),
           h("button", { type: "button", disabled: !next, onClick: () => go(next) }, "Next \u25B6"),
-          h("span", { class: "track" }, `${label2} ${index + 1} of ${group.length}` + (next ? ` \xB7 next: ${next.name}` : ""))
+          h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next ? ` \xB7 next: ${next.name}` : ""))
         )
       );
     }
@@ -1116,10 +1116,10 @@ function render7(root, dir) {
   };
   const table = () => {
     const sorted = [...entries].sort((a, b) => compare(a, b, sort));
-    const th = (key, label2, cls) => {
+    const th = (key, label, cls) => {
       const attrs = { class: cls ?? "" };
       if (sort.key === key) attrs["aria-sort"] = sort.desc ? "descending" : "ascending";
-      const el = h("th", attrs, label2);
+      const el = h("th", attrs, label);
       el.addEventListener("click", () => {
         sort = sort.key === key ? { key, desc: !sort.desc } : { key, desc: key !== "name" };
         saveSort(sort);

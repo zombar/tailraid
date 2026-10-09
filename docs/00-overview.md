@@ -42,7 +42,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 
 | Term | Meaning |
 |---|---|
-| **node** | A participant in the cluster. `Kind=device` runs `tailraid serve` (Raft, RPC, gateways, shard store). `Kind=s3` is a storage-only bucket: never a Raft member, never a gateway. |
+| **node** | A participant in the cluster. `Kind=device` runs `tailraid serve` (Raft, RPC, gateways) and stores nothing itself; `Kind=disk` is one of a device's disks, the only place shards live (docs/14). `Kind=s3` is a storage-only bucket: never a Raft member, never a gateway. |
 | **member** | A node present in the replicated node table; devices are also Raft servers (voter or non-voter). |
 | **voter** | A Raft server that counts toward quorum. Always-on devices, odd count. Laptops default to non-voter. |
 | **volume** | The single filesystem tree managed by one cluster. Has a policy `Volume{ChunkSize, K, M, PolicyVersion}`. |
@@ -50,11 +50,12 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **inode** | A file, directory or symlink record in the FSM, identified by `Ino` (monotonic, never reused) plus `Gen`. |
 | **chunk** | A fixed-size (default 1 MiB) span of a file at offset `idx*ChunkSize`, content-addressed by SHA-256 of its logical bytes. The unit of dedup and of erasure coding. |
 | **stripe** | One chunk encoded into `k` data shards and `m` parity shards. Chunk and stripe are 1:1. |
-| **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one node; key `hex(hash).k-m.idx` (the encoding is part of the key, so a migration's new shards coexist with the old). |
+| **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one disk; key `hex(hash).k-m.idx` (the encoding is part of the key, so a migration's new shards coexist with the old). |
 | **slot** | Position `idx` in a chunk's `Placement []NodeIdx`. Slot value 0 means "no node holds this shard yet" (degraded). |
 | **placement** | The `k+m` node indices that hold a chunk's shards, chosen by rendezvous hashing at write time and **stored** in the chunk table. |
 | **policy version** | `Volume.PolicyVersion`, bumped by `volume set-redundancy`. Chunks whose `(K,M)` differ from the current policy are migrated lazily by the repairer. |
 | **gateway** | The NFS (and later S3) front end running on a device; any device is a gateway for its own user. |
+| **diskless host** | A device with no disks: a member, voter if configured, and gateway whose reads and writes go to other hosts' disks (docs/14 §9). |
 | **live** | A node that answered `/health` within the last 15 s (probed every 5 s). Not stored in Raft. |
 | **WAL** | Per-inode write-ahead log on the gateway's disk that makes NFS `FILE_SYNC` honest before the chunk is flushed to the cluster. |
 
@@ -75,7 +76,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
              node table, tombstones)
                         ▲                             ▲
       cluster (raft wiring, leader forwarding,   rpc (HTTP/1.1 on <tsIP>:20481:
-      membership, prober/liveness, events)      GET/PUT/HEAD/DELETE /v1/shards/{key},
+      membership, prober/liveness, events)      GET/PUT/HEAD/DELETE /v1/disks/{id}/shards/{key},
       raft TCP <tsIP>:20480 + cluster-id        POST /v1/apply, /v1/members, /v1/join,
       handshake; raft-boltdb; FileSnapshotStore GET /health; WhoIs authorizer)
       webui (HTTP on <tsIP>:20482: dashboard over the status report, file browser and
@@ -154,6 +155,8 @@ for a member. No TLS of our own.
 | **Through the test review (measured 2026-10-09)** | **≈ 23.55k** |
 | Hardening (PR 4, measured 2026-10-09): minisign verification and the signing tool 0.35k, update hardening (size, fsync, rollback, downgrade guard) 0.1k, snapshot export and offline recovery 0.2k, the rotating log file, config validation and the rate limiter 0.25k, unit confinement, shutdown hand-over, readiness and the web UI host check 0.15k | +1.05k |
 | **Through the 2026-10 review (measured 2026-10-09)** | **≈ 24.6k** |
+| Disks only and diskless hosts (docs/14 §9, measured 2026-10-09 as the net diff): the device store, its budget, the `/v1/shards` route and the capacity special cases go (−0.3k); join registering config disks, the legacy-state check, per-disk `/dev/disk` and the soak's diskless voter and phase 14 come (+0.35k); the TypeScript loses its data-dir label | +0.05k |
+| **Through disks only (measured 2026-10-09)** | **≈ 24.65k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The

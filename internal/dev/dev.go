@@ -31,16 +31,29 @@ type FSMHash struct {
 type Store interface {
 	Path(k chunk.ShardKey) string
 	Has(k chunk.ShardKey) bool
-	Disk() (used, free, total uint64, err error)
+	// Disks lists this host's open disks as their budgets see them (docs/14 §3); a
+	// diskless host has none. Fill writes (0 removes) the scratch file on the named disk.
+	Disks() []DiskInfo
+	Fill(id string, n uint64) error
+}
+
+// DiskInfo is one disk in GET /dev/disk.
+type DiskInfo struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Used   uint64 `json:"used"`
+	Free   uint64 `json:"free"`
+	Total  uint64 `json:"total"`
+	Pinned bool   `json:"pinned"` // its budget is pinned by the config, so no fill moves it
 }
 
 // Handler returns the /dev/* mux; faults may be nil (no /dev/fault). dir is the data
 // directory /dev/fill consumes. exit defaults to os.Exit.
-func Handler(st *meta.Store, store Store, dir string, faults *Faults, log *slog.Logger) http.Handler {
-	return handler(st, store, dir, faults, log, os.Exit)
+func Handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger) http.Handler {
+	return handler(st, store, faults, log, os.Exit)
 }
 
-func handler(st *meta.Store, store Store, dir string, faults *Faults, log *slog.Logger, exit func(int)) http.Handler {
+func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit func(int)) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -94,13 +107,12 @@ func handler(st *meta.Store, store Store, dir string, faults *Faults, log *slog.
 	// the data disk as the budget sees it, and a scratch file that consumes it (docs/01
 	// §Node budget): the soak suite's way to move a node's free space
 	mux.HandleFunc("GET /dev/disk", func(w http.ResponseWriter, _ *http.Request) {
-		used, free, total, err := store.Disk()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		disks := store.Disks()
+		if disks == nil {
+			disks = []DiskInfo{}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]uint64{"used": used, "free": free, "total": total})
+		_ = json.NewEncoder(w).Encode(map[string][]DiskInfo{"disks": disks})
 	})
 	mux.HandleFunc("POST /dev/fill", func(w http.ResponseWriter, r *http.Request) {
 		n, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
@@ -108,11 +120,12 @@ func handler(st *meta.Store, store Store, dir string, faults *Faults, log *slog.
 			http.Error(w, "bytes: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := Fill(dir, n); err != nil {
+		id := r.URL.Query().Get("disk")
+		if err := store.Fill(id, n); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Warn("dev: scratch fill set", "bytes", n)
+		log.Warn("dev: scratch fill set", "disk", id, "bytes", n)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /dev/exit", func(w http.ResponseWriter, _ *http.Request) {

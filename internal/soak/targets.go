@@ -15,12 +15,9 @@ type TargetSample struct {
 	Active   bool   `json:"active"`
 }
 
-// targetsOf lists the report's targets, each disk after its host, with host names.
+// targetsOf lists the report's targets, the disks of each host in host order, with host
+// names; a device row is not a target (docs/14 §9).
 func targetsOf(rep admin.Report) []TargetSample {
-	names := map[int]string{}
-	for i := range rep.Nodes {
-		names[int(rep.Nodes[i].Idx)] = rep.Nodes[i].Name
-	}
 	var out []TargetSample
 	add := func(n *admin.NodeReport, host string) {
 		out = append(out, TargetSample{Name: n.Name, Host: host, Slots: n.Slots, Capacity: n.Capacity, Live: n.Live, Active: n.State == "active"})
@@ -30,7 +27,6 @@ func targetsOf(rep admin.Report) []TargetSample {
 		if n.Kind != "device" || n.State == "removed" {
 			continue
 		}
-		add(n, n.Name)
 		for j := range rep.Nodes {
 			if d := &rep.Nodes[j]; d.Kind == "disk" && int(d.Host) == int(n.Idx) && d.State != "removed" {
 				add(d, n.Name)

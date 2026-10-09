@@ -36,12 +36,20 @@ type diskMarker struct {
 // ErrDiskNotEmpty refuses add-disk on a path that already holds data.
 var ErrDiskNotEmpty = errors.New("node: disk path is not empty")
 
-// PrepareDisk marks an empty directory as a disk of this host and returns its new disk
-// ID: the marker is written and fsynced before the disk is registered, and an existing
-// marker or any other content refuses the path (docs/14 §2). lost+found is allowed.
+// PrepareDisk marks an empty directory as a disk of this host and returns its disk ID:
+// the marker is written and fsynced before the disk is registered, and any other content
+// refuses the path (docs/14 §2). lost+found is allowed. A marker that already names this
+// cluster and host is reused, so a retried init or join registers the same disk ID
+// rather than refusing its own work (I-121).
 func PrepareDisk(path string, clusterID [16]byte, hostID string) (string, error) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return "", err
+	}
+	if m, err := readMarker(path); err == nil {
+		if m.ClusterID == hex.EncodeToString(clusterID[:]) && m.HostID == hostID {
+			return m.DiskID, nil
+		}
+		return "", fmt.Errorf("%w: %s is marked for another cluster or host", ErrDiskNotEmpty, path)
 	}
 	ents, err := os.ReadDir(path)
 	if err != nil {
@@ -200,31 +208,44 @@ func DiskName(host string, n int) string { return fmt.Sprintf("%s/%d", host, n) 
 
 // RegisterDisks marks and registers every disk listed in the config, on a node that has
 // just bootstrapped the cluster (init takes the config's disks, docs/14 §2).
-func RegisterDisks(ctx context.Context, n *cluster.Node, cfg config.Config, clusterID [16]byte) error {
+func RegisterDisks(ctx context.Context, n *cluster.Node, cfg config.Config, clusterID [16]byte) ([]meta.Node, error) {
 	self, ok := n.SelfIdx()
 	if !ok {
-		return errors.New("node: this node is not in its own node table")
+		return nil, errors.New("node: this node is not in its own node table")
 	}
-	for i, d := range cfg.Node.Disks {
-		id, err := PrepareDisk(d.Path, clusterID, n.ID)
-		if err != nil {
-			return fmt.Errorf("disk %s: %w", d.Path, err)
-		}
-		budget, err := DiskBudget(d)
-		if err != nil {
-			return fmt.Errorf("disk %s: %w", d.Path, err)
-		}
-		disk := meta.Node{ID: id, Name: DiskName(cfg.Node.Name, i+1), Kind: meta.KindDisk, Host: self, Capacity: budget, JoinedAt: time.Now().UnixNano()}
+	return registerDisks(cfg, clusterID, n.ID, self, func(disk meta.Node) error {
 		res, _, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: disk}})
 		if err == nil {
 			err = res.Err
 		}
-		if err != nil {
-			return fmt.Errorf("disk %s: register: %w", d.Path, err)
-		}
-	}
-	return nil
+		return err
+	})
 }
+
+// registerDisks marks every disk listed in the config and hands its row to register, in
+// config order, naming them <host>/<n> from 1 (docs/14 §2, I-121). It returns the rows.
+func registerDisks(cfg config.Config, clusterID [16]byte, hostID string, host meta.NodeIdx, register func(meta.Node) error) ([]meta.Node, error) {
+	rows := make([]meta.Node, 0, len(cfg.Node.Disks))
+	for i, d := range cfg.Node.Disks {
+		id, err := PrepareDisk(d.Path, clusterID, hostID)
+		if err != nil {
+			return rows, fmt.Errorf("disk %s: %w", d.Path, err)
+		}
+		budget, err := DiskBudget(d)
+		if err != nil {
+			return rows, fmt.Errorf("disk %s: %w", d.Path, err)
+		}
+		disk := meta.Node{ID: id, Name: DiskName(cfg.Node.Name, i+1), Kind: meta.KindDisk, Host: host, Capacity: budget, JoinedAt: time.Now().UnixNano()}
+		if err := register(disk); err != nil {
+			return rows, fmt.Errorf("disk %s: register: %w", d.Path, err)
+		}
+		rows = append(rows, disk)
+	}
+	return rows, nil
+}
+
+// NoDisksHint is what init and join print for a device with no disks listed (I-121).
+const NoDisksHint = "this device stores no data (no disks listed under node.disks): it serves the volume as a gateway; add a disk with: tailraid node add-disk <path>"
 
 // openTargetStore opens a target's shard store: capacity pins its budget, "" derives it
 // from the filesystem (docs/01 §Node budget).
@@ -335,8 +356,8 @@ func (d *diskSet) health() []rpc.DiskHealth {
 	return out
 }
 
-// target is one of this host's shard stores with its target index and whether its budget
-// is pinned: disk 0 first, then the open disks.
+// target is one of this host's open disks: its shard store, its target index and whether
+// its budget is pinned.
 type target struct {
 	idx    meta.NodeIdx
 	store  *chunk.Store
