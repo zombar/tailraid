@@ -143,7 +143,8 @@ for a member. No TLS of our own.
 | **Through the web UI (measured 2026-10-08: +0.7k, the handler plus ~130 lines of wiring in rpc, tailscale, admin, vfs, config, node and cmd)** | **≈ 18.8k** |
 | `init` without flags (voter-first placement, derived budget, automatic redundancy, codec v2: ~0.4k) and the soak automation phase with `/dev/disk`, `/dev/fill` (~0.2k) | +0.6k |
 | **Through init-without-flags (measured 2026-10-08)** | **≈ 19.4k** |
-| Streaming large files: bounded flush memory, cap backpressure, streamed compaction, atomic resumable web upload, process memory in status, soak phase 12 | +0.6k |
+| Streaming large files: bounded flush memory, cap backpressure, streamed compaction, atomic resumable web upload, process memory in status, soak phase 12 (measured 2026-10-09: webui 0.27k, soak 0.23k, vfs 0.22k, rpc and admin 0.1k; the plan said 0.6k) | +0.8k |
+| **Through streaming large files (measured 2026-10-09)** | **≈ 20.2k** |
 | `internal/s3`, `internal/s3srv` (M5, deferred; not in the tree) | ~1,700 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
