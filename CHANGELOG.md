@@ -2,6 +2,36 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.3.0 (2026-10-09)
+
+### Changes
+
+- node: a pinned budget reaches the cluster when it changes — growing a device in place ([50cf821](https://github.com/zombar/tailraid/commit/50cf821))
+- node: open_disk waits for the disk's row instead of leaving it closed for a tick ([425e61f](https://github.com/zombar/tailraid/commit/425e61f))
+- soak: phase 13 adds, drains and removes a disk in auto mode; the policy follows each step ([162fa8f](https://github.com/zombar/tailraid/commit/162fa8f))
+- build: make install renames into place — overwriting a binary in place gets it killed on macOS ([7c2ca65](https://github.com/zombar/tailraid/commit/7c2ca65))
+- tailscale: give the CLI a TERM — the macOS app's binary needs one under launchd ([6f95ea3](https://github.com/zombar/tailraid/commit/6f95ea3))
+- build: ignore the single-host soak's report and results ([7baf28b](https://github.com/zombar/tailraid/commit/7baf28b))
+- soak: the single-host rig runs clean — no drain without a second node; data-slot spread capped per chunk ([43740a4](https://github.com/zombar/tailraid/commit/43740a4))
+- cluster: the leader names added disks, so two quick add-disks never share a name ([cd3071b](https://github.com/zombar/tailraid/commit/cd3071b))
+- soak: phase 13 disks, a 4 hosts × 3 targets rig and a single-host one, the disk-spread chart ([2015650](https://github.com/zombar/tailraid/commit/2015650))
+- meta: a disk is never more active than its host — draining a host drains its disks ([08bc675](https://github.com/zombar/tailraid/commit/08bc675))
+- webui: the Disks block — spread summary and a row per target; balance totals each host's disks ([5377f8f](https://github.com/zombar/tailraid/commit/5377f8f))
+- cli, admin: node add-disk, init takes configured disks, status shows disks, tolerance and host skew ([6fca256](https://github.com/zombar/tailraid/commit/6fca256))
+- repair: host-cap skew moves; harness disks; the model checker adds and fails disks ([0c4d2b7](https://github.com/zombar/tailraid/commit/0c4d2b7))
+- node, rpc, cluster: a store per disk — marker, per-target budget, disk RPC path, disk liveness ([eb4005c](https://github.com/zombar/tailraid/commit/eb4005c))
+- meta: disk targets, domain-aware placement, host-aware policy ([3656c52](https://github.com/zombar/tailraid/commit/3656c52))
+- lookdev: spread groups packed from the left, fixed-width columns ([5b214ee](https://github.com/zombar/tailraid/commit/5b214ee))
+- lookdev: a spread summary on top of the Disks block ([27caf09](https://github.com/zombar/tailraid/commit/27caf09))
+- lookdev: disks as rows inside each host card ([04d8881](https://github.com/zombar/tailraid/commit/04d8881))
+- lookdev: the Disks block and the soak report's disk-spread chart ([10ecf1e](https://github.com/zombar/tailraid/commit/10ecf1e))
+
+### Documentation
+
+- docs: growing a device or disk in place, in the README and volume grow ([0a2f836](https://github.com/zombar/tailraid/commit/0a2f836))
+- docs: a shorter README with how to grow and shrink the volume, add disks, and change voters ([4757d76](https://github.com/zombar/tailraid/commit/4757d76))
+- docs: several disks per device — disk targets, host cap, host-aware policy, domain skew (docs/14) ([48097be](https://github.com/zombar/tailraid/commit/48097be))
+
 ## v0.2.1 (2026-10-09)
 
 ### Changes
