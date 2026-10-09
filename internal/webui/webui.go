@@ -12,12 +12,14 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -49,6 +51,20 @@ type Options struct {
 	// nothing; zero values take DefaultUploadSlots and DefaultBodyTimeout.
 	UploadSlots int
 	BodyTimeout time.Duration
+	// Hosts are the Host header values the UI answers (I-127): the listener's
+	// <tsIP>:port and the node's MagicDNS name with the port. Any other Host is a 421,
+	// so a page on another origin that resolves a name to this node's IP (DNS
+	// rebinding) gets nothing. Empty allows every Host (tests).
+	Hosts []string
+}
+
+// Hosts builds Options.Hosts for a listener address and a MagicDNS name ("" to skip).
+func Hosts(addr, dnsName string) []string {
+	out := []string{addr}
+	if _, port, err := net.SplitHostPort(addr); err == nil && dnsName != "" {
+		out = append(out, net.JoinHostPort(dnsName, port))
+	}
+	return out
 }
 
 // Server is the web UI handler.
@@ -57,6 +73,7 @@ type Server struct {
 	handler http.Handler
 	cache   statusCache
 	up      uploads
+	refused logx.Limiter // one "refused" line a minute (I-124): a probe loop is not a log flood
 }
 
 // New validates the options and builds the handler.
@@ -87,8 +104,28 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /files/{path...}", s.get) // a GET pattern serves HEAD too
 	mux.HandleFunc("PUT /files/{path...}", csrf(s.put))
 	mux.HandleFunc("POST /api/mkdir", csrf(s.mkdir))
-	s.handler = s.authz(mux)
+	s.refused.Clk = o.Clk
+	s.handler = s.hostCheck(s.authz(mux))
 	return s, nil
+}
+
+// hostCheck refuses a request whose Host is not one of ours with 421 before anything
+// else runs (I-127).
+func (s *Server) hostCheck(next http.Handler) http.Handler {
+	if len(s.o.Hosts) == 0 {
+		return next
+	}
+	allowed := map[string]bool{}
+	for _, h := range s.o.Hosts {
+		allowed[strings.ToLower(h)] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowed[strings.ToLower(r.Host)] {
+			writeErr(w, http.StatusMisdirectedRequest, "this node does not answer to "+r.Host)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Handler returns the HTTP handler (the tests drive it through httptest).
@@ -123,7 +160,7 @@ func (s *Server) authz(next http.Handler) http.Handler {
 		case errors.Is(err, rpc.ErrUnavailable):
 			writeErr(w, http.StatusServiceUnavailable, err.Error())
 		default:
-			s.o.Logger.Warn("web ui: refused", "src", src, "login", login, "err", err)
+			s.refused.Warn(s.o.Logger, "web ui: refused", "src", src, "login", login, "err", err)
 			writeErr(w, http.StatusForbidden, "not a cluster member and not this node's user")
 		}
 	})

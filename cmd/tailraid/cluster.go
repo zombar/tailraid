@@ -108,9 +108,15 @@ func statusCmd() *cobra.Command {
 				return err
 			}
 			if j, _ := cmd.Flags().GetBool("json"); j {
-				return printJSON(cmd.OutOrStdout(), rep)
+				if err := printJSON(cmd.OutOrStdout(), rep); err != nil {
+					return err
+				}
+			} else {
+				printStatus(cmd.OutOrStdout(), rep)
 			}
-			printStatus(cmd.OutOrStdout(), rep)
+			if !rep.Ready { // for supervisors and scripts: exit 1 until the node can serve (I-125)
+				return errors.New("node is not ready: no leader, or the log is still being replayed")
+			}
 			return nil
 		},
 	}

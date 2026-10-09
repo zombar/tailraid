@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-yaml"
@@ -146,7 +149,32 @@ func Load(path string) (Config, error) {
 	if err := yaml.UnmarshalWithOptions(b, &c, yaml.Strict()); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
+	c.expandHome()
 	return c, c.Validate()
+}
+
+// expandHome turns a leading "~" into the user's home directory in every path the
+// config names (I-126): a mount path written as ~/TailRAID is otherwise created
+// literally under the working directory.
+func (c *Config) expandHome() {
+	c.Node.DataDir = ExpandHome(c.Node.DataDir)
+	c.Mount.Path = ExpandHome(c.Mount.Path)
+	c.Log.File = ExpandHome(c.Log.File)
+	for i := range c.Node.Disks {
+		c.Node.Disks[i].Path = ExpandHome(c.Node.Disks[i].Path)
+	}
+}
+
+// ExpandHome replaces a leading "~" or "~/" with the home directory.
+func ExpandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, `~\`) {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	return filepath.Join(home, p[1:])
 }
 
 // Save writes the config, creating the directory.
@@ -202,7 +230,63 @@ func (c Config) Validate() error {
 	} else if w != 0 && (w == c.Listen.RPC || w == c.Listen.Raft) {
 		return fmt.Errorf("config: listen.web %d must differ from listen.rpc and listen.raft", w)
 	}
+	// the rest of I-126: every port in range and distinct, known log settings, an
+	// absolute mount path
+	_, nfsPort, err := net.SplitHostPort(c.Listen.NFS)
+	if err != nil {
+		return fmt.Errorf("config: listen.nfs %q: want host:port", c.Listen.NFS)
+	}
+	np, err := strconv.Atoi(nfsPort)
+	if err != nil || np < 1 || np > 65535 {
+		return fmt.Errorf("config: listen.nfs %q: want a TCP port", c.Listen.NFS)
+	}
+	used := map[int]string{}
+	for _, l := range []struct {
+		name string
+		port int
+	}{{"listen.raft", c.Listen.Raft}, {"listen.rpc", c.Listen.RPC}, {"listen.nfs", np}, {"listen.web", c.Listen.Web}} {
+		if l.name == "listen.web" && l.port == 0 {
+			continue
+		}
+		if l.port < 1 || l.port > 65535 {
+			return fmt.Errorf("config: %s %d: want a TCP port", l.name, l.port)
+		}
+		if other, dup := used[l.port]; dup {
+			return fmt.Errorf("config: %s and %s both use port %d", other, l.name, l.port)
+		}
+		used[l.port] = l.name
+	}
+	switch strings.ToLower(c.Log.Level) {
+	case "", "debug", "info", "warn", "warning", "error":
+	default:
+		return fmt.Errorf("config: log.level %q: want debug, info, warn or error", c.Log.Level)
+	}
+	switch strings.ToLower(c.Log.Format) {
+	case "", "text", "json":
+	default:
+		return fmt.Errorf("config: log.format %q: want text or json", c.Log.Format)
+	}
+	if c.Mount.Path != "" && runtime.GOOS != "windows" && !filepath.IsAbs(c.Mount.Path) {
+		return fmt.Errorf("config: mount.path %q: want an absolute path (~ is expanded)", c.Mount.Path)
+	}
 	return nil
+}
+
+// Warnings lists what serve should say about the config file at path and the data
+// directory before it runs (I-126): a mode that lets other users of the machine read
+// the join token or the shards. Windows has no mode bits worth reading.
+func (c Config) Warnings(path string) []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	var out []string
+	if st, err := os.Stat(path); err == nil && st.Mode().Perm()&0o077 != 0 {
+		out = append(out, fmt.Sprintf("config file %s is readable by other users (mode %04o): chmod 600 %s", path, st.Mode().Perm(), path))
+	}
+	if st, err := os.Stat(c.Node.DataDir); err == nil && st.Mode().Perm()&0o077 != 0 {
+		out = append(out, fmt.Sprintf("data directory %s is accessible to other users (mode %04o): chmod 700 %s", c.Node.DataDir, st.Mode().Perm(), c.Node.DataDir))
+	}
+	return out
 }
 
 // ParseBytes parses "500G", "1.5T", "100M", "4096" (binary units).
@@ -228,11 +312,11 @@ func ParseBytes(s string) (uint64, error) {
 	return uint64(num * m), nil
 }
 
-// Logger builds the process logger from config and environment. Output goes to stderr,
-// which service managers and Docker capture.
 // OpenLogger builds the logger from log.level/log.format/log.file and the TAILRAID_LOG_*
-// overrides; the closer releases the log file (serve calls it on exit).
-func (c Config) OpenLogger() (*slog.Logger, func() error) {
+// overrides. The LogFile is nil when output goes to stderr (service managers and Docker
+// capture it); every method of a nil LogFile is a no-op, so callers close and reopen it
+// without checking.
+func (c Config) OpenLogger() (*slog.Logger, *LogFile) {
 	level, format := c.Log.Level, c.Log.Format
 	if v := os.Getenv("TAILRAID_LOG_LEVEL"); v != "" {
 		level = v
@@ -244,27 +328,30 @@ func (c Config) OpenLogger() (*slog.Logger, func() error) {
 	switch strings.ToLower(level) {
 	case "debug":
 		lvl = slog.LevelDebug
+	case "info", "":
+		lvl = slog.LevelInfo
 	case "warn", "warning":
 		lvl = slog.LevelWarn
 	case "error":
 		lvl = slog.LevelError
 	default:
+		fmt.Fprintf(os.Stderr, "tailraid: unknown log level %q; using info\n", level)
 		lvl = slog.LevelInfo
 	}
 	opts := &slog.HandlerOptions{Level: lvl}
 	var out io.Writer = os.Stderr
-	closer := func() error { return nil }
+	var lf *LogFile
 	if file := c.LogFile(); file != "" {
 		if f, err := openLogFile(file); err == nil {
-			out, closer = f, f.Close
+			out, lf = f, f
 		} else {
 			fmt.Fprintf(os.Stderr, "tailraid: log file %s: %v; logging to stderr\n", file, err)
 		}
 	}
 	if strings.EqualFold(format, "json") {
-		return slog.New(slog.NewJSONHandler(out, opts)), closer
+		return slog.New(slog.NewJSONHandler(out, opts)), lf
 	}
-	return slog.New(slog.NewTextHandler(out, opts)), closer
+	return slog.New(slog.NewTextHandler(out, opts)), lf
 }
 
 // Logger is OpenLogger without the closer: the log file stays open for the process.
@@ -281,9 +368,109 @@ func (c Config) LogFile() string {
 	return c.Log.File
 }
 
-func openLogFile(path string) (*os.File, error) {
+// The log file rotates at MaxLogSize keeping LogKeep generations (I-124): serve.log,
+// serve.log.1 … serve.log.5, oldest dropped.
+const (
+	MaxLogSize = 64 << 20
+	LogKeep    = 5
+)
+
+// LogFile is the open log.file. It rotates itself past its size and reopens on request
+// (SIGHUP, after an external rotation), so a node that runs for months never fills a
+// disk with its own log and never keeps writing into a file that was renamed away. A
+// nil *LogFile stands for stderr and accepts every call.
+type LogFile struct {
+	mu      sync.Mutex
+	path    string
+	f       *os.File
+	size    int64
+	maxSize int64
+	keep    int
+}
+
+func openLogFile(path string) (*LogFile, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // log.file from the config
+	l := &LogFile{path: path, maxSize: MaxLogSize, keep: LogKeep}
+	if err := l.openLocked(); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+func (l *LogFile) openLocked() error {
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // log.file from the config
+	if err != nil {
+		return err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	l.f, l.size = f, st.Size()
+	return nil
+}
+
+// Write appends p, rotating first when the file would grow past its size.
+func (l *LogFile) Write(p []byte) (int, error) {
+	if l == nil {
+		return os.Stderr.Write(p)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f != nil && l.size > 0 && l.size+int64(len(p)) > l.maxSize {
+		l.rotateLocked()
+	}
+	if l.f == nil { // a rotation or reopen failed: try again rather than drop the line
+		if err := l.openLocked(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := l.f.Write(p)
+	l.size += int64(n)
+	return n, err
+}
+
+// rotateLocked shifts serve.log.N to .N+1 (the oldest falls off), moves the current file
+// to .1 and opens a fresh one.
+func (l *LogFile) rotateLocked() {
+	_ = l.f.Close()
+	l.f = nil
+	for i := l.keep - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1))
+	}
+	_ = os.Rename(l.path, l.path+".1")
+	_ = l.openLocked()
+}
+
+// Reopen closes and reopens the path: what an external rotation needs after it renamed
+// the file (SIGHUP on Unix).
+func (l *LogFile) Reopen() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f != nil {
+		_ = l.f.Close()
+		l.f = nil
+	}
+	return l.openLocked()
+}
+
+// Close releases the file.
+func (l *LogFile) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	return err
 }

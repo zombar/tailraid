@@ -108,3 +108,4 @@ func (fakeApplier) Propose(context.Context, meta.Command) (meta.Result, uint64, 
 func (fakeApplier) AppliedIndex() uint64  { return 0 }
 func (fakeApplier) IsLeader() bool        { return true }
 func (fakeApplier) LeaderRPCAddr() string { return "" }
+func (fakeApplier) Ready() bool           { return true }

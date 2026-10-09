@@ -40,6 +40,7 @@ type Identity struct {
 	IP       netip.Addr
 	StableID string
 	Host     string
+	DNSName  string // MagicDNS name without the trailing dot ("" when unknown)
 }
 
 // Tailnet resolves this node's identity, using a fake when dev.enabled points at one.
@@ -66,7 +67,7 @@ func Tailnet(ctx context.Context, cfg config.Config) (tailscale.Client, Identity
 	if err != nil {
 		return nil, Identity{}, err
 	}
-	return ts, Identity{IP: ip, StableID: st.Self.ID, Host: st.Self.HostName}, nil
+	return ts, Identity{IP: ip, StableID: st.Self.ID, Host: st.Self.HostName, DNSName: strings.TrimSuffix(st.Self.DNSName, ".")}, nil
 }
 
 // WaitTailnet retries Tailnet until tailscaled reports Running or the deadline passes
@@ -119,7 +120,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return err
 	}
-	defer node.Close()
+	defer node.Shutdown(5 * time.Second) //nolint:errcheck // a leader hands over first (I-123); the close error is logged by Close's callers elsewhere
 	auth.SetMembers(node.FSM.NodeByAddr)
 	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 		return fmt.Errorf("waiting for raft: %w", err)
@@ -221,7 +222,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			webUsers = login
 		}
 		web, err = webui.New(webui.Options{
-			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status,
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log,

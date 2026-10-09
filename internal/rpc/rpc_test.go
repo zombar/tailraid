@@ -71,6 +71,7 @@ func (a *fakeApplier) Propose(_ context.Context, c meta.Command) (meta.Result, u
 func (a *fakeApplier) IsLeader() bool        { a.mu.Lock(); defer a.mu.Unlock(); return a.leader }
 func (a *fakeApplier) LeaderRPCAddr() string { a.mu.Lock(); defer a.mu.Unlock(); return a.leaderAddr }
 func (a *fakeApplier) AppliedIndex() uint64  { return a.fsm.Applied() }
+func (a *fakeApplier) Ready() bool           { return a.IsLeader() || a.LeaderRPCAddr() != "" }
 func (a *fakeApplier) setLeader(l bool, addr string) {
 	a.mu.Lock()
 	a.leader, a.leaderAddr = l, addr

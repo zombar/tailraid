@@ -129,6 +129,7 @@ type Report struct {
 	Node        string         `json:"node"`
 	ClusterID   string         `json:"cluster_id"`
 	Health      string         `json:"health"`
+	Ready       bool           `json:"ready"` // this node knows a leader and has applied every committed entry (I-125)
 	Leader      string         `json:"leader"`
 	LastContact string         `json:"last_contact,omitempty"`
 	Voters      int            `json:"voters"`
@@ -162,6 +163,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	rep := Report{Node: n.ID, ClusterID: meta.HexID(clusterID), GeneratedAt: now, Process: processReport()}
 	h := n.Health(clk, p)
 	rep.Health, rep.Leader, rep.Voters, rep.LiveVoters = h.State.String(), h.Leader, h.Voters, h.LiveVoters
+	rep.Ready = n.Ready()
 	if h.LastContact > 0 {
 		rep.LastContact = h.LastContact.Round(time.Millisecond).String()
 	}

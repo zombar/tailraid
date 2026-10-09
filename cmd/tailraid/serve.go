@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -124,15 +125,20 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Run the node: metadata, shard store and NFS gateway",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, _, err := loadConfig(cmd)
+			cfg, path, err := loadConfig(cmd)
 			if err != nil {
 				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			log, closeLog := cfg.OpenLogger()
-			defer func() { _ = closeLog() }()
+			go exitOnSecondSignal(ctx, cmd.ErrOrStderr())
+			log, lf := cfg.OpenLogger()
+			defer func() { _ = lf.Close() }()
 			slog.SetDefault(log)
+			for _, w := range cfg.Warnings(path) {
+				log.Warn(w)
+			}
+			go reopenLogOnSignal(ctx, lf, log)
 			run := func(ctx context.Context) error { return node.Serve(ctx, cfg, log, version) }
 			if asService, _ := cmd.Flags().GetBool("service"); asService {
 				return runAsService(ctx, svc.Name, run)
@@ -142,6 +148,18 @@ func serveCmd() *cobra.Command {
 	}
 	c.Flags().Bool("service", false, "run under the Windows service control manager (set by `tailraid install`)")
 	return c
+}
+
+// exitOnSecondSignal ends the process at once when a second interrupt arrives while the
+// first is still being honoured (the final flush, the leadership hand-over): an operator
+// who presses Ctrl-C twice means now (docs/12 §1, I-123).
+func exitOnSecondSignal(ctx context.Context, w io.Writer) {
+	<-ctx.Done()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	fmt.Fprintln(w, "tailraid: second signal, exiting now")
+	os.Exit(130)
 }
 
 func mountCmd() *cobra.Command {

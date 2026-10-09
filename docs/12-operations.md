@@ -40,6 +40,29 @@ status, because its Raft and RPC listeners are bound to the old address; the ser
 restart policy brings it back on the new one within seconds. Without a service manager,
 restart `tailraid serve` by hand.
 
+**Confinement (Linux).** The unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
+`ProtectHome=read-only` and `PrivateTmp`, and `ReadWritePaths` names exactly the data
+directory, every added disk and the config directory (plus the log file's directory when
+`log.file` is set), so the service can write nowhere else; every path in the unit is
+quoted; the installer stages the unit in a directory it just created, never at a
+predictable path in `/tmp` (I-122). The LaunchAgent's `KeepAlive` is
+`{SuccessfulExit: false}`: `tailraid stop` keeps the service down, while the address-change
+exit (non-zero) still restarts it.
+
+**Shutdown.** On SIGTERM or SIGINT a leader first transfers leadership to another voter
+(bounded by 5 s) and then stops Raft, so the rest of the cluster keeps committing
+without an election timeout; the NFS listener closes, the flusher's final flush runs
+(capped at 30 s), then the stores close. A second signal ends the process at once. The
+Windows handler reports a stop wait hint of 45 s and the unit's `TimeoutStopSec` is the
+same figure (I-123).
+
+**Log file.** `log.file` rotates itself at 64 MiB keeping five generations
+(`serve.log.1` … `.5`), reopens on SIGHUP (so logrotate or newsyslog can rename it), and
+`tailraid logs -f` prints every appended line once. Warnings that repeat per item (a flush
+that fails for every dirty inode, a repair that fails for every chunk, a refused web
+request per probe) are rate-limited to one line a minute per site with a `suppressed`
+count on the next line (I-124).
+
 ## 2. Windows portmap stub
 
 `mount.exe` has no port option: it asks the portmapper on 111 where MOUNT (100005 v3)
@@ -156,6 +179,12 @@ listed under `node.disks` in the config are marked and registered by `init`; lat
 are added with `tailraid node add-disk <path>` (14 §2), and the automatic policy counts
 them (a single machine with four disks runs 2+2).
 
+**Validation.** `Load` expands a leading `~` in every path (`node.data_dir`, the disks,
+`mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
+shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
+`log.level` or `log.format`, and a relative `mount.path`; `serve` warns at start when the
+config file or the data directory is readable by other users of the machine (I-126).
+
 ## 8. What `status` reports about the process
 
 Besides the cluster view (docs/06 §7), `tailraid status --json` carries what a long write
@@ -177,6 +206,12 @@ is omitted from the JSON, never reported as zero (I-85). The sampler turns the c
 counters into rates between its ticks, and the report draws CPU, memory, memory pressure
 and disk charts for the sampled node, with peaks in the totals table.
 
+**Readiness.** `/health` and `status` carry `ready`: the node knows a leader and Raft has
+handed its FSM every entry it has committed. A freshly restarted node is not ready
+until its replay is done, an isolated follower stops being ready when it loses its
+leader, and `tailraid status` exits 1 while the node it asked is not ready, so a
+supervisor or a script can wait on it (I-125).
+
 ## Invariants
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
@@ -190,6 +225,27 @@ and disk charts for the sampled node, with peaks in the totals table.
   after the host, whose budget is derived (I-74) and whose volume is `1+0` with `Auto`
   set; `tailraid join <host> <token>` with no options joins as a non-voter with a derived
   budget.
+- **I-122** — The Linux unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectHome=read-only` and `PrivateTmp`, and its `ReadWritePaths` names exactly the
+  data directory, every added disk, the config directory and the log file's directory,
+  with every path quoted; the installer stages the unit only in a directory it created;
+  the LaunchAgent restarts the service only after a non-zero exit.
+- **I-123** — On the first interrupt a leader transfers leadership before its Raft
+  stops, bounded by 5 s, so another node leads the moment the shutdown proceeds; a
+  second interrupt ends the process at once; the Windows service handler reports a stop
+  wait hint of 45 s and the unit's `TimeoutStopSec` is 45.
+- **I-124** — With `log.file` set the file rotates before a write would push it past
+  64 MiB, keeping five generations and dropping the oldest, and reopens on SIGHUP;
+  `logs -f` prints every appended line exactly once; a per-item warning site emits at
+  most one line a minute and reports how many it suppressed.
+- **I-125** — `/health` and `status` report `ready` iff the node knows a leader and
+  Raft's applied index has reached its commit index; a closed node is never ready;
+  `tailraid status` exits 1 when the node it asked is not ready.
+- **I-126** — `Load` expands a leading `~` in `node.data_dir`, the disks' paths,
+  `mount.path` and `log.file`; `Validate` refuses a listener port outside 1..65535 or
+  shared by two listeners, an unknown `log.level` or `log.format` and a relative
+  `mount.path`; `serve` warns when the config file or the data directory is readable by
+  group or others.
 
 ## Tests
 
@@ -202,3 +258,8 @@ and disk charts for the sampled node, with peaks in the totals table.
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
+| I-122 | `TestSvc_SystemdHardeningAndQuoting`, `TestSvc_UnitsRouteLogs` |
+| I-123 | `TestCluster_ShutdownTransfersLeadership` |
+| I-124 | `TestLogFile_RotatesAndReopens`, `TestLimiter_OneLinePerInterval` |
+| I-125 | `TestHealth_Ready`, `TestCluster_Ready_FollowsLeaderContact` |
+| I-126 | `TestConfig_Validate_Table`, `TestConfig_ExpandHome`, `TestConfig_Warnings_Permissions` |

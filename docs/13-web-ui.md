@@ -52,13 +52,20 @@ and the same purge on membership change as the RPC rule.
 What this gives: the user's phone, tablet or laptop that is not a storage node can open the
 UI; a guest device on the tailnet, another user's device and a tagged server cannot.
 
+The listener also answers only to its own name: a request whose `Host` is neither the
+listener's `<tsIP>:port` nor the node's MagicDNS name with the port is a `421` before
+anything else runs, so a page on another origin that points a name of its own at this
+node's IP (DNS rebinding) gets nothing from it; the index page's CSP carries
+`frame-ancestors 'none'`, so no other page can frame the UI; and `/api/status` is the
+admin report without the join token, which belongs to the CLI on a member (I-127).
+
 ## 3. Endpoints
 
 | Method and pattern | CSRF header | Response |
 |---|---|---|
-| `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'` |
+| `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
-| `GET /api/status` | – | the `admin.Report` JSON, cached 2 s; `Cache-Control: no-store` |
+| `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
 | `GET /api/ls?path=` | – | `{"path":"/a","entries":[{name,type,size,mtime,mode,ino,dirty?,target?}]}`, sorted by name; `type` is `file`, `dir` or `symlink`; `mtime` RFC 3339 UTC; `dirty` only on files |
 | `GET /api/stat?path=` | – | one entry plus `path` |
 | `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted |
@@ -308,6 +315,10 @@ colour-alone. No dual axes, no stacked bars, no pie.
   node's Tailscale IP; `webui.New` refuses to build without an authorizer; no web endpoint
   proposes a Raft command other than the file operations of I-70; `/api/status` is served
   from a cache so the chunk table is walked at most once per 2 s.
+- **I-127** — The web listener answers a request only when its `Host` is the listener's
+  `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
+  refuses every other with `421` before authorization; the index page's CSP contains
+  `frame-ancestors 'none'`; `/api/status` never carries the join token.
 
 ## Tests
 
@@ -321,5 +332,6 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |
 | I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
 | I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
+| I-127 | `TestWebUI_HostCheckFramingAndToken` |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

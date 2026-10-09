@@ -51,6 +51,7 @@ type Applier interface {
 	IsLeader() bool
 	LeaderRPCAddr() string // host:port of the leader's RPC, or "" when unknown
 	AppliedIndex() uint64
+	Ready() bool // a leader is known and every committed entry has reached the FSM (I-125)
 }
 
 // Fence answers the DELETE fence questions (docs/06 §2).
@@ -297,7 +298,7 @@ func (s *Server) member(next http.Handler) http.Handler {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	h := Health{
-		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion,
+		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion, Ready: s.o.Applier.Ready(),
 		Leader: s.o.Applier.IsLeader(), Used: s.o.Store.Used(), Capacity: s.o.Store.Capacity(),
 	}
 	h.Free = max(h.Capacity-h.Used, 0)
