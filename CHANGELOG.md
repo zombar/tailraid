@@ -2,6 +2,13 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.1 (2026-10-09)
+
+### Changes
+
+- node: keep the member seed current while serving and snapshot after the join: a fresh follower restarts with an empty table ([8191d4a](https://github.com/zombar/tailraid/commit/8191d4a))
+- cluster: a joiner keeps the leader's seed for serve, and a reset device re-joins from its old address ([0c92d84](https://github.com/zombar/tailraid/commit/0c92d84))
+
 ## v0.4.0 (2026-10-09)
 
 ### Changes
