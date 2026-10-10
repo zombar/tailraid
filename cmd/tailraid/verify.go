@@ -57,12 +57,9 @@ the partial report.`,
 			if seed == 0 {
 				seed = time.Now().UnixNano()
 			}
-			p := soak.Quick()
-			p.Name, p.Grace, p.FillAfter = "live", grace, fillAfter
-			p.ChunkSize = 0 // taken from the cluster's status unless --chunk overrides it
-			if cs, _ := cmd.Flags().GetInt("chunk"); cs > 0 {
-				p.ChunkSize = cs
-			}
+			full, _ := cmd.Flags().GetBool("full")
+			chunk, _ := cmd.Flags().GetInt("chunk")
+			p := verifyProfile(full, chunk, grace, fillAfter)
 			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), destructive, restarts)
 			rf, err := os.Create(resultsPath) //nolint:gosec // --results names the file
 			if err != nil {
@@ -76,6 +73,9 @@ the partial report.`,
 			}
 			if restarts {
 				flags = append(flags, "restarts")
+			}
+			if full {
+				flags = append(flags, "full")
 			}
 			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed)), Seed: seed, Flags: flags} //nolint:gosec // workload
 			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive, "restarts", restarts)
@@ -127,5 +127,19 @@ the partial report.`,
 	c.Flags().Bool("restarts", false, "with --destructive: every target runs under a restarting service manager, so kill, restart and partition phases run through /dev/exit and /dev/fault")
 	c.Flags().Int64("seed", 0, "workload seed (0 = time)")
 	c.Flags().Int("chunk", 0, "the volume's chunk size in bytes (default: the quick profile's 256 KiB)")
+	c.Flags().Bool("full", false, "the long profile (~1 h): a 64 MiB corpus file, a 1 GiB large file, more churn, ten leader kills")
 	return c
+}
+
+// verifyProfile is the quick profile, or the full one, with the cluster's repair knobs;
+// the chunk size comes from the cluster's status unless chunk is set.
+func verifyProfile(full bool, chunk int, grace, fillAfter time.Duration) soak.Profile {
+	p := soak.Quick()
+	p.Name = "live"
+	if full {
+		p = soak.Full()
+		p.Name = "live-full"
+	}
+	p.Grace, p.FillAfter, p.ChunkSize = grace, fillAfter, chunk
+	return p
 }

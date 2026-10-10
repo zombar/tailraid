@@ -36,8 +36,7 @@ func run() int {
 	case "quick":
 		p = soak.Quick()
 	case "full":
-		p = soak.Quick()
-		p.Name, p.BigFile, p.LargeFile, p.SmallFiles, p.ChurnOps, p.LeaderKills = "full", 64<<20, 1<<30, 2000, 3000, 10
+		p = soak.Full()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown profile", *profile)
 		return 2

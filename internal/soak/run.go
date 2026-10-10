@@ -48,6 +48,15 @@ func Quick() Profile {
 	}
 }
 
+// Full is the long profile (~1 h): the quick one with a 64 MiB corpus file, a 1 GiB
+// large file, more small files and churn, and ten leader kills. `make soak-full` and
+// `tailraid verify --full` run it.
+func Full() Profile {
+	p := Quick()
+	p.Name, p.BigFile, p.LargeFile, p.SmallFiles, p.ChurnOps, p.LeaderKills = "full", 64<<20, 1<<30, 2000, 3000, 10
+	return p
+}
+
 // Record is one line of results.jsonl.
 type Record struct {
 	T     time.Time         `json:"t"`
