@@ -118,11 +118,14 @@ func (t *faultTable) partition(a, b []NodeRef) {
 }
 
 // rules lists the peers n must drop: every peer while n or the peer is held down, and the
-// other side of the partition.
-func (t *faultTable) rules(n NodeRef, all []NodeRef) []string {
+// other side of the partition. The device running verify (keep, its RPC address) is never
+// dropped: the driver's calls come from it and must still reach a held-down node to lift
+// its rules, and its own node drops the other side in both directions, which cuts the
+// link on its own (docs/12 §3).
+func (t *faultTable) rules(n NodeRef, all []NodeRef, keep string) []string {
 	var out []string
 	for _, o := range all {
-		if o.Idx == n.Idx {
+		if o.Idx == n.Idx || (keep != "" && o.RPC == keep) {
 			continue
 		}
 		cut := t.held[n.Idx] || t.held[o.Idx] || (t.side[n.Idx] != 0 && t.side[o.Idx] != 0 && t.side[n.Idx] != t.side[o.Idx])
@@ -144,7 +147,7 @@ func (e *LiveEnv) applyFaults(ctx context.Context, skip ...NodeRef) error {
 		if skipped {
 			continue
 		}
-		if err := e.SetFault(ctx, n, e.faults.rules(n, e.all)); err != nil && first == nil {
+		if err := e.SetFault(ctx, n, e.faults.rules(n, e.all, e.SelfAddr)); err != nil && first == nil {
 			first = fmt.Errorf("fault rules on %s: %w", n.Name, err)
 		}
 	}
@@ -175,7 +178,7 @@ func (e *LiveEnv) Kill(ctx context.Context, n NodeRef) error {
 	if err := e.AwaitHealth(ctx, n, 2*time.Minute); err != nil {
 		return err
 	}
-	return e.SetFault(ctx, n, e.faults.rules(n, e.all))
+	return e.SetFault(ctx, n, e.faults.rules(n, e.all, e.SelfAddr))
 }
 
 // Start lifts a kill's hold-down (the process is already back) and waits for /health.

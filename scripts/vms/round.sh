@@ -89,7 +89,10 @@ ready_or_log() { # <os> <seconds>: like wait_ready, but a node that stays unread
 }
 mount_() { # <os>: mount, and on Windows only check that the mapping works (it is per session)
   case "$1" in
-    win) vm_ssh win 'tailraid mount; if (-not (Test-Path T:\)) { throw "T: not mapped" }; Get-ChildItem T:\ | Out-Null; tailraid umount' | tr -d '\r' ;;
+    # the SMB redirector remembers a path it failed to reach (the slate step's umount
+    # ran against no server) for a few seconds: error 53 right after the service came up
+    # is retried
+    win) vm_ssh win 'for ($i = 0; $i -lt 6; $i++) { tailraid mount; if (Test-Path T:\) { break }; Start-Sleep -Seconds 5 }; if (-not (Test-Path T:\)) { throw "T: not mapped" }; Get-ChildItem T:\ | Out-Null; tailraid umount' | tr -d '\r' ;;
     *) tr_ "$1" mount && vm_ssh "$1" "ls $(mount_path "$1") >/dev/null" ;;
   esac
 }

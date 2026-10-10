@@ -327,7 +327,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
   it, and once the service manager has it back it drops every peer until the phase's
   `Start`, so "m nodes dead" holds for as long as the phase needs rather than for the
-  service manager's restart delay. The device running `verify` is never killed (its mount
+  service manager's restart delay. No rule ever names the device running `verify`: its
+  calls must still reach a held-down or cut-off node to lift the rules, and its own
+  node's rules cut the link in both directions on their own (the three-VM rounds found
+  a partition that could never be healed otherwise). The device running `verify` is never killed (its mount
   is the run's only volume); when it leads, the consensus phase is skipped.
 - **Driver rules.** A phase runs in its own goroutine under the profile's `PhaseTimeout`
   (20 min in the quick profile; 0 is no limit): a phase that panics or overruns is one
