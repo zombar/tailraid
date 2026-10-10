@@ -202,6 +202,11 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	if seed, err := cluster.LoadMemberSeed(cfgB.Node.DataDir); err != nil || len(seed) == 0 || seed[0].Addr != "127.0.0.1" {
 		t.Fatalf("member seed after join: %+v %v", seed, err)
 	}
+	// and the log it received is snapshotted, so serve restores the table at open (the
+	// snapshot waits for the FSM to pass the joiner's own configuration entry)
+	if snaps, err := os.ReadDir(filepath.Join(cfgB.Node.DataDir, "raft", "snapshots")); err != nil || len(snaps) == 0 {
+		t.Fatalf("no raft snapshot after the join: %v %v", snaps, err)
+	}
 	cid, err := cluster.LoadClusterID(cfgA.Node.DataDir)
 	if err != nil {
 		t.Fatal(err)

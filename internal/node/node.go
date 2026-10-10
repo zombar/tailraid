@@ -942,10 +942,29 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	// snapshot it: Raft restores a table at open from a snapshot only
 	if err := n.WaitReady(ctx, 60*time.Second); err != nil {
 		log.Warn("joined, but the log has not fully replicated yet; serve will finish it", "err", err)
-	} else if err := n.Raft.Snapshot().Error(); err != nil {
-		log.Debug("no snapshot after the join", "err", err)
+	} else if err := snapshotAfterJoin(ctx, n); err != nil {
+		log.Warn("no snapshot after the join; serve relies on the member seed until the leader connects", "err", err)
 	}
 	return resp, nil
+}
+
+// snapshotAfterJoin takes the joiner's first snapshot. Raft refuses one until its FSM
+// goroutine has passed the newest configuration entry (the joiner's own add_voter,
+// which lands after the last command WaitReady waited for), so a refusal is retried for
+// a few seconds.
+func snapshotAfterJoin(ctx context.Context, n *cluster.Node) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := n.Raft.Snapshot().Error()
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // codecCompatible refuses to join a cluster whose node writes a newer log and snapshot
