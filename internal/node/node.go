@@ -134,8 +134,17 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	} else if len(seed) > 0 {
 		auth.SetSeed(seed)
 	}
-	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
-		return fmt.Errorf("waiting for raft: %w", err)
+	// A node whose snapshot holds its own row and the volume serves at once, leader or
+	// not: stale gateways, ready=false, ready once a leader connects (I-134). Waiting for
+	// a leader here would exit after the bound and leave the service manager restarting
+	// a node that nobody can reach meanwhile. Only a node without that state (the first
+	// start after a join that ended before its snapshot) needs the log first.
+	if _, ok := node.SelfIdx(); !ok || node.FSM.Volume().ChunkSize == 0 {
+		if err := node.WaitReady(ctx, 60*time.Second); err != nil {
+			return fmt.Errorf("waiting for raft: %w", err)
+		}
+	} else if !node.Ready() {
+		log.Info("no leader yet; serving stale until one connects (status exits 1 meanwhile)")
 	}
 	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, node.FSM.Nodes()); err != nil {
 		log.Warn("member seed not written", "err", err)

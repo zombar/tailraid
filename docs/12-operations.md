@@ -44,6 +44,16 @@ status, because its Raft and RPC listeners are bound to the old address; the ser
 restart policy brings it back on the new one within seconds. Without a service manager,
 restart `tailraid serve` by hand.
 
+**Start without a leader.** `serve` waits for the log only when its data directory holds
+no snapshot with its own row and the volume (the first start after a join that ended
+before the snapshot); otherwise it starts its listeners at once, with or without a
+leader, serving its gateways stale (docs/02, I-39) and answering `/health` with
+`ready: false` until a leader connects, so `status` exits 1 meanwhile (I-125). A node
+that waited a minute for a leader and then exited was what the three-VM rounds saw: the
+service manager restarted it every minute and a killed node never came back within the
+soak's settle time, because the leader stays out of reach for as long as the fault lasts
+and the restart loop never let the node be reached either (I-134).
+
 **Confinement (Linux).** The unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
 `ProtectHome=read-only` and `PrivateTmp`, and `ReadWritePaths` names exactly the data
 directory, every added disk and the config directory (plus the log file's directory when
@@ -79,7 +89,7 @@ count on the next line (I-124).
 
 ## 2. Windows mount
 
-Windows mounts the SMB gateway (docs/15): `tailraid mount T:` runs `net use` with the
+Windows mounts the SMB gateway (docs/15): `tailraid mount T:` runs `New-SmbMapping` with the
 gateway's port, which needs Windows 11 24H2 or newer. There is no portmapper and no NFS
 client to enable.
 
@@ -325,6 +335,10 @@ recovered nodes are two clusters.
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
   refuses a running node, an uninitialised directory and a list without this node.
+- **I-134** — A `serve` whose data directory holds its own row and the volume starts
+  serving without a leader: its RPC answers within seconds with `ready: false`, its
+  gateways serve stale, and it is ready once a leader connects; only a node without that
+  state waits for the log, bounded, and exits when none arrives.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -348,3 +362,4 @@ recovered nodes are two clusters.
 | I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
+| I-134 | `TestCLI_Serve_WithoutLeader_StartsStale` |
