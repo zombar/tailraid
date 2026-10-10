@@ -329,7 +329,12 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   live cluster the phase uses the cluster's own S3 node when this device holds its key:
   it registers nothing, skips the refusal and the drain, deletes behind the cluster's
   back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
-  I-137, I-138, I-42, I-149, L-104, L-112, L-139). The compose rig gives four nodes two disks each, one
+  I-137, I-138, I-42, I-149, L-104, L-112, L-139); 17 hot path (a 64-chunk file written
+  through one gateway and read whole, cold, through another: the content exact, the
+  cold-read MiB/s reported, readahead having served every chunk but the first window
+  (`readahead_joined`, docs/12 §8), fetched no more than the file's chunks, and never more
+  than `ReadAhead` prefetches in flight in any status sample; on a rig with one gateway the
+  readahead checks are skipped when the client's own cache served the read; I-166). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it) and an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket; `cmd/soak -phases 15` runs a subset of

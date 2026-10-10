@@ -226,12 +226,7 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	ctx, cancel := bound(ctx, chunk.MaxPayload) // the reply is up to a shard
 	defer cancel()
 	if t.self && t.store != nil {
-		rc, _, err := t.store.Open(key)
-		if err != nil {
-			return nil, err
-		}
-		defer rc.Close()
-		return io.ReadAll(rc)
+		return t.store.Get(key) // the verified payload, no second copy
 	}
 	resp, err := c.do(ctx, http.MethodGet, t.addr, t.prefix+string(key), nil, nil)
 	if err != nil {

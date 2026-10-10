@@ -68,7 +68,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-60 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-53 snapshot restore on follower | Committed | `TestFSM_ApplySnapshotRestoreEquivalence` |
 | L-61 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-54 leader change | Committed | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits` |
 | L-62 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-55 WaitApplied | Committed | `TestOverlay_CommitFlushed_ResetsOrCompacts` |
-| L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestReader_FetchFirstK` |
+| L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestReader_FetchFirstK`, `TestReader_FetchFirstK_ParityRanksFirst` |
 | L-64 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-57 read, m unreachable | Committed | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-65 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-58 read, m+1 unreachable | Committed | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-66 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-59 cache hit | Committed | `TestReader_ReadsWithOneNodeDown_AndFromCache` |

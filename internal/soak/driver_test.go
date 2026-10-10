@@ -30,7 +30,8 @@ type fakeEnv struct {
 	caps      Caps
 	statusErr error
 	dump      string
-	auto      bool // the volume's policy is automatic until a SetPolicy pins it
+	auto      bool                 // the volume's policy is automatic until a SetPolicy pins it
+	gateway   *admin.GatewayReport // attached to every status when set (the hot-path phase)
 }
 
 func newFakeEnv(n int) *fakeEnv {
@@ -69,8 +70,13 @@ func (e *fakeEnv) Status(_ context.Context, n NodeRef) (admin.Report, error) {
 	}
 	e.mu.Lock()
 	auto := e.auto
+	var gateway *admin.GatewayReport
+	if e.gateway != nil {
+		g := *e.gateway // a copy: the phase reads it before and after, the fake mutates it in between
+		gateway = &g
+	}
 	e.mu.Unlock()
-	rep := admin.Report{Node: n.Name, Leader: "n1", Health: "healthy", Volume: admin.VolumeReport{K: 2, M: 1, ChunkSize: 4096, Auto: auto}}
+	rep := admin.Report{Node: n.Name, Leader: "n1", Health: "healthy", Volume: admin.VolumeReport{K: 2, M: 1, ChunkSize: 4096, Auto: auto}, Gateway: gateway}
 	for _, m := range e.nodes {
 		rep.Nodes = append(rep.Nodes, admin.NodeReport{Idx: m.Idx, Name: m.Name, Kind: "device", State: "active", Voter: true, Leader: m.Idx == 1, Live: true})
 	}

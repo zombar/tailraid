@@ -263,7 +263,7 @@ func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64
    chunk share a single fetch.
 2. `c := st.GetChunk(h)`; missing → `EIO` (metadata says the chunk exists; this is a bug or
    a lost majority, not a normal path).
-3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131), and slots are offered in placement order so data shards win ties over parity (L-63).
+3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131). The ranked order is then stably partitioned: this host's own shards first (no network), then data slots, then parity, whatever the RTT, so a decode is needed only when a data holder is dead or hedged, or this host holds a parity shard of its own (L-63).
 4. Fetch the first `k` shards in parallel. On any failure or `ErrCorrupt`, pull the next slot
    in `order` until `k` good shards or the list is exhausted (→ `EIO`, logged with the chunk
    hash and the slots tried).
@@ -274,6 +274,22 @@ func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64
 `ReadAt` walks chunk indexes, copies `min(eff, c.Size)` bytes from each chunk and zero-fills
 the remainder (a short dedup'd chunk under a truncate-up). The overlay is consulted first:
 `Overlay.Read` merges WAL extents over base bytes.
+
+**Readahead.** A chunk fetch costs a network round trip plus the transfer, and the NFS
+and SMB clients ask for one range at a time, so without readahead a sequential read moves
+one chunk per fetch latency whatever the link. `vfs.File.ReadAt` (the gateways and the
+web UI; never the flusher's base reads) therefore calls `Reader.Prefetch(inode, off)`
+before it reads: a READ of chunk *i* is *sequential* when *i* = 0 or *i* is the chunk
+after the inode's previous READ, and a sequential READ starts a background fetch of chunks
+*i+1 … i+ReadAhead* (4) into the cache. A prefetch is never started for `HashZero`, for a
+chunk the cache already holds, for one already in flight, by a non-sequential READ, or by
+a reader without a cache; at most `ReadAhead` prefetches run gateway-wide, and a further
+candidate is skipped, never queued. A prefetch registers in the in-flight table before it
+starts, so a client READ that reaches a chunk being prefetched joins that fetch instead of
+starting another; its result goes only to the cache, and its failure is logged at debug
+and changes nothing the client sees (the client's own READ of that chunk fetches it
+normally). `Reader.Prefetching()` reports the prefetches in flight; `status` carries the
+chunks readahead fetched and the client READs it served (docs/12 §8).
 
 ## 6. Visibility
 
@@ -356,6 +372,7 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 | compaction | one streaming buffer | 1 MiB | the rewrite |
 | shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 1 MiB, 4 at 64 MiB) | the reply |
 | read cache, memory tier | hot decoded chunks | 64 MiB | LRU |
+| readahead | the chunk and its k shards per prefetch (§5) | `ReadAhead × (ChunkSize + k · ShardLen(ChunkSize, k))` = 4 × 2 MiB = **8 MiB** at 1 MiB and (3,2) | the cache Put |
 | FSM | the chunk list of every file, 32 B per chunk | docs/01 | – |
 
 `Flusher.Buffers()` reports the flush row live and its peak since start; `status` shows it
@@ -384,6 +401,12 @@ the WAL cap.
   compaction or reopen that fails, every call on that WAL returns `ErrWALClosed` until the
   gateway restarts and replays the log, and replay reports the bytes it discarded after
   the last intact record.
+- **I-166** — Readahead is bounded and invisible: at most `ReadAhead` prefetches are in
+  flight gateway-wide (`Reader.Prefetching()` never exceeds it), a prefetch is started only
+  by a sequential READ, never for `HashZero`, a cached chunk or one already in flight,
+  shares the in-flight table with foreground reads so no chunk is fetched twice, holds no
+  bytes beyond its own fetch (the result goes only to the cache), and its failure changes
+  nothing a client sees.
 
 ## Tests
 
@@ -397,6 +420,7 @@ the WAL cap.
 | I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
+| I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |

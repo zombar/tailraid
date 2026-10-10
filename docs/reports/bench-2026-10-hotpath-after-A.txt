@@ -1,0 +1,132 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/zombar/tailraid/internal/meta
+cpu: Apple M2 Max
+BenchmarkFSM_Commit_LargeFile-12    	   25813	     45437 ns/op	  525247 B/op	      12 allocs/op
+BenchmarkFSM_Commit_LargeFile-12    	   24322	     44589 ns/op	  525261 B/op	      12 allocs/op
+BenchmarkFSM_Commit_LargeFile-12    	   24256	     46324 ns/op	  525262 B/op	      12 allocs/op
+BenchmarkFSM_Commit_LargeFile-12    	   24052	     46339 ns/op	  525264 B/op	      12 allocs/op
+BenchmarkFSM_Commit_LargeFile-12    	   24328	     44252 ns/op	  525261 B/op	      12 allocs/op
+BenchmarkFSM_Commit_LargeFile-12    	   27908	     44136 ns/op	  525245 B/op	      12 allocs/op
+BenchmarkLookup_LargeDir-12         	 9468351	       126.1 ns/op	      15 B/op	       1 allocs/op
+BenchmarkLookup_LargeDir-12         	 9258225	       126.6 ns/op	      15 B/op	       1 allocs/op
+BenchmarkLookup_LargeDir-12         	 9499629	       130.7 ns/op	      15 B/op	       1 allocs/op
+BenchmarkLookup_LargeDir-12         	 9347810	       128.5 ns/op	      15 B/op	       1 allocs/op
+BenchmarkLookup_LargeDir-12         	 9241758	       128.1 ns/op	      15 B/op	       1 allocs/op
+BenchmarkLookup_LargeDir-12         	 9436818	       126.3 ns/op	      15 B/op	       1 allocs/op
+BenchmarkGetInode_LargeDir-12       	54652376	        30.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetInode_LargeDir-12       	55854219	        22.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetInode_LargeDir-12       	55651206	        21.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetInode_LargeDir-12       	55776552	        21.38 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetInode_LargeDir-12       	55786926	        21.33 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGetInode_LargeDir-12       	55117296	        21.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReadDir_10k-12             	     660	   1821996 ns/op	 1687552 B/op	       2 allocs/op
+BenchmarkReadDir_10k-12             	     667	   1978840 ns/op	 1687556 B/op	       2 allocs/op
+BenchmarkReadDir_10k-12             	     542	   2012812 ns/op	 1687554 B/op	       2 allocs/op
+BenchmarkReadDir_10k-12             	     661	   1814170 ns/op	 1687553 B/op	       2 allocs/op
+BenchmarkReadDir_10k-12             	     656	   1815384 ns/op	 1687552 B/op	       2 allocs/op
+BenchmarkReadDir_10k-12             	     656	   1818133 ns/op	 1687552 B/op	       2 allocs/op
+BenchmarkFSSTAT-12                  	77480793	        15.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFSSTAT-12                  	81906598	        15.14 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFSSTAT-12                  	79921633	        15.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFSSTAT-12                  	81085650	        15.22 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFSSTAT-12                  	78110587	        15.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFSSTAT-12                  	80923198	        15.16 ns/op	       0 B/op	       0 allocs/op
+BenchmarkForEachChunk_100k-12       	      52	  22759055 ns/op	12195191 B/op	  100104 allocs/op
+BenchmarkForEachChunk_100k-12       	      46	  24583169 ns/op	12195187 B/op	  100104 allocs/op
+BenchmarkForEachChunk_100k-12       	      46	  23237755 ns/op	12195192 B/op	  100104 allocs/op
+BenchmarkForEachChunk_100k-12       	      49	  23713936 ns/op	12195185 B/op	  100104 allocs/op
+BenchmarkForEachChunk_100k-12       	      42	  23887764 ns/op	12195186 B/op	  100104 allocs/op
+BenchmarkForEachChunk_100k-12       	      49	  22913855 ns/op	12195191 B/op	  100104 allocs/op
+BenchmarkPlace_10Nodes-12           	  408236	      3013 ns/op	    1688 B/op	      20 allocs/op
+BenchmarkPlace_10Nodes-12           	  400027	      2990 ns/op	    1688 B/op	      20 allocs/op
+BenchmarkPlace_10Nodes-12           	  407683	      2979 ns/op	    1688 B/op	      20 allocs/op
+BenchmarkPlace_10Nodes-12           	  416359	      2936 ns/op	    1688 B/op	      20 allocs/op
+BenchmarkPlace_10Nodes-12           	  414043	      2950 ns/op	    1688 B/op	      20 allocs/op
+BenchmarkPlace_10Nodes-12           	  420378	      2931 ns/op	    1688 B/op	      20 allocs/op
+PASS
+ok  	github.com/zombar/tailraid/internal/meta	64.648s
+goos: darwin
+goarch: arm64
+pkg: github.com/zombar/tailraid/internal/vfs
+cpu: Apple M2 Max
+BenchmarkExtents_Insert-12          	  121431	     10122 ns/op	  111410 B/op	       1 allocs/op
+BenchmarkExtents_Insert-12          	  118236	      9850 ns/op	  110871 B/op	       1 allocs/op
+BenchmarkExtents_Insert-12          	  132321	     10167 ns/op	  111410 B/op	       1 allocs/op
+BenchmarkExtents_Insert-12          	  130572	      9990 ns/op	  111075 B/op	       1 allocs/op
+BenchmarkExtents_Insert-12          	  125460	     10340 ns/op	  112552 B/op	       1 allocs/op
+BenchmarkExtents_Insert-12          	  137122	     10448 ns/op	  112454 B/op	       1 allocs/op
+BenchmarkExtents_CoversChunk-12     	22214491	        53.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExtents_CoversChunk-12     	22054515	        53.44 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExtents_CoversChunk-12     	22628754	        53.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExtents_CoversChunk-12     	22333683	        53.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExtents_CoversChunk-12     	22046040	        53.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkExtents_CoversChunk-12     	22879912	        53.91 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFlush_FullChunks-12        	       3	 530989278 ns/op	   1.97 MB/s	 3981642 B/op	    2839 allocs/op
+BenchmarkFlush_FullChunks-12        	       4	 288193230 ns/op	   3.64 MB/s	 3971766 B/op	    2806 allocs/op
+BenchmarkFlush_FullChunks-12        	       4	 281188521 ns/op	   3.73 MB/s	 3973416 B/op	    2807 allocs/op
+BenchmarkFlush_FullChunks-12        	       4	 286249427 ns/op	   3.66 MB/s	 3969640 B/op	    2807 allocs/op
+BenchmarkFlush_FullChunks-12        	       4	 290534812 ns/op	   3.61 MB/s	 3965846 B/op	    2794 allocs/op
+BenchmarkFlush_FullChunks-12        	       4	 287131250 ns/op	   3.65 MB/s	 3969720 B/op	    2801 allocs/op
+BenchmarkRead_Cached-12             	  765082	      1422 ns/op	46074.54 MB/s	       3 B/op	       0 allocs/op
+BenchmarkRead_Cached-12             	  791055	      1552 ns/op	42238.09 MB/s	       3 B/op	       0 allocs/op
+BenchmarkRead_Cached-12             	  799864	      1598 ns/op	41023.94 MB/s	       3 B/op	       0 allocs/op
+BenchmarkRead_Cached-12             	  792807	      1512 ns/op	43335.25 MB/s	       3 B/op	       0 allocs/op
+BenchmarkRead_Cached-12             	  768150	      1526 ns/op	42955.28 MB/s	       3 B/op	       0 allocs/op
+BenchmarkRead_Cached-12             	  663382	      1510 ns/op	43396.45 MB/s	       3 B/op	       0 allocs/op
+BenchmarkRead_Uncached-12           	    9501	    118823 ns/op	 551.54 MB/s	  166382 B/op	      62 allocs/op
+BenchmarkRead_Uncached-12           	    8979	    116234 ns/op	 563.83 MB/s	  166387 B/op	      62 allocs/op
+BenchmarkRead_Uncached-12           	    9578	    113921 ns/op	 575.28 MB/s	  166384 B/op	      62 allocs/op
+BenchmarkRead_Uncached-12           	   10000	    118576 ns/op	 552.69 MB/s	  166388 B/op	      62 allocs/op
+BenchmarkRead_Uncached-12           	    9876	    113931 ns/op	 575.23 MB/s	  166389 B/op	      62 allocs/op
+BenchmarkRead_Uncached-12           	   10000	    117959 ns/op	 555.58 MB/s	  166393 B/op	      62 allocs/op
+BenchmarkReadDirPlus_10k-12         	     507	   2411260 ns/op	 3611418 B/op	   10007 allocs/op
+BenchmarkReadDirPlus_10k-12         	     519	   2300591 ns/op	 3611416 B/op	   10007 allocs/op
+BenchmarkReadDirPlus_10k-12         	     520	   2301546 ns/op	 3611416 B/op	   10007 allocs/op
+BenchmarkReadDirPlus_10k-12         	     524	   2293226 ns/op	 3611416 B/op	   10007 allocs/op
+BenchmarkReadDirPlus_10k-12         	     523	   2274186 ns/op	 3611417 B/op	   10007 allocs/op
+BenchmarkReadDirPlus_10k-12         	     543	   2289812 ns/op	 3611416 B/op	   10007 allocs/op
+BenchmarkRead_Sequential_Cold-12    	      99	  15753765 ns/op	  66.56 MB/s	 2725673 B/op	    1541 allocs/op
+BenchmarkRead_Sequential_Cold-12    	      84	  17659684 ns/op	  59.38 MB/s	 2719030 B/op	    1539 allocs/op
+BenchmarkRead_Sequential_Cold-12    	      97	  13805240 ns/op	  75.95 MB/s	 2725321 B/op	    1537 allocs/op
+BenchmarkRead_Sequential_Cold-12    	      94	  14547470 ns/op	  72.08 MB/s	 2724248 B/op	    1536 allocs/op
+BenchmarkRead_Sequential_Cold-12    	      90	  14055813 ns/op	  74.60 MB/s	 2721905 B/op	    1538 allocs/op
+BenchmarkRead_Sequential_Cold-12    	      80	  12594835 ns/op	  83.25 MB/s	 2715052 B/op	    1537 allocs/op
+PASS
+ok  	github.com/zombar/tailraid/internal/vfs	254.879s
+goos: darwin
+goarch: arm64
+pkg: github.com/zombar/tailraid/internal/chunk
+cpu: Apple M2 Max
+BenchmarkStore_Put-12    	     120	  11355687 ns/op	  92.34 MB/s	    3200 B/op	      34 allocs/op
+BenchmarkStore_Put-12    	     100	  11376044 ns/op	  92.17 MB/s	    3237 B/op	      35 allocs/op
+BenchmarkStore_Put-12    	      92	  11160706 ns/op	  93.95 MB/s	    3224 B/op	      35 allocs/op
+BenchmarkStore_Put-12    	     103	   9737138 ns/op	 107.69 MB/s	    3237 B/op	      35 allocs/op
+BenchmarkStore_Put-12    	     100	  11338032 ns/op	  92.48 MB/s	    3246 B/op	      35 allocs/op
+BenchmarkStore_Put-12    	      80	  19487092 ns/op	  53.81 MB/s	    3258 B/op	      35 allocs/op
+BenchmarkCache_Get-12    	30238189	        34.27 ns/op	30597263.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12    	35991721	        33.93 ns/op	30901290.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12    	35118481	        34.34 ns/op	30536049.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12    	35125206	        33.92 ns/op	30911972.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12    	35476018	        34.05 ns/op	30791877.08 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCache_Get-12    	35413768	        34.13 ns/op	30722154.76 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/zombar/tailraid/internal/chunk	17.183s
+goos: darwin
+goarch: arm64
+pkg: github.com/zombar/tailraid/internal/ec
+cpu: Apple M2 Max
+BenchmarkEncode_4_2_1MiB-12               	    6826	    174433 ns/op	6011.34 MB/s	 1574645 B/op	      18 allocs/op
+BenchmarkEncode_4_2_1MiB-12               	    6618	    170147 ns/op	6162.75 MB/s	 1574508 B/op	      18 allocs/op
+BenchmarkEncode_4_2_1MiB-12               	    7082	    166221 ns/op	6308.32 MB/s	 1574482 B/op	      18 allocs/op
+BenchmarkEncode_4_2_1MiB-12               	    6964	    167996 ns/op	6241.69 MB/s	 1574483 B/op	      18 allocs/op
+BenchmarkEncode_4_2_1MiB-12               	    7138	    163990 ns/op	6394.15 MB/s	 1574466 B/op	      18 allocs/op
+BenchmarkEncode_4_2_1MiB-12               	    7414	    166865 ns/op	6283.98 MB/s	 1574489 B/op	      18 allocs/op
+BenchmarkDecode_4_2_1MiB_OneMissing-12    	    6908	    169569 ns/op	6183.78 MB/s	 1321590 B/op	      23 allocs/op
+BenchmarkDecode_4_2_1MiB_OneMissing-12    	    7599	    165282 ns/op	6344.15 MB/s	 1321605 B/op	      23 allocs/op
+BenchmarkDecode_4_2_1MiB_OneMissing-12    	    7392	    168389 ns/op	6227.12 MB/s	 1321593 B/op	      23 allocs/op
+BenchmarkDecode_4_2_1MiB_OneMissing-12    	    7110	    166146 ns/op	6311.17 MB/s	 1321589 B/op	      23 allocs/op
+BenchmarkDecode_4_2_1MiB_OneMissing-12    	    7136	    164759 ns/op	6364.32 MB/s	 1321580 B/op	      23 allocs/op
+BenchmarkDecode_4_2_1MiB_OneMissing-12    	    7012	    164427 ns/op	6377.17 MB/s	 1321499 B/op	      23 allocs/op
+PASS
+ok  	github.com/zombar/tailraid/internal/ec	14.618s

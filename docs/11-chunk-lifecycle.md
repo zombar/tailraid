@@ -255,7 +255,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-60 | Committed | E-53 snapshot restore on follower | Committed | restored entry identical; FSM hash equal | `TestFSM_ApplySnapshotRestoreEquivalence` |
 | L-61 | Committed | E-54 leader change | Committed | no chunk-level effect; repair queue rebuilt by new leader from FSM | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits` |
 | L-62 | Committed | E-55 WaitApplied | Committed | flushed extents cleared; `wal.Reset()` when inode clean | `TestOverlay_CommitFlushed_ResetsOrCompacts` |
-| L-63 | Committed | E-56 read, all reachable | Committed | first k by `Rank` (self first, then RTT; data slots before parity at equal rank); decode only if a data shard is missing | `TestReader_FetchFirstK` |
+| L-63 | Committed | E-56 read, all reachable | Committed | first k by `Rank` stably partitioned own shards, then data slots, then parity, whatever the rank; decode only if a data holder is dead or hedged or self holds parity | `TestReader_FetchFirstK`, `TestReader_FetchFirstK_ParityRanksFirst` |
 | L-64 | Committed | E-57 read, m unreachable | Committed | decode from any k; latency higher; no error | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-65 | Committed | E-58 read, m+1 unreachable | Committed | EIO; no partial/garbage data; other chunks unaffected | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-66 | Committed | E-59 cache hit | Committed | no network; bytes verified against Hash on insert | `TestReader_ReadsWithOneNodeDown_AndFromCache` |

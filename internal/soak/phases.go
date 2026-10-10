@@ -39,6 +39,7 @@ var phases = []phase{
 	{"13 disks", phaseDisks},
 	{"14 diskless host", phaseDiskless},
 	{"15 s3 bucket", phaseBucket},
+	{"17 hot path", phaseHotPath}, // 16 is the web UI's (its branch)
 }
 
 // model is the client's belief about the corpus: path → content.

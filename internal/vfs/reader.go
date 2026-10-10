@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -35,10 +36,25 @@ type Reader struct {
 	BadSlot func(key chunk.ShardKey, node meta.NodeIdx)
 	Events  *meta.EventRing // chunk history (nil unless dev.enabled)
 
-	mu       sync.Mutex
-	inflight map[meta.Hash]*fetchCall // one fetch per hash at a time; readahead shares it
-	lat      latencyRing              // recent shard GET times: the hedge delay is their p95
+	mu         sync.Mutex
+	inflight   map[meta.Hash]*fetchCall // one fetch per hash at a time; readahead shares it
+	last       map[meta.Ino]uint64      // the chunk index of each inode's previous READ (readahead)
+	prefetched map[meta.Hash]struct{}   // chunks a prefetch cached that no READ has consumed yet
+	lat        latencyRing              // recent shard GET times: the hedge delay is their p95
+
+	slots       chan struct{} // ReadAhead prefetch slots, gateway-wide (I-166)
+	prefetching atomic.Int32
+	raFetched   atomic.Uint64 // chunks a prefetch fetched
+	raJoined    atomic.Uint64 // READs served by a chunk a prefetch fetched or was fetching
 }
+
+// ReadAhead is how many chunks a sequential READ prefetches beyond the one it asks for,
+// and the most prefetches in flight gateway-wide (docs/04 §5, I-166).
+const ReadAhead = 4
+
+// hintCap bounds the per-inode and per-hash bookkeeping of readahead: past it the maps
+// are cleared, costing at worst one missed prefetch per inode.
+const hintCap = 4096
 
 // latencyRing keeps the last 64 successful shard GET durations.
 type latencyRing struct {
@@ -81,17 +97,105 @@ func (r *latencyRing) hedgeDelay() time.Duration {
 
 // fetchCall is a fetch in progress that later readers of the same chunk wait on.
 type fetchCall struct {
-	done chan struct{}
-	data []byte
-	err  error
+	done     chan struct{}
+	data     []byte
+	err      error
+	prefetch bool        // started by readahead, not by a READ
+	joined   atomic.Bool // a READ waited on this prefetch (counted once, not again on the cache hit)
 }
 
-// NewReader wires a reader. cache may be nil.
+// NewReader wires a reader. cache may be nil (then nothing is prefetched: a prefetch has
+// nowhere to leave its result).
 func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache *chunk.Cache, codecs *ec.Pool) *Reader {
 	if codecs == nil {
 		codecs = &ec.Pool{}
 	}
-	return &Reader{st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(), inflight: map[meta.Hash]*fetchCall{}}
+	return &Reader{
+		st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(),
+		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]uint64{}, prefetched: map[meta.Hash]struct{}{},
+		slots: make(chan struct{}, ReadAhead),
+	}
+}
+
+// Prefetching reports the prefetches in flight; it never exceeds ReadAhead (I-166).
+func (r *Reader) Prefetching() int { return int(r.prefetching.Load()) }
+
+// ReadaheadStats reports the chunks readahead fetched and the READs it served (docs/12 §8).
+func (r *Reader) ReadaheadStats() (fetched, joined uint64) {
+	return r.raFetched.Load(), r.raJoined.Load()
+}
+
+// Prefetch is called by File.ReadAt before a read at off: a sequential READ (chunk 0, or
+// the chunk after the inode's previous READ) starts a background fetch of the next
+// ReadAhead chunks into the cache (docs/04 §5). A hole, a cached chunk and one already in
+// flight are skipped; so is every candidate once the ReadAhead slots are busy, rather
+// than queued. A prefetch is registered in the in-flight table before it starts, so a READ
+// that reaches its chunk joins it; its result goes only to the cache and its failure is
+// logged at debug (I-166).
+func (r *Reader) Prefetch(in meta.Inode, off int64) {
+	if r.cache == nil || off < 0 {
+		return
+	}
+	idx := uint64(off) / uint64(r.st.Volume().ChunkSize)
+	r.mu.Lock()
+	prev, seen := r.last[in.Ino]
+	if len(r.last) >= hintCap {
+		clear(r.last)
+	}
+	r.last[in.Ino] = idx
+	r.mu.Unlock()
+	sequential := idx == 0 || (seen && idx == prev+1)
+	if !sequential {
+		return
+	}
+	for j := idx + 1; j <= idx+ReadAhead && j < uint64(len(in.Chunks)); j++ {
+		h := in.Chunks[j]
+		if h == meta.HashZero || r.cache.Has(h) {
+			continue
+		}
+		select {
+		case r.slots <- struct{}{}:
+		default:
+			return // every slot busy: skipped, never queued
+		}
+		r.mu.Lock()
+		if _, running := r.inflight[h]; running {
+			r.mu.Unlock()
+			<-r.slots
+			continue
+		}
+		call := &fetchCall{done: make(chan struct{}), prefetch: true}
+		r.inflight[h] = call
+		r.mu.Unlock()
+		r.prefetching.Add(1)
+		go func() {
+			defer func() {
+				r.prefetching.Add(-1)
+				<-r.slots
+			}()
+			if _, err := r.run(context.Background(), h, call); err != nil {
+				r.log.Debug("readahead fetch failed", "hash", fmt.Sprintf("%x", h[:8]), "err", err)
+				return
+			}
+			r.raFetched.Add(1)
+		}()
+	}
+}
+
+// run performs the fetch registered as call and settles every waiter.
+func (r *Reader) run(ctx context.Context, h meta.Hash, call *fetchCall) ([]byte, error) {
+	call.data, call.err = r.fetchChunk(ctx, h)
+	r.mu.Lock()
+	delete(r.inflight, h)
+	if call.prefetch && call.err == nil && !call.joined.Load() {
+		if len(r.prefetched) >= hintCap {
+			clear(r.prefetched)
+		}
+		r.prefetched[h] = struct{}{}
+	}
+	r.mu.Unlock()
+	close(call.done)
+	return call.data, call.err
 }
 
 func sha256Sum(b []byte) meta.Hash { return sha256.Sum256(b) }
@@ -105,6 +209,12 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 	}
 	if r.cache != nil {
 		if b, ok := r.cache.Get(h); ok {
+			r.mu.Lock()
+			if _, byPrefetch := r.prefetched[h]; byPrefetch {
+				delete(r.prefetched, h)
+				r.raJoined.Add(1)
+			}
+			r.mu.Unlock()
 			return b, nil
 		}
 	}
@@ -117,12 +227,10 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 		}
 		r.mu.Unlock()
 		if !running {
-			call.data, call.err = r.fetchChunk(ctx, h)
-			r.mu.Lock()
-			delete(r.inflight, h)
-			r.mu.Unlock()
-			close(call.done)
-			return call.data, call.err
+			return r.run(ctx, h, call)
+		}
+		if call.prefetch && call.joined.CompareAndSwap(false, true) {
+			r.raJoined.Add(1)
 		}
 		select {
 		case <-call.done:
@@ -164,8 +272,9 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %w", ErrIO, err)
 	}
 	// Live holders only (L-131): a dead node would cost the dial or header timeout for
-	// nothing. Holders are offered to Rank in slot order, so data slots come first at
-	// equal rank and a decode is only needed when a data shard is unreachable (L-63).
+	// nothing. The ranked order is then stably partitioned: this host's own shards first
+	// (no network), then data slots, then parity, whatever the RTT, so a decode is only
+	// needed when a data holder is dead or hedged (L-63).
 	live := meta.LiveSet(r.peers.Live())
 	slotOf := map[meta.NodeIdx]int{}
 	var holders []meta.NodeIdx
@@ -175,10 +284,22 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 			holders = append(holders, n)
 		}
 	}
+	local := r.localTargets()
 	order := make([]int, 0, len(holders))
 	for _, n := range r.peers.Rank(holders) {
 		order = append(order, slotOf[n])
 	}
+	tier := func(slot int) int {
+		switch {
+		case local[c.Placement[slot]]:
+			return 0
+		case slot < k:
+			return 1
+		default:
+			return 2
+		}
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return tier(a) - tier(b) })
 	shards := make([][]byte, total)
 	good := 0
 	type res struct {
@@ -245,6 +366,19 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk) ([]byte, error) {
 		return nil, fmt.Errorf("%w: decode chunk %x: %w", ErrIO, c.Hash[:8], err)
 	}
 	return data, nil
+}
+
+// localTargets is this host and its own disks: shards there cost no network.
+func (r *Reader) localTargets() map[meta.NodeIdx]bool {
+	self := r.peers.Self()
+	local := map[meta.NodeIdx]bool{self: true}
+	nodes := r.st.Nodes()
+	for i := range nodes {
+		if nodes[i].Kind == meta.KindDisk && nodes[i].Host == self {
+			local[nodes[i].Idx] = true
+		}
+	}
+	return local
 }
 
 // BaseReader is ReadAt as the overlay wants its base callback: a read past the committed

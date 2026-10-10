@@ -94,6 +94,18 @@ type GatewayReport struct {
 	FlushPeak    uint64 `json:"flush_peak"`  // the most it has held since start
 	FlushCap     uint64 `json:"flush_cap"`   // the bound of docs/04 §9 at the current policy
 	LastFlushErr string `json:"last_flush_err,omitempty"`
+	// readahead (docs/04 §5, I-166): chunks a prefetch fetched, READs served by one, and
+	// the prefetches in flight right now
+	ReadaheadFetched uint64 `json:"readahead_fetched"`
+	ReadaheadJoined  uint64 `json:"readahead_joined"`
+	Prefetching      int    `json:"prefetching"`
+}
+
+// WithReader adds the reader's readahead counters to the gateway view.
+func (g *GatewayReport) WithReader(rd *vfs.Reader) *GatewayReport {
+	g.ReadaheadFetched, g.ReadaheadJoined = rd.ReadaheadStats()
+	g.Prefetching = rd.Prefetching()
+	return g
 }
 
 // GatewayFromDirty folds the overlay's dirty list into the status view.
