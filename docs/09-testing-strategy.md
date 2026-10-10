@@ -427,6 +427,6 @@ components they exercise.
 | Invariant | Tests |
 |---|---|
 | I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
-| I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores` |
+| I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores`, `TestPhases_MembershipRestoresAutoMode` |
 | I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
 | I-114 | `TestExecute_AbortBeforePhases`, `TestExecute_CancelMarksNotRun`, `TestRender_ZeroPhasesAborted`, `TestRender_NotRunPhases`, `TestSummary_SkippedCheckCoversNothing` |

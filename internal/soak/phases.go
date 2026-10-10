@@ -840,13 +840,28 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	}
 	u := r.undoer(ctx)
 	defer u.run()
+	// the way back is the mode the cluster was in: an auto volume goes back to auto,
+	// not to a pin on the policy auto had chosen (I-112)
+	wasAuto := rep.Volume.Auto
+	restore := func(c context.Context) error {
+		if wasAuto {
+			return r.Env.SetPolicyAuto(c)
+		}
+		return r.Env.SetPolicy(c, k0, m0)
+	}
 	for _, pol := range [][2]uint8{{k1, m1}, {k0, m0}} {
-		if err := r.Env.SetPolicy(ctx, pol[0], pol[1]); err != nil {
+		var err error
+		if pol == [2]uint8{k0, m0} {
+			err = restore(ctx)
+		} else {
+			err = r.Env.SetPolicy(ctx, pol[0], pol[1])
+		}
+		if err != nil {
 			r.check("L-100", fmt.Sprintf("set-redundancy %d+%d accepted", pol[0], pol[1]), false, err.Error())
 			return nil
 		}
 		if pol == [2]uint8{k1, m1} {
-			u.add("set-redundancy back", func(c context.Context) error { return r.Env.SetPolicy(c, k0, m0) })
+			u.add("set-redundancy back", restore)
 		} else {
 			u.done("set-redundancy back")
 		}
