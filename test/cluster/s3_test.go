@@ -228,3 +228,68 @@ func TestS3Node_DeviceWithoutKeys(t *testing.T) {
 		t.Fatalf("placement %v names the bucket", ch.Placement)
 	}
 }
+
+// The leader judges a bucket by its own probe (docs/10 §4.3): a diskless voter that leads
+// with the key keeps the bucket's slots across fill_after, and one that leads without the
+// key re-places them onto devices once fill_after passes, as for a dead disk.
+// Invariant: I-148
+func TestS3Node_LeaderKeyDecidesFill(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		withKeys []int // nodes given the key; the diskless leader is node 0
+		kept     bool  // the bucket's slots survive a scan past fill_after
+	}{
+		{"leader holds the key", nil, true},
+		{"leader lacks the key", []int{1, 2}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testharness.NewCluster(t, 3, 2, 1, testharness.Diskless(0))
+			defer c.Close()
+			leader := c.Leader()
+			if leader != c.Nodes[0] || !c.Voter(0) {
+				t.Fatal("test needs the diskless voter n0 leading")
+			}
+			srv := s3test.New()
+			defer srv.Close()
+			bucket := c.AddS3(srv, "offsite", "c", tc.withKeys...)
+			if live := leader.Prober.IsLive(bucket); live != tc.kept {
+				t.Fatalf("bucket live on the leader: %v", live)
+			}
+			data := testharness.Pattern(2*int(testharness.ChunkSize), 9) // whole chunks: a short tail narrows to 1+1 and may skip the bucket
+			c.WriteFile(1, "/f", data)                                   // n1 holds the key in both cases
+			before := c.ChunksOf(1, "/f")
+			for _, ch := range before {
+				if bucketSlot(ch, bucket) < 0 {
+					t.Fatalf("placement %v: the bucket got no slot", ch.Placement)
+				}
+			}
+			c.AddNode(false) // a spare disk the leader could re-place the bucket's slots onto
+			st, err := newRepairer(c, leader, repairCfg()).Scan(ctx)
+			must(t, err)
+			if st.Repaired != 0 {
+				t.Fatalf("re-placed inside fill_after: %+v", st)
+			}
+			c.Clk.Advance(repairCfg().FillAfter + time.Second)
+			c.Probe()
+			st, err = newRepairer(c, leader, repairCfg()).Scan(ctx)
+			must(t, err)
+			c.Settle()
+			after := c.ChunksOf(0, "/f")
+			for i, ch := range after {
+				onBucket := bucketSlot(ch, bucket) >= 0
+				switch {
+				case tc.kept && !slices.Equal(ch.Placement, before[i].Placement):
+					t.Fatalf("placement moved with the key held: %v -> %v (scan %+v)", before[i].Placement, ch.Placement, st)
+				case !tc.kept && onBucket:
+					t.Fatalf("placement %v still names the bucket after fill_after (scan %+v)", ch.Placement, st)
+				}
+			}
+			if !tc.kept && st.Repaired == 0 {
+				t.Fatalf("scan after fill_after moved nothing: %+v", st)
+			}
+			if got, err := c.ReadFileCold(1, "/f"); err != nil || !bytes.Equal(got, data) {
+				t.Fatalf("read: %v", err)
+			}
+		})
+	}
+}

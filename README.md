@@ -86,10 +86,14 @@ A bucket at any S3 provider (Backblaze B2, Cloudflare R2, Hetzner, a MinIO on th
 export TAILRAID_S3_SECRET_KEY=…            # or type it when asked: never a flag
 tailraid node add-s3 offsite --endpoint https://s3.eu-central-003.backblazeb2.com \
   --bucket my-bucket --prefix tailraid --capacity 1T --access-key 003a…
-tailraid node keys offsite --access-key 003a…   # on every other device that writes
+tailraid node keys offsite --access-key 003a…   # on every other device
 ```
 
 `add-s3` writes, reads back and deletes a test object first, so a key without those rights is refused before anything is registered. The keys stay in `s3nodes.yaml` in each device's data directory and never reach the cluster state. tailraid does not encrypt data at rest, so the provider can read what lands in the bucket. Choose a provider with cheap or free egress: repairs read from the bucket when a device is down.
+
+Give the key to every device, voters above all. A device without it cannot write to the bucket, and a device that leads without it treats the bucket as dead: after `fill_after` it copies the bucket's shards back onto disks, as it would for a disk that went away. Use a key the provider scopes to that one bucket, since it sits on every device.
+
+A bucket holds one shard of every stripe, so it stores 1/k of the volume (half at 2+1, a quarter at 4+2). It is written when you write, probed with a cheap HEAD every 30 s by each device, listed once a day by the leader, and read only while a device holding a needed shard is down. A bucket never votes: it keeps your data safe while a device is away, not the volume writable. For that, pair it with a diskless voter (next section).
 
 Details: [docs/10-s3.md](docs/10-s3.md) §4.
 
@@ -136,6 +140,18 @@ tailraid node promote nas         # make a member a voter
 ```
 
 Run these from any member. `tailraid node ls` shows who votes.
+
+### A cheap always-on voter
+
+A voter needs no disk. A small cloud VM on the tailnet, joined with `--voter` and no `disks:` in its config, is a full member and gateway that stores nothing: it keeps the metadata available while your laptops are closed, and its `node ls` row says `no disks`. Two laptops plus such a VM are three voters, so the volume stays writable with the VM and either laptop up. Give it the S3 key when you have a bucket, because the VM is the device most likely to lead.
+
+```sh
+tailraid join 100.64.0.11 <token> --voter    # on the VM; nothing under disks: in its config
+tailraid install
+tailraid node keys offsite --access-key 003a…   # if the volume has a bucket
+```
+
+Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes.
 
 ## Everyday commands
 
