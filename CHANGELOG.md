@@ -2,6 +2,42 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.3 (2026-10-10)
+
+### Changes
+
+- soak: the membership phase hands an auto volume back in auto mode ([7ac9e21](https://github.com/zombar/tailraid/commit/7ac9e21))
+- The Windows node (honker) has restarted every minute since it joined: `serve` waits 60 s for its member table, the table never arrives because the authorizer refuses the leader ("raft connection refused: not a member"), serve exits, and the SCM starts it again. The RPC port never opens, so `status` and the web UI are refused. ([fbc397b](https://github.com/zombar/tailraid/commit/fbc397b))
+- vms: the update step restarts the restored binary when a release's rollback restart fails ([1f1cd8b](https://github.com/zombar/tailraid/commit/1f1cd8b))
+- smb: every reply of a compounded response is signed over what is sent ([6bfefb7](https://github.com/zombar/tailraid/commit/6bfefb7))
+- vms: the rig's sources live under scripts/vms and test/vms is state only, ignored as a whole ([4cf746b](https://github.com/zombar/tailraid/commit/4cf746b))
+- cli: update --restart resolves the service before the binary swap ([1066769](https://github.com/zombar/tailraid/commit/1066769))
+- cluster: a forward that never left is retried like a missing leader ([51b80a0](https://github.com/zombar/tailraid/commit/51b80a0))
+- vms: guest binaries under ~/.local/bin, and every guest's service log kept per round ([73c5469](https://github.com/zombar/tailraid/commit/73c5469))
+- node: a gateway that was the leader dates a leaderless spell from when it noticed ([4ba1f65](https://github.com/zombar/tailraid/commit/4ba1f65))
+- soak: verify on Windows rides out a gateway restart, and the drain guard counts targets ([83f9c7b](https://github.com/zombar/tailraid/commit/83f9c7b))
+- cluster: a drop rule fails the Raft connections already open with the peer ([9b80ebb](https://github.com/zombar/tailraid/commit/9b80ebb))
+- soak: a live run's drop rules never name the device running verify ([ae8b9e6](https://github.com/zombar/tailraid/commit/ae8b9e6))
+- vms: a round updates every node to the latest release with --restart and rolls it back ([26ad66b](https://github.com/zombar/tailraid/commit/26ad66b))
+- node: init, a ready serve and a clean shutdown snapshot, so every restart has its state ([52789da](https://github.com/zombar/tailraid/commit/52789da))
+- vms: Windows by password-authenticated SSH, liveness polled on every guest, the parity skip allowed ([9fc8c7b](https://github.com/zombar/tailraid/commit/9fc8c7b))
+- node: serve starts without a leader when its snapshot holds its row and the volume ([656855d](https://github.com/zombar/tailraid/commit/656855d))
+- smb: Windows mounts with New-SmbMapping, and a failed READ is an I/O error on the wire ([19109e3](https://github.com/zombar/tailraid/commit/19109e3))
+- vms: the Windows image installs unattended from a no-prompt copy of the ISO ([f982d52](https://github.com/zombar/tailraid/commit/f982d52))
+- vms: three local VMs (macOS, Linux, Windows) forming one volume, each OS first in turn ([4b4f296](https://github.com/zombar/tailraid/commit/4b4f296))
+- node: retry the joiner's first snapshot until Raft has passed its configuration entry ([5c5e933](https://github.com/zombar/tailraid/commit/5c5e933))
+- soak: one Full profile for cmd/soak --profile full and tailraid verify --full ([5f2903f](https://github.com/zombar/tailraid/commit/5f2903f))
+
+### Documentation
+
+- docs: README explains the Docker soak and the three-VM rig ([259f177](https://github.com/zombar/tailraid/commit/259f177))
+- docs: the license holder is FORGE3D CYF. ([9aaa6de](https://github.com/zombar/tailraid/commit/9aaa6de))
+- docs: AGPL-3.0 license file and the README notice ([6658659](https://github.com/zombar/tailraid/commit/6658659))
+
+### Tooling
+
+- tests: the shutdown hand-over test waits for the new leader's vote ([4ad0863](https://github.com/zombar/tailraid/commit/4ad0863))
+
 ## v0.4.2 (2026-10-10)
 
 ### Changes
