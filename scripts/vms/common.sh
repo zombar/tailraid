@@ -107,8 +107,9 @@ vm_ssh() {
   [ -n "$ip" ] || die "$os: no address (is it running?)"
   case "$os" in
     win) ssh "${SSH_OPTS[@]}" $WIN_SSH_OPTS -p "$(vm_port "$os")" "$VM_USER@$ip" "$@" ;;
-    # a non-interactive SSH shell on macOS has no /usr/local/bin or Homebrew on its PATH
-    *) ssh "${SSH_OPTS[@]}" -p "$(vm_port "$os")" "$VM_USER@$ip" "export PATH=/usr/local/bin:/opt/homebrew/bin:\$PATH; $*" ;;
+    # a non-interactive SSH shell has no ~/.local/bin (tailraid), /usr/local/bin or
+    # Homebrew on its PATH
+    *) ssh "${SSH_OPTS[@]}" -p "$(vm_port "$os")" "$VM_USER@$ip" "export PATH=\$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:\$PATH; $*" ;;
   esac
 }
 

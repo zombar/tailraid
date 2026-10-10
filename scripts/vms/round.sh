@@ -333,7 +333,20 @@ s9_disk_and_recover() {
   echo "recovered as a one-voter cluster; files still read"
 }
 
+# collect_logs: every guest's service log into the results directory, before the
+# teardown wipes it; a failed step is diagnosed from there
+collect_logs() {
+  for os in $OSES; do
+    case "$os" in
+      mac) vm_scp_from mac "/Users/admin/Library/Logs/tailraid/serve.log" "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
+      linux) vm_ssh linux "sudo journalctl -u tailraid --no-pager -n 3000" > "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
+      win) vm_scp_from win "C:/ProgramData/tailraid/serve.log" "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
+    esac
+  done
+}
+
 s10_teardown() {
+  collect_logs
   for os in $OSES; do
     case "$os" in
       win) vm_ssh win 'tailraid umount 2>$null | Out-Null; tailraid uninstall; tailraid reset --yes --discard-dirty' | tr -d '\r' || true ;;

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # binaries.sh — cross-build tailraid from the working tree for the three guests and copy
-# it in: /usr/local/bin/tailraid on macOS and Linux, C:\tailraid\tailraid.exe on Windows.
-# Every guest must then print the same `tailraid version`.
+# it in: ~/.local/bin/tailraid on macOS and Linux (what `make install` does, and a
+# directory the user owns so `tailraid update` can swap the binary beside it),
+# C:\tailraid\tailraid.exe on Windows. Every guest must then print the same
+# `tailraid version`.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 cd "$VMS_ROOT"
@@ -16,13 +18,12 @@ done
 
 for os in ${1:-$OSES}; do
   case "$os" in
-    mac)
-      vm_scp mac "$out/tailraid_darwin_arm64" /tmp/tailraid
-      vm_ssh mac "sudo install -m 755 /tmp/tailraid /usr/local/bin/tailraid"
-      ;;
-    linux)
-      vm_scp linux "$out/tailraid_linux_arm64" /tmp/tailraid
-      vm_ssh linux "sudo install -m 755 /tmp/tailraid /usr/local/bin/tailraid"
+    mac|linux)
+      arch=linux_arm64; [ "$os" = mac ] && arch=darwin_arm64
+      vm_scp "$os" "$out/tailraid_$arch" /tmp/tailraid
+      # beside, then rename: macOS kills a binary overwritten in place (a cached code
+      # signature), the same reason make install does it
+      vm_ssh "$os" "mkdir -p ~/.local/bin && sudo rm -f /usr/local/bin/tailraid && install -m 755 /tmp/tailraid ~/.local/bin/.tailraid.new && mv -f ~/.local/bin/.tailraid.new ~/.local/bin/tailraid"
       ;;
     win)
       # a running service keeps the exe open: stop it before the copy
