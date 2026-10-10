@@ -8,8 +8,10 @@ import (
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
-// A leader that shuts down hands leadership over first: another node leads the moment
-// Shutdown returns, and writes through it land without waiting for an election timeout.
+// A leader that shuts down hands leadership over first: another node leads as soon as
+// Shutdown returns (the transfer future resolves when the old leader has stepped down,
+// which is a vote's round trip before the target holds the term, so the check waits
+// for that and not for an election timeout), and writes through it land.
 //
 // Invariant: I-123
 func TestCluster_ShutdownTransfersLeadership(t *testing.T) {
@@ -18,15 +20,22 @@ func TestCluster_ShutdownTransfersLeadership(t *testing.T) {
 	c.WriteFile(0, "/before", testharness.Pattern(100, 1))
 	c.Settle()
 	leader := c.Leader()
+	start := time.Now()
 	must(t, leader.Node.Shutdown(5*time.Second))
 	newLeader := -1
-	for i, nd := range c.Nodes {
-		if nd != leader && nd.Node.IsLeader() {
-			newLeader = i
+	testharness.Eventually(t, func() bool {
+		for i, nd := range c.Nodes {
+			if nd != leader && nd.Node.IsLeader() {
+				newLeader = i
+				return true
+			}
 		}
-	}
-	if newLeader < 0 {
-		t.Fatal("no other node leads right after the hand-over")
+		return false
+	}, "no other node leads after the hand-over")
+	// the harness's election timeout is what a transfer saves; the hand-over must be
+	// well inside it
+	if took, limit := time.Since(start), testharness.RaftTiming().Election; took > limit {
+		t.Fatalf("the hand-over took %v, longer than an election timeout (%v)", took, limit)
 	}
 	c.Kill(leader.I) // the rest of the harness teardown for that node
 	other := 3 - leader.I - newLeader
