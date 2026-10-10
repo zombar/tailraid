@@ -58,6 +58,9 @@ type Config struct {
 	Trash struct {
 		Retention string `yaml:"retention"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
 	} `yaml:"trash"`
+	Cache struct {
+		Size string `yaml:"size"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
+	} `yaml:"cache"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
@@ -78,6 +81,22 @@ func (c Config) TrashRetention() (time.Duration, error) {
 		return 0, fmt.Errorf("config: trash.retention %q: want 0 or a duration of at least 1h", c.Trash.Retention)
 	}
 	return d, nil
+}
+
+// MinCacheSize is the smallest cache.size: under it the cache thrashes on one large file.
+const MinCacheSize = 64 << 20
+
+// CacheSize parses cache.size: 1 GiB when empty, otherwise at least MinCacheSize
+// (docs/12 §10, I-162).
+func (c Config) CacheSize() (int64, error) {
+	if c.Cache.Size == "" {
+		return 1 << 30, nil
+	}
+	n, err := ParseBytes(c.Cache.Size)
+	if err != nil || n < MinCacheSize {
+		return 0, fmt.Errorf("config: cache.size %q: want a size of at least 64MiB", c.Cache.Size)
+	}
+	return int64(n), nil
 }
 
 // Disk is one added disk: its mount path and its budget ("" derives it from the disk).
@@ -341,6 +360,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: mount.path %q: want an absolute path (~ is expanded)", c.Mount.Path)
 	}
 	if _, err := c.TrashRetention(); err != nil {
+		return err
+	}
+	if _, err := c.CacheSize(); err != nil {
 		return err
 	}
 	return nil

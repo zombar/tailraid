@@ -572,7 +572,7 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-159 | `TestStub_I_159` (planned: TestWebUI_Rename_Table, TestWebUI_Move_PerItemResults, TestWebUI_Batch_SizeBoundaries, TestWebUI_BodyCaps_AllMutatingRoutes) |
 | I-160 | `TestStub_I_160` (planned: TestWebUI_Thumb_Image_Generated_Cached_Hidden, TestWebUI_Thumb_Put_Boundaries, TestWebUI_Thumb_SweptWhenFileChanges) |
 | I-161 | `TestStub_I_161` (planned: TestDescribeChunksPage_Concurrent, TestWebUI_Chunks_HolesHaveSlots) |
-| I-162 | `TestStub_I_162` (planned: TestCache_PinnedNeverEvicted, TestPins_PrefetchFillsThenReadsOffline, TestPins_RenameKeepsPin, TestPins_UnpinReleases, TestPins_SurviveRestart, TestWebUI_Pins) |
+| I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs` (planned: TestWebUI_Pins) |
 | I-163 | `TestStub_I_163` (planned: TestWebUI_Flags_DirsOnly_Effective, TestWebUI_Mutations_ProtectedIs403) |
 | I-164 | `TestStub_I_164` (planned: TestWebUI_Tags_Table, TestWebUI_Tags_ReadBounded) |
 | I-165 | `TestStub_I_165` (planned: TestWebUI_Thumb_AudioCoverFallbackOrder, TestWebUI_Ls_DirCoverDeterministic) |

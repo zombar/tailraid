@@ -11,6 +11,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/vfs"
 )
@@ -157,6 +158,7 @@ type Report struct {
 	// is writing to the cluster and this node must be updated (docs/12 §6, I-105).
 	IncompatibleEntries uint64         `json:"incompatible_entries,omitempty"`
 	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
+	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	GeneratedAt         time.Time      `json:"generated_at"`
 }
@@ -304,6 +306,31 @@ func markDisks(nodes []NodeReport) {
 }
 
 // sharedDiskWarnings is one line per group of targets on one physical disk.
+// LowDiskWarning is the line status adds when the data disk is under 20 % free (docs/01
+// §Pins, I-162): the chunk cache, pinned bytes included, shares that disk with the WAL
+// and the Raft log. "" when the disk is unknown or has room.
+func LowDiskWarning(m *MachineReport) string {
+	if m == nil || m.DiskTotal == 0 || m.DiskFree*5 >= m.DiskTotal {
+		return ""
+	}
+	return fmt.Sprintf("the data disk is %d %% free (%s of %s): the chunk cache, pinned folders included, shares it with the WAL and the Raft log; lower cache.size or unpin a folder", m.DiskFree*100/m.DiskTotal, iec(m.DiskFree), iec(m.DiskTotal))
+}
+
+// iec prints bytes in binary units with one decimal.
+func iec(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	v, suffix := float64(n), "KMGTPE"
+	i := 0
+	for v >= unit && i < len(suffix) {
+		v /= unit
+		i++
+	}
+	return fmt.Sprintf("%.1f %ciB", v, suffix[i-1])
+}
+
 func sharedDiskWarnings(nodes []NodeReport) []string {
 	seen := map[string]bool{}
 	var out []string

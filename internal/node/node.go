@@ -31,6 +31,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/nfsgw"
+	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/smbgw"
@@ -177,7 +178,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	clk := clock.Real()
-	cache, err := chunk.OpenCache(sysfs.OS{}, filepath.Join(cfg.Node.DataDir, "cache"), 1<<30, clk)
+	cacheSize, err := cfg.CacheSize()
+	if err != nil {
+		return err
+	}
+	cache, err := chunk.OpenCache(sysfs.OS{}, filepath.Join(cfg.Node.DataDir, "cache"), cacheSize, clk)
 	if err != nil {
 		return err
 	}
@@ -212,6 +217,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
 	rd.Events = ring
+	pinned, err := pins.Open(cfg.Node.DataDir, node.FSM, rd, cache, clk, log) // the folders kept on this device (docs/01 §Pins)
+	if err != nil {
+		return err
+	}
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, vfs.DefaultConfig(), log)
 	fl.Events = ring
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
@@ -240,7 +249,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc.Events = ring
 	gc.Retention = rcfg.Retention
 	node.MinCodec = prober.MinCodec // the trash and the flags wait until every live member reads codec 4 (docs/12 §6)
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
@@ -249,6 +258,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
 		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov)
 		rep.Machine = admin.Vitals(cfg.Node.DataDir)
+		if w := admin.LowDiskWarning(rep.Machine); w != "" {
+			rep.Warnings = append(rep.Warnings, w)
+		}
+		cacheRep := pinned.List()
+		rep.Cache = &cacheRep
 		if webAddr != "" {
 			rep.WebURL = "http://" + webAddr + "/"
 		}
@@ -346,9 +360,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
 	}
 
-	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, web UI
+	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, web UI
 	bg, cancelBg := context.WithCancel(context.Background())
-	loops := 6
+	loops := 7
 	if web != nil {
 		loops++
 	}
@@ -373,6 +387,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		done <- struct{}{}
 	}()
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
+	go func() { pinned.Run(bg); done <- struct{}{} }()
 	if web != nil {
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
 	}
@@ -473,6 +488,7 @@ type adminOps struct {
 	rd       *vfs.Reader
 	ring     *meta.EventRing
 	fs       *vfs.FS
+	pins     *pins.Pins
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
@@ -727,6 +743,15 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return admin.DescribeChunks(ctx, a.node.FSM, a.prober, a.client, a.ring, op.Chunk)
 	case "trash_ls", "trash_restore", "trash_purge":
 		return a.trashOp(ctx, op)
+	case "cache_pin": // this node's pins (docs/12 §10): never forwarded
+		return a.pins.Pin(op.Path)
+	case "cache_unpin":
+		if err := a.pins.Unpin(op.Path); err != nil {
+			return nil, err
+		}
+		return map[string]string{"path": op.Path}, nil
+	case "cache_ls":
+		return a.pins.List(), nil
 	case "repair_now":
 		return a.repairer.Scan(ctx)
 	case "gc_now":

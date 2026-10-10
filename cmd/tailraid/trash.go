@@ -79,11 +79,11 @@ func iec(n uint64) string {
 	}
 	v, suffix := float64(n), "KMGTPE"
 	i := 0
-	for v >= unit && i < len(suffix)-1 {
+	for v >= unit && i < len(suffix) {
 		v /= unit
 		i++
 	}
-	return fmt.Sprintf("%.1f %ciB", v, suffix[i])
+	return fmt.Sprintf("%.1f %ciB", v, suffix[i-1])
 }
 
 func trashRestoreCmd() *cobra.Command {
