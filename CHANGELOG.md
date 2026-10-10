@@ -2,6 +2,15 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.5 (2026-10-10)
+
+### Changes
+
+- s3: prove the failover to the bucket (I-149, I-150, I-151, L-198) ([d313ac0](https://github.com/zombar/tailraid/commit/d313ac0))
+- s3: the leader judges a bucket by its own probe (I-148) ([8deb2d5](https://github.com/zombar/tailraid/commit/8deb2d5))
+- soak: phase 15, an S3 bucket as a storage node ([1376e63](https://github.com/zombar/tailraid/commit/1376e63))
+- s3: buckets as storage nodes (docs/10 §4) ([64c6d2e](https://github.com/zombar/tailraid/commit/64c6d2e))
+
 ## v0.4.4 (2026-10-10)
 
 ### Changes
