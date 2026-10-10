@@ -221,3 +221,7 @@ Details: [docs/12-operations.md](docs/12-operations.md) §4.
 | [docs/12-operations.md](docs/12-operations.md) | services, logs, releases, self-update, backup and recovery |
 | [docs/invariants.md](docs/invariants.md) | every promise the system makes, and the tests that prove it |
 | [CLAUDE.md](CLAUDE.md) | how the code is written and tested |
+
+## License
+
+Copyright (C) 2026 Forge3D cyf. tailraid is free software under the [GNU Affero General Public License, version 3](LICENSE): anyone who runs a modified version as a network service must offer its source to its users. The in-tree copy of go-filesystems/smb in `third_party/smb` keeps its own [BSD 3-Clause license](third_party/smb/LICENSE).
