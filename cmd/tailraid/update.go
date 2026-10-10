@@ -22,8 +22,9 @@ OS and architecture together with the release's sha256sums.txt, verifies the che
 runs the download's "version", and swaps it into place; the release's sha256sums.txt
 must carry the minisign signature of the release key (docs/12 §4). The previous binary
 stays as <exe>.old until the next clean start; --rollback puts it back. The running
-service is not restarted unless --restart is given. The repository is private: set
-TAILRAID_GITHUB_TOKEN or GITHUB_TOKEN, or be logged in with the gh CLI.`,
+service is not restarted unless --restart is given. The repository is public, so no
+token is needed; one is read from TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or the gh CLI when
+present (a private fork needs it).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			check, _ := cmd.Flags().GetBool("check")

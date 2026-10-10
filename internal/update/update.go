@@ -44,7 +44,7 @@ type Updater struct {
 	Owner, Repo string
 	Binary      string       // asset base name ("tailraid")
 	BaseURL     string       // GitHub API base; tests point it at a fake
-	Token       string       // bearer token for a private repository
+	Token       string       // bearer token; needed only for a private repository
 	HTTP        *http.Client // default: 2 min timeout
 	// Verify runs a downloaded binary and checks it reports tag (default: exec `<path> version`).
 	Verify func(ctx context.Context, path, tag string) error
@@ -61,7 +61,7 @@ var (
 	ErrChecksum   = errors.New("update: checksum mismatch")
 	ErrNoAsset    = errors.New("update: no asset for this platform")
 	ErrNoRelease  = errors.New("update: release not found")
-	ErrNoToken    = errors.New("update: repository needs a token (TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or `gh auth login`)")
+	ErrNoToken    = errors.New("update: GitHub refused the token (TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or `gh auth login`)")
 	ErrSize       = errors.New("update: downloaded size differs from the release asset's")
 	ErrDowngrade  = errors.New("update: release is older than the running version; --allow-downgrade installs it anyway (an older node cannot read a newer snapshot, docs/12 §6)")
 	ErrNoRollback = errors.New("update: no previous binary to roll back to")
@@ -130,8 +130,8 @@ func (u *Updater) Resolve(ctx context.Context, tag string) (*Release, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		if u.Token == "" {
-			return nil, ErrNoToken // a private repository answers 404 to anonymous callers
+		if u.Token == "" { // a private repository answers 404 to anonymous callers
+			return nil, fmt.Errorf("%w (anonymous: a private repository needs TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or `gh auth login`)", ErrNoRelease)
 		}
 		return nil, ErrNoRelease
 	case http.StatusUnauthorized, http.StatusForbidden:
