@@ -216,7 +216,7 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	size := sizeOf(st)
 	binary.LittleEndian.PutUint64(rb[40:], allocationOf(size))
 	binary.LittleEndian.PutUint64(rb[48:], size)
-	binary.LittleEndian.PutUint32(rb[56:], attributesOf(st, tc.ro))
+	binary.LittleEndian.PutUint32(rb[56:], attributesOf(of.path, st, tc.ro))
 	copy(rb[64:], of.id[:])
 	// The contexts offset stays ZERO because there are none. Pointing it at
 	// the one pad byte the structure size accounts for is what a real client

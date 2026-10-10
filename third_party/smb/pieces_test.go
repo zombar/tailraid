@@ -53,21 +53,21 @@ func TestAttributes(t *testing.T) {
 	locked := filesystem.NewStat(0o100444, 10, 3)
 	noType := filesystem.NewStat(0o644, 7, 4)
 
-	if a := attributesOf(dir, false); a&attrDirectory == 0 {
+	if a := attributesOf("x", dir, false); a&attrDirectory == 0 {
 		t.Errorf("a directory is %#x", a)
 	}
-	if a := attributesOf(file, false); a&attrDirectory != 0 || a&attrReadOnly != 0 {
+	if a := attributesOf("x", file, false); a&attrDirectory != 0 || a&attrReadOnly != 0 {
 		t.Errorf("a writable file is %#x", a)
 	}
-	if a := attributesOf(locked, false); a&attrReadOnly == 0 {
+	if a := attributesOf("x", locked, false); a&attrReadOnly == 0 {
 		t.Error("a file with no write bit is not marked read-only")
 	}
-	if a := attributesOf(file, true); a&attrReadOnly == 0 {
+	if a := attributesOf("x", file, true); a&attrReadOnly == 0 {
 		t.Error("a file on a read-only share is not marked read-only")
 	}
 	// A mode with no type bits is a file: the only guess that cannot make a
 	// client try to enumerate something that is not a directory.
-	if a := attributesOf(noType, false); a&attrDirectory != 0 {
+	if a := attributesOf("x", noType, false); a&attrDirectory != 0 {
 		t.Errorf("a mode with no type bits came out as %#x", a)
 	}
 	if sizeOf(dir) != 0 {
@@ -497,6 +497,37 @@ func TestWhatAWatchCovers(t *testing.T) {
 	} {
 		if got := tc.x.covers(tc.path); got != tc.want {
 			t.Errorf("%s: covers(%q) = %v, want %v", tc.name, tc.path, got, tc.want)
+		}
+	}
+}
+
+// A dot file is HIDDEN to a Windows client, as Samba's "hide dot files" makes it: the
+// ._ files macOS writes beside every file it copies over NFS cluttered Explorer.
+// The listing's own "." and ".." are not files and stay visible; a path is judged
+// by its last element only.
+func TestAttributes_DotFilesHidden(t *testing.T) {
+	file := filesystem.NewStat(0o100644, 1, 2)
+	dir := filesystem.NewStat(0o040755, 0, 3)
+	for _, tc := range []struct {
+		name   string
+		st     filesystem.Stat
+		hidden bool
+	}{
+		{"._photo.jpg", file, true},
+		{".DS_Store", file, true},
+		{".config", dir, true},
+		{"/a/b/._photo.jpg", file, true},
+		{`\a\._photo.jpg`, file, true},
+		{"/.hidden/visible.txt", file, false},
+		{"photo.jpg", file, false},
+		{"a.b", file, false},
+		{".", dir, false},
+		{"..", dir, false},
+		{"/", dir, false},
+		{"", dir, false},
+	} {
+		if got := attributesOf(tc.name, tc.st, false)&attrHidden != 0; got != tc.hidden {
+			t.Errorf("%q: hidden %v, want %v", tc.name, got, tc.hidden)
 		}
 	}
 }
