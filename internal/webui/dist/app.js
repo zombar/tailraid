@@ -412,7 +412,7 @@ function chunksPerTarget(r) {
   return Math.max(0, r.volume.chunks - r.volume.tombstoned);
 }
 function withDisks(nodes) {
-  return nodes.filter((n) => n.kind !== "disk").map((n) => {
+  return nodes.filter((n) => n.kind !== "disk" && n.state !== "removed").map((n) => {
     const ds = nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed");
     if (ds.length === 0) return n;
     const sum = (f) => f(n) + ds.reduce((s, d) => s + f(d), 0);
@@ -437,7 +437,6 @@ function card(n, share, scale) {
   if (n.kind === "s3") badges.append(h("span", { class: "badge" }, "s3"));
   if (n.self) badges.append(h("span", { class: "badge self" }, "self"));
   if (n.state === "draining") badges.append(h("span", { class: "badge warn" }, "draining"));
-  if (n.state === "removed") badges.append(h("span", { class: "badge" }, "removed"));
   if (n.lost) badges.append(h("span", { class: "badge bad", title: "dead longer than evict_after: remove it" }, "lost"));
   const dot = h("span", { class: "dot " + (n.live ? "ok" : "bad"), title: n.live ? "live" : "dead for " + (n.dead_for ?? "?") });
   const name = h("div", { class: "name-row" }, dot, h("span", { class: "name" }, n.name), badges);

@@ -49,10 +49,14 @@ export function chunksPerTarget(r: Report): number {
   return Math.max(0, r.volume.chunks - r.volume.tombstoned);
 }
 
-/** withDisks folds every disk into its host: capacity, free, slots and missing slots add up. */
+/**
+ * withDisks folds every disk into its host: capacity, free, slots and missing slots add up.
+ * A removed member keeps its row in the table for good (its index is never reused) and is
+ * not shown, like `status` and `node ls` (I-132).
+ */
 export function withDisks(nodes: NodeReport[]): NodeReport[] {
   return nodes
-    .filter((n) => n.kind !== "disk")
+    .filter((n) => n.kind !== "disk" && n.state !== "removed")
     .map((n) => {
       const ds = nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed");
       if (ds.length === 0) return n;
@@ -81,7 +85,6 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
   if (n.kind === "s3") badges.append(h("span", { class: "badge" }, "s3"));
   if (n.self) badges.append(h("span", { class: "badge self" }, "self"));
   if (n.state === "draining") badges.append(h("span", { class: "badge warn" }, "draining"));
-  if (n.state === "removed") badges.append(h("span", { class: "badge" }, "removed"));
   if (n.lost) badges.append(h("span", { class: "badge bad", title: "dead longer than evict_after: remove it" }, "lost"));
 
   const dot = h("span", { class: "dot " + (n.live ? "ok" : "bad"), title: n.live ? "live" : "dead for " + (n.dead_for ?? "?") });
