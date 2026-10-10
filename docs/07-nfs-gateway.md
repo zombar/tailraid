@@ -9,6 +9,23 @@ Library: `github.com/willscott/go-nfs` v0.0.4 (pure Go, NFSv3 + MOUNT on one TCP
 no portmapper, no NLM). Adapter: `internal/nfsgw` implements `nfs.Handler`;
 `internal/vfs` implements `billy.Filesystem`, `billy.File` and `billy.Change`.
 
+The tree carries its own copy of the library in `third_party/nfs` (a `replace` in every
+module file, vendored from there, as `third_party/smb` is), with the changes this gateway
+needs, each with a test in the copy:
+
+- `conn.go` reads each request frame whole from the wire (at most `MaxFrame`, 1 MiB plus
+  8 KiB of headers; a larger frame closes the connection) and dispatches it on its own
+  goroutine, at most `InFlight` (16) per connection, every reply going through the
+  connection's single writer in completion order. NFSv3 over TCP matches replies to
+  requests by XID (RFC 1813 §1.6 and RFC 5531), so a server may answer in any order; every
+  kernel client pipelines its requests on one connection and never has two WRITEs for one
+  page in flight, so two overlapping WRITEs applying in either order is the same as on any
+  multi-threaded NFS server. Upstream handled one request at a time per connection, which
+  made every cold READ and every cap wait a stall of the whole mount.
+- `nfs_onfsinfo.go` advertises `rtmax`/`wtmax`/`rtpref`/`wtpref` of 1 MiB instead of
+  1 GiB, so the frame bound is the protocol's own: a client that honours FSINFO never sends
+  a WRITE larger than `MaxFrame`.
+
 ## What go-nfs actually does (verified against v0.0.4 source)
 
 These facts drive the vfs design and are the reason the previous attempt corrupted data.
@@ -25,6 +42,7 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 | LOOKUP / GETATTR / READDIR(PLUS) | `Lstat`, `ReadDir`; fileid from `FileInfo.Sys()` when it returns `*file.FileInfo{Fileid, Nlink, UID, GID}` (go-nfs's own type), otherwise an FNV hash of the path |
 | LINK | optional `UnixChange.Link`; not implemented → NFS3ERR_NOTSUPP |
 | SYMLINK / READLINK | `Symlink`, `Readlink` (billy `Symlink` capability) |
+| any procedure | dispatched concurrently with the connection's other requests, at most `InFlight` at once (the in-tree copy, I-167); a request that blocks (a cold READ, a WRITE waiting at a cap) delays no other |
 
 Consequences:
 
@@ -96,11 +114,17 @@ the ports instead.
 
 | OS | Listener | Mount |
 |---|---|---|
-| macOS | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft 127.0.0.1:/ ~/TailRAID` |
+| macOS | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,rsize=1048576,wsize=1048576 127.0.0.1:/ ~/TailRAID` |
 | Linux | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ <dir>` |
 
 `tailraid mount` runs these for you (`internal/mount`); it retries via `sudo` when
-`mount` returns EPERM, printing the exact command first.
+`mount` returns EPERM, printing the exact command first, and on macOS retries without
+the transfer sizes if the kernel refuses them.
+
+Why `rsize`/`wsize` on macOS: its client defaults to 32 KiB on TCP and, unlike Linux, does
+not take the gateway's FSINFO maximum, so every WRITE was 32 KiB per WAL fsync and every
+READ its own RPC. macOS 26 keeps 1 MiB (`nfsstat -m` shows `rsize=1048576,wsize=1048576`;
+its `readahead=16` is then 16 MiB). Linux negotiates 1 MiB from FSINFO on its own.
 
 Why `nolock`: there is no Network Lock Manager. Without `nolock` the client's lock daemon
 tries to reach NLM and `fcntl` locks hang or fail. With it, locks are local to the client
@@ -113,9 +137,10 @@ quickly under the service manager; the mount survives because handles are stable
 **Large copies and the caps.** A local `cp` of a multi-GiB file outruns replication over
 the tailnet; the gateway then throttles the client instead of failing it: a WRITE that
 meets the WAL cap or `MaxDirty` blocks for up to `CapWait` (20 s) until the flusher has
-committed a batch (docs/04 §3, I-79). go-nfs handles one RPC at a time per connection, so
-every operation on the mount pauses for that wait; batches are at most 32 MiB of chunks so a
-wait is a few seconds even on a slow DERP path. `NFS3ERR_JUKEBOX` ("try again later")
+committed a batch (docs/04 §3, I-79). A waiting WRITE holds one of its connection's
+`InFlight` slots (I-167) and the client keeps that page's write-back waiting; the rest of
+the mount goes on. Batches are at most 32 MiB of chunks so a wait is a few seconds even on
+a slow DERP path. `NFS3ERR_JUKEBOX` ("try again later")
 cannot be used: go-nfs maps the handler's error to a status itself and never emits it. The
 bound must stay inside each client's soft-mount timeout, which is what makes the wait
 transparent rather than an I/O error:
@@ -158,6 +183,12 @@ device"), not `EIO`.
 - **I-100** — When `Serve` stops, the listener and every connection it accepted are
   closed before it returns: a mounted client is never answered by a gateway whose
   flusher has already stopped, and a stuck NFS connection cannot keep the process alive.
+- **I-167** — The NFS gateway serves one connection's requests concurrently, at most
+  `InFlight` at a time, each read whole from the wire (a frame over `MaxFrame` closes the
+  connection) before its handler runs, with replies written by the connection's single
+  writer in completion order; a blocked request delays neither its connection's other
+  requests nor other connections, FSINFO advertises `MaxFrame`'s payload as the largest
+  transfer, and a connection holds at most `InFlight × MaxFrame` request bytes.
 
 ## Tests
 
@@ -169,3 +200,4 @@ device"), not `EIO`.
 | I-46 | `TestNFS_SetattrOwnerAndTimes`, `TestNFS_SetattrSizeTruncates`, `TestVFS_SymlinkAndChange` |
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
+| I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |

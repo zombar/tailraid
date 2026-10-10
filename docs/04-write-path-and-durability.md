@@ -139,7 +139,7 @@ extents.
 | inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that arrives while the WAL is at the cap **waits** (next row) |
 | total dirty bytes ≥ `TotalDirtyHi` | 256 MiB | flush the largest inodes until below |
 | total dirty bytes ≥ `MaxDirty` (fresh **and** in-flight plan bytes) | 1 GiB | a WRITE **waits** (next row) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
-| a WRITE meets the WAL cap or `MaxDirty` | `CapWait` 20 s | the WRITE blocks until the flusher frees room (a Commit applied, an inode evicted) and then proceeds; it fails only when `CapWait` expires (`NFS3ERR_IO`, `EIO`) or when that inode's last flush attempt failed (`EIO` at once, `ENOSPC` when the cluster was full), so a client that outruns replication is throttled to it rather than told the disk is broken (I-79). go-nfs serves one RPC at a time per connection, so the mount pauses for the wait; `CapWait` is therefore shorter than the clients' soft-mount timeouts (docs/07) |
+| a WRITE meets the WAL cap or `MaxDirty` | `CapWait` 20 s | the WRITE blocks until the flusher frees room (a Commit applied, an inode evicted) and then proceeds; it fails only when `CapWait` expires (`NFS3ERR_IO`, `EIO`) or when that inode's last flush attempt failed (`EIO` at once, `ENOSPC` when the cluster was full), so a client that outruns replication is throttled to it rather than told the disk is broken (I-79). The waiting WRITE holds one of its connection's `InFlight` request slots (docs/07, I-167); `CapWait` is shorter than the clients' soft-mount timeouts (docs/07) |
 | shutdown | 30 s (`ShutdownFlush`) | `FlushAll` with that deadline, then exit; whatever did not flush stays in the WAL and flushes on the next start |
 
 Flush workers run per inode from a bounded pool (default 4) so a big copy does not starve
@@ -364,7 +364,7 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 
 | Stage | Bytes in memory | Bound (defaults) | Released by |
 |---|---|---|---|
-| NFS WRITE in flight | one request body per connection (go-nfs decodes it, hands it to `Write`) | connections × wsize (≤ 1 MiB) | the reply |
+| NFS requests in flight | each request's frame, read whole before its handler runs (docs/07, I-167) | connections × `InFlight` (16) × `MaxFrame` (1 MiB + 8 KiB) | the reply |
 | web upload in flight | one chunk-sized buffer per upload | `uploadSlots` (4) × ChunkSize | the response (docs/13 §4) |
 | WAL append | one record copy | ChunkSize (one WRITE) | the fsync |
 | overlay bookkeeping | 24 B per extent | WALCap / wsize extents per inode | compaction |
