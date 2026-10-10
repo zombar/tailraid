@@ -28,6 +28,8 @@ type Inode struct {
                               // directories: bumps on every change of the name table (READDIR cookie verifier)
     Parent   Ino              // 0 for root; single parent (no hard links)
     Name     string           // name within Parent; "" for root
+    Flags    uint8            // FlagProtected = 1, FlagNSFW = 2 (02 §Apply rules); directories only
+    DeletedAt int64           // FSM clock of the delete that put this entry in the trash; 0 while live
     Chunks   []Hash           // TFile only; len == ceil(Size/ChunkSize); copy-on-write slice
     Target   string           // TSymlink only
     Children map[string]Ino   // TDir only
@@ -87,7 +89,9 @@ type State struct {
     Chunks  map[Hash]*Chunk
     Nodes   map[NodeIdx]*Node
     Tombs   map[Hash]struct{} // index of Chunks with Refs == 0
+    Trash   map[Ino]map[Ino]struct{} // index of the trash: original parent → the deleted roots under it
     Applied uint64            // last applied Raft index
+    LastNow int64             // the FSM clock (02): the greatest Now any applied command carried
 }
 ```
 
@@ -104,6 +108,19 @@ Rules:
 - `Node.Idx` is allocated from `NextNode` and never reused, so `Placement` entries remain
   meaningful after a node is removed (they point at a `Removed` node, which the repairer
   treats like a missing slot).
+- **The trash** is a set of *deleted roots*: inodes with `DeletedAt != 0` that are absent
+  from their parent's `Children` and keep `Parent` and `Name` as the place they came
+  from. Everything under a deleted directory is untouched (its `Children`, every
+  descendant's `Parent`, every file's `Chunks` and the chunks' `Refs`), so a deleted
+  subtree is unreachable from the root by construction and nothing it references is
+  reclaimed until it is purged (06 §1). `Trash` is the index of those roots by original
+  parent; like `Tombs` it is derived, never serialized, and rebuilt on decode and in
+  `Clone`. A name may be deleted and created again any number of times: the roots are
+  distinct inodes and the index is by inode, so no two entries ever conflict.
+- `Flags` is meaningful on directories only (02 §Apply rules): `FlagProtected` is
+  enforced by the FSM, `FlagNSFW` is carried for the browser UI (13 §4). Both are
+  inherited by what lies under the directory when a gateway reports an *effective* flag;
+  the FSM stores each directory's own bits.
 
 ## Chunking
 
@@ -185,9 +202,23 @@ func (s *Store) Walk(fn func(key ShardKey, size int64, mtime time.Time) error) e
 
 ### Local chunk cache
 
-`<data_dir>/cache/<hh>/<hex>` holds decoded chunks (not shards) as an LRU bounded by bytes.
-Entries are verified against their hash on read; a mismatch evicts the entry. The cache is
-purely local and may be deleted at any time.
+`<data_dir>/cache/<hh>/<hex>` holds decoded chunks (not shards) as an LRU bounded by
+`cache.size` (12 §10, 1 GiB unless set). Entries are verified against their hash on read; a
+mismatch evicts the entry. The cache is purely local and may be deleted at any time.
+
+**Pins.** A folder the user keeps on a device (`tailraid cache pin <path>`, or "Keep on
+this device" in the browser UI, 13 §4) is recorded in `<data_dir>/pins.json` as
+`{ino, gen, path}`; the path is a label and the inode the identity, so a rename keeps the
+pin and a delete makes it lapse. A pin worker on that node walks every pinned subtree when
+a pin is added, at start, and whenever the FSM's applied index has moved since its last
+walk (checked every 30 s), reads every chunk the cache lacks through the ordinary reader
+(two in flight, cancelled on unpin or shutdown) and marks the hashes pinned; the LRU never
+evicts a pinned entry, and an unpin returns its entries to the LRU. Pinned bytes may exceed
+`cache.size` (the user asked for exactly those bytes); `status` warns when the data disk's
+free space falls under 20 %, since the cache shares it with the WAL and the Raft log.
+`status --json` and `/api/pins` report `cache{size, used, pinned_bytes, pins[{path, bytes,
+cached_bytes}]}` (I-162). Nothing about a pin is replicated: the same folder may be pinned
+on any number of devices, each for itself.
 
 ### Gateway WAL
 
@@ -205,35 +236,42 @@ Primitives: `u8`, `u16 LE`, `u32 LE`, `u64 LE`, `uvarint` (Go `encoding/binary`)
 **Command frame** (one Raft log entry):
 
 ```
-u8      codec version (1)
+u8      codec version (1, 2, 3 or 4: the lowest that carries the entry's fields, 02 §Codec versions)
 u8      Op
 ...     payload fields in the fixed order documented for that Op in 02
 ```
 
 Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM returns
 `ErrBadCommand` in `Result.Err` and applies nothing (deterministically on every node).
+A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3:
+`SetPlacement`, `GCDelete`; 4: `Trash`, `Restore`, `Purge` and a `SetAttr` carrying
+`Flags`), so an entry can never smuggle a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
 
 ```
 4 bytes  magic "TRM1"
-u8       codec version (2; a version-1 snapshot is still read, with Auto = false)
+u8       codec version (4; versions 1–3 are still read: a field a version lacks decodes as zero)
 u64      Applied
-section  Volume   {ChunkSize u32, K u8, M u8, PolicyVersion u32, Auto bool}
+i64      LastNow
+section  Volume   {ChunkSize u32, K u8, M u8, PolicyVersion u32, Auto bool (v ≥ 2)}
 section  Meta     {ClusterID 16B, JoinToken string, CreatedAt i64}
 u64      NextIno, u16 NextNode
-section  Nodes    uvarint count, then each Node (fields in struct order; strings as bytes)
+section  Nodes    uvarint count, then each Node (fields in struct order; strings as bytes; Host u16 (v ≥ 3))
 section  Chunks   uvarint count, then each Chunk {hash, Size u32, K u8, M u8, Refs u32,
                   uvarint len(Placement), Placement u16..., TombstonedAt i64}
 section  Inodes   uvarint count, then each Inode {Ino, Gen, Type, Mode, Uid, Gid, Size,
                   Atime, Mtime, Ctime, Nlink, Version, Parent, Name,
+                  Flags u8, DeletedAt i64 (v ≥ 4),
                   TFile: uvarint len(Chunks) + hashes; TSymlink: Target;
                   TDir: uvarint len(Children) + (name, Ino) pairs sorted by name}
 ```
 
 Maps are emitted in sorted key order (inos ascending, hashes bytewise, node idx ascending,
 child names bytewise) so two FSMs with equal state produce byte-identical snapshots. `Tombs`
-is not serialized; it is rebuilt from `Chunks` with `Refs == 0` on decode.
+and `Trash` are not serialized; they are rebuilt on decode from `Chunks` with `Refs == 0`
+and from inodes with `DeletedAt != 0` (I-156), and `Stats` is recomputed the same way, so a
+restored replica and one that applied the log agree on every count (I-5).
 
 ## Memory model
 
@@ -303,6 +341,11 @@ directory holds no shards (14 §1).
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
 
+- **I-156** — Snapshot version 4 carries `Flags` and `DeletedAt`, and log entries carry
+  codec version 4 only for `Trash`, `Restore`, `Purge` and a `SetAttr` with `Flags`;
+  every snapshot and entry of versions 1–3 decodes as before with those fields zero;
+  `Trash` and `Stats` rebuilt on decode equal the ones kept incrementally by the applies;
+  and `DecodeState(EncodeState(s)) == s` for a state with deleted roots and flags.
 - **I-74** — A disk's derived budget is `used + free − reserve` of the filesystem holding
   its store (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
   store's cap following at once and a `set_capacity` proposal only past the hysteresis
@@ -321,4 +364,5 @@ defined in `04-write-path-and-durability.md`.
 | I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
 | I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestDiskBudget_PinnedOrDerived`, `TestConfig_DiskCapacity`, `TestNode_Rebudget_PinnedChangeRegistered`, `TestNode_Maintenance_RegistersBudgetAtStart` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
+| I-156 | `TestStub_I_156` (planned: TestCodec_ReadsVersion3Snapshot, TestCodec_StateRoundTrip, TestEncodeCommand_Golden, TestEncodeCommand_V4Gating, FuzzDecodeCommand, TestFSM_TrashStats_MatchComputed, TestCluster_TrashSurvivesSnapshotInstall) |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
