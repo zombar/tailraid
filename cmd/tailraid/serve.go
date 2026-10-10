@@ -139,7 +139,15 @@ func serveCmd() *cobra.Command {
 			go reopenLogOnSignal(ctx, lf, log)
 			forget := time.AfterFunc(time.Minute, func() { forgetOldBinary(log) }) // the update's .old, once this start has held (I-128)
 			defer forget.Stop()
-			run := func(ctx context.Context) error { return node.Serve(ctx, cfg, log, version) }
+			// the error goes to the log too: a service has no terminal, and on Windows no
+			// stderr, so the reason serve stopped would be lost (docs/12 §1)
+			run := func(ctx context.Context) error {
+				err := node.Serve(ctx, cfg, log, version)
+				if err != nil && !errors.Is(err, context.Canceled) {
+					log.Error("serve stopped", "err", err)
+				}
+				return err
+			}
 			if asService, _ := cmd.Flags().GetBool("service"); asService {
 				return runAsService(ctx, svc.Name, run)
 			}

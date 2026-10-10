@@ -90,7 +90,12 @@ not refused, and it persists the response's members as `<data_dir>/members.seed`
 it). The file matters on every restart, not only the first: Raft restores a follower's
 table at open from a snapshot only, so a node restarted before its first snapshot has an
 empty table until the leader connects, and the leader was accepted only by that table;
-`join` also takes a snapshot once the log has arrived. A join from the Raft address of a known server under a new node ID (a device that
+`join` also takes a snapshot once the log has arrived. A node with neither a table nor a
+seed file (it joined before the file existed, or the file was lost) replays the member
+entries its own log already holds into a scratch table and seeds from that: the log was
+sent by the leader the join accepted, so it names only members that leader vouched for,
+and without it the node would refuse the leader forever and never receive its table
+(I-134). A join from the Raft address of a known server under a new node ID (a device that
 was `reset`) removes that server and re-keys the device's row to the new ID, so its disks
 and their shards stay registered under it, when the caller presents the row's StableID; a
 different tailnet device at a known address is refused (I-94).
@@ -249,6 +254,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   StableID matches the record; the cluster-ID
   handshake runs after that check, and the acceptor reads the peer's ID before sending
   its own.
+- **I-134** — A node whose member table is empty and that has no seed file seeds its
+  authorizer from the device members its local Raft log names, replayed through the FSM's
+  own apply: exactly the rows with an address that are not `Removed`.
 - **I-93** — `update_addr` from an address that is not in the member table is accepted
   only when the caller's WhoIs StableID is that of the member it names, and changes
   nothing but that member's address; every other op from a non-member is rejected with
@@ -271,6 +279,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-49 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestIDStream_RejectsForeignCluster` |
 | I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestSMB_ListenRefusesNonLoopback` |
 | I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake`, `TestMemberSeed_RoundTrip`, `TestCLI_Join_NoFlags` |
+| I-134 | `TestMembersFromLog_MatchesTable` |
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |

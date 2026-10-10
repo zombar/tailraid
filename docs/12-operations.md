@@ -70,7 +70,9 @@ service that is not installed is still an error (I-131).
 
 **Log file.** `log.file` rotates itself at 64 MiB keeping five generations
 (`serve.log.1` … `.5`), reopens on SIGHUP (so logrotate or newsyslog can rename it), and
-`tailraid logs -f` prints every appended line once. Warnings that repeat per item (a flush
+`tailraid logs -f` prints every appended line once. When `serve` stops on an error it
+logs the error as `serve stopped` before exiting, since a service has no terminal to
+print it to (and on Windows no stderr). Warnings that repeat per item (a flush
 that fails for every dirty inode, a repair that fails for every chunk, a refused web
 request per probe) are rate-limited to one line a minute per site with a `suppressed`
 count on the next line (I-124).
