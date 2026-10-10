@@ -27,6 +27,12 @@ every mutating admin operation stays in the CLI.
 - A separate listener, not a route on the RPC port: the caller set differs (same-user
   devices that are not members), a page load cannot send the `X-Tailraid-Cluster` header,
   and the RPC port's member-only rule must stay exactly as docs/08 states it.
+- **`tailraid dashboard`** opens the UI from a terminal: it asks the node for its status,
+  prints the `web_url` there (the address `status` shows on its `web` line), and hands it to
+  the OS's opener: `open` on macOS, `xdg-open` on Linux, `rundll32
+  url.dll,FileProtocolHandler` on Windows (no shell, so nothing in the URL is interpreted).
+  `--print` prints it and opens nothing, for an SSH session; `--node` asks another node.
+  With the UI off it fails, saying `listen.web` is 0 (I-143).
 
 ## 2. Who may use it
 
@@ -320,6 +326,10 @@ colour-alone. No dual axes, no stacked bars, no pie.
   over NFS for its extended attributes and Finder's view settings, and lists every other
   entry, every other dot file and an upload's temp included; a left-out file stays in the
   volume and `GET /files/<path>` serves it.
+- **I-143** — `tailraid dashboard` opens exactly the `web_url` the node's status reports,
+  with `open` (macOS), `xdg-open` (Linux) or `rundll32 url.dll,FileProtocolHandler`
+  (Windows) and the URL as one argument, after printing it; with `--print` it launches
+  nothing; a status without a `web_url` fails naming `listen.web` and launches nothing.
 - **I-127** — The web listener answers a request only when its `Host` is the listener's
   `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
   refuses every other with `421` before authorization; the index page's CSP contains
@@ -338,6 +348,7 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
 | I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
+| I-143 | `TestBrowserCommand_PerOS`, `TestCLI_Dashboard` |
 | I-140 | `TestWebUI_Ls_HidesOSMetadata` |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
