@@ -199,10 +199,10 @@ writes and repairs only (06 §6).
   over time, coloured by each disk's slot share against its expected share, with a host-cap
   strip underneath.
 - **A removed member is not listed.** Its row stays in the node table for good (an index
-  is never reused, so old placements stay interpretable, 02), but `status` and `node ls`
-  leave `removed` rows out: a device that was removed and joined again shows once, under
-  its new index. `node ls --all` lists them, `--json` and `node describe` always carry them
-  (I-132).
+  is never reused, so old placements stay interpretable, 02), but `status`, `node ls` and
+  the web UI's Balance and Disks blocks leave `removed` rows out: a device that was removed
+  and joined again shows once, under its new index. `node ls --all` lists them, `--json`
+  and `node describe` always carry them (I-132).
 - **A diskless host is shown as such.** `node ls` prints a device row with `-` for FREE and
   the flag `no disks` when it has no disk rows; `status` reports it `diskless`, and the web
   UI's Disks block draws its card with no target rows and the note `gateway only · no
@@ -272,8 +272,9 @@ runs.
   config (`auto` clears it) for a disk named by `<host>/<n>`, its number or its path,
   saves a config that validates, and restarts the service unless `--no-restart`; an
   unknown disk, a device without disks or an unparsable size leaves the config untouched.
-- **I-132** — `status` and `node ls` omit `removed` rows, which stay in the node table
-  because an index is never reused; `node ls --all` lists them and `--json` carries them.
+- **I-132** — `status`, `node ls` and the web UI's Balance and Disks blocks omit `removed`
+  rows, which stay in the node table because an index is never reused; `node ls --all`
+  lists them and `--json` carries them.
 
 ## Tests
 
