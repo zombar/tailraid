@@ -434,6 +434,16 @@ func (c *conn) serve() {
 // The replies are chained the same way. Each one but the last is padded to an
 // eight-byte boundary, because the offset that points at its successor has to
 // land on one.
+//
+// The offset is written into a reply BEFORE the reply is signed: the signature
+// covers the whole header, NextCommand included, and a reply signed first and
+// patched afterwards carries a signature over a message it no longer is. Windows
+// checks the signature of every reply in a chain and, for a failed CREATE in a
+// CREATE + QUERY_INFO + CLOSE compound, logged "signing validation failed" and
+// told the application the server could not perform the operation (error 58)
+// instead of the real status. The replies of a request that is followed by
+// another land at the padded end of their predecessor, so the offset is known
+// when the reply is built.
 func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 	// The legacy greeting is not an SMB2 message and has no header to parse,
 	// so it is answered before the loop that reads one. Putting this check
@@ -493,21 +503,13 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		// the same reason twice and knows the chain did not happen.
 		if h.flags&flagRelatedOps != 0 && prevStatus != statusSuccess {
 			reply := errorResponse(h, prevStatus)
+			var key []byte
 			if h.flags&flagSigned != 0 {
 				if sess := c.sessions[binary.LittleEndian.Uint64(one[offSessionID:])]; sess != nil {
-					signMessage(c.dialect, sess.signingKey, reply)
+					key = sess.signingKey
 				}
 			}
-			if prevAt >= 0 {
-				binary.LittleEndian.PutUint32(out[prevAt+offNextCommand:], uint32(len(out)-prevAt))
-			}
-			prevAt = len(out)
-			out = append(out, reply...)
-			if h.nextCommand != 0 {
-				for len(out)%8 != 0 {
-					out = append(out, 0)
-				}
-			}
+			out, prevAt = appendChained(out, reply, h.nextCommand != 0, c.dialect, key)
 			if h.nextCommand == 0 {
 				return out, nil
 			}
@@ -521,7 +523,7 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		sess := c.sessions[binary.LittleEndian.Uint64(one[offSessionID:])]
 		if h.flags&flagSigned != 0 {
 			if sess == nil || !verifyMessage(c.dialect, sess.signingKey, one) {
-				return c.finish(out, prevAt, errorResponse(h, statusAccessDenied), sess, h), nil
+				return c.finish(out, errorResponse(h, statusAccessDenied), sess, h), nil
 			}
 		}
 
@@ -529,44 +531,81 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		// Signed in kind: a client that signed its request checks the reply,
-		// and one that did not would reject a signature it cannot verify.
-		if reply != nil && h.flags&flagSigned != 0 && sess != nil {
-			signMessage(c.dialect, sess.signingKey, reply)
-		}
 		if reply != nil {
 			if len(reply) >= headerLen {
 				prevStatus = binary.LittleEndian.Uint32(reply[offStatus:])
 			}
-			if prevAt >= 0 {
-				binary.LittleEndian.PutUint32(out[prevAt+offNextCommand:], uint32(len(out)-prevAt))
+			// Signed in kind: a client that signed its request checks the
+			// reply, and one that did not would reject a signature it cannot
+			// verify.
+			var key []byte
+			if h.flags&flagSigned != 0 && sess != nil {
+				key = sess.signingKey
 			}
-			prevAt = len(out)
-			out = append(out, reply...)
-			if h.nextCommand != 0 {
-				for len(out)%8 != 0 {
-					out = append(out, 0)
-				}
-			}
+			out, prevAt = appendChained(out, reply, h.nextCommand != 0, c.dialect, key)
 		}
 		if h.nextCommand == 0 {
-			return out, nil
+			return c.endChain(out, prevAt, sess), nil
 		}
 		msg = msg[end:]
 	}
 }
 
+// appendChained adds one reply to a chain. When another reply follows, the reply
+// is padded to an eight-byte boundary and its NextCommand is that padded length
+// (where the successor lands); the last one says zero. The reply is signed after
+// both, over the padded bytes, which is what MS-SMB2 3.3.4.1.1 signs for a
+// compounded response (key nil: unsigned). It returns the chain and where this
+// reply starts in it.
+func appendChained(out, reply []byte, hasNext bool, dialect uint16, key []byte) ([]byte, int) {
+	if hasNext {
+		for len(reply)%8 != 0 {
+			reply = append(reply, 0)
+		}
+	}
+	if len(reply) >= headerLen {
+		next := uint32(0)
+		if hasNext {
+			next = uint32(len(reply))
+		}
+		binary.LittleEndian.PutUint32(reply[offNextCommand:], next)
+	}
+	if key != nil {
+		signMessage(dialect, key, reply)
+	}
+	at := len(out)
+	return append(out, reply...), at
+}
+
+// endChain closes a chain whose last request produced no reply of its own: the
+// reply before it was built expecting a successor, so it is re-signed as the
+// last one, with NextCommand zero (its padding stays inside the signed bytes).
+func (c *conn) endChain(out []byte, prevAt int, sess *session) []byte {
+	if prevAt < 0 || prevAt+headerLen > len(out) {
+		return out
+	}
+	last := out[prevAt:]
+	if binary.LittleEndian.Uint32(last[offNextCommand:]) == 0 {
+		return out
+	}
+	binary.LittleEndian.PutUint32(last[offNextCommand:], 0)
+	if sess != nil && last[offFlags]&byte(flagSigned) != 0 {
+		signMessage(c.dialect, sess.signingKey, last)
+	}
+	return out
+}
+
 // finish appends one last reply to a chain and returns what to send. The
 // refusal path uses it so a rejected signature still answers in the shape the
 // client is reading.
-func (c *conn) finish(out []byte, prevAt int, reply []byte, sess *session, h header) []byte {
+func (c *conn) finish(out, reply []byte, sess *session, h header) []byte {
+	var key []byte
 	if sess != nil && h.flags&flagSigned != 0 {
-		signMessage(c.dialect, sess.signingKey, reply)
+		key = sess.signingKey
 	}
-	if prevAt >= 0 {
-		binary.LittleEndian.PutUint32(out[prevAt+offNextCommand:], uint32(len(out)-prevAt))
-	}
-	return append(out, reply...)
+	// the reply before this one was built expecting a successor, signed with its offset
+	out, _ = appendChained(out, reply, false, c.dialect, key)
+	return out
 }
 
 // withInheritedIDs gives a chained request the session and tree of the one it

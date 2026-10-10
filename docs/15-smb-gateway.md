@@ -56,7 +56,15 @@ upstream, each with a test in the copy:
   file and hands its caller a short, wrong buffer; the three-VM rounds caught it through
   a Windows mount in the corruption phase (I-40). `TestSMB_UnreadableChunk_IsIoError`.
 
-The copy is updated by re-applying these three changes to a newer upstream; the `replace`
+- `server.go`: every reply of a compounded response is signed after its NextCommand and
+  its padding are in place, over the padded bytes (MS-SMB2 3.3.4.1.1). Upstream signed
+  first and wrote the offset afterwards, so the signature covered a message that was never
+  sent; Windows checks every reply of a chain, logged "signing validation failed" for a
+  CREATE + CLOSE compound whose CREATE failed, and reported error 58 ("The specified
+  server cannot perform the requested operation") instead of the CREATE's status. The
+  three-VM rounds caught it through `verify` on Windows. `TestASignedChainVerifiesEveryReply`.
+
+The copy is updated by re-applying these four changes to a newer upstream; the `replace`
 goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the
