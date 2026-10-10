@@ -75,7 +75,8 @@ type faultTransport struct {
 
 func (t faultTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t.f.Blocked(r.URL.Host) {
-		return nil, ErrDropped
+		// a refused dial: the request never left, which a proposer may retry (I-95)
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: ErrDropped}
 	}
 	return t.base.RoundTrip(r)
 }

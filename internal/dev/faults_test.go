@@ -129,7 +129,10 @@ func TestFaults_RuleFailsOpenRaftConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tb.(*raft.NetworkTransport).Close()
-	// B answers every request, so A's calls complete and keep their pooled connection
+	// B answers every request, so A's calls complete and keep their pooled connection;
+	// Close leaves pooled connections alone, so they are closed first (B's handler
+	// goroutines end with them)
+	defer ta.(*raft.NetworkTransport).CloseStreams()
 	stop := make(chan struct{})
 	defer close(stop)
 	go func() {
