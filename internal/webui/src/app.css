@@ -176,7 +176,8 @@ h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8
 .spread { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
 .spread-axis { display: flex; flex-direction: column; justify-content: space-between; height: 96px; font: 11px var(--mono); color: var(--dim); text-align: right; }
 .spread-plot { display: flex; gap: 16px; min-width: 0; overflow-x: auto; justify-content: flex-start; }
-.spread-host { display: grid; gap: 4px; flex: 0 1 auto; min-width: 0; }
+/* the host's name runs up beside its columns, so a group is as wide as its disks, not its name */
+.spread-host { display: flex; gap: 4px; flex: 0 0 auto; }
 .spread-cols { display: flex; gap: 2px; height: 96px; }
 .spread-col { position: relative; flex: 0 0 auto; width: 24px; background: var(--surface); }
 .spread-col::before { content: ""; position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px; background: var(--text); opacity: .35; }
@@ -189,7 +190,7 @@ h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: 8
 .spread-col.dead > i { background: var(--bad); opacity: .5; }
 .spread-col.drain { background: color-mix(in srgb, var(--warn) 12%, var(--bg)); }
 .spread-col.off { background: transparent; outline: 1.5px dashed var(--line); outline-offset: -1.5px; }
-.spread-label { font: 12px var(--mono); color: var(--dim); display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spread-label { font: 12px var(--mono); color: var(--dim); display: flex; align-items: center; gap: 6px; height: 96px; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- file browser -------------------------------------------------------------- */
 .crumbs { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--mono); font-size: 14px; align-items: center; }
