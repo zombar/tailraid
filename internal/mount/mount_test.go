@@ -1,8 +1,12 @@
 package mount
 
 import (
+	"context"
+	"errors"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommand_PerOS(t *testing.T) {
@@ -96,6 +100,59 @@ func TestCheckWindowsBuild_Table(t *testing.T) {
 		err := CheckWindowsBuild(build)
 		if (err == nil) != ok {
 			t.Errorf("build %d: %v, want ok=%v", build, err, ok)
+		}
+	}
+}
+
+// mount --wait maps only once the gateway accepts a connection (the service may start
+// after the logon task), and gives up after the bound with the address in the error.
+// Invariant: I-142
+func TestMount_WaitGateway(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := l.Addr().String()
+	if err := WaitGateway(t.Context(), open, time.Second); err != nil {
+		t.Errorf("a listening gateway: %v", err)
+	}
+	if err := WaitGateway(t.Context(), open, 0); err != nil {
+		t.Errorf("a listening gateway with no wait: %v", err)
+	}
+	_ = l.Close()
+	began := time.Now()
+	err = WaitGateway(t.Context(), open, 600*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), open) {
+		t.Fatalf("a closed port: %v", err)
+	}
+	if d := time.Since(began); d < 600*time.Millisecond || d > 5*time.Second {
+		t.Errorf("gave up after %v, want the bound", d)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := WaitGateway(ctx, open, time.Minute); err == nil {
+		t.Error("a cancelled wait succeeded")
+	}
+}
+
+// A mapping Windows refuses with error 1219 (another connection to the same server name
+// under another user, whatever the port) says which server and how to clear it; any
+// other failure, and any other OS, keeps its own error.
+// Invariant: I-142
+func TestMount_Explain1219(t *testing.T) {
+	_, args, err := SMBCommand("windows", "127.0.0.1:20445", "T:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := errors.New("exit status 1")
+	out := "New-SmbMapping : Multiple connections to a server or shared resource by the same user, using more than one user name, are not allowed.\n    + FullyQualifiedErrorId : Windows System Error 1219,New-SmbMapping"
+	got := explainMount("windows", args, out, cause)
+	if !errors.Is(got, cause) || !strings.Contains(got.Error(), `\\127.0.0.1 as another user`) || !strings.Contains(got.Error(), `net use \\127.0.0.1\<share> /delete`) {
+		t.Errorf("1219: %v", got)
+	}
+	for _, tc := range []struct{ goos, out string }{{"windows", "System error 86"}, {"linux", out}, {"windows", ""}} {
+		if got := explainMount(tc.goos, args, tc.out, cause); got == nil || got.Error() != cause.Error() {
+			t.Errorf("%s %q: %v, want the error unchanged", tc.goos, tc.out, got)
 		}
 	}
 }

@@ -35,6 +35,7 @@ func svcParams(cmd *cobra.Command) (svc.Params, config.Config, string, error) {
 		return svc.Params{}, cfg, "", fmt.Errorf("install needs a stable binary path, not %s (make build, then copy dist/tailraid somewhere permanent)", exe)
 	}
 	p := svc.Params{GOOS: runtime.GOOS, Exe: exe, ConfigPath: path, Home: config.Home(), LogFile: cfg.LogFile(), DataDir: cfg.Node.DataDir}
+	p.LogonMount = runtime.GOOS == "windows" && cfg.Listen.SMB != "" && cfg.Mount.Path != "" // the drive at logon (I-142)
 	for _, d := range cfg.Node.Disks {
 		p.Disks = append(p.Disks, d.Path)
 	}

@@ -84,3 +84,61 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 		t.Fatal("unsupported OS accepted")
 	}
 }
+
+// On Windows the install plan maps the drive at the installing user's logon, in that
+// user's desktop session with the limited token (Explorer's; an elevated session's drive
+// is invisible to Explorer), with no console window, and starts the task once; uninstall
+// removes it whether or not it exists. A quote in a path is doubled for PowerShell.
+// Invariant: I-142
+func TestSvc_Windows_LogonMount(t *testing.T) {
+	p := Params{GOOS: "windows", Exe: `C:\Program Files\tail'raid\tailraid.exe`, ConfigPath: `C:\ProgramData\tailraid\config.yaml`, User: `HONKER\o'neil`, LogonMount: true}
+	pl, err := Install(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := func(cmds [][]string, word string) int {
+		for i, c := range cmds {
+			if strings.Contains(strings.Join(c, " "), word) {
+				return i
+			}
+		}
+		return -1
+	}
+	reg, start, scStart := find(pl.Commands, "Register-ScheduledTask"), find(pl.Commands, "Start-ScheduledTask"), find(pl.Commands, "sc.exe start")
+	if reg < 0 || start < 0 || start < reg || start < scStart {
+		t.Fatalf("register %d, start %d, sc start %d: %v", reg, start, scStart, pl.Commands)
+	}
+	if c := pl.Commands[reg]; c[0] != "powershell" || c[len(c)-2] != "-Command" {
+		t.Fatalf("register runs %v", c)
+	}
+	script := pl.Commands[reg][len(pl.Commands[reg])-1]
+	for _, want := range []string{
+		"-TaskName 'tailraid-mount'",
+		"New-ScheduledTaskTrigger -AtLogOn -User 'HONKER\\o''neil'",
+		"New-ScheduledTaskPrincipal -UserId 'HONKER\\o''neil' -LogonType Interactive -RunLevel Limited",
+		"New-ScheduledTaskAction -Execute 'conhost.exe' -Argument '--headless \"C:\\Program Files\\tail''raid\\tailraid.exe\" mount --wait 5m --config \"C:\\ProgramData\\tailraid\\config.yaml\"'",
+		"-Force",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("register lacks %q:\n%s", want, script)
+		}
+	}
+	if got := pl.Commands[start][len(pl.Commands[start])-1]; got != "Start-ScheduledTask -TaskName 'tailraid-mount'" {
+		t.Errorf("start: %q", got)
+	}
+	un, err := Uninstall(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := strings.Join(un.Commands[len(un.Commands)-1], " ")
+	if !strings.Contains(last, "Unregister-ScheduledTask -TaskName 'tailraid-mount' -Confirm:$false -ErrorAction SilentlyContinue") {
+		t.Errorf("uninstall ends with %q", last)
+	}
+	// no gateway or no drive configured: no task
+	p.LogonMount = false
+	pl, _ = Install(p)
+	un, _ = Uninstall(p)
+	if find(pl.Commands, "ScheduledTask") >= 0 || find(un.Commands, "ScheduledTask") >= 0 {
+		t.Errorf("a task without LogonMount: %v %v", pl.Commands, un.Commands)
+	}
+}
