@@ -128,13 +128,24 @@ s4_join() {
   done
 }
 
+# all_live <seconds>: every guest's own status shows EXPECT (devices and disks live, the
+# policy) within the time; a guest that was just restarted takes a few probe rounds to
+# see its peers live again, so one sample is no verdict
+all_live() {
+  local i=0 ok
+  while :; do
+    ok=1
+    for os in $OSES; do [ "$(live_nodes "$os" 2>/dev/null)" = "$EXPECT" ] || ok=""; done
+    [ -n "$ok" ] && return 0
+    i=$((i + 5)); [ "$i" -lt "$1" ] || return 1
+    sleep 5
+  done
+}
+
 s5_membership() {
   local want rc=0
-  wait_for 90 "every device and disk live" sh -c "[ \"\$($S/round.sh --live $FIRST)\" = '$EXPECT' ]" 2>/dev/null || true
-  for os in $OSES; do
-    local l; l=$(live_nodes "$os"); echo "$os: $l"
-    [ "$l" = "$EXPECT" ] || rc=1
-  done
+  all_live 120 || rc=1
+  for os in $OSES; do echo "$os: $(live_nodes "$os")"; done
   want=$(node_table "$FIRST")
   for os in $others; do
     [ "$(node_table "$os")" = "$want" ] || { echo "$os's node table differs from $FIRST's:"; node_table "$os"; echo "--"; echo "$want"; rc=1; }
@@ -163,11 +174,11 @@ s6_restart_after_join() {
   echo "restarting $NONVOTER"
   svc_restart "$NONVOTER"
   for os in $OSES; do ready_or_log "$os" 90 || return 1; done
-  wait_for 90 "every node live after the restarts" sh -c "[ \"\$($S/round.sh --live $FIRST)\" = '$EXPECT' ]" 2>/dev/null || true
   local rc=0
+  all_live 120 || rc=1
   for os in $OSES; do
     local l; l=$(live_nodes "$os"); echo "$os: $l"
-    [ "${l%% *}" = "$N/$N" ] || { rc=1; echo "--- $os log tail"; tr_ "$os" logs -n 40 || true; }
+    [ "$l" = "$EXPECT" ] || { echo "--- $os log tail"; tr_ "$os" logs -n 40 2>&1 | cut -c1-300 || true; }
   done
   return $rc
 }
@@ -247,14 +258,15 @@ s8_verify() {
       vm_scp_from "$v" "$rep" "$OUT/$rep"; vm_scp_from "$v" "$res" "$OUT/$res"
       ;;
   esac
-  # a capability skip other than the ones the rig cannot provide (no second disk per
-  # host, no diskless host, and consensus when leadership moved to the verifier) is a
-  # failure: every target runs dev.enabled under a restarting manager, so the banner
-  # must be PASS
+  # a capability skip other than the ones three guests cannot provide (parity kills m+1
+  # hosts besides the gateway and wants one more holding slots, there is no diskless
+  # host, the disk phase has one disk per host, and consensus skips when leadership
+  # moved to the verifier) is a failure: every target runs dev.enabled under a
+  # restarting manager, so the banner must be PASS
   grep -o '"kind":"phase"[^}]*"skipped":true[^}]*' "$OUT/$res" | grep -o '"phase":"[^"]*"' | sort -u > "$OUT/skipped-$FIRST.txt" || true
   echo "verify exit $rc; skipped phases: $(tr '\n' ' ' < "$OUT/skipped-$FIRST.txt")"
   while read -r p; do
-    case "$p" in '"phase":"13 disks"'|'"phase":"14 diskless host"') ;;
+    case "$p" in '"phase":"4 parity"'|'"phase":"13 disks"'|'"phase":"14 diskless host"') ;;
       '"phase":"6 consensus"') echo "consensus skipped: the verifier was the leader" ;;
       *) echo "unexpected skip: $p"; rc=1 ;;
     esac

@@ -8,8 +8,8 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 S="$VMS_ROOT/scripts/vms"
 
-registered() { # <os>: the guest is on the tailnet already
-  vm_ssh "$1" 'tailscale status --json 2>/dev/null || & "C:\Program Files\Tailscale\tailscale.exe" status --json' 2>/dev/null | tr -d '\r' | grep -q '"BackendState": *"Running"'
+registered() { # <os>: the guest is on the tailnet already (tailscale is on every guest's PATH)
+  vm_ssh "$1" 'tailscale status --json' 2>/dev/null | tr -d '\r' | grep -q '"BackendState": *"Running"'
 }
 
 case "${1:-}" in

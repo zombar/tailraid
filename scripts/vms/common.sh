@@ -80,10 +80,23 @@ vm_ip() {
   esac
 }
 vm_port() { case "$1" in win) echo "$WIN_SSH_PORT" ;; *) echo 22 ;; esac; }
+# scp_mode <os>: Win32-OpenSSH's SFTP subsystem does not start under the rig's install,
+# so copies to Windows use scp's legacy protocol (the remote runs scp.exe through
+# PowerShell, which works)
+scp_mode() { case "$1" in win) echo "-O $WIN_SSH_OPTS" ;; esac; }
 
 # ---- ssh --------------------------------------------------------------------------------
 SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
-  -o ConnectTimeout=8 -o BatchMode=yes -o ServerAliveInterval=15)
+  -o ConnectTimeout=8 -o ServerAliveInterval=15) # no BatchMode: it would refuse the Windows password logon
+
+# Windows is reached with password authentication (admin/admin, set by the answer file):
+# a key-authenticated logon on Windows has no LSA logon session the SMB redirector can
+# use, so every mapping of the gateway from such a session fails with error 1312, while a
+# password logon maps it fine. OpenSSH takes the password from SSH_ASKPASS when forced.
+WIN_ASKPASS="$RUN/askpass.sh"
+[ -x "$WIN_ASKPASS" ] || { printf '#!/bin/sh\necho admin\n' > "$WIN_ASKPASS"; chmod 700 "$WIN_ASKPASS"; }
+export SSH_ASKPASS="$WIN_ASKPASS" SSH_ASKPASS_REQUIRE=force DISPLAY=${DISPLAY:-none} # only a password prompt consults it
+WIN_SSH_OPTS="-o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1"
 
 # vm_ssh <os> <command...>: runs a command in the guest. On macOS and Linux it is a bash
 # command line; on Windows (whose OpenSSH default shell is PowerShell) PowerShell.
@@ -93,7 +106,7 @@ vm_ssh() {
   ip=$(vm_ip "$os")
   [ -n "$ip" ] || die "$os: no address (is it running?)"
   case "$os" in
-    win) ssh "${SSH_OPTS[@]}" -p "$(vm_port "$os")" "$VM_USER@$ip" "$@" ;;
+    win) ssh "${SSH_OPTS[@]}" $WIN_SSH_OPTS -p "$(vm_port "$os")" "$VM_USER@$ip" "$@" ;;
     # a non-interactive SSH shell on macOS has no /usr/local/bin or Homebrew on its PATH
     *) ssh "${SSH_OPTS[@]}" -p "$(vm_port "$os")" "$VM_USER@$ip" "export PATH=/usr/local/bin:/opt/homebrew/bin:\$PATH; $*" ;;
   esac
@@ -104,17 +117,17 @@ vm_scp() {
   local os=$1 ip
   ip=$(vm_ip "$os")
   [ -n "$ip" ] || die "$os: no address (is it running?)"
-  scp -q "${SSH_OPTS[@]}" -P "$(vm_port "$os")" "$2" "$VM_USER@$ip:$3"
+  scp -q $(scp_mode "$os") "${SSH_OPTS[@]}" -P "$(vm_port "$os")" "$2" "$VM_USER@$ip:$3"
 }
 
 vm_scp_from() { # <os> <remote path> <local>
   local os=$1 ip
   ip=$(vm_ip "$os")
   [ -n "$ip" ] || die "$os: no address (is it running?)"
-  scp -q "${SSH_OPTS[@]}" -P "$(vm_port "$os")" "$VM_USER@$ip:$2" "$3"
+  scp -q $(scp_mode "$os") "${SSH_OPTS[@]}" -P "$(vm_port "$os")" "$VM_USER@$ip:$2" "$3"
 }
 
-vm_ssh_ok() { vm_ssh "$1" true >/dev/null 2>&1; }
+vm_ssh_ok() { vm_ssh "$1" 'exit 0' >/dev/null 2>&1; } # exit 0: a command bash and PowerShell both know
 
 # vm_run_script <os> <script> [args...]: copies a script into the guest and runs it there
 # (bash on macOS and Linux, PowerShell on Windows), streaming its output.
@@ -136,9 +149,9 @@ vm_run_script() {
 
 # ---- results ----------------------------------------------------------------------------
 # A round appends one JSON line per step to RESULTS (set by round.sh).
-json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'BEGIN { ORS = "" } NR > 1 { print "\\n" } { print }'; }
-record() { # <step> <ok|fail|skip> <detail>
+record() { # <step> <ok|fail|skip> <detail>; the detail is whatever the guests printed, so a real encoder
   [ -n "${RESULTS:-}" ] || return 0
-  printf '{"t":"%s","first":"%s","step":"%s","result":"%s","detail":"%s"}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${FIRST:-}" "$(json_escape "$1")" "$2" "$(json_escape "$3")" >> "$RESULTS"
+  python3 -c 'import json, sys, datetime
+print(json.dumps({"t": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "first": sys.argv[1], "step": sys.argv[2], "result": sys.argv[3], "detail": sys.argv[4]}))' \
+    "${FIRST:-}" "$1" "$2" "$3" >> "$RESULTS"
 }

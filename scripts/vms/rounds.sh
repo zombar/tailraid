@@ -12,9 +12,9 @@ REPORT="$VMS_ROOT/docs/reports/vms/${RUN_ID%%-*}"
 mkdir -p "$OUT" "$REPORT"
 version=$(cd "$VMS_ROOT" && git describe --tags --always --dirty)
 status=0
-declare -A outcome
+: > "$OUT/outcomes" # "<first> PASS|FAIL" per round (macOS bash 3.2 has no associative arrays)
 for first in ${ROUNDS:-mac linux win}; do
-  if "$S/round.sh" "$first"; then outcome[$first]=PASS; else outcome[$first]=FAIL; status=1; [ -n "$keep" ] || break; fi
+  if "$S/round.sh" "$first"; then echo "$first PASS" >> "$OUT/outcomes"; else echo "$first FAIL" >> "$OUT/outcomes"; status=1; [ -n "$keep" ] || break; fi
 done
 {
   echo "# Three-VM rounds: $RUN_ID ($version)"
@@ -22,7 +22,7 @@ done
   echo "| First | Outcome | Steps | Verify report |"
   echo "|---|---|---|---|"
   for first in mac linux win; do
-    o=${outcome[$first]:-"not run"}
+    o=$(awk -v f="$first" '$1 == f { print $2 }' "$OUT/outcomes"); o=${o:-"not run"}
     steps=$(python3 -c '
 import json, sys
 try:
