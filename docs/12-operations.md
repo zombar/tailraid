@@ -31,7 +31,9 @@ service runs as LocalSystem, whose config home is `%ProgramData%\tailraid` — t
 
 Mounting stays a user action (`tailraid mount`) on every OS: the LaunchAgent and the
 systemd unit only serve. The mount survives service restarts because handles are stable
-(I-16) and the mounts are `soft`.
+(I-16) and the mounts are `soft`. The three service managers, the three mounts and the
+install, restart and recover paths are exercised on real guests by the three-VM rounds
+([vms.md](vms.md)).
 
 The service log prints the browser UI address (`http://<tsIP>:20482/`, docs/13) at start,
 and `tailraid status` shows it on its `web` line; `listen.web: 0` turns the UI off.

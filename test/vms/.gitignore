@@ -1,0 +1,10 @@
+# The rig's state (docs/vms.md): keys, golden images, running instances, results.
+/id_ed25519
+/id_ed25519.pub
+/images/
+/run/
+/results/
+/iso/
+/packer/build/
+/packer/cache/
+/packer/packer_cache/

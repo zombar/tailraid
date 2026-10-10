@@ -26,15 +26,16 @@ BIN := tailraid
 # Prose and markup the spell check and the docs script cover.
 DOCS := README.md CLAUDE.md CHANGELOG.md docs/*.md docs/windows-checklist.md
 WEB_TEXT := internal/webui/src/*.ts internal/webui/src/app.css internal/webui/static/index.html docs/assets/lookdev/*.html
-YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml
-SHELL_SCRIPTS := scripts/*.sh test/soak/entry.sh
+YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml test/vms/headscale/compose.yml
+SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh test/soak/entry.sh test/vms/packer/setup/*.sh
 
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
         release tag check invariants tidy vendor-check deadcode lint-cross clean help web web-check web-typecheck \
-        spell docs-check actionlint yaml-check yamlfmt shell-check hooks
+        spell docs-check actionlint yaml-check yamlfmt shell-check hooks \
+        vms-setup vms-images vms-images-clean vms-up vms-round vms-rounds vms-down vms-destroy
 
 # Browser UI (docs/13 §6): esbuild is a Go tool; the bundle is committed and embedded.
 WEB_SRC := internal/webui/src
@@ -95,6 +96,37 @@ soak-full: soak-binary
 	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile full --out report.html --results results.jsonl; \
 	status=$$?; cd test/soak && docker compose down -v >/dev/null; exit $$status
+
+## vms-setup: install the three-VM rig's host tooling (Tart, Packer, QEMU, socket_vmnet; docs/vms.md)
+vms-setup:
+	scripts/vms/host-setup.sh
+
+## vms-images: build the golden images with Packer (macOS and Linux from Tart bases, Windows unattended from the ISO in test/vms/iso/)
+vms-images:
+	scripts/vms/images.sh build $(VMS)
+
+## vms-up: headscale and the three guests up and registered (creates instances from the images on first use)
+vms-up:
+	scripts/vms/rig.sh up
+
+## vms-round: one round with FIRST=mac|linux|win running init and the other two joining; FULL=1 runs the long verify
+vms-round:
+	scripts/vms/round.sh $(FIRST)
+
+## vms-rounds: three rounds, each OS first in turn; summary in docs/reports/vms/<date>/
+vms-rounds:
+	scripts/vms/rounds.sh
+
+## vms-down: stop the guests and headscale (state kept: the next vms-up needs no registration)
+vms-down:
+	scripts/vms/rig.sh down
+
+## vms-destroy: delete the instances and headscale's state (the golden images stay; vms-images-clean removes them)
+vms-destroy:
+	scripts/vms/rig.sh destroy
+
+vms-images-clean:
+	scripts/vms/images.sh clean
 
 ## fuzz: run every Fuzz* target for 30 s each
 fuzz:
