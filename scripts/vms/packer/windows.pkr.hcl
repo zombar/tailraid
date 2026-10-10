@@ -11,6 +11,7 @@ variable "iso" { type = string }          # the Windows 11 ARM64 ISO, with the n
 variable "unattend_iso" { type = string } # built by images.sh
 variable "efivars" { type = string }      # the edk2-arm-vars.fd template
 variable "firmware" { type = string }     # edk2-aarch64-code.fd
+variable "out" { type = string }          # the build directory (test/vms/packer/build/win: state, not source)
 
 source "qemu" "win" {
   qemu_binary      = "qemu-system-aarch64"
@@ -24,7 +25,7 @@ source "qemu" "win" {
   disk_size        = "64G"
   format           = "qcow2"
   vm_name          = "tailraid-win.qcow2"
-  output_directory = "build/win"
+  output_directory = var.out
   headless         = true
   display          = "none"
   net_device       = "virtio-net-pci"

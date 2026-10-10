@@ -33,7 +33,7 @@ case "${1:-}" in
     ;;
   status)
     for os in $OSES; do "$S/vm.sh" "$os" status; done
-    docker compose -f "$VMS_ROOT/test/vms/headscale/compose.yml" ps 2>/dev/null | tail -n +2 || true
+    docker compose -f "$RIG/headscale/compose.yml" ps 2>/dev/null | tail -n +2 || true
     ;;
   *) echo "usage: rig.sh up|down|destroy|status" >&2; exit 2 ;;
 esac

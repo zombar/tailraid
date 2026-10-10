@@ -21,7 +21,7 @@ tier where Tailscale, WhoIs, the service managers and the kernel mount clients a
 
 | Piece | Where | How |
 |---|---|---|
-| headscale (the control server) | Docker on the Mac | `test/vms/headscale/`: one container, TLS from a CA the rig generates, embedded DERP relay and STUN, MagicDNS `tr.test`, state in a named volume |
+| headscale (the control server) | Docker on the Mac | `scripts/vms/headscale/`: one container, TLS from a CA the rig generates, embedded DERP relay and STUN, MagicDNS `tr.test`, state in a named volume |
 | `tailraid-mac` | Tart (Virtualization.framework) | clone of a golden image built by Packer from `ghcr.io/cirruslabs/macos-tahoe-base`; Tailscale is the open-source daemon from Homebrew |
 | `tailraid-linux` | Tart | clone of a golden image built from `ghcr.io/cirruslabs/ubuntu`; `nfs-common`, Tailscale's package |
 | `tailraid-win` | QEMU with HVF | a qcow2 overlay of a golden image Packer installed unattended from Microsoft's Windows 11 ARM64 ISO; OpenSSH, Tailscale's MSI, the virtio network driver |
@@ -59,7 +59,7 @@ hand from <https://www.microsoft.com/software-download/windows11arm64> into
 Homebrew 7, so `host-setup.sh` installs the pinned release tarball under `~/.local/tart`
 after checking its published checksum.
 
-The Windows build (`test/vms/packer/windows.pkr.hcl`): Windows ARM64 ships drivers for
+The Windows build (`scripts/vms/packer/windows.pkr.hcl`): Windows ARM64 ships drivers for
 NVMe, USB storage and the `ramfb` display and nothing for virtio, so the disk is NVMe,
 both CD-ROMs are USB (the install ISO and an *unattend* ISO `images.sh` builds with
 `autounattend.xml`, the virtio-net driver from `virtio-win.iso`, the Win32-OpenSSH and

@@ -28,8 +28,8 @@ brew list --formula hashicorp/tap/packer >/dev/null 2>&1 || { brew tap hashicorp
 brew list --formula qemu >/dev/null 2>&1 || brew install qemu
 log "packer $("$PACKER" version | head -1), $("$QEMU" --version | head -1)"
 
-# the Packer plugins are pinned in test/vms/packer/plugins.pkr.hcl
-(cd "$VMS_ROOT/test/vms/packer" && "$PACKER" init plugins.pkr.hcl)
+# the Packer plugins are pinned in scripts/vms/packer/plugins.pkr.hcl
+(cd "$RIG/packer" && "$PACKER" init plugins.pkr.hcl)
 
 if [ ! -f "$SSH_KEY" ]; then
   ssh-keygen -q -t ed25519 -N "" -C tailraid-vms -f "$SSH_KEY"

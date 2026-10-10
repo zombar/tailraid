@@ -9,7 +9,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 export HS_DIR="$RUN/headscale" # the generated config and the pinned URL; the compose file mounts from here
-HS_COMPOSE="$VMS_ROOT/test/vms/headscale/compose.yml"
+HS_COMPOSE="$RIG/headscale/compose.yml"
 HS_USER=tr
 hs() { docker compose -f "$HS_COMPOSE" exec -T headscale headscale "$@"; }
 # user_id: headscale 0.26+ addresses users by numeric ID on the command line
@@ -24,7 +24,7 @@ write_config() {
     die "headscale was set up at $(cat "$HS_DIR/server_url") and the guests now sit behind $url: make vms-destroy, then vms-up"
   fi
   echo "$url" > "$HS_DIR/server_url"
-  sed -e "s|@SERVER_URL@|$url|" "$VMS_ROOT/test/vms/headscale/config.yaml.in" > "$HS_DIR/config.yaml"
+  sed -e "s|@SERVER_URL@|$url|" "$RIG/headscale/config.yaml.in" > "$HS_DIR/config.yaml"
   write_tls "$url"
 }
 

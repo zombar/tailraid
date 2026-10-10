@@ -5,12 +5,13 @@
 # Windows guest under QEMU with user-mode networking (it reaches the host and, through
 # it, the Tart guests; SSH comes in on a forwarded port), all registered with a throwaway
 # headscale in Docker on this Mac. Every guest is reached over SSH as `admin` with the
-# key in test/vms/.
+# key in test/vms/, which holds nothing but state and is ignored by git as a whole.
 set -euo pipefail
 export LC_ALL=C
 
 VMS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-STATE="$VMS_ROOT/test/vms"      # .gitignored state: ssh key, images, run files, results
+STATE="$VMS_ROOT/test/vms"      # ignored state: ssh key, images, run files, results, Packer's cache and builds
+RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts, Packer templates, the headscale compose file
 RUN="$STATE/run"                  # pid files, logs, qcow2 overlays of running instances
 IMAGES="$STATE/images"            # the Windows golden image (Tart keeps its own under ~/.tart)
 SSH_KEY="$STATE/id_ed25519"

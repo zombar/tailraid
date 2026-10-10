@@ -26,8 +26,8 @@ BIN := tailraid
 # Prose and markup the spell check and the docs script cover.
 DOCS := README.md CLAUDE.md CHANGELOG.md docs/*.md docs/windows-checklist.md
 WEB_TEXT := internal/webui/src/*.ts internal/webui/src/app.css internal/webui/static/index.html docs/assets/lookdev/*.html
-YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml test/vms/headscale/compose.yml
-SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh test/soak/entry.sh test/vms/packer/setup/*.sh
+YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml scripts/vms/headscale/compose.yml
+SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh scripts/vms/packer/setup/*.sh test/soak/entry.sh
 
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64

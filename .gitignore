@@ -8,3 +8,4 @@
 .DS_Store
 test/soak/*-linux-*
 /.claude/
+/test/vms/
