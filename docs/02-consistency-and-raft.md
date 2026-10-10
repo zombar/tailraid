@@ -66,7 +66,12 @@ const (
     OpSetPlacement            // {Hash, Placement []NodeIdx, K, M}   (repair / migration)
     OpGCDelete                // {Before int64} → Result.Victims
     OpSetVolumeMode           // {Auto bool, Now}   (03: automatic redundancy)
+    OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4)
+    OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
+    OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
 )
+const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
+const FlagProtected, FlagNSFW uint8 = 1, 2
 type ChunkWrite struct { Idx uint32; Hash Hash }                         // Hash may be HashZero
 type ChunkDesc  struct { Hash Hash; Size uint32; K, M uint8; Placement []NodeIdx }
 type GCVictim   struct { Hash Hash; Placement []NodeIdx }
@@ -74,7 +79,8 @@ type GCVictim   struct { Hash Hash; Placement []NodeIdx }
 var (
     ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop,
     ErrConflict, ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand,
-    ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy error
+    ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
+    ErrProtected, ErrInTrash, ErrCodec error   // appended: wire codes are never renumbered
 )
 ```
 
@@ -117,23 +123,79 @@ must be non-empty, not `.` or `..`, contain no `/`, and be ≤ 255 bytes (`ErrBa
 Existing child ⇒ `ErrExist`. Allocates `Ino = NextIno++`, `Gen = uint32(logIndex)`, sets
 times to `Now`, `Nlink` 1 (dirs: 2, and parent `Nlink++`). Returns `Ino, Gen`.
 
-**Unlink.** Child must exist and not be `TDir` (`ErrIsDir`). Removes the child entry and
-the inode. For each `Chunks[i] != HashZero`: `Chunk.Refs--`; if it reaches 0, set
-`TombstonedAt = Now` and add to `Tombs`. Any handle to the inode now fails `FromHandle`
-(I-3, I-17).
+**Unlink.** Child must exist and not be `TDir` (`ErrIsDir`), and nothing on its parent
+chain may be protected (`ErrProtected`). Removes the child entry and the inode. For each
+`Chunks[i] != HashZero`: `Chunk.Refs--`; if it reaches 0, set `TombstonedAt = Now` and add
+to `Tombs`. Any handle to the inode now fails `FromHandle` (I-3, I-17). The gateways
+propose `Unlink` only for the ephemeral names of 06 §1 (upload temps, `._*`,
+`.DS_Store`) and while a member is too old for `Trash` (12 §6); every other delete is a
+`Trash`.
 
-**Rmdir.** Child must be `TDir` (`ErrNotDir`) with empty `Children` (`ErrNotEmpty`). Removes
-it; parent `Nlink--`.
+**Rmdir.** Child must be `TDir` (`ErrNotDir`) with empty `Children` (`ErrNotEmpty`), not
+protected and under no protected directory. Removes it; parent `Nlink--`. Like `Unlink`,
+proposed only for ephemeral names and in the mixed-version window.
 
 **Rename.** Source must exist. If destination exists: file/symlink over file/symlink
-replaces it (as Unlink of the destination, then move); dir over *empty* dir replaces it;
-dir over non-empty dir ⇒ `ErrNotEmpty`; type mismatch ⇒ `ErrIsDir` or `ErrNotDir`. Moving a
+replaces it (the destination goes to the trash as by `Trash`, or is unlinked when its
+name is ephemeral, then the move); dir over *empty* dir replaces it the same way; dir
+over non-empty dir ⇒ `ErrNotEmpty`; type mismatch ⇒ `ErrIsDir` or `ErrNotDir`. Moving a
 directory into its own subtree ⇒ `ErrLoop` (walk `NewParent`'s parent chain to root and
-reject if it passes through the source). Same path ⇒ no-op success. Only `Parent`, `Name`,
-the two `Children` maps and `Ctime` change; `Ino`, `Gen` and the handle stay valid (I-16).
+reject if it passes through the source). Same path ⇒ no-op success. Protection: a source
+that is itself a protected directory ⇒ `ErrProtected`; every protected directory on the
+source's parent chain must also be on the destination parent's chain (a move within one
+protected subtree is allowed, a move out of it is not); a destination that would be
+replaced under a protected directory ⇒ `ErrProtected` (a replace is a removal). Only
+`Parent`, `Name`, the two `Children` maps and `Ctime` change; `Ino`, `Gen` and the handle
+stay valid (I-16).
 
-**SetAttr.** `Mask` selects Mode, Uid, Gid, Atime, Mtime. `Ctime = Now`. Size is *not*
-settable here; truncation is a `Commit`.
+**SetAttr.** `Mask` selects Mode, Uid, Gid, Atime, Mtime and, with `AttrFlags`, `Flags`.
+`Ctime = Now`. Size is *not* settable here; truncation is a `Commit`. `Flags` is accepted
+on a `TDir` only (`ErrNotDir`) and only with the bits of 01 (`ErrBadCommand`).
+
+**Trash.** `Parent` must be a live `TDir` holding `Name`; a `TDir` child with children is
+refused with `ErrNotEmpty` unless `Recursive` (a POSIX `rmdir` through a mount is not
+recursive; a delete from the browser UI is); the child or anything on its parent chain
+protected ⇒ `ErrProtected`. Then, with `now` the FSM clock: the child leaves
+`Parent.Children`, `DeletedAt = now`, `Trash[Parent]` gains it, `Parent.Nlink--` for a
+directory, `Parent.Mtime = Ctime = now`, `Parent.Version++`; the subtree, every `Chunks`
+list and every `Refs` are untouched (I-152, L-199), and `Stats.LogicalBytes` moves to
+`Stats.TrashBytes` for the files inside. **Folding:** when the child is a directory,
+every root in `Trash[child]` (an entry deleted from inside it earlier, as `rm -rf` does
+file by file) is put back into `child.Children` under its name, in inode order, with its
+own `DeletedAt` cleared; a name already present keeps the newer live entry and the older
+root stays a separate root. So a tree removed from a mount lands in the trash as one
+entry that restores with one command, and a file deleted from a folder last week comes
+back with the folder (13 §4 says so).
+
+**Restore.** `Ino` must be a deleted root (`ErrNotExist` otherwise: an entry under a
+deleted directory is restored with it). The target parent (`NewParent`, or the root's
+`Parent`) must exist, be a `TDir` and be live, that is neither deleted nor under a deleted
+directory (`ErrInTrash`); the name (`NewName`, or the root's `Name`) must be free
+(`ErrExist`) and valid (I-66, I-115). No loop check is needed: a live parent cannot lie
+under the deleted directory. Apply: the entry enters the parent's `Children`,
+`DeletedAt = 0`, it leaves `Trash`, `Parent.Nlink++` for a directory, `Ctime = now`,
+`Parent.Version++`, and the stats move back. `(Ino, Gen)` are unchanged, so an NFS handle
+that went stale at the delete is valid again (L-200).
+
+**Purge.** With `Ino != 0` the one root (`ErrNotExist` when it is not a root;
+`ErrProtected` when it or an ancestor is protected: a user's "delete now" obeys the flag,
+the retention purge below does not, since what it reclaims was deleted already); with
+`Ino == 0` every root whose `DeletedAt < Before` (strictly, the one aging rule of 06 §2),
+in `(DeletedAt, Ino)` order. Each root is deleted post-order, its `Trash` roots counting as
+children so a deleted entry inside a deleted directory goes with it, at most `Limit`
+inodes per entry (`0` is unbounded): a cut leaves a valid tree and the root stays due for
+the next entry, as `GCDelete` drains in batches (I-103). For every `TFile` deleted:
+`Refs--` on each `Chunks[i] != HashZero`, a chunk reaching 0 tombstoned at `now` and
+added to `Tombs` (L-201, L-202); the same underflow rule as `Unlink`. `Stats.TrashInodes`
+and `TrashBytes` shrink accordingly (I-153).
+
+**Protection**, in one place: `walkUp(ino)` follows `Parent` to the root and reports
+whether a deleted root was crossed (then the inode is in the trash) and whether a
+directory with `FlagProtected` was crossed or is the inode itself. It costs one map
+lookup per level, what `pathLen` (I-115) already pays per `Create`. `Unlink`, `Rmdir`,
+`Trash`, `Purge{Ino}` and `Rename` consult it as described (I-154); `Create`, `Mkdir`,
+`Symlink`, `Commit` and a `Rename` *into* a protected directory are unaffected: a
+protected folder accepts new content and refuses to lose any.
 
 **Commit** — the only command that changes file data. Applied atomically or not at all:
 
@@ -181,11 +243,17 @@ comes back full. Deterministic because `Before` and `Limit` are in the command a
 victim list is emitted in hash order.
 
 **Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
-disk or host) or 3 (`SetPlacement.Expect`, `GCDelete.Limit`), snapshots in version 3;
-every reader decodes every older version. `meta.CodecVersion` is the newest a binary
-writes; `/health` reports it and `join` refuses a cluster that reports a newer one
-(I-105, [12](12-operations.md) §6). An entry a binary cannot decode still advances its
-applied index (so replicas stay aligned) and is counted and logged (I-105).
+disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`) or 4 (`Trash`, `Restore`,
+`Purge`, `SetAttr` with `Flags`), snapshots in version 4 (01 §Binary codec); every reader
+decodes every older version. `meta.CodecVersion` is the newest a binary writes; `/health`
+reports it and `join` refuses a cluster that reports a newer one (I-105,
+[12](12-operations.md) §6). An entry a binary cannot decode still advances its applied
+index (so replicas stay aligned) and is counted and logged (I-105). Because a version-4
+entry would be exactly that on a member still running codec 3, the leader refuses to
+propose one with `ErrCodec` while any live active member reports an older codec in its
+`/health` (the prober records it); the gateways fall back to `Unlink`/`Rmdir` for a
+delete and to the version-3 replace on `Rename` in that window, so a mixed cluster keeps
+working without the trash until every node is updated (I-156, 12 §6).
 
 **Idempotency.** Raft may re-deliver entries on restore; `Apply` is pure with respect to the
 log so re-applying from a snapshot's index yields the same state (I-5).
@@ -223,7 +291,16 @@ and CLI reports hold a `*meta.Store`. Every read (`GetInode`, `Lookup`, `Resolve
 `ReadDir`, `GetChunk`, `ForEachChunk`, `Nodes`, `Volume`, `Stats`, `Applied`,
 `WaitApplied`) is served from the local FSM under `RLock`, returning copies. An inode
 copy carries no `Children` map (a directory's name table is read through `Lookup` and
-`ReadDir`), so a LOOKUP or GETATTR costs O(1) however large the directory. Followers may therefore serve slightly stale
+`ReadDir`), so a LOOKUP or GETATTR costs O(1) however large the directory. The trash is
+invisible to these reads: `Resolve`, `Lookup` and `ReadDir` start from live directories
+and never meet a deleted root, and `GetInode` fails with `ErrNotExist` for a deleted root
+and everything under it, so a gateway's handle to a deleted file is stale (I-17) and
+valid again after a restore (I-155). The trash has reads of its own: `GetInodeAny` (the
+raw lookup the flusher and an open file use, so a dirty file that was deleted still
+commits into its trash entry), `TrashOf(parent)` (the roots under a directory, newest
+first then by inode), `Trash()` (every root), `TrashDue(before)` (how many the retention
+purge would take) and `ResolveFrom(root, parts)` (a path inside a deleted root), which
+the browser UI and `tailraid trash` use. Followers may therefore serve slightly stale
 metadata; this is accepted NFS behaviour and lets a disconnected laptop browse the tree.
 A gateway that just proposed a command calls `WaitApplied(index)` before answering, which
 gives read-your-writes on the issuing node.
@@ -392,6 +469,31 @@ no divergent state to merge because it never applied uncommitted entries.
   demote takes the vote with `DemoteVoter`, and a leader that demotes itself records the
   row before the change and keeps running Raft as a follower after it.
 - **I-136** — A member op other than `remove` on a removed row is refused before it touches the Raft configuration or the table, and a node name given to the CLI resolves to a row that is not removed when one has that name.
+- **I-152** — `Trash` moves an entry out of its parent's name table and nothing else:
+  the inode, its subtree, every chunk list and every `Refs` are unchanged, `DeletedAt`
+  is the FSM clock, and the entry is indexed under the parent it came from; a directory
+  being trashed takes back the roots deleted from inside it earlier (folding), so a tree
+  removed entry by entry is one root; and `Restore` puts a root back with the same
+  `(Ino, Gen)`, under its original name or the name and live parent asked for, refusing a
+  taken name with `ErrExist` and a parent in the trash with `ErrInTrash`.
+- **I-153** — `Purge` is deterministic across replicas and exact: with `Ino` it takes
+  that root, otherwise every root with `DeletedAt < Before` in `(DeletedAt, Ino)` order,
+  deleting post-order with nested roots as children and at most `Limit` inodes per entry
+  while leaving a valid tree; it decrements `Refs` once per `(file, index)` it deletes,
+  tombstoning chunks that reach zero at the FSM clock, never underflowing; and after it
+  `Trash`, `TrashInodes` and `TrashBytes` equal a recount.
+- **I-154** — A directory with `FlagProtected` and everything under it cannot leave the
+  namespace: `Unlink`, `Rmdir`, `Trash` and a user's `Purge` of such an entry, a `Rename`
+  of the protected directory itself, a `Rename` that moves an entry out of a protected
+  subtree, and a `Rename` that would replace an entry under one are refused with
+  `ErrProtected` before anything changes; creating, writing and moving into a protected
+  directory succeed; `Flags` are accepted on directories only.
+- **I-155** — The trash is invisible to the gateways and readable by the browser UI: a
+  deleted root and everything under it fail `GetInode`, `Lookup`, `Resolve` and `ReadDir`
+  (a handle is stale, a name is free, a listing omits it) and are reachable through
+  `GetInodeAny`, `TrashOf`, `Trash` and `ResolveFrom`; a dirty file that is deleted keeps
+  its WAL and its flush commits into the trash entry, so a restore shows every
+  acknowledged byte, and a purge before that flush drops the WAL as an unlink does.
 
 ## Tests
 
@@ -416,3 +518,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
 | I-145 | `TestCluster_DemotePromote_RaftFollowsRow` |
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
+| I-152 | `TestStub_I_152` (planned: TestFSM_Trash_Table, TestFSM_Trash_FoldsEarlierRoots, TestFSM_Restore_Table, TestFSM_DeterministicAcrossReplicas, TestCluster_TrashRestoreAcrossNodes, TestModelCheck_Long) |
+| I-153 | `TestStub_I_153` (planned: TestFSM_Purge_Table, TestFSM_Purge_Boundary, TestFSM_Purge_CascadesNestedRoots, TestFSM_TrashStats_MatchComputed, TestCheckInvariants_DetectsEachViolation, TestFSM_ApplySnapshotRestoreEquivalence) |
+| I-154 | `TestStub_I_154` (planned: TestFSM_Protected_Table, TestFSM_SetAttr_Flags, TestVFS_Protected_EPERM, TestNFS_Protected_IsACCES, TestSMB_Protected_AccessDenied, TestCluster_V4OpsRefusedUntilAllMembersUpgraded) |
+| I-155 | `TestStub_I_155` (planned: TestStore_TrashReadAPI, TestNFS_TrashedIsGoneFromShare, TestNFS_TrashedHandleStale_RestoredValid, TestSMB_DeletedIsGoneFromShare, TestVFS_OpenTrash_ReadsBytes, TestVFS_Remove_TrashKeepsWAL_FlushCommits, TestVFS_PurgeBeforeFlush_DropsWAL) |

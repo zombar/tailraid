@@ -6,6 +6,14 @@
 <meta name="color-scheme" content="light dark">
 <title>tailraid files</title>
 <link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  /* lookdev-only: the variants stacked with a label; the fixed selection bar and the
+     dialog drawn in flow so every variant shows its own */
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  .inflow .selbar { position: relative; left: auto; right: auto; bottom: auto; }
+  .inflow dialog.picker { position: static; margin: 0; }
+  /* the open folder menu floats over the uploads below, exactly as in the app */
+</style>
 </head>
 <body>
 <header class="top">
@@ -16,36 +24,118 @@
 </header>
 <div id="warnings"></div>
 <main>
-  <section>
-    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span></div>
+
+  <section class="inflow">
+    <div class="variant">variant: the list, a protected and kept folder, the folder menu open, two entries selected, one being renamed, one deleted</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span><span class="badge lock">protected</span><span class="badge pin">kept here</span></div>
     <div class="toolbar">
       <label class="btn">Upload<input type="file" multiple></label>
-      <button type="button" aria-pressed="true">New folder</button>
+      <button type="button" aria-pressed="false">New folder</button>
+      <details class="menu" open>
+        <summary>Folder</summary>
+        <div class="menu-body">
+          <label class="menu-row"><input type="checkbox" checked><span>Protect</span><span class="small dim">nothing in it can be deleted, replaced or moved out, from any device</span></label>
+          <label class="menu-row"><input type="checkbox"><span>Mark nsfw</span><span class="small dim">thumbnails and previews are blurred until tapped</span></label>
+          <label class="menu-row"><input type="checkbox" checked><span>Keep on this device</span><span class="small dim">pike holds every chunk in its cache · 2.2 GiB of 2.2 GiB here</span></label>
+        </div>
+      </details>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>
       <span class="spacer"></span>
-      <span class="small dim">8 items · 2.2 GiB</span>
+      <span class="small dim">9 items · 2.2 GiB · 1 deleted</span>
     </div>
     <div class="uploads">
       <div class="upload"><span class="name">04 - Crowd.mov</span><span class="state">412.0 MiB / 660.3 MiB <button type="button">cancel</button></span><div class="bar"><i style="width:62%"></i></div></div>
-      <div class="upload"><span class="name">05 - Soundcheck.wav</span><span class="state">queued <button type="button">cancel</button></span></div>
       <div class="upload"><span class="name">Day 1.zip</span><span class="state bad">failed: no space left on the volume (507)</span></div>
     </div>
-    <form class="inline-form"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg><input type="text" placeholder="folder name" value="photos" aria-label="folder name" autofocus><button type="submit">Create</button><button type="button">Cancel</button></form>
+    <form class="inline-form rename"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg><input type="text" value="02 - Encore?.m4a" aria-label="new name" autofocus><button type="submit">Rename</button><button type="button">Cancel</button></form>
     <table class="files">
-      <thead><tr><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <thead><tr><th class="sel"><input type="checkbox" aria-label="select all"></th><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
       <tbody>
-        <tr><td class="name"><a href="#/browse/media/Concerts%202024/Day%201%20(soundboard)"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)</a></td><td class="size"></td><td class="mtime">2 h ago</td></tr>
-        <tr><td class="name"><a href="#/browse/media/Concerts%202024/photos"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>photos</a></td><td class="size"></td><td class="mtime">2026-10-02 21:20</td></tr>
-        <tr><td class="name"><a href="#/file/media/Concerts%202024/01%20-%20Opening%20%231.mp4"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Opening #1.mp4</a></td><td class="size">1.9 GiB</td><td class="mtime">2026-10-02 21:14</td></tr>
-        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>02 - Encore?.m4a</a></td><td class="size">48.0 MiB</td><td class="mtime">2026-10-02 21:16</td></tr>
-        <tr class="dirty"><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>03 - Jam.flac</a></td><td class="size">212.4 MiB</td><td class="mtime">12 s ago</td></tr>
-        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"/><circle cx="11" cy="5.5" r="1"/></svg>cover 100%.jpg</a></td><td class="size">3.4 MiB</td><td class="mtime">2026-10-02 21:20</td></tr>
-        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>README.md</a></td><td class="size">2.1 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
-        <tr><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>setlist — final (v2).txt</a></td><td class="size">1.3 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
-        <tr><td class="name"><span class="linkname"><svg class="icon" viewBox="0 0 16 16"><path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2.5-2.5a2.5 2.5 0 0 0-3.5-3.5L8 4.5 M9.5 6.5a2.5 2.5 0 0 0-3.5 0L3.5 9a2.5 2.5 0 0 0 3.5 3.5L8 11.5"/></svg>notes <span class="target">→ ../notes.txt</span></span></td><td class="size"></td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/browse/media/Concerts%202024/Day%201%20(soundboard)"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)<span class="badge lock">protected</span></a></td><td class="size"></td><td class="mtime">2 h ago</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/browse/media/Concerts%202024/photos"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>photos<span class="badge nsfw">nsfw</span></a></td><td class="size"></td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr class="selected"><td class="sel"><input type="checkbox" checked aria-label="select"></td><td class="name"><a href="#/file/media/Concerts%202024/01%20-%20Opening%20%231.mp4"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Opening #1.mp4</a></td><td class="size">1.9 GiB</td><td class="mtime">2026-10-02 21:14</td></tr>
+        <tr class="selected"><td class="sel"><input type="checkbox" checked aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>02 - Encore?.m4a<button type="button" class="play">▶ Play</button></a></td><td class="size">48.0 MiB</td><td class="mtime">2026-10-02 21:16</td></tr>
+        <tr class="dirty playing"><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>03 - Jam.flac<button type="button" class="play">⏸ Playing</button></a></td><td class="size">212.4 MiB</td><td class="mtime">12 s ago</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"/><circle cx="11" cy="5.5" r="1"/></svg>cover 100%.jpg</a></td><td class="size">3.4 MiB</td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>setlist — final (v2).txt</a></td><td class="size">1.3 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><span class="linkname"><svg class="icon" viewBox="0 0 16 16"><path d="M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2.5-2.5a2.5 2.5 0 0 0-3.5-3.5L8 4.5 M9.5 6.5a2.5 2.5 0 0 0-3.5 0L3.5 9a2.5 2.5 0 0 0 3.5 3.5L8 11.5"/></svg>notes <span class="target">→ ../notes.txt</span></span></td><td class="size"></td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr class="deleted"><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/trashfile/4812/old%20mix.wav"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>old mix.wav<span class="badge">deleted · 27 d</span></a></td><td class="size">98.1 MiB</td><td class="mtime">3 d ago</td></tr>
       </tbody>
     </table>
+    <div class="selbar">
+      <span class="count">2 selected</span>
+      <button type="button" disabled title="protected: unprotect Concerts 2024 to delete">Delete</button>
+      <button type="button" disabled title="protected: unprotect Concerts 2024 to move out">Move to…</button>
+      <button type="button" disabled title="select one entry to rename">Rename</button>
+      <button type="button">Play</button>
+      <button type="button">Add to queue</button>
+      <span class="spacer"></span>
+      <button type="button">Clear</button>
+    </div>
   </section>
+
+  <section class="inflow">
+    <div class="variant">variant: the same folder as tiles (a video, an image, an album folder, an nsfw folder, a protected folder, a deleted file, a dirty file)</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span><span class="badge lock">protected</span></div>
+    <div class="toolbar">
+      <label class="btn">Upload<input type="file" multiple></label>
+      <button type="button" aria-pressed="false">New folder</button>
+      <details class="menu"><summary>Folder</summary></details>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="false">List</button><button type="button" aria-pressed="true">Tiles</button></span>
+      <span class="spacer"></span>
+      <span class="small dim">9 items · 2.2 GiB · 1 deleted</span>
+    </div>
+    <div class="ftiles">
+      <a class="ftile dir" href="#/browse/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="badges"><span class="badge lock">protected</span></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg></span><span class="tname">Day 1 (soundboard)</span><span class="tmeta"><span>24 items</span></span></a>
+      <a class="ftile dir" href="#/browse/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="badges"><span class="badge nsfw">nsfw</span></span><span class="thumb nsfw"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%2364748b'/%3E%3Ccircle cx='5' cy='4' r='2' fill='%2394a3b8'/%3E%3Cpath d='M0 9 L6 5 L9 7 L12 5 L16 9Z' fill='%23475569'/%3E%3C/svg%3E"><span class="veil">nsfw · tap to show</span></span><span class="tname">photos</span><span class="tmeta"><span>118 items</span></span></a>
+      <a class="ftile dir" href="#/browse/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e293b'/%3E%3Crect x='3.5' y='.5' width='9' height='8' fill='%23b45309'/%3E%3Ccircle cx='8' cy='4.5' r='2.6' fill='%23fde68a'/%3E%3C/svg%3E"></span><span class="tname">Around the Fur</span><span class="tmeta"><span>10 tracks</span></span></a>
+      <a class="ftile selected" href="#/file/x"><span class="sel"><input type="checkbox" checked aria-label="select"></span><span class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23111827'/%3E%3Cpath d='M0 9 L5 3 L8 6 L11 2 L16 9Z' fill='%23334155'/%3E%3Cpath d='M6.5 2.5 L10 4.5 L6.5 6.5Z' fill='%23f8fafc'/%3E%3C/svg%3E"></span><span class="tname">01 - Opening #1.mp4</span><span class="tmeta"><span>1.9 GiB</span><span>8:12</span></span></a>
+      <a class="ftile playing" href="#/file/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e293b'/%3E%3Crect x='3.5' y='.5' width='9' height='8' fill='%23b45309'/%3E%3Ccircle cx='8' cy='4.5' r='2.6' fill='%23fde68a'/%3E%3C/svg%3E"></span><button type="button" class="play">⏸ Playing</button><span class="tname">02 - Encore?.m4a</span><span class="tmeta"><span>48.0 MiB</span><span>4:40</span></span></a>
+      <a class="ftile dirty" href="#/file/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg></span><span class="tname">03 - Jam.flac</span><span class="tmeta"><span>212.4 MiB</span></span></a>
+      <a class="ftile" href="#/file/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%2364748b'/%3E%3Ccircle cx='5' cy='3' r='1.5' fill='%2394a3b8'/%3E%3Cpath d='M0 9 L6 4 L9 6.5 L12 4 L16 9Z' fill='%23475569'/%3E%3C/svg%3E"></span><span class="tname">cover 100%.jpg</span><span class="tmeta"><span>3.4 MiB</span></span></a>
+      <a class="ftile" href="#/file/x"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg></span><span class="tname">setlist — final (v2).txt</span><span class="tmeta"><span>1.3 KiB</span></span></a>
+      <a class="ftile deleted" href="#/trashfile/4812/old%20mix.wav"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="badges"><span class="badge">deleted · 27 d</span></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg></span><span class="tname">old mix.wav</span><span class="tmeta"><span>98.1 MiB</span></span></a>
+    </div>
+    <div class="selbar">
+      <span class="count">1 selected</span>
+      <button type="button">Delete</button>
+      <button type="button">Move to…</button>
+      <button type="button">Rename</button>
+      <span class="spacer"></span>
+      <button type="button">Clear</button>
+    </div>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: the folder picker (Move to…), the current folder and the selection's own subtree disabled</div>
+    <dialog class="picker" open aria-label="move to">
+      <div class="crumbs"><a href="#">/</a><a href="#">media</a><span class="sep">/</span><span>Concerts 2024</span></div>
+      <ul class="picker-list">
+        <li><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>..</li>
+        <li aria-disabled="true" title="the selection is here"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)</li>
+        <li><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>photos</li>
+        <li><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>raw</li>
+      </ul>
+      <div class="picker-actions"><button type="button">Cancel</button><button type="button">Move 2 here</button></div>
+    </dialog>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: inside a deleted folder, the trash banner above its listing</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><a href="#/browse/media/Concerts%202024">Concerts 2024</a><span class="sep">/</span><span>Day 2</span><span class="badge">deleted</span></div>
+    <div class="banner deleted"><span>Deleted 3 d ago · gone for good in 27 d · 24 items · 1.1 GiB</span><span class="actions"><button type="button">Restore</button><button type="button">Delete now</button></span></div>
+    <table class="files">
+      <thead><tr><th class="sel"><input type="checkbox" aria-label="select all"></th><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <tbody>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/trash/4790/multitrack"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>multitrack</a></td><td class="size"></td><td class="mtime">2026-10-03 11:40</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/trashfile/4790/01%20-%20Intro.wav"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Intro.wav<button type="button" class="play">▶ Play</button></a></td><td class="size">61.0 MiB</td><td class="mtime">2026-10-03 11:41</td></tr>
+      </tbody>
+    </table>
+    <div class="variant">variant: the banner after a 409 (the name is taken): the rename form on its own line</div>
+    <div class="banner deleted"><span><span class="mono">Day 2</span> is taken in <span class="mono">Concerts 2024</span> · restore under another name</span><form class="inline-form rename"><input type="text" value="Day 2 (restored)" aria-label="new name"><button type="submit">Restore as</button><button type="button">Cancel</button></form></div>
+  </section>
+
 </main>
-<div id="toasts" aria-live="polite"><div class="toast bad">mkdir photos: already exists (409)</div></div>
+<div id="toasts" aria-live="polite"></div>
 </body>
 </html>
