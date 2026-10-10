@@ -305,6 +305,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-110 | Committed | E-96 scrub detects corruption | Degraded → Committed | Quarantined → Repaired; `scrub_repaired` | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-111 | Committed | E-97 shard file missing | Degraded | GET 404 → treated as slot missing → repair | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-112 | Committed (S3 slot) | E-98 object missing | Degraded | HEAD/GET 404 → repair re-PUTs | `TestS3Node_ObjectMissing_Repaired` |
+| L-198 | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | ErrCorrupt on the GET → bad slot → repair re-PUTs; outside the budget the slot is only HEADed and the corruption waits for a read | `TestS3Node_ScrubFetchesSample` |
 | L-113 | Dirty | E-100 C1 crash before WAL fsync | (none) or Dirty | write not acked; after restart content is exactly pre-write; torn record ignored | `TestOverlay_RestartReplaysDirtyWALs`, `TestWAL_ReplayStopsAtTornTail` |
 | L-114 | Dirty | E-101 C2 crash after WAL fsync | Dirty (replayed) | acked; replay on restart; flushed; readable everywhere | `TestOverlay_RestartReplaysDirtyWALs` |
 | L-115 | Uploading | E-102 C3 node crash, temp written | Uploading (slot fails) | temp never visible; removed on `Store.Open` | `TestCrash_AtEveryPoint` |

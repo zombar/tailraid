@@ -197,6 +197,7 @@ mount:
   path: ~/TailRAID      # ~ is expanded
 repair:
   fill_after: 10m       # how long a device may be away before its data is re-copied
+  s3_scrub: 1G          # bucket bytes the scrub may download per day to verify objects ("0": HEAD only)
 log:
   level: info           # debug | info | warn | error
   file: ~/tailraid.log  # optional; rotates at 64 MiB keeping five generations

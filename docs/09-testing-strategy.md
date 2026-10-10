@@ -322,11 +322,14 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   within the S3 probe interval, a second registration of it refused; a corpus written
   while it is a target lands on it in the disk layout and framing and reads exact through
   every gateway; with the host of another slot killed, a chunk that needs the bucket
-  reads exact; an object deleted behind the cluster's back is found by the scrub and put
+  reads exact at once, before any probe has noticed, and again after the liveness
+  threshold; an object deleted behind the cluster's back is found by the scrub and put
   back; GC collects a file on the bucket and the drain moves every slot off it, neither
-  deleting an object; the drained bucket is removed and the corpus still reads exact;
-  skipped where the environment has no bucket, which on a live cluster is always; I-52,
-  I-137, I-138, I-42, L-104, L-112, L-139). The compose rig gives four nodes two disks each, one
+  deleting an object; the drained bucket is removed and the corpus still reads exact. On a
+  live cluster the phase uses the cluster's own S3 node when this device holds its key:
+  it registers nothing, skips the refusal and the drain, deletes behind the cluster's
+  back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
+  I-137, I-138, I-42, I-149, L-104, L-112, L-139). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it) and an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket; `cmd/soak -phases 15` runs a subset of

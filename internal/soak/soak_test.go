@@ -158,7 +158,7 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil}
 }
 
 func (e *harnessEnv) quorum() bool {
@@ -514,7 +514,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live",
 		"policy follows the member table after a disk was added", "the drained disk holds no slots", "the removed disk is out of the node table",
 		"14 diskless host", "status reports the host diskless with no budget", "no slot names the diskless host or a disk of it",
-		"15 s3 bucket", "every slot on the bucket is its shard, in the disk layout and framing", "a read with a data holder down is served from the bucket",
+		"15 s3 bucket", "every slot on the bucket is its shard, in the disk layout and framing", "a read right after the holder died falls through to the bucket", "a read with a data holder down is served from the bucket",
 		"the scrub finds the missing object and repair puts it back", "gc collects a file on the bucket without deleting its objects",
 		"the drained bucket is out of the node table",
 	} {

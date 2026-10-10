@@ -47,36 +47,59 @@ func phaseBucket(ctx context.Context, r *Run) error {
 		r.skip("no bucket in this environment")
 		return nil
 	}
-	if !caps.Mutate {
-		r.skip("adding an S3 node changes the cluster: needs --destructive")
-		return nil
-	}
-	b, err := r.Env.Bucket(ctx)
-	if err != nil {
-		r.check("I-52", "the rig's bucket reachable from the driver", false, err.Error())
-		return nil
-	}
 	u := r.undoer(ctx)
 	defer u.run()
-	if err := r.Env.AddS3(ctx, bucketName); err != nil {
-		r.check("I-137", "add-s3 accepted", false, err.Error())
-		return nil
+	var (
+		b      *s3.Bucket
+		bucket NodeRef
+		rep    admin.Report
+		err    error
+	)
+	if caps.AddS3 {
+		if !caps.Mutate {
+			r.skip("adding an S3 node changes the cluster: needs --destructive")
+			return nil
+		}
+		if b, err = r.Env.Bucket(ctx); err != nil {
+			r.check("I-52", "the rig's bucket reachable from the driver", false, err.Error())
+			return nil
+		}
+		if err := r.Env.AddS3(ctx, bucketName); err != nil {
+			r.check("I-137", "add-s3 accepted", false, err.Error())
+			return nil
+		}
+		r.event("add-s3", bucketName)
+		if rep, _, err = r.anyStatus(ctx); err != nil {
+			return err
+		}
+		nr, ok := reportNodeByName(rep, bucketName)
+		if !ok || nr.Kind != "s3" {
+			r.check("I-137", "the bucket is in the node table", false, fmt.Sprintf("row %+v", nr))
+			return nil
+		}
+		bucket = NodeRef{Name: bucketName, Idx: nr.Idx}
+		u.add("drain and remove "+bucketName, func(c context.Context) error { _, err := r.removeBucket(c, bucket); return err })
+		r.bucketLive(ctx, bucket)
+		err = r.Env.AddS3(ctx, bucketName+"-again")
+		r.check("I-137", "a second S3 node over the same bucket is refused", err != nil, fmt.Sprint(err))
+	} else {
+		// a live cluster: its own S3 node, if this device holds the key (docs/09 §6)
+		if rep, _, err = r.anyStatus(ctx); err != nil {
+			return err
+		}
+		nr, ok := reportS3Node(rep)
+		if !ok {
+			r.skip("the cluster has no S3 node")
+			return nil
+		}
+		if b, err = r.Env.Bucket(ctx); err != nil {
+			r.skip(err.Error())
+			return nil
+		}
+		bucket = NodeRef{Name: nr.Name, Idx: nr.Idx}
+		r.checkSkipped("I-137", "a second S3 node over the same bucket is refused", "the cluster's own bucket is not re-registered")
+		r.bucketLive(ctx, bucket)
 	}
-	r.event("add-s3", bucketName)
-	rep, _, err := r.anyStatus(ctx)
-	if err != nil {
-		return err
-	}
-	nr, ok := reportNodeByName(rep, bucketName)
-	if !ok || nr.Kind != "s3" {
-		r.check("I-137", "the bucket is in the node table", false, fmt.Sprintf("row %+v", nr))
-		return nil
-	}
-	bucket := NodeRef{Name: bucketName, Idx: nr.Idx}
-	u.add("drain and remove "+bucketName, func(c context.Context) error { _, err := r.removeBucket(c, bucket); return err })
-	r.bucketLive(ctx, bucket)
-	err = r.Env.AddS3(ctx, bucketName+"-again")
-	r.check("I-137", "a second S3 node over the same bucket is refused", err != nil, fmt.Sprint(err))
 
 	// a corpus written while the bucket is a target
 	gws := r.gateways()
@@ -137,22 +160,27 @@ func phaseBucket(ctx context.Context, r *Run) error {
 	}
 
 	// an object deleted behind the cluster's back: the scrub's HEAD finds it, repair puts
-	// it back (docs/06 §5)
+	// it back (docs/06 §5). On a live cluster that is a delete in the operator's bucket,
+	// of this run's own file: only with --destructive.
 	victim := slots[0]
-	name, _ := victim.object()
-	if err := b.Delete(ctx, name); err != nil {
-		r.check("L-139", "an object deleted behind the cluster's back", false, err.Error())
-		return nil
+	if caps.Corrupt {
+		name, _ := victim.object()
+		if err := b.Delete(ctx, name); err != nil {
+			r.check("L-139", "an object deleted behind the cluster's back", false, err.Error())
+			return nil
+		}
+		r.event("delete object", b.Key(name))
+		st, err := r.scrub(ctx)
+		if err != nil {
+			r.check("L-112 L-139", "scrub with an object missing from the bucket", false, err.Error())
+			return nil
+		}
+		back, err := b.Has(ctx, name)
+		r.check("L-112 L-139", "the scrub finds the missing object and repair puts it back", st.ScrubBad > 0 && back && err == nil,
+			fmt.Sprintf("scrub %d bad, %d repaired; object back %v %v", st.ScrubBad, st.Repaired, back, err))
+	} else {
+		r.checkSkipped("L-112 L-139", "the scrub finds the missing object and repair puts it back", "deleting from the cluster's bucket needs --destructive")
 	}
-	r.event("delete object", b.Key(name))
-	st, err := r.scrub(ctx)
-	if err != nil {
-		r.check("L-112 L-139", "scrub with an object missing from the bucket", false, err.Error())
-		return nil
-	}
-	back, err := b.Has(ctx, name)
-	r.check("L-112 L-139", "the scrub finds the missing object and repair puts it back", st.ScrubBad > 0 && back && err == nil,
-		fmt.Sprintf("scrub %d bad, %d repaired; object back %v %v", st.ScrubBad, st.Repaired, back, err))
 
 	// GC collects a removed file's chunks without a DELETE to the bucket (I-138)
 	gone := victim.path
@@ -180,6 +208,12 @@ func phaseBucket(ctx context.Context, r *Run) error {
 	r.check("I-138", "gc collects a file on the bucket without deleting its objects", res.Victims > 0 && kept == len(goneObjects),
 		fmt.Sprintf("gc %d victims; %d of %d objects still in the bucket (the leader's daily sweep removes them)", res.Victims, kept, len(goneObjects)))
 
+	if !caps.AddS3 {
+		r.checkSkipped("I-42", "the bucket drains and is removed", "the cluster's own bucket stays")
+		bad, first := r.verifyModel(v, m)
+		r.checkAt("I-12", "the corpus reads exact with the bucket among the targets", bad == 0, first, first, "", gw.Name)
+		return nil
+	}
 	// drain and remove: the repairer moves every slot off the bucket and still sends it no
 	// DELETE; the removed row stays in the table for its history
 	var stale []string
@@ -206,6 +240,16 @@ func phaseBucket(ctx context.Context, r *Run) error {
 	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-12", "the corpus reads exact after the bucket left", bad == 0, first, first, "", gw.Name)
 	return nil
+}
+
+// reportS3Node is the first Active S3 row of rep.
+func reportS3Node(rep admin.Report) (admin.NodeReport, bool) {
+	for i := range rep.Nodes {
+		if n := &rep.Nodes[i]; n.Kind == "s3" && n.State == "active" {
+			return *n, true
+		}
+	}
+	return admin.NodeReport{}, false
 }
 
 // bucketLive waits up to a few S3 probe intervals for every gateway to see the bucket
@@ -281,11 +325,17 @@ func (r *Run) bucketDegradedRead(ctx context.Context, slots []bucketSlot, m mode
 			}
 			u.add("start "+victim.Name, func(c context.Context) error { return r.Env.Start(c, victim) })
 			r.event("kill", victim.Name)
+			// at once, inside the window before the prober marks the holder dead: the
+			// reader falls through to the bucket within the request (I-149)
+			got, err := r.volume(gw).ReadAll(s.path)
+			exact := err == nil && bytes.Equal(got, m[s.path])
+			r.checkAt("I-149 L-104", "a read right after the holder died falls through to the bucket", exact,
+				fmt.Sprintf("%s with %s just killed: %v", s.path, victim.Name, err), s.path, s.c.Hash[:12], gw.Name)
 			if err := r.Env.Wait(ctx, cluster.LiveThreshold+cluster.ProbeInterval); err != nil {
 				return err
 			}
-			got, err := r.volume(gw).ReadAll(s.path)
-			exact := err == nil && bytes.Equal(got, m[s.path])
+			got, err = r.volume(gw).ReadAll(s.path)
+			exact = err == nil && bytes.Equal(got, m[s.path])
 			r.checkAt("L-104 I-12", "a read with a data holder down is served from the bucket", exact,
 				fmt.Sprintf("%s with %s down: %v", s.path, victim.Name, err), s.path, s.c.Hash[:12], gw.Name)
 			if err := r.Env.Start(ctx, victim); err != nil {

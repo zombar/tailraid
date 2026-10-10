@@ -159,6 +159,7 @@ func TestS3Node_ObjectMissing_Repaired(t *testing.T) {
 	srv.DeleteObject(name)
 	cfg := repairCfg()
 	cfg.ScrubShare = 1
+	cfg.S3ScrubBytes = 0 // HEAD only: the absence is found without a fetch (L-112)
 	gets := srv.Count(http.MethodGet)
 	st, err := newRepairer(c, c.Leader(), cfg).Scrub(ctx)
 	must(t, err)
@@ -289,6 +290,204 @@ func TestS3Node_LeaderKeyDecidesFill(t *testing.T) {
 			}
 			if got, err := c.ReadFileCold(1, "/f"); err != nil || !bytes.Equal(got, data) {
 				t.Fatalf("read: %v", err)
+			}
+		})
+	}
+}
+
+// A holder that fails while still marked live is skipped within the same read: the
+// reader pulls the next slot in rank order, the bucket, before any probe has run
+// (docs/10 §4.3). This is the window after a laptop lid closes and before the prober
+// notices.
+// Invariant: I-149
+// Lifecycle: L-104
+func TestS3Node_ReadFallsThroughToBucket(t *testing.T) {
+	c, srv, bucket := s3Cluster(t)
+	defer c.Close()
+	data := testharness.Pattern(2*int(testharness.ChunkSize), 12)
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	other := c.Nodes[1].Target()
+	for _, ch := range c.ChunksOf(0, "/f") {
+		if !slices.Contains(ch.Placement, other) || bucketSlot(ch, bucket) < 0 {
+			t.Fatalf("placement %v: want a slot on n1's disk and one on the bucket", ch.Placement)
+		}
+	}
+	c.Partition([]int{0}, []int{1}) // n1 unreachable from n0, no probe: n0 still sees it live
+	defer c.Heal()
+	if !c.Nodes[0].Prober.IsLive(other) {
+		t.Fatal("n1's disk is already dead to n0: the test needs the pre-probe window")
+	}
+	gets := srv.Count(http.MethodGet)
+	got, err := c.ReadFileCold(0, "/f")
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read with a live-marked holder cut off: %v", err)
+	}
+	if n := srv.Count(http.MethodGet) - gets; n == 0 {
+		t.Fatal("the read did not fall through to the bucket")
+	}
+	if !c.Nodes[0].Prober.IsLive(other) {
+		t.Fatal("the read ran after a probe marked n1 dead: it did not prove the in-request fallthrough")
+	}
+}
+
+// With fewer than k live voter disks the bucket takes a data slot, its PUT counts toward
+// the k acks, and reads and repairs fetch the bucket's shard while the disk is away
+// (docs/10 §4.4). Repair fills the empty slot from the bucket once the disk returns.
+// Invariant: I-150
+// Lifecycle: L-48
+func TestS3Node_DegradedWrite_BucketTakesDataSlot(t *testing.T) {
+	c, srv, bucket := s3Cluster(t)
+	defer c.Close()
+	away := c.Nodes[1].Target()
+	c.FailDisk(1, away, true)
+	c.Probe()
+	if c.Nodes[0].Prober.IsLive(away) {
+		t.Fatal("n1's disk still live")
+	}
+	data := testharness.Pattern(2*int(testharness.ChunkSize), 13)
+	puts := srv.Count(http.MethodPut)
+	c.WriteFile(0, "/f", data)
+	if srv.Count(http.MethodPut)-puts < 2 {
+		t.Fatalf("%d PUTs reached the bucket for two chunks", srv.Count(http.MethodPut)-puts)
+	}
+	for _, ch := range c.ChunksOf(0, "/f") {
+		i := bucketSlot(ch, bucket)
+		if i < 0 || i >= int(ch.K) {
+			t.Fatalf("placement %v: want the bucket in a data slot (k=%d)", ch.Placement, ch.K)
+		}
+		if slices.Contains(ch.Placement, away) {
+			t.Fatalf("placement %v names the dead disk", ch.Placement)
+		}
+		if n := slices.Index(ch.Placement, 0); n >= 0 && n < int(ch.K) {
+			t.Fatalf("placement %v: a data slot is empty", ch.Placement)
+		}
+	}
+	gets := srv.Count(http.MethodGet)
+	if got, err := c.ReadFileCold(0, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read with one device shard: %v", err)
+	}
+	if srv.Count(http.MethodGet) == gets {
+		t.Fatal("the read did not fetch the bucket's data shard")
+	}
+	// the disk returns: repair fills the parity slot, decoding from the bucket's shard
+	c.FailDisk(1, away, false)
+	c.Probe()
+	gets = srv.Count(http.MethodGet)
+	st, err := newRepairer(c, c.Leader(), repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Repaired == 0 {
+		t.Fatalf("scan %+v: the empty slot was not filled", st)
+	}
+	if srv.Count(http.MethodGet) == gets {
+		t.Fatal("the repair did not read the bucket's shard")
+	}
+	c.Settle()
+	for _, ch := range c.ChunksOf(0, "/f") {
+		if slices.Contains(ch.Placement, 0) || len(ch.Placement) != int(ch.K)+int(ch.M) {
+			t.Fatalf("placement %v not full after the disk returned", ch.Placement)
+		}
+	}
+	if got, err := c.ReadFileCold(1, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after the refill: %v", err)
+	}
+}
+
+// A disk lost for good is rebuilt from the bucket: after fill_after the leader re-places
+// its slot onto a spare, decoding from the bucket's shard, and never deletes the object.
+// Invariant: I-150
+// Lifecycle: L-104
+func TestS3Node_RebuildFromBucket(t *testing.T) {
+	c, srv, bucket := s3Cluster(t)
+	defer c.Close()
+	data := testharness.Pattern(2*int(testharness.ChunkSize), 14)
+	c.WriteFile(0, "/f", data)
+	c.Settle()
+	lost := c.Nodes[1].Target()
+	var objects []string
+	for _, ch := range c.ChunksOf(0, "/f") {
+		if !slices.Contains(ch.Placement, lost) {
+			t.Fatalf("placement %v: want a slot on n1's disk", ch.Placement)
+		}
+		objects = append(objects, "c/"+rpc.ShardObject(chunk.Key(ch.Hash, ch.K, ch.M, bucketSlot(ch, bucket))))
+	}
+	c.AddNode(false) // the spare the slots move to
+	c.FailDisk(1, lost, true)
+	c.Probe()
+	c.Clk.Advance(repairCfg().FillAfter + time.Second)
+	c.Probe()
+	gets, deletes := srv.Count(http.MethodGet), srv.Count(http.MethodDelete)
+	st, err := newRepairer(c, c.Leader(), repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Repaired == 0 || st.Unrepairable != 0 {
+		t.Fatalf("scan after fill_after: %+v", st)
+	}
+	if srv.Count(http.MethodGet) == gets {
+		t.Fatal("the rebuild did not read the bucket")
+	}
+	if n := srv.Count(http.MethodDelete) - deletes; n != 0 {
+		t.Fatalf("the rebuild sent %d DELETEs to the bucket", n)
+	}
+	c.Settle()
+	for _, ch := range c.ChunksOf(0, "/f") {
+		if slices.Contains(ch.Placement, lost) || slices.Contains(ch.Placement, 0) || len(ch.Placement) != int(ch.K)+int(ch.M) {
+			t.Fatalf("placement %v after the rebuild", ch.Placement)
+		}
+		if bucketSlot(ch, bucket) < 0 {
+			t.Fatalf("placement %v: the bucket's slot moved", ch.Placement)
+		}
+	}
+	for _, name := range objects {
+		if _, ok := srv.Object(name); !ok {
+			t.Fatalf("object %s gone after the rebuild", name)
+		}
+	}
+	if got, err := c.ReadFileCold(0, "/f"); err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after the rebuild: %v", err)
+	}
+}
+
+// The scrub fetches bucket objects within a daily byte budget and hash-verifies them like
+// disk shards, so a corrupt object is found and re-PUT; with no budget it only HEADs
+// (docs/06 §5).
+// Invariant: I-151
+// Lifecycle: L-198
+func TestS3Node_ScrubFetchesSample(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget int64
+		found  bool
+	}{
+		{"within budget", 1 << 30, true},
+		{"no budget", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, srv, bucket := s3Cluster(t)
+			defer c.Close()
+			data := testharness.Pattern(int(testharness.ChunkSize), 15)
+			c.WriteFile(0, "/f", data)
+			ch := c.ChunksOf(0, "/f")[0]
+			i := bucketSlot(ch, bucket)
+			name := "c/" + rpc.ShardObject(chunk.Key(ch.Hash, ch.K, ch.M, i))
+			good, ok := srv.Object(name)
+			if !ok {
+				t.Fatal("no object for the bucket's slot")
+			}
+			bad := bytes.Clone(good)
+			bad[len(bad)-1] ^= 0xff
+			srv.PutObject(name, bad)
+			cfg := repairCfg()
+			cfg.ScrubShare = 1
+			cfg.S3ScrubBytes = tc.budget
+			gets := srv.Count(http.MethodGet)
+			st, err := newRepairer(c, c.Leader(), cfg).Scrub(ctx)
+			must(t, err)
+			fetched := srv.Count(http.MethodGet) - gets
+			if tc.found != (st.ScrubBad == 1 && st.Repaired == 1) || tc.found != (fetched > 0) {
+				t.Fatalf("scrub %+v, %d GETs: want found=%v", st, fetched, tc.found)
+			}
+			if obj, _ := srv.Object(name); bytes.Equal(obj, good) != tc.found {
+				t.Fatalf("object restored: %v, want %v", bytes.Equal(obj, good), tc.found)
 			}
 		})
 	}

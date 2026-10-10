@@ -35,7 +35,8 @@ type Caps struct {
 	Corrupt      bool
 	MultiGateway bool // Volume available on more than one node
 	Disks        bool // FailDisk/RestoreDisk on the hosts' added disks (docs/14)
-	S3           bool // AddS3/Bucket: the environment provides a bucket for phase 15 (docs/10 §4)
+	S3           bool // Bucket: phase 15 can reach a bucket behind the cluster's back (docs/10 §4)
+	AddS3        bool // AddS3: the environment provides a bucket of its own for phase 15 to register
 	// Mutate allows the phases that change the cluster itself rather than its files:
 	// policy changes, drains and removals, filling a node's disk. A live cluster allows
 	// them only with --destructive.
@@ -91,7 +92,7 @@ type Env interface {
 	// S3 nodes (docs/10 §4): AddS3 registers the environment's bucket as S3 node name
 	// (`node add-s3` on one node, `node keys` on the others); Bucket is that bucket as
 	// the driver reaches it, under the prefix the nodes use, for looking behind the
-	// cluster's back.
+	// cluster's back. A live cluster offers only Bucket, for the S3 node it already has.
 	AddS3(ctx context.Context, name string) error
 	Bucket(ctx context.Context) (*s3.Bucket, error)
 }

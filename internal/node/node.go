@@ -226,6 +226,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if rcfg.Grace, rcfg.FillAfter, err = cfg.RepairDurations(); err != nil {
 		return err
 	}
+	if rcfg.S3ScrubBytes, err = cfg.S3ScrubBytes(); err != nil {
+		return err
+	}
 	client.SetGrace(rcfg.Grace)
 	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)

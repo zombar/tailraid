@@ -185,10 +185,15 @@ repairer, with the configured `fill_after` and rate limit, serialized with the b
 passes): fetch **all** k+m shards,
 `codec.Verify`. A `false` result or any `ErrCorrupt` from a node marks the offending slots
 bad and repairs them via §4 (the chunk itself is decoded from a hash-verified subset).
-A slot on an S3 node is checked with a HEAD only, and an absent object is a bad slot
-(L-112, L-139): fetching it would download the bucket's share of the volume about every
+A slot on an S3 node is checked with a HEAD, and an absent object is a bad slot (L-112,
+L-139); fetching every one would download the bucket's share of the volume about every
 hundred passes in billed egress, and its bytes are verified by the provider on upload
-(`x-amz-content-sha256`) and by the TRS1 header on every GET (10 §4.2).
+(`x-amz-content-sha256`) and by the TRS1 header on every GET (10 §4.2). Because the bucket
+is the copy a degraded read falls back on, the scrub also fetches bucket objects within a
+daily byte budget, `repair.s3_scrub` (default 1 GiB a day, `0` for HEAD only), and verifies
+them exactly like disk shards: the budget refills continuously and the scrub fetches a slot
+while it is in credit, so a corrupt object is found over time at a bounded egress cost and
+re-PUT by the repair below (I-151, L-198).
 A node that detects a header or hash mismatch at read time moves the file to
 `quarantine/<key>.<unixnano>` (capped at 64 entries, oldest removed) and answers `404`
 (I-11); the reader reports the slot (§4 case 5), so a corrupt shard is repaired on the next
