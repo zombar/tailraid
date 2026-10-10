@@ -274,6 +274,32 @@ s8_verify() {
   return $rc
 }
 
+# every node updates itself to the latest published release and back: the GitHub
+# resolve, the minisign check, the swap, the service restart through the manager
+# (I-61, I-128, I-131) and the rollback that puts the working-tree build back. The
+# release is named explicitly with --allow-downgrade so the step runs whatever the
+# working tree's version is; the rollback must land within the minute after the restart,
+# after which serve forgets the previous binary.
+s8b_update() {
+  local tag dev
+  tag=$(curl -fsS https://api.github.com/repos/zombar/tailraid/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+  [ -n "$tag" ] || { echo "could not resolve the latest release from GitHub"; return 1; }
+  dev=$(tr_ "$FIRST" version)
+  echo "latest release $tag; the guests run $dev"
+  for os in $OSES; do
+    tr_ "$os" update --yes --restart --version "$tag" --allow-downgrade || return 1
+    local v; v=$(tr_ "$os" version)
+    [ "$v" = "tailraid $tag" ] || { echo "$os runs \"$v\" after the update, want $tag"; return 1; }
+    ready_or_log "$os" 45 || return 1
+    tr_ "$os" update --rollback --restart || return 1
+    v=$(tr_ "$os" version)
+    [ "$v" = "$dev" ] || { echo "$os runs \"$v\" after the rollback, want $dev"; return 1; }
+    ready_or_log "$os" 45 || return 1
+    echo "$os: updated to $tag and rolled back"
+  done
+  all_live 120 || { for os in $OSES; do echo "$os: $(live_nodes "$os")"; done; return 1; }
+}
+
 s9_disk_and_recover() {
   local home id
   home=$(guest_home "$FIRST")
@@ -328,6 +354,7 @@ step "6 restart after join" s6_restart_after_join &&
 step "7 cross-OS data" s7_data &&
 step "7b promote" s7b_promote &&
 step "8 verify" s8_verify &&
+step "8b update --restart" s8b_update &&
 step "9 add-disk, snapshot, recover" s9_disk_and_recover || true
 step "10 teardown" s10_teardown || true
 
