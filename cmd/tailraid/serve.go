@@ -239,14 +239,11 @@ func mountCmd() *cobra.Command {
 			var env []string // Windows' New-SmbMapping reads the password from the environment; the others prompt
 			if runtime.GOOS == "windows" {
 				env = []string{mount.SMBPasswordEnv + "=" + cfg.SMB.Password}
+				if w := mount.ElevatedWarning(mount.Elevated(), target); w != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), w)
+				}
 			}
-			if err := mount.RunWithEnv(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, env); err != nil {
-				return err
-			}
-			if mount.Elevated() { // a drive belongs to the logon session that mapped it (docs/15 §6)
-				fmt.Fprintf(cmd.OutOrStdout(), "note: this prompt is elevated, so Explorer does not show %s; the task %s maps it in your desktop session at every logon (tailraid install), or run tailraid mount from a prompt that is not elevated\n", target, svc.MountTask)
-			}
-			return nil
+			return mount.RunWithEnv(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, env)
 		},
 	}
 	c.Flags().Duration("wait", 0, "wait up to this long for the gateway to accept a connection before mounting (the logon task uses 5m)")

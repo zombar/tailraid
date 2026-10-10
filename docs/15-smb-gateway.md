@@ -196,6 +196,14 @@ the console form is printed instead:
 net use T: \\127.0.0.1\tailraid /TCPPORT:20445 /USER:tailraid * /PERSISTENT:NO
 ```
 
+A drive letter belongs to the token that mapped it: under UAC an administrator's
+elevated window and their normal one are two logon sessions, so a `T:` mapped from an
+elevated window ("Run as administrator", the window `tailraid install` needs) is invisible
+to Explorer, which runs unelevated. `tailraid mount` therefore checks its own token
+(`TokenElevation`) and, when elevated, prints a warning naming the letter and the way out
+(`net use T: /delete` there, then `tailraid mount` from a normal window) before mapping
+anyway: a script or service that wants the elevated mapping still gets it.
+
 A mapping needs a logon session the SMB redirector can attach credentials to: a
 password or interactive logon has one, a key-authenticated SSH logon does not and fails
 with error 1312 whatever the password (docs/vms.md).
@@ -209,8 +217,7 @@ user's limited token (Explorer's), it runs `tailraid mount --wait 5m --config <p
 under `conhost.exe --headless`, so no console window opens; `install` starts it once so
 the drive appears without signing out, and `uninstall` removes it. `--wait` maps only
 once the gateway accepts a connection, since the service may start after the logon. A
-`tailraid mount` from an elevated prompt maps as before and prints that Explorer will
-not show the drive. Verified on the Windows VM with UAC on (2026-10-10): after a
+`tailraid mount` from an elevated prompt warns first, as above, and maps as before. Verified on the Windows VM with UAC on (2026-10-10): after a
 reboot the task started at the automatic logon, waited two minutes for the delayed-auto
 service, and mapped the drive; the limited session saw it and the elevated one did not.
 
