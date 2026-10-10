@@ -320,7 +320,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	go func() { _ = srv.Serve(bg, rl); done <- struct{}{} }()
 	go func() { prober.Run(bg); done <- struct{}{} }()
 	go func() {
-		if watchAddress(bg, ts, node, client, selfIdx, ident.IP, log) {
+		if watchSelf(bg, ts, node, client, id, selfIdx, ident.IP, version, log) {
 			addrChanged.Store(true)
 			stop()
 		}
@@ -772,41 +772,68 @@ func (d devStores) Fill(id string, n uint64) error {
 	return fmt.Errorf("no open disk %q on this host", id)
 }
 
-// watchAddress re-registers this node when its Tailscale IP changes (docs/02 §IP change)
-// and returns true once the new address is in the node table, so the caller can restart.
-func watchAddress(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, self meta.NodeIdx, current netip.Addr, log *slog.Logger) bool {
+// watchSelf keeps this node's row current. At start it reports the version this binary
+// runs when the row names another (retrying until a leader accepts it, I-133), and it
+// re-registers the node when its Tailscale IP changes (docs/02 §IP change), returning
+// true once the new address is in the node table so the caller can restart.
+func watchSelf(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, id string, self meta.NodeIdx, current netip.Addr, version string, log *slog.Logger) bool {
 	t := time.NewTicker(cluster.ProbeInterval)
 	defer t.Stop()
+	reported := false
 	for {
+		if !reported {
+			var err error
+			if reported, err = reportVersion(ctx, node, client, id, self, version); err != nil {
+				log.Warn("version report failed, will retry", "err", err)
+			} else if reported {
+				log.Info("version reported to the node table", "version", version)
+			}
+		}
+		if st, err := ts.Status(ctx); err == nil {
+			if ip, err := tailscale.SelfIPv4(st); err == nil && ip != current {
+				log.Warn("tailscale address changed", "old", current, "new", ip)
+				if err := selfMemberOp(ctx, node, client, rpc.MemberOp{Op: "update_addr", NodeIdx: self, Addr: ip.String()}); err != nil {
+					log.Warn("address update failed, will retry", "err", err)
+				} else {
+					log.Warn("address re-registered; exiting so the service manager restarts the listeners on it", "addr", ip)
+					return true
+				}
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return false
 		case <-t.C:
 		}
-		st, err := ts.Status(ctx)
-		if err != nil {
-			continue
-		}
-		ip, err := tailscale.SelfIPv4(st)
-		if err != nil || ip == current {
-			continue
-		}
-		log.Warn("tailscale address changed", "old", current, "new", ip)
-		op := rpc.MemberOp{Op: "update_addr", NodeIdx: self, Addr: ip.String()}
-		if node.IsLeader() {
-			err = node.MemberOp(ctx, op)
-		} else if addr := node.LeaderRPCAddr(); addr != "" {
-			err = client.Members(ctx, addr, op)
-		} else {
-			err = cluster.ErrNoLeader
-		}
-		if err != nil {
-			log.Warn("address update failed, will retry", "err", err)
-			continue
-		}
-		log.Warn("address re-registered; exiting so the service manager restarts the listeners on it", "addr", ip)
-		return true
 	}
+}
+
+// reportVersion proposes set_version for this node's row when it names another version
+// than the one running. It reports true once the row is current (including when it
+// already was: a row that matches is never rewritten) and false with the error otherwise.
+func reportVersion(ctx context.Context, node *cluster.Node, client *rpc.Client, id string, self meta.NodeIdx, version string) (bool, error) {
+	cur, ok := node.FSM.NodeByID(id)
+	if !ok {
+		return false, meta.ErrNoSuchNode // the table has not arrived yet
+	}
+	if cur.Version == version {
+		return true, nil
+	}
+	if err := selfMemberOp(ctx, node, client, rpc.MemberOp{Op: "set_version", NodeIdx: self, Version: version}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// selfMemberOp runs a member op on the leader: here when this node leads, else forwarded.
+func selfMemberOp(ctx context.Context, node *cluster.Node, client *rpc.Client, op rpc.MemberOp) error {
+	if node.IsLeader() {
+		return node.MemberOp(ctx, op)
+	}
+	if addr := node.LeaderRPCAddr(); addr != "" {
+		return client.Members(ctx, addr, op)
+	}
+	return cluster.ErrNoLeader
 }
 
 // Join registers this node with an existing cluster: it starts an empty Raft so the

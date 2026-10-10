@@ -83,11 +83,12 @@ type JoinResponse struct {
 
 // MemberOp is POST /v1/members.
 type MemberOp struct {
-	Op       string         `json:"op"`                // remove | update_addr | set_voter | set_capacity | set_state | add_disk
+	Op       string         `json:"op"`                // remove | update_addr | set_version | set_voter | set_capacity | set_state | add_disk
 	NodeIdx  meta.NodeIdx   `json:"node_idx"`          // add_disk: the host
 	DiskID   string         `json:"disk_id,omitempty"` // add_disk: the marker's disk ID (docs/14 §2)
 	Name     string         `json:"name,omitempty"`    // add_disk: "<host>/<n>"
 	Addr     string         `json:"addr,omitempty"`
+	Version  string         `json:"version,omitempty"` // set_version: what the node's serve runs (I-133)
 	Voter    bool           `json:"voter,omitempty"`
 	Capacity uint64         `json:"capacity,omitempty"`
 	State    meta.NodeState `json:"state,omitempty"`
