@@ -60,7 +60,7 @@ the partial report.`,
 			full, _ := cmd.Flags().GetBool("full")
 			chunk, _ := cmd.Flags().GetInt("chunk")
 			p := verifyProfile(full, chunk, grace, fillAfter)
-			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), destructive, restarts)
+			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), cfg.Node.DataDir, destructive, restarts)
 			rf, err := os.Create(resultsPath) //nolint:gosec // --results names the file
 			if err != nil {
 				return err

@@ -106,8 +106,14 @@ cluster has re-placed elsewhere.
 
 **S3 sweep (leader only, daily).** For each S3 node the leader lists the bucket prefix with
 `ListObjectsV2` (paged) and deletes every object whose `LastModified` is older than grace
-and whose key is not placed on that node in the chunk table. Only the leader runs it, and
-only while `Healthy`. Because a dup PUT to S3 overwrites (fresh `LastModified`), an object a
+and whose key is not placed on that node in the chunk table (I-138). Only the leader runs it,
+only while `Healthy`, and only for a bucket it holds the credentials of; it checks on the
+hourly sweep tick and sweeps a bucket once a day. The repairer and the GC worker never
+send a DELETE to a bucket (10 §4.2): a superseded or collected object stays until this
+sweep finds it. A bucket has no conditional delete, so placement is checked once more just
+before each DELETE; an upload of the same shard that lands between that check and the
+DELETE (a re-write of content collected over a day ago, in the same second) leaves one
+slot whose object is missing, which the repairer's HEAD finds and refills (L-112). Because a dup PUT to S3 overwrites (fresh `LastModified`), an object a
 flusher just re-uploaded is always younger than grace.
 
 ## 4. Repair scanner (leader only)
@@ -179,6 +185,15 @@ repairer, with the configured `fill_after` and rate limit, serialized with the b
 passes): fetch **all** k+m shards,
 `codec.Verify`. A `false` result or any `ErrCorrupt` from a node marks the offending slots
 bad and repairs them via §4 (the chunk itself is decoded from a hash-verified subset).
+A slot on an S3 node is checked with a HEAD, and an absent object is a bad slot (L-112,
+L-139); fetching every one would download the bucket's share of the volume about every
+hundred passes in billed egress, and its bytes are verified by the provider on upload
+(`x-amz-content-sha256`) and by the TRS1 header on every GET (10 §4.2). Because the bucket
+is the copy a degraded read falls back on, the scrub also fetches bucket objects within a
+daily byte budget, `repair.s3_scrub` (default 1 GiB a day, `0` for HEAD only), and verifies
+them exactly like disk shards: the budget refills continuously and the scrub fetches a slot
+while it is in credit, so a corrupt object is found over time at a bounded egress cost and
+re-PUT by the repair below (I-151, L-198).
 A node that detects a header or hash mismatch at read time moves the file to
 `quarantine/<key>.<unixnano>` (capped at 64 entries, oldest removed) and answers `404`
 (I-11); the reader reports the slot (§4 case 5), so a corrupt shard is repaired on the next

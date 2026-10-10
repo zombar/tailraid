@@ -43,7 +43,17 @@ type NodeReport struct {
 	JoinedAt   time.Time    `json:"joined_at"`
 	Diskless   bool         `json:"diskless,omitempty"`    // a device with no disk rows: a gateway-only host (docs/14 §9)
 	SharedWith []string     `json:"shared_with,omitempty"` // targets of the same host on the same physical disk
+	S3         *S3Report    `json:"s3,omitempty"`          // S3 nodes: the bucket, never its credentials (I-139)
 	fs         string       // filesystem ID from the last probe
+}
+
+// S3Report is the bucket of an S3 node (docs/10 §4.1).
+type S3Report struct {
+	Endpoint  string `json:"endpoint"`
+	Bucket    string `json:"bucket"`
+	Prefix    string `json:"prefix,omitempty"`
+	Region    string `json:"region,omitempty"`
+	PathStyle bool   `json:"path_style,omitempty"`
 }
 
 // VolumeReport is `volume describe`.
@@ -215,6 +225,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 			Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
 			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
+		}
+		if nd.Kind == meta.KindS3 {
+			r.S3 = &S3Report{Endpoint: nd.S3Endpoint, Bucket: nd.S3Bucket, Prefix: nd.S3Prefix, Region: nd.S3Region, PathStyle: nd.S3PathStyle}
 		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS

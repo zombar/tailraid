@@ -83,16 +83,27 @@ type JoinResponse struct {
 
 // MemberOp is POST /v1/members.
 type MemberOp struct {
-	Op       string         `json:"op"`                // remove | update_addr | set_version | set_voter | set_capacity | set_state | add_disk
+	Op       string         `json:"op"`                // remove | update_addr | set_version | set_voter | set_capacity | set_state | add_disk | add_s3
 	NodeIdx  meta.NodeIdx   `json:"node_idx"`          // add_disk: the host
 	DiskID   string         `json:"disk_id,omitempty"` // add_disk: the marker's disk ID (docs/14 §2)
-	Name     string         `json:"name,omitempty"`    // add_disk: "<host>/<n>"
+	Name     string         `json:"name,omitempty"`    // add_disk: "<host>/<n>"; add_s3: the S3 node's name
 	Addr     string         `json:"addr,omitempty"`
 	Version  string         `json:"version,omitempty"` // set_version: what the node's serve runs (I-133)
 	Voter    bool           `json:"voter,omitempty"`
 	Capacity uint64         `json:"capacity,omitempty"`
 	State    meta.NodeState `json:"state,omitempty"`
 	Force    bool           `json:"force,omitempty"`
+	S3       *S3Spec        `json:"s3,omitempty"` // add_s3
+}
+
+// S3Spec is the bucket of an add_s3 (docs/10 §4.1). Credentials are never part of it (I-139).
+type S3Spec struct {
+	ID        string `json:"id"` // drawn by the CLI, so a retry updates the row it created
+	Endpoint  string `json:"endpoint"`
+	Bucket    string `json:"bucket"`
+	Prefix    string `json:"prefix,omitempty"`
+	Region    string `json:"region,omitempty"`
+	PathStyle bool   `json:"path_style,omitempty"`
 }
 
 // BadSlot is POST /v1/bad-slot.

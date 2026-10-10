@@ -7,8 +7,10 @@ import (
 	"net"
 	"time"
 
+	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/s3"
 )
 
 // LiveEnv is the user's real cluster seen from one device (`tailraid verify`, docs/09 §6):
@@ -21,21 +23,22 @@ type LiveEnv struct {
 	MountPath   string
 	ClusterID   string
 	Destructive bool
-	Restarts    bool // every target runs with dev.enabled under a restarting service manager
+	Restarts    bool   // every target runs with dev.enabled under a restarting service manager
+	DataDir     string // this device's data directory: its S3 keys live there (docs/10 §4.1)
 
 	all    []NodeRef // the members as of Nodes
 	faults faultTable
 }
 
 // NewLiveEnv wires the admin surface to this device's node.
-func NewLiveEnv(client *rpc.Client, selfAddr, mountPath, clusterID string, destructive, restarts bool) *LiveEnv {
-	return &LiveEnv{Caller: client, Seeds: []string{selfAddr}, SelfAddr: selfAddr, MountPath: mountPath, ClusterID: clusterID, Destructive: destructive, Restarts: restarts}
+func NewLiveEnv(client *rpc.Client, selfAddr, mountPath, clusterID, dataDir string, destructive, restarts bool) *LiveEnv {
+	return &LiveEnv{Caller: client, Seeds: []string{selfAddr}, SelfAddr: selfAddr, MountPath: mountPath, ClusterID: clusterID, DataDir: dataDir, Destructive: destructive, Restarts: restarts}
 }
 
 func (e *LiveEnv) Name() string { return "live cluster " + e.ClusterID }
 
 func (e *LiveEnv) Caps() Caps {
-	return Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts}
+	return Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts, S3: e.DataDir != ""}
 }
 
 // Nodes lists the members from this device's status; the local node comes first so its
@@ -74,6 +77,38 @@ func (e *LiveEnv) RestoreDisk(context.Context, NodeRef) error {
 
 func (e *LiveEnv) AddDisk(context.Context, NodeRef) error {
 	return errors.New("live: a disk is added with `tailraid node add-disk` on its device")
+}
+
+// AddS3 is not offered on a live cluster (Caps.AddS3 is false): the bucket is the
+// operator's, registered by hand with `node add-s3` (docs/10 §4.1).
+func (e *LiveEnv) AddS3(context.Context, string) error {
+	return errors.New("live: a bucket is added with `tailraid node add-s3` on a device")
+}
+
+// Bucket is the cluster's own S3 node as this device reaches it: the first Active S3 row
+// of the status whose key is in this device's s3nodes.yaml (docs/10 §4.1). The key never
+// leaves the device; the driver runs on it.
+func (e *LiveEnv) Bucket(ctx context.Context) (*s3.Bucket, error) {
+	rep, err := e.SeedStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := cluster.LoadS3Keys(e.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rep.Nodes {
+		n := &rep.Nodes[i]
+		if n.Kind != "s3" || n.State != "active" || n.S3 == nil {
+			continue
+		}
+		creds, ok := keys[n.Name]
+		if !ok {
+			return nil, fmt.Errorf("this device holds no key for S3 node %s", n.Name)
+		}
+		return s3.New(s3.Target{Endpoint: n.S3.Endpoint, Bucket: n.S3.Bucket, Prefix: n.S3.Prefix, Region: n.S3.Region, PathStyle: n.S3.PathStyle}, creds, nil)
+	}
+	return nil, errors.New("the cluster has no S3 node")
 }
 
 func (e *LiveEnv) Volume(n NodeRef) (Volume, bool) {

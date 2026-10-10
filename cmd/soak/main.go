@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/soak"
@@ -29,6 +30,7 @@ func run() int {
 	topology := flag.String("topology", "multi", "multi (4 hosts × 2 disks plus a diskless voter) | single (one host, four disks)")
 	nodes := flag.Int("nodes", 0, "number of nodes in the compose file (default: 4 for multi, 1 for single)")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "workload seed")
+	only := flag.String("phases", "", `comma-separated phase numbers to run ("15", "1,13"); default: all`)
 	flag.Parse()
 
 	var p soak.Profile
@@ -50,7 +52,7 @@ func run() int {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	file, n := "docker-compose.yml", 5
+	file, n := multiFile, 5
 	switch *topology {
 	case "multi":
 	case "single":
@@ -70,6 +72,12 @@ func run() int {
 		}
 	}
 	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed} //nolint:gosec // workload
+	if *only != "" {
+		if r.Phases = soak.StandardPhases(strings.Split(*only, ",")...); len(r.Phases) == 0 {
+			fmt.Fprintln(os.Stderr, "no phase numbered", *only)
+			return 2
+		}
+	}
 	log.Info("soak run", "profile", p.Name, "seed", *seed, "topology", *topology, "nodes", n)
 	sum, runErr := r.Execute(ctx) // an aborted or cancelled run still renders its partial report
 	if runErr != nil {

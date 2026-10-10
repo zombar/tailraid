@@ -44,6 +44,7 @@ type ChunkReader interface {
 type Config struct {
 	FillAfter    time.Duration // dead-node hold-down before re-placing its slots
 	ScrubShare   int           // 1 in ScrubShare chunks verified per pass (0 = none, 1 = all)
+	S3ScrubBytes int64         // bucket bytes the scrub may fetch per day to verify objects (0 = HEAD only)
 	RateBytes    int64         // shard bytes per second moved by repair (0 = unlimited)
 	Grace        time.Duration // GC grace
 	GCInterval   time.Duration
@@ -54,7 +55,7 @@ type Config struct {
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		FillAfter: 10 * time.Minute, ScrubShare: 100, RateBytes: 50 << 20, Grace: 10 * time.Minute,
+		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute,
 	}
 }
@@ -88,6 +89,7 @@ type Repairer struct {
 	log                 *slog.Logger
 	codecs              *ec.Pool
 	limit               *limiter
+	s3scrub             *budget         // bucket bytes the scrub may fetch (docs/06 §5, I-151)
 	Events              *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	scanMu   sync.Mutex // one pass at a time: `check --scrub` never overlaps the background loop
@@ -105,7 +107,7 @@ func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd Ch
 	}
 	return &Repairer{
 		st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
-		limit: newLimiter(cfg.RateBytes, clk), reported: map[chunk.ShardKey]time.Time{},
+		limit: newLimiter(cfg.RateBytes, clk), s3scrub: newBudget(cfg.S3ScrubBytes, 24*time.Hour, clk), reported: map[chunk.ShardKey]time.Time{},
 	}
 }
 
@@ -459,13 +461,23 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	return outcome{changed: true, full: full, bytes: moved}, nil
 }
 
-// scrub fetches every shard of c and returns the slots whose content is wrong.
+// scrub fetches every shard of c and returns the slots whose content is wrong. A slot on
+// an S3 node is checked for presence (HEAD) unless the daily fetch budget is in credit:
+// fetching every one would download the bucket's share of the volume every ~100 passes
+// in billed egress, so the bucket is verified over time at a bounded cost (docs/06 §5,
+// I-151). A fetched object fails like a disk shard: ErrCorrupt from the hash check.
 func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 	total := int(c.K) + int(c.M)
 	got := make([][]byte, total)
 	var corrupt []int
 	for i, n := range c.Placement {
 		if n == 0 || !r.live.IsLive(n) {
+			continue
+		}
+		if nd, ok := r.st.Node(n); ok && nd.Kind == meta.KindS3 && !r.s3scrub.take(int64(c.Size)/int64(c.K)+chunk.HeaderSize) {
+			if has, err := r.shards.Has(ctx, n, chunk.Key(c.Hash, c.K, c.M, i)); err == nil && !has {
+				corrupt = append(corrupt, i)
+			}
 			continue
 		}
 		b, err := r.shards.Get(ctx, n, chunk.Key(c.Hash, c.K, c.M, i))
@@ -502,6 +514,44 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 	}
 	sort.Ints(corrupt)
 	return corrupt, nil
+}
+
+// --- daily budget ----------------------------------------------------------------
+
+// budget is a token bucket for work that is allowed, not delayed: take reports whether n
+// is within credit now, refilling perPeriod tokens over period and holding at most one
+// period's worth. Credit may go negative on a take, so a budget smaller than one item
+// still admits one item per period.
+type budget struct {
+	perPeriod int64
+	period    time.Duration
+	clk       clock.Clock
+	mu        sync.Mutex
+	tokens    int64
+	last      time.Time
+}
+
+func newBudget(perPeriod int64, period time.Duration, clk clock.Clock) *budget {
+	return &budget{perPeriod: perPeriod, period: period, clk: clk, tokens: perPeriod, last: clk.Now()}
+}
+
+// take spends n if the budget is in credit and reports whether it did.
+func (b *budget) take(n int64) bool {
+	if b.perPeriod <= 0 {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.clk.Now()
+	if since := now.Sub(b.last); since > 0 {
+		b.tokens = min(b.perPeriod, b.tokens+int64(float64(b.perPeriod)*(float64(since)/float64(b.period))))
+		b.last = now
+	}
+	if b.tokens < 0 {
+		return false
+	}
+	b.tokens -= n
+	return true
 }
 
 // --- rate limiter ------------------------------------------------------------------

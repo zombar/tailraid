@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -228,10 +229,14 @@ func printNodes(w io.Writer, nodes []admin.NodeReport, all bool) {
 			}
 		}
 		free := "-" // a device stores nothing; its disks have the free space
-		if n.Kind != "device" {
+		addr := n.Addr
+		switch {
+		case n.S3 != nil: // a bucket reports no free space, and its address is the bucket
+			addr = path.Join(n.S3.Bucket, n.S3.Prefix)
+		case n.Kind != "device":
 			free = bytesStr(uint64(max(n.Free, 0)))
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, n.Addr, n.Voter, live, n.Slots, free, n.Version, strings.Join(flags, ", "))
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, addr, n.Voter, live, n.Slots, free, n.Version, strings.Join(flags, ", "))
 	}
 	_ = tw.Flush()
 }
@@ -349,7 +354,7 @@ func nodeCmd() *cobra.Command {
 		return nil
 	})
 	remove.Flags().Bool("force", false, "remove even if the node still holds shard slots")
-	c.AddCommand(ls, describe, promote, demote, drain, activate, remove, addDiskCmd())
+	c.AddCommand(ls, describe, promote, demote, drain, activate, remove, addDiskCmd(), addS3Cmd(), keysCmd())
 	return c
 }
 

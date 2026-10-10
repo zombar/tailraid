@@ -21,6 +21,11 @@ const (
 	StaleThreshold = 30 * time.Second
 	FillAfter      = 10 * time.Minute
 	EvictAfter     = 7 * 24 * time.Hour
+	// a bucket is probed less often and given longer: every probe is a billed request
+	// (docs/10 §4.3)
+	S3ProbeInterval = 30 * time.Second
+	S3LiveThreshold = 90 * time.Second
+	s3ProbeTimeout  = 5 * time.Second
 )
 
 // HealthState is the gateway's view of the metadata service (docs/02 §Health).
@@ -88,6 +93,12 @@ type HealthClient interface {
 	Health(ctx context.Context, addr string) (rpc.Health, error)
 }
 
+// S3Prober checks an S3 node's bucket from this device (rpc.Client). A HealthClient
+// without it never sees a bucket live.
+type S3Prober interface {
+	ProbeS3(ctx context.Context, idx meta.NodeIdx) error
+}
+
 // Prober keeps an all-to-all liveness view and implements meta.Peers (docs/05 §4).
 type Prober struct {
 	node    *Node
@@ -97,9 +108,10 @@ type Prober struct {
 	// SelfHealth supplies this node's own health row (free bytes, version); optional.
 	SelfHealth func() rpc.Health
 
-	mu     sync.Mutex
-	probes map[meta.NodeIdx]*Probe
-	events chan Event
+	mu      sync.Mutex
+	probes  map[meta.NodeIdx]*Probe
+	s3Tried map[meta.NodeIdx]time.Time // last S3 probe sent, good or not
+	events  chan Event
 
 	fillAfter, evictAfter time.Duration
 }
@@ -109,7 +121,7 @@ var _ meta.Peers = (*Prober)(nil)
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
 	return &Prober{
-		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, events: make(chan Event, 64),
+		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, s3Tried: map[meta.NodeIdx]time.Time{}, events: make(chan Event, 64),
 		fillAfter: FillAfter, evictAfter: EvictAfter,
 	}
 }
@@ -173,7 +185,12 @@ func (p *Prober) Tick(ctx context.Context) {
 		if nd.State == meta.Removed { // nothing to probe, nothing to keep
 			p.mu.Lock()
 			delete(p.probes, nd.Idx)
+			delete(p.s3Tried, nd.Idx)
 			p.mu.Unlock()
+			continue
+		}
+		if nd.Kind == meta.KindS3 {
+			p.probeS3(ctx, &wg, nd.Idx, now)
 			continue
 		}
 		if nd.Kind != meta.KindDevice {
@@ -211,9 +228,44 @@ func (p *Prober) Tick(ctx context.Context) {
 	p.holdDowns(now)
 }
 
+// probeS3 probes a bucket once per S3ProbeInterval, in the tick's wait group.
+func (p *Prober) probeS3(ctx context.Context, wg *sync.WaitGroup, idx meta.NodeIdx, now time.Time) {
+	s3p, ok := p.client.(S3Prober)
+	if !ok {
+		return
+	}
+	p.mu.Lock()
+	tried, seen := p.s3Tried[idx]
+	due := !seen || now.Sub(tried) >= S3ProbeInterval
+	if due {
+		p.s3Tried[idx] = now
+	}
+	p.mu.Unlock()
+	if !due {
+		return
+	}
+	wg.Go(func() {
+		pctx, cancel := context.WithTimeout(ctx, s3ProbeTimeout)
+		defer cancel()
+		start := p.clk.Now()
+		err := s3p.ProbeS3(pctx, idx)
+		at := p.clk.Now()
+		p.record(idx, at, at.Sub(start), err == nil, rpc.Health{}, nil)
+	})
+}
+
+// threshold is how long after its last good probe a node stays live.
+func (p *Prober) threshold(idx meta.NodeIdx) time.Duration {
+	if nd, found := p.node.nodeByIdx(idx); found && nd.Kind == meta.KindS3 {
+		return S3LiveThreshold
+	}
+	return LiveThreshold
+}
+
 // record settles one probe row; disk is the disk's own health for a disk row (its free
 // bytes and filesystem), nil for a device, which stores nothing (docs/14 §9).
 func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok bool, h rpc.Health, disk *rpc.DiskHealth) {
+	live := p.threshold(idx)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	pr := p.probes[idx]
@@ -234,7 +286,7 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 		}
 		return
 	}
-	if pr.DeadSince.IsZero() && now.Sub(pr.LastOK) >= LiveThreshold {
+	if pr.DeadSince.IsZero() && now.Sub(pr.LastOK) >= live {
 		pr.DeadSince = now
 	}
 }
@@ -331,12 +383,14 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	}
 	p.mu.Unlock()
 	if ok && !lastOK.IsZero() {
-		return p.clk.Now().Sub(lastOK) < LiveThreshold
+		return p.clk.Now().Sub(lastOK) < p.threshold(idx)
 	}
 	if !deadSince.IsZero() {
 		return false // reported failing (a disk its host lists not OK): no join grace
 	}
-	if nd, found := p.node.nodeByIdx(idx); found && nd.JoinedAt > 0 {
+	// a bucket is live only once this node has reached it: a device without its
+	// credentials never sees it live (docs/10 §4.1)
+	if nd, found := p.node.nodeByIdx(idx); found && nd.JoinedAt > 0 && nd.Kind != meta.KindS3 {
 		return p.clk.Now().Sub(time.Unix(0, nd.JoinedAt)) < LiveThreshold
 	}
 	return false
@@ -372,7 +426,7 @@ func (p *Prober) Live() []meta.NodeIdx {
 	return out
 }
 
-// Rank orders self first, then by RTT ascending, unknown last.
+// Rank orders self first, then by RTT ascending, unknown devices after those, S3 nodes last.
 func (p *Prober) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	self := p.Self()
 	snap := p.Snapshot()
@@ -381,8 +435,13 @@ func (p *Prober) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 		if idx == self {
 			return -1
 		}
-		if nd, found := p.node.nodeByIdx(idx); found && nd.Kind == meta.KindDisk && nd.Host == self {
-			return -1 // this host's own disk: no network between us (docs/14 §9)
+		if nd, found := p.node.nodeByIdx(idx); found {
+			switch {
+			case nd.Kind == meta.KindDisk && nd.Host == self:
+				return -1 // this host's own disk: no network between us (docs/14 §9)
+			case nd.Kind == meta.KindS3:
+				return 2 * time.Hour // after every device, even unprobed ones (docs/10 §4.3)
+			}
 		}
 		if pr, ok := snap[idx]; ok && !pr.LastOK.IsZero() {
 			return pr.RTT

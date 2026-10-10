@@ -38,6 +38,7 @@ var phases = []phase{
 	{"12 large file", phaseLargeFile},
 	{"13 disks", phaseDisks},
 	{"14 diskless host", phaseDiskless},
+	{"15 s3 bucket", phaseBucket},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -195,9 +196,9 @@ func (r *Run) checkFSMAgreement(ctx context.Context, cites, name string) {
 	r.check(cites, name, agree, detail)
 }
 
-// waitHealthy polls status until the cluster is healthy with every node live (except the
-// targets named in excused, such as a disk the phase closed); the detail describes the
-// last view.
+// waitHealthy polls status until the cluster is healthy with every node live (except
+// removed rows and the targets named in excused, such as a disk the phase closed); the
+// detail describes the last view.
 func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ...string) (bool, string) {
 	deadline := time.Now().Add(timeout)
 	for attempt := 0; ; attempt++ {
@@ -206,7 +207,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ..
 		if err == nil {
 			var down []string
 			for i := range rep.Nodes {
-				if !rep.Nodes[i].Live && !slices.Contains(excused, rep.Nodes[i].Name) {
+				if !rep.Nodes[i].Live && rep.Nodes[i].State != "removed" && !slices.Contains(excused, rep.Nodes[i].Name) {
 					down = append(down, rep.Nodes[i].Name)
 				}
 			}

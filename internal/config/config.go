@@ -53,6 +53,7 @@ type Config struct {
 	Repair struct {
 		Grace     string `yaml:"grace"`      // GC grace and shard DELETE fence age (default 10m)
 		FillAfter string `yaml:"fill_after"` // dead-node hold-down before re-placing its slots (default 10m)
+		S3Scrub   string `yaml:"s3_scrub"`   // bucket bytes the scrub may fetch per day to verify objects (default 1G; "0": HEAD only)
 	} `yaml:"repair"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
@@ -80,6 +81,19 @@ func (c Config) RepairDurations() (grace, fillAfter time.Duration, err error) {
 		}
 	}
 	return grace, fillAfter, nil
+}
+
+// S3ScrubBytes parses repair.s3_scrub, the bucket bytes the scrub may fetch per day
+// (docs/06 §5, I-151): 1 GiB when empty, 0 for HEAD only.
+func (c Config) S3ScrubBytes() (int64, error) {
+	if c.Repair.S3Scrub == "" {
+		return 1 << 30, nil
+	}
+	n, err := ParseBytes(c.Repair.S3Scrub)
+	if err != nil || n > 1<<62 {
+		return 0, fmt.Errorf("config: repair.s3_scrub %q: bad size", c.Repair.S3Scrub)
+	}
+	return int64(n), nil //nolint:gosec // bounded above
 }
 
 func errBadDuration(err error) error {

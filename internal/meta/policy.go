@@ -15,8 +15,8 @@ type target struct {
 }
 
 // targets lists the Active targets the policy counts: every Active disk of an Active
-// device. A device row itself is never one, so a host with no disks counts for nothing
-// (docs/14 §6, §9, I-118); S3 nodes are not counted.
+// device, and every Active S3 node as a host of its own that never votes. A device row
+// itself is never one, so a host with no disks counts for nothing (docs/14 §6, §9, I-118).
 func targets(nodes []Node) []target {
 	devs := map[NodeIdx]*Node{}
 	for i := range nodes {
@@ -27,11 +27,17 @@ func targets(nodes []Node) []target {
 	var out []target
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Kind != KindDisk || n.State != Active || n.Idx == 0 {
+		if n.State != Active || n.Idx == 0 {
 			continue
 		}
-		if h := devs[n.Host]; h != nil {
-			out = append(out, target{idx: n.Idx, host: h.Idx, voter: h.Voter})
+		switch n.Kind {
+		case KindS3:
+			out = append(out, target{idx: n.Idx, host: n.Idx}) // its own domain (docs/14 §5)
+		case KindDisk:
+			if h := devs[n.Host]; h != nil {
+				out = append(out, target{idx: n.Idx, host: h.Idx, voter: h.Voter})
+			}
+		case KindDevice:
 		}
 	}
 	return out
@@ -139,7 +145,7 @@ func Tolerance(nodes []Node, k, m uint8) (disks, hosts int) {
 }
 
 // PolicyAllowed is the precondition for a policy change, manual or automatic: k ≥ 1,
-// k+m ≤ 256 and at least k+m live Active targets (devices, disks, S3 nodes), so a full
+// k+m ≤ 256 and at least k+m live Active targets (disks and S3 nodes), so a full
 // placement is possible the moment the policy is set (migration never waits for targets
 // that are not there).
 func PolicyAllowed(nodes []Node, live Liveness, k, m uint8) error {
@@ -149,11 +155,6 @@ func PolicyAllowed(nodes []Node, live Liveness, k, m uint8) error {
 	n := 0
 	for _, t := range targets(nodes) {
 		if live.IsLive(t.idx) && live.IsLive(t.host) {
-			n++
-		}
-	}
-	for i := range nodes {
-		if nodes[i].Kind == KindS3 && nodes[i].State == Active && live.IsLive(nodes[i].Idx) {
 			n++
 		}
 	}

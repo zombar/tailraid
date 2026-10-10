@@ -435,3 +435,50 @@ func TestFSM_DiskUpsert_HostRules(t *testing.T) {
 	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: disk, State: Removed}})
 	tf.ok(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: host, State: Removed}})
 }
+
+// An Active S3 node is one target on a host of its own that never votes (docs/14 §6,
+// docs/10 §4.1): the policy grows by it and survives losing it like any host.
+// Invariant: I-88
+func TestAutoPolicy_CountsS3(t *testing.T) {
+	withS3 := func(nodes []Node, state NodeState) []Node {
+		idx := nodes[len(nodes)-1].Idx + 1
+		return append(nodes, Node{Idx: idx, ID: "s3", Kind: KindS3, State: state, Capacity: 1 << 40})
+	}
+	cases := []struct {
+		name    string
+		nodes   []Node
+		k, m    uint8
+		dk, hst int
+	}{
+		{"1 x 1 + bucket", withS3(topology([]int{0}, allVoters(1), 1), Active), 1, 1, 1, 1},
+		{"2 x 1 + bucket", withS3(topology([]int{0, 0}, allVoters(2), 1), Active), 2, 1, 1, 1},
+		{"voter x 1, laptop x 2 + bucket", withS3(topology([]int{0, 1}, []bool{true, false}, 1), Active), 1, 2, 2, 2},
+		{"draining bucket", withS3(topology([]int{0, 1}, []bool{true, false}, 1), Draining), 1, 1, 1, 1},
+		{"removed bucket", withS3(topology([]int{0, 1}, []bool{true, false}, 1), Removed), 1, 1, 1, 1},
+	}
+	for _, c := range cases {
+		k, m := AutoPolicy(c.nodes)
+		if k != c.k || m != c.m {
+			t.Errorf("%s: %d+%d, want %d+%d", c.name, k, m, c.k, c.m)
+		}
+		if d, h := Tolerance(c.nodes, k, m); d != c.dk || h != c.hst {
+			t.Errorf("%s: tolerates %d disks %d hosts, want %d, %d", c.name, d, h, c.dk, c.hst)
+		}
+	}
+	nodes := withS3(topology([]int{0}, allVoters(1), 1), Active)
+	bucket := nodes[len(nodes)-1].Idx
+	if err := PolicyAllowed(nodes, liveFunc(func(NodeIdx) bool { return true }), 1, 1); err != nil {
+		t.Errorf("1+1 over a disk and a live bucket: %v", err)
+	}
+	if err := PolicyAllowed(nodes, liveFunc(func(n NodeIdx) bool { return n != bucket }), 1, 1); err == nil {
+		t.Error("1+1 allowed with the bucket dead")
+	}
+	if err := PolicyAllowed(nodes, liveFunc(func(NodeIdx) bool { return true }), 2, 1); err == nil {
+		t.Error("2+1 allowed over two targets: the bucket was counted twice")
+	}
+}
+
+type liveFunc func(NodeIdx) bool
+
+func (f liveFunc) IsLive(n NodeIdx) bool       { return f(n) }
+func (liveFunc) DeadFor(NodeIdx) time.Duration { return 0 }

@@ -213,9 +213,7 @@ func (s *Store) PutVerified(k ShardKey, payload []byte, sum [32]byte) (added int
 	cleanup := func() { _ = f.Close(); _ = s.fsys.Remove(tmp); release() }
 
 	var hdr [HeaderSize]byte
-	copy(hdr[:4], magic)
-	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(payload)))
-	copy(hdr[8:40], sum[:])
+	header(hdr[:], len(payload), sum)
 	if _, err := f.Write(hdr[:]); err != nil {
 		cleanup()
 		return 0, fmt.Errorf("chunk: write header %s: %w", k, err)
@@ -412,6 +410,31 @@ func (s *Store) readFile(p string) ([]byte, error) {
 		return buf[:n], nil
 	}
 	return io.ReadAll(io.LimitReader(f, limit))
+}
+
+// Frame is the stored form of a payload whose SHA-256 is sum: the TRS1 header, then the
+// payload. A disk file and an S3 object hold the same bytes (docs/10 §4.2, I-52).
+func Frame(payload []byte, sum [32]byte) []byte {
+	out := make([]byte, HeaderSize, HeaderSize+len(payload))
+	header(out, len(payload), sum)
+	return append(out, payload...)
+}
+
+// header writes the TRS1 header of an n-byte payload whose SHA-256 is sum into hdr.
+func header(hdr []byte, n int, sum [32]byte) {
+	copy(hdr[:4], magic)
+	binary.LittleEndian.PutUint32(hdr[4:8], uint32(n))
+	copy(hdr[8:40], sum[:])
+}
+
+// Unframe checks a stored shard read from elsewhere (an S3 object) and returns its
+// payload, or ErrCorrupt.
+func Unframe(raw []byte) ([]byte, error) {
+	p, err := verify(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCorrupt, err)
+	}
+	return p, nil
 }
 
 // verify checks the TRS1 header against the payload and returns the payload.

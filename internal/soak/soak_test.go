@@ -3,6 +3,8 @@ package soak_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -21,6 +23,8 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/s3"
+	"github.com/zombar/tailraid/internal/s3/s3test"
 	"github.com/zombar/tailraid/internal/soak"
 	"github.com/zombar/tailraid/internal/testharness"
 )
@@ -36,6 +40,40 @@ type harnessEnv struct {
 	// reads them: faults take the write side, the sampler's reads the read side
 	mu   sync.RWMutex
 	fill map[int]uint64 // scratch bytes "on" each node's fake disk (Fill)
+
+	bucket *s3test.Server // the bucket phase 15 registers; nil: Caps.S3 is false
+}
+
+// bucketPrefix is where the harness's nodes keep their objects in the bucket.
+const bucketPrefix = "soak"
+
+// AddS3 registers the env's bucket as S3 node name with every node holding the key, as
+// `node add-s3` and `node keys` do (docs/10 §4.1).
+func (e *harnessEnv) AddS3(ctx context.Context, name string) error {
+	if e.bucket == nil {
+		return errors.New("harness: no bucket")
+	}
+	for i := range e.c.Nodes {
+		e.c.SetS3Key(i, name, &s3test.Creds)
+	}
+	t := e.bucket.Target(bucketPrefix)
+	sum := sha256.Sum256([]byte(name))
+	op := rpc.MemberOp{Op: "add_s3", Name: name, Capacity: 1 << 40, S3: &rpc.S3Spec{
+		ID: hex.EncodeToString(sum[:8]), Endpoint: t.Endpoint, Bucket: t.Bucket, Prefix: t.Prefix, PathStyle: t.PathStyle,
+	}}
+	if err := e.c.Leader().Node.MemberOp(ctx, op); err != nil {
+		return err
+	}
+	e.c.Settle()
+	e.c.Probe()
+	return nil
+}
+
+func (e *harnessEnv) Bucket(context.Context) (*s3.Bucket, error) {
+	if e.bucket == nil {
+		return nil, errors.New("harness: no bucket")
+	}
+	return s3.New(e.bucket.Target(bucketPrefix), s3test.Creds, nil)
 }
 
 // The harness pins every budget at 1 TiB, so its fake disk is sized to derive exactly
@@ -120,7 +158,7 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil}
 }
 
 func (e *harnessEnv) quorum() bool {
@@ -414,7 +452,9 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		c.AddDisk(i)
 	}
 	c.AddDisklessNode(true)
-	env := &harnessEnv{t: t, c: c}
+	bucket := s3test.New() // phase 15's bucket, as the compose rig's s3 service
+	defer bucket.Close()
+	env := &harnessEnv{t: t, c: c, bucket: bucket}
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
 	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed}
@@ -434,8 +474,15 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		if len(ph.Checks) == 0 {
 			t.Errorf("%s has no checks", ph.Name)
 		}
+		if ph.Name == "15 s3 bucket" { // the harness offers everything the bucket phase can use
+			for _, chk := range ph.Checks {
+				if chk.OK == nil {
+					t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
+				}
+			}
+		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 14 {
+	if sum.Failed != 0 || len(sum.Phases) != 15 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -467,6 +514,9 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		"13 disks", "Data spread across disks", "every chunk within the host cap", "the closed disk is dead while its host is live",
 		"policy follows the member table after a disk was added", "the drained disk holds no slots", "the removed disk is out of the node table",
 		"14 diskless host", "status reports the host diskless with no budget", "no slot names the diskless host or a disk of it",
+		"15 s3 bucket", "every slot on the bucket is its shard, in the disk layout and framing", "a read right after the holder died falls through to the bucket", "a read with a data holder down is served from the bucket",
+		"the scrub finds the missing object and repair puts it back", "gc collects a file on the bucket without deleting its objects",
+		"the drained bucket is out of the node table",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
