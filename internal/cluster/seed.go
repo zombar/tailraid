@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/hashicorp/raft"
+
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -54,4 +56,43 @@ func ForgetMemberSeed(dataDir string) error {
 		return err
 	}
 	return nil
+}
+
+// MembersFromLog replays the command entries this node's Raft log already holds into a
+// scratch FSM and returns the device members of its table. A follower whose table has
+// not arrived and that has no seed file (it joined before the seed existed, or the file
+// was lost) would otherwise refuse the leader's connection forever and never receive the
+// table. The entries in its log were sent by the leader the join accepted, so the
+// members they name are ones that leader vouched for, as the seed's are (I-134). Entries
+// already compacted into a snapshot are skipped: the FSM was restored from it at open.
+func (n *Node) MembersFromLog() ([]meta.Node, error) {
+	first, err := n.logs.FirstIndex()
+	if err != nil {
+		return nil, fmt.Errorf("cluster: first index: %w", err)
+	}
+	last, err := n.logs.LastIndex()
+	if err != nil {
+		return nil, fmt.Errorf("cluster: last index: %w", err)
+	}
+	scratch := meta.NewFSM()
+	for idx := max(first, 1); idx <= last; idx++ {
+		var l raft.Log
+		if err := n.logs.GetLog(idx, &l); err != nil {
+			if errors.Is(err, raft.ErrLogNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("cluster: read log %d: %w", idx, err)
+		}
+		if l.Type == raft.LogCommand {
+			scratch.Apply(&l)
+		}
+	}
+	var out []meta.Node
+	nodes := scratch.Nodes()
+	for i := range nodes {
+		if m := &nodes[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+			out = append(out, *m)
+		}
+	}
+	return out, nil
 }

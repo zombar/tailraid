@@ -58,7 +58,7 @@ like any other. A node
 that waited a minute for a leader and then exited was what the three-VM rounds saw: the
 service manager restarted it every minute and a killed node never came back within the
 soak's settle time, because the leader stays out of reach for as long as the fault lasts
-and the restart loop never let the node be reached either (I-134).
+and the restart loop never let the node be reached either (I-135).
 
 **Confinement (Linux).** The unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
 `ProtectHome=read-only` and `PrivateTmp`, and `ReadWritePaths` names exactly the data
@@ -88,7 +88,9 @@ service that is not installed is still an error (I-131).
 
 **Log file.** `log.file` rotates itself at 64 MiB keeping five generations
 (`serve.log.1` … `.5`), reopens on SIGHUP (so logrotate or newsyslog can rename it), and
-`tailraid logs -f` prints every appended line once. Warnings that repeat per item (a flush
+`tailraid logs -f` prints every appended line once. When `serve` stops on an error it
+logs the error as `serve stopped` before exiting, since a service has no terminal to
+print it to (and on Windows no stderr). Warnings that repeat per item (a flush
 that fails for every dirty inode, a repair that fails for every chunk, a refused web
 request per probe) are rate-limited to one line a minute per site with a `suppressed`
 count on the next line (I-124).
@@ -175,9 +177,10 @@ Versions are plain semver with a `v` prefix; a build from a commit prints
 I-128):
 
 1. Resolve the release: `GET /repos/zombar/tailraid/releases/latest` (or `/tags/<v>`),
-   authenticated with `TAILRAID_GITHUB_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`
-   when the `gh` CLI is installed (the repository is private; a public repository needs
-   none). The asset is `tailraid_<GOOS>_<GOARCH>[.exe]`.
+   anonymously (the repository is public). A token from `TAILRAID_GITHUB_TOKEN`, else
+   `GITHUB_TOKEN`, else `gh auth token` when the `gh` CLI is installed, is sent when
+   present: a private fork needs one, and with one the asset is fetched through the API
+   URL instead of the browser URL. The asset is `tailraid_<GOOS>_<GOARCH>[.exe]`.
 2. Compare: a release older than or equal to the running semver is not applied unless
    `--version` names it explicitly, and a release older than the running one also needs
    `--allow-downgrade` (an older node cannot read a newer snapshot, §6); a non-semver
@@ -343,7 +346,7 @@ recovered nodes are two clusters.
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
   refuses a running node, an uninitialised directory and a list without this node.
-- **I-134** — A `serve` whose data directory holds a snapshot with its own row and the
+- **I-135** — A `serve` whose data directory holds a snapshot with its own row and the
   volume starts serving without a leader: after giving one five seconds its RPC answers
   with `ready: false`, its gateways serve stale, and it is ready once a leader connects;
   only a node without that state waits for the log, bounded, and exits when none arrives.
@@ -372,4 +375,4 @@ recovered nodes are two clusters.
 | I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
-| I-134 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
+| I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |

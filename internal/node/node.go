@@ -135,9 +135,18 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		log.Warn("member seed unreadable; the leader is accepted once the table arrives", "err", err)
 	} else if len(seed) > 0 {
 		auth.SetSeed(seed)
+	} else if len(node.FSM.Nodes()) == 0 {
+		// no table and no seed (a join from before the seed existed, or a lost file): the
+		// member entries already in this node's own log name the leader (I-134)
+		if members, err := node.MembersFromLog(); err != nil {
+			log.Warn("members not readable from the local log", "err", err)
+		} else if len(members) > 0 {
+			auth.SetSeed(members)
+			log.Info("no member seed: accepting the members named by the local log", "members", len(members))
+		}
 	}
 	// A node whose snapshot holds its own row and the volume serves at once, leader or
-	// not: stale gateways, ready=false, ready once a leader connects (I-134). Waiting for
+	// not: stale gateways, ready=false, ready once a leader connects (I-135). Waiting for
 	// a leader here would exit after the bound and leave the service manager restarting
 	// a node that nobody can reach meanwhile. Only a node without that state (the first
 	// start after a join that ended before its snapshot) needs the log first.
@@ -985,19 +994,30 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	return resp, nil
 }
 
-// snapshotAfterJoin takes the joiner's first snapshot (Snapshot, retried: Raft refuses
-// one until its FSM goroutine has passed the newest configuration entry, the joiner's own
-// add_voter, which lands after the last command WaitReady waited for).
-func snapshotAfterJoin(ctx context.Context, n *cluster.Node) error { return Snapshot(ctx, n) }
+// snapshotAfterJoin takes the joiner's first snapshot. Raft refuses one until its FSM
+// goroutine has passed the newest configuration entry (the joiner's own add_voter, which
+// lands after the last command WaitReady waited for), and reports nothing new until the
+// FSM has applied an entry past the last snapshot; on a slow machine both take longer
+// than a ready serve's few seconds (CI runners did), so both are retried for up to 30 s.
+func snapshotAfterJoin(ctx context.Context, n *cluster.Node) error {
+	return snapshotWithin(ctx, n, 30*time.Second, true)
+}
 
 // Snapshot takes a Raft snapshot now, retrying a refusal for a few seconds; nothing new
 // to snapshot is not an error. A node restores its table at open from a snapshot only,
-// so init, join, a ready serve and a clean shutdown each leave one behind (I-134).
+// so init, join, a ready serve and a clean shutdown each leave one behind (I-135).
 func Snapshot(ctx context.Context, n *cluster.Node) error {
-	deadline := time.Now().Add(5 * time.Second)
+	return snapshotWithin(ctx, n, 5*time.Second, false)
+}
+
+// snapshotWithin retries a refused snapshot until bound; retryNothingNew also retries
+// "nothing new to snapshot", for a node whose first entries are still being applied.
+func snapshotWithin(ctx context.Context, n *cluster.Node, bound time.Duration, retryNothingNew bool) error {
+	deadline := time.Now().Add(bound)
 	for {
 		err := n.Raft.Snapshot().Error()
-		if err == nil || errors.Is(err, raft.ErrNothingNewToSnapshot) || time.Now().After(deadline) {
+		settled := err == nil || (errors.Is(err, raft.ErrNothingNewToSnapshot) && !retryNothingNew)
+		if settled || time.Now().After(deadline) {
 			return err
 		}
 		select {

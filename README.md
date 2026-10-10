@@ -21,7 +21,7 @@ git clone https://github.com/zombar/tailraid.git && cd tailraid
 make install          # → ~/.local/bin/tailraid (needs Go 1.27.2+)
 ```
 
-`tailraid update` installs the latest release. The repository is private: set `GITHUB_TOKEN` or log in with `gh`. See [Verifying a download](#verifying-a-download) before trusting a binary you fetched by hand.
+`tailraid update` installs the latest release; no token or login is needed. See [Verifying a download](#verifying-a-download) before trusting a binary you fetched by hand.
 
 ## Set up a volume
 
@@ -254,3 +254,7 @@ Details: [docs/12-operations.md](docs/12-operations.md) §4.
 | [docs/vms.md](docs/vms.md) | the three-VM rig: setup, what a round proves, results |
 | [docs/invariants.md](docs/invariants.md) | every promise the system makes, and the tests that prove it |
 | [CLAUDE.md](CLAUDE.md) | how the code is written and tested |
+
+## License
+
+Copyright (C) 2026 FORGE3D CYF. tailraid is free software under the [GNU Affero General Public License, version 3](LICENSE): anyone who runs a modified version as a network service must offer its source to its users. The in-tree copy of go-filesystems/smb in `third_party/smb` keeps its own [BSD 3-Clause license](third_party/smb/LICENSE).

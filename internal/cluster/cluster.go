@@ -567,7 +567,7 @@ func (n *Node) Shutdown(timeout time.Duration) error {
 		}
 	}
 	// the state the next start restores: Raft reads a table at open from a snapshot
-	// only (I-134); nothing new, or a refusal, is not worth delaying the shutdown for
+	// only (I-135); nothing new, or a refusal, is not worth delaying the shutdown for
 	if err := n.Raft.Snapshot().Error(); err != nil && !errors.Is(err, raft.ErrNothingNewToSnapshot) {
 		n.log.Debug("no snapshot at shutdown", "err", err)
 	}

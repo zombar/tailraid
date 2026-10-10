@@ -251,7 +251,7 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 // A restarted follower whose leader is gone serves anyway: its health answers within
 // seconds with ready=false, and it is ready once the leader is back. A fresh follower
 // has a snapshot since the join took one, so this holds from the first restart on.
-// Invariant: I-134, I-125
+// Invariant: I-135, I-125
 func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 	pathA, cfgA := devHome(t)
 	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
@@ -305,7 +305,7 @@ func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 // The node that ran init never joined anything, so no join snapshotted it: the snapshot
 // a ready serve takes is what lets it restart without a quorum (its voter peer gone)
 // and serve stale until the peer is back.
-// Invariant: I-134
+// Invariant: I-135
 func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
 	pathA, cfgA := devHome(t)
 	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
