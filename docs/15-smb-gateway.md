@@ -50,8 +50,13 @@ upstream, each with a test in the copy:
   (0, −1 and −2 mean "leave it", per MS-FSCC 2.4.7); without the capability the server
   keeps reporting the time of the reply. Explorer therefore shows the FSM's modification
   times and `robocopy /COPY:DAT` preserves them.
+- `file.go`, `status.go`: a READ the backend fails (here: a chunk with too few shards,
+  `EIO`) answers `STATUS_UNEXPECTED_IO_ERROR`, not `STATUS_END_OF_FILE`, which upstream
+  used as the fallback for every read error. A client takes END_OF_FILE for a shorter
+  file and hands its caller a short, wrong buffer; the three-VM rounds caught it through
+  a Windows mount in the corruption phase (I-40). `TestSMB_UnreadableChunk_IsIoError`.
 
-The copy is updated by re-applying these two changes to a newer upstream; the `replace`
+The copy is updated by re-applying these three changes to a newer upstream; the `replace`
 goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the
@@ -159,17 +164,25 @@ is never logged and never part of `status`; the `mount with` log line prints it 
 `tailraid mount` on Windows runs
 
 ```
+powershell -NoProfile -NonInteractive -Command New-SmbMapping -LocalPath T: -RemotePath \\127.0.0.1\tailraid -TcpPort 20445 -UserName tailraid -Password $env:TAILRAID_SMB_PASSWORD -Persistent $false
+```
+
+with the password in the child's environment (`TAILRAID_SMB_PASSWORD`), which only its
+own user and administrators can read, so it is never in the process list. `net use … *`
+was the first choice and is still the console form, but it reads the password from the
+console only, never from standard input, so a mount from any non-console session (an SSH
+session, a script, the three-VM rig) failed with "System error 86". `tailraid umount`
+runs `net use T: /delete /y`. Before either, `mount` checks the Windows build
+(`RtlGetVersion`) and refuses below 26100 with the reason. When PowerShell cannot be run
+the console form is printed instead:
+
+```
 net use T: \\127.0.0.1\tailraid /TCPPORT:20445 /USER:tailraid * /PERSISTENT:NO
 ```
 
-with the password written to the command's standard input (the `*` form reads it there),
-so it is never in the process list. `tailraid umount` runs `net use T: /delete /y`. Before
-either, `mount` checks the Windows build (`RtlGetVersion`) and refuses below 26100 with
-the reason. When `net.exe` cannot be run the PowerShell form is printed instead:
-
-```
-New-SmbMapping -LocalPath T: -RemotePath \\127.0.0.1\tailraid -TcpPort 20445 -UserName tailraid -Password <smb.password>
-```
+A mapping needs a logon session the SMB redirector can attach credentials to: a
+password or interactive logon has one, a key-authenticated SSH logon does not and fails
+with error 1312 whatever the password (docs/vms.md).
 
 Whether the Windows redirector accepts `127.0.0.1` for a non-445 loopback target, or
 needs `localhost` or the machine name, is unverified until the checklist runs
