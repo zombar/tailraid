@@ -34,7 +34,11 @@ type Params struct {
 	DataDir    string   // the node's data directory (Linux: the unit may write there, I-122)
 	Disks      []string // added disk paths (Linux: likewise)
 	Stage      string   // Linux: a private directory the unit file is staged in before `install` copies it; "" uses os.TempDir()
+	LogonMount bool     // Windows: map mount.path at the user's logon (listen.smb and mount.path set; I-142)
 }
+
+// MountTask is the Windows scheduled task that maps the drive at logon (I-142).
+const MountTask = "tailraid-mount"
 
 // File is a unit file to write.
 type File struct {
@@ -93,15 +97,22 @@ func Install(p Params) (Plan, error) {
 		}, nil
 	case "windows":
 		bin := `"` + p.Exe + `" serve --config "` + p.ConfigPath + `" --service`
-		return Plan{
+		pl := Plan{
 			Commands: [][]string{
 				{"sc.exe", "create", Name, "binPath=", bin, "start=", "delayed-auto", "depend=", "Tailscale", "DisplayName=", "tailraid"},
 				{"sc.exe", "description", Name, "tailraid node: metadata, shard store and gateways"},
 				{"sc.exe", "failure", Name, "reset=", "60", "actions=", "restart/5000/restart/5000/restart/5000"},
 				{"sc.exe", "start", Name},
 			},
-			Notes: []string{"log.file set to " + p.LogFile + " in " + p.ConfigPath + " (services have no stderr)", "run from an elevated prompt", "mount after login with: tailraid mount T:"},
-		}, nil
+			Notes: []string{"log.file set to " + p.LogFile + " in " + p.ConfigPath + " (services have no stderr)", "run from an elevated prompt"},
+		}
+		if p.LogonMount {
+			pl.Commands = append(pl.Commands, powershell(registerMountTask(p)), powershell("Start-ScheduledTask -TaskName "+psQuote(MountTask)))
+			pl.Notes = append(pl.Notes, "the drive is mapped at every logon of "+p.User+" by the task "+MountTask)
+		} else {
+			pl.Notes = append(pl.Notes, "mount after login with: tailraid mount T:")
+		}
+		return pl, nil
 	}
 	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
 }
@@ -120,10 +131,37 @@ func Uninstall(p Params) (Plan, error) {
 			append(sudo, "systemctl", "daemon-reload"),
 		}}, nil
 	case "windows":
-		return Plan{Commands: [][]string{{"sc.exe", "stop", Name}, {"sc.exe", "delete", Name}}}, nil
+		pl := Plan{Commands: [][]string{{"sc.exe", "stop", Name}, {"sc.exe", "delete", Name}}}
+		if p.LogonMount {
+			pl.Commands = append(pl.Commands, powershell("Unregister-ScheduledTask -TaskName "+psQuote(MountTask)+" -Confirm:$false -ErrorAction SilentlyContinue"))
+		}
+		return pl, nil
 	}
 	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
 }
+
+// registerMountTask is the PowerShell that registers MountTask for the installing user:
+// at that user's logon, in the interactive session with the limited token (Explorer's
+// session: a drive an elevated session maps is invisible to Explorer), `tailraid mount
+// --wait` under a headless console, so no window opens while it waits for the service.
+func registerMountTask(p Params) string {
+	arg := `--headless "` + p.Exe + `" mount --wait 5m --config "` + p.ConfigPath + `"`
+	u := psQuote(p.User)
+	return "Register-ScheduledTask -Force -TaskName " + psQuote(MountTask) +
+		" -Action (New-ScheduledTaskAction -Execute 'conhost.exe' -Argument " + psQuote(arg) + ")" +
+		" -Trigger (New-ScheduledTaskTrigger -AtLogOn -User " + u + ")" +
+		" -Principal (New-ScheduledTaskPrincipal -UserId " + u + " -LogonType Interactive -RunLevel Limited)" +
+		" -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10))" +
+		" | Out-Null"
+}
+
+func powershell(script string) []string {
+	return []string{"powershell", "-NoProfile", "-NonInteractive", "-Command", script}
+}
+
+// psQuote is s as a PowerShell single-quoted string: nothing inside is expanded and a
+// quote is doubled.
+func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 // Start returns the plan that starts the installed service.
 func Start(p Params) (Plan, error) {

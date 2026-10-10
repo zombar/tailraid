@@ -190,7 +190,7 @@ func exitOnSecondSignal(ctx context.Context, w io.Writer) {
 }
 
 func mountCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "mount [path]",
 		Short: "Mount the running gateway (the OS NFS client on macOS and Linux, the SMB client on Windows)",
 		Args:  cobra.MaximumNArgs(1),
@@ -202,6 +202,15 @@ func mountCmd() *cobra.Command {
 			target := cfg.Mount.Path
 			if len(args) == 1 {
 				target = args[0]
+			}
+			if wait, _ := cmd.Flags().GetDuration("wait"); wait > 0 { // the logon task runs before the service may be up (I-142)
+				addr := cfg.Listen.SMB
+				if cfg.Listen.NFS != "" && runtime.GOOS != "windows" {
+					addr = cfg.Listen.NFS
+				}
+				if err := mount.WaitGateway(cmd.Context(), addr, wait); err != nil {
+					return err
+				}
 			}
 			if runtime.GOOS != "windows" {
 				if err := os.MkdirAll(target, 0o750); err != nil {
@@ -231,9 +240,17 @@ func mountCmd() *cobra.Command {
 			if runtime.GOOS == "windows" {
 				env = []string{mount.SMBPasswordEnv + "=" + cfg.SMB.Password}
 			}
-			return mount.RunWithEnv(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, env)
+			if err := mount.RunWithEnv(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, env); err != nil {
+				return err
+			}
+			if mount.Elevated() { // a drive belongs to the logon session that mapped it (docs/15 §6)
+				fmt.Fprintf(cmd.OutOrStdout(), "note: this prompt is elevated, so Explorer does not show %s; the task %s maps it in your desktop session at every logon (tailraid install), or run tailraid mount from a prompt that is not elevated\n", target, svc.MountTask)
+			}
+			return nil
 		},
 	}
+	c.Flags().Duration("wait", 0, "wait up to this long for the gateway to accept a connection before mounting (the logon task uses 5m)")
+	return c
 }
 
 func umountCmd() *cobra.Command {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Command returns the program and arguments that mount the NFS gateway at nfsAddr
@@ -79,6 +80,39 @@ func UnmountCommand(goos, target string) (string, []string, error) {
 	return "", nil, fmt.Errorf("mount: unsupported OS %q", goos)
 }
 
+// waitPoll is how often WaitGateway tries the gateway's address.
+const waitPoll = 250 * time.Millisecond
+
+// WaitGateway returns once addr accepts a TCP connection, trying every waitPoll for up to
+// d (0: once), and otherwise fails naming addr: a logon task runs before the service may
+// have started its gateway (I-142).
+func WaitGateway(ctx context.Context, addr string, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	var dialer net.Dialer
+	for {
+		dctx, cancel := context.WithTimeout(ctx, time.Second)
+		c, err := dialer.DialContext(dctx, "tcp", addr)
+		cancel()
+		if err == nil {
+			_ = c.Close()
+			return nil
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("waiting for the gateway at %s: %w", addr, ctx.Err())
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the gateway at %s did not accept a connection within %s (is the service running? tailraid status): %w", addr, d, err)
+		}
+		t := time.NewTimer(min(waitPoll, time.Until(deadline)))
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return fmt.Errorf("waiting for the gateway at %s: %w", addr, ctx.Err())
+		case <-t.C:
+		}
+	}
+}
+
 // MinWindowsBuild is Windows 11 24H2, the first whose SMB client can be told a port other
 // than 445 (docs/15 §1).
 const MinWindowsBuild = 26100
@@ -108,9 +142,11 @@ func Run(ctx context.Context, out io.Writer, goos, prog string, args []string) e
 // the printed command nor the process list.
 func RunWithEnv(ctx context.Context, out io.Writer, goos, prog string, args, env []string) error {
 	fmt.Fprintf(out, "+ %s %s\n", prog, strings.Join(args, " "))
+	var seen strings.Builder // what the command printed, for explainMount
 	run := func(name string, args ...string) error {
 		cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // the mount command this package built
-		cmd.Stdout, cmd.Stderr, cmd.Stdin = out, out, os.Stdin
+		w := io.MultiWriter(out, &seen)
+		cmd.Stdout, cmd.Stderr, cmd.Stdin = w, w, os.Stdin
 		if len(env) > 0 {
 			cmd.Env = append(os.Environ(), env...)
 		}
@@ -128,5 +164,25 @@ func RunWithEnv(ctx context.Context, out io.Writer, goos, prog string, args, env
 	if goos == "windows" && errors.Is(err, exec.ErrNotFound) {
 		fmt.Fprintln(out, WindowsNotes)
 	}
-	return err
+	return explainMount(goos, args, seen.String(), err)
+}
+
+// explainMount turns a Windows mapping refused with system error 1219 into what to do:
+// the SMB client keeps one set of credentials per server name whatever the port, so a
+// connection this session already has to the gateway's host (\\127.0.0.1\..., often
+// Windows' own shares opened in Explorer) under another user blocks the share's user
+// (docs/15 §6, I-142).
+func explainMount(goos string, args []string, output string, err error) error {
+	if goos != "windows" || !strings.Contains(output, "1219") {
+		return err
+	}
+	host := "the gateway's host"
+	for i, a := range args {
+		if a == "-RemotePath" && i+1 < len(args) {
+			if parts := strings.Split(strings.TrimPrefix(args[i+1], `\\`), `\`); parts[0] != "" {
+				host = `\\` + parts[0]
+			}
+		}
+	}
+	return fmt.Errorf("mount: Windows already has a connection to %s as another user, and it allows one user per server name whatever the port: remove it (net use lists it; net use %s\\<share> /delete), then mount again: %w", host, host, err)
 }

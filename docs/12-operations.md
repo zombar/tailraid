@@ -29,8 +29,9 @@ handshake, `SERVICE_RUNNING`); without the flag it is an ordinary console proces
 service runs as LocalSystem, whose config home is `%ProgramData%\tailraid` — the same
 `config.Home()` an elevated `join` used, so no copy step.
 
-Mounting stays a user action (`tailraid mount`) on every OS: the LaunchAgent and the
-systemd unit only serve. The mount survives service restarts because handles are stable
+Mounting is a user action (`tailraid mount`) on macOS and Linux: the LaunchAgent and the
+systemd unit only serve. On Windows `install` also registers a logon task that maps the
+drive in the user's desktop session (§2). The mount survives service restarts because handles are stable
 (I-16) and the mounts are `soft`. The three service managers, the three mounts and the
 install, restart and recover paths are exercised on real guests by the three-VM rounds
 ([vms.md](vms.md)).
@@ -100,6 +101,14 @@ count on the next line (I-124).
 Windows mounts the SMB gateway (docs/15): `tailraid mount T:` runs `New-SmbMapping` with the
 gateway's port, which needs Windows 11 24H2 or newer. There is no portmapper and no NFS
 client to enable.
+
+Explorer cannot open the share by path: `\\host\…` always dials port 445, which is
+Windows' own file sharing, so the drive letter is the way in. `install` registers the
+scheduled task `tailraid-mount` for the installing user, which maps the drive at every
+logon (and once at install), so it is under This PC after a reboot without a command
+(docs/15 §6, I-142). A drive is mapped per logon session, and an elevated prompt is a
+different session from Explorer's: `tailraid mount` run as administrator maps a drive
+Explorer does not show, and says so.
 
 ## 3. Fault injection on a live cluster (`dev.enabled`)
 
