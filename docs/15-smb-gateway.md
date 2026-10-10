@@ -64,7 +64,15 @@ upstream, each with a test in the copy:
   server cannot perform the requested operation") instead of the CREATE's status. The
   three-VM rounds caught it through `verify` on Windows. `TestASignedChainVerifiesEveryReply`.
 
-The copy is updated by re-applying these four changes to a newer upstream; the `replace`
+- `attrs.go`, `dir.go`, `file.go`, `info.go`: a name whose last element starts with a dot
+  (other than `.` and `..`) carries `FILE_ATTRIBUTE_HIDDEN`, as Samba's `hide dot files`
+  does by default. Windows has no dot convention, so Explorer showed every `._<name>`
+  file macOS writes beside a file it copies over NFS (its extended attributes, which
+  NFSv3 cannot carry), every `.DS_Store`, and every Unix dot file. Nothing is left out
+  of a listing; Explorer's "Hidden items" shows them (I-141).
+  `TestAttributes_DotFilesHidden`, `TestSMB_DotFilesHidden`.
+
+The copy is updated by re-applying these five changes to a newer upstream; the `replace`
 goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the
@@ -200,6 +208,25 @@ A mapping needs a logon session the SMB redirector can attach credentials to: a
 password or interactive logon has one, a key-authenticated SSH logon does not and fails
 with error 1312 whatever the password (docs/vms.md).
 
+**The drive at logon.** A mapping belongs to the logon session that made it, and it is
+not persistent, so it is gone after a reboot or a sign-out; with UAC on, an elevated
+prompt is a session of its own, and a drive it maps is invisible to Explorer, which runs
+unelevated. `install` therefore registers a scheduled task, `tailraid-mount`, for the
+installing user: triggered at that user's logon, run in the interactive session with the
+user's limited token (Explorer's), it runs `tailraid mount --wait 5m --config <path>`
+under `conhost.exe --headless`, so no console window opens; `install` starts it once so
+the drive appears without signing out, and `uninstall` removes it. `--wait` maps only
+once the gateway accepts a connection, since the service may start after the logon. A
+`tailraid mount` from an elevated prompt warns first, as above, and maps as before. Verified on the Windows VM with UAC on (2026-10-10): after a
+reboot the task started at the automatic logon, waited two minutes for the delayed-auto
+service, and mapped the drive; the limited session saw it and the elevated one did not.
+
+The SMB client keeps one set of credentials per server name, whatever the port: a session
+that already has a connection to `\\127.0.0.1` under another user (Windows' own shares
+opened in Explorer by that address, or an old mapping) cannot map the gateway, and
+`New-SmbMapping` fails with system error 1219. `mount` then says which server and to
+remove the other connection (`net use` lists it).
+
 Whether the Windows redirector accepts `127.0.0.1` for a non-445 loopback target, or
 needs `localhost` or the machine name, is unverified until the checklist runs
 (`docs/windows-checklist.md`). On macOS `mount_smbfs //tailraid@127.0.0.1:20445/tailraid
@@ -274,6 +301,18 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   whenever `listen.smb` is set and the config has none, lives only in the 0600 config
   file and appears in no log line or `status` report; a session with a wrong password
   fails with `STATUS_LOGON_FAILURE`, and no guest or anonymous session is accepted.
+- **I-141** — Every attribute the SMB gateway reports for a name whose last element begins
+  with `.` (other than `.` and `..`), in a directory listing, a CREATE reply or a
+  QUERY_INFO, includes `FILE_ATTRIBUTE_HIDDEN`, and no other name carries it; the entry
+  is still listed and opens, reads and writes as any other.
+- **I-142** — On Windows, with `listen.smb` and `mount.path` set, the install plan registers
+  the task `tailraid-mount` for the installing user, triggered at that user's logon,
+  running in the interactive session with the limited token, executing
+  `conhost.exe --headless "<exe>" mount --wait 5m --config "<config>"`, and starts it;
+  the uninstall plan removes it and succeeds when it is absent. `mount --wait d` runs the
+  mapping only once the gateway's address accepts a TCP connection and otherwise fails
+  after `d` with an error naming the address. A mapping Windows refuses with system error
+  1219 fails with an error naming the server and how to remove the other connection.
 
 ## Tests
 
@@ -284,3 +323,5 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-108 | `TestSMB_QueryDirectory_LargeDirectory`, `TestSMB_RenameKeepsFileIdAndContent` |
 | I-109 | `TestSMB_ReadOnly_WireStatuses`, `TestSMB_WriteWhenFull_IsDiskFull`, `TestSMB_WriteAtCap_WaitsThenSucceeds`, `TestSMB_Statfs_FromUsage` |
 | I-110 | `TestSMB_Auth_WrongPasswordRefused`, `TestSMB_ListenRefusesNonLoopback`, `TestConfig_Gateways`, `TestCLI_Init_GeneratesSMBPassword` |
+| I-141 | `TestSMB_DotFilesHidden` |
+| I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |

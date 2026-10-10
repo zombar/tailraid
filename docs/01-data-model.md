@@ -273,8 +273,10 @@ minute), sets the store's cap at once, and proposes `set_capacity` for the disk 
 the leader only when the value moved by more than `max(5 %, 1 GiB)`, so placement weights
 stay still while a disk breathes. `Capacity == 0` (a full disk) takes the disk out of the
 candidate set without touching what it already holds. A pinned budget changes only when
-the pin does: raise the disk's `capacity`, restart the service, and the next tick
-registers the new value with the cluster. A device row carries no budget: the data
+the pin does: raise the disk's `capacity` (`volume grow`), restart the service, and
+`serve` registers the new value with the cluster as its maintenance loop starts, before
+the first tick, so the node table (which the browser UI draws) never lags the free space
+`status` reads from the disk's host by a minute. A device row carries no budget: the data
 directory holds no shards (14 §1).
 
 ## Invariants
@@ -305,9 +307,9 @@ defined in `04-write-path-and-durability.md`.
   its store (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
   store's cap following at once and a `set_capacity` proposal only past the hysteresis
   `max(5 %, 1 GiB)`; a disk pinned by its `capacity` is never re-derived, and its pinned
-  value is proposed on the next tick whenever the cluster holds a different one, so a
-  disk grown in place (the pin raised, the service restarted) is placed by its new
-  budget.
+  value is proposed when `serve` starts and on every tick whenever the cluster holds a
+  different one, so a disk grown in place (the pin raised, the service restarted) is
+  placed and reported by its new budget at once.
 
 ## Tests
 
@@ -317,6 +319,6 @@ defined in `04-write-path-and-durability.md`.
 | I-2 | `TestFSM_Commit_Errors`, `TestFlusher_DedupLiveAndTombstoned_NoUpload`, `TestReader_DecodedHashMismatch_EIO` |
 | I-3 | `TestFSM_InoGenNotReusedAfterUnlink`, `TestInoGen_RootIsOne_ZeroIsNever` |
 | I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
-| I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestDiskBudget_PinnedOrDerived`, `TestConfig_DiskCapacity`, `TestNode_Rebudget_PinnedChangeRegistered` |
+| I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestDiskBudget_PinnedOrDerived`, `TestConfig_DiskCapacity`, `TestNode_Rebudget_PinnedChangeRegistered`, `TestNode_Maintenance_RegistersBudgetAtStart` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |

@@ -92,7 +92,7 @@ func (c *conn) queryInfo(h header, body []byte) ([]byte, error) {
 
 func fileInfo(class uint8, of *openFile, st filesystem.Stat) []byte {
 	size := sizeOf(st)
-	attrs := attributesOf(st, of.ro)
+	attrs := attributesOf(of.path, st, of.ro)
 	switch class {
 	case fileBasicInformation:
 		b := make([]byte, 40)
