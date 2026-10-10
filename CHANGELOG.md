@@ -2,6 +2,25 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.4 (2026-10-10)
+
+### Changes
+
+- svc: the Linux unit plan stages at a slash path on every OS ([fc5eb8a](https://github.com/zombar/tailraid/commit/fc5eb8a))
+- webui: spread host names run up beside their columns ([33c3c66](https://github.com/zombar/tailraid/commit/33c3c66))
+- cluster, node: demote takes the vote, and a disk serve cannot write closes ([8d9b5a4](https://github.com/zombar/tailraid/commit/8d9b5a4))
+- serve: a node waiting for the log waits for its own row ([7863b77](https://github.com/zombar/tailraid/commit/7863b77))
+- cli: tailraid dashboard opens the browser UI ([4d112af](https://github.com/zombar/tailraid/commit/4d112af))
+- mount: warn when a Windows mount runs as administrator ([b492a23](https://github.com/zombar/tailraid/commit/b492a23))
+- windows: install maps the drive at every logon, in the desktop session ([ab7a66a](https://github.com/zombar/tailraid/commit/ab7a66a))
+- node: register a disk's budget as serve starts, not a tick later ([6d9cf10](https://github.com/zombar/tailraid/commit/6d9cf10))
+- webui, smb: macOS's ._ and .DS_Store files stop cluttering listings ([9b9976d](https://github.com/zombar/tailraid/commit/9b9976d))
+- cluster: a name names the live row, and a removed row refuses member ops ([5e3c337](https://github.com/zombar/tailraid/commit/5e3c337))
+
+### Tooling
+
+- tests: freePorts keeps every listener open until the whole set is chosen ([80dd197](https://github.com/zombar/tailraid/commit/80dd197))
+
 ## v0.4.3 (2026-10-10)
 
 ### Changes
