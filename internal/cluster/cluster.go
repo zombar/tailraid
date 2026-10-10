@@ -37,6 +37,7 @@ var (
 	ErrNotInit      = errors.New("cluster: data directory is not initialised (run init or join)")
 	ErrAlreadyOpen  = errors.New("cluster: data directory is in use by another process")
 	ErrUnknownReply = errors.New("cluster: unexpected FSM reply")
+	ErrNotMember    = errors.New("cluster: this node's row has not arrived from the leader")
 )
 
 // Options configure Open and Bootstrap.
@@ -512,6 +513,26 @@ func (n *Node) WaitReady(ctx context.Context, timeout time.Duration) error {
 		return fmt.Errorf("cluster: fsm replay incomplete (applied %d, last command %d): %w", n.FSM.Applied(), last, err)
 	}
 	return nil
+}
+
+// WaitMember waits until this node's FSM holds its own row and the volume. WaitReady is
+// not enough for a node that has neither: a follower knows the leader from the first
+// heartbeat, before the entries that add its row have arrived (I-144).
+func (n *Node) WaitMember(ctx context.Context, timeout time.Duration) error {
+	wctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		applied := n.FSM.Applied() // read before the check, so an apply in between wakes the wait
+		if _, ok := n.SelfIdx(); ok && n.FSM.Volume().ChunkSize != 0 {
+			return nil
+		}
+		if err := n.FSM.WaitApplied(wctx, applied+1); err != nil {
+			if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("%w after %s (applied %d)", ErrNotMember, timeout, n.FSM.Applied())
+			}
+			return err
+		}
+	}
 }
 
 // lastCommandIndex scans the log store backwards for the newest command entry. Entries
