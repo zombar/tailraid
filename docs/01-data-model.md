@@ -364,5 +364,5 @@ defined in `04-write-path-and-durability.md`.
 | I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
 | I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestDiskBudget_PinnedOrDerived`, `TestConfig_DiskCapacity`, `TestNode_Rebudget_PinnedChangeRegistered`, `TestNode_Maintenance_RegistersBudgetAtStart` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
-| I-156 | `TestStub_I_156` (planned: TestCodec_ReadsVersion3Snapshot, TestCodec_StateRoundTrip, TestEncodeCommand_Golden, TestEncodeCommand_V4Gating, FuzzDecodeCommand, TestFSM_TrashStats_MatchComputed, TestCluster_TrashSurvivesSnapshotInstall) |
+| I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence` (planned: TestCluster_TrashSurvivesSnapshotInstall) |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |

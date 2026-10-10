@@ -195,7 +195,11 @@ directory with `FlagProtected` was crossed or is the inode itself. It costs one 
 lookup per level, what `pathLen` (I-115) already pays per `Create`. `Unlink`, `Rmdir`,
 `Trash`, `Purge{Ino}` and `Rename` consult it as described (I-154); `Create`, `Mkdir`,
 `Symlink`, `Commit` and a `Rename` *into* a protected directory are unaffected: a
-protected folder accepts new content and refuses to lose any.
+protected folder accepts new content and refuses to lose any. The same walk guards the
+trash: `Create`, `Mkdir`, `Unlink`, `Rmdir`, `Rename`, `Trash` and a `SetAttr` of
+`Flags` refuse a parent (or entry) that lies in the trash with `ErrInTrash`; only
+`Commit` writes inside it, for the flusher of a file deleted while dirty (L-203), and
+only `Restore` and `Purge` take anything out.
 
 **Commit** — the only command that changes file data. Applied atomically or not at all:
 
@@ -518,7 +522,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
 | I-145 | `TestCluster_DemotePromote_RaftFollowsRow` |
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
-| I-152 | `TestStub_I_152` (planned: TestFSM_Trash_Table, TestFSM_Trash_FoldsEarlierRoots, TestFSM_Restore_Table, TestFSM_DeterministicAcrossReplicas, TestCluster_TrashRestoreAcrossNodes, TestModelCheck_Long) |
-| I-153 | `TestStub_I_153` (planned: TestFSM_Purge_Table, TestFSM_Purge_Boundary, TestFSM_Purge_CascadesNestedRoots, TestFSM_TrashStats_MatchComputed, TestCheckInvariants_DetectsEachViolation, TestFSM_ApplySnapshotRestoreEquivalence) |
-| I-154 | `TestStub_I_154` (planned: TestFSM_Protected_Table, TestFSM_SetAttr_Flags, TestVFS_Protected_EPERM, TestNFS_Protected_IsACCES, TestSMB_Protected_AccessDenied, TestCluster_V4OpsRefusedUntilAllMembersUpgraded) |
-| I-155 | `TestStub_I_155` (planned: TestStore_TrashReadAPI, TestNFS_TrashedIsGoneFromShare, TestNFS_TrashedHandleStale_RestoredValid, TestSMB_DeletedIsGoneFromShare, TestVFS_OpenTrash_ReadsBytes, TestVFS_Remove_TrashKeepsWAL_FlushCommits, TestVFS_PurgeBeforeFlush_DropsWAL) |
+| I-152 | `TestFSM_Trash_Table`, `TestFSM_Trash_FoldsEarlierRoots`, `TestFSM_Restore_Table`, `TestFSM_DeterministicAcrossReplicas` (planned: TestCluster_TrashRestoreAcrossNodes, TestModelCheck_Long) |
+| I-153 | `TestFSM_Purge_Table`, `TestFSM_Purge_Boundary`, `TestFSM_Purge_CascadesNestedRoots`, `TestFSM_TrashStats_MatchComputed`, `TestCheckInvariants_DetectsEachViolation`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas` |
+| I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags` (planned: TestVFS_Protected_EPERM, TestNFS_Protected_IsACCES, TestSMB_Protected_AccessDenied, TestCluster_V4OpsRefusedUntilAllMembersUpgraded) |
+| I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table` (planned: TestNFS_TrashedIsGoneFromShare, TestNFS_TrashedHandleStale_RestoredValid, TestSMB_DeletedIsGoneFromShare, TestVFS_OpenTrash_ReadsBytes, TestVFS_Remove_TrashKeepsWAL_FlushCommits, TestVFS_PurgeBeforeFlush_DropsWAL) |

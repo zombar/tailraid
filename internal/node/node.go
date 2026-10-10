@@ -581,8 +581,8 @@ func (a *adminOps) setPolicy(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		cmds = append(cmds, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: op.K, M: op.M, Now: now}})
 	}
-	for _, c := range cmds {
-		res, index, err := a.node.Propose(ctx, c)
+	for i := range cmds {
+		res, index, err := a.node.Propose(ctx, cmds[i])
 		if err == nil {
 			err = res.Err
 		}

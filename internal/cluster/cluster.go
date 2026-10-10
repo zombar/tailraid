@@ -366,14 +366,14 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 		cmds = append(cmds, meta.Command{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: true, Now: vol.Now}})
 	}
 	cmds = append(cmds, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: self}})
-	for _, c := range cmds {
-		res, _, err := n.Propose(ctx, c)
+	for i := range cmds {
+		res, _, err := n.Propose(ctx, cmds[i])
 		if err == nil {
 			err = res.Err
 		}
 		if err != nil {
 			_ = n.Close()
-			return nil, fmt.Errorf("cluster: bootstrap op %d: %w", c.Op, err)
+			return nil, fmt.Errorf("cluster: bootstrap op %d: %w", cmds[i].Op, err)
 		}
 	}
 	return n, nil

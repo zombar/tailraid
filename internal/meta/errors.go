@@ -20,6 +20,9 @@ var (
 	ErrNodeNotEmpty    = errors.New("meta: node still holds sole shards")
 	ErrPolicy          = errors.New("meta: invalid volume policy")
 	ErrNameTooLong     = errors.New("meta: name longer than MaxNameLen bytes")
+	ErrProtected       = errors.New("meta: entry is under a protected directory")
+	ErrInTrash         = errors.New("meta: entry is in the trash")
+	ErrCodec           = errors.New("meta: a member runs a codec too old for this command")
 )
 
 // ErrUnknownOutcome is returned by a Proposer (never in Result.Err, so it has no wire
@@ -33,7 +36,7 @@ var errByCode = []error{
 	nil, // 0
 	ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
 	ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
-	ErrNameTooLong,
+	ErrNameTooLong, ErrProtected, ErrInTrash, ErrCodec, // appended; codes are never renumbered
 }
 
 // ErrorCode maps a sentinel error to its wire code. nil is 0; a non-sentinel error is

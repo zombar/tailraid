@@ -237,11 +237,12 @@ func (e *harnessEnv) GCNow(ctx context.Context) (repair.Result, error) {
 func (e *harnessEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	l := e.c.Leader()
 	now := e.c.Clk.Now().UnixNano()
-	for _, cmd := range []meta.Command{
+	cmds := []meta.Command{
 		{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: false, Now: now}},
 		{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: k, M: m, Now: now}},
-	} {
-		res, _, err := l.Node.Propose(ctx, cmd)
+	}
+	for i := range cmds {
+		res, _, err := l.Node.Propose(ctx, cmds[i])
 		if err == nil {
 			err = res.Err
 		}
