@@ -12,7 +12,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 PACKER_DIR="$VMS_ROOT/test/vms/packer"
 CACHE="$PACKER_DIR/cache"
 VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso}
-OPENSSH_URL=${OPENSSH_URL:-https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-ARM64.msi}
+OPENSSH_TAG=${OPENSSH_TAG:-10.0.0.0p2-Preview} # the ARM64 MSI's name carries the version, so the tag is pinned
+OPENSSH_URL=${OPENSSH_URL:-https://github.com/PowerShell/Win32-OpenSSH/releases/download/$OPENSSH_TAG/OpenSSH-ARM64-v${OPENSSH_TAG%%p*}.msi}
 TAILSCALE_MSI_VERSION=${TAILSCALE_MSI_VERSION:-1.104.1}
 TAILSCALE_MSI_URL="https://pkgs.tailscale.com/stable/tailscale-setup-$TAILSCALE_MSI_VERSION-arm64.msi"
 
@@ -41,8 +42,15 @@ build_win() {
   # the unattend CD: the answer file at its root, the virtio-net driver for the
   # installer, the installers and the key for the first logon
   local cd="$PACKER_DIR/build/unattend"
+  [ -d "$cd" ] && chmod -R u+w "$cd" # files copied off an ISO are read-only
   rm -rf "$cd" && mkdir -p "$cd/drivers"
-  cp "$PACKER_DIR/setup/autounattend.xml" "$PACKER_DIR/setup/firstlogon.ps1" "$CACHE/OpenSSH-ARM64.msi" "$CACHE"/tailscale-setup-*-arm64.msi "$cd/"
+  cp "$PACKER_DIR/setup/firstlogon.ps1" "$CACHE/OpenSSH-ARM64.msi" "$CACHE"/tailscale-setup-*-arm64.msi "$cd/"
+  # the answer file's language must be one the ISO carries: en-GB media (Microsoft names
+  # it in the file) gets en-GB, anything else the en-US the file is written with
+  case "$(basename "$iso")" in
+    *en-gb*|*en-GB*) sed -e 's/en-US/en-GB/g; s/0409:00000409/0809:00000809/g' "$PACKER_DIR/setup/autounattend.xml" > "$cd/autounattend.xml" ;;
+    *) cp "$PACKER_DIR/setup/autounattend.xml" "$cd/" ;;
+  esac
   cp "$SSH_KEY.pub" "$cd/authorized_keys"
   local mnt
   mnt=$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "$CACHE/virtio-win.iso" | awk '/\/tmp\// { print $NF; exit }')
@@ -50,17 +58,26 @@ build_win() {
   cp -R "$mnt/NetKVM/w11/ARM64" "$cd/drivers/netkvm"
   [ -d "$mnt/viorng/w11/ARM64" ] && cp -R "$mnt/viorng/w11/ARM64" "$cd/drivers/viorng"
   hdiutil detach "$mnt" >/dev/null
+  chmod -R u+w "$cd/drivers"
   rm -f "$PACKER_DIR/build/unattend.iso"
   hdiutil makehybrid -quiet -iso -joliet -default-volume-name UNATTEND -o "$PACKER_DIR/build/unattend.iso" "$cd"
 
-  local vars="$PACKER_DIR/build/efivars.fd"
-  cp "$BREW_PREFIX/share/qemu/edk2-arm-vars.fd" "$vars"
+  # the installer's "press any key to boot from CD" cannot be answered reliably (the
+  # firmware reaches it a minute into the boot, a keypress later lands on the setup
+  # window), so a copy of the ISO carries Microsoft's no-prompt boot image instead
+  local noprompt="$PACKER_DIR/build/windows-noprompt.iso"
+  mnt=$(hdiutil attach -nobrowse -readonly -mountrandom /tmp "$iso" | awk '/\/tmp\// { print $NF; exit }')
+  python3 "$PACKER_DIR/setup/noprompt.py" "$iso" "$mnt" "$noprompt" || { hdiutil detach "$mnt" >/dev/null; die "patching the ISO failed"; }
+  hdiutil detach "$mnt" >/dev/null
+  iso=$noprompt
+
+  local vars="$BREW_PREFIX/share/qemu/edk2-arm-vars.fd" # Packer copies it to build/win/efivars.fd
   rm -rf "$PACKER_DIR/build/win"
   log "building tailraid-win.qcow2 (Packer qemu; the unattended install takes 30–60 min)"
   (cd "$PACKER_DIR" && "$PACKER" build -var "iso=$iso" -var "unattend_iso=$PACKER_DIR/build/unattend.iso" \
     -var "efivars=$vars" -var "firmware=$BREW_PREFIX/share/qemu/edk2-aarch64-code.fd" windows.pkr.hcl)
   mv "$PACKER_DIR/build/win/tailraid-win.qcow2" "$IMAGES/tailraid-win.qcow2"
-  cp "$vars" "$IMAGES/tailraid-win-efivars.fd"
+  cp "$PACKER_DIR/build/win/efivars.fd" "$IMAGES/tailraid-win-efivars.fd" # the boot entry the install wrote
   log "image at $IMAGES/tailraid-win.qcow2"
 }
 

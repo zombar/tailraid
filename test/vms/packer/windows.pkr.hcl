@@ -7,9 +7,9 @@
 # by the answer file. The qemu plugin only knows ide/sata/scsi/virtio disks, so every
 # drive and device is spelled out in qemuargs. The result is tailraid-win.qcow2 plus the
 # UEFI variable store the install wrote (the boot entry lives there).
-variable "iso" { type = string }          # the Windows 11 ARM64 ISO (downloaded by hand once)
+variable "iso" { type = string }          # the Windows 11 ARM64 ISO, with the no-prompt boot image (images.sh)
 variable "unattend_iso" { type = string } # built by images.sh
-variable "efivars" { type = string }      # a writable copy of edk2-arm-vars.fd
+variable "efivars" { type = string }      # the edk2-arm-vars.fd template
 variable "firmware" { type = string }     # edk2-aarch64-code.fd
 
 source "qemu" "win" {
@@ -28,25 +28,33 @@ source "qemu" "win" {
   headless         = true
   display          = "none"
   net_device       = "virtio-net-pci"
+  # efi_boot keeps the plugin from passing -boot once=d, which qemu-system-aarch64
+  # rejects; it copies the variable store to <output>/efivars.fd, which the pflash
+  # drive below (the override replaces the plugin's own drive list) and the instances use
+  efi_boot          = true
+  efi_firmware_code = var.firmware
+  efi_firmware_vars = var.efivars
   qemuargs = [
     ["-drive", "if=pflash,format=raw,readonly=on,file=${var.firmware}"],
-    ["-drive", "if=pflash,format=raw,file=${var.efivars}"],
+    ["-drive", "if=pflash,format=raw,file={{ .OutputDir }}/efivars.fd"],
     ["-drive", "file={{ .OutputDir }}/{{ .Name }},if=none,id=nvm,format=qcow2"],
     ["-device", "nvme,serial=tailraid,drive=nvm"],
+    ["-device", "qemu-xhci"], # before the USB devices: QEMU wants the bus first
     ["-drive", "file=${var.iso},if=none,id=installer,media=cdrom,readonly=on"],
     ["-device", "usb-storage,drive=installer"],
     ["-drive", "file=${var.unattend_iso},if=none,id=unattend,media=cdrom,readonly=on"],
     ["-device", "usb-storage,drive=unattend"],
     ["-device", "virtio-net-pci,netdev=user.0"],
     ["-device", "ramfb"],
-    ["-device", "qemu-xhci"],
     ["-device", "usb-kbd"],
     ["-device", "usb-tablet"],
     ["-device", "virtio-rng-pci"],
   ]
-  # the installer's "Press any key to boot from CD": Enter a few times over the window
-  boot_wait    = "4s"
-  boot_command = ["<enter><wait3><enter><wait3><enter><wait3><enter><wait3><enter>"]
+  # no boot_command: the ISO images.sh hands over carries the no-prompt EFI boot image,
+  # so the installer starts on its own (a keypress at the wrong moment would reach the
+  # setup window's Cancel button instead)
+  boot_wait    = "1s"
+  boot_command = []
   # the answer file installs OpenSSH and the rig's key; the install plus first logon take
   # a while on first boot
   communicator     = "ssh"
