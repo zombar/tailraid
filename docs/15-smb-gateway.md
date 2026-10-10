@@ -225,6 +225,13 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   SMB byte-range locks are enforced within one gateway only.
 - **Cross-device visibility** is as for NFS: another device's writes are visible after the
   Raft commit replicates and the client asks again.
+- **A gateway restart drops the mapping for a moment.** With no durable handles, the
+  redirector loses its session when `serve` restarts and reconnects on a later access;
+  for the few seconds it remembers the failure, `T:` answers "The network path was not
+  found" (error 53) or "The specified server cannot perform the requested operation"
+  (58). Explorer and the next command recover on their own; `verify` on Windows retries
+  such errors for up to 30 s, which is how its restart-storm phase passes there (the
+  NFS clients on macOS and Linux ride out a restart without help).
 
 ## Invariants
 

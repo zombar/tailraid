@@ -821,9 +821,9 @@ func phaseMembership(ctx context.Context, r *Run) error {
 	gw := r.gateways()[0]
 	v := r.volume(gw)
 	k0, m0 := rep.Volume.K, rep.Volume.M
-	active := 0
+	active := 0 // placement targets (disks), not rows: a device holds no slot (docs/14 §9)
 	for i := range rep.Nodes {
-		if rep.Nodes[i].State == "active" && rep.Nodes[i].Live {
+		if rep.Nodes[i].Kind == "disk" && rep.Nodes[i].State == "active" && rep.Nodes[i].Live {
 			active++
 		}
 	}

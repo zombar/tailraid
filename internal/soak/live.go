@@ -80,7 +80,7 @@ func (e *LiveEnv) Volume(n NodeRef) (Volume, bool) {
 	if n.RPC != e.SelfAddr {
 		return nil, false
 	}
-	return OSVolume{Root: e.MountPath}, true
+	return OSVolume{Root: e.MountPath, Transient: TransientNetError, RetryFor: 30 * time.Second}, true
 }
 
 func (e *LiveEnv) Corrupt(ctx context.Context, n NodeRef, key string) error {
