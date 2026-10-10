@@ -92,3 +92,65 @@ func TestMember_SetVersion(t *testing.T) {
 		t.Fatalf("empty version: %v, want ErrBadMemberOp", err)
 	}
 }
+
+// A removed row keeps its ID and address for the record; any op but remove there would
+// write a dead server back into the Raft configuration (docs/02 §Lifecycle commands).
+// Invariant: I-136
+func TestMember_RemovedRowRefusesOps(t *testing.T) {
+	n := bootstrap(t, t.TempDir())
+	defer n.Close()
+	propose := func(cmd meta.Command) {
+		t.Helper()
+		res, index, err := n.Propose(ctx, cmd)
+		if err == nil {
+			err = res.Err
+		}
+		if err == nil {
+			err = n.FSM.WaitApplied(ctx, index)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	gone := meta.Node{ID: "0123456789abcdef", Name: "honker", Kind: meta.KindDevice, Addr: "100.64.0.2", RaftPort: 20480, RPCPort: 20481}
+	propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: gone}})
+	nd, ok := n.FSM.NodeByID(gone.ID)
+	if !ok {
+		t.Fatal("row not recorded")
+	}
+	propose(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: nd.Idx, State: meta.Removed}})
+	before, _ := n.FSM.Node(nd.Idx)
+	servers := func() int {
+		f := n.Raft.GetConfiguration()
+		if err := f.Error(); err != nil {
+			t.Fatal(err)
+		}
+		return len(f.Configuration().Servers)
+	}
+	want := servers()
+	for _, op := range []rpc.MemberOp{
+		{Op: "set_voter", Voter: true},
+		{Op: "set_voter"},
+		{Op: "update_addr", Addr: "100.64.0.3"},
+		{Op: "set_state", State: meta.Active},
+		{Op: "set_version", Version: "v9.9.9"},
+		{Op: "add_disk", DiskID: "abcd0123abcd0123"},
+	} {
+		op.NodeIdx = nd.Idx
+		if err := n.MemberOp(ctx, op); !errors.Is(err, ErrBadMemberOp) {
+			t.Errorf("%s on a removed row: %v, want ErrBadMemberOp", op.Op, err)
+		}
+	}
+	if got := servers(); got != want {
+		t.Fatalf("raft configuration has %d servers, want %d", got, want)
+	}
+	if after, _ := n.FSM.Node(nd.Idx); after != before {
+		t.Fatalf("removed row changed:\n%+v\n%+v", before, after)
+	}
+	if len(n.FSM.Nodes()) != 2 {
+		t.Fatalf("rows %+v", n.FSM.Nodes())
+	}
+	if err := n.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: nd.Idx}); err != nil {
+		t.Fatalf("remove stays idempotent: %v", err)
+	}
+}

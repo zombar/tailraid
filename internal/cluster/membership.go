@@ -198,6 +198,11 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		return meta.ErrNoSuchNode
 	}
 	n.log.Info("member op", "op", op.Op, "idx", op.NodeIdx, "node", nd.ID, "state", nd.State, "voter", nd.Voter)
+	if nd.State == meta.Removed && op.Op != "remove" {
+		// the row keeps a dead ID and address for the record: promote or update_addr
+		// would put that server back into the Raft configuration (I-136)
+		return fmt.Errorf("%w: node %d (%s) was removed", ErrBadMemberOp, op.NodeIdx, nd.Name)
+	}
 	propose := func(cmd meta.Command) error {
 		res, index, err := n.Propose(ctx, cmd)
 		if err == nil {
