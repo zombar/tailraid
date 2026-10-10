@@ -74,6 +74,12 @@ ticking.
       and the file is still there on the next listing (docs/15 §8)
 - [ ] Full cluster (pin a tiny budget on every disk): a copy stops with "There is not
       enough space on T:", not an I/O error
+- [ ] Trash (docs/15 §8): delete a file in Explorer; it is gone from `T:` at once and a
+      new file of that name saves; the browser UI lists it dimmed in its folder and
+      "Restore" brings it back on the next F5 with the same bytes (`certutil -hashfile`)
+- [ ] Protected (docs/15 §8): mark a folder protected in the browser UI; deleting or
+      moving a file out of it in Explorer says "Access denied" and the file stays;
+      saving over an existing file in it says "Access denied"; a new file saves
 
 ## 4. Service mode
 

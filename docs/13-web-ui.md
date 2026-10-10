@@ -4,8 +4,10 @@ The web UI is another gateway next to the NFS and SMB gateways (docs/07, docs/15
 the same vfs and FSM, on its own tailnet listener `<tsIP>:20482`. It shows the cluster the
 way `tailraid status --json` reports it (data balance across nodes, chunk integrity, the
 repairer's state) and lets a browser on any of the user's tailnet devices browse the volume,
-stream media, upload files and make folders. It is read-only for cluster administration:
-every mutating admin operation stays in the CLI.
+stream media, upload files, make folders, rename, move and delete, restore what was deleted
+(the trash of docs/02 §Apply rules), flag folders and keep a folder cached on the device
+serving the page. It is read-only for cluster administration: every mutating admin
+operation stays in the CLI.
 
 ## 1. Scope
 
@@ -18,10 +20,26 @@ every mutating admin operation stays in the CLI.
   expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
   no added disk show one cell, their own store; the block is drawn whenever any host has
   more than one target.
-- **File browser**: list, stat, stream (HTTP Range), download, upload (`PUT`) and make
-  folders. No rename, no delete: those stay on the mount.
+- **File browser**: list, stat, stream (HTTP Range), download, upload (`PUT`), make
+  folders, rename, move and delete any number of selected entries at once (one proposal
+  per entry, every entry reported on its own, §4), and a tile view next to the list with a
+  thumbnail per image, video and album (§5).
+- **Trash**: a delete from anywhere (this UI, an NFS or SMB mount) moves the entry out of
+  the namespace instead of dropping it (docs/02 §Apply rules, docs/06 §1). The share sees
+  a plain delete; this UI still lists the entry in its old folder, dimmed and dated, and a
+  banner on it restores it or deletes it for good. `trash.retention` (docs/12, 30 days)
+  purges it otherwise.
+- **Folder flags**: `protected` (the FSM refuses to delete, replace or move out anything
+  under it, from every gateway) and `nsfw` (this UI blurs its tiles and previews until
+  tapped; nothing else changes). Set from the folder menu, shown as badges.
+- **Local cache**: "Keep on this device" pins a folder so the node serving the page keeps
+  every chunk under it in its local chunk cache (docs/01 §Local chunk cache); the
+  dashboard's Cache card shows what is pinned and how much of it has arrived.
 - **Media**: audio, video and images play in the browser's own elements; the node serves
-  files as stored, with no transcoding.
+  files as stored, with no transcoding. Audio gets more (§6): a folder of tracks renders
+  as an album with its cover and tags, playback continues in a bar at the bottom while
+  the user browses anything else, with a queue, repeat and shuffle, and the lock screen
+  shows title, artist and cover through the Media Session API.
 - A single-page TypeScript app, no framework, bundled by esbuild into one committed file and
   embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`).
 - A separate listener, not a route on the RPC port: the caller set differs (same-user
@@ -72,17 +90,34 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=` | – | `{"path":"/a","entries":[{name,type,size,mtime,mode,ino,dirty?,target?}]}`, sorted by name, without macOS's `._<name>` and `.DS_Store` (I-140); `type` is `file`, `dir` or `symlink`; `mtime` RFC 3339 UTC; `dirty` only on files |
-| `GET /api/stat?path=` | – | one entry plus `path` |
-| `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted |
-| `GET`, `HEAD /files/{path}` | – | the bytes through `http.ServeContent`; `?download=1` adds `Content-Disposition: attachment` |
-| `PUT /files/{path}` | required | the whole file (`Content-Length` required, 411 without) or one part (`Content-Range: bytes a-b/total`): the bytes stream into `.<name>.tailraid-upload` beside the target and the last byte renames it over the target; 201 for a new file, 204 for an overwrite, 202 `{"offset"}` for a part that is not the last; a part whose `a` is not the temp's size → 409 `{"offset"}`; `If-None-Match: *` on an existing file → 412; more than four uploads at once → 503 `Retry-After: 2`; a size the volume cannot hold → 507 (§4) |
+| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
+| `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
+| `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
+| `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted; the shard checks of a page run concurrently and `slots` is always an array (I-161) |
+| `GET`, `HEAD /files/{path}?in=` | – | the bytes through `http.ServeContent`; `?download=1` adds `Content-Disposition: attachment`; `in=<ino>` reads inside a deleted root with the same headers |
+| `PUT /files/{path}` | required | the whole file (`Content-Length` required, 411 without) or one part (`Content-Range: bytes a-b/total`): the bytes stream into `.<name>.tailraid-upload` beside the target and the last byte renames it over the target; 201 for a new file, 204 for an overwrite (the previous version is now in the trash, §4), 202 `{"offset"}` for a part that is not the last; a part whose `a` is not the temp's size → 409 `{"offset"}`; `If-None-Match: *` on an existing file → 412; more than four uploads at once → 503 `Retry-After: 2`; a size the volume cannot hold → 507 (§4); an overwrite under a protected folder → 403 |
 | `POST /api/mkdir` `{"path"}` | required | 201 `{"path"}`; parents are created; an existing entry → 409 |
+| `POST /api/rename` `{"path","name"}` | required | 200 `{"path"}` (the new path); a taken name → 409; a protected folder, or a replace under one → 403; the root → 400 |
+| `POST /api/move` `{"paths":[…],"to"}` | required | 200 `{"moved":[…],"failed":[{path,error,status}]}`; `to` must be a live directory (404/400 for the whole request otherwise); every path is tried on its own, one `Rename` each, never over an existing entry (409 for that item); at most `MaxBatch` (1000) paths, 413 above, 400 for none |
+| `POST /api/delete` `{"paths":[…]}` | required | 200 `{"deleted":[…],"failed":[…]}`; each entry lands in the trash (a folder as one unit); 403 for an item under a protected folder; the same `MaxBatch` bound |
+| `POST /api/restore` `{"ino","to"?,"name"?}` | required | 200 `{"path"}`; `to` and `name` default to the original place; a taken name → 409 `{"error","taken":true}`; an original parent that is itself deleted → 409 `{"error","in_trash":true}` (the page then asks for a destination); not a deleted root → 404 |
+| `POST /api/purge` `{"ino"}` or `{"all":true}` | required | 204; permanent: the entry's references are dropped and GC reclaims its chunks after grace (docs/06); `all` proposes purges until the trash is empty |
+| `POST /api/flags` `{"path","protected"?,"nsfw"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409) |
+| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg` (§5); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a video or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
+| `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser grabbed from the middle of a video (§5): 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
+| `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
+| `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
+| `GET /api/pins` | – | `{"size","used","pinned_bytes","pins":[{path,bytes,cached_bytes}]}`, the same object `/api/status` carries as `cache` |
 
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
   `ErrNotExist` 404 · `ErrExist` 409 · `EISDIR`, `ENOTDIR`, `EINVAL`, `ENAMETOOLONG` 400 ·
   `EROFS` (stale gateway, docs/02) 503 with `Retry-After: 5` · `ENOSPC` 507 · `EIO` 503 ·
-  `admin.ErrAmbiguous` 409 · anything else 500, logged.
+  `admin.ErrAmbiguous` 409 · `ErrProtected` 403 · `ErrInTrash` 409 · `ErrCodec` (a member
+  too old for the command, docs/12 §6) 503 with `Retry-After: 30` · anything else 500,
+  logged.
+- The batch routes answer 200 whenever the request itself was valid and report every item:
+  an item is moved or deleted whole or not at all, a failure of one item changes nothing
+  about the others, and the page shows the failures by name (I-159).
 - Every `/files/` response carries `Accept-Ranges: bytes`, `X-Content-Type-Options: nosniff`
   and `Content-Security-Policy: sandbox`: a stored HTML or SVG file opened from the volume
   renders inert and cannot call the API as the viewer.
@@ -97,7 +132,14 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 - Paths are cleaned with `meta.SplitPath` (which resolves `.` and `..`, collapses repeated
   separators and maps `\` to `/`) and resolved only through the vfs, so a request can never
   name anything outside the volume tree and the package touches no host path. The canonical
-  `/a/b` form is echoed back. File operations on the root or a directory are 400.
+  `/a/b` form is echoed back. File operations on the root or a directory are 400. The
+  reserved folder `/.tailraid` (§5) is left out of every listing and refused as the target
+  of every user operation with 400.
+- Request bodies are bounded before they are decoded (I-116): 4 KiB for the routes that
+  name one entry (`mkdir`, `rename`, `restore`, `purge`, `flags`, `pin`), 256 KiB for
+  `move` and `delete` (a batch of `MaxBatch` paths of `MaxPathLen` bytes does not fit,
+  which is the point: the page sends a larger selection in several requests), 256 KiB
+  for a thumbnail.
 
 ## 4. File semantics
 
@@ -133,15 +175,109 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   (docs/04 §9).
 - A new file answers 201, an overwrite 204. `POST /api/mkdir` creates parents like
   `MkdirAll`. Both are refused with 503 on a stale gateway (`EROFS`) and change nothing.
+- **Trash.** A delete is `OpTrash` (docs/02): the entry leaves its parent's name table,
+  keeps its inode, its chunks and their references, and is indexed under the parent it
+  came from. The NFS and SMB gateways see exactly a delete: LOOKUP fails, READDIR omits
+  the name, the handle is stale, a new entry may take the name at once; only the free
+  space does not move until the purge. This UI lists a folder's deleted roots after its
+  live entries with `deleted_at` and `purge_at`, dimmed, and addresses them by inode:
+  `in=<ino>` on `ls`, `stat`, `files`, `thumb` and `tags` reads inside the deleted root,
+  so a deleted folder is browsed and a deleted video plays as before the delete, from the
+  same bytes (I-158). A folder deleted from a mount with `rm -rf` arrives piece by piece
+  and is folded into one entry when the folder itself is deleted (docs/02), so it restores
+  with one tap. Restore puts the entry back under its original name, or under the name or
+  into the folder the page asks for after a 409, with the same `(ino, gen)`, so an NFS
+  handle that went stale is valid again. "Delete now" purges one entry; the retention
+  purge runs on the leader (docs/06 §2). An overwrite, whether a `PUT` of an existing
+  name here or an editor's save-by-rename on a mount, puts the previous version in the
+  trash under its old name; the upload's own temp and the other ephemeral names of
+  docs/06 §1 never enter it.
+- **Protected and nsfw** are the inode flags of docs/01, set with `OpSetAttr` on a
+  directory. The FSM enforces `protected` for every gateway (docs/02 §Apply rules,
+  I-154): this UI greys out Delete and Move for a selection that touches a protected
+  folder and names it in the tooltip, and shows the server's 403 for anything it did not
+  catch. `nsfw` has no meaning to the FSM; this UI blurs the tiles and the viewer of
+  everything under the folder until the user taps "show" (I-163). Both flags are
+  inherited for display: `ls` and `stat` carry the effective value next to the entry's
+  own.
+- **Pins** are local state of the node serving the page (`<data_dir>/pins.json`, never in
+  Raft): a pinned folder's chunks are prefetched into the node's chunk cache and kept out
+  of its eviction, renames keep the pin (it is stored by inode), and `/api/pins` and the
+  Cache card report how much of each pin has arrived (docs/01 §Local chunk cache, I-162).
+  A pin is "Keep on this device" in the folder menu, for the device whose URL is open.
 
-## 5. Status cache and chunk drill-down
+## 5. Tiles and thumbnails
+
+The tile view (`.ftiles`) shows one tile per entry with a thumbnail where one exists:
+images, videos, audio files with a picture, and folders of music through their first
+track's cover. Thumbnails live in the volume so every device shares them:
+`/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, at most 320 px wide, written through the
+same vfs path as an upload (temp beside the target, one `Rename`), so a thumbnail is a
+file like any other: replicated, erasure-coded and deduplicated. `/.tailraid` is a plain
+folder on the mount, left out of this UI's listings and refused as a target of user
+operations (400). The key carries `Version`, which bumps on every commit, so a changed
+file gets a new thumbnail and the hourly sweep (docs/06 §3) removes any whose
+`(ino, gen, version)` no longer names a file (I-160).
+
+- **Images** are made by the node on the first `GET /api/thumb` for the file: decoded
+  with Go's own `image/jpeg`, `image/png`, `image/gif` and `golang.org/x/image/webp`,
+  scaled with `x/image/draw`, encoded as JPEG at quality 80 and stored. Two decodes run at
+  a time and a picture above 64 megapixels is refused (415) rather than decoded: the
+  decode cost is bounded by the pixel count, which the header gives before any pixel.
+  HEIC has no pure-Go decoder; those tiles stay generic.
+- **Videos** have no pure-Go decoder either, so the browser makes the thumbnail with the
+  decoder it already uses to play the file: the page loads the file into an off-screen
+  `<video preload="metadata">`, seeks to half its duration, draws the frame on a 320-px
+  canvas, encodes a JPEG and `PUT`s it with the file's `Version`. The node stores it like
+  an image thumbnail and every later tile on every device reads it back. A video the
+  browser cannot decode (mkv, avi where no decoder exists) keeps the generic tile.
+- **Audio** answers its embedded picture (§6), else a `cover.*`/`folder.*` sibling, scaled
+  like an image. A folder's own tile uses its first audio entry by name that has a
+  picture (`dir.cover`), chosen the same way on every node (I-165).
+- The page loads thumbnails lazily (three at a time as tiles scroll into view) and never
+  more than one `PUT` per file per version; a tile under an nsfw folder draws its
+  thumbnail blurred.
+
+## 6. Audio
+
+A folder whose audio files outnumber its other files renders as an album (`.album`): the
+cover, the album and artist from the tags of its first track, the year, the track count
+and the total length once the browser has reported each file's duration, then the tracks
+in track order with their titles. Tags come from `GET /api/tags`, read by the node with
+`github.com/dhowden/tag` (ID3v2 and ID3v1, MP4 atoms, FLAC and Ogg comments; pure Go) over
+at most the first 10 MiB of the file (an ID3v2 tag with its picture) and its last 128 B
+(ID3v1), so a tag read never streams a file; a file without tags, or with tags the parser
+rejects, answers empty fields (I-164). The tile view and the list use the same tags for
+titles where it helps and never hide the file name.
+
+Playback belongs to a bar at the bottom of the page (`.nowbar`) that the router never
+touches: a track started anywhere keeps playing while the user browses other folders,
+the dashboard or a video page (which pauses it). The bar carries the cover, title and
+artist — album, previous · play/pause · next, a seek slider with the elapsed and total
+time, repeat (off, all, one) and shuffle, and opens into the queue. Playing a track queues
+its folder in track order; "Play all" and "Shuffle" on an album, "Play" and "Add to queue"
+on a selection do the same for any set of audio files or folders. The next track is
+preloaded in a second hidden `<audio>` and swapped in when the first ends, so an album
+plays through without a gap where the browser allows it. `navigator.mediaSession` carries
+the title, artist, album and cover and the play, pause, previous, next, seek-to and 10-s
+seek actions, which is what the lock screen and the headphone buttons use. The current
+track and position survive a reload through `sessionStorage`; the queue lives in the tab.
+Keys: space play/pause, `←`/`→` seek 10 s, shift with them previous/next, `q` the queue.
+
+## 7. Status cache and chunk drill-down
 
 `admin.Build` walks every chunk (`ScanHealth`). The handler encodes the report once and
 serves that body for 2 s, single-flight under a mutex, so several tabs polling at 5 s cost
 one walk. `/api/chunks` issues one HEAD per live slot per chunk with a 3 s timeout
-(`admin.DescribeChunk`), which is why it pages: 64 chunks per call by default.
+(`admin.DescribeChunk`), which is why it pages: 64 chunks per call by default. The HEADs of
+one page run concurrently, sixteen at a time, so a page of 64 chunks at `3+2` costs the
+tailnet round trip a few times over rather than 320 times in a row (the sequential form
+took 5.6 s on a four-node tailnet, with nothing on screen meanwhile); the panel shows a
+loading row at once, keeps the rows it has when a later page fails, and is built once per
+file so the page's second draw (after the folder listing arrives) re-attaches it instead
+of discarding a panel the user had opened (I-161).
 
-## 6. Build and assets
+## 8. Build and assets
 
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
 `tools.mod`, no node or npm anywhere) and writes `internal/webui/dist/app.js`, which is
@@ -150,11 +286,12 @@ the committed file is stale; it is part of `make check` and CI. The stylesheet
 `src/app.css` and `static/index.html` are hand-written and embedded as they are. esbuild
 strips types; a `tsconfig.json` is kept so editors type-check.
 
-## 7. Non-goals
+## 9. Non-goals
 
 User management and per-user access control, mutating admin operations from the browser
 (repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
-loopback, transcoding, rename and delete (for now), thumbnails, search.
+loopback, transcoding, search, saved playlists, a queue shared between tabs or devices,
+server-side video decoding, versions beyond the one the trash keeps.
 
 ## Design
 
@@ -206,9 +343,11 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 - Spacing steps 4 / 8 / 12 / 16 / 24; `--gutter` 16 px on every width; `main` max 1100 px.
 - Radius 6 px; pills 999 px. Borders are 1 px `--line`. No shadows except the toast.
 - Sections stack in one column with 24 px gaps; inside a section 12 px. Cards and tiles sit
-  in `auto-fill` grids (`minmax(320px, 1fr)` cards, `minmax(140px, 1fr)` tiles) so a phone
-  gets one column without a media query. Breakpoints only hide: 480 px drops the mtime
-  column and the header's node text.
+  in `auto-fill` grids (`minmax(320px, 1fr)` cards, `minmax(140px, 1fr)` stat tiles,
+  `minmax(196px, 1fr)` file tiles, five to a row at full width) so a phone gets one
+  column without a media query.
+  Breakpoints only hide or loosen: 480 px drops the mtime column and the header's node
+  text and lets the file tiles pack two to a row.
 - Touch targets ≥ 40 px (buttons, tabs, file rows 44 px). Focus is a 2 px accent outline.
 - No horizontal page scroll at 360 px: every grid child has `min-width: 0`, names use
   `overflow-wrap: anywhere`, the file table is `table-layout: fixed`.
@@ -237,17 +376,35 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Warning icon | `.warn-icon` | the warnings strip's amber `!` disc at 14 px, inline after a name; the title says why (a target on the same physical disk as others: they fail together) |
 | Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), then the slot counts and used of budget; at ≤ 480 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
 | Slot cell | `.cell` | present (green), `warn` `!` live but absent, `bad` `×` dead, `unplaced` dashed, `unverified` 50 % |
-| Panel | `details.panel` | collapsed by default; summary names the count |
+| Panel | `details.panel` | collapsed by default; summary names the count; a `.loading` row ("loading 64 of 1,946…") while a page is in flight, a "Retry" button in the error row |
 | Empty / error | `.empty`, `.error` | "empty folder"; the error block quotes the server's `error` string and status |
+| View switch | `.toolbar .seg` > two `button[aria-pressed]` | list / tiles; remembered in `sessionStorage` |
+| Folder menu | `.toolbar details.menu` > `summary` + `.menu-body` of `label.menu-row` (checkbox + text + `.small.dim` note) | Protect · Mark nsfw · Keep on this device; a row is disabled with its reason on the root and inside the trash |
+| Flag badges | `.badge.lock`, `.badge.nsfw`, `.badge.pin` | after the breadcrumb's last segment (effective flags) and in rows and tiles (own flags); mono words `protected`, `nsfw`, `kept here` |
+| Select box | `td.sel` / `.ftile .sel` > `input[type=checkbox]` | the header box selects all; shift-click selects a range; a selected row is `tr.selected`, a selected tile `.ftile.selected` |
+| Selection bar | `.selbar` > `.count` + buttons + `.spacer` + Clear | a raised surface (surface background, hairline border, an accent bar on the left, the count in accent mono) fixed above the bottom edge, shown while the selection is non-empty; "3 selected · Delete · Move to… · Rename · Play · Add to queue · Clear"; Rename only with one entry; Delete and Move disabled with the folder's name in the title when the selection touches a protected folder; Play and Add to queue only when every entry is audio or a folder |
+| Folder picker | `dialog.picker` > `.crumbs` + `ul.picker-list` > `li` (+ `button`) + `.picker-actions` | the move destination; the current folder and the selection's own subtree are disabled; Enter moves, Escape closes |
+| Rename form | `.inline-form.rename` | the new-folder form with the entry's name pre-filled and selected up to the extension |
+| Deleted row / tile | `tr.deleted`, `.ftile.deleted` | dimmed to `--dim`, a `.badge` "deleted · 27 d" after the name, no dirty marker, links lead into the trash routes |
+| Trash banner | `.banner.deleted` > text + `.actions` (Restore · Delete now) | above a deleted folder's listing and a deleted file's view: "Deleted 3 d ago · gone for good in 27 d"; after a 409 the text becomes "`Day 2` is taken in `Concerts 2024` · restore under another name" and the rename form takes the banner's next line (no nested box), or the picker opens for a parent that is itself deleted |
+| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img`, or the icon) + `.tname` + `.tmeta` | `auto-fill, minmax(196px, 1fr)` with a 16 px gap: five per row at the page's full width, four as it narrows, two on a phone (`minmax(140px, 1fr)` under 480 px); the thumb is 16:9, letterboxed on `--surface`; `dir`, `selected`, `dirty` (amber "syncing" in `.tmeta`), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (glyph badges in the corner), `playing` (audio) |
+| NSFW veil | `.thumb.nsfw`, `.viewer.nsfw` > `.veil` | `filter: blur(14px) scale(1.1)` inside `overflow: hidden`; the veil reads "nsfw · tap to show"; `.revealed` removes both for the session |
+| Album | `section.album` > `.album-head` (`img.cover`, `h1`, `.artist`, `.meta`) + `table.tracks` (`.no`, `.title`, `.dur`) | the playing row is `tr.playing` with the equaliser glyph in `.no`; "Play all" and "Shuffle" are toolbar buttons |
+| Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, 56 px, hidden until something plays (`hidden`); `expanded` shows the queue panel above it; at ≤ 480 px the seek drops under the titles and the cover shrinks to 40 px; the selection bar sits above it when both show |
+| Queue | `.queue` > `ol` > `li.qrow` (`.no`, `.title`, `.artist`, `.dur`, remove button) | the current item is `li.playing`; items can be removed; "Clear" empties it |
+| Cache card | `.card.cache` > `.name-row` + bar rows + `.pins` > `.pin-row` | used and pinned of `cache.size`; one row per pin: path, a bar of cached over total, the figures; `warn` when the data disk is under 20 % free |
 
 ### Copy
 
 Sentence case everywhere; no title case, no all-caps. Short labels: "no leader", "last scan
 42 s ago", "empty folder", "37 missing". Relative time under 24 h, then `2026-10-08 14:03`.
 Binary units with one decimal (1.5 GiB). Counts with thousands separators. Durations as the
-server prints them (`3m0s`, `12ms`). Errors say what and why, quoting the server: "mkdir
-photos: already exists (409)". Buttons state the action: "Upload", "New folder", "Download".
-Tooltips on the health pill quote the degraded-operation table of docs/00.
+server prints them (`3m0s`, `12ms`); track times as `m:ss`. Errors say what and why,
+quoting the server: "mkdir photos: already exists (409)". Buttons state the action:
+"Upload", "New folder", "Download", "Restore", "Delete now", "Move to…". The trash banner
+counts days: "Deleted 3 d ago · gone for good in 27 d". A refusal names the cause:
+"protected: unprotect Concerts 2024 to delete". Tooltips on the health pill quote the
+degraded-operation table of docs/00.
 
 ### Charts
 
@@ -280,6 +437,25 @@ colour-alone. No dual axes, no stacked bars, no pie.
    an album of m4a plays through; image prev/next; no horizontal scroll on any route.
 7. A tagged device and another user's device get 403; `tailraid status` prints the URL.
 8. `.mkv`, `.flac` and `.avi` show the decoder note; a stored `.html` opens inert.
+9. Tiles on the phone: a folder of 200 photos and videos fills as it scrolls, no
+   horizontal scroll, the first video tiles appear within a few seconds of the page and
+   are already there on the laptop afterwards; an nsfw folder's tiles are blurred until
+   tapped; a protected folder shows the lock.
+10. Trash round trip: `rm` a file on the mount, find it dimmed in the browser, restore it,
+    `sha256` matches; `rm -rf` a folder on the mount and restore it with one tap; delete a
+    folder in the browser and confirm it is gone from the mount at once, then "Delete now"
+    and watch `tailraid status` reclaim after grace.
+11. Protected: `rm` under a protected folder says "Operation not permitted" on macOS and
+    Linux and "Access denied" on Windows; an upload of a new name into it succeeds; a
+    re-upload of an existing name is refused with the reason.
+12. Select ten entries across pages of the list, move them to another folder, rename one;
+    a move onto a taken name reports that one entry and moves the rest.
+13. Album: an album plays through with the screen locked; the lock screen shows title,
+    artist and cover and its buttons skip tracks; the next track starts without a gap in
+    Safari on iOS and Chrome on Android; browsing the dashboard while playing keeps the
+    bar; a reload resumes at the same position; seek on a 1 GB flac.
+14. Pin a folder on the laptop, wait for the Cache card to show it complete, stop every
+    other node, and play a file from it.
 
 ## Invariants
 
@@ -334,6 +510,48 @@ colour-alone. No dual axes, no stacked bars, no pie.
   `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
   refuses every other with `421` before authorization; the index page's CSP contains
   `frame-ancestors 'none'`; `/api/status` never carries the join token.
+- **I-158** — The web UI lists a folder's deleted roots in that folder with their
+  `deleted_at` and `purge_at`, after the live entries; `ls`, `stat`, `files`, `thumb` and
+  `tags` with `in=<ino>` read inside a deleted root and `GET /files` there returns exactly
+  the bytes the file returned before its delete; `restore` returns the entry with the
+  same `(ino, gen)` under its original name, or under the name or into the live folder
+  the request gives, and answers 409 naming the cause (`taken`, `in_trash`) otherwise;
+  `purge` of a deleted root drops every reference its files held.
+- **I-159** — `move` and `delete` try every path of the request on its own and answer
+  200 with each path under `moved`/`deleted` or under `failed` with its error and
+  status; an entry is moved or deleted whole or not at all, a failing entry changes
+  nothing about the others, `move` never replaces an existing entry, and a request with
+  no path or more than `MaxBatch` paths is refused as a whole (400, 413) before any entry
+  is touched.
+- **I-160** — A thumbnail is stored only at `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`
+  and served only from there; the node generates one itself only for an image it can
+  decode within 64 megapixels, two at a time; a `PUT` is accepted only as JPEG of at most
+  256 KiB for the file's current `Version`, else 415 or 409; `/.tailraid` is absent from
+  every listing and refused as the target of every user operation with 400; and the
+  sweep removes a thumbnail whose `(ino, gen, version)` no longer names a file.
+- **I-161** — `/api/chunks` issues the shard checks of one page concurrently, at most
+  sixteen in flight, in report order, and every report carries `slots` as an array
+  (empty for a hole or an unknown hash), never `null`; the integrity panel is built once
+  per file view and survives the view's second draw.
+- **I-162** — A pin is local to the node that holds it (`<data_dir>/pins.json`, stored by
+  inode so a rename keeps it) and survives its restart; a pinned folder's chunks are
+  fetched into the node's chunk cache and never evicted from it while the pin stands,
+  so with every other holder dead a read under the pin is served from the cache; an
+  unpin returns the entries to the LRU; `/api/pins` and `status` report each pin's bytes
+  and cached bytes.
+- **I-163** — `ls` and `stat` carry a folder's effective `protected` and `nsfw` (its own
+  or an ancestor's) next to each entry's own flags; `POST /api/flags` accepts directories
+  only, never the root and never inside the trash; a mutation the FSM refuses with
+  `ErrProtected` is 403 with the reason, and no request from the web UI can delete,
+  replace or move out an entry under a protected folder.
+- **I-164** — `/api/tags` reads at most the first 10 MiB and the last 128 B of an audio
+  file, answers 200 with empty fields for a file without tags or with tags that do not
+  parse, never 500, and reports `has_cover` true exactly when `/api/thumb` would serve
+  the file's embedded picture.
+- **I-165** — The thumbnail of an audio file is its embedded picture, else a `cover.*` or
+  `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
+  its first audio entry by name that has a picture, the same on every node, and absent
+  when none has one.
 
 ## Tests
 
@@ -350,5 +568,13 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
 | I-143 | `TestBrowserCommand_PerOS`, `TestCLI_Dashboard` |
 | I-140 | `TestWebUI_Ls_HidesOSMetadata` |
+| I-158 | `TestStub_I_158` (planned: TestWebUI_Delete_LandsInTrash_ListedInPlace, TestWebUI_TrashAddressing_LsStatGet, TestWebUI_Restore_TakenName_409_ThenAs, TestWebUI_Purge_FreesRefs, TestWebUI_Put_OverwriteKeepsPreviousInTrash) |
+| I-159 | `TestStub_I_159` (planned: TestWebUI_Rename_Table, TestWebUI_Move_PerItemResults, TestWebUI_Batch_SizeBoundaries, TestWebUI_BodyCaps_AllMutatingRoutes) |
+| I-160 | `TestStub_I_160` (planned: TestWebUI_Thumb_Image_Generated_Cached_Hidden, TestWebUI_Thumb_Put_Boundaries, TestWebUI_Thumb_SweptWhenFileChanges) |
+| I-161 | `TestStub_I_161` (planned: TestDescribeChunksPage_Concurrent, TestWebUI_Chunks_HolesHaveSlots) |
+| I-162 | `TestStub_I_162` (planned: TestCache_PinnedNeverEvicted, TestPins_PrefetchFillsThenReadsOffline, TestPins_RenameKeepsPin, TestPins_UnpinReleases, TestPins_SurviveRestart, TestWebUI_Pins) |
+| I-163 | `TestStub_I_163` (planned: TestWebUI_Flags_DirsOnly_Effective, TestWebUI_Mutations_ProtectedIs403) |
+| I-164 | `TestStub_I_164` (planned: TestWebUI_Tags_Table, TestWebUI_Tags_ReadBounded) |
+| I-165 | `TestStub_I_165` (planned: TestWebUI_Thumb_AudioCoverFallbackOrder, TestWebUI_Ls_DirCoverDeterministic) |
 
-`TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
+`TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3. The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (docs/09 §2).
