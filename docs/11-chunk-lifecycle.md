@@ -182,6 +182,7 @@ these numbers.
 - E-123 a plan holds more than `FileDirtyHi` bytes of chunks (batch commit)
 - E-124 a disk fails or is closed (marker missing) while its host stays live (14 §4)
 - E-125 a host or disk joins, or a drain ends, so a placement within the host cap exists for a chunk that exceeds it (14 §7)
+- E-126 a shard RPC to a node fails at the transport level, or a PUT to it outlasts the straggler grace (05 §6)
 
 **5. Transition table.**
 
@@ -306,6 +307,8 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-111 | Committed | E-97 shard file missing | Degraded | GET 404 → treated as slot missing → repair | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-112 | Committed (S3 slot) | E-98 object missing | Degraded | HEAD/GET 404 → repair re-PUTs | `TestS3Node_ObjectMissing_Repaired` |
 | L-198 | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | ErrCorrupt on the GET → bad slot → repair re-PUTs; outside the budget the slot is only HEADed and the corruption waits for a read | `TestS3Node_ScrubFetchesSample` |
+| L-209 | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | the PUT is cancelled and awaited (L-190), its slot re-placed or recorded 0, and its node marked suspect (I-169, I-170) | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
+| L-210 | Durable | E-126 | Unreachable (until the next successful probe of its host) | `Live()` excludes the host and its disks: reads and placement skip it without a dial, as L-131; the hold-downs do not start | `TestProber_SuspectUntilNextProbe`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |
 | L-113 | Dirty | E-100 C1 crash before WAL fsync | (none) or Dirty | write not acked; after restart content is exactly pre-write; torn record ignored | `TestOverlay_RestartReplaysDirtyWALs`, `TestWAL_ReplayStopsAtTornTail` |
 | L-114 | Dirty | E-101 C2 crash after WAL fsync | Dirty (replayed) | acked; replay on restart; flushed; readable everywhere | `TestOverlay_RestartReplaysDirtyWALs` |
 | L-115 | Uploading | E-102 C3 node crash, temp written | Uploading (slot fails) | temp never visible; removed on `Store.Open` | `TestCrash_AtEveryPoint` |

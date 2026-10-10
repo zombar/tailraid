@@ -29,6 +29,7 @@ type NodeReport struct {
 	Leader     bool         `json:"leader"`
 	Self       bool         `json:"self"`
 	Live       bool         `json:"live"`
+	Suspect    bool         `json:"suspect,omitempty"` // a shard RPC to it failed; excluded until its next good probe (docs/05 §6)
 	DeadFor    string       `json:"dead_for,omitempty"`
 	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT        string       `json:"rtt,omitempty"`
@@ -240,6 +241,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		}
 		if nd.Kind == meta.KindS3 {
 			r.S3 = &S3Report{Endpoint: nd.S3Endpoint, Bucket: nd.S3Bucket, Prefix: nd.S3Prefix, Region: nd.S3Region, PathStyle: nd.S3PathStyle}
+		}
+		if p != nil {
+			r.Suspect = p.IsSuspect(nd.Idx)
 		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS

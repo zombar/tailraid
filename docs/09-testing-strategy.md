@@ -334,7 +334,12 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   cold-read MiB/s reported, readahead having served every chunk but the first window
   (`readahead_joined`, docs/12 §8), fetched no more than the file's chunks, and never more
   than `ReadAhead` prefetches in flight in any status sample; on a rig with one gateway the
-  readahead checks are skipped when the client's own cache served the read; I-166). The compose rig gives four nodes two disks each, one
+  readahead checks are skipped when the client's own cache served the read; then, where
+  the environment can partition, the writing gateway is cut off from one holder a quarter
+  of the way through a second file: the gateway marks the holder suspect within the
+  straggler grace and before the prober's threshold, the chunks committed after the cut
+  hold no slot on it, the mark clears on the first good probe after the heal, repair fills
+  the degraded chunks and the file reads back whole; I-166, I-169, I-170). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it) and an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket; `cmd/soak -phases 15` runs a subset of

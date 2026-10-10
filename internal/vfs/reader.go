@@ -81,18 +81,27 @@ const (
 	hedgeDefault = 200 * time.Millisecond
 )
 
-// hedgeDelay is the p95 of recent GETs clamped to [hedgeMin, hedgeMax], or hedgeDefault
-// before any GET completed.
-func (r *latencyRing) hedgeDelay() time.Duration {
+// p95 is the 95th percentile of the recorded durations; ok is false before any was.
+func (r *latencyRing) p95() (d time.Duration, ok bool) {
 	r.mu.Lock()
 	n := r.n
 	s := append([]time.Duration(nil), r.d[:n]...)
 	r.mu.Unlock()
 	if n == 0 {
-		return hedgeDefault
+		return 0, false
 	}
 	slices.Sort(s)
-	return min(max(s[(n*95+99)/100-1], hedgeMin), hedgeMax)
+	return s[(n*95+99)/100-1], true
+}
+
+// hedgeDelay is the p95 of recent GETs clamped to [hedgeMin, hedgeMax], or hedgeDefault
+// before any GET completed.
+func (r *latencyRing) hedgeDelay() time.Duration {
+	p, ok := r.p95()
+	if !ok {
+		return hedgeDefault
+	}
+	return min(max(p, hedgeMin), hedgeMax)
 }
 
 // fetchCall is a fetch in progress that later readers of the same chunk wait on.

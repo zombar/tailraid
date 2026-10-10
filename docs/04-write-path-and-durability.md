@@ -214,7 +214,13 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    the original PUTs of re-placed slots are **cancelled** and the chunk waits for every PUT
    goroutine to return before it is decided, so no straggler keeps a shard buffer alive
    past its chunk (a late shard that landed anyway is an orphan swept after grace, L-190,
-   I-83). Slots still missing are recorded as `0` (degraded). If acks < k → return an
+   I-83). Once k acks are in, the wait for the rest is capped by a **straggler grace** of
+   `clamp(4 × p95 of recent PUT durations, StragglerMin 2 s, PutDeadline)` measured from
+   the k-th ack: a PUT still pending at the grace is treated exactly as one pending at the
+   deadline, and its node is marked *suspect* (docs/05 §6) so the next chunk places
+   around it instead of waiting on it again (I-169, L-209). The floor keeps a 256 KiB/s
+   DERP peer (1.4 s for a 350 KiB shard) in the stripe; the multiplier follows a slow
+   cluster. Slots still missing are recorded as `0` (degraded). If acks < k → return an
    error; the plan stays dirty and is retried with backoff (1 s doubling to 60 s); when
    every failed slot was `ErrFull` the error wraps `chunk.ErrFull` so the client sees
    `ENOSPC` rather than `EIO` (I-79). An ack means the receiver fsynced file and directory
@@ -416,6 +422,14 @@ the WAL cap.
   compaction or reopen that fails, every call on that WAL returns `ErrWALClosed` until the
   gateway restarts and replays the log, and replay reports the bytes it discarded after
   the last intact record.
+- **I-169** — After a chunk's k-th ack the flusher waits for its remaining PUTs at most
+  the straggler grace, `clamp(4 × p95 of recent PUT durations, StragglerMin, PutDeadline)`,
+  and a PUT still pending then is cancelled, awaited and its slot re-placed or recorded 0
+  exactly as at the deadline, its node marked suspect; the wait for the first k acks is
+  unchanged.
+- **I-171** — A shard GET's deadline for the reply body is `callTimeout(Content-Length)`
+  from the reply's own headers, never the `MaxPayload` allowance; a reply announcing more
+  than `MaxPayload + HeaderSize` bytes, or no length, is refused before any of it is read.
 - **I-168** — Concurrent appends to one inode's WAL share fsyncs: an append returns
   success only after an fsync that began after its record was written has succeeded, one
   fsync may cover any number of records, a record's in-memory effect is applied only after
@@ -442,6 +456,8 @@ the WAL cap.
 | I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
+| I-169 | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks`, `TestFlusher_StragglerGrace_Table`, `TestFlusher_StragglerGrace_NotBeforeKAcks` |
+| I-171 | `TestClient_GetDeadline_FromContentLength` |
 | I-168 | `TestWAL_GroupCommit_OneFsyncCoversConcurrentAppends`, `TestWAL_GroupCommit_FailedFsyncFailsEveryWaiter`, `TestWAL_GroupCommit_LateAppendWaitsForNextFsync`, `TestOverlay_PendingWrite_NotVisibleUntilFsynced`, `TestOverlay_FailedGroupFsync_DropsEveryPendingWrite`, `TestOverlay_CommitFlushed_WaitsForPendingAppend`, `TestOverlay_WriteDoesNotHoldInodeLockDuringFsync`, `TestOverlay_TruncateDuringPendingAppend_MatchesReplay` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |

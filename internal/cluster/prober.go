@@ -111,6 +111,7 @@ type Prober struct {
 	mu      sync.Mutex
 	probes  map[meta.NodeIdx]*Probe
 	s3Tried map[meta.NodeIdx]time.Time // last S3 probe sent, good or not
+	suspect map[meta.NodeIdx]time.Time // hosts marked suspect, by host idx, until their next good probe (I-170)
 	events  chan Event
 
 	fillAfter, evictAfter time.Duration
@@ -274,6 +275,7 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 		p.probes[idx] = pr
 	}
 	if ok {
+		delete(p.suspect, idx) // a good probe clears the mark (I-170)
 		wasDead := !pr.DeadSince.IsZero()
 		pr.LastOK, pr.RTT, pr.Applied, pr.Version, pr.Dev = now, rtt, h.Applied, h.Version, h.Dev
 		pr.Free, pr.FS = 0, ""
@@ -344,6 +346,43 @@ func (p *Prober) holdDowns(now time.Time) {
 	}
 }
 
+// hostOf is the device that serves idx: itself for a device or a bucket, its host for a
+// disk.
+func (p *Prober) hostOf(idx meta.NodeIdx) meta.NodeIdx {
+	if nd, found := p.node.nodeByIdx(idx); found && nd.Kind == meta.KindDisk {
+		return nd.Host
+	}
+	return idx
+}
+
+// Suspect marks idx's host suspect (docs/05 §6, I-170): a shard RPC to it failed at the
+// transport level or a PUT to it outlasted the straggler grace. IsLive answers false for
+// the host and its disks until the first probe of it that succeeds after the mark. This
+// host is never suspect of itself.
+func (p *Prober) Suspect(idx meta.NodeIdx) {
+	host := p.hostOf(idx)
+	if self, ok := p.node.SelfIdx(); ok && self == host {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.suspect == nil {
+		p.suspect = map[meta.NodeIdx]time.Time{}
+	}
+	if _, already := p.suspect[host]; !already {
+		p.suspect[host] = p.clk.Now()
+	}
+}
+
+// IsSuspect reports whether idx's host is marked suspect.
+func (p *Prober) IsSuspect(idx meta.NodeIdx) bool {
+	host := p.hostOf(idx)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.suspect[host]
+	return ok
+}
+
 // Snapshot returns a copy of the probe table.
 func (p *Prober) Snapshot() map[meta.NodeIdx]Probe {
 	p.mu.Lock()
@@ -362,6 +401,9 @@ func (p *Prober) Snapshot() map[meta.NodeIdx]Probe {
 func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	if self, ok := p.node.SelfIdx(); ok && self == idx {
 		return true
+	}
+	if p.IsSuspect(idx) {
+		return false // until its host's next good probe (docs/05 §6, I-170)
 	}
 	// this host's own disks: live iff the host's own health lists them OK, without an age
 	// test, since nothing probes self over the network (docs/14 §4)
