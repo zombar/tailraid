@@ -5,11 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/sysfs"
 )
 
@@ -177,5 +180,61 @@ func TestNode_Rebudget_PerTarget(t *testing.T) {
 	}
 	if a.Capacity() != int64(got[1]) {
 		t.Fatal("store cap does not follow its budget")
+	}
+}
+
+// A disk this host cannot write — a read-only mount, or a path the service sandbox does
+// not let it write (a disk added after `install` wrote the systemd unit) — is closed
+// with the reason and reported not OK, so nothing is placed on it; it reopens once it is
+// writable again. Checked when it opens and on every refresh (docs/14 §3).
+// Invariant: I-146
+func TestDiskSet_UnwritableDiskClosed(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory this user cannot write: not on Windows, not as root")
+	}
+	p := filepath.Join(t.TempDir(), "disk")
+	id, err := PrepareDisk(p, testCluster, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []meta.Node{{Idx: 1, ID: "h1", Kind: meta.KindDevice, State: meta.Active}, {Idx: 7, ID: id, Kind: meta.KindDisk, Host: 1, State: meta.Active}}
+	d := newDiskSet(config.Config{}, testCluster, "h1", 1, slog.Default())
+	d.add(config.Disk{Path: p, Capacity: "1G"})
+	health := func() rpc.DiskHealth {
+		t.Helper()
+		hs := d.health()
+		if len(hs) != 1 {
+			t.Fatalf("health %+v", hs)
+		}
+		return hs[0]
+	}
+	d.refresh(rows)
+	if h := health(); !h.OK {
+		t.Fatalf("writable disk not OK: %+v", h)
+	}
+	shards := filepath.Join(p, "shards")
+	if err := os.Chmod(shards, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shards, 0o700) })
+	d.refresh(rows) // an open disk that stopped being writable
+	if h := health(); h.OK || !strings.Contains(h.Reason, "not writable") {
+		t.Fatalf("read-only open disk: %+v", h)
+	}
+	if _, _, ok := d.lookup(id); ok {
+		t.Fatal("a read-only disk still serves shards")
+	}
+	d2 := newDiskSet(config.Config{}, testCluster, "h1", 1, slog.Default()) // and one that never was
+	d2.add(config.Disk{Path: p, Capacity: "1G"})
+	d2.refresh(rows)
+	if hs := d2.health(); len(hs) != 1 || hs[0].OK {
+		t.Fatalf("read-only disk opened: %+v", hs)
+	}
+	if err := os.Chmod(shards, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d.refresh(rows)
+	if h := health(); !h.OK {
+		t.Fatalf("writable again but still closed: %+v", h)
 	}
 }

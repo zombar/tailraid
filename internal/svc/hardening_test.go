@@ -55,3 +55,39 @@ func TestSvc_SystemdHardeningAndQuoting(t *testing.T) {
 		}
 	}
 }
+
+// A disk added after install must be writable by the service: the unit's sandbox lets it
+// write only the paths ReadWritePaths names, so `node add-disk` rewrites the unit from the
+// config and restarts the service, which a plain `enable --now` would not (I-122).
+// Invariant: I-147
+func TestSvc_RefreshUnit_NamesNewDiskAndRestarts(t *testing.T) {
+	p := Params{
+		GOOS: "linux", Exe: "/usr/local/bin/tailraid", ConfigPath: "/etc/tailraid/config.yaml", User: "u",
+		DataDir: "/var/lib/tailraid/data", Disks: []string{"/mnt/a", "/srv/tailraid/shards"}, Stage: "/run/stage",
+	}
+	pl, err := RefreshUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pl.Files) != 1 || !strings.Contains(pl.Files[0].Content, "ReadWritePaths=/var/lib/tailraid/data /etc/tailraid /mnt/a /srv/tailraid/shards") {
+		t.Fatalf("unit does not name the new disk: %+v", pl.Files)
+	}
+	var cmds []string
+	for _, c := range pl.Commands {
+		cmds = append(cmds, strings.Join(c, " "))
+	}
+	want := []string{"install -m 644 /run/stage/tailraid.service /etc/systemd/system/tailraid.service", "systemctl daemon-reload", "systemctl restart tailraid"}
+	if len(cmds) != len(want) {
+		t.Fatalf("commands %q", cmds)
+	}
+	for i := range want {
+		if !strings.HasSuffix(cmds[i], want[i]) { // after sudo when not root
+			t.Errorf("command %d: %q, want …%q", i, cmds[i], want[i])
+		}
+	}
+	for _, goos := range []string{"darwin", "windows"} {
+		if pl, err := RefreshUnit(Params{GOOS: goos}); err != nil || len(pl.Commands)+len(pl.Files) != 0 {
+			t.Errorf("%s: %+v %v: only systemd sandboxes paths", goos, pl, err)
+		}
+	}
+}

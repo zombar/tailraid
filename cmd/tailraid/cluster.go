@@ -8,11 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +25,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/svc"
 )
 
 // localClient dials this device's running node over its tailnet RPC address.
@@ -405,7 +409,14 @@ func addDiskCmd() *cobra.Command {
 			if err := c.Members(cmd.Context(), leaderOr(rep, addr), rpc.MemberOp{Op: "add_disk", NodeIdx: host.Idx, DiskID: id, Name: name, Capacity: budget}); err != nil {
 				return fmt.Errorf("register %s (the marker and the config entry stay; re-run to retry): %w", name, err)
 			}
-			raw, err := c.Admin(cmd.Context(), addr, rpc.AdminOp{Op: "open_disk", Path: disk.Path, Capacity: capacity})
+			// a systemd service may write only what its unit names: rewrite the unit with the
+			// new disk and restart, or the disk opens read-only for it (I-147)
+			if runtime.GOOS == "linux" && svc.UnitInstalled() {
+				if err := refreshUnit(cmd); err != nil {
+					return fmt.Errorf("registered %s, but the service unit was not updated (run `tailraid install`, then restart the service): %w", name, err)
+				}
+			}
+			raw, err := openDiskWhenUp(cmd, c, addr, rpc.AdminOp{Op: "open_disk", Path: disk.Path, Capacity: capacity})
 			if err != nil {
 				return err
 			}
@@ -793,4 +804,40 @@ func policyFlags(k, m int) (uint8, uint8, error) {
 		return 0, 0, fmt.Errorf("bad policy k=%d m=%d: k is 1..255, m is 0..255, k+m at most 256", k, m)
 	}
 	return uint8(k), uint8(m), nil
+}
+
+// refreshUnit rewrites the systemd unit from the saved config and restarts the service.
+func refreshUnit(cmd *cobra.Command) error {
+	p, _, _, err := svcParams(cmd)
+	if err != nil {
+		return err
+	}
+	stage, err := os.MkdirTemp("", "tailraid-install-") // a directory nobody else can pre-create (I-122)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	p.Stage = stage
+	plan, err := svc.RefreshUnit(p)
+	if err != nil {
+		return err
+	}
+	return svc.Apply(cmd.Context(), cmd.OutOrStdout(), plan)
+}
+
+// openDiskWhenUp asks the node to open a just-added disk, retrying for a minute while a
+// restarted service comes back.
+func openDiskWhenUp(cmd *cobra.Command, c *rpc.Client, addr string, op rpc.AdminOp) (json.RawMessage, error) {
+	deadline := time.Now().Add(time.Minute)
+	for {
+		raw, err := c.Admin(cmd.Context(), addr, op)
+		if err == nil || time.Now().After(deadline) {
+			return raw, err
+		}
+		select {
+		case <-cmd.Context().Done():
+			return nil, cmd.Context().Err()
+		case <-time.After(time.Second):
+		}
+	}
 }

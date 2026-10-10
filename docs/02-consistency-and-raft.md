@@ -302,8 +302,11 @@ Non-voters replicate the log, serve reads and act as gateways and storage, but d
 toward quorum, so sleeping laptops never stall the cluster. `status` warns when the voter
 count is 1 or even.
 
-**Lifecycle commands** (all day-zero): `node promote|demote` (`AddVoter`/`AddNonvoter` on the
-same ID), a disk's budget (`set_capacity` → `NodeUpsert`, proposed by the disk's host as
+**Lifecycle commands** (all day-zero): `node promote|demote` (`AddVoter`, or `DemoteVoter` for a server that votes:
+raft's `AddNonvoter` on a voter changes only its address, so a demote that used it left
+the device voting while its row said otherwise; a leader demoting itself records the row
+first, then steps down to follower once the change commits, never shutting Raft down,
+I-145), a disk's budget (`set_capacity` → `NodeUpsert`, proposed by the disk's host as
 its free space changes, 01; refused for a device row, I-118), `node drain` (`NodeSetState Draining`:
 excluded from new placement; repairer re-places its slots), `node remove`
 (`NodeSetState Removed`, then `raft.RemoveServer`; a removed row stays in the table for its history, so a device reset and joined again has two rows with one name: a name on the command line names the row that is not removed, and the leader refuses every op but `remove` on a removed row, since `promote` or `update_addr` there would put a dead ID back into the Raft configuration, I-136), `set_version` (`NodeUpsert` with the
@@ -385,6 +388,9 @@ no divergent state to merge because it never applied uncommitted entries.
   row names another version proposes `set_version` through the leader, retrying until
   one accepts it, and a row that already matches is never rewritten; `set_version`
   changes nothing but the version.
+- **I-145** — After `set_voter` a device's Raft suffrage equals its row's `Voter`: a
+  demote takes the vote with `DemoteVoter`, and a leader that demotes itself records the
+  row before the change and keeps running Raft as a follower after it.
 - **I-136** — A member op other than `remove` on a removed row is refused before it touches the Raft configuration or the table, and a node name given to the CLI resolves to a row that is not removed when one has that name.
 
 ## Tests
@@ -408,4 +414,5 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |
 | I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
+| I-145 | `TestCluster_DemotePromote_RaftFollowsRow` |
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |

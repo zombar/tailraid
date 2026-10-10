@@ -127,6 +127,10 @@ func RaftConfig(id string, logOutput io.Writer) *raft.Config {
 	c.SnapshotThreshold = 8192
 	c.TrailingLogs = 10240
 	c.LogOutput = logOutput
+	// a leader that loses its vote (`node demote` of itself) or its seat steps down to
+	// follower: raft's default shuts Raft down, leaving serve running on a dead node
+	// until the process restarts (I-145)
+	c.ShutdownOnRemove = false
 	return c
 }
 

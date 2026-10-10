@@ -171,6 +171,13 @@ func (d *diskSet) refresh(nodes []meta.Node) {
 	defer d.mu.Unlock()
 	for _, ld := range d.disks {
 		if ld.store != nil {
+			// an open disk that can no longer be written (remounted read-only after
+			// errors, or outside what the service may write) closes like an unmounted
+			// one; the next refresh reopens it once it is writable (I-146)
+			if err := writable(ld.store.Root()); err != nil {
+				ld.store, ld.reason = nil, "not writable: "+err.Error()
+				d.log.Warn("disk closed", "path", ld.cfg.Path, "reason", ld.reason)
+			}
 			continue
 		}
 		row, reason := checkDisk(ld.cfg.Path, d.clusterID, d.hostID, d.host, nodes)
@@ -187,10 +194,32 @@ func (d *diskSet) refresh(nodes []meta.Node) {
 			d.log.Warn("disk closed", "path", ld.cfg.Path, "err", err)
 			continue
 		}
+		if err := writable(store.Root()); err != nil {
+			if r := "not writable: " + err.Error(); r != ld.reason {
+				ld.reason = r
+				d.log.Warn("disk closed", "path", ld.cfg.Path, "reason", r)
+			}
+			continue
+		}
 		ld.idx, ld.id, ld.store, ld.reason = row.Idx, row.ID, store, ""
 		ld.fs, _ = sysfs.FilesystemID(store.Root())
 		d.log.Info("disk open", "path", ld.cfg.Path, "disk", row.Name, "idx", row.Idx)
 	}
+}
+
+// writable checks that the store's directory takes a new file: a disk that answers
+// reads but refuses every write would otherwise stay a placement target that fails each
+// shard sent to it (I-146).
+func writable(root string) error {
+	f, err := os.CreateTemp(root, ".write-check-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	_, werr := f.Write([]byte{1})
+	cerr := f.Close()
+	rerr := os.Remove(name)
+	return errors.Join(werr, cerr, rerr)
 }
 
 // DiskBudget is the budget an added disk registers with: its pinned capacity, or the

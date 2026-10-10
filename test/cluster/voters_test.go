@@ -2,7 +2,11 @@ package cluster_test
 
 import (
 	"bytes"
+	"context"
 	"testing"
+	"time"
+
+	"github.com/zombar/tailraid/internal/rpc"
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
@@ -52,5 +56,69 @@ func TestCluster_ReadableWithNonVotersAsleep(t *testing.T) {
 	c.WriteFile(0, "/h", []byte("written with the laptops closed"))
 	if got, err := c.ReadFileCold(0, "/h"); err != nil || string(got) != "written with the laptops closed" {
 		t.Fatalf("read /h: %q %v", got, err)
+	}
+}
+
+// suffrage is the Raft suffrage of node id in nd's configuration ("" when absent).
+func suffrage(t *testing.T, nd *testharness.ClusterNode, id string) string {
+	t.Helper()
+	f := nd.Node.Raft.GetConfiguration()
+	must(t, f.Error())
+	for _, s := range f.Configuration().Servers {
+		if string(s.ID) == id {
+			return s.Suffrage.String()
+		}
+	}
+	return ""
+}
+
+// promote and demote change the Raft vote as well as the row: demote of a voter is
+// DemoteVoter (raft's AddNonvoter leaves an existing voter's vote alone), and a leader
+// that demotes itself records the row before it hands leadership over (docs/02
+// §Lifecycle commands).
+// Invariant: I-145
+func TestCluster_DemotePromote_RaftFollowsRow(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 1, 0)
+	defer c.Close()
+	setVoter := func(nd *testharness.ClusterNode, voter bool) {
+		t.Helper()
+		var err error
+		for range 20 { // a leader that just demoted itself is gone: ask the new one
+			if err = c.Leader().Node.MemberOp(context.Background(), rpc.MemberOp{Op: "set_voter", NodeIdx: nd.Idx(), Voter: voter}); err == nil {
+				break
+			}
+			<-time.After(100 * time.Millisecond)
+		}
+		must(t, err)
+		c.Settle()
+	}
+	agree := func(nd *testharness.ClusterNode, want bool) {
+		t.Helper()
+		leader := c.Leader()
+		row, _ := leader.Node.FSM.Node(nd.Idx())
+		wantS := "Nonvoter"
+		if want {
+			wantS = "Voter"
+		}
+		if got := suffrage(t, leader, nd.ID); row.Voter != want || got != wantS {
+			t.Fatalf("%s: row voter %v, raft %s; want %v / %s", nd.ID, row.Voter, got, want, wantS)
+		}
+	}
+	var follower *testharness.ClusterNode
+	for _, nd := range c.Nodes {
+		if !nd.Node.IsLeader() {
+			follower = nd
+		}
+	}
+	setVoter(follower, false)
+	agree(follower, false)
+	setVoter(follower, true)
+	agree(follower, true)
+	// the leader demotes itself: a laptop that led the cluster (the case that found this)
+	old := c.Leader()
+	setVoter(old, false)
+	agree(old, false)
+	if c.Leader() == old {
+		t.Fatal("a demoted leader still leads")
 	}
 }
