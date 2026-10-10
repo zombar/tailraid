@@ -7,6 +7,7 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/s3"
 )
 
 // NodeRef identifies a node of the environment.
@@ -34,6 +35,7 @@ type Caps struct {
 	Corrupt      bool
 	MultiGateway bool // Volume available on more than one node
 	Disks        bool // FailDisk/RestoreDisk on the hosts' added disks (docs/14)
+	S3           bool // AddS3/Bucket: the environment provides a bucket for phase 15 (docs/10 §4)
 	// Mutate allows the phases that change the cluster itself rather than its files:
 	// policy changes, drains and removals, filling a node's disk. A live cluster allows
 	// them only with --destructive.
@@ -85,4 +87,11 @@ type Env interface {
 	RestoreDisk(ctx context.Context, disk NodeRef) error
 	// AddDisk gives host one more added disk (`node add-disk` on a spare mount).
 	AddDisk(ctx context.Context, host NodeRef) error
+
+	// S3 nodes (docs/10 §4): AddS3 registers the environment's bucket as S3 node name
+	// (`node add-s3` on one node, `node keys` on the others); Bucket is that bucket as
+	// the driver reaches it, under the prefix the nodes use, for looking behind the
+	// cluster's back.
+	AddS3(ctx context.Context, name string) error
+	Bucket(ctx context.Context) (*s3.Bucket, error)
 }

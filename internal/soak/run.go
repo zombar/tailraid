@@ -819,6 +819,19 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	return sum, nil
 }
 
+// StandardPhases is the phase table of docs/09 §6 whose numbers are listed ("15",
+// "1,13"); every phase when none is. A driver that runs a subset passes it as Run.Phases.
+func StandardPhases(numbers ...string) []Phase {
+	var out []Phase
+	for _, ph := range phases {
+		num, _, _ := strings.Cut(ph.name, " ")
+		if len(numbers) == 0 || slices.Contains(numbers, num) {
+			out = append(out, Phase{Name: ph.name, Run: ph.run})
+		}
+	}
+	return out
+}
+
 // phaseList is the phases this run executes: the standard table, or Run.Phases.
 func (r *Run) phaseList() []phase {
 	if r.Phases == nil {

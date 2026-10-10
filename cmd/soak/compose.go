@@ -14,6 +14,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/soak"
 )
 
@@ -97,7 +98,56 @@ func (e *composeEnv) node(ref soak.NodeRef) composeNode {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile}
+}
+
+// multiFile is the compose file with phase 15's bucket, the s3 service (docs/10 §4).
+const multiFile = "docker-compose.yml"
+
+// The s3 service of docker-compose.yml: the nodes reach it on the compose network, the
+// driver on its published port; both see the one bucket.
+const (
+	s3NodeEndpoint   = "http://172.30.0.20:8080"
+	s3DriverEndpoint = "http://127.0.0.1:20510"
+	s3BucketName     = "tailraid"
+	s3Prefix         = "soak"
+	s3AccessKey      = "soakaccess"
+	s3SecretKey      = "soak/secret+key" //nolint:gosec // the throwaway key of the compose rig's bucket
+)
+
+// AddS3 runs `node add-s3` on the first node and `node keys` on every other, so every
+// gateway can write the bucket (docs/10 §4.1). A node that has not applied the new row
+// yet refuses `node keys`, so that is retried for a few seconds.
+func (e *composeEnv) AddS3(ctx context.Context, name string) error {
+	secret := "TAILRAID_S3_SECRET_KEY=" + s3SecretKey
+	first := e.nodes[0].ref.Name
+	if err := e.compose(ctx, "exec", "-T", "-e", secret, first, "tailraid", "node", "add-s3", name, "--endpoint", s3NodeEndpoint,
+		"--bucket", s3BucketName, "--prefix", s3Prefix, "--path-style", "--capacity", "1T", "--access-key", s3AccessKey); err != nil {
+		return err
+	}
+	for _, n := range e.nodes[1:] {
+		var err error
+		for range 10 {
+			if err = e.compose(ctx, "exec", "-T", "-e", secret, n.ref.Name, "tailraid", "node", "keys", name, "--access-key", s3AccessKey); err == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Bucket is the s3 service's bucket as the driver reaches it.
+func (e *composeEnv) Bucket(context.Context) (*s3.Bucket, error) {
+	return s3.New(s3.Target{Endpoint: s3DriverEndpoint, Bucket: s3BucketName, Prefix: s3Prefix, PathStyle: true},
+		s3.Credentials{AccessKey: s3AccessKey, SecretKey: s3SecretKey}, nil)
 }
 
 // diskDir is where an added disk named "<host>/<n>" is mounted in its container: the

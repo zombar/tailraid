@@ -317,9 +317,20 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   I-89, I-90, L-192, L-193, L-194); 14 diskless host (a host with no disks is live, flagged
   `diskless` with no budget and holds no slot; a corpus written through it is fully placed
   with no slot on it and reads exact through it and through another gateway; skipped on a
-  rig where every host has a disk; I-118). The compose rig gives four nodes two disks each, one
+  rig where every host has a disk; I-118); 15 s3 bucket (the rig's bucket registered with
+  `node add-s3` and every other node given its key with `node keys`, live on every gateway
+  within the S3 probe interval, a second registration of it refused; a corpus written
+  while it is a target lands on it in the disk layout and framing and reads exact through
+  every gateway; with the host of another slot killed, a chunk that needs the bucket
+  reads exact; an object deleted behind the cluster's back is found by the scrub and put
+  back; GC collects a file on the bucket and the drain moves every slot off it, neither
+  deleting an object; the drained bucket is removed and the corpus still reads exact;
+  skipped where the environment has no bucket, which on a live cluster is always; I-52,
+  I-137, I-138, I-42, L-104, L-112, L-139). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
-  host; phase 14 writes through it); `cmd/soak -topology single` runs one node with four
+  host; phase 14 writes through it) and an `s3` service, rclone's S3 server with
+  signature checking on, as phase 15's bucket; `cmd/soak -phases 15` runs a subset of
+  the phases on the rig; `cmd/soak -topology single` runs one node with four
   disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure and
   disk next to the process memory. A phase the environment cannot run is recorded as

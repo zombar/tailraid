@@ -9,6 +9,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/s3"
 )
 
 // LiveEnv is the user's real cluster seen from one device (`tailraid verify`, docs/09 §6):
@@ -74,6 +75,16 @@ func (e *LiveEnv) RestoreDisk(context.Context, NodeRef) error {
 
 func (e *LiveEnv) AddDisk(context.Context, NodeRef) error {
 	return errors.New("live: a disk is added with `tailraid node add-disk` on its device")
+}
+
+// AddS3 and Bucket are not offered on a live cluster: the bucket is the operator's
+// (Caps.S3 is false), and `node add-s3` is run by hand (docs/10 §4.1).
+func (e *LiveEnv) AddS3(context.Context, string) error {
+	return errors.New("live: a bucket is added with `tailraid node add-s3` on a device")
+}
+
+func (e *LiveEnv) Bucket(context.Context) (*s3.Bucket, error) {
+	return nil, errors.New("live: no bucket for the soak")
 }
 
 func (e *LiveEnv) Volume(n NodeRef) (Volume, bool) {

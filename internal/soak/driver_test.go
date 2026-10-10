@@ -15,6 +15,7 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/s3"
 )
 
 // fakeEnv is the smallest Env the driver's own rules can be tested against: one volume in
@@ -164,6 +165,15 @@ func (e *fakeEnv) RestoreDisk(ctx context.Context, d NodeRef) error {
 func (e *fakeEnv) AddDisk(ctx context.Context, h NodeRef) error {
 	e.record(ctx, "add-disk "+h.Name)
 	return nil
+}
+
+func (e *fakeEnv) AddS3(ctx context.Context, name string) error {
+	e.record(ctx, "add-s3 "+name)
+	return nil
+}
+
+func (e *fakeEnv) Bucket(context.Context) (*s3.Bucket, error) {
+	return nil, errors.New("fake: no bucket")
 }
 
 // fakeRun is a Run over e with the given phases and no periodic sampler.
