@@ -70,6 +70,9 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 	}
 	entries := make([]Entry, 0, len(kids))
 	for i := range kids {
+		if IsOSMetadata(kids[i].Name) { // kept in the volume, reachable by path (I-140)
+			continue
+		}
 		entries = append(entries, s.entry(kids[i], path.Join(canonical, kids[i].Name)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": canonical, "entries": entries})

@@ -535,3 +535,43 @@ func TestSMB_ListenRefusesNonLoopback(t *testing.T) {
 		t.Fatal("server without a password accepted")
 	}
 }
+
+// Dot files are HIDDEN to the client (Samba's "hide dot files"), in a listing and in a
+// stat, and still listed and readable; every other name is not. Explorer showed the ._
+// files macOS writes beside each file it copies over NFS.
+// Invariant: I-141
+func TestSMB_DotFilesHidden(t *testing.T) {
+	g := startGateway(t)
+	must(t, g.sh.Mkdir("d", 0o755))
+	for _, name := range []string{"d/photo.jpg", "d/._photo.jpg", "d/.DS_Store"} {
+		g.create(name)
+	}
+	must(t, g.sh.Mkdir("d/.config", 0o755))
+	const hidden = 0x2 // FILE_ATTRIBUTE_HIDDEN
+	attrs := func(fi os.FileInfo) uint32 { return fi.Sys().(*smb2.FileStat).FileAttributes }
+	ents, err := g.sh.ReadDir("d")
+	must(t, err)
+	got := map[string]bool{}
+	for _, e := range ents {
+		got[e.Name()] = attrs(e)&hidden != 0
+	}
+	want := map[string]bool{"photo.jpg": false, "._photo.jpg": true, ".DS_Store": true, ".config": true}
+	if len(got) != len(want) {
+		t.Fatalf("listing %v, want every entry listed: %v", got, want)
+	}
+	for name, h := range want {
+		if got[name] != h {
+			t.Errorf("%s: hidden %v in the listing, want %v", name, got[name], h)
+		}
+	}
+	for name, h := range map[string]bool{"d/._photo.jpg": true, "d/photo.jpg": false, "d": false} {
+		fi, err := g.sh.Stat(name)
+		must(t, err)
+		if (attrs(fi)&hidden != 0) != h {
+			t.Errorf("stat %s: attributes %#x, want hidden %v", name, attrs(fi), h)
+		}
+	}
+	if _, err := g.sh.ReadFile("d/._photo.jpg"); err != nil {
+		t.Errorf("a hidden file does not read: %v", err)
+	}
+}

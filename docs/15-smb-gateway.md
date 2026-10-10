@@ -64,7 +64,15 @@ upstream, each with a test in the copy:
   server cannot perform the requested operation") instead of the CREATE's status. The
   three-VM rounds caught it through `verify` on Windows. `TestASignedChainVerifiesEveryReply`.
 
-The copy is updated by re-applying these four changes to a newer upstream; the `replace`
+- `attrs.go`, `dir.go`, `file.go`, `info.go`: a name whose last element starts with a dot
+  (other than `.` and `..`) carries `FILE_ATTRIBUTE_HIDDEN`, as Samba's `hide dot files`
+  does by default. Windows has no dot convention, so Explorer showed every `._<name>`
+  file macOS writes beside a file it copies over NFS (its extended attributes, which
+  NFSv3 cannot carry), every `.DS_Store`, and every Unix dot file. Nothing is left out
+  of a listing; Explorer's "Hidden items" shows them (I-141).
+  `TestAttributes_DotFilesHidden`, `TestSMB_DotFilesHidden`.
+
+The copy is updated by re-applying these five changes to a newer upstream; the `replace`
 goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the
@@ -286,6 +294,10 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   whenever `listen.smb` is set and the config has none, lives only in the 0600 config
   file and appears in no log line or `status` report; a session with a wrong password
   fails with `STATUS_LOGON_FAILURE`, and no guest or anonymous session is accepted.
+- **I-141** — Every attribute the SMB gateway reports for a name whose last element begins
+  with `.` (other than `.` and `..`), in a directory listing, a CREATE reply or a
+  QUERY_INFO, includes `FILE_ATTRIBUTE_HIDDEN`, and no other name carries it; the entry
+  is still listed and opens, reads and writes as any other.
 - **I-142** — On Windows, with `listen.smb` and `mount.path` set, the install plan registers
   the task `tailraid-mount` for the installing user, triggered at that user's logon,
   running in the interactive session with the limited token, executing
@@ -304,4 +316,5 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-108 | `TestSMB_QueryDirectory_LargeDirectory`, `TestSMB_RenameKeepsFileIdAndContent` |
 | I-109 | `TestSMB_ReadOnly_WireStatuses`, `TestSMB_WriteWhenFull_IsDiskFull`, `TestSMB_WriteAtCap_WaitsThenSucceeds`, `TestSMB_Statfs_FromUsage` |
 | I-110 | `TestSMB_Auth_WrongPasswordRefused`, `TestSMB_ListenRefusesNonLoopback`, `TestConfig_Gateways`, `TestCLI_Init_GeneratesSMBPassword` |
+| I-141 | `TestSMB_DotFilesHidden` |
 | I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |

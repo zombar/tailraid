@@ -35,6 +35,14 @@ func IsUploadTemp(name string) bool {
 	return len(name) > len(uploadSuffix)+1 && strings.HasPrefix(name, ".") && strings.HasSuffix(name, uploadSuffix)
 }
 
+// IsOSMetadata reports whether name is a file macOS writes for its own use beside
+// the user's: "._<name>" (AppleDouble, a file's extended attributes on a volume
+// without them, which NFSv3 is) and ".DS_Store" (Finder's view settings). A listing
+// leaves them out (I-140).
+func IsOSMetadata(name string) bool {
+	return (len(name) > 2 && strings.HasPrefix(name, "._")) || name == ".DS_Store"
+}
+
 func tempName(name string) string { return "." + name + uploadSuffix }
 
 // uploads tracks the temps being written right now (a second upload of the same path is

@@ -632,6 +632,10 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	defer gcT.Stop()
 	defer sweepT.Stop()
 	defer budgetT.Stop()
+	// a budget changed while the service was down (`volume grow` pins a disk and restarts
+	// it) is registered now, not a tick later: status reads the host's free space at once,
+	// and the node table must not lag it (I-74)
+	a.rebudget(ctx)
 	for {
 		select {
 		case <-ctx.Done():

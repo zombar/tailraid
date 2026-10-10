@@ -338,3 +338,33 @@ func TestWebUI_Ls_MarksUploads(t *testing.T) {
 	}
 	_ = io.EOF
 }
+
+// The browser lists what the user put in the volume, not what macOS wrote beside it:
+// "._<name>" (a file's extended attributes over NFS) and ".DS_Store" are left out of a
+// listing, every other dot file (an upload's temp included) stays, and a left-out file
+// is still in the volume and readable by its path.
+// Invariant: I-140
+func TestWebUI_Ls_HidesOSMetadata(t *testing.T) {
+	u := newUI(t)
+	for _, name := range []string{"/photo.jpg", "/._photo.jpg", "/.DS_Store", "/.config", "/._", "/.song.tailraid-upload"} {
+		u.write(name, 0, []byte("x"))
+	}
+	code, _, body := u.get("/api/ls?path=/")
+	if code != 200 {
+		t.Fatalf("ls: %d", code)
+	}
+	var out struct{ Entries []webui.Entry }
+	must(t, json.Unmarshal(body, &out))
+	got := map[string]bool{}
+	for _, e := range out.Entries {
+		got[e.Name] = true
+	}
+	for name, want := range map[string]bool{"photo.jpg": true, "._photo.jpg": false, ".DS_Store": false, ".config": true, "._": true, ".song.tailraid-upload": true} {
+		if got[name] != want {
+			t.Errorf("%s listed %v, want %v (listing %v)", name, got[name], want, got)
+		}
+	}
+	if code, _, body := u.get("/files/._photo.jpg"); code != 200 || string(body) != "x" {
+		t.Errorf("a left-out file by its path: %d %q", code, body)
+	}
+}

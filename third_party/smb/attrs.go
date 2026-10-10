@@ -3,6 +3,8 @@
 package smb
 
 import (
+	"strings"
+
 	filesystem "github.com/go-filesystems/interface"
 )
 
@@ -27,17 +29,27 @@ const (
 
 func isDir(st filesystem.Stat) bool { return st.Mode()&sIFMT == sIFDIR }
 
-// attributesOf maps a driver's mode onto the attributes a client reads.
+// attributesOf maps a driver's mode, and the name's last element, onto the
+// attributes a client reads.
 //
 // A mode with no type bits at all -- a driver that reports permissions only --
 // is a regular file: it is the only guess that cannot make a client try to
 // enumerate something that is not a directory.
-func attributesOf(st filesystem.Stat, readOnly bool) uint32 {
+//
+// A name that starts with a dot is HIDDEN, as Samba's "hide dot files" does by
+// default: Windows has no dot convention of its own, so without it Explorer
+// shows every ._ file macOS writes beside a file over NFS (its extended
+// attributes), every .DS_Store, and every Unix dot file. "." and ".." are the
+// listing's own entries, not files, and stay visible.
+func attributesOf(name string, st filesystem.Stat, readOnly bool) uint32 {
 	var a uint32
 	if isDir(st) {
 		a |= attrDirectory
 	} else {
 		a |= attrArchive
+	}
+	if hiddenName(name) {
+		a |= attrHidden
 	}
 	// No write bit for anyone, or a share exported read-only: the client is
 	// told before it tries.
@@ -48,6 +60,14 @@ func attributesOf(st filesystem.Stat, readOnly bool) uint32 {
 		a = attrNormal
 	}
 	return a
+}
+
+// hiddenName reports whether a name's last element is a dot file.
+func hiddenName(name string) bool {
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	return strings.HasPrefix(name, ".") && name != "." && name != ".."
 }
 
 // sizeOf is the size a client shows. A directory's own size is meaningless to
