@@ -2,6 +2,16 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.2 (2026-10-10)
+
+### Changes
+
+- soak: the fake tailnet lists the other nodes as peers ([7f89da7](https://github.com/zombar/tailraid/commit/7f89da7))
+- webui: the Balance block hides removed members like status and node ls ([387d2c5](https://github.com/zombar/tailraid/commit/387d2c5))
+- The repository went public so a device without a GitHub token (the Windows machine) can update. The updater already handled that: without a token it resolves the release anonymously and downloads the browser URL, and the anonymous API answers 200 for v0.4.1 with every asset. What changed is the wording and one error: README, docs/12 §5 and the `update` help no longer say the repository is private, and an anonymous 404 now reads "release not found" with the token hint as a parenthesis, instead of "repository needs a token". No invariant changes. ([74162d3](https://github.com/zombar/tailraid/commit/74162d3))
+- cluster: a node reports the version it runs into its own row at start ([74ac12e](https://github.com/zombar/tailraid/commit/74ac12e))
+- svc: stop waits for the process to exit and succeeds when none runs; node ls hides removed rows ([a0fa6d5](https://github.com/zombar/tailraid/commit/a0fa6d5))
+
 ## v0.4.1 (2026-10-09)
 
 ### Changes
