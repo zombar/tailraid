@@ -286,6 +286,126 @@
         <button type="button">Load 64 more</button>
       </div>
     </details>
+    <details class="panel" open>
+      <summary>Integrity (1,946 chunks)</summary>
+      <div class="body"><div class="loading">loading 64 of 1,946…</div></div>
+    </details>
+  </section>
+
+  <section>
+    <h2>Flag badges, view switch, folder menu <span>docs/13 §4</span></h2>
+    <div class="row">
+      <span class="badge lock">protected</span>
+      <span class="badge nsfw">nsfw</span>
+      <span class="badge pin">kept here</span>
+      <span class="badge">deleted · 27 d</span>
+    </div>
+    <div class="row">
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>
+      <details class="menu" open>
+        <summary>Folder</summary>
+        <div class="menu-body" style="position:static;margin-top:8px">
+          <label class="menu-row"><input type="checkbox" checked><span>Protect</span><span class="small dim">nothing in it can be deleted, replaced or moved out, from any device</span></label>
+          <label class="menu-row"><input type="checkbox"><span>Mark nsfw</span><span class="small dim">thumbnails and previews are blurred until tapped</span></label>
+          <label class="menu-row" aria-disabled="true"><input type="checkbox" disabled><span>Keep on this device</span><span class="small dim">not for a deleted folder</span></label>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section>
+    <h2>Selection, selection bar, rename, picker</h2>
+    <table class="files">
+      <thead><tr><th class="sel"><input type="checkbox" aria-label="select all"></th><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <tbody>
+        <tr class="selected"><td class="sel"><input type="checkbox" checked aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>02 - Encore?.m4a<button type="button" class="play">▶ Play</button></a></td><td class="size">48.0 MiB</td><td class="mtime">2026-10-02 21:16</td></tr>
+        <tr class="deleted"><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/trashfile/4812/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>old mix.wav<span class="badge">deleted · 27 d</span></a></td><td class="size">98.1 MiB</td><td class="mtime">3 d ago</td></tr>
+      </tbody>
+    </table>
+    <div class="selbar" style="position:relative;left:auto;right:auto;bottom:auto">
+      <span class="count">3 selected</span>
+      <button type="button">Delete</button>
+      <button type="button">Move to…</button>
+      <button type="button" disabled title="select one entry to rename">Rename</button>
+      <button type="button">Play</button>
+      <button type="button">Add to queue</button>
+      <span class="spacer"></span>
+      <button type="button">Clear</button>
+    </div>
+    <form class="inline-form rename"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg><input type="text" value="photos" aria-label="new name"><button type="submit">Rename</button><button type="button">Cancel</button></form>
+    <dialog class="picker" open style="position:static;margin:0" aria-label="move to">
+      <div class="crumbs"><a href="#">/</a><span class="sep">/</span><span>media</span></div>
+      <ul class="picker-list">
+        <li><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>..</li>
+        <li aria-disabled="true" title="the selection is here"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Concerts 2024</li>
+        <li><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>archive</li>
+      </ul>
+      <div class="picker-actions"><button type="button">Cancel</button><button type="button">Move 3 here</button></div>
+    </dialog>
+  </section>
+
+  <section>
+    <h2>Trash banner</h2>
+    <div class="banner deleted"><span>Deleted 3 d ago · gone for good in 27 d</span><span class="actions"><button type="button">Restore</button><button type="button">Delete now</button></span></div>
+    <div class="banner deleted"><span><span class="mono">Day 2</span> is taken in <span class="mono">Concerts 2024</span> · restore under another name</span><form class="inline-form rename"><input type="text" value="Day 2 (restored)" aria-label="new name"><button type="submit">Restore as</button><button type="button">Cancel</button></form></div>
+  </section>
+
+  <section>
+    <h2>File tiles <span>docs/13 §5</span></h2>
+    <div class="ftiles">
+      <a class="ftile dir" href="#"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="badges"><span class="badge lock">protected</span></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg></span><span class="tname">Day 1 (soundboard)</span><span class="tmeta"><span>24 items</span></span></a>
+      <a class="ftile selected" href="#"><span class="sel"><input type="checkbox" checked aria-label="select"></span><span class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23111827'/%3E%3Cpath d='M6.5 2.5 L10 4.5 L6.5 6.5Z' fill='%23f8fafc'/%3E%3C/svg%3E"></span><span class="tname">01 - Opening #1.mp4</span><span class="tmeta"><span>1.9 GiB</span><span>8:12</span></span></a>
+      <a class="ftile playing" href="#"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e293b'/%3E%3Crect x='3.5' y='.5' width='9' height='8' fill='%23b45309'/%3E%3Ccircle cx='8' cy='4.5' r='2.6' fill='%23fde68a'/%3E%3C/svg%3E"></span><button type="button" class="play">⏸ Playing</button><span class="tname">02 - Encore?.m4a</span><span class="tmeta"><span>48.0 MiB</span><span>4:40</span></span></a>
+      <a class="ftile dir" href="#"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="badges"><span class="badge nsfw">nsfw</span></span><span class="thumb nsfw"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%2364748b'/%3E%3Cpath d='M0 9 L6 5 L9 7 L12 5 L16 9Z' fill='%23475569'/%3E%3C/svg%3E"><span class="veil">nsfw · tap to show</span></span><span class="tname">photos</span><span class="tmeta"><span>118 items</span></span></a>
+      <a class="ftile dirty" href="#"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg></span><span class="tname">03 - Jam.flac</span><span class="tmeta"><span>212.4 MiB</span></span></a>
+      <a class="ftile deleted" href="#"><span class="sel"><input type="checkbox" aria-label="select"></span><span class="badges"><span class="badge">deleted · 27 d</span></span><span class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg></span><span class="tname">old mix.wav</span><span class="tmeta"><span>98.1 MiB</span></span></a>
+    </div>
+    <div class="viewer nsfw revealed"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%2364748b'/%3E%3C/svg%3E" style="width:100%;max-width:320px"><span class="veil">nsfw · tap to show</span></div>
+    <div class="small dim">a revealed viewer (the veil gone for the session)</div>
+  </section>
+
+  <section>
+    <h2>Album, now-playing bar, queue <span>docs/13 §6; the bar is fixed to the bottom in the app</span></h2>
+    <div class="album">
+      <div class="album-head">
+        <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3C/svg%3E">
+        <div><h1>Around the Fur</h1><div class="artist">Deftones</div><div class="meta"><span>1997</span><span>10 tracks</span><span>41:06</span></div></div>
+      </div>
+      <table class="tracks"><tbody>
+        <tr><td class="no">1</td><td class="title">My Own Summer (Shove It)</td><td class="dur">3:35</td></tr>
+        <tr class="playing"><td class="no">▶</td><td class="title">Mascara</td><td class="dur">3:46</td></tr>
+        <tr><td class="no">10</td><td class="title">MX <span class="small dim">10 - MX _ Damone.mp3</span></td><td class="dur">—</td></tr>
+      </tbody></table>
+    </div>
+    <aside class="nowbar expanded" style="position:static">
+      <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3C/svg%3E">
+      <div class="titles"><div class="title">Mascara</div><div class="sub">Deftones — Around the Fur</div></div>
+      <div class="transport"><button type="button" aria-label="previous">⏮</button><button type="button" aria-label="pause">⏸</button><button type="button" aria-label="next">⏭</button></div>
+      <div class="seek"><input type="range" min="0" max="226" value="97" aria-label="seek"><span class="time">1:37 / 3:46</span></div>
+      <div class="modes"><button type="button" aria-pressed="true" aria-label="repeat all">⟳</button><button type="button" aria-pressed="false" aria-label="shuffle">⤮</button></div>
+      <button type="button" class="queue-btn" aria-pressed="true">Queue · 10</button>
+    </aside>
+    <div class="queue" style="position:static">
+      <ol>
+        <li class="qrow"><span class="no">2</span><span class="title">Lhabia</span><span class="artist">Deftones</span><span class="dur">4:11</span><button type="button" aria-label="remove">×</button></li>
+        <li class="qrow playing"><span class="no">▶</span><span class="title">Mascara</span><span class="artist">Deftones</span><span class="dur">3:46</span><button type="button" aria-label="remove">×</button></li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>Cache card <span>the dashboard's pins</span></h2>
+    <div class="cards">
+      <div class="card cache">
+        <div class="name-row"><span class="name">Cache</span><span class="badges"><span class="badge self">pike</span></span></div>
+        <div class="bar-row"><span class="bar-label">used</span><div class="bar"><i style="width:38%"></i></div><span class="bar-val">388.0 MiB of 1.0 GiB</span></div>
+        <div class="bar-row"><span class="bar-label">pinned</span><div class="bar warn"><i style="width:100%"></i></div><span class="bar-val">2.2 GiB pinned · beyond cache.size · disk 14 % free</span></div>
+        <div class="pins">
+          <div class="pin-row"><span class="n">/media/Concerts 2024</span><div class="bar"><i style="width:100%"></i></div><span class="v">2.2 GiB of 2.2 GiB</span></div>
+          <div class="pin-row"><span class="n">/Music/Deftones</span><div class="bar"><i style="width:41%"></i></div><span class="v">212.4 MiB of 518.0 MiB</span></div>
+        </div>
+      </div>
+    </div>
   </section>
 
 </div></div>

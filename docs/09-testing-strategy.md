@@ -237,16 +237,21 @@ has none, and a live run already has the OS mount.
 
 ```go
 type Env interface {
-    Nodes(ctx) ([]NodeRef, error)                  // name, idx, RPC address
+    Name() string; Nodes(ctx) ([]NodeRef, error)   // name, idx, RPC address
     Volume(node NodeRef) (Volume, bool)            // file IO through that node's gateway
-    Call(ctx, node, method, path string, body []byte) ([]byte, error) // node RPC as a member
-    Kill(ctx, node) error; Start(ctx, node) error; Restart(ctx, node) error
-    Partition(ctx, a, b []NodeRef) error; Heal(ctx) error
+    Caps() Caps                                    // Kill, Partition, Corrupt, MultiGateway, Disks, Mutate
     Wait(ctx, d time.Duration) error               // real time, or the fake clock in tests
-    Caps() Caps                                    // Kill, Partition, Corrupt, MultiGateway
+    // admin surface (one node's view; leader-only ops routed by the Env)
+    Status, RepairNow, Scrub, GCNow, SetPolicy, SetPolicyAuto, SetState, Remove, Fsck,
+    Chunks, FSMHash, Goroutines, Disks, Fill, S3 ...
+    WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16
+    // faults
+    Kill, Start, Restart, Partition, Heal, Corrupt, FailDisk, RestoreDisk, AddDisk ...
 }
-type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove, Size }  // Hash streams sha256 + size
+type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove, Size, List }  // Hash streams sha256 + size
 ```
+
+(`internal/soak/env.go` is the definition; the sketch names the groups.)
 
 - **Compose** (`cmd/soak`, `test/soak/docker-compose.yml`): four `tailraid` containers
   (n1–n3 voters, n4 non-voter) with `dev.enabled`, `repair.grace` and `repair.fill_after`
@@ -329,15 +334,40 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   live cluster the phase uses the cluster's own S3 node when this device holds its key:
   it registers nothing, skips the refusal and the drain, deletes behind the cluster's
   back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
-  I-137, I-138, I-42, I-149, L-104, L-112, L-139); 17 hot path (a 64-chunk file written
+  I-137, I-138, I-42, I-149, L-104, L-112, L-139); 16 web ui (the browser UI of docs/13
+  driven over HTTP at the node's `web_url` as a same-user device: listings and stats
+  against the corpus model; rename, move and delete batches with a deliberate taken
+  name and a protected entry inside, every item reported on its own and the untouched
+  ones unchanged; the trash round trip: a delete listed in place with its dates and its
+  bytes readable with `in=`, the share seeing a delete (the mount's listing omits it, a
+  read fails, a new file takes the name), an `rm -rf` through the mount restored with
+  one call, a dirty file deleted at once and restored with every acknowledged byte, an
+  overwrite through the web and through the mount whose previous version reads back from
+  the trash, `.DS_Store` and an upload temp deleted on the mount and absent from
+  `/api/trash`, a restore onto a taken name refused then done under a new name, a purge
+  and `trash purge --older-than 0` through the admin RPC followed by GC's reclaim after
+  grace; the flags: `protected` set on a folder, a web delete, a move out and a rename of
+  it refused with 403 and the mount's remove with `EPERM` while an upload into it and a
+  move into it succeed, `nsfw` effective on a nested file's stat (the flag changes need
+  `Caps.Mutate`, else those checks are skipped); thumbnails: a JPEG `PUT` for a
+  `.mp4`-named file read back byte-exact and a generated image thumbnail decoding to at
+  most 320 px wide, `dir.cover` naming the tagged file, any user operation on
+  `/.tailraid` refused with 400; tags: a file with an ID3v2 tag and a picture written
+  through the volume, `/api/tags` returning its fields and `/api/thumb` its picture; the
+  integrity panel's pages of the large file, every report with a `slots` array and the
+  hashes equal to `Env.Chunks` over RPC; and pins: a folder pinned until
+  `cache.pinned_bytes` reaches its bytes, then with `Caps.Kill` the other holders of its
+  chunks stopped and the folder read through the web, then unpinned; everything the
+  phase changed restored on its way out; I-152..I-165, L-199..L-208); 17 hot path (a 64-chunk file written
   through one gateway and read whole, cold, through another: the content exact, the
   cold-read MiB/s reported, readahead having served every chunk but the first window
   (`readahead_joined`, docs/12 §8), fetched no more than the file's chunks, and never more
   than `ReadAhead` prefetches in flight in any status sample; on a rig with one gateway the
   readahead checks are skipped when the client's own cache served the read; I-166). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
-  host; phase 14 writes through it) and an `s3` service, rclone's S3 server with
-  signature checking on, as phase 15's bucket; `cmd/soak -phases 15` runs a subset of
+  host; phase 14 writes through it), an `s3` service, rclone's S3 server with
+  signature checking on, as phase 15's bucket, and publishes each node's web port for
+  phase 16; `cmd/soak -phases 15` runs a subset of
   the phases on the rig; `cmd/soak -topology single` runs one node with four
   disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure and
@@ -372,7 +402,8 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   sample (bytes moved, cumulative write/read latency histograms over fixed log-spaced
   buckets, degraded / repair-pending / unreadable / stale-policy chunks, stored and
   logical bytes, dedup ratio, slots and liveness per node, the sampled node's overlay WAL
-  depth, FSM-hash agreement) to `results.jsonl`; every record carries its line number.
+  depth, FSM-hash agreement, the trash's inodes and bytes and the sampled node's pinned
+  cache bytes) to `results.jsonl`; every record carries its line number.
   Every check cites the invariants and lifecycle cells it exercises (`I-n`, `L-n`; a
   test keeps the citations defined). The driver then renders a self-contained
   `report.html` with inline SVG charts drawn in Go: the header (target, profile, policy
@@ -388,7 +419,8 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   that landed after a heal), every node's goroutine dump taken right after a failed
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
-  bytes, overlay WAL depth, slots per node, latency histograms, the FSM-hash strip, and the data spread across disks (one lane per
+  bytes, overlay WAL depth, slots per node, latency histograms, the FSM-hash strip, the
+  trash and the pinned cache over time, and the data spread across disks (one lane per
   target grouped by host, each sample coloured by the target's slot share against its
   expected share, dead hatched, with a host-cap strip underneath that is green while no
   chunk exceeds the cap and amber while `domain_skew > 0`).
