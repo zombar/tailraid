@@ -294,7 +294,10 @@ s8b_update() {
     local v; v=$(tr_ "$os" version)
     [ "$v" = "tailraid $tag" ] || { echo "$os runs \"$v\" after the update, want $tag"; return 1; }
     ready_or_log "$os" 45 || return 1
-    tr_ "$os" update --rollback --restart || return 1
+    # the rollback runs the release's own code: a release whose --restart cannot find
+    # the service after the swap (v0.4.2 on Linux) leaves the restored binary in place
+    # but the old image running, so the rig restarts it and says so
+    tr_ "$os" update --rollback --restart || { echo "$os: the release's rollback --restart failed; restarting the restored binary"; svc_restart "$os" || return 1; }
     v=$(tr_ "$os" version)
     [ "$v" = "$dev" ] || { echo "$os runs \"$v\" after the rollback, want $dev"; return 1; }
     ready_or_log "$os" 45 || return 1
