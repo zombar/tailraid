@@ -127,6 +127,46 @@ func TestOpen_WaitReadyReplaysLogBeforeReads(t *testing.T) {
 	}
 }
 
+// A follower knows the leader from its first heartbeat, before the entry that adds its
+// row: Join adds the Raft server, then proposes the row. In that window WaitReady holds
+// (a leader, the local log applied) while the table has no row for the node; WaitMember
+// waits for the row and fails with ErrNotMember when it never comes.
+// Regression: node0's first serve after its join, 2026-10-10
+// Invariant: I-144
+func TestWaitMember_WaitsForOwnRow(t *testing.T) {
+	leader := bootstrap(t, t.TempDir())
+	defer leader.Close()
+	fo := opts(t, t.TempDir())
+	follower, err := OpenFresh(fo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer follower.Close()
+	la, fa := leader.trans.LocalAddr(), fo.Transport.LocalAddr()
+	leader.trans.(*raft.InmemTransport).Connect(fa, fo.Transport)
+	fo.Transport.(*raft.InmemTransport).Connect(la, leader.trans)
+	must(t, leader.Raft.AddNonvoter(raft.ServerID(fo.NodeID), fa, 0, 10*time.Second).Error())
+	must(t, follower.WaitReady(ctx, 10*time.Second))
+	if _, ok := follower.SelfIdx(); ok {
+		t.Fatal("the follower has a row before the leader proposed one")
+	}
+	if err := follower.WaitMember(ctx, 300*time.Millisecond); !errors.Is(err, ErrNotMember) {
+		t.Fatalf("WaitMember without a row: %v, want ErrNotMember", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- follower.WaitMember(ctx, 10*time.Second) }()
+	row := meta.Node{ID: fo.NodeID, Name: "two", Kind: meta.KindDevice, Addr: "10.0.0.2", RaftPort: 1, RPCPort: 2}
+	if _, _, err := leader.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: row}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("WaitMember once the row is committed: %v", err)
+	}
+	if _, ok := follower.SelfIdx(); !ok || follower.FSM.Volume().ChunkSize == 0 {
+		t.Fatal("WaitMember returned without the row and the volume")
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

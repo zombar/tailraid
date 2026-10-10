@@ -61,6 +61,15 @@ service manager restarted it every minute and a killed node never came back with
 soak's settle time, because the leader stays out of reach for as long as the fault lasts
 and the restart loop never let the node be reached either (I-135).
 
+**Waiting for the log means waiting for its own row.** A follower knows the leader
+from the first heartbeat, before the entries that add its row have arrived: a joiner
+whose leader had a few hundred entries past its last snapshot replayed its local log,
+counted itself ready, found no row of its own and exited, and each restart got one
+batch further until the leader's replication backoff outlasted the process (node0's
+first start, 2026-10-10). So the node without that state waits for its own row and the
+volume to be applied, within the same bound, and exits only when they never arrive
+(I-144).
+
 **Confinement (Linux).** The unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
 `ProtectHome=read-only` and `PrivateTmp`, and `ReadWritePaths` names exactly the data
 directory, every added disk and the config directory (plus the log file's directory when
@@ -361,6 +370,9 @@ recovered nodes are two clusters.
   only a node without that state waits for the log, bounded, and exits when none arrives.
   `init`, `join`, every `serve` once ready and every clean shutdown take a snapshot, so
   the state is there from a node's first ready start on, leader or not.
+- **I-144** — A node waiting for the log at start waits until its FSM holds its own
+  row and the volume, not only until it knows a leader and has applied its local log;
+  it fails with `ErrNotMember` when they have not arrived within the bound.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -385,3 +397,4 @@ recovered nodes are two clusters.
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
 | I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
+| I-144 | `TestWaitMember_WaitsForOwnRow` |
