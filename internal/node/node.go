@@ -155,6 +155,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 			return fmt.Errorf("waiting for raft: %w", err)
 		}
+		// a leader is known from its first heartbeat; the row comes with the log (I-144)
+		if err := node.WaitMember(ctx, 60*time.Second); err != nil {
+			return fmt.Errorf("waiting for this node's row: %w", err)
+		}
 	} else if err := node.WaitReady(ctx, 5*time.Second); err != nil { // the usual case: a leader within seconds
 		log.Info("no leader yet; serving stale until one connects (status exits 1 meanwhile)")
 	}
