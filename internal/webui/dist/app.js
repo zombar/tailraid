@@ -729,9 +729,11 @@ function tile2(label, value, sub) {
 // internal/webui/src/chunks.ts
 var PAGE = 64;
 function render5(path, expected) {
-  const summary = h("summary", null, "Integrity" + (expected !== void 0 ? ` (${count(expected)} ${expected === 1 ? "chunk" : "chunks"})` : ""));
+  const title = h("span");
+  const summaryExtra = h("span", { class: "dim small" });
+  const summary = h("summary", null, title, summaryExtra);
   const body = h("div", { class: "body" });
-  const panel = h("details", { class: "panel" }, summary, body);
+  const panel2 = h("details", { class: "panel" }, summary, body);
   let loaded = 0;
   let total = 0;
   let fetching = false;
@@ -739,7 +741,13 @@ function render5(path, expected) {
   const rows = h("div");
   const more = h("button", { type: "button" }, "Load more");
   const caption = h("div", { class: "small dim" });
-  const summaryExtra = h("span", { class: "dim small" });
+  const loading = h("div", { class: "loading" });
+  const retry = h("button", { type: "button" }, "Retry");
+  const failure2 = h("div", { class: "error" });
+  const setTitle = (n) => {
+    title.textContent = "Integrity" + (n !== void 0 ? ` (${count(n)} ${n === 1 ? "chunk" : "chunks"})` : "");
+  };
+  setTitle(expected);
   const describe = () => {
     const parts = [];
     if (counts.committed) parts.push(`${count(counts.committed)} committed`);
@@ -756,9 +764,14 @@ function render5(path, expected) {
     if (fetching) return;
     fetching = true;
     more.disabled = true;
+    failure2.remove();
+    const known = total || expected;
+    loading.textContent = `loading ${known !== void 0 ? Math.min(PAGE, Math.max(known - loaded, 0)) : PAGE} of ${known !== void 0 ? count(known) : "?"}\u2026`;
+    body.append(loading);
     try {
       const page = await chunks(path, loaded, PAGE);
       total = page.total;
+      if (expected === void 0) setTitle(total);
       page.chunks.forEach((c, i) => {
         rows.append(row(loaded + i, c));
         if (c.state === "committed") counts.committed++;
@@ -768,22 +781,32 @@ function render5(path, expected) {
         if (c.policy_stale) counts.stale++;
       });
       loaded += page.chunks.length;
-      if (!summary.contains(summaryExtra)) summary.append(summaryExtra);
+      loading.remove();
       if (!body.contains(rows)) body.append(rows, caption, more);
       describe();
-      if (total === 0) body.append(h("div", { class: "empty" }, "no chunks (empty file)"));
+      if (total === 0 && !body.querySelector(".empty")) body.append(h("div", { class: "empty" }, "no chunks (empty file)"));
     } catch (e) {
-      body.append(h("div", { class: "error" }, "Could not load the chunk reports: " + (e instanceof Error ? e.message : String(e))));
+      loading.remove();
+      failure2.textContent = "Could not load the chunk reports: " + (e instanceof Error ? e.message : String(e)) + " ";
+      failure2.append(retry);
+      body.append(failure2);
     } finally {
       fetching = false;
       more.disabled = false;
     }
   };
   more.addEventListener("click", () => void load());
-  panel.addEventListener("toggle", () => {
-    if (panel.open && loaded === 0 && !fetching) void load();
+  retry.addEventListener("click", () => void load());
+  panel2.addEventListener("toggle", () => {
+    if (panel2.open && loaded === 0 && !fetching) void load();
   });
-  return panel;
+  return {
+    el: panel2,
+    expect(n) {
+      expected = n;
+      setTitle(n);
+    }
+  };
 }
 function row(i, c) {
   const km = c.k + c.m;
@@ -791,7 +814,7 @@ function row(i, c) {
   const hash = h("span", { title: c.hash }, c.hash.slice(0, 10));
   if (c.policy_stale) hash.append(" ", h("span", { class: "badge warn" }, "stale"));
   if (!c.found) hash.append(" ", h("span", { class: "badge bad" }, c.state));
-  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots));
+  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots ?? []));
 }
 
 // internal/webui/src/player.ts
@@ -843,6 +866,7 @@ function mediaKind(e) {
   return KINDS[e]?.[0] ?? "other";
 }
 var media = null;
+var panel = null;
 function render6(root, path) {
   const dir = dirname(path);
   const name = basename(path);
@@ -928,7 +952,10 @@ function render6(root, path) {
       );
     }
     const cs = status.current?.volume.chunk_size;
-    section.append(render5(path, entry && cs ? Math.ceil(entry.size / cs) : void 0));
+    const expected = entry && cs ? Math.ceil(entry.size / cs) : void 0;
+    if (!panel || panel.path !== path) panel = { path, p: render5(path, expected) };
+    else if (expected !== void 0) panel.p.expect(expected);
+    section.append(panel.p.el);
     root.append(section);
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
     keyHandler = (ev) => {
@@ -956,6 +983,7 @@ function render6(root, path) {
   );
   return () => {
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
+    panel = null;
     const leaving = !location.hash.startsWith("#/file");
     if (leaving && media) {
       media.el.pause();

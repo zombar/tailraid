@@ -17,9 +17,6 @@ func TestStub_I_159(t *testing.T) { t.Skip("stub: web UI v2 PR 3 (batch routes);
 // Invariant: I-160
 func TestStub_I_160(t *testing.T) { t.Skip("stub: web UI v2 PR 3 (thumbnails); see docs/13") }
 
-// Invariant: I-161
-func TestStub_I_161(t *testing.T) { t.Skip("stub: web UI v2 PR 3 (integrity panel); see docs/13") }
-
 // Invariant: I-163
 func TestStub_I_163(t *testing.T) { t.Skip("stub: web UI v2 PR 3 (flags); see docs/13") }
 

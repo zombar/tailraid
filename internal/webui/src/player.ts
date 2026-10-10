@@ -30,6 +30,9 @@ export function mediaKind(e: string): Kind {
 
 // the media element is kept across sibling navigation so a user gesture keeps autoplay allowed
 let media: { el: HTMLMediaElement; dir: string } | null = null;
+// the integrity panel is built once per file and re-attached on the view's second draw
+// (after the folder listing arrives), so a panel the user opened is not thrown away (I-161)
+let panel: { path: string; p: chunksPanel.Panel } | null = null;
 
 export function render(root: HTMLElement, path: string): () => void {
   const dir = dirname(path);
@@ -120,7 +123,10 @@ export function render(root: HTMLElement, path: string): () => void {
     }
 
     const cs = status.current?.volume.chunk_size;
-    section.append(chunksPanel.render(path, entry && cs ? Math.ceil(entry.size / cs) : undefined));
+    const expected = entry && cs ? Math.ceil(entry.size / cs) : undefined;
+    if (!panel || panel.path !== path) panel = { path, p: chunksPanel.render(path, expected) };
+    else if (expected !== undefined) panel.p.expect(expected);
+    section.append(panel.p.el);
     root.append(section);
 
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
@@ -151,6 +157,7 @@ export function render(root: HTMLElement, path: string): () => void {
 
   return () => {
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
+    panel = null;
     const leaving = !location.hash.startsWith("#/file");
     if (leaving && media) {
       media.el.pause();
