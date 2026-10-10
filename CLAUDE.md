@@ -115,7 +115,7 @@ defines is used); the prose by `scripts/check-docs.sh` and misspell (`make docs-
 ## CLI (target surface; see the plan for details)
 
 `init` (no options: derived budget, auto redundancy, docs/12 §7), `join`, `serve`, `token`, `reset` (wipes local Raft state only, never shards) ·
-`status` (also prints the web UI URL; exits 1 until the node is ready), `node ls|describe|promote|demote|
+`status` (also prints the web UI URL; exits 1 until the node is ready), `dashboard` (opens it; `--print`), `node ls|describe|promote|demote|
 drain|remove|add-disk` (docs/14: disks are targets named `<host>/<n>`) · `check`, `repair`, `gc`, `fsck` · `volume
 describe|grow <disk> <size>|auto|set-redundancy` · `chunk describe <hash>`
 (lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report) · `update [--check|--rollback|--restart|--allow-downgrade]` · `snapshot <dir>`, `recover --voters` (docs/12 §9)

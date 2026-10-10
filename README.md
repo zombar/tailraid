@@ -125,6 +125,7 @@ Run these from any member. `tailraid node ls` shows who votes.
 
 ```sh
 tailraid status                    # health, leader, members, usage, warnings (exit 1 until the node is ready)
+tailraid dashboard                 # open the browser UI (--print: just the address)
 tailraid node ls                   # devices and their disks
 tailraid check                     # exit 1 if anything is degraded
 tailraid repair                    # repair now (it also runs every minute)
@@ -137,7 +138,7 @@ Every command takes `--json`, and `--node <ip>` to talk to another device.
 
 ## Browser UI
 
-Each device serves a web page at `http://<tailscale-ip>:20482/`, and `tailraid status` prints the address. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
+Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid status` prints the address, and `tailraid dashboard` opens it. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
 
 ## Configuration
 
