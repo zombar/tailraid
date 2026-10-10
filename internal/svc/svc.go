@@ -85,7 +85,7 @@ func Install(p Params) (Plan, error) {
 		if stage == "" {
 			stage = os.TempDir()
 		}
-		tmp := filepath.Join(stage, "tailraid.service")
+		tmp := path.Join(stage, "tailraid.service") // a Linux plan: slash paths whatever OS builds it
 		sudo := sudoPrefix(p)
 		return Plan{
 			Files: []File{{Path: tmp, Mode: 0o644, Content: systemdUnit(p)}},
@@ -138,7 +138,7 @@ func RefreshUnit(p Params) (Plan, error) {
 	if stage == "" {
 		stage = os.TempDir()
 	}
-	tmp := filepath.Join(stage, "tailraid.service")
+	tmp := path.Join(stage, "tailraid.service") // a Linux plan: slash paths whatever OS builds it
 	sudo := sudoPrefix(p)
 	return Plan{
 		Files: []File{{Path: tmp, Mode: 0o644, Content: systemdUnit(p)}},
