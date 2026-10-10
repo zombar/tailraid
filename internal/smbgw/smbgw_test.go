@@ -32,6 +32,7 @@ const (
 	statusCollision      uint32 = 0xC0000035
 	statusLogonFailure   uint32 = 0xC000006D
 	statusDiskFull       uint32 = 0xC000007F
+	statusIoError        uint32 = 0xC00000E9
 )
 
 const password = "correct-horse"
@@ -457,6 +458,31 @@ func TestSMB_WriteAtCap_WaitsThenSucceeds(t *testing.T) {
 	must(t, g.f.Flusher().FlushAll(ctx))
 	if got := g.readAll("/big", len(payload)); !bytes.Equal(got, payload) {
 		t.Fatalf("content differs at %d", testharness.FirstDiff(got, payload))
+	}
+}
+
+// A chunk the reader cannot rebuild (every holder down) answers the READ with
+// STATUS_UNEXPECTED_IO_ERROR, which a client surfaces as an error, never
+// STATUS_END_OF_FILE, which a client takes for a shorter file and hands the caller a
+// short, wrong buffer; the three-VM rounds caught the latter through a Windows mount
+// (docs/vms.md).
+// Invariant: I-40, I-109
+func TestSMB_UnreadableChunk_IsIoError(t *testing.T) {
+	g := startGateway(t)
+	g.create("/f")
+	payload := testharness.Pattern(3000, 7)
+	must(t, g.writeAt("/f", 0, payload))
+	must(t, g.f.Flusher().FlushAll(ctx)) // committed: the dirty copy is gone, reads go to the shards
+	for n := meta.NodeIdx(1); n <= 3; n++ {
+		g.f.SetDown(n, true)
+	}
+	fh, err := g.sh.Open("f")
+	must(t, err)
+	defer func() { _ = fh.Close() }()
+	out := make([]byte, len(payload))
+	n, err := fh.ReadAt(out, 0)
+	if st := ntStatus(err); st != statusIoError {
+		t.Fatalf("read with every holder down: %d bytes, status %#x (%v), want STATUS_UNEXPECTED_IO_ERROR", n, st, err)
 	}
 }
 

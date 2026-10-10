@@ -1,6 +1,7 @@
 package smb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"strings"
@@ -1046,5 +1047,59 @@ func TestChangeNotify(t *testing.T) {
 	}
 	if st := statusOf(t, mustDispatch(t, c, cmdChangeNotify, make([]byte, 32))); st != statusFileClosed {
 		t.Errorf("watching no handle answered %#x", st)
+	}
+}
+
+// Every reply in a signed chain carries a signature over what it is on the wire:
+// NextCommand set and the padding to the successor in place (MS-SMB2 3.3.4.1.1).
+// Signing a reply first and writing its offset afterwards broke the signature, and
+// Windows, which checks every reply of a CREATE + CLOSE compound, logged "signing
+// validation failed" and reported error 58 instead of the CREATE's own status.
+func TestASignedChainVerifiesEveryReply(t *testing.T) {
+	fs := &tinyFS{body: []byte("hello")}
+	c, _ := opened(t, fs, "/file.txt", false)
+	c.dialect = dialect302
+	key := bytes.Repeat([]byte{7}, 16)
+	c.sessions[9] = &session{signingKey: key}
+	sign := func(m []byte) []byte {
+		binary.LittleEndian.PutUint64(m[offSessionID:], 9)
+		signMessage(c.dialect, key, m)
+		return m
+	}
+
+	name := utf16le("nothing-here.txt")
+	create := make([]byte, 56)
+	binary.LittleEndian.PutUint32(create[36:], dispOpen)
+	binary.LittleEndian.PutUint16(create[44:], uint16(headerLen+56))
+	binary.LittleEndian.PutUint16(create[46:], uint16(len(name)))
+	first := request(cmdCreate, 1, append(create, name...))
+	for len(first)%8 != 0 {
+		first = append(first, 0)
+	}
+	binary.LittleEndian.PutUint32(first[offNextCommand:], uint32(len(first)))
+	first = sign(first)
+
+	closing := make([]byte, 24)
+	copy(closing[8:], allOnesFileID[:])
+	second := request(cmdClose, 1, closing)
+	binary.LittleEndian.PutUint32(second[offFlags:], flagRelatedOps)
+	second = sign(second)
+
+	out, err := c.dispatchChain(append(first, second...))
+	if err != nil {
+		t.Fatalf("the chain: %v", err)
+	}
+	h, err := parseHeader(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.status != statusObjectNameNotFound || h.nextCommand == 0 {
+		t.Fatalf("first reply %#x, next %d", h.status, h.nextCommand)
+	}
+	if !verifyMessage(c.dialect, key, out[:h.nextCommand]) {
+		t.Error("the first reply's signature does not cover what was sent")
+	}
+	if !verifyMessage(c.dialect, key, out[h.nextCommand:]) {
+		t.Error("the last reply's signature does not cover what was sent")
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -97,6 +96,9 @@ func initCmd() *cobra.Command {
 			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid)
 			if err != nil {
 				return err
+			}
+			if err := node.Snapshot(cmd.Context(), n); err != nil { // the first serve restores the table from it (I-135)
+				return fmt.Errorf("snapshot after init: %w", err)
 			}
 			mode := "manual"
 			if auto {
@@ -225,11 +227,11 @@ func mountCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var stdin io.Reader // Windows' `net use … *` reads the password here; the others prompt
+			var env []string // Windows' New-SmbMapping reads the password from the environment; the others prompt
 			if runtime.GOOS == "windows" {
-				stdin = strings.NewReader(cfg.SMB.Password + "\r\n")
+				env = []string{mount.SMBPasswordEnv + "=" + cfg.SMB.Password}
 			}
-			return mount.RunWithInput(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, stdin)
+			return mount.RunWithEnv(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, env)
 		},
 	}
 }

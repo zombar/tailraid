@@ -33,14 +33,15 @@ func TestCommand_PerOS(t *testing.T) {
 	}
 }
 
-// The Windows mount names the port (24H2's /TCPPORT), the user, and reads the password
-// from stdin (`*`): it is never an argument (docs/15 §6).
+// The Windows mount names the port (24H2's -TcpPort), the user, and takes the password
+// from the environment variable: it is never an argument (docs/15 §6), and it does not
+// go through `net use … *`, which reads a password from the console only.
 // Invariant: I-110
 func TestSMBCommand_PerOS(t *testing.T) {
 	cases := []struct {
 		goos, want string
 	}{
-		{"windows", `net use T: \\127.0.0.1\tailraid /TCPPORT:20445 /USER:tailraid * /PERSISTENT:NO`},
+		{"windows", `powershell -NoProfile -NonInteractive -Command New-SmbMapping -LocalPath T: -RemotePath \\127.0.0.1\tailraid -TcpPort 20445 -UserName tailraid -Password $env:TAILRAID_SMB_PASSWORD -Persistent $false`},
 		{"darwin", "mount_smbfs //tailraid@127.0.0.1:20445/tailraid /Users/me/TailRAID"},
 		{"linux", "mount -t cifs //127.0.0.1/tailraid /Users/me/TailRAID -o port=20445,username=tailraid,vers=3.0"},
 	}
@@ -57,7 +58,7 @@ func TestSMBCommand_PerOS(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s:\n got  %s\n want %s", tc.goos, got, tc.want)
 		}
-		if strings.Contains(got, "password") || strings.Contains(got, "Password") {
+		if strings.Contains(strings.ReplaceAll(got, "-Password $env:"+SMBPasswordEnv, ""), "assword") {
 			t.Errorf("%s: a password on the command line: %s", tc.goos, got)
 		}
 	}

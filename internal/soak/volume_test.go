@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-billy/v5/memfs"
 
@@ -37,5 +38,25 @@ func TestVolume_Hash_MatchesReadAll(t *testing.T) {
 		if _, _, err := v.Hash("/missing"); err == nil {
 			t.Fatalf("%s: hash of a missing file succeeded", name)
 		}
+	}
+}
+
+// The OS volume retries an error its Transient predicate accepts for RetryFor and stops
+// at the first other error: what a Windows SMB mapping needs while its gateway restarts.
+func TestOSVolume_RetriesTransient(t *testing.T) {
+	root := t.TempDir()
+	v := soak.OSVolume{Root: root, Transient: os.IsNotExist, RetryFor: 10 * time.Second}
+	go func() {
+		time.Sleep(2500 * time.Millisecond) //nolint:forbidigo // the file appears while the volume retries
+		_ = os.WriteFile(filepath.Join(root, "late"), []byte("here"), 0o600)
+	}()
+	got, err := v.ReadAll("/late")
+	if err != nil || string(got) != "here" {
+		t.Fatalf("read of a file that appears while retrying: %q %v", got, err)
+	}
+	none := soak.OSVolume{Root: root, Transient: func(error) bool { return false }, RetryFor: 10 * time.Second}
+	start := time.Now()
+	if _, err := none.ReadAll("/never"); !os.IsNotExist(err) || time.Since(start) > time.Second {
+		t.Fatalf("a non-transient error is not retried: %v after %v", err, time.Since(start))
 	}
 }

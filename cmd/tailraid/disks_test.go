@@ -49,7 +49,7 @@ func TestCLI_InitWithDisks_AndAddDisk(t *testing.T) {
 	})
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
 	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addr); return err == nil }, "node never served")
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addr); return err == nil && h.Ready }, "node never became ready")
 
 	// a non-empty path is refused before anything is registered
 	junk := filepath.Join(home, "junk")

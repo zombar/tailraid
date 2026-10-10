@@ -202,6 +202,11 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	if seed, err := cluster.LoadMemberSeed(cfgB.Node.DataDir); err != nil || len(seed) == 0 || seed[0].Addr != "127.0.0.1" {
 		t.Fatalf("member seed after join: %+v %v", seed, err)
 	}
+	// and the log it received is snapshotted, so serve restores the table at open (the
+	// snapshot waits for the FSM to pass the joiner's own configuration entry)
+	if snaps, err := os.ReadDir(filepath.Join(cfgB.Node.DataDir, "raft", "snapshots")); err != nil || len(snaps) == 0 {
+		t.Fatalf("no raft snapshot after the join: %v %v", snaps, err)
+	}
 	cid, err := cluster.LoadClusterID(cfgA.Node.DataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -241,4 +246,113 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 		rep, err := admin.FetchStatus(ctx, rpc.NewClient(cid, nil), addrA)
 		return err == nil && len(rep.Nodes) == 2 && rep.Nodes[1].Live
 	}, "the leader never saw the joined node live")
+}
+
+// A restarted follower whose leader is gone serves anyway: its health answers within
+// seconds with ready=false, and it is ready once the leader is back. A fresh follower
+// has a snapshot since the join took one, so this holds from the first restart on.
+// Invariant: I-135, I-125
+func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
+	pathA, cfgA := devHome(t)
+	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	serve := func(cfg config.Config) func() { // returns the stop
+		sctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- node.Serve(sctx, cfg, slog.Default(), "test") }()
+		return func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("serve: %v", err)
+			}
+		}
+	}
+	ctx := context.Background()
+	stopA := serve(cfgA)
+	addrA := fmt.Sprintf("127.0.0.1:%d", cfgA.Listen.RPC)
+	probe := rpc.NewClient([16]byte{}, nil)
+	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addrA); return err == nil }, "node A never served")
+	pathB, _ := devHome(t)
+	if out, err := run(t, "join", "--config", pathB, addrA, "testtoken"); err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	cfgB, err := config.Load(pathB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrB := fmt.Sprintf("127.0.0.1:%d", cfgB.Listen.RPC)
+	stopB := serve(cfgB)
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B never became ready")
+	stopB()
+	stopA() // the leader is gone; B, a non-voter, cannot elect one
+	stopB = serve(cfgB)
+	defer stopB()
+	start := time.Now()
+	var h rpc.Health
+	testharness.Eventually(t, func() bool { var err error; h, err = probe.Health(ctx, addrB); return err == nil }, "B did not serve without a leader")
+	if h.Ready {
+		t.Fatal("B reports ready without a leader")
+	}
+	if took := time.Since(start); took > 15*time.Second {
+		t.Fatalf("B took %v to answer without a leader", took)
+	}
+	stopA = serve(cfgA)
+	defer stopA()
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B not ready once the leader is back")
+}
+
+// The node that ran init never joined anything, so no join snapshotted it: the snapshot
+// a ready serve takes is what lets it restart without a quorum (its voter peer gone)
+// and serve stale until the peer is back.
+// Invariant: I-135
+func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
+	pathA, cfgA := devHome(t)
+	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	serve := func(cfg config.Config) func() {
+		sctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- node.Serve(sctx, cfg, slog.Default(), "test") }()
+		return func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("serve: %v", err)
+			}
+		}
+	}
+	ctx := context.Background()
+	stopA := serve(cfgA)
+	addrA := fmt.Sprintf("127.0.0.1:%d", cfgA.Listen.RPC)
+	probe := rpc.NewClient([16]byte{}, nil)
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrA); return err == nil && h.Ready }, "node A never served")
+	pathB, _ := devHome(t)
+	if out, err := run(t, "join", "--config", pathB, addrA, "testtoken", "--voter"); err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	cfgB, err := config.Load(pathB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrB := fmt.Sprintf("127.0.0.1:%d", cfgB.Listen.RPC)
+	stopB := serve(cfgB)
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B never became ready")
+	// A is killed (no clean shutdown, no leadership transfer) with B gone: two voters, one left
+	stopB()
+	stopA()
+	stopA = serve(cfgA)
+	defer stopA()
+	start := time.Now()
+	var h rpc.Health
+	testharness.Eventually(t, func() bool { var err error; h, err = probe.Health(ctx, addrA); return err == nil }, "A did not serve without a quorum")
+	if h.Ready {
+		t.Fatal("A reports ready without a quorum")
+	}
+	if took := time.Since(start); took > 15*time.Second {
+		t.Fatalf("A took %v to answer without a quorum", took)
+	}
+	stopB = serve(cfgB)
+	defer stopB()
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrA); return err == nil && h.Ready }, "A not ready once B is back")
 }

@@ -529,7 +529,11 @@ New data spreads over the new space straight away; existing data stays where it 
 				fmt.Fprintln(cmd.OutOrStdout(), "restart the service to apply it: tailraid stop && tailraid start")
 				return nil
 			}
-			return restartService(cmd, true)
+			p, _, _, err := svcParams(cmd)
+			if err != nil {
+				return err
+			}
+			return restartService(cmd, &p)
 		},
 	}
 	grow.Flags().Bool("no-restart", false, "write the config only; the budget applies at the next restart")

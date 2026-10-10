@@ -271,7 +271,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   that every target runs under a restarting service manager (docs/12 §1) and adds kills,
   restarts and partitions through `/dev/exit` and `/dev/fault`; without it those phases
   are reported as *skipped (capability)*. All IO is confined to `/_soak/<timestamp>/`, deleted
-  at the end.
+  at the end. `--full` runs the long profile (the same one as `make soak-full`: a 64 MiB
+  corpus file, the 1 GiB large file, more small files and churn, ten leader kills; about
+  an hour) instead of the quick one.
 - **In-process** (`internal/soak` tests): the same phases run against the `testharness`
   cluster with a billy-backed `Volume`, the fake clock behind `Wait`, and tiny sizes, so the
   scenario code and the report are unit-tested in seconds.
@@ -325,7 +327,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
   it, and once the service manager has it back it drops every peer until the phase's
   `Start`, so "m nodes dead" holds for as long as the phase needs rather than for the
-  service manager's restart delay. The device running `verify` is never killed (its mount
+  service manager's restart delay. No rule ever names the device running `verify`: its
+  calls must still reach a held-down or cut-off node to lift the rules, and its own
+  node's rules cut the link in both directions on their own (the three-VM rounds found
+  a partition that could never be healed otherwise). The device running `verify` is never killed (its mount
   is the run's only volume); when it leads, the consensus phase is skipped.
 - **Driver rules.** A phase runs in its own goroutine under the profile's `PhaseTimeout`
   (20 min in the quick profile; 0 is no limit): a phase that panics or overruns is one
@@ -373,6 +378,14 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   minute on an idle machine; run it on its own, since `make check` alongside it turns that
   into ten.
   Acceptance for M3b includes injecting one deliberate bug and watching the suite go red.
+- **Three local VMs** ([vms.md](vms.md)): one macOS, one Linux and one Windows guest on
+  this Mac, joined to a throwaway headscale, running the real binaries under launchd,
+  systemd and the SCM with the real NFS and SMB mounts. `make vms-rounds` runs three
+  rounds, each OS running `init` in turn while the other two join by name, restarts the
+  joiners, moves data across the three mounts, runs `verify --destructive --restarts` from
+  the first node and recovers a one-voter cluster. It is the tier where Tailscale, WhoIs,
+  the service managers and the kernel mount clients are real, and the one that would have
+  caught the v0.3.2 join defects (I-76, I-92).
 
 ## 7. CI
 
@@ -414,6 +427,6 @@ components they exercise.
 | Invariant | Tests |
 |---|---|
 | I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
-| I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores` |
+| I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores`, `TestPhases_MembershipRestoresAutoMode` |
 | I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
 | I-114 | `TestExecute_AbortBeforePhases`, `TestExecute_CancelMarksNotRun`, `TestRender_ZeroPhasesAborted`, `TestRender_NotRunPhases`, `TestSummary_SkippedCheckCoversNothing` |

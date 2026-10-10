@@ -44,12 +44,11 @@ ticking.
 
 ## 3. Mount
 
-- [ ] `tailraid.exe mount T:` runs
-      `net use T: \\127.0.0.1\tailraid /TCPPORT:20445 /USER:tailraid * /PERSISTENT:NO`
-      with the password on its standard input, and `T:` appears in Explorer. Record
-      whether `net.exe` accepted the piped password; if it prompted or failed, run the
-      PowerShell form the command prints (`New-SmbMapping … -TcpPort 20445 -UserName
-      tailraid -Password <smb.password>`) and record that instead
+- [ ] `tailraid.exe mount T:` runs `New-SmbMapping … -TcpPort 20445 -UserName tailraid`
+      through PowerShell with the password in the child's environment, and `T:` appears
+      in Explorer. (The `net use … *` form reads a password from the console only; the
+      three-VM rig showed it failing with "System error 86" from any other session.) If
+      PowerShell is unavailable, run the console form the command prints and record that
 - [ ] If `net use` fails with "System error 53" or "67" (path not found): try
       `\\localhost\tailraid` and `\\<machine name>\tailraid` with the same `/TCPPORT`, and
       record which name the redirector accepts for a non-445 loopback target. The config

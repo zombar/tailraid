@@ -181,6 +181,37 @@ This runs the soak scenarios against your live cluster and writes an HTML report
 
 CI runs the same scenarios against Docker clusters: four hosts with three disks each, and one host with four disks. See the **[latest report](docs/reports/latest.html)** (download it; GitHub doesn't render HTML).
 
+## Testing a change before you ship it
+
+Two rigs run the soak scenarios without touching your cluster. The Docker one is quick and runs anywhere Docker runs; the VM one is slower but real: three operating systems, their service managers and their mount clients.
+
+### The Docker soak
+
+```sh
+make soak          # five nodes (four with two disks, one diskless voter), the quick profile, ~10 min
+make soak-single   # one node with four disks
+make soak-full     # the long profile, ~1 h
+```
+
+Each target cross-compiles the binary for the Docker engine's architecture, brings up `test/soak/docker-compose.yml` (fake tailnet identities, `dev.enabled`, 20 s repair knobs, a worker sidecar per node that reaches the node's loopback NFS gateway), drives the fourteen phases from the host with `cmd/soak`, writes `report.html` and `results.jsonl` in the repository root and tears the cluster down. It needs Docker Desktop (or any engine with Compose) and nothing else. Run it on its own: `make check` alongside it turns ten minutes into an hour.
+
+### Three local VMs
+
+On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest on a throwaway tailnet, each OS running `tailraid init` in turn while the other two join it by name, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a snapshot and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
+
+| Step | Command | Notes |
+|---|---|---|
+| once | `make vms-setup` | Tart, Packer, QEMU and the rig's SSH key; no sudo. Docker Desktop must be running (it hosts the control server) |
+| once | download the Windows 11 ARM64 ISO into `test/vms/iso/` | from [microsoft.com/software-download/windows11arm64](https://www.microsoft.com/software-download/windows11arm64); the page needs a browser |
+| once | `make vms-images` | the golden images: a minute each for macOS and Linux, 30–60 minutes for the unattended Windows install |
+| each session | `make vms-up` | starts headscale and the three guests, registering fresh ones |
+| | `make vms-rounds` | three rounds, about an hour and a quarter; `FULL=1` runs the long verify profile; summary and reports in `docs/reports/vms/<date>/` |
+| | `make vms-round FIRST=linux` | one round; `OSES="mac linux"` runs it on two guests while the Windows image is not built yet |
+| | `make vms-down` | stops everything and keeps every state, so the next `vms-up` registers nothing |
+| | `make vms-destroy` | removes the instances and the control server's state; the images stay |
+
+The guests take about 120 GB of disk. [docs/vms.md](docs/vms.md) explains what each step proves, how the networking is wired (the Tart guests' NAT, the Windows guest behind QEMU's user-mode NAT, headscale over TLS from a CA the rig generates) and what to do when something does not come up.
+
 ## Verifying a download
 
 Every release carries `sha256sums.txt` and `sha256sums.txt.minisig`, a [minisign](https://jedisct1.github.io/minisign/) signature over the sums by the release key. `tailraid update` checks both before it swaps a binary. To check a download by hand, verify the sums file against the public key printed in [docs/12-operations.md](docs/12-operations.md) §4, then the binary against the sums:
@@ -219,6 +250,8 @@ Details: [docs/12-operations.md](docs/12-operations.md) §4.
 | [docs/05-failure-model.md](docs/05-failure-model.md) | exactly what "no data loss" covers |
 | [docs/14-disks.md](docs/14-disks.md) | several disks per device |
 | [docs/12-operations.md](docs/12-operations.md) | services, logs, releases, self-update, backup and recovery |
+| [docs/09-testing-strategy.md](docs/09-testing-strategy.md) | the test tiers, the soak suite and its report |
+| [docs/vms.md](docs/vms.md) | the three-VM rig: setup, what a round proves, results |
 | [docs/invariants.md](docs/invariants.md) | every promise the system makes, and the tests that prove it |
 | [CLAUDE.md](CLAUDE.md) | how the code is written and tested |
 

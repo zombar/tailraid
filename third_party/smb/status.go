@@ -15,6 +15,9 @@ const (
 	statusInvalidParameter uint32 = 0xC000000D
 	statusNoSuchFile       uint32 = 0xC000000F
 	statusEndOfFile        uint32 = 0xC0000011
+	// a read the backend cannot serve (tailraid: too few shards): an error the client
+	// surfaces, where END_OF_FILE would make it return a shorter file
+	statusUnexpectedIoError uint32 = 0xC00000E9
 	// BUFFER_OVERFLOW is not an error: the high bit is a WARNING, and a
 	// client reads the reply that comes with it and then asks for the rest.
 	statusBufferOverflow       uint32 = 0x80000005

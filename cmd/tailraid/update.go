@@ -34,6 +34,16 @@ present (a private fork needs it).`,
 			rollback, _ := cmd.Flags().GetBool("rollback")
 			restart, _ := cmd.Flags().GetBool("restart")
 			out := cmd.OutOrStdout()
+			// the service parameters are resolved before any swap: on Linux the running
+			// binary's path (/proc/self/exe) follows the file, which the swap renames away
+			var params *svc.Params
+			if restart {
+				p, _, _, err := svcParams(cmd)
+				if err != nil {
+					return err
+				}
+				params = &p
+			}
 			if rollback {
 				exe, err := executable()
 				if err != nil {
@@ -43,7 +53,7 @@ present (a private fork needs it).`,
 					return err
 				}
 				fmt.Fprintf(out, "restored the previous binary at %s\n", exe)
-				return restartService(cmd, restart)
+				return restartService(cmd, params)
 			}
 			u := &update.Updater{Owner: "zombar", Repo: "tailraid", Token: update.Token(ctx), Out: out}
 			rel, err := u.Resolve(ctx, want)
@@ -87,7 +97,7 @@ present (a private fork needs it).`,
 					fmt.Fprintln(out, "restart the service: tailraid stop && tailraid start (or update --restart next time)")
 				}
 			}
-			return restartService(cmd, restart)
+			return restartService(cmd, params)
 		},
 	}
 	c.Flags().Bool("check", false, "only report whether a newer release exists (exit 2 when it does)")
@@ -108,21 +118,18 @@ func executable() (string, error) {
 	return filepath.EvalSymlinks(exe)
 }
 
-// restartService stops and starts the installed service when asked. The stop plan
-// returns only once the old process has exited, so the start runs the new binary (I-131).
-func restartService(cmd *cobra.Command, restart bool) error {
-	if !restart {
+// restartService stops and starts the installed service when asked (p nil: not asked),
+// with parameters resolved before the binary was swapped. The stop plan returns only
+// once the old process has exited, so the start runs the new binary (I-131).
+func restartService(cmd *cobra.Command, p *svc.Params) error {
+	if p == nil {
 		return nil
 	}
-	p, _, _, err := svcParams(cmd)
+	stop, err := svc.Stop(*p)
 	if err != nil {
 		return err
 	}
-	stop, err := svc.Stop(p)
-	if err != nil {
-		return err
-	}
-	start, err := svc.Start(p)
+	start, err := svc.Start(*p)
 	if err != nil {
 		return err
 	}

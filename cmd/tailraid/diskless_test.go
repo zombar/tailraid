@@ -35,7 +35,7 @@ func serveInBackground(t *testing.T, cfg config.Config) (context.Context, string
 	})
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
 	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addr); return err == nil }, "node never served")
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addr); return err == nil && h.Ready }, "node never became ready")
 	return ctx, addr
 }
 

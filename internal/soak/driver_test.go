@@ -29,6 +29,7 @@ type fakeEnv struct {
 	caps      Caps
 	statusErr error
 	dump      string
+	auto      bool // the volume's policy is automatic until a SetPolicy pins it
 }
 
 func newFakeEnv(n int) *fakeEnv {
@@ -65,7 +66,10 @@ func (e *fakeEnv) Status(_ context.Context, n NodeRef) (admin.Report, error) {
 	if e.statusErr != nil {
 		return admin.Report{}, e.statusErr
 	}
-	rep := admin.Report{Node: n.Name, Leader: "n1", Health: "healthy", Volume: admin.VolumeReport{K: 2, M: 1, ChunkSize: 4096}}
+	e.mu.Lock()
+	auto := e.auto
+	e.mu.Unlock()
+	rep := admin.Report{Node: n.Name, Leader: "n1", Health: "healthy", Volume: admin.VolumeReport{K: 2, M: 1, ChunkSize: 4096, Auto: auto}}
 	for _, m := range e.nodes {
 		rep.Nodes = append(rep.Nodes, admin.NodeReport{Idx: m.Idx, Name: m.Name, Kind: "device", State: "active", Voter: true, Leader: m.Idx == 1, Live: true})
 	}
@@ -77,6 +81,9 @@ func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error)     { return repa
 func (e *fakeEnv) GCNow(context.Context) (repair.Result, error)    { return repair.Result{}, nil }
 func (e *fakeEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	e.record(ctx, fmt.Sprintf("set-policy %d+%d", k, m))
+	e.mu.Lock()
+	e.auto = false
+	e.mu.Unlock()
 	return nil
 }
 
@@ -108,6 +115,9 @@ func (e *fakeEnv) Fill(ctx context.Context, n NodeRef, _ string, b uint64) error
 
 func (e *fakeEnv) SetPolicyAuto(ctx context.Context) error {
 	e.record(ctx, "set-policy auto")
+	e.mu.Lock()
+	e.auto = true
+	e.mu.Unlock()
 	return nil
 }
 
@@ -459,5 +469,32 @@ func TestCaptureDumps_TotalCap(t *testing.T) {
 	want := dumpTotalMax / (dumpMax + len("\n... (truncated)")) // 7: the eighth would cross the total
 	if dumps != want || notes != 9-dumps || bytesHeld > dumpTotalMax {
 		t.Fatalf("%d dumps (want %d), %d omitted, %d bytes", dumps, want, notes, bytesHeld)
+	}
+}
+
+// The membership phase hands the volume back in the mode it found it: an auto volume
+// is auto again afterwards, not pinned to the policy auto had chosen. The three-VM
+// rounds found every later step seeing a pinned volume.
+// Invariant: I-112
+func TestPhases_MembershipRestoresAutoMode(t *testing.T) {
+	for _, auto := range []bool{true, false} {
+		e := newFakeEnv(4)
+		e.auto = auto
+		e.caps = Caps{Mutate: true, Corrupt: true, Kill: true, Partition: true, MultiGateway: true, Disks: true}
+		var out bytes.Buffer
+		r := fakeRun(e, &out, Phase{Name: "7 membership", Run: phaseMembership})
+		if _, err := r.Execute(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		changed := false
+		for _, call := range e.log() {
+			changed = changed || strings.HasPrefix(call, "set-policy")
+		}
+		if !changed {
+			t.Fatalf("auto %v: the phase changed no policy: %v", auto, e.log())
+		}
+		if e.auto != auto {
+			t.Fatalf("auto %v before the phase, %v after: %v", auto, e.auto, e.log())
+		}
 	}
 }

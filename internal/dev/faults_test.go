@@ -15,6 +15,7 @@ import (
 	"github.com/zombar/tailraid/internal/dev"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // A drop rule cuts all four paths on the node holding it: Raft dials to the peer, Raft
@@ -102,3 +103,59 @@ func (fakeApplier) AppliedIndex() uint64  { return 0 }
 func (fakeApplier) IsLeader() bool        { return true }
 func (fakeApplier) LeaderRPCAddr() string { return "" }
 func (fakeApplier) Ready() bool           { return true }
+
+// A rule that lands after a Raft connection is up fails that connection: the node holding
+// the rule cuts a link it had open (a leader's replication pipelines) without the other
+// side's help, and a heal lets a new dial through.
+// Invariant: I-59
+func TestFaults_RuleFailsOpenRaftConnection(t *testing.T) {
+	var cid [16]byte
+	cid[0] = 9
+	faults := dev.NewFaults()
+	ta, err := cluster.NewTransport("127.0.0.1:0", cid, nil, faults, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ta.(*raft.NetworkTransport).Close()
+	// B listens on a port A can name: the transport advertises its bind address
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrB := l.Addr().String()
+	_ = l.Close()
+	tb, err := cluster.NewTransport(addrB, cid, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tb.(*raft.NetworkTransport).Close()
+	// B answers every request, so A's calls complete and keep their pooled connection;
+	// Close leaves pooled connections alone, so they are closed first (B's handler
+	// goroutines end with them)
+	defer ta.(*raft.NetworkTransport).CloseStreams()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case r := <-tb.Consumer():
+				r.Respond(&raft.AppendEntriesResponse{Success: true}, nil)
+			case <-stop:
+				return
+			}
+		}
+	}()
+	ping := func() error {
+		var resp raft.AppendEntriesResponse
+		return ta.(*raft.NetworkTransport).AppendEntries("", raft.ServerAddress(addrB), &raft.AppendEntriesRequest{ProtocolVersion: raft.ProtocolVersionMax}, &resp)
+	}
+	if err := ping(); err != nil {
+		t.Fatalf("ping without rules: %v", err)
+	}
+	faults.Set([]string{"127.0.0.1"})
+	if err := ping(); err == nil || !isDrop(err) {
+		t.Fatalf("ping over the open connection with a rule: %v", err)
+	}
+	faults.Set(nil)
+	testharness.Eventually(t, func() bool { return ping() == nil }, "no ping after the heal")
+}

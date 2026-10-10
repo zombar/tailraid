@@ -38,9 +38,16 @@ const (
 	smbUser  = "tailraid"
 )
 
+// SMBPasswordEnv is the environment variable the Windows mount command reads the share
+// password from: a child's environment is readable by its own user and administrators
+// only, unlike its argument list. `net use … *` was not an option: it reads the password
+// from the console, never from a pipe, so a mount from any non-console session (SSH, a
+// script) failed with "System error 86".
+const SMBPasswordEnv = "TAILRAID_SMB_PASSWORD" //nolint:gosec // the variable's name, not a credential
+
 // SMBCommand returns the program and arguments that mount the SMB gateway at smbAddr
-// (host:port) onto target. On Windows the password is read from standard input by the
-// `*` form of `net use`, so it is never on the command line; macOS and Linux prompt.
+// (host:port) onto target. On Windows it is New-SmbMapping through PowerShell, with the
+// password taken from SMBPasswordEnv (RunWithEnv sets it); macOS and Linux prompt.
 func SMBCommand(goos, smbAddr, target string) (string, []string, error) {
 	host, port, err := net.SplitHostPort(smbAddr)
 	if err != nil {
@@ -48,7 +55,11 @@ func SMBCommand(goos, smbAddr, target string) (string, []string, error) {
 	}
 	switch goos {
 	case "windows":
-		return "net", []string{"use", target, `\\` + host + `\` + smbShare, "/TCPPORT:" + port, "/USER:" + smbUser, "*", "/PERSISTENT:NO"}, nil
+		return "powershell", []string{
+			"-NoProfile", "-NonInteractive", "-Command",
+			"New-SmbMapping", "-LocalPath", target, "-RemotePath", `\\` + host + `\` + smbShare, "-TcpPort", port,
+			"-UserName", smbUser, "-Password", "$env:" + SMBPasswordEnv, "-Persistent", "$false",
+		}, nil
 	case "darwin":
 		return "mount_smbfs", []string{fmt.Sprintf("//%s@%s:%s/%s", smbUser, host, port, smbShare), target}, nil
 	case "linux":
@@ -81,36 +92,38 @@ func CheckWindowsBuild(build uint32) error {
 	return nil
 }
 
-// WindowsNotes is printed when `net.exe` cannot be run: the PowerShell form of the mount.
-const WindowsNotes = `Windows mounts the SMB gateway (Windows 11 24H2 or newer). Without net.exe, from PowerShell:
-  New-SmbMapping -LocalPath T: -RemotePath \\127.0.0.1\tailraid -TcpPort 20445 -UserName tailraid -Password <smb.password>
-with smb.password from the config file. See docs/15-smb-gateway.md and docs/windows-checklist.md.`
+// WindowsNotes is printed when PowerShell cannot be run: the console form of the mount.
+const WindowsNotes = `Windows mounts the SMB gateway (Windows 11 24H2 or newer). Without PowerShell, from a console:
+  net use T: \\127.0.0.1\tailraid /TCPPORT:20445 /USER:tailraid * /PERSISTENT:NO
+and type smb.password from the config file at the prompt. See docs/15-smb-gateway.md and docs/windows-checklist.md.`
 
 // Run executes prog with args, printing the command first. On Unix an EPERM from a
 // non-root user is retried through sudo so the user sees exactly what is elevated.
 func Run(ctx context.Context, out io.Writer, goos, prog string, args []string) error {
-	return RunWithInput(ctx, out, goos, prog, args, nil)
+	return RunWithEnv(ctx, out, goos, prog, args, nil)
 }
 
-// RunWithInput is Run with the command's standard input (nil is the process's own): the
-// Windows mount reads the share password there.
-func RunWithInput(ctx context.Context, out io.Writer, goos, prog string, args []string, stdin io.Reader) error {
+// RunWithEnv is Run with extra "KEY=value" entries in the command's environment: the
+// Windows mount takes the share password from SMBPasswordEnv there, so it is in neither
+// the printed command nor the process list.
+func RunWithEnv(ctx context.Context, out io.Writer, goos, prog string, args, env []string) error {
 	fmt.Fprintf(out, "+ %s %s\n", prog, strings.Join(args, " "))
-	if stdin == nil {
-		stdin = os.Stdin
+	run := func(name string, args ...string) error {
+		cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // the mount command this package built
+		cmd.Stdout, cmd.Stderr, cmd.Stdin = out, out, os.Stdin
+		if len(env) > 0 {
+			cmd.Env = append(os.Environ(), env...)
+		}
+		return cmd.Run()
 	}
-	cmd := exec.CommandContext(ctx, prog, args...) //nolint:gosec // the mount command this package built
-	cmd.Stdout, cmd.Stderr, cmd.Stdin = out, out, stdin
-	err := cmd.Run()
+	err := run(prog, args...)
 	if err == nil {
 		return nil
 	}
 	var ee *exec.ExitError
 	if goos != "windows" && errors.As(err, &ee) && os.Geteuid() != 0 {
 		fmt.Fprintf(out, "+ sudo %s %s\n", prog, strings.Join(args, " "))
-		cmd = exec.CommandContext(ctx, "sudo", append([]string{prog}, args...)...) //nolint:gosec // the same command, elevated
-		cmd.Stdout, cmd.Stderr, cmd.Stdin = out, out, stdin
-		return cmd.Run()
+		return run("sudo", append([]string{prog}, args...)...)
 	}
 	if goos == "windows" && errors.Is(err, exec.ErrNotFound) {
 		fmt.Fprintln(out, WindowsNotes)

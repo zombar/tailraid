@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -48,15 +49,26 @@ func (n *Node) Propose(ctx context.Context, cmd meta.Command) (meta.Result, uint
 			res, index, err = fwd.ApplyAt(ctx, redirect, cmd)
 		}
 	}
-	switch {
-	case err == nil:
+	if err == nil {
 		return res, index, nil
+	}
+	return meta.Result{}, 0, forwardErr(err)
+}
+
+// forwardErr classifies a forward that returned no result (I-95). A request that never
+// left (the dial was refused, or a fault rule dropped it) was not applied, so it is
+// retried like a missing leader: the leader is out of reach, which an election or a
+// heal mends within seconds. A timeout, an error after the request was sent, or the
+// leader's 500 may have applied the command; callers resolve that, never retry it blindly.
+func forwardErr(err error) error {
+	var opErr *net.OpError
+	switch {
 	case errors.Is(err, rpc.ErrNoLeader), errors.Is(err, rpc.ErrNotLeader):
-		return meta.Result{}, 0, fmt.Errorf("%w: %v", ErrNoLeader, err) //nolint:errorlint // transport detail
+		return fmt.Errorf("%w: %v", ErrNoLeader, err) //nolint:errorlint // transport detail
+	case errors.As(err, &opErr) && opErr.Op == "dial":
+		return fmt.Errorf("%w: leader unreachable: %v", ErrNoLeader, err) //nolint:errorlint // transport detail
 	default:
-		// a timeout, a transport error or the leader's 500: the command may have been
-		// applied (I-95); callers resolve it, never retry it blindly
-		return meta.Result{}, 0, fmt.Errorf("%w: forward: %w", meta.ErrUnknownOutcome, err)
+		return fmt.Errorf("%w: forward: %w", meta.ErrUnknownOutcome, err)
 	}
 }
 

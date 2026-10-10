@@ -31,7 +31,9 @@ service runs as LocalSystem, whose config home is `%ProgramData%\tailraid` — t
 
 Mounting stays a user action (`tailraid mount`) on every OS: the LaunchAgent and the
 systemd unit only serve. The mount survives service restarts because handles are stable
-(I-16) and the mounts are `soft`.
+(I-16) and the mounts are `soft`. The three service managers, the three mounts and the
+install, restart and recover paths are exercised on real guests by the three-VM rounds
+([vms.md](vms.md)).
 
 The service log prints the browser UI address (`http://<tsIP>:20482/`, docs/13) at start,
 and `tailraid status` shows it on its `web` line; `listen.web: 0` turns the UI off.
@@ -41,6 +43,22 @@ address in the node table (every peer dials it from then on) and exits with a no
 status, because its Raft and RPC listeners are bound to the old address; the service unit's
 restart policy brings it back on the new one within seconds. Without a service manager,
 restart `tailraid serve` by hand.
+
+**Start without a leader.** `serve` waits for the log only when its data directory holds
+no snapshot with its own row and the volume (the first start after a join that ended
+before the snapshot); otherwise it gives a leader five seconds (the usual case, so the
+legacy check below sees the whole log before any listener opens) and then starts its
+listeners, with or without one, serving its gateways stale (docs/02, I-39) and
+answering `/health` with `ready: false` until a leader connects, so `status` exits 1
+meanwhile (I-125); the legacy check runs again once the log has arrived. Raft
+restores a table at open from a snapshot only, and its own snapshots come every 8192
+entries, so `init`, `join`, a `serve` that has become ready and a clean shutdown each
+take one: the node that ran `init` and was killed an hour later restarts with its state
+like any other. A node
+that waited a minute for a leader and then exited was what the three-VM rounds saw: the
+service manager restarted it every minute and a killed node never came back within the
+soak's settle time, because the leader stays out of reach for as long as the fault lasts
+and the restart loop never let the node be reached either (I-135).
 
 **Confinement (Linux).** The unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
 `ProtectHome=read-only` and `PrivateTmp`, and `ReadWritePaths` names exactly the data
@@ -79,7 +97,7 @@ count on the next line (I-124).
 
 ## 2. Windows mount
 
-Windows mounts the SMB gateway (docs/15): `tailraid mount T:` runs `net use` with the
+Windows mounts the SMB gateway (docs/15): `tailraid mount T:` runs `New-SmbMapping` with the
 gateway's port, which needs Windows 11 24H2 or newer. There is no portmapper and no NFS
 client to enable.
 
@@ -90,7 +108,9 @@ Five endpoints (docs/08) turn a real node into a soak target:
 - `POST /dev/exit` replies `204` and exits with status 3 after 100 ms. With a service
   manager that restarts the process this is "kill a node".
 - `POST /dev/fault` with `{"drop":["ip",…]}` installs drop rules for the listed peers
-  on that node: the Raft stream layer refuses to dial them and closes their incoming
+  on that node: the Raft stream layer refuses to dial them, fails the connections it
+  already has with them (a leader's replication pipelines, which a rule on one side
+  alone must cut) and closes their incoming
   connections, the node RPC client refuses to send to them, and inbound RPC from them is
   answered `503`. An empty list heals. `GET /dev/fault` returns the rules. Rules live in
   memory only; a restart heals.
@@ -282,7 +302,7 @@ recovered nodes are two clusters.
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
-- **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
+- **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, fails the Raft connections already open with it, stops incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere; every command other than `serve` logs to stderr and never opens the file.
 - **I-61** — `update` replaces the binary only with an artifact whose SHA-256 matches the `sha256sums.txt` of the same release and which reports that release's version when run; on any failure the running binary is untouched and no partial file is left in its directory; a release that is not newer than a semver build is applied only when named explicitly.
 
@@ -326,6 +346,12 @@ recovered nodes are two clusters.
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
   refuses a running node, an uninitialised directory and a list without this node.
+- **I-135** — A `serve` whose data directory holds a snapshot with its own row and the
+  volume starts serving without a leader: after giving one five seconds its RPC answers
+  with `ready: false`, its gateways serve stale, and it is ready once a leader connects;
+  only a node without that state waits for the log, bounded, and exits when none arrives.
+  `init`, `join`, every `serve` once ready and every clean shutdown take a snapshot, so
+  the state is there from a node's first ready start on, leader or not.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -335,7 +361,7 @@ recovered nodes are two clusters.
 
 | ID | Tests |
 |---|---|
-| I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
+| I-59 | `TestFaults_DropRulesCutRaftAndRPC`, `TestFaults_RuleFailsOpenRaftConnection` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
@@ -349,3 +375,4 @@ recovered nodes are two clusters.
 | I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
+| I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |

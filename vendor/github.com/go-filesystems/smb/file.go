@@ -329,7 +329,7 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 		var err error
 		n, err = of.f.ReadAt(buf, offset)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return errorResponse(h, statusFor(err, statusEndOfFile)), nil
+			return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
 		}
 	} else {
 		// No positional read: the whole file, every time. See Opener's
@@ -337,7 +337,7 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 		// should not pretend to.
 		data, err := of.share.fsys.ReadFile(of.path)
 		if err != nil {
-			return errorResponse(h, statusFor(err, statusEndOfFile)), nil
+			return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
 		}
 		if offset < int64(len(data)) {
 			n = copy(buf, data[offset:])

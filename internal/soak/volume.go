@@ -4,10 +4,14 @@ package soak
 
 import (
 	"crypto/sha256"
+	"errors"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
+	"syscall"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 )
@@ -36,61 +40,119 @@ func hashReader(r io.Reader) ([32]byte, int64, error) {
 	return sum, n, err
 }
 
-// OSVolume is a mounted volume (the live environment's own kernel NFS client).
-type OSVolume struct{ Root string }
+// OSVolume is a mounted volume (the live environment's own kernel NFS or SMB client).
+// A Windows SMB mapping comes back after its gateway restarts only on a later access,
+// and the redirector reports "network path not found" for the few seconds it remembers
+// the failure, so on Windows an operation failing that way is retried for a bounded
+// time (Transient, docs/15 §8); the NFS clients ride out a restart on their own.
+type OSVolume struct {
+	Root string
+	// Transient reports an error worth retrying for RetryFor; nil retries nothing.
+	Transient func(error) bool
+	RetryFor  time.Duration
+}
 
 func (v OSVolume) abs(p string) string { return filepath.Join(v.Root, filepath.FromSlash(p)) }
 
-func (v OSVolume) Mkdir(p string) error { return os.MkdirAll(v.abs(p), 0o750) }
+// retry runs op until it returns nil, a non-transient error, or RetryFor has passed.
+func (v OSVolume) retry(op func() error) error {
+	deadline := time.Now().Add(v.RetryFor)
+	for {
+		err := op()
+		if err == nil || v.Transient == nil || !v.Transient(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(2 * time.Second) //nolint:forbidigo // the OS client's reconnection is wall-clock time
+	}
+}
+
+func (v OSVolume) Mkdir(p string) error {
+	return v.retry(func() error { return os.MkdirAll(v.abs(p), 0o750) })
+}
 
 func (v OSVolume) WriteAt(p string, off int64, data []byte) error {
-	f, err := os.OpenFile(v.abs(p), os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
+	return v.retry(func() error {
+		f, err := os.OpenFile(v.abs(p), os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		_, werr := f.WriteAt(data, off)
+		cerr := f.Close()
+		if werr != nil {
+			return werr
+		}
+		return cerr
+	})
+}
+
+func (v OSVolume) ReadAll(p string) (data []byte, err error) {
+	err = v.retry(func() error { data, err = os.ReadFile(v.abs(p)); return err })
+	return data, err
+}
+
+func (v OSVolume) Hash(p string) (sum [32]byte, n int64, err error) {
+	err = v.retry(func() error {
+		f, err := os.Open(v.abs(p))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		sum, n, err = hashReader(f)
 		return err
-	}
-	_, werr := f.WriteAt(data, off)
-	cerr := f.Close()
-	if werr != nil {
-		return werr
-	}
-	return cerr
+	})
+	return sum, n, err
 }
 
-func (v OSVolume) ReadAll(p string) ([]byte, error) { return os.ReadFile(v.abs(p)) }
-
-func (v OSVolume) Hash(p string) ([32]byte, int64, error) {
-	f, err := os.Open(v.abs(p))
-	if err != nil {
-		return [32]byte{}, 0, err
-	}
-	defer f.Close()
-	return hashReader(f)
+func (v OSVolume) Truncate(p string, size int64) error {
+	return v.retry(func() error { return os.Truncate(v.abs(p), size) })
 }
 
-func (v OSVolume) Truncate(p string, size int64) error { return os.Truncate(v.abs(p), size) }
-
-func (v OSVolume) Rename(from, to string) error { return os.Rename(v.abs(from), v.abs(to)) }
-
-func (v OSVolume) Remove(p string) error { return os.Remove(v.abs(p)) }
-
-func (v OSVolume) List(p string) ([]string, error) {
-	ents, err := os.ReadDir(v.abs(p))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(ents))
-	for _, e := range ents {
-		out = append(out, e.Name())
-	}
-	return out, nil
+func (v OSVolume) Rename(from, to string) error {
+	return v.retry(func() error { return os.Rename(v.abs(from), v.abs(to)) })
 }
 
-func (v OSVolume) Size(p string) (int64, error) {
-	st, err := os.Stat(v.abs(p))
-	if err != nil {
-		return 0, err
+func (v OSVolume) Remove(p string) error { return v.retry(func() error { return os.Remove(v.abs(p)) }) }
+
+func (v OSVolume) List(p string) (out []string, err error) {
+	err = v.retry(func() error {
+		ents, err := os.ReadDir(v.abs(p))
+		if err != nil {
+			return err
+		}
+		out = make([]string, 0, len(ents))
+		for _, e := range ents {
+			out = append(out, e.Name())
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (v OSVolume) Size(p string) (size int64, err error) {
+	err = v.retry(func() error {
+		st, err := os.Stat(v.abs(p))
+		if err != nil {
+			return err
+		}
+		size = st.Size()
+		return nil
+	})
+	return size, err
+}
+
+// TransientNetError reports the errors a Windows SMB mapping gives while its gateway is
+// back but the redirector has not reconnected: ERROR_BAD_NETPATH (53), ERROR_BAD_NET_RESP
+// (58), ERROR_UNEXP_NET_ERR (59) and ERROR_NETNAME_DELETED (64). Nothing on the other
+// OSes: their NFS clients ride out a gateway restart.
+func TransientNetError(err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
 	}
-	return st.Size(), nil
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == 53 || errno == 58 || errno == 59 || errno == 64
 }
 
 // BillyVolume drives a billy.Filesystem (the vfs of an in-process gateway).

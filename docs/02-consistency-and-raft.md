@@ -245,7 +245,7 @@ Health, computed locally:
 |---|---|---|
 | `Healthy` | leader known, last contact < 30 s | normal |
 | `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `EROFS`, which reaches the wire as `NFS3ERR_ACCES` (create, mkdir, symlink, setattr) or `NFS3ERR_IO` (remove, rmdir, rename): go-nfs maps a filesystem error per operation and has no `ROFS` mapping (07); before the threshold a failed proposal is retried with backoff, since a leader change takes seconds; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
-| `NoLeader` | Raft has no leader (quorum lost) | same as `Stale`; `status` reports which voters are unreachable |
+| `NoLeader` | Raft has no leader (an election, or quorum lost) | as `Stale` once the threshold has passed since the last leader contact (for a node that was the leader, which Raft dates no contact for, since it first saw no leader); before that proposals are retried with backoff, so a two-second election costs a client a wait, not an error; `status` reports which voters are unreachable |
 
 ## Proposing and leader forwarding
 
@@ -270,7 +270,9 @@ when leader, otherwise forwards the encoded command to the current leader with
   and `Rename` take `ErrNotExist` after an unknown outcome as the first attempt having
   landed. `SetAttr` sets absolute values and is simply repeated. A second unknown outcome
   in a row is `EIO`. Commands whose first proposal was *not* applied (`ErrNotLeader`,
-  `ErrNoLeader`) are retried with backoff until the gateway is stale.
+  `ErrNoLeader`, or a forward whose request never left because the leader's address
+  refused the dial or a fault rule dropped it) are retried with backoff until the gateway
+  is stale: the leader is out of reach, which an election or a heal mends within seconds.
 - A leader with no quorum eventually steps down; proposers see `ErrNoLeader` and the flusher
   backs off (data stays in the WAL, see 04).
 
@@ -370,7 +372,7 @@ no divergent state to merge because it never applied uncommitted entries.
   every replica; `/health` reports `meta.CodecVersion`, and `join` refuses a cluster whose
   node reports a newer one.
 - **I-95** — A proposal that may have been applied (leadership lost, timeout, cancelled
-  while pending, transport error, or the leader's `500`) is reported as
+  while pending, a transport error after the request was sent, or the leader's `500`) is reported as
   `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
   and resolves the second answer per command (`ErrExist`/`ErrNotExist` after an unknown
   outcome count as the first attempt having landed), so an acknowledged mutation is never
