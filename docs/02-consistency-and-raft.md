@@ -245,7 +245,7 @@ Health, computed locally:
 |---|---|---|
 | `Healthy` | leader known, last contact < 30 s | normal |
 | `Stale` | no leader contact for ≥ 30 s | reads from local FSM; metadata mutations (create, mkdir, unlink, rename, setattr) return `EROFS`, which reaches the wire as `NFS3ERR_ACCES` (create, mkdir, symlink, setattr) or `NFS3ERR_IO` (remove, rmdir, rename): go-nfs maps a filesystem error per operation and has no `ROFS` mapping (07); before the threshold a failed proposal is retried with backoff, since a leader change takes seconds; data WRITEs to existing files are still accepted into the WAL until the dirty caps (04), then `NFS3ERR_IO` |
-| `NoLeader` | Raft has no leader (quorum lost) | same as `Stale`; `status` reports which voters are unreachable |
+| `NoLeader` | Raft has no leader (an election, or quorum lost) | as `Stale` once the threshold has passed since the last leader contact (for a node that was the leader, which Raft dates no contact for, since it first saw no leader); before that proposals are retried with backoff, so a two-second election costs a client a wait, not an error; `status` reports which voters are unreachable |
 
 ## Proposing and leader forwarding
 

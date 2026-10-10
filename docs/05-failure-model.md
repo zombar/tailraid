@@ -173,5 +173,5 @@ re-placements (06 §3).
 |---|---|
 | I-12 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestCrash_AtEveryPoint`, `TestDurability_AckImpliesReadableFromKSurvivors`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts`, `TestModelCheck_Long` |
 | I-38 | `TestCrash_AtEveryPoint` |
-| I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale` |
+| I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale`, `TestStaleness_Table` |
 | I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO` |

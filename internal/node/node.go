@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -202,7 +203,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		uid, gid = 0, 0
 	}
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
-	fs.SetHealth(func() bool { return staleFor(node, prober, clk) })
+	var st staleness
+	fs.SetHealth(func() bool { return st.stale(node.Health(clk, prober).State, node.Raft.LastContact(), clk.Now()) })
 
 	rcfg := repair.DefaultConfig()
 	if rcfg.Grace, rcfg.FillAfter, err = cfg.RepairDurations(); err != nil {
@@ -400,18 +402,35 @@ func selfLogin(ctx context.Context, ts tailscale.Client, ip netip.Addr, log *slo
 	return w.Login()
 }
 
-// staleFor reports whether the gateway has had no leader contact for the Stale threshold
-// (docs/02 §Health): the Stale state, or no leader at all for that long. A short election
-// is not stale, so metadata mutations wait for it instead of failing.
-func staleFor(node *cluster.Node, prober *cluster.Prober, clk clock.Clock) bool {
-	switch h := node.Health(clk, prober); h.State {
+// staleness is the gateway's stale predicate (docs/02 §Health): the Stale state, or no
+// leader at all for the threshold. A short election is not stale, so metadata mutations
+// wait for it instead of failing. Raft dates the last leader contact only for a
+// follower; a node that was the leader until a moment ago has none, so for it the outage
+// is dated from when the gateway first saw no leader (the three-VM rounds caught a
+// gateway refusing a create during a two-second election for that reason).
+type staleness struct {
+	mu            sync.Mutex
+	noLeaderSince time.Time
+}
+
+func (s *staleness) stale(state cluster.HealthState, lastContact, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch state {
 	case cluster.Stale:
 		return true
 	case cluster.NoLeader:
-		return clk.Now().Sub(node.Raft.LastContact()) >= cluster.StaleThreshold
-	case cluster.Healthy:
+		if s.noLeaderSince.IsZero() {
+			s.noLeaderSince = now
+		}
+		if !lastContact.IsZero() && now.Sub(lastContact) >= cluster.StaleThreshold {
+			return true
+		}
+		return now.Sub(s.noLeaderSince) >= cluster.StaleThreshold
+	default:
+		s.noLeaderSince = time.Time{}
+		return false
 	}
-	return false
 }
 
 // ErrAddressChanged is returned by Serve after the node's Tailscale address changed and
