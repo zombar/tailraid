@@ -107,7 +107,8 @@ func executable() (string, error) {
 	return filepath.EvalSymlinks(exe)
 }
 
-// restartService stops and starts the installed service when asked.
+// restartService stops and starts the installed service when asked. The stop plan
+// returns only once the old process has exited, so the start runs the new binary (I-131).
 func restartService(cmd *cobra.Command, restart bool) error {
 	if !restart {
 		return nil
@@ -124,5 +125,8 @@ func restartService(cmd *cobra.Command, restart bool) error {
 	if err != nil {
 		return err
 	}
-	return svc.Apply(cmd.Context(), cmd.OutOrStdout(), svc.Plan{Commands: [][]string{stop, start}})
+	if err := svc.Apply(cmd.Context(), cmd.OutOrStdout(), stop); err != nil {
+		return err
+	}
+	return svc.Apply(cmd.Context(), cmd.OutOrStdout(), start)
 }

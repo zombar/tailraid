@@ -14,9 +14,9 @@ path and data directory it bound.
 
 | OS | Unit | Manager commands | Restart | Logs |
 |---|---|---|---|---|
-| macOS | LaunchAgent `~/Library/LaunchAgents/app.tailraid.serve.plist` (per user: Tailscale's GUI session and the mount are per user) | `launchctl bootstrap gui/$UID …` / `bootout`; `kickstart -k` / `kill SIGTERM` | `KeepAlive`, `ThrottleInterval 5` | `~/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
+| macOS | LaunchAgent `~/Library/LaunchAgents/app.tailraid.serve.plist` (per user: Tailscale's GUI session and the mount are per user) | `launchctl bootstrap gui/$UID …` / `bootout`; `kickstart` / `kill SIGTERM` then `print` until `not running` | `KeepAlive`, `ThrottleInterval 5` | `~/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
 | Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `Environment=TAILRAID_HOME=…`, `After=network-online.target tailscaled.service` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
-| Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto depend= Tailscale`), `sc.exe failure … actions= restart/5000` | `sc.exe start|stop|delete` (elevated) | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
+| Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto depend= Tailscale`), `sc.exe failure … actions= restart/5000` | `sc.exe start|stop|delete` (elevated); `stop` then `query` until `STOPPED` | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
 
 `log.file` in the config (or `TAILRAID_LOG_FILE`) makes `serve` append to a file in the
 configured format instead of stderr; `install` sets it on macOS and Windows. Only `serve`
@@ -57,6 +57,16 @@ without an election timeout; the NFS and SMB listeners close, the flusher's fina
 (capped at 30 s), then the stores close. A second signal ends the process at once. The
 Windows handler reports a stop wait hint of 45 s and the unit's `TimeoutStopSec` is the
 same figure (I-123).
+
+**`stop` then `start`.** `launchctl kill` and `sc.exe stop` return as soon as the signal
+is delivered, while the process is still handing over leadership and flushing, and a
+`launchctl kickstart` issued before it exits does nothing (the job is still running), after
+which the clean exit leaves it down. `tailraid stop` therefore returns only once the
+manager reports no process (`launchctl print` says `not running`, `sc.exe query` says
+`STOPPED`; `systemctl stop` blocks on its own), bounded by 60 s, and succeeds when there
+was no process to stop (launchctl's "No process to signal", SCM's error 1062), so
+`tailraid stop && tailraid start` and `update --restart` always start the new binary; a
+service that is not installed is still an error (I-131).
 
 **Log file.** `log.file` rotates itself at 64 MiB keeping five generations
 (`serve.log.1` … `.5`), reopens on SIGHUP (so logrotate or newsyslog can rename it), and
@@ -310,6 +320,10 @@ recovered nodes are two clusters.
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
   refuses a running node, an uninitialised directory and a list without this node.
+- **I-131** — `tailraid stop` returns only once the service manager reports no process
+  (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
+  bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
+  `stop && start` therefore start the new binary.
 
 ## Tests
 
@@ -328,3 +342,4 @@ recovered nodes are two clusters.
 | I-126 | `TestConfig_Validate_Table`, `TestConfig_ExpandHome`, `TestConfig_Warnings_Permissions` |
 | I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
+| I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |

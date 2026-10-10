@@ -12,8 +12,10 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Name is the service name on every OS.
@@ -45,8 +47,18 @@ type File struct {
 type Plan struct {
 	Files    []File
 	Commands [][]string
-	Notes    []string
+	// WaitStopped is the manager query Apply repeats after the commands until it reports
+	// no running process, bounded by stopTimeout: `launchctl kill` and `sc.exe stop`
+	// return once the signal is delivered, while the process is still handing over
+	// leadership and flushing, and a start issued before it exits is lost (I-131).
+	WaitStopped []string
+	Notes       []string
 }
+
+const (
+	stopTimeout = 60 * time.Second       // a leader hands over (5 s) and flushes (30 s) before it exits (I-123)
+	stopPoll    = 500 * time.Millisecond // between WaitStopped queries
+)
 
 // Install returns the plan that registers and starts the service.
 func Install(p Params) (Plan, error) {
@@ -113,29 +125,67 @@ func Uninstall(p Params) (Plan, error) {
 	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
 }
 
-// Start and Stop return the manager commands.
-func Start(p Params) ([]string, error) {
+// Start returns the plan that starts the installed service.
+func Start(p Params) (Plan, error) {
 	switch p.GOOS {
 	case "darwin":
-		return []string{"launchctl", "kickstart", fmt.Sprintf("gui/%d/app.tailraid.serve", p.UID)}, nil
+		return Plan{Commands: [][]string{{"launchctl", "kickstart", launchdTarget(p)}}}, nil
 	case "linux":
-		return append(sudoPrefix(p), "systemctl", "start", Name), nil
+		return Plan{Commands: [][]string{append(sudoPrefix(p), "systemctl", "start", Name)}}, nil
 	case "windows":
-		return []string{"sc.exe", "start", Name}, nil
+		return Plan{Commands: [][]string{{"sc.exe", "start", Name}}}, nil
 	}
-	return nil, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
+	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
 }
 
-func Stop(p Params) ([]string, error) {
+// Stop returns the plan that stops the service and returns once it has no process, so a
+// start that follows it starts the new binary; a service that was not running is already
+// stopped (I-131). systemctl stop blocks on its own; launchctl and sc.exe are polled.
+func Stop(p Params) (Plan, error) {
 	switch p.GOOS {
 	case "darwin":
-		return []string{"launchctl", "kill", "SIGTERM", fmt.Sprintf("gui/%d/app.tailraid.serve", p.UID)}, nil
+		return Plan{
+			Commands:    [][]string{{"launchctl", "kill", "SIGTERM", launchdTarget(p)}},
+			WaitStopped: []string{"launchctl", "print", launchdTarget(p)},
+		}, nil
 	case "linux":
-		return append(sudoPrefix(p), "systemctl", "stop", Name), nil
+		return Plan{Commands: [][]string{append(sudoPrefix(p), "systemctl", "stop", Name)}}, nil
 	case "windows":
-		return []string{"sc.exe", "stop", Name}, nil
+		return Plan{
+			Commands:    [][]string{{"sc.exe", "stop", Name}},
+			WaitStopped: []string{"sc.exe", "query", Name},
+		}, nil
 	}
-	return nil, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
+	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
+}
+
+func launchdTarget(p Params) string { return fmt.Sprintf("gui/%d/app.tailraid.serve", p.UID) }
+
+// scStopped matches the STATE line of `sc.exe query` for a stopped service.
+var scStopped = regexp.MustCompile(`STATE\s*:\s*1\s+STOPPED`)
+
+// stopped reads a WaitStopped query: a query that fails names a service that is not
+// loaded or not installed, so nothing runs; otherwise the manager's state line decides.
+func stopped(query []string, out string, err error) bool {
+	if err != nil {
+		return true
+	}
+	if query[0] == "launchctl" {
+		return strings.Contains(out, "state = not running")
+	}
+	return scStopped.MatchString(out)
+}
+
+// notRunning reports a failed stop command whose output says there was no process to
+// stop: launchctl's exit 3 and sc.exe's error 1062. Stopping a stopped service succeeds.
+func notRunning(c []string, out string) bool {
+	switch {
+	case c[0] == "launchctl" && c[1] == "kill":
+		return strings.Contains(out, "No process to signal")
+	case c[0] == "sc.exe" && c[1] == "stop":
+		return strings.Contains(out, "1062") || strings.Contains(out, "has not been started")
+	}
+	return false
 }
 
 // Logs returns the command that prints (or follows) the service log, or "" when the log
@@ -247,13 +297,17 @@ func Print(w io.Writer, pl Plan) {
 	for _, c := range pl.Commands {
 		fmt.Fprintf(w, "+ %s\n", strings.Join(c, " "))
 	}
+	if pl.WaitStopped != nil {
+		fmt.Fprintf(w, "# then repeat `%s` until the service has stopped (up to %s)\n", strings.Join(pl.WaitStopped, " "), stopTimeout)
+	}
 	for _, n := range pl.Notes {
 		fmt.Fprintf(w, "# %s\n", n)
 	}
 }
 
 // Apply writes the files and runs the commands, echoing each; a failing "bootout" or
-// "stop" before install is tolerated (nothing was loaded yet).
+// "stop" before install is tolerated (nothing was loaded yet), and so is a stop of a
+// service with no process. With WaitStopped it then polls until the service has stopped.
 func Apply(ctx context.Context, w io.Writer, pl Plan) error {
 	for _, f := range pl.Files {
 		if err := os.MkdirAll(filepath.Dir(f.Path), 0o750); err != nil {
@@ -266,10 +320,11 @@ func Apply(ctx context.Context, w io.Writer, pl Plan) error {
 	}
 	for i, c := range pl.Commands {
 		fmt.Fprintf(w, "+ %s\n", strings.Join(c, " "))
+		var out strings.Builder
 		cmd := exec.CommandContext(ctx, c[0], c[1:]...) //nolint:gosec // the plan's commands are launchctl, systemctl and sc.exe (docs/12 §1)
-		cmd.Stdout, cmd.Stderr, cmd.Stdin = w, w, os.Stdin
+		cmd.Stdout, cmd.Stderr, cmd.Stdin = io.MultiWriter(w, &out), io.MultiWriter(w, &out), os.Stdin
 		if err := cmd.Run(); err != nil {
-			tolerated := i == 0 && (c[1] == "bootout" || c[1] == "stop")
+			tolerated := (i == 0 && (c[1] == "bootout" || c[1] == "stop")) || notRunning(c, out.String())
 			if tolerated {
 				continue
 			}
@@ -279,8 +334,35 @@ func Apply(ctx context.Context, w io.Writer, pl Plan) error {
 			return err
 		}
 	}
+	if pl.WaitStopped != nil {
+		if err := waitStopped(ctx, pl.WaitStopped); err != nil {
+			return err
+		}
+		fmt.Fprintln(w, "stopped")
+	}
 	for _, n := range pl.Notes {
 		fmt.Fprintf(w, "note: %s\n", n)
 	}
 	return nil
+}
+
+// waitStopped runs query until stopped reports no process, or stopTimeout passes.
+func waitStopped(ctx context.Context, query []string) error {
+	deadline := time.NewTimer(stopTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(stopPoll)
+	defer tick.Stop()
+	for {
+		out, err := exec.CommandContext(ctx, query[0], query[1:]...).CombinedOutput() //nolint:gosec // launchctl print or sc.exe query (docs/12 §1)
+		if stopped(query, string(out), err) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("svc: the service is still running %s after stop", stopTimeout)
+		case <-tick.C:
+		}
+	}
 }

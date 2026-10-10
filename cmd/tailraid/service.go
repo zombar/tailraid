@@ -118,7 +118,7 @@ func uninstallCmd() *cobra.Command {
 	return c
 }
 
-func startStopCmd(name string, pick func(svc.Params) ([]string, error)) *cobra.Command {
+func startStopCmd(name string, pick func(svc.Params) (svc.Plan, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   name,
 		Short: name + " the installed service",
@@ -127,11 +127,11 @@ func startStopCmd(name string, pick func(svc.Params) ([]string, error)) *cobra.C
 			if err != nil {
 				return err
 			}
-			c, err := pick(p)
+			plan, err := pick(p)
 			if err != nil {
 				return err
 			}
-			return svc.Apply(cmd.Context(), cmd.OutOrStdout(), svc.Plan{Commands: [][]string{c}})
+			return svc.Apply(cmd.Context(), cmd.OutOrStdout(), plan)
 		},
 	}
 }

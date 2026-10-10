@@ -157,7 +157,7 @@ func printStatus(w io.Writer, r admin.Report) {
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
 	}
-	printNodes(w, r.Nodes)
+	printNodes(w, r.Nodes, false)
 	for _, warn := range r.Warnings {
 		fmt.Fprintf(w, "! %s\n", warn)
 	}
@@ -188,9 +188,14 @@ func hostOrder(nodes []admin.NodeReport) []admin.NodeReport {
 	return out
 }
 
-func printNodes(w io.Writer, nodes []admin.NodeReport) {
+// printNodes prints the member table. A Removed row stays in the table for good (an index
+// is never reused, docs/02), so it is left out unless all is set (I-132).
+func printNodes(w io.Writer, nodes []admin.NodeReport, all bool) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "IDX\tNAME\tKIND\tSTATE\tADDR\tVOTER\tLIVE\tSLOTS\tFREE\tVERSION\tFLAGS")
+	if !all {
+		nodes = slices.DeleteFunc(slices.Clone(nodes), func(n admin.NodeReport) bool { return n.State == "removed" })
+	}
 	nodes = hostOrder(nodes)
 	for i := range nodes {
 		n := &nodes[i]
@@ -281,10 +286,12 @@ func nodeCmd() *cobra.Command {
 			if j, _ := cmd.Flags().GetBool("json"); j {
 				return printJSON(cmd.OutOrStdout(), rep.Nodes)
 			}
-			printNodes(cmd.OutOrStdout(), rep.Nodes)
+			all, _ := cmd.Flags().GetBool("all")
+			printNodes(cmd.OutOrStdout(), rep.Nodes, all)
 			return nil
 		},
 	}
+	ls.Flags().Bool("all", false, "include removed members (their index is never reused)")
 	addNodeFlags(ls)
 	describe := &cobra.Command{
 		Use: "describe <name|idx>", Short: "Show one member in detail", Args: cobra.ExactArgs(1),
