@@ -256,8 +256,16 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   time: creation is reported as the change time.
 - **A delete that fails is not reported.** SMB2 deletes by marking a handle delete-on-close,
   and the server does not carry the failure of that delete into the CLOSE reply, so a
-  delete while the gateway is stale answers success and the file stays. The next listing
-  shows it.
+  delete while the gateway is stale, or of an entry under a protected folder (docs/02,
+  I-154; the vfs answers `EPERM`), answers success and the file stays. The next listing
+  shows it. SET_INFO disposition, which Explorer sends before the close, does carry the
+  refusal: the adapter checks the protection there and answers `STATUS_ACCESS_DENIED`, so
+  Explorer shows "Access denied" for a protected entry rather than a silent no-op.
+- **A delete goes to the trash** (docs/02 §Apply rules): `DeleteFile` and `DeleteDir`
+  propose `Trash` for every name but the ephemeral ones of docs/06 §1, and the share sees
+  a delete: the name is `STATUS_OBJECT_NAME_NOT_FOUND`, the listing omits it, a create of
+  the name succeeds, the share's free space waits for the purge. The browser UI (docs/13
+  §4) restores it; the SMB gateway has no view of the trash.
 - **Mode, owner, attributes.** SMB2 carries no POSIX mode or owner; the READONLY attribute
   is derived from the permission bits and a change of it is dropped. `chmod` and `chown`
   from a Windows client do not reach the FSM.

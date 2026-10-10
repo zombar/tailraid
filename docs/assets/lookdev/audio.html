@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid audio</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  /* lookdev-only: the variants stacked with a label; the fixed bars drawn in flow so each
+     variant shows its own, and a 360-px frame for the phone layout */
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  .inflow aside.nowbar, .inflow .queue { position: static; }
+  .inflow .queue { display: block; }
+  .phone { width: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; container-type: inline-size; }
+  .phone aside.nowbar { grid-template-columns: 40px minmax(0, 1fr) auto auto; row-gap: 0; padding-top: 6px; padding-bottom: 6px; }
+  .phone .nowbar .cover { width: 40px; height: 40px; }
+  .phone .nowbar .seek { grid-column: 1 / -1; }
+  .phone .nowbar .modes { display: none; }
+  .phone .album-head { grid-template-columns: 96px 1fr; }
+  .phone .album-head img.cover { width: 96px; height: 96px; }
+  .phone .phone-body { padding: 12px; display: grid; gap: 24px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a class="active" href="#/browse/">Files</a></nav>
+  <span class="pill ok" title="leader reachable, live ≥ k+m: metadata, reads and writes normal">healthy</span>
+  <span class="who">jockey · leader honker · 3/3 voters live</span>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section class="album">
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/Music">Music</a><span class="sep">/</span><a href="#/browse/Music/Deftones">Deftones</a><span class="sep">/</span><span>[1997] Around the Fur</span><span class="badge pin">kept here</span></div>
+    <div class="toolbar">
+      <button type="button">Play all</button>
+      <button type="button">Shuffle</button>
+      <label class="btn">Upload<input type="file" multiple></label>
+      <details class="menu"><summary>Folder</summary></details>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>
+      <span class="spacer"></span>
+      <span class="small dim">10 items · 86.4 MiB</span>
+    </div>
+    <div class="album-head">
+      <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3Ccircle cx='2' cy='2' r='.5' fill='%23b45309'/%3E%3C/svg%3E">
+      <div>
+        <h1>Around the Fur</h1>
+        <div class="artist">Deftones</div>
+        <div class="meta"><span>1997</span><span>10 tracks</span><span>41:06</span><span>mp3</span></div>
+      </div>
+    </div>
+    <table class="tracks">
+      <tbody>
+        <tr><td class="no">1</td><td class="title">My Own Summer (Shove It)</td><td class="dur">3:35</td></tr>
+        <tr><td class="no">2</td><td class="title">Lhabia</td><td class="dur">4:11</td></tr>
+        <tr class="playing"><td class="no">▶</td><td class="title">Mascara</td><td class="dur">3:46</td></tr>
+        <tr><td class="no">4</td><td class="title">Around the Fur</td><td class="dur">3:31</td></tr>
+        <tr><td class="no">5</td><td class="title">Rickets</td><td class="dur">2:42</td></tr>
+        <tr><td class="no">6</td><td class="title">Be Quiet and Drive (Far Away)</td><td class="dur">5:08</td></tr>
+        <tr><td class="no">7</td><td class="title">Lotion</td><td class="dur">3:57</td></tr>
+        <tr><td class="no">8</td><td class="title">Dai the Flu</td><td class="dur">4:36</td></tr>
+        <tr><td class="no">9</td><td class="title">Headup <span class="small dim">feat. Max Cavalera</span></td><td class="dur">5:10</td></tr>
+        <tr><td class="no">10</td><td class="title">MX <span class="small dim">10 - MX _ Damone.mp3</span></td><td class="dur">—</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: the now-playing bar, collapsed (fixed to the bottom edge in the app)</div>
+    <aside class="nowbar">
+      <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3C/svg%3E">
+      <div class="titles"><div class="title">Mascara</div><div class="sub">Deftones — Around the Fur</div></div>
+      <div class="transport"><button type="button" aria-label="previous">⏮</button><button type="button" aria-label="pause">⏸</button><button type="button" aria-label="next">⏭</button></div>
+      <div class="seek"><input type="range" min="0" max="226" value="97" aria-label="seek"><span class="time">1:37 / 3:46</span></div>
+      <div class="modes"><button type="button" aria-pressed="false" aria-label="repeat">⟳</button><button type="button" aria-pressed="true" aria-label="shuffle">⤮</button></div>
+      <button type="button" class="queue-btn" aria-pressed="false">Queue · 10</button>
+    </aside>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: expanded, the queue above the bar</div>
+    <aside class="nowbar expanded">
+      <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3C/svg%3E">
+      <div class="titles"><div class="title">Mascara</div><div class="sub">Deftones — Around the Fur</div></div>
+      <div class="transport"><button type="button" aria-label="previous">⏮</button><button type="button" aria-label="play">▶</button><button type="button" aria-label="next">⏭</button></div>
+      <div class="seek"><input type="range" min="0" max="226" value="97" aria-label="seek"><span class="time">1:37 / 3:46</span></div>
+      <div class="modes"><button type="button" aria-pressed="true" aria-label="repeat all">⟳</button><button type="button" aria-pressed="false" aria-label="shuffle">⤮</button></div>
+      <button type="button" class="queue-btn" aria-pressed="true">Queue · 10</button>
+    </aside>
+    <div class="queue">
+      <div class="toolbar"><span class="small dim">10 in the queue · repeat all</span><span class="spacer"></span><button type="button">Clear</button></div>
+      <ol>
+        <li class="qrow"><span class="no">1</span><span class="title">My Own Summer (Shove It)</span><span class="artist">Deftones</span><span class="dur">3:35</span><button type="button" aria-label="remove">×</button></li>
+        <li class="qrow"><span class="no">2</span><span class="title">Lhabia</span><span class="artist">Deftones</span><span class="dur">4:11</span><button type="button" aria-label="remove">×</button></li>
+        <li class="qrow playing"><span class="no">▶</span><span class="title">Mascara</span><span class="artist">Deftones</span><span class="dur">3:46</span><button type="button" aria-label="remove">×</button></li>
+        <li class="qrow"><span class="no">4</span><span class="title">Around the Fur</span><span class="artist">Deftones</span><span class="dur">3:31</span><button type="button" aria-label="remove">×</button></li>
+        <li class="qrow"><span class="no">5</span><span class="title">Dorian</span><span class="artist">Agnes Obel</span><span class="dur">5:14</span><button type="button" aria-label="remove">×</button></li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: 360 px, the bar's phone layout (seek under the titles, modes hidden, cover 40 px)</div>
+    <div class="phone inflow">
+      <div class="phone-body">
+        <section class="album">
+          <div class="album-head">
+            <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3C/svg%3E">
+            <div><h1>Around the Fur</h1><div class="artist">Deftones</div><div class="meta"><span>1997</span><span>10 tracks</span></div></div>
+          </div>
+          <table class="tracks"><tbody>
+            <tr><td class="no">1</td><td class="title">My Own Summer (Shove It)</td><td class="dur">3:35</td></tr>
+            <tr class="playing"><td class="no">▶</td><td class="title">Mascara</td><td class="dur">3:46</td></tr>
+          </tbody></table>
+        </section>
+      </div>
+      <aside class="nowbar">
+        <img class="cover" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fde68a'/%3E%3C/svg%3E">
+        <div class="titles"><div class="title">Mascara</div><div class="sub">Deftones — Around the Fur</div></div>
+        <div class="transport"><button type="button" aria-label="previous">⏮</button><button type="button" aria-label="pause">⏸</button><button type="button" aria-label="next">⏭</button></div>
+        <button type="button" class="queue-btn" aria-pressed="false">10</button>
+        <div class="seek"><input type="range" min="0" max="226" value="97" aria-label="seek"><span class="time">1:37 / 3:46</span></div>
+        <div class="modes"></div>
+      </aside>
+    </div>
+  </section>
+
+</main>
+<div id="toasts" aria-live="polite"></div>
+</body>
+</html>
