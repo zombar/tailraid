@@ -98,6 +98,7 @@ type ClusterNode struct {
 	started bool
 	disks   nodeDisks    // the node's disks (docs/14), kept across restarts; the first is its Store
 	idx     meta.NodeIdx // the device row's index, recorded at bootstrap or join
+	s3      nodeS3Keys   // this node's S3 credentials (docs/10 §4.1), kept across restarts
 }
 
 // RaftTiming is the harness's shortened Raft timing: quick elections, but a lease long
@@ -371,6 +372,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Client = rpc.NewClient(c.CID, nd.Node.RPCAddrOf)
 	nd.Client.SetTransport(nd.Net)
 	nd.Client.SetDisks(nd.Node.DiskOf, nd.disks.local)
+	nd.Client.SetS3(cluster.NewS3Buckets(nd.Node, nd.s3.get, nil).Bucket)
 	nd.Node.SetForwarder(nd.Client)
 	nd.Prober = cluster.NewProber(nd.Node, nd.Client, c.Clk)
 	nd.Prober.SelfHealth = func() rpc.Health {

@@ -312,7 +312,7 @@ excluded from new placement; repairer re-places its slots), `node remove`
 (`NodeSetState Removed`, then `raft.RemoveServer`; a removed row stays in the table for its history, so a device reset and joined again has two rows with one name: a name on the command line names the row that is not removed, and the leader refuses every op but `remove` on a removed row, since `promote` or `update_addr` there would put a dead ID back into the Raft configuration, I-136), `set_version` (`NodeUpsert` with the
 version `serve` runs: proposed by the node at start, through the leader, whenever its row
 names another, so `node ls` shows what each node runs rather than what it joined with,
-I-133), `volume set-redundancy` (`SetVolume`
+I-133), `node add-s3` (`NodeUpsert` of a `KindS3` row by the leader's `add_s3`, refused for a name or bucket already registered, I-137, 10 §4.1), `volume set-redundancy` (`SetVolume`
 after `SetVolumeMode{false}`; `--auto` is `SetVolumeMode{true}`),
 `tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
 the device can `join` afresh; never touches `shards/`, which the sweep reconciles later; it

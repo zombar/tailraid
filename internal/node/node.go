@@ -193,6 +193,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	client := rpc.NewClient(clusterID, node.RPCAddrOf)
 	client.SetDisks(node.DiskOf, disks.local)
+	// S3 nodes: the buckets this device holds credentials for (docs/10 §4.1)
+	s3keys := cluster.KeysFromFile(cfg.Node.DataDir, func(err error) { log.Warn("s3 credentials file unreadable; keeping the last good keys", "err", err) })
+	client.SetS3(cluster.NewS3Buckets(node, s3keys, nil).Bucket)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
 	prober.SelfHealth = func() rpc.Health {
@@ -466,7 +469,8 @@ type adminOps struct {
 	clk      clock.Clock
 	log      *slog.Logger
 	dataDir  string
-	seedKey  string // the device members the seed file holds (refreshSeed)
+	seedKey  string    // the device members the seed file holds (refreshSeed)
+	s3Swept  time.Time // the leader's last S3 sweep (docs/06 §3)
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -665,12 +669,37 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 					a.log.Info("sweep", "target", t.idx, "orphans_removed", n)
 				}
 			}
+			a.sweepS3(ctx, cfg.Grace)
 			if n, err := webui.SweepUploads(ctx, a.fs, a.node.FSM, a.clk.Now(), webui.UploadTTL); err != nil {
 				a.log.Warn("upload sweep failed", "err", err)
 			} else if n > 0 {
 				a.log.Info("sweep", "stale_uploads_removed", n)
 			}
 			sweepT.Reset(time.Hour)
+		}
+	}
+}
+
+// S3SweepInterval is how often the leader sweeps each bucket: every LIST page is a billed
+// request, and an orphan object costs only its storage meanwhile (docs/06 §3).
+const S3SweepInterval = 24 * time.Hour
+
+// sweepS3 runs the leader's daily sweep of every S3 node that is not removed (I-138).
+func (a *adminOps) sweepS3(ctx context.Context, grace time.Duration) {
+	if !a.node.IsLeader() || !a.healthy() || (!a.s3Swept.IsZero() && a.clk.Now().Sub(a.s3Swept) < S3SweepInterval) {
+		return
+	}
+	a.s3Swept = a.clk.Now()
+	nodes := a.node.FSM.Nodes()
+	for i := range nodes {
+		nd := &nodes[i]
+		if nd.Kind != meta.KindS3 || nd.State == meta.Removed {
+			continue
+		}
+		if n, err := repair.SweepS3(ctx, a.client, a.node.FSM, nd.Idx, grace, a.clk.Now()); err != nil {
+			a.log.Warn("s3 sweep failed", "node", nd.Name, "err", err)
+		} else if n > 0 {
+			a.log.Info("s3 sweep", "node", nd.Name, "orphans_removed", n)
 		}
 	}
 }

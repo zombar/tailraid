@@ -459,13 +459,22 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	return outcome{changed: true, full: full, bytes: moved}, nil
 }
 
-// scrub fetches every shard of c and returns the slots whose content is wrong.
+// scrub fetches every shard of c and returns the slots whose content is wrong. A slot on
+// an S3 node is only checked for presence (HEAD): fetching it would download the bucket's
+// share of the volume every ~100 passes in billed egress, and its bytes are verified by
+// the provider on upload and by the TRS1 header on every GET (docs/06 §5).
 func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 	total := int(c.K) + int(c.M)
 	got := make([][]byte, total)
 	var corrupt []int
 	for i, n := range c.Placement {
 		if n == 0 || !r.live.IsLive(n) {
+			continue
+		}
+		if nd, ok := r.st.Node(n); ok && nd.Kind == meta.KindS3 {
+			if has, err := r.shards.Has(ctx, n, chunk.Key(c.Hash, c.K, c.M, i)); err == nil && !has {
+				corrupt = append(corrupt, i)
+			}
 			continue
 		}
 		b, err := r.shards.Get(ctx, n, chunk.Key(c.Hash, c.K, c.M, i))

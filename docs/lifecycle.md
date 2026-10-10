@@ -53,7 +53,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-45 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-37 400 hash mismatch | Uploading (retry once same node) | `TestChunkRPC_HashMismatchRejected`, `TestChunkRPC_PutGetHeadDelete_SizeBoundaries` |
 | L-46 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-38 403 | as E-34 | `TestFlusher_PutForbidden_SlotReplaced` |
 | L-47 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-39 409 cluster-id | as E-34 | `TestIDStream_RejectsForeignCluster` |
-| L-48 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-40 slow S3 past deadline, acks ≥ k | Placed(n<k+m) | `TestStubLifecycle_L_48` |
+| L-48 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-40 slow S3 past deadline, acks ≥ k | Placed(n<k+m) | `TestS3Node_SlowBucket_DoesNotStallFlush` |
 | L-49 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-41 duplicate PUT (racing gateways) | Placed | `TestChunkRPC_PutGetHeadDelete_SizeBoundaries` |
 | L-50 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-42 self in placement | Placed | `TestFlusher_SmallAndLargeChunksCommit` |
 | L-51 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Placed(k+m) | E-45 Commit OK | Committed | `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFlusher_SmallAndLargeChunksCommit` |
@@ -109,7 +109,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-101 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (policy) | migration step | Repairing → Committed | `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |
 | L-102 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Repairing (policy) | leader crash mid-migration | Degraded (policy) | `TestRepair_MigrationCrash_Resumes` |
 | L-103 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded | E-87 live < k+m | Degraded (fewer 0 slots) | `TestRepair_FillsDegradedSlotsWhenSpareAppears` |
-| L-104 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-88 S3 slow/unreachable | Committed / Degraded after fill_after | `TestStubLifecycle_L_104` |
+| L-104 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-88 S3 slow/unreachable | Committed / Degraded after fill_after | `TestProber_S3LivenessAndRank`, `TestS3Node_PlacementAndReads` |
 | L-105 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-91 1..m shards corrupt | Degraded | `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-106 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-92 m+1 corrupt | Degraded | `TestCheck_MPlusOneCorrupt_NotOK` |
 | L-107 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-93 header mismatch | Degraded | `TestStore_GetVerifiesHash_Corrupted` |
@@ -117,7 +117,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-109 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-95 scrub OK | Committed | `TestChunkDescribe_StateFilesAndEvents` |
 | L-110 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-96 scrub detects corruption | Degraded → Committed | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-111 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-97 shard file missing | Degraded | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
-| L-112 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-98 object missing | Degraded | `TestStubLifecycle_L_112` |
+| L-112 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-98 object missing | Degraded | `TestS3Node_ObjectMissing_Repaired` |
 | L-113 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-100 C1 crash before WAL fsync | (none) or Dirty | `TestOverlay_RestartReplaysDirtyWALs`, `TestWAL_ReplayStopsAtTornTail` |
 | L-114 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-101 C2 crash after WAL fsync | Dirty (replayed) | `TestOverlay_RestartReplaysDirtyWALs` |
 | L-115 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading | E-102 C3 node crash, temp written | Uploading (slot fails) | `TestCrash_AtEveryPoint` |
@@ -144,7 +144,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-136 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | duplicate PUT | Durable | `TestStore_ConcurrentPutSameHash`, `TestStore_DupPutRefreshesMtime`, `TestStore_PutDifferentPayloadSameKey_Replaces` |
 | L-137 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (placed on self) | E-44 DELETE for a placed key | Durable | `TestChunkRPC_DeleteFence` |
 | L-138 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | PUT with capacity exceeded | Durable (new one rejected) | `TestStore_ConcurrentPutsNearCapacity_NeverExceed` |
-| L-139 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (S3) | object deleted externally | (missing) | `TestStubLifecycle_L_139` |
+| L-139 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (S3) | object deleted externally | (missing) | `TestS3Node_ObjectMissing_Repaired` |
 | L-140 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | scrub sample | Verified | `TestChunkDescribe_StateFilesAndEvents` |
 | L-141 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | GCDelete | Collected | `TestFSM_GCDelete_Boundary` |
 | L-142 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Temp | Get/Open by a reader | served | `TestStore_TempNeverServed` |
@@ -175,7 +175,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-167 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned/Degraded (< k present slots) | E-113 dedup hit | Uploading (fill) → Committed | `TestFlusher_DedupDegradedEntry_FillsSlotsBeforeCommit`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts` |
 | L-168 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-114 truncate down then write past the truncation point | Dirty (`minSize` < `size`) → Committed | `TestFSM_Commit_TruncateThenGrow_DropsOldBytes`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface` |
 | L-169 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable (device) | E-115 DELETE with stale fence | Durable | `TestChunkRPC_DeleteFence` |
-| L-170 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (S3 object) | E-116 leader S3 sweep | Swept | `TestStubLifecycle_L_170` |
+| L-170 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan (S3 object) | E-116 leader S3 sweep | Swept | `TestSweepS3_DeletesOldOrphansOnly` |
 | L-171 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Orphan | E-117 Sweep while not `Healthy` / behind leader index | Orphan | `TestSweep_SkippedWhenNotHealthy` |
 | L-172 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (fresh extents during flush) | E-118 flush completes | Dirty (compacted WAL) | `TestOverlay_CommitFlushed_WithResidual`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_Compact_StreamsThroughBoundedBuffer` |
 | L-173 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (`(k,m)` ≠ policy) | E-119 migration PUTs under new keys | Repairing → Committed | `TestModelCheck_Long`, `TestRepair_SetRedundancy_MigratesAllChunks_NoWindowBelowK` |

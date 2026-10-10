@@ -49,6 +49,7 @@ Write a file on one device and read it on any other. `tailraid status` shows the
 |---|---|
 | Add a device | `tailraid join <ip> <token>` on the new device |
 | Add a disk to a device | `tailraid node add-disk /path/to/empty/dir` on that device |
+| Add an S3 bucket off-site | `tailraid node add-s3 <name> …` on one device, `tailraid node keys <name> …` on the others |
 | Grow a device or disk in place | See below |
 
 `tailraid volume describe` shows the volume's raw, usable and free capacity.
@@ -76,6 +77,21 @@ tailraid node add-disk /Volumes/Big/tailraid --capacity 500G
 The directory must be empty and should be on a different physical disk. The disk joins as `<device>/1`, `<device>/2` and so on, listed under its device. A single machine with several disks makes a complete volume, with redundancy across its disks. If a disk is unplugged or not mounted, tailraid notices, stops using it and repairs from the other copies.
 
 Details: [docs/14-disks.md](docs/14-disks.md).
+
+### Adding an S3 bucket
+
+A bucket at any S3 provider (Backblaze B2, Cloudflare R2, Hetzner, a MinIO on the tailnet) can hold shards like a disk on a host of its own, which gives the volume an off-site copy. Devices read and write it directly; reads use it only when a device that holds a shard is down.
+
+```sh
+export TAILRAID_S3_SECRET_KEY=…            # or type it when asked: never a flag
+tailraid node add-s3 offsite --endpoint https://s3.eu-central-003.backblazeb2.com \
+  --bucket my-bucket --prefix tailraid --capacity 1T --access-key 003a…
+tailraid node keys offsite --access-key 003a…   # on every other device that writes
+```
+
+`add-s3` writes, reads back and deletes a test object first, so a key without those rights is refused before anything is registered. The keys stay in `s3nodes.yaml` in each device's data directory and never reach the cluster state. tailraid does not encrypt data at rest, so the provider can read what lands in the bucket. Choose a provider with cheap or free egress: repairs read from the bucket when a device is down.
+
+Details: [docs/10-s3.md](docs/10-s3.md) §4.
 
 ## Shrink the volume
 
@@ -126,7 +142,7 @@ Run these from any member. `tailraid node ls` shows who votes.
 ```sh
 tailraid status                    # health, leader, members, usage, warnings (exit 1 until the node is ready)
 tailraid dashboard                 # open the browser UI (--print: just the address)
-tailraid node ls                   # devices and their disks
+tailraid node ls                   # devices, their disks and S3 buckets
 tailraid check                     # exit 1 if anything is degraded
 tailraid repair                    # repair now (it also runs every minute)
 tailraid volume describe           # policy, usage, dedup, free space

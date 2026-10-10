@@ -76,12 +76,19 @@ func devHome(t *testing.T) (string, config.Config) {
 // run executes a CLI command in-process, as main wires it.
 func run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	return runStdin(t, "", args...)
+}
+
+// runStdin is run with stdin.
+func runStdin(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
 	root := &cobra.Command{Use: "tailraid", SilenceUsage: true, SilenceErrors: true}
 	root.PersistentFlags().String("config", "", "")
 	root.AddCommand(initCmd(), joinCmd(), nodeCmd(), volumeCmd(), dashboardCmd())
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
+	root.SetIn(strings.NewReader(stdin))
 	root.SetArgs(args)
 	err := root.Execute()
 	return out.String(), err

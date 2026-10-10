@@ -150,8 +150,10 @@ a host above the cap when another placement exists (I-89).
 ## 6. Policy
 
 `AutoPolicy` (03 §Choosing the policy) counts **targets**, not devices: every Active disk
-of an Active device; a device with no disks counts for nothing, and S3 nodes are not
-counted, as before. `v` counts the targets on voter hosts. The thresholds for `m` and the cap `k ≤ 6` are unchanged. One step
+of an Active device; a device with no disks counts for nothing, and an Active S3 node
+counts as one target on a host of its own that is never a voter (10 §4.1): a bucket is an
+off-site host, so the policy that survives one host survives losing the bucket or any one
+device. `v` counts the targets on voter hosts. The thresholds for `m` and the cap `k ≤ 6` are unchanged. One step
 is added when there are `H ≥ 2` hosts with a target: `k` is lowered (never below 1) until
 no host would hold more than `m` slots of a stripe under the host cap (so `ceil((k+m)/H) ≤
 m` when every host has the targets), and an automatic policy survives the loss of one whole
@@ -299,7 +301,7 @@ runs.
 |---|---|
 | I-86 | `TestChunkRPC_DiskPath_RoundTrip`, `TestClient_LocalDiskRouting`, `TestDiskMarker_Table`, `TestNode_ClosedDisk_NotServedNotSwept` |
 | I-87 | `TestCandidates_DiskDomainAndVoter`, `TestFillPlacement_HostCap`, `TestPlace_HostCap`, `TestPlace_HostCap_NNodeDeterminism`, `TestPlace_OneTargetPerHost_Unchanged` |
-| I-88 | `TestAutoPolicy_Disks_Table`, `TestAutoPolicy_OneTargetPerHost_Unchanged`, `TestAutoPolicy_SurvivesOneHost`, `TestCluster_AutoPolicy_SingleHostDisks`, `TestPolicyAllowed_CountsTargets`, `TestTolerance_Table` |
+| I-88 | `TestAutoPolicy_Disks_Table`, `TestAutoPolicy_OneTargetPerHost_Unchanged`, `TestAutoPolicy_SurvivesOneHost`, `TestCluster_AutoPolicy_SingleHostDisks`, `TestPolicyAllowed_CountsTargets`, `TestTolerance_Table`, `TestAutoPolicy_CountsS3` |
 | I-89 | `TestChunkState_DomainSkew`, `TestModelCheck_Long`, `TestRepair_DeadDisk_RePlacesWithinCap`, `TestRepair_DomainSkew_MovesWithinCap`, `TestRepair_DomainSkew_UnfixableIgnored` |
 | I-90 | `TestChunkRPC_DiskPath_RoundTrip`, `TestCluster_SingleHostDisks_DiskFails_ReadsAndRepair`, `TestMember_AddDisk_ResolvesToHost`, `TestProber_DiskLiveness` |
 | I-91 | `TestBudget_PerDisk_SharedFilesystem`, `TestNode_Rebudget_PerTarget` |

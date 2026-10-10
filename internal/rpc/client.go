@@ -15,6 +15,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/s3"
 )
 
 // Resolver maps a node index to its RPC address; self reports whether it is this node.
@@ -31,6 +32,7 @@ type Client struct {
 	// localDisk opens one of this host's disks (nil when closed)
 	diskOf    func(meta.NodeIdx) (string, bool)
 	localDisk func(id string) ShardStore
+	s3Of      func(meta.NodeIdx) (*s3.Bucket, bool) // S3 targets (docs/10 §4.2)
 }
 
 // SetDisks wires disk routing: the disk ID of a target, and this host's open disks.
@@ -182,6 +184,12 @@ func (c *Client) target(node meta.NodeIdx) (shardTarget, error) {
 }
 
 func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, body []byte) error {
+	if b, isS3, err := c.bucket(node); isS3 {
+		if err != nil {
+			return err
+		}
+		return s3Put(ctx, b, key, body)
+	}
 	t, err := c.target(node)
 	if err != nil {
 		return err
@@ -205,6 +213,12 @@ func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 }
 
 func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
+	if b, isS3, err := c.bucket(node); isS3 {
+		if err != nil {
+			return nil, err
+		}
+		return s3Get(ctx, b, key)
+	}
 	t, err := c.target(node)
 	if err != nil {
 		return nil, err
@@ -243,6 +257,9 @@ func (c *Client) Delete(ctx context.Context, node meta.NodeIdx, key chunk.ShardK
 
 // DeleteFenced deletes a shard on node with the docs/06 fence (GCDelete/SetPlacement index).
 func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey, index uint64) error {
+	if _, isS3, _ := c.bucket(node); isS3 {
+		return errS3Delete // no request: the S3 sweep owns deletes on a bucket (I-138)
+	}
 	t, err := c.target(node)
 	if err != nil {
 		return err
@@ -270,6 +287,12 @@ func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.
 
 // Has checks shard presence on a node.
 func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error) {
+	if b, isS3, err := c.bucket(node); isS3 {
+		if err != nil {
+			return false, err
+		}
+		return s3Has(ctx, b, key)
+	}
 	t, err := c.target(node)
 	if err != nil {
 		return false, err

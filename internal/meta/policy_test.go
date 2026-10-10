@@ -60,11 +60,12 @@ func TestAutoPolicy_Table(t *testing.T) {
 			}
 		}
 	}
-	// only Active devices count: draining, removed and S3 nodes are ignored
+	// only Active targets count, and an S3 node never as a voter, whatever its row says
+	// (docs/14 §6)
 	nodes := devices(3, 1)
 	nodes[0].State = Draining
 	nodes = append(nodes, Node{Idx: 9, Kind: KindS3, State: Active, Capacity: 1, Voter: true})
-	if k, m := AutoPolicy(nodes); k != 2 || m != 1 { // v=2, s=1 → 2+1
+	if k, m := AutoPolicy(nodes); k != 2 || m != 2 { // v=2, s=2 → 2+2
 		t.Errorf("filtered: %d+%d", k, m)
 	}
 	if k, m := AutoPolicy(nil); k != 1 || m != 0 {

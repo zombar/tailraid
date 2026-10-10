@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/raft"
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/s3"
 )
 
 // Membership errors. A remove refused because the node still holds slots is
@@ -182,8 +184,8 @@ func (n *Node) SlotsHeldBy(idx meta.NodeIdx) int {
 	return count
 }
 
-// MemberOp implements remove, update_addr, set_version, set_voter, set_capacity and
-// set_state on the leader.
+// MemberOp implements remove, update_addr, set_version, set_voter, set_capacity,
+// set_state, add_disk and add_s3 on the leader.
 func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 	n.memberMu.Lock()
 	defer n.memberMu.Unlock()
@@ -192,6 +194,9 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 			return ErrNoLeader
 		}
 		return ErrNotLeader
+	}
+	if op.Op == "add_s3" {
+		return n.addS3(ctx, op)
 	}
 	nd, ok := n.nodeByIdx(op.NodeIdx)
 	if !ok {
@@ -203,16 +208,7 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		// would put that server back into the Raft configuration (I-136)
 		return fmt.Errorf("%w: node %d (%s) was removed", ErrBadMemberOp, op.NodeIdx, nd.Name)
 	}
-	propose := func(cmd meta.Command) error {
-		res, index, err := n.Propose(ctx, cmd)
-		if err == nil {
-			err = res.Err
-		}
-		if err != nil {
-			return err
-		}
-		return n.FSM.WaitApplied(ctx, index)
-	}
+	propose := func(cmd meta.Command) error { return n.proposeApplied(ctx, cmd) }
 	switch op.Op {
 	case "remove":
 		if nd.State != meta.Removed {
@@ -400,4 +396,60 @@ func (n *Node) votes(id raft.ServerID) bool {
 		}
 	}
 	return false
+}
+
+// proposeApplied proposes cmd and waits until this node has applied it.
+func (n *Node) proposeApplied(ctx context.Context, cmd meta.Command) error {
+	res, index, err := n.Propose(ctx, cmd)
+	if err == nil {
+		err = res.Err
+	}
+	if err != nil {
+		return err
+	}
+	return n.FSM.WaitApplied(ctx, index)
+}
+
+// addS3 registers a bucket as an S3 node, once (docs/10 §4.1, I-137): the name must be
+// free, the endpoint and bucket not registered under any prefix, and the ID either new or
+// the S3 row an earlier attempt of the same add created.
+func (n *Node) addS3(ctx context.Context, op rpc.MemberOp) error {
+	sp := op.S3
+	if sp == nil || op.Name == "" || op.Capacity == 0 || sp.Bucket == "" {
+		return fmt.Errorf("%w: add_s3 needs a name, a bucket and a capacity", ErrBadMemberOp)
+	}
+	if len(sp.ID) != 16 {
+		return fmt.Errorf("%w: add_s3 needs a 16-character id", ErrBadMemberOp)
+	}
+	u, err := s3.ParseEndpoint(sp.Endpoint)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrBadMemberOp, err)
+	}
+	endpoint := strings.ToLower(u.Scheme + "://" + u.Host)
+	nd := meta.Node{
+		ID: sp.ID, Name: op.Name, Kind: meta.KindS3, Capacity: op.Capacity, JoinedAt: time.Now().UnixNano(),
+		S3Endpoint: endpoint, S3Bucket: sp.Bucket, S3Prefix: strings.Trim(sp.Prefix, "/"), S3Region: sp.Region, S3PathStyle: sp.PathStyle,
+	}
+	nodes := n.FSM.Nodes()
+	for i := range nodes {
+		cur := &nodes[i]
+		if cur.State == meta.Removed {
+			continue
+		}
+		if cur.ID == sp.ID {
+			if cur.Kind != meta.KindS3 {
+				return fmt.Errorf("%w: id %s belongs to %s", ErrBadMemberOp, sp.ID, cur.Name)
+			}
+			nd.Idx, nd.JoinedAt = cur.Idx, cur.JoinedAt // a retry of the add that created it
+			continue
+		}
+		if cur.Name == op.Name {
+			return fmt.Errorf("%w: a member is already named %q", ErrBadMemberOp, op.Name)
+		}
+		if cur.Kind == meta.KindS3 && cur.S3Endpoint == endpoint && cur.S3Bucket == sp.Bucket {
+			return fmt.Errorf("%w: bucket %s at %s is already S3 node %s (one row per bucket: a second would be counted as another failure domain)", ErrBadMemberOp, sp.Bucket, endpoint, cur.Name)
+		}
+	}
+	n.log.Info("member op", "op", op.Op, "name", op.Name, "endpoint", endpoint, "bucket", sp.Bucket, "prefix", nd.S3Prefix)
+	return n.proposeApplied(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 }
