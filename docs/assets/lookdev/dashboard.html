@@ -25,6 +25,7 @@
       <div class="tile"><div class="label">Policy</div><div class="value">6+2</div><div class="sub">auto · 1 MiB chunks · policy v4</div></div>
       <div class="tile"><div class="label">Files</div><div class="value">12,418</div><div class="sub">48,211 chunks · 212 tombstoned</div></div>
       <div class="tile"><div class="label">Dedup</div><div class="value">1.12×</div><div class="sub">41.3 GiB logical</div></div>
+      <div class="tile"><div class="label">Trash</div><div class="value">12</div><div class="sub">1.2 GiB · purged after 30 d</div></div>
     </div>
     <div class="compare">
       <div class="bar-row"><span class="bar-label">logical</span><div class="bar tall"><i style="width:74%"></i></div><span class="bar-val">41.3 GiB</span></div>
@@ -223,6 +224,21 @@
     <div class="bar-row"><span class="bar-label">dirty bytes</span><div class="bar"><i style="width:7%"></i></div><span class="bar-val">18.2 MiB in 3 files of 256 MiB · flushing</span></div>
     <div class="bar-row"><span class="bar-label">WAL</span><div class="bar"><i style="width:17%"></i></div><span class="bar-val">22.0 MiB of 128 MiB</span></div>
     <div class="small dim">acknowledged writes not yet committed to the cluster</div>
+  </section>
+
+  <section>
+    <h2>Cache<span class="h-sub">this device's chunk cache and the folders kept on it</span></h2>
+    <div class="cards">
+      <div class="card cache">
+        <div class="name-row"><span class="name">pike</span><span class="badges"><span class="badge self">self</span></span></div>
+        <div class="bar-row"><span class="bar-label">used</span><div class="bar"><i style="width:38%"></i></div><span class="bar-val">388.0 MiB of 1.0 GiB</span></div>
+        <div class="bar-row"><span class="bar-label">pinned</span><div class="bar"><i style="width:100%"></i></div><span class="bar-val">2.4 GiB kept here · 1.2 TiB free on the data disk</span></div>
+        <div class="pins">
+          <div class="pin-row"><span class="n">/media/Concerts 2024</span><div class="bar"><i style="width:100%"></i></div><span class="v">2.2 GiB of 2.2 GiB</span></div>
+          <div class="pin-row"><span class="n">/Music/Deftones</span><div class="bar"><i style="width:41%"></i></div><span class="v">212.4 MiB of 518.0 MiB · fetching</span></div>
+        </div>
+      </div>
+    </div>
   </section>
 
 </main>

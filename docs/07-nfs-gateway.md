@@ -106,6 +106,19 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
   returns the overlay size and mtime so the local client sees its own writes immediately.
 - **Unsupported**: hard links (LINK → NFS3ERR_NOTSUPP), MKNOD → NFS3ERR_NOTSUPP, locks
   (no NLM; mount with `nolock`), ACLs (`noacl`), xattrs (not in NFSv3).
+- **REMOVE and RMDIR are a delete, and the volume keeps a trash** (docs/02 §Apply rules):
+  the vfs proposes `Trash` for every name but the ephemeral ones of docs/06 §1, and the
+  mount sees exactly what POSIX promises: LOOKUP of the name is `NFS3ERR_NOENT`, READDIR
+  omits it, the file's handle is `NFS3ERR_STALE`, a CREATE of the name succeeds, and
+  FSSTAT's free space does not grow until the entry is purged (the one visible
+  difference). The browser UI (docs/13 §4) and `tailraid trash` are where the entry is
+  seen and restored; a restored file's old handle resolves again (I-155). RENAME over an
+  existing file sends the replaced file to the trash the same way.
+- **A protected folder** (docs/02, I-154) answers REMOVE, RMDIR, a RENAME of the folder,
+  a RENAME out of it or over an entry inside it with `NFS3ERR_ACCES`: the vfs maps
+  `ErrProtected` to `EPERM`, which satisfies `os.ErrPermission`, the error go-nfs already
+  turns into `ACCES` for the SETATTR change hook; macOS and Linux show "Operation not
+  permitted". CREATE, WRITE and a RENAME into the folder succeed.
 
 ## Ports and mount commands
 
@@ -172,8 +185,9 @@ device"), not `EIO`.
 - **I-16** — A file handle is a pure encoding of (inode, generation). It stays valid across
   rename of the file or any ancestor, across gateway process restarts, and across gateways on
   different devices; it never depends on the path or on in-memory state.
-- **I-17** — A handle whose inode no longer exists, whose generation differs, or whose bytes
-  are malformed yields NFS3ERR_STALE. It never resolves to a different file and never panics.
+- **I-17** — A handle whose inode no longer exists or is in the trash, whose generation
+  differs, or whose bytes are malformed yields NFS3ERR_STALE. It never resolves to a
+  different file and never panics.
 - **I-45** — Every NFS WRITE is applied at exactly the requested offset and length; all other
   bytes of the file are unchanged (the per-RPC open/seek/write/close cycle is honoured).
 - **I-46** — `Change` is non-nil: SETATTR of mode, owner and times succeeds and is visible

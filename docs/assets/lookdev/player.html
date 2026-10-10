@@ -23,6 +23,7 @@
 
   <section class="player">
     <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><a href="#/browse/media/Concerts%202024">Concerts 2024</a></div>
+    <div class="banner deleted"><span>Deleted 3 d ago · gone for good in 27 d</span><span class="actions"><button type="button">Restore</button><button type="button">Delete now</button></span></div>
     <div class="title-row">
       <h1>01 - Opening #1.mp4</h1>
       <span class="small dim mono">1.9 GiB · 2026-10-02 21:14</span>
@@ -37,6 +38,10 @@
       <span class="track">track 1 of 3 · next: 02 - Encore?.m4a</span>
     </div>
     <details class="panel" open>
+      <summary>Integrity (1,946 chunks)</summary>
+      <div class="body"><div class="loading">loading 64 of 1,946…</div></div>
+    </details>
+    <details class="panel" open>
       <summary>Integrity (1,946 chunks) <span class="dim small" style="font-weight:400">· 1,909 committed · 37 degraded · 2+1</span></summary>
       <div class="body">
         <div class="chunk-row"><span class="dim">#0</span><span title="3f9a1c4e7b2d…">3f9a1c4e7b</span><span class="km dim">2+1</span><span class="live">3/3</span><div class="cells"><span class="cell" title="slot 0 · atlas"></span><span class="cell" title="slot 1 · pike"></span><span class="cell unverified" title="slot 2 · nomad · not verified"></span></div></div>
@@ -47,18 +52,20 @@
         <div class="chunk-row"><span class="dim">#5</span><span>b44e0d17c8</span><span class="km dim">2+1</span><span class="live warn">2/3</span><div class="cells"><span class="cell warn" title="slot 0 · pike · live, shard absent"></span><span class="cell"></span><span class="cell"></span></div></div>
         <div class="small dim">a hash that appears more than once is the same stored chunk (dedup) · 6 of 1,946</div>
         <button type="button">Load 64 more</button>
+        <div class="error">Could not load the chunk reports: chunk reports are not wired on this node (503). <button type="button">Retry</button></div>
       </div>
     </details>
   </section>
 
   <section class="player">
-    <div class="variant">variant: image</div>
+    <div class="variant">variant: image, under an nsfw folder (the veil until tapped)</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><a href="#/browse/media/Concerts%202024">Concerts 2024</a><span class="sep">/</span><a href="#">photos</a><span class="badge nsfw">nsfw</span></div>
     <div class="title-row">
       <h1>cover 100%.jpg</h1>
       <span class="small dim mono">3.4 MiB · 2026-10-02 21:20</span>
       <span class="actions"><a class="btn" href="#">Download</a></span>
     </div>
-    <div class="viewer"><img alt="cover 100%.jpg" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%2364748b'/%3E%3Ccircle cx='1.3' cy='1.1' r='.5' fill='%2394a3b8'/%3E%3Cpath d='M0 3 L1.4 1.6 L2.2 2.4 L2.9 1.8 L4 3Z' fill='%23475569'/%3E%3C/svg%3E" style="width:100%;max-width:640px"></div>
+    <div class="viewer nsfw"><img alt="cover 100%.jpg" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%2364748b'/%3E%3Ccircle cx='1.3' cy='1.1' r='.5' fill='%2394a3b8'/%3E%3Cpath d='M0 3 L1.4 1.6 L2.2 2.4 L2.9 1.8 L4 3Z' fill='%23475569'/%3E%3C/svg%3E" style="width:100%;max-width:640px"><span class="veil">nsfw · tap to show</span></div>
     <div class="controls">
       <button type="button">◀ Previous</button>
       <button type="button">Next ▶</button>
