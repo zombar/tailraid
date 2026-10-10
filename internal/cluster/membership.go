@@ -258,17 +258,26 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		if nd.Kind != meta.KindDevice {
 			return fmt.Errorf("%w: only devices vote", ErrBadMemberOp)
 		}
-		var fut raft.IndexFuture
-		if op.Voter {
-			fut = n.Raft.AddVoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
-		} else {
-			fut = n.Raft.AddNonvoter(raft.ServerID(nd.ID), n.raftAddrFor(nd), 0, 10*time.Second)
+		row := nd
+		row.Voter = op.Voter
+		record := func() error {
+			return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: row}})
 		}
-		if err := fut.Error(); err != nil {
-			return raftErr("change suffrage", err)
+		// a leader that demotes itself steps down once the new configuration commits, so
+		// the row is recorded first, while it can still propose (I-145)
+		self := !op.Voter && nd.ID == n.ID
+		if self {
+			if err := record(); err != nil {
+				return err
+			}
 		}
-		nd.Voter = op.Voter
-		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
+		if err := n.setSuffrage(nd, op.Voter); err != nil {
+			return err
+		}
+		if self {
+			return nil
+		}
+		return record()
 	case "set_version":
 		// the row carries the version serve runs, not the one it joined with (I-133)
 		if op.Version == "" {
@@ -357,4 +366,38 @@ func raftErr(what string, err error) error {
 		return fmt.Errorf("%w: %s: %v", ErrNotLeader, what, err) //nolint:errorlint // raft detail
 	}
 	return fmt.Errorf("cluster: %s: %w", what, err)
+}
+
+// setSuffrage gives nd's Raft server the vote or takes it away. Taking it is DemoteVoter:
+// raft's AddNonvoter on a server that already votes changes only its address, which left
+// a demoted device voting while its row said otherwise (I-145).
+func (n *Node) setSuffrage(nd meta.Node, voter bool) error {
+	id := raft.ServerID(nd.ID)
+	var fut raft.IndexFuture
+	switch {
+	case voter:
+		fut = n.Raft.AddVoter(id, n.raftAddrFor(nd), 0, 10*time.Second)
+	case n.votes(id):
+		fut = n.Raft.DemoteVoter(id, 0, 10*time.Second)
+	default:
+		fut = n.Raft.AddNonvoter(id, n.raftAddrFor(nd), 0, 10*time.Second)
+	}
+	if err := fut.Error(); err != nil {
+		return raftErr("change suffrage", err)
+	}
+	return nil
+}
+
+// votes reports whether id is a voter in the current Raft configuration.
+func (n *Node) votes(id raft.ServerID) bool {
+	f := n.Raft.GetConfiguration()
+	if f.Error() != nil {
+		return false
+	}
+	for _, s := range f.Configuration().Servers {
+		if s.ID == id {
+			return s.Suffrage == raft.Voter
+		}
+	}
+	return false
 }

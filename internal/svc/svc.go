@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -79,12 +80,12 @@ func Install(p Params) (Plan, error) {
 			Notes: []string{"logs: " + p.LogFile, "mount after login with: tailraid mount"},
 		}, nil
 	case "linux":
-		unit := "/etc/systemd/system/tailraid.service"
+		unit := unitPath
 		stage := p.Stage
 		if stage == "" {
 			stage = os.TempDir()
 		}
-		tmp := filepath.Join(stage, "tailraid.service")
+		tmp := path.Join(stage, "tailraid.service") // a Linux plan: slash paths whatever OS builds it
 		sudo := sudoPrefix(p)
 		return Plan{
 			Files: []File{{Path: tmp, Mode: 0o644, Content: systemdUnit(p)}},
@@ -117,6 +118,38 @@ func Install(p Params) (Plan, error) {
 	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
 }
 
+// unitPath is the systemd unit `install` writes.
+const unitPath = "/etc/systemd/system/tailraid.service"
+
+// UnitInstalled reports whether the systemd unit is installed on this machine.
+func UnitInstalled() bool {
+	_, err := os.Stat(unitPath)
+	return err == nil
+}
+
+// RefreshUnit returns the plan that rewrites the systemd unit from p and restarts the
+// service, so a disk added since `install` is among the paths the sandbox lets serve
+// write (I-122, I-147). Off Linux nothing confines the paths: the plan is empty.
+func RefreshUnit(p Params) (Plan, error) {
+	if p.GOOS != "linux" {
+		return Plan{}, nil
+	}
+	stage := p.Stage
+	if stage == "" {
+		stage = os.TempDir()
+	}
+	tmp := path.Join(stage, "tailraid.service") // a Linux plan: slash paths whatever OS builds it
+	sudo := sudoPrefix(p)
+	return Plan{
+		Files: []File{{Path: tmp, Mode: 0o644, Content: systemdUnit(p)}},
+		Commands: [][]string{
+			append(slices.Clone(sudo), "install", "-m", "644", tmp, unitPath),
+			append(slices.Clone(sudo), "systemctl", "daemon-reload"),
+			append(slices.Clone(sudo), "systemctl", "restart", Name),
+		},
+	}, nil
+}
+
 // Uninstall returns the plan that stops and removes the service (data stays).
 func Uninstall(p Params) (Plan, error) {
 	switch p.GOOS {
@@ -127,7 +160,7 @@ func Uninstall(p Params) (Plan, error) {
 		sudo := sudoPrefix(p)
 		return Plan{Commands: [][]string{
 			append(sudo, "systemctl", "disable", "--now", Name),
-			append(sudo, "rm", "-f", "/etc/systemd/system/tailraid.service"),
+			append(sudo, "rm", "-f", unitPath),
 			append(sudo, "systemctl", "daemon-reload"),
 		}}, nil
 	case "windows":

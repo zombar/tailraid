@@ -57,7 +57,12 @@ node:
 3. appends the entry to the config;
 4. proposes `NodeUpsert{Kind: KindDisk, Host: self, ID: diskID, Capacity: budget}` through
    the leader (the `member` op `add_disk`, forwarded like `join`);
-5. the running daemon opens the store on its next maintenance tick (no restart needed).
+5. the running daemon opens the store on its next maintenance tick (no restart needed),
+   except under the systemd unit `install` writes on Linux: its sandbox lets `serve` write
+   only the paths `ReadWritePaths` names, so `add-disk` there rewrites the unit from the
+   config, reloads systemd and restarts the service, and waits for the node to come back
+   and open the disk (I-147). Without that the disk opened read-only for `serve`, and
+   every shard placed on it failed.
 
 `init` and `join` take the disks already listed in the config: each is marked and
 registered with the device row, so both stay option-free (12 §7, I-121); with no disks
@@ -76,7 +81,13 @@ two share one budget (§3) and one failure.
 ## 3. Stores and budgets
 
 `serve` opens one `chunk.Store` per configured disk, at `<path>/shards`. Every store keeps
-the existing layout, file format and sweep (01 §Shards, 06 §3).
+the existing layout, file format and sweep (01 §Shards, 06 §3). A disk must also take a
+new file: `serve` writes and removes a check file in the store when it opens the disk and
+on every maintenance tick, and a disk that refuses it (remounted read-only after errors,
+or outside what the service may write) is closed with the reason `not writable: …`,
+reported not OK like an unmounted one (§4), and reopened by the tick that finds it
+writable again (I-146). A disk that answered reads but refused writes would otherwise
+stay a placement target and fail every shard sent to it.
 
 Before opening an added disk, `serve` reads its marker. A missing marker, a different
 `cluster_id`, or a disk ID that is not a row of this host leaves the disk **closed**: it is
@@ -275,6 +286,12 @@ runs.
 - **I-132** — `status`, `node ls` and the web UI's Balance and Disks blocks omit `removed`
   rows, which stay in the node table because an index is never reused; `node ls --all`
   lists them and `--json` carries them.
+- **I-146** — A disk whose store does not take a new file is closed with the reason when
+  it opens and at every maintenance tick, so it is never a live target, and it reopens at
+  the first tick that finds it writable.
+- **I-147** — On Linux with the systemd unit installed, `node add-disk` rewrites the unit
+  from the saved config, so `ReadWritePaths` names the new disk, and restarts the service
+  before asking the node to open it.
 
 ## Tests
 
@@ -292,3 +309,5 @@ runs.
 | I-121 | `TestCLI_Init_NoDisks_PrintsHint`, `TestCLI_Join_RegistersConfiguredDisks` |
 | I-130 | `TestCLI_VolumeGrow_EditsConfig` |
 | I-132 | `TestPrintNodes_HidesRemoved` |
+| I-146 | `TestDiskSet_UnwritableDiskClosed` |
+| I-147 | `TestSvc_RefreshUnit_NamesNewDiskAndRestarts` |
