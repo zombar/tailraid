@@ -224,4 +224,4 @@ Details: [docs/12-operations.md](docs/12-operations.md) §4.
 
 ## License
 
-Copyright (C) 2026 Forge3D cyf. tailraid is free software under the [GNU Affero General Public License, version 3](LICENSE): anyone who runs a modified version as a network service must offer its source to its users. The in-tree copy of go-filesystems/smb in `third_party/smb` keeps its own [BSD 3-Clause license](third_party/smb/LICENSE).
+Copyright (C) 2026 FORGE3D CYF. tailraid is free software under the [GNU Affero General Public License, version 3](LICENSE): anyone who runs a modified version as a network service must offer its source to its users. The in-tree copy of go-filesystems/smb in `third_party/smb` keeps its own [BSD 3-Clause license](third_party/smb/LICENSE).
