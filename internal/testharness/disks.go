@@ -66,7 +66,11 @@ func (d *nodeDisks) health() []rpc.DiskHealth {
 // AddDisk gives node i one more disk, registered through the leader with the add_disk
 // member op, and returns its target index. Every node probes once afterwards so the disk
 // is live everywhere. A node's first disk is its default disk: its Store (docs/14 §9).
-func (c *Cluster) AddDisk(i int) meta.NodeIdx {
+func (c *Cluster) AddDisk(i int) meta.NodeIdx { return c.AddDiskCap(i, 1<<40) }
+
+// AddDiskCap is AddDisk with the disk's registered capacity (its placement weight and
+// its share of the host's slots, docs/14 §7).
+func (c *Cluster) AddDiskCap(i int, capacity uint64) meta.NodeIdx {
 	c.T.Helper()
 	nd := c.Nodes[i]
 	nd.disks.mu.Lock()
@@ -81,7 +85,7 @@ func (c *Cluster) AddDisk(i int) meta.NodeIdx {
 	nd.disks.mu.Lock()
 	nd.disks.disks = append(nd.disks.disks, hd)
 	nd.disks.mu.Unlock()
-	op := rpc.MemberOp{Op: "add_disk", NodeIdx: nd.Idx(), DiskID: id, Name: fmt.Sprintf("n%d/%d", i, n), Capacity: 1 << 40}
+	op := rpc.MemberOp{Op: "add_disk", NodeIdx: nd.Idx(), DiskID: id, Name: fmt.Sprintf("n%d/%d", i, n), Capacity: capacity}
 	if err := c.Leader().Node.MemberOp(context.Background(), op); err != nil {
 		c.T.Fatalf("add disk to n%d: %v", i, err)
 	}

@@ -206,3 +206,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-198 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | `TestS3Node_ScrubFetchesSample` |
 | L-209 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
 | L-210 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | E-126 | Unreachable (until the next successful probe of its host) | `TestFlusher_SuspectNodeExcludedFromNextChunk`, `TestProber_SuspectUntilNextProbe` |
+| L-211 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot on a disk far above its share) | E-127 rebalance pass | Repairing → Committed | `TestRepair_Rebalance_MovesWithinHost` |

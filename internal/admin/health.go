@@ -16,6 +16,7 @@ type VolumeHealth struct {
 	Unreadable     int                  // chunks with fewer than k readable slots right now
 	StalePolicy    int                  // chunks awaiting migration to the current (k, m)
 	DomainSkew     int                  // chunks above the host cap that repair will move (docs/14 §7)
+	DiskSkew       int                  // slots the capacity rebalance would move between disks of one host (docs/14 §7, I-172)
 	DegradedHashes map[meta.Hash]bool   // degraded, repair-pending or unreadable
 	Slots          map[meta.NodeIdx]int // placement slots per node
 	Missing        map[meta.NodeIdx]int // slots per node whose node is not live
@@ -31,6 +32,7 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 	}
 	v := VolumeHealth{DegradedHashes: map[meta.Hash]bool{}, Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}}
 	in := meta.HealthInput{Nodes: nodes, Live: live, FillAfter: fillAfter}
+	chunks := 0
 	st.ForEachChunk(func(c meta.Chunk) bool {
 		if c.Refs == 0 {
 			return true
@@ -62,8 +64,12 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 		if h.Skewed {
 			v.DomainSkew++
 		}
+		chunks++
 		return true
 	})
+	for _, mv := range meta.RebalanceMoves(all, v.Slots, chunks, meta.DefaultRebalanceSkew, live.IsLive) {
+		v.DiskSkew += mv.N
+	}
 	return v
 }
 

@@ -230,7 +230,7 @@ func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
 		if err != nil {
 			return admin.Report{}, err
 		}
-		if st.Repaired+st.Partial+st.Migrated+st.Deferred == 0 {
+		if st.Repaired+st.Partial+st.Migrated+st.Deferred+st.Rebalanced == 0 {
 			break
 		}
 		if err := r.Env.Wait(ctx, 200*time.Millisecond); err != nil {

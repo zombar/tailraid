@@ -78,6 +78,7 @@ type VolumeReport struct {
 	Unreadable     int     `json:"unreadable_chunks"` // chunks with < k live slots
 	StalePolicy    int     `json:"stale_policy_chunks"`
 	DomainSkew     int     `json:"domain_skew"`     // chunks above the host cap, to be moved (docs/14 §7)
+	DiskSkew       int     `json:"disk_skew"`       // slots the capacity rebalance would move within a host (docs/14 §7)
 	ToleratesDisks int     `json:"tolerates_disks"` // targets the policy survives losing
 	ToleratesHosts int     `json:"tolerates_hosts"` // whole hosts it survives losing (docs/14 §6)
 }
@@ -222,7 +223,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	}
 	health := ScanHealth(st, lv, fillAfter)
 	rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy = health.Degraded, health.RepairPending, health.Unreadable, health.StalePolicy
-	rep.Volume.DomainSkew = health.DomainSkew
+	rep.Volume.DomainSkew, rep.Volume.DiskSkew = health.DomainSkew, health.DiskSkew
 	rep.Volume.ToleratesDisks, rep.Volume.ToleratesHosts = meta.Tolerance(nodes, vol.K, vol.M)
 	slots, missing := health.Slots, health.Missing
 	live := map[meta.NodeIdx]bool{}

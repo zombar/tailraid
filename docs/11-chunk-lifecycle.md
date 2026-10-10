@@ -183,6 +183,7 @@ these numbers.
 - E-124 a disk fails or is closed (marker missing) while its host stays live (14 §4)
 - E-125 a host or disk joins, or a drain ends, so a placement within the host cap exists for a chunk that exceeds it (14 §7)
 - E-126 a shard RPC to a node fails at the transport level, or a PUT to it outlasts the straggler grace (05 §6)
+- E-127 a repair pass finds a disk far above its capacity share of its host's slots while another disk of that host is below (14 §7)
 
 **5. Transition table.**
 
@@ -309,6 +310,7 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-198 | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | ErrCorrupt on the GET → bad slot → repair re-PUTs; outside the budget the slot is only HEADed and the corruption waits for a read | `TestS3Node_ScrubFetchesSample` |
 | L-209 | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | the PUT is cancelled and awaited (L-190), its slot re-placed or recorded 0, and its node marked suspect (I-169, I-170) | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
 | L-210 | Durable | E-126 | Unreachable (until the next successful probe of its host) | `Live()` excludes the host and its disks: reads and placement skip it without a dial, as L-131; the hold-downs do not start | `TestProber_SuspectUntilNextProbe`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |
+| L-211 | Committed (a slot on a disk far above its share) | E-127 rebalance pass | Repairing → Committed | the slot moves to the emptier disk of the same host: PUT, `SetPlacement` with `Expect`, fenced DELETE; readable throughout, never two slots on one target, the host's count unchanged; at most `RebalanceBatch` chunks a pass (I-172) | `TestRepair_Rebalance_MovesWithinHost` |
 | L-113 | Dirty | E-100 C1 crash before WAL fsync | (none) or Dirty | write not acked; after restart content is exactly pre-write; torn record ignored | `TestOverlay_RestartReplaysDirtyWALs`, `TestWAL_ReplayStopsAtTornTail` |
 | L-114 | Dirty | E-101 C2 crash after WAL fsync | Dirty (replayed) | acked; replay on restart; flushed; readable everywhere | `TestOverlay_RestartReplaysDirtyWALs` |
 | L-115 | Uploading | E-102 C3 node crash, temp written | Uploading (slot fails) | temp never visible; removed on `Store.Open` | `TestCrash_AtEveryPoint` |

@@ -142,7 +142,12 @@ A slot `i` of chunk `c` is **bad** when any of:
    or a stale shard gets repaired without waiting for the 1 % scrub sample;
 6. the chunk is **skewed** (14 §7): one host holds more than `ceil((k+m)/D)` of its slots
    while the candidates admit a placement within that cap; the excess slots (highest
-   index first) are bad and move like draining slots.
+   index first) are bad and move like draining slots;
+7. after the per-chunk pass, a **capacity rebalance** within each host (14 §7, I-172):
+   when a disk sits above its share of its host's slots, another disk of that host below
+   it, and either is more than `RebalanceSkew` off its share, slots move from the one to
+   the other, at most `RebalanceBatch` chunks a pass, by the move sequence below (PUT,
+   `SetPlacement` with `Expect`, fenced DELETE).
 
 A chunk with ≥ 1 bad slot and ≥ k good live slots is **repairable**. Repair of one chunk:
 

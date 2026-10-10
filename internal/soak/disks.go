@@ -337,6 +337,16 @@ func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 	if added.Idx == 0 {
 		return nil
 	}
+	// the host's other disks are now far above their shares: repair passes move slots
+	// to the new disk until every disk of the host is within the skew (docs/14 §7)
+	rep, err = r.repairUntilClean(ctx)
+	if err != nil {
+		return err
+	}
+	r.checkAt("I-172", "repair moved slots onto the added disk", hostSlotsOf(rep, added.Name) > 0 && rep.Volume.DiskSkew == 0,
+		fmt.Sprintf("%d slots on %s, disk skew %d after the passes", hostSlotsOf(rep, added.Name), added.Name, rep.Volume.DiskSkew), "", "", added.Name)
+	bad, first := r.verifyModel(v, m)
+	r.checkAt("I-12 I-65", "corpus exact after the rebalance", bad == 0, first, first, "", gw.Name)
 	if err := r.Env.SetState(ctx, added, meta.Draining); err != nil {
 		r.check("L-93", "drain of the added disk accepted", false, err.Error())
 		return nil
