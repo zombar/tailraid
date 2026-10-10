@@ -230,6 +230,9 @@ func mountCmd() *cobra.Command {
 			var env []string // Windows' New-SmbMapping reads the password from the environment; the others prompt
 			if runtime.GOOS == "windows" {
 				env = []string{mount.SMBPasswordEnv + "=" + cfg.SMB.Password}
+				if w := mount.ElevatedWarning(mount.Elevated(), target); w != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), w)
+				}
 			}
 			return mount.RunWithEnv(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs, env)
 		},

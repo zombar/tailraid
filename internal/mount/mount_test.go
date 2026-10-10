@@ -99,3 +99,17 @@ func TestCheckWindowsBuild_Table(t *testing.T) {
 		}
 	}
 }
+
+// From an elevated window the mapping is made but the warning names the letter and the
+// way out; from a normal one nothing is printed (docs/15 §6).
+func TestElevatedWarning(t *testing.T) {
+	if w := ElevatedWarning(false, "T:"); w != "" {
+		t.Fatalf("not elevated: %q", w)
+	}
+	w := ElevatedWarning(true, "T:")
+	for _, want := range []string{"administrator", "Explorer", "net use T: /delete", "tailraid mount"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warning lacks %q: %s", want, w)
+		}
+	}
+}

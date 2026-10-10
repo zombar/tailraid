@@ -130,3 +130,14 @@ func RunWithEnv(ctx context.Context, out io.Writer, goos, prog string, args, env
 	}
 	return err
 }
+
+// ElevatedWarning is what `mount` prints before mapping target from an elevated window:
+// the letter will exist for elevated programs only, and Explorer runs unelevated
+// (docs/15 §6). Empty when not elevated.
+func ElevatedWarning(elevated bool, target string) string {
+	if !elevated {
+		return ""
+	}
+	return fmt.Sprintf("warning: this window runs as administrator, so %[1]s will be visible to elevated programs only, not to Explorer.\n"+
+		"To see it in Explorer: `net use %[1]s /delete` here, then `tailraid mount` from a normal (non-administrator) window.", target)
+}
