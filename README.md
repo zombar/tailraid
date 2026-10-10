@@ -21,7 +21,7 @@ git clone https://github.com/zombar/tailraid.git && cd tailraid
 make install          # → ~/.local/bin/tailraid (needs Go 1.27.2+)
 ```
 
-`tailraid update` installs the latest release. The repository is private: set `GITHUB_TOKEN` or log in with `gh`. See [Verifying a download](#verifying-a-download) before trusting a binary you fetched by hand.
+`tailraid update` installs the latest release; no token or login is needed. See [Verifying a download](#verifying-a-download) before trusting a binary you fetched by hand.
 
 ## Set up a volume
 

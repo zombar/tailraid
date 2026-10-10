@@ -145,9 +145,10 @@ Versions are plain semver with a `v` prefix; a build from a commit prints
 I-128):
 
 1. Resolve the release: `GET /repos/zombar/tailraid/releases/latest` (or `/tags/<v>`),
-   authenticated with `TAILRAID_GITHUB_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`
-   when the `gh` CLI is installed (the repository is private; a public repository needs
-   none). The asset is `tailraid_<GOOS>_<GOARCH>[.exe]`.
+   anonymously (the repository is public). A token from `TAILRAID_GITHUB_TOKEN`, else
+   `GITHUB_TOKEN`, else `gh auth token` when the `gh` CLI is installed, is sent when
+   present: a private fork needs one, and with one the asset is fetched through the API
+   URL instead of the browser URL. The asset is `tailraid_<GOOS>_<GOARCH>[.exe]`.
 2. Compare: a release older than or equal to the running semver is not applied unless
    `--version` names it explicitly, and a release older than the running one also needs
    `--allow-downgrade` (an older node cannot read a newer snapshot, §6); a non-semver

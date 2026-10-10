@@ -107,7 +107,7 @@ func TestUpdate_AppliesVerifiedRelease(t *testing.T) {
 		Verify: func(_ context.Context, path, tag string) error { verified = tag; return nil },
 	}
 	ctx := context.Background()
-	if _, err := (&Updater{Owner: "zombar", Repo: "tailraid", BaseURL: gh.URL}).Resolve(ctx, ""); !errors.Is(err, ErrNoToken) {
+	if _, err := (&Updater{Owner: "zombar", Repo: "tailraid", BaseURL: gh.URL}).Resolve(ctx, ""); !errors.Is(err, ErrNoRelease) || !strings.Contains(err.Error(), "GITHUB_TOKEN") {
 		t.Fatalf("anonymous on a private repo: %v", err)
 	}
 	rel, err := u.Resolve(ctx, "")
