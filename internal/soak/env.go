@@ -56,6 +56,10 @@ type Env interface {
 	RepairNow(ctx context.Context) (repair.Stats, error)
 	Scrub(ctx context.Context) (repair.Stats, error)
 	GCNow(ctx context.Context) (repair.Result, error)
+	// PurgeTrash deletes every entry in the trash for good (`tailraid trash purge --all`,
+	// docs/12 §10) and returns how many inodes went; a removed file's chunks are then
+	// tombstoned and GC collects them after grace.
+	PurgeTrash(ctx context.Context) (int, error)
 	SetPolicy(ctx context.Context, k, m uint8) error
 	SetState(ctx context.Context, node NodeRef, state meta.NodeState) error
 	// Remove takes a member out of the node table (`node remove`, no --force).

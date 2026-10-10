@@ -21,7 +21,7 @@ import (
 // I-82): the body streams into a hidden sibling of the target and one Rename publishes it
 // once every announced byte has arrived.
 const (
-	uploadSuffix = ".tailraid-upload"
+	uploadSuffix = meta.UploadSuffix
 	// DefaultUploadSlots bounds concurrent uploads; each holds one chunk-sized buffer.
 	DefaultUploadSlots = 4
 	// DefaultBodyTimeout is how long an upload body may send nothing before it is dropped.
@@ -31,17 +31,13 @@ const (
 )
 
 // IsUploadTemp reports whether name is an upload's temp file, ".<name>.tailraid-upload".
-func IsUploadTemp(name string) bool {
-	return len(name) > len(uploadSuffix)+1 && strings.HasPrefix(name, ".") && strings.HasSuffix(name, uploadSuffix)
-}
+func IsUploadTemp(name string) bool { return meta.IsUploadTemp(name) }
 
 // IsOSMetadata reports whether name is a file macOS writes for its own use beside
 // the user's: "._<name>" (AppleDouble, a file's extended attributes on a volume
 // without them, which NFSv3 is) and ".DS_Store" (Finder's view settings). A listing
-// leaves them out (I-140).
-func IsOSMetadata(name string) bool {
-	return (len(name) > 2 && strings.HasPrefix(name, "._")) || name == ".DS_Store"
-}
+// leaves them out (I-140). Both are ephemeral names: a delete unlinks them (docs/06 §1).
+func IsOSMetadata(name string) bool { return meta.IsOSMetadata(name) }
 
 func tempName(name string) string { return "." + name + uploadSuffix }
 

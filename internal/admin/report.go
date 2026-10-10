@@ -79,6 +79,8 @@ type VolumeReport struct {
 	DomainSkew     int     `json:"domain_skew"`     // chunks above the host cap, to be moved (docs/14 §7)
 	ToleratesDisks int     `json:"tolerates_disks"` // targets the policy survives losing
 	ToleratesHosts int     `json:"tolerates_hosts"` // whole hosts it survives losing (docs/14 §6)
+	TrashInodes    int     `json:"trash_inodes"`    // deleted entries waiting in the trash (docs/06 §1)
+	TrashBytes     uint64  `json:"trash_bytes"`     // their file bytes, not counted in logical_bytes
 }
 
 // GatewayReport is this node's overlay: what is acknowledged but not yet committed, and
@@ -188,6 +190,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	rep.Volume = VolumeReport{
 		K: vol.K, M: vol.M, Auto: vol.Auto, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
 		Inodes: stats.Inodes, Chunks: stats.Chunks, Tombstoned: stats.Tombstoned, LogicalBytes: stats.LogicalBytes, StoredBytes: stats.StoredBytes,
+		TrashInodes: stats.TrashInodes, TrashBytes: stats.TrashBytes,
 	}
 
 	nodes := st.Nodes()

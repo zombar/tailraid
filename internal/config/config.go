@@ -55,10 +55,29 @@ type Config struct {
 		FillAfter string `yaml:"fill_after"` // dead-node hold-down before re-placing its slots (default 10m)
 		S3Scrub   string `yaml:"s3_scrub"`   // bucket bytes the scrub may fetch per day to verify objects (default 1G; "0": HEAD only)
 	} `yaml:"repair"`
+	Trash struct {
+		Retention string `yaml:"retention"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
+	} `yaml:"trash"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
+}
+
+// TrashRetention parses trash.retention: 30 days when empty, 0 for "never purged on its
+// own", otherwise at least an hour (docs/12 §10, I-157).
+func (c Config) TrashRetention() (time.Duration, error) {
+	switch c.Trash.Retention {
+	case "":
+		return 30 * 24 * time.Hour, nil
+	case "0":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.Trash.Retention)
+	if err != nil || d < time.Hour {
+		return 0, fmt.Errorf("config: trash.retention %q: want 0 or a duration of at least 1h", c.Trash.Retention)
+	}
+	return d, nil
 }
 
 // Disk is one added disk: its mount path and its budget ("" derives it from the disk).
@@ -320,6 +339,9 @@ func (c Config) Validate() error {
 	}
 	if c.Mount.Path != "" && runtime.GOOS != "windows" && !filepath.IsAbs(c.Mount.Path) {
 		return fmt.Errorf("config: mount.path %q: want an absolute path (~ is expanded)", c.Mount.Path)
+	}
+	if _, err := c.TrashRetention(); err != nil {
+		return err
 	}
 	return nil
 }

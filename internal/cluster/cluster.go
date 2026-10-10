@@ -100,6 +100,11 @@ type Node struct {
 	ID   string
 	Raft *raft.Raft
 	FSM  *meta.FSM
+	// MinCodec, when set, is the oldest codec a live active member reports (the prober's
+	// view): a leader refuses a command written in a newer one with meta.ErrCodec, so a
+	// cluster half-way through an update never logs an entry half of it cannot read
+	// (docs/12 §6, I-156). nil accepts everything (tests, single-node rigs).
+	MinCodec func() uint8
 
 	logs        raft.LogStore
 	closer      io.Closer // the on-disk store; nil for injected stores

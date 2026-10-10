@@ -183,6 +183,15 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusNotADirectory), nil
 	}
 
+	if options&optDeleteOnClose != 0 && !tc.ro {
+		// the delete happens at CLOSE, whose reply carries no failure: a backend that
+		// may refuse it is asked now, where the client reads the status
+		if d, ok := sh.fsys.(DeleteChecker); ok {
+			if err := d.CanDelete(p); err != nil {
+				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+			}
+		}
+	}
 	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID}
 	if !dir {
 		if o, canOpen := sh.fsys.(filesystem.Opener); canOpen {
@@ -223,6 +232,14 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	// rejects: it requires the offset to be eight-byte aligned, and 153 is
 	// not. Zero is how "there are none" is spelled.
 	return b, nil
+}
+
+// DeleteChecker is the optional capability of a filesystem that can refuse a delete
+// before it is marked: SMB2 deletes at CLOSE, whose reply carries no failure, so a
+// backend that may refuse one (a protected folder) is asked when the client sets
+// delete-on-close, at CREATE or through SET_INFO, and the client reads the status.
+type DeleteChecker interface {
+	CanDelete(path string) error
 }
 
 // Timestamper is the optional capability of a Stat that knows its times. The

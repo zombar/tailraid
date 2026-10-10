@@ -233,6 +233,14 @@ func (e *harnessEnv) GCNow(ctx context.Context) (repair.Result, error) {
 	return repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil).RunOnce(ctx)
 }
 
+func (e *harnessEnv) PurgeTrash(ctx context.Context) (int, error) {
+	l := e.c.Leader()
+	gc := repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil)
+	n, err := gc.PurgeTrash(ctx, max(e.c.Clk.Now().UnixNano(), l.Node.FSM.LastNow())+1)
+	e.c.Settle()
+	return n, err
+}
+
 // SetPolicy pins a policy as the admin op does: manual mode first, then the policy.
 func (e *harnessEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	l := e.c.Leader()

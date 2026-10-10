@@ -290,7 +290,7 @@ type chunkWork struct {
 func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool) (uint64, error) {
 	forceUpload := false
 	for range 16 {
-		base, ok := f.st.GetInode(plan.Ino)
+		base, ok := f.st.GetInodeAny(plan.Ino) // a file deleted while dirty commits into its trash entry (L-203)
 		if !ok || base.Type != meta.TFile {
 			return 0, meta.ErrNotExist
 		}

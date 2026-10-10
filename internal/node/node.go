@@ -226,6 +226,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if rcfg.Grace, rcfg.FillAfter, err = cfg.RepairDurations(); err != nil {
 		return err
 	}
+	if rcfg.Retention, err = cfg.TrashRetention(); err != nil {
+		return err
+	}
 	if rcfg.S3ScrubBytes, err = cfg.S3ScrubBytes(); err != nil {
 		return err
 	}
@@ -235,6 +238,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer.Events = ring
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
+	gc.Retention = rcfg.Retention
+	node.MinCodec = prober.MinCodec // the trash and the flags wait until every live member reads codec 4 (docs/12 §6)
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
@@ -709,7 +714,7 @@ func (a *adminOps) sweepS3(ctx context.Context, grace time.Duration) {
 
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
-	case "repair_now", "check", "set_policy", "gc_now", "rotate_token":
+	case "repair_now", "check", "set_policy", "gc_now", "rotate_token", "trash_restore", "trash_purge":
 		if !a.node.IsLeader() {
 			if a.node.LeaderRPCAddr() == "" {
 				return nil, cluster.ErrNoLeader
@@ -720,6 +725,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
 	case "chunk":
 		return admin.DescribeChunks(ctx, a.node.FSM, a.prober, a.client, a.ring, op.Chunk)
+	case "trash_ls", "trash_restore", "trash_purge":
+		return a.trashOp(ctx, op)
 	case "repair_now":
 		return a.repairer.Scan(ctx)
 	case "gc_now":
@@ -793,6 +800,82 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 }
 
 // filesReferencing walks the tree once and returns the paths whose chunks are in set.
+
+// trashOp serves `tailraid trash ls|restore|purge` (docs/12 §10): a listing from this
+// node's FSM copy, a restore or a purge proposed on the leader.
+func (a *adminOps) trashOp(ctx context.Context, op rpc.AdminOp) (any, error) {
+	st := a.node.FSM
+	now := a.clk.Now().UnixNano()
+	switch op.Op {
+	case "trash_ls":
+		var dir *meta.Ino
+		if op.Path != "" {
+			in, err := st.Resolve(meta.SplitPath(op.Path))
+			if err != nil {
+				return nil, err
+			}
+			if in.Type != meta.TDir {
+				return nil, meta.ErrNotDir
+			}
+			dir = &in.Ino
+		}
+		return map[string]any{"entries": admin.TrashList(st, dir)}, nil
+	case "trash_restore":
+		c := &meta.Restore{Ino: meta.Ino(op.Ino), NewName: op.As, Now: now}
+		if op.To != "" {
+			in, err := st.Resolve(meta.SplitPath(op.To))
+			if err != nil {
+				return nil, err
+			}
+			c.NewParent = in.Ino
+		}
+		if err := a.propose(ctx, meta.Command{Op: meta.OpRestore, Restore: c}); err != nil {
+			return nil, err
+		}
+		parts, err := st.PathOf(c.Ino)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"path": "/" + strings.Join(parts, "/")}, nil
+	default: // trash_purge
+		if op.Ino != 0 {
+			was := st.Stats().TrashInodes
+			if err := a.propose(ctx, meta.Command{Op: meta.OpPurge, Purge: &meta.Purge{Ino: meta.Ino(op.Ino), Now: now}}); err != nil {
+				return nil, err
+			}
+			return map[string]int{"purged": was - st.Stats().TrashInodes}, nil
+		}
+		before := max(now, st.LastNow()) + 1 // --all: everything, however young
+		if op.OlderThan != "" {
+			d, err := time.ParseDuration(op.OlderThan)
+			if err != nil || d < 0 {
+				return nil, fmt.Errorf("trash purge: older-than %q: want a duration", op.OlderThan)
+			}
+			if d > 0 {
+				before = max(now, st.LastNow()) - d.Nanoseconds()
+			}
+		} else if !op.All {
+			return nil, errors.New("trash purge: one of --ino, --older-than or --all is required")
+		}
+		n, err := a.gc.PurgeTrash(ctx, before)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]int{"purged": n}, nil
+	}
+}
+
+// propose applies one command on the leader and waits for it locally.
+func (a *adminOps) propose(ctx context.Context, cmd meta.Command) error {
+	res, index, err := a.node.Propose(ctx, cmd)
+	if err == nil {
+		err = res.Err
+	}
+	if err != nil {
+		return err
+	}
+	return a.node.FSM.WaitApplied(ctx, index)
+}
 
 // fence answers the DELETE fence from the local FSM for one of this host's disks
 // (rpc.Fence).

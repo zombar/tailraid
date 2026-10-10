@@ -80,6 +80,7 @@ func (e *fakeEnv) Status(_ context.Context, n NodeRef) (admin.Report, error) {
 func (e *fakeEnv) RepairNow(context.Context) (repair.Stats, error) { return repair.Stats{}, nil }
 func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error)     { return repair.Stats{}, nil }
 func (e *fakeEnv) GCNow(context.Context) (repair.Result, error)    { return repair.Result{}, nil }
+func (e *fakeEnv) PurgeTrash(context.Context) (int, error)         { return 0, nil }
 func (e *fakeEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	e.record(ctx, fmt.Sprintf("set-policy %d+%d", k, m))
 	e.mu.Lock()

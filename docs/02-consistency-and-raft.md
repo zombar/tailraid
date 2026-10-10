@@ -522,7 +522,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
 | I-145 | `TestCluster_DemotePromote_RaftFollowsRow` |
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
-| I-152 | `TestFSM_Trash_Table`, `TestFSM_Trash_FoldsEarlierRoots`, `TestFSM_Restore_Table`, `TestFSM_DeterministicAcrossReplicas` (planned: TestCluster_TrashRestoreAcrossNodes, TestModelCheck_Long) |
+| I-152 | `TestFSM_Trash_Table`, `TestFSM_Trash_FoldsEarlierRoots`, `TestFSM_Restore_Table`, `TestFSM_DeterministicAcrossReplicas`, `TestCluster_TrashRestoreAcrossNodes` (planned: TestModelCheck_Long) |
 | I-153 | `TestFSM_Purge_Table`, `TestFSM_Purge_Boundary`, `TestFSM_Purge_CascadesNestedRoots`, `TestFSM_TrashStats_MatchComputed`, `TestCheckInvariants_DetectsEachViolation`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas` |
-| I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags` (planned: TestVFS_Protected_EPERM, TestNFS_Protected_IsACCES, TestSMB_Protected_AccessDenied, TestCluster_V4OpsRefusedUntilAllMembersUpgraded) |
-| I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table` (planned: TestNFS_TrashedIsGoneFromShare, TestNFS_TrashedHandleStale_RestoredValid, TestSMB_DeletedIsGoneFromShare, TestVFS_OpenTrash_ReadsBytes, TestVFS_Remove_TrashKeepsWAL_FlushCommits, TestVFS_PurgeBeforeFlush_DropsWAL) |
+| I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
+| I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes` |

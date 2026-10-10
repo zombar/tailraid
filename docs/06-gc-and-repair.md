@@ -322,4 +322,4 @@ state to patch.
 | I-43 | `TestFSM_DeterministicAcrossReplicas` |
 | I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
 | I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
-| I-157 | `TestStub_I_157` (planned: TestVFS_Remove_EphemeralIsImmediate, TestVFS_RenameOver_TrashesReplaced, TestVFS_RenameOver_EphemeralIsUnlinked, TestGC_PurgeTrash_RetentionBoundary, TestGC_PurgeTrash_DrainsInBatches, TestGC_PurgeThenCollect, TestConfig_TrashRetention) |
+| I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |

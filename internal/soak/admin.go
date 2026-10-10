@@ -133,6 +133,14 @@ func (a *Admin) GCNow(ctx context.Context) (repair.Result, error) {
 	return res, err
 }
 
+func (a *Admin) PurgeTrash(ctx context.Context) (int, error) {
+	var res struct {
+		Purged int `json:"purged"`
+	}
+	err := a.leaderOp(ctx, rpc.AdminOp{Op: "trash_purge", All: true}, &res)
+	return res.Purged, err
+}
+
 func (a *Admin) SetPolicy(ctx context.Context, k, m uint8) error {
 	return a.leaderOp(ctx, rpc.AdminOp{Op: "set_policy", K: k, M: m}, nil)
 }

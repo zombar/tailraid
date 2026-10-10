@@ -157,11 +157,13 @@ type Run struct {
 	Env     Env
 	Profile Profile
 	Log     *slog.Logger
-	Out     io.Writer // results.jsonl (may be nil)
-	Rng     *rand.Rand
-	Seed    int64    // the Rng's seed, for the report
-	Flags   []string // run flags worth recording ("destructive", "restarts")
-	Root    string   // volume directory for this run, e.g. /_soak/20261008T1200
+
+	lastRepair repair.Stats // the last pass repairUntilClean ran, quoted when a phase finds work left
+	Out        io.Writer    // results.jsonl (may be nil)
+	Rng        *rand.Rand
+	Seed       int64    // the Rng's seed, for the report
+	Flags      []string // run flags worth recording ("destructive", "restarts")
+	Root       string   // volume directory for this run, e.g. /_soak/20261008T1200
 
 	mu        sync.Mutex
 	records   []Record

@@ -188,6 +188,7 @@ func TestS3Node_GCNeverDeletes(t *testing.T) {
 	objects := len(srv.Keys())
 	must(t, c.Nodes[0].FS.Remove("/f"))
 	c.Settle()
+	purgeTrash(t, c) // a delete reclaims nothing until the entry is purged (docs/06 §1)
 	leader := c.Leader()
 	const grace = 10 * time.Minute
 	gc := repair.NewGC(leader.Node.FSM, leader.Node, leader.Client, leader.Prober, c.Clk, grace, nil)

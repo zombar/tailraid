@@ -251,22 +251,31 @@ func MustEncodeCommand(c Command) []byte {
 	return b
 }
 
-func encodeCommand(c Command) []byte {
-	w := &writer{b: make([]byte, 0, 64)}
+// CommandCodec is the codec version the log entry for c carries: the lowest that holds
+// its fields (docs/02 §Codec versions). A leader refuses a command whose version a live
+// member cannot read (docs/12 §6, I-156).
+func CommandCodec(c Command) uint8 {
 	v2 := c.Op == OpNodeUpsert && c.NodeUpsert != nil && (c.NodeUpsert.Node.Kind == KindDisk || c.NodeUpsert.Node.Host != 0)
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
-	v4 := needsV4(c)
 	switch {
-	case v4:
-		w.u8(commandVersionV4)
+	case needsV4(c):
+		return commandVersionV4
 	case v3:
-		w.u8(commandVersionV3)
+		return commandVersionV3
 	case v2:
-		w.u8(commandVersionV2)
+		return commandVersionV2
 	default:
-		w.u8(commandVersion)
+		return commandVersion
 	}
+}
+
+func encodeCommand(c Command) []byte {
+	w := &writer{b: make([]byte, 0, 64)}
+	v := CommandCodec(c)
+	v3, v4 := v == commandVersionV3, v == commandVersionV4
+	v2 := v == commandVersionV2
+	w.u8(v)
 	w.u8(uint8(c.Op))
 	switch c.Op {
 	case OpSetVolume:

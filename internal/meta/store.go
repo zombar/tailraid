@@ -119,6 +119,14 @@ func (f *FSM) trashList(set map[Ino]struct{}) []Inode {
 	return out
 }
 
+// Protected reports whether ino or a directory above it carries FlagProtected (I-154):
+// what a gateway asks before it marks an entry for a delete it cannot report (docs/15).
+func (f *FSM) Protected(ino Ino) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.st.lineage(ino).protected
+}
+
 // TrashDue counts the deleted roots a Purge{Before: before} would take.
 func (f *FSM) TrashDue(before int64) int {
 	f.mu.RLock()

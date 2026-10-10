@@ -22,7 +22,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-14 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-13 unlink (shared chunk) | Committed (Refs−1 ≥ 1) | `TestFSM_Unlink_Rmdir`, `TestNFS_RemovedHandleIsStale`, `TestVFS_OracleRandomOps` |
 | L-15 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-13 unlink (sole reference) | Tombstoned | `TestFSM_Unlink_Rmdir` |
 | L-16 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-14 rename | Committed | `TestFSM_Rename_Table`, `TestMount_Workload`, `TestNFS_RenameKeepsHandleValid`, `TestVFS_OracleRandomOps` |
-| L-17 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (dest file's chunks) | E-15 rename over existing | Committed/Tombstoned per Refs | `TestFSM_Rename_Table`, `TestVFS_OracleRandomOps` |
+| L-17 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (dest file's chunks) | E-15 rename over existing | Committed/Tombstoned per Refs | `TestFSM_Rename_Table`, `TestVFS_OracleRandomOps`, `TestVFS_RenameOver_TrashesReplaced` |
 | L-18 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-14 rename of dirty file | Dirty | `TestVFS_RenameDirtyFile_FlushCommitsSameIno` |
 | L-19 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-16 identical content again | Committed (Refs+1) | `TestFSM_Commit_NewFileAndOverwrite` |
 | L-20 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned | E-16 identical content before GC | Revived → Committed | `TestFSM_Revive` |
@@ -204,13 +204,13 @@ exactly one design doc transition table and cited by at least one test via
 | L-196 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Degraded (repair, migration or drain) | SetPlacement | a host above the cap while a placement within it exists | `TestRepair_DeadDisk_RePlacesWithinCap` |
 | L-197 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed or Degraded (placement P) | SetPlacement{Expect: Q}, Q ≠ P | any change | `TestFSM_SetPlacement_ExpectConflict` |
 | L-198 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | `TestS3Node_ScrubFetchesSample` |
-| L-199 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (sole reference) | E-126 Trash | Committed | `TestFSM_Trash_Table` |
-| L-200 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (in the trash) | E-127 Restore | Committed | `TestFSM_Restore_Table` |
-| L-201 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (sole reference, in the trash) | E-128 Purge | Tombstoned | `TestFSM_Purge_Table` |
+| L-199 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (sole reference) | E-126 Trash | Committed | `TestFSM_Trash_Table`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits` |
+| L-200 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (in the trash) | E-127 Restore | Committed | `TestFSM_Restore_Table`, `TestNFS_TrashedHandleStale_RestoredValid` |
+| L-201 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (sole reference, in the trash) | E-128 Purge | Tombstoned | `TestFSM_Purge_Table`, `TestGC_PurgeThenCollect`, `TestGC_PurgeTrash_RetentionBoundary` |
 | L-202 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (shared, in the trash) | E-128 Purge | Committed (Refs−1 ≥ 1) | `TestFSM_Purge_Table` |
-| L-203 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-126 Trash before flush | Dirty → Committed (in the trash) | `TestStubLifecycle_L_203` |
-| L-204 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (in the trash) | E-128 Purge before flush | (dropped) | `TestStubLifecycle_L_204` |
-| L-205 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (dest file's chunks) | E-15 rename over an existing non-ephemeral file | Committed (dest in the trash) | `TestFSM_Rename_Table` |
-| L-206 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (under a protected directory) | E-13 unlink, E-126 Trash, E-15 rename over, a rename out of the subtree, or a user's Purge | any loss of the entry | `TestFSM_Protected_Table` |
-| L-207 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (referenced only from the trash) | GCDelete, or a Purge with `DeletedAt ≥ Before` | Collected / Tombstoned | `TestFSM_Purge_Boundary` |
-| L-208 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty or Committed (an ephemeral name: an upload temp, a thumbnail, `._<name>`, `.DS_Store`) | delete or rename over | in the trash | `TestStubLifecycle_L_208` |
+| L-203 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-126 Trash before flush | Dirty → Committed (in the trash) | `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL` |
+| L-204 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (in the trash) | E-128 Purge before flush | (dropped) | `TestVFS_PurgeBeforeFlush_DropsWAL` |
+| L-205 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (dest file's chunks) | E-15 rename over an existing non-ephemeral file | Committed (dest in the trash) | `TestFSM_Rename_Table`, `TestVFS_RenameOver_TrashesReplaced` |
+| L-206 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (under a protected directory) | E-13 unlink, E-126 Trash, E-15 rename over, a rename out of the subtree, or a user's Purge | any loss of the entry | `TestFSM_Protected_Table`, `TestVFS_Protected_EPERM` |
+| L-207 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (referenced only from the trash) | GCDelete, or a Purge with `DeletedAt ≥ Before` | Collected / Tombstoned | `TestFSM_Purge_Boundary`, `TestGC_PurgeTrash_RetentionBoundary` |
+| L-208 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty or Committed (an ephemeral name: an upload temp, a thumbnail, `._<name>`, `.DS_Store`) | delete or rename over | in the trash | `TestVFS_Remove_EphemeralIsImmediate`, `TestVFS_RenameOver_TrashesReplaced` |

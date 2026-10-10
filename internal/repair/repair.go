@@ -50,13 +50,17 @@ type Config struct {
 	GCInterval   time.Duration
 	ScanInterval time.Duration
 	ReportTTL    time.Duration // reported bad slots expire after this
+	Retention    time.Duration // the trash's retention (docs/06 §2, trash.retention); 0 = never purged on its own
 }
+
+// DefaultRetention is how long a deleted entry waits in the trash (docs/12 §10).
+const DefaultRetention = 30 * 24 * time.Hour
 
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
-		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute,
+		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
 	}
 }
 

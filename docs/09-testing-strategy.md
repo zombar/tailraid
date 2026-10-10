@@ -244,6 +244,7 @@ type Env interface {
     // admin surface (one node's view; leader-only ops routed by the Env)
     Status, RepairNow, Scrub, GCNow, SetPolicy, SetPolicyAuto, SetState, Remove, Fsck,
     Chunks, FSMHash, Goroutines, Disks, Fill, S3 ...
+    PurgeTrash(ctx) (int, error)                   // `trash purge --all`: what phase 8 needs before GC can reclaim
     WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16
     // faults
     Kill, Start, Restart, Partition, Heal, Corrupt, FailDisk, RestoreDisk, AddDisk ...
@@ -289,11 +290,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   gateways on disjoint files against a model; 20 s); 4 parity (kill m: reads and writes
   continue, `degraded` drains to 0 after `fill_after`; kill m+1: every read is either exact
   or an error, never garbage); 5 corruption (m shards: read exact, scrub repairs; m+1:
-  error, never garbage); 6 consensus (kill the leader under writes ×3; acknowledged writes
+  error, never garbage, then the lost file is deleted and purged from the trash, as an
+  operator would, so its unrepairable chunk leaves every later count); 6 consensus (kill the leader under writes ×3; acknowledged writes
   persist; FSM hashes agree); 7 membership (`set-redundancy` 2+1→1+2→2+1 under load with
   `stale_policy_chunks` draining to 0; drain and re-activate n4); 8 dedup and GC (second
-  copy of the corpus adds < 1 % stored bytes; removing a unique file reclaims after grace,
-  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity); 10
+  copy of the corpus adds < 1 % stored bytes; removing a unique file leaves its bytes
+  stored and the entry in the trash, purging it (`trash purge --all`) tombstones its
+  chunks, and GC reclaims them after grace, `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity); 10
   partition (a minority is cut off: the majority elects and keeps committing, a cut-off
   gateway refuses metadata operations and buffers WRITEs that commit after the heal; then
   the gateway itself is cut off and rejoins; a refused operation may land after the heal,

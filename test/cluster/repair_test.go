@@ -601,6 +601,7 @@ func TestGC_CollectsAfterGrace_RespectsFence_AndSweep(t *testing.T) {
 	}
 	must(t, c.Nodes[0].FS.Remove("/f"))
 	c.Settle()
+	purgeTrash(t, c) // a delete reclaims nothing until the entry is purged (docs/06 §1)
 	leader := c.Leader()
 	gc := repair.NewGC(leader.Node.FSM, leader.Node, leader.Client, leader.Prober, c.Clk, 10*time.Minute, nil)
 	// inside grace: nothing collected, shards intact
@@ -652,6 +653,7 @@ func TestGC_LeaderClockBehind_DoesNotStallGC(t *testing.T) {
 	ch := c.ChunksOf(0, "/f")[0]
 	must(t, c.Nodes[0].FS.Remove("/f"))
 	c.Settle()
+	purgeTrash(t, c) // a delete reclaims nothing until the entry is purged (docs/06 §1)
 	leader := c.Leader()
 	behind := clock.NewFake(c.Clk.Now().Add(-30 * time.Minute))
 	gc := repair.NewGC(leader.Node.FSM, leader.Node, leader.Client, leader.Prober, behind, 10*time.Minute, nil)
