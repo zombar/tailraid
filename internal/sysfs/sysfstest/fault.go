@@ -71,11 +71,43 @@ type Fault struct {
 	writeErr    error
 	crashed     bool
 	writtenByFD map[*faultFile]int64
+	calls       map[Step]int // every gated call, per step
+	blockStep   Step         // calls of this step block until BlockAt's release
+	blockIn     chan struct{}
+	blockOut    chan struct{}
+}
+
+// BlockAt makes every call of the given step block until release is called; entered
+// receives one token per call that is waiting. A group of WAL appends is gathered
+// behind one blocked fsync this way.
+func (f *Fault) BlockAt(step Step) (entered <-chan struct{}, release func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	in, out := make(chan struct{}, 1024), make(chan struct{})
+	f.blockStep, f.blockIn, f.blockOut = step, in, out
+	var once sync.Once
+	return in, func() {
+		once.Do(func() {
+			f.mu.Lock()
+			if f.blockStep == step {
+				f.blockStep = 0
+			}
+			f.mu.Unlock()
+			close(out)
+		})
+	}
+}
+
+// Calls is how many times the given step was called (gated calls only).
+func (f *Fault) Calls(step Step) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[step]
 }
 
 // New wraps inner with no faults armed.
 func New(inner sysfs.FS) *Fault {
-	return &Fault{inner: inner, tornKeep: -1, writeLimit: -1, writtenByFD: map[*faultFile]int64{}}
+	return &Fault{inner: inner, tornKeep: -1, writeLimit: -1, writtenByFD: map[*faultFile]int64{}, calls: map[Step]int{}}
 }
 
 // FailAt makes the next call of the given step return err.
@@ -125,11 +157,13 @@ func (f *Fault) Restart() {
 	f.writtenByFD = map[*faultFile]int64{}
 }
 
-// check runs the step gate: crashed → ErrCrashed; crash armed → truncate+panic; fail armed → err.
+// check runs the step gate: crashed → ErrCrashed; crash armed → truncate+panic; fail armed
+// → err; block armed → wait for the release, then proceed.
 func (f *Fault) check(step Step, file *faultFile) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.calls[step]++
 	if f.crashed {
+		f.mu.Unlock()
 		return ErrCrashed
 	}
 	if f.crashStep == step {
@@ -142,17 +176,27 @@ func (f *Fault) check(step Step, file *faultFile) error {
 		if file != nil {
 			_ = file.File.Close() // a dead process holds no handles (Windows cannot remove open files)
 		}
+		f.mu.Unlock()
 		panic(crashSentinel{step})
 	}
 	if f.failStep == step {
 		if f.failSkip > 0 {
 			f.failSkip--
+			f.mu.Unlock()
 			return nil
 		}
 		f.failStep = 0
 		err := f.failErr
 		f.failErr = nil
+		f.mu.Unlock()
 		return err
+	}
+	block := f.blockStep == step
+	in, out := f.blockIn, f.blockOut
+	f.mu.Unlock()
+	if block {
+		in <- struct{}{}
+		<-out
 	}
 	return nil
 }

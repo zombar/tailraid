@@ -199,7 +199,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [01-data-model](01-data-model.md) | Types, chunking, hashing, on-disk formats, handles. I-1..I-3, I-22 |
 | [02-consistency-and-raft](02-consistency-and-raft.md) | FSM commands and apply rules, Raft wiring, membership, forwarding, reads. I-4..I-6, I-26..I-29 |
 | [03-erasure-coding-and-placement](03-erasure-coding-and-placement.md) | `ec.Codec`, rendezvous placement, degraded writes, policy migration. I-8..I-10, I-30, I-32, I-33 |
-| [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model, readahead. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83, I-166 |
+| [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model, readahead. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83, I-166, I-168 |
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived. I-12, I-38..I-40 |
 | [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, DELETE fence, sweep, repair scanner, scrub, drain, migration. I-13..I-15, I-41..I-44 |
 | [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, macOS and Linux mounts, the in-tree go-nfs copy. I-16, I-17, I-45..I-47, I-100, I-167 |

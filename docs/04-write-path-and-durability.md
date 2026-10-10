@@ -127,8 +127,23 @@ Rules:
 - `OpenOverlay` replays every `staging/*.wal` at startup, so a gateway that crashed with
   dirty data comes back with the same overlay and flushes it.
 
-Per-WRITE cost: one `pwrite`, one `fsync`, one sorted insert. Nothing is held in memory but
-extents.
+**Group commit.** `AppendWrite` is two steps: the record is written at the end of the log
+under the inode lock, then the caller waits, without the lock, for an fsync that started
+after its bytes were written. The first waiter runs the fsync; every record written before
+it started is covered by it and returns; a record written while it runs waits for the
+next one. One fsync therefore covers however many WRITEs reached the inode while the
+previous fsync ran (the NFS gateway serves a connection's requests concurrently, docs/07),
+and each WRITE is still acknowledged only after its own record is on disk (I-7). The
+overlay applies a record's in-memory effect (the extent, a truncate) only once its fsync
+has succeeded, in log order, so a READ never shows bytes whose WRITE may still fail and the
+live view always equals what a replay of the log would build. A failed fsync fails every
+append it covered: the log is cut back to the last fsynced byte and the file reopened
+(I-37, I-101) before any later append, and the cut records' effects are dropped unapplied.
+A flush snapshot, a compaction and an eviction wait for the inode's appends between write
+and fsync, and hold new ones until they are done (I-168).
+
+Per-WRITE cost: one `pwrite`, one `fsync` shared with every WRITE that arrived during the
+previous one, one sorted insert. Nothing is held in memory but extents.
 
 ## 3. Flush triggers
 
@@ -339,7 +354,7 @@ Degraded writes (user's choice) hold < m parity until repair.
 
 | Component | What is fsynced | When |
 |---|---|---|
-| WAL (`staging/<ino>.wal`) | the file; the directory when the file is created | after every appended record, before the WRITE reply; the directory before the first record |
+| WAL (`staging/<ino>.wal`) | the file; the directory when the file is created | after every appended record, before the WRITE reply (concurrent appends to one inode share one fsync, §2.1, I-168); the directory before the first record |
 | shard store (`shards/hh/<key>`) | temp file, rename, directory | `write → f.Sync() → Close → Rename → fsync(dir)`; `Put` returns (and the PUT is acked) only after the directory fsync |
 | raft log/stable (`raft/raft.db`) | bbolt | `NoSync = false` (every Raft append) |
 | snapshots | `FileSnapshotStore` | fsync on `Close` |
@@ -366,7 +381,7 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 |---|---|---|---|
 | NFS requests in flight | each request's frame, read whole before its handler runs (docs/07, I-167) | connections × `InFlight` (16) × `MaxFrame` (1 MiB + 8 KiB) | the reply |
 | web upload in flight | one chunk-sized buffer per upload | `uploadSlots` (4) × ChunkSize | the response (docs/13 §4) |
-| WAL append | one record copy | ChunkSize (one WRITE) | the fsync |
+| WAL append | one record copy per WRITE in flight | connections × `InFlight` × wsize (docs/07) | its fsync |
 | overlay bookkeeping | 24 B per extent | WALCap / wsize extents per inode | compaction |
 | flush: assemble + encode | the chunk and its `(k+m)` shards, per chunk in the pipeline | `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))` = 8 × 2.5 MiB = **20 MiB** at 1 MiB and (2,1) | the chunk being decided (step 9) |
 | compaction | one streaming buffer | 1 MiB | the rewrite |
@@ -401,6 +416,13 @@ the WAL cap.
   compaction or reopen that fails, every call on that WAL returns `ErrWALClosed` until the
   gateway restarts and replays the log, and replay reports the bytes it discarded after
   the last intact record.
+- **I-168** — Concurrent appends to one inode's WAL share fsyncs: an append returns
+  success only after an fsync that began after its record was written has succeeded, one
+  fsync may cover any number of records, a record's in-memory effect is applied only after
+  that fsync and in log order, a failed fsync fails every append it covered and cuts the
+  log back to the last fsynced byte before any later append, and no flush snapshot,
+  compaction or eviction runs while an append of that inode is between its write and its
+  fsync.
 - **I-166** — Readahead is bounded and invisible: at most `ReadAhead` prefetches are in
   flight gateway-wide (`Reader.Prefetching()` never exceeds it), a prefetch is started only
   by a sequential READ, never for `HashZero`, a cached chunk or one already in flight,
@@ -420,6 +442,7 @@ the WAL cap.
 | I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
+| I-168 | `TestWAL_GroupCommit_OneFsyncCoversConcurrentAppends`, `TestWAL_GroupCommit_FailedFsyncFailsEveryWaiter`, `TestWAL_GroupCommit_LateAppendWaitsForNextFsync`, `TestOverlay_PendingWrite_NotVisibleUntilFsynced`, `TestOverlay_FailedGroupFsync_DropsEveryPendingWrite`, `TestOverlay_CommitFlushed_WaitsForPendingAppend`, `TestOverlay_WriteDoesNotHoldInodeLockDuringFsync`, `TestOverlay_TruncateDuringPendingAppend_MatchesReplay` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
