@@ -226,7 +226,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1, 2 or 3 and snapshots version 3 (02 §Codec versions;
+Log entries carry codec version 1, 2, 3 or 4 and snapshots version 4 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows
@@ -236,7 +236,12 @@ snapshot field can reject what an older node wrote or sends, so upgrade every no
 (`tailraid update`, §5) before relying on the new feature; every such rule is also checked
 by the gateway before it proposes, so a cluster running one version never produces an
 entry another node of that version rejects. The first snapshot an upgraded node writes is
-version 2, which an un-upgraded node cannot restore: upgrade the whole cluster in one go.
+the newest version, which an un-upgraded node cannot restore: upgrade the whole cluster
+in one go. The trash and the folder flags (codec 4) go one step further: the leader
+refuses to propose their commands with `ErrCodec` while any live active member reports
+an older codec, the mounts delete and replace as before in that window, and the browser
+UI answers 503 with the hint to update the remaining nodes, so a cluster half-way
+through an update never writes an entry half of it cannot read (I-156).
 
 ## 7. Day one: `tailraid init`
 
@@ -259,8 +264,10 @@ diskless host (14 §9).
 **Validation.** `Load` expands a leading `~` in every path (`node.data_dir`, the disks,
 `mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
 shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
-`log.level` or `log.format`, and a relative `mount.path`; `serve` warns at start when the
-config file or the data directory is readable by other users of the machine (I-126).
+`log.level` or `log.format`, a relative `mount.path`, a `trash.retention` that is neither
+`0` nor at least an hour, and a `cache.size` under 64 MiB (§10); `serve` warns at start
+when the config file or the data directory is readable by other users of the machine
+(I-126).
 
 ## 8. What `status` reports about the process
 
@@ -319,6 +326,30 @@ the member table still lists the lost nodes until they are removed or `reset` an
 `recover` refuses to run while `serve` holds the data directory, on an uninitialised
 directory, and when the list leaves this node out (I-129). Run it on one node only: two
 recovered nodes are two clusters.
+
+## 10. The trash and the local cache
+
+**Trash.** Every delete on the volume, from a mount or the browser UI, lands in the trash
+(02 §Apply rules, 06 §1): the share sees a delete, the browser UI shows the entry in its
+old folder with a banner that restores it, and the leader purges it `trash.retention`
+after the delete (`720h` unless set; `0` never purges on its own; a duration under an
+hour is refused by `Validate`). The CLI has the same three verbs for a terminal:
+`tailraid trash ls [path]` lists the deleted roots (every one, or those under a folder)
+with inode, original path, size and age; `tailraid trash restore <ino> [--to dir] [--as
+name]` puts one back; `tailraid trash purge --ino <n> | --older-than <d> | --all` reclaims,
+`--older-than 0` taking everything. `status` reports `volume.trash_inodes` and
+`volume.trash_bytes`, which the dashboard shows under Volume and the soak report charts.
+The one thing the trash changes for an operator: free space returns with the purge, not
+with the delete, so an `rm -rf` to make room is followed by `tailraid trash purge
+--older-than 0` (or the browser's "delete now") and then GC's grace.
+
+**Local cache.** `cache.size` bounds the node's chunk cache (01 §Local chunk cache;
+`1GiB` unless set). `tailraid cache pin <path>` keeps a folder on this device: its chunks
+are fetched into the cache and never evicted while the pin stands, so the folder reads
+from the device with every other node away; `cache unpin <path>` releases it and
+`cache ls` shows each pin's bytes and how many have arrived. The browser UI's folder menu
+("Keep on this device", 13 §4) is the same per-node state. Pinned bytes may exceed
+`cache.size`; `status` warns when the data disk falls under 20 % free (I-162).
 
 ## Invariants
 

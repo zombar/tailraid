@@ -63,8 +63,10 @@ Authorization is checked before any request body is consumed (`http.MaxBytesRead
 installed after the check). A rejected PUT therefore costs the attacker's bandwidth, not
 the node's disk. Every body is bounded (I-116): a shard PUT by the chunk size, `/v1/apply`
 at 4 MiB, the JSON of `/v1/join`, `/v1/members`, `/v1/admin` and `/dev/fault` at 64 KiB,
-`/v1/bad-slot` and the web UI's `POST /api/mkdir` at 4 KiB; a body past its bound is a
-`400` before anything is decoded.
+`/v1/bad-slot` and the web UI's single-entry routes (`mkdir`, `rename`, `restore`,
+`purge`, `flags`, `pin`) at 4 KiB, its batch routes (`move`, `delete`) and a thumbnail
+`PUT` at 256 KiB (docs/13 §3); a body past its bound is a `400` before anything is
+decoded.
 
 ## Join
 
@@ -233,8 +235,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 ## Invariants
 - **I-116** — Every request body a node reads is bounded before it is decoded: 4 MiB for
   `/v1/apply`, 64 KiB for `/v1/join`, `/v1/members`, `/v1/admin` and `/dev/fault`, 4 KiB
-  for `/v1/bad-slot` and the web UI's `POST /api/mkdir`, the chunk size for a shard PUT;
-  a body one byte past its bound is refused with `400` and nothing of it is applied.
+  for `/v1/bad-slot` and the web UI's single-entry routes, 256 KiB for its batch routes
+  and a thumbnail `PUT`, the chunk size for a shard PUT; a body one byte past its bound
+  is refused with `400` and nothing of it is applied.
 
 - **I-18** — An RPC whose source IP is not a cluster member with a matching Tailscale
   StableID is rejected with 403 before any request body is read; a request whose

@@ -30,10 +30,21 @@ State.Tombs map[Hash]struct{}  // index of chunks with Refs == 0
   **when at least k of their slots are on live nodes**; otherwise it fills the missing slots
   from the bytes it holds before committing (04 §4 step 6). Tombstoned chunks are never
   scanned by the repairer; revival is what repairs them.
-- `Unlink`, `Rename`-over-existing and `Truncate` (via `Commit`) are the only paths that
-  decrement.
+- `Unlink`, `Truncate` (via `Commit`) and `Purge` are the only paths that decrement. A
+  delete does not: it is a `Trash` (02 §Apply rules), which moves the entry out of the
+  namespace and keeps the inode with every reference it holds, so nothing a deleted
+  file used is reclaimed until the entry is purged, by the user ("delete now") or by the
+  retention purge of §2. The same holds for the entry a `Rename` replaces. The only
+  entries that are unlinked outright are the **ephemeral names**: an upload's temp
+  (`.<name>.tailraid-upload`), the thumbnails under `/.tailraid` (13 §5) and the files
+  macOS writes beside the user's over NFS (`._<name>`, `.DS_Store`); `meta.IsEphemeral`
+  is the one list, used by the FSM's `Rename`, the vfs and the web UI (I-157, L-208).
+- A file that is both in the trash and still referenced from a live file (dedup) costs
+  nothing extra; a file whose chunks are referenced only from the trash keeps them
+  committed and placed, repaired and scrubbed like any other (L-199).
 - Invariant checked by `fsck` and by the FSM test suite: `Σ Refs == number of (inode,
-  index) pairs referencing the hash` and `Tombs == {h : Refs == 0}`.
+  index) pairs referencing the hash`, counting the files in the trash, and
+  `Tombs == {h : Refs == 0}`.
 
 ## 2. GC worker (leader only)
 
@@ -80,6 +91,18 @@ hash was tombstoned and GC removed the entry in between, the Commit fails with
 `ErrUnknownChunk` and the flusher re-uploads (04 §4 step 10). Grace makes that race rare and
 the DELETE fence makes it harmless; correctness does not depend on timing.
 
+**Retention purge.** On the same tick, before `GCDelete`, the leader proposes
+`Purge{Before: fsmNow − retention, Limit: 1024}` and again while `TrashDue(Before)` is
+still non-zero and the last entry made progress, with `retention = trash.retention` (12
+§10; 30 days unless set; `0` means the trash is never purged on its own, only by the
+user). `fsmNow` is the same clamped clock as above, so a leader with a slow clock never
+keeps a deleted entry past its day and `Before` never goes backwards across leader
+changes. The purge drops the references of every file it deletes; the chunks that reach
+zero are tombstoned at that moment and collected by `GCDelete` after grace, so a 30-day
+old delete is reclaimed about ten minutes after its day and a "delete now" from the
+browser UI the same way (I-157). Nothing in the trash is ever a GC victim while it is in
+the trash (L-207).
+
 ## 3. Sweep (every node, hourly)
 
 ```go
@@ -103,6 +126,12 @@ whose Commit has not yet been applied locally. `Put` of an already-present ident
 refreshes its mtime for the same reason. Sweep never consults the network; it uses only the
 replicated chunk table, so a node that returns after a week cleans up exactly what the
 cluster has re-placed elsewhere.
+
+The hourly tick also runs the namespace sweeps of the web UI (13): upload temps idle for
+24 h are removed (I-81), and so is every thumbnail under `/.tailraid/thumbs` whose
+`<ino>-<gen>-<version>` names no live file at that version (the file changed, was
+purged, or never existed), through `Unlink` since the names are ephemeral (I-160). A
+thumbnail of a file in the trash is kept: the browser UI shows the deleted file's tile.
 
 **S3 sweep (leader only, daily).** For each S3 node the leader lists the bucket prefix with
 `ListObjectsV2` (paged) and deletes every object whose `LastModified` is older than grace
@@ -252,9 +281,12 @@ prefix of at least 8 hex digits is accepted when it is unique; a path describes 
 of that file in order.
 
 `tailraid fsck` checks, from the asked node's FSM copy, every FSM invariant
-(`meta.CheckInvariants`): refcount sums; `len(Chunks) == ceil(Size/CS)` for every file;
-every parent chain reaches root and every `Children` entry points to an inode whose
-`Parent`/`Name` agree; `Tombs ⇔ Refs == 0`; placement distinctness. It also counts the
+(`meta.CheckInvariants`): refcount sums (the files in the trash included); `len(Chunks) ==
+ceil(Size/CS)` for every file; every parent chain reaches root or a deleted root and every
+`Children` entry points to an inode whose `Parent`/`Name` agree; `Tombs ⇔ Refs == 0`;
+`Trash ⇔ DeletedAt ≠ 0`, a deleted root absent from its parent's `Children`, a
+directory's `Nlink` equal to 2 plus its live subdirectories, `TrashInodes` and
+`TrashBytes` equal to a recount; placement distinctness. It also counts the
 orphan shards on that node (files the chunk table does not place there, plus anything in
 the shard tree that is not a shard); orphans are informational, the sweep removes them
 after grace. Data is verified by `check --scrub` (§5), not by fsck, and there is no
@@ -271,6 +303,12 @@ state to patch.
 - **I-43** — `GCDelete` applied on any replica deletes exactly the same chunk entries (determinism via `Before` in the command).
 - **I-44** — `fsck` reports zero findings on a cluster where every test in this document passed; any finding is a bug, not noise.
 - **I-65** — A repair pass never lowers the number of readable slots of a chunk and never proposes a placement equal to the committed one: a slot whose shard is still readable (a live draining node) stays in the placement until a replacement is placed, a live draining holder counts toward the `≥ k` readability test, and a pass that could improve nothing proposes nothing.
+- **I-157** — A delete reclaims nothing: only `Purge`, `Unlink` of an ephemeral name
+  and `Truncate` drop references, `meta.IsEphemeral` is the one list of names that are
+  unlinked rather than trashed (an upload temp, a thumbnail, `._<name>`, `.DS_Store`),
+  and the leader's retention purge takes exactly the roots whose `DeletedAt` is older
+  than `trash.retention` on the FSM clock (`max(leader clock, LastNow)`), in bounded
+  batches, never when the retention is zero.
 
 ## Tests
 
@@ -284,3 +322,4 @@ state to patch.
 | I-43 | `TestFSM_DeterministicAcrossReplicas` |
 | I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
 | I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
+| I-157 | `TestStub_I_157` (planned: TestVFS_Remove_EphemeralIsImmediate, TestVFS_RenameOver_TrashesReplaced, TestVFS_RenameOver_EphemeralIsUnlinked, TestGC_PurgeTrash_RetentionBoundary, TestGC_PurgeTrash_DrainsInBatches, TestGC_PurgeThenCollect, TestConfig_TrashRetention) |
