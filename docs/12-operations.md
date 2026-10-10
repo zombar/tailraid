@@ -106,7 +106,9 @@ Five endpoints (docs/08) turn a real node into a soak target:
 - `POST /dev/exit` replies `204` and exits with status 3 after 100 ms. With a service
   manager that restarts the process this is "kill a node".
 - `POST /dev/fault` with `{"drop":["ip",…]}` installs drop rules for the listed peers
-  on that node: the Raft stream layer refuses to dial them and closes their incoming
+  on that node: the Raft stream layer refuses to dial them, fails the connections it
+  already has with them (a leader's replication pipelines, which a rule on one side
+  alone must cut) and closes their incoming
   connections, the node RPC client refuses to send to them, and inbound RPC from them is
   answered `503`. An empty list heals. `GET /dev/fault` returns the rules. Rules live in
   memory only; a restart heals.
@@ -297,7 +299,7 @@ recovered nodes are two clusters.
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
-- **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
+- **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, fails the Raft connections already open with it, stops incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere; every command other than `serve` logs to stderr and never opens the file.
 - **I-61** — `update` replaces the binary only with an artifact whose SHA-256 matches the `sha256sums.txt` of the same release and which reports that release's version when run; on any failure the running binary is untouched and no partial file is left in its directory; a release that is not newer than a semver build is applied only when named explicitly.
 
@@ -356,7 +358,7 @@ recovered nodes are two clusters.
 
 | ID | Tests |
 |---|---|
-| I-59 | `TestFaults_DropRulesCutRaftAndRPC` |
+| I-59 | `TestFaults_DropRulesCutRaftAndRPC`, `TestFaults_RuleFailsOpenRaftConnection` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |

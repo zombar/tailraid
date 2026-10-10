@@ -119,7 +119,43 @@ func (s *idStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Con
 	if err != nil {
 		return nil, err
 	}
-	return s.handshake(c, true)
+	hc, err := s.handshake(c, true)
+	if err != nil {
+		return nil, err
+	}
+	return s.guard(hc, string(addr)), nil
+}
+
+// guard wraps a Raft connection so that a drop rule naming its peer fails it: a rule
+// cuts the links that were up when it landed (a leader's replication pipelines to its
+// followers), not only new dials and new accepts (I-59). Without faults it is c itself.
+func (s *idStream) guard(c net.Conn, peer string) net.Conn {
+	if s.faults == nil {
+		return c
+	}
+	return &guardedConn{Conn: c, peer: peer, faults: s.faults}
+}
+
+type guardedConn struct {
+	net.Conn
+	peer   string
+	faults Faults
+}
+
+func (g *guardedConn) Read(p []byte) (int, error) {
+	if g.faults.Blocked(g.peer) {
+		_ = g.Close()
+		return 0, errDropped
+	}
+	return g.Conn.Read(p)
+}
+
+func (g *guardedConn) Write(p []byte) (int, error) {
+	if g.faults.Blocked(g.peer) {
+		_ = g.Close()
+		return 0, errDropped
+	}
+	return g.Conn.Write(p)
 }
 
 // allowed is the member check on an accepted connection (I-92): before any byte is read.
@@ -184,7 +220,7 @@ func (s *idStream) pump() {
 				return
 			}
 			select {
-			case s.accepted <- hc:
+			case s.accepted <- s.guard(hc, c.RemoteAddr().String()):
 			case <-s.closed:
 				_ = hc.Close()
 			}
