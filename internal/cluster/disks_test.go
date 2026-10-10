@@ -68,3 +68,27 @@ func TestMember_AddDisk_ResolvesToHost(t *testing.T) {
 		t.Fatalf("no disk id: %v", err)
 	}
 }
+
+// set_version rewrites only the version of a row: a node's row names the version its
+// serve runs, not the one it joined with (docs/02 §Lifecycle commands).
+// Invariant: I-133
+func TestMember_SetVersion(t *testing.T) {
+	n := bootstrap(t, t.TempDir())
+	defer n.Close()
+	self, _ := n.SelfIdx()
+	before, _ := n.FSM.Node(self)
+	if err := n.MemberOp(ctx, rpc.MemberOp{Op: "set_version", NodeIdx: self, Version: "v9.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := n.FSM.Node(self)
+	if after.Version != "v9.9.9" {
+		t.Fatalf("version %q, want v9.9.9", after.Version)
+	}
+	after.Version = before.Version
+	if after != before {
+		t.Fatalf("set_version changed more than the version:\n%+v\n%+v", before, after)
+	}
+	if err := n.MemberOp(ctx, rpc.MemberOp{Op: "set_version", NodeIdx: self}); !errors.Is(err, ErrBadMemberOp) {
+		t.Fatalf("empty version: %v, want ErrBadMemberOp", err)
+	}
+}

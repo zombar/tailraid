@@ -182,7 +182,8 @@ func (n *Node) SlotsHeldBy(idx meta.NodeIdx) int {
 	return count
 }
 
-// MemberOp implements remove, update_addr, set_voter, set_capacity and set_state on the leader.
+// MemberOp implements remove, update_addr, set_version, set_voter, set_capacity and
+// set_state on the leader.
 func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 	n.memberMu.Lock()
 	defer n.memberMu.Unlock()
@@ -262,6 +263,13 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 			return raftErr("change suffrage", err)
 		}
 		nd.Voter = op.Voter
+		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
+	case "set_version":
+		// the row carries the version serve runs, not the one it joined with (I-133)
+		if op.Version == "" {
+			return fmt.Errorf("%w: set_version needs version", ErrBadMemberOp)
+		}
+		nd.Version = op.Version
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	case "update_addr":
 		if op.Addr == "" {

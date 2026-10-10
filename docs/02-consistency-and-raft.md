@@ -304,7 +304,10 @@ count is 1 or even.
 same ID), a disk's budget (`set_capacity` → `NodeUpsert`, proposed by the disk's host as
 its free space changes, 01; refused for a device row, I-118), `node drain` (`NodeSetState Draining`:
 excluded from new placement; repairer re-places its slots), `node remove`
-(`NodeSetState Removed`, then `raft.RemoveServer`), `volume set-redundancy` (`SetVolume`
+(`NodeSetState Removed`, then `raft.RemoveServer`), `set_version` (`NodeUpsert` with the
+version `serve` runs: proposed by the node at start, through the leader, whenever its row
+names another, so `node ls` shows what each node runs rather than what it joined with,
+I-133), `volume set-redundancy` (`SetVolume`
 after `SetVolumeMode{false}`; `--auto` is `SetVolumeMode{true}`),
 `tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
 the device can `join` afresh; never touches `shards/`, which the sweep reconciles later; it
@@ -376,6 +379,10 @@ no divergent state to merge because it never applied uncommitted entries.
   into the FSM (a barrier) before Raft stops, since raft's FSM loop drops its queue on
   shutdown and a future for a committed-but-unapplied entry would otherwise never
   resolve; every waiter returns and no goroutine is left behind.
+- **I-133** — A node's row carries the version its `serve` runs: at start a node whose
+  row names another version proposes `set_version` through the leader, retrying until
+  one accepts it, and a row that already matches is never rewritten; `set_version`
+  changes nothing but the version.
 
 ## Tests
 
@@ -397,3 +404,4 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |
+| I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
