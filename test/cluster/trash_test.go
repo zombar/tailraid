@@ -3,6 +3,7 @@ package cluster_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -110,4 +111,92 @@ func TestCluster_V4OpsRefusedUntilAllMembersUpgraded(t *testing.T) {
 	if len(leader.Node.FSM.Trash()) != 1 {
 		t.Fatalf("trash after the update: %+v", leader.Node.FSM.Trash())
 	}
+}
+
+// A node that missed the trash, a restore and a flag set catches up through a snapshot
+// install, not the log: the rebuilt trash index, the stats and the flags on it equal
+// the leader's, the trashed bytes read on it, and a restore proposed through it lands.
+//
+// Invariant: I-156
+func TestCluster_TrashSurvivesSnapshotInstall(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1, testharness.SnapshotThreshold(40))
+	defer c.Close()
+	c.Kill(2)
+	gone := testharness.Pattern(3000, 5)
+	c.WriteFile(c.Leader().I, "/d/gone", gone)
+	c.WriteFile(c.Leader().I, "/d/back", testharness.Pattern(100, 6))
+	c.Settle()
+	leader := c.Leader()
+	goneIn, err := leader.Node.FSM.Resolve([]string{"d", "gone"})
+	must(t, err)
+	backIn, err := leader.Node.FSM.Resolve([]string{"d", "back"})
+	must(t, err)
+	dir, err := leader.Node.FSM.Resolve([]string{"d"})
+	must(t, err)
+	must(t, c.Nodes[leader.I].FS.Remove("/d/gone"))
+	must(t, c.Nodes[leader.I].FS.Remove("/d/back"))
+	c.Settle()
+	for _, cmd := range []meta.Command{
+		{Op: meta.OpRestore, Restore: &meta.Restore{Ino: backIn.Ino, Now: c.Clk.Now().UnixNano()}},
+		{Op: meta.OpSetAttr, SetAttr: &meta.SetAttr{Ino: dir.Ino, Mask: meta.AttrFlags, Flags: meta.FlagProtected | meta.FlagNSFW, Now: c.Clk.Now().UnixNano()}},
+	} {
+		res, _, err := leader.Node.Propose(ctx, cmd)
+		if err == nil {
+			err = res.Err
+		}
+		must(t, err)
+	}
+	for i := range 200 { // past the snapshot threshold: the rejoining node installs a snapshot
+		mkdirRetry(t, c, fmt.Sprintf("/d%03d", i))
+	}
+	c.Restart(2)
+	c.Settle()
+	n2 := c.Nodes[2].Node.FSM
+	if got, want := n2.Stats(), leader.Node.FSM.Stats(); got.TrashInodes != 1 || got != want {
+		t.Fatalf("rejoined stats %+v, leader %+v", got, want)
+	}
+	if roots := n2.TrashOf(dir.Ino); len(roots) != 1 || roots[0].Ino != goneIn.Ino || roots[0].DeletedAt == 0 {
+		t.Fatalf("rejoined trash of /d: %+v", roots)
+	}
+	if in, err := n2.Resolve([]string{"d"}); err != nil || in.Flags != meta.FlagProtected|meta.FlagNSFW {
+		t.Fatalf("rejoined /d: %+v %v", in, err)
+	}
+	if in, err := n2.Resolve([]string{"d", "back"}); err != nil || in.Ino != backIn.Ino {
+		t.Fatalf("rejoined /d/back: %+v %v", in, err)
+	}
+	if _, ok := n2.GetInode(goneIn.Ino); ok {
+		t.Fatal("the trashed root is live on the rejoined node")
+	}
+	fh, err := c.Nodes[2].FS.OpenTrash(goneIn.Ino, nil)
+	must(t, err)
+	buf := make([]byte, len(gone))
+	n, _ := fh.ReadAt(buf, 0)
+	_ = fh.Close()
+	if !bytes.Equal(buf[:n], gone) {
+		t.Fatalf("trashed bytes on the rejoined node differ at %d", testharness.FirstDiff(buf[:n], gone))
+	}
+	if v := meta.CheckInvariants(fsmState(t, n2)); len(v) != 0 {
+		t.Fatalf("rejoined FSM invariants: %v", v)
+	}
+	// a restore through the rejoined node (forwarded to the leader) lands everywhere
+	res, _, err := c.Nodes[2].Node.Propose(ctx, meta.Command{Op: meta.OpRestore, Restore: &meta.Restore{Ino: goneIn.Ino, Now: c.Clk.Now().UnixNano()}})
+	if err == nil {
+		err = res.Err
+	}
+	must(t, err)
+	c.Settle()
+	for i := range c.Nodes {
+		got, err := c.ReadFile(i, "/d/gone")
+		if err != nil || !bytes.Equal(got, gone) {
+			t.Fatalf("n%d after restore: %v, differs at %d", i, err, testharness.FirstDiff(got, gone))
+		}
+	}
+}
+
+// fsmState is the FSM's state as its snapshot carries it.
+func fsmState(t *testing.T, f *meta.FSM) *meta.State {
+	t.Helper()
+	snap, err := f.Snapshot()
+	must(t, err)
+	return snap.(interface{ State() *meta.State }).State()
 }

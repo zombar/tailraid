@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -52,8 +53,11 @@ const maxWorlds = 8
 // The schedule also changes the volume policy and drains a node mid-run: after each
 // quiescence the repairer must have migrated every chunk to the current (k,m) and moved
 // every slot off the draining node (docs/06).
-// Invariant: I-4, I-9, I-12, I-13, I-15, I-29
-// Lifecycle: L-162, L-163, L-173
+// A remove and a rename over a name are trashes (docs/02): the checker keeps the bytes
+// it believes each trashed inode holds, restores and purges them at random, and after
+// every quiescence reads every trashed root it knows on every node (I-152, I-153, I-155).
+// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155
+// Lifecycle: L-162, L-163, L-173, L-199, L-200, L-201, L-203, L-204, L-205
 func TestModelCheck_Long(t *testing.T) {
 	n := *steps
 	if n == 0 {
@@ -138,6 +142,23 @@ func TestModelCheck_Long(t *testing.T) {
 	// the inode.
 	owner := map[string]int{}
 	frozen := map[string]bool{}
+	// trashed: the bytes the model believes each trashed inode holds (a remove or a
+	// rename over a name trashes it, docs/02). An entry whose operation failed with an
+	// unknown outcome may describe a live inode: a restore or purge of it then fails
+	// with ErrNotExist, and the quiescence drops it when the FSM's trash lacks it.
+	trashed := map[meta.Ino][]byte{}
+	inoOf := func(gw int, name string) (meta.Ino, bool) {
+		in, err := c.Nodes[gw].Node.FSM.Resolve(strings.Split(strings.TrimPrefix(name, "/"), "/"))
+		return in.Ino, err == nil
+	}
+	knownTrash := func() []meta.Ino {
+		inos := make([]meta.Ino, 0, len(trashed))
+		for ino := range trashed {
+			inos = append(inos, ino)
+		}
+		slices.Sort(inos)
+		return inos
+	}
 	pickGateway := func(name string, gws []int) (int, bool) {
 		if frozen[name] {
 			return 0, false
@@ -176,7 +197,7 @@ func TestModelCheck_Long(t *testing.T) {
 	doStep := func(step int) {
 		gws := liveGateways()
 		switch r := rng.Intn(100); {
-		case r < 55 && len(gws) > 0: // client write at a random offset through the file's gateway
+		case r < 52 && len(gws) > 0: // client write at a random offset through the file's gateway
 			name := names[rng.Intn(len(names))]
 			gw, ok := pickGateway(name, gws)
 			if !ok {
@@ -226,7 +247,7 @@ func TestModelCheck_Long(t *testing.T) {
 				w[name] = buf
 			}
 			log("%d write %s@%d+%d via n%d", step, name, off, len(data), gw)
-		case r < 62 && len(gws) > 0: // truncate (an overlay operation: no proposal, so never ambiguous)
+		case r < 58 && len(gws) > 0: // truncate (an overlay operation: no proposal, so never ambiguous)
 			name := names[rng.Intn(len(names))]
 			if !exists(name) {
 				return
@@ -252,12 +273,14 @@ func TestModelCheck_Long(t *testing.T) {
 				w[name] = buf
 			}
 			log("%d truncate %s to %d via n%d", step, name, size, gw)
-		case r < 68 && len(gws) > 0: // remove
+		case r < 64 && len(gws) > 0: // remove: the file lands in the trash with its bytes (L-199)
 			gw := gws[rng.Intn(len(gws))]
 			name := names[rng.Intn(len(names))]
 			if !exists(name) || frozen[name] {
 				return
 			}
+			ino, resolved := inoOf(gw, name) // the inode this gateway would trash
+			content := worlds[0][name]
 			if err := c.Nodes[gw].FS.Remove(name); err != nil {
 				if definite(err) {
 					log("%d remove %s via n%d: %v (stale gateway, nothing happened)", step, name, gw, err)
@@ -265,15 +288,21 @@ func TestModelCheck_Long(t *testing.T) {
 				}
 				log("%d remove %s via n%d failed: %v (outcome unknown)", step, name, gw, err)
 				ambiguous(func(w world) { delete(w, name) }, name)
+				if resolved {
+					trashed[ino] = content
+				}
 				return
 			}
 			for _, w := range worlds {
 				delete(w, name)
 			}
+			if resolved {
+				trashed[ino] = content
+			}
 			delete(owner, name)
 			frozen[name] = true // other gateways may still resolve the old inode (docs/02 §stale window)
-			log("%d remove %s via n%d", step, name, gw)
-		case r < 74 && len(gws) > 0: // rename over another name
+			log("%d remove %s via n%d (ino %d to the trash)", step, name, gw, ino)
+		case r < 70 && len(gws) > 0: // rename over another name: the replaced file lands in the trash (L-205)
 			gw := gws[rng.Intn(len(gws))]
 			from, to := names[rng.Intn(len(names))], names[rng.Intn(len(names))]
 			if from == to || !exists(from) || frozen[from] || frozen[to] {
@@ -285,6 +314,8 @@ func TestModelCheck_Long(t *testing.T) {
 				}
 				delete(w, from)
 			}
+			replaced, hadTo := inoOf(gw, to)
+			replacedContent := worlds[0][to]
 			if err := c.Nodes[gw].FS.Rename(from, to); err != nil {
 				if definite(err) {
 					log("%d rename %s -> %s via n%d: %v (stale gateway, nothing happened)", step, from, to, gw, err)
@@ -292,10 +323,16 @@ func TestModelCheck_Long(t *testing.T) {
 				}
 				log("%d rename %s -> %s via n%d failed: %v (outcome unknown)", step, from, to, gw, err)
 				ambiguous(mv, from, to)
+				if hadTo {
+					trashed[replaced] = replacedContent
+				}
 				return
 			}
 			for _, w := range worlds {
 				mv(w)
+			}
+			if hadTo {
+				trashed[replaced] = replacedContent
 			}
 			if g, ok := owner[from]; ok { // the dirty data follows the inode
 				owner[to] = g
@@ -305,6 +342,77 @@ func TestModelCheck_Long(t *testing.T) {
 			delete(owner, from)
 			frozen[from], frozen[to] = true, true
 			log("%d rename %s -> %s via n%d", step, from, to, gw)
+		case r < 73: // restore a trashed inode under a free name (L-200)
+			inos := knownTrash()
+			if len(inos) == 0 || partitioned {
+				return
+			}
+			ino := inos[rng.Intn(len(inos))]
+			name := names[rng.Intn(len(names))]
+			if frozen[name] || exists(name) {
+				return // the name is taken or in its stale window; try another step
+			}
+			leader := c.Leader()
+			parts := strings.Split(strings.TrimPrefix(name, "/"), "/")
+			parent, err := leader.Node.FSM.Resolve(parts[:len(parts)-1])
+			if err != nil {
+				return // the directory is not there yet
+			}
+			content := trashed[ino]
+			res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpRestore, Restore: &meta.Restore{Ino: ino, NewParent: parent.Ino, NewName: parts[len(parts)-1], Now: c.Clk.Now().UnixNano()}})
+			if err == nil {
+				err = res.Err
+			}
+			if err != nil {
+				if definite(err) {
+					log("%d restore ino %d as %s: %v (nothing happened)", step, ino, name, err)
+					if errors.Is(err, meta.ErrNotExist) {
+						delete(trashed, ino) // live after an ambiguous remove, or purged
+					}
+					return
+				}
+				log("%d restore ino %d as %s failed: %v (outcome unknown)", step, ino, name, err)
+				ambiguous(func(w world) { w[name] = content }, name)
+				return
+			}
+			for _, w := range worlds {
+				w[name] = content
+			}
+			delete(trashed, ino)
+			delete(owner, name)
+			frozen[name] = true // its dirty bytes, if any, sit in the gateway that wrote them (L-203)
+			log("%d restore ino %d as %s", step, ino, name)
+		case r < 75: // purge one trashed inode, or everything in the trash (L-201)
+			inos := knownTrash()
+			if len(inos) == 0 || partitioned {
+				return
+			}
+			cmd := meta.Command{Op: meta.OpPurge, Purge: &meta.Purge{Now: c.Clk.Now().UnixNano()}}
+			ino := inos[rng.Intn(len(inos))]
+			if rng.Intn(4) == 0 {
+				cmd.Purge.Before = max(c.Clk.Now().UnixNano(), c.Leader().Node.FSM.LastNow()) + 1
+				ino = 0
+			} else {
+				cmd.Purge.Ino = ino
+			}
+			res, _, err := c.Leader().Node.Propose(ctx, cmd)
+			if err == nil {
+				err = res.Err
+			}
+			if err != nil {
+				log("%d purge ino %d failed: %v (the quiescence resolves it)", step, ino, err)
+				if errors.Is(err, meta.ErrNotExist) {
+					delete(trashed, ino)
+				}
+				return
+			}
+			if ino == 0 {
+				clear(trashed)
+				log("%d purge all", step)
+				return
+			}
+			delete(trashed, ino)
+			log("%d purge ino %d", step, ino)
 		case r < 82: // kill one node (never below a majority)
 			if len(gws) <= 3 {
 				return
@@ -446,8 +554,43 @@ func TestModelCheck_Long(t *testing.T) {
 				t.Fatalf("step %d: after repair %+v (policy %d+%d, draining %d)", step, st, policy[0], policy[1], draining)
 			}
 			worlds = []world{checkInvariants(t, c, worlds, names, step, policy, draining)}
+			checkTrash(t, c, trashed, step)
 			owner = map[string]int{}
 			frozen = map[string]bool{}
+		}
+	}
+}
+
+// checkTrash reads every trashed root the model knows on every node and compares it with
+// the bytes the model holds for it (I-155); a known inode the FSM's trash lacks was purged
+// or never trashed (an ambiguous failure) and leaves the model. The FSMs agree with each
+// other already (checkInvariants, I-4), so the roots come from n0.
+func checkTrash(t *testing.T, c *testharness.Cluster, trashed map[meta.Ino][]byte, step int) {
+	t.Helper()
+	inTrash := map[meta.Ino]bool{}
+	roots := c.Nodes[0].Node.FSM.Trash()
+	for i := range roots {
+		inTrash[roots[i].Ino] = true
+	}
+	for ino, want := range trashed {
+		if !inTrash[ino] {
+			delete(trashed, ino)
+			continue
+		}
+		for i := range c.Nodes {
+			if _, ok := c.Nodes[i].Node.FSM.GetInode(ino); ok {
+				t.Fatalf("step %d: n%d serves trashed ino %d as live", step, i, ino)
+			}
+			fh, err := c.Nodes[i].FS.OpenTrash(ino, nil)
+			if err != nil {
+				t.Fatalf("step %d: n%d open trashed ino %d: %v", step, i, ino, err)
+			}
+			got := make([]byte, len(want)+1)
+			n, _ := fh.ReadAt(got, 0)
+			_ = fh.Close()
+			if !bytes.Equal(got[:n], want) {
+				t.Fatalf("step %d: n%d trashed ino %d differs at %d (len %d want %d)", step, i, ino, testharness.FirstDiff(got[:n], want), n, len(want))
+			}
 		}
 	}
 }
