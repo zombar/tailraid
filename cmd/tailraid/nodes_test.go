@@ -83,3 +83,29 @@ func TestPrintNodes_HidesRemoved(t *testing.T) {
 		t.Error("printNodes must not edit the report it was given")
 	}
 }
+
+// A device reset and joined again leaves a removed row under its old name: a name names
+// the row that is not removed, an index or ID names exactly that row, and a name only a
+// removed row has still resolves (node describe of a removed device) (docs/02 §Lifecycle
+// commands).
+// Invariant: I-136
+func TestFindNode_PrefersLiveRow(t *testing.T) {
+	rep := admin.Report{Nodes: []admin.NodeReport{
+		{Idx: 1, ID: "aaaa", Name: "jockey", State: "active"},
+		{Idx: 3, ID: "bbbb", Name: "honker", State: "removed"},
+		{Idx: 4, ID: "cccc", Name: "honker", State: "active"},
+		{Idx: 5, ID: "dddd", Name: "old", State: "removed"},
+	}}
+	for _, c := range []struct {
+		key  string
+		want uint32
+	}{{"honker", 4}, {"3", 3}, {"bbbb", 3}, {"4", 4}, {"old", 5}, {"jockey", 1}} {
+		n, err := findNode(rep, c.key)
+		if err != nil || uint32(n.Idx) != c.want {
+			t.Errorf("findNode(%q) = %d %v, want %d", c.key, n.Idx, err, c.want)
+		}
+	}
+	if _, err := findNode(rep, "nope"); err == nil {
+		t.Error("an unknown name resolved")
+	}
+}

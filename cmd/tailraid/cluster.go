@@ -437,12 +437,26 @@ func leaderOr(rep admin.Report, addr string) string {
 	return addr
 }
 
+// findNode resolves an index, ID or name. A device reset and joined again leaves a
+// removed row under the same name, so a name prefers the row that is not removed (I-136).
 func findNode(rep admin.Report, key string) (admin.NodeReport, error) {
+	var removed *admin.NodeReport
 	for i := range rep.Nodes {
 		n := &rep.Nodes[i]
-		if n.Name == key || strconv.Itoa(int(n.Idx)) == key || n.ID == key {
+		if strconv.Itoa(int(n.Idx)) == key || n.ID == key {
 			return *n, nil
 		}
+		if n.Name == key {
+			if n.State != "removed" {
+				return *n, nil
+			}
+			if removed == nil {
+				removed = n
+			}
+		}
+	}
+	if removed != nil {
+		return *removed, nil
 	}
 	return admin.NodeReport{}, fmt.Errorf("no member %q", key)
 }

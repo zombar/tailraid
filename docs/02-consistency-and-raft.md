@@ -306,7 +306,7 @@ count is 1 or even.
 same ID), a disk's budget (`set_capacity` → `NodeUpsert`, proposed by the disk's host as
 its free space changes, 01; refused for a device row, I-118), `node drain` (`NodeSetState Draining`:
 excluded from new placement; repairer re-places its slots), `node remove`
-(`NodeSetState Removed`, then `raft.RemoveServer`), `set_version` (`NodeUpsert` with the
+(`NodeSetState Removed`, then `raft.RemoveServer`; a removed row stays in the table for its history, so a device reset and joined again has two rows with one name: a name on the command line names the row that is not removed, and the leader refuses every op but `remove` on a removed row, since `promote` or `update_addr` there would put a dead ID back into the Raft configuration, I-136), `set_version` (`NodeUpsert` with the
 version `serve` runs: proposed by the node at start, through the leader, whenever its row
 names another, so `node ls` shows what each node runs rather than what it joined with,
 I-133), `volume set-redundancy` (`SetVolume`
@@ -385,6 +385,7 @@ no divergent state to merge because it never applied uncommitted entries.
   row names another version proposes `set_version` through the leader, retrying until
   one accepts it, and a row that already matches is never rewritten; `set_version`
   changes nothing but the version.
+- **I-136** — A member op other than `remove` on a removed row is refused before it touches the Raft configuration or the table, and a node name given to the CLI resolves to a row that is not removed when one has that name.
 
 ## Tests
 
@@ -407,3 +408,4 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-64 | `TestChunkCount_NoOverflow`, `TestFSM_Commit_NewSizeBounds`, `TestVFS_SizeBeyondMax_EFBIG` |
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |
 | I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
+| I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
