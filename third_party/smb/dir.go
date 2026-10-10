@@ -222,7 +222,7 @@ func encodeDirEntry(class uint8, e dirEntry, readOnly bool) []byte {
 	sz := sizeOf(e.st)
 	binary.LittleEndian.PutUint64(b[40:], sz)
 	binary.LittleEndian.PutUint64(b[48:], allocationOf(sz))
-	binary.LittleEndian.PutUint32(b[56:], attributesOf(e.st, readOnly))
+	binary.LittleEndian.PutUint32(b[56:], attributesOf(e.name, e.st, readOnly))
 	binary.LittleEndian.PutUint32(b[60:], uint32(len(name)))
 	switch class {
 	case infoDirectoryIDFull:

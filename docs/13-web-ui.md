@@ -66,7 +66,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=` | – | `{"path":"/a","entries":[{name,type,size,mtime,mode,ino,dirty?,target?}]}`, sorted by name; `type` is `file`, `dir` or `symlink`; `mtime` RFC 3339 UTC; `dirty` only on files |
+| `GET /api/ls?path=` | – | `{"path":"/a","entries":[{name,type,size,mtime,mode,ino,dirty?,target?}]}`, sorted by name, without macOS's `._<name>` and `.DS_Store` (I-140); `type` is `file`, `dir` or `symlink`; `mtime` RFC 3339 UTC; `dirty` only on files |
 | `GET /api/stat?path=` | – | one entry plus `path` |
 | `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted |
 | `GET`, `HEAD /files/{path}` | – | the bytes through `http.ServeContent`; `?download=1` adds `Content-Disposition: attachment` |
@@ -315,6 +315,11 @@ colour-alone. No dual axes, no stacked bars, no pie.
   node's Tailscale IP; `webui.New` refuses to build without an authorizer; no web endpoint
   proposes a Raft command other than the file operations of I-70; `/api/status` is served
   from a cache so the chunk table is walked at most once per 2 s.
+- **I-140** — `GET /api/ls` leaves out every entry named `._<name>` (at least one
+  character after the prefix) or `.DS_Store`, the files macOS writes beside the user's
+  over NFS for its extended attributes and Finder's view settings, and lists every other
+  entry, every other dot file and an upload's temp included; a left-out file stays in the
+  volume and `GET /files/<path>` serves it.
 - **I-127** — The web listener answers a request only when its `Host` is the listener's
   `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
   refuses every other with `421` before authorization; the index page's CSP contains
@@ -333,5 +338,6 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
 | I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
+| I-140 | `TestWebUI_Ls_HidesOSMetadata` |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
