@@ -46,9 +46,15 @@ restart `tailraid serve` by hand.
 
 **Start without a leader.** `serve` waits for the log only when its data directory holds
 no snapshot with its own row and the volume (the first start after a join that ended
-before the snapshot); otherwise it starts its listeners at once, with or without a
-leader, serving its gateways stale (docs/02, I-39) and answering `/health` with
-`ready: false` until a leader connects, so `status` exits 1 meanwhile (I-125). A node
+before the snapshot); otherwise it gives a leader five seconds (the usual case, so the
+legacy check below sees the whole log before any listener opens) and then starts its
+listeners, with or without one, serving its gateways stale (docs/02, I-39) and
+answering `/health` with `ready: false` until a leader connects, so `status` exits 1
+meanwhile (I-125); the legacy check runs again once the log has arrived. Raft
+restores a table at open from a snapshot only, and its own snapshots come every 8192
+entries, so `init`, `join`, a `serve` that has become ready and a clean shutdown each
+take one: the node that ran `init` and was killed an hour later restarts with its state
+like any other. A node
 that waited a minute for a leader and then exited was what the three-VM rounds saw: the
 service manager restarted it every minute and a killed node never came back within the
 soak's settle time, because the leader stays out of reach for as long as the fault lasts
@@ -335,10 +341,12 @@ recovered nodes are two clusters.
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
   refuses a running node, an uninitialised directory and a list without this node.
-- **I-134** — A `serve` whose data directory holds its own row and the volume starts
-  serving without a leader: its RPC answers within seconds with `ready: false`, its
-  gateways serve stale, and it is ready once a leader connects; only a node without that
-  state waits for the log, bounded, and exits when none arrives.
+- **I-134** — A `serve` whose data directory holds a snapshot with its own row and the
+  volume starts serving without a leader: after giving one five seconds its RPC answers
+  with `ready: false`, its gateways serve stale, and it is ready once a leader connects;
+  only a node without that state waits for the log, bounded, and exits when none arrives.
+  `init`, `join`, every `serve` once ready and every clean shutdown take a snapshot, so
+  the state is there from a node's first ready start on, leader or not.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -362,4 +370,4 @@ recovered nodes are two clusters.
 | I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
-| I-134 | `TestCLI_Serve_WithoutLeader_StartsStale` |
+| I-134 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |

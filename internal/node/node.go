@@ -19,6 +19,7 @@ import (
 	"time"
 
 	smb "github.com/go-filesystems/smb"
+	"github.com/hashicorp/raft"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
@@ -139,13 +140,18 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// a leader here would exit after the bound and leave the service manager restarting
 	// a node that nobody can reach meanwhile. Only a node without that state (the first
 	// start after a join that ended before its snapshot) needs the log first.
+	fatal := make(chan error, 1) // a check that fails once the node is ready ends serve
 	if _, ok := node.SelfIdx(); !ok || node.FSM.Volume().ChunkSize == 0 {
 		if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 			return fmt.Errorf("waiting for raft: %w", err)
 		}
-	} else if !node.Ready() {
+	} else if err := node.WaitReady(ctx, 5*time.Second); err != nil { // the usual case: a leader within seconds
 		log.Info("no leader yet; serving stale until one connects (status exits 1 meanwhile)")
 	}
+	// Raft restores a table at open from a snapshot only, so the state the next start
+	// needs is snapshotted once this one is ready (and again at a clean shutdown); the
+	// legacy check runs again then, on the state the log brought
+	go onReady(ctx, node, log, fatal)
 	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, node.FSM.Nodes()); err != nil {
 		log.Warn("member seed not written", "err", err)
 	}
@@ -357,7 +363,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		gateways++
 		go func() { gw <- smbgw.Serve(sctx, sl, smbSrv) }()
 	}
-	err = <-gw
+	select {
+	case err = <-gw:
+	case err = <-fatal:
+	}
 	stop()
 	for range gateways - 1 {
 		<-gw
@@ -957,15 +966,19 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	return resp, nil
 }
 
-// snapshotAfterJoin takes the joiner's first snapshot. Raft refuses one until its FSM
-// goroutine has passed the newest configuration entry (the joiner's own add_voter,
-// which lands after the last command WaitReady waited for), so a refusal is retried for
-// a few seconds.
-func snapshotAfterJoin(ctx context.Context, n *cluster.Node) error {
+// snapshotAfterJoin takes the joiner's first snapshot (Snapshot, retried: Raft refuses
+// one until its FSM goroutine has passed the newest configuration entry, the joiner's own
+// add_voter, which lands after the last command WaitReady waited for).
+func snapshotAfterJoin(ctx context.Context, n *cluster.Node) error { return Snapshot(ctx, n) }
+
+// Snapshot takes a Raft snapshot now, retrying a refusal for a few seconds; nothing new
+// to snapshot is not an error. A node restores its table at open from a snapshot only,
+// so init, join, a ready serve and a clean shutdown each leave one behind (I-134).
+func Snapshot(ctx context.Context, n *cluster.Node) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		err := n.Raft.Snapshot().Error()
-		if err == nil || time.Now().After(deadline) {
+		if err == nil || errors.Is(err, raft.ErrNothingNewToSnapshot) || time.Now().After(deadline) {
 			return err
 		}
 		select {
@@ -973,6 +986,27 @@ func snapshotAfterJoin(ctx context.Context, n *cluster.Node) error {
 			return ctx.Err()
 		case <-time.After(50 * time.Millisecond):
 		}
+	}
+}
+
+// onReady waits for the node to be ready once, then re-runs the legacy check on the
+// state the log brought (a stale start checked the snapshot only) and snapshots.
+func onReady(ctx context.Context, n *cluster.Node, log *slog.Logger, fatal chan<- error) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for !n.Ready() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+	if err := legacyCheck(n.FSM); err != nil {
+		fatal <- err
+		return
+	}
+	if err := Snapshot(ctx, n); err != nil && !errors.Is(err, raft.ErrNothingNewToSnapshot) {
+		log.Warn("snapshot after becoming ready failed", "err", err)
 	}
 }
 

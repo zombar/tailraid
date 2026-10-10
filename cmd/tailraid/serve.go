@@ -97,6 +97,9 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := node.Snapshot(cmd.Context(), n); err != nil { // the first serve restores the table from it (I-134)
+				return fmt.Errorf("snapshot after init: %w", err)
+			}
 			mode := "manual"
 			if auto {
 				mode = "auto, grows as disks join"

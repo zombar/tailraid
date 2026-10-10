@@ -301,3 +301,58 @@ func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 	defer stopA()
 	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B not ready once the leader is back")
 }
+
+// The node that ran init never joined anything, so no join snapshotted it: the snapshot
+// a ready serve takes is what lets it restart without a quorum (its voter peer gone)
+// and serve stale until the peer is back.
+// Invariant: I-134
+func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
+	pathA, cfgA := devHome(t)
+	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	serve := func(cfg config.Config) func() {
+		sctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- node.Serve(sctx, cfg, slog.Default(), "test") }()
+		return func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("serve: %v", err)
+			}
+		}
+	}
+	ctx := context.Background()
+	stopA := serve(cfgA)
+	addrA := fmt.Sprintf("127.0.0.1:%d", cfgA.Listen.RPC)
+	probe := rpc.NewClient([16]byte{}, nil)
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrA); return err == nil && h.Ready }, "node A never served")
+	pathB, _ := devHome(t)
+	if out, err := run(t, "join", "--config", pathB, addrA, "testtoken", "--voter"); err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	cfgB, err := config.Load(pathB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrB := fmt.Sprintf("127.0.0.1:%d", cfgB.Listen.RPC)
+	stopB := serve(cfgB)
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B never became ready")
+	// A is killed (no clean shutdown, no leadership transfer) with B gone: two voters, one left
+	stopB()
+	stopA()
+	stopA = serve(cfgA)
+	defer stopA()
+	start := time.Now()
+	var h rpc.Health
+	testharness.Eventually(t, func() bool { var err error; h, err = probe.Health(ctx, addrA); return err == nil }, "A did not serve without a quorum")
+	if h.Ready {
+		t.Fatal("A reports ready without a quorum")
+	}
+	if took := time.Since(start); took > 15*time.Second {
+		t.Fatalf("A took %v to answer without a quorum", took)
+	}
+	stopB = serve(cfgB)
+	defer stopB()
+	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrA); return err == nil && h.Ready }, "A not ready once B is back")
+}
