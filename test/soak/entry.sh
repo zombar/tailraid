@@ -16,15 +16,22 @@ jsonlog() {
   done
 }
 say() { printf '%s\n' "$*" | jsonlog; }
-# per-node fake tailscale: this container is "self", the others are peers (docs/09 §soak)
+# per-node fake tailscale: this container is "self", the others are peers (docs/09 §soak).
+# The peers matter: join accepts an address only when the status lists it (or it is in
+# Tailscale's ranges, which 172.30/16 is not) and resolves a device name through them.
 cat > "$TAILRAID_HOME/ts.json" <<EOF
 {
   "status": {
     "BackendState": "Running",
     "TailscaleIPs": ["$SELF_IP"],
     "MagicDNSSuffix": "compose.invalid",
-    "Self": {"ID": "ts-$NODE_NAME", "HostName": "$NODE_NAME", "TailscaleIPs": ["$SELF_IP"], "Online": true},
-    "Peer": {}
+    "Self": {"ID": "ts-$NODE_NAME", "HostName": "$NODE_NAME", "DNSName": "$NODE_NAME.compose.invalid.", "TailscaleIPs": ["$SELF_IP"], "Online": true},
+    "Peer": {
+$(echo "$IDENTITIES" | tr ',' '\n' | while IFS='=' read -r ip id; do
+    [ "$id" = "$NODE_NAME" ] && continue
+    printf '      "ts-%s": {"ID": "ts-%s", "HostName": "%s", "DNSName": "%s.compose.invalid.", "TailscaleIPs": ["%s"], "Online": true},\n' "$id" "$id" "$id" "$id" "$ip"
+  done | sed '$ s/,$//')
+    }
   },
   "whois": {
 $(echo "$IDENTITIES" | tr ',' '\n' | while IFS='=' read -r ip id; do
