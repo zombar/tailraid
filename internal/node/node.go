@@ -133,6 +133,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		log.Warn("member seed unreadable; the leader is accepted once the table arrives", "err", err)
 	} else if len(seed) > 0 {
 		auth.SetSeed(seed)
+	} else if len(node.FSM.Nodes()) == 0 {
+		// no table and no seed (a join from before the seed existed, or a lost file): the
+		// member entries already in this node's own log name the leader (I-134)
+		if members, err := node.MembersFromLog(); err != nil {
+			log.Warn("members not readable from the local log", "err", err)
+		} else if len(members) > 0 {
+			auth.SetSeed(members)
+			log.Info("no member seed: accepting the members named by the local log", "members", len(members))
+		}
 	}
 	if err := node.WaitReady(ctx, 60*time.Second); err != nil {
 		return fmt.Errorf("waiting for raft: %w", err)

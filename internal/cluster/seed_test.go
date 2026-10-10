@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 )
 
 // The join's member seed round-trips through the data directory, keeps only device rows
@@ -44,5 +45,50 @@ func TestMemberSeed_RoundTrip(t *testing.T) {
 	}
 	if _, err := LoadMemberSeed(dir); err == nil {
 		t.Fatal("a corrupt seed must be an error, not an empty table")
+	}
+}
+
+// A node with neither a table nor a seed rebuilds the members from the entries its own
+// log holds: the replay yields exactly the device rows with an address that the live
+// table has, after an address change, a disk, a join and a removed member, so the leader
+// the log names is accepted (docs/08 §Join).
+//
+// Invariant: I-134
+func TestMembersFromLog_MatchesTable(t *testing.T) {
+	n := bootstrap(t, t.TempDir())
+	defer n.Close()
+	self, _ := n.SelfIdx()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(n.MemberOp(ctx, rpc.MemberOp{Op: "update_addr", NodeIdx: self, Addr: "100.64.0.9"}))
+	must(n.MemberOp(ctx, rpc.MemberOp{Op: "add_disk", NodeIdx: self, DiskID: "abcd0123abcd0123", Name: "solo/1", Capacity: 7}))
+	join := func(id, addr string) meta.NodeIdx {
+		resp, err := n.Join(ctx, rpc.JoinRequest{NodeID: id, Name: id[:4], Addr: addr, TSStableID: "ts-" + id[:4], RaftPort: 1, RPCPort: 2})
+		must(err)
+		return resp.NodeIdx
+	}
+	join("aaaa000000000001", "100.64.0.21")
+	gone := join("bbbb000000000002", "100.64.0.22")
+	must(n.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: gone}))
+
+	got, err := n.MembersFromLog()
+	must(err)
+	var want []meta.Node
+	for _, m := range n.FSM.Nodes() {
+		if m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+			want = append(want, m)
+		}
+	}
+	if len(want) != 2 || len(got) != len(want) {
+		t.Fatalf("replayed %d members, table has %d (want 2):\n%+v\n%+v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i].Idx != want[i].Idx || got[i].ID != want[i].ID || got[i].Addr != want[i].Addr || got[i].TSStableID != want[i].TSStableID {
+			t.Errorf("member %d: replayed %+v, table %+v", i, got[i], want[i])
+		}
 	}
 }
