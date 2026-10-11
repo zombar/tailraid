@@ -337,6 +337,19 @@ func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 	if !e.quorum() {
 		return nil
 	}
+	// FlushAll skips an inode whose flush the background flusher already has under way
+	// and returns before that commit exists, so flushing once can leave a commit out of
+	// the log Settle waits on; other gateways then read the file at its create size (seen
+	// once in about twenty -race runs, phase 2). Wait until no live node has a flush under
+	// way, then flush: what is still dirty after that is what a cut-off holder keeps.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && e.flushing() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	for i := range e.c.Nodes {
 		if e.c.Alive(i) {
 			_ = e.c.Nodes[i].Flush.FlushAll(ctx)
@@ -346,6 +359,21 @@ func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 		e.c.Settle()
 	}
 	return nil
+}
+
+// flushing reports whether a live node has a flush under way (the background flusher's).
+func (e *harnessEnv) flushing() bool {
+	for i := range e.c.Nodes {
+		if !e.c.Alive(i) {
+			continue
+		}
+		for _, d := range e.c.Nodes[i].Ov.Dirty() {
+			if d.Flushing {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, error) {
