@@ -165,15 +165,25 @@ func phaseStats(ctx context.Context, r *Run) error {
 			}
 			u.add("start "+victim.Name, func(c context.Context) error { return r.Env.Start(c, victim) })
 			r.event("kill", victim.Name)
-			// the prober marks the member dead after LiveThreshold; the leader's next rows
-			// carry it (the harness's Kill advances its clock past the threshold already)
-			_ = r.Env.Wait(ctx, cluster.LiveThreshold+2*r.Profile.SampleEvery+10*time.Second)
+			killed := r.statsNow(ctx, devices)
+			// the prober marks the member dead after LiveThreshold and the leader's next
+			// rows carry it (the harness's Kill advances its clock past the threshold
+			// already); leadership may move meanwhile, so every live member is asked and the
+			// newest cluster row written after the kill is the one judged, within the window
+			_ = r.Env.Wait(ctx, cluster.LiveThreshold+2*r.Profile.SampleEvery)
 			_, err := r.Env.StatsLive(ctx, victim, 0)
 			r.checkAt("I-196", "a dead member has no live edge", err != nil, fmt.Sprintf("err %v", err), "", "", victim.Name)
-			lrows, lerr := r.Env.StatsLive(ctx, leader, 0)
-			last := lastCluster(lrows)
-			r.checkAt("I-191", "the leader's row marks the dead member", lerr == nil && last != nil && last.C.Live[victim.Name] == 0,
-				fmt.Sprintf("err %v, live %v", lerr, liveOf(last)), "", "", victim.Name)
+			deadline := time.Now().Add(attrCacheWindow)
+			var last *stats.Row
+			var by string
+			for {
+				last, by = r.newestCluster(ctx, devices, victim, killed)
+				if (last != nil && last.C.Live[victim.Name] == 0) || time.Now().After(deadline) || r.Env.Wait(ctx, 2*time.Second) != nil {
+					break
+				}
+			}
+			r.checkAt("I-191", "the leader's row marks the dead member", last != nil && last.C.Live[victim.Name] == 0,
+				fmt.Sprintf("newest cluster row after the kill from %s: live %v", by, liveOf(last)), "", "", victim.Name)
 		}
 	} else {
 		r.checkSkipped("I-196", "a dead member has no live edge", "kills are not allowed on this environment")
@@ -268,4 +278,35 @@ func (r *Run) waitGone(ctx context.Context, v Volume, p string) bool {
 			return false
 		}
 	}
+}
+
+// statsNow is the newest instant any live member has sampled: the clock the rows carry.
+func (r *Run) statsNow(ctx context.Context, devices []NodeRef) int64 {
+	var t int64
+	for _, n := range devices {
+		if rows, err := r.Env.StatsLive(ctx, n, 0); err == nil {
+			t = max(t, maxT(rows))
+		}
+	}
+	return t
+}
+
+// newestCluster asks every live member but victim for its unsealed rows after since
+// and returns the newest cluster row among them, with the member that held it.
+func (r *Run) newestCluster(ctx context.Context, devices []NodeRef, victim NodeRef, since int64) (*stats.Row, string) {
+	var best *stats.Row
+	by := "nobody"
+	for _, n := range devices {
+		if n.Idx == victim.Idx {
+			continue
+		}
+		rows, err := r.Env.StatsLive(ctx, n, since)
+		if err != nil {
+			continue
+		}
+		if c := lastCluster(rows); c != nil && (best == nil || c.T > best.T || (c.T == best.T && c.Term > best.Term)) {
+			best, by = c, n.Name
+		}
+	}
+	return best, by
 }
