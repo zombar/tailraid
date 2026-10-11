@@ -80,14 +80,46 @@ func (c *conn) queryInfo(h header, body []byte) ([]byte, error) {
 		return errorResponse(h, statusInvalidInfoClass), nil
 	}
 
+	// The answer is bounded by the buffer the client offered (MS-SMB2 3.3.5.20). A
+	// variable-length class whose fixed part fits is cut to the buffer with
+	// BUFFER_OVERFLOW; a buffer shorter than the fixed part gets nothing. Windows asks
+	// for the volume information with room for an empty label whenever a program calls
+	// GetFileInformationByHandle, and an answer longer than that buffer was taken for a
+	// malformed reply: the call failed with error 58 and nothing in any log.
+	status := statusSuccess
+	if outMax := int(binary.LittleEndian.Uint32(body[4:])); len(out) > outMax {
+		if outMax < fixedPart(infoType, class, len(out)) {
+			return errorResponse(h, statusInfoLengthMismatch), nil
+		}
+		out, status = out[:outMax], statusBufferOverflow
+	}
+
 	const bodyLen = 8
-	b := append(responseTo(h, statusSuccess), make([]byte, bodyLen+len(out))...)
+	b := append(responseTo(h, status), make([]byte, bodyLen+len(out))...)
 	rb := b[headerLen:]
 	binary.LittleEndian.PutUint16(rb[0:], 9)
 	binary.LittleEndian.PutUint16(rb[2:], headerLen+bodyLen)
 	binary.LittleEndian.PutUint32(rb[4:], uint32(len(out)))
 	copy(rb[bodyLen:], out)
 	return b, nil
+}
+
+// fixedPart is the size of a class's fixed part in MS-FSCC, n (the whole answer) for a
+// class that has no variable part.
+func fixedPart(infoType, class uint8, n int) int {
+	switch {
+	case infoType == infoTypeFile && class == fileNameInformation:
+		return 4 // FileNameLength, then the name
+	case infoType == infoTypeFile && class == fileStreamInformation:
+		return 24 // one entry's fixed fields, then its name
+	case infoType == infoTypeFile && class == fileAllInformation:
+		return 100 // basic, standard, internal, ea, access, position, mode, alignment, name length
+	case infoType == infoTypeFilesystem && class == fsVolumeInformation:
+		return 18 // creation time, serial, label length, supports objects, reserved
+	case infoType == infoTypeFilesystem && class == fsAttributeInformation:
+		return 12 // attributes, longest component, name length
+	}
+	return n
 }
 
 func fileInfo(class uint8, of *openFile, st filesystem.Stat) []byte {

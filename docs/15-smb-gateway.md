@@ -77,8 +77,20 @@ upstream, each with a test in the copy:
   deletes at CLOSE, whose reply carries no failure, so without it a delete the backend
   refuses (a protected folder, docs/02, I-154) answered success and the file stayed.
   `TestDeleteOnClose_AsksTheBackend`, `TestSMB_Protected_AccessDenied`.
+- `info.go`: a QUERY_INFO answer is bounded by the request's OutputBufferLength, as
+  MS-SMB2 3.3.5.20 says: an answer that fits is sent whole, one longer than the buffer
+  but whose fixed part fits is cut to the buffer with `STATUS_BUFFER_OVERFLOW`, and a
+  buffer shorter than the fixed part is refused with `STATUS_INFO_LENGTH_MISMATCH`.
+  Upstream ignored the field. Windows asks for `FileFsVolumeInformation` with a buffer
+  sized for an empty label whenever a program calls `GetFileInformationByHandle`, which
+  Go's `os.Open` of a directory does; the share's label made the answer longer than the
+  buffer, the redirector took it for a malformed reply and failed the call with error 58
+  ("The specified server cannot perform the requested operation") without a log line.
+  Every `os.ReadDir` on the mapping failed: the three-VM rounds caught it through
+  `verify` on Windows, where only the soak's 30 s retry had hidden it (I-213).
+  `TestQueryInfo_OutputBufferLength`.
 
-The copy is updated by re-applying these six changes to a newer upstream; the `replace`
+The copy is updated by re-applying these seven changes to a newer upstream; the `replace`
 goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the
@@ -327,6 +339,11 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   mapping only once the gateway's address accepts a TCP connection and otherwise fails
   after `d` with an error naming the address. A mapping Windows refuses with system error
   1219 fails with an error naming the server and how to remove the other connection.
+- **I-213** — A QUERY_INFO answer never exceeds the request's OutputBufferLength: an
+  answer of n bytes to a buffer of b bytes is sent whole when n ≤ b, cut to its first b
+  bytes with `STATUS_BUFFER_OVERFLOW` when the class's fixed part fits in b < n, and
+  refused with `STATUS_INFO_LENGTH_MISMATCH` and no data when b is shorter than the fixed
+  part; for every file and filesystem class the server answers.
 
 ## Tests
 
@@ -339,3 +356,4 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-110 | `TestSMB_Auth_WrongPasswordRefused`, `TestSMB_ListenRefusesNonLoopback`, `TestConfig_Gateways`, `TestCLI_Init_GeneratesSMBPassword` |
 | I-141 | `TestSMB_DotFilesHidden` |
 | I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |
+| I-213 | `TestQueryInfo_OutputBufferLength` |
