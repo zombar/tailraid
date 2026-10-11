@@ -172,7 +172,8 @@ verified.
 ## Development endpoints
 
 `/dev/fsm-hash` (applied index and SHA-256 of the encoded FSM state), `/dev/corrupt?key=`
-(flips a byte of a shard file's payload), `/dev/exit` (process exit 3 after the reply, for
+(flips a byte of a shard file's payload, in every copy the host's disks hold: a move within
+the host leaves a stale one until its fenced delete or the sweep removes it), `/dev/exit` (process exit 3 after the reply, for
 a service manager to restart), `/dev/fault` (per-peer drop rules on the Raft stream and
 the node RPC, both directions; docs/12 §3), `/dev/goroutines` (the stack of every
 goroutine, as a crash dump prints it, so a hung node is diagnosed without killing it),

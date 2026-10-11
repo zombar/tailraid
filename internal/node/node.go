@@ -898,23 +898,19 @@ type devStores struct {
 	fsm   *meta.Store
 }
 
-func (d devStores) find(k chunk.ShardKey) *chunk.Store {
+// Paths is every copy of k on this host's disks: a move within the host (docs/14 §7)
+// leaves a stale copy until its fenced delete or the sweep removes it.
+func (d devStores) Paths(k chunk.ShardKey) []string {
+	var out []string
 	for _, ld := range d.disks.open() {
 		if ld.store.Has(k) {
-			return ld.store
+			out = append(out, ld.store.Path(k))
 		}
 	}
-	return nil
+	return out
 }
 
-func (d devStores) Has(k chunk.ShardKey) bool { return d.find(k) != nil }
-
-func (d devStores) Path(k chunk.ShardKey) string {
-	if s := d.find(k); s != nil {
-		return s.Path(k)
-	}
-	return ""
-}
+func (d devStores) Has(k chunk.ShardKey) bool { return len(d.Paths(k)) != 0 }
 
 // Disks is GET /dev/disk: every open disk as its budget sees it.
 func (d devStores) Disks() []dev.DiskInfo {
