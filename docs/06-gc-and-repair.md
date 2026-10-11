@@ -36,9 +36,11 @@ State.Tombs map[Hash]struct{}  // index of chunks with Refs == 0
   file used is reclaimed until the entry is purged, by the user ("delete now") or by the
   retention purge of §2. The same holds for the entry a `Rename` replaces. The only
   entries that are unlinked outright are the **ephemeral names**: an upload's temp
-  (`.<name>.tailraid-upload`), the thumbnails under `/.tailraid` (13 §5) and the files
-  macOS writes beside the user's over NFS (`._<name>`, `.DS_Store`); `meta.IsEphemeral`
-  is the one list, used by the FSM's `Rename`, the vfs and the web UI (I-157, L-208).
+  (`.<name>.tailraid-upload`), everything under `/.tailraid` (the thumbnails of 13 §5 and
+  the stats segments of 17 §2: a tree the node writes for itself, never the user; I-195)
+  and the files macOS writes beside the user's over NFS (`._<name>`, `.DS_Store`);
+  `meta.IsEphemeral` is the one list, used by the FSM's `Rename`, the vfs and the web UI
+  (I-157, L-208).
 - A file that is both in the trash and still referenced from a live file (dedup) costs
   nothing extra; a file whose chunks are referenced only from the trash keeps them
   committed and placed, repaired and scrubbed like any other (L-199).
@@ -337,6 +339,9 @@ state to patch.
   and the leader's retention purge takes exactly the roots whose `DeletedAt` is older
   than `trash.retention` on the FSM clock (`max(leader clock, LastNow)`), in bounded
   batches, never when the retention is zero.
+- **I-195** — Every path under `/.tailraid/` is ephemeral: a replace or a delete of one
+  unlinks it at once and never trashes it, and the web file browser lists nothing under it
+  (I-160); on the mounts the tree is plain files and folders.
 
 ## Tests
 
@@ -353,3 +358,4 @@ state to patch.
 | I-174 | `TestRepair_FanOut_Bounded`, `TestRepair_FanOut_CancelDrains`, `TestConfig_RepairWorkersAndRate`, `TestPhaseFanOut_ConformingPassPasses`, `TestPhaseFanOut_OverWorkersFails`, `TestPhaseFanOut_FastPassSkips` |
 | I-175 | `TestServer_BackgroundShare`, `TestBackgroundSlots_Table`, `TestClient_BackgroundHeader`, `TestPhaseFanOut_ConformingPassPasses`, `TestPins_WalkFetchesBackground` |
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
+| I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |

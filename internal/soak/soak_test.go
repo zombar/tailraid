@@ -32,8 +32,10 @@ import (
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/s3/s3test"
 	"github.com/zombar/tailraid/internal/soak"
+	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 	"github.com/zombar/tailraid/internal/webui"
 )
 
@@ -57,6 +59,85 @@ type harnessEnv struct {
 	pins map[int]*pins.Pins
 	stop map[int]context.CancelFunc
 	once sync.Once
+	// the stats sampler of docs/17 on every node, as serve runs it, on the fake clock
+	stats map[int]*harnessStats
+}
+
+type harnessStats struct {
+	svc    *stats.Service
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// startStats runs node i's sampler: one row a second on the fake clock, sealed into the
+// volume through the node's own vfs, the cluster rows while it leads.
+func (e *harnessEnv) startStats(i int) {
+	if e.stats == nil {
+		e.stats = map[int]*harnessStats{}
+	}
+	nd := e.c.Nodes[i]
+	vol := stats.VFS{FS: nd.FS, St: nd.Node.FSM, Rd: vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nil, nil)}
+	name := fmt.Sprintf("n%d", nd.I)
+	svc := &stats.Service{
+		Name: name, Every: time.Second, Keep: stats.DefaultKeep, Clk: e.c.Clk,
+		Writer: &stats.Writer{Vol: vol, Name: name, Log: slog.New(slog.DiscardHandler)}, Log: slog.New(slog.DiscardHandler),
+		Src: stats.Sources{
+			Machine: func() *admin.MachineReport { return admin.Vitals(nd.Dir, netip.Addr{}) },
+			Gateway: func() *admin.GatewayReport {
+				return admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader).WithFS(nd.FS)
+			},
+			Process:  admin.Process,
+			IsLeader: nd.Node.IsLeader,
+			Term:     nd.Node.Raft.CurrentTerm,
+			Health:   func() admin.VolumeHealth { return admin.ScanHealth(nd.Node.FSM, nd.Prober, 10*time.Minute) },
+			Stats:    nd.Node.FSM.Stats,
+			Members:  nd.Node.FSM.Nodes,
+			Live:     func(idx meta.NodeIdx) int { return stats.LiveState(nd.Prober.IsLive(idx), nd.Prober.IsSuspect(idx)) },
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h := &harnessStats{svc: svc, cancel: cancel, done: make(chan struct{})}
+	go func() { defer close(h.done); svc.Run(ctx) }()
+	e.stats[i] = h
+}
+
+func (e *harnessEnv) stopStats(i int) {
+	if h := e.stats[i]; h != nil {
+		h.cancel()
+		<-h.done
+		delete(e.stats, i)
+	}
+}
+
+func (e *harnessEnv) stopAllStats() {
+	for i := range e.stats {
+		e.stopStats(i)
+	}
+}
+
+func (e *harnessEnv) StatsSeal(ctx context.Context, n soak.NodeRef, rollup bool) (int, error) {
+	e.mu.RLock()
+	h := e.stats[e.node(n).I]
+	e.mu.RUnlock()
+	if h == nil {
+		return 0, errors.New("node is down")
+	}
+	rows := h.svc.Writer.Unsealed()
+	if err := h.svc.Seal(ctx, rollup); err != nil {
+		return 0, err
+	}
+	e.c.Settle()
+	return rows, nil
+}
+
+func (e *harnessEnv) StatsLive(_ context.Context, n soak.NodeRef, since int64) ([]stats.Row, error) {
+	e.mu.RLock()
+	h := e.stats[e.node(n).I]
+	e.mu.RUnlock()
+	if h == nil {
+		return nil, errors.New("node is down")
+	}
+	return h.svc.Live(since), nil
 }
 
 // WebURL serves node n's browser UI on a loopback listener for the phase, authorized as
@@ -231,7 +312,7 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil, Stats: e.stats != nil}
 }
 
 func (e *harnessEnv) quorum() bool {
@@ -247,7 +328,11 @@ func (e *harnessEnv) quorum() bool {
 // Wait advances the fake clock, flushes every live gateway and settles the cluster
 // (not under a partition: the cut-off side cannot catch up until the heal).
 func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
-	e.c.Clk.Advance(d)
+	for d > 0 { // a second at a time, so the samplers' timers fire at every interval
+		step := min(d, time.Second)
+		e.c.Clk.Advance(step)
+		d -= step
+	}
 	e.c.Probe()
 	if !e.quorum() {
 		return nil
@@ -272,7 +357,7 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 	}
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
 	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader)
-	rep.Machine = admin.Vitals(nd.Dir)
+	rep.Machine = admin.Vitals(nd.Dir, netip.Addr{})
 	if p := e.pins[nd.I]; p != nil {
 		c := p.List()
 		rep.Cache = &c
@@ -405,6 +490,7 @@ func (e *harnessEnv) Goroutines(context.Context, soak.NodeRef) (string, error) {
 func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.stopStats(e.node(n).I)
 	e.c.Kill(e.node(n).I)
 	e.c.Clk.Advance(cluster.LiveThreshold + time.Second)
 	e.c.Probe()
@@ -418,6 +504,9 @@ func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
 	if e.quorum() {
 		e.c.Settle()
 	}
+	if e.stats != nil {
+		e.startStats(e.node(n).I)
+	}
 	return nil
 }
 
@@ -425,12 +514,18 @@ func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, n := range nodes {
+		e.stopStats(e.node(n).I)
 		e.c.Kill(e.node(n).I)
 	}
 	for _, n := range nodes {
 		e.c.Restart(e.node(n).I)
 	}
 	e.c.Settle()
+	if e.stats != nil {
+		for _, n := range nodes {
+			e.startStats(e.node(n).I)
+		}
+	}
 	return nil
 }
 
@@ -556,6 +651,10 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	bucket := s3test.New() // phase 15's bucket, as the compose rig's s3 service
 	defer bucket.Close()
 	env := &harnessEnv{t: t, c: c, bucket: bucket}
+	for i := range c.Nodes {
+		env.startStats(i)
+	}
+	defer env.stopAllStats()
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
 	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed}
@@ -583,7 +682,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 18 {
+	if sum.Failed != 0 || len(sum.Phases) != 19 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

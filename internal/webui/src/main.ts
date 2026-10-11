@@ -2,6 +2,7 @@
 // now-playing bar, and the hash router over the dashboard, the file browser, the file
 // view and their trash counterparts (#/trash/<ino>/<path>, #/trashfile/<ino>/<path>).
 
+import * as theme from "./theme.ts"; // first: applies the stored theme before any view renders (I-200)
 import { clear, h } from "./dom.ts";
 import { status } from "./status.ts";
 import { decodeHashPath, type Ctx } from "./util.ts";
@@ -9,6 +10,7 @@ import * as dashboard from "./dashboard.ts";
 import * as browser from "./browser.ts";
 import * as player from "./player.ts";
 import { player as audio } from "./audio.ts";
+import * as stats from "./stats.ts";
 import type { Report } from "./api.ts";
 
 const view = document.getElementById("view") as HTMLElement;
@@ -64,17 +66,18 @@ function drawShell(): void {
 let dispose: (() => void) | null = null;
 
 /** parse reads the route: the view, and where it looks. */
-export function parse(hash: string): { head: string; ctx: Ctx } {
-  const [head = "", ...rest] = hash.replace(/^#\/?/, "").split("/");
+export function parse(hash: string): { head: string; ctx: Ctx; query: string } {
+  const [where = "", query = ""] = hash.replace(/^#\/?/, "").split("?"); // the Stats page keeps its range and node after "?"
+  const [head = "", ...rest] = where.split("/");
   if (head === "trash" || head === "trashfile") {
     const ino = Number(rest.shift() ?? "");
-    return { head, ctx: { path: decodeHashPath(rest.join("/")), root: Number.isFinite(ino) && ino > 0 ? ino : undefined } };
+    return { head, ctx: { path: decodeHashPath(rest.join("/")), root: Number.isFinite(ino) && ino > 0 ? ino : undefined }, query };
   }
-  return { head, ctx: { path: decodeHashPath(rest.join("/")) } };
+  return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
 }
 
 function route(): void {
-  const { head, ctx } = parse(location.hash || "#/");
+  const { head, ctx, query } = parse(location.hash || "#/");
   dispose?.();
   dispose = null;
   clear(view);
@@ -85,6 +88,9 @@ function route(): void {
   } else if (head === "file" || (head === "trashfile" && ctx.root !== undefined)) {
     tab = "files";
     dispose = player.render(view, ctx);
+  } else if (head === "stats") {
+    tab = "stats";
+    dispose = stats.render(view, query);
   } else {
     dispose = dashboard.render(view);
   }
@@ -93,6 +99,8 @@ function route(): void {
 }
 
 audio.mount();
+const themeButton = document.querySelector<HTMLButtonElement>("button.theme");
+if (themeButton) theme.wire(themeButton);
 status.subscribe(drawShell);
 window.addEventListener("hashchange", route);
 route();

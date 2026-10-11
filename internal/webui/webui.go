@@ -23,6 +23,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -43,8 +44,9 @@ type Options struct {
 	FS     *vfs.FS
 	Store  *meta.Store
 	Auth   Authorizer
-	Login  string     // this node's tailnet login; "" = cluster members only
-	Status func() any // the admin report (same closure as the RPC status endpoint)
+	Login  string       // this node's tailnet login; "" = cluster members only
+	Status func() any   // the admin report (same closure as the RPC status endpoint)
+	Stats  *stats.Query // the Stats page's history (docs/17 §3); nil = 503 on /api/stats
 	Chunks func(ctx context.Context, path string, offset, limit int) (int, []admin.ChunkReport, error)
 	Clk    clock.Clock
 	Logger *slog.Logger
@@ -105,6 +107,7 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /assets/{file}", s.asset)
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/ls", s.ls)
 	mux.HandleFunc("GET /api/stat", s.stat)
 	mux.HandleFunc("GET /api/trash", s.trash)

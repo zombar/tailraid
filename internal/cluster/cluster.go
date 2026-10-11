@@ -178,37 +178,9 @@ func WriteClusterID(dataDir, hexID string) error {
 	return writeFileSync(filepath.Join(dataDir, "cluster_id"), []byte(hexID+"\n"))
 }
 
-// writeFileSync writes an identity file so that a crash leaves either the old file or
-// the new one, never an empty or partial one: temp file, fsync, rename, directory fsync.
-func writeFileSync(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	cleanup := func() { _ = tmp.Close(); _ = os.Remove(tmp.Name()) }
-	if _, err := tmp.Write(data); err != nil {
-		cleanup()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	return sysfs.OS{}.SyncDir(dir) // a directory cannot be opened for fsync on Windows; the seam knows
-}
+// writeFileSync is sysfs.WriteFileSync (I-96): a temp beside the target, fsynced,
+// renamed over it, the directory synced.
+func writeFileSync(path string, data []byte) error { return sysfs.WriteFileSync(path, data) }
 
 // HasState reports whether the data directory holds Raft state.
 func HasState(dataDir string) bool {

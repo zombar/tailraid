@@ -1,6 +1,11 @@
 package admin
 
-import "github.com/zombar/tailraid/internal/sysfs"
+import (
+	"net"
+	"net/netip"
+
+	"github.com/zombar/tailraid/internal/sysfs"
+)
 
 // MachineReport is what the operating system exposes about the node to a pure-Go binary
 // (docs/12 §8, I-85). Every field is a measurement or absent: a vital the OS does not
@@ -20,15 +25,44 @@ type MachineReport struct {
 	DiskTotal    uint64  `json:"disk_total,omitempty"`
 	DiskWritten  uint64  `json:"disk_written_bytes,omitempty"` // Linux: every disk, cumulative
 	DiskRead     uint64  `json:"disk_read_bytes,omitempty"`
+	NetRx        uint64  `json:"net_rx_bytes,omitempty"` // every interface but loopback, cumulative (I-190)
+	NetTx        uint64  `json:"net_tx_bytes,omitempty"`
+	TailnetRx    uint64  `json:"tailnet_rx_bytes,omitempty"` // the interface that holds the tailnet address
+	TailnetTx    uint64  `json:"tailnet_tx_bytes,omitempty"`
 }
 
-// Vitals measures the node: dataDir names the disk. It never fails; what cannot be
-// measured stays absent.
-func Vitals(dataDir string) *MachineReport {
+// Vitals measures the node: dataDir names the disk, tailnetIP the address whose interface
+// the tailnet counters follow (the zero Addr leaves them absent). It never fails; what
+// cannot be measured stays absent.
+func Vitals(dataDir string, tailnetIP netip.Addr) *MachineReport {
 	m := &MachineReport{}
 	if free, total, err := (sysfs.OS{}).Free(dataDir); err == nil {
 		m.DiskFree, m.DiskTotal = free, total
 	}
-	platformVitals(m)
+	platformVitals(m, tailnetInterface(tailnetIP))
 	return m
+}
+
+// tailnetInterface is the interface that holds ip, found through the standard library so
+// the match is the same on every OS; nil when ip is unset or no interface holds it.
+func tailnetInterface(ip netip.Addr) *net.Interface {
+	if !ip.IsValid() {
+		return nil
+	}
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for i := range ifs {
+		addrs, err := ifs[i].Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if pfx, err := netip.ParsePrefix(a.String()); err == nil && pfx.Addr().Unmap() == ip.Unmap() {
+				return &ifs[i]
+			}
+		}
+	}
+	return nil
 }

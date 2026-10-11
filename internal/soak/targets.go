@@ -1,19 +1,16 @@
 package soak
 
-import "github.com/zombar/tailraid/internal/admin"
+import (
+	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/chart"
+)
 
 // Placement targets (docs/14): a device's own store and its added disks. The driver's
 // nodes are hosts; a slot on a disk belongs to the disk's host for every per-node check.
 
-// TargetSample is one placement target in a sample, for the disk-spread chart.
-type TargetSample struct {
-	Name     string `json:"name"`
-	Host     string `json:"host"`
-	Slots    int    `json:"slots"`
-	Capacity uint64 `json:"capacity"`
-	Live     bool   `json:"live"`
-	Active   bool   `json:"active"`
-}
+// TargetSample is one placement target in a sample, for the disk-spread chart: the chart
+// package's Target, so the samples feed it without a copy.
+type TargetSample = chart.Target
 
 // targetsOf lists the report's targets, the disks of each host in host order, with host
 // names; a device row is not a target (docs/14 §9).
