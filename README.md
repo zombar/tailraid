@@ -170,7 +170,7 @@ Every command takes `--json`, and `--node <ip>` to talk to another device.
 
 ## Browser UI
 
-Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid status` prints the address, and `tailraid dashboard` opens it. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
+Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid status` prints the address, and `tailraid dashboard` opens it. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders; the Stats page draws the cluster's history (throughput, repair, data spread, each device's CPU, memory, disk and network) over any range, kept inside the volume itself so a lost device loses none of it. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
 
 ## Configuration
 
@@ -200,6 +200,10 @@ repair:
   s3_scrub: 1G          # bucket bytes the scrub may download per day to verify objects ("0": HEAD only)
   workers: 4            # chunks a repair pass works on at once (1..64)
   rate: 50M             # shard bytes per second repair may move ("0": no limit)
+stats:
+  every: 10s            # how often each device samples itself for the Stats page
+  keep:
+    raw: 48h            # 10 s samples; then 1-minute rows for 30 d and 10-minute rows for 2 y
 log:
   level: info           # debug | info | warn | error
   file: ~/tailraid.log  # optional; rotates at 64 MiB keeping five generations

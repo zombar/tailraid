@@ -50,11 +50,12 @@ Endpoints and who may call them:
 
 | Endpoint | Caller | Note |
 |---|---|---|
-| `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body |
+| `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body; it names the node's web port (`web`, 0 when off) so a dashboard can link a member's own pages (docs/13 §1) |
 | `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412`; `X-Tailraid-Priority: background` (the repairer's requests) holds at most half the node's slots (06 §4, I-175) |
 | `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |
+| `GET /v1/stats?since=` | members | this node's unsealed stats rows newer than `since`, at most 720, never another member's (docs/17 §3, I-199) |
 | `/dev/*` | members, only with `dev.enabled` | |
 | web UI (`<tsIP>:20482`): `GET /`, `/assets/*`, `/api/*`, `GET`/`HEAD /files/*` | members, or any tailnet device logged in as this node's user | docs/13 §2; no cluster header |
 | web UI: `PUT /files/*`, `POST /api/mkdir` | the same, plus the `X-Tailraid-UI` header | no CORS, so a cross-site page cannot send the header |
@@ -272,6 +273,10 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   that record's StableID; a join from the Raft address of a known server under a new node
   ID removes that server and re-keys its row to the new ID only when it presents the
   row's StableID, and is refused otherwise.
+- **I-199** — `GET /v1/stats` is a member route (the cluster-ID and WhoIs member check of
+  `/v1/status`); it answers at most 720 of this node's own unsealed rows, newer than
+  `since` and oldest first, and never another member's rows or any credential; `/health`
+  carries the node's web port and nothing else that is new.
 
 ## Tests
 
@@ -287,3 +292,4 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
 | I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap` |
+| I-199 | `TestStub_I_199` (planned: TestRPC_Stats_MemberOnly_OwnRows, TestRPC_Stats_SinceAndCap_Table, TestHealth_CarriesWebPort) |

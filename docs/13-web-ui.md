@@ -20,6 +20,22 @@ operation stays in the CLI.
   expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
   no added disk show one cell, their own store; the block is drawn whenever any host has
   more than one target.
+- **Stats**: a third tab, `#/stats`, draws the soak report's charts (docs/09 §6) over the
+  history every node keeps inside the volume (docs/17): stored against logical bytes,
+  chunks, the repair backlog and the bytes a pass moves, liveness lanes, the data spread
+  across disks and the slots per node for the cluster, then one member's client
+  throughput, tailnet and total network rates, CPU, memory, pressure, data disk, disk
+  throughput, WAL depth, process memory and readahead. A range picker in the Grafana
+  style (1h, 6h, 24h, 7d, 30d, 1y, or a custom from and to) and the member choice live in
+  the URL hash, so a link reproduces a view; a range ending now refreshes every 5 s
+  while the tab is visible. The member dropdown lists every device member with its
+  liveness and, since every member serves its own page, links each one's Stats page at
+  the same range by its tailnet address and web port (which `/health` now carries,
+  docs/08). The charts come from `GET /api/stats` as server-rendered SVG, the report's
+  own drawing code, so nothing is lost between the report and the live page (§Design).
+- **Theme switch**: a button at the right end of the header cycles system, light and
+  dark; the choice stays in the browser (`localStorage`) and is applied before the first
+  view renders (§Design, I-200).
 - **File browser**: list, stat, stream (HTTP Range), download, upload (`PUT`), make
   folders, rename, move and delete any number of selected entries at once (one proposal
   per entry, every entry reported on its own, §4), and a tile view next to the list with a
@@ -41,7 +57,7 @@ operation stays in the CLI.
   the user browses anything else, with a queue, repeat and shuffle, and the lock screen
   shows title, artist and cover through the Media Session API.
 - A single-page TypeScript app, no framework, bundled by esbuild into one committed file and
-  embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`).
+  embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`, `#/stats`).
 - A separate listener, not a route on the RPC port: the caller set differs (same-user
   devices that are not members), a page load cannot send the `X-Tailraid-Cluster` header,
   and the RPC port's member-only rule must stay exactly as docs/08 states it.
@@ -90,6 +106,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
+| `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,tier,step},"nodes":[…],"charts":[{id,title,svg}]}`: the charts of docs/17 §4 over `[from, to]` (Unix seconds; `to=now` for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; a range longer than `stats.keep.coarse` or with `from ≥ to` → 400; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
@@ -325,8 +342,26 @@ word, bars a label, slot cells a glyph (`!` absent, `×` dead, dashed = unplaced
 
 Dark mode is selected, not inverted: the same status steps, a lighter `--dim`, a lighter
 accent. `color-scheme: light dark` lets native controls (video, inputs, scrollbars) follow.
-The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
-`data-theme`, that attribute; the app itself has no theme toggle.
+The sheet honours `prefers-color-scheme` and, above it, `data-theme` on the document:
+the **theme switch** at the right end of the header (`button.theme`) cycles system → light
+→ dark → system, sets `data-theme` to `light` or `dark` (removes it for system) and keeps
+the choice in `localStorage` under `theme`, a per-viewer convenience the server never
+sees. The CSP forbids an inline script, so `src/theme.ts` applies the stored value as the
+first statement of the module, before any view renders; a storage read or write that
+throws (a private window, cleared site data) means system. The glyph is a half-filled disc
+for system, a sun for light and a moon for dark, with the word beside it above 480 px;
+`title` and `aria-label` read "Theme: dark (tap for system)" (I-200). The Stats page's
+charts follow the theme through the chart tokens below (§Charts).
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--c0`…`--c7` | the soak report's eight hues (`#2563eb #dc2626 #16a34a #d97706 #7c3aed #0891b2 #be185d #4d7c0f`) | the same hues lifted for navy (`#60a5fa #f87171 #4ade80 #fbbf24 #a78bfa #22d3ee #f472b6 #a3e635`) | chart series, in order |
+| `--under3` `--under2` `--under1` | `#1d4ed8` `#7895e4` `#c3cdee` | `#60a5fa` `#2563eb` `#1e3a8a` | the disk-spread lanes: a target under its expected share, strong to mild |
+| `--even` | `#e5e7eb` | `#334155` | within ±5 % |
+| `--over1` `--over2` `--over3` | `#e3c3e6` `#c272c9` `#a21caf` | `#581c87` `#a21caf` `#e879f9` | over the expected share, mild to strong |
+
+A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--warn` and
+`--bad` as everywhere else.
 
 ### Type
 
@@ -393,6 +428,12 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, 56 px, hidden until something plays (`hidden`); `expanded` shows the queue panel above it; at ≤ 480 px the seek drops under the titles and the cover shrinks to 40 px; the selection bar sits above it when both show |
 | Queue | `.queue` > `ol` > `li.qrow` (`.no`, `.title`, `.artist`, `.dur`, remove button) | the current item is `li.playing`; items can be removed; "Clear" empties it |
 | Cache card | `.card.cache` > `.name-row` + bar rows + `.pins` > `.pin-row` | used and pinned of `cache.size`; one row per pin: path, a bar of cached over total, the figures; `warn` when the data disk is under 20 % free |
+| Range picker | `.toolbar .seg` > `button[aria-pressed]` × 7 | 1h · 6h · 24h · 7d · 30d · 1y · custom; the pressed one is the range in the hash; custom opens the range form on the toolbar's next line |
+| Range form | `.inline-form.range` > two `input[type=datetime-local]` + Apply + Cancel | a custom `from` and `to`; Enter applies, Escape closes; an empty or inverted range disables Apply |
+| Live pill | `.pill.ok` "live" / `.pill` "paused" | at the toolbar's right: live while the range ends now and the tab is visible (a refresh every 5 s), paused for a custom range or a hidden tab; the title says when the last fetch landed |
+| Member menu | `.toolbar details.menu` > `summary` ("Node: pike") + `.menu-body` of `a.menu-row` (`.dot` + name + `.small.dim` state) + `a.menu-link` (↗) | one row per device member with its live dot and state; choosing a row re-renders the node section from this gateway; the ↗ link opens that member's own Stats page at the same range (`http://<tsIP>:<web>/#/stats?…`); a member without a web listener has no link; "all nodes" is the first row |
+| Chart card | `.charts` > `.chart-card` > `svg.chart` + `.small.dim` caption | the soak report's chart drawn in the page's tokens: text in `--text` and `--dim`, grid in `--line`, series in `--c0`…`--c7`, status cells in the status colours, the spread bins in the under/even/over tokens; one chart per row at every width; the caption names the unit, the window and the tier; hover shows the chart's `<title>` tooltips |
+| Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word hides below 480 px; cycles on tap |
 
 ### Copy
 
@@ -414,6 +455,21 @@ threshold moves it to amber or red, so colour on a bar is always a status, never
 The expected-share tick is 2 px of ink crossing the track. The sparkline carries no axis; its
 caption says what it is and over what window. Every bar has a text value; nothing is
 colour-alone. No dual axes, no stacked bars, no pie.
+
+**The Stats page adds the soak report's charts** (docs/09 §6, `internal/chart`): lines
+over a shared time axis with dashed event markers, liveness lanes, the disk-spread lanes
+with their seven deviation bins and the hatched `dead` pattern, and bars. They keep the
+report's information (every series, band, marker, bin and tooltip) and take this page's
+look: the package emits no colour at all, only classes (`title`, `tick`, `grid`, `marker`,
+`marklabel`, `band0`/`band1`, series `s0`…`s7`, status `chart-ok`/`chart-warn`/`chart-bad`,
+`chart-bg` for the pattern's ground, bins `dev-3`…`dev3`), and `app.css` maps them to the
+tokens above, so the charts follow light and dark like the rest of the page while the
+report's own stylesheet maps the same classes to the report's fixed colours. The same SVG
+bytes therefore draw the report's picture in the report and the page's picture here. One
+chart per row at every width. The rules above stand around them: a series hue is never a
+status, every lane and cell has a `<title>` with its value, the caption says what the chart
+is, its unit and its window; the one thing the page asks of the drawing that the report
+does not is a clock time axis in place of seconds since the run started (I-197).
 
 ## Manual checks (real tailnet, before a release)
 
@@ -457,6 +513,16 @@ colour-alone. No dual axes, no stacked bars, no pie.
     bar; a reload resumes at the same position; seek on a 1 GB flac.
 14. Pin a folder on the laptop, wait for the Cache card to show it complete, stop every
     other node, and play a file from it.
+15. Stats on the phone at 360 px: every chart fits the width with no horizontal scroll,
+    the range picker's seven buttons wrap, a 24 h and a 30 d range draw within two
+    seconds, the live pill turns to paused when the tab is hidden and back with one fetch.
+16. The member menu: choose another member and the node charts change; the ↗ link
+    opens that member's own page at the same range and node (its Host check lets it in);
+    a diskless member has node charts and no spread lanes; a member with `listen.web: 0`
+    shows no link.
+17. The theme switch: set dark on the dashboard, reload, open Files and Stats: all dark
+    with no flash of light on load; set system and change the OS theme live; the charts
+    follow the theme, every series legible on navy.
 
 ## Invariants
 
@@ -553,6 +619,20 @@ colour-alone. No dual axes, no stacked bars, no pie.
   `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
   its first audio entry by name that has a picture, the same on every node, and absent
   when none has one.
+- **I-197** — One chart package renders the soak report and the Stats page: the same
+  series render byte-identical SVG for both; it emits no colour and no inline `style`,
+  only classes, and every class it emits is defined in `app.css` and in the report's
+  stylesheet; every title, name and tooltip it emits is escaped; the page's time axis
+  prints clock times and is the only difference the page asks of it.
+- **I-198** — The Stats page's range and node are in the URL hash; a range ending now
+  refreshes every 5 s while the tab is visible and pauses while it is hidden, a custom
+  range never refreshes; the member dropdown lists every device member with its liveness
+  and links each that has a web listener to its own Stats page at the same range and
+  node by its tailnet address and web port, exactly the Host form that page admits.
+- **I-200** — The theme switch cycles system, light and dark, sets `data-theme` on the
+  document (absent for system), keeps the choice in the browser's `localStorage` only and
+  applies it before the first view renders; a storage failure means system; the server
+  never sees the choice.
 
 ## Tests
 
@@ -577,5 +657,8 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-163 | `TestStub_I_163` (planned: TestWebUI_Flags_DirsOnly_Effective, TestWebUI_Mutations_ProtectedIs403) |
 | I-164 | `TestStub_I_164` (planned: TestWebUI_Tags_Table, TestWebUI_Tags_ReadBounded) |
 | I-165 | `TestStub_I_165` (planned: TestWebUI_Thumb_AudioCoverFallbackOrder, TestWebUI_Ls_DirCoverDeterministic) |
+| I-197 | `TestStub_I_197` (planned: TestChart_ReportGolden_ByteIdenticalAfterMove, TestChart_ClassesDefinedInAppCSSAndReport, TestChart_NoInlineStyle, TestChart_EscapesHostileNames, TestChart_Points_Table, TestChart_LegendWrap_Table, TestChart_DropsNaNInf, TestChart_Spread_DeadAndDraining, TestChart_LookdevDataSetMatchesStatsPage, TestChart_ClockAxis) |
+| I-198 | `TestStub_I_198` (planned: TestStats_HashCarriesRangeAndNode, TestStats_RefreshOnlyWhileLiveAndVisible, TestStats_MemberMenu_LinksByWebPort) |
+| I-200 | `TestStub_I_200` (planned: TestTheme_CycleAndAttribute, TestTheme_StorageThrowsMeansSystem) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3. The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (docs/09 §2).

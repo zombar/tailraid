@@ -301,6 +301,27 @@ is omitted from the JSON, never reported as zero (I-85). The sampler turns the c
 counters into rates between its ticks, and the report draws CPU, memory, memory pressure
 and disk charts for the sampled node, with peaks in the totals table.
 
+**Network.** `machine` also carries four cumulative byte counters: `net_rx_bytes` and
+`net_tx_bytes` summed over every interface but loopback, and `tailnet_rx_bytes` and
+`tailnet_tx_bytes` for the one interface that holds the node's tailnet address (found
+with the standard library's interface list, so the same on every OS). Linux reads
+`/proc/net/dev`; macOS the `net.route` interface list (`NET_RT_IFLIST2`, the
+`if_msghdr2` byte counters, parsed by offset as the load average is); Windows
+`GetIfTable2` from `iphlpapi.dll` (`MIB_IF_ROW2`'s octet counters). The same rule holds:
+absent when the OS does not expose a counter, never zero (I-190). The soak sampler turns
+them into rates and the report draws a network chart next to the disk one; the Stats page
+(docs/13 §1, docs/17) keeps them as history.
+
+**Stats.** Every node keeps the history docs/17 describes: `stats.every` (default 10 s,
+5 s to 1 min) is the sample interval, `stats.keep.raw` (48 h, at least 26 h),
+`stats.keep.minute` (30 d, at least 48 h) and `stats.keep.coarse` (2 y) the retention of
+the three tiers, `stats.cache` (32 MiB) the gateway's parsed-segment cache; `serve` refuses
+a value outside those bounds, and every key is written only when set (I-61). `tailraid
+stats seal` asks the node (`/v1/admin` op `stats_seal`, next to `repair_now` and
+`gc_now`) to write its partial hour now and to roll up every day whose raw segments are
+newer than their rollup: the same function a clean `serve` stop runs, and what the soak
+phase uses instead of waiting for the hour.
+
 **Repair progress.** On the leader `repair` carries the last completed pass (`last_scan`,
 `stats`) and, while a pass runs, `in_progress`: `pass`, `started`, `scanned` of `total`
 chunks, `in_flight` of `workers`, `bytes_moved` (06 §4, I-174). `tailraid status` prints
@@ -375,6 +396,11 @@ from the device with every other node away; `cache unpin <path>` releases it and
 
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
+- **I-190** — `status` reports `net_rx_bytes` and `net_tx_bytes` summed over every
+  interface but loopback and `tailnet_rx_bytes` and `tailnet_tx_bytes` for the interface
+  that holds the node's tailnet address, cumulative, on Linux, macOS and Windows; a
+  counter the OS does not expose is absent, never zero, and none decreases between two
+  reports from one process (I-85).
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, fails the Raft connections already open with it, stops incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
 - **I-60** — With `log.file` set, every line `serve` logs is appended to that file in the configured format and nothing is written to stderr; the service units route stdout and stderr to the same file or to journald, never to nowhere; every command other than `serve` logs to stderr and never opens the file.
 - **I-61** — `update` replaces the binary only with an artifact whose SHA-256 matches the `sha256sums.txt` of the same release and which reports that release's version when run; on any failure the running binary is untouched and no partial file is left in its directory; a release that is not newer than a semver build is applied only when named explicitly.
@@ -447,6 +473,7 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
+| I-190 | `TestStub_I_190` (planned: TestVitals_Network_AbsentOrMeasured, TestVitals_NetworkParsers_PerOS, TestVitals_TailnetInterface_Match, TestReport_NetworkChart) |
 | I-122 | `TestSvc_SystemdHardeningAndQuoting`, `TestSvc_UnitsRouteLogs` |
 | I-123 | `TestCluster_ShutdownTransfersLeadership` |
 | I-124 | `TestLogFile_RotatesAndReopens`, `TestLimiter_OneLinePerInterval` |

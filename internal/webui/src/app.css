@@ -17,6 +17,10 @@
   --warn: #d97706;
   --bad: #d42035;
   --fill: rgba(15, 23, 42, .55);
+  /* chart series (the soak report's eight hues) and the disk-spread deviation bins:
+     blue under the expected share, grey at it, violet over (docs/13 §Design Charts) */
+  --c0: #2563eb; --c1: #dc2626; --c2: #16a34a; --c3: #d97706; --c4: #7c3aed; --c5: #0891b2; --c6: #be185d; --c7: #4d7c0f;
+  --under3: #1d4ed8; --under2: #7895e4; --under1: #c3cdee; --even: #e5e7eb; --over1: #e3c3e6; --over2: #c272c9; --over3: #a21caf;
   --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, ui-monospace, Menlo, monospace;
   --sans: system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
   --gutter: 16px;
@@ -27,12 +31,16 @@
     color-scheme: dark;
     --bg: #0f172a; --surface: #1e293b; --line: #334155; --text: #f8fafc; --dim: #94a3b8; --accent: #38bdf8;
     --fill: rgba(248, 250, 252, .55);
+    --c0: #60a5fa; --c1: #f87171; --c2: #4ade80; --c3: #fbbf24; --c4: #a78bfa; --c5: #22d3ee; --c6: #f472b6; --c7: #a3e635;
+    --under3: #60a5fa; --under2: #2563eb; --under1: #1e3a8a; --even: #334155; --over1: #581c87; --over2: #a21caf; --over3: #e879f9;
   }
 }
 :root[data-theme="dark"], .theme-dark {
   color-scheme: dark;
   --bg: #0f172a; --surface: #1e293b; --line: #334155; --text: #f8fafc; --dim: #94a3b8; --accent: #38bdf8;
     --fill: rgba(248, 250, 252, .55);
+    --c0: #60a5fa; --c1: #f87171; --c2: #4ade80; --c3: #fbbf24; --c4: #a78bfa; --c5: #22d3ee; --c6: #f472b6; --c7: #a3e635;
+    --under3: #60a5fa; --under2: #2563eb; --under1: #1e3a8a; --even: #334155; --over1: #581c87; --over2: #a21caf; --over3: #e879f9;
 }
 
 /* ---- base ---------------------------------------------------------------------- */
@@ -399,3 +407,47 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .card.cache .pin-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(64px, 1fr) auto; gap: 8px; align-items: center; font: 12px var(--mono); }
 .card.cache .pin-row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card.cache .pin-row .v { color: var(--dim); white-space: nowrap; }
+
+/* ---- stats page (docs/13 §1, docs/17): the soak report's charts in the page's tokens --- */
+/* the chart package emits classes only (series s0–s7, status, the spread bins, bands, text
+   and grid), so this sheet themes the page's charts and the report's own sheet keeps the
+   report's look; one chart per row */
+.charts { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.chart-card { display: grid; gap: 4px; padding: 6px 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
+.chart-card .chart { display: block; width: 100%; height: auto; }
+.chart .title { font: 600 13px var(--sans); fill: var(--text); }
+.chart .tick { font: 11px var(--sans); fill: var(--dim); }
+.chart .grid { stroke: var(--line); }
+.chart .marker { stroke: var(--dim); stroke-dasharray: 3 3; }
+.chart .marklabel { font: 9px var(--sans); fill: var(--dim); }
+.chart rect.band0 { fill: var(--surface); }
+.chart rect.band1 { fill: var(--line); }
+.chart path.s0 { stroke: var(--c0); } .chart rect.s0, .chart circle.s0 { fill: var(--c0); }
+.chart path.s1 { stroke: var(--c1); } .chart rect.s1, .chart circle.s1 { fill: var(--c1); }
+.chart path.s2 { stroke: var(--c2); } .chart rect.s2, .chart circle.s2 { fill: var(--c2); }
+.chart path.s3 { stroke: var(--c3); } .chart rect.s3, .chart circle.s3 { fill: var(--c3); }
+.chart path.s4 { stroke: var(--c4); } .chart rect.s4, .chart circle.s4 { fill: var(--c4); }
+.chart path.s5 { stroke: var(--c5); } .chart rect.s5, .chart circle.s5 { fill: var(--c5); }
+.chart path.s6 { stroke: var(--c6); } .chart rect.s6, .chart circle.s6 { fill: var(--c6); }
+.chart path.s7 { stroke: var(--c7); } .chart rect.s7, .chart circle.s7 { fill: var(--c7); }
+.chart rect.chart-ok { fill: var(--ok); }
+.chart rect.chart-warn { fill: var(--warn); }
+.chart rect.chart-bad { fill: var(--bad); }
+.chart rect.chart-bg { fill: var(--bg); }
+.chart rect.dev-3 { fill: var(--under3); } .chart rect.dev-2 { fill: var(--under2); } .chart rect.dev-1 { fill: var(--under1); }
+.chart rect.dev0 { fill: var(--even); }
+.chart rect.dev1 { fill: var(--over1); } .chart rect.dev2 { fill: var(--over2); } .chart rect.dev3 { fill: var(--over3); }
+.inline-form.range input[type=datetime-local] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; min-height: 40px; }
+.inline-form.range label { font-size: 13px; color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
+.menu-row.link { grid-template-columns: auto 1fr auto; }
+.menu-row .menu-link { grid-row: 1 / span 2; align-self: center; padding: 6px 8px; color: var(--accent); font-family: var(--mono); font-size: 13px; border-radius: 4px; }
+.menu-row .menu-link:hover { background: var(--bg); text-decoration: none; }
+.menu-row[aria-current=true] { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+
+/* ---- theme switch (docs/13 §Design Tokens, I-200): system → light → dark ----------------- */
+.theme { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 10px; font: 500 13px var(--mono); color: var(--dim); flex: none; }
+.theme:hover { color: var(--text); }
+.theme svg.icon { width: 16px; height: 16px; vertical-align: 0; }
+@media (max-width: 480px) { .theme { margin-left: auto; padding: 4px 8px; } .theme span { display: none; } }
+.menu-row .dot { grid-row: 1 / span 2; }
+.menu-row > a { color: var(--text); }
