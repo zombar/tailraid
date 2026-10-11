@@ -219,7 +219,8 @@ and the Disks block's deviations shrink with it (I-172).
 ## 8. What the user sees
 
 - `node ls` groups disks under their host; `status` and the web UI show per-target used,
-  budget, slots and liveness, and the volume's "survives N disks, M hosts".
+  budget, stored shard bytes (`stored_bytes`, 10 §4.1), slots and liveness, and the
+  volume's "survives N disks, M hosts".
 - The web UI's **Disks** block (13 §Design) opens with a spread summary (one column per
   target, grouped by host, above or below its expected share) and then draws each host as a card with one row per
   target: its slots on one shared scale against the expected-share tick, and its used
