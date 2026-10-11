@@ -353,7 +353,9 @@ recovered nodes are two clusters.
 (02 §Apply rules, 06 §1): the share sees a delete, the browser UI shows the entry in its
 old folder with a banner that restores it, and the leader purges it `trash.retention`
 after the delete (`720h` unless set; `0` never purges on its own; a duration under an
-hour is refused by `Validate`). The CLI has the same three verbs for a terminal:
+hour is refused by `Validate`; like `repair.workers`, the key is written to the file
+only when set, so a release from before the trash still reads the file after a
+rollback, I-61). The CLI has the same three verbs for a terminal:
 `tailraid trash ls [path]` lists the deleted roots (every one, or those under a folder)
 with inode, original path, size and age; `tailraid trash restore <ino> [--to dir] [--as
 name]` puts one back; `tailraid trash purge --ino <n> | --older-than <d> | --all` reclaims,
@@ -364,7 +366,8 @@ with the delete, so an `rm -rf` to make room is followed by `tailraid trash purg
 --older-than 0` (or the browser's "delete now") and then GC's grace.
 
 **Local cache.** `cache.size` bounds the node's chunk cache (01 §Local chunk cache;
-`1GiB` unless set). `tailraid cache pin <path>` keeps a folder on this device: its chunks
+`1GiB` unless set, and written to the file only when set, as `trash.retention` is,
+I-61). `tailraid cache pin <path>` keeps a folder on this device: its chunks
 are fetched into the cache and never evicted while the pin stands, so the folder reads
 from the device with every other node away; `cache unpin <path>` releases it and
 `cache ls` shows each pin's bytes and how many have arrived. The browser UI's folder menu
@@ -443,7 +446,7 @@ from the device with every other node away; `cache unpin <path>` releases it and
 |---|---|
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC`, `TestFaults_RuleFailsOpenRaftConnection` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
-| I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder`, `TestConfig_NewRepairKeysWrittenOnlyWhenSet` |
+| I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder`, `TestConfig_NewRepairKeysWrittenOnlyWhenSet`, `TestConfig_TrashKeyWrittenOnlyWhenSet`, `TestConfig_CacheKeyWrittenOnlyWhenSet` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
