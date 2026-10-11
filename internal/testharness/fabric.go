@@ -425,9 +425,28 @@ func (f *Fabric) Ops() []meta.Op {
 
 // --- components under test ---
 
-// Reader returns a reader sharing the fabric cache.
+// Reader returns a reader sharing the fabric cache. Its readahead prefetches run on
+// after a READ returns (docs/04 §5), so the test's cleanup waits for them: one still
+// writing the cache while the temp directories go fails the test's own cleanup.
 func (f *Fabric) Reader() *vfs.Reader {
-	return vfs.NewReader(f.FSM, f, f, f.Cache, &ec.Pool{})
+	rd := vfs.NewReader(f.FSM, f, f, f.Cache, &ec.Pool{})
+	f.TB.Cleanup(func() { f.drain(rd) })
+	return rd
+}
+
+// drain waits on the wall clock for every prefetch of rd to finish.
+func (f *Fabric) drain(rd *vfs.Reader) {
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
+	for rd.Prefetching() != 0 {
+		select {
+		case <-tick.C:
+		case <-deadline:
+			f.TB.Fatalf("readahead prefetches still running: %d", rd.Prefetching())
+			return
+		}
+	}
 }
 
 // readerNoCache is a reader as another gateway with a cold cache would see the cluster.

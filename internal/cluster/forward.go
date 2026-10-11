@@ -86,6 +86,11 @@ func (n *Node) applyLocal(ctx context.Context, cmd meta.Command) (meta.Result, u
 	if d, ok := ctx.Deadline(); ok {
 		timeout = max(time.Until(d), time.Millisecond)
 	}
+	if n.MinCodec != nil {
+		if need := meta.CommandCodec(cmd); need > 1 && n.MinCodec() < need {
+			return meta.Result{Err: meta.ErrCodec}, 0, nil // refused before Raft sees it: nothing to retry (I-156)
+		}
+	}
 	encoded, err := meta.EncodeCommand(cmd)
 	if err != nil {
 		return meta.Result{}, 0, err

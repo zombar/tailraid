@@ -30,22 +30,39 @@ func CheckInvariants(st *State) []string {
 		if in.Ino != ino {
 			bad("inode %d: Ino field is %d", ino, in.Ino)
 		}
+		if in.Flags&^knownFlags != 0 || (in.Flags != 0 && in.Type != TDir) {
+			bad("inode %d: flags %#x on a %d", ino, in.Flags, in.Type)
+		}
 		if ino == RootIno {
 			if in.Type != TDir {
 				bad("root is not a directory")
 			}
+			if in.DeletedAt != 0 {
+				bad("root is in the trash")
+			}
 		} else {
 			p, ok := st.Inodes[in.Parent]
-			if !ok || p.Type != TDir {
+			switch {
+			case !ok || p.Type != TDir:
 				bad("inode %d: parent %d missing or not a directory", ino, in.Parent)
-			} else if child, ok := p.Children[in.Name]; !ok || child != ino {
-				bad("inode %d (%q): parent %d has no matching child entry", ino, in.Name, in.Parent)
+			case in.DeletedAt != 0:
+				// a deleted root: out of the name table, in the trash index (docs/01)
+				if child, taken := p.Children[in.Name]; taken && child == ino {
+					bad("inode %d (%q): deleted root still in parent %d's name table", ino, in.Name, in.Parent)
+				}
+				if _, indexed := st.Trash[in.Parent][ino]; !indexed {
+					bad("inode %d: deleted root missing from the trash index", ino)
+				}
+			default:
+				if child, ok := p.Children[in.Name]; !ok || child != ino {
+					bad("inode %d (%q): parent %d has no matching child entry", ino, in.Name, in.Parent)
+				}
+				if in.Type == TDir {
+					subdirs[in.Parent]++ // live subdirectories only: a deleted root left its parent's nlink
+				}
 			}
 			if !reachesRoot(st, ino) {
 				bad("inode %d: parent chain does not reach root", ino)
-			}
-			if in.Type == TDir {
-				subdirs[in.Parent]++
 			}
 		}
 		switch in.Type {
@@ -132,8 +149,32 @@ func CheckInvariants(st *State) []string {
 			bad("Tombs entry %x has no chunk", h[:4])
 		}
 	}
+	for parent, set := range st.Trash {
+		for ino := range set {
+			in, ok := st.Inodes[ino]
+			switch {
+			case !ok:
+				bad("trash index: root %d under %d has no inode", ino, parent)
+			case in.DeletedAt == 0 || in.Parent != parent:
+				bad("trash index: root %d under %d is live or lies under %d", ino, parent, in.Parent)
+			}
+		}
+		if len(set) == 0 {
+			bad("trash index: empty set under %d", parent)
+		}
+	}
 	sort.Strings(v)
 	return v
+}
+
+// CheckStats compares the stats the applier kept against a recount (I-153, I-156).
+func CheckStats(st *State, kept Stats) []string {
+	want := computeStats(st)
+	kept.Inodes = want.Inodes
+	if kept != want {
+		return []string{fmt.Sprintf("stats drifted: kept %+v, recount %+v", kept, want)}
+	}
+	return nil
 }
 
 func reachesRoot(st *State, ino Ino) bool {

@@ -53,7 +53,13 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		baseHeap = base.Process.HeapInuse
 	}
 	// orphans before the phase belong to earlier phases (migrations, restarts) and go
-	// with the hourly sweep; the large file must add none
+	// with the hourly sweep; the large file must add none. A previous phase's restore may
+	// have just moved the automatic policy (phase 11's budgets), and a migration still
+	// running under the phase would leave each moved chunk's old shard here as an orphan
+	// of its own, so the migration finishes first.
+	if _, err := r.repairUntilClean(ctx); err != nil {
+		return err
+	}
 	_, orphans0, _, _ := r.Env.Fsck(ctx, gw)
 	h := sha256.New()
 	var peak struct {

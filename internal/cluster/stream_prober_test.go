@@ -55,14 +55,55 @@ func TestIDStream_RejectsForeignCluster(t *testing.T) {
 }
 
 type fakeHealth struct {
-	down map[string]bool
+	down  map[string]bool
+	codec map[string]uint8 // the codec each peer reports; absent = 0, a binary that predates the field
 }
 
 func (f *fakeHealth) Health(_ context.Context, addr string) (rpc.Health, error) {
 	if f.down[addr] {
 		return rpc.Health{}, errors.New("down")
 	}
-	return rpc.Health{}, nil
+	return rpc.Health{Codec: f.codec[addr]}, nil
+}
+
+// MinCodec is the oldest codec a live active device reports: a dead member does not
+// count, a member that predates the field counts as 0, and self counts as this binary.
+//
+// Invariant: I-156
+func TestProber_MinCodec(t *testing.T) {
+	dir := t.TempDir()
+	n := bootstrap(t, dir)
+	defer n.Close()
+	for i, name := range []string{"b", "c"} {
+		r, _, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
+			ID: "peer-" + name + "000000000000", Name: name, Kind: meta.KindDevice, Addr: "10.0.0." + string(rune('2'+i)), RPCPort: 1, RaftPort: 1, Capacity: 1,
+		}}})
+		if err != nil || r.Err != nil {
+			t.Fatal(err, r.Err)
+		}
+	}
+	clk := clock.NewFake(time.Now())
+	fh := &fakeHealth{down: map[string]bool{}, codec: map[string]uint8{"10.0.0.2:1": meta.CodecVersion, "10.0.0.3:1": 3}}
+	p := NewProber(n, fh, clk)
+	p.Tick(ctx)
+	if got := p.MinCodec(); got != 3 {
+		t.Fatalf("min codec %d with a codec-3 member, want 3", got)
+	}
+	// the old member dies: it no longer holds the cluster back
+	fh.down["10.0.0.3:1"] = true
+	clk.Advance(LiveThreshold + time.Second)
+	p.Tick(ctx)
+	if got := p.MinCodec(); got != meta.CodecVersion {
+		t.Fatalf("min codec %d with the old member dead, want %d", got, meta.CodecVersion)
+	}
+	// it returns updated; a member that reports no codec at all is the oldest of all
+	fh.down["10.0.0.3:1"] = false
+	fh.codec["10.0.0.3:1"] = meta.CodecVersion
+	delete(fh.codec, "10.0.0.2:1")
+	p.Tick(ctx)
+	if got := p.MinCodec(); got != 0 {
+		t.Fatalf("min codec %d with a member that predates the field, want 0", got)
+	}
 }
 
 // Lifecycle: L-86, L-87, L-88, L-92, L-131, L-132

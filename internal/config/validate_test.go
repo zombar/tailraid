@@ -37,6 +37,11 @@ func TestConfig_Validate_Table(t *testing.T) {
 		{"mount relative", func(c *Config) { c.Mount.Path = "TailRAID" }, "mount.path"},
 		{"mount unexpanded tilde", func(c *Config) { c.Mount.Path = "~/TailRAID" }, "mount.path"},
 		{"mount empty", func(c *Config) { c.Mount.Path = "" }, ""},
+		{"trash retention default", nil, ""},
+		{"trash retention never", func(c *Config) { c.Trash.Retention = "0" }, ""},
+		{"trash retention 1h", func(c *Config) { c.Trash.Retention = "1h" }, ""},
+		{"trash retention 59m", func(c *Config) { c.Trash.Retention = "59m" }, "trash.retention"},
+		{"trash retention words", func(c *Config) { c.Trash.Retention = "a month" }, "trash.retention"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := Default()

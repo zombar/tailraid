@@ -38,7 +38,7 @@ var _ billy.File = (*File)(nil)
 func (f *File) Name() string { return f.name }
 
 func (f *File) inode() (meta.Inode, error) {
-	in, ok := f.fs.st.GetInode(f.ino)
+	in, ok := f.fs.st.GetInodeAny(f.ino) // an open file in the trash still reads and flushes (I-155)
 	if !ok {
 		return meta.Inode{}, mapErr("read", f.name, meta.ErrNotExist)
 	}
@@ -47,7 +47,7 @@ func (f *File) inode() (meta.Inode, error) {
 
 // size is the client-visible size: the overlay's while dirty, else the committed size.
 func (f *File) size() uint64 {
-	in, ok := f.fs.st.GetInode(f.ino)
+	in, ok := f.fs.st.GetInodeAny(f.ino) // an open file in the trash still reads and flushes (I-155)
 	if !ok {
 		return 0
 	}
