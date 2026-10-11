@@ -207,3 +207,32 @@ func TestConfig_NewRepairKeysWrittenOnlyWhenSet(t *testing.T) {
 		t.Fatalf("set keys did not round-trip: %+v %v", got.Repair, err)
 	}
 }
+
+// A file this build writes names the trash section only when trash.retention is set: a
+// release from before the key reads the file strictly and must still start after a
+// rollback (I-61, the three-VM rounds' update step); set, it round-trips.
+// Invariant: I-61, I-126
+func TestConfig_TrashKeyWrittenOnlyWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	c := Default()
+	c.Node.DataDir = filepath.Join(dir, "data")
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "trash:") || strings.Contains(string(b), "retention:") {
+		t.Fatalf("an unset trash.retention was written:\n%s", b)
+	}
+	c.Trash.Retention = "48h"
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || got.Trash.Retention != "48h" {
+		t.Fatalf("a set trash.retention did not round-trip: %+v %v", got.Trash, err)
+	}
+}
