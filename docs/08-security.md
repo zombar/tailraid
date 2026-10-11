@@ -214,6 +214,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | A peer stalls mid-body and holds a PUT or GET slot | per-request body deadline derived from the transfer size (I-97) |
+| An admin op runs a pass longer than a shard call's header timeout | the client's control-plane transport has no response-header timeout, and a pass op (`repair_now`, `gc_now`, `check` with a scrub) is bounded by the caller's context alone; shard calls keep the 10 s header timeout (I-189) |
 | LAN host reaches NFS, SMB or RPC | NFS and SMB bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
 | Guest, other-user or tagged tailnet device opens the web UI | member-or-same-user WhoIs rule; tagged devices have no login (docs/13, I-68) |
@@ -267,6 +268,13 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 - **I-97** — Reading a PUT or `apply` body and writing a GET body carry a deadline derived
   from the largest transfer (`BodyTimeout`, default `callTimeout(MaxShard)`), so a peer
   that stalls mid-transfer releases its slot when the deadline passes.
+- **I-189** — The RPC client reaches a node's control plane (`/v1/*` JSON calls, `/health`)
+  through a transport without a response-header timeout, and an admin op that runs a
+  pass (`repair_now`, `gc_now`, `check` with a scrub) carries no client deadline beyond
+  the caller's context: the leader answers when the pass is done, `tailraid repair`,
+  `gc` and `check --scrub` wait for it, and the soak's live environment gives a pass
+  `PassTimeout` (30 min). Shard calls keep their size-scaled deadline and the 10 s
+  header timeout (I-83), so a stalled holder still fails fast.
 - **I-94** — A join records the caller's source address and rejects a request that names
   another with 403; a re-join under a known node ID keeps the record only when it presents
   that record's StableID; a join from the Raft address of a known server under a new node
@@ -286,4 +294,5 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
+| I-189 | `TestClient_PassOpOutlivesHeaderTimeout`, `TestAdminOp_IsPass_Table`, `TestAdmin_PassOpsCarryDeadline` |
 | I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap` |
