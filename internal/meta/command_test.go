@@ -126,9 +126,59 @@ var goldenCommands = []struct {
 		Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: -1, Limit: 1024}},
 		"03 0d ffffffffffffffff 00040000",
 	},
+	{
+		"Trash", // codec version 4 (docs/02 §Trash)
+		Command{Op: OpTrash, Trash: &Trash{Parent: 1, Name: "d", Recursive: true, Now: 2}},
+		"04 0f 0100000000000000 01 64 01 0200000000000000",
+	},
+	{
+		"Restore",
+		Command{Op: OpRestore, Restore: &Restore{Ino: 5, Now: 3}},
+		"04 10 0500000000000000 0000000000000000 00 0300000000000000",
+	},
+	{
+		"RestoreElsewhere",
+		Command{Op: OpRestore, Restore: &Restore{Ino: 5, NewParent: 2, NewName: "b", Now: 3}},
+		"04 10 0500000000000000 0200000000000000 01 62 0300000000000000",
+	},
+	{
+		"Purge",
+		Command{Op: OpPurge, Purge: &Purge{Before: -1, Limit: 1024, Now: 4}},
+		"04 11 0000000000000000 ffffffffffffffff 00040000 0400000000000000",
+	},
+	{
+		"SetAttrFlags", // codec version 4: Flags follows Now (I-156)
+		Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 5, Mask: AttrFlags, Flags: FlagProtected | FlagNSFW, Now: 11}},
+		"04 0a 0500000000000000 20 00000000 00000000 00000000 0000000000000000 0000000000000000 0b00000000000000 03",
+	},
 }
 
-// Invariant: I-22
+// A codec-4 entry is written only for the ops that need it, and read only for them
+// (docs/01 §Binary codec).
+//
+// Invariant: I-156
+func TestEncodeCommand_V4Gating(t *testing.T) {
+	plain := MustEncodeCommand(Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 5, Mask: AttrMode, Mode: 1, Now: 1}})
+	if plain[0] != commandVersion {
+		t.Fatalf("a SetAttr without flags is version %d, want %d", plain[0], commandVersion)
+	}
+	flagged := MustEncodeCommand(Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 5, Mask: AttrMode | AttrFlags, Mode: 1, Now: 1}})
+	if flagged[0] != commandVersionV4 {
+		t.Fatalf("a SetAttr with flags is version %d, want %d", flagged[0], commandVersionV4)
+	}
+	bad := map[string][]byte{
+		"trash in version 1":           append([]byte{commandVersion}, MustEncodeCommand(Command{Op: OpTrash, Trash: &Trash{Parent: 1, Name: "d", Now: 2}})[1:]...),
+		"unlink in version 4":          append([]byte{commandVersionV4}, MustEncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a", Now: 2}})[1:]...),
+		"version 4 SetAttr sans flags": append([]byte{commandVersionV4}, append(plain[1:], 0)...),
+	}
+	for name, in := range bad {
+		if _, err := DecodeCommand(in); err == nil {
+			t.Errorf("%s: accepted %x", name, in)
+		}
+	}
+}
+
+// Invariant: I-22, I-156
 func TestEncodeCommand_Golden(t *testing.T) {
 	for _, g := range goldenCommands {
 		t.Run(g.name, func(t *testing.T) {
@@ -177,7 +227,7 @@ func TestEncodeCommand_AllOpsCovered(t *testing.T) {
 	for _, g := range goldenCommands {
 		seen[g.cmd.Op] = true
 	}
-	for op := OpSetVolume; op <= OpSetVolumeMode; op++ {
+	for op := OpSetVolume; op <= OpPurge; op++ {
 		if !seen[op] {
 			t.Errorf("op %d has no golden", op)
 		}
@@ -259,7 +309,7 @@ func equalIdx(a, b []NodeIdx) bool {
 	return true
 }
 
-// Invariant: I-22, I-26
+// Invariant: I-22, I-26, I-156
 func FuzzDecodeCommand(f *testing.F) {
 	for i := range goldenCommands {
 		f.Add(h(goldenCommands[i].hex))

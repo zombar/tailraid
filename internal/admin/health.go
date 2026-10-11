@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/zombar/tailraid/internal/ec"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 )
@@ -11,15 +12,16 @@ import (
 // VolumeHealth is the volume-wide roll-up of meta.ChunkState (docs/11 §2) that `status`
 // and `check` share, so the two never disagree.
 type VolumeHealth struct {
-	Degraded       int                  // chunks with fewer than k+m reachable copies right now
-	RepairPending  int                  // chunks with a slot to re-place (the repairer's view, after fill_after)
-	Unreadable     int                  // chunks with fewer than k readable slots right now
-	StalePolicy    int                  // chunks awaiting migration to the current (k, m)
-	DomainSkew     int                  // chunks above the host cap that repair will move (docs/14 §7)
-	DiskSkew       int                  // slots the capacity rebalance would move between disks of one host (docs/14 §7, I-172)
-	DegradedHashes map[meta.Hash]bool   // degraded, repair-pending or unreadable
-	Slots          map[meta.NodeIdx]int // placement slots per node
-	Missing        map[meta.NodeIdx]int // slots per node whose node is not live
+	Degraded       int                     // chunks with fewer than k+m reachable copies right now
+	RepairPending  int                     // chunks with a slot to re-place (the repairer's view, after fill_after)
+	Unreadable     int                     // chunks with fewer than k readable slots right now
+	StalePolicy    int                     // chunks awaiting migration to the current (k, m)
+	DomainSkew     int                     // chunks above the host cap that repair will move (docs/14 §7)
+	DiskSkew       int                     // slots the capacity rebalance would move between disks of one host (docs/14 §7, I-172)
+	DegradedHashes map[meta.Hash]bool      // degraded, repair-pending or unreadable
+	Slots          map[meta.NodeIdx]int    // placement slots per node
+	Missing        map[meta.NodeIdx]int    // slots per node whose node is not live
+	Bytes          map[meta.NodeIdx]uint64 // shard bytes per node, the sum of its slots' shard lengths (I-178)
 }
 
 // ScanHealth derives every referenced chunk's state once.
@@ -30,16 +32,18 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 	for i := range all {
 		nodes[all[i].Idx] = all[i]
 	}
-	v := VolumeHealth{DegradedHashes: map[meta.Hash]bool{}, Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}}
+	v := VolumeHealth{DegradedHashes: map[meta.Hash]bool{}, Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}, Bytes: map[meta.NodeIdx]uint64{}}
 	in := meta.HealthInput{Nodes: nodes, Live: live, FillAfter: fillAfter}
 	chunks := 0
 	st.ForEachChunk(func(c meta.Chunk) bool {
 		if c.Refs == 0 {
 			return true
 		}
+		shard := uint64(ec.ShardLen(int(c.Size), int(c.K)))
 		for _, s := range c.Placement {
 			if s != 0 {
 				v.Slots[s]++
+				v.Bytes[s] += shard
 				if !live.IsLive(s) {
 					v.Missing[s]++
 				}

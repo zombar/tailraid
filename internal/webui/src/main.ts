@@ -1,13 +1,15 @@
-// tailraid web UI entry (docs/13): the shell (health pill, warnings, tabs) and the hash
-// router over the dashboard, the file browser and the file view.
+// tailraid web UI entry (docs/13): the shell (health pill, warnings, tabs), the
+// now-playing bar, and the hash router over the dashboard, the file browser, the file
+// view and their trash counterparts (#/trash/<ino>/<path>, #/trashfile/<ino>/<path>).
 
 import * as theme from "./theme.ts"; // first: applies the stored theme before any view renders (I-200)
 import { clear, h } from "./dom.ts";
 import { status } from "./status.ts";
-import { decodeHashPath } from "./util.ts";
+import { decodeHashPath, type Ctx } from "./util.ts";
 import * as dashboard from "./dashboard.ts";
 import * as browser from "./browser.ts";
 import * as player from "./player.ts";
+import { player as audio } from "./audio.ts";
 import * as stats from "./stats.ts";
 import type { Report } from "./api.ts";
 
@@ -63,21 +65,29 @@ function drawShell(): void {
 
 let dispose: (() => void) | null = null;
 
-function route(): void {
-  const hash = location.hash || "#/";
-  const [where = "", query = ""] = hash.replace(/^#\/?/, "").split("?");
+/** parse reads the route: the view, and where it looks. */
+export function parse(hash: string): { head: string; ctx: Ctx; query: string } {
+  const [where = "", query = ""] = hash.replace(/^#\/?/, "").split("?"); // the Stats page keeps its range and node after "?"
   const [head = "", ...rest] = where.split("/");
-  const tail = rest.join("/");
+  if (head === "trash" || head === "trashfile") {
+    const ino = Number(rest.shift() ?? "");
+    return { head, ctx: { path: decodeHashPath(rest.join("/")), root: Number.isFinite(ino) && ino > 0 ? ino : undefined }, query };
+  }
+  return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
+}
+
+function route(): void {
+  const { head, ctx, query } = parse(location.hash || "#/");
   dispose?.();
   dispose = null;
   clear(view);
   let tab = "dash";
-  if (head === "browse") {
+  if (head === "browse" || (head === "trash" && ctx.root !== undefined)) {
     tab = "files";
-    dispose = browser.render(view, decodeHashPath(tail));
-  } else if (head === "file") {
+    dispose = browser.render(view, ctx);
+  } else if (head === "file" || (head === "trashfile" && ctx.root !== undefined)) {
     tab = "files";
-    dispose = player.render(view, decodeHashPath(tail));
+    dispose = player.render(view, ctx);
   } else if (head === "stats") {
     tab = "stats";
     dispose = stats.render(view, query);
@@ -88,6 +98,7 @@ function route(): void {
   window.scrollTo(0, 0);
 }
 
+audio.mount();
 const themeButton = document.querySelector<HTMLButtonElement>("button.theme");
 if (themeButton) theme.wire(themeButton);
 status.subscribe(drawShell);

@@ -124,15 +124,39 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot | stats_seal
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
 	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
 	Scrub bool   `json:"scrub,omitempty"` // check: force a full scrub pass
 	Files bool   `json:"files,omitempty"` // check: list affected files
 	Chunk string `json:"chunk,omitempty"` // chunk: hex hash (prefix ≥ 8) or a /path
-	// open_disk (this host only): start serving a disk `node add-disk` has just added
+	// open_disk (this host only): start serving a disk `node add-disk` has just added;
+	// trash_ls: the folder to list (empty: every root); cache_pin and cache_unpin (this
+	// host only): the folder to keep on this device, or release (docs/12 §10)
 	Path     string `json:"path,omitempty"`
 	Capacity string `json:"capacity,omitempty"`
-	Rollup   bool   `json:"rollup,omitempty"` // stats_seal: also write today's rollups so far (docs/17 §7)
+	// the trash (docs/12 §10): trash_restore takes the root's inode and an optional
+	// destination folder and name; trash_purge takes one inode, or everything deleted
+	// longer than OlderThan ago ("" with All: everything)
+	Ino       uint64 `json:"ino,omitempty"`
+	To        string `json:"to,omitempty"`
+	As        string `json:"as,omitempty"`
+	OlderThan string `json:"older_than,omitempty"`
+	All       bool   `json:"all,omitempty"`
+	Rollup    bool   `json:"rollup,omitempty"` // stats_seal: also write today's rollups so far (docs/17 §7)
+}
+
+// IsPass reports an op the leader answers only once a pass over the volume is done
+// (docs/08, I-189): the client gives it no deadline of its own.
+func (op AdminOp) IsPass() bool {
+	switch op.Op {
+	case "repair_now", "gc_now":
+		return true
+	case "check":
+		return op.Scrub
+	case "trash_purge": // the whole trash: one proposal after another until it is empty
+		return op.All
+	}
+	return false
 }

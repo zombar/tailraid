@@ -2,6 +2,7 @@ package soak
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -59,6 +60,10 @@ type Env interface {
 	RepairNow(ctx context.Context) (repair.Stats, error)
 	Scrub(ctx context.Context) (repair.Stats, error)
 	GCNow(ctx context.Context) (repair.Result, error)
+	// PurgeTrash deletes every entry in the trash for good (`tailraid trash purge --all`,
+	// docs/12 §10) and returns how many inodes went; a removed file's chunks are then
+	// tombstoned and GC collects them after grace.
+	PurgeTrash(ctx context.Context) (int, error)
 	SetPolicy(ctx context.Context, k, m uint8) error
 	SetState(ctx context.Context, node NodeRef, state meta.NodeState) error
 	// Remove takes a member out of the node table (`node remove`, no --force).
@@ -99,6 +104,12 @@ type Env interface {
 	AddS3(ctx context.Context, name string) error
 	Bucket(ctx context.Context) (*s3.Bucket, error)
 
+	// WebURL is the node's browser UI (docs/13) as the driver reaches it,
+	// "http://<host>:<port>/"; "" when the environment has none, which skips phase 16.
+	// WebClient is the HTTP client that reaches it (nil: a default client); the compose
+	// rig's dials its published ports.
+	WebURL(ctx context.Context, node NodeRef) (string, error)
+	WebClient() *http.Client
 	// the stats history (docs/17 §7): StatsSeal is `tailraid stats seal [--rollup]` on
 	// one node (how many rows it sealed); StatsLive is that node's unsealed rows newer
 	// than since (GET /v1/stats).

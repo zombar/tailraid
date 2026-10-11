@@ -7,6 +7,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/stats"
 )
@@ -115,8 +116,10 @@ func phaseStats(ctx context.Context, r *Run) error {
 	if _, err := r.Env.StatsSeal(ctx, leader, false); err != nil {
 		r.check("I-194", "the leader's seal prunes", false, err.Error())
 	} else {
-		_, err := v.Size(planted)
-		r.check("I-194", "a segment past its retention is removed, whoever wrote it", err != nil, fmt.Sprintf("%s: %v", planted, err))
+		// a kernel NFS client holds the name it wrote in its attribute cache for up to
+		// acdirmax (docs/07): the mount is given that window to show the removal
+		gone := r.waitGone(ctx, v, planted)
+		r.check("I-194", "a segment past its retention is removed, whoever wrote it", gone, planted)
 	}
 	// (d) the page's charts from the rows read and the live edge of every node
 	var all []stats.Row
@@ -162,7 +165,9 @@ func phaseStats(ctx context.Context, r *Run) error {
 			}
 			u.add("start "+victim.Name, func(c context.Context) error { return r.Env.Start(c, victim) })
 			r.event("kill", victim.Name)
-			_ = r.Env.Wait(ctx, 3*time.Second)
+			// the prober marks the member dead after LiveThreshold; the leader's next rows
+			// carry it (the harness's Kill advances its clock past the threshold already)
+			_ = r.Env.Wait(ctx, cluster.LiveThreshold+2*r.Profile.SampleEvery+10*time.Second)
 			_, err := r.Env.StatsLive(ctx, victim, 0)
 			r.checkAt("I-196", "a dead member has no live edge", err != nil, fmt.Sprintf("err %v", err), "", "", victim.Name)
 			lrows, lerr := r.Env.StatsLive(ctx, leader, 0)
@@ -249,4 +254,18 @@ func liveOf(r *stats.Row) map[string]int {
 		return nil
 	}
 	return r.C.Live
+}
+
+// waitGone returns true once the mount no longer answers a stat of p, within the
+// attribute-cache window (docs/07).
+func (r *Run) waitGone(ctx context.Context, v Volume, p string) bool {
+	deadline := time.Now().Add(attrCacheWindow)
+	for {
+		if _, err := v.Size(p); err != nil {
+			return true
+		}
+		if time.Now().After(deadline) || r.Env.Wait(ctx, 2*time.Second) != nil {
+			return false
+		}
+	}
 }

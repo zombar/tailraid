@@ -36,6 +36,7 @@ func TestGC_DeletesShardsOnDisks(t *testing.T) {
 	}
 	must(t, c.Nodes[0].FS.Remove("/f"))
 	c.Settle()
+	purgeTrash(t, c) // a delete reclaims nothing until the entry is purged (docs/06 §1)
 	leader := c.Leader()
 	gc := repair.NewGC(leader.Node.FSM, leader.Node, leader.Client, leader.Prober, c.Clk, 10*time.Minute, nil)
 	c.Clk.Advance(11 * time.Minute)

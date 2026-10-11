@@ -146,6 +146,12 @@ func (a *applier) apply(c Command) (Result, error) {
 		return a.gcDelete(c.GCDelete)
 	case OpSetVolumeMode:
 		return Result{}, a.setVolumeMode(c.SetVolumeMode)
+	case OpTrash:
+		return Result{}, a.trash(c.Trash)
+	case OpRestore:
+		return Result{}, a.restore(c.Restore)
+	case OpPurge:
+		return Result{}, a.purge(c.Purge)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -333,6 +339,19 @@ func (a *applier) dir(ino Ino) (*Inode, error) {
 	return in, nil
 }
 
+// liveDir is dir for the namespace commands: a parent in the trash is refused, since
+// only the flusher's Commit writes inside the trash (docs/02 §Protection).
+func (a *applier) liveDir(ino Ino) (*Inode, error) {
+	in, err := a.dir(ino)
+	if err != nil {
+		return nil, err
+	}
+	if a.st.lineage(ino).inTrash {
+		return nil, ErrInTrash
+	}
+	return in, nil
+}
+
 func (a *applier) newInode(typ FileType, parent *Inode, name string, mode, uid, gid uint32, now int64) *Inode {
 	st := a.st
 	in := &Inode{
@@ -363,7 +382,7 @@ func (a *applier) create(c *Create) (Result, error) {
 	if c.Type == TSymlink && c.Target == "" {
 		return Result{}, ErrBadCommand
 	}
-	p, err := a.dir(c.Parent)
+	p, err := a.liveDir(c.Parent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -389,7 +408,7 @@ func (a *applier) mkdir(c *Mkdir) (Result, error) {
 	if a.pathLen(c.Parent, c.Name) > MaxPathLen {
 		return Result{}, ErrNameTooLong
 	}
-	p, err := a.dir(c.Parent)
+	p, err := a.liveDir(c.Parent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -461,7 +480,7 @@ func (a *applier) unlink(c *Unlink) error {
 		return err
 	}
 	st := a.st
-	p, err := a.dir(c.Parent)
+	p, err := a.liveDir(c.Parent)
 	if err != nil {
 		return err
 	}
@@ -472,6 +491,9 @@ func (a *applier) unlink(c *Unlink) error {
 	in := st.Inodes[ino]
 	if in.Type == TDir {
 		return ErrIsDir
+	}
+	if st.lineage(ino).protected {
+		return ErrProtected // nothing under a protected directory leaves the namespace (I-154)
 	}
 	d := refDelta{}
 	d.add(in.Chunks, -1)
@@ -498,7 +520,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 		return err
 	}
 	st := a.st
-	p, err := a.dir(c.Parent)
+	p, err := a.liveDir(c.Parent)
 	if err != nil {
 		return err
 	}
@@ -510,8 +532,18 @@ func (a *applier) rmdir(c *Rmdir) error {
 	if in.Type != TDir {
 		return ErrNotDir
 	}
+	if st.lineage(ino).protected {
+		return ErrProtected
+	}
 	if len(in.Children) != 0 {
 		return ErrNotEmpty
+	}
+	if len(st.Trash[ino]) != 0 {
+		// an empty directory whose earlier deletes are still roots under it: the
+		// mount's rmdir of a folder it emptied with rm. Trash it instead (fold), so the
+		// roots come back with it (docs/02 §Trash).
+		a.trashEntry(in, p, a.clock(c.Now))
+		return nil
 	}
 	now := a.clock(c.Now)
 	delete(p.Children, c.Name)
@@ -550,7 +582,7 @@ func (a *applier) rename(c *Rename) error {
 		return ErrNameTooLong
 	}
 	st := a.st
-	op, err := a.dir(c.OldParent)
+	op, err := a.liveDir(c.OldParent)
 	if err != nil {
 		return err
 	}
@@ -558,7 +590,7 @@ func (a *applier) rename(c *Rename) error {
 	if !ok {
 		return ErrNotExist
 	}
-	np, err := a.dir(c.NewParent)
+	np, err := a.liveDir(c.NewParent)
 	if err != nil {
 		return err
 	}
@@ -568,6 +600,16 @@ func (a *applier) rename(c *Rename) error {
 	}
 	if src.Type == TDir && a.isAncestor(srcIno, c.NewParent) {
 		return ErrLoop
+	}
+	// protection (I-154): the protected folder itself stays put, nothing leaves a
+	// protected subtree, and nothing under one is replaced; moving in is fine
+	if src.Type == TDir && src.Flags&FlagProtected != 0 {
+		return ErrProtected
+	}
+	for _, guard := range a.protectedAncestors(c.OldParent) {
+		if !a.isAncestor(guard, c.NewParent) {
+			return ErrProtected
+		}
 	}
 	var dst *Inode
 	if dstIno, exists := np.Children[c.NewName]; exists {
@@ -579,17 +621,23 @@ func (a *applier) rename(c *Rename) error {
 			return ErrNotDir
 		case dst.Type == TDir && len(dst.Children) != 0:
 			return ErrNotEmpty
+		case st.lineage(dstIno).protected:
+			return ErrProtected // a replace is a removal
 		}
 	}
+	// the replaced entry goes to the trash unless its name or place is ephemeral
+	// (docs/06 §1, L-205, L-208)
+	hard := dst != nil && (IsEphemeral(dst.Name) || st.lineage(dst.Ino).reserved)
 	d := refDelta{}
-	if dst != nil {
+	if hard {
 		d.add(dst.Chunks, -1)
 	}
 	if err := d.check(st); err != nil {
 		return err
 	}
 	now := a.clock(c.Now)
-	if dst != nil {
+	switch {
+	case hard:
 		d.commit(st, a.stats, now)
 		if dst.Type == TFile {
 			a.stats.LogicalBytes -= dst.Size
@@ -598,6 +646,8 @@ func (a *applier) rename(c *Rename) error {
 		if dst.Type == TDir {
 			np.Nlink--
 		}
+	case dst != nil:
+		a.trashEntry(dst, np, now)
 	}
 	delete(op.Children, c.OldName)
 	np.Children[c.NewName] = srcIno
@@ -617,7 +667,7 @@ func (a *applier) setAttr(c *SetAttr) error {
 	if c == nil {
 		return ErrBadCommand
 	}
-	const known = AttrMode | AttrUid | AttrGid | AttrAtime | AttrMtime
+	const known = AttrMode | AttrUid | AttrGid | AttrAtime | AttrMtime | AttrFlags
 	if c.Mask&^known != 0 {
 		return ErrBadCommand
 	}
@@ -625,7 +675,20 @@ func (a *applier) setAttr(c *SetAttr) error {
 	if !ok {
 		return ErrNotExist
 	}
+	if c.Mask&AttrFlags != 0 {
+		switch {
+		case in.Type != TDir:
+			return ErrNotDir // flags are a directory's (docs/02 §SetAttr)
+		case c.Flags&^knownFlags != 0:
+			return ErrBadCommand
+		case a.st.lineage(c.Ino).inTrash:
+			return ErrInTrash
+		}
+	}
 	now := a.clock(c.Now)
+	if c.Mask&AttrFlags != 0 {
+		in.Flags = c.Flags
+	}
 	if c.Mask&AttrMode != 0 {
 		in.Mode = c.Mode
 	}
@@ -802,7 +865,11 @@ func (a *applier) commit(c *Commit) error {
 		newList[w.Idx] = w.Hash
 	}
 	in.Chunks = newList
-	a.stats.LogicalBytes += c.NewSize - in.Size // unsigned: wraps and unwraps exactly
+	if st.lineage(c.Ino).inTrash { // a dirty file deleted before its flush commits into its trash entry (L-203)
+		a.stats.TrashBytes += c.NewSize - in.Size // unsigned: wraps and unwraps exactly
+	} else {
+		a.stats.LogicalBytes += c.NewSize - in.Size
+	}
 	in.Size = c.NewSize
 	in.Version++
 	in.Mtime, in.Ctime = now, now

@@ -91,7 +91,12 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
   const name = h("div", { class: "name-row" }, dot, h("span", { class: "name" }, n.name), badges);
 
   let capacity: HTMLElement;
-  if (!n.live) {
+  if (n.s3) {
+    // a bucket reports no free space (its probe is a HEAD): what it stores, by the
+    // placement table, against its weight (docs/10 §4.1, I-178)
+    const frac = n.capacity > 0 ? n.stored_bytes / n.capacity : 0;
+    capacity = barRow("stored", bar(frac, fillTone(frac)), `${bytes(n.stored_bytes)} of ${bytes(n.capacity)} weight`);
+  } else if (!n.live) {
     capacity = barRow("capacity", bar(0, "off"), "unknown (dead " + (n.dead_for ?? "?") + ")");
   } else if (n.capacity === 0) {
     capacity = barRow("capacity", bar(0), n.kind === "device" ? "no disks" : "no capacity");
@@ -116,14 +121,15 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }
 
-  const meta = h(
-    "div",
-    { class: "meta" },
-    h("span", null, "rtt " + (n.rtt ?? "—")),
-    h("span", null, n.version || "?"),
-    h("span", null, "applied " + count(n.applied)),
-    h("span", null, `${n.addr}:${n.rpc_port}`),
-    h("span", null, "joined " + shortDate(n.joined_at)),
-  );
+  const meta = h("div", { class: "meta" }, h("span", null, "rtt " + (n.rtt ?? "—")));
+  if (n.s3) {
+    // a bucket runs no serve: its bucket, prefix and region stand where a device's version,
+    // applied index and address go (I-178)
+    meta.append(h("span", null, n.s3.prefix ? `${n.s3.bucket}/${n.s3.prefix}` : n.s3.bucket));
+    if (n.s3.region) meta.append(h("span", null, n.s3.region));
+  } else {
+    meta.append(h("span", null, n.version || "?"), h("span", null, "applied " + count(n.applied)), h("span", null, `${n.addr}:${n.rpc_port}`));
+  }
+  meta.append(h("span", null, "joined " + shortDate(n.joined_at)));
   return h("div", { class: "card node" + (n.self ? " self" : "") }, name, capacity, slots, meta);
 }

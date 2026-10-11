@@ -259,3 +259,60 @@ func TestConfig_StatsKeys_Table(t *testing.T) {
 		t.Fatalf("defaults %v %v %v %v %d", every, raw, minute, coarse, cache)
 	}
 }
+
+// A file this build writes names the trash section only when trash.retention is set: a
+// release from before the key reads the file strictly and must still start after a
+// rollback (I-61, the three-VM rounds' update step); set, it round-trips.
+// Invariant: I-61, I-126
+func TestConfig_TrashKeyWrittenOnlyWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	c := Default()
+	c.Node.DataDir = filepath.Join(dir, "data")
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "trash:") || strings.Contains(string(b), "retention:") {
+		t.Fatalf("an unset trash.retention was written:\n%s", b)
+	}
+	c.Trash.Retention = "48h"
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || got.Trash.Retention != "48h" {
+		t.Fatalf("a set trash.retention did not round-trip: %+v %v", got.Trash, err)
+	}
+}
+
+// A file this build writes names the cache section only when cache.size is set, for the
+// same rollback (I-61); set, it round-trips.
+// Invariant: I-61, I-126
+func TestConfig_CacheKeyWrittenOnlyWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	c := Default()
+	c.Node.DataDir = filepath.Join(dir, "data")
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "cache:") || strings.Contains(string(b), "size:") {
+		t.Fatalf("an unset cache.size was written:\n%s", b)
+	}
+	c.Cache.Size = "2GiB"
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || got.Cache.Size != "2GiB" {
+		t.Fatalf("a set cache.size did not round-trip: %+v %v", got.Cache, err)
+	}
+}

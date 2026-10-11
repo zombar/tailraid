@@ -244,7 +244,9 @@ type Env interface {
     // admin surface (one node's view; leader-only ops routed by the Env)
     Status, RepairNow, Scrub, GCNow, SetPolicy, SetPolicyAuto, SetState, Remove, Fsck,
     Chunks, FSMHash, Goroutines, Disks, Fill, S3 ...
-    WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16
+    PurgeTrash(ctx) (int, error)                   // `trash purge --all`: what phase 8 needs before GC can reclaim
+    WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16; "" skips it
+    WebClient() *http.Client                       // how the driver reaches it (nil: directly); compose dials its published ports
     // faults
     Kill, Start, Restart, Partition, Heal, Corrupt, FailDisk, RestoreDisk, AddDisk ...
 }
@@ -289,11 +291,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   gateways on disjoint files against a model; 20 s); 4 parity (kill m: reads and writes
   continue, `degraded` drains to 0 after `fill_after`; kill m+1: every read is either exact
   or an error, never garbage); 5 corruption (m shards: read exact, scrub repairs; m+1:
-  error, never garbage); 6 consensus (kill the leader under writes ×3; acknowledged writes
+  error, never garbage, then the lost file is deleted and purged from the trash, as an
+  operator would, so its unrepairable chunk leaves every later count); 6 consensus (kill the leader under writes ×3; acknowledged writes
   persist; FSM hashes agree); 7 membership (`set-redundancy` 2+1→1+2→2+1 under load with
   `stale_policy_chunks` draining to 0; drain and re-activate n4); 8 dedup and GC (second
-  copy of the corpus adds < 1 % stored bytes; removing a unique file reclaims after grace,
-  `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity); 10
+  copy of the corpus adds < 1 % stored bytes; removing a unique file leaves its bytes
+  stored and the entry in the trash, purging it (`trash purge --all`) tombstones its
+  chunks, and GC reclaims them after grace, `fsck` clean); 9 restart storm (restart every node with dirty WALs; integrity); 10
   partition (a minority is cut off: the majority elects and keeps committing, a cut-off
   gateway refuses metadata operations and buffers WRITEs that commit after the heal; then
   the gateway itself is cut off and rejoins; a refused operation may land after the heal,
@@ -307,7 +311,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   never holds it: every write acknowledged with no `EIO` while the client outruns the
   flusher, the WAL never past its cap plus one record, flush buffers within the I-78
   formula and the process heap flat, the content hash exact, and afterwards an empty
-  `staging/`, no temp file, a clean `fsck` and no new orphan; then where the file's
+  `staging/`, no temp file, a clean `fsck` and no new orphan (the phase first runs
+  repair passes until one finds nothing to do, so a policy migration a previous phase's
+  restore started does not leave moved chunks' old shards under it); then where the file's
   chunks landed: every chunk fully placed, its data slots on voters, data slots spread
   among the voters in proportion to capacity within the statistical margin, and a
   per-node figure of its data and parity slots against each node's capacity share;
@@ -337,13 +343,17 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   it registers nothing, skips the refusal and the drain, deletes behind the cluster's
   back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
   I-137, I-138, I-42, I-149, L-104, L-112, L-139); 16 web ui (the browser UI of docs/13
-  driven over HTTP at the node's `web_url` as a same-user device: listings and stats
+  driven over HTTP at the node's `web_url` as a same-user device: on the compose rig every
+  node's fake tailnet gives the nodes and the driver's address, the bridge's gateway, one
+  login, so the driver is a non-member device of the nodes' user (docs/13 §2); listings and stats
   against the corpus model; rename, move and delete batches with a deliberate taken
   name and a protected entry inside, every item reported on its own and the untouched
   ones unchanged; the trash round trip: a delete listed in place with its dates and its
   bytes readable with `in=`, the share seeing a delete (the mount's listing omits it, a
   read fails, a new file takes the name), an `rm -rf` through the mount restored with
-  one call, a dirty file deleted at once and restored with every acknowledged byte, an
+  one call (read back once the mount's attribute cache lets the restored names show,
+  within 90 s on a kernel NFS client, docs/07), a dirty file deleted at once and
+  restored with every acknowledged byte, an
   overwrite through the web and through the mount whose previous version reads back from
   the trash, `.DS_Store` and an upload temp deleted on the mount and absent from
   `/api/trash`, a restore onto a taken name refused then done under a new name, a purge
