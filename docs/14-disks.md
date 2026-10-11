@@ -236,7 +236,9 @@ and the Disks block's deviations shrink with it (I-172).
 - **A diskless host is shown as such.** `node ls` prints a device row with `-` for FREE and
   the flag `no disks` when it has no disk rows; `status` reports it `diskless`, and the web
   UI's Disks block draws its card with no target rows and the note `gateway only · no
-  disks`.
+  disks`. When it is dead, `status` prints no "unreachable for" warning for it, before or
+  after `evict_after`: it holds no slot, so nothing waits on it and there is nothing to
+  re-place (a dead voter still shows in the quorum line).
 - **Targets on one physical disk are flagged.** Each host reports the filesystem ID of
   every target it serves (`fs` in `/health`, from the device number on Unix and the volume
   on Windows); `status` marks targets of one host that share a filesystem with
@@ -332,7 +334,7 @@ runs.
 | I-89 | `TestChunkState_DomainSkew`, `TestModelCheck_Long`, `TestRepair_DeadDisk_RePlacesWithinCap`, `TestRepair_DomainSkew_MovesWithinCap`, `TestRepair_DomainSkew_UnfixableIgnored`, `TestRepair_Migration_WithinCap_VoterHostDisks` |
 | I-90 | `TestChunkRPC_DiskPath_RoundTrip`, `TestCluster_SingleHostDisks_DiskFails_ReadsAndRepair`, `TestMember_AddDisk_ResolvesToHost`, `TestProber_DiskLiveness` |
 | I-91 | `TestBudget_PerDisk_SharedFilesystem`, `TestNode_Rebudget_PerTarget` |
-| I-118 | `TestAutoPolicy_DisklessHostNotCounted`, `TestCandidates_DevicesNeverTargets`, `TestCluster_DisklessVoter_WritesLandOnOtherHosts`, `TestCluster_RemoveLastDisk_HostBecomesDiskless`, `TestMemberOp_SetCapacity_RefusesDevice`, `TestPrintNodes_DisklessAndSharedDisk`, `TestReport_DisklessAndSharedDisk`, `TestUsage_DisksOnly` |
+| I-118 | `TestAutoPolicy_DisklessHostNotCounted`, `TestCandidates_DevicesNeverTargets`, `TestCluster_DisklessVoter_WritesLandOnOtherHosts`, `TestCluster_RemoveLastDisk_HostBecomesDiskless`, `TestMemberOp_SetCapacity_RefusesDevice`, `TestPrintNodes_DisklessAndSharedDisk`, `TestReport_DisklessAndSharedDisk`, `TestStatus_NoUnreachableWarningForDisklessHost`, `TestUsage_DisksOnly` |
 | I-119 | `TestCLI_Serve_RefusesLegacyState`, `TestLegacyDeviceTargets_Table`, `TestServe_RefusesLegacyState` |
 | I-120 | `TestCluster_Diskless_WriteIsENOSPC`, `TestFlusher_NoTargets_ErrorWrapsErrFull`, `TestHasTargets_Table` |
 | I-121 | `TestCLI_Init_NoDisks_PrintsHint`, `TestCLI_Join_RegistersConfiguredDisks` |

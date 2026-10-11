@@ -397,8 +397,8 @@ func warnings(r Report) []string {
 	w = append(w, sharedDiskWarnings(r.Nodes)...)
 	for i := range r.Nodes {
 		n := &r.Nodes[i]
-		if n.State == "removed" {
-			continue
+		if n.State == "removed" || n.Diskless {
+			continue // a diskless host holds no slot: nothing to re-place, nothing to do (docs/14 §9)
 		}
 		switch {
 		case n.Lost:
