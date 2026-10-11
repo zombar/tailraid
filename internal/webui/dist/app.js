@@ -160,6 +160,13 @@ async function putThumb(path, version, jpeg) {
   const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
   if (!r.ok) throw await apiError(r);
 }
+function media(lib, sort = "title", offset = 0) {
+  if (lib === void 0) return call("/api/media");
+  return call(`/api/media?lib=${encodeURIComponent(lib)}&sort=${sort}&offset=${offset}`);
+}
+function mediaItem(path) {
+  return call("/api/media?item=" + encodeURIComponent(path));
+}
 function search(q, under) {
   return call("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
 }
@@ -631,14 +638,14 @@ function render2(root, r) {
   const active2 = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
   const perHost = targets.length / Math.max(1, groups.length);
   const layout = Number.isInteger(perHost) ? `${plural(groups.length, "host")} \xD7 ${plural(perHost, "target")}` : `${plural(groups.length, "host")}, ${plural(targets.length, "target")}`;
-  const sub = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
+  const sub2 = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
   const n = v.k + v.m;
   const capPer = Math.ceil(n / Math.max(1, active2.length));
   const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active2.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active2[0]?.node.name ?? "it"}`);
   const scale = Math.max(1, ...targets.map((t) => Math.max(t.slots, sh.get(t.idx)?.expected ?? 0))) * 1.1;
   const block = h("div", { class: "disks" }, spread(groups, sh), capNote);
   for (const g of groups) block.append(hostCard(g, sh, scale));
-  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub)), block));
+  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub2)), block));
 }
 function spread(groups, sh) {
   const devs = groups.flatMap((g) => g.targets.filter((t) => t.state === "active" && !off(t)).map((t) => Math.abs(sh.get(t.idx)?.deviation ?? 0)));
@@ -781,12 +788,12 @@ function render3(root, r, history) {
   }
   root.append(section);
 }
-function tile(label, value, sub, tone) {
+function tile(label, value, sub2, tone) {
   const zero = value === 0;
   const lab = h("div", { class: "label" });
   if (!zero) lab.append(h("span", { class: "dot " + tone }));
   lab.append(label);
-  return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub));
+  return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub2));
 }
 function repair(r) {
   if (!r.repair) {
@@ -855,10 +862,10 @@ function volume(root, r) {
   );
   const s = r.search;
   if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
-    let sub = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
-    if (s.pending > 0) sub += ` \xB7 ${count(s.pending)} pending`;
-    if (s.capped) sub += " \xB7 capped: contents no longer indexed";
-    tiles.append(tile2("Index", count(s.docs), sub));
+    let sub2 = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
+    if (s.pending > 0) sub2 += ` \xB7 ${count(s.pending)} pending`;
+    if (s.capped) sub2 += " \xB7 capped: contents no longer indexed";
+    tiles.append(tile2("Index", count(s.docs), sub2));
   }
   const scale = Math.max(1, v.logical_bytes, v.stored_bytes);
   const used = Math.max(0, v.usable_capacity - v.free);
@@ -872,8 +879,8 @@ function volume(root, r) {
   );
   root.append(h("section", null, h("h2", null, "Volume"), tiles, compare2));
 }
-function tile2(label, value, sub) {
-  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
+function tile2(label, value, sub2) {
+  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub2));
 }
 function cache(root, r) {
   const c = r.cache;
@@ -1463,7 +1470,7 @@ var Player = class {
     const cover = h("img", { class: "cover", alt: "" });
     cover.addEventListener("error", () => cover.removeAttribute("src"));
     const title = h("div", { class: "title" });
-    const sub = h("div", { class: "sub" });
+    const sub2 = h("div", { class: "sub" });
     const prev = h("button", { type: "button", "aria-label": "previous", onClick: () => this.prev() }, "\u23EE");
     const playBtn = h("button", { type: "button", "aria-label": "play", onClick: () => this.toggle() }, "\u25B6");
     const next2 = h("button", { type: "button", "aria-label": "next", onClick: () => this.next() }, "\u23ED");
@@ -1480,7 +1487,7 @@ var Player = class {
       "aside",
       { class: "nowbar", hidden: true },
       cover,
-      h("div", { class: "titles" }, title, sub),
+      h("div", { class: "titles" }, title, sub2),
       h("div", { class: "transport" }, prev, playBtn, next2),
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),
@@ -1492,7 +1499,7 @@ var Player = class {
     document.body.append(bar2, queue3);
     this.bar = bar2;
     this.queueEl = queue3;
-    this.els = { cover, title, sub, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
+    this.els = { cover, title, sub: sub2, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
   }
   notify() {
     this.drawBar();
@@ -1646,7 +1653,7 @@ var TEXT_MAX = 1024 * 1024;
 function mediaKind(e) {
   return KINDS[e]?.[0] ?? "other";
 }
-var media = null;
+var media2 = null;
 var panel = null;
 function render6(root, ctx) {
   const path = ctx.path;
@@ -1684,18 +1691,18 @@ function render6(root, ctx) {
     if (kind === "video") {
       const mime = KINDS[ext(name)]?.[1] ?? "";
       let el;
-      if (media && media.dir === dir) {
-        el = media.el;
+      if (media2 && media2.dir === dir) {
+        el = media2.el;
         el.src = fileURL(path, false, ctx.root);
         void el.play().catch(() => void 0);
       } else {
-        media?.el.pause();
+        media2?.el.pause();
         el = document.createElement("video");
         el.controls = true;
         el.preload = "metadata";
         el.playsInline = true;
         el.src = fileURL(path, false, ctx.root);
-        media = { el, dir };
+        media2 = { el, dir };
       }
       el.onended = () => go(next2);
       viewer.append(el);
@@ -1766,10 +1773,10 @@ function render6(root, ctx) {
       if (ev.key === "ArrowRight") go(next2);
       else if (ev.key === "ArrowLeft") go(prev);
       else if (ev.key === "Escape") location.hash = inTrash ? `#/trash/${ctx.root}` + encodeForHash(dir) : "#/browse" + encodeForHash(dir);
-      else if (ev.key === " " && media) {
+      else if (ev.key === " " && media2) {
         ev.preventDefault();
-        if (media.el.paused) void media.el.play().catch(() => void 0);
-        else media.el.pause();
+        if (media2.el.paused) void media2.el.play().catch(() => void 0);
+        else media2.el.pause();
       }
     };
     document.addEventListener("keydown", keyHandler);
@@ -1808,11 +1815,11 @@ function render6(root, ctx) {
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
     panel = null;
     const leaving = !location.hash.startsWith("#/file") && !location.hash.startsWith("#/trashfile");
-    if (leaving && media) {
-      media.el.pause();
-      media.el.removeAttribute("src");
-      media.el.load();
-      media = null;
+    if (leaving && media2) {
+      media2.el.pause();
+      media2.el.removeAttribute("src");
+      media2.el.load();
+      media2 = null;
     }
   };
 }
@@ -2580,6 +2587,7 @@ function render8(root, ctx) {
     const b = h("span", { class: "badges" });
     if (e.protected) b.append(h("span", { class: "badge lock" }, "protected"));
     if (e.nsfw) b.append(h("span", { class: "badge nsfw" }, "nsfw"));
+    if (e.library) b.append(h("span", { class: "badge lib" }, e.library));
     if (e.deleted_at) b.append(badge(e.purge_at));
     return b;
   };
@@ -2614,6 +2622,7 @@ function render8(root, ctx) {
       link = h("a", { href }, icon(kind), e.name);
       if (e.protected) link.append(h("span", { class: "badge lock" }, "protected"));
       if (e.nsfw) link.append(h("span", { class: "badge nsfw" }, "nsfw"));
+      if (e.library) link.append(h("span", { class: "badge lib" }, e.library));
       if (e.deleted_at) link.append(badge(e.purge_at));
       if (e.type === "file" && isAudioName(e.name)) link.append(playBtn(e));
     }
@@ -2832,6 +2841,7 @@ function crumbs(ctx, info, inTrash = false) {
   if (inTrash) el.append(h("span", { class: "badge" }, "deleted"));
   if (info?.protected) el.append(h("span", { class: "badge lock" }, "protected"));
   if (info?.nsfw) el.append(h("span", { class: "badge nsfw" }, "nsfw"));
+  if (info?.library) el.append(h("span", { class: "badge lib" }, info.library));
   if (info?.pinned) el.append(h("span", { class: "badge pin" }, "kept here"));
   return el;
 }
@@ -2946,7 +2956,7 @@ function render9(root, query) {
   const charts = h("div", { class: "charts" });
   const head = h("section", null, h("h2", null, "Stats", h("span", { class: "h-sub" }, "")), toolbar, form);
   root.append(head, charts);
-  const sub = head.querySelector(".h-sub");
+  const sub2 = head.querySelector(".h-sub");
   const drawMembers = (nodes, current) => {
     clear(body);
     const row2 = (name, label, dot, note, m) => {
@@ -2964,7 +2974,7 @@ function render9(root, query) {
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
     drawMembers(r.nodes, nodeName);
     const span = r.range.to - r.range.from;
-    sub.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
+    sub2.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
     clear(charts);
     if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
     for (const c of r.charts) {
@@ -3110,8 +3120,8 @@ function render10(root, q, params) {
   const section = h("section", { class: "results" });
   root.append(section);
   const scope = under || folder;
-  const sub = h("span", { class: "h-sub" }, "searching\u2026");
-  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub), h("span", { class: "spacer" }));
+  const sub2 = h("span", { class: "h-sub" }, "searching\u2026");
+  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub2), h("span", { class: "spacer" }));
   if (scope !== "/") {
     const toggle = h("input", { type: "checkbox", checked: under !== "" });
     toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
@@ -3155,8 +3165,8 @@ function render10(root, q, params) {
   search(q, under).then(
     (res) => {
       if (abort.signal.aborted) return;
-      clear(sub);
-      sub.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
+      clear(sub2);
+      sub2.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
       if (res.index) section.append(h("div", { class: "note" }, "index unavailable on this node: names only until the leader's next pass"));
       if (res.hits.length === 0) {
         const empty = h("div", { class: "empty" }, "no matches for ", h("code", null, q));
@@ -3169,13 +3179,221 @@ function render10(root, q, params) {
       section.append(ol);
     },
     (e) => {
-      if (!abort.signal.aborted) sub.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
+      if (!abort.signal.aborted) sub2.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
     }
   );
   return () => {
     abort.abort();
     seen.disconnect();
   };
+}
+
+// internal/webui/src/media.ts
+var NOUN = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"] };
+function glyph(kind) {
+  const d = kind === "album" ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" : kind === "episode" ? "M4 2.5l9 5.5-9 5.5z" : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
+  return svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d }));
+}
+function duration2(min) {
+  if (!min) return "";
+  return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}` : `${min} min`;
+}
+function itemHash(it) {
+  return it.kind === "album" ? browseHash({ path: it.path }) : "#/media/item" + encodePathForHash(it.path);
+}
+function art(it) {
+  if (it.poster) return thumbURL(it.poster);
+  if (it.kind === "album") return thumbURL(it.path);
+  if (it.video) return thumbURL(it.video);
+  return void 0;
+}
+function sub(it) {
+  if (it.kind === "album") return [it.artist, it.year].filter(Boolean).join(" \xB7 ");
+  const parts = [];
+  if (it.year) parts.push(String(it.year));
+  if (it.kind === "show" && it.children) parts.push(`${it.children} ${it.children === 1 ? "season" : "seasons"}`);
+  if (it.kind === "movie") parts.push(it.runtime ? duration2(it.runtime) : it.plot ? "" : "no sidecar");
+  return parts.filter(Boolean).join(" \xB7 ");
+}
+function posterTile(it) {
+  const veiled = it.nsfw && !session.get("tr.revealed", false);
+  const box = h("span", { class: "art" });
+  const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), h("span", { class: "pyear" }, veiled ? "nsfw \xB7 tap to show" : sub(it)));
+  const missing = () => {
+    clear(box);
+    box.append(glyph(it.kind));
+    a.classList.add("missing");
+  };
+  const src = art(it);
+  if (src) {
+    const img = h("img", { alt: "", loading: "lazy", src });
+    img.addEventListener("error", missing);
+    box.append(img);
+  } else missing();
+  if (veiled) {
+    a.addEventListener("click", (ev) => {
+      if (!a.classList.contains("nsfw")) return;
+      ev.preventDefault();
+      session.set("tr.revealed", true);
+      a.classList.remove("nsfw");
+      a.querySelector(".pyear").textContent = sub(it);
+    });
+  }
+  return a;
+}
+function librarySection(lib) {
+  const [one, many] = NOUN[lib.kind] ?? ["item", "items"];
+  const countEl = h("span", { class: "count" }, "\u2026");
+  const section = h("section", { class: "lib " + lib.kind }, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl));
+  const grid = h("div", { class: "posters" });
+  const sorts = ["title", "year", "added"];
+  let sort = session.get(`tr.media.sort.${lib.path}`, "title");
+  const pressed = /* @__PURE__ */ new Set();
+  let items = [];
+  const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s[0].toUpperCase() + s.slice(1)));
+  const chips = h("div", { class: "chips" });
+  const draw = () => {
+    clear(grid);
+    const shown = pressed.size === 0 ? items : items.filter((it) => (it.genres ?? []).some((g) => pressed.has(g.toLowerCase())));
+    for (const it of shown) grid.append(posterTile(it));
+  };
+  const load = () => {
+    media(lib.path, sort).then(
+      (res) => {
+        items = res.items;
+        clear(countEl);
+        countEl.append(`${count(res.lib.count)} ${res.lib.count === 1 ? one : many}${res.lib.count > res.items.length ? ` (first ${res.items.length})` : ""} \xB7 `, h("a", { href: browseHash({ path: lib.path }) }, "open folder"));
+        clear(chips);
+        for (const g of res.lib.genres ?? []) {
+          const chip = h("button", { type: "button", class: "chip", "aria-pressed": String(pressed.has(g)) }, g);
+          chip.addEventListener("click", () => {
+            if (pressed.has(g)) pressed.delete(g);
+            else pressed.add(g);
+            chip.setAttribute("aria-pressed", String(pressed.has(g)));
+            draw();
+          });
+          chips.append(chip);
+        }
+        draw();
+      },
+      (e) => {
+        countEl.textContent = "could not list: " + (e instanceof Error ? e.message : String(e));
+      }
+    );
+  };
+  buttons.forEach(
+    (b, i) => b.addEventListener("click", () => {
+      sort = sorts[i];
+      session.set(`tr.media.sort.${lib.path}`, sort);
+      buttons.forEach((o, j) => o.setAttribute("aria-pressed", String(i === j)));
+      load();
+    })
+  );
+  section.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons), chips), grid);
+  load();
+  return section;
+}
+function overview(root) {
+  media().then(
+    (res) => {
+      if (res.libs.length === 0) {
+        root.append(
+          h(
+            "section",
+            null,
+            h("h2", null, "Media"),
+            h("div", { class: "empty" }, "No library yet: open a folder in Files, choose its menu and set ", h("b", null, "Library"), " to movies, tv or music.")
+          )
+        );
+        return;
+      }
+      for (const lib of res.libs) root.append(librarySection(lib));
+    },
+    (e) => root.append(h("div", { class: "note" }, "could not list the libraries: " + (e instanceof Error ? e.message : String(e))))
+  );
+}
+function episodeNo(e) {
+  const two = (n) => String(n).padStart(2, "0");
+  return `S${two(e.season ?? 0)}E${two(e.episode ?? 0)}` + (e.episode_to && e.episode_to !== e.episode ? `E${two(e.episode_to)}` : "");
+}
+function detail(root, path) {
+  mediaItem(path).then(
+    (it) => {
+      const backdrop = it.fanart ? fileURL(it.fanart) : it.poster ? fileURL(it.poster) : "";
+      const cls = "hero" + (it.fanart ? "" : it.poster ? " poster-only" : " no-art");
+      const section = h("section", { class: cls });
+      if (backdrop) section.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
+      const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
+      const poster = h("img", { class: "hero-poster", alt: "", src: posterSrc || void 0 });
+      poster.addEventListener("error", () => poster.style.visibility = "hidden");
+      const facts = h("div", { class: "facts" });
+      const seasons = it.seasons ?? [];
+      const episodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
+      for (const f of [
+        it.year ? String(it.year) : "",
+        it.kind === "show" ? `${seasons.length} ${seasons.length === 1 ? "season" : "seasons"} \xB7 ${episodes} ${episodes === 1 ? "episode" : "episodes"}` : duration2(it.runtime),
+        it.rating ? `\u2605 ${it.rating}` : "",
+        (it.genres ?? []).join(" \xB7 ").toLowerCase(),
+        it.mpaa ?? ""
+      ])
+        if (f) facts.append(h("span", null, f));
+      facts.append(h("span", { class: "dim" }, it.path));
+      const body = h("div", null, h("h1", null, it.title), facts);
+      if (it.plot) body.append(h("p", { class: "plot" }, it.plot));
+      else {
+        const sidecar = it.kind === "show" ? "tvshow.nfo" : it.path.includes(".") && it.video === it.path ? basename(it.path).replace(/\.[^.]+$/, "") + ".nfo" : "movie.nfo";
+        body.append(h("p", { class: "plot dim" }, "No description: add a ", h("code", null, sidecar), it.kind === "show" ? " to the show's folder." : " beside the file."));
+      }
+      const first = seasons.find((s) => s.n > 0)?.episodes[0] ?? seasons[0]?.episodes[0];
+      const play = h("button", { type: "button" }, it.kind === "show" ? first ? `\u25B6 Play ${episodeNo(first)}` : "\u25B6 Play" : "\u25B6 Play");
+      const target = it.kind === "show" ? first?.path : it.video;
+      if (target) play.addEventListener("click", () => location.hash = fileHash({ path: target }));
+      else play.disabled = true;
+      const folder2 = it.video === it.path ? dirname(it.path) : it.path;
+      body.append(h("div", { class: "actions" }, play, h("a", { class: "btn", href: browseHash({ path: folder2 }) }, "Open folder")));
+      if (it.people?.length) {
+        const people = h("div", { class: "people" });
+        it.people.forEach((p, i) => people.append(h("span", { class: "person" }, i === 0 && it.kind === "movie" && it.people.length > 1 ? `${p} \xB7 director` : p)));
+        body.append(people);
+      }
+      if (seasons.length > 0) {
+        const strip = h("div", { class: "seasons" });
+        const table = h("table", { class: "episodes" });
+        const tbody = h("tbody");
+        table.append(tbody);
+        const show = (i) => {
+          strip.querySelectorAll("button").forEach((b, j) => b.setAttribute("aria-pressed", String(i === j)));
+          clear(tbody);
+          for (const e of seasons[i].episodes) {
+            const thumb = h("td", { class: "thumb" });
+            const img = h("img", { alt: "", loading: "lazy", src: thumbURL(e.thumb || e.path) });
+            img.addEventListener("error", () => img.replaceWith(glyph("episode")));
+            thumb.append(img);
+            const title = h("td", { class: "title" }, e.title);
+            if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));
+            const row2 = h("tr", null, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration2(e.runtime)));
+            row2.addEventListener("click", () => location.hash = fileHash({ path: e.path }));
+            tbody.append(row2);
+          }
+        };
+        seasons.forEach((s, i) => {
+          const b = h("button", { type: "button", "aria-pressed": "false" }, s.title);
+          b.addEventListener("click", () => show(i));
+          strip.append(b);
+        });
+        body.append(strip, table);
+        show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
+      }
+      section.append(h("div", { class: "hero-body" }, poster, body));
+      root.append(section);
+    },
+    (e) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
+  );
+}
+function render11(root, rest) {
+  if (rest.startsWith("/item/")) detail(root, rest.slice("/item".length));
+  else overview(root);
+  return () => void 0;
 }
 
 // internal/webui/src/main.ts
@@ -3242,6 +3460,9 @@ function route() {
     tab = "files";
     if (head === "browse") setFolder(ctx.path);
     dispose = render8(view2, ctx);
+  } else if (head === "media") {
+    tab = "media";
+    dispose = render11(view2, decodeHashPath(rawRest(location.hash)));
   } else if (head === "search") {
     tab = "";
     dispose = render10(view2, decodeHashPath(rawRest(location.hash)).slice(1), query);

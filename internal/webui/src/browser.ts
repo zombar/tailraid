@@ -303,6 +303,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     const b = h("span", { class: "badges" });
     if (e.protected) b.append(h("span", { class: "badge lock" }, "protected"));
     if (e.nsfw) b.append(h("span", { class: "badge nsfw" }, "nsfw"));
+    if (e.library) b.append(h("span", { class: "badge lib" }, e.library));
     if (e.deleted_at) b.append(deletedBadge(e.purge_at));
     return b;
   };
@@ -339,6 +340,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       link = h("a", { href }, icon(kind), e.name);
       if (e.protected) link.append(h("span", { class: "badge lock" }, "protected"));
       if (e.nsfw) link.append(h("span", { class: "badge nsfw" }, "nsfw"));
+      if (e.library) link.append(h("span", { class: "badge lib" }, e.library));
       if (e.deleted_at) link.append(deletedBadge(e.purge_at));
       if (e.type === "file" && isAudioName(e.name)) link.append(playBtn(e));
     }
@@ -569,6 +571,7 @@ export function crumbs(ctx: Ctx, info?: DirInfo, inTrash = false): HTMLElement {
   if (inTrash) el.append(h("span", { class: "badge" }, "deleted"));
   if (info?.protected) el.append(h("span", { class: "badge lock" }, "protected"));
   if (info?.nsfw) el.append(h("span", { class: "badge nsfw" }, "nsfw"));
+  if (info?.library) el.append(h("span", { class: "badge lib" }, info.library));
   if (info?.pinned) el.append(h("span", { class: "badge pin" }, "kept here"));
   return el;
 }

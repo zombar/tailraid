@@ -12,6 +12,7 @@ import * as player from "./player.ts";
 import { player as audio } from "./audio.ts";
 import * as stats from "./stats.ts";
 import * as search from "./search.ts";
+import * as mediaTab from "./media.ts";
 import type { Report } from "./api.ts";
 
 const view = document.getElementById("view") as HTMLElement;
@@ -94,6 +95,9 @@ function route(): void {
     tab = "files";
     if (head === "browse") search.setFolder(ctx.path);
     dispose = browser.render(view, ctx);
+  } else if (head === "media") {
+    tab = "media";
+    dispose = mediaTab.render(view, decodeHashPath(rawRest(location.hash)));
   } else if (head === "search") {
     tab = "";
     dispose = search.render(view, decodeHashPath(rawRest(location.hash)).slice(1), query);

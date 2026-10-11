@@ -574,7 +574,13 @@ table.episodes td.title .plot { white-space: normal; display: -webkit-box; -webk
 table.episodes td.dur { width: 64px; font: 13px var(--mono); color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
 table.episodes tr:hover { cursor: pointer; background: var(--surface); }
 table.episodes tr.playing td.title { color: var(--accent); }
-@media (max-width: 480px) { table.episodes td.no { width: 56px; } table.episodes td.thumb { display: none; } }
+table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
+@media (max-width: 480px) {
+  table.episodes td.no { width: 60px; font-size: 12px; padding: 6px 4px; }
+  table.episodes td.thumb { display: none; }
+  /* the season strip and the episodes run under the poster column: the text column alone is too narrow */
+  .hero-body .seasons, .hero-body table.episodes { margin-left: -108px; width: calc(100% + 108px); }
+}
 /* the Library row stacks label, select and note in one column (the other rows put their
    checkbox in a first column and send the note to the second) */
 .menu-row.library { grid-template-columns: 1fr; gap: 6px; }

@@ -156,6 +156,16 @@ func ParseEpisode(name string) (season, episode, to int, ok bool) {
 	return 0, 0, 0, false
 }
 
+// EpisodeTitle is an episode's title from its file name: the cleaned name, or
+// "Episode N" when that is only the show's name again.
+func EpisodeTitle(stem, show string, episode int) string {
+	t, _ := CleanName(stem)
+	if t == "" || SortTitle(t) == SortTitle(show) {
+		return "Episode " + strconv.Itoa(episode)
+	}
+	return t
+}
+
 // SeasonOf is a season folder's number: Season NN, Series NN, Specials (0).
 func SeasonOf(name string) (int, bool) {
 	if strings.EqualFold(strings.TrimSpace(name), "specials") {
@@ -503,7 +513,7 @@ func (c *catalogue) shows(lib meta.Ino) {
 		e.Fanart = sd.art("fanart")
 		e.Banner = sd.art("banner")
 		c.add(e)
-		c.episodes(lib, show.Ino, sd, sd, -1)
+		c.episodes(lib, show.Ino, sd, e.Title, -1)
 		for j := range sd.kids {
 			k := &sd.kids[j]
 			n, ok := SeasonOf(k.Name)
@@ -518,7 +528,7 @@ func (c *catalogue) shows(lib meta.Ino) {
 			}
 			s.Poster = firstOf(sd.art(name+"-poster"), nd.art("poster", "folder"))
 			c.add(s)
-			c.episodes(lib, show.Ino, nd, sd, n)
+			c.episodes(lib, show.Ino, nd, e.Title, n)
 		}
 	}
 }
@@ -532,7 +542,7 @@ func twoDigits(n int) string {
 
 // episodes lists the episode files of one folder: the show's own (season from the
 // name) or a season folder's (its number when the name does not say).
-func (c *catalogue) episodes(lib, show meta.Ino, d, _ dirIndex, folderSeason int) {
+func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, folderSeason int) {
 	for i := range d.kids {
 		f := &d.kids[i]
 		if f.Type != meta.TFile || !IsVideo(f.Name) {
@@ -547,7 +557,7 @@ func (c *catalogue) episodes(lib, show meta.Ino, d, _ dirIndex, folderSeason int
 			season = max(folderSeason, 1)
 		}
 		e := Entry{Ino: f.Ino, Lib: lib, Parent: show, Kind: EntEpisode, Video: f.Ino, Season: season, Episode: ep, EpisodeTo: to}
-		e.Title, _ = CleanName(vs)
+		e.Title = EpisodeTitle(vs, showTitle, ep)
 		if n, ok := c.sidecar(d, vs+".nfo"); ok {
 			applyNFO(&e, n)
 			if n.Season >= 0 && n.Episode > 0 {

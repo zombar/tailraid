@@ -167,7 +167,8 @@ effective library kind (§9) is set, stored in the segment beside the docs:
   `Series NN` and `Specials` folders are seasons (`seasonNN-poster.*`, `season-specials-
   poster.*`); video files are episodes with `SnnEnn`, `nnxnn` or `Episode nn` in the name
   (`<name>.nfo`: `title`, `plot`, `aired`, `season`, `episode`, `runtime`; `<name>-thumb.*`
-  else the browser-made thumbnail); a double episode `S01E01E02` is one entry spanning
+  else the browser-made thumbnail; a title that is only the show's name again becomes
+  "Episode N"); a double episode `S01E01E02` is one entry spanning
   both numbers; an episode directly under the show belongs to the season its name says.
 - *Music* (`music`): artist folders of album folders as the album view defines them
   (13 §6: a folder whose audio files outnumber its other files). The catalogue stores

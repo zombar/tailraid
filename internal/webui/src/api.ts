@@ -362,6 +362,57 @@ export async function putThumb(path: string, version: number, jpeg: Blob): Promi
   if (!r.ok) throw await apiError(r);
 }
 
+/** MediaItem is a film, show, season, episode or album of the Media tab (docs/13 §3). */
+export interface MediaItem {
+  ino: number;
+  path: string;
+  kind: "movie" | "show" | "season" | "episode" | "album";
+  title: string;
+  sort_title: string;
+  year?: number;
+  genres?: string[];
+  rating?: string;
+  runtime?: number;
+  mpaa?: string;
+  artist?: string;
+  poster?: string;
+  fanart?: string;
+  thumb?: string;
+  video?: string;
+  size?: number;
+  added: string;
+  nsfw: boolean;
+  children?: number;
+  plot?: string;
+  people?: string[];
+  season?: number;
+  episode?: number;
+  episode_to?: number;
+  aired?: string;
+  seasons?: { n: number; title: string; poster?: string; episodes: MediaItem[] }[];
+  tracks?: string[];
+  catalogued: boolean;
+}
+
+export interface MediaLibrary {
+  path: string;
+  kind: string;
+  count: number;
+  genres?: string[];
+}
+
+/** media lists the libraries, or one library's items (docs/13 §10). */
+export function media(): Promise<{ libs: MediaLibrary[] }>;
+export function media(lib: string, sort: string, offset?: number): Promise<{ lib: MediaLibrary; items: MediaItem[] }>;
+export function media(lib?: string, sort = "title", offset = 0): Promise<unknown> {
+  if (lib === undefined) return call("/api/media");
+  return call(`/api/media?lib=${encodeURIComponent(lib)}&sort=${sort}&offset=${offset}`);
+}
+
+export function mediaItem(path: string): Promise<MediaItem> {
+  return call<MediaItem>("/api/media?item=" + encodeURIComponent(path));
+}
+
 /** search asks the node's index (docs/18 §6). */
 export function search(q: string, under: string): Promise<SearchResult> {
   return call<SearchResult>("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
