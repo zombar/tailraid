@@ -24,6 +24,8 @@ export interface VolumeReport {
   domain_skew: number; // chunks above the host cap (docs/14 §7)
   tolerates_disks: number;
   tolerates_hosts: number;
+  trash_inodes: number; // deleted entries waiting in the trash (docs/06 §1)
+  trash_bytes: number;
 }
 
 export interface NodeReport {
@@ -81,6 +83,26 @@ export interface GatewayReport {
   flushing: number;
 }
 
+export interface MachineReport {
+  disk_free?: number;
+  disk_total?: number;
+}
+
+/** PinEntry is one pinned folder of this node (docs/13 §4). */
+export interface PinEntry {
+  path: string;
+  bytes: number;
+  cached_bytes: number;
+}
+
+/** CacheReport is `cache` in the status report and the body of /api/pins. */
+export interface CacheReport {
+  size: number;
+  used: number;
+  pinned_bytes: number;
+  pins: PinEntry[];
+}
+
 export interface Report {
   node: string;
   cluster_id: string;
@@ -94,6 +116,8 @@ export interface Report {
   nodes: NodeReport[];
   repair?: RepairStatus | null;
   gateway?: GatewayReport | null;
+  machine?: MachineReport | null;
+  cache?: CacheReport | null;
   web_url?: string;
   generated_at: string;
 }
@@ -105,15 +129,73 @@ export interface Entry {
   mtime: string;
   mode: number;
   ino: number;
+  version: number;
   dirty?: boolean;
   upload?: boolean;
   target?: string;
   path?: string;
+  protected?: boolean;
+  nsfw?: boolean;
+  deleted_at?: string;
+  purge_at?: string;
+  thumb?: boolean;
+  cover?: string;
+}
+
+/** DirInfo describes the listed folder: effective flags, pin, place in the trash. */
+export interface DirInfo {
+  protected: boolean;
+  nsfw: boolean;
+  pinned: boolean;
+  deleted_at?: string;
+  purge_at?: string;
+  cover?: string;
 }
 
 export interface Ls {
   path: string;
+  dir: DirInfo;
   entries: Entry[];
+}
+
+export interface TrashEntry {
+  ino: number;
+  name: string;
+  type: "file" | "dir" | "symlink";
+  size: number;
+  path: string;
+  deleted_at: string;
+  purge_at?: string;
+  restorable: boolean;
+}
+
+export interface Failure {
+  path: string;
+  error: string;
+  status: number;
+}
+
+export interface MoveResult {
+  moved: string[];
+  failed: Failure[];
+}
+
+export interface DeleteResult {
+  deleted: string[];
+  failed: Failure[];
+}
+
+export interface Tags {
+  title: string;
+  artist: string;
+  album: string;
+  album_artist: string;
+  track: number;
+  tracks: number;
+  disc: number;
+  year: number;
+  genre: string;
+  has_cover: boolean;
 }
 
 export interface SlotReport {
@@ -145,7 +227,11 @@ export interface ChunksPage {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public body?: Record<string, unknown>,
+  ) {
     super(message);
   }
 }
@@ -157,39 +243,70 @@ export function encodePath(p: string): string {
   return p.split("/").map(encodeURIComponent).join("/");
 }
 
-export function fileURL(path: string, download = false): string {
-  return "/files" + encodePath(path) + (download ? "?download=1" : "");
+/** inQuery is the `in=<ino>` parameter that addresses a deleted root (docs/13 §4). */
+function inQuery(root: number | undefined, first = false): string {
+  return root === undefined ? "" : (first ? "?" : "&") + "in=" + root;
+}
+
+export function fileURL(path: string, download = false, root?: number): string {
+  const q: string[] = [];
+  if (download) q.push("download=1");
+  if (root !== undefined) q.push("in=" + root);
+  return "/files" + encodePath(path) + (q.length ? "?" + q.join("&") : "");
+}
+
+export function thumbURL(path: string, root?: number): string {
+  return "/api/thumb?path=" + encodeURIComponent(path) + inQuery(root);
 }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
-  if (!r.ok) throw new ApiError(r.status, await errorText(r));
+  if (!r.ok) throw await apiError(r);
   if (r.status === 204) return undefined as T;
   return (await r.json()) as T;
 }
 
-async function errorText(r: Response): Promise<string> {
+async function apiError(r: Response): Promise<ApiError> {
   try {
-    const body = (await r.json()) as { error?: string };
-    if (body.error) return `${body.error} (${r.status})`;
+    const body = (await r.json()) as Record<string, unknown>;
+    if (typeof body.error === "string") return new ApiError(r.status, `${body.error} (${r.status})`, body);
   } catch {
     // not JSON
   }
-  return `${r.statusText || "request failed"} (${r.status})`;
+  return new ApiError(r.status, `${r.statusText || "request failed"} (${r.status})`);
+}
+
+function post<T>(route: string, body: unknown): Promise<T> {
+  return call(route, { method: "POST", headers: { [HEADER]: "1", "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
 export const getStatus = (): Promise<Report> => call("/api/status");
-export const ls = (path: string): Promise<Ls> => call("/api/ls?path=" + encodeURIComponent(path));
-export const stat = (path: string): Promise<Entry> => call("/api/stat?path=" + encodeURIComponent(path));
+export const ls = (path: string, root?: number): Promise<Ls> => call("/api/ls?path=" + encodeURIComponent(path) + inQuery(root));
+export const stat = (path: string, root?: number): Promise<Entry> => call("/api/stat?path=" + encodeURIComponent(path) + inQuery(root));
+export const trashList = (): Promise<{ entries: TrashEntry[] }> => call("/api/trash");
 export const chunks = (path: string, offset: number, limit: number): Promise<ChunksPage> =>
   call(`/api/chunks?path=${encodeURIComponent(path)}&offset=${offset}&limit=${limit}`);
-export const mkdir = (path: string): Promise<{ path: string }> =>
-  call("/api/mkdir", { method: "POST", headers: { [HEADER]: "1", "Content-Type": "application/json" }, body: JSON.stringify({ path }) });
+export const tags = (path: string, root?: number): Promise<Tags> => call("/api/tags?path=" + encodeURIComponent(path) + inQuery(root));
+export const getPins = (): Promise<CacheReport> => call("/api/pins");
+export const mkdir = (path: string): Promise<{ path: string }> => post("/api/mkdir", { path });
+export const rename = (path: string, name: string): Promise<{ path: string }> => post("/api/rename", { path, name });
+export const move = (paths: string[], to: string): Promise<MoveResult> => post("/api/move", { paths, to });
+export const del = (paths: string[]): Promise<DeleteResult> => post("/api/delete", { paths });
+export const restore = (ino: number, opts: { to?: string; name?: string } = {}): Promise<{ path: string }> => post("/api/restore", { ino, ...opts });
+export const purge = (sel: { ino: number } | { all: true }): Promise<void> => post("/api/purge", sel);
+export const setFlags = (path: string, flags: { protected?: boolean; nsfw?: boolean }): Promise<Entry> => post("/api/flags", { path, ...flags });
+export const pin = (path: string, pinned: boolean): Promise<{ path: string; pinned: boolean; bytes: number }> => post("/api/pin", { path, pinned });
+
+/** putThumb stores the frame the browser grabbed from a video (docs/13 §5). */
+export async function putThumb(path: string, version: number, jpeg: Blob): Promise<void> {
+  const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
+  if (!r.ok) throw await apiError(r);
+}
 
 /** text fetches a small file as text (previews). */
-export async function text(path: string): Promise<string> {
-  const r = await fetch(fileURL(path));
-  if (!r.ok) throw new ApiError(r.status, await errorText(r));
+export async function text(path: string, root?: number): Promise<string> {
+  const r = await fetch(fileURL(path, false, root));
+  if (!r.ok) throw await apiError(r);
   return r.text();
 }
 

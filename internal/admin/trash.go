@@ -14,15 +14,17 @@ type TrashEntry struct {
 	Name       string `json:"name"`
 	Type       string `json:"type"` // file | dir | symlink
 	Size       uint64 `json:"size"`
-	Path       string `json:"path"`       // where it was deleted from, "/a/b/name"
-	DeletedAt  string `json:"deleted_at"` // RFC 3339 UTC
-	Restorable bool   `json:"restorable"` // false while its original folder is itself deleted
+	Path       string `json:"path"`               // where it was deleted from, "/a/b/name"
+	DeletedAt  string `json:"deleted_at"`         // RFC 3339 UTC
+	PurgeAt    string `json:"purge_at,omitempty"` // when the retention purge takes it; absent with retention 0
+	Restorable bool   `json:"restorable"`         // false while its original folder is itself deleted
 }
 
 // TrashList lists the deleted roots, every one or those under dir (nil for all),
 // newest first. A root's path is the one it had; a root whose folder is itself in the
-// trash is listed, not restorable in place.
-func TrashList(st *meta.Store, dir *meta.Ino) []TrashEntry {
+// trash is listed, not restorable in place. retention is trash.retention (0: no
+// purge_at).
+func TrashList(st *meta.Store, dir *meta.Ino, retention time.Duration) []TrashEntry {
 	var roots []meta.Inode
 	if dir != nil {
 		roots = st.TrashOf(*dir)
@@ -33,6 +35,9 @@ func TrashList(st *meta.Store, dir *meta.Ino) []TrashEntry {
 	for i := range roots {
 		r := &roots[i]
 		e := TrashEntry{Ino: uint64(r.Ino), Name: r.Name, Size: r.Size, DeletedAt: time.Unix(0, r.DeletedAt).UTC().Format(time.RFC3339)}
+		if retention > 0 {
+			e.PurgeAt = time.Unix(0, r.DeletedAt).Add(retention).UTC().Format(time.RFC3339)
+		}
 		switch r.Type {
 		case meta.TDir:
 			e.Type = "dir"

@@ -66,6 +66,40 @@ export function shortDate(iso: string | undefined): string {
   return date(t).slice(0, 10);
 }
 
+/** mmss renders seconds as m:ss (or h:mm:ss), "—" when unknown. */
+export function mmss(sec: number | undefined): string {
+  if (sec === undefined || !Number.isFinite(sec) || sec < 0) return "—";
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${r}` : `${m}:${r}`;
+}
+
+/** days renders a count of days, "today" under one. */
+export function days(ms: number): string {
+  const d = Math.round(Math.abs(ms) / 86_400_000);
+  return d < 1 ? "today" : `${d} d`;
+}
+
+/** daysAgo is "3 d ago" / "today" for an RFC 3339 time. */
+export function daysAgo(iso: string | undefined, now = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = days(now - t);
+  return d === "today" ? d : d + " ago";
+}
+
+/** daysUntil is "in 27 d" / "today" for an RFC 3339 time. */
+export function daysUntil(iso: string | undefined, now = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = days(t - now);
+  return d === "today" ? d : "in " + d;
+}
+
 // --- paths ------------------------------------------------------------------------
 
 export function dirname(p: string): string {

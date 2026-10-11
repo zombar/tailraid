@@ -849,7 +849,7 @@ func (a *adminOps) trashOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			}
 			dir = &in.Ino
 		}
-		return map[string]any{"entries": admin.TrashList(st, dir)}, nil
+		return map[string]any{"entries": admin.TrashList(st, dir, a.gc.Retention)}, nil
 	case "trash_restore":
 		c := &meta.Restore{Ino: meta.Ino(op.Ino), NewName: op.As, Now: now}
 		if op.To != "" {

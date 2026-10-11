@@ -324,5 +324,7 @@ func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, e)
 }
 
-// trashList is admin.TrashList for this node's FSM copy.
-func trashList(st *meta.Store) []admin.TrashEntry { return admin.TrashList(st, nil) }
+// trashList is admin.TrashList for this node's FSM copy, with the retention's purge_at.
+func (s *Server) trashList() []admin.TrashEntry {
+	return admin.TrashList(s.o.Store, nil, s.o.Retention)
+}

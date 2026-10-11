@@ -244,7 +244,7 @@ func (s *Server) pinned(canonical string) bool {
 
 // trash lists every deleted root for the CLI and the dashboard (docs/13 §3).
 func (s *Server) trash(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"entries": trashList(s.o.Store)})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": s.trashList()})
 }
 
 // get serves a file through http.ServeContent: Range, 206/416, HEAD and If-None-Match
