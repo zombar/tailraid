@@ -446,8 +446,8 @@ colour-alone. No dual axes, no stacked bars, no pie.
     `sha256` matches; `rm -rf` a folder on the mount and restore it with one tap; delete a
     folder in the browser and confirm it is gone from the mount at once, then "Delete now"
     and watch `tailraid status` reclaim after grace.
-11. Protected: `rm` under a protected folder says "Operation not permitted" on macOS and
-    Linux and "Access denied" on Windows; an upload of a new name into it succeeds; a
+11. Protected: `rm` under a protected folder says "Permission denied" on macOS and
+    Linux (`EACCES` from the wire's `NFS3ERR_ACCES`, docs/07) and "Access denied" on Windows; an upload of a new name into it succeeds; a
     re-upload of an existing name is refused with the reason.
 12. Select ten entries across pages of the list, move them to another folder, rename one;
     a move onto a taken name reports that one entry and moves the rest.

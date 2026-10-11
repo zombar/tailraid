@@ -341,7 +341,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   it registers nothing, skips the refusal and the drain, deletes behind the cluster's
   back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
   I-137, I-138, I-42, I-149, L-104, L-112, L-139); 16 web ui (the browser UI of docs/13
-  driven over HTTP at the node's `web_url` as a same-user device: listings and stats
+  driven over HTTP at the node's `web_url` as a same-user device: on the compose rig every
+  node's fake tailnet gives the nodes and the driver's address, the bridge's gateway, one
+  login, so the driver is a non-member device of the nodes' user (docs/13 §2); listings and stats
   against the corpus model; rename, move and delete batches with a deliberate taken
   name and a protected entry inside, every item reported on its own and the untouched
   ones unchanged; the trash round trip: a delete listed in place with its dates and its

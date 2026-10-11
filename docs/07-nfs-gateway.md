@@ -117,8 +117,9 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **A protected folder** (docs/02, I-154) answers REMOVE, RMDIR, a RENAME of the folder,
   a RENAME out of it or over an entry inside it with `NFS3ERR_ACCES`: the vfs maps
   `ErrProtected` to `EPERM`, which satisfies `os.ErrPermission`, the error go-nfs already
-  turns into `ACCES` for the SETATTR change hook; macOS and Linux show "Operation not
-  permitted". CREATE, WRITE and a RENAME into the folder succeed.
+  turns into `ACCES` for the SETATTR change hook; the kernel client maps the status to
+  `EACCES`, so macOS and Linux show "Permission denied". CREATE, WRITE and a RENAME into
+  the folder succeed.
 
 ## Ports and mount commands
 
