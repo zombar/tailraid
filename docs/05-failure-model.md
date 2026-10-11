@@ -97,6 +97,10 @@ What the user sees:
 - `EROFS` on create/mkdir/unlink/rename/setattr: the gateway cannot reach a leader. Reads,
   directory listings and writes to existing files keep working (the latter into the WAL).
 - Nothing is ever returned as wrong bytes: every read path verifies the chunk hash.
+- A holder that stops answering mid-write costs the write at most one straggler grace
+  (docs/04 §4 step 9): it is marked suspect and the chunks that follow place around it
+  (§6). A persistently slow peer therefore receives fewer hot-path shards and relies on
+  the repairer's fill to reach full redundancy.
 
 ## 6. Liveness, hold-downs and timings
 
@@ -115,6 +119,18 @@ chunks), no repair before 10 min, `MemberUp` on return, no data moves. A laptop 
 week: slots re-placed after 10 min, `MemberLost` at 7 d; its now-unplaced shards are swept
 by its own `Sweep` once it has returned, is `Healthy`, and has applied the log past the
 re-placements (06 §3).
+
+**Suspect marks.** The window between a node dying and the prober noticing is 15–23 s
+(a probe every 5 s, dead after 15 s), during which every chunk written would wait on it
+for up to `PutDeadline`. A gateway therefore marks a node *suspect* the moment a shard RPC
+to it fails at the transport level (dial refused or timed out, response-header timeout,
+the call's own deadline) or a PUT to it outlasts the straggler grace (docs/04 §4 step 9):
+`Live()` excludes a suspect host and its disks, so neither placement nor a read dials it,
+until the first probe of it that succeeds after the mark (at most one probe interval for a
+false positive). A reply with any HTTP status, and a request the gateway cancelled for its
+own reasons (a losing hedge, a decided chunk), never mark. A mark changes placement and
+reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are untouched.
+`status` shows `suspect` on the node while the mark holds (I-170, L-210).
 
 ## 7. Clock assumptions
 
@@ -166,6 +182,10 @@ re-placements (06 §3).
 - **I-38** — For every write, after a crash at any point C1..C7 and a restart, exactly one holds: the write was not acknowledged and the file equals its pre-write content with no visible orphan shard, or it was acknowledged and the file equals its post-write content on every live gateway.
 - **I-39** — A gateway that cannot reach a Raft leader for longer than the `Stale` threshold refuses metadata mutations with `EROFS`, keeps accepting data WRITEs into its WAL until the dirty caps, and continues to serve reads from its local FSM.
 - **I-40** — No read path ever returns bytes that do not hash to the chunk's recorded hash; on shortage of shards it returns `EIO`.
+- **I-170** — A node whose shard RPC failed at the transport level, or whose PUT outlasted
+  the straggler grace, is excluded from `Live()` (with its disks) until the first probe
+  that succeeds after the mark; an HTTP-status reply or a request the gateway itself
+  cancelled never marks a node, and a mark never affects the hold-downs or repair.
 
 ## Tests
 
@@ -175,3 +195,4 @@ re-placements (06 §3).
 | I-38 | `TestCrash_AtEveryPoint` |
 | I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale`, `TestStaleness_Table` |
 | I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO` |
+| I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |

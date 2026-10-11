@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/s3"
 )
@@ -33,6 +35,26 @@ type Client struct {
 	diskOf    func(meta.NodeIdx) (string, bool)
 	localDisk func(id string) ShardStore
 	s3Of      func(meta.NodeIdx) (*s3.Bucket, bool) // S3 targets (docs/10 §4.2)
+	clk       clock.Clock                           // the GET body deadline's timer (I-171)
+	// OnUnreachable, when set, is called with the node of a shard RPC that failed at the
+	// transport level (dial, header timeout, the call's own deadline), never for an HTTP
+	// status reply or a request the caller cancelled (docs/05 §6, I-170). Must not block.
+	OnUnreachable func(meta.NodeIdx)
+}
+
+// errTransport marks a request that got no HTTP reply at all.
+var errTransport = errors.New("rpc: no reply")
+
+// SetClock sets the clock the GET body deadline runs on (tests use a fake).
+func (c *Client) SetClock(clk clock.Clock) { c.clk = clk }
+
+// unreachable reports a transport-level failure of a shard RPC to node, unless the
+// caller itself cancelled the request (parent is its context before the call's own
+// deadline was added).
+func (c *Client) unreachable(parent context.Context, node meta.NodeIdx, err error) {
+	if c.OnUnreachable != nil && errors.Is(err, errTransport) && parent.Err() == nil {
+		c.OnUnreachable(node)
+	}
 }
 
 // SetDisks wires disk routing: the disk ID of a target, and this host's open disks.
@@ -53,7 +75,7 @@ func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 	// no whole-request timeout on the client: a shard call's deadline scales with its
 	// size (callTimeout), the rest get callTimeout(0); ResponseHeaderTimeout bounds a
 	// dead peer either way (I-83)
-	return &Client{http: &http.Client{Transport: tr}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute}
+	return &Client{http: &http.Client{Transport: tr}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
 }
 
 // transferRate is the slowest tailnet path a shard transfer is given: a DERP relay at
@@ -104,7 +126,7 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s %s: %w", ErrUnavailable, method, addr, err) // a cancelled context stays matchable
+		return nil, fmt.Errorf("%w (%w): %s %s: %w", ErrUnavailable, errTransport, method, addr, err) // a cancelled context stays matchable
 	}
 	return resp, nil
 }
@@ -199,10 +221,12 @@ func (c *Client) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 		_, err := t.store.PutVerified(key, body, sum)
 		return err
 	}
+	parent := ctx
 	ctx, cancel := bound(ctx, int64(len(body)))
 	defer cancel()
 	resp, err := c.do(ctx, http.MethodPut, t.addr, t.prefix+string(key), body, map[string]string{HeaderShardSum: hex.EncodeToString(sum[:])})
 	if err != nil {
+		c.unreachable(parent, node, err)
 		return err
 	}
 	defer resp.Body.Close()
@@ -223,30 +247,47 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := bound(ctx, chunk.MaxPayload) // the reply is up to a shard
-	defer cancel()
 	if t.self && t.store != nil {
-		rc, _, err := t.store.Open(key)
-		if err != nil {
-			return nil, err
-		}
-		defer rc.Close()
-		return io.ReadAll(rc)
+		return t.store.Get(key) // the verified payload, no second copy
 	}
+	// The headers are bounded by the dial and response-header timeouts; the body by
+	// callTimeout of its own announced length, never the MaxPayload allowance (I-171).
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	resp, err := c.do(ctx, http.MethodGet, t.addr, t.prefix+string(key), nil, nil)
 	if err != nil {
+		c.unreachable(parent, node, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, errFromStatus(resp)
 	}
-	if n := resp.ContentLength; n >= 0 && n <= chunk.MaxPayload+chunk.HeaderSize {
-		b := make([]byte, n) // sized by Content-Length: one allocation, no growth copies
-		_, err := io.ReadFull(resp.Body, b)
-		return b, err
+	n := resp.ContentLength
+	switch {
+	case n < 0:
+		return nil, fmt.Errorf("%w: reply without a length", ErrUnavailable)
+	case n > chunk.MaxPayload+chunk.HeaderSize:
+		return nil, ErrTooLarge // refused before any of it is read
 	}
-	return io.ReadAll(resp.Body)
+	t2 := c.clk.NewTimer(callTimeout(n))
+	defer t2.Stop()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-t2.C():
+			cancel()
+		case <-done:
+		}
+	}()
+	b := make([]byte, n) // sized by Content-Length: one allocation, no growth copies
+	if _, err := io.ReadFull(resp.Body, b); err != nil {
+		c.unreachable(parent, node, fmt.Errorf("%w: body: %w", errTransport, err))
+		return nil, fmt.Errorf("%w: GET %s body: %w", ErrUnavailable, t.addr, err)
+	}
+	return b, nil
 }
 
 // Delete issues an unfenced local delete for self, and is otherwise DeleteFenced with
@@ -272,10 +313,12 @@ func (c *Client) DeleteFenced(ctx context.Context, node meta.NodeIdx, key chunk.
 		}
 		return err
 	}
+	parent := ctx
 	ctx, cancel := bound(ctx, 0)
 	defer cancel()
 	resp, err := c.do(ctx, http.MethodDelete, t.addr, t.prefix+string(key), nil, map[string]string{HeaderLogIndex: strconv.FormatUint(index, 10)})
 	if err != nil {
+		c.unreachable(parent, node, err)
 		return err
 	}
 	defer resp.Body.Close()
@@ -300,10 +343,12 @@ func (c *Client) Has(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	if t.self && t.store != nil {
 		return t.store.Has(key), nil
 	}
+	parent := ctx
 	ctx, cancel := bound(ctx, 0)
 	defer cancel()
 	resp, err := c.do(ctx, http.MethodHead, t.addr, t.prefix+string(key), nil, nil)
 	if err != nil {
+		c.unreachable(parent, node, err)
 		return false, err
 	}
 	defer resp.Body.Close()

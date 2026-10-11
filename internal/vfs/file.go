@@ -112,6 +112,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	f.fs.rd.Prefetch(in, off) // readahead for a sequential client (docs/04 §5, I-166)
 	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
 		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReader(context.Background(), in))
 		if err == nil || errors.Is(err, io.EOF) {

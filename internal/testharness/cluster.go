@@ -384,6 +384,8 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	cfg := vfs.DefaultConfig()
 	cfg.PutDeadline = 2 * time.Second
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
+	nd.Client.OnUnreachable = nd.Prober.Suspect // as node.go wires them (docs/05 §6, I-170)
+	nd.Flush.Suspect = nd.Prober.Suspect
 	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
 	if c.retryUntilStale {

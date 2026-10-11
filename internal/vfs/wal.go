@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/zombar/tailraid/internal/sysfs"
 )
@@ -46,18 +47,30 @@ type walRec struct {
 const compactBuf = 1 << 20
 
 // WAL is a per-inode append-only log. Every append is fsynced before it returns, so a
-// successful append means the bytes survive a crash or power loss (I-7). All file access
-// goes through the sysfs.FS seam so tests can inject fsync failures and crashes.
+// successful append means the bytes survive a crash or power loss (I-7). Concurrent
+// appends share fsyncs (group commit, docs/04 §2.1, I-168): a record is written under mu,
+// then its caller waits for an fsync that started after the write; the first waiter runs
+// it and it covers every record written before it began. All file access goes through
+// the sysfs.FS seam so tests can inject fsync failures and crashes.
 type WAL struct {
-	fs     sysfs.FS
-	path   string
-	f      sysfs.File
-	size   int64
-	failed error // ErrWALClosed with its cause, once the file could not be reopened
+	fs   sysfs.FS
+	path string
+
+	mu      sync.Mutex // guards f, size, synced, syncing and failed
+	cond    *sync.Cond // broadcast when an fsync ends
+	f       sysfs.File
+	size    int64 // bytes written (synced or not)
+	synced  int64 // bytes covered by a successful fsync
+	syncing bool  // an fsync is running
+	failed  error // ErrWALClosed with its cause, once the file could not be reopened
 	// Discarded is the number of bytes Replay cut off after the last intact record: a
 	// torn tail from a crash, or everything after a record that failed its CRC.
 	Discarded int64
 }
+
+// errWALCut is returned to an append whose record was cut back by another append's
+// failed fsync: it was never acknowledged and is not on disk.
+var errWALCut = errors.New("vfs: wal fsync failed; record cut back")
 
 func openWAL(fsys sysfs.FS, path string) (*WAL, error) {
 	f, err := fsys.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
@@ -77,11 +90,24 @@ func openWAL(fsys sysfs.FS, path string) (*WAL, error) {
 			return nil, fmt.Errorf("vfs: fsync wal dir: %w", err)
 		}
 	}
-	return &WAL{fs: fsys, path: path, f: f, size: st.Size()}, nil
+	w := &WAL{fs: fsys, path: path, f: f, size: st.Size(), synced: st.Size()}
+	w.cond = sync.NewCond(&w.mu)
+	return w, nil
 }
 
-// Size is the byte length of the log.
-func (w *WAL) Size() int64 { return w.size }
+// Size is the byte length of the log, synced or not.
+func (w *WAL) Size() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.size
+}
+
+// Synced is the byte length of the log that a successful fsync covers.
+func (w *WAL) Synced() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.synced
+}
 
 func (w *WAL) Close() error { return w.f.Close() }
 
@@ -95,36 +121,87 @@ func encodeRecord(typ uint8, off uint64, data []byte) []byte {
 	return buf
 }
 
-// append writes one record at the end and fsyncs; returns the offset of its data.
-func (w *WAL) append(typ uint8, off uint64, data []byte) (int64, error) {
-	if w.failed != nil {
-		return 0, w.failed
-	}
+// write puts one record at the end of the log, unsynced; it returns the offset of the
+// record's data and the end of the log after it, which syncTo takes (I-168).
+func (w *WAL) write(typ uint8, off uint64, data []byte) (dataOff, end int64, err error) {
 	if len(data) > maxRecordData {
-		return 0, fmt.Errorf("vfs: wal record too large (%d bytes)", len(data))
+		return 0, 0, fmt.Errorf("vfs: wal record too large (%d bytes)", len(data))
 	}
 	buf := encodeRecord(typ, off, data)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.failed != nil {
+		return 0, 0, w.failed
+	}
 	if _, err := w.f.WriteAt(buf, w.size); err != nil {
-		return 0, fmt.Errorf("vfs: wal write: %w", err)
+		return 0, 0, fmt.Errorf("vfs: wal write: %w", err)
 	}
-	if err := w.f.Sync(); err != nil {
-		// Not acknowledged: cut the record back off so a crash cannot replay it (I-37),
-		// then reopen the file: after a failed fsync the kernel may have dropped the
-		// dirty pages and cleared the error on this descriptor, so the next fsync on it
-		// would report success for data that never reached the disk (I-101).
-		_ = w.f.Truncate(w.size)
-		_ = w.f.Sync()
-		_ = w.f.Close()
-		if f, rerr := w.fs.OpenFile(w.path, os.O_RDWR, 0o600); rerr == nil {
-			w.f = f
-		} else {
-			w.failed = fmt.Errorf("%w: reopen after a failed fsync: %w", ErrWALClosed, rerr)
-		}
-		return 0, fmt.Errorf("vfs: wal fsync: %w", err)
-	}
-	dataOff := w.size + recHeaderLen
+	dataOff = w.size + recHeaderLen
 	w.size += int64(len(buf))
-	return dataOff, nil
+	return dataOff, w.size, nil
+}
+
+// syncTo returns once an fsync that began after the log reached end has succeeded. The
+// first caller to find no fsync running runs one covering everything written so far;
+// the others wait for it and, if it did not cover them, for the next (group commit).
+// A failed fsync cuts the log back to the last synced byte: every record past it is gone
+// and its append fails (I-37), and the file is reopened before any later append (I-101).
+func (w *WAL) syncTo(end int64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for {
+		switch {
+		case w.synced >= end:
+			return nil
+		case w.failed != nil:
+			return w.failed
+		case end > w.size:
+			return errWALCut // cut back by an earlier group's failed fsync
+		case w.syncing:
+			w.cond.Wait()
+			continue
+		}
+		w.syncing = true
+		target := w.size
+		w.mu.Unlock()
+		err := w.f.Sync()
+		w.mu.Lock()
+		w.syncing = false
+		if err == nil {
+			w.synced = target
+		} else {
+			w.cutBackLocked()
+		}
+		w.cond.Broadcast()
+		if err != nil {
+			return fmt.Errorf("vfs: wal fsync: %w", err)
+		}
+	}
+}
+
+// cutBackLocked drops every unsynced record after a failed fsync so a crash cannot
+// replay it (I-37), then reopens the file: after a failed fsync the kernel may have
+// dropped the dirty pages and cleared the error on this descriptor, so the next fsync
+// on it would report success for data that never reached the disk (I-101).
+func (w *WAL) cutBackLocked() {
+	_ = w.f.Truncate(w.synced)
+	_ = w.f.Sync()
+	_ = w.f.Close()
+	w.size = w.synced
+	if f, rerr := w.fs.OpenFile(w.path, os.O_RDWR, 0o600); rerr == nil {
+		w.f = f
+	} else {
+		w.failed = fmt.Errorf("%w: reopen after a failed fsync: %w", ErrWALClosed, rerr)
+	}
+}
+
+// append writes one record at the end and fsyncs; returns the offset of its data.
+func (w *WAL) append(typ uint8, off uint64, data []byte) (int64, error) {
+	dataOff, end, err := w.write(typ, off, data)
+	if err != nil {
+		return 0, err
+	}
+	return dataOff, w.syncTo(end)
 }
 
 // AppendWrite logs a write of p at file offset off. The returned walOff addresses p's bytes.
@@ -147,13 +224,16 @@ func (w *WAL) AppendBase(size uint64) error {
 // ReadAt fills p with logged bytes starting at walOff (a data offset returned by AppendWrite,
 // possibly advanced into the record by an extent split).
 func (w *WAL) ReadAt(p []byte, walOff int64) error {
-	if w.failed != nil {
-		return w.failed
+	w.mu.Lock()
+	failed, size, f := w.failed, w.size, w.f
+	w.mu.Unlock()
+	if failed != nil {
+		return failed
 	}
-	if walOff < 0 || walOff+int64(len(p)) > w.size {
+	if walOff < 0 || walOff+int64(len(p)) > size {
 		return errWALShortRead
 	}
-	if _, err := w.f.ReadAt(p, walOff); err != nil {
+	if _, err := f.ReadAt(p, walOff); err != nil {
 		return fmt.Errorf("vfs: wal read: %w", err)
 	}
 	return nil
@@ -198,7 +278,7 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 		if err := w.f.Sync(); err != nil {
 			return fmt.Errorf("vfs: wal fsync: %w", err)
 		}
-		w.size = pos
+		w.size, w.synced = pos, pos
 	}
 	return nil
 }
@@ -213,6 +293,9 @@ func (w *WAL) Replay(fn func(typ uint8, off uint64, n uint32, walOff int64, data
 func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 	if w.failed != nil {
 		return nil, w.failed
+	}
+	if w.syncing || w.synced != w.size { // the overlay quiesces appends first (I-168)
+		return nil, errors.New("vfs: wal compact with an append in flight (bug)")
 	}
 	tmp := w.path + ".new"
 	nf, err := w.fs.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -283,6 +366,6 @@ func (w *WAL) Compact(recs []walRec) ([]int64, error) {
 		return nil, first
 	}
 	w.f = reopened
-	w.size = pos
+	w.size, w.synced = pos, pos
 	return offs, first
 }

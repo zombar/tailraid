@@ -26,6 +26,7 @@ type Config struct {
 	FileDirtyHi    uint64        // partial flush of an inode's full chunks
 	TotalDirtyHi   uint64        // flush the largest inodes
 	PutDeadline    time.Duration // step 9: wait for stragglers at most this long
+	StragglerMin   time.Duration // step 9: the floor of the wait for stragglers once k acks are in (I-169)
 	ProposeTimeout time.Duration
 	ShutdownFlush  time.Duration // FlushAll on shutdown gives up after this; the WAL keeps the rest
 	Workers        int           // inode flushes under way at once
@@ -38,7 +39,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20,
-		PutDeadline: 10 * time.Second, ProposeTimeout: 5 * time.Second, ShutdownFlush: 30 * time.Second,
+		PutDeadline: 10 * time.Second, StragglerMin: 2 * time.Second, ProposeTimeout: 5 * time.Second, ShutdownFlush: 30 * time.Second,
 		Workers: 4, ChunkWorkers: 8, RetryMin: time.Second, RetryMax: 60 * time.Second,
 	}
 }
@@ -68,6 +69,11 @@ type Flusher struct {
 	codecs             *ec.Pool
 	Hooks              Hooks
 	Events             *meta.EventRing // chunk history (nil unless dev.enabled)
+	// Suspect, when set, is called for every node whose PUT was still pending when a
+	// chunk stopped waiting (the straggler grace or the deadline): the prober excludes
+	// it until its next good probe (docs/05 §6, I-170). Must not block.
+	Suspect func(meta.NodeIdx)
+	putLat  latencyRing // recent PUT durations: the straggler grace follows their p95
 
 	sem     chan struct{} // ChunkWorkers slots: chunks in memory across every flush
 	buffers atomic.Int64  // chunk and shard bytes held right now
@@ -661,14 +667,23 @@ func allFull(failed map[int]error) bool {
 	return true
 }
 
+// StragglerGrace is how long a chunk with k acks waits for its remaining PUTs: four
+// times the p95 of recent PUT durations, within [floor, deadline] (docs/04 §4 step 9,
+// I-169).
+func StragglerGrace(p95, floor, deadline time.Duration) time.Duration {
+	return min(max(4*p95, floor), deadline)
+}
+
 // putSlots PUTs every unacked slot with a non-zero node in parallel and waits until ≥k
-// acks and (all done or the deadline). It marks acked slots and returns the failed ones
-// with their errors. Stragglers past the deadline are cancelled and awaited before it
-// returns, so no goroutine keeps a shard buffer alive past its chunk (L-190, I-83).
+// acks and (all done, or the deadline, or the straggler grace from the k-th ack). It
+// marks acked slots and returns the failed ones with their errors. Stragglers are
+// cancelled and awaited before it returns, so no goroutine keeps a shard buffer alive
+// past its chunk (L-190, I-83), and their nodes are marked suspect (I-170).
 func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, place []meta.NodeIdx, acked []bool) map[int]error {
 	type res struct {
 		slot int
 		err  error
+		took time.Duration
 	}
 	pctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
@@ -677,17 +692,18 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 		wg.Wait()
 	}()
 	out := make(chan res, len(place))
-	pending := 0
+	inflight := map[int]bool{}
 	for i, n := range place {
 		if n == 0 || acked[i] {
 			continue
 		}
-		pending++
+		inflight[i] = true
 		wg.Add(1)
 		go func(slot int, node meta.NodeIdx) {
 			defer wg.Done()
+			start := f.clk.Now()
 			err := f.shards.Put(pctx, node, chunk.Key(w.hash, w.k, w.m, slot), shards[slot])
-			out <- res{slot, err}
+			out <- res{slot, err, f.clk.Since(start)}
 		}(i, n)
 	}
 	failed := map[int]error{}
@@ -700,12 +716,21 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 	// Once the deadline has passed, the first moment k acks are in ends the wait and the
 	// stragglers are recorded as missing slots (L-43). The deadline fires once, so it is
 	// remembered rather than re-selected: a deadline that passes before the k-th ack must
-	// still cut the wait short when that ack arrives.
+	// still cut the wait short when that ack arrives. The grace is armed at the k-th ack
+	// and ends the wait the same way (L-209).
 	deadline := f.clk.After(f.cfg.PutDeadline)
+	var grace <-chan time.Time
 	expired := false
-	for pending > 0 {
+	armGrace := func() {
+		if grace == nil && acks >= int(w.k) && len(inflight) > 0 {
+			p95, _ := f.putLat.p95()
+			grace = f.clk.After(StragglerGrace(p95, f.cfg.StragglerMin, f.cfg.PutDeadline))
+		}
+	}
+	armGrace()
+	for len(inflight) > 0 {
 		if expired && acks >= int(w.k) {
-			return failed
+			break
 		}
 		var r res
 		select {
@@ -713,8 +738,11 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 		case <-deadline:
 			expired, deadline = true, nil
 			continue
+		case <-grace:
+			expired, grace = true, nil
+			continue
 		}
-		pending--
+		delete(inflight, r.slot)
 		if r.err != nil {
 			failed[r.slot] = r.err
 			if errors.Is(r.err, chunk.ErrFull) {
@@ -728,6 +756,14 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 		}
 		acked[r.slot] = true
 		acks++
+		f.putLat.add(r.took)
+		armGrace()
+	}
+	for slot := range inflight { // stragglers: still pending at the grace or the deadline
+		f.Events.Record(w.hash, meta.EvPutFailed, fmt.Sprintf("slot %d node %d: still pending, marked suspect", slot, place[slot]))
+		if f.Suspect != nil {
+			f.Suspect(place[slot])
+		}
 	}
 	return failed
 }

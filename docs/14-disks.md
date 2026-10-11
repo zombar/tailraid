@@ -197,8 +197,21 @@ DELETE, so a chunk never has fewer than `k` readable slots (I-32, I-65). Skew th
 placement can fix (too few hosts or targets) is not reported and does not count as
 degraded. `status` counts skewed chunks as `domain_skew`.
 
-There is no capacity rebalancing: a disk that is emptier than its share receives new
-writes and repairs only (06 §6).
+**Capacity rebalance within a host.** Each disk's expected share of its host's slots is
+its capacity share over the host's active disks, no disk expecting more than one slot per
+chunk (what the web UI's Disks block draws as the tick). When a disk sits above its share
+and another live disk of the same host below it, and either is more than `RebalanceSkew`
+(25 %) off its share, every repair pass moves slots from the disk furthest above to the
+one furthest below, as many as the excess and the room allow, at most `RebalanceBatch`
+(64) chunks a pass, under the repair rate limit, by the same sequence as a skew move: PUT the shard to
+the emptier disk, `SetPlacement` with `Expect`, then the fenced DELETE, so the chunk never
+has fewer readable slots than before (I-65) and never two slots on one target (I-9). The
+move stays within the host, so it changes no failure domain and crosses no network (the
+host's own disks), and it keeps the host cap. Slots never move between hosts for capacity:
+a disk emptier than its share on a host whose other disks are within theirs receives new
+writes and repairs only (06 §6). `status` counts the slots a pass would move as
+`disk_skew`; after `node add-disk` of a large disk it falls to 0 over the following passes
+and the Disks block's deviations shrink with it (I-172).
 
 ## 8. What the user sees
 
@@ -294,6 +307,14 @@ runs.
 - **I-147** — On Linux with the systemd unit installed, `node add-disk` rewrites the unit
   from the saved config, so `ReadWritePaths` names the new disk, and restarts the service
   before asking the node to open it.
+- **I-172** — When a disk sits above its capacity share of its host's slots, another live
+  disk of that host below it, and either is more than `RebalanceSkew` off its share, the
+  repairer moves slots from the one furthest above to the one furthest below, as many as
+  the excess and the room allow, at most `RebalanceBatch` per pass and under the repair
+  rate limit, by the repair move sequence (the old shard is deleted only after the new
+  placement applied, I-65), never two slots of a chunk on one target (I-9), never across
+  hosts, never above the host cap; a host whose disks are all within `RebalanceSkew` of
+  their shares, or with one disk, has nothing moved.
 
 ## Tests
 
@@ -313,3 +334,4 @@ runs.
 | I-132 | `TestPrintNodes_HidesRemoved` |
 | I-146 | `TestDiskSet_UnwritableDiskClosed` |
 | I-147 | `TestSvc_RefreshUnit_NamesNewDiskAndRestarts` |
+| I-172 | `TestRebalanceMoves_Table`, `TestRepair_Rebalance_MovesWithinHost` |

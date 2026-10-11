@@ -125,6 +125,15 @@ func (c *Cache) Used() int64 {
 	return c.used
 }
 
+// Has reports whether h is cached, without touching its LRU position (readahead asks
+// before deciding to prefetch).
+func (c *Cache) Has(h [32]byte) bool {
+	c.mu.Lock()
+	_, ok := c.idx[h]
+	c.mu.Unlock()
+	return ok
+}
+
 // Get returns the chunk for h if cached and intact: from memory when hot, else from
 // disk (verified, then promoted to memory). A corrupt disk entry is removed. The slice
 // is shared with the cache and must not be modified.
