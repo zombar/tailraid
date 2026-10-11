@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	xdr2 "github.com/rasky/go-xdr/xdr2"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
@@ -36,43 +37,69 @@ const (
 	ResponseCodeAuthError
 )
 
+// tailraid: requests on one connection are served concurrently (docs/07, I-167).
+//
+// InFlight is the most requests one connection has in flight at once; MaxFrame is the
+// largest request frame accepted, a WRITE of the advertised wtmax (1 MiB, nfs_onfsinfo.go)
+// plus its RPC and NFS headers. A larger frame closes the connection.
+const (
+	InFlight = 16
+	MaxFrame = 1<<20 + 8<<10
+)
+
 type conn struct {
 	*Server
 	writeSerializer chan []byte
 	net.Conn
 }
 
+// serve reads request frames one after another and runs each on its own goroutine, at
+// most InFlight at once; replies go through the connection's single writer in completion
+// order (NFSv3 over TCP matches replies by XID, RFC 1813 §1.6). A frame that cannot be
+// read or parsed, or a handler that fails at the transport level, closes the connection;
+// the reader then returns and waits for the handlers still running.
 func (c *conn) serve(ctx context.Context) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer c.Close()
 	c.writeSerializer = make(chan []byte, 1)
 	go c.serializeWrites(connCtx)
 
 	bio := bufio.NewReader(c.Conn)
+	slots := make(chan struct{}, InFlight)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel() // runs before wg.Wait: a handler blocked on its reply stops
 	for {
-		w, err := c.readRequestHeader(connCtx, bio)
+		w, err := c.readRequest(connCtx, bio)
 		if err != nil {
-			if err == io.EOF {
-				// Clean close.
-				c.Close()
-				return
-			}
+			// EOF, a closed socket or a frame the server refuses: the close is the
+			// signal (not logged: the library logger is a global a test may be swapping)
 			return
 		}
 		Log.Tracef("request: %v", w.req)
-		err = c.handle(connCtx, w)
-		respErr := w.finish(connCtx)
-		if err != nil {
-			Log.Errorf("error handling req: %v", err)
-			// failure to handle at a level needing to close the connection.
-			c.Close()
+		select {
+		case slots <- struct{}{}:
+		case <-connCtx.Done():
 			return
 		}
-		if respErr != nil {
-			Log.Errorf("error sending response: %v", respErr)
-			c.Close()
-			return
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			if err := c.handle(connCtx, w); err != nil {
+				Log.Errorf("error handling req: %v", err)
+				// failure to handle at a level needing to close the connection.
+				c.Close()
+				cancel()
+				return
+			}
+			if err := w.finish(connCtx); err != nil {
+				Log.Errorf("error sending response: %v", err)
+				c.Close()
+				cancel()
+			}
+		}()
 	}
 }
 
@@ -250,18 +277,11 @@ func (w *response) Write(dat []byte) error {
 	return nil
 }
 
-// drain reads the rest of the request frame if not consumed by the handler.
-func (w *response) drain(ctx context.Context) error {
-	if reader, ok := w.req.Body.(*io.LimitedReader); ok {
-		if reader.N == 0 {
-			return nil
-		}
-		// todo: wrap body in a context reader.
-		_, err := io.CopyN(io.Discard, w.req.Body, reader.N)
-		if err == nil || err == io.EOF {
-			return nil
-		}
-		return err
+// drain discards what the handler left of the request frame. The frame was read whole
+// before the handler ran (readRequest), so there is nothing left on the wire.
+func (w *response) drain(context.Context) error {
+	if _, ok := w.req.Body.(*bytes.Reader); ok {
+		return nil
 	}
 	return io.ErrUnexpectedEOF
 }
@@ -275,7 +295,10 @@ func (w *response) finish(ctx context.Context) error {
 	}
 }
 
-func (c *conn) readRequestHeader(ctx context.Context, reader *bufio.Reader) (w *response, err error) {
+// readRequest reads one request frame whole (at most MaxFrame bytes) and parses its RPC
+// header; the body the handler decodes is the rest of the frame, in memory, so the next
+// frame can be read while this one is served.
+func (c *conn) readRequest(_ context.Context, reader *bufio.Reader) (w *response, err error) {
 	fragment, err := xdr.ReadUint32(reader)
 	if err != nil {
 		if xdrErr, ok := err.(*xdr2.UnmarshalError); ok {
@@ -290,17 +313,20 @@ func (c *conn) readRequestHeader(ctx context.Context, reader *bufio.Reader) (w *
 		return nil, ErrInputInvalid
 	}
 	reqLen := fragment - uint32(1<<31)
-	if reqLen < 40 {
+	if reqLen < 40 || reqLen > MaxFrame {
 		return nil, ErrInputInvalid
 	}
+	frame := make([]byte, reqLen)
+	if _, err := io.ReadFull(reader, frame); err != nil {
+		return nil, err
+	}
+	r := bytes.NewReader(frame)
 
-	r := io.LimitedReader{R: reader, N: int64(reqLen)}
-
-	xid, err := xdr.ReadUint32(&r)
+	xid, err := xdr.ReadUint32(r)
 	if err != nil {
 		return nil, err
 	}
-	reqType, err := xdr.ReadUint32(&r)
+	reqType, err := xdr.ReadUint32(r)
 	if err != nil {
 		return nil, err
 	}
@@ -311,9 +337,9 @@ func (c *conn) readRequestHeader(ctx context.Context, reader *bufio.Reader) (w *
 	req := request{
 		xid,
 		rpc.Header{},
-		&r,
+		r,
 	}
-	if err = xdr.Read(&r, &req.Header); err != nil {
+	if err = xdr.Read(r, &req.Header); err != nil {
 		return nil, err
 	}
 

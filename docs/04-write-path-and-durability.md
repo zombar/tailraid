@@ -127,8 +127,23 @@ Rules:
 - `OpenOverlay` replays every `staging/*.wal` at startup, so a gateway that crashed with
   dirty data comes back with the same overlay and flushes it.
 
-Per-WRITE cost: one `pwrite`, one `fsync`, one sorted insert. Nothing is held in memory but
-extents.
+**Group commit.** `AppendWrite` is two steps: the record is written at the end of the log
+under the inode lock, then the caller waits, without the lock, for an fsync that started
+after its bytes were written. The first waiter runs the fsync; every record written before
+it started is covered by it and returns; a record written while it runs waits for the
+next one. One fsync therefore covers however many WRITEs reached the inode while the
+previous fsync ran (the NFS gateway serves a connection's requests concurrently, docs/07),
+and each WRITE is still acknowledged only after its own record is on disk (I-7). The
+overlay applies a record's in-memory effect (the extent, a truncate) only once its fsync
+has succeeded, in log order, so a READ never shows bytes whose WRITE may still fail and the
+live view always equals what a replay of the log would build. A failed fsync fails every
+append it covered: the log is cut back to the last fsynced byte and the file reopened
+(I-37, I-101) before any later append, and the cut records' effects are dropped unapplied.
+A flush snapshot, a compaction and an eviction wait for the inode's appends between write
+and fsync, and hold new ones until they are done (I-168).
+
+Per-WRITE cost: one `pwrite`, one `fsync` shared with every WRITE that arrived during the
+previous one, one sorted insert. Nothing is held in memory but extents.
 
 ## 3. Flush triggers
 
@@ -139,7 +154,7 @@ extents.
 | inode WAL file ≥ 4 × `FileDirtyHi` | 128 MiB | full flush of that inode (its WAL compacts); a WRITE that arrives while the WAL is at the cap **waits** (next row) |
 | total dirty bytes ≥ `TotalDirtyHi` | 256 MiB | flush the largest inodes until below |
 | total dirty bytes ≥ `MaxDirty` (fresh **and** in-flight plan bytes) | 1 GiB | a WRITE **waits** (next row) while the overlay holds `MaxDirty` or more dirty bytes; existing dirty data is intact and drains through the triggers above |
-| a WRITE meets the WAL cap or `MaxDirty` | `CapWait` 20 s | the WRITE blocks until the flusher frees room (a Commit applied, an inode evicted) and then proceeds; it fails only when `CapWait` expires (`NFS3ERR_IO`, `EIO`) or when that inode's last flush attempt failed (`EIO` at once, `ENOSPC` when the cluster was full), so a client that outruns replication is throttled to it rather than told the disk is broken (I-79). go-nfs serves one RPC at a time per connection, so the mount pauses for the wait; `CapWait` is therefore shorter than the clients' soft-mount timeouts (docs/07) |
+| a WRITE meets the WAL cap or `MaxDirty` | `CapWait` 20 s | the WRITE blocks until the flusher frees room (a Commit applied, an inode evicted) and then proceeds; it fails only when `CapWait` expires (`NFS3ERR_IO`, `EIO`) or when that inode's last flush attempt failed (`EIO` at once, `ENOSPC` when the cluster was full), so a client that outruns replication is throttled to it rather than told the disk is broken (I-79). The waiting WRITE holds one of its connection's `InFlight` request slots (docs/07, I-167); `CapWait` is shorter than the clients' soft-mount timeouts (docs/07) |
 | shutdown | 30 s (`ShutdownFlush`) | `FlushAll` with that deadline, then exit; whatever did not flush stays in the WAL and flushes on the next start |
 
 Flush workers run per inode from a bounded pool (default 4) so a big copy does not starve
@@ -199,7 +214,13 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    the original PUTs of re-placed slots are **cancelled** and the chunk waits for every PUT
    goroutine to return before it is decided, so no straggler keeps a shard buffer alive
    past its chunk (a late shard that landed anyway is an orphan swept after grace, L-190,
-   I-83). Slots still missing are recorded as `0` (degraded). If acks < k → return an
+   I-83). Once k acks are in, the wait for the rest is capped by a **straggler grace** of
+   `clamp(4 × p95 of recent PUT durations, StragglerMin 2 s, PutDeadline)` measured from
+   the k-th ack: a PUT still pending at the grace is treated exactly as one pending at the
+   deadline, and its node is marked *suspect* (docs/05 §6) so the next chunk places
+   around it instead of waiting on it again (I-169, L-209). The floor keeps a 256 KiB/s
+   DERP peer (1.4 s for a 350 KiB shard) in the stripe; the multiplier follows a slow
+   cluster. Slots still missing are recorded as `0` (degraded). If acks < k → return an
    error; the plan stays dirty and is retried with backoff (1 s doubling to 60 s); when
    every failed slot was `ErrFull` the error wraps `chunk.ErrFull` so the client sees
    `ENOSPC` rather than `EIO` (I-79). An ack means the receiver fsynced file and directory
@@ -263,7 +284,7 @@ func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64
    chunk share a single fetch.
 2. `c := st.GetChunk(h)`; missing → `EIO` (metadata says the chunk exists; this is a bug or
    a lost majority, not a normal path).
-3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131), and slots are offered in placement order so data shards win ties over parity (L-63).
+3. `order = peers.Rank(live(nonZero(c.Placement)))`: self first, then by RTT, S3 nodes last; holders the prober reports dead are never dialled (L-131). The ranked order is then stably partitioned: this host's own shards first (no network), then data slots, then parity, whatever the RTT, so a decode is needed only when a data holder is dead or hedged, or this host holds a parity shard of its own (L-63).
 4. Fetch the first `k` shards in parallel. On any failure or `ErrCorrupt`, pull the next slot
    in `order` until `k` good shards or the list is exhausted (→ `EIO`, logged with the chunk
    hash and the slots tried).
@@ -274,6 +295,22 @@ func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64
 `ReadAt` walks chunk indexes, copies `min(eff, c.Size)` bytes from each chunk and zero-fills
 the remainder (a short dedup'd chunk under a truncate-up). The overlay is consulted first:
 `Overlay.Read` merges WAL extents over base bytes.
+
+**Readahead.** A chunk fetch costs a network round trip plus the transfer, and the NFS
+and SMB clients ask for one range at a time, so without readahead a sequential read moves
+one chunk per fetch latency whatever the link. `vfs.File.ReadAt` (the gateways and the
+web UI; never the flusher's base reads) therefore calls `Reader.Prefetch(inode, off)`
+before it reads: a READ of chunk *i* is *sequential* when *i* = 0 or *i* is the chunk
+after the inode's previous READ, and a sequential READ starts a background fetch of chunks
+*i+1 … i+ReadAhead* (4) into the cache. A prefetch is never started for `HashZero`, for a
+chunk the cache already holds, for one already in flight, by a non-sequential READ, or by
+a reader without a cache; at most `ReadAhead` prefetches run gateway-wide, and a further
+candidate is skipped, never queued. A prefetch registers in the in-flight table before it
+starts, so a client READ that reaches a chunk being prefetched joins that fetch instead of
+starting another; its result goes only to the cache, and its failure is logged at debug
+and changes nothing the client sees (the client's own READ of that chunk fetches it
+normally). `Reader.Prefetching()` reports the prefetches in flight; `status` carries the
+chunks readahead fetched and the client READs it served (docs/12 §8).
 
 ## 6. Visibility
 
@@ -323,7 +360,7 @@ Degraded writes (user's choice) hold < m parity until repair.
 
 | Component | What is fsynced | When |
 |---|---|---|
-| WAL (`staging/<ino>.wal`) | the file; the directory when the file is created | after every appended record, before the WRITE reply; the directory before the first record |
+| WAL (`staging/<ino>.wal`) | the file; the directory when the file is created | after every appended record, before the WRITE reply (concurrent appends to one inode share one fsync, §2.1, I-168); the directory before the first record |
 | shard store (`shards/hh/<key>`) | temp file, rename, directory | `write → f.Sync() → Close → Rename → fsync(dir)`; `Put` returns (and the PUT is acked) only after the directory fsync |
 | raft log/stable (`raft/raft.db`) | bbolt | `NoSync = false` (every Raft append) |
 | snapshots | `FileSnapshotStore` | fsync on `Close` |
@@ -348,14 +385,15 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 
 | Stage | Bytes in memory | Bound (defaults) | Released by |
 |---|---|---|---|
-| NFS WRITE in flight | one request body per connection (go-nfs decodes it, hands it to `Write`) | connections × wsize (≤ 1 MiB) | the reply |
+| NFS requests in flight | each request's frame, read whole before its handler runs (docs/07, I-167) | connections × `InFlight` (16) × `MaxFrame` (1 MiB + 8 KiB) | the reply |
 | web upload in flight | one chunk-sized buffer per upload | `uploadSlots` (4) × ChunkSize | the response (docs/13 §4) |
-| WAL append | one record copy | ChunkSize (one WRITE) | the fsync |
+| WAL append | one record copy per WRITE in flight | connections × `InFlight` × wsize (docs/07) | its fsync |
 | overlay bookkeeping | 24 B per extent | WALCap / wsize extents per inode | compaction |
 | flush: assemble + encode | the chunk and its `(k+m)` shards, per chunk in the pipeline | `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))` = 8 × 2.5 MiB = **20 MiB** at 1 MiB and (2,1) | the chunk being decided (step 9) |
 | compaction | one streaming buffer | 1 MiB | the rewrite |
 | shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 1 MiB, 4 at 64 MiB) | the reply |
 | read cache, memory tier | hot decoded chunks | 64 MiB | LRU |
+| readahead | the chunk and its k shards per prefetch (§5) | `ReadAhead × (ChunkSize + k · ShardLen(ChunkSize, k))` = 4 × 2 MiB = **8 MiB** at 1 MiB and (3,2) | the cache Put |
 | FSM | the chunk list of every file, 32 B per chunk | docs/01 | – |
 
 `Flusher.Buffers()` reports the flush row live and its peak since start; `status` shows it
@@ -384,6 +422,27 @@ the WAL cap.
   compaction or reopen that fails, every call on that WAL returns `ErrWALClosed` until the
   gateway restarts and replays the log, and replay reports the bytes it discarded after
   the last intact record.
+- **I-169** — After a chunk's k-th ack the flusher waits for its remaining PUTs at most
+  the straggler grace, `clamp(4 × p95 of recent PUT durations, StragglerMin, PutDeadline)`,
+  and a PUT still pending then is cancelled, awaited and its slot re-placed or recorded 0
+  exactly as at the deadline, its node marked suspect; the wait for the first k acks is
+  unchanged.
+- **I-171** — A shard GET's deadline for the reply body is `callTimeout(Content-Length)`
+  from the reply's own headers, never the `MaxPayload` allowance; a reply announcing more
+  than `MaxPayload + HeaderSize` bytes, or no length, is refused before any of it is read.
+- **I-168** — Concurrent appends to one inode's WAL share fsyncs: an append returns
+  success only after an fsync that began after its record was written has succeeded, one
+  fsync may cover any number of records, a record's in-memory effect is applied only after
+  that fsync and in log order, a failed fsync fails every append it covered and cuts the
+  log back to the last fsynced byte before any later append, and no flush snapshot,
+  compaction or eviction runs while an append of that inode is between its write and its
+  fsync.
+- **I-166** — Readahead is bounded and invisible: at most `ReadAhead` prefetches are in
+  flight gateway-wide (`Reader.Prefetching()` never exceeds it), a prefetch is started only
+  by a sequential READ, never for `HashZero`, a cached chunk or one already in flight,
+  shares the in-flight table with foreground reads so no chunk is fetched twice, holds no
+  bytes beyond its own fetch (the result goes only to the cache), and its failure changes
+  nothing a client sees.
 
 ## Tests
 
@@ -397,6 +456,10 @@ the WAL cap.
 | I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
+| I-169 | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks`, `TestFlusher_StragglerGrace_Table`, `TestFlusher_StragglerGrace_NotBeforeKAcks` |
+| I-171 | `TestClient_GetDeadline_FromContentLength` |
+| I-168 | `TestWAL_GroupCommit_OneFsyncCoversConcurrentAppends`, `TestWAL_GroupCommit_FailedFsyncFailsEveryWaiter`, `TestWAL_GroupCommit_LateAppendWaitsForNextFsync`, `TestOverlay_PendingWrite_NotVisibleUntilFsynced`, `TestOverlay_FailedGroupFsync_DropsEveryPendingWrite`, `TestOverlay_CommitFlushed_WaitsForPendingAppend`, `TestOverlay_WriteDoesNotHoldInodeLockDuringFsync`, `TestOverlay_TruncateDuringPendingAppend_MatchesReplay` |
+| I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |

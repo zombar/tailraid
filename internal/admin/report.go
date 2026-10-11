@@ -29,6 +29,7 @@ type NodeReport struct {
 	Leader     bool         `json:"leader"`
 	Self       bool         `json:"self"`
 	Live       bool         `json:"live"`
+	Suspect    bool         `json:"suspect,omitempty"` // a shard RPC to it failed; excluded until its next good probe (docs/05 §6)
 	DeadFor    string       `json:"dead_for,omitempty"`
 	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT        string       `json:"rtt,omitempty"`
@@ -77,6 +78,7 @@ type VolumeReport struct {
 	Unreadable     int     `json:"unreadable_chunks"` // chunks with < k live slots
 	StalePolicy    int     `json:"stale_policy_chunks"`
 	DomainSkew     int     `json:"domain_skew"`     // chunks above the host cap, to be moved (docs/14 §7)
+	DiskSkew       int     `json:"disk_skew"`       // slots the capacity rebalance would move within a host (docs/14 §7)
 	ToleratesDisks int     `json:"tolerates_disks"` // targets the policy survives losing
 	ToleratesHosts int     `json:"tolerates_hosts"` // whole hosts it survives losing (docs/14 §6)
 	TrashInodes    int     `json:"trash_inodes"`    // deleted entries waiting in the trash (docs/06 §1)
@@ -96,6 +98,18 @@ type GatewayReport struct {
 	FlushPeak    uint64 `json:"flush_peak"`  // the most it has held since start
 	FlushCap     uint64 `json:"flush_cap"`   // the bound of docs/04 §9 at the current policy
 	LastFlushErr string `json:"last_flush_err,omitempty"`
+	// readahead (docs/04 §5, I-166): chunks a prefetch fetched, READs served by one, and
+	// the prefetches in flight right now
+	ReadaheadFetched uint64 `json:"readahead_fetched"`
+	ReadaheadJoined  uint64 `json:"readahead_joined"`
+	Prefetching      int    `json:"prefetching"`
+}
+
+// WithReader adds the reader's readahead counters to the gateway view.
+func (g *GatewayReport) WithReader(rd *vfs.Reader) *GatewayReport {
+	g.ReadaheadFetched, g.ReadaheadJoined = rd.ReadaheadStats()
+	g.Prefetching = rd.Prefetching()
+	return g
 }
 
 // GatewayFromDirty folds the overlay's dirty list into the status view.
@@ -212,7 +226,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	}
 	health := ScanHealth(st, lv, fillAfter)
 	rep.Volume.Degraded, rep.Volume.RepairPending, rep.Volume.Unreadable, rep.Volume.StalePolicy = health.Degraded, health.RepairPending, health.Unreadable, health.StalePolicy
-	rep.Volume.DomainSkew = health.DomainSkew
+	rep.Volume.DomainSkew, rep.Volume.DiskSkew = health.DomainSkew, health.DiskSkew
 	rep.Volume.ToleratesDisks, rep.Volume.ToleratesHosts = meta.Tolerance(nodes, vol.K, vol.M)
 	slots, missing := health.Slots, health.Missing
 	live := map[meta.NodeIdx]bool{}
@@ -231,6 +245,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		}
 		if nd.Kind == meta.KindS3 {
 			r.S3 = &S3Report{Endpoint: nd.S3Endpoint, Bucket: nd.S3Bucket, Prefix: nd.S3Prefix, Region: nd.S3Region, PathStyle: nd.S3PathStyle}
+		}
+		if p != nil {
+			r.Suspect = p.IsSuspect(nd.Idx)
 		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS

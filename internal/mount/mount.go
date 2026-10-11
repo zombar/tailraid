@@ -15,16 +15,38 @@ import (
 	"time"
 )
 
+// TransferSize is the rsize and wsize the macOS mount asks for: the gateway's FSINFO
+// maximum (docs/07, I-167). macOS defaults to 32 KiB on TCP and does not raise it from
+// FSINFO as Linux does; at 32 KiB every WRITE is its own WAL fsync and every READ its
+// own RPC, which is where the macOS write ceiling of a few MB/s came from.
+const TransferSize = 1 << 20
+
 // Command returns the program and arguments that mount the NFS gateway at nfsAddr
 // (host:port) onto target for the given GOOS. Windows mounts over SMB (SMBCommand).
+// On macOS the options ask for TransferSize; a kernel that refuses them is retried with
+// PlainCommand by the caller.
 func Command(goos, nfsAddr, target string) (string, []string, error) {
+	return command(goos, nfsAddr, target, true)
+}
+
+// PlainCommand is Command without the transfer sizes: the fallback when the sized mount
+// is refused.
+func PlainCommand(goos, nfsAddr, target string) (string, []string, error) {
+	return command(goos, nfsAddr, target, false)
+}
+
+func command(goos, nfsAddr, target string, sized bool) (string, []string, error) {
 	host, port, err := net.SplitHostPort(nfsAddr)
 	if err != nil {
 		return "", nil, fmt.Errorf("mount: nfs address: %w", err)
 	}
 	switch goos {
 	case "darwin":
-		return "mount", []string{"-t", "nfs", "-o", fmt.Sprintf("port=%s,mountport=%s,vers=3,tcp,nolocks,soft", port, port), host + ":/", target}, nil
+		opts := fmt.Sprintf("port=%s,mountport=%s,vers=3,tcp,nolocks,soft", port, port)
+		if sized {
+			opts += fmt.Sprintf(",rsize=%d,wsize=%d", TransferSize, TransferSize)
+		}
+		return "mount", []string{"-t", "nfs", "-o", opts, host + ":/", target}, nil
 	case "linux":
 		return "mount", []string{"-t", "nfs", "-o", fmt.Sprintf("port=%s,mountport=%s,nfsvers=3,tcp,nolock,noacl,soft", port, port), host + ":/", target}, nil
 	case "windows":

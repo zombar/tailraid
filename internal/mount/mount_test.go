@@ -13,7 +13,7 @@ func TestCommand_PerOS(t *testing.T) {
 	cases := []struct {
 		goos, want string
 	}{
-		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft 127.0.0.1:/ /Users/me/TailRAID"},
+		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,rsize=1048576,wsize=1048576 127.0.0.1:/ /Users/me/TailRAID"},
 		{"linux", "mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ /Users/me/TailRAID"},
 	}
 	for _, tc := range cases {
@@ -23,6 +23,21 @@ func TestCommand_PerOS(t *testing.T) {
 		}
 		if got := prog + " " + strings.Join(args, " "); got != tc.want {
 			t.Errorf("%s:\n got  %s\n want %s", tc.goos, got, tc.want)
+		}
+	}
+	// the fallback when a kernel refuses the sizes: the same mount without them (macOS);
+	// Linux takes its sizes from FSINFO and has none to drop
+	plain := []struct{ goos, want string }{
+		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft 127.0.0.1:/ /Users/me/TailRAID"},
+		{"linux", "mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ /Users/me/TailRAID"},
+	}
+	for _, tc := range plain {
+		prog, args, err := PlainCommand(tc.goos, "127.0.0.1:20490", "/Users/me/TailRAID")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := prog + " " + strings.Join(args, " "); got != tc.want {
+			t.Errorf("plain %s:\n got  %s\n want %s", tc.goos, got, tc.want)
 		}
 	}
 	// Windows has no NFS mount any more (docs/15)
