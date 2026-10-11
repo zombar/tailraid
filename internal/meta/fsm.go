@@ -152,6 +152,8 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.restore(c.Restore)
 	case OpPurge:
 		return Result{}, a.purge(c.Purge)
+	case OpSetShardSums:
+		return Result{}, a.setShardSums(c.SetShardSums)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -760,6 +762,7 @@ func (a *applier) commit(c *Commit) error {
 		d ChunkDesc
 	}
 	var fresh []newEntry
+	var fill []ChunkDesc // dedup hits whose sums the chunk lacked (I-201)
 	for _, d := range c.NewChunks {
 		if d.Hash == HashZero {
 			return ErrBadCommand
@@ -768,9 +771,21 @@ func (a *applier) commit(c *Commit) error {
 			if cur.Size != d.Size {
 				return ErrBadCommand
 			}
+			switch {
+			case len(d.Sums) == 0:
+			case len(d.Sums) != int(cur.K):
+				return ErrBadCommand
+			case cur.Sums == nil:
+				fill = append(fill, d)
+			case !slices.Equal(cur.Sums, d.Sums):
+				return ErrConflict // a pure function of the bytes: a difference is a bug caught here
+			}
 			continue
 		}
 		if d.Size == 0 || uint64(d.Size) > cs || !validPlacement(d.K, d.M, d.Placement) {
+			return ErrBadCommand
+		}
+		if len(d.Sums) != 0 && len(d.Sums) != int(d.K) {
 			return ErrBadCommand
 		}
 		fresh = append(fresh, newEntry{d})
@@ -829,7 +844,14 @@ func (a *applier) commit(c *Commit) error {
 	// Reference deltas, checked before mutation.
 	for _, e := range fresh {
 		d := e.d
-		st.Chunks[d.Hash] = &Chunk{Hash: d.Hash, Size: d.Size, K: d.K, M: d.M, Placement: append([]NodeIdx(nil), d.Placement...)}
+		ch := &Chunk{Hash: d.Hash, Size: d.Size, K: d.K, M: d.M, Placement: append([]NodeIdx(nil), d.Placement...)}
+		if len(d.Sums) > 0 {
+			ch.Sums = append([]Hash(nil), d.Sums...)
+		}
+		st.Chunks[d.Hash] = ch
+	}
+	for _, d := range fill {
+		st.Chunks[d.Hash].Sums = append([]Hash(nil), d.Sums...)
 	}
 	// Only the indices that change carry a delta: written ones (old entry out, new in),
 	// and the entries a truncate drops; everything below keep that was not written is
@@ -893,11 +915,38 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	if ch.Refs > 0 {
 		a.stats.StoredBytes -= storedBytes(ch)
 	}
+	if ch.K != c.K || ch.M != c.M {
+		ch.Sums = nil // the shards are different bytes now; the backfill records the new sums (I-201)
+	}
 	ch.K, ch.M = c.K, c.M
 	ch.Placement = append([]NodeIdx(nil), c.Placement...)
 	if ch.Refs > 0 {
 		a.stats.StoredBytes += storedBytes(ch)
 	}
+	return nil
+}
+
+// setShardSums records a chunk's data-shard hashes (docs/04 §4, I-201): the backfill's
+// command for a chunk committed without them. Refs, placement and the tombstone are
+// untouched, so GC and repair see nothing change.
+func (a *applier) setShardSums(c *SetShardSums) error {
+	if c == nil {
+		return ErrBadCommand
+	}
+	ch, ok := a.st.Chunks[c.Hash]
+	if !ok {
+		return ErrUnknownChunk
+	}
+	if len(c.Sums) != int(ch.K) {
+		return ErrBadCommand
+	}
+	if ch.Sums != nil {
+		if slices.Equal(ch.Sums, c.Sums) {
+			return nil
+		}
+		return ErrConflict
+	}
+	ch.Sums = append([]Hash(nil), c.Sums...)
 	return nil
 }
 

@@ -109,6 +109,10 @@ type Chunk struct {
 	Refs         uint32
 	Placement    []NodeIdx // len K+M; Placement[i] holds shard i; 0 = missing
 	TombstonedAt int64     // unix nanos when Refs reached 0; 0 while live
+	// Sums is the SHA-256 of each data shard's stored payload (len K) once recorded by
+	// the flusher or the backfill (docs/04 §4, I-201); nil until then. Never modified in
+	// place: copy on write like Placement.
+	Sums []Hash
 }
 
 // NodeKind distinguishes devices (Raft members, gateways, storage) from S3 buckets
@@ -364,6 +368,9 @@ func (s *State) Clone() *State {
 	for h, ch := range s.Chunks {
 		cp := *ch
 		cp.Placement = append([]NodeIdx(nil), ch.Placement...)
+		if ch.Sums != nil {
+			cp.Sums = append([]Hash(nil), ch.Sums...)
+		}
 		c.Chunks[h] = &cp
 	}
 	for idx, n := range s.Nodes {

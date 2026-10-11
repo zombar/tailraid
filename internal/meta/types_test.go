@@ -100,7 +100,7 @@ func sampleState() *State {
 		Capacity: 1 << 41, S3Endpoint: "https://s3.example", S3Bucket: "b", S3Prefix: "p/", S3Region: "us-west-004", S3PathStyle: true, JoinedAt: 6,
 	}
 	s.NextNode = 3
-	s.Chunks[sampleHash(1)] = &Chunk{Hash: sampleHash(1), Size: 1 << 20, K: 2, M: 1, Refs: 1, Placement: []NodeIdx{1, 2, 0}}
+	s.Chunks[sampleHash(1)] = &Chunk{Hash: sampleHash(1), Size: 1 << 20, K: 2, M: 1, Refs: 1, Placement: []NodeIdx{1, 2, 0}, Sums: []Hash{sampleHash(3), sampleHash(4)}}
 	s.Chunks[sampleHash(2)] = &Chunk{Hash: sampleHash(2), Size: 10, K: 1, M: 1, Refs: 0, Placement: []NodeIdx{2, 1}, TombstonedAt: 50}
 	s.Tombs[sampleHash(2)] = struct{}{}
 	s.Inodes[2] = &Inode{

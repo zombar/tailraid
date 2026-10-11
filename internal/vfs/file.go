@@ -116,7 +116,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	// served, so the chunk the client waits for never competes with its prefetches (I-203)
 	defer f.fs.rd.Prefetch(in, off)
 	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
-		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReader(context.Background(), in))
+		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReaderEarly(context.Background(), in))
 		if err == nil || errors.Is(err, io.EOF) {
 			return n, err
 		}
@@ -124,7 +124,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 			return n, mapErr("read", f.name, err)
 		}
 	}
-	n, err := f.fs.rd.ReadAt(context.Background(), in, p, off)
+	n, err := f.fs.rd.ReadAtEarly(context.Background(), in, p, off) // a range from one verified shard when it can (I-202)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, mapErr("read", f.name, err)
 	}

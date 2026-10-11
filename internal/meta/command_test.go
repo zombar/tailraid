@@ -147,6 +147,16 @@ var goldenCommands = []struct {
 		"04 11 0000000000000000 ffffffffffffffff 00040000 0400000000000000",
 	},
 	{
+		"SetShardSums", // codec version 5: a chunk's data-shard hashes (I-201)
+		Command{Op: OpSetShardSums, SetShardSums: &SetShardSums{Hash: Hash{0xaa}, Sums: []Hash{{0x01}, {0x02}}}},
+		"0512aa000000000000000000000000000000000000000000000000000000000000000201000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000",
+	},
+	{
+		"CommitWithSums", // codec version 5: each new chunk's sums follow its placement (I-201)
+		Command{Op: OpCommit, Commit: &Commit{Ino: 2, BaseVersion: 1, NewSize: 64, Writes: []ChunkWrite{{0, Hash{0xbb}}}, NewChunks: []ChunkDesc{{Hash: Hash{0xbb}, Size: 64, K: 2, M: 1, Placement: []NodeIdx{1, 2, 3}, Sums: []Hash{{0x03}, {0x04}}}}, Now: 5}},
+		"050b0200000000000000010000000000000000000000000000000040000000000000000100000000bb0000000000000000000000000000000000000000000000000000000000000001bb000000000000000000000000000000000000000000000000000000000000004000000002010301000200030002030000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000500000000000000",
+	},
+	{
 		"SetAttrFlags", // codec version 4: Flags follows Now (I-156)
 		Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 5, Mask: AttrFlags, Flags: FlagProtected | FlagNSFW, Now: 11}},
 		"04 0a 0500000000000000 20 00000000 00000000 00000000 0000000000000000 0000000000000000 0b00000000000000 03",
@@ -227,7 +237,7 @@ func TestEncodeCommand_AllOpsCovered(t *testing.T) {
 	for _, g := range goldenCommands {
 		seen[g.cmd.Op] = true
 	}
-	for op := OpSetVolume; op <= OpPurge; op++ {
+	for op := OpSetVolume; op <= OpSetShardSums; op++ {
 		if !seen[op] {
 			t.Errorf("op %d has no golden", op)
 		}

@@ -105,6 +105,7 @@ type GatewayReport struct {
 	ReadaheadFetched   uint64 `json:"readahead_fetched"`
 	ReadaheadJoined    uint64 `json:"readahead_joined"`
 	ReadaheadCancelled uint64 `json:"readahead_cancelled"` // prefetches cut by a client's seek (I-203)
+	ReadsEarly         uint64 `json:"reads_early"`         // ranges served from verified data shards rather than the decoded chunk (I-202)
 	Prefetching        int    `json:"prefetching"`
 }
 
@@ -112,6 +113,7 @@ type GatewayReport struct {
 func (g *GatewayReport) WithReader(rd *vfs.Reader) *GatewayReport {
 	g.ReadaheadFetched, g.ReadaheadJoined = rd.ReadaheadStats()
 	g.ReadaheadCancelled = rd.ReadaheadCancelled()
+	g.ReadsEarly = rd.ReadsEarly()
 	g.Prefetching = rd.Prefetching()
 	return g
 }

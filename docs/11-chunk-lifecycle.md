@@ -187,6 +187,7 @@ these numbers.
 - E-128 Purge of a deleted root, by the user or by the retention tick (06 §2)
 - E-129 a shard RPC to a node fails at the transport level, or a PUT to it outlasts the straggler grace (05 §6)
 - E-130 a repair pass finds a disk far above its capacity share of its host's slots while another disk of that host is below (14 §7)
+- E-134 a chunk decoded from k shards fails its hash: every reader waiting for it gets `EIO`, the chunk stays out of the cache, the scrub finds the bad shard (04 §5, I-202); ranges already served from a data shard were verified against its recorded sum (I-201)
 
 **5. Transition table.**
 

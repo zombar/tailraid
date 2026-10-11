@@ -1561,6 +1561,7 @@ func TestCheckInvariants_DetectsEachViolation(t *testing.T) {
 		want string
 	}{
 		{"refs too high", func(s *State) { s.Chunks[sha("a")].Refs++ }, "refs"},
+		{"sums length", func(s *State) { s.Chunks[sha("a")].Sums = []Hash{sha("x")} }, "sums"},
 		{"refs too low", func(s *State) { s.Chunks[sha("a")].Refs-- }, "refs"},
 		{"chunk list length", func(s *State) { s.Inodes[findIno(s, "f")].Size += testCS }, "chunk count"},
 		{"missing parent entry", func(s *State) { delete(s.Inodes[findIno(s, "d")].Children, "f") }, "parent"},

@@ -15,7 +15,8 @@ var stateMagic = []byte("TRM1")
 // snapshots are still read (the fields zero) so a cluster upgrades without a format
 // break (docs/12 §6, I-156).
 const (
-	stateVersion   = 4
+	stateVersion   = 5
+	stateVersionV4 = 4
 	stateVersionV3 = 3
 	stateVersionV2 = 2
 	stateVersionV1 = 1
@@ -73,6 +74,9 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.u32(c.Refs)
 		w.nodeIdxs(c.Placement)
 		w.i64(c.TombstonedAt)
+		if version >= stateVersion {
+			w.hashes(c.Sums)
+		}
 		w.spill()
 	}
 
@@ -98,7 +102,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.u64(in.Version)
 		w.u64(uint64(in.Parent))
 		w.str(in.Name)
-		if version >= stateVersion {
+		if version >= stateVersionV4 {
 			w.u8(in.Flags)
 			w.i64(in.DeletedAt)
 		}
@@ -138,7 +142,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
-	if r.err == nil && version != stateVersion && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
@@ -181,6 +185,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 		}
 		prevHash = h
 		c := &Chunk{Hash: h, Size: r.u32(), K: r.u8(), M: r.u8(), Refs: r.u32(), Placement: r.nodeIdxs(), TombstonedAt: r.i64()}
+		if version >= stateVersion {
+			c.Sums = r.hashes()
+		}
 		if h == HashZero {
 			return nil, fmt.Errorf("meta: snapshot contains a HashZero chunk entry")
 		}
@@ -201,7 +208,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 			return nil, fmt.Errorf("meta: inodes not in canonical order")
 		}
 		prevIno = in.Ino
-		if version >= stateVersion {
+		if version >= stateVersionV4 {
 			in.Flags = r.u8()
 			in.DeletedAt = r.i64()
 		}

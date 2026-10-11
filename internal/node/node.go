@@ -267,6 +267,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc.Events = ring
 	gc.Retention = rcfg.Retention
 	node.MinCodec = prober.MinCodec // the trash and the flags wait until every live member reads codec 4 (docs/12 §6)
+	fl.MinCodec = prober.MinCodec   // a Commit carries shard sums once every live member reads codec 5 (I-201)
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {

@@ -24,6 +24,7 @@ const (
 	OpTrash         Op = 15 // {Parent, Name, Recursive, Now}: the entry into the trash (codec 4)
 	OpRestore       Op = 16 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
 	OpPurge         Op = 17 // {Ino (0 = every root due), Before, Limit, Now} (codec 4)
+	OpSetShardSums  Op = 18 // {Hash, Sums}: the data shards' hashes of a chunk committed without them (docs/04 §4, codec 5)
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
@@ -34,10 +35,14 @@ const (
 	commandVersionV2 = 2
 	commandVersionV3 = 3 // SetPlacement.Expect and GCDelete.Limit
 	commandVersionV4 = 4 // Trash, Restore, Purge and a SetAttr carrying Flags (docs/02)
+	commandVersionV5 = 5 // a Commit whose NewChunks carry Sums, and SetShardSums (docs/04 §4, I-201)
+	// CodecShardSums is the codec every live member must read before a Commit carries
+	// Sums (the flusher asks the prober's MinCodec, docs/02 §Codec versions).
+	CodecShardSums = commandVersionV5
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 4
+	CodecVersion = 5
 )
 
 // SetAttr mask bits.
@@ -172,12 +177,22 @@ type ChunkWrite struct {
 	Hash Hash
 }
 
-// ChunkDesc registers a new chunk (ignored if the hash already exists: dedup).
+// ChunkDesc registers a new chunk (ignored if the hash already exists: dedup, except
+// that Sums fill a chunk that lacked them).
 type ChunkDesc struct {
 	Hash      Hash
 	Size      uint32
 	K, M      uint8
 	Placement []NodeIdx
+	Sums      []Hash // the data shards' SHA-256s, len K, or none (codec 5, I-201)
+}
+
+// SetShardSums records the data-shard hashes of a chunk committed without them (the
+// leader's backfill, docs/06 §4): the chunk must exist, len(Sums) must be its K, and
+// sums already recorded must be equal (ErrConflict otherwise).
+type SetShardSums struct {
+	Hash Hash
+	Sums []Hash
 }
 
 // GCVictim is a chunk removed by GCDelete whose shards the leader must now delete.
@@ -207,6 +222,26 @@ type Command struct {
 	Trash         *Trash
 	Restore       *Restore
 	Purge         *Purge
+	SetShardSums  *SetShardSums
+}
+
+// needsV5 reports whether c carries a codec-5 field: SetShardSums, or a Commit whose
+// NewChunks carry Sums (docs/04 §4, I-201).
+func needsV5(c Command) bool {
+	switch c.Op { //nolint:exhaustive // every other op is version 1–4
+	case OpSetShardSums:
+		return true
+	case OpCommit:
+		if c.Commit == nil {
+			return false
+		}
+		for i := range c.Commit.NewChunks {
+			if len(c.Commit.NewChunks[i].Sums) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // needsV4 reports whether c carries a codec-4 field (docs/02 §Codec versions).
@@ -259,6 +294,8 @@ func CommandCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV5(c):
+		return commandVersionV5
 	case needsV4(c):
 		return commandVersionV4
 	case v3:
@@ -273,7 +310,7 @@ func CommandCodec(c Command) uint8 {
 func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
 	v := CommandCodec(c)
-	v3, v4 := v == commandVersionV3, v == commandVersionV4
+	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4, v == commandVersionV5
 	v2 := v == commandVersionV2
 	w.u8(v)
 	w.u8(uint8(c.Op))
@@ -365,8 +402,15 @@ func encodeCommand(c Command) []byte {
 			w.u8(d.K)
 			w.u8(d.M)
 			w.nodeIdxs(d.Placement)
+			if v5 {
+				w.hashes(d.Sums)
+			}
 		}
 		w.i64(p.Now)
+	case OpSetShardSums:
+		p := mustPayload(c.SetShardSums, c.Op)
+		w.hash(p.Hash)
+		w.hashes(p.Sums)
 	case OpSetPlacement:
 		p := mustPayload(c.SetPlacement, c.Op)
 		w.hash(p.Hash)
@@ -424,7 +468,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 && v != commandVersionV4 {
+	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 && v != commandVersionV4 && v != commandVersionV5 {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -441,8 +485,10 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSetPlacement || c.Op == OpGCDelete
 	case commandVersionV4:
 		legal = c.Op == OpTrash || c.Op == OpRestore || c.Op == OpPurge || c.Op == OpSetAttr
+	case commandVersionV5:
+		legal = c.Op == OpSetShardSums || c.Op == OpCommit
 	default:
-		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge
+		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
@@ -490,10 +536,15 @@ func DecodeCommand(b []byte) (Command, error) {
 			p.NewChunks = make([]ChunkDesc, n)
 			for i := range p.NewChunks {
 				p.NewChunks[i] = ChunkDesc{Hash: r.hash(), Size: r.u32(), K: r.u8(), M: r.u8(), Placement: r.nodeIdxs()}
+				if v == commandVersionV5 {
+					p.NewChunks[i].Sums = r.hashes()
+				}
 			}
 		}
 		p.Now = r.i64()
 		c.Commit = p
+	case OpSetShardSums:
+		c.SetShardSums = &SetShardSums{Hash: r.hash(), Sums: r.hashes()}
 	case OpSetPlacement:
 		p := &SetPlacement{Hash: r.hash(), Placement: r.nodeIdxs()}
 		if v == commandVersionV3 {
