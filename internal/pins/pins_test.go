@@ -46,6 +46,7 @@ func newRig(t *testing.T, cacheMax int64) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(c.Drain) // the cache writes files behind Put (I-204): done before the temp dir goes
 	rd := vfs.NewReader(f.FSM, f, f, c, &ec.Pool{})
 	p, err := pins.Open(dir, f.FSM, rd, c, f.Clk, nil)
 	if err != nil {
@@ -258,6 +259,7 @@ func TestPins_SurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(c2.Drain)
 	p2, err := pins.Open(r.dir, r.f.FSM, vfs.NewReader(r.f.FSM, r.f, r.f, c2, &ec.Pool{}), c2, r.f.Clk, nil)
 	if err != nil {
 		t.Fatal(err)
