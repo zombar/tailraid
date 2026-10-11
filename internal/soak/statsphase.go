@@ -3,7 +3,9 @@ package soak
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"time"
 
@@ -73,18 +75,29 @@ func phaseStats(ctx context.Context, r *Run) error {
 	if !sealedAll {
 		return nil
 	}
+	// the segments are read back through the gateway's mount; a mount that cannot list
+	// the reserved tree (the Windows SMB client's known listing error, docs/vms §5)
+	// leaves these checks unmeasured, never failed (I-114)
 	rawRows := map[string][]stats.Row{} // per writer
 	for _, n := range devices {
 		if !r.alive(ctx, n) {
 			continue
 		}
-		rows, size, ok := r.statsSegments(v, stats.Raw, n.Name)
-		r.checkAt("I-192", "raw segment of "+n.Name+" under its own directory", ok && len(rows) > 0 && size < meta.SmallChunkMax,
+		rows, size, err := r.statsSegments(v, stats.Raw, n.Name)
+		if err != nil {
+			r.checkSkipped("I-192", "raw segment of "+n.Name+" under its own directory", "the mount cannot read the reserved tree: "+err.Error())
+			continue
+		}
+		r.checkAt("I-192", "raw segment of "+n.Name+" under its own directory", len(rows) > 0 && size < meta.SmallChunkMax,
 			fmt.Sprintf("%d rows in %d bytes (threshold %d)", len(rows), size, meta.SmallChunkMax), "", "", n.Name)
 		rawRows[n.Name] = rows
 	}
-	crows, _, ok := r.statsSegments(v, stats.Raw, stats.ClusterWriter)
-	r.check("I-191", "the leader's cluster segment", ok && len(crows) > 0 && crows[0].C != nil && crows[0].Term > 0, fmt.Sprintf("%d cluster rows, term %d", len(crows), firstTerm(crows)))
+	crows, _, err := r.statsSegments(v, stats.Raw, stats.ClusterWriter)
+	if err != nil {
+		r.checkSkipped("I-191", "the leader's cluster segment", "the mount cannot read the reserved tree: "+err.Error())
+	} else {
+		r.check("I-191", "the leader's cluster segment", len(crows) > 0 && crows[0].C != nil && crows[0].Term > 0, fmt.Sprintf("%d cluster rows, term %d", len(crows), firstTerm(crows)))
+	}
 	rawRows[stats.ClusterWriter] = crows
 	// (b) a forced rollup: today's minute rows equal the pure rollup of the raw rows read
 	if _, err := r.Env.StatsSeal(ctx, gw, true); err != nil {
@@ -94,18 +107,19 @@ func phaseStats(ctx context.Context, r *Run) error {
 	// the rollup seal sealed the rows sampled since the first seal into a second raw
 	// segment before rolling the day up: the raw rows are read again, after it, since a
 	// segment changes only on a seal
-	rawNow, _, _ := r.statsSegments(v, stats.Raw, gw.Name)
-	minute, _, ok := r.statsSegments(v, stats.Minute, gw.Name)
-	want := stats.Rollup(rawNow, stats.Minute)
-	var wantBuf, gotBuf bytes.Buffer
-	_ = stats.Encode(&wantBuf, want)
-	_ = stats.Encode(&gotBuf, minute)
-	r.check("I-193", "today's minute rollup equals the rollup of the raw rows", ok && bytes.Equal(wantBuf.Bytes(), gotBuf.Bytes()),
-		fmt.Sprintf("%d minute rows from %d raw rows", len(minute), len(rawNow)))
-	if coarse, _, ok := r.statsSegments(v, stats.Coarse, gw.Name); !ok || len(coarse) == 0 {
-		r.check("I-193", "today's coarse rollup", false, "no coarse segment")
+	rawNow, _, rerr := r.statsSegments(v, stats.Raw, gw.Name)
+	minute, _, merr := r.statsSegments(v, stats.Minute, gw.Name)
+	coarse, _, cerr := r.statsSegments(v, stats.Coarse, gw.Name)
+	if rerr != nil || merr != nil || cerr != nil {
+		r.checkSkipped("I-193", "today's minute rollup equals the rollup of the raw rows", fmt.Sprintf("the mount cannot read the reserved tree: %v %v %v", rerr, merr, cerr))
 	} else {
-		r.check("I-193", "today's coarse rollup", true, fmt.Sprintf("%d coarse rows", len(coarse)))
+		want := stats.Rollup(rawNow, stats.Minute)
+		var wantBuf, gotBuf bytes.Buffer
+		_ = stats.Encode(&wantBuf, want)
+		_ = stats.Encode(&gotBuf, minute)
+		r.check("I-193", "today's minute rollup equals the rollup of the raw rows", len(minute) > 0 && bytes.Equal(wantBuf.Bytes(), gotBuf.Bytes()),
+			fmt.Sprintf("%d minute rows from %d raw rows", len(minute), len(rawNow)))
+		r.check("I-193", "today's coarse rollup", len(coarse) > 0, fmt.Sprintf("%d coarse rows", len(coarse)))
 	}
 	// (c) retention: a segment planted with a 2010 name is gone after the leader's seal
 	planted := path.Join(stats.Root, stats.Raw.Dir(), "gone", stats.SegmentName(stats.Raw, time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC), "gone"))
@@ -214,33 +228,36 @@ func phaseStats(ctx context.Context, r *Run) error {
 }
 
 // statsSegments reads a writer's segments at a tier through a gateway's volume: the rows
-// in name order, the largest segment's size, and whether the directory had any.
-func (r *Run) statsSegments(v Volume, tier stats.Tier, writer string) ([]stats.Row, int64, bool) {
+// in name order and the largest segment's size. A directory the mount cannot list or a
+// segment it cannot read is an error (the measurement failed, not the cluster); a
+// missing directory is no rows.
+func (r *Run) statsSegments(v Volume, tier stats.Tier, writer string) ([]stats.Row, int64, error) {
 	dir := path.Join(stats.Root, tier.Dir(), writer)
 	names, err := v.List(dir)
-	if err != nil {
-		return nil, 0, false
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, 0, nil // the writer has no directory yet: no rows
+	case err != nil:
+		return nil, 0, fmt.Errorf("list %s: %w", dir, err)
 	}
 	var rows []stats.Row
 	var largest int64
-	found := false
 	for _, n := range names {
 		if _, ok := stats.ParseName(tier, n); !ok {
 			continue
 		}
 		data, err := v.ReadAll(path.Join(dir, n))
 		if err != nil {
-			continue
+			return nil, 0, fmt.Errorf("read %s: %w", n, err)
 		}
 		got, err := stats.Decode(bytes.NewReader(data))
 		if err != nil {
-			continue
+			return nil, 0, fmt.Errorf("decode %s: %w", n, err)
 		}
-		found = true
 		largest = max(largest, int64(len(data)))
 		rows = append(rows, got...)
 	}
-	return rows, largest, found
+	return rows, largest, nil
 }
 
 func (r *Run) alive(ctx context.Context, n NodeRef) bool {

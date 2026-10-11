@@ -4,6 +4,7 @@
 
 import { clear, h } from "./dom.ts";
 import { getStats, type StatsMember, type StatsResponse } from "./api.ts";
+import { status } from "./status.ts";
 
 const RANGES: [string, number][] = [
   ["1h", 3600],
@@ -125,6 +126,7 @@ export function render(root: HTMLElement, query: string): () => void {
     sub.textContent = `${r.range.tier} rows · ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " · refreshes every 5 s while live" : "");
     clear(charts);
     if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
+    else if (!r.charts.some((c) => c.id === "stored")) charts.append(h("div", { class: "note" }, noClusterNote()));
     for (const c of r.charts) {
       const card = h("div", { class: "chart-card" });
       card.innerHTML = c.svg; // the node renders the SVG and escapes every name in it (I-197)
@@ -173,4 +175,13 @@ export function render(root: HTMLElement, query: string): () => void {
     stop();
     document.removeEventListener("visibilitychange", onVisible);
   };
+}
+
+/** noClusterNote explains a range without the leader's rows: the cluster charts (stored,
+ * backlog, liveness, spread, slots) exist only once the leader runs the sampler. */
+function noClusterNote(): string {
+  const r = status.current;
+  const leader = r?.nodes.find((n) => n.leader);
+  const who = leader ? `${leader.name} (${leader.version})` : "the leader";
+  return `No cluster charts in this range: the leader writes them, and ${who} has written none. A leader running a build with the stats sampler adds stored vs logical bytes, the repair backlog, liveness, the data spread and the slots per node.`;
 }

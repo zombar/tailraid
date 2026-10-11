@@ -2815,6 +2815,7 @@ function render9(root, query) {
     sub.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
     clear(charts);
     if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
+    else if (!r.charts.some((c) => c.id === "stored")) charts.append(h("div", { class: "note" }, noClusterNote()));
     for (const c of r.charts) {
       const card2 = h("div", { class: "chart-card" });
       card2.innerHTML = c.svg;
@@ -2861,6 +2862,12 @@ function render9(root, query) {
     stop();
     document.removeEventListener("visibilitychange", onVisible);
   };
+}
+function noClusterNote() {
+  const r = status.current;
+  const leader = r?.nodes.find((n) => n.leader);
+  const who2 = leader ? `${leader.name} (${leader.version})` : "the leader";
+  return `No cluster charts in this range: the leader writes them, and ${who2} has written none. A leader running a build with the stats sampler adds stored vs logical bytes, the repair backlog, liveness, the data spread and the slots per node.`;
 }
 
 // internal/webui/src/main.ts

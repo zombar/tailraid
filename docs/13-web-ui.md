@@ -33,6 +33,9 @@ operation stays in the CLI.
   the same range by its tailnet address and web port (which `/health` now carries,
   docs/08). The charts come from `GET /api/stats` as server-rendered SVG, the report's
   own drawing code, so nothing is lost between the report and the live page (§Design).
+  A range with node rows but no cluster rows (a leader without the sampler, as during a
+  rollout) shows the node charts and a note naming the leader and its version, since the
+  cluster charts are the leader's to write (docs/17 §1).
 - **Theme switch**: a button at the right end of the header cycles system, light and
   dark; the choice stays in the browser (`localStorage`) and is applied before the first
   view renders (§Design, I-200).
