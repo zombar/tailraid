@@ -480,6 +480,39 @@ func TestReader_Readahead_ReadInSameChunkKeepsPrefetches(t *testing.T) {
 	}
 }
 
+// A READ in the chunk of the previous one retries the candidates its chunk's first READ
+// skipped because every slot was busy: an early-served READ returns while its chunk's
+// fetch still holds a slot, so the first READ of a chunk often finds them taken, and a
+// candidate left until the next chunk's first READ is one the client fetches itself.
+// Regression: I-166
+func TestReader_Readahead_SameChunkReadRetriesSkippedCandidates(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	busy := f.Inode(writeAndFlush(t, f, "busy", testharness.Pattern(16*cs, 19)))
+	in := f.Inode(writeAndFlush(t, f, "a", testharness.Pattern(16*cs, 20)))
+	g := &countGate{ShardClient: f, release: make(chan struct{})}
+	rd := vfs.NewReader(f.FSM, f, g, f.Cache, nil)
+	drained(t, rd)
+	k := 2
+	rd.Prefetch(busy, 0) // another stream takes every slot
+	testharness.Eventually(t, func() bool { return int(g.entered.Load()) == vfs.ReadAhead*k }, "every slot busy")
+	rd.Prefetch(in, 0) // the chunk's first READ: every candidate skipped
+	if n := rd.Prefetching(); n != vfs.ReadAhead {
+		t.Fatalf("%d prefetches in flight, want only the other stream's %d", n, vfs.ReadAhead)
+	}
+	if n := rd.ReadaheadSkipped(); n == 0 {
+		t.Fatal("a skip with every slot busy was not counted")
+	}
+	close(g.release)
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "the other stream's prefetches done")
+	rd.Prefetch(in, int64(cs/2)+7) // a later READ in chunk 0
+	testharness.Eventually(t, func() bool {
+		fetched, _ := rd.ReadaheadStats()
+		return fetched == uint64(2*vfs.ReadaheadDepth(uint32(cs)))
+	},
+		"the skipped candidates fetched on the later READ")
+}
+
 // A prefetch a client has joined is not cancelled by that client's seek elsewhere: the
 // joined read completes from the one fetch, and only the unjoined prefetches are cut.
 // Invariant: I-203

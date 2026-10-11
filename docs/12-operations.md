@@ -287,7 +287,9 @@ runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under w
 `gateway.readahead_fetched` (chunks a prefetch fetched), `gateway.readahead_joined`
 (client READs served by a chunk a prefetch fetched or was fetching),
 `gateway.readahead_cancelled` (prefetches cut because their client seeked away, 04 §5,
-I-203), `gateway.reads_early` (ranges served from verified data shards rather than from
+I-203), `gateway.readahead_skipped` (readahead candidates skipped because every slot was
+busy: readahead saturated, the client fetches those chunks itself, I-166),
+`gateway.reads_early` (ranges served from verified data shards rather than from
 the decoded chunk, 04 §5, I-202) and `gateway.prefetching` (prefetches in flight
 right now). On the leader `repair.stats.sums_recorded` and `repair.stats.sums_pending`
 count the chunks whose data-shard sums the last pass recorded and the chunks still

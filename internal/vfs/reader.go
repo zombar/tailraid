@@ -48,6 +48,7 @@ type Reader struct {
 	raFetched   atomic.Uint64 // chunks a prefetch fetched
 	raJoined    atomic.Uint64 // READs served by a chunk a prefetch fetched or was fetching
 	raCancelled atomic.Uint64 // prefetches cut because their client seeked away (I-203)
+	raSkipped   atomic.Uint64 // readahead candidates skipped because every slot was busy (I-166)
 	readsEarly  atomic.Uint64 // ranges served from verified data shards rather than the decoded chunk (I-202)
 	fetching    atomic.Int32  // fetches running on their own goroutine (ReadAtEarly)
 }
@@ -228,6 +229,10 @@ func (r *Reader) ReadaheadStats() (fetched, joined uint64) {
 // ReadaheadCancelled reports the prefetches cut because their client seeked away (I-203).
 func (r *Reader) ReadaheadCancelled() uint64 { return r.raCancelled.Load() }
 
+// ReadaheadSkipped is the number of readahead candidates skipped because every slot was
+// busy: readahead saturated, and the client fetches those chunks itself (I-166).
+func (r *Reader) ReadaheadSkipped() uint64 { return r.raSkipped.Load() }
+
 // ReadsEarly reports the ranges served from verified data shards rather than from the
 // decoded chunk (docs/12 §8, I-202).
 func (r *Reader) ReadsEarly() uint64 { return r.readsEarly.Load() }
@@ -258,11 +263,10 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 		clear(r.pf)
 	}
 	r.last[in.Ino] = idx
-	if seen && idx == prev { // another READ in the same chunk: still in the sequence, its readahead already started
-		r.mu.Unlock()
-		return
-	}
-	sequential := idx == 0 || (seen && idx == prev+1)
+	// another READ in the same chunk stays in the sequence: it cancels nothing and retries
+	// the candidates a busy slot made the chunk's first READ skip (an early-served READ
+	// returns while its chunk's fetch still holds a slot)
+	sequential := idx == 0 || (seen && (idx == prev || idx == prev+1))
 	if !sequential {
 		r.cancelUnjoinedLocked(in.Ino)
 	}
@@ -279,7 +283,8 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 		select {
 		case r.slots <- struct{}{}:
 		default:
-			return // every slot busy: skipped, never queued
+			r.raSkipped.Add(1) // every slot busy: skipped, never queued
+			return
 		}
 		r.mu.Lock()
 		if _, running := r.inflight[h]; running {
