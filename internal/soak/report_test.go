@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/chart"
 )
 
 // Node names, check text and file names from the environment are untrusted: the report
@@ -177,5 +179,44 @@ func TestPhases_CitesAreDefined(t *testing.T) {
 	}
 	if n < 50 {
 		t.Fatalf("only %d citations found", n)
+	}
+}
+
+// The report's stylesheet defines every class the chart package emits, in the report's
+// own colours, as app.css does in the web UI's tokens.
+// Invariant: I-197
+func TestReport_DefinesChartClasses(t *testing.T) {
+	var out bytes.Buffer
+	if err := Render(&out, Summary{Started: time.Now(), Phases: nil}); err != nil {
+		t.Fatal(err)
+	}
+	style := out.String()
+	for _, c := range chart.Classes {
+		if !strings.Contains(style, "."+c+"{") && !strings.Contains(style, "."+c+",") {
+			t.Errorf("the report's stylesheet does not define .%s", c)
+		}
+	}
+}
+
+// The report draws the network chart when any sample carries a network rate (I-190), and
+// leaves it out when none does, like the other vitals charts.
+// Invariant: I-190
+func TestReport_NetworkChart(t *testing.T) {
+	render := func(s Sample) string {
+		var out bytes.Buffer
+		now := time.Now()
+		sum := Summary{Started: now, Duration: 2 * time.Second, Records: []Record{{Kind: "sample", T: now.Add(time.Second), S: &s}}}
+		if err := Render(&out, sum); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	const title = "Network on the sampled node (tailnet and every interface)"
+	with := render(Sample{TailnetRxBps: 3 << 20, NetRxBps: 4 << 20})
+	if !strings.Contains(with, title) || !strings.Contains(with, "tailnet rx MiB/s") || !strings.Contains(with, "rx MiB/s (every interface)") {
+		t.Fatal("the network chart is missing with a rate sampled")
+	}
+	if strings.Contains(render(Sample{Load1: 1}), title) {
+		t.Fatal("the network chart is drawn without a network rate")
 	}
 }

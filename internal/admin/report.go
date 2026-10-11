@@ -42,6 +42,7 @@ type NodeReport struct {
 	Slots      int          `json:"slots"`
 	Missing    int          `json:"missing_slots"` // slots this node should hold but is dead for
 	Dev        bool         `json:"dev,omitempty"` // /dev/* endpoints enabled
+	Web        uint16       `json:"web,omitempty"` // the member's browser UI port, 0 when off: the dashboard links its pages by tsIP and this port (docs/13 §1)
 	TSStable   string       `json:"ts_stable_id,omitempty"`
 	JoinedAt   time.Time    `json:"joined_at"`
 	Diskless   bool         `json:"diskless,omitempty"`    // a device with no disk rows: a gateway-only host (docs/14 §9)
@@ -106,6 +107,16 @@ type GatewayReport struct {
 	ReadaheadJoined    uint64 `json:"readahead_joined"`
 	ReadaheadCancelled uint64 `json:"readahead_cancelled"` // prefetches cut by a client's seek (I-203)
 	Prefetching        int    `json:"prefetching"`
+	// every byte clients read and wrote through this gateway's files, cumulative
+	// (docs/17 §1, I-191)
+	BytesRead    uint64 `json:"bytes_read"`
+	BytesWritten uint64 `json:"bytes_written"`
+}
+
+// WithFS adds the filesystem's client byte counters to the gateway view.
+func (g *GatewayReport) WithFS(fs *vfs.FS) *GatewayReport {
+	g.BytesRead, g.BytesWritten = fs.ClientBytes()
+	return g
 }
 
 // WithReader adds the reader's readahead counters to the gateway view.
@@ -147,6 +158,9 @@ type ProcessReport struct {
 	Sys        uint64 `json:"sys"`
 	Goroutines int    `json:"goroutines"`
 }
+
+// Process is the runtime's snapshot of this process.
+func Process() *ProcessReport { return processReport() }
 
 func processReport() *ProcessReport {
 	var ms runtime.MemStats
@@ -258,7 +272,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS
-			r.Free, r.Applied, r.Dev = pr.Free, pr.Applied, pr.Dev
+			r.Free, r.Applied, r.Dev, r.Web = pr.Free, pr.Applied, pr.Dev, pr.Web
 			if !pr.LastOK.IsZero() {
 				r.RTT = pr.RTT.Round(time.Millisecond).String()
 			}

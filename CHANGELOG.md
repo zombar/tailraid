@@ -2,6 +2,22 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.5.1 (2026-10-11)
+
+### Changes
+
+- soak: phase 20 compares the rollup against the raw rows as sealed by the rollup seal ([45b2331](https://github.com/zombar/tailraid/commit/45b2331))
+- stats: a dead member's row says dead, whatever its suspect mark (I-191) ([c79adc3](https://github.com/zombar/tailraid/commit/c79adc3))
+- soak: phase 20 judges the newest cluster row after the kill from any live member ([b56dd7d](https://github.com/zombar/tailraid/commit/b56dd7d))
+- soak: gofmt the report after the merge ([5708bad](https://github.com/zombar/tailraid/commit/5708bad))
+- rpc, meta: a join with an unknown row outcome is retryable; the FSM generator keeps one folder protected ([905d984](https://github.com/zombar/tailraid/commit/905d984))
+- soak, stats: phase 20 and the seal's rollup mode (docs/17 §7) ([ef386fd](https://github.com/zombar/tailraid/commit/ef386fd))
+- webui, stats: the Stats page, /api/stats and the theme switch (I-196, I-198, I-200) ([bc450de](https://github.com/zombar/tailraid/commit/bc450de))
+- stats: the history kept in the volume (I-191..I-194, I-199, the hiding half of I-195) ([d386c90](https://github.com/zombar/tailraid/commit/d386c90))
+- admin, soak: network rx/tx vitals on three OSes and the report's network chart (I-190) ([8339a14](https://github.com/zombar/tailraid/commit/8339a14))
+- chart: one package draws the soak report and the Stats page (I-197) ([ce7b6c2](https://github.com/zombar/tailraid/commit/ce7b6c2))
+- docs, lookdev: the Stats page (docs/17), I-190..I-200, stubs ([be5b8c3](https://github.com/zombar/tailraid/commit/be5b8c3))
+
 ## v0.5.0 (2026-10-11)
 
 ### Changes

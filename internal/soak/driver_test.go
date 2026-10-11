@@ -16,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/s3"
+	"github.com/zombar/tailraid/internal/stats"
 )
 
 // fakeEnv is the smallest Env the driver's own rules can be tested against: one volume in
@@ -530,4 +531,12 @@ func TestPhases_MembershipRestoresAutoMode(t *testing.T) {
 			t.Fatalf("auto %v before the phase, %v after: %v", auto, e.auto, e.log())
 		}
 	}
+}
+
+func (e *fakeEnv) StatsSeal(context.Context, NodeRef, bool) (int, error) {
+	return 0, errors.New("fake: no stats sampler")
+}
+
+func (e *fakeEnv) StatsLive(context.Context, NodeRef, int64) ([]stats.Row, error) {
+	return nil, errors.New("fake: no stats sampler")
 }

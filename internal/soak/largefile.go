@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/chart"
 )
 
 // The data-slot spread check (I-33) judges a target only once it expects minJudged data
@@ -265,10 +266,10 @@ func (r *Run) placementChecks(ctx context.Context, p string, size int, rep admin
 				votIdx = append(votIdx, idx)
 			}
 		}
-		for i, e := range expectedShares(all, len(reps)) {
+		for i, e := range chart.ExpectedShares(all, len(reps)) {
 			allShare[allIdx[i]] = e
 		}
-		for i, e := range expectedShares(vot, len(reps)) {
+		for i, e := range chart.ExpectedShares(vot, len(reps)) {
 			voterShare[votIdx[i]] = e
 		}
 	}

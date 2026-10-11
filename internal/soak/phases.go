@@ -42,6 +42,7 @@ var phases = []phase{
 	{"16 web ui", phaseWeb},
 	{"17 hot path", phaseHotPath},
 	{"18 repair fan-out", phaseFanOut},
+	{"20 stats", phaseStats}, // 19 is snapshots' (its branch)
 }
 
 // model is the client's belief about the corpus: path → content.

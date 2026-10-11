@@ -4,6 +4,7 @@ package admin
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -12,8 +13,17 @@ import (
 
 // platformVitals reads procfs: nothing here fails loudly, a file that cannot be read
 // leaves its fields absent (I-85).
-func platformVitals(m *MachineReport) {
+func platformVitals(m *MachineReport, tailnet *net.Interface) {
 	rusageVitals(m)
+	if b, err := os.ReadFile("/proc/net/dev"); err == nil {
+		name := ""
+		if tailnet != nil {
+			name = tailnet.Name
+		}
+		if rx, tx, trx, ttx, ok := parseNetDev(string(b), name); ok {
+			m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
+		}
+	}
 	if f := fields("/proc/self/statm"); len(f) > 1 {
 		if pages, err := strconv.ParseUint(f[1], 10, 64); err == nil {
 			m.RSS = pages * uint64(os.Getpagesize())

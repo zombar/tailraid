@@ -67,6 +67,17 @@ type Config struct {
 	Cache struct {
 		Size string `yaml:"size,omitempty"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
 	} `yaml:"cache,omitempty"`
+	// Stats is the Stats page's history (docs/17 §5): every key is written only when set
+	// (I-61), so a release from before them still starts after a rollback.
+	Stats struct {
+		Every string `yaml:"every,omitempty"` // the sample interval (default 10s; 5s..1m)
+		Keep  struct {
+			Raw    string `yaml:"raw,omitempty"`    // the 10 s tier (default 48h; at least 26h)
+			Minute string `yaml:"minute,omitempty"` // the 1-min tier (default 720h; at least 48h)
+			Coarse string `yaml:"coarse,omitempty"` // the 10-min tier (default 17520h)
+		} `yaml:"keep,omitempty"`
+		Cache string `yaml:"cache,omitempty"` // the gateway's parsed-segment cache (default 32MiB)
+	} `yaml:"stats,omitempty"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
@@ -163,6 +174,52 @@ func (c Config) RepairRateBytes() (n int64, set bool, err error) {
 		return 0, false, fmt.Errorf("config: repair.rate %q: bad size", c.Repair.Rate)
 	}
 	return int64(u), true, nil //nolint:gosec // bounded above
+}
+
+// StatsEvery parses stats.every, the sample interval of docs/17 §1: 10 s when unset,
+// otherwise 5 s to 1 min (I-194).
+func (c Config) StatsEvery() (time.Duration, error) {
+	return statsDuration("stats.every", c.Stats.Every, 10*time.Second, 5*time.Second, time.Minute)
+}
+
+// StatsKeep parses the three retentions of docs/17 §5: raw at least 26 h (a day must be
+// whole when it is rolled up), minute at least 48 h, coarse at least a day.
+func (c Config) StatsKeep() (raw, minute, coarse time.Duration, err error) {
+	const year = 365 * 24 * time.Hour
+	if raw, err = statsDuration("stats.keep.raw", c.Stats.Keep.Raw, 48*time.Hour, 26*time.Hour, 10*year); err != nil {
+		return 0, 0, 0, err
+	}
+	if minute, err = statsDuration("stats.keep.minute", c.Stats.Keep.Minute, 720*time.Hour, 48*time.Hour, 10*year); err != nil {
+		return 0, 0, 0, err
+	}
+	if coarse, err = statsDuration("stats.keep.coarse", c.Stats.Keep.Coarse, 17520*time.Hour, 24*time.Hour, 100*year); err != nil {
+		return 0, 0, 0, err
+	}
+	return raw, minute, coarse, nil
+}
+
+// StatsCacheBytes parses stats.cache, the gateway's parsed-segment cache: 32 MiB when
+// unset, at least 1 MiB.
+func (c Config) StatsCacheBytes() (int64, error) {
+	if c.Stats.Cache == "" {
+		return 32 << 20, nil
+	}
+	n, err := ParseBytes(c.Stats.Cache)
+	if err != nil || n < 1<<20 || n > 1<<40 {
+		return 0, fmt.Errorf("config: stats.cache %q: want a size of 1MiB to 1TiB", c.Stats.Cache)
+	}
+	return int64(n), nil //nolint:gosec // bounded above
+}
+
+func statsDuration(key, s string, def, lo, hi time.Duration) (time.Duration, error) {
+	if s == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < lo || d > hi {
+		return 0, fmt.Errorf("config: %s %q: want a duration of %v to %v", key, s, lo, hi)
+	}
+	return d, nil
 }
 
 func errBadDuration(err error) error {
@@ -396,6 +453,15 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, err := c.CacheSize(); err != nil {
+		return err
+	}
+	if _, err := c.StatsEvery(); err != nil {
+		return err
+	}
+	if _, _, _, err := c.StatsKeep(); err != nil {
+		return err
+	}
+	if _, err := c.StatsCacheBytes(); err != nil {
 		return err
 	}
 	return nil

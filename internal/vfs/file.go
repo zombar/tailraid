@@ -86,6 +86,7 @@ func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	if err := f.fs.ov.Write(f.ino, in.Size, uint64(off), p); err != nil {
 		return 0, mapErr("write", f.name, err)
 	}
+	f.fs.bytesWritten.Add(uint64(len(p)))
 	return len(p), nil
 }
 
@@ -118,6 +119,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
 		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReader(context.Background(), in))
 		if err == nil || errors.Is(err, io.EOF) {
+			f.fs.bytesRead.Add(uint64(max(n, 0))) //nolint:gosec // n is a count
 			return n, err
 		}
 		if !errors.Is(err, meta.ErrNotExist) { // the flush committed and evicted the entry in between: the base has it all
@@ -128,6 +130,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, mapErr("read", f.name, err)
 	}
+	f.fs.bytesRead.Add(uint64(max(n, 0))) //nolint:gosec // n is a count
 	return n, err
 }
 

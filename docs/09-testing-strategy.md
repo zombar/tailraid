@@ -388,15 +388,25 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `repair.workers`, the pass having overlapped chunks, the read during the pass keeping
   at least a third of its idle throughput, then the policy restored and the migration
   back complete; the in-flight and during-the-pass checks are skipped when the pass
-  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175). The compose rig gives four nodes two disks each, one
+  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 20 stats (with `stats.every: 5s`
+  on the rig and 1 s on the harness: after `stats seal` every node's raw segment is
+  under its own directory, decodes and is below the small-chunk threshold and the
+  leader's cluster segment is there, `stats seal --rollup` writes today's minute and
+  coarse segments and the minute rows equal the pure rollup of the raw rows the driver
+  read back, the leader's seal removes a segment the phase planted with a 2010 name,
+  the page's charts render for a 6 h range from the rows read and the live edge every
+  node answers over `/v1/stats`, a member killed mid-phase answers no live edge and the
+  leader's rows mark it dead and never a zero, and the stored bytes grow by no more
+  than docs/17 §6's estimate for one sealed hour and the rollups per node, printed
+  measured against estimated; 19 is taken by snapshots; I-191..I-194, I-196). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for
   phase 16; `cmd/soak -phases 15` runs a subset of
   the phases on the rig; `cmd/soak -topology single` runs one node with four
   disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
-  machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure and
-  disk next to the process memory. A phase the environment cannot run is recorded as
+  machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure, disk
+  and network (the tailnet interface's rx and tx, I-190) next to the process memory. A phase the environment cannot run is recorded as
   *skipped (capability)*, never passed.
   On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
   it, and once the service manager has it back it drops every peer until the phase's
@@ -444,8 +454,8 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   that landed after a heal), every node's goroutine dump taken right after a failed
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
-  bytes, overlay WAL depth, slots per node, latency histograms, the FSM-hash strip, the
-  trash and the pinned cache over time, and the data spread across disks (one lane per
+  bytes, overlay WAL depth, slots per node, network throughput, latency histograms, the
+  FSM-hash strip, the trash and the pinned cache over time, and the data spread across disks (one lane per
   target grouped by host, each sample coloured by the target's slot share against its
   expected share, dead hatched, with a host-cap strip underneath that is green while no
   chunk exceeds the cap and amber while `domain_skew > 0`).
