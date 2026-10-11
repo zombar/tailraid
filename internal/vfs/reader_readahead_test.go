@@ -448,6 +448,38 @@ func TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch(t *testing.T) {
 	}
 }
 
+// A client reads a chunk in many READs (32 KiB to 1 MiB each, a chunk is 4 MiB): a READ
+// in the chunk of the previous one stays in the sequence and cancels nothing, at chunk 0
+// and past it. Every READ after the first in a chunk had cancelled the prefetches the
+// previous chunk had started, and a sequential read of 64 chunks was served 47 times
+// from readahead instead of 59 (the soak's phase 17).
+// Regression: I-203
+func TestReader_Readahead_ReadInSameChunkKeepsPrefetches(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	data := testharness.Pattern(16*cs, 18)
+	in := f.Inode(writeAndFlush(t, f, "a", data))
+	g := &countGate{ShardClient: f, release: make(chan struct{})}
+	rd := vfs.NewReader(f.FSM, f, g, f.Cache, nil)
+	drained(t, rd)
+	k := 2
+	rd.Prefetch(in, 0)
+	rd.Prefetch(in, int64(cs/2)) // a second READ in chunk 0
+	rd.Prefetch(in, int64(cs))   // chunk 1: next in sequence
+	testharness.Eventually(t, func() bool { return int(g.entered.Load()) == vfs.ReadAhead*k }, "prefetches in flight")
+	for _, off := range []int64{int64(cs) + 1, int64(cs + cs/2), int64(2*cs - 1)} { // more READs in chunk 1
+		rd.Prefetch(in, off)
+	}
+	if n := rd.ReadaheadCancelled(); n != 0 {
+		t.Fatalf("READs inside the chunk of the previous READ cancelled %d prefetches, want none", n)
+	}
+	close(g.release)
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "prefetches done")
+	if fetched, _ := rd.ReadaheadStats(); fetched == 0 {
+		t.Fatal("no prefetch completed")
+	}
+}
+
 // A prefetch a client has joined is not cancelled by that client's seek elsewhere: the
 // joined read completes from the one fetch, and only the unjoined prefetches are cut.
 // Invariant: I-203

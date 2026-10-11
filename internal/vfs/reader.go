@@ -258,6 +258,10 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 		clear(r.pf)
 	}
 	r.last[in.Ino] = idx
+	if seen && idx == prev { // another READ in the same chunk: still in the sequence, its readahead already started
+		r.mu.Unlock()
+		return
+	}
 	sequential := idx == 0 || (seen && idx == prev+1)
 	if !sequential {
 		r.cancelUnjoinedLocked(in.Ino)
