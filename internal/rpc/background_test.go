@@ -59,12 +59,10 @@ func TestServer_BackgroundShare(t *testing.T) {
 		t.Fatalf("the third background PUT ran with the share full: %v", err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	start := time.Now()
+	// the client-path PUT lands while the background one is still queued: the order,
+	// not a wall-clock bound, is the property (a slow runner takes a second per call)
 	if err := c.Put(ctx, 1, key(p, 0), p); err != nil {
 		t.Fatalf("foreground PUT: %v", err)
-	}
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("the foreground PUT waited %s behind background work", took)
 	}
 	select {
 	case err := <-queued:
