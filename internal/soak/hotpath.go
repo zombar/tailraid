@@ -103,11 +103,17 @@ func phaseHotPath(ctx context.Context, r *Run) error {
 	default:
 		fetched := after.Gateway.ReadaheadFetched - before.Gateway.ReadaheadFetched
 		joined := after.Gateway.ReadaheadJoined - before.Gateway.ReadaheadJoined
-		text := fmt.Sprintf("%d of %d chunks served by readahead, %d prefetched, via %s", joined, hotpathChunks, fetched, reader.Name)
+		cancelled := after.Gateway.ReadaheadCancelled - before.Gateway.ReadaheadCancelled
+		skipped := after.Gateway.ReadaheadSkipped - before.Gateway.ReadaheadSkipped
+		text := fmt.Sprintf("%d of %d chunks served by readahead, %d prefetched, %d cancelled, %d candidates skipped with every slot busy, via %s", joined, hotpathChunks, fetched, cancelled, skipped, reader.Name)
 		if len(gws) == 1 && fetched == 0 && joined == 0 {
 			r.checkSkipped("I-166", "readahead served the sequential read", "one gateway: the client's own cache served the read it had just written; "+text)
 		} else {
-			r.checkAt("I-166", "readahead served the sequential read", joined >= uint64(hotpathChunks-vfs.ReadaheadDepth(uint32(r.Profile.ChunkSize))-1), text, p, "", reader.Name)
+			// a chunk readahead did not serve is acceptable only where the slot bound left it
+			// to the client (saturated readahead: a slow host decodes behind the client), never
+			// where a prefetch was cut or lost
+			short := uint64(hotpathChunks - vfs.ReadaheadDepth(uint32(r.Profile.ChunkSize)) - 1)
+			r.checkAt("I-166", "readahead served the sequential read", joined > 0 && cancelled == 0 && (joined >= short || skipped > 0), text, p, "", reader.Name)
 			r.checkAt("I-166", "readahead fetched no more than the file's chunks", fetched <= hotpathChunks, text, p, "", reader.Name)
 			early := after.Gateway.ReadsEarly - before.Gateway.ReadsEarly
 			r.checkAt("I-202", "a cold ranged read was served from verified data shards", early > 0, fmt.Sprintf("%d ranges served early via %s", early, reader.Name), p, "", reader.Name)
