@@ -473,7 +473,7 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
-| I-190 | `TestStub_I_190` (planned: TestVitals_Network_AbsentOrMeasured, TestVitals_NetworkParsers_PerOS, TestVitals_TailnetInterface_Match, TestReport_NetworkChart) |
+| I-190 | `TestVitals_RealMeasurementsOrAbsent`, `TestVitals_NetworkParsers_PerOS`, `TestVitals_IfList2Parser`, `TestVitals_IfTableSum`, `TestVitals_TailnetInterface_Match`, `TestVitals_CounterReset`, `TestReport_NetworkChart` |
 | I-122 | `TestSvc_SystemdHardeningAndQuoting`, `TestSvc_UnitsRouteLogs` |
 | I-123 | `TestCluster_ShutdownTransfersLeadership` |
 | I-124 | `TestLogFile_RotatesAndReopens`, `TestLimiter_OneLinePerInterval` |

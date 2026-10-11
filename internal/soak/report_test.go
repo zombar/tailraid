@@ -197,3 +197,26 @@ func TestReport_DefinesChartClasses(t *testing.T) {
 		}
 	}
 }
+
+// The report draws the network chart when any sample carries a network rate (I-190), and
+// leaves it out when none does, like the other vitals charts.
+// Invariant: I-190
+func TestReport_NetworkChart(t *testing.T) {
+	render := func(s Sample) string {
+		var out bytes.Buffer
+		now := time.Now()
+		sum := Summary{Started: now, Duration: 2 * time.Second, Records: []Record{{Kind: "sample", T: now.Add(time.Second), S: &s}}}
+		if err := Render(&out, sum); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	const title = "Network on the sampled node (tailnet and every interface)"
+	with := render(Sample{TailnetRxBps: 3 << 20, NetRxBps: 4 << 20})
+	if !strings.Contains(with, title) || !strings.Contains(with, "tailnet rx MiB/s") || !strings.Contains(with, "rx MiB/s (every interface)") {
+		t.Fatal("the network chart is missing with a rate sampled")
+	}
+	if strings.Contains(render(Sample{Load1: 1}), title) {
+		t.Fatal("the network chart is drawn without a network rate")
+	}
+}

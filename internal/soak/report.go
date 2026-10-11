@@ -297,7 +297,9 @@ func charts(s Summary) ([]template.HTML, string) {
 	pressure := chart.Series{Name: "memory pressure (PSI some, avg10 %)"}
 	free := chart.Series{Name: "data disk free"}
 	dwr, drd := chart.Series{Name: "disk write MiB/s"}, chart.Series{Name: "disk read MiB/s"}
-	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO := false, false, false, false, false
+	nrx, ntx := chart.Series{Name: "rx MiB/s (every interface)"}, chart.Series{Name: "tx MiB/s (every interface)"}
+	trx, ttx := chart.Series{Name: "tailnet rx MiB/s"}, chart.Series{Name: "tailnet tx MiB/s"}
+	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO, haveNet := false, false, false, false, false, false
 	nodeSeries := map[string]*chart.Series{}
 	var nodeNames []string
 	liveCells := map[string][]chart.Cell{}
@@ -334,6 +336,11 @@ func charts(s Summary) ([]template.HTML, string) {
 		havePressure = havePressure || sm.MemPressure > 0
 		haveDisk = haveDisk || sm.DiskFree > 0
 		haveDiskIO = haveDiskIO || sm.DiskWriteBps > 0 || sm.DiskReadBps > 0
+		nrx.Points = append(nrx.Points, [2]float64{x(rec), sm.NetRxBps / (1 << 20)})
+		ntx.Points = append(ntx.Points, [2]float64{x(rec), sm.NetTxBps / (1 << 20)})
+		trx.Points = append(trx.Points, [2]float64{x(rec), sm.TailnetRxBps / (1 << 20)})
+		ttx.Points = append(ttx.Points, [2]float64{x(rec), sm.TailnetTxBps / (1 << 20)})
+		haveNet = haveNet || sm.NetRxBps > 0 || sm.NetTxBps > 0 || sm.TailnetRxBps > 0 || sm.TailnetTxBps > 0
 		for name, slots := range sm.Slots {
 			ns, ok := nodeSeries[name]
 			if !ok {
@@ -388,6 +395,9 @@ func charts(s Summary) ([]template.HTML, string) {
 	}
 	if haveDiskIO {
 		out = append(out, template.HTML(chart.Line("Disk throughput on the sampled node (every disk)", "MiB/s", []chart.Series{dwr, drd}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
+	}
+	if haveNet {
+		out = append(out, template.HTML(chart.Line("Network on the sampled node (tailnet and every interface)", "MiB/s", []chart.Series{trx, ttx, nrx, ntx}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if placement != nil {
 		out = append(out, template.HTML(placementChart(placement))) //nolint:gosec // generated SVG

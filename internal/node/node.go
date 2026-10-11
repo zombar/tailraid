@@ -260,7 +260,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	status := func() any {
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
 		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd)
-		rep.Machine = admin.Vitals(cfg.Node.DataDir)
+		rep.Machine = admin.Vitals(cfg.Node.DataDir, ident.IP)
 		if webAddr != "" {
 			rep.WebURL = "http://" + webAddr + "/"
 		}

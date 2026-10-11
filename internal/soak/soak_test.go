@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"runtime/pprof"
 	"slices"
@@ -200,7 +201,7 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 	}
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
 	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader)
-	rep.Machine = admin.Vitals(nd.Dir)
+	rep.Machine = admin.Vitals(nd.Dir, netip.Addr{})
 	return rep, nil
 }
 

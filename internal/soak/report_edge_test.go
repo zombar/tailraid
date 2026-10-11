@@ -137,16 +137,17 @@ func TestEmit_MarshalFailureIsRecorded(t *testing.T) {
 
 // A node's cumulative counters reset when it restarts: the rate for that interval is 0,
 // never negative or enormous, and the next interval is computed from the new base.
+// Invariant: I-190
 func TestVitals_CounterReset(t *testing.T) {
 	r := &Run{}
 	now := r.now()
-	r.vitals = map[string]vitalsPrev{"n1": {t: now.Add(-time.Second), m: admin.MachineReport{CPUSeconds: 100, MachineBusy: 900, MachineTotal: 1000, DiskWritten: 1 << 30, DiskRead: 1 << 20}}}
+	r.vitals = map[string]vitalsPrev{"n1": {t: now.Add(-time.Second), m: admin.MachineReport{CPUSeconds: 100, MachineBusy: 900, MachineTotal: 1000, DiskWritten: 1 << 30, DiskRead: 1 << 20, NetRx: 1 << 40, NetTx: 1 << 40, TailnetRx: 1 << 30, TailnetTx: 1 << 30}}}
 	var s Sample
-	r.vitalsSample(&s, "n1", admin.MachineReport{CPUSeconds: 0.5, MachineBusy: 10, MachineTotal: 20, DiskWritten: 4096, DiskRead: 0})
-	if s.CPUPct != 0 || s.MachinePct != 0 || s.DiskWriteBps != 0 || s.DiskReadBps != 0 {
+	r.vitalsSample(&s, "n1", admin.MachineReport{CPUSeconds: 0.5, MachineBusy: 10, MachineTotal: 20, DiskWritten: 4096, DiskRead: 0, NetRx: 10, NetTx: 10, TailnetRx: 1, TailnetTx: 1})
+	if s.CPUPct != 0 || s.MachinePct != 0 || s.DiskWriteBps != 0 || s.DiskReadBps != 0 || s.NetRxBps != 0 || s.TailnetTxBps != 0 {
 		t.Fatalf("rates across a reset: %+v", s)
 	}
-	for _, v := range []float64{s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps} {
+	for _, v := range []float64{s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps, s.NetRxBps, s.NetTxBps, s.TailnetRxBps, s.TailnetTxBps} {
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 			t.Fatalf("bad rate %v", v)
 		}
@@ -157,11 +158,19 @@ func TestVitals_CounterReset(t *testing.T) {
 		t.Fatalf("base not reset: %+v", prev.m)
 	}
 	// too soon after: the last rates are carried, not recomputed over milliseconds
-	r.vitals["n1"] = vitalsPrev{t: now, m: prev.m, cpu: 7, hasRates: true}
+	r.vitals["n1"] = vitalsPrev{t: now, m: prev.m, cpu: 7, trx: 9, hasRates: true}
 	var s2 Sample
 	r.vitalsSample(&s2, "n1", admin.MachineReport{CPUSeconds: 100})
-	if s2.CPUPct != 7 {
-		t.Fatalf("carried rate %v, want 7", s2.CPUPct)
+	if s2.CPUPct != 7 || s2.TailnetRxBps != 9 {
+		t.Fatalf("carried rates %v %v, want 7 and 9", s2.CPUPct, s2.TailnetRxBps)
+	}
+	// a plain interval: bytes per second from the counters' difference
+	r.vitals["n1"] = vitalsPrev{t: now.Add(-2 * time.Second), m: admin.MachineReport{NetRx: 1000, NetTx: 0, TailnetRx: 500, TailnetTx: 100}}
+	var s3 Sample
+	r.vitalsSample(&s3, "n1", admin.MachineReport{NetRx: 3000, NetTx: 4000, TailnetRx: 700, TailnetTx: 100})
+	near := func(got, want float64) bool { return math.Abs(got-want) <= want*0.01 } // the run's clock is a hair past the fixture's two seconds
+	if !near(s3.NetRxBps, 1000) || !near(s3.NetTxBps, 2000) || !near(s3.TailnetRxBps, 100) || s3.TailnetTxBps != 0 {
+		t.Fatalf("network rates %v %v %v %v", s3.NetRxBps, s3.NetTxBps, s3.TailnetRxBps, s3.TailnetTxBps)
 	}
 }
 

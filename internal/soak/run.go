@@ -119,15 +119,20 @@ type Sample struct {
 	DiskTotal    uint64  `json:"disk_total"`
 	DiskWriteBps float64 `json:"disk_write_bps"`
 	DiskReadBps  float64 `json:"disk_read_bps"`
+	NetRxBps     float64 `json:"net_rx_bps"` // every interface but loopback (I-190)
+	NetTxBps     float64 `json:"net_tx_bps"`
+	TailnetRxBps float64 `json:"tailnet_rx_bps"` // the tailnet interface
+	TailnetTxBps float64 `json:"tailnet_tx_bps"`
 }
 
 // vitalsPrev is the last machine report of one node that a rate was computed from, and
 // the rates themselves (carried across intervals too short to divide by).
 type vitalsPrev struct {
-	t                 time.Time
-	m                 admin.MachineReport
-	cpu, mcpu, wr, rd float64
-	hasRates          bool
+	t                  time.Time
+	m                  admin.MachineReport
+	cpu, mcpu, wr, rd  float64
+	nrx, ntx, trx, ttx float64
+	hasRates           bool
 }
 
 // minRateInterval is the shortest interval a rate is computed over: the samples at
@@ -309,7 +314,7 @@ func (r *Run) event(name, text string) { r.emit(Record{Kind: "event", Name: name
 // scrubSample replaces NaN and Inf in every float field of s with 0: the sources guard
 // their divisions, but a node's own vitals (load, memory pressure) arrive as it sent them.
 func scrubSample(s *Sample) {
-	for _, f := range []*float64{&s.DedupRatio, &s.CPUPct, &s.MachinePct, &s.Load1, &s.MemPressure, &s.DiskWriteBps, &s.DiskReadBps} {
+	for _, f := range []*float64{&s.DedupRatio, &s.CPUPct, &s.MachinePct, &s.Load1, &s.MemPressure, &s.DiskWriteBps, &s.DiskReadBps, &s.NetRxBps, &s.NetTxBps, &s.TailnetRxBps, &s.TailnetTxBps} {
 		if math.IsNaN(*f) || math.IsInf(*f, 0) {
 			*f = 0
 		}
@@ -551,6 +556,7 @@ func (r *Run) vitalsSample(s *Sample, node string, m admin.MachineReport) {
 	if dt := now.Sub(prev.t); dt < minRateInterval {
 		// too close to divide by: carry the last rates, keep the earlier report as the base
 		s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps = prev.cpu, prev.mcpu, prev.wr, prev.rd
+		s.NetRxBps, s.NetTxBps, s.TailnetRxBps, s.TailnetTxBps = prev.nrx, prev.ntx, prev.trx, prev.ttx
 		return
 	}
 	dt := now.Sub(prev.t).Seconds()
@@ -567,8 +573,17 @@ func (r *Run) vitalsSample(s *Sample, node string, m admin.MachineReport) {
 	if m.DiskRead >= prev.m.DiskRead {
 		cur.rd = float64(m.DiskRead-prev.m.DiskRead) / dt
 	}
+	rate := func(now, before uint64) float64 {
+		if now < before {
+			return 0 // a counter reset (a reboot): no rate this interval
+		}
+		return float64(now-before) / dt
+	}
+	cur.nrx, cur.ntx = rate(m.NetRx, prev.m.NetRx), rate(m.NetTx, prev.m.NetTx)
+	cur.trx, cur.ttx = rate(m.TailnetRx, prev.m.TailnetRx), rate(m.TailnetTx, prev.m.TailnetTx)
 	r.vitals[node] = cur
 	s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps = cur.cpu, cur.mcpu, cur.wr, cur.rd
+	s.NetRxBps, s.NetTxBps, s.TailnetRxBps, s.TailnetTxBps = cur.nrx, cur.ntx, cur.trx, cur.ttx
 }
 
 func (r *Run) snapshotCounters() Sample {

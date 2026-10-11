@@ -4,11 +4,8 @@ import "testing"
 
 // Stubs for the stats page (docs/17, docs/12 §8, docs/13, docs/06, docs/08): each is deleted
 // by the PR that lands the tests its doc's Tests table names after it. PR 1 (the chart
-// package, I-197) has landed; PR 2 is the network vitals (I-190), PR 3 the store (I-191 to I-195, I-199),
+// package, I-197) and PR 2 (the network vitals, I-190) have landed; PR 3 is the store (I-191 to I-195, I-199),
 // PR 4 the web route, the page and the theme switch (I-196, I-198, I-200).
-
-// Invariant: I-190
-func TestStub_I_190(t *testing.T) { t.Skip("stub: stats PR 2 (network vitals); see docs/12 §8") }
 
 // Invariant: I-191
 func TestStub_I_191(t *testing.T) { t.Skip("stub: stats PR 3 (sampler); see docs/17") }

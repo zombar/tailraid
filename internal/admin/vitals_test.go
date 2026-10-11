@@ -3,6 +3,7 @@ package admin_test
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"net/netip"
 	"runtime"
 	"strings"
 	"testing"
@@ -14,13 +15,13 @@ import (
 // go backwards.
 // Invariant: I-85
 func TestVitals_RealMeasurementsOrAbsent(t *testing.T) {
-	first := admin.Vitals(t.TempDir())
+	first := admin.Vitals(t.TempDir(), netip.Addr{})
 	// burn some CPU so the process counter moves
 	sum := sha256.Sum256([]byte("x"))
 	for range 200_000 {
 		sum = sha256.Sum256(sum[:])
 	}
-	m := admin.Vitals(t.TempDir())
+	m := admin.Vitals(t.TempDir(), netip.Addr{})
 	if m.CPUSeconds <= 0 || m.CPUSeconds < first.CPUSeconds {
 		t.Fatalf("cpu seconds %v then %v", first.CPUSeconds, m.CPUSeconds)
 	}
@@ -40,6 +41,15 @@ func TestVitals_RealMeasurementsOrAbsent(t *testing.T) {
 		if m.MemTotal == 0 || m.MemAvailable > m.MemTotal || m.RSS != 0 || m.Load1 != 0 {
 			t.Fatalf("windows vitals %+v", m)
 		}
+	}
+	// the network counters never decrease and the tailnet pair stays absent without an
+	// address; with the loopback address the tailnet pair is still absent, since loopback
+	// is never counted (I-190)
+	if m.NetRx < first.NetRx || m.NetTx < first.NetTx || m.TailnetRx != 0 || m.TailnetTx != 0 {
+		t.Fatalf("network vitals %+v then %+v", first, m)
+	}
+	if lo := admin.Vitals(t.TempDir(), netip.MustParseAddr("127.0.0.1")); lo.TailnetRx != 0 || lo.TailnetTx != 0 {
+		t.Fatalf("loopback counted as the tailnet interface: %+v", lo)
 	}
 	// absent, not zero: a field this OS cannot measure is not in the JSON
 	b, err := json.Marshal(m)
