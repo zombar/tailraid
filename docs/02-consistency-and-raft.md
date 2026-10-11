@@ -396,6 +396,13 @@ the device can `join` afresh; never touches `shards/`, which the sweep reconcile
 refuses while `serve` runs and while `staging/` holds unflushed writes, unless
 `--discard-dirty` accepts losing them).
 
+Every member op runs on the leader behind a Raft barrier, so it reads the node table as
+of every entry the leader has committed. A leader elected before its FSM replayed its
+log (the first seconds after a restart from a snapshot older than the log) would
+otherwise read the snapshot's copy of the row, and since `NodeUpsert` replaces the whole
+row, the `set_version` a restarting node reports at that moment reverted the row's
+budget, address or vote to the snapshot's (CI, 2026-10-11; I-177).
+
 ## Partitions and quorum
 
 Raft guarantees that only a partition containing a majority of voters elects a leader and
@@ -468,6 +475,10 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-145** — After `set_voter` a device's Raft suffrage equals its row's `Voter`: a
   demote takes the vote with `DemoteVoter`, and a leader that demotes itself records the
   row before the change and keeps running Raft as a follower after it.
+- **I-177** — A member op on the leader reads the node table only after a Raft barrier
+  has applied every entry the leader had committed: a leader whose FSM still lags its
+  log never rewrites a row from a stale copy, so a `set_version` sent to a freshly
+  elected leader keeps every other field of the row.
 - **I-136** — A member op other than `remove` on a removed row is refused before it touches the Raft configuration or the table, and a node name given to the CLI resolves to a row that is not removed when one has that name.
 - **I-152** — `Trash` moves an entry out of its parent's name table and nothing else:
   the inode, its subtree, every chunk list and every `Refs` are unchanged, `DeletedAt`
@@ -517,6 +528,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-29 | `TestApply_ForwardAndRedirect`, `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits`, `TestFSM_WaitApplied_ReturnsOnClose`, `TestModelCheck_Long` |
 | I-133 | `TestMember_SetVersion`, `TestReportVersion_UpdatesOwnRow` |
 | I-145 | `TestCluster_DemotePromote_RaftFollowsRow` |
+| I-177 | `TestMemberOp_ReadsAppliedRow` |
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
 | I-152 | `TestStub_I_152` (planned: TestFSM_Trash_Table, TestFSM_Trash_FoldsEarlierRoots, TestFSM_Restore_Table, TestFSM_DeterministicAcrossReplicas, TestCluster_TrashRestoreAcrossNodes, TestModelCheck_Long) |
 | I-153 | `TestStub_I_153` (planned: TestFSM_Purge_Table, TestFSM_Purge_Boundary, TestFSM_Purge_CascadesNestedRoots, TestFSM_TrashStats_MatchComputed, TestCheckInvariants_DetectsEachViolation, TestFSM_ApplySnapshotRestoreEquivalence) |
