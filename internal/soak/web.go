@@ -498,16 +498,16 @@ func (r *Run) webTrash(ctx context.Context, w *webClient, v Volume, dir string, 
 		}
 		r.check("I-153 L-201", "a purge removes the entry", code == 204 && !still, fmt.Sprint(code))
 	}
-	rep, _, err := r.anyStatus(ctx)
-	stored := rep.Volume.StoredBytes
 	purged, perr := r.Env.PurgeTrash(ctx)
-	r.check("I-153 L-201", "the admin purge empties the trash", err == nil && perr == nil && purged > 0, fmt.Sprintf("%d purged, %v", purged, perr))
+	r.check("I-153 L-201", "the admin purge empties the trash", perr == nil && purged > 0, fmt.Sprintf("%d purged, %v", purged, perr))
 	if err := r.Env.Wait(ctx, r.Profile.Grace+time.Second); err != nil {
 		return
 	}
+	// as phase 8 judges it: the purged chunks were tombstoned and their deletes went out.
+	// Stored bytes are no measure on a live cluster, where a migration a previous phase
+	// started may be adding shards at the same time (the three-VM rounds).
 	res, err := r.gcNow(ctx)
-	rep2, _, _ := r.anyStatus(ctx)
-	r.check("I-13 L-201", "gc reclaims the purged files' chunks after grace", err == nil && res.Victims > 0 && rep2.Volume.StoredBytes < stored, fmt.Sprintf("%+v, stored %d -> %d", res, stored, rep2.Volume.StoredBytes))
+	r.check("I-13 L-201", "gc reclaims the purged files' chunks after grace", err == nil && res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v, %v", res, err))
 }
 
 func (r *Run) webFlags(ctx context.Context, w *webClient, v Volume, dir string, caps Caps, u *undo) {
