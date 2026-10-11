@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -26,7 +27,8 @@ type Resolver func(idx meta.NodeIdx) (addr string, self bool, ok bool)
 // Client talks to other nodes. It implements chunk.ShardClient (traffic to this host's
 // own disks goes straight to their stores) and the leader-forwarding and join calls.
 type Client struct {
-	http    *http.Client
+	http    *http.Client // shard calls: size-scaled deadlines and a header timeout (I-83)
+	ctl     *http.Client // the control plane: no header timeout, a pass answers when done (I-189)
 	clusID  string
 	resolve Resolver
 	grace   time.Duration // age guard for self-targeted deletes (same rule as the fence)
@@ -66,16 +68,20 @@ var _ chunk.ShardClient = (*Client)(nil)
 
 // NewClient builds a client; resolve may be nil for a client that only joins or probes.
 func NewClient(clusterID [16]byte, resolve Resolver) *Client {
+	dial := (&net.Dialer{Timeout: 3 * time.Second}).DialContext
 	tr := &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+		DialContext:           dial,
 		MaxIdleConnsPerHost:   32, // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
 	// no whole-request timeout on the client: a shard call's deadline scales with its
 	// size (callTimeout), the rest get callTimeout(0); ResponseHeaderTimeout bounds a
-	// dead peer either way (I-83)
-	return &Client{http: &http.Client{Transport: tr}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
+	// dead peer either way (I-83). The control plane has no header timeout: an admin op
+	// that runs a pass is answered when the pass is done, and the dial timeout plus the
+	// caller's context bound a dead peer (I-189).
+	ctl := &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}
+	return &Client{http: &http.Client{Transport: tr}, ctl: &http.Client{Transport: ctl}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
 }
 
 // transferRate is the slowest tailnet path a shard transfer is given: a DERP relay at
@@ -91,13 +97,17 @@ func callTimeout(n int64) time.Duration {
 // SetGrace sets the minimum age of a shard this node will delete locally.
 func (c *Client) SetGrace(d time.Duration) { c.grace = d }
 
-// SetTransport replaces the HTTP transport (tests inject FaultNet).
-func (c *Client) SetTransport(rt http.RoundTripper) { c.http.Transport = rt }
+// SetTransport replaces both HTTP transports (tests inject FaultNet).
+func (c *Client) SetTransport(rt http.RoundTripper) { c.http.Transport, c.ctl.Transport = rt, rt }
 
-// WrapTransport replaces the transport with wrap(current) (dev fault rules).
+// WrapTransport replaces each transport with wrap(current) (dev fault rules).
 func (c *Client) WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) {
 	c.http.Transport = wrap(c.http.Transport)
+	c.ctl.Transport = wrap(c.ctl.Transport)
 }
+
+// shardPrefix opens every shard path (shardTarget.prefix); other paths are the control plane.
+const shardPrefix = "/v1/disks/"
 
 // bound gives a call without a deadline one of callTimeout(n); the caller cancels it once
 // the reply, body included, has been consumed.
@@ -127,7 +137,11 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	if body != nil {
 		req.ContentLength = int64(len(body))
 	}
-	resp, err := c.http.Do(req)
+	hc := c.ctl
+	if strings.HasPrefix(path, shardPrefix) {
+		hc = c.http
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w (%w): %s %s: %w", ErrUnavailable, errTransport, method, addr, err) // a cancelled context stays matchable
 	}
@@ -422,6 +436,11 @@ func (c *Client) postJSON(ctx context.Context, addr, path string, in, out any, w
 	body, _ := json.Marshal(in)
 	ctx, cancel := bound(ctx, int64(len(body)))
 	defer cancel()
+	return c.postJSONRaw(ctx, addr, path, body, out, want)
+}
+
+// postJSONRaw is postJSON under the caller's context alone (a pass op, I-189).
+func (c *Client) postJSONRaw(ctx context.Context, addr, path string, body []byte, out any, want int) error {
 	resp, err := c.do(ctx, http.MethodPost, addr, path, body, map[string]string{"Content-Type": "application/json"})
 	if err != nil {
 		return err
@@ -498,6 +517,11 @@ func (c *Client) Call(ctx context.Context, addr, method, path string, body []byt
 
 func (c *Client) Admin(ctx context.Context, addr string, op AdminOp) (json.RawMessage, error) {
 	var raw json.RawMessage
+	if op.IsPass() { // answered when the pass is done: the caller's context bounds it (I-189)
+		body, _ := json.Marshal(op)
+		err := c.postJSONRaw(ctx, addr, "/v1/admin", body, &raw, http.StatusOK)
+		return raw, err
+	}
 	err := c.postJSON(ctx, addr, "/v1/admin", op, &raw, http.StatusOK)
 	return raw, err
 }
