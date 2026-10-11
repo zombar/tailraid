@@ -289,7 +289,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
-			}, Clk: clk, Logger: log,
+			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
 		})
 		if err != nil {
 			return err
@@ -698,6 +698,11 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 				a.log.Warn("upload sweep failed", "err", err)
 			} else if n > 0 {
 				a.log.Info("sweep", "stale_uploads_removed", n)
+			}
+			if n, err := webui.SweepThumbs(ctx, a.fs, a.node.FSM); err != nil {
+				a.log.Warn("thumbnail sweep failed", "err", err)
+			} else if n > 0 {
+				a.log.Info("sweep", "orphan_thumbnails_removed", n)
 			}
 			sweepT.Reset(time.Hour)
 		}

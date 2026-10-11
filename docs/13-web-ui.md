@@ -90,7 +90,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
+| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), on the listed folder and on each folder entry; `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
 | `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted; the shard checks of a page run concurrently and `slots` is always an array (I-161) |
@@ -568,13 +568,13 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
 | I-143 | `TestBrowserCommand_PerOS`, `TestCLI_Dashboard` |
 | I-140 | `TestWebUI_Ls_HidesOSMetadata` |
-| I-158 | `TestStub_I_158` (planned: TestWebUI_Delete_LandsInTrash_ListedInPlace, TestWebUI_TrashAddressing_LsStatGet, TestWebUI_Restore_TakenName_409_ThenAs, TestWebUI_Purge_FreesRefs, TestWebUI_Put_OverwriteKeepsPreviousInTrash) |
-| I-159 | `TestStub_I_159` (planned: TestWebUI_Rename_Table, TestWebUI_Move_PerItemResults, TestWebUI_Batch_SizeBoundaries, TestWebUI_BodyCaps_AllMutatingRoutes) |
-| I-160 | `TestStub_I_160` (planned: TestWebUI_Thumb_Image_Generated_Cached_Hidden, TestWebUI_Thumb_Put_Boundaries, TestWebUI_Thumb_SweptWhenFileChanges) |
+| I-158 | `TestWebUI_Delete_LandsInTrash_ListedInPlace`, `TestWebUI_TrashAddressing_LsStatGet`, `TestWebUI_Restore_TakenName_409_ThenAs`, `TestWebUI_Purge_FreesRefs`, `TestWebUI_Put_OverwriteKeepsPreviousInTrash` |
+| I-159 | `TestWebUI_Rename_Table`, `TestWebUI_Move_PerItemResults`, `TestWebUI_Batch_SizeBoundaries`, `TestWebUI_BodyCaps_AllMutatingRoutes` |
+| I-160 | `TestWebUI_Thumb_Image_Generated_Cached_Hidden`, `TestWebUI_Thumb_Put_Boundaries`, `TestWebUI_Thumb_SweptWhenFileChanges` |
 | I-161 | `TestDescribeChunksPage_Concurrent`, `TestWebUI_Chunks_HolesHaveSlots` |
 | I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs` (planned: TestWebUI_Pins) |
-| I-163 | `TestStub_I_163` (planned: TestWebUI_Flags_DirsOnly_Effective, TestWebUI_Mutations_ProtectedIs403) |
-| I-164 | `TestStub_I_164` (planned: TestWebUI_Tags_Table, TestWebUI_Tags_ReadBounded) |
-| I-165 | `TestStub_I_165` (planned: TestWebUI_Thumb_AudioCoverFallbackOrder, TestWebUI_Ls_DirCoverDeterministic) |
+| I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403` |
+| I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded` |
+| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic` |
 
-`TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3. The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (docs/09 §2).
+`TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
