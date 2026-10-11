@@ -3,6 +3,9 @@
 #   ROLE=init|join   SELF_IP, NODE_NAME, LEADER (ip for join), TOKEN, K, M, VOTER
 #   DISKS (space-separated disks, docs/14, each `path` or `path=capacity`; empty for a
 #   diskless host, docs/14 §9)
+#   DRIVER_IP (the address the driver's published-port connections arrive from, the
+#   compose bridge's gateway by default: the fake tailnet knows it as a device of the
+#   nodes' own user, so phase 16 reaches the browser UI under the same-user rule)
 set -eu
 mkdir -p "$TAILRAID_HOME"
 # one log format for the whole container stream: shell messages and CLI output become
@@ -35,8 +38,9 @@ $(echo "$IDENTITIES" | tr ',' '\n' | while IFS='=' read -r ip id; do
   },
   "whois": {
 $(echo "$IDENTITIES" | tr ',' '\n' | while IFS='=' read -r ip id; do
-    printf '    "%s": {"Node": {"StableID": "%s", "Name": "%s.compose.invalid.", "Addresses": ["%s/32"], "Hostinfo": {"Hostname": "%s", "OS": "linux"}}},\n' "$ip" "ts-$id" "$id" "$ip" "$id"
-  done | sed '$ s/,$//')
+    printf '    "%s": {"Node": {"StableID": "%s", "Name": "%s.compose.invalid.", "Addresses": ["%s/32"], "Hostinfo": {"Hostname": "%s", "OS": "linux"}}, "UserProfile": {"LoginName": "soak@compose.invalid"}},\n' "$ip" "ts-$id" "$id" "$ip" "$id"
+  done)
+    "${DRIVER_IP:-172.30.0.1}": {"Node": {"StableID": "ts-driver", "Name": "driver.compose.invalid.", "Addresses": ["${DRIVER_IP:-172.30.0.1}/32"], "Hostinfo": {"Hostname": "driver", "OS": "darwin"}}, "UserProfile": {"LoginName": "soak@compose.invalid"}}
   }
 }
 EOF

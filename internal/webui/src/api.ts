@@ -46,14 +46,24 @@ export interface NodeReport {
   dead_for?: string;
   lost?: boolean;
   rtt?: string;
-  free: number;
+  free: number; // from the probe; a bucket's is 0, never a measurement (docs/10 §4.1)
   capacity: number;
+  stored_bytes: number; // shard bytes of the slots the placement table gives it (I-178)
   version: string;
   applied: number;
   slots: number;
   missing_slots: number;
   dev?: boolean;
   joined_at: string;
+  s3?: S3Report; // S3 nodes: the bucket, never its credentials
+}
+
+export interface S3Report {
+  endpoint: string;
+  bucket: string;
+  prefix?: string;
+  region?: string;
+  path_style?: boolean;
 }
 
 export interface RepairStats {

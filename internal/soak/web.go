@@ -380,6 +380,24 @@ func (r *Run) webBatches(ctx context.Context, w *webClient, v Volume, dir string
 	}
 }
 
+// attrCacheWindow is how long the driver gives a mount to show a change made through
+// the browser to a name the mount itself deleted: a kernel NFS client trusts its
+// directory attribute cache for up to acdirmax, 60 s by default (docs/07).
+const attrCacheWindow = 90 * time.Second
+
+// waitVisible returns once the mount answers a stat of p, or the window has passed.
+func (r *Run) waitVisible(ctx context.Context, v Volume, p string) {
+	deadline := time.Now().Add(attrCacheWindow)
+	for {
+		if _, err := v.Size(p); err == nil || time.Now().After(deadline) {
+			return
+		}
+		if r.Env.Wait(ctx, 2*time.Second) != nil {
+			return
+		}
+	}
+}
+
 func (r *Run) webTrash(ctx context.Context, w *webClient, v Volume, dir string, m model) {
 	a := join(dir, "a.bin")
 	before := m[a]
@@ -434,6 +452,10 @@ func (r *Run) webTrash(ctx context.Context, w *webClient, v Volume, dir string, 
 		if root != nil {
 			code, _, _ = w.postJSON(ctx, "/api/restore", map[string]any{"ino": root.Ino}, nil)
 		}
+		// the mount deleted these names itself, so a kernel NFS client holds them as
+		// absent until its attribute cache expires (docs/07); the browser's restore is
+		// visible there within that window
+		r.waitVisible(ctx, v, join(tree, "x"))
 		bad, first := r.verifyModel(v, tm)
 		r.check("I-152 L-200", "a tree removed piece by piece is one deleted entry and restores with one call", root != nil && roots == 1 && code == 200 && bad == 0, fmt.Sprintf("roots %d, restore %d, %s", roots, code, first))
 	}
@@ -498,16 +520,16 @@ func (r *Run) webTrash(ctx context.Context, w *webClient, v Volume, dir string, 
 		}
 		r.check("I-153 L-201", "a purge removes the entry", code == 204 && !still, fmt.Sprint(code))
 	}
-	rep, _, err := r.anyStatus(ctx)
-	stored := rep.Volume.StoredBytes
 	purged, perr := r.Env.PurgeTrash(ctx)
-	r.check("I-153 L-201", "the admin purge empties the trash", err == nil && perr == nil && purged > 0, fmt.Sprintf("%d purged, %v", purged, perr))
+	r.check("I-153 L-201", "the admin purge empties the trash", perr == nil && purged > 0, fmt.Sprintf("%d purged, %v", purged, perr))
 	if err := r.Env.Wait(ctx, r.Profile.Grace+time.Second); err != nil {
 		return
 	}
+	// as phase 8 judges it: the purged chunks were tombstoned and their deletes went out.
+	// Stored bytes are no measure on a live cluster, where a migration a previous phase
+	// started may be adding shards at the same time (the three-VM rounds).
 	res, err := r.gcNow(ctx)
-	rep2, _, _ := r.anyStatus(ctx)
-	r.check("I-13 L-201", "gc reclaims the purged files' chunks after grace", err == nil && res.Victims > 0 && rep2.Volume.StoredBytes < stored, fmt.Sprintf("%+v, stored %d -> %d", res, stored, rep2.Volume.StoredBytes))
+	r.check("I-13 L-201", "gc reclaims the purged files' chunks after grace", err == nil && res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v, %v", res, err))
 }
 
 func (r *Run) webFlags(ctx context.Context, w *webClient, v Volume, dir string, caps Caps, u *undo) {

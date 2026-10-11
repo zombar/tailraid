@@ -204,7 +204,9 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   so a deleted folder is browsed and a deleted video plays as before the delete, from the
   same bytes (I-158). A folder deleted from a mount with `rm -rf` arrives piece by piece
   and is folded into one entry when the folder itself is deleted (docs/02), so it restores
-  with one tap. Restore puts the entry back under its original name, or under the name or
+  with one tap; the mount that deleted the names shows them again once its attribute
+  cache expires (an NFS client's `acdirmax`, up to 60 s, docs/07), the browser at once.
+  Restore puts the entry back under its original name, or under the name or
   into the folder the page asks for after a 409, with the same `(ino, gen)`, so an NFS
   handle that went stale is valid again. "Delete now" purges one entry; the retention
   purge runs on the leader (docs/06 §2). An overwrite, whether a `PUT` of an existing
@@ -412,7 +414,7 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Compare bars | `.compare` of bar rows | two measures of one unit at one scale (logical vs stored); never stacked |
 | Sparkline | `.spark-wrap` > `svg.spark` + `.spark-dot` | full width of its container (48 px tall) unless a layout manager places it; 2 px line in `--dim`, 12 % wash, the end dot is a positioned element coloured by the current value |
 | Key/value grid | `dl.kv` | counters; a value is `warn`/`bad` only when non-zero and meaningful |
-| Node card | `.card.node` | `self` outlined in accent; name row, two bar rows, mono meta footer |
+| Node card | `.card.node` | `self` outlined in accent; name row, two bar rows, mono meta footer; an S3 node's first bar row is labelled `stored`, its `stored_bytes` of its weight (a bucket reports no free space, docs/10 §4.1, I-178) and its footer names the bucket, prefix and region after the rtt where a device shows its version, applied index and address |
 | File row | `table.files tr` | dir / file / symlink icon; `dirty` adds "syncing" in amber |
 | Breadcrumb | `.crumbs` | mono, wraps; last segment plain |
 | Upload row | `.upload` | queued (dim), uploading (bar), done `ok`, failed `bad` with the server's message |
@@ -481,7 +483,9 @@ colour-alone. No dual axes, no stacked bars, no pie.
 3. Polling pauses while the tab is hidden and resumes with one immediate fetch.
 4. Balance: filling a device's disk lowers its budget and expected share within a minute;
    a draining node shows "slots to move"; after `node add-disk` of a large disk its host's
-   bars move toward their ticks over the following repair passes (docs/14 §7).
+   bars move toward their ticks over the following repair passes (docs/14 §7); a bucket's
+   card shows what it stores of its weight and its bucket, prefix and region, never a
+   full red bar on an empty volume.
 5. Browser: nested folders, every sort both ways, names with spaces, `#`, `%`, `?` and
    non-ASCII; a 409 toast on an existing folder name; an upload of a 100 MB file with
    progress, a cancel mid-way, five files queued in order, a 507 toast on a full volume.
@@ -502,8 +506,8 @@ colour-alone. No dual axes, no stacked bars, no pie.
     `sha256` matches; `rm -rf` a folder on the mount and restore it with one tap; delete a
     folder in the browser and confirm it is gone from the mount at once, then "Delete now"
     and watch `tailraid status` reclaim after grace.
-11. Protected: `rm` under a protected folder says "Operation not permitted" on macOS and
-    Linux and "Access denied" on Windows; an upload of a new name into it succeeds; a
+11. Protected: `rm` under a protected folder says "Permission denied" on macOS and
+    Linux (`EACCES` from the wire's `NFS3ERR_ACCES`, docs/07) and "Access denied" on Windows; an upload of a new name into it succeeds; a
     re-upload of an existing name is refused with the reason.
 12. Select ten entries across pages of the list, move them to another folder, rename one;
     a move onto a taken name reports that one entry and moves the rest.

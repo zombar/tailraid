@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -294,6 +295,11 @@ func (v *httpVolume) do(req fsReq) (fsResp, error) {
 	if resp.Error != "" {
 		if strings.Contains(resp.Error, "does not exist") || strings.Contains(resp.Error, "NOENT") || strings.Contains(resp.Error, "no such") {
 			return resp, fmt.Errorf("%w: %s", errNotExist, resp.Error)
+		}
+		// the pure-Go NFS client reports the wire status by name; a kernel mount would
+		// give EACCES, which satisfies os.ErrPermission (docs/07, a protected folder)
+		if strings.Contains(resp.Error, "ACCES") || strings.Contains(resp.Error, "permission denied") {
+			return resp, fmt.Errorf("%w: %s", os.ErrPermission, resp.Error)
 		}
 		return resp, errors.New(resp.Error)
 	}

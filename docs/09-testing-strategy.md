@@ -316,7 +316,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   never holds it: every write acknowledged with no `EIO` while the client outruns the
   flusher, the WAL never past its cap plus one record, flush buffers within the I-78
   formula and the process heap flat, the content hash exact, and afterwards an empty
-  `staging/`, no temp file, a clean `fsck` and no new orphan; then where the file's
+  `staging/`, no temp file, a clean `fsck` and no new orphan (the phase first runs
+  repair passes until one finds nothing to do, so a policy migration a previous phase's
+  restore started does not leave moved chunks' old shards under it); then where the file's
   chunks landed: every chunk fully placed, its data slots on voters, data slots spread
   among the voters in proportion to capacity within the statistical margin, and a
   per-node figure of its data and parity slots against each node's capacity share;
@@ -346,13 +348,17 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   it registers nothing, skips the refusal and the drain, deletes behind the cluster's
   back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
   I-137, I-138, I-42, I-149, L-104, L-112, L-139); 16 web ui (the browser UI of docs/13
-  driven over HTTP at the node's `web_url` as a same-user device: listings and stats
+  driven over HTTP at the node's `web_url` as a same-user device: on the compose rig every
+  node's fake tailnet gives the nodes and the driver's address, the bridge's gateway, one
+  login, so the driver is a non-member device of the nodes' user (docs/13 §2); listings and stats
   against the corpus model; rename, move and delete batches with a deliberate taken
   name and a protected entry inside, every item reported on its own and the untouched
   ones unchanged; the trash round trip: a delete listed in place with its dates and its
   bytes readable with `in=`, the share seeing a delete (the mount's listing omits it, a
   read fails, a new file takes the name), an `rm -rf` through the mount restored with
-  one call, a dirty file deleted at once and restored with every acknowledged byte, an
+  one call (read back once the mount's attribute cache lets the restored names show,
+  within 90 s on a kernel NFS client, docs/07), a dirty file deleted at once and
+  restored with every acknowledged byte, an
   overwrite through the web and through the mount whose previous version reads back from
   the trash, `.DS_Store` and an upload temp deleted on the mount and absent from
   `/api/trash`, a restore onto a taken name refused then done under a new name, a purge
