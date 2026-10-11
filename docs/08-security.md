@@ -292,4 +292,4 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
 | I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap` |
-| I-199 | `TestStub_I_199` (planned: TestRPC_Stats_MemberOnly_OwnRows, TestRPC_Stats_SinceAndCap_Table, TestHealth_CarriesWebPort) |
+| I-199 | `TestRPC_Stats_MemberOnly_OwnRows`, `TestWriter_Live_SinceAndCap_Table` |

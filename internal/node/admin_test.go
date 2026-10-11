@@ -3,7 +3,11 @@ package node
 import (
 	"context"
 	"log/slog"
+	"path"
 	"testing"
+	"time"
+
+	"github.com/zombar/tailraid/internal/stats"
 
 	"go.uber.org/goleak"
 
@@ -119,5 +123,41 @@ func TestToken_Rotate(t *testing.T) {
 		if m.JoinToken != tok || m.ClusterID != before.ClusterID {
 			t.Fatalf("n%d meta %+v", nd.I, m)
 		}
+	}
+}
+
+// The stats_seal admin op writes this node's unsealed rows into the volume at once and
+// reports how many; it needs no leader (a per-node op).
+// Invariant: I-192
+func TestAdminOp_StatsSeal(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	nd := c.Nodes[1] // a follower
+	ops := opsFor(c, nd)
+	ops.stats = &stats.Service{
+		Name: "n1", Clk: c.Clk, Keep: stats.DefaultKeep,
+		Writer: &stats.Writer{Vol: stats.VFS{FS: nd.FS, St: nd.Node.FSM, Rd: nd.Reader}, Name: "n1"},
+	}
+	h := c.Clk.Now().UTC().Truncate(time.Hour)
+	for s := 0; s < 30; s += 10 {
+		ops.stats.Writer.Add(stats.Row{T: h.Add(time.Duration(s) * time.Second).Unix(), N: "n1", M: map[string]float64{"load1": 1}})
+	}
+	raw, err := ops.AdminOp(context.Background(), rpc.AdminOp{Op: "stats_seal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := raw.(map[string]any)["sealed_rows"]; got != 3 {
+		t.Fatalf("sealed_rows %v", got)
+	}
+	if n := ops.stats.Writer.Unsealed(); n != 0 {
+		t.Fatalf("%d rows still unsealed", n)
+	}
+	seg := path.Join(stats.Root, "10s", "n1", stats.SegmentName(stats.Raw, h, "n1"))
+	if _, err := c.ReadFile(0, seg); err != nil {
+		t.Fatalf("the segment on another gateway: %v", err)
+	}
+	// nothing to seal: zero rows, no error
+	if raw, err := ops.AdminOp(context.Background(), rpc.AdminOp{Op: "stats_seal"}); err != nil || raw.(map[string]any)["sealed_rows"] != 0 {
+		t.Fatalf("empty seal: %v %v", raw, err)
 	}
 }

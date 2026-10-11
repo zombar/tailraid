@@ -73,6 +73,9 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 		if IsOSMetadata(kids[i].Name) { // kept in the volume, reachable by path (I-140)
 			continue
 		}
+		if in.Ino == meta.RootIno && kids[i].Name == ReservedDir { // the node's own tree (docs/13 §5, I-195)
+			continue
+		}
 		entries = append(entries, s.entry(kids[i], path.Join(canonical, kids[i].Name)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": canonical, "entries": entries})

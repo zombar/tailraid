@@ -48,6 +48,7 @@ type Health struct {
 	Ready     bool         `json:"ready"`           // a leader is known and the FSM has every committed entry (I-125)
 	Leader    bool         `json:"leader"`
 	Dev       bool         `json:"dev,omitempty"`   // /dev/* endpoints enabled on this node
+	Web       uint16       `json:"web,omitempty"`   // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
 	Disks     []DiskHealth `json:"disks,omitempty"` // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
 }
 

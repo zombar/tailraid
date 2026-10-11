@@ -43,6 +43,10 @@ func IsOSMetadata(name string) bool {
 	return (len(name) > 2 && strings.HasPrefix(name, "._")) || name == ".DS_Store"
 }
 
+// ReservedDir is the root entry the node writes for itself (docs/13 §5: thumbnails,
+// docs/17 §2: the stats segments); a listing leaves it out (I-195).
+const ReservedDir = ".tailraid"
+
 func tempName(name string) string { return "." + name + uploadSuffix }
 
 // uploads tracks the temps being written right now (a second upload of the same path is

@@ -54,10 +54,13 @@ between them, as the soak's `vitalsSample` computes it; the first sample after a
 carries no rate. A vital the OS does not expose is absent from the report (I-85) and
 therefore absent from the row: nothing is written as zero.
 
-**The leader alone** also produces a **cluster row** each tick, from state that is already
-computed: the FSM's volume counters, the repairer's last scan and the pass under way
-(`repair.Stats`, `repair.Progress`, 06 §4), the prober's view of every device and the
-member table's slots and capacity per target (14). Never a fresh `ScanHealth`.
+**The leader alone** also produces a **cluster row** each tick: the FSM's volume counters
+(O(1)), the pass under way (`repair.Progress`, 06 §4), the prober's view of every device
+and the member table, plus the chunk walk's counters (degraded, pending, unreadable, stale,
+the host and disk skew, the slots per target) from `ScanHealth`, which the leader's
+sampler runs **at most once a minute** and reuses for the rows in between: one walk a
+minute on one node, against the walk the dashboard's status cache makes every 2 s while a
+browser polls, and none on a follower.
 
 ```json
 {"t":1760184000,"term":12,"by":"jockey","c":{"degraded":37,"pending":37,"stale":0,"unreadable":0,
@@ -91,7 +94,7 @@ never collide.
 
 | Tier | Row interval | One file per | Name | Written |
 |---|---|---|---|---|
-| `10s` | `stats.every` | UTC hour | `2026-10-11T14-jockey.jsonl.gz`; a partial hour (a restart, a late start, a seal) is named by its first row's minute, `2026-10-11T1423-jockey.jsonl.gz` | at the hour boundary, on `serve` stop and on `tailraid stats seal`; never rewritten |
+| `10s` | `stats.every` | UTC hour | `2026-10-11T14-jockey.jsonl.gz`; a partial hour (a restart, a late start, a seal) is named by its first row's minute, `2026-10-11T1423-jockey.jsonl.gz`, and a second seal within one minute by its second, `2026-10-11T142315-jockey.jsonl.gz`; a reader takes the period from the name either way | at the hour boundary, on `serve` stop and on `tailraid stats seal`; never rewritten |
 | `1m` | 60 s | UTC day | `2026-10-11-jockey.jsonl.gz` | in the first hour of the next day, from the day's sealed raw files **read back from the volume**, never from memory, so a restart loses nothing; never rewritten |
 | `10m` | 600 s | UTC month | `2026-10-jockey.jsonl.gz` | **rebuilt daily**: the month file's rows plus the new day's rows derived from its raw files; so a year is twelve files per node, not 365 (a one-year page would otherwise open 1 825 one-chunk files at about 66 ms each) |
 
@@ -241,10 +244,11 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 
 - **I-191** — Every node samples its node series every `stats.every` from its vitals,
   gateway and process snapshots without walking the FSM; the leader alone samples the
-  cluster series, from the repairer's last scan and pass, the prober and the member table,
-  stamped with its Raft term; a cumulative counter is stored as a rate against the previous
-  sample and the first sample after a start carries no rate; a vital absent from the report
-  is absent from the row, never zero.
+  cluster series, from the volume counters, the pass under way, the prober, the member
+  table and a chunk walk it runs at most once a minute, stamped with its Raft term; a
+  cumulative counter is stored as a rate against the previous sample and the first sample
+  after a start carries no rate; a vital absent from the report is absent from the row,
+  never zero.
 - **I-192** — A node writes only under `/.tailraid/stats/<tier>/<its name or cluster>/` with
   its name in every file name, from one goroutine; a segment is gzip-compressed JSON lines
   written whole to a temp name, flushed and then renamed; raw and minute segments are never
@@ -273,10 +277,10 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 
 | Invariant | Tests |
 |---|---|
-| I-191 | `TestStub_I_191` (planned: TestSampler_NodeRowFromSnapshots_NoFSMWalk, TestSampler_RatesAgainstPrevious_FirstHasNone, TestSampler_AbsentVitalAbsentInRow, TestSampler_LeaderOnlyClusterRow_WithTerm) |
-| I-192 | `TestStub_I_192` (planned: TestWriter_SealsAtHourBoundary, TestWriter_SealOnStop_AndAdminOp, TestWriter_PartialHourNamedByMinute, TestWriter_FlushBeforeRename_SeenFromSecondGateway, TestWriter_OwnDirectoryOnly, TestWriter_SpillAndUploadOnNextStart, TestSegment_SizeAgainstSmallChunkMax_Table, FuzzRowCodec) |
-| I-193 | `TestStub_I_193` (planned: TestRollup_DeterministicAcrossNodes, TestRollup_EmptyIntervalIsGap, TestRollup_MonthRebuildIdempotent, TestRollup_CatchUpMissingDay) |
-| I-194 | `TestStub_I_194` (planned: TestRetention_RemovesByTier_AnyWriter, TestRetention_RemovedMemberAgesOut, TestConfig_StatsKeys_Table) |
+| I-191 | `TestSampler_NodeRow_RatesAndAbsence`, `TestSampler_ClusterRow`, `TestService_Run_SealsAtHour`, `TestFS_ClientBytes_Counted` |
+| I-192 | `TestRowCodec_RoundTrip`, `TestRowCodec_Empty_And_Garbage`, `FuzzRowCodec`, `TestSegmentName_RoundTrip_Table`, `TestWriter_SealsAtBoundary_NamesPartialHours`, `TestWriter_SpillAndRecover`, `TestService_Run_SealsAtHour`, `TestStats_SealVisibleFromSecondGateway`, `TestAdminOp_StatsSeal`, `TestCLI_StatsSeal` |
+| I-193 | `TestTier_PeriodOf`, `TestRollup_DeterministicAcrossNodes`, `TestRollup_Rules`, `TestWriter_RollupDay_MonthRebuild_CatchUp` |
+| I-194 | `TestSegment_Expired_Table`, `TestWriter_Retain_AnyWriter_Table`, `TestStats_Retention_RemovedMemberSegment`, `TestConfig_StatsKeys_Table` |
 | I-196 | `TestStub_I_196` (planned: TestStatsQuery_TierChoice_Table, TestStatsQuery_NameWindowAndRowFilter, TestStatsQuery_CacheBound_Table, TestStatsQuery_FanOut_TimeoutIsGap_BackOff, TestStatsQuery_Dedup_TermRule_Seeded, TestStatsQuery_Downsample_Points_Table, TestStatsQuery_NoChunkCache) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (09 §2).

@@ -358,4 +358,4 @@ state to patch.
 | I-174 | `TestRepair_FanOut_Bounded`, `TestRepair_FanOut_CancelDrains`, `TestConfig_RepairWorkersAndRate`, `TestPhaseFanOut_ConformingPassPasses`, `TestPhaseFanOut_OverWorkersFails`, `TestPhaseFanOut_FastPassSkips` |
 | I-175 | `TestServer_BackgroundShare`, `TestBackgroundSlots_Table`, `TestClient_BackgroundHeader`, `TestPhaseFanOut_ConformingPassPasses` |
 | I-157 | `TestStub_I_157` (planned: TestVFS_Remove_EphemeralIsImmediate, TestVFS_RenameOver_TrashesReplaced, TestVFS_RenameOver_EphemeralIsUnlinked, TestGC_PurgeTrash_RetentionBoundary, TestGC_PurgeTrash_DrainsInBatches, TestGC_PurgeThenCollect, TestConfig_TrashRetention) |
-| I-195 | `TestStub_I_195` (planned: TestVFS_TailraidTree_IsEphemeral, TestWebUI_Ls_HidesTailraidTree) |
+| I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |

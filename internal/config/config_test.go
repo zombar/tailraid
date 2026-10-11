@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseBytes(t *testing.T) {
@@ -193,17 +194,68 @@ func TestConfig_NewRepairKeysWrittenOnlyWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"workers", "rate"} {
+	for _, key := range []string{"workers", "rate", "stats", "every", "keep", "cache"} {
 		if strings.Contains(string(b), key+":") {
 			t.Fatalf("an unset %s was written:\n%s", key, b)
 		}
 	}
 	c.Repair.Workers, c.Repair.Rate = 8, "20M"
+	c.Stats.Every, c.Stats.Keep.Raw, c.Stats.Cache = "30s", "72h", "64MiB"
 	if err := Save(p, c); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(p)
-	if err != nil || got.Repair.Workers != 8 || got.Repair.Rate != "20M" {
-		t.Fatalf("set keys did not round-trip: %+v %v", got.Repair, err)
+	if err != nil || got.Repair.Workers != 8 || got.Repair.Rate != "20M" || got.Stats.Every != "30s" || got.Stats.Keep.Raw != "72h" || got.Stats.Keep.Minute != "" || got.Stats.Cache != "64MiB" {
+		t.Fatalf("set keys did not round-trip: %+v %+v %v", got.Repair, got.Stats, err)
+	}
+}
+
+// The stats keys parse with their defaults and refuse what docs/17 §5 bounds: the sample
+// interval 5 s to 1 min, the raw retention at least 26 h, the minute retention at least
+// 48 h, the cache at least 1 MiB.
+// Invariant: I-194
+func TestConfig_StatsKeys_Table(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(*Config)
+		want string // "" = valid
+	}{
+		{"defaults", nil, ""},
+		{"every 5s", func(c *Config) { c.Stats.Every = "5s" }, ""},
+		{"every 4s", func(c *Config) { c.Stats.Every = "4s" }, "stats.every"},
+		{"every 1m", func(c *Config) { c.Stats.Every = "1m" }, ""},
+		{"every 61s", func(c *Config) { c.Stats.Every = "61s" }, "stats.every"},
+		{"every junk", func(c *Config) { c.Stats.Every = "soon" }, "stats.every"},
+		{"raw 26h", func(c *Config) { c.Stats.Keep.Raw = "26h" }, ""},
+		{"raw 25h59m", func(c *Config) { c.Stats.Keep.Raw = "25h59m" }, "stats.keep.raw"},
+		{"minute 48h", func(c *Config) { c.Stats.Keep.Minute = "48h" }, ""},
+		{"minute 47h", func(c *Config) { c.Stats.Keep.Minute = "47h" }, "stats.keep.minute"},
+		{"coarse 24h", func(c *Config) { c.Stats.Keep.Coarse = "24h" }, ""},
+		{"coarse 1h", func(c *Config) { c.Stats.Keep.Coarse = "1h" }, "stats.keep.coarse"},
+		{"cache 1MiB", func(c *Config) { c.Stats.Cache = "1MiB" }, ""},
+		{"cache 512KiB", func(c *Config) { c.Stats.Cache = "512KiB" }, "stats.cache"},
+		{"cache junk", func(c *Config) { c.Stats.Cache = "lots" }, "stats.cache"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.Node.DataDir = filepath.Join(t.TempDir(), "data")
+			if tc.mut != nil {
+				tc.mut(&c)
+			}
+			err := c.Validate()
+			if tc.want == "" && err != nil {
+				t.Fatalf("valid config refused: %v", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("got %v, want an error naming %s", err, tc.want)
+			}
+		})
+	}
+	c := Default()
+	every, _ := c.StatsEvery()
+	raw, minute, coarse, _ := c.StatsKeep()
+	cache, _ := c.StatsCacheBytes()
+	if every != 10*time.Second || raw != 48*time.Hour || minute != 720*time.Hour || coarse != 17520*time.Hour || cache != 32<<20 {
+		t.Fatalf("defaults %v %v %v %v %d", every, raw, minute, coarse, cache)
 	}
 }

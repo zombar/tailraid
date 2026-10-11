@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,10 +30,14 @@ type FS struct {
 	prop  meta.Proposer
 	ov    *Overlay
 	rd    *Reader
+	fl    *Flusher // for Flush; nil until SetFlusher
 	clk   clock.Clock
 	uid   uint32
 	gid   uint32
 	stale func() bool // no leader contact for the Stale threshold (docs/02 §Health); nil = always
+
+	// every byte a client read or wrote through a File (docs/17 §1: bytes_r, bytes_w)
+	bytesRead, bytesWritten atomic.Uint64
 }
 
 // New wires a filesystem. uid/gid are stamped on created inodes.
@@ -45,6 +50,47 @@ func New(st *meta.Store, prop meta.Proposer, ov *Overlay, rd *Reader, clk clock.
 // within seconds; once stale (no leader contact for 30 s, docs/02) the mutation fails
 // with EROFS (L-187). Without a view every failure is EROFS at once.
 func (f *FS) SetHealth(stale func() bool) { f.stale = stale }
+
+// SetFlusher gives the filesystem the flusher Flush waits on.
+func (f *FS) SetFlusher(fl *Flusher) { f.fl = fl }
+
+// ClientBytes is how many bytes clients have read and written through this gateway's
+// files since it started (cumulative; docs/17 §1).
+func (f *FS) ClientBytes() (read, written uint64) { return f.bytesRead.Load(), f.bytesWritten.Load() }
+
+// flushPoll is how often Flush looks again while a flush another path started is still
+// outstanding on the inode.
+const flushPoll = 50 * time.Millisecond
+
+// Flush commits a file's dirty bytes and returns once the overlay holds nothing for it:
+// a Commit has landed for every byte, so another gateway reads them (docs/17 §2, I-192).
+// A flush the idle timer started first is waited for rather than doubled.
+func (f *FS) Flush(ctx context.Context, name string) error {
+	if f.fl == nil {
+		return errors.New("flush: no flusher")
+	}
+	in, err := f.st.Resolve(meta.SplitPath(name))
+	if err != nil {
+		return mapErr("flush", name, err)
+	}
+	for {
+		if err := f.fl.FlushInode(ctx, in.Ino); err != nil {
+			return mapErr("flush", name, err)
+		}
+		cur, ok := f.st.GetInode(in.Ino)
+		if !ok {
+			return mapErr("flush", name, meta.ErrNotExist)
+		}
+		if _, dirty := f.ov.Size(in.Ino, cur.Size); !dirty {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return mapErr("flush", name, ctx.Err())
+		case <-f.clk.After(flushPoll):
+		}
+	}
+}
 
 // Proposal retry backoff while the gateway is not yet stale.
 const (
