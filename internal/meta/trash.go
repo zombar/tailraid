@@ -63,7 +63,7 @@ func (a *applier) trashEntry(in, p *Inode, now int64) {
 	st.indexTrash(p.Ino, in.Ino)
 	if in.Type == TDir {
 		p.Nlink--
-		a.fold(in)
+		a.fold(in, now)
 	}
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -71,8 +71,10 @@ func (a *applier) trashEntry(in, p *Inode, now int64) {
 
 // fold puts the roots deleted from inside dir earlier back into it, in inode order: a
 // tree removed file by file from a mount becomes one trash entry. A name already live
-// in dir keeps its entry; the older root stays a root of its own.
-func (a *applier) fold(dir *Inode) {
+// in dir keeps its entry; the older root stays a root of its own. A fold that put a name
+// back changes dir's name table, so its times and version move as for any entry added:
+// an NFS client that cached the name's absence revalidates the directory (docs/07).
+func (a *applier) fold(dir *Inode, now int64) {
 	set := a.st.Trash[dir.Ino]
 	if len(set) == 0 {
 		return
@@ -82,6 +84,7 @@ func (a *applier) fold(dir *Inode) {
 		inos = append(inos, ino)
 	}
 	slices.Sort(inos)
+	changed := false
 	for _, ino := range inos {
 		r := a.st.Inodes[ino]
 		if _, taken := dir.Children[r.Name]; taken {
@@ -93,6 +96,11 @@ func (a *applier) fold(dir *Inode) {
 		if r.Type == TDir {
 			dir.Nlink++
 		}
+		changed = true
+	}
+	if changed {
+		dir.Mtime, dir.Ctime = now, now
+		dir.Version++
 	}
 }
 

@@ -517,7 +517,10 @@ function card(n, share, scale) {
   const dot = h("span", { class: "dot " + (n.live ? "ok" : "bad"), title: n.live ? "live" : "dead for " + (n.dead_for ?? "?") });
   const name = h("div", { class: "name-row" }, dot, h("span", { class: "name" }, n.name), badges);
   let capacity;
-  if (!n.live) {
+  if (n.s3) {
+    const frac = n.capacity > 0 ? n.stored_bytes / n.capacity : 0;
+    capacity = barRow("stored", bar(frac, fillTone(frac)), `${bytes(n.stored_bytes)} of ${bytes(n.capacity)} weight`);
+  } else if (!n.live) {
     capacity = barRow("capacity", bar(0, "off"), "unknown (dead " + (n.dead_for ?? "?") + ")");
   } else if (n.capacity === 0) {
     capacity = barRow("capacity", bar(0), n.kind === "device" ? "no disks" : "no capacity");
@@ -540,15 +543,14 @@ function card(n, share, scale) {
     }
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }
-  const meta = h(
-    "div",
-    { class: "meta" },
-    h("span", null, "rtt " + (n.rtt ?? "\u2014")),
-    h("span", null, n.version || "?"),
-    h("span", null, "applied " + count(n.applied)),
-    h("span", null, `${n.addr}:${n.rpc_port}`),
-    h("span", null, "joined " + shortDate(n.joined_at))
-  );
+  const meta = h("div", { class: "meta" }, h("span", null, "rtt " + (n.rtt ?? "\u2014")));
+  if (n.s3) {
+    meta.append(h("span", null, n.s3.prefix ? `${n.s3.bucket}/${n.s3.prefix}` : n.s3.bucket));
+    if (n.s3.region) meta.append(h("span", null, n.s3.region));
+  } else {
+    meta.append(h("span", null, n.version || "?"), h("span", null, "applied " + count(n.applied)), h("span", null, `${n.addr}:${n.rpc_port}`));
+  }
+  meta.append(h("span", null, "joined " + shortDate(n.joined_at)));
   return h("div", { class: "card node" + (n.self ? " self" : "") }, name, capacity, slots, meta);
 }
 

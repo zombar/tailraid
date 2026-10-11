@@ -365,7 +365,7 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Compare bars | `.compare` of bar rows | two measures of one unit at one scale (logical vs stored); never stacked |
 | Sparkline | `.spark-wrap` > `svg.spark` + `.spark-dot` | full width of its container (48 px tall) unless a layout manager places it; 2 px line in `--dim`, 12 % wash, the end dot is a positioned element coloured by the current value |
 | Key/value grid | `dl.kv` | counters; a value is `warn`/`bad` only when non-zero and meaningful |
-| Node card | `.card.node` | `self` outlined in accent; name row, two bar rows, mono meta footer |
+| Node card | `.card.node` | `self` outlined in accent; name row, two bar rows, mono meta footer; an S3 node's first bar row is labelled `stored`, its `stored_bytes` of its weight (a bucket reports no free space, docs/10 §4.1, I-178) and its footer names the bucket, prefix and region after the rtt where a device shows its version, applied index and address |
 | File row | `table.files tr` | dir / file / symlink icon; `dirty` adds "syncing" in amber |
 | Breadcrumb | `.crumbs` | mono, wraps; last segment plain |
 | Upload row | `.upload` | queued (dim), uploading (bar), done `ok`, failed `bad` with the server's message |
@@ -425,7 +425,9 @@ colour-alone. No dual axes, no stacked bars, no pie.
 3. Polling pauses while the tab is hidden and resumes with one immediate fetch.
 4. Balance: filling a device's disk lowers its budget and expected share within a minute;
    a draining node shows "slots to move"; after `node add-disk` of a large disk its host's
-   bars move toward their ticks over the following repair passes (docs/14 §7).
+   bars move toward their ticks over the following repair passes (docs/14 §7); a bucket's
+   card shows what it stores of its weight and its bucket, prefix and region, never a
+   full red bar on an empty volume.
 5. Browser: nested folders, every sort both ways, names with spaces, `#`, `%`, `?` and
    non-ASCII; a 409 toast on an existing folder name; an upload of a 100 MB file with
    progress, a cancel mid-way, five files queued in order, a 507 toast on a full volume.
