@@ -57,15 +57,33 @@ type Config struct {
 	// (0 disables it).
 	RebalanceSkew  float64
 	RebalanceBatch int
+	// Workers is how many chunks a pass repairs at once (docs/06 §4, I-174): each chunk's
+	// steps stay in sequence, chunks overlap; at most MaxWorkers, below 1 means 1.
+	Workers int
 }
+
+// MaxWorkers bounds Config.Workers (`repair.workers`).
+const MaxWorkers = 64
 
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute,
-		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64,
+		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64, Workers: 4,
 	}
+}
+
+// Progress is the pass under way: what `status` shows as `in_progress` while Last still
+// reports the pass before it (docs/12 §8).
+type Progress struct {
+	Pass       int       `json:"pass"`
+	Started    time.Time `json:"started"`
+	Scanned    int       `json:"scanned"`
+	Total      int       `json:"total"`
+	InFlight   int       `json:"in_flight"`
+	Workers    int       `json:"workers"`
+	BytesMoved int64     `json:"bytes_moved"`
 }
 
 // Stats summarises one scan pass (admin.RepairStatus).
@@ -82,6 +100,22 @@ type Stats struct {
 	Rebalanced   int   `json:"rebalanced"` // slots moved between disks of one host (docs/14 §7)
 	BytesMoved   int64 `json:"bytes_moved"`
 	Errors       int   `json:"errors"`
+}
+
+// add sums o into s: a pass's statistics are the sum over its chunks, whatever the overlap.
+func (s *Stats) add(o Stats) {
+	s.Scanned += o.Scanned
+	s.Repaired += o.Repaired
+	s.Partial += o.Partial
+	s.Unrepairable += o.Unrepairable
+	s.Deferred += o.Deferred
+	s.Migrated += o.Migrated
+	s.PolicyStale += o.PolicyStale
+	s.Scrubbed += o.Scrubbed
+	s.ScrubBad += o.ScrubBad
+	s.Rebalanced += o.Rebalanced
+	s.BytesMoved += o.BytesMoved
+	s.Errors += o.Errors
 }
 
 // Repairer is the leader's scanner.
@@ -107,6 +141,8 @@ type Repairer struct {
 	last     Stats
 	lastAt   time.Time
 	pass     int
+	progress Progress // the pass under way, while running
+	running  bool
 }
 
 // New wires a repairer. log may be nil.
@@ -142,6 +178,13 @@ func (r *Repairer) Last() (Stats, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.last, r.lastAt
+}
+
+// Progress returns the pass under way and whether one is running.
+func (r *Repairer) Progress() (Progress, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.progress, r.running
 }
 
 // Run scans every ScanInterval until ctx is done; isLeader gates each pass.
@@ -262,94 +305,143 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 		}
 	}
 
+	workers := max(1, r.cfg.Workers)
+	r.mu.Lock()
+	r.progress = Progress{Pass: pass, Started: now, Total: len(work), Workers: workers}
+	r.running = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.running = false
+		r.mu.Unlock()
+	}()
+	// Every shard request of the pass is background work: a node serving it keeps half its
+	// slots for client-path reads and flushes (I-175). At most Workers chunks are in flight
+	// at once (I-174); a chunk's own steps stay in sequence, and the statistics are sums,
+	// the same whatever the overlap. A cancelled pass starts no more chunks and returns
+	// once the ones in flight end.
+	ctx = chunk.Background(ctx)
+	var (
+		wg  sync.WaitGroup
+		smu sync.Mutex
+		sem = make(chan struct{}, workers)
+	)
 	for _, c := range work {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
 		if ctx.Err() != nil {
-			return st, ctx.Err()
+			break
 		}
-		st.Scanned++
-		// re-verify reported slots with a HEAD; a present shard is not bad (docs/06 §4 case 5)
-		reported := map[int]bool{}
-		for idx := range reportedKeys[c.Hash] {
-			if idx < len(c.Placement) && c.Placement[idx] != 0 && r.live.IsLive(c.Placement[idx]) {
-				has, err := r.shards.Has(ctx, c.Placement[idx], chunk.Key(c.Hash, c.K, c.M, idx))
-				if err == nil && has {
-					r.mu.Lock()
-					delete(r.reported, chunk.Key(c.Hash, c.K, c.M, idx))
-					r.mu.Unlock()
-					continue
-				}
-				reported[idx] = true
-			}
-		}
-		bad, kept, migrate, readable := r.classify(c, vol, nodes, reported)
-		if len(bad) == 0 && !migrate {
-			if scrubShare > 0 && int(c.Hash[0])%scrubShare == pass%scrubShare {
-				st.Scrubbed++
-				corrupt, err := r.scrub(ctx, c)
-				if err != nil {
-					st.Errors++
-					continue
-				}
-				if len(corrupt) == 0 {
-					r.Events.Record(c.Hash, meta.EvScrubOK, "")
-					continue
-				}
-				st.ScrubBad += len(corrupt)
-				r.Events.Record(c.Hash, meta.EvScrubBad, fmt.Sprintf("slots %v", corrupt))
-				for _, i := range corrupt {
-					bad = append(bad, meta.SlotIssue{Idx: i, Reason: "scrub"})
-					if kept[i] != 0 && r.live.IsLive(kept[i]) {
-						readable--
-					}
-					kept[i] = 0
-				}
-			} else {
-				continue
-			}
-		}
-		if migrate {
-			st.PolicyStale++
-		}
-		if readable < int(c.K) {
-			st.Unrepairable++
-			r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d readable slots < k=%d", readable, c.K))
-			continue
-		}
-		outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
-		if err != nil {
-			st.Errors++
-			r.warnRepair.Warn(r.log, "repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
-			continue
-		}
-		st.BytesMoved += outcome.bytes
-		switch {
-		case !outcome.changed && migrate:
-			st.Deferred++ // fewer than k acks: the old encoding stays committed, retried next pass
-		case !outcome.changed:
-			// no live spare could take the bad slots; counted as still degraded
-		case migrate:
-			// the chunk is on the new policy now; with missing slots it is also partial
-			st.Migrated++
-			st.PolicyStale--
-			if !outcome.full {
-				st.Partial++
-			}
-			r.Events.Record(c.Hash, meta.EvMigrated, fmt.Sprintf("%d+%d -> %d+%d", c.K, c.M, vol.K, vol.M))
-		case outcome.full:
-			st.Repaired++
-			r.Events.Record(c.Hash, meta.EvRepaired, fmt.Sprintf("%d bad slots", len(bad)))
-		default:
-			st.Partial++
-			r.Events.Record(c.Hash, meta.EvPartial, fmt.Sprintf("%d bad slots", len(bad)))
-		}
+		wg.Add(1)
+		go func(c meta.Chunk) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			r.mu.Lock()
+			r.progress.InFlight++
+			r.mu.Unlock()
+			one := r.scanOne(ctx, c, vol, nodes, reportedKeys[c.Hash], pass, scrubShare)
+			r.mu.Lock()
+			r.progress.InFlight--
+			r.progress.Scanned++
+			r.progress.BytesMoved += one.BytesMoved
+			r.mu.Unlock()
+			smu.Lock()
+			st.add(one)
+			smu.Unlock()
+		}(c)
 	}
-	if ctx.Err() == nil {
-		st.Rebalanced, st.BytesMoved = r.rebalance(ctx, &st, all, slots, len(work))
+	wg.Wait()
+	if ctx.Err() != nil {
+		return st, ctx.Err()
 	}
+	st.Rebalanced, st.BytesMoved = r.rebalance(ctx, &st, all, slots, len(work))
 	r.mu.Lock()
 	r.last, r.lastAt = st, r.clk.Now()
 	r.mu.Unlock()
 	return st, nil
+}
+
+// scanOne classifies one chunk and repairs, migrates or scrubs it (docs/06 §4 cases
+// 1–6), returning what it did as that chunk's share of the pass statistics.
+func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reportedIdx map[int]bool, pass, scrubShare int) (st Stats) {
+	st.Scanned++
+	// re-verify reported slots with a HEAD; a present shard is not bad (docs/06 §4 case 5)
+	reported := map[int]bool{}
+	for idx := range reportedIdx {
+		if idx < len(c.Placement) && c.Placement[idx] != 0 && r.live.IsLive(c.Placement[idx]) {
+			has, err := r.shards.Has(ctx, c.Placement[idx], chunk.Key(c.Hash, c.K, c.M, idx))
+			if err == nil && has {
+				r.mu.Lock()
+				delete(r.reported, chunk.Key(c.Hash, c.K, c.M, idx))
+				r.mu.Unlock()
+				continue
+			}
+			reported[idx] = true
+		}
+	}
+	bad, kept, migrate, readable := r.classify(c, vol, nodes, reported)
+	if len(bad) == 0 && !migrate {
+		if scrubShare <= 0 || int(c.Hash[0])%scrubShare != pass%scrubShare {
+			return st
+		}
+		st.Scrubbed++
+		corrupt, err := r.scrub(ctx, c)
+		if err != nil {
+			st.Errors++
+			return st
+		}
+		if len(corrupt) == 0 {
+			r.Events.Record(c.Hash, meta.EvScrubOK, "")
+			return st
+		}
+		st.ScrubBad += len(corrupt)
+		r.Events.Record(c.Hash, meta.EvScrubBad, fmt.Sprintf("slots %v", corrupt))
+		for _, i := range corrupt {
+			bad = append(bad, meta.SlotIssue{Idx: i, Reason: "scrub"})
+			if kept[i] != 0 && r.live.IsLive(kept[i]) {
+				readable--
+			}
+			kept[i] = 0
+		}
+	}
+	if migrate {
+		st.PolicyStale++
+	}
+	if readable < int(c.K) {
+		st.Unrepairable++
+		r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d readable slots < k=%d", readable, c.K))
+		return st
+	}
+	outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
+	if err != nil {
+		st.Errors++
+		r.warnRepair.Warn(r.log, "repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+		return st
+	}
+	st.BytesMoved += outcome.bytes
+	switch {
+	case !outcome.changed && migrate:
+		st.Deferred++ // fewer than k acks: the old encoding stays committed, retried next pass
+	case !outcome.changed:
+		// no live spare could take the bad slots; counted as still degraded
+	case migrate:
+		// the chunk is on the new policy now; with missing slots it is also partial
+		st.Migrated++
+		st.PolicyStale--
+		if !outcome.full {
+			st.Partial++
+		}
+		r.Events.Record(c.Hash, meta.EvMigrated, fmt.Sprintf("%d+%d -> %d+%d", c.K, c.M, vol.K, vol.M))
+	case outcome.full:
+		st.Repaired++
+		r.Events.Record(c.Hash, meta.EvRepaired, fmt.Sprintf("%d bad slots", len(bad)))
+	default:
+		st.Partial++
+		r.Events.Record(c.Hash, meta.EvPartial, fmt.Sprintf("%d bad slots", len(bad)))
+	}
+	return st
 }
 
 // rebalance evens out each host's disks by capacity (docs/14 §7, I-172): for every

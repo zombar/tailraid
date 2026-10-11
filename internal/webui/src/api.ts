@@ -44,14 +44,24 @@ export interface NodeReport {
   dead_for?: string;
   lost?: boolean;
   rtt?: string;
-  free: number;
+  free: number; // from the probe; a bucket's is 0, never a measurement (docs/10 §4.1)
   capacity: number;
+  stored_bytes: number; // shard bytes of the slots the placement table gives it (I-178)
   version: string;
   applied: number;
   slots: number;
   missing_slots: number;
   dev?: boolean;
   joined_at: string;
+  s3?: S3Report; // S3 nodes: the bucket, never its credentials
+}
+
+export interface S3Report {
+  endpoint: string;
+  bucket: string;
+  prefix?: string;
+  region?: string;
+  path_style?: boolean;
 }
 
 export interface RepairStats {
@@ -68,10 +78,22 @@ export interface RepairStats {
   errors: number;
 }
 
+// The pass under way on the leader (docs/12 §8): absent while the repairer is idle.
+export interface RepairProgress {
+  pass: number;
+  started: string;
+  scanned: number;
+  total: number;
+  in_flight: number;
+  workers: number;
+  bytes_moved: number;
+}
+
 export interface RepairStatus {
   last_scan: string;
   stats: RepairStats;
   reported_bad_slots: number;
+  in_progress?: RepairProgress | null;
 }
 
 export interface GatewayReport {

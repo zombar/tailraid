@@ -2,6 +2,31 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.8 (2026-10-11)
+
+### Changes
+
+- dev, soak: a corruption reaches every copy of the shard on the host ([ecf1834](https://github.com/zombar/tailraid/commit/ecf1834))
+- cmd/tailraid: the CLI tests wait a minute for a real Raft to become ready ([198393f](https://github.com/zombar/tailraid/commit/198393f))
+- cluster, node: a member op reads the row behind a Raft barrier (I-177) ([af28107](https://github.com/zombar/tailraid/commit/af28107))
+- cli: default chunk size 4 MiB ([3742d49](https://github.com/zombar/tailraid/commit/3742d49))
+
+## v0.4.7 (2026-10-11)
+
+### Changes
+
+- rpc: the share test asserts order, not a wall-clock bound ([007ed72](https://github.com/zombar/tailraid/commit/007ed72))
+- config: repair.workers and repair.rate are written only when set ([1c5573a](https://github.com/zombar/tailraid/commit/1c5573a))
+- soak, rpc, vms: phase 18 reports its backlog, one gateway skips its read check, the share test waits for its slots ([41a7ce4](https://github.com/zombar/tailraid/commit/41a7ce4))
+- node: the voter-file test's unwritable step works on Windows ([3709c71](https://github.com/zombar/tailraid/commit/3709c71))
+- node: the config's vote follows the member table (I-176) ([1875183](https://github.com/zombar/tailraid/commit/1875183))
+- repair: a bounded fan-out that stays in the background (I-174, I-175) ([77e2dc7](https://github.com/zombar/tailraid/commit/77e2dc7))
+- placement: the host cap outranks the voter preference (I-173) ([d2b7114](https://github.com/zombar/tailraid/commit/d2b7114))
+
+### Documentation
+
+- docs: soak and three-VM reports on repair-converges (18 phases, 0 failed; mac and win rounds pass) ([77b8f04](https://github.com/zombar/tailraid/commit/77b8f04))
+
 ## v0.4.6 (2026-10-11)
 
 ### Changes

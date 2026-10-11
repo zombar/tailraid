@@ -40,6 +40,7 @@ var phases = []phase{
 	{"14 diskless host", phaseDiskless},
 	{"15 s3 bucket", phaseBucket},
 	{"17 hot path", phaseHotPath}, // 16 is the web UI's (its branch)
+	{"18 repair fan-out", phaseFanOut},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -662,7 +663,7 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	if cerr != nil {
 		return fmt.Errorf("corrupt %s slot %d on %s: %w (%s)", c.Hash[:12], slot, holder.Name, cerr, slotTable(c))
 	}
-	r.event("corrupt", fmt.Sprintf("%s slot %d on %s", c.Hash[:12], slot, holder.Name))
+	r.event("corrupt", fmt.Sprintf("%s slot %d (target %d) on %s", c.Hash[:12], slot, c.Slots[slot].Node, holder.Name))
 	got, err := v.ReadAll(target)
 	r.checkAt("I-40 L-68 L-105", "read exact with m shards corrupt", err == nil && bytes.Equal(got, m[target]), fmt.Sprint(err), target, c.Hash, holder.Name)
 	st, err := r.scrub(ctx)

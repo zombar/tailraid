@@ -230,7 +230,7 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    does not populate the read cache; the first read after a flush fetches shards and the
    `Reader` caches then, so a bulk upload never evicts the hot set.
 10. **Commit.** A plan is committed in **batches** of at most `FileDirtyHi` bytes of chunks
-    (32 at 1 MiB): `assemble` keeps the lowest-indexed touched chunks that fit and leaves
+    (8 at 4 MiB): `assemble` keeps the lowest-indexed touched chunks that fit and leaves
     the rest dirty as residual, exactly like a partial flush; a plan with a truncate is
     never split (I-80, L-191). Then `Propose(Commit{Ino, BaseVersion: base.Version,
     HasTruncate: plan.sizeSet, TruncateTo: plan.minSize, NewSize, Writes, NewChunks, Now})`
@@ -389,11 +389,11 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 | web upload in flight | one chunk-sized buffer per upload | `uploadSlots` (4) × ChunkSize | the response (docs/13 §4) |
 | WAL append | one record copy per WRITE in flight | connections × `InFlight` × wsize (docs/07) | its fsync |
 | overlay bookkeeping | 24 B per extent | WALCap / wsize extents per inode | compaction |
-| flush: assemble + encode | the chunk and its `(k+m)` shards, per chunk in the pipeline | `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))` = 8 × 2.5 MiB = **20 MiB** at 1 MiB and (2,1) | the chunk being decided (step 9) |
+| flush: assemble + encode | the chunk and its `(k+m)` shards, per chunk in the pipeline | `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))` = 8 × 10 MiB = **80 MiB** at 4 MiB and (2,1) | the chunk being decided (step 9) |
 | compaction | one streaming buffer | 1 MiB | the rewrite |
-| shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 1 MiB, 4 at 64 MiB) | the reply |
+| shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 4 MiB, 4 at 64 MiB) | the reply |
 | read cache, memory tier | hot decoded chunks | 64 MiB | LRU |
-| readahead | the chunk and its k shards per prefetch (§5) | `ReadAhead × (ChunkSize + k · ShardLen(ChunkSize, k))` = 4 × 2 MiB = **8 MiB** at 1 MiB and (3,2) | the cache Put |
+| readahead | the chunk and its k shards per prefetch (§5) | `ReadAhead × (ChunkSize + k · ShardLen(ChunkSize, k))` = 4 × 8 MiB = **32 MiB** at 4 MiB and (3,2) | the cache Put |
 | FSM | the chunk list of every file, 32 B per chunk | docs/01 | – |
 
 `Flusher.Buffers()` reports the flush row live and its peak since start; `status` shows it

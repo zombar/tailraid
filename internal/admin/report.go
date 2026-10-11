@@ -33,8 +33,9 @@ type NodeReport struct {
 	DeadFor    string       `json:"dead_for,omitempty"`
 	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT        string       `json:"rtt,omitempty"`
-	Free       int64        `json:"free"`
+	Free       int64        `json:"free"` // from the probe; a bucket's is 0, never a measurement (docs/10 §4.1)
 	Capacity   uint64       `json:"capacity"`
+	Stored     uint64       `json:"stored_bytes"` // shard bytes of the slots the placement table gives it (I-178)
 	Version    string       `json:"version"`
 	Applied    uint64       `json:"applied"`
 	Slots      int          `json:"slots"`
@@ -175,9 +176,10 @@ type Report struct {
 
 // RepairStatus is the leader's last scan (nil on followers).
 type RepairStatus struct {
-	LastScan time.Time    `json:"last_scan"`
-	Stats    repair.Stats `json:"stats"`
-	Reported int          `json:"reported_bad_slots"`
+	LastScan   time.Time        `json:"last_scan"`
+	Stats      repair.Stats     `json:"stats"`
+	Reported   int              `json:"reported_bad_slots"`
+	InProgress *repair.Progress `json:"in_progress,omitempty"` // the pass under way, if any (docs/12 §8)
 }
 
 // Build assembles the report from the local FSM and prober view; rep may be nil.
@@ -238,7 +240,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		r := NodeReport{
 			Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
-			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
+			Slots: slots[nd.Idx], Missing: missing[nd.Idx], Stored: health.Bytes[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
 		}
 		if nd.Kind == meta.KindS3 {
 			r.S3 = &S3Report{Endpoint: nd.S3Endpoint, Bucket: nd.S3Bucket, Prefix: nd.S3Prefix, Region: nd.S3Region, PathStyle: nd.S3PathStyle}
@@ -271,6 +273,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	if rp != nil && n.IsLeader() {
 		st, at := rp.Last()
 		rep.Repair = &RepairStatus{LastScan: at, Stats: st, Reported: rp.Reported()}
+		if p, running := rp.Progress(); running {
+			rep.Repair.InProgress = &p
+		}
 	}
 	markDisks(rep.Nodes)
 	rep.Warnings = warnings(rep)

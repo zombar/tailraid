@@ -16,6 +16,10 @@ const (
 	HeaderIndex    = "X-Tailraid-Index"     // log index of an applied command
 	HeaderLeader   = "X-Tailraid-Leader"    // leader RPC address on 421
 	HeaderNodeID   = "X-Tailraid-Node"      // responding node's raft ID
+	// HeaderPriority marks a shard request as background work (the repairer's), which
+	// holds at most half of a node's PUT and GET slots (docs/06 §4, I-175).
+	HeaderPriority     = "X-Tailraid-Priority"
+	PriorityBackground = "background"
 )
 
 // Errors the client returns.

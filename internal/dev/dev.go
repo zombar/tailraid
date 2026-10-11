@@ -29,8 +29,10 @@ type FSMHash struct {
 
 // Store is the shard store surface /dev/corrupt needs.
 type Store interface {
-	Path(k chunk.ShardKey) string
-	Has(k chunk.ShardKey) bool
+	// Paths lists the file of every copy of k on this host's open disks: a rebalance
+	// within the host (docs/14 §7) leaves the old copy where the grace fence refused
+	// its delete until the sweep, and a corruption must reach the placed copy.
+	Paths(k chunk.ShardKey) []string
 	// Disks lists this host's open disks as their budgets see them (docs/14 §3); a
 	// diskless host has none. Fill writes (0 removes) the scratch file on the named disk.
 	Disks() []DiskInfo
@@ -87,15 +89,18 @@ func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit
 	})
 	mux.HandleFunc("POST /dev/corrupt", func(w http.ResponseWriter, r *http.Request) {
 		key := chunk.ShardKey(r.URL.Query().Get("key"))
-		if key == "" || !store.Has(key) {
+		paths := store.Paths(key)
+		if key == "" || len(paths) == 0 {
 			http.Error(w, "unknown shard key", http.StatusNotFound)
 			return
 		}
-		if err := Corrupt(store.Path(key)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		for _, p := range paths { // every copy on the host, so the placed one is among them
+			if err := Corrupt(p); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
-		log.Warn("dev: shard corrupted on request", "key", string(key))
+		log.Warn("dev: shard corrupted on request", "key", string(key), "copies", len(paths))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	// the stack of every goroutine, as a crash dump would print it: a hung node is

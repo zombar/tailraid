@@ -35,11 +35,11 @@ func TestCheck_MPlusOneCorrupt_NotOK(t *testing.T) {
 	ino := f.Create("f")
 	must(t, f.Ov.Write(ino, 0, 4096, testharness.Pattern(int(testharness.ChunkSize), 5)))
 	must(t, f.Flusher().FlushInode(ctx, ino))
-	clean := admin.Check(f.FSM, allLive{}, 10*time.Minute, repair.Stats{Scanned: 2, Scrubbed: 2}, true)
+	clean := admin.Check(f.FSM, allLive{}, 10*time.Minute, repair.Stats{Scanned: 2, Scrubbed: 2}, nil, true)
 	if !clean.OK || clean.Degraded != 0 || clean.Unreadable != 0 || len(clean.Files) != 0 {
 		t.Fatalf("clean cluster: %+v", clean)
 	}
-	bad := admin.Check(f.FSM, allLive{}, 10*time.Minute, repair.Stats{Scanned: 2, Scrubbed: 2, ScrubBad: 2, Unrepairable: 1}, true)
+	bad := admin.Check(f.FSM, allLive{}, 10*time.Minute, repair.Stats{Scanned: 2, Scrubbed: 2, ScrubBad: 2, Unrepairable: 1}, nil, true)
 	if bad.OK {
 		t.Fatalf("m+1 corrupt shards reported OK: %+v", bad)
 	}
@@ -48,7 +48,7 @@ func TestCheck_MPlusOneCorrupt_NotOK(t *testing.T) {
 	place := append([]meta.NodeIdx(nil), c.Placement...)
 	place[2] = 0
 	f.MustApply(meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: place}})
-	deg := admin.Check(f.FSM, allLive{}, 10*time.Minute, repair.Stats{}, true)
+	deg := admin.Check(f.FSM, allLive{}, 10*time.Minute, repair.Stats{}, nil, true)
 	if deg.OK || deg.Degraded != 1 || deg.RepairPending != 1 || deg.Unreadable != 0 || len(deg.Files) != 1 || deg.Files[0] != "/f" {
 		t.Fatalf("degraded: %+v", deg)
 	}

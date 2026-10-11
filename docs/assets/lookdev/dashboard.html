@@ -203,6 +203,12 @@
         <div class="bar-row"><span class="bar-label">slots</span><div class="bar warn"><i style="width:2%"></i></div><span class="bar-val">1,133 slots to move</span></div>
         <div class="meta"><span>rtt 38ms</span><span>v0.4.0</span><span>applied 182,344</span><span>100.64.0.40:20481</span><span>joined 2026-09-20</span></div>
       </div>
+      <div class="card node">
+        <div class="name-row"><span class="dot ok"></span><span class="name">b2</span><span class="badges"><span class="badge">s3</span></span></div>
+        <div class="bar-row"><span class="bar-label">stored</span><div class="bar"><i style="width:9%"></i></div><span class="bar-val">92.4 GiB of 1.0 TiB weight</span></div>
+        <div class="bar-row"><span class="bar-label">slots</span><div class="bar"><i style="width:30%"></i><b class="tick" style="left:30%"></b></div><span class="bar-val">28,927 · expected 28,927 · +0.0 %</span></div>
+        <div class="meta"><span>rtt 83ms</span><span>8ball-data/tailraid</span><span>eu-central-003</span><span>joined 2026-10-11</span></div>
+      </div>
     </div>
   </section>
 
@@ -220,6 +226,24 @@
       <div class="small dim">degraded + pending, last 10 min (this tab only)</div>
     </div>
     <div class="note">Repair runs on the leader. This node (pike) is a follower. <a href="http://100.64.0.3:20482/">Open atlas's dashboard</a> for the repairer's counters.</div>
+    <!-- on the leader, in place of the note: the pass under way, then the last completed pass -->
+    <h3>Repair · pass 3 running</h3>
+    <div class="bar-row"><span class="bar-label">scanned</span><div class="bar"><i style="width:12%"></i></div><span class="bar-val">12,345 of 106,452 · 4 in flight of 4 workers · 1.2 GiB moved · started 06:01</span></div>
+    <div class="small dim">the pass under way; the counters below are the last completed pass, 2 h ago</div>
+    <dl class="kv">
+      <div><dt>scanned</dt><dd>106,452</dd></div>
+      <div><dt>repaired</dt><dd>98,390</dd></div>
+      <div><dt>partial</dt><dd>0</dd></div>
+      <div><dt>unrepairable</dt><dd>0</dd></div>
+      <div><dt>deferred</dt><dd>0</dd></div>
+      <div><dt>migrated</dt><dd>30,596</dd></div>
+      <div><dt>policy stale</dt><dd>0</dd></div>
+      <div><dt>scrubbed</dt><dd>1,064</dd></div>
+      <div><dt>scrub bad</dt><dd>0</dd></div>
+      <div><dt>bytes moved</dt><dd>41.3 GiB</dd></div>
+      <div><dt>errors</dt><dd>0</dd></div>
+      <div><dt>reported bad slots</dt><dd>0</dd></div>
+    </dl>
     <h3>Gateway</h3>
     <div class="bar-row"><span class="bar-label">dirty bytes</span><div class="bar"><i style="width:7%"></i></div><span class="bar-val">18.2 MiB in 3 files of 256 MiB · flushing</span></div>
     <div class="bar-row"><span class="bar-label">WAL</span><div class="bar"><i style="width:17%"></i></div><span class="bar-val">22.0 MiB of 128 MiB</span></div>

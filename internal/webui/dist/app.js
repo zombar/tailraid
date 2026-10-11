@@ -441,7 +441,10 @@ function card(n, share, scale) {
   const dot = h("span", { class: "dot " + (n.live ? "ok" : "bad"), title: n.live ? "live" : "dead for " + (n.dead_for ?? "?") });
   const name = h("div", { class: "name-row" }, dot, h("span", { class: "name" }, n.name), badges);
   let capacity;
-  if (!n.live) {
+  if (n.s3) {
+    const frac = n.capacity > 0 ? n.stored_bytes / n.capacity : 0;
+    capacity = barRow("stored", bar(frac, fillTone(frac)), `${bytes(n.stored_bytes)} of ${bytes(n.capacity)} weight`);
+  } else if (!n.live) {
     capacity = barRow("capacity", bar(0, "off"), "unknown (dead " + (n.dead_for ?? "?") + ")");
   } else if (n.capacity === 0) {
     capacity = barRow("capacity", bar(0), n.kind === "device" ? "no disks" : "no capacity");
@@ -464,15 +467,14 @@ function card(n, share, scale) {
     }
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }
-  const meta = h(
-    "div",
-    { class: "meta" },
-    h("span", null, "rtt " + (n.rtt ?? "\u2014")),
-    h("span", null, n.version || "?"),
-    h("span", null, "applied " + count(n.applied)),
-    h("span", null, `${n.addr}:${n.rpc_port}`),
-    h("span", null, "joined " + shortDate(n.joined_at))
-  );
+  const meta = h("div", { class: "meta" }, h("span", null, "rtt " + (n.rtt ?? "\u2014")));
+  if (n.s3) {
+    meta.append(h("span", null, n.s3.prefix ? `${n.s3.bucket}/${n.s3.prefix}` : n.s3.bucket));
+    if (n.s3.region) meta.append(h("span", null, n.s3.region));
+  } else {
+    meta.append(h("span", null, n.version || "?"), h("span", null, "applied " + count(n.applied)), h("span", null, `${n.addr}:${n.rpc_port}`));
+  }
+  meta.append(h("span", null, "joined " + shortDate(n.joined_at)));
   return h("div", { class: "card node" + (n.self ? " self" : "") }, name, capacity, slots, meta);
 }
 
@@ -659,11 +661,11 @@ function tile(label, value, sub, tone) {
 function repair(r) {
   if (!r.repair) {
     const self = r.nodes.find((n) => n.self)?.name ?? r.node;
-    const note = h("div", { class: "note" }, `Repair runs on the leader. This node (${self}) is a follower. `);
+    const note2 = h("div", { class: "note" }, `Repair runs on the leader. This node (${self}) is a follower. `);
     const leader = r.nodes.find((n) => n.leader || n.id === r.leader);
-    if (!r.leader) note.append("No leader is elected.");
-    else if (leader) note.append(h("a", { href: `http://${leader.addr}:${location.port || "20482"}/` }, `Open ${leader.name}'s dashboard`), " for the repairer's counters.");
-    return note;
+    if (!r.leader) note2.append("No leader is elected.");
+    else if (leader) note2.append(h("a", { href: `http://${leader.addr}:${location.port || "20482"}/` }, `Open ${leader.name}'s dashboard`), " for the repairer's counters.");
+    return note2;
   }
   const s = r.repair.stats;
   const kv = h("dl", { class: "kv" });
@@ -680,7 +682,16 @@ function repair(r) {
   row2("bytes moved", bytes(s.bytes_moved));
   row2("errors", count(s.errors), s.errors > 0 ? "bad" : void 0);
   row2("reported bad slots", count(r.repair.reported_bad_slots), r.repair.reported_bad_slots > 0 ? "warn" : void 0);
-  return h("div", null, h("h3", null, "Repair \xB7 last scan " + ago(r.repair.last_scan)), kv);
+  const p = r.repair.in_progress;
+  if (!p) return h("div", null, h("h3", null, "Repair \xB7 last scan " + ago(r.repair.last_scan)), kv);
+  const started = new Date(p.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const progress = barRow(
+    "scanned",
+    bar(p.total > 0 ? p.scanned / p.total : 0),
+    `${count(p.scanned)} of ${count(p.total)} \xB7 ${p.in_flight} in flight of ${p.workers} workers \xB7 ${bytes(p.bytes_moved)} moved \xB7 started ${started}`
+  );
+  const note = h("div", { class: "small dim" }, `the pass under way; the counters below are the last completed pass, ${ago(r.repair.last_scan)}`);
+  return h("div", null, h("h3", null, `Repair \xB7 pass ${p.pass} running`), progress, note, kv);
 }
 
 // internal/webui/src/dashboard.ts

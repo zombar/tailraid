@@ -9,8 +9,6 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/node"
-	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // Each OS opens the URL with its own opener and the URL as one argument, never through a
@@ -54,8 +52,7 @@ func TestCLI_Dashboard(t *testing.T) {
 		}
 	}()
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(context.Background(), addr); return err == nil && h.Ready }, "the node never served")
+	waitReady(context.Background(), t, addr, "the node never served")
 
 	out, err := run(t, "dashboard", "--config", path, "--print")
 	if want := fmt.Sprintf("http://127.0.0.1:%d/\n", cfg.Listen.Web); err != nil || out != want {

@@ -51,7 +51,7 @@ Endpoints and who may call them:
 | Endpoint | Caller | Note |
 |---|---|---|
 | `GET /health` | anyone on the tailnet | unauthenticated, no secrets in the body |
-| `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412` |
+| `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412`; `X-Tailraid-Priority: background` (the repairer's requests) holds at most half the node's slots (06 §4, I-175) |
 | `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |
@@ -172,7 +172,7 @@ verified.
 ## Development endpoints
 
 `/dev/fsm-hash` (applied index and SHA-256 of the encoded FSM state), `/dev/corrupt?key=`
-(flips a byte of a shard file's payload), `/dev/exit` (process exit 3 after the reply, for
+(flips a byte of the shard's payload on every disk of the host that holds a copy: a rebalance within the host leaves the old copy until the sweep), `/dev/exit` (process exit 3 after the reply, for
 a service manager to restart), `/dev/fault` (per-peer drop rules on the Raft stream and
 the node RPC, both directions; docs/12 §3), `/dev/goroutines` (the stack of every
 goroutine, as a crash dump prints it, so a hung node is diagnosed without killing it),
