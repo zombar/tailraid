@@ -368,3 +368,32 @@ func TestWebUI_Ls_HidesOSMetadata(t *testing.T) {
 		t.Errorf("a left-out file by its path: %d %q", code, body)
 	}
 }
+
+// The node's own tree, /.tailraid (thumbnails, the stats segments of docs/17), is absent
+// from the root listing while its files stay reachable by path, like the OS metadata.
+// Invariant: I-195
+func TestWebUI_Ls_HidesTailraidTree(t *testing.T) {
+	u := newUI(t)
+	u.write("/.tailraid/stats/10s/pike/2026-10-11T14-pike.jsonl.gz", 0, []byte("x"))
+	u.write("/photo.jpg", 0, []byte("y"))
+	code, _, body := u.get("/api/ls?path=/")
+	if code != 200 {
+		t.Fatalf("ls: %d", code)
+	}
+	var out struct{ Entries []webui.Entry }
+	must(t, json.Unmarshal(body, &out))
+	for _, e := range out.Entries {
+		if e.Name == ".tailraid" {
+			t.Fatalf("the reserved tree is listed: %+v", out.Entries)
+		}
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Name != "photo.jpg" {
+		t.Fatalf("listing %+v", out.Entries)
+	}
+	if code, _, body := u.get("/api/ls?path=/.tailraid/stats/10s/pike"); code != 200 || !strings.Contains(string(body), "2026-10-11T14-pike.jsonl.gz") {
+		t.Errorf("the tree by its path: %d %s", code, body)
+	}
+	if code, _, body := u.get("/files/.tailraid/stats/10s/pike/2026-10-11T14-pike.jsonl.gz"); code != 200 || string(body) != "x" {
+		t.Errorf("a segment by its path: %d %q", code, body)
+	}
+}

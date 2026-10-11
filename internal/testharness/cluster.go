@@ -394,6 +394,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Flush.Suspect = nd.Prober.Suspect
 	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
+	nd.FS.SetFlusher(nd.Flush)
 	if c.retryUntilStale {
 		nd.FS.SetHealth(func() bool {
 			switch h := nd.Node.Health(c.Clk, nd.Prober); h.State {

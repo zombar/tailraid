@@ -158,3 +158,28 @@ func TestStatic_PagesAreWellFormedShells(t *testing.T) {
 		}
 	}
 }
+
+// The shell carries the Stats tab and the theme switch, and the bundle carries the page's
+// route, the theme's storage key and the data-theme attribute it sets (I-198, I-200; the
+// behaviour itself is docs/13's manual checks 15 to 17: the TypeScript has no unit runner).
+// Invariant: I-198, I-200
+func TestStatic_StatsShellAndTheme(t *testing.T) {
+	index, err := os.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`data-tab="stats"`, `href="#/stats"`, `<button type="button" class="theme"`} {
+		if !strings.Contains(string(index), want) {
+			t.Errorf("index.html lacks %s", want)
+		}
+	}
+	bundle, err := os.ReadFile("dist/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"#/stats?"`, `/api/stats?from=`, `localStorage.getItem(`, `"theme"`, `setAttribute("data-theme"`, `removeAttribute("data-theme")`, `"visibilitychange"`} {
+		if !strings.Contains(string(bundle), want) {
+			t.Errorf("app.js lacks %s", want)
+		}
+	}
+}

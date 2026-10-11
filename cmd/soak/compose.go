@@ -121,7 +121,7 @@ func (e *composeEnv) WebClient() *http.Client {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true}
 }
 
 // multiFile is the compose file with phase 15's bucket, the s3 service (docs/10 §4).

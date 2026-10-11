@@ -62,3 +62,32 @@ func TestCLI_Dashboard(t *testing.T) {
 		t.Errorf("no web_url: %v", err)
 	}
 }
+
+// stats seal asks the serving node to write its partial hour now and prints how many
+// rows it sealed; --json prints the reply.
+// Invariant: I-192
+func TestCLI_StatsSeal(t *testing.T) {
+	path, cfg := devHome(t)
+	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	sctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- node.Serve(sctx, cfg, slog.Default(), "test") }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("serve: %v", err)
+		}
+	}()
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
+	waitReady(context.Background(), t, addr, "the node never served")
+
+	out, err := run(t, "stats", "seal", "--config", path)
+	if err != nil || !strings.HasPrefix(out, "sealed ") || !strings.HasSuffix(out, " rows\n") {
+		t.Fatalf("stats seal: %q %v", out, err)
+	}
+	if out, err := run(t, "stats", "seal", "--config", path, "--json"); err != nil || !strings.Contains(out, `"sealed_rows"`) {
+		t.Fatalf("stats seal --json: %q %v", out, err)
+	}
+}

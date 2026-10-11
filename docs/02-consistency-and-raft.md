@@ -384,7 +384,11 @@ its derived budget (01). The node is named after the host; `--name`, `--chunk` a
 Generates `node_id`; `POST /v1/join` with `{token, node_id, name, ts_stable_id, addr, ports,
 voter, version}`. The receiver requires `WhoIs(srcIP).StableID == ts_stable_id`
 and `token == Meta.JoinToken`, then forwards to the leader, which calls
-`raft.AddNonvoter` or `AddVoter` and proposes `NodeUpsert`. The joiner then starts `serve`
+`raft.AddNonvoter` or `AddVoter` and proposes `NodeUpsert`. A voter just added and not
+yet caught up can cost the leader its lease while that proposal is in flight; the
+outcome is then unknown (I-95) and the reply is `503`, which the joiner retries under
+the same node ID: a re-join keeps the row and index whichever way the proposal went
+(I-94). The joiner then starts `serve`
 and receives the state by snapshot, after registering its configured disks through the
 leader's `add_disk` member op (14 §2, I-121).
 
@@ -535,7 +539,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-27 | `TestCheckInvariants_DetectsEachViolation`, `TestFSM_Commit_NewFileAndOverwrite`, `TestFSM_Commit_SameHashTwiceInOneFile_RefsPerIndex`, `TestFSM_Revive` |
 | I-28 | `TestFSM_Commit_RejectsStaleBaseVersion` |
 | I-62 | `TestFSM_NodeUpsert_IdempotentByID` |
-| I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext`, `TestCluster_CloseWhileApplying_EveryWaiterResolves` |
+| I-95 | `TestVFS_UnknownOutcome_ResolvesPerCommand`, `TestApply_UnknownOutcomeIs500`, `TestApplyLocal_ExpiredAndCancelledContext`, `TestCluster_CloseWhileApplying_EveryWaiterResolves`, `TestJoin_UnknownOutcomeIsRetryable` |
 | I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
 | I-102 | `TestFSM_SetPlacement_ExpectConflict`, `TestEncodeCommand_Golden` |
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |

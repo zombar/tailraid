@@ -48,6 +48,7 @@ type Health struct {
 	Ready     bool         `json:"ready"`           // a leader is known and the FSM has every committed entry (I-125)
 	Leader    bool         `json:"leader"`
 	Dev       bool         `json:"dev,omitempty"`   // /dev/* endpoints enabled on this node
+	Web       uint16       `json:"web,omitempty"`   // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
 	Disks     []DiskHealth `json:"disks,omitempty"` // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
 }
 
@@ -123,7 +124,7 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
 	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
@@ -143,6 +144,7 @@ type AdminOp struct {
 	As        string `json:"as,omitempty"`
 	OlderThan string `json:"older_than,omitempty"`
 	All       bool   `json:"all,omitempty"`
+	Rollup    bool   `json:"rollup,omitempty"` // stats_seal: also write today's rollups so far (docs/17 §7)
 }
 
 // IsPass reports an op the leader answers only once a pass over the volume is done

@@ -61,10 +61,10 @@ func TestLiveEnv_CapsFollowFlags(t *testing.T) {
 		destructive, restarts bool
 		want                  Caps
 	}{
-		{false, false, Caps{}},
-		{true, false, Caps{Corrupt: true, Mutate: true}},
-		{true, true, Caps{Corrupt: true, Mutate: true, Kill: true, Partition: true}},
-		{false, true, Caps{}}, // verify refuses the combination; the env is safe anyway
+		{false, false, Caps{Stats: true}}, // a live cluster always runs the sampler (docs/17)
+		{true, false, Caps{Corrupt: true, Mutate: true, Stats: true}},
+		{true, true, Caps{Corrupt: true, Mutate: true, Kill: true, Partition: true, Stats: true}},
+		{false, true, Caps{Stats: true}}, // verify refuses the combination; the env is safe anyway
 	} {
 		e := &LiveEnv{Destructive: c.destructive, Restarts: c.restarts}
 		if got := e.Caps(); got != c.want {

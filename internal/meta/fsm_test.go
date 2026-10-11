@@ -1165,6 +1165,16 @@ func (g *cmdGen) next() Command {
 			// refuses every trash under it for the rest of the run
 			flags &^= FlagProtected
 		}
+		if flags&FlagProtected != 0 {
+			// and one folder at a time: in a deep tree, protection left on many folders
+			// puts most paths under a protected ancestor and no trash ever succeeds
+			// (seed 1791729117970525800 ran 3000 commands without one)
+			for i := range dirs {
+				if p := &dirs[i]; p.Flags&FlagProtected != 0 && p.Ino != d.Ino {
+					return Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: p.Ino, Mask: AttrFlags, Flags: p.Flags &^ FlagProtected, Now: g.now}}
+				}
+			}
+		}
 		return Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: d.Ino, Mask: AttrFlags, Flags: flags, Now: g.now}}
 	case 0:
 		return Command{Op: OpCreate, Create: &Create{Parent: d.Ino, Name: name, Type: TFile, Mode: 0o644, Now: g.now}}
