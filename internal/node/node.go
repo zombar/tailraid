@@ -835,22 +835,16 @@ type devStores struct {
 	fsm   *meta.Store
 }
 
-func (d devStores) find(k chunk.ShardKey) *chunk.Store {
+// Paths is every copy of k on this host's open disks (a rebalance within the host may
+// have left one behind the placed copy until the sweep).
+func (d devStores) Paths(k chunk.ShardKey) []string {
+	var out []string
 	for _, ld := range d.disks.open() {
 		if ld.store.Has(k) {
-			return ld.store
+			out = append(out, ld.store.Path(k))
 		}
 	}
-	return nil
-}
-
-func (d devStores) Has(k chunk.ShardKey) bool { return d.find(k) != nil }
-
-func (d devStores) Path(k chunk.ShardKey) string {
-	if s := d.find(k); s != nil {
-		return s.Path(k)
-	}
-	return ""
+	return out
 }
 
 // Disks is GET /dev/disk: every open disk as its budget sees it.
@@ -1127,6 +1121,14 @@ func onReady(ctx context.Context, n *cluster.Node, log *slog.Logger, fatal chan<
 			return
 		case <-t.C:
 		}
+	}
+	// Ready proves dispatch to the FSM, not the apply: the check reads the table only
+	// once the FSM holds every entry of the log (WaitReady, a barrier on the leader)
+	if err := n.WaitReady(ctx, time.Minute); err != nil {
+		if ctx.Err() == nil {
+			log.Warn("legacy check skipped: the log did not replay", "err", err)
+		}
+		return
 	}
 	if err := legacyCheck(n.FSM); err != nil {
 		fatal <- err

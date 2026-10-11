@@ -291,7 +291,9 @@ runs.
   host.
 - **I-119** — `serve` refuses, before any listener opens, a restored state in which a device
   row has `Capacity > 0` or a chunk slot names a device index, and prints that the cluster
-  must be re-created with `reset` and `init`/`join`.
+  must be re-created with `reset` and `init`/`join`; the check runs again once the node
+  is ready and its FSM holds every entry of its log, for a snapshot older than the
+  legacy entries.
 - **I-120** — A volume whose node table holds no Active disk or S3 row fails every flush
   with `ErrFull`, so the client sees `ENOSPC`, never `EIO`.
 - **I-121** — `join` marks and registers the disks listed in its config exactly as `init`
