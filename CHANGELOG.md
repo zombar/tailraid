@@ -2,6 +2,23 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.5.2 (2026-10-11)
+
+### Changes
+
+- soak: the harness wait lets a flush under way finish before flushing (phase 2) ([42743e3](https://github.com/zombar/tailraid/commit/42743e3))
+- vfs, soak: readahead retries skipped candidates and counts them (I-166) ([a01f485](https://github.com/zombar/tailraid/commit/a01f485))
+- vfs: a READ that joined a failed prefetch fetches for itself (I-203) ([57eb46c](https://github.com/zombar/tailraid/commit/57eb46c))
+- soak: phase 17 polls for the suspect mark to clear before repairing (I-170) ([93a8852](https://github.com/zombar/tailraid/commit/93a8852))
+- vfs: a READ in the chunk of the previous one keeps the readahead (I-203) ([0eb4b2a](https://github.com/zombar/tailraid/commit/0eb4b2a))
+- admin, rpc: a status reply follows the request that asked for it (I-214) ([a34593f](https://github.com/zombar/tailraid/commit/a34593f))
+- smb: a QUERY_INFO answer is bounded by the client's buffer (I-213) ([5c13502](https://github.com/zombar/tailraid/commit/5c13502))
+- pins, testharness: drain the chunk cache before its directory goes ([79a9a17](https://github.com/zombar/tailraid/commit/79a9a17))
+- webui: hidden wins over a class's display; a player change re-marks rows in place ([ecfcfaf](https://github.com/zombar/tailraid/commit/ecfcfaf))
+- CLAUDE.md: one status paragraph after the merge of main ([14989ab](https://github.com/zombar/tailraid/commit/14989ab))
+- Early serve: data-shard sums in Raft, a range served from a verified shard before the chunk is decoded (I-201, I-202, codec 5) ([10d4a75](https://github.com/zombar/tailraid/commit/10d4a75))
+- Open media fast: readahead after the read, cache writes behind the Put, status off the request path (I-203..I-205, I-165) ([a8cc721](https://github.com/zombar/tailraid/commit/a8cc721))
+
 ## v0.5.1 (2026-10-11)
 
 ### Changes
