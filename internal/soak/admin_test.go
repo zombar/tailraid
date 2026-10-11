@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
@@ -88,5 +90,58 @@ func TestAdmin_SeedsRedirectsAndReplies(t *testing.T) {
 	fc.down["10.0.0.2:20481"] = true
 	if _, err := a.LeaderAddr(ctx); err == nil || !strings.Contains(err.Error(), "tailraid serve") {
 		t.Fatalf("all seeds down: %v", err)
+	}
+}
+
+// deadlineCaller records how much deadline each call arrived with (0 for none).
+type deadlineCaller struct {
+	fakeCaller
+	mu   sync.Mutex
+	left []time.Duration
+}
+
+func (d *deadlineCaller) Call(ctx context.Context, addr, method, path string, body []byte) ([]byte, error) {
+	var left time.Duration
+	if dl, ok := ctx.Deadline(); ok {
+		left = time.Until(dl)
+	}
+	d.mu.Lock()
+	d.left = append(d.left, left)
+	d.mu.Unlock()
+	return d.fakeCaller.Call(ctx, addr, method, path, body)
+}
+
+// A pass op reaches the leader under PassTimeout, the only deadline a pass gets (the RPC
+// client gives a pass none of its own, docs/08).
+//
+// Invariant: I-189
+func TestAdmin_PassOpsCarryDeadline(t *testing.T) {
+	dc := &deadlineCaller{}
+	dc.rep = report("10.0.0.1:20481", "10.0.0.1:20481")
+	a := &Admin{Caller: dc, Seeds: []string{"10.0.0.1:20481"}}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"repair", func() error { _, err := a.RepairNow(ctx); return err }},
+		{"scrub", func() error { _, err := a.Scrub(ctx); return err }},
+		{"gc", func() error { _, err := a.GCNow(ctx); return err }},
+	} {
+		dc.mu.Lock()
+		dc.left = nil
+		dc.mu.Unlock()
+		if err := tc.call(); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		dc.mu.Lock()
+		left := append([]time.Duration(nil), dc.left...)
+		dc.mu.Unlock()
+		if len(left) < 2 {
+			t.Fatalf("%s: calls %v, want the leader lookup and then the op", tc.name, left)
+		}
+		if op := left[len(left)-1]; op <= PassTimeout-time.Minute || op > PassTimeout {
+			t.Fatalf("%s: the pass op arrived with %v left, want about %v", tc.name, op, PassTimeout)
+		}
 	}
 }
