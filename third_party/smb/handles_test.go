@@ -107,6 +107,7 @@ func TestQueryInfoClasses(t *testing.T) {
 	ask := func(infoType, class uint8) []byte {
 		body := make([]byte, 40)
 		body[2], body[3] = infoType, class
+		binary.LittleEndian.PutUint32(body[4:], 65536) // OutputBufferLength, as a client sends
 		copy(body[24:], of.id[:])
 		out, err := c.dispatch(request(cmdQueryInfo, 1, body))
 		if err != nil {
@@ -148,6 +149,7 @@ func TestQueryInfoClasses(t *testing.T) {
 	cd, dirOf := opened(t, fs, "/", false)
 	dirBody := make([]byte, 40)
 	dirBody[2], dirBody[3] = infoTypeFile, fileStandardInformation
+	binary.LittleEndian.PutUint32(dirBody[4:], 65536)
 	copy(dirBody[24:], dirOf.id[:])
 	out, err := cd.dispatch(request(cmdQueryInfo, 1, dirBody))
 	if err != nil {
@@ -155,6 +157,81 @@ func TestQueryInfoClasses(t *testing.T) {
 	}
 	if out[headerLen+8+21] != 1 {
 		t.Error("a directory's standard information does not say it is one")
+	}
+}
+
+// A QUERY_INFO answer never exceeds the buffer the client offered (MS-SMB2 3.3.5.20):
+// whole when it fits, cut with BUFFER_OVERFLOW when only the fixed part fits, refused
+// with INFO_LENGTH_MISMATCH below that. Windows asks for the volume information with a
+// buffer sized for an empty label on every GetFileInformationByHandle (Go's os.Open of a
+// directory), and a longer answer failed the call with error 58 on the client.
+// Invariant: I-213
+func TestQueryInfo_OutputBufferLength(t *testing.T) {
+	fs := &tinyFS{body: []byte("hello")}
+	c, of := opened(t, fs, "/file.txt", false)
+	ask := func(infoType, class uint8, outMax uint32) (uint32, []byte) {
+		t.Helper()
+		body := make([]byte, 40)
+		body[2], body[3] = infoType, class
+		binary.LittleEndian.PutUint32(body[4:], outMax)
+		copy(body[24:], of.id[:])
+		out, err := c.dispatch(request(cmdQueryInfo, 1, body))
+		if err != nil {
+			t.Fatalf("type %d class %d buffer %d: %v", infoType, class, outMax, err)
+		}
+		st := statusOf(t, out)
+		if st == statusSuccess || st == statusBufferOverflow {
+			n := binary.LittleEndian.Uint32(out[headerLen+4:])
+			return st, out[headerLen+8 : headerLen+8+int(n)]
+		}
+		return st, nil
+	}
+	for _, tc := range []struct {
+		infoType, class uint8
+		fixed           int // MS-FSCC's fixed part of the class
+	}{
+		{infoTypeFile, fileBasicInformation, 40},
+		{infoTypeFile, fileStandardInformation, 24},
+		{infoTypeFile, fileInternalInformation, 8},
+		{infoTypeFile, fileEaInformation, 4},
+		{infoTypeFile, fileAccessInformation, 4},
+		{infoTypeFile, fileNameInformation, 4},
+		{infoTypeFile, fileAlignmentInformation, 4},
+		{infoTypeFile, filePositionInformation, 8},
+		{infoTypeFile, fileNetworkOpenInformation, 56},
+		{infoTypeFile, fileStreamInformation, 24},
+		{infoTypeFile, fileAllInformation, 100},
+		{infoTypeFilesystem, fsVolumeInformation, 18},
+		{infoTypeFilesystem, fsSizeInformation, 24},
+		{infoTypeFilesystem, fsFullSizeInformation, 32},
+		{infoTypeFilesystem, fsDeviceInformation, 8},
+		{infoTypeFilesystem, fsAttributeInformation, 12},
+	} {
+		_, whole := ask(tc.infoType, tc.class, 65536)
+		n := len(whole)
+		if n < tc.fixed {
+			t.Fatalf("type %d class %d: a whole answer of %d bytes is shorter than its fixed part %d", tc.infoType, tc.class, n, tc.fixed)
+		}
+		for _, b := range []int{0, 1, tc.fixed - 1, tc.fixed, n - 1, n, n + 1} {
+			if b < 0 {
+				continue
+			}
+			st, got := ask(tc.infoType, tc.class, uint32(b))
+			switch {
+			case b >= n:
+				if st != statusSuccess || len(got) != n { // the bytes may carry the reply's time
+					t.Errorf("type %d class %d buffer %d of %d: %#x with %d bytes, want the whole answer", tc.infoType, tc.class, b, n, st, len(got))
+				}
+			case b >= tc.fixed:
+				if st != statusBufferOverflow || len(got) != b {
+					t.Errorf("type %d class %d buffer %d of %d: %#x with %d bytes, want BUFFER_OVERFLOW with the first %d", tc.infoType, tc.class, b, n, st, len(got), b)
+				}
+			default:
+				if st != statusInfoLengthMismatch {
+					t.Errorf("type %d class %d buffer %d below the fixed %d: %#x, want INFO_LENGTH_MISMATCH", tc.infoType, tc.class, b, tc.fixed, st)
+				}
+			}
+		}
 	}
 }
 
@@ -471,6 +548,7 @@ func TestChainedRequestsInheritTheHandle(t *testing.T) {
 
 	query := make([]byte, 40)
 	query[2], query[3] = infoTypeFile, fileStandardInformation
+	binary.LittleEndian.PutUint32(query[4:], 65536)
 	copy(query[24:], allOnesFileID[:]) // "the file the previous operation opened"
 	second := request(cmdQueryInfo, 0, query)
 	binary.LittleEndian.PutUint32(second[offFlags:], flagRelatedOps)

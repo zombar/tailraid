@@ -21,6 +21,7 @@ const (
 	// BUFFER_OVERFLOW is not an error: the high bit is a WARNING, and a
 	// client reads the reply that comes with it and then asks for the rest.
 	statusBufferOverflow       uint32 = 0x80000005
+	statusInfoLengthMismatch   uint32 = 0xC0000004
 	statusMoreProcessing       uint32 = 0xC0000016
 	statusAccessDenied         uint32 = 0xC0000022
 	statusObjectNameNotFound   uint32 = 0xC0000034
