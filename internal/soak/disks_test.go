@@ -4,6 +4,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/zombar/tailraid/internal/chart"
 )
 
 // The expected share is the capacity share capped at one slot per chunk (I-9): with as
@@ -16,7 +18,7 @@ func TestReport_ExpectedShares_CappedPerChunk(t *testing.T) {
 		{Name: "a/2", Slots: 20, Capacity: 4, Active: true, Live: true},
 		{Name: "a/3", Slots: 20, Capacity: 2, Active: true, Live: true},
 	}
-	for i, e := range expectedShares(ts, 20) {
+	for i, e := range chart.ExpectedShares(ts, 20) {
 		if math.Abs(e-20) > 1e-9 {
 			t.Errorf("target %d expects %.2f, want 20 (every chunk)", i, e)
 		}
@@ -27,7 +29,7 @@ func TestReport_ExpectedShares_CappedPerChunk(t *testing.T) {
 		{Name: "b", Slots: 20, Capacity: 3, Active: true},
 		{Name: "c", Slots: 5, Capacity: 3, Active: false},
 	}
-	e := expectedShares(ts, 1000)
+	e := chart.ExpectedShares(ts, 1000)
 	if math.Abs(e[0]-8.75) > 1e-9 || math.Abs(e[1]-26.25) > 1e-9 || e[2] != 0 {
 		t.Fatalf("shares %v", e)
 	}
@@ -42,11 +44,11 @@ func TestReport_DisksTable_LastSampleWithData(t *testing.T) {
 	if peak != 3 || len(rows) != 2 || rows[0].Slots != 10 || rows[1].State != "dead" || rows[0].Delta != "+0.0 %" {
 		t.Fatalf("rows %+v peak %d", rows, peak)
 	}
-	svg := diskSpread(10, []float64{0, 5}, []*Sample{held, empty})
-	if !strings.Contains(svg, "Data spread across disks") || !strings.Contains(svg, `fill="url(#dead)"`) || !strings.Contains(svg, "#d97706") {
+	svg := chart.Spread(10, []float64{0, 5}, spreadSamples([]*Sample{held, empty}), chart.Axis{})
+	if !strings.Contains(svg, "Data spread across disks") || !strings.Contains(svg, `fill="url(#dead)"`) || !strings.Contains(svg, `class="chart-warn"`) {
 		t.Fatal("chart lacks its lanes, the dead hatch or the skew strip")
 	}
-	if diskSpread(10, []float64{0}, []*Sample{{}}) != "" {
+	if chart.Spread(10, []float64{0}, spreadSamples([]*Sample{{}}), chart.Axis{}) != "" {
 		t.Fatal("a run without disks drew the chart")
 	}
 }

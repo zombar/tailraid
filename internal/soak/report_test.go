@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zombar/tailraid/internal/chart"
 )
 
 // Node names, check text and file names from the environment are untrusted: the report
@@ -177,5 +179,21 @@ func TestPhases_CitesAreDefined(t *testing.T) {
 	}
 	if n < 50 {
 		t.Fatalf("only %d citations found", n)
+	}
+}
+
+// The report's stylesheet defines every class the chart package emits, in the report's
+// own colours, as app.css does in the web UI's tokens.
+// Invariant: I-197
+func TestReport_DefinesChartClasses(t *testing.T) {
+	var out bytes.Buffer
+	if err := Render(&out, Summary{Started: time.Now(), Phases: nil}); err != nil {
+		t.Fatal(err)
+	}
+	style := out.String()
+	for _, c := range chart.Classes {
+		if !strings.Contains(style, "."+c+"{") && !strings.Contains(style, "."+c+",") {
+			t.Errorf("the report's stylesheet does not define .%s", c)
+		}
 	}
 }

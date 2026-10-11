@@ -434,6 +434,7 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .chart rect.chart-warn { fill: var(--warn); }
 .chart rect.chart-bad { fill: var(--bad); }
 .chart rect.chart-bg { fill: var(--bg); }
+.chart rect.chart-off { fill: var(--line); }
 .chart rect.dev-3 { fill: var(--under3); } .chart rect.dev-2 { fill: var(--under2); } .chart rect.dev-1 { fill: var(--under1); }
 .chart rect.dev0 { fill: var(--even); }
 .chart rect.dev1 { fill: var(--over1); } .chart rect.dev2 { fill: var(--over2); } .chart rect.dev3 { fill: var(--over3); }

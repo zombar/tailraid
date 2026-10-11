@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/chart"
 )
 
 // A summary with no phases and an abort reason renders as ABORTED with the reason, never
@@ -93,11 +94,11 @@ func TestSummary_SkippedCheckCoversNothing(t *testing.T) {
 // never writes NaN into a coordinate; long marker labels are cut.
 func TestCharts_NaNEmptySingle(t *testing.T) {
 	long := strings.Repeat("kill n1 and then some more words ", 4)
-	svg := lineChart("t", "y", []series{
-		{name: "nan", points: [][2]float64{{0, math.NaN()}, {1, 2}, {math.Inf(1), 3}, {2, math.Inf(-1)}}},
-		{name: "empty"},
-		{name: "one", points: [][2]float64{{5, 5}}},
-	}, []marker{{x: 1, label: long}}, []band{{x0: 0, x1: 1, label: "p"}})
+	svg := chart.Line("t", "y", []chart.Series{
+		{Name: "nan", Points: [][2]float64{{0, math.NaN()}, {1, 2}, {math.Inf(1), 3}, {2, math.Inf(-1)}}},
+		{Name: "empty"},
+		{Name: "one", Points: [][2]float64{{5, 5}}},
+	}, []chart.Marker{{X: 1, Label: long}}, []chart.Band{{X0: 0, X1: 1, Label: "p"}}, chart.Axis{})
 	for _, bad := range []string{"NaN", "Inf", "+Inf", "-Inf"} {
 		if strings.Contains(svg, bad) {
 			t.Fatalf("chart contains %s", bad)
@@ -109,12 +110,6 @@ func TestCharts_NaNEmptySingle(t *testing.T) {
 	}
 	if !strings.Contains(svg, "<svg") || !strings.Contains(svg, "<path") {
 		t.Fatal("no chart drawn")
-	}
-	if got := truncate("abc", 3); got != "abc" {
-		t.Fatalf("truncate at the limit: %q", got)
-	}
-	if got := truncate("abcd", 3); got != "ab…" {
-		t.Fatalf("truncate past the limit: %q", got)
 	}
 }
 

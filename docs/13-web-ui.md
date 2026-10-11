@@ -657,7 +657,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-163 | `TestStub_I_163` (planned: TestWebUI_Flags_DirsOnly_Effective, TestWebUI_Mutations_ProtectedIs403) |
 | I-164 | `TestStub_I_164` (planned: TestWebUI_Tags_Table, TestWebUI_Tags_ReadBounded) |
 | I-165 | `TestStub_I_165` (planned: TestWebUI_Thumb_AudioCoverFallbackOrder, TestWebUI_Ls_DirCoverDeterministic) |
-| I-197 | `TestStub_I_197` (planned: TestChart_ReportGolden_ByteIdenticalAfterMove, TestChart_ClassesDefinedInAppCSSAndReport, TestChart_NoInlineStyle, TestChart_EscapesHostileNames, TestChart_Points_Table, TestChart_LegendWrap_Table, TestChart_DropsNaNInf, TestChart_Spread_DeadAndDraining, TestChart_LookdevDataSetMatchesStatsPage, TestChart_ClockAxis) |
+| I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestStub_I_198` (planned: TestStats_HashCarriesRangeAndNode, TestStats_RefreshOnlyWhileLiveAndVisible, TestStats_MemberMenu_LinksByWebPort) |
 | I-200 | `TestStub_I_200` (planned: TestTheme_CycleAndAttribute, TestTheme_StorageThrowsMeansSystem) |
 
