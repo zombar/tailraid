@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -224,7 +225,17 @@ func mountCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return mount.Run(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs)
+				err = mount.Run(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, prog, margs)
+				if err == nil || cmd.Context().Err() != nil {
+					return err
+				}
+				// a kernel that refuses the transfer sizes gets the plain mount (docs/07)
+				plain, pargs, perr := mount.PlainCommand(runtime.GOOS, cfg.Listen.NFS, target)
+				if perr != nil || strings.Join(pargs, " ") == strings.Join(margs, " ") {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "mount with transfer sizes failed (%v); retrying without them\n", err)
+				return mount.Run(cmd.Context(), cmd.OutOrStdout(), runtime.GOOS, plain, pargs)
 			}
 			if cfg.Listen.SMB == "" {
 				return errors.New("listen.smb is not set: Windows mounts over SMB (docs/15)")

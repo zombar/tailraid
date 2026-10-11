@@ -1159,7 +1159,13 @@ func (g *cmdGen) next() Command {
 		if d.Ino == RootIno {
 			break // a protected root would stop every delete for the rest of the run
 		}
-		return Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: d.Ino, Mask: AttrFlags, Flags: uint8(g.rng.Intn(4)), Now: g.now}}
+		flags := uint8(g.rng.Intn(4))
+		if d.Flags&FlagProtected != 0 && g.rng.Intn(4) != 0 {
+			// protection is short-lived: a protected folder near the root otherwise
+			// refuses every trash under it for the rest of the run
+			flags &^= FlagProtected
+		}
+		return Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: d.Ino, Mask: AttrFlags, Flags: flags, Now: g.now}}
 	case 0:
 		return Command{Op: OpCreate, Create: &Create{Parent: d.Ino, Name: name, Type: TFile, Mode: 0o644, Now: g.now}}
 	case 1:

@@ -3,6 +3,7 @@ package meta
 import (
 	"hash/fnv"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -248,6 +249,110 @@ func ExcludeIdx(cands []Candidate, held []NodeIdx) []Candidate {
 	for _, c := range cands {
 		if !skip[c.Idx] {
 			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// DefaultRebalanceSkew is how far (a fraction) a disk may sit from its share of its
+// host's slots before the repairer moves slots between the host's disks (docs/14 §7).
+const DefaultRebalanceSkew = 0.25
+
+// HostShares is each active disk's expected slot count within its host (docs/14 §7,
+// I-172): the host's slots spread over its active disks by capacity, no disk expecting
+// more than one slot per chunk (I-9), what a disk cannot take spread over the rest
+// (water-filling), as the web UI's Disks block draws it. chunks ≤ 0 means no cap.
+func HostShares(nodes []Node, slots map[NodeIdx]int, chunks int) map[NodeIdx]float64 {
+	out := map[NodeIdx]float64{}
+	for _, disks := range hostDisks(nodes) {
+		total := 0.0
+		for _, d := range disks {
+			total += float64(slots[d.Idx])
+		}
+		limit := math.Inf(1)
+		if chunks > 0 {
+			limit = float64(chunks)
+		}
+		open, left := disks, total
+		for len(open) > 0 {
+			sumCap := 0.0
+			for _, d := range open {
+				sumCap += float64(d.Capacity)
+			}
+			var rest []*Node
+			for _, d := range open {
+				if left*float64(d.Capacity)/sumCap > limit {
+					out[d.Idx] = limit
+					left -= limit
+				} else {
+					rest = append(rest, d)
+				}
+			}
+			if len(rest) == len(open) {
+				for _, d := range open {
+					out[d.Idx] = left * float64(d.Capacity) / sumCap
+				}
+				break
+			}
+			open = rest
+		}
+	}
+	return out
+}
+
+// hostDisks groups the active disks with a capacity by host, in index order.
+func hostDisks(nodes []Node) map[NodeIdx][]*Node {
+	byHost := map[NodeIdx][]*Node{}
+	for i := range nodes {
+		nd := &nodes[i]
+		if nd.Kind == KindDisk && nd.State == Active && nd.Capacity > 0 {
+			byHost[nd.Host] = append(byHost[nd.Host], nd)
+		}
+	}
+	for _, disks := range byHost {
+		sort.Slice(disks, func(i, j int) bool { return disks[i].Idx < disks[j].Idx })
+	}
+	return byHost
+}
+
+// RebalanceMove is a set of slot moves within one host (docs/14 §7, I-172): N chunks
+// holding a slot on From and none on To get that slot moved to To.
+type RebalanceMove struct {
+	Host, From, To NodeIdx
+	N              int
+}
+
+// RebalanceMoves lists, for every host where a disk sits above its share, another live
+// disk of the host below it, and either is more than skew (a fraction) off its share,
+// the move from the disk furthest above to the one furthest below, as many slots as the
+// excess and the room allow. Hosts whose disks are all within skew of their shares, and
+// hosts with one disk, get nothing: a slot never moves between hosts.
+func RebalanceMoves(nodes []Node, slots map[NodeIdx]int, chunks int, skew float64, live func(NodeIdx) bool) []RebalanceMove {
+	shares := HostShares(nodes, slots, chunks)
+	byHost := hostDisks(nodes)
+	hosts := make([]NodeIdx, 0, len(byHost))
+	for h := range byHost {
+		hosts = append(hosts, h)
+	}
+	slices.Sort(hosts)
+	var out []RebalanceMove
+	for _, h := range hosts {
+		var from, to NodeIdx
+		var excess, room, fromShare, toShare float64
+		for _, d := range byHost[h] {
+			e, s := shares[d.Idx], float64(slots[d.Idx])
+			if s > e && s-e > excess {
+				from, excess, fromShare = d.Idx, s-e, e
+			}
+			if s < e && e-s > room && live(d.Idx) {
+				to, room, toShare = d.Idx, e-s, e
+			}
+		}
+		if from == 0 || to == 0 || (excess <= fromShare*skew && room <= toShare*skew) {
+			continue
+		}
+		if n := int(math.Floor(min(excess, room))); n >= 1 {
+			out = append(out, RebalanceMove{Host: h, From: from, To: to, N: n})
 		}
 	}
 	return out

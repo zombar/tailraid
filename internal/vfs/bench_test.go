@@ -2,12 +2,17 @@ package vfs_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"testing"
+	"time"
 
+	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // A full flush of 16 entirely dirty chunks (1 MiB at the test chunk size): assemble,
@@ -104,5 +109,57 @@ func BenchmarkReadDirPlus_10k(b *testing.B) {
 		if err != nil || len(ents) != 10_000 {
 			b.Fatal(err)
 		}
+	}
+}
+
+// latencyClient adds a fixed delay to every shard GET, standing in for the tailnet.
+type latencyClient struct {
+	chunk.ShardClient
+	d time.Duration
+}
+
+func (c latencyClient) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
+	select {
+	case <-time.After(c.d):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return c.ShardClient.Get(ctx, node, key)
+}
+
+// A cold sequential read of a 16-chunk file in 16 KiB pieces through File.ReadAt, the
+// path the gateways take, with 2 ms per shard GET: what readahead buys (docs/04 §5).
+func BenchmarkRead_Sequential_Cold(b *testing.B) {
+	f := testharness.NewFabric(b, 3, 2, 1)
+	cs := int(testharness.ChunkSize)
+	rd := vfs.NewReader(f.FSM, f, latencyClient{f, 2 * time.Millisecond}, f.Cache, nil)
+	fs := vfs.New(f.FSM, f, f.Ov, rd, f.Clk, 501, 20)
+	buf := make([]byte, 16<<10)
+	b.SetBytes(int64(16 * cs))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		b.StopTimer()
+		data := make([]byte, 16*cs)
+		rand.New(rand.NewSource(int64(i))).Read(data) //nolint:gosec // distinct bytes per file, so every read is cold
+		name := fmt.Sprintf("s%d", i)
+		ino := f.Create(name)
+		if err := f.Ov.Write(ino, 0, 0, data); err != nil {
+			b.Fatal(err)
+		}
+		if err := f.Flusher().FlushInode(context.Background(), ino); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		fh, err := fs.Open("/" + name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for off := int64(0); off < int64(len(data)); off += int64(len(buf)) {
+			if _, err := fh.ReadAt(buf, off); err != nil && !errors.Is(err, io.EOF) {
+				b.Fatal(err)
+			}
+		}
+		_ = fh.Close()
 	}
 }

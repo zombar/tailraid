@@ -156,8 +156,8 @@ func printStatus(w io.Writer, r admin.Report) {
 	fmt.Fprintf(w, "volume  %d+%d, chunk %s  files: %d  logical: %s  stored: %s  free: %s  dedup: %.2fx\n",
 		v.K, v.M, bytesStr(uint64(v.ChunkSize)), v.Inodes, bytesStr(v.LogicalBytes), bytesStr(v.StoredBytes), bytesStr(v.Free), v.DedupRatio)
 	fmt.Fprintf(w, "        survives %s\n", survives(v.ToleratesDisks, v.ToleratesHosts))
-	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 || v.DomainSkew > 0 {
-		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d  host-skew: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy, v.DomainSkew)
+	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 || v.DomainSkew > 0 || v.DiskSkew > 0 {
+		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d  host-skew: %d  disk-skew: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy, v.DomainSkew, v.DiskSkew)
 	}
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)

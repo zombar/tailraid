@@ -37,6 +37,7 @@ func acquire(ctx context.Context, sem chan struct{}) bool {
 }
 
 type ShardStore interface {
+	Get(k chunk.ShardKey) ([]byte, error) // the verified payload (the self path of Client.Get)
 	Open(k chunk.ShardKey) (io.ReadCloser, int64, error)
 	PutVerified(k chunk.ShardKey, payload []byte, sum [32]byte) (int64, error) // sum = sha256(payload), verified by the caller
 	Has(k chunk.ShardKey) bool

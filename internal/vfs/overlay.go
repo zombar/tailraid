@@ -102,6 +102,68 @@ type dirtyFile struct {
 	counted   uint64 // this entry's share of Overlay.total (fresh + plan bytes)
 	lastErr   error  // the last flush attempt's failure, nil after a success (I-79)
 	lastWrite time.Time
+	// Group commit (docs/04 §2.1, I-168): a record's in-memory effect waits in pending
+	// until its fsync succeeded and is applied in log order; gate holds new appends while
+	// a snapshot, compaction or eviction waits for pending to drain.
+	cond    *sync.Cond // on mu; broadcast when pending drains or the gate opens
+	pending []pendingRec
+	gate    bool
+}
+
+// pendingRec is an appended record whose effect is applied once its fsync covers end.
+type pendingRec struct {
+	end   int64
+	apply func()
+}
+
+func (d *dirtyFile) c() *sync.Cond {
+	if d.cond == nil {
+		d.cond = sync.NewCond(&d.mu)
+	}
+	return d.cond
+}
+
+// waitGate holds the caller (with d.mu) while a quiesce is in progress; it reports false
+// when the entry died meanwhile and the caller must look the inode up again.
+func (d *dirtyFile) waitGate() bool {
+	for d.gate && !d.dead {
+		d.c().Wait()
+	}
+	return !d.dead
+}
+
+// quiesce closes the gate and waits until no append of this inode is between its write
+// and its fsync; release reopens it. Called with d.mu held.
+func (d *dirtyFile) quiesce() (release func()) {
+	d.gate = true
+	for len(d.pending) > 0 {
+		d.c().Wait()
+	}
+	return func() {
+		d.gate = false
+		d.c().Broadcast()
+	}
+}
+
+// settle applies, in log order, every pending record the WAL has fsynced, and drops
+// every record a failed fsync cut back. Called with d.mu held after a syncTo.
+func (d *dirtyFile) settle() {
+	synced, size := d.wal.Synced(), d.wal.Size()
+	kept := d.pending[:0]
+	for _, p := range d.pending {
+		switch {
+		case p.end <= synced:
+			p.apply()
+		case p.end > size: // cut back: never acknowledged, nothing to apply
+		default:
+			kept = append(kept, p)
+		}
+	}
+	for i := len(kept); i < len(d.pending); i++ {
+		d.pending[i] = pendingRec{}
+	}
+	d.pending = kept
+	d.c().Broadcast()
 }
 
 func (d *dirtyFile) dirty() bool { return len(d.ext) > 0 || d.sizeSet || d.plan != nil }
@@ -392,6 +454,7 @@ func (d *dirtyFile) setTrunc(size uint64) {
 // doomed file (open, then unlinked under it) and sit at a cap that nothing would clear.
 func (o *Overlay) evict(d *dirtyFile) error {
 	d.dead = true
+	d.c().Broadcast() // a WRITE waiting at the gate looks the inode up again
 	o.recount(d)
 	err := d.wal.Close()
 	if rerr := o.fs.Remove(d.wal.path); rerr != nil && err == nil {
@@ -448,22 +511,38 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	if err != nil {
 		return err
 	}
-	defer d.mu.Unlock()
+	if !d.waitGate() {
+		d.mu.Unlock()
+		return o.tryWrite(ino, baseSize, off, p) // evicted while waiting: a fresh entry
+	}
 	if d.wal.Size() >= o.walCap {
 		// The flusher flushes this inode in full at the cap (L-186); until that drains
 		// the WAL nothing more is accepted. One record may cross the line, so the cap is
 		// a trigger the run loop can observe, not a size the WAL can never reach.
+		d.mu.Unlock()
 		return ErrWALFull
 	}
-	walOff, err := d.wal.AppendWrite(off, p)
+	// the record goes to the log under the lock; its fsync is waited for without it, so
+	// the WRITEs that arrive meanwhile share that fsync (group commit, I-168); the extent
+	// is applied only once the fsync covered the record (settle), in log order
+	walOff, end, err := d.wal.write(recWrite, off, p)
 	if err != nil {
+		d.mu.Unlock()
 		return err
 	}
-	d.ext.insert(extent{off: off, n: uint64(len(p)), walOff: walOff})
-	d.size = max(d.size, off+uint64(len(p)))
-	d.lastWrite = o.clk.Now()
-	o.recount(d)
-	return nil
+	n := uint64(len(p))
+	d.pending = append(d.pending, pendingRec{end: end, apply: func() {
+		d.ext.insert(extent{off: off, n: n, walOff: walOff})
+		d.size = max(d.size, off+n)
+		d.lastWrite = o.clk.Now()
+		o.recount(d)
+	}})
+	d.mu.Unlock()
+	err = d.wal.syncTo(end)
+	d.mu.Lock()
+	d.settle()
+	d.mu.Unlock()
+	return err
 }
 
 // Truncate sets the overlay size and records the truncation point (review #2).
@@ -475,20 +554,34 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 	if err != nil {
 		return err
 	}
-	defer d.mu.Unlock()
-	if err := d.wal.AppendTruncate(size); err != nil {
+	if !d.waitGate() {
+		d.mu.Unlock()
+		return o.Truncate(ino, baseSize, size)
+	}
+	// a truncate is a record like a write: its effect is applied in log order once its
+	// fsync covers it, so it never reorders against a write in flight (I-168)
+	_, end, err := d.wal.write(recTruncate, size, nil)
+	if err != nil {
+		d.mu.Unlock()
 		return err
 	}
-	d.ext.truncate(size)
-	d.size = size
-	d.setTrunc(size)
-	if d.plan != nil {
-		d.planMin = min(d.planMin, size)
-		d.planTrunc = true
-	}
-	d.lastWrite = o.clk.Now()
-	o.recount(d)
-	return nil
+	d.pending = append(d.pending, pendingRec{end: end, apply: func() {
+		d.ext.truncate(size)
+		d.size = size
+		d.setTrunc(size)
+		if d.plan != nil {
+			d.planMin = min(d.planMin, size)
+			d.planTrunc = true
+		}
+		d.lastWrite = o.clk.Now()
+		o.recount(d)
+	}})
+	d.mu.Unlock()
+	err = d.wal.syncTo(end)
+	d.mu.Lock()
+	d.settle()
+	d.mu.Unlock()
+	return err
 }
 
 // Size returns the client-visible size of a dirty inode given its committed size, or
@@ -591,6 +684,10 @@ func (o *Overlay) Drop(ino meta.Ino) {
 	if d.dead {
 		return
 	}
+	defer d.quiesce()() // the log goes away: no append may be mid-fsync (I-168)
+	if d.dead {
+		return
+	}
 	_ = o.evict(d)
 }
 
@@ -633,6 +730,7 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 		return nil, false
 	}
 	defer d.mu.Unlock()
+	defer d.quiesce()() // an append between its write and its fsync is not in the snapshot (I-168)
 	if d.plan != nil || (len(d.ext) == 0 && !d.sizeSet) {
 		return nil, false
 	}
@@ -716,6 +814,7 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 		return meta.ErrNotExist
 	}
 	defer d.mu.Unlock()
+	defer d.quiesce()() // the compaction rewrites the log: no append may be mid-fsync (I-168)
 	if d.plan != plan {
 		return errors.New("vfs: plan is not outstanding")
 	}

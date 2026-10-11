@@ -327,8 +327,14 @@ func TestS3Node_ReadFallsThroughToBucket(t *testing.T) {
 	if n := srv.Count(http.MethodGet) - gets; n == 0 {
 		t.Fatal("the read did not fall through to the bucket")
 	}
-	if !c.Nodes[0].Prober.IsLive(other) {
+	// no probe marked n1 dead meanwhile (the dead clock never started), so the
+	// fallthrough happened within the request; the failed GET did mark n1 suspect, which
+	// is what the next read and placement go by (docs/05 §6, I-170)
+	if c.Nodes[0].Prober.DeadFor(other) != 0 {
 		t.Fatal("the read ran after a probe marked n1 dead: it did not prove the in-request fallthrough")
+	}
+	if !c.Nodes[0].Prober.IsSuspect(other) {
+		t.Fatal("the cut-off holder was not marked suspect by the failed GET")
 	}
 }
 
