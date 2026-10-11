@@ -54,6 +54,10 @@ type Config struct {
 		Grace     string `yaml:"grace"`      // GC grace and shard DELETE fence age (default 10m)
 		FillAfter string `yaml:"fill_after"` // dead-node hold-down before re-placing its slots (default 10m)
 		S3Scrub   string `yaml:"s3_scrub"`   // bucket bytes the scrub may fetch per day to verify objects (default 1G; "0": HEAD only)
+		// written only when set, so a release from before these keys can still read a
+		// file this build wrote (a rollback after update, I-61)
+		Workers int    `yaml:"workers,omitempty"` // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
+		Rate    string `yaml:"rate,omitempty"`    // shard bytes per second repair may move (default 50M; "0": no limit)
 	} `yaml:"repair"`
 	Trash struct {
 		Retention string `yaml:"retention"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
@@ -65,6 +69,9 @@ type Config struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
+	// Path is the file Load read, never written to it: the daemon rewrites the file
+	// there (node.voter follows the member row, docs/12 §7, I-176).
+	Path string `yaml:"-"`
 }
 
 // TrashRetention parses trash.retention: 30 days when empty, 0 for "never purged on its
@@ -132,6 +139,28 @@ func (c Config) S3ScrubBytes() (int64, error) {
 		return 0, fmt.Errorf("config: repair.s3_scrub %q: bad size", c.Repair.S3Scrub)
 	}
 	return int64(n), nil //nolint:gosec // bounded above
+}
+
+// RepairWorkers parses repair.workers, the chunks a repair pass works on at once
+// (docs/06 §4, I-174): 0 when unset (the repairer's default), otherwise 1..64.
+func (c Config) RepairWorkers() (int, error) {
+	if w := c.Repair.Workers; w < 0 || w > 64 {
+		return 0, fmt.Errorf("config: repair.workers %d: want 1..64", w)
+	}
+	return c.Repair.Workers, nil
+}
+
+// RepairRateBytes parses repair.rate, the shard bytes a second repair may move: set is
+// false when the key is empty (the repairer's default), and 0 means no limit.
+func (c Config) RepairRateBytes() (n int64, set bool, err error) {
+	if c.Repair.Rate == "" {
+		return 0, false, nil
+	}
+	u, err := ParseBytes(c.Repair.Rate)
+	if err != nil || u > 1<<62 {
+		return 0, false, fmt.Errorf("config: repair.rate %q: bad size", c.Repair.Rate)
+	}
+	return int64(u), true, nil //nolint:gosec // bounded above
 }
 
 func errBadDuration(err error) error {
@@ -219,7 +248,8 @@ func (c *Config) EnsureSMBPassword() bool {
 	return true
 }
 
-// Load reads a config file strictly (unknown keys are errors) over the defaults.
+// Load reads a config file strictly (unknown keys are errors) over the defaults and
+// records the path in Path, so the daemon can write the file back (docs/12 §7, I-176).
 func Load(path string) (Config, error) {
 	c := Default()
 	b, err := os.ReadFile(path) //nolint:gosec // the config file the operator named
@@ -230,6 +260,7 @@ func Load(path string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	c.expandHome()
+	c.Path = path
 	return c, c.Validate()
 }
 

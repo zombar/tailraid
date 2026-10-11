@@ -18,7 +18,6 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // serveInBackground runs node.Serve on cfg until the test ends and waits for its RPC port.
@@ -34,8 +33,7 @@ func serveInBackground(t *testing.T, cfg config.Config) (context.Context, string
 		}
 	})
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addr); return err == nil && h.Ready }, "node never became ready")
+	waitReady(ctx, t, addr, "node never became ready")
 	return ctx, addr
 }
 

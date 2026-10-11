@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"go.uber.org/goleak"
@@ -312,4 +313,47 @@ func TestPins_NewFileInPinnedDirIsFetched(t *testing.T) {
 	}, "the later file fetched on the worker's check")
 	cancel()
 	<-done
+}
+
+// Every shard request of a walk carries the background mark, so a prefetch of a large
+// folder queues behind client reads for a node's slots (docs/06 §4).
+//
+// Invariant: I-175
+func TestPins_WalkFetchesBackground(t *testing.T) {
+	r := newRig(t, 1<<30)
+	music := r.mkdir(meta.RootIno, "music")
+	r.file(music, "a", testharness.Pattern(2*int(testharness.ChunkSize), 1))
+	seen := &markingReader{rd: r.rd}
+	p, err := pins.Open(t.TempDir(), r.f.FSM, seen, r.cache, r.f.Clk, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Pin("/music"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Walk(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seen.mu.Lock()
+	defer seen.mu.Unlock()
+	if seen.calls != 2 || seen.foreground != 0 {
+		t.Fatalf("%d chunk reads, %d of them without the background mark; want 2 and 0", seen.calls, seen.foreground)
+	}
+}
+
+// markingReader counts the reads that reach the reader and those missing the mark.
+type markingReader struct {
+	rd                pins.Reader
+	mu                sync.Mutex
+	calls, foreground int
+}
+
+func (m *markingReader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
+	m.mu.Lock()
+	m.calls++
+	if !chunk.IsBackground(ctx) {
+		m.foreground++
+	}
+	m.mu.Unlock()
+	return m.rd.ReadChunk(ctx, h)
 }
