@@ -175,9 +175,10 @@ type Report struct {
 
 // RepairStatus is the leader's last scan (nil on followers).
 type RepairStatus struct {
-	LastScan time.Time    `json:"last_scan"`
-	Stats    repair.Stats `json:"stats"`
-	Reported int          `json:"reported_bad_slots"`
+	LastScan   time.Time        `json:"last_scan"`
+	Stats      repair.Stats     `json:"stats"`
+	Reported   int              `json:"reported_bad_slots"`
+	InProgress *repair.Progress `json:"in_progress,omitempty"` // the pass under way, if any (docs/12 §8)
 }
 
 // Build assembles the report from the local FSM and prober view; rep may be nil.
@@ -271,6 +272,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	if rp != nil && n.IsLeader() {
 		st, at := rp.Last()
 		rep.Repair = &RepairStatus{LastScan: at, Stats: st, Reported: rp.Reported()}
+		if p, running := rp.Progress(); running {
+			rep.Repair.InProgress = &p
+		}
 	}
 	markDisks(rep.Nodes)
 	rep.Warnings = warnings(rep)

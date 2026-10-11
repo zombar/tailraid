@@ -304,3 +304,56 @@ func TestRepair_DrainHost_MovesItsDisks(t *testing.T) {
 }
 
 var _ = cluster.LiveThreshold
+
+// A voter host with three disks, a voter host with one and three non-voter hosts: the
+// data slots of a 3+2 → 4+2 migration prefer the voters, but the cap of two keeps the
+// fourth off the three-disk host, so no migrated chunk is skewed and a second pass
+// proposes nothing.
+// Invariant: I-89, I-173, I-65
+func TestRepair_Migration_WithinCap_VoterHostDisks(t *testing.T) {
+	c := testharness.NewCluster(t, 5, 3, 2, testharness.NonVoters(2, 3, 4))
+	defer c.Close()
+	data := testharness.Pattern(6*int(testharness.ChunkSize), 8)
+	c.WriteFile(0, "/mig", data)
+	c.AddDisk(0)
+	c.AddDisk(0)
+	leader := c.Leader()
+	res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: 4, M: 2, Now: c.Clk.Now().UnixNano()}})
+	must(t, err)
+	must(t, res.Err)
+	c.Settle()
+	st, err := newRepairer(c, c.Leader(), repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Migrated != 6 || st.Partial != 0 || st.Deferred != 0 {
+		t.Fatalf("migration pass: %+v", st)
+	}
+	hostA := c.Nodes[0].Idx()
+	before := c.ChunksOf(0, "/mig")
+	for _, ch := range before {
+		ph := perHost(c, 0, ch)
+		if ch.K != 4 || ch.M != 2 || ph[hostA] > 2 {
+			t.Fatalf("migrated chunk %d+%d %v: host A holds %d slots", ch.K, ch.M, ch.Placement, ph[hostA])
+		}
+		for _, s := range ch.Placement {
+			if s == 0 {
+				t.Fatalf("migrated chunk left a hole: %v", ch.Placement)
+			}
+		}
+	}
+	got, err := c.ReadFileCold(3, "/mig")
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read after the migration: %v", err)
+	}
+	// the second pass finds nothing skewed and proposes no repair (I-65); the capacity
+	// rebalance may still even out host A's three disks, which moves slots within A only
+	st, err = newRepairer(c, c.Leader(), repairCfg()).Scan(ctx)
+	must(t, err)
+	if st.Repaired != 0 || st.Partial != 0 || st.Migrated != 0 {
+		t.Fatalf("second pass moved again: %+v", st)
+	}
+	for i, ch := range c.ChunksOf(0, "/mig") {
+		if fmt.Sprint(perHost(c, 0, ch)) != fmt.Sprint(perHost(c, 0, before[i])) {
+			t.Fatalf("chunk %d moved across hosts by an idle pass: %v -> %v", i, before[i].Placement, ch.Placement)
+		}
+	}
+}

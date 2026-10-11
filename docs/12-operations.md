@@ -261,6 +261,14 @@ them (a single machine with four disks runs 2+2). A device with no disks is told
 (`this device stores no data: tailraid node add-disk <path>`) and serves the volume as a
 diskless host (14 §9).
 
+**The vote in the config.** `node.voter` is the vote `init` (always) or `join --voter`
+asked for; the member table is its record afterwards (`node ls` shows VOTER), and
+`node promote|demote` change the row on the leader from any device, which cannot reach
+the demoted device's file. So the file follows the row: once a node serves and has its
+row, it rewrites `node.voter` whenever the two differ, at the same tick that reports
+its version (I-133), and logs the change; a file it cannot write is warned about at
+most once a minute and retried (I-176). Nothing reads the key but an operator.
+
 **Validation.** `Load` expands a leading `~` in every path (`node.data_dir`, the disks,
 `mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
 shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
@@ -292,6 +300,18 @@ every disk. Every field is a real measurement or absent: a value the OS does not
 is omitted from the JSON, never reported as zero (I-85). The sampler turns the cumulative
 counters into rates between its ticks, and the report draws CPU, memory, memory pressure
 and disk charts for the sampled node, with peaks in the totals table.
+
+**Repair progress.** On the leader `repair` carries the last completed pass (`last_scan`,
+`stats`) and, while a pass runs, `in_progress`: `pass`, `started`, `scanned` of `total`
+chunks, `in_flight` of `workers`, `bytes_moved` (06 §4, I-174). `tailraid status` prints
+it as one line (`repair  pass 3 running: 12345/106452 scanned, 4 in flight of 4 workers,
+1.2 GiB moved, started 06:01:19`), `check` carries it next to `scan`, and the dashboard's
+integrity panel shows it above the last pass's counters, so a first pass over a large
+backlog is visible as progress rather than read as a stall. `repair.workers` (1..64,
+default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in the config
+set the fan-out and the byte rate; `serve` refuses a value outside those bounds. Both
+are written to the file only when set, so a release from before them, which reads the
+file strictly, still starts after a rollback (I-61).
 
 **Readiness.** `/health` and `status` carry `ready`: the node knows a leader and Raft has
 handed its FSM every entry it has committed. A freshly restarted node is not ready
@@ -385,6 +405,10 @@ from the device with every other node away; `cache unpin <path>` releases it and
   shared by two listeners, an unknown `log.level` or `log.format` and a relative
   `mount.path`; `serve` warns when the config file or the data directory is readable by
   group or others.
+- **I-176** — While a node serves, its config file's `node.voter` equals its row's
+  `Voter`: the file is rewritten only when the two differ (a `node promote` or `demote`
+  run anywhere), a file that cannot be written is warned about at most once a minute and
+  retried, and a node loaded without a file writes nothing.
 - **I-128** — `update` applies an artifact only when the release's `sha256sums.txt`
   carries a `sha256sums.txt.minisig` that verifies under `ReleaseKey` (minisign's
   prehashed ed25519 over BLAKE2b-512, the trusted comment bound by the global
@@ -419,7 +443,7 @@ from the device with every other node away; `cache unpin <path>` releases it and
 |---|---|
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC`, `TestFaults_RuleFailsOpenRaftConnection` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
-| I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
+| I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder`, `TestConfig_NewRepairKeysWrittenOnlyWhenSet` |
 | I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
@@ -428,6 +452,7 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-124 | `TestLogFile_RotatesAndReopens`, `TestLimiter_OneLinePerInterval` |
 | I-125 | `TestHealth_Ready`, `TestCluster_Ready_FollowsLeaderContact` |
 | I-126 | `TestConfig_Validate_Table`, `TestConfig_ExpandHome`, `TestConfig_Warnings_Permissions` |
+| I-176 | `TestVoterFile_FollowsRow` |
 | I-128 | `TestMinisign_SignVerifyAndTamper`, `TestMinisign_FileShape`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder` |
 | I-129 | `TestRecover_RewritesVotersOffline`, `TestCluster_RecoverAfterLostMajority` |
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |

@@ -30,8 +30,10 @@ type fakeEnv struct {
 	caps      Caps
 	statusErr error
 	dump      string
-	auto      bool                 // the volume's policy is automatic until a SetPolicy pins it
-	gateway   *admin.GatewayReport // attached to every status when set (the hot-path phase)
+	auto      bool                                            // the volume's policy is automatic until a SetPolicy pins it
+	gateway   *admin.GatewayReport                            // attached to every status when set (the hot-path phase)
+	repair    *admin.RepairStatus                             // attached to every status when set (the fan-out phase)
+	pass      func(ctx context.Context) (repair.Stats, error) // RepairNow when set
 }
 
 func newFakeEnv(n int) *fakeEnv {
@@ -75,17 +77,31 @@ func (e *fakeEnv) Status(_ context.Context, n NodeRef) (admin.Report, error) {
 		g := *e.gateway // a copy: the phase reads it before and after, the fake mutates it in between
 		gateway = &g
 	}
+	var rs *admin.RepairStatus
+	if e.repair != nil {
+		s := *e.repair
+		if s.InProgress != nil {
+			p := *s.InProgress
+			s.InProgress = &p
+		}
+		rs = &s
+	}
 	e.mu.Unlock()
-	rep := admin.Report{Node: n.Name, Leader: "n1", Health: "healthy", Volume: admin.VolumeReport{K: 2, M: 1, ChunkSize: 4096, Auto: auto}, Gateway: gateway}
+	rep := admin.Report{Node: n.Name, Leader: "n1", Health: "healthy", Volume: admin.VolumeReport{K: 2, M: 1, ChunkSize: 4096, Auto: auto}, Gateway: gateway, Repair: rs}
 	for _, m := range e.nodes {
 		rep.Nodes = append(rep.Nodes, admin.NodeReport{Idx: m.Idx, Name: m.Name, Kind: "device", State: "active", Voter: true, Leader: m.Idx == 1, Live: true})
 	}
 	return rep, nil
 }
 
-func (e *fakeEnv) RepairNow(context.Context) (repair.Stats, error) { return repair.Stats{}, nil }
-func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error)     { return repair.Stats{}, nil }
-func (e *fakeEnv) GCNow(context.Context) (repair.Result, error)    { return repair.Result{}, nil }
+func (e *fakeEnv) RepairNow(ctx context.Context) (repair.Stats, error) {
+	if e.pass != nil {
+		return e.pass(ctx)
+	}
+	return repair.Stats{}, nil
+}
+func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error)  { return repair.Stats{}, nil }
+func (e *fakeEnv) GCNow(context.Context) (repair.Result, error) { return repair.Result{}, nil }
 func (e *fakeEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	e.record(ctx, fmt.Sprintf("set-policy %d+%d", k, m))
 	e.mu.Lock()

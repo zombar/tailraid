@@ -78,5 +78,15 @@ function repair(r: Report): HTMLElement {
   row("bytes moved", bytes(s.bytes_moved));
   row("errors", count(s.errors), s.errors > 0 ? "bad" : undefined);
   row("reported bad slots", count(r.repair.reported_bad_slots), r.repair.reported_bad_slots > 0 ? "warn" : undefined);
-  return h("div", null, h("h3", null, "Repair · last scan " + ago(r.repair.last_scan)), kv);
+  // the pass under way (docs/12 §8) above the last completed pass's counters
+  const p = r.repair.in_progress;
+  if (!p) return h("div", null, h("h3", null, "Repair · last scan " + ago(r.repair.last_scan)), kv);
+  const started = new Date(p.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const progress = barRow(
+    "scanned",
+    bar(p.total > 0 ? p.scanned / p.total : 0),
+    `${count(p.scanned)} of ${count(p.total)} · ${p.in_flight} in flight of ${p.workers} workers · ${bytes(p.bytes_moved)} moved · started ${started}`,
+  );
+  const note = h("div", { class: "small dim" }, `the pass under way; the counters below are the last completed pass, ${ago(r.repair.last_scan)}`);
+  return h("div", null, h("h3", null, `Repair · pass ${p.pass} running`), progress, note, kv);
 }

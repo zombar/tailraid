@@ -28,6 +28,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/dev"
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/nfsgw"
@@ -231,6 +232,20 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if rcfg.S3ScrubBytes, err = cfg.S3ScrubBytes(); err != nil {
 		return err
 	}
+	workers, err := cfg.RepairWorkers()
+	if err != nil {
+		return err
+	}
+	if workers > 0 {
+		rcfg.Workers = workers
+	}
+	rate, rateSet, err := cfg.RepairRateBytes()
+	if err != nil {
+		return err
+	}
+	if rateSet {
+		rcfg.RateBytes = rate
+	}
 	client.SetGrace(rcfg.Grace)
 	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
@@ -357,8 +372,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	var addrChanged atomic.Bool
 	go func() { _ = srv.Serve(bg, rl); done <- struct{}{} }()
 	go func() { prober.Run(bg); done <- struct{}{} }()
+	vf := &voterFile{cfg: cfg, voter: cfg.Node.Voter}
 	go func() {
-		if watchSelf(bg, ts, node, client, id, selfIdx, ident.IP, version, log) {
+		if watchSelf(bg, ts, node, client, id, selfIdx, ident.IP, version, vf, log) {
 			addrChanged.Store(true)
 			stop()
 		}
@@ -766,7 +782,11 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		} else {
 			st, _ = a.repairer.Last()
 		}
-		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, op.Files), nil
+		var prog *repair.Progress
+		if p, running := a.repairer.Progress(); running {
+			prog = &p
+		}
+		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files), nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
 		if err != nil {
@@ -864,11 +884,12 @@ func (d devStores) Fill(id string, n uint64) error {
 // runs when the row names another (retrying until a leader accepts it, I-133), and it
 // re-registers the node when its Tailscale IP changes (docs/02 §IP change), returning
 // true once the new address is in the node table so the caller can restart.
-func watchSelf(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, id string, self meta.NodeIdx, current netip.Addr, version string, log *slog.Logger) bool {
+func watchSelf(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, id string, self meta.NodeIdx, current netip.Addr, version string, vf *voterFile, log *slog.Logger) bool {
 	t := time.NewTicker(cluster.ProbeInterval)
 	defer t.Stop()
 	reported := false
 	for {
+		vf.follow(node, id, log) // the file's vote follows the row (I-176)
 		if !reported {
 			var err error
 			if reported, err = reportVersion(ctx, node, client, id, self, version); err != nil {
@@ -894,6 +915,31 @@ func watchSelf(ctx context.Context, ts tailscale.Client, node *cluster.Node, cli
 		case <-t.C:
 		}
 	}
+}
+
+// voterFile keeps the config file's `node.voter` equal to this node's row (docs/12 §7,
+// I-176): the row is the truth (`node promote|demote` change it on the leader, from any
+// device), the key is what init or join asked for and what an operator reads back. The
+// file is rewritten only when the two differ; one that cannot be written is warned
+// about, at most once a minute, and serving goes on.
+type voterFile struct {
+	cfg   config.Config // as loaded; Path names the file ("" when there is none)
+	voter bool          // the value the file holds
+	warn  logx.Limiter
+}
+
+func (v *voterFile) follow(node *cluster.Node, id string, log *slog.Logger) {
+	row, ok := node.FSM.NodeByID(id)
+	if !ok || v.cfg.Path == "" || row.Voter == v.voter {
+		return
+	}
+	v.cfg.Node.Voter = row.Voter
+	if err := config.Save(v.cfg.Path, v.cfg); err != nil {
+		v.warn.Warn(log, "config not updated to the member table's vote", "path", v.cfg.Path, "voter", row.Voter, "err", err)
+		return
+	}
+	v.voter = row.Voter
+	log.Info("config updated to the member table's vote", "path", v.cfg.Path, "voter", row.Voter)
 }
 
 // reportVersion proposes set_version for this node's row when it names another version

@@ -145,7 +145,10 @@ plain top-`n`, so placements of clusters without disks are unchanged; on a singl
 
 `PlaceKM` and `FillPlacement` count the domains of slots already held: a refilled slot
 skips any domain at the cap given the slots kept, so repair, migration and drain never put
-a host above the cap when another placement exists (I-89).
+a host above the cap when another placement exists (I-89). The voter preference for data
+slots ([03](03-erasure-coding-and-placement.md)) yields to the cap the same way: a voter
+host's third disk never takes a data slot while a non-voter under the cap is free
+(I-173).
 
 ## 6. Policy
 
@@ -323,7 +326,7 @@ runs.
 | I-86 | `TestChunkRPC_DiskPath_RoundTrip`, `TestClient_LocalDiskRouting`, `TestDiskMarker_Table`, `TestNode_ClosedDisk_NotServedNotSwept` |
 | I-87 | `TestCandidates_DiskDomainAndVoter`, `TestFillPlacement_HostCap`, `TestPlace_HostCap`, `TestPlace_HostCap_NNodeDeterminism`, `TestPlace_OneTargetPerHost_Unchanged` |
 | I-88 | `TestAutoPolicy_Disks_Table`, `TestAutoPolicy_OneTargetPerHost_Unchanged`, `TestAutoPolicy_SurvivesOneHost`, `TestCluster_AutoPolicy_SingleHostDisks`, `TestPolicyAllowed_CountsTargets`, `TestTolerance_Table`, `TestAutoPolicy_CountsS3` |
-| I-89 | `TestChunkState_DomainSkew`, `TestModelCheck_Long`, `TestRepair_DeadDisk_RePlacesWithinCap`, `TestRepair_DomainSkew_MovesWithinCap`, `TestRepair_DomainSkew_UnfixableIgnored` |
+| I-89 | `TestChunkState_DomainSkew`, `TestModelCheck_Long`, `TestRepair_DeadDisk_RePlacesWithinCap`, `TestRepair_DomainSkew_MovesWithinCap`, `TestRepair_DomainSkew_UnfixableIgnored`, `TestRepair_Migration_WithinCap_VoterHostDisks` |
 | I-90 | `TestChunkRPC_DiskPath_RoundTrip`, `TestCluster_SingleHostDisks_DiskFails_ReadsAndRepair`, `TestMember_AddDisk_ResolvesToHost`, `TestProber_DiskLiveness` |
 | I-91 | `TestBudget_PerDisk_SharedFilesystem`, `TestNode_Rebudget_PerTarget` |
 | I-118 | `TestAutoPolicy_DisklessHostNotCounted`, `TestCandidates_DevicesNeverTargets`, `TestCluster_DisklessVoter_WritesLandOnOtherHosts`, `TestCluster_RemoveLastDisk_HostBecomesDiskless`, `TestMemberOp_SetCapacity_RefusesDevice`, `TestPrintNodes_DisklessAndSharedDisk`, `TestReport_DisklessAndSharedDisk`, `TestUsage_DisksOnly` |

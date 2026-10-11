@@ -122,11 +122,20 @@ func FillPlacement(h Hash, place []NodeIdx, cands []Candidate, k int, dom Domain
 		}
 	}
 	limit := hostCap(len(place), len(domains))
-	rv := ranked(h, voters)
-	if len(rv) < needData { // too few voters: data slots fall back to everyone
-		rv = ranked(h, cands)
+	var data []NodeIdx
+	if rv := ranked(h, voters); len(rv) < needData { // too few voters: data slots fall back to everyone
+		data = pick(ranked(h, cands), needData, count, limit)
+	} else {
+		// the cap outranks the vote (I-173): voters under it, then anyone under it, and
+		// only then the candidates the cap skipped
+		data = pickUnder(rv, needData, count, limit)
+		if len(data) < needData {
+			data = append(data, pickUnder(ranked(h, ExcludeIdx(cands, data)), needData-len(data), count, limit)...)
+		}
+		if len(data) < needData {
+			data = append(data, pickOver(ranked(h, ExcludeIdx(cands, data)), needData-len(data), count)...)
+		}
 	}
-	data := pick(rv, needData, count, limit)
 	parity := pick(ranked(h, ExcludeIdx(cands, data)), needParity, count, limit)
 	di, pi := 0, 0
 	for i := range place {
@@ -157,29 +166,37 @@ func hostCap(n, d int) int {
 // slot left from the targets the cap skipped; count holds the slots each domain already
 // has and is updated.
 func pick(r []Candidate, n int, count map[NodeIdx]int, limit int) []NodeIdx {
-	if n <= 0 {
-		return nil
+	out := pickUnder(r, n, count, limit)
+	if len(out) < n {
+		out = append(out, pickOver(ExcludeIdx(r, out), n-len(out), count)...)
 	}
-	out := make([]NodeIdx, 0, min(n, len(r)))
-	taken := make([]bool, len(r))
-	for i, c := range r {
+	return out
+}
+
+// pickUnder takes up to n targets from r in rank order whose domain is under the cap.
+func pickUnder(r []Candidate, n int, count map[NodeIdx]int, limit int) []NodeIdx {
+	var out []NodeIdx
+	for _, c := range r {
 		if len(out) == n {
 			break
 		}
 		if count[c.domain()] < limit {
 			out = append(out, c.Idx)
 			count[c.domain()]++
-			taken[i] = true
 		}
 	}
-	for i, c := range r {
+	return out
+}
+
+// pickOver takes up to n targets from r in rank order, cap or not.
+func pickOver(r []Candidate, n int, count map[NodeIdx]int) []NodeIdx {
+	var out []NodeIdx
+	for _, c := range r {
 		if len(out) == n {
 			break
 		}
-		if !taken[i] {
-			out = append(out, c.Idx)
-			count[c.domain()]++
-		}
+		out = append(out, c.Idx)
+		count[c.domain()]++
 	}
 	return out
 }
