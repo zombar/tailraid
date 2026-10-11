@@ -59,12 +59,14 @@ type Config struct {
 		Workers int    `yaml:"workers,omitempty"` // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
 		Rate    string `yaml:"rate,omitempty"`    // shard bytes per second repair may move (default 50M; "0": no limit)
 	} `yaml:"repair"`
+	// these sections are written only when set, so a release from before them can still
+	// read a file this build wrote (a rollback after update, I-61)
 	Trash struct {
-		Retention string `yaml:"retention"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
-	} `yaml:"trash"`
+		Retention string `yaml:"retention,omitempty"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
+	} `yaml:"trash,omitempty"`
 	Cache struct {
-		Size string `yaml:"size"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
-	} `yaml:"cache"`
+		Size string `yaml:"size,omitempty"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
+	} `yaml:"cache,omitempty"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
