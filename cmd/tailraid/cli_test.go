@@ -129,7 +129,7 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 	n := openFSM(t, cfg)
 	defer n.Close()
 	vol := n.FSM.Volume()
-	if !vol.Auto || vol.K != 1 || vol.M != 0 || vol.ChunkSize != 1<<20 {
+	if !vol.Auto || vol.K != 1 || vol.M != 0 || vol.ChunkSize != 4<<20 {
 		t.Fatalf("volume %+v", vol)
 	}
 	nodes := n.FSM.Nodes()

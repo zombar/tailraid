@@ -252,7 +252,7 @@ device's Tailscale IP, or its name as `tailscale status` shows it (host name or 
 name), which `join` looks up in the tailnet status because a plain DNS lookup gives a LAN
 address no node listens on (I-50); an address off the tailnet is refused with the hint.
 `--voter` stays explicit
-because only the operator knows which devices are always on. `--name`, `--chunk` and
+because only the operator knows which devices are always on. `--name`, `--chunk` (4 MiB by default, 01) and
 `--token` remain for overrides and test rigs; `--k`/`--m` on `init` pin a manual policy
 for test rigs and are hidden. Disks listed under `node.disks` in the config are marked and
 registered by `init` and by `join` (I-121), each with its derived budget (01); later ones
