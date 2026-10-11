@@ -41,12 +41,27 @@ type Cache struct {
 	mem     *list.List // front = most recently used
 	memIdx  map[[32]byte]*list.Element
 	memUsed int64
+
+	// disk writes run behind the Put that accounted the entry (I-204): at most
+	// CacheWriters at once, at most CacheQueue outstanding; past that a Put writes inline
+	writeSlots chan struct{}
+	writing    int // Puts whose write is outstanding (under mu)
+	wg         sync.WaitGroup
 }
+
+// CacheWriters is how many disk writes the cache runs at once; CacheQueue is how many
+// Puts may have their write outstanding before a Put writes synchronously, which bounds
+// the chunk buffers the pending writes hold to CacheQueue chunks (docs/04 §9, I-204).
+const (
+	CacheWriters = 2
+	CacheQueue   = 8
+)
 
 type cacheEntry struct {
 	hash    [32]byte
 	size    int64
-	touched time.Time // last mtime refresh (LRU order across restarts)
+	touched time.Time     // last mtime refresh (LRU order across restarts)
+	pending chan struct{} // closed once the file is on disk; nil when it is
 }
 
 type memEntry struct {
@@ -74,6 +89,7 @@ func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts
 		fsys: fsys, root: root, max: maxBytes, clk: clk, lru: list.New(), idx: map[[32]byte]*list.Element{},
 		pinned: map[[32]byte]struct{}{},
 		memMax: DefaultMemory, mem: list.New(), memIdx: map[[32]byte]*list.Element{},
+		writeSlots: make(chan struct{}, CacheWriters),
 	}
 	for _, o := range opts {
 		o(c)
@@ -140,6 +156,19 @@ func (c *Cache) Pinned() int64 {
 	return c.pinnedUsed
 }
 
+// Writing reports the Puts whose disk write is still outstanding; never above CacheQueue.
+func (c *Cache) Writing() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writing
+}
+
+// Drain waits for every outstanding disk write.
+func (c *Cache) Drain() { c.wg.Wait() }
+
+// Close drains the writes; the cache is purely local, so nothing else needs closing.
+func (c *Cache) Close() { c.Drain() }
+
 // Has reports whether h is cached, without touching its LRU position (readahead and the
 // pins worker ask before deciding to fetch).
 func (c *Cache) Has(h [32]byte) bool {
@@ -205,7 +234,17 @@ func (c *Cache) Get(h [32]byte) ([]byte, bool) {
 		}
 		return data, true
 	}
+	pending := el.Value.(cacheEntry).pending
 	c.mu.Unlock()
+	if pending != nil { // the bytes are on their way to disk: wait rather than miss and refetch (I-204)
+		<-pending
+		c.mu.Lock()
+		_, still := c.idx[h]
+		c.mu.Unlock()
+		if !still { // the write failed and dropped the entry
+			return nil, false
+		}
+	}
 
 	f, err := c.fsys.Open(c.path(h))
 	if err != nil {
@@ -270,7 +309,9 @@ func (c *Cache) memDropLocked(h [32]byte) {
 }
 
 // Put stores data (whose sha256 must be h) and evicts least-recently-used entries until
-// the cache fits in max. Entries larger than max are ignored.
+// the cache fits in max. Entries larger than max are ignored. The entry is accounted and
+// in memory when Put returns; its file is written behind it unless CacheQueue writes are
+// already outstanding, in which case this Put writes it before returning (I-204).
 func (c *Cache) Put(h [32]byte, data []byte) {
 	if int64(len(data)) > c.max {
 		return
@@ -281,43 +322,89 @@ func (c *Cache) Put(h [32]byte, data []byte) {
 		c.mu.Unlock()
 		return
 	}
+	done := make(chan struct{})
+	c.idx[h] = c.lru.PushFront(cacheEntry{hash: h, size: int64(len(data)), touched: c.clk.Now(), pending: done})
+	c.used += int64(len(data))
+	victims := c.evictLocked()
+	c.memPutLocked(h, data)
+	async := c.writing < CacheQueue
+	if async {
+		c.writing++
+		c.wg.Add(1)
+	}
 	c.mu.Unlock()
-
-	p := c.path(h)
-	if err := c.fsys.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	c.removeEvicted(victims)
+	if !async {
+		c.write(h, data, done)
 		return
+	}
+	go func() {
+		defer c.wg.Done()
+		c.writeSlots <- struct{}{}
+		c.write(h, data, done)
+		<-c.writeSlots
+		c.mu.Lock()
+		c.writing--
+		c.mu.Unlock()
+	}()
+}
+
+// write puts data's file in place and settles the entry that done belongs to: the
+// entry loses its pending mark, or, when it was evicted meanwhile, the file goes again;
+// a failed write drops the entry so a Get misses instead of finding no file.
+func (c *Cache) write(h [32]byte, data []byte, done chan struct{}) {
+	defer close(done)
+	p := c.path(h)
+	written := c.writeFile(p, data)
+	c.mu.Lock()
+	el, ok := c.idx[h]
+	if ok && el.Value.(cacheEntry).pending == done {
+		if written {
+			e := el.Value.(cacheEntry)
+			e.pending = nil
+			el.Value = e
+			c.mu.Unlock()
+			_ = c.fsys.Chtimes(p, e.touched, e.touched) // the LRU time is the Put's (or a hit's refresh since), not the write's
+			return
+		}
+		c.used -= el.Value.(cacheEntry).size
+		if _, pinned := c.pinned[h]; pinned {
+			delete(c.pinned, h)
+			c.pinnedUsed -= el.Value.(cacheEntry).size
+		}
+		c.lru.Remove(el)
+		delete(c.idx, h)
+		c.memDropLocked(h)
+	}
+	c.mu.Unlock()
+	if written { // evicted or dropped while the file was being written: it is untracked
+		_ = c.fsys.Remove(p)
+	}
+}
+
+// writeFile writes data to p through a temp beside it and reports whether p now exists.
+func (c *Cache) writeFile(p string, data []byte) bool {
+	if err := c.fsys.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return false
 	}
 	f, err := c.fsys.CreateTemp(filepath.Dir(p), ".tmp-*")
 	if err != nil {
-		return
+		return false
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = c.fsys.Remove(f.Name())
-		return
+		return false
 	}
 	if err := f.Close(); err != nil {
 		_ = c.fsys.Remove(f.Name())
-		return
+		return false
 	}
 	if err := c.fsys.Rename(f.Name(), p); err != nil {
 		_ = c.fsys.Remove(f.Name())
-		return
+		return false
 	}
-	now := c.clk.Now()
-	_ = c.fsys.Chtimes(p, now, now)
-
-	c.mu.Lock()
-	if _, ok := c.idx[h]; ok { // raced with another Put of the same hash
-		c.mu.Unlock()
-		return
-	}
-	c.idx[h] = c.lru.PushFront(cacheEntry{hash: h, size: int64(len(data)), touched: now})
-	c.used += int64(len(data))
-	victims := c.evictLocked()
-	c.memPutLocked(h, data)
-	c.mu.Unlock()
-	c.removeEvicted(victims)
+	return true
 }
 
 // evictLocked untracks least-recently-used unpinned entries until the unpinned bytes fit

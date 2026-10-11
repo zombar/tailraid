@@ -226,7 +226,7 @@ func TestWebUI_Thumb_Image_Generated_Cached_Hidden(t *testing.T) {
 	if _, _, body = u.thumb("path=/small.jpg"); decodeJPEG(t, body).Bounds().Dx() != 200 {
 		t.Fatal("a small image was scaled up")
 	}
-	for query, want := range map[string]int{"path=/huge.png": 415, "path=/clip.mp4": 404, "path=/note.txt": 404, "path=/d": 400, "path=/nope": 404} {
+	for query, want := range map[string]int{"path=/huge.png": 415, "path=/clip.mp4": 404, "path=/note.txt": 404, "path=/d": 404, "path=/nope": 404} {
 		if code, _, _ := u.thumb(query); code != want {
 			t.Fatalf("thumb %s: %d, want %d", query, code, want)
 		}
@@ -524,6 +524,16 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 	u.write("/alb/c.mp3", 0, append(id3v2(map[string]string{"TIT2": "c"}, pic), audio...))
 	u.write("/plain/a.mp3", 0, append(id3v2(map[string]string{"TIT2": "a"}, nil), audio...))
 	u.flush()
+	// a listing reports a cover only once the folder's thumbnail resolved it (I-165)
+	if l := u.lsOf("path=/alb"); l.Dir.Cover != "" {
+		t.Fatalf("cover of /alb before any thumbnail request: %q", l.Dir.Cover)
+	}
+	if code, _, _ := u.get("/api/thumb?path=/alb"); code != 200 {
+		t.Fatalf("folder thumb: %d", code)
+	}
+	if code, _, _ := u.get("/api/thumb?path=/plain"); code != 404 {
+		t.Fatalf("folder thumb without a picture: %d, want 404", code)
+	}
 	if l := u.lsOf("path=/alb"); l.Dir.Cover != "b.mp3" {
 		t.Fatalf("cover of /alb: %q", l.Dir.Cover)
 	}
@@ -533,6 +543,7 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 	}
 	u.write("/alb/0.mp3", 0, append(id3v2(map[string]string{"TIT2": "0"}, pic), audio...))
 	u.flush()
+	u.get("/api/thumb?path=/alb")
 	if l := u.lsOf("path=/alb"); l.Dir.Cover != "0.mp3" {
 		t.Fatalf("cover after adding 0.mp3: %q", l.Dir.Cover)
 	}
@@ -550,6 +561,13 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 		}}
 		srv, err := webui.New(webui.Options{FS: c.Nodes[i].FS, Store: c.Nodes[i].Node.FSM, Auth: auth, Clk: c.Clk, Logger: slog.New(slog.DiscardHandler)})
 		must(t, err)
+		thumb := httptest.NewRecorder()
+		treq := httptest.NewRequest(http.MethodGet, "/api/thumb?path=/alb", http.NoBody)
+		treq.RemoteAddr = loop.String() + ":4242"
+		srv.Handler().ServeHTTP(thumb, treq)
+		if thumb.Code != 200 {
+			t.Fatalf("n%d: folder thumb %d %s", i, thumb.Code, strings.TrimSpace(thumb.Body.String()))
+		}
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/ls?path=/", http.NoBody)
 		req.RemoteAddr = loop.String() + ":4242"
@@ -558,6 +576,56 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 		must(t, json.Unmarshal(rec.Body.Bytes(), &l))
 		if rec.Code != 200 || l.entry("alb") == nil || l.entry("alb").Cover != "b.mp3" {
 			t.Fatalf("n%d: %d %s", i, rec.Code, strings.TrimSpace(rec.Body.String()))
+		}
+	}
+}
+
+// A listing reads no file: the covers of a folder of albums cost no shard GET until a
+// folder's thumbnail is asked for, which resolves and remembers that folder's cover.
+// Invariant: I-165
+func TestWebUI_Ls_ReadsNoFile(t *testing.T) {
+	u := newUI(t)
+	pic := jpegBytes(16, 16, green)
+	audio := testharness.Pattern(500, 1)
+	for i := range 20 {
+		u.write(fmt.Sprintf("/music/alb%02d/a.mp3", i), 0, append(id3v2(map[string]string{"TIT2": "a"}, pic), audio...))
+	}
+	u.flush()
+	gets := func() int {
+		n := 0
+		for _, tgt := range u.f.Targets() {
+			n += u.f.Gets(tgt)
+		}
+		return n
+	}
+	before := gets()
+	l := u.lsOf("path=/music")
+	if len(l.Entries) != 20 {
+		t.Fatalf("%d entries", len(l.Entries))
+	}
+	for _, e := range l.Entries {
+		if e.Cover != "" {
+			t.Fatalf("%s carries a cover before any thumbnail request", e.Name)
+		}
+	}
+	if n := gets(); n != before {
+		t.Fatalf("the listing issued %d shard GETs", n-before)
+	}
+	if code, _, _ := u.get("/api/thumb?path=/music/alb07"); code != 200 {
+		t.Fatalf("folder thumb: %d", code)
+	}
+	if n := gets(); n <= before {
+		t.Fatal("the folder thumbnail read nothing")
+	}
+	l = u.lsOf("path=/music")
+	for _, e := range l.Entries {
+		if want := ""; e.Name == "alb07" {
+			want = "a.mp3"
+			if e.Cover != want {
+				t.Fatalf("alb07 cover %q after its thumbnail, want %q", e.Cover, want)
+			}
+		} else if e.Cover != "" {
+			t.Fatalf("%s carries a cover nobody resolved", e.Name)
 		}
 	}
 }

@@ -188,6 +188,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return err
 	}
+	defer cache.Drain() // the writes behind the last Puts (at most CacheQueue chunks, I-204)
 	vol := node.FSM.Volume()
 	ov, err := vfs.OpenOverlay(filepath.Join(cfg.Node.DataDir, "staging"), vol.ChunkSize, clk, vfs.WithLog(log))
 	if err != nil {
@@ -304,8 +305,12 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
 	}
-	status := func() any {
+	// the report walks every chunk, so a refresher builds it off the request path and a
+	// request serves the latest build (docs/12 §8, I-205)
+	reporter := admin.NewReporter(func() admin.Report {
+		start := time.Now()
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
+		rep.WalkMS = time.Since(start).Milliseconds()
 		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
 		rep.Machine = admin.Vitals(cfg.Node.DataDir, ident.IP)
 		if w := admin.LowDiskWarning(rep.Machine); w != "" {
@@ -317,7 +322,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			rep.WebURL = "http://" + webAddr + "/"
 		}
 		return rep
-	}
+	}, clk)
+	defer reporter.Close()
+	status := func() any { return reporter.Get() }
 	srv, err := rpc.NewServer(rpc.Options{
 		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },

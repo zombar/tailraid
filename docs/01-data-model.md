@@ -206,6 +206,17 @@ func (s *Store) Walk(fn func(key ShardKey, size int64, mtime time.Time) error) e
 `cache.size` (12 §10, 1 GiB unless set). Entries are verified against their hash on read; a
 mismatch evicts the entry. The cache is purely local and may be deleted at any time.
 
+**Writes run behind the Put (I-204).** A fetched chunk is in the memory tier and counted
+the moment `Put` returns; its file is written by one of `CacheWriters` (2) background
+writers, at most `CacheQueue` (8) writes outstanding, so the read that fetched the chunk
+answers without waiting for a 4 MiB disk write (measured 2026-10-11: the write was on
+every cold read's path). Past `CacheQueue` a `Put` writes synchronously rather than
+holding a further buffer, which bounds the pending buffers to `CacheQueue` chunks (04 §9).
+A `Get` of an entry whose write is pending is served from memory, or waits for the write
+when the memory tier let it go, never misses and refetches; an entry evicted before its
+write leaves no file (the writer removes what it wrote); a write that fails drops the
+entry; `Drain` returns once nothing is outstanding and the node drains at shutdown.
+
 **Pins.** A folder the user keeps on a device (`tailraid cache pin <path>`, or "Keep on
 this device" in the browser UI, 13 §4) is recorded in `<data_dir>/pins.json` as
 `{ino, gen, path}`; the path is a label and the inode the identity, so a rename keeps the
@@ -343,6 +354,13 @@ directory holds no shards (14 §1).
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
 
+- **I-204** — A chunk is in the cache's memory tier and its accounting when `Put`
+  returns and its file is written behind it: at most `CacheWriters` writes run at once
+  and at most `CacheQueue` are outstanding, past which a `Put` writes synchronously; a
+  `Get` of an entry whose write is pending is served from memory or waits for the write,
+  never misses; an entry evicted before its write leaves no file; a failed write drops the
+  entry; `Drain` returns once no write is outstanding.
+
 - **I-156** — Snapshot version 4 carries `Flags` and `DeletedAt`, and log entries carry
   codec version 4 only for `Trash`, `Restore`, `Purge` and a `SetAttr` with `Flags`;
   every snapshot and entry of versions 1–3 decodes as before with those fields zero;
@@ -368,3 +386,4 @@ defined in `04-write-path-and-durability.md`.
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
+| I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously` |

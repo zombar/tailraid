@@ -107,7 +107,7 @@ func phaseHotPath(ctx context.Context, r *Run) error {
 		if len(gws) == 1 && fetched == 0 && joined == 0 {
 			r.checkSkipped("I-166", "readahead served the sequential read", "one gateway: the client's own cache served the read it had just written; "+text)
 		} else {
-			r.checkAt("I-166", "readahead served the sequential read", joined >= hotpathChunks-vfs.ReadAhead-1, text, p, "", reader.Name)
+			r.checkAt("I-166", "readahead served the sequential read", joined >= uint64(hotpathChunks-vfs.ReadaheadDepth(uint32(r.Profile.ChunkSize))-1), text, p, "", reader.Name)
 			r.checkAt("I-166", "readahead fetched no more than the file's chunks", fetched <= hotpathChunks, text, p, "", reader.Name)
 		}
 		r.checkAt("I-166", "prefetches in flight within ReadAhead", peak <= vfs.ReadAhead, fmt.Sprintf("peak %d of %d allowed over %d samples", peak, vfs.ReadAhead, samples), p, "", reader.Name)

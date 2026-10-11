@@ -103,9 +103,10 @@ type GatewayReport struct {
 	LastFlushErr string `json:"last_flush_err,omitempty"`
 	// readahead (docs/04 §5, I-166): chunks a prefetch fetched, READs served by one, and
 	// the prefetches in flight right now
-	ReadaheadFetched uint64 `json:"readahead_fetched"`
-	ReadaheadJoined  uint64 `json:"readahead_joined"`
-	Prefetching      int    `json:"prefetching"`
+	ReadaheadFetched   uint64 `json:"readahead_fetched"`
+	ReadaheadJoined    uint64 `json:"readahead_joined"`
+	ReadaheadCancelled uint64 `json:"readahead_cancelled"` // prefetches cut by a client's seek (I-203)
+	Prefetching        int    `json:"prefetching"`
 	// every byte clients read and wrote through this gateway's files, cumulative
 	// (docs/17 §1, I-191)
 	BytesRead    uint64 `json:"bytes_read"`
@@ -121,6 +122,7 @@ func (g *GatewayReport) WithFS(fs *vfs.FS) *GatewayReport {
 // WithReader adds the reader's readahead counters to the gateway view.
 func (g *GatewayReport) WithReader(rd *vfs.Reader) *GatewayReport {
 	g.ReadaheadFetched, g.ReadaheadJoined = rd.ReadaheadStats()
+	g.ReadaheadCancelled = rd.ReadaheadCancelled()
 	g.Prefetching = rd.Prefetching()
 	return g
 }
@@ -190,6 +192,7 @@ type Report struct {
 	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	GeneratedAt         time.Time      `json:"generated_at"`
+	WalkMS              int64          `json:"walk_ms"` // how long this report's chunk walk took (docs/12 §8, I-205)
 }
 
 // RepairStatus is the leader's last scan (nil on followers).

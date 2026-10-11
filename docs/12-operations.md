@@ -285,8 +285,9 @@ runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under w
 `gateway.flush_bytes` (chunk and shard buffers held by the flusher, docs/04 §9),
 `gateway.wal_cap` and `gateway.last_flush_err`, and the reader's readahead (docs/04 §5):
 `gateway.readahead_fetched` (chunks a prefetch fetched), `gateway.readahead_joined`
-(client READs served by a chunk a prefetch fetched or was fetching) and
-`gateway.prefetching` (prefetches in flight right now). The soak sampler records them every second
+(client READs served by a chunk a prefetch fetched or was fetching),
+`gateway.readahead_cancelled` (prefetches cut because their client seeked away, 04 §5,
+I-203) and `gateway.prefetching` (prefetches in flight right now). The soak sampler records them every second
 and the report charts the heap next to the WAL depth, so a memory regression under a
 large copy is a visible line, not a guess (I-84).
 
@@ -334,6 +335,15 @@ default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in
 set the fan-out and the byte rate; `serve` refuses a value outside those bounds. Both
 are written to the file only when set, so a release from before them, which reads the
 file strictly, still starts after a rollback (I-61).
+
+**The report is built off the request path (I-205).** `admin.Build` walks every chunk
+(`ScanHealth`): 0.26 s at 44k chunks on a laptop, seconds at a million, and every open
+browser tab asks every 5 s. The node therefore keeps an `admin.Reporter`: the first
+request builds the report on its own goroutine, and from then on a refresher rebuilds it
+every `ReportEvery` (2 s) for as long as a request arrived within `ReportIdle` (30 s),
+stopping otherwise until the next one. `tailraid status`, `/v1/status` and `/api/status`
+all return the latest build at once; `generated_at` says how old it is and `walk_ms` how
+long its walk took, so a slow walk is a visible number rather than a slow page.
 
 **Readiness.** `/health` and `status` carry `ready`: the node knows a leader and Raft has
 handed its FSM every entry it has committed. A freshly restarted node is not ready
@@ -462,6 +472,11 @@ from the device with every other node away; `cache unpin <path>` releases it and
 - **I-144** — A node waiting for the log at start waits until its FSM holds its own
   row and the volume, not only until it knows a leader and has applied its local log;
   it fails with `ErrNotMember` when they have not arrived within the bound.
+- **I-205** — After the first report, `status`, `/v1/status` and `/api/status` never run
+  the chunk walk on the request's goroutine: a refresher rebuilds the report every
+  `ReportEvery` while one was asked for within `ReportIdle` and stops otherwise, a request
+  returns the latest build at once, the report carries `walk_ms` and `generated_at`, and
+  `Close` stops the refresher.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -489,3 +504,4 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
 | I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
+| I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |

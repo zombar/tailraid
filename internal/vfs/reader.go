@@ -37,20 +37,35 @@ type Reader struct {
 	Events  *meta.EventRing // chunk history (nil unless dev.enabled)
 
 	mu         sync.Mutex
-	inflight   map[meta.Hash]*fetchCall // one fetch per hash at a time; readahead shares it
-	last       map[meta.Ino]uint64      // the chunk index of each inode's previous READ (readahead)
-	prefetched map[meta.Hash]struct{}   // chunks a prefetch cached that no READ has consumed yet
-	lat        latencyRing              // recent shard GET times: the hedge delay is their p95
+	inflight   map[meta.Hash]*fetchCall  // one fetch per hash at a time; readahead shares it
+	last       map[meta.Ino]uint64       // the chunk index of each inode's previous READ (readahead)
+	prefetched map[meta.Hash]struct{}    // chunks a prefetch cached that no READ has consumed yet
+	pf         map[meta.Ino][]*fetchCall // the prefetches each inode's sequential READs started (I-203)
+	lat        latencyRing               // recent shard GET times: the hedge delay is their p95
 
 	slots       chan struct{} // ReadAhead prefetch slots, gateway-wide (I-166)
 	prefetching atomic.Int32
 	raFetched   atomic.Uint64 // chunks a prefetch fetched
 	raJoined    atomic.Uint64 // READs served by a chunk a prefetch fetched or was fetching
+	raCancelled atomic.Uint64 // prefetches cut because their client seeked away (I-203)
 }
 
-// ReadAhead is how many chunks a sequential READ prefetches beyond the one it asks for,
-// and the most prefetches in flight gateway-wide (docs/04 §5, I-166).
+// ReadAhead is the most prefetches in flight gateway-wide, and the most chunks a
+// sequential READ prefetches beyond the one it asks for (docs/04 §5, I-166).
 const ReadAhead = 4
+
+// ReadAheadBytes is how far ahead of a sequential client readahead reaches: the
+// per-stream depth is ReadAheadBytes in chunks, at least one and at most ReadAhead, so a
+// 4 MiB volume prefetches two chunks where a 1 MiB volume prefetches four (I-203).
+const ReadAheadBytes = 8 << 20
+
+// ReadaheadDepth is the chunks a sequential READ prefetches at the given chunk size.
+func ReadaheadDepth(chunkSize uint32) int {
+	if chunkSize == 0 {
+		return ReadAhead
+	}
+	return max(1, min(ReadAhead, ReadAheadBytes/int(chunkSize)))
+}
 
 // hintCap bounds the per-inode and per-hash bookkeeping of readahead: past it the maps
 // are cleared, costing at worst one missed prefetch per inode.
@@ -109,8 +124,9 @@ type fetchCall struct {
 	done     chan struct{}
 	data     []byte
 	err      error
-	prefetch bool        // started by readahead, not by a READ
-	joined   atomic.Bool // a READ waited on this prefetch (counted once, not again on the cache hit)
+	prefetch bool               // started by readahead, not by a READ
+	joined   bool               // a READ waited on this prefetch (under Reader.mu; counted once, not again on the cache hit)
+	cancel   context.CancelFunc // a prefetch's context: cut when its client seeks away unjoined (I-203)
 }
 
 // NewReader wires a reader. cache may be nil (then nothing is prefetched: a prefetch has
@@ -122,6 +138,7 @@ func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache
 	return &Reader{
 		st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(),
 		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]uint64{}, prefetched: map[meta.Hash]struct{}{},
+		pf:    map[meta.Ino][]*fetchCall{},
 		slots: make(chan struct{}, ReadAhead),
 	}
 }
@@ -134,30 +151,41 @@ func (r *Reader) ReadaheadStats() (fetched, joined uint64) {
 	return r.raFetched.Load(), r.raJoined.Load()
 }
 
-// Prefetch is called by File.ReadAt before a read at off: a sequential READ (chunk 0, or
-// the chunk after the inode's previous READ) starts a background fetch of the next
-// ReadAhead chunks into the cache (docs/04 §5). A hole, a cached chunk and one already in
-// flight are skipped; so is every candidate once the ReadAhead slots are busy, rather
-// than queued. A prefetch is registered in the in-flight table before it starts, so a READ
-// that reaches its chunk joins it; its result goes only to the cache and its failure is
-// logged at debug (I-166).
+// ReadaheadCancelled reports the prefetches cut because their client seeked away (I-203).
+func (r *Reader) ReadaheadCancelled() uint64 { return r.raCancelled.Load() }
+
+// Prefetch is called by File.ReadAt once its read at off is served: a sequential READ
+// (chunk 0, or the chunk after the inode's previous READ) starts a background fetch of
+// the next ReadaheadDepth chunks into the cache (docs/04 §5). A hole, a cached chunk and
+// one already in flight are skipped; so is every candidate once the ReadAhead slots are
+// busy, rather than queued. A prefetch is registered in the in-flight table before it
+// starts, so a READ that reaches its chunk joins it; its result goes only to the cache
+// and its failure is logged at debug (I-166). Its shard GETs run as background work on
+// the holders, and a READ of the inode that leaves the sequence cancels the inode's
+// prefetches no READ has joined (I-203).
 func (r *Reader) Prefetch(in meta.Inode, off int64) {
 	if r.cache == nil || off < 0 {
 		return
 	}
-	idx := uint64(off) / uint64(r.st.Volume().ChunkSize)
+	cs := r.st.Volume().ChunkSize
+	idx := uint64(off) / uint64(cs)
 	r.mu.Lock()
 	prev, seen := r.last[in.Ino]
 	if len(r.last) >= hintCap {
 		clear(r.last)
+		clear(r.pf)
 	}
 	r.last[in.Ino] = idx
-	r.mu.Unlock()
 	sequential := idx == 0 || (seen && idx == prev+1)
+	if !sequential {
+		r.cancelUnjoinedLocked(in.Ino)
+	}
+	r.mu.Unlock()
 	if !sequential {
 		return
 	}
-	for j := idx + 1; j <= idx+ReadAhead && j < uint64(len(in.Chunks)); j++ {
+	depth := uint64(ReadaheadDepth(cs))
+	for j := idx + 1; j <= idx+depth && j < uint64(len(in.Chunks)); j++ {
 		h := in.Chunks[j]
 		if h == meta.HashZero || r.cache.Has(h) {
 			continue
@@ -173,17 +201,22 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 			<-r.slots
 			continue
 		}
-		call := &fetchCall{done: make(chan struct{}), prefetch: true}
+		pctx, cancel := context.WithCancel(chunk.Background(context.Background()))
+		call := &fetchCall{done: make(chan struct{}), prefetch: true, cancel: cancel}
 		r.inflight[h] = call
+		r.pf[in.Ino] = append(r.pruneLocked(r.pf[in.Ino]), call)
 		r.mu.Unlock()
 		r.prefetching.Add(1)
 		go func() {
 			defer func() {
 				r.prefetching.Add(-1)
 				<-r.slots
+				cancel()
 			}()
-			if _, err := r.run(context.Background(), h, call); err != nil {
-				r.log.Debug("readahead fetch failed", "hash", fmt.Sprintf("%x", h[:8]), "err", err)
+			if _, err := r.run(pctx, h, call); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					r.log.Debug("readahead fetch failed", "hash", fmt.Sprintf("%x", h[:8]), "err", err)
+				}
 				return
 			}
 			r.raFetched.Add(1)
@@ -191,12 +224,43 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 	}
 }
 
+// cancelUnjoinedLocked cuts the inode's prefetches still in flight that no READ has
+// joined: the client moved elsewhere, so their bytes would only take a holder's slot
+// and the link from the chunk it wants now. The caller holds r.mu.
+func (r *Reader) cancelUnjoinedLocked(ino meta.Ino) {
+	for _, call := range r.pf[ino] {
+		select {
+		case <-call.done:
+			continue
+		default:
+		}
+		if !call.joined {
+			call.cancel()
+			r.raCancelled.Add(1)
+		}
+	}
+	delete(r.pf, ino)
+}
+
+// pruneLocked drops the finished calls from an inode's prefetch list.
+func (r *Reader) pruneLocked(calls []*fetchCall) []*fetchCall {
+	live := calls[:0]
+	for _, call := range calls {
+		select {
+		case <-call.done:
+		default:
+			live = append(live, call)
+		}
+	}
+	return live
+}
+
 // run performs the fetch registered as call and settles every waiter.
 func (r *Reader) run(ctx context.Context, h meta.Hash, call *fetchCall) ([]byte, error) {
 	call.data, call.err = r.fetchChunk(ctx, h)
 	r.mu.Lock()
 	delete(r.inflight, h)
-	if call.prefetch && call.err == nil && !call.joined.Load() {
+	if call.prefetch && call.err == nil && !call.joined {
 		if len(r.prefetched) >= hintCap {
 			clear(r.prefetched)
 		}
@@ -233,13 +297,13 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 		if !running {
 			call = &fetchCall{done: make(chan struct{})}
 			r.inflight[h] = call
+		} else if call.prefetch && !call.joined { // under r.mu, so a seek's cancel never cuts a joined call
+			call.joined = true
+			r.raJoined.Add(1)
 		}
 		r.mu.Unlock()
 		if !running {
 			return r.run(ctx, h, call)
-		}
-		if call.prefetch && call.joined.CompareAndSwap(false, true) {
-			r.raJoined.Add(1)
 		}
 		select {
 		case <-call.done:
