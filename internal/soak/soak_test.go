@@ -380,18 +380,32 @@ func (e *harnessEnv) Heal(context.Context) error {
 func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) error {
 	nd := e.node(n)
 	k := chunk.ShardKey(key)
-	if nd.Store.Has(k) {
-		return dev.Corrupt(nd.Store.Path(k))
-	}
+	// every copy the host holds, as /dev/corrupt does: a move within the host (docs/14
+	// §7) leaves a stale copy on the old disk until its fenced delete or the sweep gets
+	// it, and corrupting only that one would leave the placement's shard intact
+	stores := []*chunk.Store{nd.Store}
 	nodes := nd.Node.FSM.Nodes()
-	for i := range nodes { // the host's added disks, as /dev/corrupt searches them
+	for i := range nodes {
 		if t := &nodes[i]; t.Kind == meta.KindDisk && t.Host == nd.Idx() {
-			if s := e.c.DiskStore(nd.I, t.Idx); s != nil && s.Has(k) {
-				return dev.Corrupt(s.Path(k))
+			if s := e.c.DiskStore(nd.I, t.Idx); s != nil && s != nd.Store {
+				stores = append(stores, s)
 			}
 		}
 	}
-	return errors.New("no such shard")
+	found := false
+	for _, s := range stores {
+		if !s.Has(k) {
+			continue
+		}
+		if err := dev.Corrupt(s.Path(k)); err != nil {
+			return err
+		}
+		found = true
+	}
+	if !found {
+		return errors.New("no such shard")
+	}
+	return nil
 }
 
 // hostOf finds the harness node serving a disk ref by its host name.

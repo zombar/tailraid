@@ -29,7 +29,10 @@ type FSMHash struct {
 
 // Store is the shard store surface /dev/corrupt needs.
 type Store interface {
-	Path(k chunk.ShardKey) string
+	// Paths lists every copy of k this host holds, one per disk. A move within the host
+	// (docs/14 §7) leaves a stale copy behind until its fenced delete or the sweep gets
+	// it, and only the placement's copy is ever read, so /dev/corrupt hits them all.
+	Paths(k chunk.ShardKey) []string
 	Has(k chunk.ShardKey) bool
 	// Disks lists this host's open disks as their budgets see them (docs/14 §3); a
 	// diskless host has none. Fill writes (0 removes) the scratch file on the named disk.
@@ -91,11 +94,14 @@ func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit
 			http.Error(w, "unknown shard key", http.StatusNotFound)
 			return
 		}
-		if err := Corrupt(store.Path(key)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		paths := store.Paths(key)
+		for _, p := range paths {
+			if err := Corrupt(p); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
-		log.Warn("dev: shard corrupted on request", "key", string(key))
+		log.Warn("dev: shard corrupted on request", "key", string(key), "copies", len(paths))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	// the stack of every goroutine, as a crash dump would print it: a hung node is
