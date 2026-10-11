@@ -105,8 +105,10 @@ type Sample struct {
 	FlushBytes    uint64                     `json:"flush_bytes"`  // the sampled node's flush buffers (docs/04 §9)
 	TrashInodes   int                        `json:"trash_inodes"` // deleted entries waiting in the trash (docs/06 §1)
 	TrashBytes    uint64                     `json:"trash_bytes"`
-	CachePinned   int64                      `json:"cache_pinned"` // bytes the sampled node's cache holds for its pins (docs/13 §4)
-	HeapInuse     uint64                     `json:"heap_inuse"`   // the sampled node's process (docs/12 §8)
+	CachePinned   int64                      `json:"cache_pinned"`   // bytes the sampled node's cache holds for its pins (docs/13 §4)
+	SearchDocs    int                        `json:"search_docs"`    // files in the sampled node's index (docs/18 §5)
+	SearchPending int                        `json:"search_pending"` // candidates the leader's last pass left
+	HeapInuse     uint64                     `json:"heap_inuse"`     // the sampled node's process (docs/12 §8)
 	Sys           uint64                     `json:"sys"`
 	Goroutines    int                        `json:"goroutines"`
 	// the sampled node's machine vitals (docs/12 §8); rates are between this node's
@@ -522,6 +524,9 @@ func (r *Run) sample(ctx context.Context, round int) {
 		s.TrashInodes, s.TrashBytes = rep.Volume.TrashInodes, rep.Volume.TrashBytes
 		if rep.Cache != nil {
 			s.CachePinned = rep.Cache.PinnedBytes
+		}
+		if rep.Search != nil {
+			s.SearchDocs, s.SearchPending = rep.Search.Docs, rep.Search.Pending
 		}
 		s.Health = rep.Health
 		s.Slots, s.LiveNodes = map[string]int{}, map[string]bool{}

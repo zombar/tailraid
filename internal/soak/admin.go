@@ -13,6 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/stats"
 )
 
@@ -143,6 +144,13 @@ func (a *Admin) Scrub(ctx context.Context) (repair.Stats, error) {
 func (a *Admin) GCNow(ctx context.Context) (repair.Result, error) {
 	var res repair.Result
 	err := a.passOp(ctx, rpc.AdminOp{Op: "gc_now"}, &res)
+	return res, err
+}
+
+// IndexNow is `tailraid search index`: the leader's pass (docs/18 §5, a pass op).
+func (a *Admin) IndexNow(ctx context.Context) (search.PassResult, error) {
+	var res search.PassResult
+	err := a.passOp(ctx, rpc.AdminOp{Op: "index_now"}, &res)
 	return res, err
 }
 

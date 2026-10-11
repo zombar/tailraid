@@ -304,6 +304,8 @@ func charts(s Summary) ([]template.HTML, string) {
 	trx, ttx := chart.Series{Name: "tailnet rx MiB/s"}, chart.Series{Name: "tailnet tx MiB/s"}
 	trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
 	haveTrash := false
+	sdocs, spend := chart.Series{Name: "indexed files"}, chart.Series{Name: "pending"}
+	haveSearch := false
 	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO, haveNet := false, false, false, false, false, false
 	nodeSeries := map[string]*chart.Series{}
 	var nodeNames []string
@@ -339,6 +341,9 @@ func charts(s Summary) ([]template.HTML, string) {
 		trashB.Points = append(trashB.Points, [2]float64{x(rec), float64(sm.TrashBytes)})
 		pinnedB.Points = append(pinnedB.Points, [2]float64{x(rec), float64(sm.CachePinned)})
 		haveTrash = haveTrash || sm.TrashInodes > 0 || sm.TrashBytes > 0 || sm.CachePinned > 0
+		sdocs.Points = append(sdocs.Points, [2]float64{x(rec), float64(sm.SearchDocs)})
+		spend.Points = append(spend.Points, [2]float64{x(rec), float64(sm.SearchPending)})
+		haveSearch = haveSearch || sm.SearchDocs > 0 || sm.SearchPending > 0
 		haveCPU = haveCPU || sm.CPUPct > 0 || sm.MachinePct > 0
 		haveRSS = haveRSS || sm.RSS > 0 || sm.MemAvailable > 0
 		havePressure = havePressure || sm.MemPressure > 0
@@ -387,6 +392,9 @@ func charts(s Summary) ([]template.HTML, string) {
 	}
 	if haveTrash {
 		out = append(out, template.HTML(chart.Line("Trash and pinned cache (docs/06 §1, docs/13 §4)", "bytes", []chart.Series{trashB, pinnedB}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
+	}
+	if haveSearch {
+		out = append(out, template.HTML(chart.Line("Search index (docs/18 §5)", "files", []chart.Series{sdocs, spend}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveMem {
 		out = append(out, template.HTML(chart.Line("Process memory on the sampled node", "bytes", []chart.Series{heap, sys}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG

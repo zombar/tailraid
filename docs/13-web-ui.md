@@ -791,7 +791,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
-| I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table` (the Rendered/Raw switch is manual check 19) |
-| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes` (the hero and the grids are manual checks 20 and 21) |
+| I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
+| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

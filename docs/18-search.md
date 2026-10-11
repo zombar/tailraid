@@ -248,11 +248,11 @@ biography and art.
 
 | Invariant | Tests |
 |---|---|
-| I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain` |
-| I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table` |
-| I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table` |
+| I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
+| I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
+| I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
-| I-211 | `TestCatalog_CleanName_Table`, `TestCatalog_Episode_Table`, `TestCatalog_NFO_Table`, `FuzzNFODecode`, `TestCatalog_ArtResolutionOrder`, `TestCatalog_LibraryKinds_Structure`, `TestCluster_SearchDeterministicAcrossNodes` |
+| I-211 | `TestCatalog_CleanName_Table`, `TestCatalog_Episode_Table`, `TestCatalog_NFO_Table`, `FuzzNFODecode`, `TestCatalog_ArtResolutionOrder`, `TestCatalog_LibraryKinds_Structure`, `TestCluster_SearchDeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
 
 Soak phase 21 joins these rows with the PR that lands it (09 §2). The web side's invariants (I-209 markdown,
 I-212 the Media tab) are in 13.

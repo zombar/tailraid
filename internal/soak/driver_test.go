@@ -16,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/s3"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/stats"
 )
 
@@ -103,7 +104,10 @@ func (e *fakeEnv) RepairNow(ctx context.Context) (repair.Stats, error) {
 }
 func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error)  { return repair.Stats{}, nil }
 func (e *fakeEnv) GCNow(context.Context) (repair.Result, error) { return repair.Result{}, nil }
-func (e *fakeEnv) PurgeTrash(context.Context) (int, error)      { return 0, nil }
+func (e *fakeEnv) IndexNow(context.Context) (search.PassResult, error) {
+	return search.PassResult{}, nil
+}
+func (e *fakeEnv) PurgeTrash(context.Context) (int, error) { return 0, nil }
 func (e *fakeEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	e.record(ctx, fmt.Sprintf("set-policy %d+%d", k, m))
 	e.mu.Lock()
