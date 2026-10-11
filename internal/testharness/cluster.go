@@ -610,6 +610,9 @@ func (c *Cluster) Kill(i int) {
 	if err := nd.Node.Close(); err != nil {
 		c.T.Logf("close n%d: %v", i, err)
 	}
+	// A cache write still in flight would race a Restart's new cache on the same directory,
+	// or the temp directory's removal after Close (I-204).
+	nd.Cache.Close()
 	_ = nd.trans.Close()
 	nd.trans = nil
 	for _, other := range c.Nodes {
