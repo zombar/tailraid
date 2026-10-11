@@ -16,8 +16,10 @@ type Stats struct {
 	Inodes       int
 	Chunks       int
 	Tombstoned   int
-	LogicalBytes uint64 // Σ file sizes
+	LogicalBytes uint64 // Σ live file sizes
 	StoredBytes  uint64 // Σ over live chunks of ShardLen(size,k)·(k+m)
+	TrashInodes  int    // inodes in the trash: the deleted roots and everything under them
+	TrashBytes   uint64 // Σ file sizes in the trash
 }
 
 // copyInode is the read API's view of an inode: every field but the Children map, which
@@ -59,8 +61,21 @@ func (f *FSM) LastNow() int64 {
 // Applied returns the last applied log index.
 func (f *FSM) Applied() uint64 { return f.applied.Load() }
 
-// GetInode returns a copy of the inode.
+// GetInode returns a copy of a live inode: a deleted root and everything under it are
+// not found, so a gateway's handle to a deleted file is stale (I-17, I-155).
 func (f *FSM) GetInode(ino Ino) (Inode, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	in, ok := f.st.Inodes[ino]
+	if !ok || f.st.lineage(ino).inTrash {
+		return Inode{}, false
+	}
+	return copyInode(in), true
+}
+
+// GetInodeAny returns a copy of the inode whether it is live or in the trash: the
+// flusher commits into a trashed file and the browser UI reads one (docs/02 §Reads).
+func (f *FSM) GetInodeAny(ino Ino) (Inode, bool) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	in, ok := f.st.Inodes[ino]
@@ -68,6 +83,85 @@ func (f *FSM) GetInode(ino Ino) (Inode, bool) {
 		return Inode{}, false
 	}
 	return copyInode(in), true
+}
+
+// TrashOf lists the deleted roots under parent, newest first then by inode.
+func (f *FSM) TrashOf(parent Ino) []Inode {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.trashList(f.st.Trash[parent])
+}
+
+// Trash lists every deleted root, newest first then by inode.
+func (f *FSM) Trash() []Inode {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	all := map[Ino]struct{}{}
+	for _, set := range f.st.Trash {
+		for ino := range set {
+			all[ino] = struct{}{}
+		}
+	}
+	return f.trashList(all)
+}
+
+func (f *FSM) trashList(set map[Ino]struct{}) []Inode {
+	out := make([]Inode, 0, len(set))
+	for ino := range set {
+		out = append(out, copyInode(f.st.Inodes[ino]))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DeletedAt != out[j].DeletedAt {
+			return out[i].DeletedAt > out[j].DeletedAt
+		}
+		return out[i].Ino < out[j].Ino
+	})
+	return out
+}
+
+// Protected reports whether ino or a directory above it carries FlagProtected (I-154):
+// what a gateway asks before it marks an entry for a delete it cannot report (docs/15).
+func (f *FSM) Protected(ino Ino) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.st.lineage(ino).protected
+}
+
+// TrashDue counts the deleted roots a Purge{Before: before} would take.
+func (f *FSM) TrashDue(before int64) int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n := 0
+	for _, set := range f.st.Trash {
+		for ino := range set {
+			if f.st.Inodes[ino].DeletedAt < before {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// ResolveFrom walks path inside the deleted root; an empty path is the root itself.
+// root must be a deleted root (ErrNotExist otherwise).
+func (f *FSM) ResolveFrom(root Ino, path []string) (Inode, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	cur, ok := f.st.Inodes[root]
+	if !ok || cur.DeletedAt == 0 {
+		return Inode{}, ErrNotExist
+	}
+	for _, name := range path {
+		if cur.Type != TDir {
+			return Inode{}, ErrNotDir
+		}
+		ino, ok := cur.Children[name]
+		if !ok {
+			return Inode{}, ErrNotExist
+		}
+		cur = f.st.Inodes[ino]
+	}
+	return copyInode(cur), nil
 }
 
 // Lookup resolves name inside directory parent.
@@ -275,8 +369,24 @@ func (f *FSM) Stats() Stats {
 func computeStats(st *State) Stats {
 	var s Stats
 	s.Inodes = len(st.Inodes)
-	for _, in := range st.Inodes {
-		if in.Type == TFile {
+	trashed := map[Ino]bool{}
+	for _, set := range st.Trash {
+		for ino := range set {
+			n, size := st.subtreeStats(st.Inodes[ino])
+			s.TrashInodes += n
+			s.TrashBytes += size
+			var mark func(*Inode)
+			mark = func(x *Inode) {
+				trashed[x.Ino] = true
+				for _, child := range x.Children {
+					mark(st.Inodes[child])
+				}
+			}
+			mark(st.Inodes[ino])
+		}
+	}
+	for ino, in := range st.Inodes {
+		if in.Type == TFile && !trashed[ino] {
 			s.LogicalBytes += in.Size
 		}
 	}

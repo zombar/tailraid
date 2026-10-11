@@ -2,6 +2,42 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.5.0 (2026-10-11)
+
+### Changes
+
+- vms: the downgrade step accepts a release's refusal of a newer snapshot codec ([d84889a](https://github.com/zombar/tailraid/commit/d84889a))
+- config: trash.retention is written only when set (I-61) ([ad11d3a](https://github.com/zombar/tailraid/commit/ad11d3a))
+- soak: phase 16 gives the mount its attribute-cache window to show a restored tree ([a15a30b](https://github.com/zombar/tailraid/commit/a15a30b))
+- rpc, soak: an admin op that runs a pass is answered when the pass is done (I-189) ([1082911](https://github.com/zombar/tailraid/commit/1082911))
+- soak: phase 16 judges the reclaim as phase 8 does ([7e42d24](https://github.com/zombar/tailraid/commit/7e42d24))
+- testharness: a fabric reader's readahead drains before the test's temp dirs go ([438f15a](https://github.com/zombar/tailraid/commit/438f15a))
+- meta: a fold touches the directory it folds into ([f9226a4](https://github.com/zombar/tailraid/commit/f9226a4))
+- soak: phase 12 lets a migration from the previous phase's restore finish before it counts orphans ([b06f656](https://github.com/zombar/tailraid/commit/b06f656))
+- soak: the compose rig admits the driver to the browser UI; a refused remove is a permission error ([25bbec0](https://github.com/zombar/tailraid/commit/25bbec0))
+- pins: a walk's shard requests carry the background mark (I-175) ([3382dae](https://github.com/zombar/tailraid/commit/3382dae))
+- admin, webui: a bucket's card shows what it stores, not a full disk (I-178) ([fa44d1c](https://github.com/zombar/tailraid/commit/fa44d1c))
+- dev, soak: a corruption hits every copy of the shard the host holds ([f5f9ef5](https://github.com/zombar/tailraid/commit/f5f9ef5))
+- build: tidy tools.mod and actionlint.mod for x/image and dhowden/tag ([78dfdab](https://github.com/zombar/tailraid/commit/78dfdab))
+- soak: phase 16 drives the browser UI; the report charts the trash and the pinned cache ([e44caec](https://github.com/zombar/tailraid/commit/e44caec))
+- webui: list and tile views, selection, trash, flags, pins, thumbnails, the album view and the now-playing bar ([0a39622](https://github.com/zombar/tailraid/commit/0a39622))
+- webui: the trash, batches, flags, thumbnails, tags and pins over HTTP ([9537a70](https://github.com/zombar/tailraid/commit/9537a70))
+- webui: the integrity panel loads a page sixteen checks at a time and survives the redraw ([4c6da9b](https://github.com/zombar/tailraid/commit/4c6da9b))
+- cache: pinned folders kept on a device, cache.size, `tailraid cache pin|unpin|ls` ([aa57001](https://github.com/zombar/tailraid/commit/aa57001))
+- status: no "unreachable" warning for a dead diskless host ([584827f](https://github.com/zombar/tailraid/commit/584827f))
+- vfs, gateways, gc: a delete is a trash; the retention purge, trash admin ops and CLI ([42d6da1](https://github.com/zombar/tailraid/commit/42d6da1))
+- meta: the trash, restore and purge, protected and nsfw flags, codec 4 ([08ec386](https://github.com/zombar/tailraid/commit/08ec386))
+
+### Documentation
+
+- docs: soak report on the final web UI v2 stack (18 phases, 202 checks, 0 failed) ([2078287](https://github.com/zombar/tailraid/commit/2078287))
+- docs: soak report on the web UI v2 stack (18 phases, 202 checks, 0 failed) ([658891e](https://github.com/zombar/tailraid/commit/658891e))
+
+### Tooling
+
+- tests: the command generator keeps protection short-lived; the idle-flush test moves the clock inside its condition ([fe6511c](https://github.com/zombar/tailraid/commit/fe6511c))
+- test: the model checker trashes, restores and purges; a trash survives a snapshot install ([bbade8f](https://github.com/zombar/tailraid/commit/bbade8f))
+
 ## v0.4.8 (2026-10-11)
 
 ### Changes

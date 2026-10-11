@@ -184,6 +184,9 @@ func buildReport(s Summary) reportData {
 		{"peak resident set", humanBytes(float64(t.MaxRSS))},
 		{"peak process CPU", fmt.Sprintf("%.0f %% of one CPU", t.MaxCPUPct)},
 		{"least free disk on the sampled node", humanBytes(float64(t.MinDiskFree))},
+		{"most in the trash", fmt.Sprintf("%d entries, %s", t.MaxTrash, humanBytes(float64(t.MaxTrashB)))},
+		{"most pinned in the sampled node's cache", humanBytes(float64(t.MaxPinned))},
+		{"thumbnail round trips", fmt.Sprintf("%d, slowest %s", t.Thumbs, t.ThumbMax.Round(time.Millisecond))},
 		{"repair", fmt.Sprintf("%d scanned, %d repaired, %d partial, %d unrepairable, %d migrated, %d deferred, %d scrubbed, %d corrupt, %s moved, %d errors",
 			t.Repair.Scanned, t.Repair.Repaired, t.Repair.Partial, t.Repair.Unrepairable, t.Repair.Migrated, t.Repair.Deferred, t.Repair.Scrubbed, t.Repair.ScrubBad, humanBytes(float64(t.Repair.BytesMoved)), t.Repair.Errors)},
 		{"gc", fmt.Sprintf("%d chunk entries collected, %d shards deleted, %d deletes refused", t.GC.Victims, t.GC.Deleted, t.GC.Refused)},
@@ -297,6 +300,8 @@ func charts(s Summary) ([]template.HTML, string) {
 	pressure := chart.Series{Name: "memory pressure (PSI some, avg10 %)"}
 	free := chart.Series{Name: "data disk free"}
 	dwr, drd := chart.Series{Name: "disk write MiB/s"}, chart.Series{Name: "disk read MiB/s"}
+	trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
+	haveTrash := false
 	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO := false, false, false, false, false
 	nodeSeries := map[string]*chart.Series{}
 	var nodeNames []string
@@ -329,6 +334,9 @@ func charts(s Summary) ([]template.HTML, string) {
 		free.Points = append(free.Points, [2]float64{x(rec), float64(sm.DiskFree)})
 		dwr.Points = append(dwr.Points, [2]float64{x(rec), sm.DiskWriteBps / (1 << 20)})
 		drd.Points = append(drd.Points, [2]float64{x(rec), sm.DiskReadBps / (1 << 20)})
+		trashB.Points = append(trashB.Points, [2]float64{x(rec), float64(sm.TrashBytes)})
+		pinnedB.Points = append(pinnedB.Points, [2]float64{x(rec), float64(sm.CachePinned)})
+		haveTrash = haveTrash || sm.TrashInodes > 0 || sm.TrashBytes > 0 || sm.CachePinned > 0
 		haveCPU = haveCPU || sm.CPUPct > 0 || sm.MachinePct > 0
 		haveRSS = haveRSS || sm.RSS > 0 || sm.MemAvailable > 0
 		havePressure = havePressure || sm.MemPressure > 0
@@ -369,6 +377,9 @@ func charts(s Summary) ([]template.HTML, string) {
 		template.HTML(chart.Line("Stored vs logical bytes (dedup)", "bytes", []chart.Series{stored, logical}, nil, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	if haveWAL {
 		out = append(out, template.HTML(chart.Line("Overlay WAL depth on the sampled node", "bytes", []chart.Series{wal, dirty, plan, flush}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
+	}
+	if haveTrash {
+		out = append(out, template.HTML(chart.Line("Trash and pinned cache (docs/06 §1, docs/13 §4)", "bytes", []chart.Series{trashB, pinnedB}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveMem {
 		out = append(out, template.HTML(chart.Line("Process memory on the sampled node", "bytes", []chart.Series{heap, sys}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG

@@ -39,7 +39,8 @@ var phases = []phase{
 	{"13 disks", phaseDisks},
 	{"14 diskless host", phaseDiskless},
 	{"15 s3 bucket", phaseBucket},
-	{"17 hot path", phaseHotPath}, // 16 is the web UI's (its branch)
+	{"16 web ui", phaseWeb},
+	{"17 hot path", phaseHotPath},
 	{"18 repair fan-out", phaseFanOut},
 }
 
@@ -231,6 +232,7 @@ func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
 		if err != nil {
 			return admin.Report{}, err
 		}
+		r.lastRepair = st
 		if st.Repaired+st.Partial+st.Migrated+st.Deferred+st.Rebalanced == 0 {
 			break
 		}
@@ -720,9 +722,16 @@ func phaseCorruption(ctx context.Context, r *Run) error {
 	got, err = rv.ReadAll(p)
 	ok, text := corruptionVerdict(corrupted, int(c.M), reader.Idx != gw.Idx, err, bytes.Equal(got, data))
 	r.checkAt("I-40 L-106", fmt.Sprintf("m+1=%d corrupt shards: error, never garbage", int(c.M)+1), ok, text, p, c.Hash, reader.Name)
+	// the file is lost; an operator deletes it and purges it from the trash, which is
+	// what takes its unrepairable chunk out of every later count (docs/06 §1)
 	if err := v.Remove(p); err != nil {
 		return err
 	}
+	purged, err := r.Env.PurgeTrash(ctx)
+	if err != nil {
+		return err
+	}
+	r.event("purge", fmt.Sprintf("%d inodes, the lost file among them", purged))
 	return nil
 }
 
@@ -881,7 +890,7 @@ func phaseMembership(ctx context.Context, r *Run) error {
 		if rep, err = r.repairUntilClean(ctx); err != nil {
 			return err
 		}
-		r.check("I-15 I-32 L-100 L-101", fmt.Sprintf("migration to %d+%d complete", pol[0], pol[1]), rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0, fmt.Sprintf("%d stale, %d degraded", rep.Volume.StalePolicy, rep.Volume.Degraded))
+		r.check("I-15 I-32 L-100 L-101", fmt.Sprintf("migration to %d+%d complete", pol[0], pol[1]), rep.Volume.StalePolicy == 0 && rep.Volume.Degraded == 0, fmt.Sprintf("%d stale, %d degraded (last pass %+v)", rep.Volume.StalePolicy, rep.Volume.Degraded, r.lastRepair))
 		bad, first := r.verifyModel(v, m)
 		r.checkAt("I-12 I-15 L-173", fmt.Sprintf("corpus exact under %d+%d", pol[0], pol[1]), bad == 0, first, first, "", gw.Name)
 	}
@@ -971,6 +980,17 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 		return err
 	}
 	r.event("remove", p)
+	// a delete is a trash (docs/06 §1): nothing is reclaimed until the entry is purged
+	if rep, _, err = r.anyStatus(ctx); err != nil {
+		return err
+	}
+	r.check("I-157 L-199", "the removed file waits in the trash, its bytes still stored", rep.Volume.TrashInodes > 0 && rep.Volume.StoredBytes == stored1, fmt.Sprintf("trash %d inodes, stored %d -> %d", rep.Volume.TrashInodes, stored1, rep.Volume.StoredBytes))
+	purged, err := r.Env.PurgeTrash(ctx)
+	if err != nil {
+		return err
+	}
+	r.event("purge", fmt.Sprintf("%d inodes", purged))
+	r.check("I-153 L-201", "purge empties the trash", purged > 0, fmt.Sprintf("%d purged", purged))
 	if err := r.Env.Wait(ctx, r.Profile.Grace+time.Second); err != nil {
 		return err
 	}
@@ -978,7 +998,7 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 	if err != nil {
 		return err
 	}
-	r.check("I-13 L-15 L-75 L-77", "gc collects the removed file's chunks", res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v (refused deletes are orphans for the sweep)", res))
+	r.check("I-13 L-201 L-75 L-77", "gc collects the purged file's chunks", res.Victims > 0 && res.Deleted > 0, fmt.Sprintf("%+v (refused deletes are orphans for the sweep)", res))
 	if rep, _, err = r.anyStatus(ctx); err != nil {
 		return err
 	}

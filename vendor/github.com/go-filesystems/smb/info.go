@@ -317,6 +317,15 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 		if len(in) < 1 {
 			return errorResponse(h, statusInvalidParameter), nil
 		}
+		if in[0] != 0 {
+			// the delete happens at CLOSE, whose reply carries no failure: a backend
+			// that may refuse it is asked now, where the client reads the status
+			if d, ok := of.share.fsys.(DeleteChecker); ok {
+				if err := d.CanDelete(of.path); err != nil {
+					return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+				}
+			}
+		}
 		of.deleteOnClose = in[0] != 0
 
 	case fileRenameInformation:

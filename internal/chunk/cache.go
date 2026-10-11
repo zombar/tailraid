@@ -32,6 +32,10 @@ type Cache struct {
 	lru  *list.List // front = most recently used
 	idx  map[[32]byte]*list.Element
 	used int64
+	// pinned entries stay in the LRU but eviction passes over them (docs/01 §Pins): the
+	// budget max bounds the unpinned bytes, so pinned bytes may exceed it
+	pinned     map[[32]byte]struct{}
+	pinnedUsed int64
 
 	memMax  int64
 	mem     *list.List // front = most recently used
@@ -68,6 +72,7 @@ func WithMemory(n int64) CacheOption { return func(c *Cache) { c.memMax = n } }
 func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts ...CacheOption) (*Cache, error) {
 	c := &Cache{
 		fsys: fsys, root: root, max: maxBytes, clk: clk, lru: list.New(), idx: map[[32]byte]*list.Element{},
+		pinned: map[[32]byte]struct{}{},
 		memMax: DefaultMemory, mem: list.New(), memIdx: map[[32]byte]*list.Element{},
 	}
 	for _, o := range opts {
@@ -118,20 +123,64 @@ func (c *Cache) path(h [32]byte) string {
 	return filepath.Join(c.dir(), hx[:2], hx)
 }
 
-// Used returns the bytes currently cached.
+// Used returns the bytes currently cached, pinned ones included.
 func (c *Cache) Used() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.used
 }
 
-// Has reports whether h is cached, without touching its LRU position (readahead asks
-// before deciding to prefetch).
+// Max is the budget for the unpinned bytes (cache.size).
+func (c *Cache) Max() int64 { return c.max }
+
+// Pinned returns the bytes held by pinned entries.
+func (c *Cache) Pinned() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pinnedUsed
+}
+
+// Has reports whether h is cached, without touching its LRU position (readahead and the
+// pins worker ask before deciding to fetch).
 func (c *Cache) Has(h [32]byte) bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	_, ok := c.idx[h]
-	c.mu.Unlock()
 	return ok
+}
+
+// Pin keeps h out of eviction while it stays pinned and reports whether the cache holds
+// it: false means the entry is not cached (never was, or was evicted meanwhile) and the
+// caller fetches it again. Pinning a pinned entry is a no-op.
+func (c *Cache) Pin(h [32]byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.idx[h]
+	if !ok {
+		return false
+	}
+	if _, p := c.pinned[h]; !p {
+		c.pinned[h] = struct{}{}
+		c.pinnedUsed += el.Value.(cacheEntry).size
+	}
+	return true
+}
+
+// Unpin returns h to the LRU: it is evicted like any other entry once the unpinned bytes
+// exceed the budget. Unpinning an unknown or unpinned hash is a no-op.
+func (c *Cache) Unpin(h [32]byte) {
+	c.mu.Lock()
+	if _, p := c.pinned[h]; !p {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.pinned, h)
+	if el, ok := c.idx[h]; ok {
+		c.pinnedUsed -= el.Value.(cacheEntry).size
+	}
+	victims := c.evictLocked()
+	c.mu.Unlock()
+	c.removeEvicted(victims)
 }
 
 // Get returns the chunk for h if cached and intact: from memory when hot, else from
@@ -271,19 +320,22 @@ func (c *Cache) Put(h [32]byte, data []byte) {
 	c.removeEvicted(victims)
 }
 
-// evictLocked untracks least-recently-used entries until the cache fits in max and
-// returns them; the caller removes their files after unlocking (removeEvicted), so a
-// slow disk never holds the lock.
+// evictLocked untracks least-recently-used unpinned entries until the unpinned bytes fit
+// in max and returns them; the caller removes their files after unlocking
+// (removeEvicted), so a slow disk never holds the lock. Pinned entries are passed over.
 func (c *Cache) evictLocked() []cacheEntry {
 	var victims []cacheEntry
-	for c.used > c.max && c.lru.Len() > 0 {
-		el := c.lru.Back()
+	for el := c.lru.Back(); el != nil && c.used-c.pinnedUsed > c.max; {
+		prev := el.Prev()
 		e := el.Value.(cacheEntry)
-		c.lru.Remove(el)
-		delete(c.idx, e.hash)
-		c.memDropLocked(e.hash)
-		c.used -= e.size
-		victims = append(victims, e)
+		if _, p := c.pinned[e.hash]; !p {
+			c.lru.Remove(el)
+			delete(c.idx, e.hash)
+			c.memDropLocked(e.hash)
+			c.used -= e.size
+			victims = append(victims, e)
+		}
+		el = prev
 	}
 	return victims
 }
@@ -309,7 +361,12 @@ func (c *Cache) drop(h [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if el, ok := c.idx[h]; ok {
-		c.used -= el.Value.(cacheEntry).size
+		size := el.Value.(cacheEntry).size
+		c.used -= size
+		if _, p := c.pinned[h]; p { // corrupt on disk: the pin worker fetches it again
+			delete(c.pinned, h)
+			c.pinnedUsed -= size
+		}
 		c.lru.Remove(el)
 		delete(c.idx, h)
 	}

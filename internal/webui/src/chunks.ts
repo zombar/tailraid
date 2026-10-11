@@ -1,4 +1,6 @@
-// The per-file integrity panel: paged chunk reports with a slot strip per chunk.
+// The per-file integrity panel: paged chunk reports with a slot strip per chunk. A page
+// shows a loading row the moment it is asked for, a failed page keeps the rows already
+// there and offers a retry, and the panel is built once per file view (docs/13 §7, I-161).
 
 import { h } from "./dom.ts";
 import { slotStrip } from "./chart.ts";
@@ -7,8 +9,16 @@ import { count } from "./fmt.ts";
 
 const PAGE = 64;
 
-export function render(path: string, expected?: number): HTMLElement {
-  const summary = h("summary", null, "Integrity" + (expected !== undefined ? ` (${count(expected)} ${expected === 1 ? "chunk" : "chunks"})` : ""));
+export interface Panel {
+  el: HTMLElement;
+  /** expect sets the chunk count in the summary once the file's size is known. */
+  expect(n: number): void;
+}
+
+export function render(path: string, expected?: number): Panel {
+  const title = h("span");
+  const summaryExtra = h("span", { class: "dim small" });
+  const summary = h("summary", null, title, summaryExtra);
   const body = h("div", { class: "body" });
   const panel = h("details", { class: "panel" }, summary, body);
   let loaded = 0;
@@ -18,7 +28,14 @@ export function render(path: string, expected?: number): HTMLElement {
   const rows = h("div");
   const more = h("button", { type: "button" }, "Load more");
   const caption = h("div", { class: "small dim" });
-  const summaryExtra = h("span", { class: "dim small" });
+  const loading = h("div", { class: "loading" });
+  const retry = h("button", { type: "button" }, "Retry");
+  const failure = h("div", { class: "error" });
+
+  const setTitle = (n?: number) => {
+    title.textContent = "Integrity" + (n !== undefined ? ` (${count(n)} ${n === 1 ? "chunk" : "chunks"})` : "");
+  };
+  setTitle(expected);
 
   const describe = () => {
     const parts: string[] = [];
@@ -37,9 +54,14 @@ export function render(path: string, expected?: number): HTMLElement {
     if (fetching) return;
     fetching = true;
     more.disabled = true;
+    failure.remove();
+    const known = total || expected;
+    loading.textContent = `loading ${known !== undefined ? Math.min(PAGE, Math.max(known - loaded, 0)) : PAGE} of ${known !== undefined ? count(known) : "?"}…`;
+    body.append(loading);
     try {
       const page = await chunks(path, loaded, PAGE);
       total = page.total;
+      if (expected === undefined) setTitle(total);
       page.chunks.forEach((c, i) => {
         rows.append(row(loaded + i, c));
         if (c.state === "committed") counts.committed++;
@@ -49,22 +71,32 @@ export function render(path: string, expected?: number): HTMLElement {
         if (c.policy_stale) counts.stale++;
       });
       loaded += page.chunks.length;
-      if (!summary.contains(summaryExtra)) summary.append(summaryExtra);
+      loading.remove();
       if (!body.contains(rows)) body.append(rows, caption, more);
       describe();
-      if (total === 0) body.append(h("div", { class: "empty" }, "no chunks (empty file)"));
+      if (total === 0 && !body.querySelector(".empty")) body.append(h("div", { class: "empty" }, "no chunks (empty file)"));
     } catch (e) {
-      body.append(h("div", { class: "error" }, "Could not load the chunk reports: " + (e instanceof Error ? e.message : String(e))));
+      loading.remove();
+      failure.textContent = "Could not load the chunk reports: " + (e instanceof Error ? e.message : String(e)) + " ";
+      failure.append(retry);
+      body.append(failure);
     } finally {
       fetching = false;
       more.disabled = false;
     }
   };
   more.addEventListener("click", () => void load());
+  retry.addEventListener("click", () => void load());
   panel.addEventListener("toggle", () => {
     if (panel.open && loaded === 0 && !fetching) void load();
   });
-  return panel;
+  return {
+    el: panel,
+    expect(n) {
+      expected = n;
+      setTitle(n);
+    },
+  };
 }
 
 function row(i: number, c: ChunkReport): HTMLElement {
@@ -73,5 +105,5 @@ function row(i: number, c: ChunkReport): HTMLElement {
   const hash = h("span", { title: c.hash }, c.hash.slice(0, 10));
   if (c.policy_stale) hash.append(" ", h("span", { class: "badge warn" }, "stale"));
   if (!c.found) hash.append(" ", h("span", { class: "badge bad" }, c.state));
-  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots));
+  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots ?? []));
 }
