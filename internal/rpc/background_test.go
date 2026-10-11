@@ -41,9 +41,17 @@ func TestServer_BackgroundShare(t *testing.T) {
 	c := e.client()
 	a := stalledPut(t, e, "bg-a", true)
 	b := stalledPut(t, e, "bg-b", true)
+	// the two stalled PUTs hold the whole background share before the third is sent
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for deadline := time.After(10 * time.Second); len(e.srv.bgPutSem) < 2; {
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatalf("the stalled PUTs hold %d background slots, want 2", len(e.srv.bgPutSem))
+		}
+	}
 	p := bytes.Repeat([]byte{7}, 100)
-	// the two stalled PUTs hold the background share once a third background PUT no
-	// longer lands within the server's queueing time
 	queued := make(chan error, 1)
 	go func() { queued <- c.Put(chunk.Background(ctx), 1, key(p, 1), p) }()
 	select {

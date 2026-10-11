@@ -73,7 +73,14 @@ func phaseFanOut(ctx context.Context, r *Run) error {
 		return nil
 	}
 	u.add("set-redundancy back", restore)
-	r.event("set-redundancy", fmt.Sprintf("%d+%d: every chunk stale", k1, m1))
+	// the leader's own pass may start on the backlog before the one asked for here and
+	// hold the scan lock until it ends; the stale count before and after shows how much
+	// each did
+	staleBefore := -1
+	if st, _, err := r.anyStatus(ctx); err == nil {
+		staleBefore = st.Volume.StalePolicy
+	}
+	r.event("set-redundancy", fmt.Sprintf("%d+%d: %d chunks stale", k1, m1, staleBefore))
 
 	type passResult struct {
 		st   repair.Stats
@@ -154,8 +161,12 @@ func phaseFanOut(ctx context.Context, r *Run) error {
 		return nil
 	}
 	rate := float64(res.st.Scanned) / max(res.took.Seconds(), 1e-9)
-	r.event("repair pass", fmt.Sprintf("%d chunks scanned, %d migrated in %s (%.1f chunks/s), %d in flight at peak over %d samples",
-		res.st.Scanned, res.st.Migrated, res.took.Round(time.Millisecond), rate, pk, s))
+	staleAfter := -1
+	if st, _, err := r.anyStatus(ctx); err == nil {
+		staleAfter = st.Volume.StalePolicy
+	}
+	r.event("repair pass", fmt.Sprintf("%d chunks scanned, %d migrated (%d deferred, %d partial, %d errors) in %s (%.1f chunks/s), %d in flight at peak over %d samples; %d stale before, %d after (the leader's own pass may have taken part)",
+		res.st.Scanned, res.st.Migrated, res.st.Deferred, res.st.Partial, res.st.Errors, res.took.Round(time.Millisecond), rate, pk, s, staleBefore, staleAfter))
 	const bound, overlap, invisible = "repairs in flight within repair.workers", "the pass ran chunks concurrently", "a cold read during the pass keeps a third of its idle throughput"
 	if s == 0 {
 		r.checkSkipped("I-174", bound, "the pass ended before a status sample saw it running")
@@ -167,6 +178,10 @@ func phaseFanOut(ctx context.Context, r *Run) error {
 	switch {
 	case !running:
 		r.checkSkipped("I-175", invisible, "the pass ended before the read could start")
+	case len(gws) == 1:
+		// the same gateway read the file a moment ago: its own cache serves the second
+		// read, so the figure says nothing about the pass (as phase 17's readahead case)
+		r.checkSkipped("I-175", invisible, fmt.Sprintf("one gateway: the client's own cache served the read it had just done (%.1f MiB/s against %.1f MiB/s idle)", during, idle))
 	case readOK:
 		r.check("I-175", invisible, during >= idle/3, fmt.Sprintf("%.1f MiB/s during the pass, %.1f MiB/s idle, via %s", during, idle, reader.Name))
 	}
