@@ -69,8 +69,9 @@ browser polls, and none on a follower.
  "targets":[{"name":"jockey/1","host":"jockey","slots":15020,"cap":500000000000,"live":true,"active":true}]}}
 ```
 
-`term` is the Raft term the writer held; `by` its name; `live` maps every device member to
-0 (dead), 1 (live) or 2 (suspect, 05 §6); `repair_moved` is the running pass's bytes moved
+`term` is the Raft term the writer held; `by` its name; `live` maps every device the
+volume depends on, a voter or a disk's host, to 0 (dead), 1 (live) or 2 (suspect, 05 §6):
+a device that only mounts (a laptop, a phone) comes and goes and gets no lane; `repair_moved` is the running pass's bytes moved
 as a rate; `targets` is what the disk-spread chart needs (09 §6). Two leaders can write
 rows for one instant around an election; the reader keeps the row with the higher term
 (§3), so a handover is one continuous series with no leader logic anywhere else.
@@ -252,7 +253,8 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 - **I-191** — Every node samples its node series every `stats.every` from its vitals,
   gateway and process snapshots without walking the FSM; the leader alone samples the
   cluster series, from the volume counters, the pass under way, the prober, the member
-  table and a chunk walk it runs at most once a minute, stamped with its Raft term; a
+  table (the liveness of every voter and every disk's host, never of a device that only
+  mounts) and a chunk walk it runs at most once a minute, stamped with its Raft term; a
   cumulative counter is stored as a rate against the previous sample and the first sample
   after a start carries no rate; a vital absent from the report is absent from the row,
   never zero.

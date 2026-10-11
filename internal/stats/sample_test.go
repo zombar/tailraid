@@ -69,8 +69,10 @@ func TestSampler_NodeRow_RatesAndAbsence(t *testing.T) {
 	}
 }
 
-// The cluster row carries the volume counters, the last walk's backlog, every device's
-// liveness and every disk's slots with its host, the running pass's rate, the term.
+// The cluster row carries the volume counters, the last walk's backlog, the liveness of
+// every device the volume depends on (a voter or a disk's host; a device that only mounts
+// is left out, so a laptop's comings and goings never show), every disk's slots with its
+// host, the running pass's rate, the term.
 // Invariant: I-191
 func TestSampler_ClusterRow(t *testing.T) {
 	t0 := time.Unix(1760184000, 0)
@@ -78,6 +80,8 @@ func TestSampler_ClusterRow(t *testing.T) {
 		{Idx: 1, Name: "jockey", Kind: meta.KindDevice, State: meta.Active},
 		{Idx: 2, Name: "honker", Kind: meta.KindDevice, State: meta.Active},
 		{Idx: 3, Name: "gone", Kind: meta.KindDevice, State: meta.Removed},
+		{Idx: 7, Name: "laptop", Kind: meta.KindDevice, State: meta.Active},             // mounts only: no lane
+		{Idx: 8, Name: "cloud", Kind: meta.KindDevice, State: meta.Active, Voter: true}, // diskless voter: a lane
 		{Idx: 4, Name: "jockey/1", Kind: meta.KindDisk, Host: 1, State: meta.Active, Capacity: 5e11},
 		{Idx: 5, Name: "honker/1", Kind: meta.KindDisk, Host: 2, State: meta.Draining, Capacity: 1e12},
 		{Idx: 6, Name: "gone/1", Kind: meta.KindDisk, Host: 3, State: meta.Removed, Capacity: 1},
@@ -108,8 +112,11 @@ func TestSampler_ClusterRow(t *testing.T) {
 	if c.RepairMoved != float64(5<<20)/10 {
 		t.Errorf("repair_moved %v", c.RepairMoved)
 	}
-	if len(c.Live) != 2 || c.Live["jockey"] != 1 || c.Live["honker"] != 2 {
+	if len(c.Live) != 3 || c.Live["jockey"] != 1 || c.Live["honker"] != 2 || c.Live["cloud"] != 0 {
 		t.Errorf("live %v", c.Live)
+	}
+	if _, ok := c.Live["laptop"]; ok {
+		t.Errorf("a device that only mounts has a lane: %v", c.Live)
 	}
 	if len(c.Targets) != 2 || c.Targets[0].Name != "jockey/1" || c.Targets[0].Host != "jockey" || c.Targets[0].Slots != 15020 || !c.Targets[0].Active || !c.Targets[0].Live ||
 		c.Targets[1].Name != "honker/1" || c.Targets[1].Active || c.Targets[1].Capacity != 1e12 {

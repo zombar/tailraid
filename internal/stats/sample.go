@@ -102,7 +102,9 @@ type View struct {
 }
 
 // ClusterRow builds the leader's row from its view: the volume counters, the backlog of
-// the last walk, every device's liveness and every active target's slots.
+// the last walk, the liveness of every device the volume depends on (a voter or a disk's
+// host: a device that only mounts comes and goes and is nobody's concern, docs/17 §1)
+// and every active target's slots.
 func ClusterRow(v View) Row {
 	c := &Cluster{
 		Degraded: float64(v.Health.Degraded), Pending: float64(v.Health.RepairPending), Stale: float64(v.Health.StalePolicy), Unreadable: float64(v.Health.Unreadable),
@@ -115,12 +117,18 @@ func ClusterRow(v View) Row {
 			c.RepairMoved = float64(v.Moved-v.PrevMove) / dt
 		}
 	}
+	holds := map[meta.NodeIdx]bool{} // devices with a disk that is not removed
+	for i := range v.Members {
+		if n := &v.Members[i]; n.Kind == meta.KindDisk && n.State != meta.Removed {
+			holds[n.Host] = true
+		}
+	}
 	hosts := map[meta.NodeIdx]string{}
 	for i := range v.Members {
 		n := &v.Members[i]
 		if n.Kind == meta.KindDevice && n.State != meta.Removed {
 			hosts[n.Idx] = n.Name
-			if v.Live != nil {
+			if v.Live != nil && (n.Voter || holds[n.Idx]) {
 				c.Live[n.Name] = v.Live(n.Idx)
 			}
 		}
