@@ -326,5 +326,5 @@ state to patch.
 | I-42 | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | I-43 | `TestFSM_DeterministicAcrossReplicas` |
 | I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
-| I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
+| I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable`, `TestRepair_Migration_WithinCap_VoterHostDisks` |
 | I-157 | `TestStub_I_157` (planned: TestVFS_Remove_EphemeralIsImmediate, TestVFS_RenameOver_TrashesReplaced, TestVFS_RenameOver_EphemeralIsUnlinked, TestGC_PurgeTrash_RetentionBoundary, TestGC_PurgeTrash_DrainsInBatches, TestGC_PurgeThenCollect, TestConfig_TrashRetention) |

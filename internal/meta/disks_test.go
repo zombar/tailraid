@@ -482,3 +482,86 @@ type liveFunc func(NodeIdx) bool
 
 func (f liveFunc) IsLive(n NodeIdx) bool       { return f(n) }
 func (liveFunc) DeadFor(NodeIdx) time.Duration { return 0 }
+
+// disksOfHost lists the disk targets of host in nodes, in index order.
+func disksOfHost(nodes []Node, host NodeIdx) []NodeIdx {
+	var out []NodeIdx
+	for i := range nodes {
+		if nodes[i].Kind == KindDisk && nodes[i].Host == host {
+			out = append(out, nodes[i].Idx)
+		}
+	}
+	return out
+}
+
+func isVoterTarget(cs []Candidate, n NodeIdx) bool {
+	for _, c := range cs {
+		if c.Idx == n {
+			return c.Voter
+		}
+	}
+	return false
+}
+
+// Voters that span too few hosts: four voter disks on two hosts cannot hold four data
+// slots under a cap of two, so the fourth data slot goes to a non-voter under the cap,
+// never to the voter host's third disk; a refill of that slot does the same. With enough
+// voter hosts every data slot stays on a voter.
+// Invariant: I-173, I-87, I-77
+func TestFillPlacement_CapBeforeVoters(t *testing.T) {
+	r := testseed.Seed(t)
+	// host 1: voter A, three disks; host 5: voter B, one disk; hosts 7 and 9: non-voters,
+	// one disk each; plus an S3 node, its own domain
+	nodes := topology([]int{3, 1, 1, 1}, []bool{true, true, false, false}, 0)
+	s3 := NodeIdx(len(nodes) + 1)
+	nodes = append(nodes, Node{Idx: s3, ID: "s3", Kind: KindS3, State: Active, Capacity: 2})
+	hostA, hostB := NodeIdx(1), NodeIdx(5)
+	a, b := disksOfHost(nodes, hostA), disksOfHost(nodes, hostB)
+	n1, n2 := disksOfHost(nodes, 7)[0], disksOfHost(nodes, 9)[0]
+	cs := Candidates(nodes, allLive)
+	dom := DomainsOf(nodes)
+	const k, m = 4, 2
+	for i := range uint64(2000) {
+		h := hashN(i)
+		p := PlaceKM(h, cs, k, m)
+		distinctNonZero(t, p, "4+2")
+		voters := 0
+		for j, n := range p {
+			if n == 0 {
+				t.Fatalf("hash %d: slot %d unfilled: %v", i, j, p)
+			}
+			if j < k && isVoterTarget(cs, n) {
+				voters++
+			}
+		}
+		for host, cnt := range domainCounts(t, p, nodes) {
+			if cnt > 2 {
+				t.Fatalf("hash %d: host %d holds %d > cap 2: %v", i, host, cnt, p)
+			}
+		}
+		if voters != 3 {
+			t.Fatalf("hash %d: %d data slots on voters, want 3 (two on A, one on B): %v", i, voters, p)
+		}
+		if got := PlaceKM(h, shuffled(r, cs), k, m); !equalIdx(got, p) {
+			t.Fatalf("hash %d: shuffled candidates placed %v, want %v", i, got, p)
+		}
+		// the refill of a freed data slot: A's third disk and the S3 node are the free
+		// candidates, A is at the cap, so the slot goes to the S3 node
+		place := []NodeIdx{a[0], b[0], a[1], 0, n1, n2}
+		FillPlacement(h, place, ExcludeIdx(cs, place), k, dom)
+		if place[3] != s3 {
+			t.Fatalf("hash %d: freed data slot refilled with %d, want the S3 node %d: %v", i, place[3], s3, place)
+		}
+	}
+	// control: four voter hosts hold every data slot (I-77), cap 1 with six domains
+	nodes = topology([]int{1, 1, 1, 1, 1, 1}, []bool{true, true, true, true, false, false}, 0)
+	cs = Candidates(nodes, allLive)
+	for i := range uint64(500) {
+		p := PlaceKM(hashN(i), cs, k, m)
+		for j := range k {
+			if p[j] == 0 || !isVoterTarget(cs, p[j]) {
+				t.Fatalf("hash %d: data slot %d on non-voter %d with four voter hosts: %v", i, j, p[j], p)
+			}
+		}
+	}
+}
