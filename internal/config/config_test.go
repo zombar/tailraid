@@ -176,3 +176,34 @@ func TestConfig_RepairWorkersAndRate(t *testing.T) {
 		}
 	}
 }
+
+// A file this build writes names repair.workers and repair.rate only when they are set:
+// a release from before the keys reads it strictly and must still start after a
+// rollback (I-61); set, they round-trip.
+// Invariant: I-61, I-126
+func TestConfig_NewRepairKeysWrittenOnlyWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	c := Default()
+	c.Node.DataDir = filepath.Join(dir, "data")
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"workers", "rate"} {
+		if strings.Contains(string(b), key+":") {
+			t.Fatalf("an unset %s was written:\n%s", key, b)
+		}
+	}
+	c.Repair.Workers, c.Repair.Rate = 8, "20M"
+	if err := Save(p, c); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || got.Repair.Workers != 8 || got.Repair.Rate != "20M" {
+		t.Fatalf("set keys did not round-trip: %+v %v", got.Repair, err)
+	}
+}

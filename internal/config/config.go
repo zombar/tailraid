@@ -54,8 +54,10 @@ type Config struct {
 		Grace     string `yaml:"grace"`      // GC grace and shard DELETE fence age (default 10m)
 		FillAfter string `yaml:"fill_after"` // dead-node hold-down before re-placing its slots (default 10m)
 		S3Scrub   string `yaml:"s3_scrub"`   // bucket bytes the scrub may fetch per day to verify objects (default 1G; "0": HEAD only)
-		Workers   int    `yaml:"workers"`    // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
-		Rate      string `yaml:"rate"`       // shard bytes per second repair may move (default 50M; "0": no limit)
+		// written only when set, so a release from before these keys can still read a
+		// file this build wrote (a rollback after update, I-61)
+		Workers int    `yaml:"workers,omitempty"` // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
+		Rate    string `yaml:"rate,omitempty"`    // shard bytes per second repair may move (default 50M; "0": no limit)
 	} `yaml:"repair"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
