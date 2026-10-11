@@ -83,6 +83,7 @@ type Probe struct {
 	Version   string
 	Codec     uint8     // meta.CodecVersion the node reported (0 from a binary that predates the field)
 	Dev       bool      // /dev/* enabled on that node (docs/08)
+	Web       uint16    // the node's browser UI port, 0 when off (docs/13 §1)
 	FS        string    // filesystem holding the target's store (docs/14 §8)
 	DeadSince time.Time // zero while live
 	Down      bool      // MemberDown already emitted
@@ -278,7 +279,7 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 	if ok {
 		delete(p.suspect, idx) // a good probe clears the mark (I-170)
 		wasDead := !pr.DeadSince.IsZero()
-		pr.LastOK, pr.RTT, pr.Applied, pr.Version, pr.Dev, pr.Codec = now, rtt, h.Applied, h.Version, h.Dev, h.Codec
+		pr.LastOK, pr.RTT, pr.Applied, pr.Version, pr.Dev, pr.Codec, pr.Web = now, rtt, h.Applied, h.Version, h.Dev, h.Codec, h.Web
 		pr.Free, pr.FS = 0, ""
 		if disk != nil {
 			pr.Free, pr.FS = disk.Free, disk.FS

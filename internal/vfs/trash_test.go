@@ -106,12 +106,12 @@ func TestVFS_Remove_TrashKeepsWAL_FlushCommits(t *testing.T) {
 
 // An ephemeral name is unlinked, never trashed: its WAL goes with it.
 //
-// Invariant: I-157
+// Invariant: I-157, I-195
 // Lifecycle: L-208
 func TestVFS_Remove_EphemeralIsImmediate(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()
-	for _, name := range []string{"/d/._photo.jpg", "/d/.DS_Store", "/d/.photo.jpg.tailraid-upload", "/.tailraid/thumbs/7-1-2.jpg"} {
+	for _, name := range []string{"/d/._photo.jpg", "/d/.DS_Store", "/d/.photo.jpg.tailraid-upload", "/.tailraid/thumbs/7-1-2.jpg", "/.tailraid/stats/10s/pike/2026-10-11T14-pike.jsonl.gz"} {
 		writeFile(t, fs, name, []byte("ephemeral"))
 		ino := f.InodeOf(fs, name)
 		must(t, fs.Remove(name))
@@ -126,8 +126,9 @@ func TestVFS_Remove_EphemeralIsImmediate(t *testing.T) {
 		t.Fatalf("trash: %+v", f.FSM.Trash())
 	}
 	// the reserved folder itself goes the same way
-	must(t, fs.Remove("/.tailraid/thumbs"))
-	must(t, fs.Remove("/.tailraid"))
+	for _, dir := range []string{"/.tailraid/thumbs", "/.tailraid/stats/10s/pike", "/.tailraid/stats/10s", "/.tailraid/stats", "/.tailraid"} {
+		must(t, fs.Remove(dir))
+	}
 	if len(f.FSM.Trash()) != 0 {
 		t.Fatal("the reserved folder landed in the trash")
 	}

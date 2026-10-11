@@ -93,7 +93,9 @@ type Options struct {
 	Auth       Authorizer
 	Members    func() []meta.Node
 	JoinToken  func() string
-	Status     func() any // GET /v1/status body (admin report)
+	Status     func() any            // GET /v1/status body (admin report)
+	Stats      func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
+	Web        uint16                // the browser UI's port for /health (0 when off)
 	BadSlot    func(key chunk.ShardKey, node meta.NodeIdx)
 	Dev        http.Handler           // /dev/* (docs/08): nil unless dev.enabled
 	Blocked    func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
@@ -180,6 +182,7 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
 	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
+	mux.Handle("GET /v1/stats", s.clusterCheck(s.member(http.HandlerFunc(s.stats))))
 	mux.Handle("POST /v1/join", http.HandlerFunc(s.join)) // token + claimed identity, not membership
 	if o.Dev != nil {
 		mux.Handle("/dev/", s.clusterCheck(s.member(o.Dev)))
@@ -304,7 +307,7 @@ func (s *Server) member(next http.Handler) http.Handler {
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	h := Health{
 		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion, Ready: s.o.Applier.Ready(),
-		Leader: s.o.Applier.IsLeader(),
+		Leader: s.o.Applier.IsLeader(), Web: s.o.Web,
 	}
 	if s.o.DiskHealth != nil {
 		h.Disks = s.o.DiskHealth()
@@ -668,6 +671,19 @@ func (s *Server) badSlot(w http.ResponseWriter, r *http.Request) {
 		s.o.BadSlot(chunk.ShardKey(b.Key), b.Node)
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// stats answers this node's unsealed stats rows newer than ?since= (docs/17 §3): at most
+// stats.MaxLive of its own rows, never another member's (I-199). Without a sampler the
+// body is an empty list.
+func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	var body any = []struct{}{}
+	if s.o.Stats != nil {
+		body = s.o.Stats(since)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {

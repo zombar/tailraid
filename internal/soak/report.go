@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zombar/tailraid/internal/chart"
 )
 
 // Render writes the self-contained HTML report for a run (docs/09 §6).
@@ -210,15 +212,15 @@ func placementChart(rec *Record) string {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	data, parity, expected := series{name: "data slots"}, series{name: "parity slots"}, series{name: "capacity share", color: "#94a3b8"}
+	data, parity, expected := chart.Series{Name: "data slots"}, chart.Series{Name: "parity slots"}, chart.Series{Name: "capacity share", Class: "chart-off"}
 	for _, n := range names {
 		var d, p, e float64
 		_, _ = fmt.Sscanf(rec.Attrs[n], "%f/%f/%f", &d, &p, &e)
-		data.points = append(data.points, [2]float64{0, d})
-		parity.points = append(parity.points, [2]float64{0, p})
-		expected.points = append(expected.points, [2]float64{0, e})
+		data.Points = append(data.Points, [2]float64{0, d})
+		parity.Points = append(parity.Points, [2]float64{0, p})
+		expected.Points = append(expected.Points, [2]float64{0, e})
 	}
-	return barChart("Large file: shard slots per node ("+rec.Text+")", names, []series{data, parity, expected})
+	return chart.Bars("Large file: shard slots per node ("+rec.Text+")", names, []chart.Series{data, parity, expected})
 }
 
 func humanBytes(b float64) string {
@@ -236,8 +238,8 @@ func humanBytes(b float64) string {
 // charts derives every figure from the sample, event and phase records.
 func charts(s Summary) ([]template.HTML, string) {
 	var samples []Record
-	var marks []marker
-	var bands []band
+	var marks []chart.Marker
+	var bands []chart.Band
 	var placement *Record // the large file's per-node slot counts (phase 12)
 	x := func(rec *Record) float64 { return rec.T.Sub(s.Started).Seconds() }
 	for i := range s.Records {
@@ -253,25 +255,25 @@ func charts(s Summary) ([]template.HTML, string) {
 				continue
 			}
 			if rec.Name != "note" && rec.Name != "baseline written" {
-				marks = append(marks, marker{x: x(rec), label: strings.TrimSpace(rec.Name + " " + rec.Text)})
+				marks = append(marks, chart.Marker{X: x(rec), Label: strings.TrimSpace(rec.Name + " " + rec.Text)})
 			}
 		case "phase":
 			if rec.Text == "start" {
 				if n := len(bands); n > 0 {
-					bands[n-1].x1 = x(rec)
+					bands[n-1].X1 = x(rec)
 				}
-				bands = append(bands, band{x0: x(rec), label: rec.Name})
+				bands = append(bands, chart.Band{X0: x(rec), Label: rec.Name})
 			}
 		}
 	}
 	if n := len(bands); n > 0 {
-		bands[n-1].x1 = s.Duration.Seconds()
+		bands[n-1].X1 = s.Duration.Seconds()
 	}
 	var out []template.HTML
 	// throughput: bytes per second between consecutive samples; the extra samples at
 	// phase boundaries sit too close to a periodic one to carry a rate, so intervals much
 	// shorter than the typical one are skipped
-	wr, rd := series{name: "write MiB/s"}, series{name: "read MiB/s"}
+	wr, rd := chart.Series{Name: "write MiB/s"}, chart.Series{Name: "read MiB/s"}
 	var peakW, peakR float64
 	minDT := medianInterval(samples) / 4
 	for i := 1; i < len(samples); i++ {
@@ -281,90 +283,94 @@ func charts(s Summary) ([]template.HTML, string) {
 		}
 		w := float64(samples[i].S.BytesWritten-samples[i-1].S.BytesWritten) / dt / (1 << 20)
 		r := float64(samples[i].S.BytesRead-samples[i-1].S.BytesRead) / dt / (1 << 20)
-		wr.points = append(wr.points, [2]float64{x(&samples[i]), w})
-		rd.points = append(rd.points, [2]float64{x(&samples[i]), r})
+		wr.Points = append(wr.Points, [2]float64{x(&samples[i]), w})
+		rd.Points = append(rd.Points, [2]float64{x(&samples[i]), r})
 		peakW, peakR = maxf(peakW, w), maxf(peakR, r)
 	}
-	out = append(out, template.HTML(lineChart("Throughput (phase bands, event markers)", "MiB/s", []series{wr, rd}, marks, bands))) //nolint:gosec // generated SVG
+	out = append(out, template.HTML(chart.Line("Throughput (phase bands, event markers)", "MiB/s", []chart.Series{wr, rd}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	// repair backlog, storage, slots, liveness, WAL depth
-	deg, pend, stale, unread := series{name: "degraded"}, series{name: "repair pending"}, series{name: "stale policy"}, series{name: "unreadable"}
-	stored, logical := series{name: "stored bytes"}, series{name: "logical bytes"}
-	wal, dirty := series{name: "overlay WAL bytes"}, series{name: "dirty bytes"}
-	plan, flush := series{name: "plan bytes"}, series{name: "flush buffers"}
-	heap, sys := series{name: "heap in use"}, series{name: "sys"}
+	deg, pend, stale, unread := chart.Series{Name: "degraded"}, chart.Series{Name: "repair pending"}, chart.Series{Name: "stale policy"}, chart.Series{Name: "unreadable"}
+	stored, logical := chart.Series{Name: "stored bytes"}, chart.Series{Name: "logical bytes"}
+	wal, dirty := chart.Series{Name: "overlay WAL bytes"}, chart.Series{Name: "dirty bytes"}
+	plan, flush := chart.Series{Name: "plan bytes"}, chart.Series{Name: "flush buffers"}
+	heap, sys := chart.Series{Name: "heap in use"}, chart.Series{Name: "sys"}
 	haveMem := false
-	cpu, mcpu, load := series{name: "process % of one CPU"}, series{name: "machine % busy"}, series{name: "load (1 min)"}
-	rss, avail := series{name: "resident set"}, series{name: "memory available"}
-	pressure := series{name: "memory pressure (PSI some, avg10 %)"}
-	free := series{name: "data disk free"}
-	dwr, drd := series{name: "disk write MiB/s"}, series{name: "disk read MiB/s"}
-	trashB, pinnedB := series{name: "trash bytes"}, series{name: "pinned cache bytes"}
+	cpu, mcpu, load := chart.Series{Name: "process % of one CPU"}, chart.Series{Name: "machine % busy"}, chart.Series{Name: "load (1 min)"}
+	rss, avail := chart.Series{Name: "resident set"}, chart.Series{Name: "memory available"}
+	pressure := chart.Series{Name: "memory pressure (PSI some, avg10 %)"}
+	free := chart.Series{Name: "data disk free"}
+	dwr, drd := chart.Series{Name: "disk write MiB/s"}, chart.Series{Name: "disk read MiB/s"}
+	nrx, ntx := chart.Series{Name: "rx MiB/s (every interface)"}, chart.Series{Name: "tx MiB/s (every interface)"}
+	trx, ttx := chart.Series{Name: "tailnet rx MiB/s"}, chart.Series{Name: "tailnet tx MiB/s"}
+	trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
 	haveTrash := false
-	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO := false, false, false, false, false
-	nodeSeries := map[string]*series{}
+	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO, haveNet := false, false, false, false, false, false
+	nodeSeries := map[string]*chart.Series{}
 	var nodeNames []string
-	liveCells, liveColors := map[string][][2]float64{}, map[string][]string{}
-	var cells [][2]float64
-	var colors []string
+	liveCells := map[string][]chart.Cell{}
+	var cells []chart.Cell
 	haveWAL := false
 	for i := range samples {
 		rec := &samples[i]
 		sm := rec.S
-		deg.points = append(deg.points, [2]float64{x(rec), float64(sm.Degraded)})
-		pend.points = append(pend.points, [2]float64{x(rec), float64(sm.RepairPending)})
-		stale.points = append(stale.points, [2]float64{x(rec), float64(sm.StalePolicy)})
-		unread.points = append(unread.points, [2]float64{x(rec), float64(sm.Unreadable)})
-		stored.points = append(stored.points, [2]float64{x(rec), float64(sm.StoredBytes)})
-		logical.points = append(logical.points, [2]float64{x(rec), float64(sm.LogicalBytes)})
-		wal.points = append(wal.points, [2]float64{x(rec), float64(sm.WALBytes)})
-		dirty.points = append(dirty.points, [2]float64{x(rec), float64(sm.DirtyBytes)})
-		plan.points = append(plan.points, [2]float64{x(rec), float64(sm.PlanBytes)})
-		flush.points = append(flush.points, [2]float64{x(rec), float64(sm.FlushBytes)})
-		heap.points = append(heap.points, [2]float64{x(rec), float64(sm.HeapInuse)})
-		sys.points = append(sys.points, [2]float64{x(rec), float64(sm.Sys)})
+		deg.Points = append(deg.Points, [2]float64{x(rec), float64(sm.Degraded)})
+		pend.Points = append(pend.Points, [2]float64{x(rec), float64(sm.RepairPending)})
+		stale.Points = append(stale.Points, [2]float64{x(rec), float64(sm.StalePolicy)})
+		unread.Points = append(unread.Points, [2]float64{x(rec), float64(sm.Unreadable)})
+		stored.Points = append(stored.Points, [2]float64{x(rec), float64(sm.StoredBytes)})
+		logical.Points = append(logical.Points, [2]float64{x(rec), float64(sm.LogicalBytes)})
+		wal.Points = append(wal.Points, [2]float64{x(rec), float64(sm.WALBytes)})
+		dirty.Points = append(dirty.Points, [2]float64{x(rec), float64(sm.DirtyBytes)})
+		plan.Points = append(plan.Points, [2]float64{x(rec), float64(sm.PlanBytes)})
+		flush.Points = append(flush.Points, [2]float64{x(rec), float64(sm.FlushBytes)})
+		heap.Points = append(heap.Points, [2]float64{x(rec), float64(sm.HeapInuse)})
+		sys.Points = append(sys.Points, [2]float64{x(rec), float64(sm.Sys)})
 		haveWAL = haveWAL || sm.WALBytes > 0 || sm.DirtyBytes > 0
 		haveMem = haveMem || sm.HeapInuse > 0
-		cpu.points = append(cpu.points, [2]float64{x(rec), sm.CPUPct})
-		mcpu.points = append(mcpu.points, [2]float64{x(rec), sm.MachinePct})
-		load.points = append(load.points, [2]float64{x(rec), sm.Load1})
-		rss.points = append(rss.points, [2]float64{x(rec), float64(sm.RSS)})
-		avail.points = append(avail.points, [2]float64{x(rec), float64(sm.MemAvailable)})
-		pressure.points = append(pressure.points, [2]float64{x(rec), sm.MemPressure})
-		free.points = append(free.points, [2]float64{x(rec), float64(sm.DiskFree)})
-		dwr.points = append(dwr.points, [2]float64{x(rec), sm.DiskWriteBps / (1 << 20)})
-		drd.points = append(drd.points, [2]float64{x(rec), sm.DiskReadBps / (1 << 20)})
-		trashB.points = append(trashB.points, [2]float64{x(rec), float64(sm.TrashBytes)})
-		pinnedB.points = append(pinnedB.points, [2]float64{x(rec), float64(sm.CachePinned)})
+		cpu.Points = append(cpu.Points, [2]float64{x(rec), sm.CPUPct})
+		mcpu.Points = append(mcpu.Points, [2]float64{x(rec), sm.MachinePct})
+		load.Points = append(load.Points, [2]float64{x(rec), sm.Load1})
+		rss.Points = append(rss.Points, [2]float64{x(rec), float64(sm.RSS)})
+		avail.Points = append(avail.Points, [2]float64{x(rec), float64(sm.MemAvailable)})
+		pressure.Points = append(pressure.Points, [2]float64{x(rec), sm.MemPressure})
+		free.Points = append(free.Points, [2]float64{x(rec), float64(sm.DiskFree)})
+		dwr.Points = append(dwr.Points, [2]float64{x(rec), sm.DiskWriteBps / (1 << 20)})
+		drd.Points = append(drd.Points, [2]float64{x(rec), sm.DiskReadBps / (1 << 20)})
+		trashB.Points = append(trashB.Points, [2]float64{x(rec), float64(sm.TrashBytes)})
+		pinnedB.Points = append(pinnedB.Points, [2]float64{x(rec), float64(sm.CachePinned)})
 		haveTrash = haveTrash || sm.TrashInodes > 0 || sm.TrashBytes > 0 || sm.CachePinned > 0
 		haveCPU = haveCPU || sm.CPUPct > 0 || sm.MachinePct > 0
 		haveRSS = haveRSS || sm.RSS > 0 || sm.MemAvailable > 0
 		havePressure = havePressure || sm.MemPressure > 0
 		haveDisk = haveDisk || sm.DiskFree > 0
 		haveDiskIO = haveDiskIO || sm.DiskWriteBps > 0 || sm.DiskReadBps > 0
+		nrx.Points = append(nrx.Points, [2]float64{x(rec), sm.NetRxBps / (1 << 20)})
+		ntx.Points = append(ntx.Points, [2]float64{x(rec), sm.NetTxBps / (1 << 20)})
+		trx.Points = append(trx.Points, [2]float64{x(rec), sm.TailnetRxBps / (1 << 20)})
+		ttx.Points = append(ttx.Points, [2]float64{x(rec), sm.TailnetTxBps / (1 << 20)})
+		haveNet = haveNet || sm.NetRxBps > 0 || sm.NetTxBps > 0 || sm.TailnetRxBps > 0 || sm.TailnetTxBps > 0
 		for name, slots := range sm.Slots {
 			ns, ok := nodeSeries[name]
 			if !ok {
-				ns = &series{name: name + " slots"}
+				ns = &chart.Series{Name: name + " slots"}
 				nodeSeries[name] = ns
 				nodeNames = append(nodeNames, name)
 			}
-			ns.points = append(ns.points, [2]float64{x(rec), float64(slots)})
+			ns.Points = append(ns.Points, [2]float64{x(rec), float64(slots)})
 		}
 		for name, live := range sm.LiveNodes {
-			liveCells[name] = append(liveCells[name], [2]float64{x(rec), 0})
-			c := "#16a34a"
+			c := chart.OK
 			if !live {
-				c = "#dc2626"
+				c = chart.Bad
 			}
-			liveColors[name] = append(liveColors[name], c)
+			liveCells[name] = append(liveCells[name], chart.Cell{X: x(rec), Status: c})
 		}
 		if sm.FSMAgree != nil {
-			cells = append(cells, [2]float64{x(rec), 0})
-			if *sm.FSMAgree {
-				colors = append(colors, "#16a34a")
-			} else {
-				colors = append(colors, "#dc2626")
+			c := chart.OK
+			if !*sm.FSMAgree {
+				c = chart.Bad
 			}
+			cells = append(cells, chart.Cell{X: x(rec), Status: c})
 		}
 	}
 	sort.Strings(nodeNames)
@@ -373,33 +379,36 @@ func charts(s Summary) ([]template.HTML, string) {
 		maxX = maxf(maxX, x(&samples[len(samples)-1]))
 	}
 	out = append(out,
-		template.HTML(lanes("Node liveness as seen by status (green = live)", maxX, nodeNames, liveCells, liveColors)), //nolint:gosec // generated SVG
-		template.HTML(lineChart("Repair backlog", "chunks", []series{deg, pend, stale, unread}, marks, bands)),         //nolint:gosec // generated SVG
-		template.HTML(lineChart("Stored vs logical bytes (dedup)", "bytes", []series{stored, logical}, nil, bands)))    //nolint:gosec // generated SVG
+		template.HTML(chart.Lanes("Node liveness as seen by status (green = live)", maxX, nodeNames, liveCells, chart.Axis{})),           //nolint:gosec // generated SVG
+		template.HTML(chart.Line("Repair backlog", "chunks", []chart.Series{deg, pend, stale, unread}, marks, bands, chart.Axis{})),      //nolint:gosec // generated SVG
+		template.HTML(chart.Line("Stored vs logical bytes (dedup)", "bytes", []chart.Series{stored, logical}, nil, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	if haveWAL {
-		out = append(out, template.HTML(lineChart("Overlay WAL depth on the sampled node", "bytes", []series{wal, dirty, plan, flush}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Overlay WAL depth on the sampled node", "bytes", []chart.Series{wal, dirty, plan, flush}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveTrash {
-		out = append(out, template.HTML(lineChart("Trash and pinned cache (docs/06 §1, docs/13 §4)", "bytes", []series{trashB, pinnedB}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Trash and pinned cache (docs/06 §1, docs/13 §4)", "bytes", []chart.Series{trashB, pinnedB}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveMem {
-		out = append(out, template.HTML(lineChart("Process memory on the sampled node", "bytes", []series{heap, sys}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Process memory on the sampled node", "bytes", []chart.Series{heap, sys}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	// machine vitals (docs/12 §8): each chart only when some node reported the measure
 	if haveCPU {
-		out = append(out, template.HTML(lineChart("CPU on the sampled node", "% / load", []series{cpu, mcpu, load}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("CPU on the sampled node", "% / load", []chart.Series{cpu, mcpu, load}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveRSS {
-		out = append(out, template.HTML(lineChart("Memory on the sampled node", "bytes", []series{rss, avail}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Memory on the sampled node", "bytes", []chart.Series{rss, avail}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if havePressure {
-		out = append(out, template.HTML(lineChart("Memory pressure on the sampled node", "%", []series{pressure}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Memory pressure on the sampled node", "%", []chart.Series{pressure}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveDisk {
-		out = append(out, template.HTML(lineChart("Data disk on the sampled node", "bytes", []series{free}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Data disk on the sampled node", "bytes", []chart.Series{free}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if haveDiskIO {
-		out = append(out, template.HTML(lineChart("Disk throughput on the sampled node (every disk)", "MiB/s", []series{dwr, drd}, marks, bands))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Line("Disk throughput on the sampled node (every disk)", "MiB/s", []chart.Series{dwr, drd}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
+	}
+	if haveNet {
+		out = append(out, template.HTML(chart.Line("Network on the sampled node (tailnet and every interface)", "MiB/s", []chart.Series{trx, ttx, nrx, ntx}, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	}
 	if placement != nil {
 		out = append(out, template.HTML(placementChart(placement))) //nolint:gosec // generated SVG
@@ -410,31 +419,31 @@ func charts(s Summary) ([]template.HTML, string) {
 		xs = append(xs, x(&samples[i]))
 		spread = append(spread, samples[i].S)
 	}
-	if svg := diskSpread(maxX, xs, spread); svg != "" {
+	if svg := chart.Spread(maxX, xs, spreadSamples(spread), chart.Axis{}); svg != "" {
 		out = append(out, template.HTML(svg)) //nolint:gosec // generated SVG
 	}
-	ns := make([]series, 0, len(nodeNames))
+	ns := make([]chart.Series, 0, len(nodeNames))
 	for _, n := range nodeNames {
 		ns = append(ns, *nodeSeries[n])
 	}
-	out = append(out, template.HTML(lineChart("Shard slots per node", "slots", ns, marks, bands))) //nolint:gosec // generated SVG
+	out = append(out, template.HTML(chart.Line("Shard slots per node", "slots", ns, marks, bands, chart.Axis{}))) //nolint:gosec // generated SVG
 	// latency histograms from the final counters
 	if len(samples) > 0 {
 		last := samples[len(samples)-1].S
 		labels := make([]string, len(latencyBuckets))
-		w, r := series{name: "writes"}, series{name: "reads"}
+		w, r := chart.Series{Name: "writes"}, chart.Series{Name: "reads"}
 		for i := range latencyBuckets {
 			if i == len(latencyBuckets)-1 {
 				labels[i] = fmt.Sprintf(">%g", latencyBuckets[i-1])
 			} else {
 				labels[i] = fmt.Sprintf("≤%g", latencyBuckets[i])
 			}
-			w.points = append(w.points, [2]float64{float64(i), float64(last.WriteLatency[i])})
-			r.points = append(r.points, [2]float64{float64(i), float64(last.ReadLatency[i])})
+			w.Points = append(w.Points, [2]float64{float64(i), float64(last.WriteLatency[i])})
+			r.Points = append(r.Points, [2]float64{float64(i), float64(last.ReadLatency[i])})
 		}
-		out = append(out, template.HTML(barChart("Operation latency, driver side (count per bucket, ms)", labels, []series{w, r}))) //nolint:gosec // generated SVG
+		out = append(out, template.HTML(chart.Bars("Operation latency, driver side (count per bucket, ms)", labels, []chart.Series{w, r}))) //nolint:gosec // generated SVG
 	}
-	out = append(out, template.HTML(strip("FSM-hash agreement across nodes (green = identical state at one index)", maxX, cells, colors))) //nolint:gosec // generated SVG
+	out = append(out, template.HTML(chart.Strip("FSM-hash agreement across nodes (green = identical state at one index)", maxX, cells, chart.Axis{}))) //nolint:gosec // generated SVG
 	return out, fmt.Sprintf("peak write %.1f MiB/s, peak read %.1f MiB/s", peakW, peakR)
 }
 
@@ -470,6 +479,10 @@ table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid
 th{background:#f6f6f6} .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font-weight:600}.skip{color:#777;font-weight:600}
 .meta{color:#555} .cites{color:#777;font-size:11px;white-space:nowrap} .chart{width:100%;height:auto;margin:10px 0;border:1px solid #eee;border-radius:6px}
 .title{font:600 13px sans-serif;fill:#222}.tick{font:11px sans-serif;fill:#555}.grid{stroke:#eee}.marker{stroke:#999;stroke-dasharray:3 3}.marklabel{font:9px sans-serif;fill:#777}
+.band0{fill:#f8fafc}.band1{fill:#eef2f7}.chart-ok{fill:#16a34a}.chart-warn{fill:#d97706}.chart-bad{fill:#dc2626}.chart-bg{fill:#fff}.chart-off{fill:#94a3b8}
+path.s0{stroke:#2563eb}rect.s0,circle.s0{fill:#2563eb}path.s1{stroke:#dc2626}rect.s1,circle.s1{fill:#dc2626}path.s2{stroke:#16a34a}rect.s2,circle.s2{fill:#16a34a}path.s3{stroke:#d97706}rect.s3,circle.s3{fill:#d97706}
+path.s4{stroke:#7c3aed}rect.s4,circle.s4{fill:#7c3aed}path.s5{stroke:#0891b2}rect.s5,circle.s5{fill:#0891b2}path.s6{stroke:#be185d}rect.s6,circle.s6{fill:#be185d}path.s7{stroke:#4d7c0f}rect.s7,circle.s7{fill:#4d7c0f}
+.dev-3{fill:#1d4ed8}.dev-2{fill:#7895e4}.dev-1{fill:#c3cdee}.dev0{fill:#e5e7eb}.dev1{fill:#e3c3e6}.dev2{fill:#c272c9}.dev3{fill:#a21caf}
 details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-align:right} .cov span{display:inline-block;margin:2px 6px 2px 0;padding:1px 6px;border-radius:4px;background:#eef2f7;font-size:12px} .cov .bad{background:#fee2e2} .dump{font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto;max-height:480px;background:#f8fafc;padding:8px;border:1px solid #eee}
 </style></head><body>
 <h1>{{.Mark}}<span>tail<span style="color:#2563eb">raid</span> soak report</span></h1>
@@ -508,3 +521,14 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <table><tr><th>Name</th><th>Idx</th><th>RPC</th><th>Version</th></tr>{{range .Nodes}}<tr><td>{{.Name}}</td><td>{{.Idx}}</td><td>{{.RPC}}</td><td>{{.Version}}</td></tr>{{end}}</table>
 </body></html>
 `))
+
+// spreadSamples is the chart's view of the samples: targets, live chunks and the host skew.
+func spreadSamples(samples []*Sample) []chart.SpreadSample {
+	out := make([]chart.SpreadSample, len(samples))
+	for i, s := range samples {
+		if s != nil {
+			out[i] = chart.SpreadSample{Targets: s.Targets, Chunks: s.Chunks, DomainSkew: s.DomainSkew}
+		}
+	}
+	return out
+}

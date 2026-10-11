@@ -36,6 +36,7 @@ import (
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/smbgw"
+	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/sysfs"
 	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -205,7 +206,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
 	prober.SelfHealth = func() rpc.Health {
-		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Dev: cfg.Dev.Enabled, Disks: disks.health()}
+		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Dev: cfg.Dev.Enabled, Web: webPort(cfg), Disks: disks.health()}
 	}
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
@@ -266,15 +267,47 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc.Events = ring
 	gc.Retention = rcfg.Retention
 	node.MinCodec = prober.MinCodec // the trash and the flags wait until every live member reads codec 4 (docs/12 §6)
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	fs.SetFlusher(fl)
+	// the stats history (docs/17): this node's rows every stats.every, the cluster's while
+	// it leads, sealed into the volume at the hour; its reader has no chunk cache (I-196)
+	statsEvery, err := cfg.StatsEvery()
+	if err != nil {
+		return err
+	}
+	keepRaw, keepMinute, keepCoarse, err := cfg.StatsKeep()
+	if err != nil {
+		return err
+	}
+	statsSvc := &stats.Service{
+		Name: cfg.Node.Name, Every: statsEvery, Keep: stats.Keep{Raw: keepRaw, Minute: keepMinute, Coarse: keepCoarse}, Clk: clk, Log: log,
+		Writer: &stats.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Name: cfg.Node.Name, Spill: filepath.Join(cfg.Node.DataDir, "stats", "pending"), Log: log},
+		Src: stats.Sources{
+			Machine: func() *admin.MachineReport { return admin.Vitals(cfg.Node.DataDir, ident.IP) },
+			Gateway: func() *admin.GatewayReport {
+				return admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
+			},
+			Process:  admin.Process,
+			IsLeader: node.IsLeader,
+			Term:     node.Raft.CurrentTerm,
+			Health:   func() admin.VolumeHealth { return admin.ScanHealth(node.FSM, prober, rcfg.FillAfter) },
+			Stats:    node.FSM.Stats,
+			Members:  node.FSM.Nodes,
+			Live:     func(idx meta.NodeIdx) int { return stats.LiveState(prober.IsLive(idx), prober.IsSuspect(idx)) },
+			Moved: func() (int64, bool) {
+				p, ok := repairer.Progress()
+				return p.BytesMoved, ok
+			},
+		},
+	}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
 	}
 	status := func() any {
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
-		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd)
-		rep.Machine = admin.Vitals(cfg.Node.DataDir)
+		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
+		rep.Machine = admin.Vitals(cfg.Node.DataDir, ident.IP)
 		if w := admin.LowDiskWarning(rep.Machine); w != "" {
 			rep.Warnings = append(rep.Warnings, w)
 		}
@@ -291,6 +324,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked,
+		Stats: func(since int64) any { return statsSvc.Live(since) }, Web: webPort(cfg),
 	})
 	if err != nil {
 		return err
@@ -302,8 +336,33 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		if login != "" {
 			webUsers = login
 		}
+		cacheBytes, err := cfg.StatsCacheBytes()
+		if err != nil {
+			return err
+		}
+		query := &stats.Query{
+			Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Keep: statsSvc.Keep, CacheBytes: cacheBytes, Log: log,
+			Self: statsSvc.Live, Fetch: stats.FetchRPC(client),
+			Members: func() []stats.Member {
+				probes := prober.Snapshot()
+				var out []stats.Member
+				all := node.FSM.Nodes()
+				for i := range all {
+					n := &all[i]
+					if n.Kind != meta.KindDevice || n.State == meta.Removed {
+						continue
+					}
+					m := stats.Member{Name: n.Name, Addr: net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort))), Live: prober.IsLive(n.Idx), Self: n.Idx == selfIdx, Web: probes[n.Idx].Web}
+					if m.Self {
+						m.Web = webPort(cfg)
+					}
+					out = append(out, m)
+				}
+				return out
+			},
+		}
 		web, err = webui.New(webui.Options{
-			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Hosts: webui.Hosts(webAddr, ident.DNSName),
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Stats: query, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
@@ -377,9 +436,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
 	}
 
-	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, web UI
+	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, stats, web UI
 	bg, cancelBg := context.WithCancel(context.Background())
-	loops := 7
+	loops := 8
 	if web != nil {
 		loops++
 	}
@@ -406,6 +465,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}()
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
 	go func() { pinned.Run(bg); done <- struct{}{} }()
+	go func() { statsSvc.Run(bg); done <- struct{}{} }()
 	if web != nil {
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
 	}
@@ -430,6 +490,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	for range gateways - 1 {
 		<-gw
 	}
+	ops.sealStats() // the partial hour, before the flusher drains and the leader hands over (I-192)
 	cancelBg()
 	for range loops {
 		<-done
@@ -507,6 +568,7 @@ type adminOps struct {
 	ring     *meta.EventRing
 	fs       *vfs.FS
 	pins     *pins.Pins
+	stats    *stats.Service
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
@@ -722,6 +784,13 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 			} else if n > 0 {
 				a.log.Info("sweep", "orphan_thumbnails_removed", n)
 			}
+			if a.stats != nil && a.node.IsLeader() && a.healthy() { // the stats retention is the leader's (I-194)
+				if n, err := a.stats.Retain(ctx); err != nil {
+					a.log.Warn("stats retention failed", "err", err)
+				} else if n > 0 {
+					a.log.Info("stats retention", "segments_removed", n)
+				}
+			}
 			sweepT.Reset(time.Hour)
 		}
 	}
@@ -779,6 +848,15 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.repairer.Scan(ctx)
 	case "gc_now":
 		return a.gc.RunOnce(ctx)
+	case "stats_seal": // this node's partial stats hour and any rollup still missing (docs/17 §7)
+		if a.stats == nil {
+			return nil, errors.New("stats: no sampler")
+		}
+		n := a.stats.Writer.Unsealed()
+		if err := a.stats.Seal(ctx, op.Rollup); err != nil {
+			return nil, err
+		}
+		return map[string]any{"sealed_rows": n}, nil
 	case "rotate_token":
 		// a MetaSet with the token only: the cluster ID is left as it is (docs/08 §Join)
 		token := meta.NewJoinToken()
@@ -1276,4 +1354,28 @@ func decodeHex(s string) ([]byte, error) {
 		out[i] = byte(v)
 	}
 	return out, nil
+}
+
+// webPort is the browser UI's port for /health (docs/13 §1): 0 when the UI is off.
+func webPort(cfg config.Config) uint16 {
+	if cfg.Listen.Web <= 0 || cfg.Listen.Web > 65535 {
+		return 0
+	}
+	return uint16(cfg.Listen.Web) //nolint:gosec // bounded above
+}
+
+// StatsSealTimeout bounds the seal a stopping node writes (docs/17 §2).
+const StatsSealTimeout = 10 * time.Second
+
+// sealStats writes the partial hour on stop; a cluster that cannot take it (no leader, a
+// stale gateway) gets the rows spilled locally for the next start.
+func (a *adminOps) sealStats() {
+	if a.stats == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), StatsSealTimeout)
+	defer cancel()
+	if err := a.stats.Seal(ctx, false); err != nil {
+		a.log.Warn("stats: the stop's seal did not reach the volume", "err", err)
+	}
 }
