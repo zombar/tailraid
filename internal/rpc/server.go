@@ -577,6 +577,13 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 			s.notLeader(w)
 			return
 		}
+		if errors.Is(err, meta.ErrUnknownOutcome) {
+			// the row's proposal was in flight when the leader lost its lease (a voter
+			// just added and not yet caught up): the joiner retries under the same node
+			// ID, which keeps its row and index whichever way the proposal went (I-94, I-95)
+			writeErr(w, http.StatusServiceUnavailable, "join: "+err.Error())
+			return
+		}
 		writeErr(w, http.StatusBadRequest, "join: "+err.Error())
 		return
 	}

@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,14 +85,18 @@ type fakeFence struct{ placed map[chunk.ShardKey]bool }
 func (f fakeFence) PlacedOn(_ meta.NodeIdx, k chunk.ShardKey) bool { return f.placed[k] }
 
 type fakeJoiner struct {
-	mu  sync.Mutex
-	app *fakeApplier
-	ops []MemberOp
+	mu   sync.Mutex
+	app  *fakeApplier
+	ops  []MemberOp
+	fail error // when set, every join fails with it (a leader that lost its lease mid-proposal)
 }
 
 func (j *fakeJoiner) Join(_ context.Context, req JoinRequest) (JoinResponse, error) {
 	if !j.app.IsLeader() {
 		return JoinResponse{}, ErrNotLeader
+	}
+	if j.fail != nil {
+		return JoinResponse{}, j.fail
 	}
 	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
 		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter,
@@ -527,5 +533,32 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A join whose row proposal had no known outcome (the leader lost its lease with the
+// new voter not yet caught up) answers as retryable, not as a bad request: the joiner
+// tries again under the same node ID, which keeps its row and index whichever way the
+// proposal went.
+//
+// Invariant: I-94, I-95
+func TestJoin_UnknownOutcomeIsRetryable(t *testing.T) {
+	e := newEnv(t)
+	c := e.client()
+	req := JoinRequest{Token: "tok", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2}
+	e.joiner.fail = fmt.Errorf("cluster: record member: %w: apply: leadership lost while committing log", meta.ErrUnknownOutcome)
+	_, err := c.Join(ctx, e.addr, req)
+	if !errors.Is(err, ErrNoLeader) || !strings.Contains(err.Error(), "outcome unknown") {
+		t.Fatalf("unknown outcome: %v, want a retryable no-leader error naming it", err)
+	}
+	e.clk.Advance(JoinInterval)
+	e.joiner.fail = fmt.Errorf("cluster: record member: %w", meta.ErrNotDir)
+	if _, err := c.Join(ctx, e.addr, req); errors.Is(err, ErrNoLeader) || err == nil {
+		t.Fatalf("a known failure stays a bad request: %v", err)
+	}
+	e.clk.Advance(JoinInterval)
+	e.joiner.fail = nil
+	if jr, err := c.Join(ctx, e.addr, req); err != nil || jr.NodeIdx != 2 {
+		t.Fatalf("the retry: %+v %v", jr, err)
 	}
 }
