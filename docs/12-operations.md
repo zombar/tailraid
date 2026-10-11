@@ -275,7 +275,10 @@ Besides the cluster view (docs/06 §7), `tailraid status --json` carries what a 
 needs watched: `process.heap_inuse`, `process.sys` and `process.goroutines` from the Go
 runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under way),
 `gateway.flush_bytes` (chunk and shard buffers held by the flusher, docs/04 §9),
-`gateway.wal_cap` and `gateway.last_flush_err`. The soak sampler records them every second
+`gateway.wal_cap` and `gateway.last_flush_err`, and the reader's readahead (docs/04 §5):
+`gateway.readahead_fetched` (chunks a prefetch fetched), `gateway.readahead_joined`
+(client READs served by a chunk a prefetch fetched or was fetching) and
+`gateway.prefetching` (prefetches in flight right now). The soak sampler records them every second
 and the report charts the heap next to the WAL depth, so a memory regression under a
 large copy is a visible line, not a guess (I-84).
 

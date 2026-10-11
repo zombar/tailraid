@@ -175,8 +175,10 @@ type Peers interface {
 ```
 
 `Reader.ReadChunk(h)`: cache hit → return. Otherwise `c = GetChunk(h)`; order
-`Rank(live non-zero placement)` (dead holders are never dialled, L-131; slots are offered
-in placement order so data shards come before parity at equal rank, L-63); fetch the
+`Rank(live non-zero placement)` (dead holders are never dialled, L-131), then stably
+partitioned: this host's own shards first, then data slots, then parity, whatever their
+RTT, so a decode runs only when a data holder is dead or hedged or this host holds parity
+(L-63); fetch the
 first `k` in parallel; on any failure or `ErrCorrupt`
 pull the next slot until `k` good shards are in hand; `Decode(shards, c.Size)`; verify
 `sha256 == h` (a mismatch is `EIO` and is logged with the slot list for scrub); cache.

@@ -317,9 +317,11 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   one disk by moving its marker and restarting its host: reads stay exact, the disk is
   dead while its host is live, repair re-places its slots within the cap after
   `fill_after`; restore it: live again, its stale shards swept after grace; then, in auto
-  mode, add a disk to the gateway host, drain it and remove it, the policy following the
-  member table after each step with the corpus exact (the previous pin restored after); I-86, I-87,
-  I-89, I-90, L-192, L-193, L-194); 14 diskless host (a host with no disks is live, flagged
+  mode, add a disk to the gateway host (repair passes move slots onto it until the host's
+  disks are within the skew of their shares and `disk_skew` is 0, the corpus exact), drain
+  it and remove it, the policy following the member table after each step with the corpus
+  exact (the previous pin restored after); I-86, I-87, I-89, I-90, I-172, L-192, L-193,
+  L-194); 14 diskless host (a host with no disks is live, flagged
   `diskless` with no budget and holds no slot; a corpus written through it is fully placed
   with no slot on it and reads exact through it and through another gateway; skipped on a
   rig where every host has a disk; I-118); 15 s3 bucket (the rig's bucket registered with
@@ -358,7 +360,17 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   hashes equal to `Env.Chunks` over RPC; and pins: a folder pinned until
   `cache.pinned_bytes` reaches its bytes, then with `Caps.Kill` the other holders of its
   chunks stopped and the folder read through the web, then unpinned; everything the
-  phase changed restored on its way out; I-152..I-165, L-199..L-208). The compose rig gives four nodes two disks each, one
+  phase changed restored on its way out; I-152..I-165, L-199..L-208); 17 hot path (a 64-chunk file written
+  through one gateway and read whole, cold, through another: the content exact, the
+  cold-read MiB/s reported, readahead having served every chunk but the first window
+  (`readahead_joined`, docs/12 §8), fetched no more than the file's chunks, and never more
+  than `ReadAhead` prefetches in flight in any status sample; on a rig with one gateway the
+  readahead checks are skipped when the client's own cache served the read; then, where
+  the environment can partition, the writing gateway is cut off from one holder a quarter
+  of the way through a second file: the gateway marks the holder suspect within the
+  straggler grace and before the prober's threshold, the chunks committed after the cut
+  hold no slot on it, the mark clears on the first good probe after the heal, repair fills
+  the degraded chunks and the file reads back whole; I-166, I-169, I-170). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for

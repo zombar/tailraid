@@ -68,7 +68,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-60 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-53 snapshot restore on follower | Committed | `TestFSM_ApplySnapshotRestoreEquivalence` |
 | L-61 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-54 leader change | Committed | `TestCluster_LeaderFailoverMidApply_NoLostOrDuplicateCommits` |
 | L-62 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-55 WaitApplied | Committed | `TestOverlay_CommitFlushed_ResetsOrCompacts` |
-| L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestReader_FetchFirstK` |
+| L-63 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-56 read, all reachable | Committed | `TestReader_FetchFirstK`, `TestReader_FetchFirstK_ParityRanksFirst` |
 | L-64 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-57 read, m unreachable | Committed | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-65 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-58 read, m+1 unreachable | Committed | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO` |
 | L-66 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-59 cache hit | Committed | `TestReader_ReadsWithOneNodeDown_AndFromCache` |
@@ -195,7 +195,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-187 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (metadata mutation on a gateway that lost its leader) | E-54 leader unreachable | Committed | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestSMB_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale` |
 | L-188 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, flusher progressing | Dirty | `TestOverlay_WALCap_WaitsForFlush` |
 | L-189 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty | E-122 WRITE at a cap, the inode's last flush attempt failed | Dirty | `TestCluster_Diskless_WriteIsENOSPC`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestSMB_WriteWhenFull_IsDiskFull`, `TestVFS_ClusterFull_ENOSPC` |
-| L-190 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | `TestFlusher_StragglerPut_CancelledAfterReplace` |
+| L-190 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (a slot re-placed after the PUT deadline) | E-35 the original PUT of that slot is still in flight | Placed | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks`, `TestFlusher_StragglerPut_CancelledAfterReplace` |
 | L-191 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty (plan larger than `FileDirtyHi` bytes of chunks) | E-123 batch commit | Committed (the lowest-indexed batch) + Dirty (residual) | `TestFlusher_BatchCommit_ResidualStaysDirty` |
 | L-192 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot on a disk) | E-124 disk dead > fill_after, host live | Degraded → Repairing → Committed | `TestCluster_SingleHostDisks_DiskFails_ReadsAndRepair` |
 | L-193 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a host above the cap, fixable) | E-125 repair pass | Degraded (`DomainSkew`) → Repairing → Committed | `TestChunkState_DomainSkew`, `TestRepair_DomainSkew_MovesWithinCap` |
@@ -214,3 +214,6 @@ exactly one design doc transition table and cited by at least one test via
 | L-206 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (under a protected directory) | E-13 unlink, E-126 Trash, E-15 rename over, a rename out of the subtree, or a user's Purge | any loss of the entry | `TestStubLifecycle_L_206` |
 | L-207 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (referenced only from the trash) | GCDelete, or a Purge with `DeletedAt ≥ Before` | Collected / Tombstoned | `TestStubLifecycle_L_207` |
 | L-208 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Dirty or Committed (an ephemeral name: an upload temp, a thumbnail, `._<name>`, `.DS_Store`) | delete or rename over | in the trash | `TestStubLifecycle_L_208` |
+| L-209 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
+| L-210 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Durable | E-129 | Unreachable (until the next successful probe of its host) | `TestFlusher_SuspectNodeExcludedFromNextChunk`, `TestProber_SuspectUntilNextProbe` |
+| L-211 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot on a disk far above its share) | E-130 rebalance pass | Repairing → Committed | `TestRepair_Rebalance_MovesWithinHost` |

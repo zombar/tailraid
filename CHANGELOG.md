@@ -2,6 +2,21 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.6 (2026-10-11)
+
+### Changes
+
+- repair: capacity rebalance within a host after add-disk (I-172) ([c70079b](https://github.com/zombar/tailraid/commit/c70079b))
+- vfs, cluster, rpc: straggler grace, suspect marks, GET body deadline (I-169..I-171) ([75ee95d](https://github.com/zombar/tailraid/commit/75ee95d))
+- vfs: WAL group commit; a record's effect applies after its fsync, in log order (I-168) ([69717d6](https://github.com/zombar/tailraid/commit/69717d6))
+- nfsgw: in-tree go-nfs serves a connection's requests concurrently; macOS mounts at 1 MiB (I-167) ([d9d9a4f](https://github.com/zombar/tailraid/commit/d9d9a4f))
+- vfs: server-side readahead, own and data shards first, soak phase 17 (I-166) ([5758ea8](https://github.com/zombar/tailraid/commit/5758ea8))
+
+### Documentation
+
+- docs: soak report on the hot-path stack (16 phases, 0 failed) ([cfe506f](https://github.com/zombar/tailraid/commit/cfe506f))
+- docs: web UI v2 design, lookdev and stubs (trash, flags, tiles, audio, pins) ([c839884](https://github.com/zombar/tailraid/commit/c839884))
+
 ## v0.4.5 (2026-10-10)
 
 ### Changes
