@@ -71,8 +71,14 @@ upstream, each with a test in the copy:
   NFSv3 cannot carry), every `.DS_Store`, and every Unix dot file. Nothing is left out
   of a listing; Explorer's "Hidden items" shows them (I-141).
   `TestAttributes_DotFilesHidden`, `TestSMB_DotFilesHidden`.
+- `file.go`, `info.go`: a `DeleteChecker` capability on the filesystem
+  (`CanDelete(path) error`) is asked when a client marks a handle delete-on-close, at
+  CREATE or through SET_INFO disposition, and its error is the reply's status. SMB2
+  deletes at CLOSE, whose reply carries no failure, so without it a delete the backend
+  refuses (a protected folder, docs/02, I-154) answered success and the file stayed.
+  `TestDeleteOnClose_AsksTheBackend`, `TestSMB_Protected_AccessDenied`.
 
-The copy is updated by re-applying these five changes to a newer upstream; the `replace`
+The copy is updated by re-applying these six changes to a newer upstream; the `replace`
 goes when upstream carries them.
 
 It exports a backend through the `github.com/go-filesystems/interface` contract: the

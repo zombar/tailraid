@@ -64,6 +64,8 @@ func TestAdminOp_IsPass_Table(t *testing.T) {
 		{AdminOp{Op: "gc_now"}, true},
 		{AdminOp{Op: "check", Scrub: true}, true},
 		{AdminOp{Op: "check"}, false},
+		{AdminOp{Op: "trash_purge", All: true}, true},
+		{AdminOp{Op: "trash_purge", Ino: 7}, false},
 		{AdminOp{Op: "set_policy"}, false},
 		{AdminOp{Op: "fsck"}, false},
 		{AdminOp{Op: "chunk", Chunk: "/f"}, false},

@@ -49,23 +49,57 @@ const (
 // Inode is one file, directory or symlink. Chunks is treated as immutable: every Commit
 // builds a new slice, so a copied Inode always sees a consistent chunk list.
 type Inode struct {
-	Ino      Ino
-	Gen      uint32
-	Type     FileType
-	Mode     uint32
-	Uid, Gid uint32
-	Size     uint64
-	Atime    int64
-	Mtime    int64
-	Ctime    int64
-	Nlink    uint16
-	Version  uint64
-	Parent   Ino
-	Name     string
-	Chunks   []Hash         // TFile only; len == ceil(Size/ChunkSize)
-	Target   string         // TSymlink only
-	Children map[string]Ino // TDir only
+	Ino       Ino
+	Gen       uint32
+	Type      FileType
+	Mode      uint32
+	Uid, Gid  uint32
+	Size      uint64
+	Atime     int64
+	Mtime     int64
+	Ctime     int64
+	Nlink     uint16
+	Version   uint64
+	Parent    Ino
+	Name      string
+	Flags     uint8          // FlagProtected, FlagNSFW (docs/02 §Apply rules); directories only
+	DeletedAt int64          // FSM clock of the delete that made this entry a trash root; 0 while live
+	Chunks    []Hash         // TFile only; len == ceil(Size/ChunkSize)
+	Target    string         // TSymlink only
+	Children  map[string]Ino // TDir only
 }
+
+// Directory flags (docs/01). FlagProtected is enforced by the FSM (I-154); FlagNSFW is
+// carried for the browser UI.
+const (
+	FlagProtected uint8 = 1 << 0
+	FlagNSFW      uint8 = 1 << 1
+
+	knownFlags = FlagProtected | FlagNSFW
+)
+
+// UploadSuffix ends a web upload's temp name, ".<name>.tailraid-upload" (docs/13 §4).
+const UploadSuffix = ".tailraid-upload"
+
+// ReservedDir is the root folder that holds the browser UI's thumbnails (docs/13 §5);
+// everything under it is ephemeral.
+const ReservedDir = ".tailraid"
+
+// IsUploadTemp reports whether name is a web upload's temp (docs/13 §4, I-81).
+func IsUploadTemp(name string) bool {
+	return len(name) > len(UploadSuffix)+1 && strings.HasPrefix(name, ".") && strings.HasSuffix(name, UploadSuffix)
+}
+
+// IsOSMetadata reports whether name is a file macOS writes for its own use beside the
+// user's: "._<name>" (AppleDouble) and ".DS_Store" (Finder's view settings) (I-140).
+func IsOSMetadata(name string) bool {
+	return (len(name) > 2 && strings.HasPrefix(name, "._")) || name == ".DS_Store"
+}
+
+// IsEphemeral is the one list of names a delete unlinks rather than trashes (docs/06 §1,
+// I-157): an upload's temp and the macOS metadata files. The thumbnails under
+// ReservedDir are the other ephemeral entries; the FSM knows them by their place.
+func IsEphemeral(name string) bool { return IsUploadTemp(name) || IsOSMetadata(name) }
 
 // Chunk is one entry of the content-addressed chunk table.
 type Chunk struct {
@@ -221,8 +255,12 @@ type State struct {
 	Chunks   map[Hash]*Chunk
 	Nodes    map[NodeIdx]*Node
 	Tombs    map[Hash]struct{} // index of Chunks with Refs == 0
-	Applied  uint64
-	LastNow  int64 // monotonic FSM clock: max of every applied command's Now
+	// Trash indexes the deleted roots (inodes with DeletedAt != 0, absent from their
+	// parent's Children) by the parent they came from (docs/01). Derived like Tombs:
+	// never serialized, rebuilt on decode and in Clone.
+	Trash   map[Ino]map[Ino]struct{}
+	Applied uint64
+	LastNow int64 // monotonic FSM clock: max of every applied command's Now
 }
 
 // NewState returns an empty state containing only the root directory.
@@ -236,7 +274,62 @@ func NewState() *State {
 		Chunks: map[Hash]*Chunk{},
 		Nodes:  map[NodeIdx]*Node{},
 		Tombs:  map[Hash]struct{}{},
+		Trash:  map[Ino]map[Ino]struct{}{},
 	}
+}
+
+// indexTrash records ino as a deleted root under parent.
+func (s *State) indexTrash(parent, ino Ino) {
+	set := s.Trash[parent]
+	if set == nil {
+		set = map[Ino]struct{}{}
+		s.Trash[parent] = set
+	}
+	set[ino] = struct{}{}
+}
+
+// unindexTrash forgets the root ino under parent.
+func (s *State) unindexTrash(parent, ino Ino) {
+	if set := s.Trash[parent]; set != nil {
+		delete(set, ino)
+		if len(set) == 0 {
+			delete(s.Trash, parent)
+		}
+	}
+}
+
+// lineage is what the parent chain of an inode says about it (docs/02 §Protection):
+// whether it lies in the trash (it or an ancestor is a deleted root), under a protected
+// directory (itself included), or under the reserved folder of docs/13 §5.
+type lineage struct {
+	inTrash   bool
+	protected bool
+	reserved  bool
+}
+
+// lineage walks from ino to the root: one map lookup per level, what pathLen pays.
+func (s *State) lineage(ino Ino) lineage {
+	var l lineage
+	for cur, steps := ino, 0; steps <= len(s.Inodes); steps++ {
+		in, ok := s.Inodes[cur]
+		if !ok {
+			return l
+		}
+		if in.DeletedAt != 0 {
+			l.inTrash = true
+		}
+		if in.Type == TDir && in.Flags&FlagProtected != 0 {
+			l.protected = true
+		}
+		if in.Parent == RootIno && in.Name == ReservedDir {
+			l.reserved = true
+		}
+		if cur == RootIno || in.Parent == 0 {
+			return l
+		}
+		cur = in.Parent
+	}
+	return l
 }
 
 // Clone returns a deep copy of s suitable for a snapshot taken while Apply keeps running
@@ -253,6 +346,12 @@ func (s *State) Clone() *State {
 		Chunks:   make(map[Hash]*Chunk, len(s.Chunks)),
 		Nodes:    make(map[NodeIdx]*Node, len(s.Nodes)),
 		Tombs:    make(map[Hash]struct{}, len(s.Tombs)),
+		Trash:    make(map[Ino]map[Ino]struct{}, len(s.Trash)),
+	}
+	for parent, set := range s.Trash {
+		cp := make(map[Ino]struct{}, len(set))
+		maps.Copy(cp, set)
+		c.Trash[parent] = cp
 	}
 	for ino, in := range s.Inodes {
 		cp := *in

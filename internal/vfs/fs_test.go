@@ -187,15 +187,17 @@ func TestVFS_RenameDirtyFile_FlushCommitsSameIno(t *testing.T) {
 	}
 }
 
+// An ephemeral name (here an upload temp) is unlinked, and the unlink drops the WAL; a
+// user's file goes to the trash and keeps it (TestVFS_Remove_TrashKeepsWAL_FlushCommits).
 // Lifecycle: L-13
 func TestVFS_RemoveDirtyFile_DropsOverlay(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()
-	fh, _ := fs.Create("/a")
+	fh, _ := fs.Create("/.a.tailraid-upload")
 	_, _ = fh.Write([]byte("gone"))
 	_ = fh.Close()
-	ino := f.InodeOf(fs, "/a")
-	must(t, fs.Remove("/a"))
+	ino := f.InodeOf(fs, "/.a.tailraid-upload")
+	must(t, fs.Remove("/.a.tailraid-upload"))
 	if _, ok := f.Ov.Size(ino, 0); ok {
 		t.Fatal("overlay still tracks removed inode")
 	}
@@ -582,13 +584,15 @@ func TestVFS_RenameIntoOwnSubtree_NoSideEffects(t *testing.T) {
 	}
 }
 
-// A write through the handle of a removed file fails and leaves no WAL behind: the
-// overlay entry went with the unlink and nothing recreates it.
-// Lifecycle: L-13
+// A write through the handle of an unlinked file (an ephemeral name) fails and leaves
+// no WAL behind: the overlay entry went with the unlink and nothing recreates it. A
+// write through the handle of a trashed file lands, and its flush commits into the
+// trash entry and clears the WAL.
+// Lifecycle: L-13, L-203
 func TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()
-	fh, err := fs.Create("/gone")
+	fh, err := fs.Create("/.gone.tailraid-upload")
 	must(t, err)
 	if _, err := fh.Seek(4096, io.SeekStart); err != nil {
 		t.Fatal(err)
@@ -596,7 +600,7 @@ func TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL(t *testing.T) {
 	if _, err := fh.Write([]byte("before")); err != nil {
 		t.Fatal(err)
 	}
-	must(t, fs.Remove("/gone"))
+	must(t, fs.Remove("/.gone.tailraid-upload"))
 	if _, err := fh.Write([]byte("after")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("write after remove: err=%v, want ENOENT", err)
 	}
@@ -607,6 +611,28 @@ func TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL(t *testing.T) {
 	wals, _ := filepath.Glob(filepath.Join(f.Staging(), "*.wal"))
 	if len(wals) != 0 {
 		t.Fatalf("orphan WALs: %v", wals)
+	}
+	// the trashed case: the handle keeps writing, the flush commits, nothing is left over
+	th, err := fs.Create("/trashed")
+	must(t, err)
+	if _, err := th.Write([]byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	ino := f.InodeOf(fs, "/trashed")
+	must(t, fs.Remove("/trashed"))
+	if _, err := th.Write([]byte(" after")); err != nil {
+		t.Fatalf("write after a delete to the trash: %v", err)
+	}
+	must(t, th.Close())
+	must(t, f.Flusher().FlushAll(ctx))
+	if in, _ := f.FSM.GetInodeAny(ino); in.Size != 12 {
+		t.Fatalf("the trash entry after the flush: %+v", in)
+	}
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("overlay still tracks the trashed file after its flush: %+v", d)
+	}
+	if wals, _ := filepath.Glob(filepath.Join(f.Staging(), "*.wal")); len(wals) != 0 {
+		t.Fatalf("WALs after the flush: %v", wals)
 	}
 }
 

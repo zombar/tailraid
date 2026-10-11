@@ -40,34 +40,34 @@ services:
     !!merge <<: *node
     environment: {!!merge <<: *env, ROLE: init, SELF_IP: 172.30.0.11, NODE_NAME: n1}
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
-    ports: ["127.0.0.1:20501:20495"]
+    ports: ["127.0.0.1:20501:20495", "127.0.0.1:20521:20482"]
     volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-spare:/disks/spare']
   n2:
     !!merge <<: *node
     environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2}
     networks: {tailraid: {ipv4_address: 172.30.0.12}}
-    ports: ["127.0.0.1:20502:20495"]
+    ports: ["127.0.0.1:20502:20495", "127.0.0.1:20522:20482"]
     volumes: ['n2:/var/lib/tailraid', 'n2-d1:/disks/d1', 'n2-d2:/disks/d2', 'n2-spare:/disks/spare']
     depends_on: [n1]
   n3:
     !!merge <<: *node
     environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.13}}
-    ports: ["127.0.0.1:20503:20495"]
+    ports: ["127.0.0.1:20503:20495", "127.0.0.1:20523:20482"]
     volumes: ['n3:/var/lib/tailraid', 'n3-d1:/disks/d1', 'n3-d2:/disks/d2', 'n3-spare:/disks/spare']
     depends_on: [n2]
   n4:
     !!merge <<: *node
     environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.14, NODE_NAME: n4, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.14}}
-    ports: ["127.0.0.1:20504:20495"]
+    ports: ["127.0.0.1:20504:20495", "127.0.0.1:20524:20482"]
     volumes: ['n4:/var/lib/tailraid', 'n4-d1:/disks/d1', 'n4-d2:/disks/d2', 'n4-spare:/disks/spare']
     depends_on: [n3]
   n5:
     !!merge <<: *node
     environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.15, NODE_NAME: n5, DISKS: ""}
     networks: {tailraid: {ipv4_address: 172.30.0.15}}
-    ports: ["127.0.0.1:20505:20495"]
+    ports: ["127.0.0.1:20505:20495", "127.0.0.1:20525:20482"]
     volumes: ['n5:/var/lib/tailraid', 'n5-spare:/disks/spare']
     depends_on: [n4]
 

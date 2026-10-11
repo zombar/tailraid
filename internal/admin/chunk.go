@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -56,10 +57,14 @@ func DescribeChunks(ctx context.Context, st *meta.Store, p *cluster.Prober, hc S
 	return out, err
 }
 
+// PageWorkers bounds the reports of one page described at once, and so the shard HEADs
+// in flight: each report checks its slots one after the other (docs/13 §7, I-161).
+const PageWorkers = 16
+
 // DescribeChunksPage is DescribeChunks over the window [offset, offset+limit) of the
 // selection (limit <= 0 means to the end) and returns the whole selection's count too.
 // The web UI pages a file's chunks this way because each report costs one HEAD per live
-// slot (docs/13 §5).
+// slot (docs/13 §7); the page's reports are built PageWorkers at a time, in order.
 func DescribeChunksPage(ctx context.Context, st *meta.Store, p *cluster.Prober, hc ShardChecker, ring *meta.EventRing, sel string, offset, limit int) (int, []ChunkReport, error) {
 	hashes, err := selectChunks(st, sel)
 	if err != nil {
@@ -71,10 +76,19 @@ func DescribeChunksPage(ctx context.Context, st *meta.Store, p *cluster.Prober, 
 	if limit > 0 && offset+limit < total {
 		end = offset + limit
 	}
-	out := make([]ChunkReport, 0, end-offset)
-	for _, h := range hashes[offset:end] {
-		out = append(out, DescribeChunk(ctx, st, p, hc, ring, h))
+	out := make([]ChunkReport, end-offset)
+	sem := make(chan struct{}, PageWorkers)
+	var wg sync.WaitGroup
+	for i, h := range hashes[offset:end] {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i int, h meta.Hash) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			out[i] = DescribeChunk(ctx, st, p, hc, ring, h)
+		}(i, h)
 	}
+	wg.Wait()
 	return total, out, nil
 }
 
@@ -119,7 +133,7 @@ func selectChunks(st *meta.Store, sel string) ([]meta.Hash, error) {
 
 // DescribeChunk builds the report for one hash.
 func DescribeChunk(ctx context.Context, st *meta.Store, p *cluster.Prober, hc ShardChecker, ring *meta.EventRing, h meta.Hash) ChunkReport {
-	rep := ChunkReport{Hash: hex.EncodeToString(h[:]), State: "unknown", EventRing: ring != nil, Events: ring.Of(h)}
+	rep := ChunkReport{Hash: hex.EncodeToString(h[:]), State: "unknown", Slots: []SlotReport{}, EventRing: ring != nil, Events: ring.Of(h)} // slots is an array even for a hole (I-161)
 	if h == meta.HashZero {
 		rep.State = "zero"
 		return rep

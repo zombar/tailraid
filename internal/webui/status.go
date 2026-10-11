@@ -11,7 +11,7 @@ import (
 )
 
 // statusTTL bounds how often the admin report (a walk of every chunk) is rebuilt; every
-// tab polling at 5 s shares one build (docs/13 §5, I-73).
+// tab polling at 5 s shares one build (docs/13 §7, I-73).
 const statusTTL = 2 * time.Second
 
 type statusCache struct {

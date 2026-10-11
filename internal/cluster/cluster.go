@@ -100,6 +100,11 @@ type Node struct {
 	ID   string
 	Raft *raft.Raft
 	FSM  *meta.FSM
+	// MinCodec, when set, is the oldest codec a live active member reports (the prober's
+	// view): a leader refuses a command written in a newer one with meta.ErrCodec, so a
+	// cluster half-way through an update never logs an entry half of it cannot read
+	// (docs/12 §6, I-156). nil accepts everything (tests, single-node rigs).
+	MinCodec func() uint8
 
 	logs        raft.LogStore
 	closer      io.Closer // the on-disk store; nil for injected stores
@@ -366,14 +371,14 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 		cmds = append(cmds, meta.Command{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: true, Now: vol.Now}})
 	}
 	cmds = append(cmds, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: self}})
-	for _, c := range cmds {
-		res, _, err := n.Propose(ctx, c)
+	for i := range cmds {
+		res, _, err := n.Propose(ctx, cmds[i])
 		if err == nil {
 			err = res.Err
 		}
 		if err != nil {
 			_ = n.Close()
-			return nil, fmt.Errorf("cluster: bootstrap op %d: %w", c.Op, err)
+			return nil, fmt.Errorf("cluster: bootstrap op %d: %w", cmds[i].Op, err)
 		}
 	}
 	return n, nil
