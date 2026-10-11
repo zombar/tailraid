@@ -153,7 +153,13 @@ func TestFSM_Trash_FoldsEarlierRoots(t *testing.T) {
 	a := tf.create(d, "a")
 	b := tf.create(sub, "b")
 	tf.trash(sub, "b", false)
-	tf.trash(d, "sub", false) // an empty dir with a root under it: trashed with it (fold)
+	subV := tf.inode(sub).Version
+	// an empty dir with a root under it: trashed with it (fold); its name table changed,
+	// so its times and version move (an NFS client's negative lookup of b expires)
+	tf.ok(Command{Op: OpTrash, Trash: &Trash{Parent: d, Name: "sub", Now: 7}})
+	if in, _ := tf.f.GetInodeAny(sub); in.Version <= subV || in.Mtime != 7 || in.Ctime != 7 {
+		t.Fatalf("folded-into dir not touched: version %d (was %d), mtime %d, ctime %d", in.Version, subV, in.Mtime, in.Ctime)
+	}
 	tf.trash(d, "a", false)
 	// a name reused after its delete: the older root stays separate
 	a2 := tf.create(d, "a")
