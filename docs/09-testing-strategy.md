@@ -395,8 +395,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   coarse segments and the minute rows equal the pure rollup of the raw rows the driver
   read back, the leader's seal removes a segment the phase planted with a 2010 name,
   the page's charts render for a 6 h range from the rows read and the live edge every
-  node answers over `/v1/stats`, a member killed mid-phase answers no live edge and the
-  leader's rows mark it dead and never a zero, and the stored bytes grow by no more
+  node answers over `/v1/stats`, a member killed mid-phase answers no live edge (or, bounced by
+  its service manager on a live rig, nothing from before the kill) and the leader's
+  rows mark it dead and never a zero, and the stored bytes grow by no more
   than docs/17 §6's estimate for one sealed hour and the rollups per node, printed
   measured against estimated; 19 is taken by snapshots; I-191..I-194, I-196). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only

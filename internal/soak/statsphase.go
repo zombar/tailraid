@@ -175,8 +175,17 @@ func phaseStats(ctx context.Context, r *Run) error {
 			// already); leadership may move meanwhile, so every live member is asked and the
 			// newest cluster row written after the kill is the one judged, within the window
 			_ = r.Env.Wait(ctx, cluster.LiveThreshold+2*r.Profile.SampleEvery)
-			_, err := r.Env.StatsLive(ctx, victim, 0)
-			r.checkAt("I-196", "a dead member has no live edge", err != nil, fmt.Sprintf("err %v", err), "", "", victim.Name)
+			// a killed member answers no live edge; one a service manager bounced at once
+			// (a live rig's hold-down, docs/09 §6) answers again, with a ring that holds
+			// nothing from before the kill: either way the kill is a gap, never a zero
+			vrows, err := r.Env.StatsLive(ctx, victim, 0)
+			stale := 0
+			for _, row := range vrows {
+				if row.T <= killed {
+					stale++
+				}
+			}
+			r.checkAt("I-196", "a dead member has no live edge from before the kill", err != nil || stale == 0, fmt.Sprintf("err %v, %d rows, %d from before the kill", err, len(vrows), stale), "", "", victim.Name)
 			deadline := time.Now().Add(attrCacheWindow)
 			var last *stats.Row
 			var by string

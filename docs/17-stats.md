@@ -233,7 +233,9 @@ rows equal the pure rollup of the raw rows the driver read back (I-193); (c) a s
 planted with a 2010 name is gone after the leader's seal; (d) the page's charts render for
 a 6 h range from the rows read and the live edge every node answers over `/v1/stats` (the
 same code `/api/stats` runs; the page itself is 13's manual checks); (e) a member killed
-mid-phase answers no live edge and the leader's rows mark it dead, never a zero; (f)
+mid-phase answers no live edge, or, bounced at once by its service manager on a live
+rig (09 §6), only rows from after its return, and the leader's rows mark it dead, never
+a zero; (f)
 `stored_bytes` grows by no more than §6's estimate for one sealed hour and the rollups per
 node, printed measured against estimated. `verify` runs (a) to (d) and (f) on a live
 cluster and (e) with `--destructive --restarts`; the three-VM rounds (vms.md) pick the
