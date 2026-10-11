@@ -133,6 +133,18 @@ func (a *Admin) GCNow(ctx context.Context) (repair.Result, error) {
 	return res, err
 }
 
+// WebURL is the node's browser UI from its status report.
+func (a *Admin) WebURL(ctx context.Context, n NodeRef) (string, error) {
+	rep, err := a.Status(ctx, n)
+	if err != nil {
+		return "", err
+	}
+	return rep.WebURL, nil
+}
+
+// WebClient is nil: a live cluster's web UI is reached directly on the tailnet.
+func (a *Admin) WebClient() *http.Client { return nil }
+
 func (a *Admin) PurgeTrash(ctx context.Context) (int, error) {
 	var res struct {
 		Purged int `json:"purged"`

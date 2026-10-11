@@ -568,13 +568,13 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
 | I-143 | `TestBrowserCommand_PerOS`, `TestCLI_Dashboard` |
 | I-140 | `TestWebUI_Ls_HidesOSMetadata` |
-| I-158 | `TestWebUI_Delete_LandsInTrash_ListedInPlace`, `TestWebUI_TrashAddressing_LsStatGet`, `TestWebUI_Restore_TakenName_409_ThenAs`, `TestWebUI_Purge_FreesRefs`, `TestWebUI_Put_OverwriteKeepsPreviousInTrash` |
-| I-159 | `TestWebUI_Rename_Table`, `TestWebUI_Move_PerItemResults`, `TestWebUI_Batch_SizeBoundaries`, `TestWebUI_BodyCaps_AllMutatingRoutes` |
-| I-160 | `TestWebUI_Thumb_Image_Generated_Cached_Hidden`, `TestWebUI_Thumb_Put_Boundaries`, `TestWebUI_Thumb_SweptWhenFileChanges` |
-| I-161 | `TestDescribeChunksPage_Concurrent`, `TestWebUI_Chunks_HolesHaveSlots` |
-| I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs` (planned: TestWebUI_Pins) |
-| I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403` |
-| I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded` |
-| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic` |
+| I-158 | `TestWebUI_Delete_LandsInTrash_ListedInPlace`, `TestWebUI_TrashAddressing_LsStatGet`, `TestWebUI_Restore_TakenName_409_ThenAs`, `TestWebUI_Purge_FreesRefs`, `TestWebUI_Put_OverwriteKeepsPreviousInTrash`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
+| I-159 | `TestWebUI_Rename_Table`, `TestWebUI_Move_PerItemResults`, `TestWebUI_Batch_SizeBoundaries`, `TestWebUI_BodyCaps_AllMutatingRoutes`, `TestSoak_AllPhasesAgainstHarness` |
+| I-160 | `TestWebUI_Thumb_Image_Generated_Cached_Hidden`, `TestWebUI_Thumb_Put_Boundaries`, `TestWebUI_Thumb_SweptWhenFileChanges`, `TestSoak_AllPhasesAgainstHarness` |
+| I-161 | `TestDescribeChunksPage_Concurrent`, `TestWebUI_Chunks_HolesHaveSlots`, `TestSoak_AllPhasesAgainstHarness` |
+| I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs`, `TestWebUI_Pins`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
+| I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
+| I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
+| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestSoak_AllPhasesAgainstHarness` |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

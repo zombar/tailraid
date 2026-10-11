@@ -245,7 +245,8 @@ type Env interface {
     Status, RepairNow, Scrub, GCNow, SetPolicy, SetPolicyAuto, SetState, Remove, Fsck,
     Chunks, FSMHash, Goroutines, Disks, Fill, S3 ...
     PurgeTrash(ctx) (int, error)                   // `trash purge --all`: what phase 8 needs before GC can reclaim
-    WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16
+    WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16; "" skips it
+    WebClient() *http.Client                       // how the driver reaches it (nil: directly); compose dials its published ports
     // faults
     Kill, Start, Restart, Partition, Heal, Corrupt, FailDisk, RestoreDisk, AddDisk ...
 }

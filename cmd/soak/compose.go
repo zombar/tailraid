@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -95,6 +96,27 @@ func (e *composeEnv) node(ref soak.NodeRef) composeNode {
 		}
 	}
 	panic("compose: unknown node " + ref.Name)
+}
+
+// webPort is the browser UI's container port; the compose files publish node i's on
+// 127.0.0.1:2052i, so the driver dials the published port while the request names the
+// node's own address, which its Host check expects (docs/13 §2, I-127).
+const webPort = "20482"
+
+func (e *composeEnv) WebClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	return &http.Client{Timeout: 90 * time.Second, Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil && port == webPort {
+				for i, n := range e.nodes {
+					if n.ip == host {
+						addr = fmt.Sprintf("127.0.0.1:%d", 20520+i+1)
+					}
+				}
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+	}}
 }
 
 func (e *composeEnv) Caps() soak.Caps {

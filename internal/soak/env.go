@@ -2,6 +2,7 @@ package soak
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -99,4 +100,11 @@ type Env interface {
 	// cluster's back. A live cluster offers only Bucket, for the S3 node it already has.
 	AddS3(ctx context.Context, name string) error
 	Bucket(ctx context.Context) (*s3.Bucket, error)
+
+	// WebURL is the node's browser UI (docs/13) as the driver reaches it,
+	// "http://<host>:<port>/"; "" when the environment has none, which skips phase 16.
+	// WebClient is the HTTP client that reaches it (nil: a default client); the compose
+	// rig's dials its published ports.
+	WebURL(ctx context.Context, node NodeRef) (string, error)
+	WebClient() *http.Client
 }

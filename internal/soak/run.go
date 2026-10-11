@@ -102,8 +102,11 @@ type Sample struct {
 	WALBytes      int64                      `json:"wal_bytes"`      // the sampled node's overlay WAL depth
 	DirtyBytes    uint64                     `json:"dirty_bytes"`
 	PlanBytes     uint64                     `json:"plan_bytes"`
-	FlushBytes    uint64                     `json:"flush_bytes"` // the sampled node's flush buffers (docs/04 §9)
-	HeapInuse     uint64                     `json:"heap_inuse"`  // the sampled node's process (docs/12 §8)
+	FlushBytes    uint64                     `json:"flush_bytes"`  // the sampled node's flush buffers (docs/04 §9)
+	TrashInodes   int                        `json:"trash_inodes"` // deleted entries waiting in the trash (docs/06 §1)
+	TrashBytes    uint64                     `json:"trash_bytes"`
+	CachePinned   int64                      `json:"cache_pinned"` // bytes the sampled node's cache holds for its pins (docs/13 §4)
+	HeapInuse     uint64                     `json:"heap_inuse"`   // the sampled node's process (docs/12 §8)
 	Sys           uint64                     `json:"sys"`
 	Goroutines    int                        `json:"goroutines"`
 	// the sampled node's machine vitals (docs/12 §8); rates are between this node's
@@ -159,7 +162,9 @@ type Run struct {
 	Log     *slog.Logger
 
 	lastRepair repair.Stats // the last pass repairUntilClean ran, quoted when a phase finds work left
-	Out        io.Writer    // results.jsonl (may be nil)
+	thumbs     int          // thumbnail round trips of phase 16 (under mu)
+	thumbMax   time.Duration
+	Out        io.Writer // results.jsonl (may be nil)
 	Rng        *rand.Rand
 	Seed       int64    // the Rng's seed, for the report
 	Flags      []string // run flags worth recording ("destructive", "restarts")
@@ -256,6 +261,11 @@ type Totals struct {
 	MaxRSS       uint64  // highest resident set seen in a sample (docs/12 §8)
 	MaxCPUPct    float64 // the process's busiest sample interval
 	MinDiskFree  uint64  // least free space on the sampled node's data disk (0 = not sampled)
+	MaxTrash     int     // most entries seen in the trash (docs/06 §1)
+	MaxTrashB    uint64  // their bytes at that moment
+	MaxPinned    int64   // most bytes the sampled node's cache held for its pins (docs/13 §4)
+	Thumbs       int     // thumbnail round trips phase 16 made
+	ThumbMax     time.Duration
 	Repair       repair.Stats
 	GC           repair.Result
 }
@@ -504,6 +514,10 @@ func (r *Run) sample(ctx context.Context, round int) {
 			s.Targets = targetsOf(rep)
 		}
 		s.StoredBytes, s.LogicalBytes, s.DedupRatio = rep.Volume.StoredBytes, rep.Volume.LogicalBytes, rep.Volume.DedupRatio
+		s.TrashInodes, s.TrashBytes = rep.Volume.TrashInodes, rep.Volume.TrashBytes
+		if rep.Cache != nil {
+			s.CachePinned = rep.Cache.PinnedBytes
+		}
 		s.Health = rep.Health
 		s.Slots, s.LiveNodes = map[string]int{}, map[string]bool{}
 		for i := range rep.Nodes {
@@ -797,12 +811,16 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	}
 	sum.Latency = latencyRows(r.lats, results, faultWindows(sum.Records))
 	sum.Coverage = coverage(results)
-	sum.Totals = Totals{BytesWritten: r.counters.BytesWritten, BytesRead: r.counters.BytesRead, Writes: r.counters.Writes, Reads: r.counters.Reads, Repair: r.repair, GC: r.gc}
+	sum.Totals = Totals{BytesWritten: r.counters.BytesWritten, BytesRead: r.counters.BytesRead, Writes: r.counters.Writes, Reads: r.counters.Reads, Repair: r.repair, GC: r.gc, Thumbs: r.thumbs, ThumbMax: r.thumbMax}
 	for i := range sum.Records {
 		s := sum.Records[i].S
 		if s == nil {
 			continue
 		}
+		if s.TrashInodes > sum.Totals.MaxTrash {
+			sum.Totals.MaxTrash, sum.Totals.MaxTrashB = s.TrashInodes, s.TrashBytes
+		}
+		sum.Totals.MaxPinned = max(sum.Totals.MaxPinned, s.CachePinned)
 		sum.Totals.MaxWALBytes = max(sum.Totals.MaxWALBytes, s.WALBytes)
 		sum.Totals.MaxFlush = max(sum.Totals.MaxFlush, s.FlushBytes)
 		sum.Totals.MaxHeap = max(sum.Totals.MaxHeap, s.HeapInuse)
