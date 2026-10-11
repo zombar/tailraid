@@ -93,7 +93,7 @@ type Options struct {
 	Auth       Authorizer
 	Members    func() []meta.Node
 	JoinToken  func() string
-	Status     func() any            // GET /v1/status body (admin report)
+	Status     func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
 	Stats      func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
 	Web        uint16                // the browser UI's port for /health (0 when off)
 	BadSlot    func(key chunk.ShardKey, node meta.NodeIdx)
@@ -686,10 +686,10 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	var body any = map[string]any{"members": s.o.Members()}
 	if s.o.Status != nil {
-		body = s.o.Status()
+		body = s.o.Status(r.URL.Query().Get("fresh") == "1")
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)

@@ -345,9 +345,16 @@ file strictly, still starts after a rollback (I-61).
 browser tab asks every 5 s. The node therefore keeps an `admin.Reporter`: the first
 request builds the report on its own goroutine, and from then on a refresher rebuilds it
 every `ReportEvery` (2 s) for as long as a request arrived within `ReportIdle` (30 s),
-stopping otherwise until the next one. `tailraid status`, `/v1/status` and `/api/status`
-all return the latest build at once; `generated_at` says how old it is and `walk_ms` how
-long its walk took, so a slow walk is a visible number rather than a slow page.
+stopping otherwise until the next one. While the refresher runs, `/api/status` and
+`/v1/status` return the latest build at once; `generated_at` says how old it is and
+`walk_ms` how long its walk took, so a slow walk is a visible number rather than a slow
+page. A request that finds the refresher stopped waits for the build it restarts rather
+than serving the last one, which may be hours old, and `/v1/status?fresh=1` waits for a
+build that starts after the request (one build serves every request waiting on it).
+`tailraid status`, every CLI command that reads the report and `verify` ask with
+`fresh=1`: what they print follows the action before them, which the soak's checks
+depend on (a report up to a refresh old had failed fourteen of them, I-214); the
+dashboard's polling takes the cheap path.
 
 **Readiness.** `/health` and `status` carry `ready`: the node knows a leader and Raft has
 handed its FSM every entry it has committed. A freshly restarted node is not ready
@@ -479,8 +486,12 @@ from the device with every other node away; `cache unpin <path>` releases it and
 - **I-205** — After the first report, `status`, `/v1/status` and `/api/status` never run
   the chunk walk on the request's goroutine: a refresher rebuilds the report every
   `ReportEvery` while one was asked for within `ReportIdle` and stops otherwise, a request
-  returns the latest build at once, the report carries `walk_ms` and `generated_at`, and
-  `Close` stops the refresher.
+  made while it runs returns the latest build at once, the report carries `walk_ms` and
+  `generated_at`, and `Close` stops the refresher.
+- **I-214** — A request that finds the refresher stopped, and every `/v1/status?fresh=1`
+  request (the CLI's and `verify`'s), gets a report whose build started after the request
+  arrived, never an older one; concurrent such requests share one build; after `Close` a
+  request serves the last report.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -509,3 +520,4 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
+| I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |

@@ -325,7 +325,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return rep
 	}, clk)
 	defer reporter.Close()
-	status := func() any { return reporter.Get() }
+	status := func(fresh bool) any { return reporter.Get(fresh) }
 	srv, err := rpc.NewServer(rpc.Options{
 		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
@@ -370,7 +370,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			},
 		}
 		web, err = webui.New(webui.Options{
-			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Stats: query, Hosts: webui.Hosts(webAddr, ident.DNSName),
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: func() any { return status(false) }, Stats: query, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
