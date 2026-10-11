@@ -32,7 +32,7 @@ func (f *fakeCaller) Call(_ context.Context, addr, method, path string, body []b
 	if f.down[addr] {
 		return nil, errors.New("dial: connection refused")
 	}
-	if path == "/v1/status" {
+	if path == "/v1/status?fresh=1" { // FetchStatus asks for a report built after it (I-214)
 		return json.Marshal(f.rep)
 	}
 	if to, ok := f.redirect[addr]; ok {
@@ -74,7 +74,7 @@ func TestAdmin_SeedsRedirectsAndReplies(t *testing.T) {
 	if err != nil || st.Scanned != 3 {
 		t.Fatalf("scrub %+v, %v", st, err)
 	}
-	want := []string{"GET 10.0.0.1:20481/v1/status", "GET 10.0.0.2:20481/v1/status", "POST 10.0.0.2:20481/v1/admin", "POST 10.0.0.3:20481/v1/admin"}
+	want := []string{"GET 10.0.0.1:20481/v1/status?fresh=1", "GET 10.0.0.2:20481/v1/status?fresh=1", "POST 10.0.0.2:20481/v1/admin", "POST 10.0.0.3:20481/v1/admin"}
 	if got := fc.calls[len(fc.calls)-4:]; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("calls %v", got)
 	}

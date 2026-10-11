@@ -8,10 +8,12 @@ import (
 )
 
 // Reporter keeps the status report off the request path (docs/12 §8, I-205): building
-// one walks every chunk (ScanHealth), so a request never runs the walk itself. The first
-// Get builds synchronously; from then on a refresher rebuilds the report every
-// ReportEvery for as long as someone asked for it within ReportIdle, and every Get
-// returns the latest build at once. The report's GeneratedAt says how old it is.
+// one walks every chunk (ScanHealth), so a request never runs the walk itself. A refresher
+// rebuilds the report every ReportEvery for as long as someone asked for it within
+// ReportIdle, and a request while it runs returns the latest build at once. A request
+// that finds it stopped, and a fresh one, wait for a build that starts after the request
+// (I-214): a report from before an idle stretch, or from before the action a caller just
+// took, is never served as current. The report's GeneratedAt says how old it is.
 type Reporter struct {
 	build func() Report
 	clk   clock.Clock
@@ -20,8 +22,11 @@ type Reporter struct {
 
 	mu      sync.Mutex
 	rep     Report
-	have    bool
-	first   chan struct{} // closed once the first build is stored; later first-callers wait on it
+	started uint64        // builds begun
+	stored  uint64        // the number of the build behind rep (0: none yet)
+	need    uint64        // the latest build number a waiter needs
+	landed  chan struct{} // closed and replaced whenever a build is stored
+	kick    chan struct{} // wakes the refresher early for a waiter (buffered 1)
 	asked   time.Time
 	running bool
 	closed  bool
@@ -36,39 +41,61 @@ const (
 	ReportIdle  = 30 * time.Second
 )
 
-// NewReporter wraps build, which is called on the reporter's goroutine or, once, on the
-// first caller's.
+// NewReporter wraps build, which is called on the reporter's goroutine (or, after Close
+// with no report yet, on the caller's).
 func NewReporter(build func() Report, clk clock.Clock) *Reporter {
-	return &Reporter{build: build, clk: clk, every: ReportEvery, idle: ReportIdle, first: make(chan struct{}), stop: make(chan struct{})}
+	return &Reporter{
+		build: build, clk: clk, every: ReportEvery, idle: ReportIdle,
+		landed: make(chan struct{}), kick: make(chan struct{}, 1), stop: make(chan struct{}),
+	}
 }
 
-// Get returns the latest report. Only the very first call builds one on the caller's
-// goroutine (a concurrent first caller waits for that build rather than starting another).
-func (r *Reporter) Get() Report {
+// Get returns the status report. While the refresher runs, a plain request gets the
+// latest build at once; a fresh request, or any request that finds the refresher
+// stopped, waits for a build that begins after the request (I-214), and concurrent
+// waiters share it.
+func (r *Reporter) Get(fresh bool) Report {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.asked = r.clk.Now()
-	if !r.have {
-		first := r.first
-		building := r.running // the first caller marks itself running while it builds
-		if !building {
-			r.running = true
-			r.mu.Unlock()
-			rep := r.build()
-			r.mu.Lock()
-			r.rep, r.have = rep, true
-			close(first)
-			r.startLocked()
-		} else {
-			r.mu.Unlock()
-			<-first
-			r.mu.Lock()
+	if r.closed {
+		return r.lastLocked()
+	}
+	if r.stored > 0 && r.running && !fresh {
+		return r.rep
+	}
+	need := r.started + 1 // the next build to begin; one under way began before this request
+	r.need = max(r.need, need)
+	if r.running {
+		select {
+		case r.kick <- struct{}{}:
+		default:
 		}
-	} else if !r.running {
+	} else {
 		r.startLocked()
 	}
-	rep := r.rep
-	r.mu.Unlock()
-	return rep
+	for r.stored < need {
+		landed := r.landed
+		r.mu.Unlock()
+		select {
+		case <-landed:
+			r.mu.Lock()
+		case <-r.stop:
+			r.mu.Lock()
+			return r.lastLocked()
+		}
+	}
+	return r.rep
+}
+
+// lastLocked is the report after Close: the last build, or one built on the caller's
+// goroutine when there was none. The caller holds mu.
+func (r *Reporter) lastLocked() Report {
+	if r.stored == 0 {
+		r.started++
+		r.rep, r.stored = r.build(), r.started
+	}
+	return r.rep
 }
 
 // Running reports whether the refresher is up (tests).
@@ -78,40 +105,68 @@ func (r *Reporter) Running() bool {
 	return r.running
 }
 
-// startLocked starts the refresher unless the reporter is closed. The caller holds mu.
+// startLocked starts the refresher, which builds at once. The caller holds mu.
 func (r *Reporter) startLocked() {
-	r.running = !r.closed
-	if r.closed {
-		return
-	}
+	r.running = true
 	r.done = make(chan struct{})
-	go r.refresh(r.done, r.clk.NewTimer(r.every)) // armed here, so a clock advanced right after Get fires it
+	go r.refresh(r.done)
 }
 
-func (r *Reporter) refresh(done chan struct{}, t clock.Timer) {
+// refresh builds now and then every ReportEvery while the report is wanted, at once again
+// when a waiter needs a build that begins after the one just stored.
+func (r *Reporter) refresh(done chan struct{}) {
 	defer close(done)
-	defer t.Stop()
+	var t clock.Timer
+	defer func() {
+		if t != nil {
+			t.Stop()
+		}
+	}()
 	for {
+		select { // a build beginning now serves every waiter that kicked before it
+		case <-r.kick:
+		default:
+		}
+		r.mu.Lock()
+		r.started++
+		n := r.started
+		r.mu.Unlock()
+		rep := r.build()
+		r.mu.Lock()
+		r.rep, r.stored = rep, n
+		again := r.need > n // a waiter arrived after this build began
+		if !again {
+			// armed before the build is announced, so a clock advanced right after a Get
+			// that waited for it fires the next one
+			if t == nil {
+				t = r.clk.NewTimer(r.every)
+			} else {
+				t.Reset(r.every)
+			}
+		}
+		close(r.landed)
+		r.landed = make(chan struct{})
+		r.mu.Unlock()
+		if again {
+			continue
+		}
 		select {
 		case <-r.stop:
 			r.mu.Lock()
 			r.running = false
 			r.mu.Unlock()
 			return
+		case <-r.kick:
+			continue
 		case <-t.C():
 		}
 		r.mu.Lock()
-		if r.clk.Now().Sub(r.asked) > r.idle || r.closed { // nobody is looking: stop until the next Get
+		if r.clk.Now().Sub(r.asked) > r.idle && r.need <= r.stored { // nobody is looking: stop until the next Get
 			r.running = false
 			r.mu.Unlock()
 			return
 		}
 		r.mu.Unlock()
-		rep := r.build()
-		r.mu.Lock()
-		r.rep = rep
-		r.mu.Unlock()
-		t.Reset(r.every)
 	}
 }
 
