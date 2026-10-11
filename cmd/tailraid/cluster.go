@@ -159,6 +159,11 @@ func printStatus(w io.Writer, r admin.Report) {
 	if v.Degraded > 0 || v.RepairPending > 0 || v.Unreadable > 0 || v.DomainSkew > 0 || v.DiskSkew > 0 {
 		fmt.Fprintf(w, "chunks  degraded: %d  repair-pending: %d  unreadable: %d  policy-stale: %d  host-skew: %d  disk-skew: %d\n", v.Degraded, v.RepairPending, v.Unreadable, v.StalePolicy, v.DomainSkew, v.DiskSkew)
 	}
+	if r.Repair != nil && r.Repair.InProgress != nil {
+		p := r.Repair.InProgress
+		fmt.Fprintf(w, "repair  pass %d running: %d/%d scanned, %d in flight of %d workers, %s moved, started %s\n",
+			p.Pass, p.Scanned, p.Total, p.InFlight, p.Workers, bytesStr(uint64(max(p.BytesMoved, 0))), p.Started.Local().Format("15:04:05"))
+	}
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
 	}

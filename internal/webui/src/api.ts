@@ -68,10 +68,22 @@ export interface RepairStats {
   errors: number;
 }
 
+// The pass under way on the leader (docs/12 §8): absent while the repairer is idle.
+export interface RepairProgress {
+  pass: number;
+  started: string;
+  scanned: number;
+  total: number;
+  in_flight: number;
+  workers: number;
+  bytes_moved: number;
+}
+
 export interface RepairStatus {
   last_scan: string;
   stats: RepairStats;
   reported_bad_slots: number;
+  in_progress?: RepairProgress | null;
 }
 
 export interface GatewayReport {

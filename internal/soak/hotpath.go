@@ -37,33 +37,11 @@ func phaseHotPath(ctx context.Context, r *Run) error {
 	size := hotpathChunks * r.Profile.ChunkSize
 	p := join(r.Root, "hotpath.bin")
 	wv := r.volume(writer)
-	h := sha256.New()
-	for off := 0; off < size; off += hotpathPiece {
-		piece := r.randomBytes(min(hotpathPiece, size-off))
-		if err := wv.WriteAt(p, int64(off), piece); err != nil {
-			r.checkAt("I-7", "hot-path file written", false, fmt.Sprintf("write at %d: %v", off, err), p, "", writer.Name)
-			return nil
-		}
-		h.Write(piece)
-		if err := r.Env.Wait(ctx, 0); err != nil {
-			return err
-		}
+	want, ok, err := r.writeCommitted(ctx, writer, p, size)
+	if err != nil {
+		return err
 	}
-	want := [32]byte(h.Sum(nil))
-	// the read must see committed chunks: wait for the writer's overlay to drain, as the
-	// large-file phase does
-	var rep admin.Report
-	var err error
-	for range 20 {
-		if werr := r.Env.Wait(ctx, r.Profile.FlushIdle); werr != nil {
-			return werr
-		}
-		if rep, err = r.Env.Status(ctx, writer); err == nil && rep.Gateway != nil && rep.Gateway.DirtyInodes == 0 {
-			break
-		}
-	}
-	if err != nil || rep.Gateway == nil || rep.Gateway.DirtyInodes != 0 {
-		r.checkAt("I-7", "hot-path file committed before the read", false, fmt.Sprintf("gateway %+v, %v", rep.Gateway, err), p, "", writer.Name)
+	if !ok {
 		return nil
 	}
 
@@ -138,6 +116,41 @@ func phaseHotPath(ctx context.Context, r *Run) error {
 		r.checkAt("I-81", "hot-path file removed", false, err.Error(), p, "", writer.Name)
 	}
 	return r.hotpathStraggler(ctx, writer)
+}
+
+// writeCommitted writes size random bytes to p through gw in hotpathPiece pieces and
+// waits for the gateway's overlay to drain, as the large-file phase does, so a read
+// elsewhere sees committed chunks. ok is false when a check failed (recorded); err is
+// the environment's.
+func (r *Run) writeCommitted(ctx context.Context, gw NodeRef, p string, size int) (want [32]byte, ok bool, err error) {
+	v := r.volume(gw)
+	h := sha256.New()
+	for off := 0; off < size; off += hotpathPiece {
+		piece := r.randomBytes(min(hotpathPiece, size-off))
+		if werr := v.WriteAt(p, int64(off), piece); werr != nil {
+			r.checkAt("I-7", "file written through the gateway", false, fmt.Sprintf("write at %d: %v", off, werr), p, "", gw.Name)
+			return want, false, nil
+		}
+		h.Write(piece)
+		if err := r.Env.Wait(ctx, 0); err != nil {
+			return want, false, err
+		}
+	}
+	want = [32]byte(h.Sum(nil))
+	var rep admin.Report
+	for range 20 {
+		if werr := r.Env.Wait(ctx, r.Profile.FlushIdle); werr != nil {
+			return want, false, werr
+		}
+		if rep, err = r.Env.Status(ctx, gw); err == nil && rep.Gateway != nil && rep.Gateway.DirtyInodes == 0 {
+			break
+		}
+	}
+	if err != nil || rep.Gateway == nil || rep.Gateway.DirtyInodes != 0 {
+		r.checkAt("I-7", "file committed before the read", false, fmt.Sprintf("gateway %+v, %v", rep.Gateway, err), p, "", gw.Name)
+		return want, false, nil
+	}
+	return want, true, nil
 }
 
 // hotpathStraggler cuts the writing gateway off from one holder in the middle of a

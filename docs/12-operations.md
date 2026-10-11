@@ -293,6 +293,16 @@ is omitted from the JSON, never reported as zero (I-85). The sampler turns the c
 counters into rates between its ticks, and the report draws CPU, memory, memory pressure
 and disk charts for the sampled node, with peaks in the totals table.
 
+**Repair progress.** On the leader `repair` carries the last completed pass (`last_scan`,
+`stats`) and, while a pass runs, `in_progress`: `pass`, `started`, `scanned` of `total`
+chunks, `in_flight` of `workers`, `bytes_moved` (06 §4, I-174). `tailraid status` prints
+it as one line (`repair  pass 3 running: 12345/106452 scanned, 4 in flight of 4 workers,
+1.2 GiB moved, started 06:01:19`), `check` carries it next to `scan`, and the dashboard's
+integrity panel shows it above the last pass's counters, so a first pass over a large
+backlog is visible as progress rather than read as a stall. `repair.workers` (1..64,
+default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in the config
+set the fan-out and the byte rate; `serve` refuses a value outside those bounds.
+
 **Readiness.** `/health` and `status` carry `ready`: the node knows a leader and Raft has
 handed its FSM every entry it has committed. A freshly restarted node is not ready
 until its replay is done, an isolated follower stops being ready when it loses its

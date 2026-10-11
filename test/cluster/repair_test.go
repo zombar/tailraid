@@ -778,7 +778,11 @@ func (f *failPuts) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKe
 }
 
 func repairerWith(c *testharness.Cluster, nd *testharness.ClusterNode, shards repair.Shards) *repair.Repairer {
-	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, shards, nd.Reader, c.Clk, repairCfg(), nil)
+	return repairerWithCfg(c, nd, shards, repairCfg())
+}
+
+func repairerWithCfg(c *testharness.Cluster, nd *testharness.ClusterNode, shards repair.Shards, cfg repair.Config) *repair.Repairer {
+	r := repair.New(nd.Node.FSM, nd.Node, nd.Prober, shards, nd.Reader, c.Clk, cfg, nil)
 	r.Events = nd.Events
 	return r
 }
@@ -846,9 +850,12 @@ func TestRepair_MigrationCrash_Resumes(t *testing.T) {
 	must(t, err)
 	must(t, res.Err)
 	c.Settle()
-	// the first chunk's four PUTs land, then the leader "dies": every later PUT fails
+	// the first chunk's four PUTs land, then the leader "dies": every later PUT fails.
+	// The crash point counts PUTs in order, so this pass runs one chunk at a time.
 	dying := &failPuts{Shards: leader.Client, after: 4}
-	st, err := repairerWith(c, leader, dying).Scan(ctx)
+	serial := repairCfg()
+	serial.Workers = 1
+	st, err := repairerWithCfg(c, leader, dying, serial).Scan(ctx)
 	must(t, err)
 	if st.Migrated != 1 {
 		t.Fatalf("expected exactly one chunk migrated before the crash: %+v", st)

@@ -231,6 +231,20 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if rcfg.S3ScrubBytes, err = cfg.S3ScrubBytes(); err != nil {
 		return err
 	}
+	workers, err := cfg.RepairWorkers()
+	if err != nil {
+		return err
+	}
+	if workers > 0 {
+		rcfg.Workers = workers
+	}
+	rate, rateSet, err := cfg.RepairRateBytes()
+	if err != nil {
+		return err
+	}
+	if rateSet {
+		rcfg.RateBytes = rate
+	}
 	client.SetGrace(rcfg.Grace)
 	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
@@ -766,7 +780,11 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		} else {
 			st, _ = a.repairer.Last()
 		}
-		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, op.Files), nil
+		var prog *repair.Progress
+		if p, running := a.repairer.Progress(); running {
+			prog = &p
+		}
+		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files), nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
 		if err != nil {

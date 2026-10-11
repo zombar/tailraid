@@ -54,6 +54,8 @@ type Config struct {
 		Grace     string `yaml:"grace"`      // GC grace and shard DELETE fence age (default 10m)
 		FillAfter string `yaml:"fill_after"` // dead-node hold-down before re-placing its slots (default 10m)
 		S3Scrub   string `yaml:"s3_scrub"`   // bucket bytes the scrub may fetch per day to verify objects (default 1G; "0": HEAD only)
+		Workers   int    `yaml:"workers"`    // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
+		Rate      string `yaml:"rate"`       // shard bytes per second repair may move (default 50M; "0": no limit)
 	} `yaml:"repair"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
@@ -94,6 +96,28 @@ func (c Config) S3ScrubBytes() (int64, error) {
 		return 0, fmt.Errorf("config: repair.s3_scrub %q: bad size", c.Repair.S3Scrub)
 	}
 	return int64(n), nil //nolint:gosec // bounded above
+}
+
+// RepairWorkers parses repair.workers, the chunks a repair pass works on at once
+// (docs/06 §4, I-174): 0 when unset (the repairer's default), otherwise 1..64.
+func (c Config) RepairWorkers() (int, error) {
+	if w := c.Repair.Workers; w < 0 || w > 64 {
+		return 0, fmt.Errorf("config: repair.workers %d: want 1..64", w)
+	}
+	return c.Repair.Workers, nil
+}
+
+// RepairRateBytes parses repair.rate, the shard bytes a second repair may move: set is
+// false when the key is empty (the repairer's default), and 0 means no limit.
+func (c Config) RepairRateBytes() (n int64, set bool, err error) {
+	if c.Repair.Rate == "" {
+		return 0, false, nil
+	}
+	u, err := ParseBytes(c.Repair.Rate)
+	if err != nil || u > 1<<62 {
+		return 0, false, fmt.Errorf("config: repair.rate %q: bad size", c.Repair.Rate)
+	}
+	return int64(u), true, nil //nolint:gosec // bounded above
 }
 
 func errBadDuration(err error) error {
