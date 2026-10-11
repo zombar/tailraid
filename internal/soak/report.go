@@ -302,7 +302,7 @@ func charts(s Summary) ([]template.HTML, string) {
 	dwr, drd := chart.Series{Name: "disk write MiB/s"}, chart.Series{Name: "disk read MiB/s"}
 	nrx, ntx := chart.Series{Name: "rx MiB/s (every interface)"}, chart.Series{Name: "tx MiB/s (every interface)"}
 	trx, ttx := chart.Series{Name: "tailnet rx MiB/s"}, chart.Series{Name: "tailnet tx MiB/s"}
-		trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
+	trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
 	haveTrash := false
 	haveCPU, haveRSS, havePressure, haveDisk, haveDiskIO, haveNet := false, false, false, false, false, false
 	nodeSeries := map[string]*chart.Series{}
