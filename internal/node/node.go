@@ -389,7 +389,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			},
 		}
 		web, err = webui.New(webui.Options{
-			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: func() any { return status(false) }, Stats: query, Hosts: webui.Hosts(webAddr, ident.DNSName),
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: func() any { return status(false) }, Stats: query, Search: searchSvc, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,

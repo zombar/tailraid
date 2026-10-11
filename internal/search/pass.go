@@ -190,6 +190,9 @@ func (s *Service) Pass(ctx context.Context) (PassResult, error) {
 		s.mu.Unlock()
 	}()
 	res, err := s.runPass(ctx)
+	if err == nil && res.Seq != 0 {
+		s.Warm(ctx) // the leader's own status and queries see the segment it wrote
+	}
 	s.mu.Lock()
 	s.status.LastPass = s.Clk.Now()
 	s.status.Pending, s.status.Capped = res.Pending, res.Capped

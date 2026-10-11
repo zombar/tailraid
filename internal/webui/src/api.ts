@@ -141,7 +141,41 @@ export interface Report {
   machine?: MachineReport | null;
   cache?: CacheReport | null;
   web_url?: string;
+  search?: SearchStatus | null;
   generated_at: string;
+}
+
+/** SearchStatus is `status.search` (docs/12 §8, docs/18 §5). */
+export interface SearchStatus {
+  docs: number;
+  segments: number;
+  bytes: number;
+  catalog: number;
+  pending: number;
+  last_pass?: string;
+  in_progress?: boolean;
+  capped?: boolean;
+  index?: string;
+}
+
+/** SearchHit is one result of GET /api/search (docs/13 §3). */
+export interface SearchHit {
+  path: string;
+  type: "file" | "dir" | "symlink";
+  size: number;
+  mtime: string;
+  ino: number;
+  match: "name" | "tags" | "content";
+  title?: string;
+  artist?: string;
+  album?: string;
+  terms: { term: string; off: number }[];
+}
+
+export interface SearchResult {
+  query: string;
+  hits: SearchHit[];
+  index?: string;
 }
 
 export interface Entry {
@@ -326,6 +360,18 @@ export const pin = (path: string, pinned: boolean): Promise<{ path: string; pinn
 export async function putThumb(path: string, version: number, jpeg: Blob): Promise<void> {
   const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
   if (!r.ok) throw await apiError(r);
+}
+
+/** search asks the node's index (docs/18 §6). */
+export function search(q: string, under: string): Promise<SearchResult> {
+  return call<SearchResult>("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
+}
+
+/** rendered fetches a markdown file as the node's HTML fragment (docs/13 §4, I-209). */
+export async function rendered(path: string, root?: number): Promise<string> {
+  const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
+  if (!r.ok) throw await apiError(r);
+  return r.text();
 }
 
 /** text fetches a small file as text (previews). */

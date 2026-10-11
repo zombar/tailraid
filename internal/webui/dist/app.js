@@ -100,8 +100,8 @@ apply(stored());
 
 // internal/webui/src/api.ts
 var ApiError = class extends Error {
-  constructor(status2, message, body) {
-    super(message);
+  constructor(status2, message2, body) {
+    super(message2);
     this.status = status2;
     this.body = body;
   }
@@ -159,6 +159,14 @@ var pin = (path, pinned) => post("/api/pin", { path, pinned });
 async function putThumb(path, version, jpeg) {
   const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
   if (!r.ok) throw await apiError(r);
+}
+function search(q, under) {
+  return call("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
+}
+async function rendered(path, root) {
+  const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
+  if (!r.ok) throw await apiError(r);
+  return r.text();
 }
 async function text(path, root) {
   const r = await fetch(fileURL(path, false, root));
@@ -845,6 +853,13 @@ function volume(root, r) {
     tile2("Dedup", v.dedup_ratio.toFixed(2) + "\xD7", bytes(v.logical_bytes) + " logical"),
     tile2("Trash", count(v.trash_inodes ?? 0), v.trash_inodes ? `${bytes(v.trash_bytes ?? 0)} \xB7 restore from its folder` : "nothing deleted")
   );
+  const s = r.search;
+  if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
+    let sub = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
+    if (s.pending > 0) sub += ` \xB7 ${count(s.pending)} pending`;
+    if (s.capped) sub += " \xB7 capped: contents no longer indexed";
+    tiles.append(tile2("Index", count(s.docs), sub));
+  }
   const scale = Math.max(1, v.logical_bytes, v.stored_bytes);
   const used = Math.max(0, v.usable_capacity - v.free);
   const usedFrac = v.usable_capacity > 0 ? used / v.usable_capacity : 0;
@@ -1535,6 +1550,54 @@ function isAudioName(name) {
   return ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(ext(name));
 }
 
+// internal/webui/src/markdown.ts
+function isMarkdown(name) {
+  return /\.(md|markdown)$/i.test(name);
+}
+function message(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function view(path, root) {
+  const body = h("div");
+  const asRendered = h("button", { type: "button" }, "Rendered");
+  const asRaw = h("button", { type: "button" }, "Raw");
+  const seg = h("span", { class: "seg", role: "group", "aria-label": "view" }, asRendered, asRaw);
+  const show = (raw) => {
+    session.set("tr.md.raw", raw);
+    asRendered.setAttribute("aria-pressed", String(!raw));
+    asRaw.setAttribute("aria-pressed", String(raw));
+    clear(body);
+    if (raw) {
+      const pre = h("pre", null, "loading\u2026");
+      body.append(pre);
+      text(path, root).then(
+        (t) => pre.textContent = t,
+        (e) => pre.textContent = "could not load: " + message(e)
+      );
+      return;
+    }
+    const article = h("article", { class: "md md-doc" }, "loading\u2026");
+    body.append(article);
+    rendered(path, root).then(
+      (html) => {
+        article.innerHTML = html;
+      },
+      (e) => article.textContent = "could not render: " + message(e)
+    );
+  };
+  body.addEventListener("click", (ev) => {
+    const a = ev.target.closest("a");
+    const href = a?.getAttribute("href") ?? "";
+    if (!href.startsWith("#") || href.startsWith("#/")) return;
+    ev.preventDefault();
+    document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  asRendered.addEventListener("click", () => show(false));
+  asRaw.addEventListener("click", () => show(true));
+  show(session.get("tr.md.raw", false));
+  return { seg, body };
+}
+
 // internal/webui/src/player.ts
 var KINDS = {
   mp4: ["video", "video/mp4"],
@@ -1605,15 +1668,9 @@ function render6(root, ctx) {
       section.append(banner({ root: { ...r, purge_at: r.purge_at ?? entry?.purge_at }, bytes: entry?.size }));
     }
     const info = entry ? `${bytes(entry.size)} \xB7 ${when(entry.mtime)}` : "";
-    section.append(
-      h(
-        "div",
-        { class: "title-row" },
-        h("h1", null, name),
-        h("span", { class: "small dim mono" }, info),
-        h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download"))
-      )
-    );
+    const actions = h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download"));
+    const titleRow = h("div", { class: "title-row" }, h("h1", null, name), h("span", { class: "small dim mono" }, info), actions);
+    section.append(titleRow);
     const veiled = nsfw && !session.get("tr.revealed", false);
     const viewer = h("div", { class: "viewer" + (nsfw ? " nsfw" : "") + (nsfw && !veiled ? " revealed" : "") });
     section.append(viewer);
@@ -1655,6 +1712,11 @@ function render6(root, ctx) {
     } else if (kind === "text") {
       if (entry && entry.size > TEXT_MAX) {
         viewer.append(h("div", { class: "placeholder" }, "too large to preview", h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download")));
+      } else if (isMarkdown(name)) {
+        const doc = view(path, ctx.root);
+        titleRow.insertBefore(doc.seg, actions);
+        if (nsfw) viewer.append(doc.body);
+        else viewer.replaceWith(doc.body);
       } else {
         const pre = h("pre", null, "loading\u2026");
         viewer.append(pre);
@@ -2299,7 +2361,7 @@ function render8(root, ctx) {
   const dir = ctx.path;
   const inTrash = ctx.root !== void 0;
   let sort = session.get("tr.sort", { key: "name", desc: false });
-  let view2 = session.get("tr.view", "list");
+  let view3 = session.get("tr.view", "list");
   let entries = [];
   let info = { protected: false, nsfw: false, pinned: false };
   let trashRoot;
@@ -2348,7 +2410,7 @@ function render8(root, ctx) {
     const total = live().reduce((s, e) => s + (e.type === "file" ? e.size : 0), 0);
     const deleted = entries.length - live().length;
     const toolbar = h("div", { class: "toolbar" });
-    const asAlbum = view2 === "list" && !isAlbum(entries) ? false : view2 === "list";
+    const asAlbum = view3 === "list" && !isAlbum(entries) ? false : view3 === "list";
     if (asAlbum) {
       toolbar.append(
         h("button", { type: "button", onClick: () => alb && player.play(alb.tracks, 0) }, "Play all"),
@@ -2374,8 +2436,8 @@ function render8(root, ctx) {
     const seg = h(
       "span",
       { class: "seg", role: "group", "aria-label": "view" },
-      h("button", { type: "button", "aria-pressed": view2 === "list" ? "true" : "false", onClick: () => setView("list") }, "List"),
-      h("button", { type: "button", "aria-pressed": view2 === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles")
+      h("button", { type: "button", "aria-pressed": view3 === "list" ? "true" : "false", onClick: () => setView("list") }, "List"),
+      h("button", { type: "button", "aria-pressed": view3 === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles")
     );
     toolbar.append(seg, h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}` + (deleted ? ` \xB7 ${deleted} deleted` : "")));
     section.append(toolbar);
@@ -2394,13 +2456,13 @@ function render8(root, ctx) {
       section.append(alb.el);
       const rest = entries.filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section.append(table(rest));
-    } else if (view2 === "tiles") section.append(tiles());
+    } else if (view3 === "tiles") section.append(tiles());
     else section.append(table(entries));
     section.append(selbar());
     root.append(section);
   };
   const setView = (v) => {
-    view2 = v;
+    view3 = v;
     session.set("tr.view", v);
     draw();
   };
@@ -2953,8 +3015,171 @@ function render9(root, query) {
   };
 }
 
+// internal/webui/src/search.ts
+var folder = "/";
+function setFolder(p) {
+  folder = p || "/";
+}
+function searchHash(q, under) {
+  return "#/search/" + encodeURIComponent(q) + (under ? "?under=" + encodeURIComponent(under) : "");
+}
+function typing(t) {
+  return t instanceof HTMLElement && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
+}
+function wire2(form) {
+  const input = form.querySelector("input");
+  let timer = 0;
+  const go = () => {
+    const q = input.value.trim();
+    if (!q) return;
+    const on = location.hash.startsWith("#/search/");
+    const under = on ? new URLSearchParams(location.hash.split("?")[1] ?? "").get("under") ?? "" : "";
+    const target = searchHash(q, under);
+    if (target === location.hash) return;
+    if (on) location.replace(target);
+    else location.hash = target;
+  };
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    clearTimeout(timer);
+    go();
+  });
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      if (input.value.trim().length >= 2) go();
+    }, 150);
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      input.value = "";
+      input.blur();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "/" && !ev.metaKey && !ev.ctrlKey && !typing(ev.target)) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+}
+function fold(s) {
+  return s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+function marked(text2, terms) {
+  const out = [];
+  for (const part of text2.split(/([\p{L}\p{N}]+)/u)) {
+    if (!part) continue;
+    const f = fold(part);
+    out.push(/[\p{L}\p{N}]/u.test(part) && terms.some((t) => f.startsWith(t)) ? h("mark", null, part) : part);
+  }
+  return out;
+}
+var SNIP_BEFORE = 100;
+var SNIP_AFTER = 140;
+var SNIP_AT_ONCE = 3;
+async function snippet(hit, signal) {
+  const off2 = Math.min(...hit.terms.map((t) => t.off));
+  const start = Math.max(0, off2 - SNIP_BEFORE);
+  const end = Math.min(hit.size, off2 + SNIP_AFTER) - 1;
+  const r = await fetch(fileURL(hit.path), { headers: { Range: `bytes=${start}-${Math.max(end, start)}` }, signal });
+  if (!r.ok) throw new Error(`${r.status}`);
+  let text2 = new TextDecoder("utf-8").decode(await r.arrayBuffer()).replace(/�/g, "");
+  if (start > 0) text2 = "\u2026" + text2.replace(/^[\p{L}\p{N}]*\s*/u, "");
+  if (end < hit.size - 1) text2 = text2.replace(/\s*[\p{L}\p{N}]*$/u, "") + "\u2026";
+  return marked(text2.replace(/\s+/g, " "), hit.terms.map((t) => t.term));
+}
+function hitRow(hit, want) {
+  const href = hit.type === "dir" ? browseHash({ path: hit.path }) : fileHash({ path: hit.path });
+  let where = dirname(hit.path);
+  if (hit.match === "tags" && hit.title) where += " \xB7 " + [hit.title, hit.artist, hit.album].filter(Boolean).join(" \u2014 ");
+  const li = h("li", { class: "hit" }, h("a", { class: "hname", href }, basename(hit.path) || "/"), h("span", { class: "hpath" }, where), h("span", { class: "hwhy badge" }, hit.match));
+  if (hit.match === "content" && hit.terms.length > 0 && hit.size > 0) {
+    const snip = h("span", { class: "hsnip loading" }, "loading the snippet\u2026");
+    li.append(snip);
+    want(snip, hit);
+  }
+  return li;
+}
+function render10(root, q, params) {
+  const under = new URLSearchParams(params).get("under") ?? "";
+  const input = document.querySelector("form.search input");
+  if (input && document.activeElement !== input) input.value = q;
+  const abort = new AbortController();
+  const section = h("section", { class: "results" });
+  root.append(section);
+  const scope = under || folder;
+  const sub = h("span", { class: "h-sub" }, "searching\u2026");
+  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub), h("span", { class: "spacer" }));
+  if (scope !== "/") {
+    const toggle = h("input", { type: "checkbox", checked: under !== "" });
+    toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
+    bar2.append(h("label", { class: "under" }, toggle, " in ", h("code", null, scope), " only"));
+  }
+  section.append(bar2);
+  const queue3 = [];
+  let running2 = 0;
+  const pump2 = () => {
+    while (running2 < SNIP_AT_ONCE && queue3.length > 0) {
+      const [el, hit] = queue3.shift();
+      running2++;
+      snippet(hit, abort.signal).then(
+        (parts) => {
+          clear(el);
+          el.classList.remove("loading");
+          el.append(...parts);
+        },
+        () => el.remove()
+      ).finally(() => {
+        running2--;
+        pump2();
+      });
+    }
+  };
+  const pending = /* @__PURE__ */ new Map();
+  const seen = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const hit = pending.get(e.target);
+      if (!e.isIntersecting || !hit) continue;
+      pending.delete(e.target);
+      seen.unobserve(e.target);
+      queue3.push([e.target, hit]);
+    }
+    pump2();
+  });
+  const want = (el, hit) => {
+    pending.set(el, hit);
+    seen.observe(el);
+  };
+  search(q, under).then(
+    (res) => {
+      if (abort.signal.aborted) return;
+      clear(sub);
+      sub.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
+      if (res.index) section.append(h("div", { class: "note" }, "index unavailable on this node: names only until the leader's next pass"));
+      if (res.hits.length === 0) {
+        const empty = h("div", { class: "empty" }, "no matches for ", h("code", null, q));
+        if (under) empty.append(" under ", h("code", null, under));
+        section.append(empty);
+        return;
+      }
+      const ol = h("ol");
+      for (const hit of res.hits) ol.append(hitRow(hit, want));
+      section.append(ol);
+    },
+    (e) => {
+      if (!abort.signal.aborted) sub.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
+    }
+  );
+  return () => {
+    abort.abort();
+    seen.disconnect();
+  };
+}
+
 // internal/webui/src/main.ts
-var view = document.getElementById("view");
+var view2 = document.getElementById("view");
 var pill = document.getElementById("health");
 var who = document.getElementById("who");
 var warnings = document.getElementById("warnings");
@@ -3002,28 +3227,39 @@ function parse2(hash2) {
   }
   return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
 }
+function rawRest(hash2) {
+  const where = hash2.replace(/^#\/?/, "").split("?")[0] ?? "";
+  const i = where.indexOf("/");
+  return i < 0 ? "" : where.slice(i + 1);
+}
 function route() {
   const { head, ctx, query } = parse2(location.hash || "#/");
   dispose?.();
   dispose = null;
-  clear(view);
+  clear(view2);
   let tab = "dash";
   if (head === "browse" || head === "trash" && ctx.root !== void 0) {
     tab = "files";
-    dispose = render8(view, ctx);
+    if (head === "browse") setFolder(ctx.path);
+    dispose = render8(view2, ctx);
+  } else if (head === "search") {
+    tab = "";
+    dispose = render10(view2, decodeHashPath(rawRest(location.hash)).slice(1), query);
   } else if (head === "file" || head === "trashfile" && ctx.root !== void 0) {
     tab = "files";
-    dispose = render6(view, ctx);
+    dispose = render6(view2, ctx);
   } else if (head === "stats") {
     tab = "stats";
-    dispose = render9(view, query);
+    dispose = render9(view2, query);
   } else {
-    dispose = render4(view);
+    dispose = render4(view2);
   }
   for (const a of tabs) a.classList.toggle("active", a.dataset.tab === tab);
   window.scrollTo(0, 0);
 }
 player.mount();
+var searchForm = document.querySelector("form.search");
+if (searchForm) wire2(searchForm);
 var themeButton = document.querySelector("button.theme");
 if (themeButton) wire(themeButton);
 status.subscribe(drawShell);

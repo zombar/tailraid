@@ -11,6 +11,7 @@ import * as browser from "./browser.ts";
 import * as player from "./player.ts";
 import { player as audio } from "./audio.ts";
 import * as stats from "./stats.ts";
+import * as search from "./search.ts";
 import type { Report } from "./api.ts";
 
 const view = document.getElementById("view") as HTMLElement;
@@ -76,6 +77,13 @@ export function parse(hash: string): { head: string; ctx: Ctx; query: string } {
   return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
 }
 
+/** rawRest is the route's text after its head, before any "?": the search query keeps its slashes. */
+function rawRest(hash: string): string {
+  const where = hash.replace(/^#\/?/, "").split("?")[0] ?? "";
+  const i = where.indexOf("/");
+  return i < 0 ? "" : where.slice(i + 1);
+}
+
 function route(): void {
   const { head, ctx, query } = parse(location.hash || "#/");
   dispose?.();
@@ -84,7 +92,11 @@ function route(): void {
   let tab = "dash";
   if (head === "browse" || (head === "trash" && ctx.root !== undefined)) {
     tab = "files";
+    if (head === "browse") search.setFolder(ctx.path);
     dispose = browser.render(view, ctx);
+  } else if (head === "search") {
+    tab = "";
+    dispose = search.render(view, decodeHashPath(rawRest(location.hash)).slice(1), query);
   } else if (head === "file" || (head === "trashfile" && ctx.root !== undefined)) {
     tab = "files";
     dispose = player.render(view, ctx);
@@ -99,6 +111,8 @@ function route(): void {
 }
 
 audio.mount();
+const searchForm = document.querySelector<HTMLFormElement>("form.search");
+if (searchForm) search.wire(searchForm);
 const themeButton = document.querySelector<HTMLButtonElement>("button.theme");
 if (themeButton) theme.wire(themeButton);
 status.subscribe(drawShell);

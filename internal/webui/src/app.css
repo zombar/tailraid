@@ -497,6 +497,8 @@ article.md { font: 15px/1.55 var(--sans); max-width: 760px; }
 .md table { border-collapse: collapse; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
 .md th { background: var(--surface); font-weight: 600; }
+.md [align=center] { text-align: center; }
+.md [align=right] { text-align: right; }
 .md img { max-width: 100%; height: auto; border-radius: var(--radius); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 24px auto; width: 90%; }
 /* the document surface: a gutter hairline on the left and the heading levels as faint

@@ -237,7 +237,9 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   Media tab (§10) lists; it needs every member on codec 6 and is refused with 503 and
   `Retry-After: 30` until then, like the trash was at codec 4.
 - **Markdown (I-209).** `GET /api/render` returns a `.md` file as a document fragment the
-  page inserts into `article.md.md-doc`. The node renders it with its own escape-first
+  page inserts into `article.md.md-doc`. A table cell's alignment is the `align`
+  attribute (the CSP forbids inline style), and an `#anchor` link scrolls to its heading
+  without reaching the hash router. The node renders it with its own escape-first
   renderer (`internal/webui/md.go`, in the manner of errol's): the source is HTML-escaped
   line by line *before* any construct is recognised, so no tag, attribute or entity of the
   file reaches the output unescaped, and the output's tags are only the renderer's own.
@@ -788,7 +790,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
-| I-209 | `TestStub_I_209` (planned: TestMarkdown_Table, TestMarkdown_LinksAndImages_Policy, TestMarkdown_RawHTMLIsText, FuzzMarkdown, TestWebUI_Render_Table; the Rendered/Raw switch is manual check 19) |
+| I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table` (the Rendered/Raw switch is manual check 19) |
 | I-212 | `TestStub_I_212` (planned: TestWebUI_Media_Library_Table, TestWebUI_Media_Item_ShowSeasonsEpisodes, TestWebUI_Media_TrashedAndReservedHidden, TestWebUI_Media_NSFWFlagCarried, TestWebUI_Media_DeterministicAcrossNodes, TestSoak_AllPhasesAgainstHarness; the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
