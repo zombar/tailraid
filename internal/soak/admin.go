@@ -13,6 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/stats"
 )
 
 // Admin is the soak admin surface over the node RPC (docs/08), shared by the environments
@@ -230,4 +231,20 @@ func (a *Admin) AwaitHealth(ctx context.Context, n NodeRef, timeout time.Duratio
 			return err
 		}
 	}
+}
+
+// StatsSeal is `tailraid stats seal [--rollup]` on one node.
+func (a *Admin) StatsSeal(ctx context.Context, n NodeRef, rollup bool) (int, error) {
+	var out struct {
+		Rows int `json:"sealed_rows"`
+	}
+	err := a.nodeOp(ctx, n, rpc.AdminOp{Op: "stats_seal", Rollup: rollup}, &out)
+	return out.Rows, err
+}
+
+// StatsLive is one node's unsealed stats rows newer than since (GET /v1/stats).
+func (a *Admin) StatsLive(ctx context.Context, n NodeRef, since int64) ([]stats.Row, error) {
+	var rows []stats.Row
+	err := a.call(ctx, n.RPC, http.MethodGet, fmt.Sprintf("/v1/stats?since=%d", since), nil, &rows)
+	return rows, err
 }

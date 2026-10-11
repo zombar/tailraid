@@ -317,10 +317,11 @@ them into rates and the report draws a network chart next to the disk one; the S
 `stats.keep.minute` (30 d, at least 48 h) and `stats.keep.coarse` (2 y) the retention of
 the three tiers, `stats.cache` (32 MiB) the gateway's parsed-segment cache; `serve` refuses
 a value outside those bounds, and every key is written only when set (I-61). `tailraid
-stats seal` asks the node (`/v1/admin` op `stats_seal`, next to `repair_now` and
-`gc_now`) to write its partial hour now and to roll up every day whose raw segments are
-newer than their rollup: the same function a clean `serve` stop runs, and what the soak
-phase uses instead of waiting for the hour.
+stats seal [--rollup]` asks the node (`/v1/admin` op `stats_seal`, next to `repair_now`
+and `gc_now`) to write its partial hour now, to roll up every day whose raw segments exist
+without their rollup, with `--rollup` today's rows so far as well, and on the leader to
+prune segments past their retention: the same function a clean `serve` stop runs, and
+what the soak phase uses instead of waiting for the hour.
 
 **Repair progress.** On the leader `repair` carries the last completed pass (`last_scan`,
 `stats`) and, while a pass runs, `in_progress`: `pass`, `started`, `scanned` of `total`

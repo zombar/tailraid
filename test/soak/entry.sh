@@ -54,6 +54,8 @@ mount:
 repair:
   grace: ${REPAIR_GRACE:-10m}
   fill_after: ${FILL_AFTER:-10m}
+stats:
+  every: ${STATS_EVERY:-5s}
 dev:
   enabled: true
   tailscale_fake: $TAILRAID_HOME/ts.json

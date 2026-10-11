@@ -124,7 +124,7 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot
+	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot | stats_seal
 	K     uint8  `json:"k,omitempty"`
 	M     uint8  `json:"m,omitempty"`
 	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
@@ -134,4 +134,5 @@ type AdminOp struct {
 	// open_disk (this host only): start serving a disk `node add-disk` has just added
 	Path     string `json:"path,omitempty"`
 	Capacity string `json:"capacity,omitempty"`
+	Rollup   bool   `json:"rollup,omitempty"` // stats_seal: also write today's rollups so far (docs/17 §7)
 }

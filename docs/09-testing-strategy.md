@@ -378,15 +378,17 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `repair.workers`, the pass having overlapped chunks, the read during the pass keeping
   at least a third of its idle throughput, then the policy restored and the migration
   back complete; the in-flight and during-the-pass checks are skipped when the pass
-  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 20 stats (with `stats.every: 1s`
-  on the rig: after `stats seal` every node's raw segment is under its own directory,
-  parses and is below the small-chunk threshold, a second seal past the day boundary
-  writes the minute and the month rollups byte-identical through two gateways, the
-  leader's retention removes a segment the phase planted with a 2010 name, `/api/stats`
-  answers a 6 h range with every chart and the live edge of every node, a member killed
-  mid-phase leaves a gap and never a zero, and the stored bytes grow by no more than
-  docs/17 §6's estimate for one sealed hour and one rollup, printed measured against
-  estimated; 19 is taken by snapshots; I-191..I-194, I-196). The compose rig gives four nodes two disks each, one
+  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 20 stats (with `stats.every: 5s`
+  on the rig and 1 s on the harness: after `stats seal` every node's raw segment is
+  under its own directory, decodes and is below the small-chunk threshold and the
+  leader's cluster segment is there, `stats seal --rollup` writes today's minute and
+  coarse segments and the minute rows equal the pure rollup of the raw rows the driver
+  read back, the leader's seal removes a segment the phase planted with a 2010 name,
+  the page's charts render for a 6 h range from the rows read and the live edge every
+  node answers over `/v1/stats`, a member killed mid-phase answers no live edge and the
+  leader's rows mark it dead and never a zero, and the stored bytes grow by no more
+  than docs/17 §6's estimate for one sealed hour and the rollups per node, printed
+  measured against estimated; 19 is taken by snapshots; I-191..I-194, I-196). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for

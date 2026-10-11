@@ -142,7 +142,7 @@ func TestAdminOp_StatsSeal(t *testing.T) {
 	for s := 0; s < 30; s += 10 {
 		ops.stats.Writer.Add(stats.Row{T: h.Add(time.Duration(s) * time.Second).Unix(), N: "n1", M: map[string]float64{"load1": 1}})
 	}
-	raw, err := ops.AdminOp(context.Background(), rpc.AdminOp{Op: "stats_seal"})
+	raw, err := ops.AdminOp(context.Background(), rpc.AdminOp{Op: "stats_seal", Rollup: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +155,11 @@ func TestAdminOp_StatsSeal(t *testing.T) {
 	seg := path.Join(stats.Root, "10s", "n1", stats.SegmentName(stats.Raw, h, "n1"))
 	if _, err := c.ReadFile(0, seg); err != nil {
 		t.Fatalf("the segment on another gateway: %v", err)
+	}
+	// --rollup wrote today's rollups so far
+	day, _ := stats.Minute.Period(h)
+	if _, err := c.ReadFile(0, path.Join(stats.Root, "1m", "n1", stats.SegmentName(stats.Minute, day, "n1"))); err != nil {
+		t.Fatalf("today's minute rollup: %v", err)
 	}
 	// nothing to seal: zero rows, no error
 	if raw, err := ops.AdminOp(context.Background(), rpc.AdminOp{Op: "stats_seal"}); err != nil || raw.(map[string]any)["sealed_rows"] != 0 {

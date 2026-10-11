@@ -101,13 +101,28 @@ func (s *Service) Sample() {
 // Live is the RPC's answer: the unsealed rows newer than since (I-199).
 func (s *Service) Live(since int64) []Row { return s.Writer.Live(since) }
 
-// Seal writes the unsealed rows now (the hour boundary, a stop, `stats seal`) and rolls
-// up any day still missing its rollup (docs/17 §7).
-func (s *Service) Seal(ctx context.Context) error {
+// Seal writes the unsealed rows now (a stop, `stats seal`), rolls up any day still
+// missing its rollup and, with rollup, today's rows so far (a partial the day's end
+// replaces); on the leader it prunes the archive as the hourly tick does (docs/17 §7).
+func (s *Service) Seal(ctx context.Context, rollup bool) error {
 	now := s.Clk.Now()
 	err := s.Writer.Seal(ctx, now)
-	if cerr := s.Writer.CatchUp(ctx, now, s.Keep.Raw, s.writers()...); err == nil {
+	writers := s.writers()
+	if cerr := s.Writer.CatchUp(ctx, now, s.Keep.Raw, writers...); err == nil {
 		err = cerr
+	}
+	if rollup {
+		today, _ := Minute.Period(now)
+		for _, w := range writers {
+			if rerr := s.Writer.RollupDay(ctx, w, today); err == nil {
+				err = rerr
+			}
+		}
+	}
+	if s.Src.IsLeader != nil && s.Src.IsLeader() {
+		if _, rerr := s.Writer.Retain(ctx, now, s.Keep); err == nil {
+			err = rerr
+		}
 	}
 	return err
 }
@@ -144,6 +159,13 @@ func (s *Service) Run(ctx context.Context) {
 		case <-hour.C():
 			if err := s.Writer.Seal(ctx, nextHour); err != nil {
 				s.log().Warn("stats: seal failed", "err", err)
+			}
+			if nextHour.Hour() == 0 { // the day's end: yesterday's rollups, whole, whatever a forced rollup wrote
+				for _, w := range s.writers() {
+					if err := s.Writer.RollupDay(ctx, w, nextHour.AddDate(0, 0, -1)); err != nil {
+						s.log().Warn("stats: rollup failed", "writer", w, "err", err)
+					}
+				}
 			}
 			if err := s.Writer.CatchUp(ctx, nextHour, s.Keep.Raw, s.writers()...); err != nil {
 				s.log().Warn("stats: rollup failed", "err", err)

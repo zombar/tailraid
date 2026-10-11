@@ -8,6 +8,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/s3"
+	"github.com/zombar/tailraid/internal/stats"
 )
 
 // NodeRef identifies a node of the environment.
@@ -41,6 +42,8 @@ type Caps struct {
 	// policy changes, drains and removals, filling a node's disk. A live cluster allows
 	// them only with --destructive.
 	Mutate bool
+	// Stats: the nodes run the stats sampler of docs/17 (StatsSeal, StatsLive).
+	Stats bool
 }
 
 // Env is one target cluster (docs/09 §6).
@@ -95,4 +98,10 @@ type Env interface {
 	// cluster's back. A live cluster offers only Bucket, for the S3 node it already has.
 	AddS3(ctx context.Context, name string) error
 	Bucket(ctx context.Context) (*s3.Bucket, error)
+
+	// the stats history (docs/17 §7): StatsSeal is `tailraid stats seal [--rollup]` on
+	// one node (how many rows it sealed); StatsLive is that node's unsealed rows newer
+	// than since (GET /v1/stats).
+	StatsSeal(ctx context.Context, node NodeRef, rollup bool) (int, error)
+	StatsLive(ctx context.Context, node NodeRef, since int64) ([]stats.Row, error)
 }

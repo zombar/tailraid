@@ -824,7 +824,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			return nil, errors.New("stats: no sampler")
 		}
 		n := a.stats.Writer.Unsealed()
-		if err := a.stats.Seal(ctx); err != nil {
+		if err := a.stats.Seal(ctx, op.Rollup); err != nil {
 			return nil, err
 		}
 		return map[string]any{"sealed_rows": n}, nil
@@ -1270,7 +1270,7 @@ func (a *adminOps) sealStats() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), StatsSealTimeout)
 	defer cancel()
-	if err := a.stats.Seal(ctx); err != nil {
+	if err := a.stats.Seal(ctx, false); err != nil {
 		a.log.Warn("stats: the stop's seal did not reach the volume", "err", err)
 	}
 }

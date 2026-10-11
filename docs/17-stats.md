@@ -219,20 +219,25 @@ numbers and the report prints them next to this table's estimate.
 ## 7. Sealing, the soak phase and `verify`
 
 `AdminOp` gains `stats_seal` next to `repair_now` and `gc_now` (12 §3): seal the partial
-hour and roll up every day whose raw files are newer than its rollup. It is the shutdown
-path's own function exposed as **`tailraid stats seal`**, so the soak needs no test-mode
-switch, no period override and no fake clock on real nodes (09 §3).
+hour, roll up every day whose raw files exist without their rollup and, with `rollup`,
+today's rows so far (a partial minute and coarse segment that the day's end rewrites
+whole), and on the leader prune the archive as the hourly tick does. It is the shutdown
+path's own function exposed as **`tailraid stats seal [--rollup]`**, so the soak needs no
+test-mode switch, no period override and no fake clock on real nodes (09 §3).
 
-Soak **phase 20 "stats"**, with `stats.every: 1s` on the rig, checks: (a) after `stats seal`
-every node's raw file appears under its own directory, parses, and is below
-`SmallChunkMax`; (b) a second `stats seal` after the day boundary produces the `1m` and
-`10m` files, byte-identical when read through two gateways; (c) the leader's retention
-removes a file the phase planted with a 2010 name; (d) `/api/stats` answers a 6 h range
-with every chart and the live edge of every node; (e) a member killed mid-phase leaves a
-gap, not zeros; (f) `stored_bytes` grows by no more than §6's estimate for one sealed hour
-and one rollup, and the report prints measured against estimated. `verify` runs (a), (d),
-the read half of (e) and (f) on a live cluster; the three-VM rounds (vms.md) pick the phase
-up unchanged.
+Soak **phase 20 "stats"**, with `stats.every: 5s` on the rig (1 s on the in-process
+harness), checks: (a) after `stats seal` every node's raw segment is under its own
+directory, decodes, and is below `SmallChunkMax`, and the leader's cluster segment is
+there; (b) `stats seal --rollup` writes today's `1m` and `10m` segments and the minute
+rows equal the pure rollup of the raw rows the driver read back (I-193); (c) a segment
+planted with a 2010 name is gone after the leader's seal; (d) the page's charts render for
+a 6 h range from the rows read and the live edge every node answers over `/v1/stats` (the
+same code `/api/stats` runs; the page itself is 13's manual checks); (e) a member killed
+mid-phase answers no live edge and the leader's rows mark it dead, never a zero; (f)
+`stored_bytes` grows by no more than §6's estimate for one sealed hour and the rollups per
+node, printed measured against estimated. `verify` runs (a) to (d) and (f) on a live
+cluster and (e) with `--destructive --restarts`; the three-VM rounds (vms.md) pick the
+phase up unchanged.
 
 ## 8. Non-goals
 
@@ -252,10 +257,11 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 - **I-192** — A node writes only under `/.tailraid/stats/<tier>/<its name or cluster>/` with
   its name in every file name, from one goroutine; a segment is gzip-compressed JSON lines
   written whole to a temp name, flushed and then renamed; raw and minute segments are never
-  rewritten and the month segment is rebuilt daily to identical bytes for identical input;
-  the raw tier seals at every UTC hour boundary, on `serve` stop and on `stats seal`, a
-  partial hour named by its first row's minute, and a seal the cluster cannot take is
-  spilled locally and written at the next start.
+  rewritten, except that a forced rollup writes today's partial minute segment which the
+  day's end rewrites whole, and the month segment is rebuilt daily to identical bytes for
+  identical input; the raw tier seals at every UTC hour boundary, on `serve` stop and on
+  `stats seal`, a partial hour named by its first row's minute, and a seal the cluster
+  cannot take is spilled locally and written at the next start.
 - **I-193** — The `1m` and `10m` rows of a UTC day are a pure function of its sealed raw
   rows read from the volume (the mean of rates and gauges, the minimum of liveness, the last
   targets and the highest term of the interval; no row for an empty interval), byte-identical
@@ -278,9 +284,9 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 | Invariant | Tests |
 |---|---|
 | I-191 | `TestSampler_NodeRow_RatesAndAbsence`, `TestSampler_ClusterRow`, `TestService_Run_SealsAtHour`, `TestFS_ClientBytes_Counted` |
-| I-192 | `TestRowCodec_RoundTrip`, `TestRowCodec_Empty_And_Garbage`, `FuzzRowCodec`, `TestSegmentName_RoundTrip_Table`, `TestWriter_SealsAtBoundary_NamesPartialHours`, `TestWriter_SpillAndRecover`, `TestService_Run_SealsAtHour`, `TestStats_SealVisibleFromSecondGateway`, `TestAdminOp_StatsSeal`, `TestCLI_StatsSeal` |
-| I-193 | `TestTier_PeriodOf`, `TestRollup_DeterministicAcrossNodes`, `TestRollup_Rules`, `TestWriter_RollupDay_MonthRebuild_CatchUp` |
-| I-194 | `TestSegment_Expired_Table`, `TestWriter_Retain_AnyWriter_Table`, `TestStats_Retention_RemovedMemberSegment`, `TestConfig_StatsKeys_Table` |
+| I-192 | `TestRowCodec_RoundTrip`, `TestRowCodec_Empty_And_Garbage`, `FuzzRowCodec`, `TestSegmentName_RoundTrip_Table`, `TestWriter_SealsAtBoundary_NamesPartialHours`, `TestWriter_SpillAndRecover`, `TestService_Run_SealsAtHour`, `TestService_Seal_RollupAndPrune`, `TestStats_SealVisibleFromSecondGateway`, `TestAdminOp_StatsSeal`, `TestCLI_StatsSeal`, `TestSoak_AllPhasesAgainstHarness` (phase 20), `TestPhaseStats_SkipsWithoutSampler` |
+| I-193 | `TestTier_PeriodOf`, `TestRollup_DeterministicAcrossNodes`, `TestRollup_Rules`, `TestWriter_RollupDay_MonthRebuild_CatchUp`, `TestService_Seal_RollupAndPrune`, `TestSoak_AllPhasesAgainstHarness` (phase 20) |
+| I-194 | `TestSegment_Expired_Table`, `TestWriter_Retain_AnyWriter_Table`, `TestStats_Retention_RemovedMemberSegment`, `TestConfig_StatsKeys_Table`, `TestService_Seal_RollupAndPrune`, `TestSoak_AllPhasesAgainstHarness` (phase 20) |
 | I-196 | `TestStatsQuery_TierChoice_Table`, `TestStatsQuery_NameWindowAndRowFilter`, `TestStatsQuery_CacheBound_Table`, `TestStatsQuery_FanOut_TimeoutIsGap_BackOff`, `TestStatsQuery_Dedup_TermRule_Seeded`, `TestStatsQuery_Downsample_Points_Table`, `TestStatsQuery_Charts`, `TestWebUI_Stats_Route`, `TestStats_SealVisibleFromSecondGateway` (the cache-less reader) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (09 §2).

@@ -16,8 +16,9 @@ func statsCmd() *cobra.Command {
 		Short: "Write this node's partial stats hour into the volume now and roll up any day still missing its rollup",
 		Long: `seal asks the node to write the rows it has sampled since the last hour boundary as a
 raw segment under /.tailraid/stats/, and to produce the 1-minute and 10-minute rollups of
-any day whose raw segments exist without them. It is what a clean stop does; the hour
-boundary does it on its own (docs/17 §7).`,
+any day whose raw segments exist without them; with --rollup, today's rollups so far as
+well. On the leader it also prunes segments past their retention. It is what a clean
+stop does; the hour boundary does it on its own (docs/17 §7).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
@@ -25,7 +26,8 @@ boundary does it on its own (docs/17 §7).`,
 			if err != nil {
 				return err
 			}
-			raw, err := c.Admin(ctx, addr, rpc.AdminOp{Op: "stats_seal"})
+			rollup, _ := cmd.Flags().GetBool("rollup")
+			raw, err := c.Admin(ctx, addr, rpc.AdminOp{Op: "stats_seal", Rollup: rollup})
 			if err != nil {
 				return err
 			}
@@ -42,6 +44,7 @@ boundary does it on its own (docs/17 §7).`,
 			return nil
 		},
 	}
+	seal.Flags().Bool("rollup", false, "also write today's 1-minute and 10-minute rollups so far (the day's end rewrites them whole)")
 	addNodeFlags(seal)
 	c.AddCommand(seal)
 	return c

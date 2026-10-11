@@ -507,3 +507,51 @@ func testEventually(t *testing.T, cond func() bool, what string) {
 		time.Sleep(time.Millisecond) //nolint:forbidigo // as above
 	}
 }
+
+// A forced seal writes today's rollups so far and, on the leader, prunes; the day's end
+// then rewrites yesterday's rollups whole.
+// Invariant: I-192, I-193, I-194
+func TestService_Seal_RollupAndPrune(t *testing.T) {
+	ctx := context.Background()
+	vol := newMem()
+	start := utc(2026, 10, 11, 10, 0)
+	clk := clock.NewFake(start)
+	leader := true
+	svc := &Service{
+		Name: "pike", Every: 10 * time.Second, Keep: DefaultKeep, Clk: clk, Writer: &Writer{Vol: vol, Name: "pike"},
+		Src: Sources{IsLeader: func() bool { return leader }, Term: func() uint64 { return 1 }, Health: func() admin.VolumeHealth { return admin.VolumeHealth{} }},
+	}
+	old := path.Join(Root, "10s", "gone", SegmentName(Raw, utc(2010, 1, 1, 0, 0), "gone"))
+	_ = vol.WriteFile(ctx, old, []byte("x"))
+	for range 3 {
+		svc.Sample()
+		clk.Advance(10 * time.Second)
+	}
+	if err := svc.Seal(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		Root + "/10s/pike/2026-10-11T10-pike.jsonl.gz", Root + "/10s/cluster/2026-10-11T10-cluster.jsonl.gz",
+		Root + "/1m/pike/2026-10-11-pike.jsonl.gz", Root + "/1m/cluster/2026-10-11-cluster.jsonl.gz",
+		Root + "/10m/pike/2026-10-pike.jsonl.gz",
+	} {
+		if _, err := vol.ReadFile(ctx, p); err != nil {
+			t.Errorf("%s: %v (%v)", p, err, vol.names())
+		}
+	}
+	if _, err := vol.ReadFile(ctx, old); err == nil {
+		t.Error("the leader's seal did not prune")
+	}
+	if rows := vol.rows(t, Root+"/1m/pike/2026-10-11-pike.jsonl.gz"); len(rows) != 1 {
+		t.Errorf("today's partial rollup: %d rows", len(rows))
+	}
+	// a follower's seal prunes nothing
+	leader = false
+	_ = vol.WriteFile(ctx, old, []byte("x"))
+	if err := svc.Seal(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vol.ReadFile(ctx, old); err != nil {
+		t.Error("a follower pruned")
+	}
+}

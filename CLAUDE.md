@@ -122,7 +122,7 @@ defines is used); the prose by `scripts/check-docs.sh` and misspell (`make docs-
 drain|remove|add-disk` (docs/14: disks are targets named `<host>/<n>`) · `check`, `repair`, `gc`, `fsck` · `volume
 describe|grow <disk> <size>|auto|set-redundancy` · `chunk describe <hash>`
 (lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report) · `update [--check|--rollback|--restart|--allow-downgrade]` · `snapshot <dir>`, `recover --voters` (docs/12 §9)
-· `node add-s3 <name>|keys <name>` (docs/10 §4.1; the secret key from `TAILRAID_S3_SECRET_KEY` or stdin) · `stats seal` (docs/17 §7: write the partial stats hour and roll up now)
+· `node add-s3 <name>|keys <name>` (docs/10 §4.1; the secret key from `TAILRAID_S3_SECRET_KEY` or stdin) · `stats seal [--rollup]` (docs/17 §7: write the partial stats hour, roll up and, on the leader, prune now)
 · deferred with the S3 gateway: `bucket ls|describe|create|rm`, `s3 keys`
 · `mount`, `umount`, `install`, `uninstall`, `start`, `stop`, `logs` · `version`.
 
