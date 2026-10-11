@@ -398,7 +398,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   node answers over `/v1/stats`, a member killed mid-phase answers no live edge and the
   leader's rows mark it dead and never a zero, and the stored bytes grow by no more
   than docs/17 §6's estimate for one sealed hour and the rollups per node, printed
-  measured against estimated; 19 is taken by snapshots; I-191..I-194, I-196). The compose rig gives four nodes two disks each, one
+  measured against estimated; 19 is taken by snapshots; I-191..I-194, I-196); 21 search and
+  media (text files with known words, a tagged track, a Kodi-style film folder and a show
+  folder written through the mount, the libraries flagged, `index_now` over the admin RPC,
+  then every node's `/api/search` and `/api/media` compared byte for byte, a renamed file
+  found at once, a trashed one gone from both, a snippet range equal to the bytes, a
+  markdown file rendered with only the renderer's tags, the film's plot and poster and the
+  episode numbering; flags restored under `Caps.Mutate`; I-206..I-212). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for

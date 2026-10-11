@@ -135,6 +135,9 @@ The hourly tick also runs the namespace sweeps of the web UI (13): upload temps 
 purged, or never existed), through `Unlink` since the names are ephemeral (I-160), and
 every video frame grabbed by an older recipe (13 §5, I-216). A
 thumbnail of a file in the trash is kept: the browser UI shows the deleted file's tile.
+On the leader the same tick removes every search segment under `/.tailraid/index` that
+the current chain does not name once it is an hour old (18 §4, I-206): a rebuild's
+predecessors and an abandoned pass's temp; a segment in the chain is never touched.
 
 **S3 sweep (leader only, daily).** For each S3 node the leader lists the bucket prefix with
 `ListObjectsV2` (paged) and deletes every object whose `LastModified` is older than grace

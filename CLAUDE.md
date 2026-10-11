@@ -130,7 +130,7 @@ describe|grow <disk> <size>|auto|set-redundancy` · `chunk describe <hash>`
 
 S3 beyond the implemented subset (versioning, ACLs, policies, lifecycle, tagging, SSE,
 object lock, presigned POST), web UI beyond docs/13 (user management, mutating admin ops
-from the browser, search, saved playlists), metrics stack, encryption at rest, quotas,
+from the browser, saved playlists), metrics stack, encryption at rest, quotas,
 versioning beyond the one previous version the trash keeps, xattrs, NLM locking, snapshots, hard links, NFSv4, SMB encryption,
 3.1.1, oplocks, leases and security descriptors, Windows before 11 24H2, multiple
 independent volumes, content-defined chunking, compression (hook left), tiering,

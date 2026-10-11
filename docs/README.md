@@ -21,6 +21,7 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [13-web-ui.md](13-web-ui.md) | Browser dashboard (balance, integrity) and file browser with media playback on a tailnet listener; same-user authorization; the style guide and lookdev |
 | [14-disks.md](14-disks.md) | Several disks per device: disks as placement targets, the host as failure domain, the host cap, host-aware policy |
 | [15-smb-gateway.md](15-smb-gateway.md) | SMB2 gateway for Windows: library, adapter over the vfs, case-insensitive names, password and `net use` mount, known gaps |
+| [18-search.md](18-search.md) | Search and the index kept in the volume: what is indexed, segments and the leader's pass, queries, the media catalogue from sidecars and tags, the library folder flag |
 | [17-stats.md](17-stats.md) | Time series kept in the volume: per-node samples, gzip segments and rollups, retention, the live edge, the Stats page's charts, the storage budget |
 | [invariants.md](invariants.md) | Generated table: every invariant, its doc, statement and tests |
 | [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows SMB mount path |

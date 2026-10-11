@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid markdown</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  .phone { width: 360px; border: 1px dashed var(--line); border-radius: 12px; padding: 12px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a class="active" href="#/browse/">Files</a><a href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
+  <span class="pill ok">healthy</span>
+  <span class="who">pike · leader atlas · 3/3 voters live</span>
+  <button type="button" class="theme" title="Theme: system (tap for light)" aria-label="Theme: system (tap for light)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></svg><span>system</span></button>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section class="player">
+    <div class="variant">variant: a README rendered as a document; the file's # is the page's h2, deeper headings carry their level in the margin</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/docs">docs</a><span class="sep">/</span><span>README.md</span></div>
+    <div class="title-row">
+      <h1>README.md</h1>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">Rendered</button><button type="button" aria-pressed="false">Raw</button></span>
+      <div class="actions"><a class="btn" href="#">Download</a></div>
+    </div>
+    <article class="md md-doc">
+      <h2 id="the-library">The library</h2>
+      <p>How this volume is laid out, what the folders are for and the two scripts that keep it tidy. Everything here is <em>plain files</em>; nothing depends on a database or a <strong>particular app</strong>.</p>
+      <h3 id="folders">Folders</h3>
+      <table>
+        <thead><tr><th>Folder</th><th>What lives there</th><th>Library</th></tr></thead>
+        <tbody>
+          <tr><td><code>/music</code></td><td>artist / album / track, tagged</td><td>music</td></tr>
+          <tr><td><code>/films</code></td><td>one folder per film, Kodi sidecars</td><td>movies</td></tr>
+          <tr><td><code>/shows</code></td><td>show / Season NN / episodes</td><td>tv</td></tr>
+          <tr><td><code>/notes</code></td><td>markdown, searchable</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <h3 id="to-do">To do</h3>
+      <ul>
+        <li class="task"><input type="checkbox" checked disabled> flag <code>/music</code> as a library</li>
+        <li class="task"><input type="checkbox" disabled> add <code>fanart.jpg</code> to the 2019 films</li>
+        <li class="task"><input type="checkbox" disabled> tag the live recordings
+          <ul><li>the Berlin set is untagged</li><li>the Prague set has the wrong year</li></ul>
+        </li>
+      </ul>
+      <h4 id="the-rename-script">The rename script</h4>
+      <p>Run it from the folder it should touch; it never follows symlinks and asks before anything is overwritten.</p>
+      <pre><code data-lang="sh">for f in *.flac; do
+  mv -i "$f" "$(printf '%02d' "$n") ${f#* - }"
+  n=$((n + 1))
+done</code></pre>
+      <blockquote><p>Keep the originals until the sums match. — a note to self after the 2023 mishap.</p></blockquote>
+      <h4 id="cover-art">Cover art</h4>
+      <p>A <code>cover.jpg</code> beside the tracks is what the tiles use when the tags carry no picture (<a href="#/file/docs/tagging.md">tagging.md</a> has the details); an external reference like <a href="https://musicbrainz.org" rel="noopener noreferrer">MusicBrainz</a> opens in a new tab.</p>
+      <p><img alt="the cover of Aventine" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23334155'/%3E%3Ccircle cx='8' cy='4.5' r='2.4' fill='%2394a3b8'/%3E%3C/svg%3E" width="320" height="180"></p>
+      <hr>
+      <h5 id="raw-html">Raw HTML</h5>
+      <p>A file that carries markup shows it as text: <code>&lt;script&gt;alert(1)&lt;/script&gt;</code> renders exactly like that, never as a script, and a <code>javascript:</code> link is left as its text.</p>
+      <h6 id="colophon">Colophon</h6>
+      <p>Rendered on the node, escape-first; Raw shows the source.</p>
+    </article>
+  </section>
+
+  <section class="player">
+    <div class="variant">variant: Raw, the plain text of today</div>
+    <div class="title-row">
+      <h1>README.md</h1>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="false">Rendered</button><button type="button" aria-pressed="true">Raw</button></span>
+      <div class="actions"><a class="btn" href="#">Download</a></div>
+    </div>
+    <div class="viewer"><pre># The library
+
+How this volume is laid out, what the folders are for and the two scripts that keep it
+tidy. Everything here is *plain files*; nothing depends on a database or a **particular app**.
+
+## Folders
+
+| Folder | What lives there | Library |
+|---|---|---|
+| `/music` | artist / album / track, tagged | music |</pre></div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the phone layout at 360 px, the gutter narrows</div>
+    <div class="phone">
+      <article class="md md-doc">
+        <h2 id="the-library-2">The library</h2>
+        <p>How this volume is laid out and what the folders are for.</p>
+        <h3 id="folders-2">Folders</h3>
+        <ul><li><code>/music</code> artist / album / track</li><li><code>/films</code> one folder per film</li></ul>
+        <h4 id="script-2">The rename script</h4>
+        <pre><code data-lang="sh">mv -i "$f" "$n $f"</code></pre>
+      </article>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

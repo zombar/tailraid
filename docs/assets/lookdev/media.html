@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid media</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  .phone { width: 360px; border: 1px dashed var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 16px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a href="#/browse/">Files</a><a class="active" href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
+  <span class="pill ok">healthy</span>
+  <span class="who">pike · leader atlas · 3/3 voters live</span>
+  <button type="button" class="theme" title="Theme: system (tap for light)" aria-label="Theme: system (tap for light)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></svg><span>system</span></button>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section class="lib movies">
+    <div class="variant">variant: the tab; one section per library folder, films first, one film without sidecars shows its cleaned name on a dashed card</div>
+    <h2>films <span class="badge lib">movies</span><span class="count">14 films · <a href="#/browse/films">open folder</a></span></h2>
+    <div class="toolbar">
+      <span class="seg" role="group" aria-label="sort"><button type="button" aria-pressed="true">Title</button><button type="button" aria-pressed="false">Year</button><button type="button" aria-pressed="false">Added</button></span>
+      <div class="chips"><button type="button" class="chip" aria-pressed="false">drama</button><button type="button" class="chip" aria-pressed="true">science fiction</button><button type="button" class="chip" aria-pressed="false">documentary</button><button type="button" class="chip" aria-pressed="false">comedy</button></div>
+    </div>
+    <div class="posters">
+      <a class="poster" href="#/media/item/films/Arrival%20(2016)"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3Cellipse cx='1' cy='1.4' rx='.7' ry='.35' fill='%2394a3b8'/%3E%3C/svg%3E"></span><span class="ptitle">Arrival</span><span class="pyear">2016 · 1 h 56</span></a>
+      <a class="poster" href="#/media/item/films/Stalker%20(1979)"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3Crect x='.3' y='1.8' width='1.4' height='.9' fill='%23a16207'/%3E%3C/svg%3E"></span><span class="ptitle">Stalker</span><span class="pyear">1979 · 2 h 42</span></a>
+      <a class="poster missing" href="#/media/item/films/Moon.2009.1080p.BluRay.x264-GROUP.mkv"><span class="art"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5"/></svg></span><span class="ptitle">Moon</span><span class="pyear">2009 · no sidecar</span></a>
+      <a class="poster" href="#/media/item/films/Solaris%20(1972)"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23312e81'/%3E%3Ccircle cx='1' cy='1' r='.5' fill='%23c7d2fe'/%3E%3C/svg%3E"></span><span class="ptitle">Solaris</span><span class="pyear">1972 · 2 h 47</span></a>
+      <a class="poster" href="#/media/item/films/Her%20(2013)"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%239f1239'/%3E%3C/svg%3E"></span><span class="ptitle">Her</span><span class="pyear">2013 · 2 h 06</span></a>
+      <a class="poster" href="#/media/item/films/Paterson%20(2016)"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23365314'/%3E%3Crect x='.5' y='.5' width='1' height='2' fill='%2384cc16' opacity='.5'/%3E%3C/svg%3E"></span><span class="ptitle">Paterson</span><span class="pyear">2016 · 1 h 58</span></a>
+    </div>
+  </section>
+
+  <section class="lib tv">
+    <h2>shows <span class="badge lib">tv</span><span class="count">3 shows · <a href="#/browse/shows">open folder</a></span></h2>
+    <div class="posters">
+      <a class="poster" href="#/media/item/shows/The%20Expanse"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23172554'/%3E%3Ccircle cx='1.4' cy='.8' r='.3' fill='%23fde68a'/%3E%3C/svg%3E"></span><span class="ptitle">The Expanse</span><span class="pyear">2015 · 6 seasons</span></a>
+      <a class="poster" href="#/media/item/shows/Detectorists"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%234d7c0f'/%3E%3Crect y='2.2' width='2' height='.8' fill='%23a3e635' opacity='.6'/%3E%3C/svg%3E"></span><span class="ptitle">Detectorists</span><span class="pyear">2014 · 3 seasons</span></a>
+      <a class="poster" href="#/media/item/shows/Severance"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23e2e8f0'/%3E%3Crect x='.6' y='.6' width='.8' height='1.8' fill='%2364748b'/%3E%3C/svg%3E"></span><span class="ptitle">Severance</span><span class="pyear">2022 · 2 seasons</span></a>
+    </div>
+  </section>
+
+  <section class="lib music">
+    <h2>music <span class="badge lib">music</span><span class="count">99 artists · 412 albums · <a href="#/browse/music">open folder</a></span></h2>
+    <div class="posters">
+      <a class="poster" href="#/browse/music/Agnes%20Obel/Aventine"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23334155'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%2394a3b8'/%3E%3C/svg%3E"></span><span class="ptitle">Aventine</span><span class="pyear">Agnes Obel · 2013</span></a>
+      <a class="poster" href="#/browse/music/Deftones/Around%20the%20Fur"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%23b45309'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fcd34d'/%3E%3C/svg%3E"></span><span class="ptitle">Around the Fur</span><span class="pyear">Deftones · 1997</span></a>
+      <a class="poster" href="#/browse/music/Amon%20Tobin/Supermodified"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%230f766e'/%3E%3C/svg%3E"></span><span class="ptitle">Supermodified</span><span class="pyear">Amon Tobin · 2000</span></a>
+      <a class="poster missing" href="#/browse/music/Boom%20Bip/Blue%20Eyed%20in%20the%20Red%20Room"><span class="art"><svg class="icon" viewBox="0 0 16 16"><path d="M6 12.5V3.5l7-1.5v9"/><circle cx="4" cy="12.5" r="2"/><circle cx="11" cy="11" r="2"/></svg></span><span class="ptitle">Blue Eyed in the Red Room</span><span class="pyear">Boom Bip · no cover</span></a>
+      <a class="poster nsfw" href="#/browse/nsfw/mix"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 4'%3E%3Crect width='4' height='4' fill='%239f1239'/%3E%3Ccircle cx='2' cy='2' r='1.3' fill='%23fda4af'/%3E%3C/svg%3E"></span><span class="ptitle">late mix</span><span class="pyear">nsfw · tap to show</span></a>
+    </div>
+  </section>
+
+  <section class="hero">
+    <div class="variant">variant: a film with every sidecar: the fanart darkened and faded into the page, the poster over its edge, facts, plot, people</div>
+    <img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3Crect y='7' width='16' height='2' fill='%230f172a'/%3E%3C/svg%3E">
+    <div class="hero-body">
+      <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3Cellipse cx='1' cy='1.4' rx='.7' ry='.35' fill='%2394a3b8'/%3E%3C/svg%3E">
+      <div>
+        <h1>Arrival</h1>
+        <div class="facts"><span>2016</span><span>1 h 56</span><span>★ 7.9</span><span>science fiction · drama</span><span>12A</span><span class="dim">/films/Arrival (2016)</span></div>
+        <p class="plot">A linguist is recruited by the military to communicate with alien lifeforms after twelve mysterious spacecraft land around the world. As nations edge toward war, she races to understand a language in which time itself is written differently.</p>
+        <div class="actions"><button type="button">▶ Play</button><a class="btn" href="#/browse/films/Arrival%20(2016)">Open folder</a></div>
+        <div class="people"><span class="person">Denis Villeneuve · director</span><span class="person">Amy Adams</span><span class="person">Jeremy Renner</span><span class="person">Forest Whitaker</span><span class="person">Michael Stuhlbarg</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="hero poster-only">
+    <div class="variant">variant: a film with a poster but no fanart: the poster's blurred copy stands in for the backdrop</div>
+    <img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3Crect x='.3' y='1.8' width='1.4' height='.9' fill='%23a16207'/%3E%3C/svg%3E">
+    <div class="hero-body">
+      <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3Crect x='.3' y='1.8' width='1.4' height='.9' fill='%23a16207'/%3E%3C/svg%3E">
+      <div>
+        <h1>Stalker</h1>
+        <div class="facts"><span>1979</span><span>2 h 42</span><span>★ 8.1</span><span>drama · science fiction</span></div>
+        <p class="plot">A guide leads two men through an area known as the Zone to find a room that grants wishes.</p>
+        <div class="actions"><button type="button">▶ Play</button><a class="btn" href="#/browse/films/Stalker%20(1979)">Open folder</a></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="hero no-art">
+    <div class="variant">variant: a bare file, no sidecar at all: a plain band, the cleaned name, the browser's frame where the poster would be</div>
+    <div class="hero-body">
+      <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23334155'/%3E%3Ccircle cx='8' cy='4.5' r='2.4' fill='%2394a3b8'/%3E%3C/svg%3E">
+      <div>
+        <h1>Moon</h1>
+        <div class="facts"><span>2009</span><span>1 h 37</span><span class="dim">Moon.2009.1080p.BluRay.x264-GROUP.mkv · 8.1 GiB</span></div>
+        <p class="plot dim">No description: add a <code>movie.nfo</code> or <code>Moon.2009.1080p.BluRay.x264-GROUP.nfo</code> beside the file.</p>
+        <div class="actions"><button type="button">▶ Play</button><a class="btn" href="#/browse/films">Open folder</a></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="hero">
+    <div class="variant">variant: a show: the season strip and the episode list, one episode still without a frame</div>
+    <img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23172554'/%3E%3Ccircle cx='12' cy='3' r='1.2' fill='%23fde68a'/%3E%3Cellipse cx='5' cy='7' rx='4' ry='1.2' fill='%231e3a8a'/%3E%3C/svg%3E">
+    <div class="hero-body">
+      <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23172554'/%3E%3Ccircle cx='1.4' cy='.8' r='.3' fill='%23fde68a'/%3E%3C/svg%3E">
+      <div>
+        <h1>The Expanse</h1>
+        <div class="facts"><span>2015–2022</span><span>6 seasons · 62 episodes</span><span>★ 8.5</span><span>science fiction · drama</span><span>ended</span></div>
+        <p class="plot">Two hundred years in the future, a hardened detective and a rogue ship's captain come together to investigate a missing young woman, and uncover a conspiracy that threatens the fragile peace between Earth, Mars and the Belt.</p>
+        <div class="actions"><button type="button">▶ Play S01E01</button><a class="btn" href="#/browse/shows/The%20Expanse">Open folder</a></div>
+        <div class="seasons"><button type="button" aria-pressed="true">Season 1</button><button type="button" aria-pressed="false">Season 2</button><button type="button" aria-pressed="false">Season 3</button><button type="button" aria-pressed="false">Season 4</button><button type="button" aria-pressed="false">Season 5</button><button type="button" aria-pressed="false">Season 6</button><button type="button" aria-pressed="false">Specials</button></div>
+        <table class="episodes">
+          <tbody>
+            <tr><td class="no">S01E01</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23172554'/%3E%3Ccircle cx='4' cy='4' r='1.4' fill='%23fde68a'/%3E%3C/svg%3E"></td><td class="title">Dulcinea<div class="plot small dim">In the asteroid belt, a detective is hired to find a missing heiress, and the crew of an ice hauler answer a distress call that will change everything.</div></td><td class="dur">46:19</td></tr>
+            <tr class="playing"><td class="no">S01E02</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a8a'/%3E%3Crect x='6' y='2' width='4' height='5' fill='%2394a3b8'/%3E%3C/svg%3E"></td><td class="title">The Big Empty<div class="plot small dim">The survivors drift toward Ceres in a shuttle with hours of air; on Ceres, Miller follows a thread the station would rather he dropped.</div></td><td class="dur">42:51</td></tr>
+            <tr><td class="no">S01E03</td><td class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg></td><td class="title">Remember the Cant<div class="plot small dim">Holden's broadcast sets the inner planets against each other; the crew is picked up by a Martian warship.</div></td><td class="dur">43:12</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the phone layout at 360 px, posters two abreast and a detail with the poster at 96 px</div>
+    <div class="phone">
+      <section class="lib movies">
+        <h2>films <span class="badge lib">movies</span><span class="count">14</span></h2>
+        <div class="posters">
+          <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3C/svg%3E"></span><span class="ptitle">Arrival</span><span class="pyear">2016</span></a>
+          <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3C/svg%3E"></span><span class="ptitle">Stalker</span><span class="pyear">1979</span></a>
+        </div>
+      </section>
+      <section class="hero">
+        <img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3C/svg%3E">
+        <div class="hero-body">
+          <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3C/svg%3E">
+          <div>
+            <h1>Arrival</h1>
+            <div class="facts"><span>2016</span><span>1 h 56</span><span>★ 7.9</span></div>
+            <p class="plot">A linguist is recruited by the military to communicate with alien lifeforms after twelve spacecraft land around the world.</p>
+            <div class="actions"><button type="button">▶ Play</button></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

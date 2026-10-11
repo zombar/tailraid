@@ -28,7 +28,7 @@ type Inode struct {
                               // directories: bumps on every change of the name table (READDIR cookie verifier)
     Parent   Ino              // 0 for root; single parent (no hard links)
     Name     string           // name within Parent; "" for root
-    Flags    uint8            // FlagProtected = 1, FlagNSFW = 2 (02 §Apply rules); directories only
+    Flags    uint8            // FlagProtected = 1, FlagNSFW = 2, library kind in bits 2-3 (02 §Apply rules, 18 §9); directories only
     DeletedAt int64           // FSM clock of the delete that put this entry in the trash; 0 while live
     Chunks   []Hash           // TFile only; len == ceil(Size/ChunkSize); copy-on-write slice
     Target   string           // TSymlink only
@@ -119,9 +119,10 @@ Rules:
   `Clone`. A name may be deleted and created again any number of times: the roots are
   distinct inodes and the index is by inode, so no two entries ever conflict.
 - `Flags` is meaningful on directories only (02 §Apply rules): `FlagProtected` is
-  enforced by the FSM, `FlagNSFW` is carried for the browser UI (13 §4). Both are
-  inherited by what lies under the directory when a gateway reports an *effective* flag;
-  the FSM stores each directory's own bits.
+  enforced by the FSM, `FlagNSFW` is carried for the browser UI (13 §4), and bits 2–3
+  (`FlagLibraryMask = 0b1100`) hold the library kind of 18 §9: 0 none, 1 movies, 2 tv,
+  3 music (codec 6, I-210). All are inherited by what lies under the directory when a
+  gateway reports an *effective* flag; the FSM stores each directory's own bits.
 
 ## Chunking
 
