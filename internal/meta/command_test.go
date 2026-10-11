@@ -147,6 +147,11 @@ var goldenCommands = []struct {
 		"04 11 0000000000000000 ffffffffffffffff 00040000 0400000000000000",
 	},
 	{
+		"SetAttrLibrary", // codec version 6: the library kind in the flags (I-210)
+		Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 7, Mask: AttrFlags, Flags: WithLibrary(FlagNSFW, LibraryMusic), Now: 9}},
+		"060a0700000000000000200000000000000000000000000000000000000000000000000000000009000000000000000e",
+	},
+	{
 		"SetShardSums", // codec version 5: a chunk's data-shard hashes (I-201)
 		Command{Op: OpSetShardSums, SetShardSums: &SetShardSums{Hash: Hash{0xaa}, Sums: []Hash{{0x01}, {0x02}}}},
 		"0512aa000000000000000000000000000000000000000000000000000000000000000201000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000",

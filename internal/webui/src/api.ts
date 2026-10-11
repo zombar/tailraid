@@ -158,6 +158,7 @@ export interface Entry {
   path?: string;
   protected?: boolean;
   nsfw?: boolean;
+  library?: string;
   deleted_at?: string;
   purge_at?: string;
   thumb?: boolean;
@@ -168,6 +169,7 @@ export interface Entry {
 export interface DirInfo {
   protected: boolean;
   nsfw: boolean;
+  library?: string;
   pinned: boolean;
   deleted_at?: string;
   purge_at?: string;
@@ -317,7 +319,7 @@ export const move = (paths: string[], to: string): Promise<MoveResult> => post("
 export const del = (paths: string[]): Promise<DeleteResult> => post("/api/delete", { paths });
 export const restore = (ino: number, opts: { to?: string; name?: string } = {}): Promise<{ path: string }> => post("/api/restore", { ino, ...opts });
 export const purge = (sel: { ino: number } | { all: true }): Promise<void> => post("/api/purge", sel);
-export const setFlags = (path: string, flags: { protected?: boolean; nsfw?: boolean }): Promise<Entry> => post("/api/flags", { path, ...flags });
+export const setFlags = (path: string, flags: { protected?: boolean; nsfw?: boolean; library?: string }): Promise<Entry> => post("/api/flags", { path, ...flags });
 export const pin = (path: string, pinned: boolean): Promise<{ path: string; pinned: boolean; bytes: number }> => post("/api/pin", { path, pinned });
 
 /** putThumb stores the frame the browser grabbed from a video (docs/13 §5). */

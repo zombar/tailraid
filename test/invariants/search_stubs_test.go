@@ -18,9 +18,6 @@ func TestStub_I_208(t *testing.T) { t.Skip("stub: lands with search-web; see doc
 // Invariant: I-209
 func TestStub_I_209(t *testing.T) { t.Skip("stub: lands with search-web; see docs/13-web-ui.md §4") }
 
-// Invariant: I-210
-func TestStub_I_210(t *testing.T) { t.Skip("stub: lands with library-flag; see docs/18-search.md §9") }
-
 // Invariant: I-211
 func TestStub_I_211(t *testing.T) { t.Skip("stub: lands with search-index; see docs/18-search.md §8") }
 

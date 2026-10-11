@@ -36,13 +36,14 @@ const (
 	commandVersionV3 = 3 // SetPlacement.Expect and GCDelete.Limit
 	commandVersionV4 = 4 // Trash, Restore, Purge and a SetAttr carrying Flags (docs/02)
 	commandVersionV5 = 5 // a Commit whose NewChunks carry Sums, and SetShardSums (docs/04 §4, I-201)
+	commandVersionV6 = 6 // a SetAttr whose Flags carry the library kind (docs/18 §9, I-210)
 	// CodecShardSums is the codec every live member must read before a Commit carries
 	// Sums (the flusher asks the prober's MinCodec, docs/02 §Codec versions).
 	CodecShardSums = commandVersionV5
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 5
+	CodecVersion = 6
 )
 
 // SetAttr mask bits.
@@ -225,6 +226,12 @@ type Command struct {
 	SetShardSums  *SetShardSums
 }
 
+// needsV6 reports whether c carries the library kind, a codec-6 field: an older binary
+// rejects the bits, so the leader refuses the entry while such a member is live (I-210).
+func needsV6(c Command) bool {
+	return c.Op == OpSetAttr && c.SetAttr != nil && c.SetAttr.Mask&AttrFlags != 0 && c.SetAttr.Flags&FlagLibraryMask != 0
+}
+
 // needsV5 reports whether c carries a codec-5 field: SetShardSums, or a Commit whose
 // NewChunks carry Sums (docs/04 §4, I-201).
 func needsV5(c Command) bool {
@@ -294,6 +301,8 @@ func CommandCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV6(c):
+		return commandVersionV6
 	case needsV5(c):
 		return commandVersionV5
 	case needsV4(c):
@@ -310,7 +319,7 @@ func CommandCodec(c Command) uint8 {
 func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
 	v := CommandCodec(c)
-	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4, v == commandVersionV5
+	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6, v == commandVersionV5
 	v2 := v == commandVersionV2
 	w.u8(v)
 	w.u8(uint8(c.Op))
@@ -468,7 +477,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 && v != commandVersionV4 && v != commandVersionV5 {
+	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 && v != commandVersionV4 && v != commandVersionV5 && v != commandVersionV6 {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -487,6 +496,8 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpTrash || c.Op == OpRestore || c.Op == OpPurge || c.Op == OpSetAttr
 	case commandVersionV5:
 		legal = c.Op == OpSetShardSums || c.Op == OpCommit
+	case commandVersionV6:
+		legal = c.Op == OpSetAttr
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums
 	}
@@ -518,10 +529,13 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.Rename = &Rename{OldParent: Ino(r.u64()), OldName: r.str(), NewParent: Ino(r.u64()), NewName: r.str(), Now: r.i64()}
 	case OpSetAttr:
 		c.SetAttr = &SetAttr{Ino: Ino(r.u64()), Mask: r.u8(), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(), Atime: r.i64(), Mtime: r.i64(), Now: r.i64()}
-		if v == commandVersionV4 {
+		if v == commandVersionV4 || v == commandVersionV6 {
 			c.SetAttr.Flags = r.u8()
 			if r.err == nil && c.SetAttr.Mask&AttrFlags == 0 {
 				return c, fmt.Errorf("meta: SetAttr in command version %d without AttrFlags", v)
+			}
+			if r.err == nil && v < commandVersionV6 && c.SetAttr.Flags&FlagLibraryMask != 0 {
+				return c, fmt.Errorf("meta: library bits in command version %d", v) // never written; an older reader would reject them (I-210)
 			}
 		}
 	case OpCommit:

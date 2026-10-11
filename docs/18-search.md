@@ -46,9 +46,12 @@ hash is absent or different. `Version` alone would not do: it bumps on `chmod` a
 - *Excluded*: everything under `/.tailraid`, deleted roots and their subtrees (the
   live-only `GetInode`, 02 §Apply rules), and `IsEphemeral` names (upload temps, macOS
   metadata, 06 §1).
-- *Bounds*: a pass takes at most `search.batch` (2000) candidates; above `search.max_bytes`
-  (256 MiB of segments) the pass indexes tags, names and the catalogue only and `status`
-  reports `capped`.
+- *Bounds*: a pass takes at most `search.batch` (2000) candidates or `search.batch_bytes`
+  (64 MiB) of text, whichever comes first, so the postings a pass holds in memory while it
+  writes its segment are bounded by a number the operator sets, not by the files found;
+  above `search.max_bytes` (256 MiB of segments) the pass indexes tags, names and the
+  catalogue only and `status` reports `capped`. A million small files is many passes,
+  never a large one.
 
 ## 3. Tokens
 
@@ -100,8 +103,9 @@ On the maintenance tick (`node.go` `maintenance`, next to GC) every `search.inte
 (10 min, `"0"` off) when `Applied` advanced since the last pass: load the chain, walk
 every inode once (`Store.ForEachInode`, the `ForEachChunk` pattern: keys sorted, copies
 taken in batches of 1000 under the read lock, so a million inodes never starve Apply),
-collect the candidates in inode order, take at most `search.batch`, read them
-`search.workers` (2) at a time under `chunk.Background` (06 §4, I-175), tokenize, derive
+collect the candidates in inode order, take at most `search.batch` of them or
+`search.batch_bytes` of text, read them `search.workers` (2) at a time under
+`chunk.Background` (06 §4, I-175), tokenize, derive
 the catalogue entries (§8), write the segment (§4), repeat next tick until nothing is
 pending. `AdminOp "index_now"` (`IsPass`, I-189) runs a pass on demand: `tailraid search
 index` and the soak use it. `status` carries `search: {docs, segments, bytes, pending,
@@ -207,9 +211,10 @@ biography and art.
   `search.max_file` bytes of a text file by extension, the first chunk's tags of an audio
   file, nothing of anything else; it skips `/.tailraid`, deleted roots and ephemeral
   names; it re-indexes a file only when `sha256(Chunks)` changed, so a rename, a move or a
-  `SetAttr` costs nothing; it reads at most `search.batch` candidates a pass,
-  `search.workers` at a time at background priority; and above `search.max_bytes` of
-  segments it indexes tags, names and the catalogue only and `status` says `capped`.
+  `SetAttr` costs nothing; it reads at most `search.batch` candidates or `search.batch_bytes`
+  of text a pass, `search.workers` at a time at background priority; and above
+  `search.max_bytes` of segments it indexes tags, names and the catalogue only and
+  `status` says `capped`.
 - **I-208** — `GET /api/search` folds the query as it folds the index, ANDs the words with
   the last as a prefix, limits to `under`'s live subtree, answers name hits from the
   FSM's current state and tag and content hits from the segments, never names an entry in
@@ -238,7 +243,7 @@ biography and art.
 | I-206 | `TestStub_I_206` (planned: TestSegment_RoundTrip_TrailerRejectsTruncation, TestSegment_SizeBoundaries_Table, FuzzSegmentDecode, TestIndexer_LoserOfCreateRaceAborts, TestIndexer_NoChangeWritesNothing, TestIndexer_RebuildWhenChainExceedsEight, TestIndexer_FlushBeforePublish_SeenFromSecondGateway, TestIndexer_LeaderChange_ContinuesFromChain, TestSweep_RemovesOrphansOlderThanHour, TestSearch_ReloadsOnNewSegment, TestSoak_AllPhasesAgainstHarness) |
 | I-207 | `TestStub_I_207` (planned: TestTokenize_Table, FuzzTokenize, TestIndexer_SortedWalk_SegmentBytesDeterministic, TestIndexer_ReindexOnlyWhenChunksChange, TestIndexer_SkipsTrashReservedEphemeral, TestIndexer_MaxFile_Table, TestIndexer_AudioFirstChunkOnly, TestIndexer_MaxBytes_TagsOnly, TestConfig_SearchKeys_Table, TestSoak_AllPhasesAgainstHarness) |
 | I-208 | `TestStub_I_208` (planned: TestSearch_AndPrefix_RankNameTagsContent, TestSearch_FiltersDeletedAndUnder, TestSearch_LimitBoundaries, TestSearch_NameListFollowsApplied, TestCluster_SearchDeterministicAcrossNodes, TestWebUI_Search_Table, TestCLI_Search, TestSoak_AllPhasesAgainstHarness) |
-| I-210 | `TestStub_I_210` (planned: TestFSM_SetAttr_LibraryKind_Table, TestFSM_LibraryEffective_NearestAncestor, TestCluster_Codec6RefusedWhileMemberOld, TestEncodeCommand_Golden, TestWebUI_Flags_Library_Table, TestStore_Libraries) |
+| I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-211 | `TestStub_I_211` (planned: TestCatalog_CleanName_Table, TestCatalog_Episode_Table, TestCatalog_NFO_Table, FuzzNFODecode, TestCatalog_ArtResolutionOrder, TestCatalog_LibraryKinds_Structure, TestCatalog_DeterministicAcrossNodes, TestSoak_AllPhasesAgainstHarness) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them

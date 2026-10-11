@@ -274,9 +274,10 @@ func (s *Server) purge(w http.ResponseWriter, r *http.Request) {
 // flags sets a folder's protected and nsfw flags (I-163).
 func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Path      string `json:"path"`
-		Protected *bool  `json:"protected"`
-		NSFW      *bool  `json:"nsfw"`
+		Path      string  `json:"path"`
+		Protected *bool   `json:"protected"`
+		NSFW      *bool   `json:"nsfw"`
+		Library   *string `json:"library"` // none, movies, tv or music (docs/18 §9)
 	}
 	if !decode(w, r, singleBodyCap, &req) {
 		return
@@ -308,6 +309,14 @@ func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 	}
 	set(meta.FlagProtected, req.Protected)
 	set(meta.FlagNSFW, req.NSFW)
+	if req.Library != nil {
+		k, ok := meta.ParseLibraryKind(*req.Library)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "flags "+canonical+": library is one of none, movies, tv, music")
+			return
+		}
+		flags = meta.WithLibrary(flags, k)
+	}
 	if flags != in.Flags {
 		if err := s.o.FS.SetFlags(canonical, flags); err != nil {
 			s.fail(w, err)

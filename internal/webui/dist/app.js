@@ -2054,6 +2054,28 @@ function menu(ctx) {
     });
     return lab;
   };
+  const libraryRow = (current, why) => {
+    const select = h("select", { "aria-label": "library kind" });
+    for (const word of ["none", "movies", "tv", "music"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : void 0 }, word));
+    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows or music");
+    const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
+    if (why) {
+      select.disabled = true;
+      lab.setAttribute("aria-disabled", "true");
+    }
+    select.addEventListener("change", () => {
+      select.disabled = true;
+      setFlags(ctx.path, { library: select.value }).then(
+        () => ctx.onChange(),
+        (e) => {
+          select.value = current || "none";
+          select.disabled = false;
+          toast("Library: " + (e instanceof Error ? e.message : String(e)), "bad");
+        }
+      );
+    });
+    return lab;
+  };
   const fill = async () => {
     body.replaceChildren(h("div", { class: "loading" }, "loading"));
     let own;
@@ -2080,7 +2102,8 @@ function menu(ctx) {
         ctx.dir.pinned,
         why,
         (on) => pin(ctx.path, on)
-      )
+      ),
+      libraryRow(own?.library ?? "", why ?? (ctx.dir.library && !own?.library ? `inside a ${ctx.dir.library} library: this folder is listed as part of it` : null))
     );
   };
   details.addEventListener("toggle", () => {
