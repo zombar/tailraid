@@ -60,18 +60,18 @@ func TestVoterFile_FollowsRow(t *testing.T) {
 	if !voterInFile() {
 		t.Fatal("the file still says voter: false after the promotion")
 	}
-	// an unwritable directory: warned, the file untouched, the next follow retries
+	// a file that cannot be written (a directory sits where Save writes its temp file,
+	// which fails on every OS): warned, the file untouched, the next follow retries
 	must(t, leader.Node.MemberOp(ctx, rpc.MemberOp{Op: "set_voter", NodeIdx: nd.Idx(), Voter: false}))
 	c.Settle()
-	must(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	must(t, os.Mkdir(p+".tmp", 0o700))
 	vf.follow(nd.Node, nd.ID, log)
 	if !vf.voter {
 		t.Fatal("an unwritable file was recorded as updated")
 	}
-	must(t, os.Chmod(dir, 0o700))
-	if voterInFile() != true {
-		t.Fatal("the file changed although its directory was unwritable")
+	must(t, os.Remove(p+".tmp"))
+	if !voterInFile() {
+		t.Fatal("the file changed although it could not be written")
 	}
 	vf.follow(nd.Node, nd.ID, log)
 	if voterInFile() {
