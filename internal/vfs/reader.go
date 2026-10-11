@@ -394,8 +394,11 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 		}
 		select {
 		case <-call.done:
-			if call.err != nil && errors.Is(call.err, context.Canceled) {
-				continue // the leader gave up for its own reasons; fetch for ourselves
+			if call.err != nil && (errors.Is(call.err, context.Canceled) || call.prefetch) {
+				// the leader gave up for its own reasons, or a prefetch failed at background
+				// priority, which says nothing about a client's read (I-203, I-175): fetch
+				// for ourselves
+				continue
 			}
 			return call.data, call.err
 		case <-ctx.Done():
@@ -679,7 +682,7 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 		return ctx.Err()
 	}
 	if call.err != nil {
-		if errors.Is(call.err, context.Canceled) { // a prefetch cut under us: fetch for ourselves
+		if errors.Is(call.err, context.Canceled) || call.prefetch { // a prefetch cut or refused under us: fetch for ourselves
 			data, err := r.ReadChunk(ctx, h)
 			if err != nil {
 				return err
