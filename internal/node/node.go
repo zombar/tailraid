@@ -35,6 +35,7 @@ import (
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/sysfs"
@@ -308,7 +309,16 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			},
 		},
 	}
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	// the index in the volume (docs/18): the leader's pass, every node's queries
+	sset, err := cfg.SearchSettings()
+	if err != nil {
+		return err
+	}
+	searchSvc := &search.Service{
+		Src: node.FSM, Vol: search.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Log: log,
+		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
+	}
+	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
@@ -326,6 +336,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		cacheRep := pinned.List()
 		rep.Cache = &cacheRep
+		searchRep := searchSvc.Status()
+		rep.Search = &searchRep
 		if webAddr != "" {
 			rep.WebURL = "http://" + webAddr + "/"
 		}
@@ -451,9 +463,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
 	}
 
-	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, stats, web UI
+	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, stats, search, web UI
 	bg, cancelBg := context.WithCancel(context.Background())
-	loops := 8
+	loops := 9
 	if web != nil {
 		loops++
 	}
@@ -481,6 +493,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
 	go func() { pinned.Run(bg); done <- struct{}{} }()
 	go func() { statsSvc.Run(bg); done <- struct{}{} }()
+	go func() { ops.searchLoop(bg, sset.Interval); done <- struct{}{} }()
 	if web != nil {
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
 	}
@@ -584,6 +597,7 @@ type adminOps struct {
 	fs       *vfs.FS
 	pins     *pins.Pins
 	stats    *stats.Service
+	search   *search.Service
 	self     meta.NodeIdx
 	clk      clock.Clock
 	log      *slog.Logger
@@ -752,6 +766,46 @@ func (a *adminOps) refreshSeed() {
 	a.seedKey = key.String()
 }
 
+// searchLoop runs the leader's index pass every interval while the FSM moved, every
+// Backlog while candidates are pending; a follower keeps its chain loaded (docs/18 §5).
+// An interval of 0 turns the pass off.
+func (a *adminOps) searchLoop(ctx context.Context, every time.Duration) {
+	if every <= 0 {
+		<-ctx.Done()
+		return
+	}
+	t := a.clk.NewTimer(every)
+	defer t.Stop()
+	var last uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C():
+		}
+		next := every
+		applied := a.node.FSM.Applied()
+		switch {
+		case !a.node.IsLeader() || !a.healthy():
+			a.search.Warm(ctx)
+		case applied != last:
+			res, err := a.search.Pass(ctx)
+			switch {
+			case err != nil:
+				a.log.Warn("search pass failed", "err", err)
+			case res.Pending > 0:
+				next = min(every, search.Backlog)
+			default:
+				last = applied
+			}
+			if err == nil && res.Indexed > 0 {
+				a.log.Info("search pass", "indexed", res.Indexed, "pending", res.Pending, "segment", res.Seq, "rebuilt", res.Rebuilt)
+			}
+		}
+		t.Reset(next)
+	}
+}
+
 func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	gcT := a.clk.NewTimer(cfg.GCInterval)
 	sweepT := a.clk.NewTimer(time.Hour)
@@ -799,6 +853,13 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 			} else if n > 0 {
 				a.log.Info("sweep", "orphan_thumbnails_removed", n)
 			}
+			if a.search != nil && a.node.IsLeader() && a.healthy() { // the index's old segments (docs/18 §4, I-206)
+				if n, err := a.search.Sweep(ctx); err != nil {
+					a.log.Warn("search sweep failed", "err", err)
+				} else if n > 0 {
+					a.log.Info("sweep", "index_segments_removed", n)
+				}
+			}
 			if a.stats != nil && a.node.IsLeader() && a.healthy() { // the stats retention is the leader's (I-194)
 				if n, err := a.stats.Retain(ctx); err != nil {
 					a.log.Warn("stats retention failed", "err", err)
@@ -837,7 +898,7 @@ func (a *adminOps) sweepS3(ctx context.Context, grace time.Duration) {
 
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
-	case "repair_now", "check", "set_policy", "gc_now", "rotate_token", "trash_restore", "trash_purge":
+	case "repair_now", "check", "set_policy", "gc_now", "rotate_token", "trash_restore", "trash_purge", "index_now":
 		if !a.node.IsLeader() {
 			if a.node.LeaderRPCAddr() == "" {
 				return nil, cluster.ErrNoLeader
@@ -863,6 +924,10 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.repairer.Scan(ctx)
 	case "gc_now":
 		return a.gc.RunOnce(ctx)
+	case "index_now": // the leader's pass now (docs/18 §5, a pass op, I-189)
+		return a.search.Pass(ctx)
+	case "search": // this node's index (docs/18 §6): never forwarded
+		return a.search.Search(ctx, op.Query, op.Path, op.Limit), nil
 	case "stats_seal": // this node's partial stats hour and any rollup still missing (docs/17 §7)
 		if a.stats == nil {
 			return nil, errors.New("stats: no sampler")

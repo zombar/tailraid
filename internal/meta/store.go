@@ -2,6 +2,7 @@ package meta
 
 import (
 	"bytes"
+	"slices"
 	"sort"
 	"strings"
 
@@ -326,14 +327,48 @@ func (f *FSM) ForEachChunk(fn func(Chunk) bool) {
 	}
 	f.mu.RUnlock()
 	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
+	walkBatches(f, keys, func(h Hash) (Chunk, bool) {
+		c, ok := f.st.Chunks[h]
+		if !ok {
+			return Chunk{}, false
+		}
+		return copyChunk(c), true
+	}, fn)
+}
+
+// ForEachInode calls fn for every inode present when the walk starts, in inode order,
+// until fn returns false, by ForEachChunk's rules: keys sorted once, copies taken in
+// batches of 1000 under the read lock so Apply is never starved (an inode deleted
+// meanwhile is skipped, one added meanwhile is not visited). Entries in the trash are
+// visited too: GetInode tells the caller which are live (docs/18 §5).
+func (f *FSM) ForEachInode(fn func(Inode) bool) {
+	f.mu.RLock()
+	keys := make([]Ino, 0, len(f.st.Inodes))
+	for ino := range f.st.Inodes {
+		keys = append(keys, ino)
+	}
+	f.mu.RUnlock()
+	slices.Sort(keys)
+	walkBatches(f, keys, func(ino Ino) (Inode, bool) {
+		in, ok := f.st.Inodes[ino]
+		if !ok {
+			return Inode{}, false
+		}
+		return copyInode(in), true
+	}, fn)
+}
+
+// walkBatches copies the entries of the sorted keys in batches of 1000 under the read
+// lock and calls fn for each with the lock released, until fn returns false.
+func walkBatches[K, V any](f *FSM, keys []K, get func(K) (V, bool), fn func(V) bool) {
 	const batchSize = 1000
 	for start := 0; start < len(keys); start += batchSize {
 		end := min(start+batchSize, len(keys))
-		batch := make([]Chunk, 0, end-start)
+		batch := make([]V, 0, end-start)
 		f.mu.RLock()
-		for _, h := range keys[start:end] {
-			if c, ok := f.st.Chunks[h]; ok {
-				batch = append(batch, copyChunk(c))
+		for _, k := range keys[start:end] {
+			if v, ok := get(k); ok {
+				batch = append(batch, v)
 			}
 		}
 		f.mu.RUnlock()

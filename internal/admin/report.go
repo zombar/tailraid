@@ -13,6 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -195,6 +196,7 @@ type Report struct {
 	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
 	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
+	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
 	GeneratedAt         time.Time      `json:"generated_at"`
 	WalkMS              int64          `json:"walk_ms"` // how long this report's chunk walk took (docs/12 §8, I-205)
 }

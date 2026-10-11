@@ -91,8 +91,10 @@ the folder. The rules:
   reloads when it moved. A segment that fails its trailer is skipped and its docs count
   as unindexed, which the next pass repairs.
 - A pass with nothing changed writes nothing. When the chain would exceed `RebuildAt` (8)
-  segments the pass rebuilds the whole index into one segment from scratch (every
-  candidate again, no posting merge), so a reader's chain is at most 8 files.
+  segments the pass merges the chain and its batch into one segment with no chain: the
+  dictionaries are walked in step, each inode keeps its newest doc while the file is
+  live, and only the output is held in memory, so a reader's chain is at most 8 files
+  and a deleted file's words leave the index at the next rebuild.
 - `/.tailraid` is ephemeral (06 §3, I-195): a delete or replace never trashes. The
   leader's hourly sweep removes a `.seg` outside the current chain once it is an hour
   old, which is how a rebuild's predecessors and an abandoned pass's temp go.
@@ -106,8 +108,11 @@ taken in batches of 1000 under the read lock, so a million inodes never starve A
 collect the candidates in inode order, take at most `search.batch` of them or
 `search.batch_bytes` of text, read them `search.workers` (2) at a time under
 `chunk.Background` (06 §4, I-175), tokenize, derive
-the catalogue entries (§8), write the segment (§4), repeat next tick until nothing is
-pending. `AdminOp "index_now"` (`IsPass`, I-189) runs a pass on demand: `tailraid search
+the catalogue entries (§8), write the segment (§4). While candidates are pending the
+next pass runs after `Backlog` (30 s) instead of the interval, so a large import is
+indexed pass after pass rather than one batch per interval. The leader remembers each
+`.nfo` it parsed by its chunk list, so a pass re-reads only changed sidecars; a new
+leader reads them once. `AdminOp "index_now"` (`IsPass`, I-189) runs a pass on demand: `tailraid search
 index` and the soak use it. `status` carries `search: {docs, segments, bytes, pending,
 last_pass, in_progress, capped}` (12 §8).
 
@@ -123,7 +128,9 @@ A hit is `{path, type, size, mtime, ino, match, title?, artist?, album?, terms:
 
 - **Names** are matched live against the FSM, so a file written a second ago is found by
   its name at once. The node keeps a folded name list (every live inode's words) rebuilt
-  when `Applied` moved and reused otherwise, never a full walk per keystroke.
+  when `Applied` moved and at least `NameRefresh` (1 s) has passed since the last
+  build, and reused otherwise: never a full walk per keystroke, even while a copy keeps
+  the FSM moving.
 - **Tags** and **content** come from the segments. Every candidate inode is filtered
   through the live `GetInode` (nothing in the trash or under `/.tailraid` is a hit) and
   `PathOf` names it.
@@ -240,12 +247,12 @@ biography and art.
 
 | Invariant | Tests |
 |---|---|
-| I-206 | `TestStub_I_206` (planned: TestSegment_RoundTrip_TrailerRejectsTruncation, TestSegment_SizeBoundaries_Table, FuzzSegmentDecode, TestIndexer_LoserOfCreateRaceAborts, TestIndexer_NoChangeWritesNothing, TestIndexer_RebuildWhenChainExceedsEight, TestIndexer_FlushBeforePublish_SeenFromSecondGateway, TestIndexer_LeaderChange_ContinuesFromChain, TestSweep_RemovesOrphansOlderThanHour, TestSearch_ReloadsOnNewSegment, TestSoak_AllPhasesAgainstHarness) |
-| I-207 | `TestStub_I_207` (planned: TestTokenize_Table, FuzzTokenize, TestIndexer_SortedWalk_SegmentBytesDeterministic, TestIndexer_ReindexOnlyWhenChunksChange, TestIndexer_SkipsTrashReservedEphemeral, TestIndexer_MaxFile_Table, TestIndexer_AudioFirstChunkOnly, TestIndexer_MaxBytes_TagsOnly, TestConfig_SearchKeys_Table, TestSoak_AllPhasesAgainstHarness) |
-| I-208 | `TestStub_I_208` (planned: TestSearch_AndPrefix_RankNameTagsContent, TestSearch_FiltersDeletedAndUnder, TestSearch_LimitBoundaries, TestSearch_NameListFollowsApplied, TestCluster_SearchDeterministicAcrossNodes, TestWebUI_Search_Table, TestCLI_Search, TestSoak_AllPhasesAgainstHarness) |
+| I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain` |
+| I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table` |
+| I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
-| I-211 | `TestStub_I_211` (planned: TestCatalog_CleanName_Table, TestCatalog_Episode_Table, TestCatalog_NFO_Table, FuzzNFODecode, TestCatalog_ArtResolutionOrder, TestCatalog_LibraryKinds_Structure, TestCatalog_DeterministicAcrossNodes, TestSoak_AllPhasesAgainstHarness) |
+| I-211 | `TestCatalog_CleanName_Table`, `TestCatalog_Episode_Table`, `TestCatalog_NFO_Table`, `FuzzNFODecode`, `TestCatalog_ArtResolutionOrder`, `TestCatalog_LibraryKinds_Structure`, `TestCluster_SearchDeterministicAcrossNodes` |
 
-The stubs live in `test/invariants/` until the PR that lands each feature replaces them
-with the tests named after them (09 §2). The web side's invariants (I-209 markdown,
+The web route's own tests (`/api/search`, the 400s outside `1..200`) and soak phase 21
+join these rows with the PRs that land them (09 §2). The web side's invariants (I-209 markdown,
 I-212 the Media tab) are in 13.
