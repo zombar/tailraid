@@ -187,7 +187,7 @@ Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid statu
 ```yaml
 node:
   capacity: 500G        # pin this device's budget (omit to follow free space; "0" stores nothing here)
-  voter: true           # always-on devices only
+  voter: true           # always-on devices only; follows `node promote|demote` while the node serves
   disks:                # disks listed here before `init` are added by it;
     - path: /Volumes/Big/tailraid   # later ones need: tailraid node add-disk
 listen:

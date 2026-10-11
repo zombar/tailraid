@@ -61,6 +61,9 @@ type Config struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
+	// Path is the file Load read, never written to it: the daemon rewrites the file
+	// there (node.voter follows the member row, docs/12 §7, I-176).
+	Path string `yaml:"-"`
 }
 
 // Disk is one added disk: its mount path and its budget ("" derives it from the disk).
@@ -205,7 +208,8 @@ func (c *Config) EnsureSMBPassword() bool {
 	return true
 }
 
-// Load reads a config file strictly (unknown keys are errors) over the defaults.
+// Load reads a config file strictly (unknown keys are errors) over the defaults and
+// records the path in Path, so the daemon can write the file back (docs/12 §7, I-176).
 func Load(path string) (Config, error) {
 	c := Default()
 	b, err := os.ReadFile(path) //nolint:gosec // the config file the operator named
@@ -216,6 +220,7 @@ func Load(path string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	c.expandHome()
+	c.Path = path
 	return c, c.Validate()
 }
 

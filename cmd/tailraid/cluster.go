@@ -344,6 +344,9 @@ func nodeCmd() *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s (node %d)\n", opName, n.Name, n.Idx)
+				if opName == "set_voter" {
+					fmt.Fprintln(cmd.OutOrStdout(), "the member table is the vote's record; the device's config file follows it while it serves (node.voter)")
+				}
 				return nil
 			},
 		}
