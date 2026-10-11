@@ -163,7 +163,10 @@ list and every `Refs` are untouched (I-152, L-199), and `Stats.LogicalBytes` mov
 every root in `Trash[child]` (an entry deleted from inside it earlier, as `rm -rf` does
 file by file) is put back into `child.Children` under its name, in inode order, with its
 own `DeletedAt` cleared; a name already present keeps the newer live entry and the older
-root stays a separate root. So a tree removed from a mount lands in the trash as one
+root stays a separate root. A fold that put a name back sets `child.Mtime = Ctime = now`
+and `child.Version++`, as any change to a name table does: an NFS client that cached the
+names' absence after the file-by-file delete revalidates the directory and sees them
+again once the folder is restored (07). So a tree removed from a mount lands in the trash as one
 entry that restores with one command, and a file deleted from a folder last week comes
 back with the folder (13 §4 says so).
 
