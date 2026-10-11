@@ -2,6 +2,15 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.4.8 (2026-10-11)
+
+### Changes
+
+- dev, soak: a corruption reaches every copy of the shard on the host ([ecf1834](https://github.com/zombar/tailraid/commit/ecf1834))
+- cmd/tailraid: the CLI tests wait a minute for a real Raft to become ready ([198393f](https://github.com/zombar/tailraid/commit/198393f))
+- cluster, node: a member op reads the row behind a Raft barrier (I-177) ([af28107](https://github.com/zombar/tailraid/commit/af28107))
+- cli: default chunk size 4 MiB ([3742d49](https://github.com/zombar/tailraid/commit/3742d49))
+
 ## v0.4.7 (2026-10-11)
 
 ### Changes
