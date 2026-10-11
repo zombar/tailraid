@@ -26,7 +26,7 @@ services:
       timeout: 2s
       retries: 30
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
-    ports: ["127.0.0.1:20501:20495"]
+    ports: ["127.0.0.1:20501:20495", "127.0.0.1:20521:20482"]
     volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-d3:/disks/d3', 'n1-d4:/disks/d4', 'n1-spare:/disks/spare']
 
   w1:

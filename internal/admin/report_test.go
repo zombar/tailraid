@@ -9,6 +9,9 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/cluster"
+	"github.com/zombar/tailraid/internal/ec"
+	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/s3/s3test"
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
@@ -125,4 +128,64 @@ func TestStatus_SuggestsRemoveAfterEvict(t *testing.T) {
 		}
 	}
 	t.Fatalf("no warning naming %q: %v", want, rep.Warnings)
+}
+
+// A bucket's row carries what it stores, the shard bytes of the slots the placement
+// table gives it, and no free space (its probe is a HEAD); every disk's row carries the
+// same figure next to its filesystem's free bytes, and a device's is zero.
+// Invariant: I-178
+func TestReport_S3NodeStoredBytes(t *testing.T) {
+	c := testharness.NewCluster(t, 2, 2, 1)
+	defer c.Close()
+	srv := s3test.New()
+	defer srv.Close()
+	bucket := c.AddS3(srv, "offsite", "c")
+	// three chunks, the last one a single byte: its shard is shorter than the others'
+	c.WriteFile(0, "/f", testharness.Pattern(2*int(testharness.ChunkSize)+1, 1))
+	c.Settle()
+	leader := c.Leader()
+	rep := admin.Build(leader.Node, leader.Prober, c.CID, c.Clk, nil)
+
+	// the oracle walks the placement table itself
+	stored, slots := map[meta.NodeIdx]uint64{}, map[meta.NodeIdx]int{}
+	leader.Node.FSM.ForEachChunk(func(ch meta.Chunk) bool {
+		for _, s := range ch.Placement {
+			if s != 0 {
+				stored[s] += uint64(ec.ShardLen(int(ch.Size), int(ch.K)))
+				slots[s]++
+			}
+		}
+		return true
+	})
+	if slots[bucket] == 0 {
+		t.Fatalf("no stripe placed a slot on the bucket: %+v", slots)
+	}
+	seen := false
+	for _, n := range rep.Nodes {
+		if n.Stored != stored[n.Idx] || n.Slots != slots[n.Idx] {
+			t.Fatalf("%s (%s): stored %d slots %d, want stored %d slots %d", n.Name, n.Kind, n.Stored, n.Slots, stored[n.Idx], slots[n.Idx])
+		}
+		switch n.Kind {
+		case "s3":
+			seen = true
+			if n.S3 == nil || n.Free != 0 || n.Stored == 0 || n.Stored >= n.Capacity || n.Version != "" || n.Applied != 0 || n.Addr != "" {
+				t.Fatalf("bucket row %+v", n)
+			}
+		case "device":
+			if n.Stored != 0 {
+				t.Fatalf("a device stores nothing: %+v", n)
+			}
+		case "disk":
+			if n.Stored == 0 || n.Free <= 0 {
+				t.Fatalf("disk row %+v", n)
+			}
+		}
+	}
+	if !seen {
+		t.Fatalf("no bucket row: %+v", rep.Nodes)
+	}
+	b, err := json.Marshal(rep)
+	if err != nil || !strings.Contains(string(b), `"stored_bytes"`) {
+		t.Fatalf("stored_bytes missing from the JSON: %v", err)
+	}
 }

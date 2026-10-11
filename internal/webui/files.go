@@ -1,10 +1,12 @@
 package webui
 
 import (
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,16 +15,34 @@ import (
 
 // Entry is one directory entry or stat result (docs/13 §3).
 type Entry struct {
-	Name   string    `json:"name"`
-	Type   string    `json:"type"` // file | dir | symlink
-	Size   uint64    `json:"size"`
-	Mtime  time.Time `json:"mtime"`
-	Mode   uint32    `json:"mode"`
-	Ino    uint64    `json:"ino"`
-	Dirty  bool      `json:"dirty,omitempty"`  // acknowledged bytes not yet committed (files)
-	Upload bool      `json:"upload,omitempty"` // an upload's temp, ".<name>.tailraid-upload"
-	Target string    `json:"target,omitempty"` // symlinks
-	Path   string    `json:"path,omitempty"`   // stat only
+	Name      string    `json:"name"`
+	Type      string    `json:"type"` // file | dir | symlink
+	Size      uint64    `json:"size"`
+	Mtime     time.Time `json:"mtime"`
+	Mode      uint32    `json:"mode"`
+	Ino       uint64    `json:"ino"`
+	Version   uint64    `json:"version"`              // bumps on every commit: the thumbnail key and the PUT /api/thumb check (§5)
+	Dirty     bool      `json:"dirty,omitempty"`      // acknowledged bytes not yet committed (files)
+	Upload    bool      `json:"upload,omitempty"`     // an upload's temp, ".<name>.tailraid-upload"
+	Target    string    `json:"target,omitempty"`     // symlinks
+	Path      string    `json:"path,omitempty"`       // stat only
+	Protected bool      `json:"protected,omitempty"`  // the entry's own flag (directories)
+	NSFW      bool      `json:"nsfw,omitempty"`       // the entry's own flag (directories)
+	DeletedAt string    `json:"deleted_at,omitempty"` // a deleted root (RFC 3339 UTC)
+	PurgeAt   string    `json:"purge_at,omitempty"`   // when the retention purge takes it; absent with retention 0
+	Thumb     bool      `json:"thumb,omitempty"`      // GET /api/thumb answers without a PUT: stored, or an image or audio file
+	Cover     string    `json:"cover,omitempty"`      // directories: the audio entry whose picture is the folder's tile (I-165)
+}
+
+// DirInfo describes the listed folder itself: the effective flags (its own or an
+// ancestor's), whether this node keeps it, and its place in the trash.
+type DirInfo struct {
+	Protected bool   `json:"protected"`
+	NSFW      bool   `json:"nsfw"`
+	Pinned    bool   `json:"pinned"`
+	DeletedAt string `json:"deleted_at,omitempty"`
+	PurgeAt   string `json:"purge_at,omitempty"`
+	Cover     string `json:"cover,omitempty"`
 }
 
 // cleanPath resolves ".", "..", repeated and backslash separators (meta.SplitPath) and
@@ -32,38 +52,130 @@ func cleanPath(raw string) ([]string, string) {
 	return parts, "/" + strings.Join(parts, "/")
 }
 
-func (s *Server) entry(in meta.Inode, canonical string) Entry {
-	e := Entry{Name: in.Name, Size: in.Size, Mtime: time.Unix(0, in.Mtime).UTC(), Mode: in.Mode & 0o7777, Ino: uint64(in.Ino), Target: in.Target}
+// reserved reports whether parts names /.tailraid or anything under it, which no user
+// operation may touch (docs/13 §5, I-160).
+func reserved(parts []string) bool {
+	return len(parts) > 0 && parts[0] == meta.ReservedDir
+}
+
+// target is a resolved request path: live, or inside the deleted root `in` (§4).
+type target struct {
+	in        meta.Inode
+	parts     []string
+	canonical string
+	root      meta.Inode // the deleted root when addressed with in=
+	trashed   bool
+}
+
+// resolveTarget resolves the path (and `in`) of a read request.
+func (s *Server) resolveTarget(r *http.Request, raw string) (target, error) {
+	parts, canonical := cleanPath(raw)
+	t := target{parts: parts, canonical: canonical}
+	if q := r.URL.Query().Get("in"); q != "" {
+		ino, err := strconv.ParseUint(q, 10, 64)
+		if err != nil {
+			return t, fmt.Errorf("in=%q: %w", q, meta.ErrBadCommand)
+		}
+		root, ok := s.o.Store.GetInodeAny(meta.Ino(ino))
+		if !ok || root.DeletedAt == 0 {
+			return t, fmt.Errorf("in=%d: not a deleted entry: %w", ino, meta.ErrNotExist)
+		}
+		in, err := s.o.Store.ResolveFrom(root.Ino, parts)
+		if err != nil {
+			return t, err
+		}
+		t.in, t.root, t.trashed = in, root, true
+		return t, nil
+	}
+	in, err := s.o.Store.Resolve(parts)
+	if err != nil {
+		return t, err
+	}
+	t.in = in
+	return t, nil
+}
+
+func typeName(in meta.Inode) string {
 	switch in.Type {
 	case meta.TDir:
-		e.Type = "dir"
+		return "dir"
 	case meta.TSymlink:
-		e.Type = "symlink"
+		return "symlink"
 	default:
-		e.Type = "file"
+		return "file"
+	}
+}
+
+func rfc3339(ns int64) string {
+	if ns == 0 {
+		return ""
+	}
+	return time.Unix(0, ns).UTC().Format(time.RFC3339)
+}
+
+// purgeAt is when the retention purge takes a root deleted at ns ("" with retention 0).
+func (s *Server) purgeAt(ns int64) string {
+	if ns == 0 || s.o.Retention <= 0 {
+		return ""
+	}
+	return time.Unix(0, ns).Add(s.o.Retention).UTC().Format(time.RFC3339)
+}
+
+// entry describes in; canonical is its live path ("" inside the trash, where the
+// overlay's view is not consulted).
+func (s *Server) entry(in meta.Inode, canonical string) Entry {
+	e := Entry{Name: in.Name, Type: typeName(in), Size: in.Size, Mtime: time.Unix(0, in.Mtime).UTC(), Mode: in.Mode & 0o7777, Ino: uint64(in.Ino), Version: in.Version, Target: in.Target}
+	e.Protected = in.Flags&meta.FlagProtected != 0
+	e.NSFW = in.Flags&meta.FlagNSFW != 0
+	e.DeletedAt = rfc3339(in.DeletedAt)
+	e.PurgeAt = s.purgeAt(in.DeletedAt)
+	switch in.Type {
+	case meta.TFile:
 		e.Upload = IsUploadTemp(in.Name)
-		if fi, err := s.o.FS.Stat(canonical); err == nil { // the overlay's size and dirty flag
-			e.Size = uint64(fi.Size())
-			if d, ok := fi.(interface{ Dirty() bool }); ok {
-				e.Dirty = d.Dirty()
+		if canonical != "" {
+			if fi, err := s.o.FS.Stat(canonical); err == nil { // the overlay's size and dirty flag
+				e.Size = uint64(fi.Size())
+				if d, ok := fi.(interface{ Dirty() bool }); ok {
+					e.Dirty = d.Dirty()
+				}
 			}
 		}
+		e.Thumb = s.hasThumb(in) || isImage(in.Name) || isAudio(in.Name)
+	case meta.TDir:
+		e.Cover = s.coverOf(in)
+	case meta.TSymlink:
 	}
 	return e
 }
 
+// effective reports the flags in's ancestors and in itself carry (docs/13 §4).
+func (s *Server) effective(in meta.Inode) (protected, nsfw bool) {
+	seen := 0
+	for cur := in; ; seen++ {
+		protected = protected || cur.Flags&meta.FlagProtected != 0
+		nsfw = nsfw || cur.Flags&meta.FlagNSFW != 0
+		if cur.Ino == meta.RootIno || cur.Parent == 0 || seen > 4096 {
+			return
+		}
+		p, ok := s.o.Store.GetInodeAny(cur.Parent)
+		if !ok {
+			return
+		}
+		cur = p
+	}
+}
+
 func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
-	parts, canonical := cleanPath(r.URL.Query().Get("path"))
-	in, err := s.o.Store.Resolve(parts)
+	t, err := s.resolveTarget(r, r.URL.Query().Get("path"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	if in.Type != meta.TDir {
-		s.fail(w, fmt.Errorf("ls %s: %w", canonical, meta.ErrNotDir))
+	if t.in.Type != meta.TDir {
+		s.fail(w, fmt.Errorf("ls %s: %w", t.canonical, meta.ErrNotDir))
 		return
 	}
-	kids, err := s.o.Store.ReadDir(in.Ino)
+	kids, err := s.o.Store.ReadDir(t.in.Ino)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -73,39 +185,83 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 		if IsOSMetadata(kids[i].Name) { // kept in the volume, reachable by path (I-140)
 			continue
 		}
-		if in.Ino == meta.RootIno && kids[i].Name == ReservedDir { // the node's own tree (docs/13 §5, I-195)
+		if !t.trashed && len(t.parts) == 0 && kids[i].Name == meta.ReservedDir { // the thumbnails (I-160)
 			continue
 		}
-		entries = append(entries, s.entry(kids[i], path.Join(canonical, kids[i].Name)))
+		live := ""
+		if !t.trashed {
+			live = path.Join(t.canonical, kids[i].Name)
+		}
+		entries = append(entries, s.entry(kids[i], live))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"path": canonical, "entries": entries})
+	if !t.trashed { // the folder's deleted roots, newest first, after the live entries
+		roots := s.o.Store.TrashOf(t.in.Ino)
+		for i := range roots {
+			entries = append(entries, s.entry(roots[i], ""))
+		}
+	}
+	dir := DirInfo{Cover: s.coverOf(t.in)}
+	dir.Protected, dir.NSFW = s.effective(t.in)
+	if t.trashed {
+		dir.DeletedAt, dir.PurgeAt = rfc3339(t.root.DeletedAt), s.purgeAt(t.root.DeletedAt)
+	} else {
+		dir.Pinned = s.pinned(t.canonical)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": t.canonical, "dir": dir, "entries": entries})
 }
 
 func (s *Server) stat(w http.ResponseWriter, r *http.Request) {
-	parts, canonical := cleanPath(r.URL.Query().Get("path"))
-	in, err := s.o.Store.Resolve(parts)
+	t, err := s.resolveTarget(r, r.URL.Query().Get("path"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	e := s.entry(in, canonical)
-	e.Path = canonical
+	live := ""
+	if !t.trashed {
+		live = t.canonical
+	}
+	e := s.entry(t.in, live)
+	e.Path = t.canonical
+	e.Protected, e.NSFW = s.effective(t.in)
+	if t.trashed {
+		e.DeletedAt, e.PurgeAt = rfc3339(t.root.DeletedAt), s.purgeAt(t.root.DeletedAt)
+	}
 	writeJSON(w, http.StatusOK, e)
+}
+
+// pinned reports whether this node keeps the folder at canonical (docs/13 §4).
+func (s *Server) pinned(canonical string) bool {
+	if s.o.Pins == nil {
+		return false
+	}
+	for _, p := range s.o.Pins.List().Pins {
+		if p.Path == canonical {
+			return true
+		}
+	}
+	return false
+}
+
+// trash lists every deleted root for the CLI and the dashboard (docs/13 §3).
+func (s *Server) trash(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"entries": s.trashList()})
 }
 
 // get serves a file through http.ServeContent: Range, 206/416, HEAD and If-None-Match
 // come from the standard library; the ETag is omitted while the file is dirty (I-69).
+// With in= the bytes come from inside a deleted root, with the same headers.
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	parts, canonical := cleanPath(r.PathValue("path"))
-	if len(parts) == 0 {
+	if len(parts) == 0 && r.URL.Query().Get("in") == "" {
 		s.fail(w, fmt.Errorf("get %s: %w", canonical, meta.ErrIsDir))
 		return
 	}
-	in, err := s.o.Store.Resolve(parts)
+	t, err := s.resolveTarget(r, r.PathValue("path"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
+	in := t.in
 	switch in.Type {
 	case meta.TDir:
 		s.fail(w, fmt.Errorf("get %s: %w", canonical, meta.ErrIsDir))
@@ -115,21 +271,36 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		return
 	case meta.TFile:
 	}
-	f, err := s.o.FS.Open(canonical)
-	if err != nil {
-		s.fail(w, err)
-		return
+	h := w.Header()
+	var f interface {
+		Read([]byte) (int, error)
+		Seek(int64, int) (int64, error)
+		Close() error
+	}
+	if t.trashed {
+		f, err = s.o.FS.OpenTrash(t.root.Ino, t.parts)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		h.Set("ETag", fmt.Sprintf(`"%d.%d.%d"`, in.Ino, in.Gen, in.Version))
+	} else {
+		f, err = s.o.FS.Open(canonical)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		fi, err := s.o.FS.Stat(canonical)
+		if err != nil {
+			_ = f.Close()
+			s.fail(w, err)
+			return
+		}
+		if d, ok := fi.(interface{ Dirty() bool }); !ok || !d.Dirty() {
+			h.Set("ETag", fmt.Sprintf(`"%d.%d.%d"`, in.Ino, in.Gen, in.Version))
+		}
 	}
 	defer f.Close()
-	fi, err := s.o.FS.Stat(canonical)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	h := w.Header()
-	if d, ok := fi.(interface{ Dirty() bool }); !ok || !d.Dirty() {
-		h.Set("ETag", fmt.Sprintf(`"%d.%d.%d"`, in.Ino, in.Gen, in.Version))
-	}
 	h.Set("Content-Type", contentType(in.Name))
 	h.Set("Content-Security-Policy", "sandbox")
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -163,3 +334,24 @@ var typeOverrides = map[string]string{
 	".md":   "text/markdown; charset=utf-8",
 	".ts":   "application/octet-stream", // not MPEG-TS, not TypeScript
 }
+
+// isImage reports a file the node can decode for a thumbnail (§5).
+func isImage(name string) bool {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+		return true
+	}
+	return false
+}
+
+// isAudio reports a file /api/tags reads (§6).
+func isAudio(name string) bool {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac":
+		return true
+	}
+	return false
+}
+
+// errNotFile is the 400 for a file operation on a directory or symlink.
+var errNotFile = errors.New("not a file")

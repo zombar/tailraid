@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -136,6 +137,12 @@ func mapErr(op, name string, err error) error {
 		e = syscall.EINVAL
 	case errors.Is(err, meta.ErrNameTooLong):
 		e = syscall.ENAMETOOLONG
+	case errors.Is(err, meta.ErrProtected):
+		e = syscall.EPERM // os.ErrPermission on the wire: NFS3ERR_ACCES, STATUS_ACCESS_DENIED (I-154)
+	case errors.Is(err, meta.ErrInTrash):
+		e = os.ErrNotExist // the share never sees the trash (I-155)
+	case errors.Is(err, meta.ErrCodec):
+		e = syscall.EOPNOTSUPP // a member too old for the command (docs/12 §6)
 	case errors.Is(err, meta.ErrBadCommand):
 		e = syscall.EINVAL
 	case errors.Is(err, ErrIO):
@@ -333,8 +340,10 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	if err != nil {
 		return mapErr("rename", newpath, err)
 	}
+	// a replaced entry goes to the trash and keeps its WAL (its flush commits into the
+	// trash entry, L-203); an ephemeral one is unlinked and loses it (L-208)
 	var replaced meta.Ino
-	if dst, ok := f.st.Lookup(newDir.Ino, nn); ok && dst.Type != meta.TDir {
+	if dst, ok := f.st.Lookup(newDir.Ino, nn); ok && dst.Type != meta.TDir && hardDelete(np, nn) {
 		replaced = dst.Ino
 	}
 	if _, err := f.propose(ctx, meta.Command{Op: meta.OpRename, Rename: &meta.Rename{
@@ -348,6 +357,19 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	return nil
 }
 
+// hardDelete reports whether a delete of name under the directory parts unlinks rather
+// than trashes (docs/06 §1, I-157): an ephemeral name, or anything under the reserved
+// folder of docs/13 §5. The FSM applies the same rule; this is the gateway's side of
+// it, which decides what happens to the overlay.
+func hardDelete(dir []string, name string) bool {
+	return meta.IsEphemeral(name) || (len(dir) > 0 && dir[0] == meta.ReservedDir) || (len(dir) == 0 && name == meta.ReservedDir)
+}
+
+// Remove deletes filename into the trash (docs/02 §Trash): the name is gone from every
+// gateway at once, the entry and its bytes stay for the browser UI to restore. A
+// directory must be empty, as POSIX asks. An ephemeral name is unlinked outright. While
+// a member is too old for the trash (meta.ErrCodec, docs/12 §6) the delete falls back to
+// the plain unlink, so rm keeps working through an update.
 func (f *FS) Remove(filename string) error {
 	ctx := context.Background()
 	dp, name := parentOf(meta.SplitPath(filename))
@@ -362,17 +384,39 @@ func (f *FS) Remove(filename string) error {
 	if !ok {
 		return mapErr("remove", filename, meta.ErrNotExist)
 	}
-	var cmd meta.Command
-	if in.Type == meta.TDir {
-		cmd = meta.Command{Op: meta.OpRmdir, Rmdir: &meta.Rmdir{Parent: dir.Ino, Name: name, Now: f.now()}}
-	} else {
-		cmd = meta.Command{Op: meta.OpUnlink, Unlink: &meta.Unlink{Parent: dir.Ino, Name: name, Now: f.now()}}
+	hard := hardDelete(dp, name)
+	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: &meta.Trash{Parent: dir.Ino, Name: name, Now: f.now()}})
+	if errors.Is(err, meta.ErrCodec) {
+		hard = true
+		var cmd meta.Command
+		if in.Type == meta.TDir {
+			cmd = meta.Command{Op: meta.OpRmdir, Rmdir: &meta.Rmdir{Parent: dir.Ino, Name: name, Now: f.now()}}
+		} else {
+			cmd = meta.Command{Op: meta.OpUnlink, Unlink: &meta.Unlink{Parent: dir.Ino, Name: name, Now: f.now()}}
+		}
+		_, err = f.propose(ctx, cmd)
 	}
-	if _, err := f.propose(ctx, cmd); err != nil && !landedEarlier(err, meta.ErrNotExist) { // the first attempt removed it
+	if err != nil && !landedEarlier(err, meta.ErrNotExist) { // the first attempt removed it
 		return mapErr("remove", filename, err)
 	}
-	f.ov.Drop(in.Ino)
+	if hard {
+		f.ov.Drop(in.Ino) // a trashed file keeps its WAL: the flush commits into the trash entry (L-203)
+	}
 	return nil
+}
+
+// OpenTrash opens, read-only, a file inside the deleted root: the root itself with no
+// path, or path relative to it (docs/02 §Reads; the browser UI's trash view, I-155).
+func (f *FS) OpenTrash(root meta.Ino, path []string) (billy.File, error) {
+	name := filepath.Join(append([]string{"trash", strconv.FormatUint(uint64(root), 10)}, path...)...)
+	in, err := f.st.ResolveFrom(root, path)
+	if err != nil {
+		return nil, mapErr("open", name, err)
+	}
+	if in.Type != meta.TFile {
+		return nil, mapErr("open", name, meta.ErrIsDir)
+	}
+	return &File{fs: f, ino: in.Ino, name: name, flag: os.O_RDONLY}, nil
 }
 
 // Join uses the OS separator like billy's osfs does; every entry point splits on both

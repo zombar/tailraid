@@ -21,19 +21,23 @@ const (
 	OpSetPlacement  Op = 12 // {Hash, Placement, K, M}
 	OpGCDelete      Op = 13 // {Before} → Result.Victims
 	OpSetVolumeMode Op = 14 // {Auto, Now}: the leader picks K, M from the member table (docs/03)
+	OpTrash         Op = 15 // {Parent, Name, Recursive, Now}: the entry into the trash (codec 4)
+	OpRestore       Op = 16 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
+	OpPurge         Op = 17 // {Ino (0 = every root due), Before, Limit, Now} (codec 4)
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
 // NodeUpsert that carries a disk (its Node has Host), so a cluster without disks writes
-// exactly what an older node reads (docs/12 §6); both versions are read.
+// exactly what an older node reads (docs/12 §6); every version is read.
 const (
 	commandVersion   = 1
 	commandVersionV2 = 2
 	commandVersionV3 = 3 // SetPlacement.Expect and GCDelete.Limit
+	commandVersionV4 = 4 // Trash, Restore, Purge and a SetAttr carrying Flags (docs/02)
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 3
+	CodecVersion = 4
 )
 
 // SetAttr mask bits.
@@ -43,6 +47,7 @@ const (
 	AttrGid   uint8 = 1 << 2
 	AttrAtime uint8 = 1 << 3
 	AttrMtime uint8 = 1 << 4
+	AttrFlags uint8 = 1 << 5 // Flags follows Now on the wire (codec 4); directories only
 )
 
 // Payloads. Every command that the FSM timestamps carries Now (unix nanos) from the
@@ -111,6 +116,30 @@ type (
 		Atime    int64
 		Mtime    int64
 		Now      int64
+		Flags    uint8 // with AttrFlags: the directory's FlagProtected | FlagNSFW bits
+	}
+	// Trash moves Parent/Name out of the namespace into the trash (docs/02): a directory
+	// with children needs Recursive (a POSIX rmdir is not recursive; a browser delete is).
+	Trash struct {
+		Parent    Ino
+		Name      string
+		Recursive bool
+		Now       int64
+	}
+	// Restore puts a deleted root back: under NewParent/NewName, or (0, "") its own place.
+	Restore struct {
+		Ino       Ino
+		NewParent Ino
+		NewName   string
+		Now       int64
+	}
+	// Purge deletes deleted roots for good: the one root Ino, or every root with
+	// DeletedAt < Before, at most Limit inodes per entry (0 is unbounded), post-order.
+	Purge struct {
+		Ino    Ino
+		Before int64
+		Limit  uint32
+		Now    int64
 	}
 	Commit struct {
 		Ino         Ino
@@ -175,6 +204,21 @@ type Command struct {
 	SetPlacement  *SetPlacement
 	GCDelete      *GCDelete
 	SetVolumeMode *SetVolumeMode
+	Trash         *Trash
+	Restore       *Restore
+	Purge         *Purge
+}
+
+// needsV4 reports whether c carries a codec-4 field (docs/02 §Codec versions).
+func needsV4(c Command) bool {
+	switch c.Op { //nolint:exhaustive // every other op is version 1–3
+	case OpTrash, OpRestore, OpPurge:
+		return true
+	case OpSetAttr:
+		return c.SetAttr != nil && c.SetAttr.Mask&AttrFlags != 0
+	default:
+		return false
+	}
 }
 
 // Result is what Apply returns for a command.
@@ -207,19 +251,31 @@ func MustEncodeCommand(c Command) []byte {
 	return b
 }
 
-func encodeCommand(c Command) []byte {
-	w := &writer{b: make([]byte, 0, 64)}
+// CommandCodec is the codec version the log entry for c carries: the lowest that holds
+// its fields (docs/02 §Codec versions). A leader refuses a command whose version a live
+// member cannot read (docs/12 §6, I-156).
+func CommandCodec(c Command) uint8 {
 	v2 := c.Op == OpNodeUpsert && c.NodeUpsert != nil && (c.NodeUpsert.Node.Kind == KindDisk || c.NodeUpsert.Node.Host != 0)
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV4(c):
+		return commandVersionV4
 	case v3:
-		w.u8(commandVersionV3)
+		return commandVersionV3
 	case v2:
-		w.u8(commandVersionV2)
+		return commandVersionV2
 	default:
-		w.u8(commandVersion)
+		return commandVersion
 	}
+}
+
+func encodeCommand(c Command) []byte {
+	w := &writer{b: make([]byte, 0, 64)}
+	v := CommandCodec(c)
+	v3, v4 := v == commandVersionV3, v == commandVersionV4
+	v2 := v == commandVersionV2
+	w.u8(v)
 	w.u8(uint8(c.Op))
 	switch c.Op {
 	case OpSetVolume:
@@ -286,6 +342,9 @@ func encodeCommand(c Command) []byte {
 		w.i64(p.Atime)
 		w.i64(p.Mtime)
 		w.i64(p.Now)
+		if v4 {
+			w.u8(p.Flags)
+		}
 	case OpCommit:
 		p := mustPayload(c.Commit, c.Op)
 		w.u64(uint64(p.Ino))
@@ -327,6 +386,24 @@ func encodeCommand(c Command) []byte {
 		p := mustPayload(c.SetVolumeMode, c.Op)
 		w.bool(p.Auto)
 		w.i64(p.Now)
+	case OpTrash:
+		p := mustPayload(c.Trash, c.Op)
+		w.u64(uint64(p.Parent))
+		w.str(p.Name)
+		w.bool(p.Recursive)
+		w.i64(p.Now)
+	case OpRestore:
+		p := mustPayload(c.Restore, c.Op)
+		w.u64(uint64(p.Ino))
+		w.u64(uint64(p.NewParent))
+		w.str(p.NewName)
+		w.i64(p.Now)
+	case OpPurge:
+		p := mustPayload(c.Purge, c.Op)
+		w.u64(uint64(p.Ino))
+		w.i64(p.Before)
+		w.u32(p.Limit)
+		w.i64(p.Now)
 	default:
 		panic(fmt.Sprintf("meta: EncodeCommand: unknown op %d", c.Op))
 	}
@@ -347,17 +424,27 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 {
+	if r.err == nil && v != commandVersion && v != commandVersionV2 && v != commandVersionV3 && v != commandVersionV4 {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
 	if r.err != nil {
 		return c, r.err
 	}
-	if v == commandVersionV2 && c.Op != OpNodeUpsert {
-		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
+	// a version is legal only for the ops that need it, so an entry never smuggles a
+	// field an older reader would misparse (docs/01 §Binary codec)
+	var legal bool
+	switch v {
+	case commandVersionV2:
+		legal = c.Op == OpNodeUpsert
+	case commandVersionV3:
+		legal = c.Op == OpSetPlacement || c.Op == OpGCDelete
+	case commandVersionV4:
+		legal = c.Op == OpTrash || c.Op == OpRestore || c.Op == OpPurge || c.Op == OpSetAttr
+	default:
+		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge
 	}
-	if v == commandVersionV3 && c.Op != OpSetPlacement && c.Op != OpGCDelete {
+	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
 	}
 	switch c.Op {
@@ -385,6 +472,12 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.Rename = &Rename{OldParent: Ino(r.u64()), OldName: r.str(), NewParent: Ino(r.u64()), NewName: r.str(), Now: r.i64()}
 	case OpSetAttr:
 		c.SetAttr = &SetAttr{Ino: Ino(r.u64()), Mask: r.u8(), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(), Atime: r.i64(), Mtime: r.i64(), Now: r.i64()}
+		if v == commandVersionV4 {
+			c.SetAttr.Flags = r.u8()
+			if r.err == nil && c.SetAttr.Mask&AttrFlags == 0 {
+				return c, fmt.Errorf("meta: SetAttr in command version %d without AttrFlags", v)
+			}
+		}
 	case OpCommit:
 		p := &Commit{Ino: Ino(r.u64()), BaseVersion: r.u64(), HasTruncate: r.bool(), TruncateTo: r.u64(), NewSize: r.u64()}
 		if n := r.length(maxListLen); n > 0 {
@@ -418,6 +511,12 @@ func DecodeCommand(b []byte) (Command, error) {
 		}
 	case OpSetVolumeMode:
 		c.SetVolumeMode = &SetVolumeMode{Auto: r.bool(), Now: r.i64()}
+	case OpTrash:
+		c.Trash = &Trash{Parent: Ino(r.u64()), Name: r.str(), Recursive: r.bool(), Now: r.i64()}
+	case OpRestore:
+		c.Restore = &Restore{Ino: Ino(r.u64()), NewParent: Ino(r.u64()), NewName: r.str(), Now: r.i64()}
+	case OpPurge:
+		c.Purge = &Purge{Ino: Ino(r.u64()), Before: r.i64(), Limit: r.u32(), Now: r.i64()}
 	default:
 		return c, fmt.Errorf("meta: unknown op %d", c.Op)
 	}

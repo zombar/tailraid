@@ -81,6 +81,7 @@ type Probe struct {
 	Free      int64
 	Applied   uint64
 	Version   string
+	Codec     uint8     // meta.CodecVersion the node reported (0 from a binary that predates the field)
 	Dev       bool      // /dev/* enabled on that node (docs/08)
 	Web       uint16    // the node's browser UI port, 0 when off (docs/13 §1)
 	FS        string    // filesystem holding the target's store (docs/14 §8)
@@ -278,7 +279,7 @@ func (p *Prober) record(idx meta.NodeIdx, now time.Time, rtt time.Duration, ok b
 	if ok {
 		delete(p.suspect, idx) // a good probe clears the mark (I-170)
 		wasDead := !pr.DeadSince.IsZero()
-		pr.LastOK, pr.RTT, pr.Applied, pr.Version, pr.Dev, pr.Web = now, rtt, h.Applied, h.Version, h.Dev, h.Web
+		pr.LastOK, pr.RTT, pr.Applied, pr.Version, pr.Dev, pr.Codec, pr.Web = now, rtt, h.Applied, h.Version, h.Dev, h.Codec, h.Web
 		pr.Free, pr.FS = 0, ""
 		if disk != nil {
 			pr.Free, pr.FS = disk.Free, disk.FS
@@ -437,6 +438,31 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 		return p.clk.Now().Sub(time.Unix(0, nd.JoinedAt)) < LiveThreshold
 	}
 	return false
+}
+
+// MinCodec is the oldest codec version a live active device reports, this node's own
+// included: what the leader may write without leaving a live member unable to read it
+// (docs/12 §6, I-156). A member that predates the field reports 0 and counts as oldest.
+func (p *Prober) MinCodec() uint8 {
+	minCodec := uint8(meta.CodecVersion)
+	self, _ := p.node.SelfIdx()
+	p.node.FSM.ForEachNode(func(nd meta.Node) bool {
+		if nd.Kind != meta.KindDevice || nd.State != meta.Active || nd.Idx == self || !p.IsLive(nd.Idx) {
+			return true
+		}
+		p.mu.Lock()
+		pr, ok := p.probes[nd.Idx]
+		codec := uint8(0)
+		if ok {
+			codec = pr.Codec
+		}
+		p.mu.Unlock()
+		if ok && codec < minCodec {
+			minCodec = codec
+		}
+		return true
+	})
+	return minCodec
 }
 
 // DeadFor returns how long a node has been dead (0 when live or unknown).
