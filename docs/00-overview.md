@@ -33,8 +33,11 @@ S3 features beyond the implemented subset (versioning, ACLs, policies, lifecycle
 SSE, object lock, presigned POST); web UI beyond the dashboard and file browser of docs/13
 (no user management, no mutating admin operations from the browser); metrics stack (a
 `status` JSON instead);
-encryption at rest (WireGuard covers transit); quotas; file versioning / recycle bin;
-xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; SMB encryption,
+encryption at rest (WireGuard covers transit); quotas; versions beyond what the trash
+and a snapshot keep (docs/13, docs/16: no per-save history, no versioned attributes, no
+snapshot of a sub-tree, no writable clone of a snapshot, no cross-snapshot diff, not the
+Windows Previous Versions tab); xattrs; NLM locking (mount with `nolock`); hard links;
+NFSv4; SMB encryption,
 dialect 3.1.1, oplocks and leases, SMB security descriptors; Windows before 11 24H2; multiple
 independent volumes (S3 buckets are top-level directories of the one volume);
 content-defined chunking; compression (hook left); tiering; fsck-from-shards metadata
@@ -163,6 +166,7 @@ for a member. No TLS of our own.
 | SMB gateway for Windows (docs/15, measured 2026-10-09: the adapter and server wiring in `internal/smbgw` 0.33k, `vfs.File.WriteAt` and the file info's times 0.02k, config, node, CLI and mount helpers 0.19k; minus the portmap stub and the Windows NFS path 0.25k; the server copy in `third_party/smb` is upstream code and not counted) | +0.3k |
 | **Through the SMB gateway (measured 2026-10-09)** | **≈ 24.95k** |
 | Web UI v2 (docs/13, planned 2026-10-10): the trash, folder flags and protection in the FSM, vfs and GC tick (meta 0.35k, vfs 0.08k, repair, node and config 0.08k), the pinned local cache (0.3k), the web handler's batch, trash, flag, thumbnail, tag and pin routes with the in-volume thumbnails (0.9k + 0.4k), the `trash` and `cache` CLI (0.15k), soak phase 16 with the report's trash and cache chart (0.4k); the TypeScript grows by about 1.8k (tiles, selection, trash, flags, the album view and the now-playing bar), not Go | +2.6k planned |
+| Snapshots and previous versions (docs/16, planned 2026-10-11): spans, versions, the snapshot table, reachability, the reads as of a snapshot, ops 18–20, codec 5, `Kept`, the reap with its index, the purge's version refs, `ErrPinned` in Unlink and Rmdir, the checks (meta 0.8k); `/.snapshots`, the handle variant and chain check, the ROFS mapping, the overlay drain, revert and tree restore (vfs and gateways 0.45k); the schedule, thinning and reap in the tick (0.15k); `snapshot` and `versions`, the `export` rename, status and check (0.3k); the web handler's routes (0.3k); soak phase 19 and the report's charts and table (0.35k); config (0.05k); the TypeScript grows by about 0.6k, not Go | +2.4k planned |
 | `internal/s3srv` (the S3 gateway, deferred; not in the tree) | ~900 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
@@ -202,7 +206,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [03-erasure-coding-and-placement](03-erasure-coding-and-placement.md) | `ec.Codec`, rendezvous placement, degraded writes, policy migration. I-8..I-10, I-30, I-32, I-33 |
 | [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model, readahead. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83, I-166, I-168, I-169, I-171 |
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived, suspect marks. I-12, I-38..I-40, I-170 |
-| [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, the retention purge, DELETE fence, sweep, repair scanner, scrub, drain, migration. I-13..I-15, I-41..I-44, I-157 |
+| [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, the retention purge, the snapshot schedule and reap, DELETE fence, sweep, repair scanner, scrub, drain, migration. I-13..I-15, I-41..I-44, I-157, I-182, I-183 |
 | [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, macOS and Linux mounts, the in-tree go-nfs copy. I-16, I-17, I-45..I-47, I-100, I-167 |
 | [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys. I-18, I-48..I-50 |
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
@@ -212,6 +216,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, batch rename/move/delete, the trash view, folder flags, tiles and thumbnails, the album view and now-playing bar, pins, the style guide. I-68..I-73, I-81, I-82, I-158..I-165 |
 | [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, domain skew, capacity rebalance within a host. I-86..I-91, I-172 |
 | [15-smb-gateway](15-smb-gateway.md) | SMB2 gateway for Windows: the library and its backend contract, the adapter over the vfs, case-insensitive names, password and `net use` mount, caps, known gaps. I-106..I-110 |
+| [16-snapshots](16-snapshots.md) | Snapshots and previous versions: a name and a Raft index, the span rule, reads as of a snapshot, the reap, the schedule, revert and restore, bounds. I-179..I-181, I-186 (I-182, I-183 in 06; I-184 in 01; I-185 in 07; I-187 in 13; I-188 in 12) |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged

@@ -226,7 +226,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1, 2, 3 or 4 and snapshots version 4 (02 §Codec versions;
+Log entries carry codec version 1 to 5 and snapshots version 5 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows
@@ -241,7 +241,10 @@ in one go. The trash and the folder flags (codec 4) go one step further: the lea
 refuses to propose their commands with `ErrCodec` while any live active member reports
 an older codec, the mounts delete and replace as before in that window, and the browser
 UI answers 503 with the hint to update the remaining nodes, so a cluster half-way
-through an update never writes an entry half of it cannot read (I-156).
+through an update never writes an entry half of it cannot read (I-156). Volume snapshots
+(codec 5, docs/16) follow the same rule: the schedule waits and `snapshot create` is
+refused until every member is updated, and a node from before codec 5 cannot restore a
+version-5 Raft snapshot (I-184).
 
 ## 7. Day one: `tailraid init`
 
@@ -273,7 +276,8 @@ most once a minute and retried (I-176). Nothing reads the key but an operator.
 `mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
 shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
 `log.level` or `log.format`, a relative `mount.path`, a `trash.retention` that is neither
-`0` nor at least an hour, and a `cache.size` under 64 MiB (§10); `serve` warns at start
+`0` nor at least an hour, a `cache.size` under 64 MiB (§10), a `snapshots.every` that is
+neither `0` nor at least a minute and a `snapshots.keep` count over 10 000 (§11); `serve` warns at start
 when the config file or the data directory is readable by other users of the machine
 (I-126).
 
@@ -326,12 +330,14 @@ the voters and lives in each one's Raft log and snapshots under `<data_dir>/raft
 data is the shards on every device and disk. Losing any `m` targets is survived (05 §3)
 and needs nothing from this section.
 
-**Backup.** `tailraid snapshot <dir>` asks the local node for a fresh Raft snapshot
-(`/v1/admin` op `snapshot`, which the node writes under `<data_dir>/export/<id>/` with
+**Backup.** `tailraid export <dir>` asks the local node for a fresh Raft snapshot
+(`/v1/admin` op `export`, which the node writes under `<data_dir>/export/<id>/` with
 `state.bin` and `meta.json`, each fsynced) and copies it to `<dir>/<id>/`. It is small
 (the metadata only) and a copy outside the cluster is worth keeping; `state.bin` is the
 `DecodeState` format of 02, so a future `fsck-from-snapshot` can read it. Shards are not
-part of it.
+part of it. The verb was `tailraid snapshot <dir>` until the volume snapshots of docs/16
+took the word (their PR 2 renames it, with the admin op); an export is a copy of the
+metadata for an operator, a snapshot a point in time of the volume for its users.
 
 **Quorum loss (05 (h)).** When more voters are gone for good than Raft can lose, the
 survivors can never elect a leader: every gateway goes stale and read-only. On one
@@ -370,6 +376,49 @@ from the device with every other node away; `cache unpin <path>` releases it and
 `cache ls` shows each pin's bytes and how many have arrived. The browser UI's folder menu
 ("Keep on this device", 13 §4) is the same per-node state. Pinned bytes may exceed
 `cache.size`; `status` warns when the data disk falls under 20 % free (I-162).
+
+## 11. Snapshots and previous versions
+
+The volume snapshots of docs/16 are taken by the leader's schedule and by hand, browsed
+on the mounts under `/.snapshots/<name>/` and in the browser UI (13 §4), and driven from
+a terminal with:
+
+```
+tailraid snapshot ls                              # name, taken, auto/manual, what it alone pins
+tailraid snapshot create [name]                   # manual (never thinned); the name defaults to the UTC minute
+tailraid snapshot rm <name>                       # the history it alone pinned is reaped on the next tick
+tailraid snapshot restore <name> <path> [--to <dir>] [--as <name>]   # a file or a folder, server-side, no data moved
+tailraid versions <path>                          # the file's distinct contents and the snapshots pinning each
+tailraid versions <path> --revert <snapshot>      # the content as of that snapshot becomes current
+tailraid versions <path> --copy <snapshot> --as <name>
+```
+
+Every verb goes through the admin RPC to the leader (`snapshot` and `versions` ops; a
+revert or restore is the gateway's `Commit` by hash, 16 §5). The config:
+
+```yaml
+snapshots:
+  every: 1h          # the leader takes an automatic snapshot every `every`; 0 = none
+  keep:
+    hourly: 24       # the newest automatic snapshot of each of the last N hour buckets (UTC)
+    daily: 30
+    weekly: 8
+```
+
+Each key is written only when set, so a rollback to a release from before them still
+reads the file (I-61). `status --json` carries `volume.snapshots`, `volume.versions` (the
+retained `FileVersion` count) and `volume.version_bytes` (their logical bytes, the upper
+bound of what history holds), which the dashboard shows under Volume and in its
+Snapshots section and the soak report charts; `tailraid status` prints one line,
+`snapshots  24 auto · 2 manual · versions 1.2 GiB · next in 23 m`. `check` warns when the
+schedule is on and no automatic snapshot is younger than `2 × every` (the leader lacks
+codec-5 members, or the tick is failing), and when one file's retained versions exceed a
+tenth of the volume's logical bytes (16 §7).
+
+The one thing to know as an operator: free space returns when the last snapshot that
+pins a version goes and the reap and GC have run, so "delete now" on a folder a snapshot
+still reaches is refused with the snapshot's name, and `snapshot rm` of that snapshot is
+the way to reclaim it.
 
 ## Invariants
 
@@ -418,7 +467,8 @@ from the device with every other node away; `cache unpin <path>` releases it and
   binary stays as `<exe>.old` until a minute into a clean `serve` or until
   `update --rollback` restores it; a release older than the running one needs
   `--version` and `--allow-downgrade`.
-- **I-129** — `tailraid snapshot` exports a fresh Raft snapshot whose `state.bin`
+- **I-129** — `tailraid export` (named `snapshot` until docs/16's PR 2 renames it)
+  exports a fresh Raft snapshot whose `state.bin`
   decodes to the node's current metadata; `tailraid recover --voters` on a stopped node
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
@@ -436,6 +486,13 @@ from the device with every other node away; `cache unpin <path>` releases it and
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
   `stop && start` therefore start the new binary.
+- **I-188** — `tailraid export` is the metadata export of §9; `tailraid snapshot
+  ls|create|rm|restore` and `tailraid versions` drive the volume snapshots of docs/16
+  through the admin RPC, a manual snapshot is never thinned, `restore` and `--revert`
+  move no data; `status` reports `snapshots`, `versions` and `version_bytes` and prints
+  the snapshots line; `check` warns when the schedule is on and no automatic snapshot is
+  younger than `2 × every`; and `Validate` refuses `snapshots.every` under a minute and a
+  `keep` count over 10 000.
 
 ## Tests
 
@@ -458,3 +515,4 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
 | I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
+| I-188 | planned (docs/16): TestCLI_Export, TestCLI_Snapshot_LsCreateRmRestore, TestCLI_Versions, TestReport_SnapshotFields, TestCheck_SnapshotScheduleStale, TestConfig_Snapshots, `TestSoak_AllPhasesAgainstHarness` |

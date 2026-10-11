@@ -25,6 +25,10 @@ needs, each with a test in the copy:
 - `nfs_onfsinfo.go` advertises `rtmax`/`wtmax`/`rtpref`/`wtpref` of 1 MiB instead of
   1 GiB, so the frame bound is the protocol's own: a client that honours FSINFO never sends
   a WRITE larger than `MaxFrame`.
+- *(planned with docs/16)* the per-operation error mapping gains `NFS3ERR_ROFS` for the
+  vfs's snapshot error (`vfs.ErrSnapshot`, which satisfies `EROFS`), so a mutation under
+  `/.snapshots` is "read-only file system" on every client rather than `ACCES` or `IO`;
+  the stale gateway's `EROFS` keeps its mapping below.
 
 ## What go-nfs actually does (verified against v0.0.4 source)
 
@@ -90,6 +94,22 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
   cluster-wide inode numbers (I-16). Inode numbers are never reused and `gen` is the low 32
   bits of the creating Raft index, so a handle can never resolve to a different file (I-17).
   go-nfs's `CachingHandler` (random UUID → path LRU) is **not** used.
+- **Snapshot handles are 24 bytes** (docs/01 §NFS file handle, docs/16): `magic "TRHS" |
+  snap u32 | gen u32 | ino u64 | zero u32`, for every entry under `/.snapshots/<name>/`.
+  `FromHandle` looks up the snapshot, then the inode as of it (`GetInodeAt`): a snapshot
+  that is gone, a `Gen` mismatch, or an inode the snapshot does not reach is
+  `NFS3ERR_STALE`. The path is rebuilt with `PathAt` under `/.snapshots/<name>`. go-nfs
+  allows 64-byte handles; the live layout is untouched (I-16, I-17, I-185).
+- **`/.snapshots`** is synthesized by the vfs at the root (docs/16): absent from the
+  root's READDIR, found by LOOKUP, listing one directory per snapshot (its name; mtime the
+  snapshot's `At`) whose tree is `ReadDirAt`/`LookupAt` of the FSM, read-only. Every
+  mutation under it (CREATE, WRITE, SETATTR, REMOVE, RENAME, MKDIR, SYMLINK, and a RENAME
+  into or out of it) is `NFS3ERR_ROFS`. The fileid of an entry is its `Ino`, as live; the
+  synthetic directories carry fixed fileids above any real inode. The directory cookie
+  verifier of a listing under a snapshot includes the snapshot ID. `.snapshots` is a
+  reserved name at the root: CREATE, MKDIR, RENAME onto it and a tree restore into it are
+  refused. A read of a version goes through the same reader, cache and readahead as a
+  live file (the overlay is bypassed: a snapshot never has dirty bytes).
 - **FSStat**: `Total = Σ Node.Capacity · K/(K+M)` over Active nodes, `Free = Total − stored·K/(K+M)`,
   `Files = inodes`, `FreeFiles = 1<<32 − inodes`. Degraded chunks count at their nominal size.
 - **READDIR / READDIRPLUS**: go-nfs pages with cookies over the `[]os.FileInfo` returned by
@@ -208,6 +228,13 @@ device"), not `EIO`.
   writer in completion order; a blocked request delays neither its connection's other
   requests nor other connections, FSINFO advertises `MaxFrame`'s payload as the largest
   transfer, and a connection holds at most `InFlight × MaxFrame` request bytes.
+- **I-185** — `/.snapshots` is absent from the root's READDIR, resolves by name, lists
+  every snapshot as a directory, and every entry under it reads exactly the snapshot's
+  content through every gateway; every mutation under it is `EROFS` (`NFS3ERR_ROFS` on
+  the wire, `os.ErrPermission` on SMB); a snapshot handle is 24 bytes with its own magic
+  and is `STALE` once the snapshot is gone, the `Gen` mismatches or the inode is not
+  reachable at the snapshot; and `.snapshots` cannot be created, renamed, removed or
+  restored into.
 
 ## Tests
 
@@ -220,3 +247,4 @@ device"), not `EIO`.
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
+| I-185 | planned (docs/16): TestNFS_SnapshotsDir_HiddenResolvesLists, TestNFS_SnapshotRead_ExactOnEveryGateway, TestNFS_SnapshotMutation_IsROFS, TestHandle_Snapshot_RoundTrip, TestNFS_SnapshotHandle_StaleTable, TestSMB_SnapshotsDir_ReadOnly, TestVFS_SnapshotsName_Reserved, `FuzzDecodeHandle` |

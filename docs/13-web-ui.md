@@ -35,6 +35,12 @@ operation stays in the CLI.
 - **Local cache**: "Keep on this device" pins a folder so the node serving the page keeps
   every chunk under it in its local chunk cache (docs/01 §Local chunk cache); the
   dashboard's Cache card shows what is pinned and how much of it has arrived.
+- **Snapshots and versions** (docs/16): the file browser shows any folder *as of* a
+  snapshot (read-only, with a folder restore), a file's view lists its distinct contents
+  with the snapshots that pin each (view, revert, save a copy), and the dashboard's
+  Snapshots section lists, takes and deletes snapshots. Taking and deleting a snapshot
+  are file operations of the user, like the trash's restore and "delete now", not
+  cluster administration.
 - **Media**: audio, video and images play in the browser's own elements; the node serves
   files as stored, with no transcoding. Audio gets more (§6): a folder of tracks renders
   as an album with its cover and tags, playback continues in a bar at the bottom while
@@ -108,13 +114,26 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
 | `GET /api/pins` | – | `{"size","used","pinned_bytes","pins":[{path,bytes,cached_bytes}]}`, the same object `/api/status` carries as `cache` |
+| `GET /api/snapshots` | – | `{"snapshots":[{id,name,at,auto,pins,pin_bytes}]}`, newest first; `pins` and `pin_bytes` are the history entries and bytes this snapshot alone pins (docs/16) |
+| `POST /api/snapshot` `{"name"?}` | required | 201 the snapshot; the name defaults to the UTC minute; the serving gateway flushes its dirty files first (docs/16 §6); a taken name → 409; a member too old for codec 5 → 503 |
+| `POST /api/snapshot/delete` `{"id"}` | required | 204; the history it alone pinned is reaped on the leader's next tick |
+| `GET /api/versions?path=` | – | `{"versions":[{version,size,mtime,from_at,snapshots:[name…],current}]}`: the file's distinct contents, newest first, each with the snapshots pinning it; the live content is `current` |
+| `POST /api/revert` `{"path","snapshot"}` | required | 200 `{"kept":bool}`: the content as of the snapshot becomes current (a `Commit` by hash, docs/16 §5); `kept` says whether the replaced content stays in a snapshot; a dirty file is flushed first; under a protected folder the revert is allowed (nothing leaves the namespace) |
+| `POST /api/copy` `{"path","snapshot","name"}` | required | 201 the new entry beside the file; a taken name → 409 |
+| `POST /api/restore-tree` `{"snapshot","path","to"?,"name"?}` | required | 200 `{"created":[…],"skipped":[…]}`: the snapshot's tree at `path` recreated under `to` (its original parent unless given) as `name` (its own unless given) by hash, an existing directory descended, an existing file skipped and listed; at most `MaxBatch` entries per request, 413 above (the page continues from the last created path) |
 
+- `ls`, `stat`, `files`, `thumb` and `tags` take `at=<snapid>` and then read as of that
+  snapshot (`ReadDirAt`, `ResolveAt`, docs/16 §2): the listing carries no `dirty`,
+  `deleted_at` or `upload` entries and `dir` carries `snapshot` (its name and `at`); a
+  mutating route given `at` is 400; an unknown snapshot 404. `in=` and `at=` together
+  are 400.
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
   `ErrNotExist` 404 · `ErrExist` 409 · `EISDIR`, `ENOTDIR`, `EINVAL`, `ENAMETOOLONG` 400 ·
   `EROFS` (stale gateway, docs/02) 503 with `Retry-After: 5` · `ENOSPC` 507 · `EIO` 503 ·
-  `admin.ErrAmbiguous` 409 · `ErrProtected` 403 · `ErrInTrash` 409 · `ErrCodec` (a member
-  too old for the command, docs/12 §6) 503 with `Retry-After: 30` · anything else 500,
-  logged.
+  `admin.ErrAmbiguous` 409 · `ErrProtected` 403 · `ErrInTrash` 409 · `ErrPinned` (a
+  purge of a root a snapshot reaches, docs/16) 409 with `{"error","pinned_by":"<name>"}` ·
+  `ErrCodec` (a member too old for the command, docs/12 §6) 503 with `Retry-After: 30` ·
+  anything else 500, logged.
 - The batch routes answer 200 whenever the request itself was valid and report every item:
   an item is moved or deleted whole or not at all, a failure of one item changes nothing
   about the others, and the page shows the failures by name (I-159).
@@ -205,6 +224,23 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   of its eviction, renames keep the pin (it is stored by inode), and `/api/pins` and the
   Cache card report how much of each pin has arrived (docs/01 §Local chunk cache, I-162).
   A pin is "Keep on this device" in the folder menu, for the device whose URL is open.
+- **Snapshots and versions** (docs/16). The toolbar's *as-of* menu lists the snapshots
+  newest first, manual ones with a badge, "Now" first; choosing one puts `at=<id>` on the
+  route and every read, and the listing becomes read-only: no select boxes, no upload,
+  no folder menu, no dirty or deleted rows, the breadcrumb ends in the snapshot's badge,
+  and a banner says "As of `2026-10-11-1200Z` · taken 1 h ago · read-only" with "Restore
+  folder to…" (the picker, then `restore-tree`) and "Back to now". A file's view carries a
+  **Versions** panel: one row per distinct content with the snapshots pinning it folded
+  into a range ("2026-10-11-0900Z – 2026-10-11-1200Z · 4 hourly snapshots · before
+  reinstall"), its size and modified time, and View (the file view with `at=`), Revert
+  and Save a copy; the live content is the `current` row. A revert's toast says whether
+  the replaced content is kept ("kept by 2026-10-11-1300Z") or gone, from the response's
+  `kept`. A deleted root a snapshot still reaches shows "deleted · kept by snapshot" and
+  its banner names the snapshot, with "Delete now" disabled and the reason in its title;
+  the server answers 409 `pinned_by` for anything the page did not catch (I-187). The
+  dashboard's Snapshots section (§7) is where snapshots are taken and deleted; "Take a
+  snapshot" asks for an optional name and flushes the serving gateway's dirty files
+  first so the user's own last writes are in it.
 
 ## 5. Tiles and thumbnails
 
@@ -217,7 +253,9 @@ file like any other: replicated, erasure-coded and deduplicated. `/.tailraid` is
 folder on the mount, left out of this UI's listings and refused as a target of user
 operations (400). The key carries `Version`, which bumps on every commit, so a changed
 file gets a new thumbnail and the hourly sweep (docs/06 §3) removes any whose
-`(ino, gen, version)` no longer names a file (I-160).
+`(ino, gen, version)` no longer names a file (I-160); a retained version of a file
+(docs/16) still names it, so a snapshot's tiles keep their thumbnails until the version
+is reaped.
 
 - **Images** are made by the node on the first `GET /api/thumb` for the file: decoded
   with Go's own `image/jpeg`, `image/png`, `image/gif` and `golang.org/x/image/webp`,
@@ -277,6 +315,13 @@ loading row at once, keeps the rows it has when a later page fails, and is built
 file so the page's second draw (after the folder listing arrives) re-attaches it instead
 of discarding a panel the user had opened (I-161).
 
+The dashboard's **Snapshots** section (docs/16) sits after Integrity: a Snapshots tile
+under Volume (the count, the bytes history holds and the schedule), then "Take a
+snapshot" and a table of every snapshot newest first (name with a `manual` badge, taken,
+kind, what it alone pins, Browse and Delete; Delete confirms with what the reap will
+release). The section's heading carries the schedule (`hourly 24 · daily 30 · weekly 8 ·
+next in 23 m`) and a warning when no automatic snapshot is younger than `2 × every`.
+
 ## 8. Build and assets
 
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
@@ -291,7 +336,9 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 User management and per-user access control, mutating admin operations from the browser
 (repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
 loopback, transcoding, search, saved playlists, a queue shared between tabs or devices,
-server-side video decoding, versions beyond the one the trash keeps.
+server-side video decoding, a diff between two versions or two snapshots, a snapshot of
+one folder (a snapshot is the whole volume, docs/16), the Windows Previous Versions tab
+(docs/15 §8).
 
 ## Design
 
@@ -393,6 +440,11 @@ The sheet honours `prefers-color-scheme` and, for mockup viewers that stamp
 | Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, 56 px, hidden until something plays (`hidden`); `expanded` shows the queue panel above it; at ≤ 480 px the seek drops under the titles and the cover shrinks to 40 px; the selection bar sits above it when both show |
 | Queue | `.queue` > `ol` > `li.qrow` (`.no`, `.title`, `.artist`, `.dur`, remove button) | the current item is `li.playing`; items can be removed; "Clear" empties it |
 | Cache card | `.card.cache` > `.name-row` + bar rows + `.pins` > `.pin-row` | used and pinned of `cache.size`; one row per pin: path, a bar of cached over total, the figures; `warn` when the data disk is under 20 % free |
+| As-of menu | `.toolbar details.menu.asof` > `summary` ("Now" or the snapshot's name, prefixed "as of") + `.menu-body` of `label.menu-row` (radio + name (+ `.badge` manual) + `.small.dim` when and kind) + `.menu-foot` | newest first after "Now"; the count and a link to the dashboard in the foot; inside a snapshot the menu stays and the rest of the toolbar is the view switch and the summary |
+| Snapshot banner | `.banner.snapshot` > text + `.actions` (Restore folder to… · Back to now) | above a listing or a file view as of a snapshot: "As of `2026-10-11-1200Z` · taken 1 h ago · read-only · 11 items · 2.3 GiB"; accent border and tint (information, not a warning) |
+| Versions list | `details.panel` > `table.versions` > `tr` (`td.asof`, `td.size`, `td.mtime`, `td.acts`) | one row per distinct content, newest first; `td.asof` is the snapshot range in mono with the count and manual names under it in `.small.dim`; the live content is `tr.current` with a `.badge.strong` "current" and no actions; the others carry View · Revert · Save a copy; at ≤ 480 px the modified column drops |
+| Kept badge | `.badge` "deleted · kept by snapshot" on a deleted row or tile; the trash banner names the snapshot and "Delete now" is `disabled` with the reason in its `title` | a deleted root a snapshot still reaches |
+| Snapshots section | `section` > `h2` + `.h-sub` (the schedule) + `.snap-head` (Take a snapshot · the count and bytes) + `table.snapshots` > `tr` (`td.name` (+ `.badge` manual), `td.taken`, `td.holds`, `td.acts` Browse · Delete) | the dashboard's list, newest first; at ≤ 480 px taken and holds drop under the name; a Snapshots `.tile` under Volume shows the count with the bytes and schedule in `.sub` |
 
 ### Copy
 
@@ -403,8 +455,12 @@ server prints them (`3m0s`, `12ms`); track times as `m:ss`. Errors say what and 
 quoting the server: "mkdir photos: already exists (409)". Buttons state the action:
 "Upload", "New folder", "Download", "Restore", "Delete now", "Move to…". The trash banner
 counts days: "Deleted 3 d ago · gone for good in 27 d". A refusal names the cause:
-"protected: unprotect Concerts 2024 to delete". Tooltips on the health pill quote the
-degraded-operation table of docs/00.
+"protected: unprotect Concerts 2024 to delete", "kept by snapshot 2026-10-09-0000Z:
+delete that snapshot first". A snapshot is named as the server names it, in mono
+(`2026-10-11-1200Z`, or the user's own name), never reformatted; "as of" introduces it
+everywhere ("as of 2026-10-11-1200Z", the as-of menu, the Versions column); a revert's
+toast states the outcome for the replaced content ("kept by …" or "gone"). Tooltips on
+the health pill quote the degraded-operation table of docs/00.
 
 ### Charts
 
@@ -457,6 +513,16 @@ colour-alone. No dual axes, no stacked bars, no pie.
     bar; a reload resumes at the same position; seek on a 1 GB flac.
 14. Pin a folder on the laptop, wait for the Cache card to show it complete, stop every
     other node, and play a file from it.
+15. Snapshots: take one from the dashboard, overwrite a file on the mount, open the file
+    in the browser and see two versions; View the old one, Save a copy, then Revert and
+    read the reverted bytes on the mount; the toast says whether the replaced content is
+    kept; `ls /TailRAID/.snapshots/<name>/` on the mount shows the old bytes and `touch`
+    there says "Read-only file system".
+16. Browse a folder as of the snapshot on the phone: no select boxes, the banner, "Back
+    to now"; restore the folder under a new name and compare on the mount.
+17. Delete a folder, see "kept by snapshot" and the disabled "Delete now"; delete the
+    snapshot on the dashboard, watch the badge go, "Delete now" work, and `tailraid
+    status` reclaim after the tick and grace.
 
 ## Invariants
 
@@ -553,6 +619,13 @@ colour-alone. No dual axes, no stacked bars, no pie.
   `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
   its first audio entry by name that has a picture, the same on every node, and absent
   when none has one.
+- **I-187** — The web UI lists and reads as of a snapshot with `at=` through the FSM's
+  snapshot reads, refuses a mutation given `at` with 400, lists a file's distinct
+  contents with the snapshots pinning each, takes and deletes snapshots and reverts,
+  copies and restores trees through the endpoints of §3 with no shard moved or uploaded;
+  a deleted root a snapshot reaches is shown "kept by snapshot" and its purge is refused
+  with 409 naming the snapshot; and the page flushes the serving gateway's dirty files
+  before a snapshot it takes.
 
 ## Tests
 
@@ -577,5 +650,6 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
 | I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
 | I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestSoak_AllPhasesAgainstHarness` |
+| I-187 | planned (docs/16): TestWebUI_Snapshots_ListTakeDelete, TestWebUI_LsAt_ReadOnly, TestWebUI_Versions_DistinctContents, TestWebUI_Revert_Copy_RestoreTree, TestWebUI_Purge_PinnedRefused, `TestSoak_AllPhasesAgainstHarness` |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

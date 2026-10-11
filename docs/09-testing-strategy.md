@@ -185,6 +185,11 @@ rotate the gateway; 20 iterations short / 200 long). **`TestModelCheck_Long`** (
 test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`, `Restart`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
+With docs/16 it also takes, deletes and reverts to volume snapshots (3 %, 2 % and 2 % of
+the steps) and keeps a world per snapshot: at every quiescence every node reads every name
+under every snapshot byte-exact against that snapshot's world, the trash-aware checks
+hold for pinned roots, and the Raft snapshot frames stay byte-identical across nodes
+(I-179, I-180, I-181).
 
 **End to end** — `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` (in `-short`, ≈5 s).
 `test/mount/TestMount_Workload`, gated on `TAILRAID_MOUNT_TEST=1` and `sudo -n true`: real
@@ -382,7 +387,20 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `repair.workers`, the pass having overlapped chunks, the read during the pass keeping
   at least a third of its idle throughput, then the policy restored and the migration
   back complete; the in-flight and during-the-pass checks are skipped when the pass
-  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175). The compose rig gives four nodes two disks each, one
+  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 19
+  snapshots (docs/16; needs `Caps.Mutate`, skipped otherwise, and restores what it
+  changes: a manual snapshot taken, then one file overwritten in place through the mount,
+  another renamed, a third deleted, a fourth truncated and a new one written; every path
+  under `/.snapshots/<name>/` read through another gateway byte-exact against the model,
+  the new file absent and the deleted one present; `/api/versions` of the overwritten
+  file listing two contents, a revert of it and the pre-revert bytes read back from the
+  snapshot; the deleted folder restored server-side under a new name and compared;
+  "delete now" on the deleted root refused with the snapshot's name; then the snapshot
+  deleted, the reap and GC run through the admin RPC, `volume.versions` reaching 0 and the
+  stored bytes falling after grace; on a live cluster with the schedule on, an automatic
+  snapshot younger than `2 × every`; the phase records one `snapshot round trip` event
+  with the snapshot's name, the files it saw, the versions and bytes it pinned and what
+  the delete reclaimed; I-179..I-188, L-212..L-218). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for
@@ -421,8 +439,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   sample (bytes moved, cumulative write/read latency histograms over fixed log-spaced
   buckets, degraded / repair-pending / unreadable / stale-policy chunks, stored and
   logical bytes, dedup ratio, slots and liveness per node, the sampled node's overlay WAL
-  depth, FSM-hash agreement, the trash's inodes and bytes and the sampled node's pinned
-  cache bytes) to `results.jsonl`; every record carries its line number.
+  depth, FSM-hash agreement, the trash's inodes and bytes, the sampled node's pinned
+  cache bytes, and the snapshot count and retained version bytes) to `results.jsonl`;
+  every record carries its line number.
   Every check cites the invariants and lifecycle cells it exercises (`I-n`, `L-n`; a
   test keeps the citations defined). The driver then renders a self-contained
   `report.html` with inline SVG charts drawn in Go: the header (target, profile, policy
@@ -439,7 +458,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
   bytes, overlay WAL depth, slots per node, latency histograms, the FSM-hash strip, the
-  trash and the pinned cache over time, and the data spread across disks (one lane per
+  trash and the pinned cache over time, the snapshot count and the retained version
+  bytes over time with the phase's snapshot round-trip table (two one-axis line charts
+  drawn only when a snapshot was taken; the lookdev is
+  `assets/lookdev/soak-snapshots.html`), and the data spread across disks (one lane per
   target grouped by host, each sample coloured by the target's slot share against its
   expected share, dead hatched, with a host-cap strip underneath that is green while no
   chunk exceeds the cap and amber while `domain_skew > 0`).

@@ -26,6 +26,7 @@
       <div class="tile"><div class="label">Files</div><div class="value">12,418</div><div class="sub">48,211 chunks · 212 tombstoned</div></div>
       <div class="tile"><div class="label">Dedup</div><div class="value">1.12×</div><div class="sub">41.3 GiB logical</div></div>
       <div class="tile"><div class="label">Trash</div><div class="value">12</div><div class="sub">1.2 GiB · purged after 30 d</div></div>
+      <div class="tile"><div class="label">Snapshots</div><div class="value">26</div><div class="sub">versions hold 1.2 GiB · hourly</div></div>
     </div>
     <div class="compare">
       <div class="bar-row"><span class="bar-label">logical</span><div class="bar tall"><i style="width:74%"></i></div><span class="bar-val">41.3 GiB</span></div>
@@ -242,6 +243,22 @@
     <div class="bar-row"><span class="bar-label">dirty bytes</span><div class="bar"><i style="width:7%"></i></div><span class="bar-val">18.2 MiB in 3 files of 256 MiB · flushing</span></div>
     <div class="bar-row"><span class="bar-label">WAL</span><div class="bar"><i style="width:17%"></i></div><span class="bar-val">22.0 MiB of 128 MiB</span></div>
     <div class="small dim">acknowledged writes not yet committed to the cluster</div>
+  </section>
+
+  <section>
+    <h2>Snapshots<span class="h-sub">hourly 24 · daily 30 · weekly 8 · next in 23 m</span></h2>
+    <div class="snap-head"><button type="button">Take a snapshot</button><span class="small dim">26 snapshots · 2 manual · versions hold 1.2 GiB</span></div>
+    <table class="snapshots">
+      <thead><tr><th>name</th><th class="taken">taken</th><th class="holds">holds alone</th><th class="acts"></th></tr></thead>
+      <tbody>
+        <tr><td class="name">2026-10-11-1300Z</td><td class="taken">12 min ago · hourly</td><td class="holds">1 version · 4.0 MiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">2026-10-11-1200Z</td><td class="taken">1 h ago · hourly</td><td class="holds">0 versions</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">before reinstall<span class="badge">manual</span></td><td class="taken">2026-10-09 18:30</td><td class="holds">312 versions · 0.9 GiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">2026-10-09-0000Z</td><td class="taken">2026-10-09 00:00 · daily</td><td class="holds">1 folder in the trash · 1.1 GiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">2026-10-04-0000Z</td><td class="taken">2026-10-04 00:00 · weekly</td><td class="holds">18 versions · 212.4 MiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+      </tbody>
+    </table>
+    <div class="small dim">a snapshot copies nothing; "holds alone" is what deleting it would let the reap and GC release</div>
   </section>
 
   <section>

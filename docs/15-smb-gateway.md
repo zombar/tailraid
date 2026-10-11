@@ -272,6 +272,11 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   a delete: the name is `STATUS_OBJECT_NAME_NOT_FOUND`, the listing omits it, a create of
   the name succeeds, the share's free space waits for the purge. The browser UI (docs/13
   §4) restores it; the SMB gateway has no view of the trash.
+- **Snapshots are a folder, not the Previous Versions tab.** `/.snapshots/<name>/…` reads
+  through the adapter as on NFS, read-only (`EROFS` is `STATUS_ACCESS_DENIED` here,
+  docs/07, I-185), and the browser UI lists a file's versions (docs/13 §4). Explorer's
+  Previous Versions tab needs VSS over SMB (`FSCTL_SRV_ENUMERATE_SNAPSHOTS` and `@GMT-`
+  path tokens), which the server does not implement; out of scope.
 - **Mode, owner, attributes.** SMB2 carries no POSIX mode or owner; the READONLY attribute
   is derived from the permission bits and a change of it is dropped. `chmod` and `chown`
   from a Windows client do not reach the FSM.

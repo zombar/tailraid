@@ -33,7 +33,24 @@ type Inode struct {
     Chunks   []Hash           // TFile only; len == ceil(Size/ChunkSize); copy-on-write slice
     Target   string           // TSymlink only
     Children map[string]Ino   // TDir only
+    // history (16): positions are Raft indices
+    NameIdx    uint64         // index at which the current (Parent, Name, live) span opened
+    DeletedIdx uint64         // index of the Trash that closed it; 0 while live (set with DeletedAt)
+    DataIdx    uint64         // index of the last Commit (files)
+    Names      []NameSpan     // closed spans a snapshot pins, oldest first; copy-on-write
+    Prev       []FileVersion  // closed contents a snapshot pins, oldest first; copy-on-write
 }
+
+type SnapID uint32            // from State.NextSnap; never reused
+type Snapshot struct {        // the volume as of every entry ≤ Index (16)
+    ID    SnapID
+    Name  string              // unique, 1..64 bytes, no "/", not "." or ".."
+    Index uint64              // the Snapshot command's own index
+    At    int64               // FSM clock when taken; display only
+    Auto  bool                // taken by the leader's schedule (thinned); false = manual
+}
+type NameSpan    struct { Parent Ino; Name string; From, To uint64 }                        // the entry sat at Parent/Name for [From, To)
+type FileVersion struct { Size uint64; Mtime int64; Version uint64; Chunks []Hash; From, To uint64 } // the content for [From, To)
 
 type Chunk struct {
     Hash         Hash
@@ -90,6 +107,10 @@ type State struct {
     Nodes   map[NodeIdx]*Node
     Tombs   map[Hash]struct{} // index of Chunks with Refs == 0
     Trash   map[Ino]map[Ino]struct{} // index of the trash: original parent → the deleted roots under it
+    Snaps    map[SnapID]*Snapshot    // the snapshot table (16)
+    NextSnap SnapID
+    Former   map[Ino]map[Ino]struct{} // derived: parent → inodes with a NameSpan under it
+    Hist     map[Ino]struct{}         // derived: inodes with Names or Prev (the reap's index)
     Applied uint64            // last applied Raft index
     LastNow int64             // the FSM clock (02): the greatest Now any applied command carried
 }
@@ -121,6 +142,15 @@ Rules:
   enforced by the FSM, `FlagNSFW` is carried for the browser UI (13 §4). Both are
   inherited by what lies under the directory when a gateway reports an *effective* flag;
   the FSM stores each directory's own bits.
+- **History** is kept only while a snapshot pins it (16 §3): a change of an inode's
+  `(Parent, Name, deleted)` closes its current span `[NameIdx, …)` at the command's index
+  and keeps it in `Names` iff a snapshot falls inside it; a `Commit` keeps the old content
+  in `Prev` the same way, with its references (`Refs` counts positions in live lists and
+  retained versions alike). `Names` and `Prev` are treated as immutable like `Chunks`:
+  every change builds a new slice, so a clone shares them. `Former` and `Hist` are
+  derived, never serialized, rebuilt on decode and in `Clone` like `Trash`. An inode
+  changed before the upgrade decodes with every index zero, which reads as "before index
+  1" and is exact; deleted means `DeletedAt != 0`, never `DeletedIdx != 0`.
 
 ## Chunking
 
@@ -238,7 +268,7 @@ Primitives: `u8`, `u16 LE`, `u32 LE`, `u64 LE`, `uvarint` (Go `encoding/binary`)
 **Command frame** (one Raft log entry):
 
 ```
-u8      codec version (1, 2, 3 or 4: the lowest that carries the entry's fields, 02 §Codec versions)
+u8      codec version (1 to 5: the lowest that carries the entry's fields, 02 §Codec versions)
 u8      Op
 ...     payload fields in the fixed order documented for that Op in 02
 ```
@@ -247,13 +277,14 @@ Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM retur
 `ErrBadCommand` in `Result.Err` and applies nothing (deterministically on every node).
 A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3:
 `SetPlacement`, `GCDelete`; 4: `Trash`, `Restore`, `Purge` and a `SetAttr` carrying
-`Flags`), so an entry can never smuggle a field an older reader would misparse.
+`Flags`; 5: `Snapshot`, `SnapshotDelete`, `SnapshotReap`), so an entry can never smuggle
+a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
 
 ```
 4 bytes  magic "TRM1"
-u8       codec version (4; versions 1–3 are still read: a field a version lacks decodes as zero)
+u8       codec version (5; versions 1–4 are still read: a field a version lacks decodes as zero)
 u64      Applied
 i64      LastNow
 section  Volume   {ChunkSize u32, K u8, M u8, PolicyVersion u32, Auto bool (v ≥ 2)}
@@ -265,15 +296,23 @@ section  Chunks   uvarint count, then each Chunk {hash, Size u32, K u8, M u8, Re
 section  Inodes   uvarint count, then each Inode {Ino, Gen, Type, Mode, Uid, Gid, Size,
                   Atime, Mtime, Ctime, Nlink, Version, Parent, Name,
                   Flags u8, DeletedAt i64 (v ≥ 4),
-                  TFile: uvarint len(Chunks) + hashes; TSymlink: Target;
+                  NameIdx u64, DeletedIdx u64, DataIdx u64,
+                  uvarint len(Names) + each {Parent, Name, From, To} (v ≥ 5),
+                  TFile: uvarint len(Chunks) + hashes,
+                         uvarint len(Prev) + each {Size, Mtime, Version, uvarint len(Chunks) + hashes, From, To} (v ≥ 5);
+                  TSymlink: Target;
                   TDir: uvarint len(Children) + (name, Ino) pairs sorted by name}
+section  Snaps    uvarint count, then each {ID u32, Name, Index u64, At i64, Auto bool}, then NextSnap u32 (v ≥ 5)
 ```
 
 Maps are emitted in sorted key order (inos ascending, hashes bytewise, node idx ascending,
-child names bytewise) so two FSMs with equal state produce byte-identical snapshots. `Tombs`
-and `Trash` are not serialized; they are rebuilt on decode from `Chunks` with `Refs == 0`
-and from inodes with `DeletedAt != 0` (I-156), and `Stats` is recomputed the same way, so a
-restored replica and one that applied the log agree on every count (I-5).
+child names bytewise, snapshot IDs ascending) so two FSMs with equal state produce
+byte-identical snapshots. `Tombs`, `Trash`, `Former` and `Hist` are not serialized; they
+are rebuilt on decode from `Chunks` with `Refs == 0`, from inodes with `DeletedAt != 0`
+(I-156) and from inodes with history (I-184), and `Stats` is recomputed the same way, so
+a restored replica and one that applied the log agree on every count (I-5). The volume
+snapshots of 16 and these Raft snapshots are different things: a Raft snapshot is a copy
+of the whole `State` for log compaction, a volume snapshot is one row of `Snaps`.
 
 ## Memory model
 
@@ -283,10 +322,19 @@ restored replica and one that applied the log agree on every count (I-5).
 | per chunk of file data, 4 MiB by default (one `Hash` in `Chunks`) | 32 |
 | per directory child (`Children` entry) | ~60 |
 | `Chunk` struct + map slot + `Placement` (K+M ≤ 8) | ~110 |
+| a retained `FileVersion` (16) | ~56 + 32 per chunk of the version |
+| a retained `NameSpan` | ~60 |
+| a `Snapshot` row | ~80 |
 
 Rule of thumb: 1 M files + 1 TB unique data ≈ 200 MB + 110 MB ≈ **320 MB** of resident
 metadata per node. Soft documented limits: 2 M inodes, 4 TB unique data per volume.
-Snapshot clone (for `raft.FSM.Snapshot`) of 1 M inodes takes roughly 100–300 ms.
+Snapshot clone (for `raft.FSM.Snapshot`) of 1 M inodes takes roughly 100–300 ms. History
+costs only for entries changed after a snapshot and only while a snapshot pins them, at
+most one version per snapshot per file (`len(Prev) ≤ len(Snaps)`); the worst case is a
+large file rewritten continuously, one chunk list per snapshot, 8 MiB of hashes per TiB
+at 4 MiB chunks, so a 1 TiB file under the default keep set (62 snapshots) holds about
+0.5 GiB on every node, and `check` warns when one file's `VersionBytes` exceeds a tenth of
+the volume's logical bytes (16 §7).
 
 ## NFS file handle
 
@@ -300,6 +348,20 @@ offset  size  field
 16 bytes, fixed, big-endian throughout (network order; it is an opaque wire value). `FromHandle` looks up `Ino`; a missing inode or a `Gen` mismatch returns
 `NFS3ERR_STALE`. Handles are therefore stable across renames, gateway restarts, and across
 gateways on different devices (they encode cluster-wide identity, not a path).
+
+An entry under `/.snapshots/<name>/` (16, 07) has a second fixed layout, 24 bytes:
+
+```
+offset  size  field
+0       4     magic 0x54524853 ("TRHS"), big-endian
+4       4     SnapID uint32 big-endian
+8       4     Gen uint32 big-endian
+12      8     Ino uint64 big-endian
+20      4     reserved, zero
+```
+
+A missing snapshot, a `Gen` mismatch, or an inode not reachable at the snapshot is
+`NFS3ERR_STALE` (I-185). The 16-byte live layout is untouched.
 
 ## Node budget
 
@@ -348,6 +410,13 @@ defined in `04-write-path-and-durability.md`.
   every snapshot and entry of versions 1–3 decodes as before with those fields zero;
   `Trash` and `Stats` rebuilt on decode equal the ones kept incrementally by the applies;
   and `DecodeState(EncodeState(s)) == s` for a state with deleted roots and flags.
+- **I-184** — Snapshot version 5 carries the snapshot table and each inode's indices,
+  spans and versions; log entries carry codec 5 only for `Snapshot`, `SnapshotDelete` and
+  `SnapshotReap`; every snapshot and entry of versions 1–4 decodes as before with those
+  fields zero, and a deleted root from version 4 stays invisible to every volume
+  snapshot; `Former`, `Hist` and the history stats rebuilt on decode equal the ones kept
+  incrementally; `Clone` shares the history slices and every change builds a new one; and
+  `DecodeState(EncodeState(s)) == s` for a state with snapshots, spans and versions.
 - **I-74** — A disk's derived budget is `used + free − reserve` of the filesystem holding
   its store (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
   store's cap following at once and a `set_capacity` proposal only past the hysteresis
@@ -368,3 +437,4 @@ defined in `04-write-path-and-durability.md`.
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
+| I-184 | planned (16): TestCodec_ReadsVersion4Snapshot, TestEncodeCommand_V5Gating, TestFSM_HistoryStats_MatchComputed, TestFSM_Clone_HistoryCopyOnWrite, TestCluster_SnapshotsSurviveSnapshotInstall, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `FuzzDecodeCommand`, `FuzzDecodeState` |

@@ -42,9 +42,15 @@ State.Tombs map[Hash]struct{}  // index of chunks with Refs == 0
 - A file that is both in the trash and still referenced from a live file (dedup) costs
   nothing extra; a file whose chunks are referenced only from the trash keeps them
   committed and placed, repaired and scrubbed like any other (L-199).
-- Invariant checked by `fsck` and by the FSM test suite: `Σ Refs == number of (inode,
-  index) pairs referencing the hash`, counting the files in the trash, and
-  `Tombs == {h : Refs == 0}`.
+- **A retained version holds its references** (16 §3): a `Commit` that overwrites or
+  truncates content a snapshot sees keeps the old chunk list as a `FileVersion` and drops
+  nothing (L-212); the references go when `SnapshotReap` drops the version once no
+  snapshot pins it (L-213, L-214), or with the file when a purge takes a trashed subtree
+  that held one (L-218). A chunk referenced only from a version is never a GC victim
+  (L-216).
+- Invariant checked by `fsck` and by the FSM test suite: `Σ Refs == number of (list,
+  index) positions referencing the hash`, over live chunk lists and retained versions,
+  counting the files in the trash, and `Tombs == {h : Refs == 0}`.
 
 ## 2. GC worker (leader only)
 
@@ -101,7 +107,21 @@ changes. The purge drops the references of every file it deletes; the chunks tha
 zero are tombstoned at that moment and collected by `GCDelete` after grace, so a 30-day
 old delete is reclaimed about ten minutes after its day and a "delete now" from the
 browser UI the same way (I-157). Nothing in the trash is ever a GC victim while it is in
-the trash (L-207).
+the trash (L-207). A root some snapshot reaches is skipped by the purge and stays in the
+trash until the first tick after the last such snapshot is gone (I-182, L-215).
+
+**Snapshots.** The same tick, before the purge, runs the snapshot schedule of 16 §4 with
+the same clamped clock: it proposes an automatic `Snapshot` named by the UTC minute when
+the newest automatic one is older than `snapshots.every` (1 h unless set, `0` for none),
+deletes the automatic snapshots outside the keep set (the newest of each of the last
+`keep.hourly` hour, `keep.daily` day and `keep.weekly` ISO-week buckets, 24, 30 and 8
+unless set; a manual snapshot is never thinned), oldest first, and then proposes
+`SnapshotReap{Limit: 1024}` while the result says `More`. So the order of one tick is
+snapshot → thin → reap → purge → `GCDelete`: a reaped version tombstones the chunks that
+reach zero, and `GCDelete` collects them after grace exactly as it does a purged file
+(I-183). An `ErrExist` on the automatic name (a far-ahead `LastNow` clamps the clock to
+one minute) counts as "taken this minute", never a retry; while any live member runs a
+codec older than 5 the leader proposes none of the three (02 §Codec versions).
 
 ## 3. Sweep (every node, hourly)
 
@@ -304,7 +324,10 @@ ceil(Size/CS)` for every file; every parent chain reaches root or a deleted root
 `Children` entry points to an inode whose `Parent`/`Name` agree; `Tombs ⇔ Refs == 0`;
 `Trash ⇔ DeletedAt ≠ 0`, a deleted root absent from its parent's `Children`, a
 directory's `Nlink` equal to 2 plus its live subdirectories, `TrashInodes` and
-`TrashBytes` equal to a recount; placement distinctness. It also counts the
+`TrashBytes` equal to a recount; placement distinctness; and the history of 16: every
+retained span and version pinned by some snapshot, an inode's spans disjoint and ordered
+with the current one last, `Former ⇔ Names`, `Hist ⇔ (Names or Prev)`, `len(Prev) ≤
+len(Snaps)` per file, and `Snapshots`, `Versions` and `VersionBytes` equal to a recount. It also counts the
 orphan shards on that node (files the chunk table does not place there, plus anything in
 the shard tree that is not a shard); orphans are informational, the sweep removes them
 after grace. Data is verified by `check --scrub` (§5), not by fsck, and there is no
@@ -337,6 +360,19 @@ state to patch.
   and the leader's retention purge takes exactly the roots whose `DeletedAt` is older
   than `trash.retention` on the FSM clock (`max(leader clock, LastNow)`), in bounded
   batches, never when the retention is zero.
+- **I-182** — Purge never takes a pinned root, one that some snapshot reaches, itself or
+  anything under it: the retention tick skips it and a user's purge is `ErrPinned` naming
+  the snapshot; it is taken on the first tick after the last such snapshot is gone; a
+  purge drops one reference per non-zero position of every deleted file's live list and
+  retained versions and removes every span of the deleted inodes from `Former`; and a
+  chunk referenced only from a retained version or from a pinned root has `Refs > 0` and
+  is never a GC victim.
+- **I-183** — With `snapshots.every > 0` the leader takes an automatic snapshot named by
+  the UTC minute whenever the newest automatic one is older than `every`, keeps the
+  newest automatic snapshot of each of the last `hourly`, `daily` and `weekly` buckets,
+  deletes the other automatic ones oldest first and never a manual one, and reaps in
+  `Limit` batches before the purge and GC of the same tick; an `ErrExist` on the
+  automatic name is not retried; nothing is proposed while a live member lacks codec 5.
 
 ## Tests
 
@@ -353,3 +389,5 @@ state to patch.
 | I-174 | `TestRepair_FanOut_Bounded`, `TestRepair_FanOut_CancelDrains`, `TestConfig_RepairWorkersAndRate`, `TestPhaseFanOut_ConformingPassPasses`, `TestPhaseFanOut_OverWorkersFails`, `TestPhaseFanOut_FastPassSkips` |
 | I-175 | `TestServer_BackgroundShare`, `TestBackgroundSlots_Table`, `TestClient_BackgroundHeader`, `TestPhaseFanOut_ConformingPassPasses`, `TestPins_WalkFetchesBackground` |
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
+| I-182 | planned (16): TestFSM_Purge_SkipsPinnedRoot, TestFSM_Purge_DropsVersionRefs, TestGC_PurgeTrash_PinnedRootWaits, `TestFSM_GCDelete_Boundary`, `TestCheckInvariants_DetectsEachViolation` |
+| I-183 | planned (16): TestSchedule_TakesAndThins_Table, TestSchedule_ManualNeverThinned, TestSchedule_SkipsWhileCodecOld, TestSchedule_AutoNameTaken_NoRetry, TestConfig_Snapshots, `TestSoak_AllPhasesAgainstHarness` |

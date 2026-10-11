@@ -397,6 +397,40 @@
   </section>
 
   <section>
+    <h2>Snapshots and versions <span>docs/13 §4, docs/16</span></h2>
+    <div class="row">
+      <details class="menu asof" open>
+        <summary>Now</summary>
+        <div class="menu-body" style="position:static;margin-top:8px" role="radiogroup" aria-label="as of">
+          <label class="menu-row"><input type="radio" name="asof-c" checked><span>Now</span><span class="small dim">the live volume</span></label>
+          <label class="menu-row"><input type="radio" name="asof-c"><span>2026-10-11-1300Z</span><span class="small dim">12 min ago · hourly</span></label>
+          <label class="menu-row"><input type="radio" name="asof-c"><span>before reinstall<span class="badge">manual</span></span><span class="small dim">2026-10-09 18:30</span></label>
+          <div class="menu-foot small dim">26 snapshots · <a href="#/">manage on the dashboard</a></div>
+        </div>
+      </details>
+      <span class="badge">as of 2026-10-11-1200Z</span>
+      <span class="badge">deleted · kept by snapshot</span>
+    </div>
+    <div class="banner snapshot"><span>As of <span class="mono">2026-10-11-1200Z</span> · taken 1 h ago · read-only · 11 items · 2.3 GiB</span><span class="actions"><button type="button">Restore folder to…</button><button type="button">Back to now</button></span></div>
+    <div class="banner deleted"><span>Deleted 3 d ago · kept by snapshot <span class="mono">2026-10-09-0000Z</span> · 24 items · 1.1 GiB</span><span class="actions"><button type="button">Restore</button><button type="button" disabled title="kept by snapshot 2026-10-09-0000Z: delete that snapshot first">Delete now</button></span></div>
+    <table class="versions">
+      <thead><tr><th>as of</th><th class="size">size</th><th class="mtime">modified</th><th class="acts"></th></tr></thead>
+      <tbody>
+        <tr class="current"><td class="asof">now<span class="small dim">pinned by 2026-10-11-1300Z</span></td><td class="size">1.3 KiB</td><td class="mtime">2 h ago</td><td class="acts"><span class="badge strong">current</span></td></tr>
+        <tr><td class="asof">2026-10-11-0900Z – 2026-10-11-1200Z<span class="small dim">4 hourly snapshots · before reinstall</span></td><td class="size">1.2 KiB</td><td class="mtime">2026-10-10 09:02</td><td class="acts"><button type="button">View</button><button type="button">Revert</button><button type="button">Save a copy</button></td></tr>
+      </tbody>
+    </table>
+    <div class="snap-head"><button type="button">Take a snapshot</button><span class="small dim">26 snapshots · versions hold 1.2 GiB</span></div>
+    <table class="snapshots">
+      <thead><tr><th>name</th><th class="taken">taken</th><th class="holds">holds alone</th><th class="acts"></th></tr></thead>
+      <tbody>
+        <tr><td class="name">2026-10-11-1300Z</td><td class="taken">12 min ago · hourly</td><td class="holds">1 version · 4.0 MiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">before reinstall<span class="badge">manual</span></td><td class="taken">2026-10-09 18:30</td><td class="holds">312 versions · 0.9 GiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
     <h2>Cache card <span>the dashboard's pins</span></h2>
     <div class="cards">
       <div class="card cache">

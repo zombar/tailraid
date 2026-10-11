@@ -187,6 +187,9 @@ these numbers.
 - E-128 Purge of a deleted root, by the user or by the retention tick (06 §2)
 - E-129 a shard RPC to a node fails at the transport level, or a PUT to it outlasts the straggler grace (05 §6)
 - E-130 a repair pass finds a disk far above its capacity share of its host's slots while another disk of that host is below (14 §7)
+- E-131 Snapshot: a volume snapshot is taken, by the user or by the leader's schedule (16 §3, §4)
+- E-132 SnapshotDelete, by the user or by the thinning of the schedule (16 §4)
+- E-133 SnapshotReap: the leader's tick drops the history no snapshot pins (16 §3)
 
 **5. Transition table.**
 
@@ -371,6 +374,12 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-203 | Dirty | E-126 Trash before flush | Dirty → Committed (in the trash) | the WAL is kept; the flush commits into the trash entry; a restore shows every acknowledged byte | `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestVFS_WriteViaHandleAfterRemove_NoOrphanWAL`, `TestModelCheck_Long` |
 | L-204 | Dirty (in the trash) | E-128 Purge before flush | (dropped) | the Commit meets `ErrNotExist` and the WAL is dropped as for an unlinked file (L-13, L-55); nothing committed, no chunk entry | `TestVFS_PurgeBeforeFlush_DropsWAL`, `TestModelCheck_Long` |
 | L-205 | Committed (dest file's chunks) | E-15 rename over an existing non-ephemeral file | Committed (dest in the trash) | RENAME OK; the dest handle ESTALE; the dest keeps its refs as a deleted root under the same name; L-17 applies to ephemeral names only | `TestFSM_Rename_Table`, `TestVFS_RenameOver_TrashesReplaced`, `TestModelCheck_Long` (planned: TestWebUI_Put_OverwriteKeepsPreviousInTrash) |
+| L-212 | Committed (sole reference) | E-2, E-8 or E-10: a Commit overwrites or truncates content a snapshot sees (16 §3) | Committed (held by a version) | the old list is kept whole as a `FileVersion` with its refs: `Refs` unchanged, no tombstone, the chunk stays placed, repaired and scrubbed as any other, readable under `/.snapshots/<s>/` and through the file's version list; `Result.Kept` is true | planned: TestFSM_Commit_PinnedKeepsVersion, TestNFS_SnapshotRead_ExactOnEveryGateway, `TestModelCheck_Long` |
+| L-213 | Committed (sole reference, held only by a version) | E-133 reap once no snapshot pins the version | Tombstoned | `Refs` → 0, `TombstonedAt` = FSM now, in `Tombs`; `GCDelete` collects it after grace, as a purged file (06 §2) | planned: TestFSM_SnapshotReap_Table, TestGC_ReapThenCollect, `TestModelCheck_Long` |
+| L-214 | Committed (shared: a live list and a version) | E-133 reap | Committed (Refs−1 ≥ 1) | the chunk is kept for the live file; refs exact | planned: TestFSM_SnapshotReap_Table |
+| L-215 | Committed (in the trash, the root reached by a snapshot) | E-128 Purge | Committed (unchanged) | the retention tick skips the root, a user's purge is `ErrPinned` naming the snapshot; the root is taken on the first tick after the last such snapshot goes (I-182) | planned: TestFSM_Purge_SkipsPinnedRoot, TestGC_PurgeTrash_PinnedRootWaits, `TestModelCheck_Long` |
+| L-217 | Committed (a version's chunks) | a revert, copy or tree restore: a Commit by hash (16 §5) | Committed | `Refs + 1` per position in the new list, no upload, no shard moved; the version keeps its own refs; the replaced content is kept iff a snapshot sees it (`Kept`) | planned: TestVFS_Revert_Table, TestFSM_Revert_ByHash_NoUpload |
+| L-218 | Committed (held by a version inside a trashed subtree no snapshot reaches) | E-128 Purge | Tombstoned (or Committed with Refs−1 when shared) | the purge drops the version's positions with the file's (I-182); a chunk reaching 0 is tombstoned at the FSM clock | planned: TestFSM_Purge_DropsVersionRefs |
 
 **6. Forbidden transitions.**
 
@@ -420,6 +429,7 @@ event ring or the final state).
 | L-206 | Committed (under a protected directory) | E-13 unlink, E-126 Trash, E-15 rename over, a rename out of the subtree, or a user's Purge | any loss of the entry | forbidden (I-154): `ErrProtected`, nothing changes; a `Rename` within the subtree and new content into it are allowed | `TestFSM_Protected_Table`, `TestVFS_Protected_EPERM` |
 | L-207 | Committed (referenced only from the trash) | GCDelete, or a Purge with `DeletedAt ≥ Before` | Collected / Tombstoned | forbidden (I-153, I-157): a chunk referenced from a deleted file has `Refs > 0` and is never a victim; a root younger than the retention is never purged by the tick | `TestFSM_Purge_Boundary`, `TestGC_PurgeTrash_RetentionBoundary` |
 | L-208 | Dirty or Committed (an ephemeral name: an upload temp, a thumbnail, `._<name>`, `.DS_Store`) | delete or rename over | in the trash | forbidden (I-157): an ephemeral name is unlinked (L-13, L-15, L-17), never trashed | `TestVFS_Remove_EphemeralIsImmediate`, `TestVFS_RenameOver_TrashesReplaced` |
+| L-216 | Committed (referenced only from a retained version or from a root a snapshot reaches) | GCDelete, or E-133 reap while a snapshot pins the version, or E-13 Unlink / Rmdir of the pinned entry | Collected / Tombstoned | forbidden (I-180, I-181, I-182): a chunk a version references has `Refs > 0` and is never a victim; a pinned version is never reaped; a hard delete of a pinned entry is `ErrPinned` | planned: TestFSM_SnapshotReap_Table, TestFSM_UnlinkRmdir_PinnedRefused, `TestFSM_GCDelete_Boundary`, `TestCheckInvariants_DetectsEachViolation` |
 
 ## 7. How the matrix is tested
 

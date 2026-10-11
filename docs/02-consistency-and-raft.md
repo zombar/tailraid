@@ -69,6 +69,9 @@ const (
     OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4)
     OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
     OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
+    OpSnapshot                // {Name, Auto bool, Now} → Result.SnapID (codec 5, 16)
+    OpSnapshotDelete          // {ID SnapID, Now} (codec 5)
+    OpSnapshotReap            // {Limit uint32, Now} → Result.More (codec 5)
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
@@ -80,9 +83,13 @@ var (
     ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop,
     ErrConflict, ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand,
     ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
-    ErrProtected, ErrInTrash, ErrCodec error   // appended: wire codes are never renumbered
+    ErrProtected, ErrInTrash, ErrCodec,
+    ErrPinned error                            // appended: wire codes are never renumbered
 )
 ```
+
+`Result` is `{Ino, Gen, Victims, SnapID, More, Kept, Err}`: `SnapID` from `Snapshot`,
+`More` from `SnapshotReap`, `Kept` from a `Commit` whose pre-image became a version (16).
 
 ### Apply rules
 
@@ -129,11 +136,13 @@ chain may be protected (`ErrProtected`). Removes the child entry and the inode. 
 to `Tombs`. Any handle to the inode now fails `FromHandle` (I-3, I-17). The gateways
 propose `Unlink` only for the ephemeral names of 06 §1 (upload temps, `._*`,
 `.DS_Store`) and while a member is too old for `Trash` (12 §6); every other delete is a
-`Trash`.
+`Trash`. A non-ephemeral entry some snapshot reaches (16 §2) is refused with `ErrPinned`:
+a hard delete never takes what a snapshot shows.
 
 **Rmdir.** Child must be `TDir` (`ErrNotDir`) with empty `Children` (`ErrNotEmpty`), not
 protected and under no protected directory. Removes it; parent `Nlink--`. Like `Unlink`,
-proposed only for ephemeral names and in the mixed-version window.
+proposed only for ephemeral names and in the mixed-version window, and `ErrPinned` for a
+directory a snapshot reaches.
 
 **Rename.** Source must exist. If destination exists: file/symlink over file/symlink
 replaces it (the destination goes to the trash as by `Trash`, or is unlinked when its
@@ -145,8 +154,8 @@ that is itself a protected directory ⇒ `ErrProtected`; every protected directo
 source's parent chain must also be on the destination parent's chain (a move within one
 protected subtree is allowed, a move out of it is not); a destination that would be
 replaced under a protected directory ⇒ `ErrProtected` (a replace is a removal). Only
-`Parent`, `Name`, the two `Children` maps and `Ctime` change; `Ino`, `Gen` and the handle
-stay valid (I-16).
+`Parent`, `Name`, the two `Children` maps, `Ctime` and the span fields of the span rule
+below change; `Ino`, `Gen` and the handle stay valid (I-16).
 
 **SetAttr.** `Mask` selects Mode, Uid, Gid, Atime, Mtime and, with `AttrFlags`, `Flags`.
 `Ctime = Now`. Size is *not* settable here; truncation is a `Commit`. `Flags` is accepted
@@ -165,7 +174,9 @@ file by file) is put back into `child.Children` under its name, in inode order, 
 own `DeletedAt` cleared; a name already present keeps the newer live entry and the older
 root stays a separate root. So a tree removed from a mount lands in the trash as one
 entry that restores with one command, and a file deleted from a folder last week comes
-back with the folder (13 §4 says so).
+back with the folder (13 §4 says so). Folding keeps the nested root's deleted span when a
+snapshot pins it (the span rule below), so a snapshot taken between the two deletes does
+not see the file while the folded tree still restores whole.
 
 **Restore.** `Ino` must be a deleted root (`ErrNotExist` otherwise: an entry under a
 deleted directory is restored with it). The target parent (`NewParent`, or the root's
@@ -185,9 +196,42 @@ in `(DeletedAt, Ino)` order. Each root is deleted post-order, its `Trash` roots 
 children so a deleted entry inside a deleted directory goes with it, at most `Limit`
 inodes per entry (`0` is unbounded): a cut leaves a valid tree and the root stays due for
 the next entry, as `GCDelete` drains in batches (I-103). For every `TFile` deleted:
-`Refs--` on each `Chunks[i] != HashZero`, a chunk reaching 0 tombstoned at `now` and
-added to `Tombs` (L-201, L-202); the same underflow rule as `Unlink`. `Stats.TrashInodes`
-and `TrashBytes` shrink accordingly (I-153).
+`Refs--` on each `Chunks[i] != HashZero` and on every position of each retained version
+in its `Prev`, a chunk reaching 0 tombstoned at `now` and added to `Tombs` (L-201, L-202,
+L-218); the same underflow rule as `Unlink`. `Stats.TrashInodes` and `TrashBytes` shrink
+accordingly (I-153), and so do `Versions` and `VersionBytes`. A root some snapshot
+reaches (itself or anything under it, 16 §2) is **pinned**: a user's purge of it is
+`ErrPinned` naming the newest snapshot that sees it, and the retention purge leaves it in
+the trash until the first tick after the last such snapshot is gone (I-182, L-215). Every
+span of a deleted inode leaves `Former`, and a deleted directory's `Former` entry goes
+with it.
+
+**Snapshot.** `Name` must be 1 to 64 bytes, contain no `/`, not be `.` or `..`
+(`ErrBadCommand`) and be free (`ErrExist`). Allocates `ID = NextSnap++`, records
+`{ID, Name, Index: the command's own index, At: now, Auto}` in `Snaps` and returns the ID.
+Nothing else changes: taking a snapshot copies nothing (16 §1).
+
+**SnapshotDelete.** `ID` must exist (`ErrNotExist`). Removes the row and nothing else; the
+history it alone pinned is released by the reap.
+
+**SnapshotReap.** Walks `Hist` in `Ino` order and each inode's `Prev` and `Names` in `To`
+order, dropping at most `Limit` entries (`0` is unbounded; the leader sends 1024, I-103)
+whose interval no snapshot pins: a dropped `FileVersion` applies `Refs--` per non-zero
+position, tombstoning at `now` as `Purge` does, never underflowing; a dropped `NameSpan`
+removes the inode from `Former[Parent]` when it was the inode's last span under that
+parent; an inode with both lists empty leaves `Hist`. `Result.More` is true when the limit
+cut the walk (I-181). Deterministic because the order and the limit are in the command.
+
+**The span rule** (16 §3), which `Rename`, `Trash`, `Restore` and folding above and
+`Commit` below obey: *every change of an inode's `(Parent, Name, deleted)` at index `i` closes its current
+span at `i` and, iff the closed span is pinned by a snapshot, appends it to `Names` (the
+inode joins `Former[Parent]` and `Hist`); `Trash` sets `DeletedIdx = i` and opens nothing;
+`Rename`, `Restore` and folding open the new span at `i` (`NameIdx = i`,
+`DeletedIdx = 0`).* A `Commit` at `i` keeps the old content as a `FileVersion` for
+`[DataIdx, i)`, with its references, iff a snapshot in that interval has
+`SpanAt(inode, Index) ≠ none`, and sets `DataIdx = i`. Nothing is kept under an ephemeral
+name or the reserved folder `/.tailraid`. The rule reads `Snaps`, which is state, so every
+replica keeps the same history (I-180).
 
 **Protection**, in one place: `walkUp(ino)` follows `Parent` to the root and reports
 whether a deleted root was crossed (then the inode is in the trash) and whether a
@@ -223,11 +267,16 @@ only `Restore` and `Purge` take anything out.
    lives in memory on every node, I-64). `n = ceil(NewSize/ChunkSize)`; `NewSize >= TruncateTo` when
    `HasTruncate`. `newChunks = copy(cur[:min(len(cur), n)])`, extended with `HashZero` to
    length `n`. Every `Writes[i].Idx` must be `< n` (`ErrBadCommand`).
-7. **Then write.** Apply `Writes`. For each position whose hash changed (including positions
-   dropped by the truncate): old hash (if not `HashZero`) `Refs--` with tombstone on zero;
-   new hash (if not `HashZero`) `Refs++` and, if it was tombstoned, `TombstonedAt = 0` and
-   remove from `Tombs`. A `Refs--` that would underflow is `ErrBadCommand` (never a panic).
-8. `inode.Chunks = newChunks; Size = NewSize; Version++; Mtime = Ctime = now`.
+7. **Then write.** Apply `Writes`. When a snapshot pins the old content (the span rule:
+   a snapshot in `[DataIdx, i)` sees the file, and the name is neither ephemeral nor
+   reserved), the old list is appended whole to `Prev` as
+   `FileVersion{Size, Mtime, Version, Chunks: old, From: DataIdx, To: i}`, **no** `Refs--`
+   is applied (the version holds them, L-212) and `Result.Kept` is true. Otherwise, for
+   each position whose hash changed (including positions dropped by the truncate): old
+   hash (if not `HashZero`) `Refs--` with tombstone on zero. In both cases each new hash
+   (if not `HashZero`) `Refs++` and, if it was tombstoned, `TombstonedAt = 0` and remove
+   from `Tombs`. A `Refs--` that would underflow is `ErrBadCommand` (never a panic).
+8. `inode.Chunks = newChunks; Size = NewSize; Version++; Mtime = Ctime = now; DataIdx = i`.
 
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
@@ -247,9 +296,9 @@ comes back full. Deterministic because `Before` and `Limit` are in the command a
 victim list is emitted in hash order.
 
 **Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
-disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`) or 4 (`Trash`, `Restore`,
-`Purge`, `SetAttr` with `Flags`), snapshots in version 4 (01 §Binary codec); every reader
-decodes every older version. `meta.CodecVersion` is the newest a binary writes; `/health`
+disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore`,
+`Purge`, `SetAttr` with `Flags`) or 5 (`Snapshot`, `SnapshotDelete`, `SnapshotReap`),
+snapshots in version 5 (01 §Binary codec); every reader decodes every older version. `meta.CodecVersion` is the newest a binary writes; `/health`
 reports it and `join` refuses a cluster that reports a newer one (I-105,
 [12](12-operations.md) §6). An entry a binary cannot decode still advances its applied
 index (so replicas stay aligned) and is counted and logged (I-105). Because a version-4
@@ -257,7 +306,10 @@ entry would be exactly that on a member still running codec 3, the leader refuse
 propose one with `ErrCodec` while any live active member reports an older codec in its
 `/health` (the prober records it); the gateways fall back to `Unlink`/`Rmdir` for a
 delete and to the version-3 replace on `Rename` in that window, so a mixed cluster keeps
-working without the trash until every node is updated (I-156, 12 §6).
+working without the trash until every node is updated (I-156, 12 §6). The same rule
+gates codec 5: the leader's snapshot schedule and a user's `snapshot create` are
+`ErrCodec` while a member runs an older codec, so no snapshot exists before every node
+keeps history the same way (I-184).
 
 **Idempotency.** Raft may re-deliver entries on restore; `Apply` is pure with respect to the
 log so re-applying from a snapshot's index yields the same state (I-5).
@@ -275,8 +327,9 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error
 
 `hashicorp/raft` guarantees `Apply` never runs concurrently with `Snapshot()` but *does* run
 concurrently with `Persist`. Hence `Snapshot()` clones under the read lock (Children maps
-deep-copied; `Chunks` slices shared because they are immutable) and `Persist` works on the
-clone with no lock. Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
+deep-copied; `Chunks`, `Names` and `Prev` slices shared because they are immutable, I-184)
+and `Persist` works on the clone with no lock. These Raft snapshots (log compaction) are
+not the volume snapshots of 16, which are rows of `State.Snaps`. Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
 on close. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db` with
 `NoSync = false`.
 
@@ -304,8 +357,12 @@ raw lookup the flusher and an open file use, so a dirty file that was deleted st
 commits into its trash entry), `TrashOf(parent)` (the roots under a directory, newest
 first then by inode), `Trash()` (every root), `TrashDue(before)` (how many the retention
 purge would take) and `ResolveFrom(root, parts)` (a path inside a deleted root), which
-the browser UI and `tailraid trash` use. Followers may therefore serve slightly stale
-metadata; this is accepted NFS behaviour and lets a disconnected laptop browse the tree.
+the browser UI and `tailraid trash` use. The volume snapshots of 16 have theirs:
+`Snapshots()`, `ReadDirAt`, `LookupAt`, `ResolveAt`, `GetInodeAt`, `PathAt` and
+`VersionsOf`, every one a pure function of the state (16 §2), so the `/.snapshots` tree
+and a file's version list read the same on every node (I-179). Followers may therefore
+serve slightly stale metadata; this is accepted NFS behaviour and lets a disconnected
+laptop browse the tree.
 A gateway that just proposed a command calls `WaitApplied(index)` before answering, which
 gives read-your-writes on the issuing node.
 
@@ -487,8 +544,9 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-152** — `Trash` moves an entry out of its parent's name table and nothing else:
   the inode, its subtree, every chunk list and every `Refs` are unchanged, `DeletedAt`
   is the FSM clock, and the entry is indexed under the parent it came from; a directory
-  being trashed takes back the roots deleted from inside it earlier (folding), so a tree
-  removed entry by entry is one root; and `Restore` puts a root back with the same
+  being trashed takes back the roots deleted from inside it earlier (folding, keeping a
+  nested root's deleted span when a snapshot pins it), so a tree removed entry by entry
+  is one root; and `Restore` puts a root back with the same
   `(Ino, Gen)`, under its original name or the name and live parent asked for, refusing a
   taken name with `ErrExist` and a parent in the trash with `ErrInTrash`.
 - **I-153** — `Purge` is deterministic across replicas and exact: with `Ino` it takes

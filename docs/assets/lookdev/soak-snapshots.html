@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>soak snapshots</title>
+<style>
+body{font:14px/1.45 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;margin:0;padding:24px;color:#111;background:#fff;max-width:1000px}
+h2{font-size:17px;margin:28px 0 8px;border-bottom:1px solid #ddd;padding-bottom:4px}
+.meta{color:#555}
+table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid #e5e5e5;padding:5px 8px;text-align:left;vertical-align:top} .num{text-align:right;font-variant-numeric:tabular-nums}
+.chart{width:100%;height:auto;margin:10px 0;border:1px solid #eee;border-radius:6px}
+.title{font:600 13px sans-serif;fill:#222}.tick{font:11px sans-serif;fill:#555}.grid{stroke:#eee}.marker{stroke:#999;stroke-dasharray:3 3}.marklabel{font:9px sans-serif;fill:#777}
+.band{fill:#f1f5f9}
+.lookdev{font:12px ui-monospace,Menlo,monospace;color:#777;border:1px dashed #ddd;padding:8px 10px;border-radius:6px}
+</style>
+</head>
+<body>
+<p class="lookdev">lookdev — soak report (internal/soak/report.go), the two charts and the table phase 19 adds; compose run, 4 hosts × 2 disks, auto 3+2. Synthetic data. The charts follow the report's lineChart (one measure, one axis each; no dual axis), drawn behind a haveSnapshots flag, so a run without a snapshot shows neither.</p>
+<h2>Charts</h2>
+<p class="meta">docker compose, 4 hosts × 2 disks + a diskless voter · auto 3+2 · 4 MiB chunks</p>
+
+<svg class="chart" viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Snapshots">
+<text x="64" y="18" class="title">Snapshots — the snapshot table's size over the run</text>
+<rect x="517.3" y="28" width="113.3" height="150" class="band"/>
+<text x="520.3" y="37" class="marklabel">19 snapshots</text>
+<line x1="64" y1="178" x2="744" y2="178" class="grid"/><line x1="64" y1="128" x2="744" y2="128" class="grid"/><line x1="64" y1="78" x2="744" y2="78" class="grid"/><line x1="64" y1="28" x2="744" y2="28" class="grid"/>
+<text x="58" y="182" class="tick" text-anchor="end">0</text><text x="58" y="132" class="tick" text-anchor="end">1</text><text x="58" y="82" class="tick" text-anchor="end">2</text><text x="58" y="32" class="tick" text-anchor="end">3</text>
+<polyline fill="none" stroke="#2563eb" stroke-width="1.5" points="64,178 517,178 517,128 540,128 540,78 575,78 575,128 610,128 610,178 744,178"/>
+<line x1="517.3" y1="28" x2="517.3" y2="178" class="marker"/><text x="520" y="190" class="marklabel">manual snapshot</text>
+<line x1="540" y1="28" x2="540" y2="178" class="marker"/><text x="543" y="200" class="marklabel">second snapshot</text>
+<line x1="575" y1="28" x2="575" y2="178" class="marker"/><text x="578" y="190" class="marklabel">one deleted</text>
+<line x1="610" y1="28" x2="610" y2="178" class="marker"/><text x="613" y="200" class="marklabel">both deleted · reap</text>
+<text x="64.0" y="212" class="tick" text-anchor="middle">0s</text>
+<text x="290.7" y="212" class="tick" text-anchor="middle">200s</text>
+<text x="517.3" y="212" class="tick" text-anchor="middle">400s</text>
+<text x="744.0" y="212" class="tick" text-anchor="middle">600s</text>
+</svg>
+
+<svg class="chart" viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Retained versions">
+<text x="64" y="18" class="title">Retained versions — bytes held only by history (volume.version_bytes)</text>
+<rect x="517.3" y="28" width="113.3" height="150" class="band"/>
+<text x="520.3" y="37" class="marklabel">19 snapshots</text>
+<line x1="64" y1="178" x2="744" y2="178" class="grid"/><line x1="64" y1="128" x2="744" y2="128" class="grid"/><line x1="64" y1="78" x2="744" y2="78" class="grid"/><line x1="64" y1="28" x2="744" y2="28" class="grid"/>
+<text x="58" y="182" class="tick" text-anchor="end">0</text><text x="58" y="132" class="tick" text-anchor="end">16 MiB</text><text x="58" y="82" class="tick" text-anchor="end">32 MiB</text><text x="58" y="32" class="tick" text-anchor="end">48 MiB</text>
+<polyline fill="none" stroke="#2563eb" stroke-width="1.5" points="64,178 522,178 522,118 530,118 530,96 548,96 548,84 575,84 575,84 610,84 612,178 744,178"/>
+<line x1="522" y1="28" x2="522" y2="178" class="marker"/><text x="525" y="190" class="marklabel">overwrite, truncate</text>
+<line x1="548" y1="28" x2="548" y2="178" class="marker"/><text x="551" y="200" class="marklabel">revert</text>
+<line x1="612" y1="28" x2="612" y2="178" class="marker"/><text x="615" y="190" class="marklabel">reap → 0</text>
+<text x="64.0" y="212" class="tick" text-anchor="middle">0s</text>
+<text x="290.7" y="212" class="tick" text-anchor="middle">200s</text>
+<text x="517.3" y="212" class="tick" text-anchor="middle">400s</text>
+<text x="744.0" y="212" class="tick" text-anchor="middle">600s</text>
+</svg>
+
+<h2>Snapshot round trip</h2>
+<p class="meta">phase 19 · one event with its attributes, rendered as a table like the large file's placement figure</p>
+<table class="snapshots"><tr><th>Snapshot</th><th>Taken at</th><th class="num">Files seen</th><th class="num">Changed after</th><th class="num">Versions pinned</th><th class="num">Bytes pinned</th><th>Read through</th><th class="num">Reclaimed after delete</th></tr>
+<tr><td>soak-1760182800</td><td>412 s (index 182,344)</td><td class="num">154</td><td class="num">5</td><td class="num">4</td><td class="num">44.0 MiB</td><td>n3 (another gateway) · exact</td><td class="num">44.0 MiB after grace (10m)</td></tr>
+<tr><td>2026-10-11-1300Z</td><td>440 s (index 182,910) · automatic</td><td class="num">155</td><td class="num">1</td><td class="num">1</td><td class="num">4.0 MiB</td><td>n3 · exact</td><td class="num">4.0 MiB</td></tr>
+<tr><td colspan="8" class="meta">the deleted folder restored into <code>restored-day2</code> (24 entries created, 0 skipped) and compared exact; "delete now" on the pinned root refused (409, kept by soak-1760182800); the revert's replaced content kept by 2026-10-11-1300Z; on a live cluster the schedule check: an automatic snapshot younger than 2 × every</td></tr></table>
+</body>
+</html>

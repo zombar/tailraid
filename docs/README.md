@@ -21,6 +21,7 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [13-web-ui.md](13-web-ui.md) | Browser dashboard (balance, integrity) and file browser with media playback on a tailnet listener; same-user authorization; the style guide and lookdev |
 | [14-disks.md](14-disks.md) | Several disks per device: disks as placement targets, the host as failure domain, the host cap, host-aware policy |
 | [15-smb-gateway.md](15-smb-gateway.md) | SMB2 gateway for Windows: library, adapter over the vfs, case-insensitive names, password and `net use` mount, known gaps |
+| [16-snapshots.md](16-snapshots.md) | Snapshots and previous versions: a snapshot is a name and a Raft index, history is kept only while a snapshot pins it, `/.snapshots` on the mounts, revert and restore, the schedule |
 | [invariants.md](invariants.md) | Generated table: every invariant, its doc, statement and tests |
 | [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows SMB mount path |
 | [vms.md](vms.md) | Three local VMs (macOS, Linux, Windows) on a throwaway tailnet forming one volume, each OS first in turn; the rounds, the soak and the results |

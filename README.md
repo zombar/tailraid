@@ -170,7 +170,11 @@ Every command takes `--json`, and `--node <ip>` to talk to another device.
 
 ## Browser UI
 
-Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid status` prints the address, and `tailraid dashboard` opens it. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
+Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid status` prints the address, and `tailraid dashboard` opens it. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders, restores what was deleted and shows any folder as it was at a snapshot. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
+
+## Snapshots and previous versions
+
+The leader takes a snapshot of the whole volume every hour and keeps the newest of each of the last 24 hours, 30 days and 8 weeks (`snapshots` in the config); `tailraid snapshot create [name]` takes one that is never thinned. Taking a snapshot copies nothing: a file keeps its old content only while a snapshot still shows it, and the space comes back through the usual garbage collection once the last such snapshot is deleted. On the mount, `.snapshots/<name>/` at the volume's root holds the volume as it was, read-only (the folder is hidden from listings; `ls .snapshots` works). In the browser a file's view lists its versions with the snapshots that hold each, and reverts or saves a copy; `tailraid versions <path>` does the same from a terminal, and `tailraid snapshot restore <name> <path>` puts a file or a whole folder back without moving data. Design: [docs/16-snapshots.md](docs/16-snapshots.md).
 
 ## Configuration
 
@@ -200,6 +204,9 @@ repair:
   s3_scrub: 1G          # bucket bytes the scrub may download per day to verify objects ("0": HEAD only)
   workers: 4            # chunks a repair pass works on at once (1..64)
   rate: 50M             # shard bytes per second repair may move ("0": no limit)
+snapshots:
+  every: 1h             # an automatic snapshot of the volume this often ("0": none)
+  keep: {hourly: 24, daily: 30, weekly: 8}   # the newest automatic snapshot of each of the last N buckets
 log:
   level: info           # debug | info | warn | error
   file: ~/tailraid.log  # optional; rotates at 64 MiB keeping five generations
@@ -263,7 +270,7 @@ Run `tailraid update` on every device, voters first, then `tailraid stop && tail
 
 ## Backup and recovery
 
-The volume's metadata is replicated on the voters; the data is on the devices and disks. `tailraid snapshot <dir>` exports the metadata (a fresh Raft snapshot) to a directory, which is small and worth copying somewhere outside the cluster now and then. Losing any `m` devices or disks is survived without any of this.
+The volume's metadata is replicated on the voters; the data is on the devices and disks. `tailraid export <dir>` (`tailraid snapshot <dir>` until the volume snapshots above land) exports the metadata (a fresh Raft snapshot) to a directory, which is small and worth copying somewhere outside the cluster now and then. Losing any `m` devices or disks is survived without any of this.
 
 Losing more voters than Raft can spare, permanently, is the one failure the cluster cannot heal on its own ([docs/05-failure-model.md](docs/05-failure-model.md) §3). On one surviving voter, with its service stopped, `tailraid recover --voters <its node id>` makes it continue alone with everything it knew; every file whose shards survive is readable again. Start it, then `tailraid reset` and re-join the other devices.
 
@@ -285,6 +292,7 @@ Details: [docs/12-operations.md](docs/12-operations.md) §4.
 | [docs/README.md](docs/README.md) | the design, in reading order |
 | [docs/05-failure-model.md](docs/05-failure-model.md) | exactly what "no data loss" covers |
 | [docs/14-disks.md](docs/14-disks.md) | several disks per device |
+| [docs/16-snapshots.md](docs/16-snapshots.md) | snapshots and previous versions |
 | [docs/12-operations.md](docs/12-operations.md) | services, logs, releases, self-update, backup and recovery |
 | [docs/09-testing-strategy.md](docs/09-testing-strategy.md) | the test tiers, the soak suite and its report |
 | [docs/vms.md](docs/vms.md) | the three-VM rig: setup, what a round proves, results |
