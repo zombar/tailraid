@@ -50,12 +50,14 @@ func onFSInfo(ctx context.Context, w *response, userHandle Handler) error {
 		Properties  uint32
 	}
 
+	// tailraid: 1 MiB, the frame bound of conn.go (MaxFrame covers a WRITE of wtmax plus
+	// its headers), instead of upstream's 1 GiB (docs/07, I-167)
 	res := fsinfores{
-		Rtmax:       1 << 30,
-		Rtpref:      1 << 30,
+		Rtmax:       1 << 20,
+		Rtpref:      1 << 20,
 		Rtmult:      4096,
-		Wtmax:       1 << 30,
-		Wtpref:      1 << 30,
+		Wtmax:       1 << 20,
+		Wtpref:      1 << 20,
 		Wtmult:      4096,
 		Dtpref:      8192,
 		Maxfilesize: 1 << 62, // wild guess. this seems big.

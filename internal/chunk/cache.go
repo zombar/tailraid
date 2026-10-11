@@ -140,7 +140,8 @@ func (c *Cache) Pinned() int64 {
 	return c.pinnedUsed
 }
 
-// Has reports whether h is cached, without touching its LRU position.
+// Has reports whether h is cached, without touching its LRU position (readahead and the
+// pins worker ask before deciding to fetch).
 func (c *Cache) Has(h [32]byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

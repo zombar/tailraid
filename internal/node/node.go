@@ -215,6 +215,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		client.WrapTransport(faults.Transport)
 		blocked = faults.Blocked
 	}
+	client.OnUnreachable = prober.Suspect // a shard RPC that fails at the transport level (docs/05 §6, I-170)
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
 	rd.Events = ring
 	pinned, err := pins.Open(cfg.Node.DataDir, node.FSM, rd, cache, clk, log) // the folders kept on this device (docs/01 §Pins)
@@ -223,6 +224,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, vfs.DefaultConfig(), log)
 	fl.Events = ring
+	fl.Suspect = prober.Suspect // a PUT that outlasts the straggler grace (I-169)
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
 	if runtime.GOOS == "windows" {
 		uid, gid = 0, 0
@@ -256,7 +258,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	status := func() any {
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
-		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov)
+		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd)
 		rep.Machine = admin.Vitals(cfg.Node.DataDir)
 		if w := admin.LowDiskWarning(rep.Machine); w != "" {
 			rep.Warnings = append(rep.Warnings, w)

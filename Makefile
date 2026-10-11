@@ -58,9 +58,11 @@ install: build
 test:
 	go test -short -cover $(PKGS)
 
-## test-race: fast suite under the race detector (pre-commit)
+## test-race: fast suite under the race detector (pre-commit); the in-tree go-nfs copy is
+## its own module, so its tests run from there
 test-race:
 	go test -short -race $(PKGS)
+	go test -C third_party/nfs -short -race ./...
 
 ## test-long: model checker, long durability and oracle runs (minutes; nightly)
 test-long:
