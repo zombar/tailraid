@@ -45,6 +45,7 @@
 
 /* ---- base ---------------------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; min-width: 0; }
+[hidden] { display: none !important; } /* the attribute wins over any display a class sets: the selection bar, the now-playing bar, the queue */
 html { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--sans); overflow-wrap: anywhere; }
 a { color: var(--accent); text-decoration: none; }
@@ -369,7 +370,6 @@ table.tracks tr.playing td { background: color-mix(in srgb, var(--accent) 10%, v
 table.tracks tr.playing td.no { color: var(--accent); }
 table.tracks tr:hover { cursor: pointer; }
 aside.nowbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: grid; grid-template-columns: 56px minmax(0, 1fr) auto minmax(120px, 2fr) auto auto; gap: 12px; align-items: center; min-height: 56px; padding: 0 var(--gutter) env(safe-area-inset-bottom, 0px); background: var(--surface); border-top: 1px solid var(--line); }
-aside.nowbar[hidden] { display: none; }
 .nowbar .cover { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: var(--line); }
 .nowbar .titles { display: grid; min-width: 0; }
 .nowbar .title { font: 600 14px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

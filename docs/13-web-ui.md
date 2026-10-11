@@ -275,7 +275,11 @@ titles where it helps and never hide the file name.
 
 Playback belongs to a bar at the bottom of the page (`.nowbar`) that the router never
 touches: a track started anywhere keeps playing while the user browses other folders,
-the dashboard or a video page (which pauses it). The bar carries the cover, title and
+the dashboard or a video page (which pauses it). A change of track or of play state
+re-marks the listing's rows in place (the playing row, the play buttons): the listing is
+neither fetched nor rebuilt, so nothing flickers. The selection bar, the now-playing bar
+and the queue carry `hidden` while they have nothing to show, and the stylesheet lets the
+attribute win over any display a class sets. The bar carries the cover, title and
 artist — album, previous · play/pause · next, a seek slider with the elapsed and total
 time, repeat (off, all, one) and shuffle, and opens into the queue. Playing a track queues
 its folder in track order; "Play all" and "Shuffle" on an album, "Play" and "Add to queue"

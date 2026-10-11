@@ -280,16 +280,29 @@ func (r *Run) hotpathStraggler(ctx context.Context, gw NodeRef) error {
 	if err := heal(); err != nil {
 		return err
 	}
-	if err := r.Env.Wait(ctx, cluster.ProbeInterval+time.Second); err != nil {
-		return err
-	}
-	if st, err := r.Env.Status(ctx, gw); err == nil {
-		for i := range st.Nodes {
-			if st.Nodes[i].Idx == victim.Idx {
-				r.checkAt("I-170", "the mark clears on the next good probe", !st.Nodes[i].Suspect && st.Nodes[i].Live, fmt.Sprintf("%s suspect %v live %v after the heal", victim.Name, st.Nodes[i].Suspect, st.Nodes[i].Live), "", "", gw.Name)
+	// the next good probe comes at most a probe interval after the tick under way ends,
+	// and a tick lasts as long as its slowest probe: poll for it within three intervals
+	// rather than reading once at a fixed point a loaded host can miss (status is fresh,
+	// I-214), and repair only once the holder is back
+	healedAt := time.Now()
+	suspect, live := true, false
+	for time.Since(healedAt) < 3*cluster.ProbeInterval {
+		if st, err := r.Env.Status(ctx, gw); err == nil {
+			for i := range st.Nodes {
+				if st.Nodes[i].Idx == victim.Idx {
+					suspect, live = st.Nodes[i].Suspect, st.Nodes[i].Live
+				}
 			}
 		}
+		if !suspect && live {
+			break
+		}
+		if err := r.Env.Wait(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
 	}
+	r.checkAt("I-170", "the mark clears on the next good probe", !suspect && live,
+		fmt.Sprintf("%s suspect %v live %v %s after the heal", victim.Name, suspect, live, time.Since(healedAt).Round(100*time.Millisecond)), "", "", gw.Name)
 	after, err := r.repairUntilClean(ctx)
 	r.check("I-32", "degraded chunks of the cut-off write filled after the heal", err == nil && after.Volume.RepairPending == 0 && after.Volume.Degraded == 0,
 		fmt.Sprintf("repair pending %d degraded %d, %v", after.Volume.RepairPending, after.Volume.Degraded, err))
