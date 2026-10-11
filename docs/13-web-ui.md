@@ -185,7 +185,9 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   so a deleted folder is browsed and a deleted video plays as before the delete, from the
   same bytes (I-158). A folder deleted from a mount with `rm -rf` arrives piece by piece
   and is folded into one entry when the folder itself is deleted (docs/02), so it restores
-  with one tap. Restore puts the entry back under its original name, or under the name or
+  with one tap; the mount that deleted the names shows them again once its attribute
+  cache expires (an NFS client's `acdirmax`, up to 60 s, docs/07), the browser at once.
+  Restore puts the entry back under its original name, or under the name or
   into the folder the page asks for after a 409, with the same `(ino, gen)`, so an NFS
   handle that went stale is valid again. "Delete now" purges one entry; the retention
   purge runs on the leader (docs/06 §2). An overwrite, whether a `PUT` of an existing

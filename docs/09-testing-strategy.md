@@ -351,7 +351,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   ones unchanged; the trash round trip: a delete listed in place with its dates and its
   bytes readable with `in=`, the share seeing a delete (the mount's listing omits it, a
   read fails, a new file takes the name), an `rm -rf` through the mount restored with
-  one call, a dirty file deleted at once and restored with every acknowledged byte, an
+  one call (read back once the mount's attribute cache lets the restored names show,
+  within 90 s on a kernel NFS client, docs/07), a dirty file deleted at once and
+  restored with every acknowledged byte, an
   overwrite through the web and through the mount whose previous version reads back from
   the trash, `.DS_Store` and an upload temp deleted on the mount and absent from
   `/api/trash`, a restore onto a taken name refused then done under a new name, a purge

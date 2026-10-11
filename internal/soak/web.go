@@ -380,6 +380,24 @@ func (r *Run) webBatches(ctx context.Context, w *webClient, v Volume, dir string
 	}
 }
 
+// attrCacheWindow is how long the driver gives a mount to show a change made through
+// the browser to a name the mount itself deleted: a kernel NFS client trusts its
+// directory attribute cache for up to acdirmax, 60 s by default (docs/07).
+const attrCacheWindow = 90 * time.Second
+
+// waitVisible returns once the mount answers a stat of p, or the window has passed.
+func (r *Run) waitVisible(ctx context.Context, v Volume, p string) {
+	deadline := time.Now().Add(attrCacheWindow)
+	for {
+		if _, err := v.Size(p); err == nil || time.Now().After(deadline) {
+			return
+		}
+		if r.Env.Wait(ctx, 2*time.Second) != nil {
+			return
+		}
+	}
+}
+
 func (r *Run) webTrash(ctx context.Context, w *webClient, v Volume, dir string, m model) {
 	a := join(dir, "a.bin")
 	before := m[a]
@@ -434,6 +452,10 @@ func (r *Run) webTrash(ctx context.Context, w *webClient, v Volume, dir string, 
 		if root != nil {
 			code, _, _ = w.postJSON(ctx, "/api/restore", map[string]any{"ino": root.Ino}, nil)
 		}
+		// the mount deleted these names itself, so a kernel NFS client holds them as
+		// absent until its attribute cache expires (docs/07); the browser's restore is
+		// visible there within that window
+		r.waitVisible(ctx, v, join(tree, "x"))
 		bad, first := r.verifyModel(v, tm)
 		r.check("I-152 L-200", "a tree removed piece by piece is one deleted entry and restores with one call", root != nil && roots == 1 && code == 200 && bad == 0, fmt.Sprintf("roots %d, restore %d, %s", roots, code, first))
 	}
