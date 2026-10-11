@@ -21,7 +21,7 @@ import (
 // I-82): the body streams into a hidden sibling of the target and one Rename publishes it
 // once every announced byte has arrived.
 const (
-	uploadSuffix = ".tailraid-upload"
+	uploadSuffix = meta.UploadSuffix
 	// DefaultUploadSlots bounds concurrent uploads; each holds one chunk-sized buffer.
 	DefaultUploadSlots = 4
 	// DefaultBodyTimeout is how long an upload body may send nothing before it is dropped.
@@ -31,21 +31,13 @@ const (
 )
 
 // IsUploadTemp reports whether name is an upload's temp file, ".<name>.tailraid-upload".
-func IsUploadTemp(name string) bool {
-	return len(name) > len(uploadSuffix)+1 && strings.HasPrefix(name, ".") && strings.HasSuffix(name, uploadSuffix)
-}
+func IsUploadTemp(name string) bool { return meta.IsUploadTemp(name) }
 
 // IsOSMetadata reports whether name is a file macOS writes for its own use beside
 // the user's: "._<name>" (AppleDouble, a file's extended attributes on a volume
 // without them, which NFSv3 is) and ".DS_Store" (Finder's view settings). A listing
-// leaves them out (I-140).
-func IsOSMetadata(name string) bool {
-	return (len(name) > 2 && strings.HasPrefix(name, "._")) || name == ".DS_Store"
-}
-
-// ReservedDir is the root entry the node writes for itself (docs/13 §5: thumbnails,
-// docs/17 §2: the stats segments); a listing leaves it out (I-195).
-const ReservedDir = ".tailraid"
+// leaves them out (I-140). Both are ephemeral names: a delete unlinks them (docs/06 §1).
+func IsOSMetadata(name string) bool { return meta.IsOSMetadata(name) }
 
 func tempName(name string) string { return "." + name + uploadSuffix }
 
@@ -142,6 +134,11 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, fmt.Errorf("put %s: %w", canonical, meta.ErrIsDir))
 		return
 	}
+	if reserved(parts) { // the thumbnails are the node's (I-160)
+		early(w)
+		writeErr(w, http.StatusBadRequest, "put "+canonical+": not a user file")
+		return
+	}
 	in, err := s.o.Store.Resolve(parts)
 	existed := err == nil
 	switch {
@@ -165,6 +162,11 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	if existed && noOverwrite && (part.start == 0 || part.final()) {
 		early(w)
 		writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
+		return
+	}
+	if existed && s.o.Store.Protected(in.Ino) { // a replace under a protected folder is refused before the body (I-163)
+		early(w)
+		writeErr(w, http.StatusForbidden, "put "+canonical+": protected: unprotect the folder to replace the file")
 		return
 	}
 	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1]))
@@ -260,6 +262,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.o.FS.Rename(temp, canonical); err != nil {
+		_ = s.o.FS.Remove(temp) // a refused publish leaves nothing behind (docs/13 §4)
 		s.fail(w, err)
 		return
 	}
@@ -310,6 +313,10 @@ func (s *Server) mkdir(w http.ResponseWriter, r *http.Request) {
 	parts, canonical := cleanPath(req.Path)
 	if len(parts) == 0 {
 		s.fail(w, fmt.Errorf("mkdir %s: %w", canonical, meta.ErrIsDir))
+		return
+	}
+	if reserved(parts) {
+		writeErr(w, http.StatusBadRequest, "mkdir "+canonical+": not a user folder")
 		return
 	}
 	if _, err := s.o.Store.Resolve(parts); err == nil {

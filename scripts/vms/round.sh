@@ -293,7 +293,13 @@ s8b_update() {
     tr_ "$os" update --yes --restart --version "$tag" --allow-downgrade || return 1
     local v; v=$(tr_ "$os" version)
     [ "$v" = "tailraid $tag" ] || { echo "$os runs \"$v\" after the update, want $tag"; return 1; }
-    ready_or_log "$os" 45 || return 1
+    if ! ready_or_log "$os" 45; then
+      # a release from before the volume's snapshot codec cannot start on it (docs/12
+      # §6): the refusal is the designed outcome of a downgrade across a codec bump, and
+      # the rollback below is the way back; anything else is a failure
+      tr_ "$os" logs -n 40 2>/dev/null | grep -q "unsupported snapshot version" || return 1
+      echo "$os: $tag refuses the volume's snapshot (its codec is newer than the release's, docs/12 §6); rolling back"
+    fi
     # the rollback runs the release's own code: a release whose --restart cannot find
     # the service after the swap (v0.4.2 on Linux) leaves the restored binary in place
     # but the old image running, so the rig restarts it and says so

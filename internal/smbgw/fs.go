@@ -60,6 +60,20 @@ func wrap(err error) error {
 	return err
 }
 
+// CanDelete is asked when a client marks a handle delete-on-close (docs/15 §8): the
+// delete itself happens at CLOSE, whose reply carries no failure, so a protected entry
+// (I-154) is refused here, where the client reads STATUS_ACCESS_DENIED.
+func (f *FS) CanDelete(p string) error {
+	in, err := f.st.Resolve(meta.SplitPath(p))
+	if err != nil {
+		return os.ErrNotExist
+	}
+	if f.st.Protected(in.Ino) {
+		return os.ErrPermission
+	}
+	return nil
+}
+
 // POSIX type bits of a Stat mode, which is what the server reads.
 const (
 	modeDir     uint16 = 0o040000

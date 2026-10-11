@@ -11,10 +11,12 @@ import (
 
 var stateMagic = []byte("TRM1")
 
-// stateVersion 2 adds Volume.Auto and 3 adds Node.Host; older snapshots are still read
-// (Auto = false, Host = 0) so a cluster upgrades without a format break (docs/12 §6).
+// stateVersion 2 adds Volume.Auto, 3 Node.Host and 4 Inode.Flags and DeletedAt; older
+// snapshots are still read (the fields zero) so a cluster upgrades without a format
+// break (docs/12 §6, I-156).
 const (
-	stateVersion   = 3
+	stateVersion   = 4
+	stateVersionV3 = 3
 	stateVersionV2 = 2
 	stateVersionV1 = 1
 )
@@ -52,7 +54,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 	sort.Ints(nodeIdx)
 	w.uvarint(uint64(len(nodeIdx)))
 	for _, idx := range nodeIdx {
-		writeNode(w, s.Nodes[NodeIdx(idx)], version >= stateVersion)
+		writeNode(w, s.Nodes[NodeIdx(idx)], version >= stateVersionV3)
 		w.spill()
 	}
 
@@ -96,6 +98,10 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.u64(in.Version)
 		w.u64(uint64(in.Parent))
 		w.str(in.Name)
+		if version >= stateVersion {
+			w.u8(in.Flags)
+			w.i64(in.DeletedAt)
+		}
 		switch in.Type {
 		case TFile:
 			w.uvarint(uint64(len(in.Chunks)))
@@ -132,7 +138,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
-	if r.err == nil && version != stateVersion && version != stateVersionV2 && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
@@ -140,6 +146,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		Chunks: map[Hash]*Chunk{},
 		Nodes:  map[NodeIdx]*Node{},
 		Tombs:  map[Hash]struct{}{},
+		Trash:  map[Ino]map[Ino]struct{}{},
 	}
 	s.Applied = r.u64()
 	s.LastNow = r.i64()
@@ -156,7 +163,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 	n := r.length(maxListLen)
 	var prevIdx NodeIdx
 	for i := 0; i < n && r.err == nil; i++ {
-		node := readNode(r, version >= stateVersion)
+		node := readNode(r, version >= stateVersionV3)
 		if i > 0 && node.Idx <= prevIdx {
 			return nil, fmt.Errorf("meta: nodes not in canonical order")
 		}
@@ -194,6 +201,10 @@ func DecodeState(rd io.Reader) (*State, error) {
 			return nil, fmt.Errorf("meta: inodes not in canonical order")
 		}
 		prevIno = in.Ino
+		if version >= stateVersion {
+			in.Flags = r.u8()
+			in.DeletedAt = r.i64()
+		}
 		switch in.Type {
 		case TFile:
 			if cnt := r.length(maxListLen); cnt > 0 {
@@ -222,6 +233,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 			}
 		}
 		s.Inodes[in.Ino] = in
+		if in.DeletedAt != 0 {
+			s.indexTrash(in.Parent, in.Ino) // the trash index is rebuilt, like Tombs (I-156)
+		}
 	}
 	if err := r.done(); err != nil {
 		return nil, err

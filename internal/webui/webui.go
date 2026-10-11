@@ -21,6 +21,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -53,6 +54,10 @@ type Options struct {
 	// nothing; zero values take DefaultUploadSlots and DefaultBodyTimeout.
 	UploadSlots int
 	BodyTimeout time.Duration
+	// Retention is trash.retention, for each deleted entry's purge_at (0: none).
+	Retention time.Duration
+	// Pins is this node's pinned folders (docs/13 §4); nil answers 503 on the pin routes.
+	Pins Pinner
 	// Hosts are the Host header values the UI answers (I-127): the listener's
 	// <tsIP>:port and the node's MagicDNS name with the port. Any other Host is a 421,
 	// so a page on another origin that resolves a name to this node's IP (DNS
@@ -71,11 +76,13 @@ func Hosts(addr, dnsName string) []string {
 
 // Server is the web UI handler.
 type Server struct {
-	o       Options
-	handler http.Handler
-	cache   statusCache
-	up      uploads
-	refused logx.Limiter // one "refused" line a minute (I-124): a probe loop is not a log flood
+	o        Options
+	handler  http.Handler
+	cache    statusCache
+	up       uploads
+	refused  logx.Limiter  // one "refused" line a minute (I-124): a probe loop is not a log flood
+	decoders chan struct{} // thumbnail decodes in flight (ThumbDecoders)
+	covers   coverCache
 }
 
 // New validates the options and builds the handler.
@@ -95,7 +102,7 @@ func New(o Options) (*Server, error) {
 	if o.BodyTimeout <= 0 {
 		o.BodyTimeout = DefaultBodyTimeout
 	}
-	s := &Server{o: o, up: uploads{inflight: map[string]bool{}, slots: make(chan struct{}, o.UploadSlots)}}
+	s := &Server{o: o, up: uploads{inflight: map[string]bool{}, slots: make(chan struct{}, o.UploadSlots)}, decoders: make(chan struct{}, ThumbDecoders)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /assets/{file}", s.asset)
@@ -103,10 +110,22 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/ls", s.ls)
 	mux.HandleFunc("GET /api/stat", s.stat)
+	mux.HandleFunc("GET /api/trash", s.trash)
 	mux.HandleFunc("GET /api/chunks", s.chunks)
+	mux.HandleFunc("GET /api/thumb", s.thumbGet)
+	mux.HandleFunc("PUT /api/thumb", csrf(s.thumbPut))
+	mux.HandleFunc("GET /api/tags", s.tags)
+	mux.HandleFunc("GET /api/pins", s.pinList)
 	mux.HandleFunc("GET /files/{path...}", s.get) // a GET pattern serves HEAD too
 	mux.HandleFunc("PUT /files/{path...}", csrf(s.put))
 	mux.HandleFunc("POST /api/mkdir", csrf(s.mkdir))
+	mux.HandleFunc("POST /api/rename", csrf(s.rename))
+	mux.HandleFunc("POST /api/move", csrf(s.move))
+	mux.HandleFunc("POST /api/delete", csrf(s.del))
+	mux.HandleFunc("POST /api/restore", csrf(s.restore))
+	mux.HandleFunc("POST /api/purge", csrf(s.purge))
+	mux.HandleFunc("POST /api/flags", csrf(s.flags))
+	mux.HandleFunc("POST /api/pin", csrf(s.pin))
 	s.refused.Clk = o.Clk
 	s.handler = s.hostCheck(s.authz(mux))
 	return s, nil
@@ -194,8 +213,11 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 // fail maps an error to its status (docs/13 §3) and writes it.
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	code := errStatus(err)
-	if code == http.StatusServiceUnavailable && errors.Is(err, syscall.EROFS) {
+	switch {
+	case code == http.StatusServiceUnavailable && errors.Is(err, syscall.EROFS):
 		w.Header().Set("Retry-After", "5")
+	case code == http.StatusServiceUnavailable && (errors.Is(err, meta.ErrCodec) || errors.Is(err, syscall.EOPNOTSUPP)):
+		w.Header().Set("Retry-After", "30") // a member too old for the command (docs/12 §6)
 	}
 	if code == http.StatusInternalServerError {
 		s.o.Logger.Error("web ui", "err", err)
@@ -207,14 +229,18 @@ func errStatus(err error) int {
 	switch {
 	case errors.Is(err, os.ErrNotExist), errors.Is(err, meta.ErrNotExist):
 		return http.StatusNotFound
-	case errors.Is(err, os.ErrExist), errors.Is(err, meta.ErrExist), errors.Is(err, admin.ErrAmbiguous):
+	case errors.Is(err, os.ErrExist), errors.Is(err, meta.ErrExist), errors.Is(err, admin.ErrAmbiguous),
+		errors.Is(err, meta.ErrInTrash), errors.Is(err, meta.ErrNotEmpty), errors.Is(err, syscall.ENOTEMPTY):
 		return http.StatusConflict
+	case errors.Is(err, meta.ErrProtected), errors.Is(err, syscall.EPERM), errors.Is(err, os.ErrPermission):
+		return http.StatusForbidden // under a protected folder (I-154, I-163)
 	case errors.Is(err, syscall.EISDIR), errors.Is(err, meta.ErrIsDir), errors.Is(err, syscall.ENOTDIR), errors.Is(err, meta.ErrNotDir),
-		errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENAMETOOLONG), errors.Is(err, meta.ErrNameTooLong), errors.Is(err, meta.ErrBadCommand):
+		errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENAMETOOLONG), errors.Is(err, meta.ErrNameTooLong), errors.Is(err, meta.ErrBadCommand),
+		errors.Is(err, meta.ErrLoop), errors.Is(err, pins.ErrRoot):
 		return http.StatusBadRequest
 	case errors.Is(err, syscall.ENOSPC), errors.Is(err, chunk.ErrFull):
 		return http.StatusInsufficientStorage
-	case errors.Is(err, syscall.EROFS), errors.Is(err, syscall.EIO):
+	case errors.Is(err, syscall.EROFS), errors.Is(err, syscall.EIO), errors.Is(err, meta.ErrCodec), errors.Is(err, syscall.EOPNOTSUPP):
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError

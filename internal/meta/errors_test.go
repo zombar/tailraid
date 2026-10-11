@@ -10,6 +10,7 @@ func TestErrorCode_RoundTrip(t *testing.T) {
 	all := []error{
 		ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
 		ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
+		ErrNameTooLong, ErrProtected, ErrInTrash, ErrCodec,
 	}
 	seen := map[uint8]bool{}
 	for _, e := range all {

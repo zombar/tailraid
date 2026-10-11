@@ -4,6 +4,7 @@ go 1.27.2
 
 require (
 	github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701
+	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/go-filesystems/interface v0.5.0
 	github.com/go-filesystems/smb v0.7.0
 	github.com/go-git/go-billy/v5 v5.9.2
@@ -17,7 +18,8 @@ require (
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.57.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/image v0.47.0
+	golang.org/x/sys v0.49.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 )
 

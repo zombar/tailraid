@@ -212,7 +212,9 @@ this device" in the browser UI, 13 §4) is recorded in `<data_dir>/pins.json` as
 pin and a delete makes it lapse. A pin worker on that node walks every pinned subtree when
 a pin is added, at start, and whenever the FSM's applied index has moved since its last
 walk (checked every 30 s), reads every chunk the cache lacks through the ordinary reader
-(two in flight, cancelled on unpin or shutdown) and marks the hashes pinned; the LRU never
+(two in flight, cancelled on unpin or shutdown, every shard request marked background so
+a prefetch of a large folder yields a node's shard slots to client reads, 06 §4, I-175)
+and marks the hashes pinned; the LRU never
 evicts a pinned entry, and an unpin returns its entries to the LRU. Pinned bytes may exceed
 `cache.size` (the user asked for exactly those bytes); `status` warns when the data disk's
 free space falls under 20 %, since the cache shares it with the WAL and the Raft log.
@@ -364,5 +366,5 @@ defined in `04-write-path-and-durability.md`.
 | I-22 | `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCodec_CanonicalOrdering`, `TestCodec_ReadsVersion1Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeState_Canonical` |
 | I-74 | `TestStore_Budget_Boundaries`, `TestStore_BudgetChanged_Hysteresis`, `TestStore_SetCapacity_CapFollows`, `TestOS_Free`, `TestDiskBudget_PinnedOrDerived`, `TestConfig_DiskCapacity`, `TestNode_Rebudget_PinnedChangeRegistered`, `TestNode_Maintenance_RegistersBudgetAtStart` |
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
-| I-156 | `TestStub_I_156` (planned: TestCodec_ReadsVersion3Snapshot, TestCodec_StateRoundTrip, TestEncodeCommand_Golden, TestEncodeCommand_V4Gating, FuzzDecodeCommand, TestFSM_TrashStats_MatchComputed, TestCluster_TrashSurvivesSnapshotInstall) |
+| I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |

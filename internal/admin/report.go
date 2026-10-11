@@ -11,6 +11,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/vfs"
 )
@@ -33,8 +34,9 @@ type NodeReport struct {
 	DeadFor    string       `json:"dead_for,omitempty"`
 	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT        string       `json:"rtt,omitempty"`
-	Free       int64        `json:"free"`
+	Free       int64        `json:"free"` // from the probe; a bucket's is 0, never a measurement (docs/10 §4.1)
 	Capacity   uint64       `json:"capacity"`
+	Stored     uint64       `json:"stored_bytes"` // shard bytes of the slots the placement table gives it (I-178)
 	Version    string       `json:"version"`
 	Applied    uint64       `json:"applied"`
 	Slots      int          `json:"slots"`
@@ -82,6 +84,8 @@ type VolumeReport struct {
 	DiskSkew       int     `json:"disk_skew"`       // slots the capacity rebalance would move within a host (docs/14 §7)
 	ToleratesDisks int     `json:"tolerates_disks"` // targets the policy survives losing
 	ToleratesHosts int     `json:"tolerates_hosts"` // whole hosts it survives losing (docs/14 §6)
+	TrashInodes    int     `json:"trash_inodes"`    // deleted entries waiting in the trash (docs/06 §1)
+	TrashBytes     uint64  `json:"trash_bytes"`     // their file bytes, not counted in logical_bytes
 }
 
 // GatewayReport is this node's overlay: what is acknowledged but not yet committed, and
@@ -183,6 +187,7 @@ type Report struct {
 	// is writing to the cluster and this node must be updated (docs/12 §6, I-105).
 	IncompatibleEntries uint64         `json:"incompatible_entries,omitempty"`
 	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
+	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	GeneratedAt         time.Time      `json:"generated_at"`
 }
@@ -217,6 +222,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	rep.Volume = VolumeReport{
 		K: vol.K, M: vol.M, Auto: vol.Auto, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
 		Inodes: stats.Inodes, Chunks: stats.Chunks, Tombstoned: stats.Tombstoned, LogicalBytes: stats.LogicalBytes, StoredBytes: stats.StoredBytes,
+		TrashInodes: stats.TrashInodes, TrashBytes: stats.TrashBytes,
 	}
 
 	nodes := st.Nodes()
@@ -253,7 +259,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		r := NodeReport{
 			Idx: nd.Idx, ID: nd.ID, Name: nd.Name, Kind: nd.Kind.String(), Host: nd.Host, State: nd.State.String(), Addr: nd.Addr, RPCPort: nd.RPCPort,
 			Voter: nd.Voter, Leader: nd.ID == string(leaderID), Self: self, Live: live[nd.Idx], Capacity: nd.Capacity, Version: nd.Version,
-			Slots: slots[nd.Idx], Missing: missing[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
+			Slots: slots[nd.Idx], Missing: missing[nd.Idx], Stored: health.Bytes[nd.Idx], TSStable: nd.TSStableID, JoinedAt: time.Unix(0, nd.JoinedAt),
 		}
 		if nd.Kind == meta.KindS3 {
 			r.S3 = &S3Report{Endpoint: nd.S3Endpoint, Bucket: nd.S3Bucket, Prefix: nd.S3Prefix, Region: nd.S3Region, PathStyle: nd.S3PathStyle}
@@ -336,6 +342,31 @@ func markDisks(nodes []NodeReport) {
 }
 
 // sharedDiskWarnings is one line per group of targets on one physical disk.
+// LowDiskWarning is the line status adds when the data disk is under 20 % free (docs/01
+// §Pins, I-162): the chunk cache, pinned bytes included, shares that disk with the WAL
+// and the Raft log. "" when the disk is unknown or has room.
+func LowDiskWarning(m *MachineReport) string {
+	if m == nil || m.DiskTotal == 0 || m.DiskFree*5 >= m.DiskTotal {
+		return ""
+	}
+	return fmt.Sprintf("the data disk is %d %% free (%s of %s): the chunk cache, pinned folders included, shares it with the WAL and the Raft log; lower cache.size or unpin a folder", m.DiskFree*100/m.DiskTotal, iec(m.DiskFree), iec(m.DiskTotal))
+}
+
+// iec prints bytes in binary units with one decimal.
+func iec(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	v, suffix := float64(n), "KMGTPE"
+	i := 0
+	for v >= unit && i < len(suffix) {
+		v /= unit
+		i++
+	}
+	return fmt.Sprintf("%.1f %ciB", v, suffix[i-1])
+}
+
 func sharedDiskWarnings(nodes []NodeReport) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -380,8 +411,8 @@ func warnings(r Report) []string {
 	w = append(w, sharedDiskWarnings(r.Nodes)...)
 	for i := range r.Nodes {
 		n := &r.Nodes[i]
-		if n.State == "removed" {
-			continue
+		if n.State == "removed" || n.Diskless {
+			continue // a diskless host holds no slot: nothing to re-place, nothing to do (docs/14 §9)
 		}
 		switch {
 		case n.Lost:

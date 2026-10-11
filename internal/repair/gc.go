@@ -24,7 +24,10 @@ type GC struct {
 	grace  time.Duration
 	// Batch is the number of chunk entries one GCDelete removes; 0 is GCBatch.
 	Batch int
-	log   *slog.Logger
+	// Retention is how long a deleted entry waits in the trash before RunOnce purges it
+	// (docs/06 §2, trash.retention); 0 leaves the trash to the user (I-157).
+	Retention time.Duration
+	log       *slog.Logger
 }
 
 // NewGC wires the collector.
@@ -37,19 +40,59 @@ func NewGC(st *meta.Store, prop meta.Proposer, shards Shards, live Liveness, clk
 
 // Result of one GC pass.
 type Result struct {
+	Purged  int `json:"purged"`  // inodes purged from the trash by the retention rule (docs/06 §2)
 	Victims int `json:"victims"` // chunk entries removed from metadata
 	Deleted int `json:"deleted"` // shard files deleted on live device nodes
 	Refused int `json:"refused"` // DELETEs refused by the fence or unreachable (Sweep reconciles)
 }
 
-// RunOnce proposes GCDelete{Before: fsmNow − grace} and deletes the victims' shards with
-// the fence header. Entries younger than grace stay; so do files younger than grace.
-// fsmNow is the leader's clock clamped by the FSM clock (docs/06 §2, docs/05 §7): grace is
-// measured on the same clock that stamped TombstonedAt, so a leader whose clock lags the
-// proposers never stalls GC and Before never goes backwards across leader changes.
+// fsmNow is the leader's clock clamped by the FSM clock (docs/06 §2, docs/05 §7): ages
+// are measured on the clock that stamped TombstonedAt and DeletedAt, so a leader whose
+// clock lags the proposers never stalls, and Before never goes backwards across leaders.
+func (g *GC) fsmNow() int64 { return max(g.clk.Now().UnixNano(), g.st.LastNow()) }
+
+// PurgeTrash purges every deleted root older than before, in batches, and returns how
+// many inodes went (docs/06 §2, I-157). The chunks they held are tombstoned at the FSM
+// clock and collected by GCDelete after grace.
+func (g *GC) PurgeTrash(ctx context.Context, before int64) (int, error) {
+	batch := g.Batch
+	if batch == 0 {
+		batch = GCBatch
+	}
+	purged := 0
+	for g.st.TrashDue(before) > 0 {
+		was := g.st.Stats().TrashInodes
+		r, index, err := g.prop.Propose(ctx, meta.Command{Op: meta.OpPurge, Purge: &meta.Purge{Before: before, Limit: uint32(batch), Now: g.clk.Now().UnixNano()}})
+		if err == nil {
+			err = r.Err
+		}
+		if err != nil {
+			return purged, fmt.Errorf("purge: %w", err)
+		}
+		if err := g.st.WaitApplied(ctx, index); err != nil {
+			return purged, err
+		}
+		n := was - g.st.Stats().TrashInodes
+		purged += n
+		if n <= 0 {
+			return purged, errors.New("purge: no progress") // a root this replica cannot see; never spin
+		}
+	}
+	return purged, nil
+}
+
+// RunOnce purges the trash past Retention, then proposes GCDelete{Before: fsmNow − grace}
+// and deletes the victims' shards with the fence header. Entries younger than grace stay;
+// so do files younger than grace.
 func (g *GC) RunOnce(ctx context.Context) (Result, error) {
 	var res Result
-	before := max(g.clk.Now().UnixNano(), g.st.LastNow()) - g.grace.Nanoseconds()
+	if g.Retention > 0 {
+		var err error
+		if res.Purged, err = g.PurgeTrash(ctx, g.fsmNow()-g.Retention.Nanoseconds()); err != nil {
+			return res, fmt.Errorf("gc: %w", err)
+		}
+	}
+	before := g.fsmNow() - g.grace.Nanoseconds()
 	batch := g.Batch
 	if batch == 0 {
 		batch = GCBatch

@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"runtime/pprof"
@@ -23,12 +26,15 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/dev"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/s3/s3test"
 	"github.com/zombar/tailraid/internal/soak"
+	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/webui"
 )
 
 // harnessEnv runs the soak phases against the in-process cluster: billy volumes, the fake
@@ -44,7 +50,72 @@ type harnessEnv struct {
 	fill map[int]uint64 // scratch bytes "on" each node's fake disk (Fill)
 
 	bucket *s3test.Server // the bucket phase 15 registers; nil: Caps.S3 is false
+
+	// one browser UI per node, built on WebURL over the node's current handles (a restart
+	// rebuilds them), with that node's pins and their worker (docs/13, phase 16)
+	web  map[int]*httptest.Server
+	pins map[int]*pins.Pins
+	stop map[int]context.CancelFunc
+	once sync.Once
 }
+
+// WebURL serves node n's browser UI on a loopback listener for the phase, authorized as
+// a member; a previous server for the node is closed first, since a restart rebuilt the
+// node's handles.
+func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	nd := e.node(n)
+	if !e.c.Alive(nd.I) {
+		return "", errors.New("node is down")
+	}
+	e.once.Do(func() {
+		e.web, e.pins, e.stop = map[int]*httptest.Server{}, map[int]*pins.Pins{}, map[int]context.CancelFunc{}
+		e.t.Cleanup(func() {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			for _, stop := range e.stop {
+				stop()
+			}
+			for _, srv := range e.web {
+				srv.Close()
+			}
+		})
+	})
+	if srv := e.web[nd.I]; srv != nil {
+		srv.Close()
+	}
+	if stop := e.stop[nd.I]; stop != nil {
+		stop()
+	}
+	p, err := pins.Open(nd.Dir, nd.Node.FSM, nd.Reader, nd.Cache, e.c.Clk, nil)
+	if err != nil {
+		return "", err
+	}
+	wctx, cancel := context.WithCancel(context.Background())
+	go p.Run(wctx)
+	e.pins[nd.I], e.stop[nd.I] = p, cancel
+	loop := netip.MustParseAddr("127.0.0.1")
+	ts := tailscale.NewFake(loop, "soak-driver", nil)
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: e.c.Clk, Member: func(string) (meta.Node, bool) {
+		return meta.Node{Idx: nd.Idx(), ID: nd.ID, Name: n.Name, Kind: meta.KindDevice, TSStableID: "soak-driver", Addr: loop.String()}, true
+	}}
+	ui, err := webui.New(webui.Options{
+		FS: nd.FS, Store: nd.Node.FSM, Auth: auth, Clk: e.c.Clk, Logger: slog.New(slog.DiscardHandler), Retention: 30 * 24 * time.Hour, Pins: p,
+		Status: func() any { rep, _ := e.Status(context.Background(), n); return rep },
+		Chunks: func(ctx context.Context, sel string, off, lim int) (int, []admin.ChunkReport, error) {
+			return admin.DescribeChunksPage(ctx, nd.Node.FSM, nd.Prober, nd.Client, nd.Events, sel, off, lim)
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	srv := httptest.NewServer(ui.Handler())
+	e.web[nd.I] = srv
+	return srv.URL + "/", nil
+}
+
+func (e *harnessEnv) WebClient() *http.Client { return nil }
 
 // bucketPrefix is where the harness's nodes keep their objects in the bucket.
 const bucketPrefix = "soak"
@@ -202,6 +273,10 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
 	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader)
 	rep.Machine = admin.Vitals(nd.Dir, netip.Addr{})
+	if p := e.pins[nd.I]; p != nil {
+		c := p.List()
+		rep.Cache = &c
+	}
 	return rep, nil
 }
 
@@ -235,15 +310,24 @@ func (e *harnessEnv) GCNow(ctx context.Context) (repair.Result, error) {
 	return repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil).RunOnce(ctx)
 }
 
+func (e *harnessEnv) PurgeTrash(ctx context.Context) (int, error) {
+	l := e.c.Leader()
+	gc := repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil)
+	n, err := gc.PurgeTrash(ctx, max(e.c.Clk.Now().UnixNano(), l.Node.FSM.LastNow())+1)
+	e.c.Settle()
+	return n, err
+}
+
 // SetPolicy pins a policy as the admin op does: manual mode first, then the policy.
 func (e *harnessEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	l := e.c.Leader()
 	now := e.c.Clk.Now().UnixNano()
-	for _, cmd := range []meta.Command{
+	cmds := []meta.Command{
 		{Op: meta.OpSetVolumeMode, SetVolumeMode: &meta.SetVolumeMode{Auto: false, Now: now}},
 		{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{K: k, M: m, Now: now}},
-	} {
-		res, _, err := l.Node.Propose(ctx, cmd)
+	}
+	for i := range cmds {
+		res, _, err := l.Node.Propose(ctx, cmds[i])
 		if err == nil {
 			err = res.Err
 		}
@@ -491,7 +575,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		if len(ph.Checks) == 0 {
 			t.Errorf("%s has no checks", ph.Name)
 		}
-		if ph.Name == "15 s3 bucket" { // the harness offers everything the bucket phase can use
+		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" { // the harness offers everything these phases can use
 			for _, chk := range ph.Checks {
 				if chk.OK == nil {
 					t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
@@ -499,7 +583,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 17 {
+	if sum.Failed != 0 || len(sum.Phases) != 18 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

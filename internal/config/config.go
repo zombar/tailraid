@@ -59,6 +59,14 @@ type Config struct {
 		Workers int    `yaml:"workers,omitempty"` // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
 		Rate    string `yaml:"rate,omitempty"`    // shard bytes per second repair may move (default 50M; "0": no limit)
 	} `yaml:"repair"`
+	// these sections are written only when set, so a release from before them can still
+	// read a file this build wrote (a rollback after update, I-61)
+	Trash struct {
+		Retention string `yaml:"retention,omitempty"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
+	} `yaml:"trash,omitempty"`
+	Cache struct {
+		Size string `yaml:"size,omitempty"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
+	} `yaml:"cache,omitempty"`
 	// Stats is the Stats page's history (docs/17 §5): every key is written only when set
 	// (I-61), so a release from before them still starts after a rollback.
 	Stats struct {
@@ -77,6 +85,38 @@ type Config struct {
 	// Path is the file Load read, never written to it: the daemon rewrites the file
 	// there (node.voter follows the member row, docs/12 §7, I-176).
 	Path string `yaml:"-"`
+}
+
+// TrashRetention parses trash.retention: 30 days when empty, 0 for "never purged on its
+// own", otherwise at least an hour (docs/12 §10, I-157).
+func (c Config) TrashRetention() (time.Duration, error) {
+	switch c.Trash.Retention {
+	case "":
+		return 30 * 24 * time.Hour, nil
+	case "0":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(c.Trash.Retention)
+	if err != nil || d < time.Hour {
+		return 0, fmt.Errorf("config: trash.retention %q: want 0 or a duration of at least 1h", c.Trash.Retention)
+	}
+	return d, nil
+}
+
+// MinCacheSize is the smallest cache.size: under it the cache thrashes on one large file.
+const MinCacheSize = 64 << 20
+
+// CacheSize parses cache.size: 1 GiB when empty, otherwise at least MinCacheSize
+// (docs/12 §10, I-162).
+func (c Config) CacheSize() (int64, error) {
+	if c.Cache.Size == "" {
+		return 1 << 30, nil
+	}
+	n, err := ParseBytes(c.Cache.Size)
+	if err != nil || n < MinCacheSize {
+		return 0, fmt.Errorf("config: cache.size %q: want a size of at least 64MiB", c.Cache.Size)
+	}
+	return int64(n), nil
 }
 
 // Disk is one added disk: its mount path and its budget ("" derives it from the disk).
@@ -408,6 +448,12 @@ func (c Config) Validate() error {
 	}
 	if c.Mount.Path != "" && runtime.GOOS != "windows" && !filepath.IsAbs(c.Mount.Path) {
 		return fmt.Errorf("config: mount.path %q: want an absolute path (~ is expanded)", c.Mount.Path)
+	}
+	if _, err := c.TrashRetention(); err != nil {
+		return err
+	}
+	if _, err := c.CacheSize(); err != nil {
+		return err
 	}
 	if _, err := c.StatsEvery(); err != nil {
 		return err
