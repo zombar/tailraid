@@ -163,6 +163,7 @@ for a member. No TLS of our own.
 | SMB gateway for Windows (docs/15, measured 2026-10-09: the adapter and server wiring in `internal/smbgw` 0.33k, `vfs.File.WriteAt` and the file info's times 0.02k, config, node, CLI and mount helpers 0.19k; minus the portmap stub and the Windows NFS path 0.25k; the server copy in `third_party/smb` is upstream code and not counted) | +0.3k |
 | **Through the SMB gateway (measured 2026-10-09)** | **≈ 24.95k** |
 | Web UI v2 (docs/13, planned 2026-10-10): the trash, folder flags and protection in the FSM, vfs and GC tick (meta 0.35k, vfs 0.08k, repair, node and config 0.08k), the pinned local cache (0.3k), the web handler's batch, trash, flag, thumbnail, tag and pin routes with the in-volume thumbnails (0.9k + 0.4k), the `trash` and `cache` CLI (0.15k), soak phase 16 with the report's trash and cache chart (0.4k); the TypeScript grows by about 1.8k (tiles, selection, trash, flags, the album view and the now-playing bar), not Go | +2.6k planned |
+| Open media fast (PR A1 `open-fast`, measured 2026-10-11 as the net diff): the cache's background writers and pending entries 0.09k, readahead depth in bytes, background priority and seek cancellation 0.07k, the status reporter 0.13k, folder covers off the listing 0.03k; measured first on the real cluster (`docs/reports/bench-2026-10-open-media.txt`) | +0.32k |
 | `internal/s3srv` (the S3 gateway, deferred; not in the tree) | ~900 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The

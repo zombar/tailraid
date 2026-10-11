@@ -27,8 +27,7 @@ export function render(ctx: Ctx, cover: string | undefined, entries: Entry[]): A
   const audio = entries.filter((e) => !e.deleted_at && !e.upload && e.type === "file" && isAudioName(e.name)).sort((a, b) => trackNo(a.name) - trackNo(b.name) || a.name.localeCompare(b.name, undefined, { numeric: true }));
   const tracks: Track[] = audio.map((e) => ({ path: join(ctx.path, e.name), root: ctx.root }));
   const img = h("img", { class: "cover", alt: "" }) as HTMLImageElement;
-  if (cover) img.src = thumbURL(join(ctx.path, cover), ctx.root);
-  else img.removeAttribute("src");
+  img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root); // the folder itself resolves its cover when the listing did not carry one
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, basename(ctx.path) || "/");
   const artist = h("div", { class: "artist" });

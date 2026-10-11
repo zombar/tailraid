@@ -99,6 +99,7 @@ func NewFabric(t TB, nodes int, k, m uint8) *Fabric {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(f.Cache.Drain) // a write still in flight while the temp directory goes fails the cleanup
 	f.staging = filepath.Join(root, "staging")
 	f.Ov, err = vfs.OpenOverlay(f.staging, ChunkSize, f.Clk)
 	if err != nil {

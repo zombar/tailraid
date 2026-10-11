@@ -75,6 +75,17 @@ func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if t.in.Type == meta.TDir { // a folder's tile is its cover track's picture, resolved here and remembered (I-165)
+		name := s.coverOf(t.in)
+		if name == "" {
+			writeErr(w, http.StatusNotFound, "no thumbnail")
+			return
+		}
+		if t, err = s.resolveTarget(r, path.Join(r.URL.Query().Get("path"), name)); err != nil {
+			s.fail(w, err)
+			return
+		}
+	}
 	if t.in.Type != meta.TFile {
 		writeErr(w, http.StatusBadRequest, "thumb "+t.canonical+": "+errNotFile.Error())
 		return

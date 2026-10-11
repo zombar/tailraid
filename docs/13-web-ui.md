@@ -90,7 +90,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), on the listed folder and on each folder entry; `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
+| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
 | `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted; the shard checks of a page run concurrently and `slots` is always an array (I-161) |
@@ -103,7 +103,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `POST /api/restore` `{"ino","to"?,"name"?}` | required | 200 `{"path"}`; `to` and `name` default to the original place; a taken name → 409 `{"error","taken":true}`; an original parent that is itself deleted → 409 `{"error","in_trash":true}` (the page then asks for a destination); not a deleted root → 404 |
 | `POST /api/purge` `{"ino"}` or `{"all":true}` | required | 204; permanent: the entry's references are dropped and GC reclaims its chunks after grace (docs/06); `all` proposes purges until the trash is empty |
 | `POST /api/flags` `{"path","protected"?,"nsfw"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409) |
-| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg` (§5); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a video or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
+| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg` (§5); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
 | `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser grabbed from the middle of a video (§5): 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
@@ -235,7 +235,11 @@ file gets a new thumbnail and the hourly sweep (docs/06 §3) removes any whose
   browser cannot decode (mkv, avi where no decoder exists) keeps the generic tile.
 - **Audio** answers its embedded picture (§6), else a `cover.*`/`folder.*` sibling, scaled
   like an image. A folder's own tile uses its first audio entry by name that has a
-  picture (`dir.cover`), chosen the same way on every node (I-165).
+  picture (`dir.cover`), chosen the same way on every node (I-165). Finding it reads each
+  candidate's tags, so the folder's tile asks `GET /api/thumb?path=<folder>` and the node
+  resolves the cover then, once per folder version, and remembers it; a listing reports
+  `cover` only when already known and reads no file (measured 2026-10-11: a cold listing
+  of 99 album folders took 5.5 s while it resolved every cover in line).
 - The page loads thumbnails lazily (three at a time as tiles scroll into view) and never
   more than one `PUT` per file per version; a tile under an nsfw folder draws its
   thumbnail blurred.
@@ -268,9 +272,10 @@ Keys: space play/pause, `←`/`→` seek 10 s, shift with them previous/next, `q
 
 ## 7. Status cache and chunk drill-down
 
-`admin.Build` walks every chunk (`ScanHealth`). The handler encodes the report once and
+`admin.Build` walks every chunk (`ScanHealth`); the node builds the report off the request
+path and serves the latest build (docs/12 §8, I-205). The handler encodes it once and
 serves that body for 2 s, single-flight under a mutex, so several tabs polling at 5 s cost
-one walk. `/api/chunks` issues one HEAD per live slot per chunk with a 3 s timeout
+one encoding. `/api/chunks` issues one HEAD per live slot per chunk with a 3 s timeout
 (`admin.DescribeChunk`), which is why it pages: 64 chunks per call by default. The HEADs of
 one page run concurrently, sixteen at a time, so a page of 64 chunks at `3+2` costs the
 tailnet round trip a few times over rather than 320 times in a row (the sequential form
@@ -556,7 +561,9 @@ colour-alone. No dual axes, no stacked bars, no pie.
 - **I-165** — The thumbnail of an audio file is its embedded picture, else a `cover.*` or
   `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
   its first audio entry by name that has a picture, the same on every node, and absent
-  when none has one.
+  when none has one; a listing reports it only once this node has resolved it and reads
+  no file to do so, and `GET /api/thumb` of the folder resolves it, serves that picture
+  and answers 404 for a folder without one.
 
 ## Tests
 
@@ -580,6 +587,6 @@ colour-alone. No dual axes, no stacked bars, no pie.
 | I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs`, `TestWebUI_Pins`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
 | I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
-| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestSoak_AllPhasesAgainstHarness` |
+| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

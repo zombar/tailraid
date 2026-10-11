@@ -358,8 +358,10 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     const thumb = h("span", { class: "thumb" + (info.nsfw || e.nsfw ? " nsfw" : "") });
     const showIcon = () => thumb.replaceChildren(icon(kind));
     const path = pathOf(e);
+    // a folder's tile asks for the folder itself: the node resolves its cover (an album's
+    // first track with a picture) then, so a listing never reads a file to find one
     const thumbPath = e.type === "dir" && e.cover ? join(path, e.cover) : path;
-    const canThumb = e.type === "dir" ? !!e.cover : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
+    const canThumb = e.type === "dir" ? !e.deleted_at || !!e.cover : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
     if (canThumb) {
       const img = h("img", { alt: "" }) as HTMLImageElement;
       thumb.append(img);

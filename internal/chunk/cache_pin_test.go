@@ -26,6 +26,7 @@ func TestCache_PinnedNeverEvicted(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer c.Drain()
 			var pinned [][32]byte
 			for left, i := pinnedBytes, 0; left > 0; i++ { // in entries of at most 1000 bytes
 				n := min(left, 1000)
@@ -87,6 +88,7 @@ func TestCache_PinnedNeverEvicted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Drain()
 	p := payload(100, 1)
 	h := sha256.Sum256(p)
 	if c.Pin(h) {
@@ -94,6 +96,7 @@ func TestCache_PinnedNeverEvicted(t *testing.T) {
 	}
 	c.Put(h, p)
 	c.Pin(h)
+	c.Drain()
 	if err := os.WriteFile(c.path(h), payload(100, 2), 0o644); err != nil {
 		t.Fatal(err)
 	}

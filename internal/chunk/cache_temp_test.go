@@ -19,9 +19,11 @@ func TestCache_OpenRemovesTempFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Drain()
 	p := payload(1000, 1)
 	h := sha256.Sum256(p)
 	c.Put(h, p)
+	c.Drain()
 	stale := filepath.Join(filepath.Dir(c.path(h)), ".tmp-leftover")
 	if err := os.WriteFile(stale, []byte("half a chunk"), 0o600); err != nil {
 		t.Fatal(err)
@@ -30,6 +32,7 @@ func TestCache_OpenRemovesTempFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c2.Drain()
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("temp file still present after open: %v", err)
 	}

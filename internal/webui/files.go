@@ -142,7 +142,7 @@ func (s *Server) entry(in meta.Inode, canonical string) Entry {
 		}
 		e.Thumb = s.hasThumb(in) || isImage(in.Name) || isAudio(in.Name)
 	case meta.TDir:
-		e.Cover = s.coverOf(in)
+		e.Cover = s.coverCached(in) // known covers only: a listing reads no file (I-165)
 	case meta.TSymlink:
 	}
 	return e
@@ -200,7 +200,7 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 			entries = append(entries, s.entry(roots[i], ""))
 		}
 	}
-	dir := DirInfo{Cover: s.coverOf(t.in)}
+	dir := DirInfo{Cover: s.coverCached(t.in)}
 	dir.Protected, dir.NSFW = s.effective(t.in)
 	if t.trashed {
 		dir.DeletedAt, dir.PurgeAt = rfc3339(t.root.DeletedAt), s.purgeAt(t.root.DeletedAt)

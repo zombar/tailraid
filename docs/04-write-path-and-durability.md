@@ -302,15 +302,31 @@ one chunk per fetch latency whatever the link. `vfs.File.ReadAt` (the gateways a
 web UI; never the flusher's base reads) therefore calls `Reader.Prefetch(inode, off)`
 before it reads: a READ of chunk *i* is *sequential* when *i* = 0 or *i* is the chunk
 after the inode's previous READ, and a sequential READ starts a background fetch of chunks
-*i+1 … i+ReadAhead* (4) into the cache. A prefetch is never started for `HashZero`, for a
+*i+1 … i+depth* into the cache, where the depth is `ReadaheadDepth(ChunkSize)` =
+`min(ReadAhead, ReadAheadBytes / ChunkSize)`, at least one: readahead reaches
+`ReadAheadBytes` (8 MiB) ahead of the client, two chunks at 4 MiB, four at 1 MiB (I-203).
+A prefetch is never started for `HashZero`, for a
 chunk the cache already holds, for one already in flight, by a non-sequential READ, or by
-a reader without a cache; at most `ReadAhead` prefetches run gateway-wide, and a further
+a reader without a cache; at most `ReadAhead` (4) prefetches run gateway-wide, and a further
 candidate is skipped, never queued. A prefetch registers in the in-flight table before it
 starts, so a client READ that reaches a chunk being prefetched joins that fetch instead of
 starting another; its result goes only to the cache, and its failure is logged at debug
 and changes nothing the client sees (the client's own READ of that chunk fetches it
 normally). `Reader.Prefetching()` reports the prefetches in flight; `status` carries the
 chunks readahead fetched and the client READs it served (docs/12 §8).
+
+Three rules keep readahead out of the client's way (I-203; measured on the real cluster
+on 2026-10-11, the head of a file took 0.7 s against 0.25 s for a chunk fetched alone,
+because the four prefetches started alongside the chunk the client was waiting for).
+`vfs.File.ReadAt` starts the prefetch only once its own read is served, so the chunk the
+client waits for never competes with the ones it may want later. A prefetch's shard GETs
+run under the background mark (`chunk.Background`, 06 §4, I-175), so a holder serves a
+client's own GET first; a client READ that joins a prefetch in flight keeps that call and
+is documented to queue behind foreground traffic for that one chunk. And a READ of the
+inode that leaves the sequence (a seek) cancels the inode's prefetches still in flight
+that no READ has joined: their slots free at once and nothing the client moved away from
+is fetched or cached; a joined prefetch is never cancelled (`joined` is set under the
+reader's lock, where the cancel decides). `status` counts them as `readahead_cancelled`.
 
 ## 6. Visibility
 
@@ -393,7 +409,8 @@ of it is dirty. Dirty bytes live in the WAL on disk (§2); what the process hold
 | compaction | one streaming buffer | 1 MiB | the rewrite |
 | shard RPC server | the whole body of each in-flight PUT or GET | `slots × MaxShard ≤ 256 MiB` (32 at 4 MiB, 4 at 64 MiB) | the reply |
 | read cache, memory tier | hot decoded chunks | 64 MiB | LRU |
-| readahead | the chunk and its k shards per prefetch (§5) | `ReadAhead × (ChunkSize + k · ShardLen(ChunkSize, k))` = 4 × 8 MiB = **32 MiB** at 4 MiB and (3,2) | the cache Put |
+| read cache, disk writes | chunks whose file is still being written behind the Put (01 §Local chunk cache, I-204) | `CacheQueue × ChunkSize` = 8 × 4 MiB = **32 MiB** | the write |
+| readahead | the chunk and its k shards per prefetch (§5) | `ReadAhead × (ChunkSize + k · ShardLen(ChunkSize, k))` = 4 × 8 MiB = **32 MiB** at 4 MiB and (3,2); a stream holds at most `ReadaheadDepth(ChunkSize)` of them, 2 at 4 MiB (I-203) | the cache Put |
 | FSM | the chunk list of every file, 32 B per chunk | docs/01 | – |
 
 `Flusher.Buffers()` reports the flush row live and its peak since start; `status` shows it
@@ -443,6 +460,13 @@ the WAL cap.
   shares the in-flight table with foreground reads so no chunk is fetched twice, holds no
   bytes beyond its own fetch (the result goes only to the cache), and its failure changes
   nothing a client sees.
+- **I-203** — Readahead reaches `ReadAheadBytes` (8 MiB) ahead of a sequential client: a
+  stream's depth is `ReadaheadDepth(ChunkSize)` = `min(ReadAhead, ReadAheadBytes /
+  ChunkSize)`, at least one chunk; a prefetch starts only after the READ that triggered
+  it has been served; its shard GETs carry the background mark (I-175); and a READ of
+  the inode that leaves the sequence cancels the inode's in-flight prefetches no READ has
+  joined, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
+  cancelled.
 
 ## Tests
 
@@ -459,6 +483,7 @@ the WAL cap.
 | I-169 | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks`, `TestFlusher_StragglerGrace_Table`, `TestFlusher_StragglerGrace_NotBeforeKAcks` |
 | I-171 | `TestClient_GetDeadline_FromContentLength` |
 | I-168 | `TestWAL_GroupCommit_OneFsyncCoversConcurrentAppends`, `TestWAL_GroupCommit_FailedFsyncFailsEveryWaiter`, `TestWAL_GroupCommit_LateAppendWaitsForNextFsync`, `TestOverlay_PendingWrite_NotVisibleUntilFsynced`, `TestOverlay_FailedGroupFsync_DropsEveryPendingWrite`, `TestOverlay_CommitFlushed_WaitsForPendingAppend`, `TestOverlay_WriteDoesNotHoldInodeLockDuringFsync`, `TestOverlay_TruncateDuringPendingAppend_MatchesReplay` |
+| I-203 | `TestReader_Readahead_DepthByBytes_Table`, `TestReader_Readahead_PrefetchIsBackgroundPriority`, `TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch`, `TestReader_Readahead_JoinedPrefetchSurvivesCancel`, `TestFile_ReadAt_PrefetchStartsAfterTheRead` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |

@@ -17,6 +17,7 @@ func TestCache_PutGetAndMiss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Drain()
 	p := payload(1000, 1)
 	h := sha256.Sum256(p)
 	if _, ok := c.Get(h); ok {
@@ -38,6 +39,7 @@ func TestCache_LRUEvictsBySize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Drain()
 	var hs [][32]byte
 	for i := range 3 {
 		p := payload(1000, int64(i))
@@ -78,6 +80,7 @@ func TestCache_RebuildsOrderOnOpen(t *testing.T) {
 	root := t.TempDir()
 	fc := clock.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	c, _ := OpenCache(sysfs.OS{}, root, 10_000, fc)
+	defer c.Drain()
 	var hs [][32]byte
 	for i := range 3 {
 		p := payload(1000, int64(i))
@@ -91,6 +94,7 @@ func TestCache_RebuildsOrderOnOpen(t *testing.T) {
 	if _, ok := c.Get(hs[0]); !ok {
 		t.Fatal("miss")
 	}
+	c.Drain()
 	c2, err := OpenCache(sysfs.OS{}, root, 2500, fc) // reopen smaller: must evict by mtime order
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +117,7 @@ func TestCache_CorruptEntryEvicted(t *testing.T) {
 	p := payload(1000, 1)
 	h := sha256.Sum256(p)
 	c.Put(h, p)
+	c.Drain()
 	m, _ := filepath.Glob(filepath.Join(root, "cache", "*", "*"))
 	if len(m) != 1 {
 		t.Fatalf("cache files: %v", m)
@@ -140,12 +145,14 @@ func TestCache_MemoryTier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer c.Drain()
 	var hs [][32]byte
 	for i := range 3 {
 		p := payload(1000, int64(i))
 		hs = append(hs, sha256.Sum256(p))
 		c.Put(hs[i], p)
 	}
+	c.Drain()
 	if c.MemoryUsed() != 2000 { // 3000 written, 2000 fit: entry 0 left memory, stays on disk
 		t.Fatalf("memory %d", c.MemoryUsed())
 	}
@@ -164,6 +171,7 @@ func TestCache_MemoryTier(t *testing.T) {
 	}
 	// a disk eviction drops the memory copy as well
 	c2, _ := OpenCache(sysfs.OS{}, t.TempDir(), 2500, fc, WithMemory(10_000))
+	defer c2.Drain()
 	for i := range 3 {
 		p := payload(1000, int64(i))
 		c2.Put(sha256.Sum256(p), p)
@@ -183,9 +191,11 @@ func TestCache_TouchThrottled(t *testing.T) {
 	root := t.TempDir()
 	fc := clock.NewFake(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	c, _ := OpenCache(sysfs.OS{}, root, 10_000, fc)
+	defer c.Drain()
 	p := payload(1000, 1)
 	h := sha256.Sum256(p)
 	c.Put(h, p)
+	c.Drain()
 	mtime := func() time.Time {
 		files, _ := filepath.Glob(filepath.Join(root, "cache", "*", "*"))
 		fi, err := os.Stat(files[0])

@@ -126,9 +126,25 @@ type coverEntry struct {
 
 const coverCacheMax = 1024
 
+// coverCached is the folder's cover when this node has already resolved it for the
+// folder's current version; a listing reports only that and never reads a file to find
+// one (I-165): GET /api/thumb of the folder resolves it (coverOf).
+func (s *Server) coverCached(dir meta.Inode) string {
+	if dir.Type != meta.TDir {
+		return ""
+	}
+	s.covers.mu.Lock()
+	defer s.covers.mu.Unlock()
+	if e, ok := s.covers.entries[dir.Ino]; ok && e.version == dir.Version && e.mtime == dir.Mtime {
+		return e.name
+	}
+	return ""
+}
+
 // coverOf is the folder's first audio entry by name that has a picture, "" when none
 // (I-165). It is the same on every node: the FSM orders names and the files are the
-// same bytes.
+// same bytes. Resolving it reads each candidate's tags, so only the folder's thumbnail
+// request pays for it, once per folder version.
 func (s *Server) coverOf(dir meta.Inode) string {
 	if dir.Type != meta.TDir {
 		return ""

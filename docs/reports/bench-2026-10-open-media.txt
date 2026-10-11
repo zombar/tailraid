@@ -1,0 +1,45 @@
+Opening media from the web UI: where the first byte's time goes (plan A0, 2026-10-11)
+
+Cluster 3ab51232, v0.5.0 on every node, 3+2, 4 MiB chunks, 154.9 GiB logical in 10,685
+files (the copy-back of the user's library still running), leader node0 (2.4 GHz Wi-Fi).
+Measured from jockey (the user's Mac, a member) with curl against two gateways: jockey's
+own web port and minixps's (wired, one tailnet hop away). Five videos of 200-700 MiB not
+opened before; for each: the head range the browser asks first (0-32 KiB), the tail
+range it asks next for an mp4's moov box (last 1 MiB), a mid-file seek (32 KiB), the head
+again (warm), a second seek. ttfb = curl's time_starttransfer, seconds.
+
+                    jockey (local gateway)          minixps (one hop)
+                    ttfb                            ttfb
+head, cold          0.80 0.73 0.34 0.37 0.21        0.71 0.71 0.71 0.56 0.60
+tail, cold          0.24 0.21 0.10 0.16 0.22        0.28 0.18 0.32 0.21 0.27
+mid seek, cold      0.17 0.25 0.15 0.24 0.24        0.32 0.35 0.33 0.28 0.26
+head, warm          0.002 0.002 0.002 0.011 0.004   0.030 0.025 0.037 0.079 0.040
+second seek, cold   0.19 0.29 0.15 0.14 0.27        0.28 0.35 0.30 0.30 0.29
+
+/api/status         0.26                            0.44
+/api/ls?path=/music 0.002                           5.5   (99 artist folders, cold)
+/api/ls?path=/nsfw  0.006                           0.12
+
+Reading of the numbers
+- A 4 MiB chunk fetched alone (the seeks: k shards in parallel, decode, hash, cache
+  write) costs 0.15-0.35 s on this tailnet. The head of a file costs 0.7 s on both
+  gateways: chunk 0 is a sequential read, so File.ReadAt started four prefetches (16 MiB)
+  before fetching chunk 0, and the client's chunk shared the holders' slots and the links
+  with them. Warm reads cost the round trip only (2 ms local, 30 ms across the tailnet).
+- /api/status walks every chunk (44k) on the request: 0.26 s on the Mac, 0.44 s on
+  minixps, every 5 s per open tab.
+- A cold listing of /music on minixps took 5.5 s: ls resolved each folder's cover by
+  reading the tags of its audio children in line (jockey's cover cache was warm).
+
+What PR A1 (open-fast) changes, each pinned by an invariant
+- I-203 readahead: starts after the client's read is served, reaches 8 MiB (two chunks
+  at 4 MiB) at background priority, and a seek cancels the unjoined prefetches.
+- I-204 cache: the chunk is served from memory as soon as it is verified; the 4 MiB
+  disk write runs behind the Put.
+- I-205 status: a refresher builds the report; a request serves the latest build;
+  walk_ms is in the report.
+- I-165 covers: a listing reads no file; the folder's thumbnail request resolves the
+  cover once per folder version.
+
+After: rerun bench-open.sh (scratch of the session; the same five files) once every node
+runs the release and paste the table here.

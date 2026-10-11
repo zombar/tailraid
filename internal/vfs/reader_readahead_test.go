@@ -353,3 +353,164 @@ func TestReader_FetchFirstK_ParityRanksFirst(t *testing.T) {
 		}
 	}
 }
+
+// The per-stream readahead depth is counted in bytes: ReadAheadBytes ahead of the client,
+// never more than ReadAhead chunks and never less than one, so a 4 MiB volume prefetches
+// two chunks where a 1 MiB volume prefetched four (docs/04 §5).
+// Invariant: I-203
+func TestReader_Readahead_DepthByBytes_Table(t *testing.T) {
+	for _, tc := range []struct {
+		cs   uint32
+		want int
+	}{
+		{64 << 10, vfs.ReadAhead},
+		{1 << 20, vfs.ReadAhead},
+		{2 << 20, vfs.ReadAhead},
+		{4 << 20, 2},
+		{8 << 20, 1},
+		{16 << 20, 1},
+	} {
+		if got := vfs.ReadaheadDepth(tc.cs); got != tc.want {
+			t.Errorf("depth at %d: %d, want %d", tc.cs, got, tc.want)
+		}
+	}
+}
+
+// priorityLog records, per shard key, whether its GET ran as background work, and the
+// order the GETs arrived in.
+type priorityLog struct {
+	chunk.ShardClient
+	mu   sync.Mutex
+	bg   map[string]bool
+	keys []string
+}
+
+func (p *priorityLog) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
+	p.mu.Lock()
+	if p.bg == nil {
+		p.bg = map[string]bool{}
+	}
+	p.bg[string(key)] = chunk.IsBackground(ctx)
+	p.keys = append(p.keys, string(key))
+	p.mu.Unlock()
+	return p.ShardClient.Get(ctx, node, key)
+}
+
+// A prefetch's shard GETs carry the background mark, so a holder serves a client's own
+// GET before them (I-175); the client's foreground GETs never carry it.
+// Invariant: I-203
+func TestReader_Readahead_PrefetchIsBackgroundPriority(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	data := testharness.Pattern(8*cs, 14)
+	in := f.Inode(writeAndFlush(t, f, "a", data))
+	p := &priorityLog{ShardClient: f}
+	rd := vfs.NewReader(f.FSM, f, p, f.Cache, nil)
+	drained(t, rd)
+	readChunk(t, rd, in, 0)
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "prefetches done")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, bg := range p.bg {
+		fg := strings.HasPrefix(key, hex.EncodeToString(in.Chunks[0][:]))
+		if fg == bg {
+			t.Fatalf("GET %s background=%v: the client's own GETs are foreground, prefetches background", key[:16], bg)
+		}
+	}
+}
+
+// A READ that leaves the sequence cancels the inode's prefetches no client has joined:
+// the slots free at once and nothing the client moved away from is fetched or cached.
+// Invariant: I-203
+func TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	data := testharness.Pattern(16*cs, 15)
+	in := f.Inode(writeAndFlush(t, f, "a", data))
+	g := &countGate{ShardClient: f, release: make(chan struct{})}
+	rd := vfs.NewReader(f.FSM, f, g, f.Cache, nil)
+	drained(t, rd)
+	k := 2
+	rd.Prefetch(in, 0)
+	testharness.Eventually(t, func() bool { return int(g.entered.Load()) == vfs.ReadAhead*k }, "prefetches in flight")
+	rd.Prefetch(in, int64(9*cs)) // the client seeked: chunks 1..ReadAhead are no longer wanted
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "cancelled prefetches gone while their GETs still hang")
+	if n := rd.ReadaheadCancelled(); n != uint64(vfs.ReadAhead) {
+		t.Fatalf("cancelled %d, want %d", n, vfs.ReadAhead)
+	}
+	close(g.release)
+	testharness.Eventually(t, func() bool { return int(g.entered.Load()) == vfs.ReadAhead*k }, "no further GET")
+	if cached(f, in.Chunks[1]) {
+		t.Fatal("a cancelled prefetch cached its chunk")
+	}
+	if fetched, _ := rd.ReadaheadStats(); fetched != 0 {
+		t.Fatalf("fetched %d after cancellation", fetched)
+	}
+}
+
+// A prefetch a client has joined is not cancelled by that client's seek elsewhere: the
+// joined read completes from the one fetch, and only the unjoined prefetches are cut.
+// Invariant: I-203
+func TestReader_Readahead_JoinedPrefetchSurvivesCancel(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	data := testharness.Pattern(16*cs, 16)
+	in := f.Inode(writeAndFlush(t, f, "a", data))
+	g := &countGate{ShardClient: f, release: make(chan struct{})}
+	rd := vfs.NewReader(f.FSM, f, g, f.Cache, nil)
+	drained(t, rd)
+	k := 2
+	rd.Prefetch(in, 0)
+	testharness.Eventually(t, func() bool { return int(g.entered.Load()) == vfs.ReadAhead*k }, "prefetches in flight")
+	done := make(chan []byte, 1)
+	errs := make(chan error, 1)
+	go func() {
+		b, err := rd.ReadChunk(ctx, in.Chunks[1])
+		done <- b
+		errs <- err
+	}()
+	testharness.Eventually(t, func() bool { _, joined := rd.ReadaheadStats(); return joined == 1 }, "the client joined chunk 1's prefetch")
+	rd.Prefetch(in, int64(9*cs))
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 1 }, "only the joined prefetch remains")
+	if n := rd.ReadaheadCancelled(); n != uint64(vfs.ReadAhead-1) {
+		t.Fatalf("cancelled %d, want %d", n, vfs.ReadAhead-1)
+	}
+	close(g.release)
+	must(t, <-errs)
+	if got := <-done; !bytes.Equal(got, data[cs:2*cs]) {
+		t.Fatalf("joined read differs at %d", testharness.FirstDiff(got, data[cs:2*cs]))
+	}
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "prefetches done")
+}
+
+// File.ReadAt starts the readahead after its own chunk is in hand, never alongside it:
+// every GET of the client's chunk precedes the first GET of a prefetch, so the bytes the
+// client waits for are not queued behind the ones it may want later.
+// Invariant: I-203
+func TestFile_ReadAt_PrefetchStartsAfterTheRead(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	data := testharness.Pattern(8*cs, 17)
+	in := f.Inode(writeAndFlush(t, f, "a", data))
+	p := &priorityLog{ShardClient: f}
+	rd := vfs.NewReader(f.FSM, f, p, f.Cache, nil)
+	drained(t, rd)
+	fs := vfs.New(f.FSM, f, f.Ov, rd, f.Clk, 501, 20)
+	file, err := fs.Open("/a")
+	must(t, err)
+	defer file.Close()
+	buf := make([]byte, 32<<10)
+	if _, err := file.ReadAt(buf, 0); err != nil {
+		t.Fatal(err)
+	}
+	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "prefetches done")
+	own := hex.EncodeToString(in.Chunks[0][:])
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := 2
+	for i, key := range p.keys {
+		if strings.HasPrefix(key, own) != (i < k) {
+			t.Fatalf("GET order %v: the client's %d GETs must come first", p.keys, k)
+		}
+	}
+}
