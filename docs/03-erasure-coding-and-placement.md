@@ -54,7 +54,7 @@ chunks). `meta.IsSmallChunk` and `meta.TargetPolicy` are the only places this ru
 the flusher, the repair scanner and every report read them.
 
 Small files thus cost `(m+1)×` their size with a single RPC per replica instead of `k+m`
-RPCs for a few kilobytes. Space overhead of a full 1 MiB chunk at 2+1 is 1.5× plus ≤128 B.
+RPCs for a few kilobytes. Space overhead of a full 4 MiB chunk at 2+1 is 1.5× plus ≤128 B.
 
 ## Placement
 
@@ -86,9 +86,14 @@ Voters are the always-on devices; non-voters are the laptops that sleep (00 glos
 `PlaceKM` draws the `k` **data** slots by rendezvous from the voter candidates when at
 least `k` of them are present, otherwise from all candidates, and then the `m` **parity**
 slots by rendezvous from the candidates not yet used, voters and non-voters alike. The
-result is still a pure function of `(h, candidate set, k, m)` (I-8, I-9 hold), and when no
-candidate is a voter it is a plain rendezvous over all candidates (the former `Place`, which only tests called, is gone: the tests prove `PlaceKM`). `FillPlacement(h, place, cands, k)`
-refills a zero data slot from voters first and a zero parity slot from anyone.
+host cap ([14 §5](14-disks.md)) outranks the preference: a data slot goes to a voter under
+the cap, then to any candidate under the cap, and only when none is left to a candidate
+the cap skipped (I-173), so voters that span too few hosts never push a stripe above the
+cap. The result is still a pure function of `(h, candidate set, k, m)` (I-8, I-9 hold), and
+when no candidate is a voter it is a plain rendezvous over all candidates (the former
+`Place`, which only tests called, is gone: the tests prove `PlaceKM`).
+`FillPlacement(h, place, cands, k)` refills a zero data slot from the voters under the cap
+first, then from anyone under it, and a zero parity slot from anyone.
 
 What this buys: a chunk is readable from the live voters alone whenever `k ≤` live
 voters (I-77), and a flush collects its `k` durable acks (I-7) from always-on devices, so
@@ -114,7 +119,9 @@ were nearly equal and the weights were effectively ignored (a 2:1 weighting meas
 99984:16 before the mix). Sort candidates by `score` descending, ties broken by `idx` ascending, and take
 the first `n`, skipping a candidate whose domain already holds `ceil(n/D)` picks and
 filling any slot left over from the skipped ones in the same order (the host cap, 14 §5;
-with one target per domain this is the plain top-`n`). Shard `i` goes to the `i`-th selected node. Properties:
+with one target per domain this is the plain top-`n`). A data slot the voters cannot fill
+under the cap is filled from the non-voters under the cap before any skipped candidate
+(I-173). Shard `i` goes to the `i`-th selected node. Properties:
 
 - Pure function of `(h, candidate set, n)` (I-8): every node computes the same answer from
   the same inputs, which the predecessor got wrong by sorting its own name among peer IPs.
@@ -208,7 +215,10 @@ of the counts of Active targets on voter hosts (`v`) and on non-voter hosts (`s`
 | 2 | 4 | 2+2 | yes |
 
 When the targets span `H ≥ 2` hosts, `k` is then lowered until `ceil((k+m)/H) ≤ m` so the
-policy survives the loss of a whole host (I-88; 14 §6 has the table for disks).
+policy survives the loss of a whole host (I-88; 14 §6 has the table for disks). `k` counts
+voter targets, not the hosts they span: with four voter disks on two hosts and a cap of
+two, a 4+2 stripe holds three data slots on voters and the fourth on a non-voter (I-173),
+so a chunk is readable from the voters alone only while they span enough hosts.
 
 `k` follows the voters so the data shards fit on always-on devices (voter-first slots
 above); `m` follows the cluster size. The leader evaluates the rule at the start of every
@@ -264,9 +274,13 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
   exceed the live Active targets; it grows after a join or promotion and shrinks only after
   a removal or demotion, never because of liveness.
 - **I-77** — `PlaceKM(h, cands, k, m)` is a pure function of `(h, candidate set, k, m)`
-  whose data slots are drawn from voter candidates whenever at least `k` voters are
-  candidates, so a chunk is readable from live voters alone when `k ≤` live voters; with
-  no voter candidate it equals `Place(h, cands, k+m)`.
+  whose data slots are drawn from voter candidates under the host cap whenever at least
+  `k` voters are candidates, so a chunk is readable from live voters alone when `k ≤` live
+  voters under the cap; with no voter candidate it equals `Place(h, cands, k+m)`.
+- **I-173** — A data slot is filled from the voter candidates under the host cap, then
+  from the other candidates under the cap, and only then from the candidates the cap
+  skipped: `PlaceKM` and `FillPlacement` never put a stripe above the cap while a candidate
+  under it remains, whatever its vote; with one target per domain the result is I-77's.
 - **I-33** — Weighted placement is proportional: over many hashes a candidate receives
   shards in proportion to its weight within ±10 %, and removing a candidate relocates only
   the shards it held.
@@ -283,5 +297,6 @@ The ≥ k durable-acks rule for committing a flush is **I-7** (`04-write-path-an
 | I-33 | `TestPlace_CapacityWeighting`, `TestPlace_StabilityOnAdd`, `TestPlace_StabilityOnMembershipChange`, `TestPlace_StabilityOnRemove` |
 | I-67 | `TestFSM_SetVolume_ChunkSizeBounds`, `TestStore_PayloadBoundaries` |
 | I-75 | `TestAutoPolicy_Table`, `TestAutoPolicy_NNodeDeterminism`, `TestCluster_AutoPolicy_GrowsOnJoin_DefersWhileAsleep`, `TestCluster_AutoPolicy_ShrinksOnRemoveNotOnDeath`, `TestAutoPolicy_ManualPins`, `TestFSM_SetVolumeMode` |
-| I-77 | `TestPlaceKM_VoterFirst_DataSlots`, `TestPlaceKM_VoterFirst_NNodeDeterminism`, `TestFillPlacement_KeepsSlotClass`, `TestCandidates_VoterBit`, `TestCluster_ReadableWithNonVotersAsleep` |
+| I-77 | `TestPlaceKM_VoterFirst_DataSlots`, `TestPlaceKM_VoterFirst_NNodeDeterminism`, `TestFillPlacement_KeepsSlotClass`, `TestFillPlacement_CapBeforeVoters`, `TestCandidates_VoterBit`, `TestCluster_ReadableWithNonVotersAsleep` |
+| I-173 | `TestFillPlacement_CapBeforeVoters`, `TestRepair_Migration_WithinCap_VoterHostDisks` |
 | I-117 | `TestFSM_SetVolume_ShardCountBoundaries`, `TestPolicyFlags_Bounds` |

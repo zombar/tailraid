@@ -18,7 +18,7 @@ numbered invariant (`I-n`) in these documents is enforced by at least one named 
 2. **RAID semantics across devices**: any `m` devices may be lost or asleep and the volume
    remains readable; writes continue (degraded) while at least `k` storage nodes and a Raft
    quorum are reachable.
-3. **Dedup**: identical 1 MiB chunks are stored once regardless of path or how often they
+3. **Dedup**: identical chunks (4 MiB by default) are stored once regardless of path or how often they
    are written.
 4. **Native mounts** on Windows, macOS, Linux with no kernel drivers to install.
 5. **Small, provable code**: a single static binary of about 18.1k production lines through
@@ -50,7 +50,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **volume** | The single filesystem tree managed by one cluster. Has a policy `Volume{ChunkSize, K, M, PolicyVersion}`. |
 | **bucket** | A top-level directory of the volume as seen through the S3 API. |
 | **inode** | A file, directory or symlink record in the FSM, identified by `Ino` (monotonic, never reused) plus `Gen`. |
-| **chunk** | A fixed-size (default 1 MiB) span of a file at offset `idx*ChunkSize`, content-addressed by SHA-256 of its logical bytes. The unit of dedup and of erasure coding. |
+| **chunk** | A fixed-size (default 4 MiB) span of a file at offset `idx*ChunkSize`, content-addressed by SHA-256 of its logical bytes. The unit of dedup and of erasure coding. |
 | **stripe** | One chunk encoded into `k` data shards and `m` parity shards. Chunk and stripe are 1:1. |
 | **shard** | One of the `k+m` encoded pieces of a chunk; stored on exactly one disk; key `hex(hash).k-m.idx` (the encoding is part of the key, so a migration's new shards coexist with the old). |
 | **slot** | Position `idx` in a chunk's `Placement []NodeIdx`. Slot value 0 means "no node holds this shard yet" (degraded). |

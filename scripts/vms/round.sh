@@ -263,13 +263,13 @@ s8_verify() {
   esac
   # a capability skip other than the ones three guests cannot provide (parity kills m+1
   # hosts besides the gateway and wants one more holding slots, there is no diskless
-  # host, the disk phase has one disk per host, and consensus skips when leadership
-  # moved to the verifier) is a failure: every target runs dev.enabled under a
-  # restarting manager, so the banner must be PASS
+  # host, the disk phase has one disk per host, the rig has no S3 bucket, and consensus
+  # skips when leadership moved to the verifier) is a failure: every target runs
+  # dev.enabled under a restarting manager, so the banner must be PASS
   grep -o '"kind":"phase"[^}]*"skipped":true[^}]*' "$OUT/$res" | grep -o '"phase":"[^"]*"' | sort -u > "$OUT/skipped-$FIRST.txt" || true
   echo "verify exit $rc; skipped phases: $(tr '\n' ' ' < "$OUT/skipped-$FIRST.txt")"
   while read -r p; do
-    case "$p" in '"phase":"4 parity"'|'"phase":"13 disks"'|'"phase":"14 diskless host"') ;;
+    case "$p" in '"phase":"4 parity"'|'"phase":"13 disks"'|'"phase":"14 diskless host"'|'"phase":"15 s3 bucket"') ;;
       '"phase":"6 consensus"') echo "consensus skipped: the verifier was the leader" ;;
       *) echo "unexpected skip: $p"; rc=1 ;;
     esac

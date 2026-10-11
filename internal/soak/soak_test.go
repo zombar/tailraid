@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"runtime/pprof"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -453,22 +454,23 @@ func (e *harnessEnv) Heal(context.Context) error {
 	return nil
 }
 
+// Corrupt flips a byte of every copy of the shard on the host's disks, as /dev/corrupt
+// does: a rebalance within the host (I-172) leaves the old copy on its disk until the
+// sweep, and phase 5's scrub found nothing when only that orphan was corrupted.
 func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) error {
 	nd := e.node(n)
 	k := chunk.ShardKey(key)
-	// every copy the host holds, as /dev/corrupt does: a move within the host (docs/14
-	// §7) leaves a stale copy on the old disk until its fenced delete or the sweep gets
-	// it, and corrupting only that one would leave the placement's shard intact
 	stores := []*chunk.Store{nd.Store}
 	nodes := nd.Node.FSM.Nodes()
-	for i := range nodes {
+	for i := range nodes { // the host's disks; its default disk is nd.Store again, and a
+		// second flip of the same file would restore it
 		if t := &nodes[i]; t.Kind == meta.KindDisk && t.Host == nd.Idx() {
-			if s := e.c.DiskStore(nd.I, t.Idx); s != nil && s != nd.Store {
+			if s := e.c.DiskStore(nd.I, t.Idx); s != nil && !slices.Contains(stores, s) {
 				stores = append(stores, s)
 			}
 		}
 	}
-	found := false
+	copies := 0
 	for _, s := range stores {
 		if !s.Has(k) {
 			continue
@@ -476,9 +478,9 @@ func (e *harnessEnv) Corrupt(_ context.Context, n soak.NodeRef, key string) erro
 		if err := dev.Corrupt(s.Path(k)); err != nil {
 			return err
 		}
-		found = true
+		copies++
 	}
-	if !found {
+	if copies == 0 {
 		return errors.New("no such shard")
 	}
 	return nil
@@ -581,7 +583,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 17 {
+	if sum.Failed != 0 || len(sum.Phases) != 18 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

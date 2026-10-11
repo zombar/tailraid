@@ -75,12 +75,13 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 
 // CheckReport is the `check` reply.
 type CheckReport struct {
-	Scan          repair.Stats `json:"scan"`
-	Degraded      int          `json:"degraded_chunks"`       // fewer than k+m copies reachable now
-	RepairPending int          `json:"repair_pending_chunks"` // a slot to re-place (after fill_after)
-	Unreadable    int          `json:"unreadable_chunks"`
-	Files         []string     `json:"files,omitempty"` // paths touching degraded/unreadable chunks
-	OK            bool         `json:"ok"`
+	Scan          repair.Stats     `json:"scan"`                  // the last completed pass
+	InProgress    *repair.Progress `json:"in_progress,omitempty"` // the pass under way, if any (docs/12 §8)
+	Degraded      int              `json:"degraded_chunks"`       // fewer than k+m copies reachable now
+	RepairPending int              `json:"repair_pending_chunks"` // a slot to re-place (after fill_after)
+	Unreadable    int              `json:"unreadable_chunks"`
+	Files         []string         `json:"files,omitempty"` // paths touching degraded/unreadable chunks
+	OK            bool             `json:"ok"`
 }
 
 // FsckReport is the `fsck` reply.
@@ -93,9 +94,9 @@ type FsckReport struct {
 // Check builds the `check` reply from the shared derivation plus the scan the caller ran
 // (or the repairer's last pass). It is OK only when nothing is degraded or unreadable and
 // the scan found nothing unrepairable or corrupt (L-106).
-func Check(st *meta.Store, live meta.Liveness, fillAfter time.Duration, scan repair.Stats, files bool) CheckReport {
+func Check(st *meta.Store, live meta.Liveness, fillAfter time.Duration, scan repair.Stats, prog *repair.Progress, files bool) CheckReport {
 	v := ScanHealth(st, live, fillAfter)
-	rep := CheckReport{Scan: scan, Degraded: v.Degraded, RepairPending: v.RepairPending, Unreadable: v.Unreadable}
+	rep := CheckReport{Scan: scan, InProgress: prog, Degraded: v.Degraded, RepairPending: v.RepairPending, Unreadable: v.Unreadable}
 	if files && len(v.DegradedHashes) > 0 {
 		rep.Files = FilesReferencing(st, v.DegradedHashes)
 	}

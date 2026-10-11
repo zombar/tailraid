@@ -137,7 +137,12 @@ the transfer sizes if the kernel refuses them.
 Why `rsize`/`wsize` on macOS: its client defaults to 32 KiB on TCP and, unlike Linux, does
 not take the gateway's FSINFO maximum, so every WRITE was 32 KiB per WAL fsync and every
 READ its own RPC. macOS 26 keeps 1 MiB (`nfsstat -m` shows `rsize=1048576,wsize=1048576`;
-its `readahead=16` is then 16 MiB). Linux negotiates 1 MiB from FSINFO on its own.
+its `readahead=16` is then 16 MiB). Linux negotiates 1 MiB from FSINFO on its own. The
+transfer size is independent of the chunk size (4 MiB by default, 01): a chunk arrives as
+several WRITEs the WAL and overlay coalesce, and a READ fetches its whole chunk into the
+cache, so the following READs of it are served from memory. 1 MiB is also the ceiling of
+both clients (macOS `vfs.generic.nfs.client.iosize`, the Linux rsize/wsize cap), so a
+larger chunk never asks for a larger transfer.
 
 Why `nolock`: there is no Network Lock Manager. Without `nolock` the client's lock daemon
 tries to reach NLM and `fcntl` locks hang or fail. With it, locks are local to the client

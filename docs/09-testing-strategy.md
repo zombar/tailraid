@@ -374,7 +374,15 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   of the way through a second file: the gateway marks the holder suspect within the
   straggler grace and before the prober's threshold, the chunks committed after the cut
   hold no slot on it, the mark clears on the first good probe after the heal, repair fills
-  the degraded chunks and the file reads back whole; I-166, I-169, I-170). The compose rig gives four nodes two disks each, one
+  the degraded chunks and the file reads back whole; I-166, I-169, I-170); 18 repair fan-out (a
+  64-chunk file written and read cold through another gateway for an idle figure, then
+  the neighbouring policy set so every chunk is stale, the migration pass run while the
+  leader's status is sampled every 100 ms and the same file read cold again: the pass
+  rate, the in-flight peak and both reads reported, repairs in flight never above
+  `repair.workers`, the pass having overlapped chunks, the read during the pass keeping
+  at least a third of its idle throughput, then the policy restored and the migration
+  back complete; the in-flight and during-the-pass checks are skipped when the pass
+  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for

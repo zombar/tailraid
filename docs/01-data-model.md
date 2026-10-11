@@ -67,7 +67,7 @@ type Node struct {           // the ONE node struct; 02 and 10 refer to it, neve
 }
 
 type Volume struct {
-    ChunkSize     uint32      // default 1 MiB; fixed for the life of the volume
+    ChunkSize     uint32      // default 4 MiB; fixed for the life of the volume
     K, M          uint8       // current policy for NEW chunks
     PolicyVersion uint32      // bumped by every SetVolume that changes K or M
     Auto          bool        // the leader picks K, M from the member table (03); set by init,
@@ -124,7 +124,7 @@ Rules:
 
 ## Chunking
 
-- **Fixed-size chunks.** `ChunkSize` defaults to 1 MiB and is set at `tailraid init`. Byte
+- **Fixed-size chunks.** `ChunkSize` defaults to 4 MiB and is set at `tailraid init` (`--chunk`). Byte
   `off` of a file lives in chunk `idx = off / ChunkSize` at chunk offset `off % ChunkSize`.
   Random-offset NFS writes modify one or two chunks and never re-chunk the file. Content
   defined chunking is out of scope.
@@ -212,7 +212,9 @@ this device" in the browser UI, 13 §4) is recorded in `<data_dir>/pins.json` as
 pin and a delete makes it lapse. A pin worker on that node walks every pinned subtree when
 a pin is added, at start, and whenever the FSM's applied index has moved since its last
 walk (checked every 30 s), reads every chunk the cache lacks through the ordinary reader
-(two in flight, cancelled on unpin or shutdown) and marks the hashes pinned; the LRU never
+(two in flight, cancelled on unpin or shutdown, every shard request marked background so
+a prefetch of a large folder yields a node's shard slots to client reads, 06 §4, I-175)
+and marks the hashes pinned; the LRU never
 evicts a pinned entry, and an unpin returns its entries to the LRU. Pinned bytes may exceed
 `cache.size` (the user asked for exactly those bytes); `status` warns when the data disk's
 free space falls under 20 %, since the cache shares it with the WAL and the Raft log.
@@ -278,7 +280,7 @@ restored replica and one that applied the log agree on every count (I-5).
 | Item | Approx. bytes |
 |---|---|
 | `Inode` struct + map slot + short name | ~200 |
-| per 1 MiB of file data (one `Hash` in `Chunks`) | 32 |
+| per chunk of file data, 4 MiB by default (one `Hash` in `Chunks`) | 32 |
 | per directory child (`Children` entry) | ~60 |
 | `Chunk` struct + map slot + `Placement` (K+M ≤ 8) | ~110 |
 

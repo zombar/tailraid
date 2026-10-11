@@ -290,7 +290,9 @@ func (p *Pins) wake() {
 func (p *Pins) Walk(ctx context.Context) error {
 	p.walkMu.Lock()
 	defer p.walkMu.Unlock()
-	ctx, cancel := context.WithCancel(ctx)
+	// a prefetch is background work: its shard requests hold at most half of a node's
+	// slots and queue behind client reads (docs/06 §4, I-175)
+	ctx, cancel := context.WithCancel(chunk.Background(ctx))
 	defer cancel()
 	p.mu.Lock()
 	p.cancel = cancel

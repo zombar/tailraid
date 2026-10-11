@@ -60,6 +60,8 @@ type Fabric struct {
 	failPutWith    map[meta.NodeIdx]error     // every PUT to the node fails with this
 	stallPut       map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
 	cancelledPuts  map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
+	stallNow       int                        // PUTs waiting in a stall right now, every node
+	stallPeak      int                        // the most at once since the fabric was built
 	putCount       int
 	gets           map[meta.NodeIdx]int
 	proposeErr     error // returned once by Propose as a transport failure
@@ -315,10 +317,21 @@ func (f *Fabric) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 		return err
 	}
 	stall := f.stallPut[node]
+	if stall != nil {
+		// under the lock: release deletes the stall under it before it waits, so every
+		// Add happens before the Wait (concurrent callers, the repairer's fan-out)
+		stall.inflight.Add(1)
+		f.stallNow++
+		f.stallPeak = max(f.stallPeak, f.stallNow)
+	}
 	f.mu.Unlock()
 	if stall != nil {
-		stall.inflight.Add(1)
 		defer stall.inflight.Done()
+		defer func() {
+			f.mu.Lock()
+			f.stallNow--
+			f.mu.Unlock()
+		}()
 		stall.enteredOnce.Do(func() { close(stall.entered) })
 		select {
 		case <-stall.release:
@@ -581,6 +594,14 @@ type putStall struct {
 	enteredOnce sync.Once
 	release     chan struct{}
 	inflight    sync.WaitGroup // PUTs that entered the stall and have not finished
+}
+
+// StallPeak is the most PUTs that were waiting in stalls at once, over every node: the
+// fan-out a caller reached (I-174).
+func (f *Fabric) StallPeak() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stallPeak
 }
 
 // CancelledPuts is the number of stalled PUTs to node that their caller cancelled.
