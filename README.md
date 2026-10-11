@@ -187,7 +187,7 @@ Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid statu
 ```yaml
 node:
   capacity: 500G        # pin this device's budget (omit to follow free space; "0" stores nothing here)
-  voter: true           # always-on devices only
+  voter: true           # always-on devices only; follows `node promote|demote` while the node serves
   disks:                # disks listed here before `init` are added by it;
     - path: /Volumes/Big/tailraid   # later ones need: tailraid node add-disk
 listen:
@@ -198,6 +198,8 @@ mount:
 repair:
   fill_after: 10m       # how long a device may be away before its data is re-copied
   s3_scrub: 1G          # bucket bytes the scrub may download per day to verify objects ("0": HEAD only)
+  workers: 4            # chunks a repair pass works on at once (1..64)
+  rate: 50M             # shard bytes per second repair may move ("0": no limit)
 log:
   level: info           # debug | info | warn | error
   file: ~/tailraid.log  # optional; rotates at 64 MiB keeping five generations

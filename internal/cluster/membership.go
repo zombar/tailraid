@@ -195,6 +195,12 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		return ErrNotLeader
 	}
+	// the row is read as of every entry this leader has committed (I-177): a leader
+	// elected before its FSM replayed its log would otherwise rewrite the row from the
+	// snapshot's copy, since an upsert replaces the whole row
+	if err := n.Raft.Barrier(10 * time.Second).Error(); err != nil {
+		return raftErr("apply the log before the member op", err)
+	}
 	if op.Op == "add_s3" {
 		return n.addS3(ctx, op)
 	}

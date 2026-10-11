@@ -203,9 +203,22 @@ under the *committed* placement exist, because the old placement stays committed
 new shards are durable, and old shards are deleted only after the new placement is
 committed.
 
-Rate limiting: `--rate` (default 50 MB/s of shard traffic) via a token bucket; a scan pass
-also yields between chunks so foreground IO is not starved. Progress is exposed as
-`admin.RepairStatus{Pending, Repaired, Failed, BytesMoved, PolicyMigrated, PolicyTotal}`.
+**Pacing.** A pass works on at most `repair.workers` chunks at once (default 4, at most
+64; I-174): each chunk's steps stay in sequence, chunks overlap, so the pass is bounded
+by its targets' latency times the fan-out rather than by one round trip per step, and
+the statistics are sums, the same whatever the overlap; a cancelled pass starts no more
+chunks and returns once the ones in flight end. Every shard request of a pass (its
+reads, PUTs, HEADs and DELETEs, the scrub's and the rebalance's too) carries the
+background priority (`X-Tailraid-Priority: background`, [08](08-security.md)), and a node
+serving it lets background requests hold at most half of its PUT and, separately, GET
+slots ([04 §9](04-write-path-and-durability.md)), so a client's reads and flushes always
+find the other half free; a background request queues for its share, is never refused,
+and gets the same reply (I-175). Shard bytes are also metered by a token bucket of
+`repair.rate` a second (default 50 MiB, `0` for no limit), total across the workers.
+Progress is `admin.RepairStatus`: the last completed pass's `stats`, and while a pass
+runs `in_progress` (its number, start, chunks scanned of total, chunks in flight and
+workers, bytes moved; [12 §8](12-operations.md)), which `status` prints as one line and
+`check` carries, so a long first pass is never read as a stall.
 
 Chunks with < k good live slots are **unrepairable**; they are counted and listed by
 `tailraid check --files` and retried on the next pass (a node may come back). Both repair
@@ -308,6 +321,16 @@ state to patch.
 - **I-43** — `GCDelete` applied on any replica deletes exactly the same chunk entries (determinism via `Before` in the command).
 - **I-44** — `fsck` reports zero findings on a cluster where every test in this document passed; any finding is a bug, not noise.
 - **I-65** — A repair pass never lowers the number of readable slots of a chunk and never proposes a placement equal to the committed one: a slot whose shard is still readable (a live draining node) stays in the placement until a replacement is placed, a live draining holder counts toward the `≥ k` readability test, and a pass that could improve nothing proposes nothing.
+- **I-174** — A repair pass works on at most `Workers` chunks at once (`repair.workers`,
+  1..64, default 4); each chunk's move sequence is unchanged (I-65, I-102); the pass
+  statistics do not depend on `Workers`; `Progress` reports the pass while it runs and
+  nothing once it ends; a cancelled pass starts no more chunks and returns once the ones
+  in flight end.
+- **I-175** — A shard request marked background holds at most half of a node's PUT and,
+  separately, GET slots (never fewer than one); a client-path request never waits behind
+  a background one for the other half; a background request is queued, never refused,
+  and the mark changes no reply; every request a repair pass makes carries the mark and
+  no gateway read or flush does.
 - **I-157** — A delete reclaims nothing: only `Purge`, `Unlink` of an ephemeral name
   and `Truncate` drop references, `meta.IsEphemeral` is the one list of names that are
   unlinked rather than trashed (an upload temp, a thumbnail, `._<name>`, `.DS_Store`),
@@ -326,5 +349,7 @@ state to patch.
 | I-42 | `TestCluster_JoinDrainRemove`, `TestRepair_DrainMovesAllSlotsBeforeRemove` |
 | I-43 | `TestFSM_DeterministicAcrossReplicas` |
 | I-44 | `TestCheck_MPlusOneCorrupt_NotOK`, `TestFsck_CleanClusterNoFindings`, `TestFsck_CountsOrphanShards` |
-| I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable` |
+| I-65 | `TestRepair_DeadWithinFillAfter_NoRepeatProposal`, `TestRepair_DrainNoReplacement_KeepsShard`, `TestRepair_DrainingHolderIsReadable`, `TestRepair_Migration_WithinCap_VoterHostDisks` |
+| I-174 | `TestRepair_FanOut_Bounded`, `TestRepair_FanOut_CancelDrains`, `TestConfig_RepairWorkersAndRate`, `TestPhaseFanOut_ConformingPassPasses`, `TestPhaseFanOut_OverWorkersFails`, `TestPhaseFanOut_FastPassSkips` |
+| I-175 | `TestServer_BackgroundShare`, `TestBackgroundSlots_Table`, `TestClient_BackgroundHeader`, `TestPhaseFanOut_ConformingPassPasses` |
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |

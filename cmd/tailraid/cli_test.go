@@ -129,7 +129,7 @@ func TestCLI_Init_NoFlags(t *testing.T) {
 	n := openFSM(t, cfg)
 	defer n.Close()
 	vol := n.FSM.Volume()
-	if !vol.Auto || vol.K != 1 || vol.M != 0 || vol.ChunkSize != 1<<20 {
+	if !vol.Auto || vol.K != 1 || vol.M != 0 || vol.ChunkSize != 4<<20 {
 		t.Fatalf("volume %+v", vol)
 	}
 	nodes := n.FSM.Nodes()
@@ -298,7 +298,7 @@ func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 	}
 	addrB := fmt.Sprintf("127.0.0.1:%d", cfgB.Listen.RPC)
 	stopB := serve(cfgB)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B never became ready")
+	waitReady(ctx, t, addrB, "B never became ready")
 	stopB()
 	stopA() // the leader is gone; B, a non-voter, cannot elect one
 	stopB = serve(cfgB)
@@ -314,7 +314,7 @@ func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 	}
 	stopA = serve(cfgA)
 	defer stopA()
-	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B not ready once the leader is back")
+	waitReady(ctx, t, addrB, "B not ready once the leader is back")
 }
 
 // The node that ran init never joined anything, so no join snapshotted it: the snapshot
@@ -341,7 +341,7 @@ func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
 	stopA := serve(cfgA)
 	addrA := fmt.Sprintf("127.0.0.1:%d", cfgA.Listen.RPC)
 	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrA); return err == nil && h.Ready }, "node A never served")
+	waitReady(ctx, t, addrA, "node A never served")
 	pathB, _ := devHome(t)
 	if out, err := run(t, "join", "--config", pathB, addrA, "testtoken", "--voter"); err != nil {
 		t.Fatalf("join: %v\n%s", err, out)
@@ -352,7 +352,7 @@ func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
 	}
 	addrB := fmt.Sprintf("127.0.0.1:%d", cfgB.Listen.RPC)
 	stopB := serve(cfgB)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrB); return err == nil && h.Ready }, "B never became ready")
+	waitReady(ctx, t, addrB, "B never became ready")
 	// A is killed (no clean shutdown, no leadership transfer) with B gone: two voters, one left
 	stopB()
 	stopA()
@@ -369,5 +369,26 @@ func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
 	}
 	stopB = serve(cfgB)
 	defer stopB()
-	testharness.Eventually(t, func() bool { h, err := probe.Health(ctx, addrA); return err == nil && h.Ready }, "A not ready once B is back")
+	waitReady(ctx, t, addrA, "A not ready once B is back")
+}
+
+// waitReady polls a node's health until it reports ready. A real Raft on a CI runner
+// elects itself heartbeat (2–4 s) plus election (up to 2 s, sometimes twice) after its
+// open, on top of the init before it: the harness's 10 s Eventually timed out on Windows.
+func waitReady(ctx context.Context, t *testing.T, addr, msg string) {
+	t.Helper()
+	probe := rpc.NewClient([16]byte{}, nil)
+	deadline := time.After(60 * time.Second)
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if h, err := probe.Health(ctx, addr); err == nil && h.Ready {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timeout: %s", msg)
+		case <-tick.C:
+		}
+	}
 }

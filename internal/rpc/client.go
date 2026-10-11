@@ -121,6 +121,9 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
+	if chunk.IsBackground(ctx) {
+		req.Header.Set(HeaderPriority, PriorityBackground) // the repairer's work yields slots (I-175)
+	}
 	if body != nil {
 		req.ContentLength = int64(len(body))
 	}
