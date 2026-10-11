@@ -45,7 +45,18 @@ func (tf *tfsm) apply(c Command) Result {
 	if v := CheckInvariants(tf.f.state()); len(v) != 0 {
 		tf.t.Fatalf("invariants violated after op %d at index %d: %v", c.Op, tf.idx, v)
 	}
+	if v := CheckStats(tf.f.state(), tf.f.stats); len(v) != 0 {
+		tf.t.Fatalf("after op %d at index %d: %v", c.Op, tf.idx, v)
+	}
 	return res
+}
+
+// trash deletes name under parent into the trash and returns its inode.
+func (tf *tfsm) trash(parent Ino, name string, recursive bool) Ino {
+	tf.t.Helper()
+	ino := tf.child(parent, name)
+	tf.ok(Command{Op: OpTrash, Trash: &Trash{Parent: parent, Name: name, Recursive: recursive, Now: 1}})
+	return ino
 }
 
 func (tf *tfsm) ok(c Command) Result {
@@ -336,7 +347,7 @@ func TestFSM_Unlink_Rmdir(t *testing.T) {
 	tf.fails(Command{Op: OpRmdir, Rmdir: &Rmdir{Parent: RootIno, Name: "", Now: 62}}, ErrBadCommand)
 }
 
-// Lifecycle: L-16, L-17
+// Lifecycle: L-16, L-17, L-205
 func TestFSM_Rename_Table(t *testing.T) {
 	tf := newTFSM(t)
 	d1 := tf.mkdir(RootIno, "d1")
@@ -376,22 +387,36 @@ func TestFSM_Rename_Table(t *testing.T) {
 	if tf.child(d1, "f1") != 0 {
 		t.Fatal("old entry remains")
 	}
-	// file over file: dest unlinked, dest refs dropped (L-17)
+	// file over file: the dest goes to the trash under its old name with its refs (L-205)
 	tf.ok(rn(d2, "moved", d2, "f2"))
 	if _, ok := tf.f.GetInode(f2); ok {
-		t.Fatal("replaced dest still exists")
+		t.Fatal("replaced dest still live")
 	}
-	if c := tf.chunk(y); c.Refs != 0 || c.TombstonedAt != 70 {
+	if c := tf.chunk(y); c.Refs != 1 || c.TombstonedAt != 0 {
 		t.Fatalf("dest chunk %+v", c)
+	}
+	if roots := tf.f.TrashOf(d2); len(roots) != 1 || roots[0].Ino != f2 || roots[0].Name != "f2" || roots[0].DeletedAt != 70 {
+		t.Fatalf("trash of d2: %+v", roots)
 	}
 	if tf.child(d2, "f2") != f1 {
 		t.Fatal("entry does not point at source")
 	}
+	// an ephemeral dest is unlinked outright (L-17, L-208)
+	tmp := tf.create(d2, ".f2.tailraid-upload")
+	tf.ok(Command{Op: OpCommit, Commit: &Commit{Ino: tmp, NewSize: testCS, Writes: []ChunkWrite{{0, y}}, Now: 5}})
+	tf.ok(rn(d2, "f2", d2, ".f2.tailraid-upload"))
+	if _, ok := tf.f.GetInodeAny(tmp); ok {
+		t.Fatal("replaced ephemeral dest still exists")
+	}
+	if c := tf.chunk(y); c.Refs != 1 {
+		t.Fatalf("ephemeral dest chunk %+v", c)
+	}
+	tf.ok(rn(d2, ".f2.tailraid-upload", d2, "f2"))
 	// dir over empty dir; nlink bookkeeping
 	rootN := tf.inode(RootIno).Nlink
 	tf.ok(rn(RootIno, "d1", RootIno, "empty"))
 	if _, ok := tf.f.GetInode(emptyDir); ok {
-		t.Fatal("replaced empty dir still exists")
+		t.Fatal("replaced empty dir still live")
 	}
 	if tf.inode(RootIno).Nlink != rootN-1 || tf.child(RootIno, "empty") != d1 {
 		t.Fatalf("root %+v", tf.inode(RootIno))
@@ -1110,7 +1135,37 @@ func (g *cmdGen) next() Command {
 	dirs, files := g.files()
 	d := dirs[g.rng.Intn(len(dirs))]
 	name := string(rune('a' + g.rng.Intn(6)))
-	switch g.rng.Intn(14) {
+	switch g.rng.Intn(18) {
+	case 9:
+		return Command{Op: OpTrash, Trash: &Trash{Parent: d.Ino, Name: name, Recursive: g.rng.Intn(2) == 0, Now: g.now}}
+	case 10:
+		roots := g.f.Trash()
+		if len(roots) == 0 {
+			break
+		}
+		r := roots[g.rng.Intn(len(roots))]
+		c := &Restore{Ino: r.Ino, Now: g.now}
+		if g.rng.Intn(2) == 0 {
+			c.NewParent, c.NewName = dirs[g.rng.Intn(len(dirs))].Ino, string(rune('a'+g.rng.Intn(6)))
+		}
+		return Command{Op: OpRestore, Restore: c}
+	case 11:
+		c := &Purge{Before: g.now - int64(g.rng.Intn(20)), Limit: uint32(g.rng.Intn(4)), Now: g.now}
+		if roots := g.f.Trash(); len(roots) > 0 && g.rng.Intn(2) == 0 {
+			c.Ino = roots[g.rng.Intn(len(roots))].Ino
+		}
+		return Command{Op: OpPurge, Purge: c}
+	case 12:
+		if d.Ino == RootIno {
+			break // a protected root would stop every delete for the rest of the run
+		}
+		flags := uint8(g.rng.Intn(4))
+		if d.Flags&FlagProtected != 0 && g.rng.Intn(4) != 0 {
+			// protection is short-lived: a protected folder near the root otherwise
+			// refuses every trash under it for the rest of the run
+			flags &^= FlagProtected
+		}
+		return Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: d.Ino, Mask: AttrFlags, Flags: flags, Now: g.now}}
 	case 0:
 		return Command{Op: OpCreate, Create: &Create{Parent: d.Ino, Name: name, Type: TFile, Mode: 0o644, Now: g.now}}
 	case 1:
@@ -1195,7 +1250,7 @@ func applyAll(t *testing.T, f *FSM, logs []*raft.Log) {
 	}
 }
 
-// Invariant: I-4, I-5
+// Invariant: I-4, I-5, I-153, I-156
 // Lifecycle: L-60, L-159
 func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	const n = 5000
@@ -1229,6 +1284,12 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 		if v := CheckInvariants(ref.state()); len(v) != 0 {
 			t.Fatalf("step %d op %d: %v", i, c.Op, v)
 		}
+		if v := CheckStats(ref.state(), ref.stats); len(v) != 0 {
+			t.Fatalf("step %d op %d: %v", i, c.Op, v)
+		}
+		if v := CheckStats(cur.state(), cur.stats); len(v) != 0 {
+			t.Fatalf("step %d op %d (restored replica): %v", i, c.Op, v)
+		}
 		if rng.Intn(200) == 0 {
 			snap, err := cur.Snapshot()
 			if err != nil {
@@ -1261,7 +1322,7 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	}
 }
 
-// Invariant: I-4, I-43
+// Invariant: I-4, I-43, I-152, I-153
 // Lifecycle: L-159
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 	rng := testseed.Seed(t)
@@ -1476,7 +1537,7 @@ func TestStore_ReadAPI(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Invariant checker
 
-// Invariant: I-27
+// Invariant: I-27, I-153
 // Lifecycle: L-150, L-151
 func TestCheckInvariants_DetectsEachViolation(t *testing.T) {
 	build := func() *State {
@@ -1521,6 +1582,33 @@ func TestCheckInvariants_DetectsEachViolation(t *testing.T) {
 		{"child name mismatch", func(s *State) { s.Inodes[findIno(s, "f")].Name = "zz" }, "parent"},
 		{"placement length", func(s *State) { s.Chunks[sha("a")].Placement = []NodeIdx{1} }, "placement"},
 		{"unreferenced chunk missing from table", func(s *State) { delete(s.Chunks, sha("a")) }, "unknown chunk"},
+		// the trash (docs/01): a deleted root is out of the name table and in the index
+		{"deleted root still named", func(s *State) {
+			s.Inodes[findIno(s, "g")].DeletedAt = 9
+			s.indexTrash(findIno(s, "d"), findIno(s, "g"))
+		}, "name table"},
+		{"deleted root not indexed", func(s *State) {
+			g := s.Inodes[findIno(s, "g")]
+			g.DeletedAt = 9
+			delete(s.Inodes[findIno(s, "d")].Children, "g")
+		}, "trash index"},
+		{"index entry live", func(s *State) { s.indexTrash(findIno(s, "d"), findIno(s, "g")) }, "trash index"},
+		{"index entry under another parent", func(s *State) {
+			g := s.Inodes[findIno(s, "g")]
+			g.DeletedAt = 9
+			delete(s.Inodes[findIno(s, "d")].Children, "g")
+			s.indexTrash(RootIno, g.Ino)
+		}, "trash index"},
+		{"flags on a file", func(s *State) { s.Inodes[findIno(s, "f")].Flags = FlagProtected }, "flags"},
+		{"unknown flag bit", func(s *State) { s.Inodes[findIno(s, "d")].Flags = 8 }, "flags"},
+		{"deleted subdir still counted in nlink", func(s *State) {
+			d := s.Inodes[findIno(s, "d")]
+			sub := &Inode{Ino: 90, Type: TDir, Nlink: 2, Parent: d.Ino, Name: "sub", Children: map[string]Ino{}, DeletedAt: 9}
+			s.Inodes[90] = sub
+			s.indexTrash(d.Ino, 90)
+			s.NextIno = 91
+			d.Nlink++ // as if the delete had not taken the link
+		}, "nlink"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

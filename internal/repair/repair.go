@@ -51,6 +51,7 @@ type Config struct {
 	GCInterval   time.Duration
 	ScanInterval time.Duration
 	ReportTTL    time.Duration // reported bad slots expire after this
+	Retention    time.Duration // the trash's retention (docs/06 §2, trash.retention); 0 = never purged on its own
 	// Capacity rebalance within a host (docs/14 §7, I-172): a disk more than
 	// RebalanceSkew (a fraction) above its share of its host's slots has slots moved to
 	// a disk of the same host below its share, at most RebalanceBatch chunks per pass
@@ -62,6 +63,9 @@ type Config struct {
 	Workers int
 }
 
+// DefaultRetention is how long a deleted entry waits in the trash (docs/12 §10).
+const DefaultRetention = 30 * 24 * time.Hour
+
 // MaxWorkers bounds Config.Workers (`repair.workers`).
 const MaxWorkers = 64
 
@@ -69,7 +73,7 @@ const MaxWorkers = 64
 func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
-		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute,
+		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
 		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64, Workers: 4,
 	}
 }

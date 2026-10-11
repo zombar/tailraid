@@ -163,7 +163,10 @@ list and every `Refs` are untouched (I-152, L-199), and `Stats.LogicalBytes` mov
 every root in `Trash[child]` (an entry deleted from inside it earlier, as `rm -rf` does
 file by file) is put back into `child.Children` under its name, in inode order, with its
 own `DeletedAt` cleared; a name already present keeps the newer live entry and the older
-root stays a separate root. So a tree removed from a mount lands in the trash as one
+root stays a separate root. A fold that put a name back sets `child.Mtime = Ctime = now`
+and `child.Version++`, as any change to a name table does: an NFS client that cached the
+names' absence after the file-by-file delete revalidates the directory and sees them
+again once the folder is restored (07). So a tree removed from a mount lands in the trash as one
 entry that restores with one command, and a file deleted from a folder last week comes
 back with the folder (13 §4 says so).
 
@@ -195,7 +198,11 @@ directory with `FlagProtected` was crossed or is the inode itself. It costs one 
 lookup per level, what `pathLen` (I-115) already pays per `Create`. `Unlink`, `Rmdir`,
 `Trash`, `Purge{Ino}` and `Rename` consult it as described (I-154); `Create`, `Mkdir`,
 `Symlink`, `Commit` and a `Rename` *into* a protected directory are unaffected: a
-protected folder accepts new content and refuses to lose any.
+protected folder accepts new content and refuses to lose any. The same walk guards the
+trash: `Create`, `Mkdir`, `Unlink`, `Rmdir`, `Rename`, `Trash` and a `SetAttr` of
+`Flags` refuse a parent (or entry) that lies in the trash with `ErrInTrash`; only
+`Commit` writes inside it, for the flusher of a file deleted while dirty (L-203), and
+only `Restore` and `Purge` take anything out.
 
 **Commit** — the only command that changes file data. Applied atomically or not at all:
 
@@ -530,7 +537,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-145 | `TestCluster_DemotePromote_RaftFollowsRow` |
 | I-177 | `TestMemberOp_ReadsAppliedRow` |
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
-| I-152 | `TestStub_I_152` (planned: TestFSM_Trash_Table, TestFSM_Trash_FoldsEarlierRoots, TestFSM_Restore_Table, TestFSM_DeterministicAcrossReplicas, TestCluster_TrashRestoreAcrossNodes, TestModelCheck_Long) |
-| I-153 | `TestStub_I_153` (planned: TestFSM_Purge_Table, TestFSM_Purge_Boundary, TestFSM_Purge_CascadesNestedRoots, TestFSM_TrashStats_MatchComputed, TestCheckInvariants_DetectsEachViolation, TestFSM_ApplySnapshotRestoreEquivalence) |
-| I-154 | `TestStub_I_154` (planned: TestFSM_Protected_Table, TestFSM_SetAttr_Flags, TestVFS_Protected_EPERM, TestNFS_Protected_IsACCES, TestSMB_Protected_AccessDenied, TestCluster_V4OpsRefusedUntilAllMembersUpgraded) |
-| I-155 | `TestStub_I_155` (planned: TestStore_TrashReadAPI, TestNFS_TrashedIsGoneFromShare, TestNFS_TrashedHandleStale_RestoredValid, TestSMB_DeletedIsGoneFromShare, TestVFS_OpenTrash_ReadsBytes, TestVFS_Remove_TrashKeepsWAL_FlushCommits, TestVFS_PurgeBeforeFlush_DropsWAL) |
+| I-152 | `TestFSM_Trash_Table`, `TestFSM_Trash_FoldsEarlierRoots`, `TestFSM_Restore_Table`, `TestFSM_DeterministicAcrossReplicas`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
+| I-153 | `TestFSM_Purge_Table`, `TestFSM_Purge_Boundary`, `TestFSM_Purge_CascadesNestedRoots`, `TestFSM_TrashStats_MatchComputed`, `TestCheckInvariants_DetectsEachViolation`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas`, `TestModelCheck_Long` |
+| I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
+| I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |

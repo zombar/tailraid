@@ -1,12 +1,14 @@
-// tailraid web UI entry (docs/13): the shell (health pill, warnings, tabs) and the hash
-// router over the dashboard, the file browser and the file view.
+// tailraid web UI entry (docs/13): the shell (health pill, warnings, tabs), the
+// now-playing bar, and the hash router over the dashboard, the file browser, the file
+// view and their trash counterparts (#/trash/<ino>/<path>, #/trashfile/<ino>/<path>).
 
 import { clear, h } from "./dom.ts";
 import { status } from "./status.ts";
-import { decodeHashPath } from "./util.ts";
+import { decodeHashPath, type Ctx } from "./util.ts";
 import * as dashboard from "./dashboard.ts";
 import * as browser from "./browser.ts";
 import * as player from "./player.ts";
+import { player as audio } from "./audio.ts";
 import type { Report } from "./api.ts";
 
 const view = document.getElementById("view") as HTMLElement;
@@ -61,20 +63,28 @@ function drawShell(): void {
 
 let dispose: (() => void) | null = null;
 
-function route(): void {
-  const hash = location.hash || "#/";
+/** parse reads the route: the view, and where it looks. */
+export function parse(hash: string): { head: string; ctx: Ctx } {
   const [head = "", ...rest] = hash.replace(/^#\/?/, "").split("/");
-  const tail = rest.join("/");
+  if (head === "trash" || head === "trashfile") {
+    const ino = Number(rest.shift() ?? "");
+    return { head, ctx: { path: decodeHashPath(rest.join("/")), root: Number.isFinite(ino) && ino > 0 ? ino : undefined } };
+  }
+  return { head, ctx: { path: decodeHashPath(rest.join("/")) } };
+}
+
+function route(): void {
+  const { head, ctx } = parse(location.hash || "#/");
   dispose?.();
   dispose = null;
   clear(view);
   let tab = "dash";
-  if (head === "browse") {
+  if (head === "browse" || (head === "trash" && ctx.root !== undefined)) {
     tab = "files";
-    dispose = browser.render(view, decodeHashPath(tail));
-  } else if (head === "file") {
+    dispose = browser.render(view, ctx);
+  } else if (head === "file" || (head === "trashfile" && ctx.root !== undefined)) {
     tab = "files";
-    dispose = player.render(view, decodeHashPath(tail));
+    dispose = player.render(view, ctx);
   } else {
     dispose = dashboard.render(view);
   }
@@ -82,6 +92,7 @@ function route(): void {
   window.scrollTo(0, 0);
 }
 
+audio.mount();
 status.subscribe(drawShell);
 window.addEventListener("hashchange", route);
 route();
