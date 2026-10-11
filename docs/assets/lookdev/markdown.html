@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../../../internal/webui/src/app.css">
 <style>
   .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
-  .phone { width: 360px; border: 1px dashed var(--line); border-radius: 12px; padding: 12px; }
+  iframe.phone { border: 1px dashed var(--line); border-radius: 12px; display: block; }
 </style>
 </head>
 <body>
@@ -90,17 +90,8 @@ tidy. Everything here is *plain files*; nothing depends on a database or a **par
   </section>
 
   <section>
-    <div class="variant">variant: the phone layout at 360 px, the gutter narrows</div>
-    <div class="phone">
-      <article class="md md-doc">
-        <h2 id="the-library-2">The library</h2>
-        <p>How this volume is laid out and what the folders are for.</p>
-        <h3 id="folders-2">Folders</h3>
-        <ul><li><code>/music</code> artist / album / track</li><li><code>/films</code> one folder per film</li></ul>
-        <h4 id="script-2">The rename script</h4>
-        <pre><code data-lang="sh">mv -i "$f" "$n $f"</code></pre>
-      </article>
-    </div>
+    <div class="variant">variant: the phone layout at 360 px (a real viewport in an iframe): the gutter narrows</div>
+    <iframe class="phone" src="markdown-phone.html" width="360" height="420" title="phone frame"></iframe>
   </section>
 
 </main>

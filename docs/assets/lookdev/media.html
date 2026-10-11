@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../../../internal/webui/src/app.css">
 <style>
   .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
-  .phone { width: 360px; border: 1px dashed var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 16px; }
+  iframe.phone { border: 1px dashed var(--line); border-radius: 12px; display: block; }
 </style>
 </head>
 <body>
@@ -125,28 +125,8 @@
   </section>
 
   <section>
-    <div class="variant">variant: the phone layout at 360 px, posters two abreast and a detail with the poster at 96 px</div>
-    <div class="phone">
-      <section class="lib movies">
-        <h2>films <span class="badge lib">movies</span><span class="count">14</span></h2>
-        <div class="posters">
-          <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3C/svg%3E"></span><span class="ptitle">Arrival</span><span class="pyear">2016</span></a>
-          <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3C/svg%3E"></span><span class="ptitle">Stalker</span><span class="pyear">1979</span></a>
-        </div>
-      </section>
-      <section class="hero">
-        <img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3Cellipse cx='8' cy='4' rx='5' ry='2.2' fill='%2394a3b8'/%3E%3C/svg%3E">
-        <div class="hero-body">
-          <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3C/svg%3E">
-          <div>
-            <h1>Arrival</h1>
-            <div class="facts"><span>2016</span><span>1 h 56</span><span>★ 7.9</span></div>
-            <p class="plot">A linguist is recruited by the military to communicate with alien lifeforms after twelve spacecraft land around the world.</p>
-            <div class="actions"><button type="button">▶ Play</button></div>
-          </div>
-        </div>
-      </section>
-    </div>
+    <div class="variant">variant: the phone layout at 360 px (a real viewport in an iframe): the header on three rows, posters two abreast, the detail with the poster at 96 px</div>
+    <iframe class="phone" src="media-phone.html" width="360" height="1100" title="phone frame"></iframe>
   </section>
 
 </main>

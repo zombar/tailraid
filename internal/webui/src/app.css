@@ -454,12 +454,14 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .menu-row > a { color: var(--text); }
 
 /* ---- search (docs/13 §1, docs/18): the box in the header and the results page ------------ */
-form.search { display: flex; align-items: center; flex: 0 1 320px; min-width: 0; }
-form.search input[type=search] { flex: 1; min-width: 0; min-height: 36px; padding: 6px 10px; font-size: 14px; border-radius: var(--radius) 0 0 var(--radius); }
+form.search { display: flex; align-items: center; flex: 0 1 320px; min-width: 0; border-radius: var(--radius); }
+form.search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+form.search input[type=search] { flex: 1; min-width: 0; min-height: 36px; padding: 6px 10px; font-size: 14px; border-radius: var(--radius) 0 0 var(--radius); appearance: none; -webkit-appearance: none; }
+form.search input[type=search]:focus-visible { outline: none; }
 form.search button { min-height: 36px; padding: 4px 10px; color: var(--dim); border-left: 0; border-radius: 0 var(--radius) var(--radius) 0; }
-@media (max-width: 480px) {
-  /* on a phone the box takes a second header row of its own, so the tabs keep their
-     room and nothing scrolls sideways */
+@media (max-width: 900px) {
+  /* when the header is tight (a phone, or a narrow window) the box takes a second header
+     row of its own, so the tabs keep their room and nothing scrolls sideways */
   header.top { flex-wrap: wrap; row-gap: 6px; }
   form.search { order: 10; flex: 1 1 100%; }
 }
@@ -571,5 +573,8 @@ table.episodes td.dur { width: 64px; font: 13px var(--mono); color: var(--dim); 
 table.episodes tr:hover { cursor: pointer; background: var(--surface); }
 table.episodes tr.playing td.title { color: var(--accent); }
 @media (max-width: 480px) { table.episodes td.no { width: 56px; } table.episodes td.thumb { display: none; } }
-.menu-row.library { grid-template-columns: 1fr; }
-.menu-row.library select { min-height: 36px; padding: 4px 8px; font-size: 14px; }
+/* the Library row stacks label, select and note in one column (the other rows put their
+   checkbox in a first column and send the note to the second) */
+.menu-row.library { grid-template-columns: 1fr; gap: 6px; }
+.menu-row.library > * { grid-column: 1; }
+.menu-row.library select { min-height: 36px; padding: 4px 8px; font-size: 14px; width: 100%; }
