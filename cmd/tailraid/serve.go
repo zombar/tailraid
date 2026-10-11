@@ -115,7 +115,7 @@ func initCmd() *cobra.Command {
 	c.Flags().IntVar(&m, "m", 0, "parity shards per chunk (pins a manual policy)")
 	_ = c.Flags().MarkHidden("k")
 	_ = c.Flags().MarkHidden("m")
-	c.Flags().StringVar(&chunkSize, "chunk", "1M", "chunk size (fixed for the volume's life)")
+	c.Flags().StringVar(&chunkSize, "chunk", "4M", "chunk size (fixed for the volume's life)")
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	c.Flags().StringVar(&tokenFlag, "token", "", "join token (default: random; set for automation)")
 	return c

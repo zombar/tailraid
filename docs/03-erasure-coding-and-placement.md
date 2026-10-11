@@ -54,7 +54,7 @@ chunks). `meta.IsSmallChunk` and `meta.TargetPolicy` are the only places this ru
 the flusher, the repair scanner and every report read them.
 
 Small files thus cost `(m+1)×` their size with a single RPC per replica instead of `k+m`
-RPCs for a few kilobytes. Space overhead of a full 1 MiB chunk at 2+1 is 1.5× plus ≤128 B.
+RPCs for a few kilobytes. Space overhead of a full 4 MiB chunk at 2+1 is 1.5× plus ≤128 B.
 
 ## Placement
 

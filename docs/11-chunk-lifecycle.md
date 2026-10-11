@@ -2,8 +2,8 @@
 
 ## Purpose and how to read this document
 
-This is the authoritative model of everything that can happen to a chunk (one 1 MiB logical
-block of a file) and to a shard (one erasure-coded piece of a chunk stored on one node) from
+This is the authoritative model of everything that can happen to a chunk (one logical block
+of a file, 4 MiB by default) and to a shard (one erasure-coded piece of a chunk stored on one node) from
 the first dirty byte to final deletion. It defines the states, every event that can act on
 them, the complete table of reachable transitions with their observable outcome and the test
 that proves it, and the table of transitions that must never happen. Every cell has a stable
