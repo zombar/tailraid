@@ -121,3 +121,17 @@ func TestSampler_ClusterRow(t *testing.T) {
 		t.Error("a rate without a pass")
 	}
 }
+
+// Dead wins over suspect: a killed member keeps its suspect mark until its next good
+// probe, and the row must say dead (the soak's phase 20 read 2 for a killed node).
+// Invariant: I-191
+func TestSampler_LiveState_Table(t *testing.T) {
+	for _, tc := range []struct {
+		live, suspect bool
+		want          int
+	}{{false, false, 0}, {false, true, 0}, {true, false, 1}, {true, true, 2}} {
+		if got := LiveState(tc.live, tc.suspect); got != tc.want {
+			t.Errorf("live %v suspect %v: %d, want %d", tc.live, tc.suspect, got, tc.want)
+		}
+	}
+}

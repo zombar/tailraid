@@ -138,3 +138,16 @@ func ClusterRow(v View) Row {
 	}
 	return Row{T: v.T.Unix(), Term: v.Term, By: v.By, C: c}
 }
+
+// LiveState is a device's liveness as the cluster row carries it (docs/17 §1): 0 dead,
+// 1 live, 2 live but suspect (a shard RPC to it failed, docs/05 §6). Dead wins: a dead
+// member keeps its suspect mark until its next good probe, and the row must say dead.
+func LiveState(live, suspect bool) int {
+	switch {
+	case !live:
+		return 0
+	case suspect:
+		return 2
+	}
+	return 1
+}

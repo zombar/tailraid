@@ -292,15 +292,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			Health:   func() admin.VolumeHealth { return admin.ScanHealth(node.FSM, prober, rcfg.FillAfter) },
 			Stats:    node.FSM.Stats,
 			Members:  node.FSM.Nodes,
-			Live: func(idx meta.NodeIdx) int {
-				switch {
-				case prober.IsSuspect(idx):
-					return 2
-				case prober.IsLive(idx):
-					return 1
-				}
-				return 0
-			},
+			Live:     func(idx meta.NodeIdx) int { return stats.LiveState(prober.IsLive(idx), prober.IsSuspect(idx)) },
 			Moved: func() (int64, bool) {
 				p, ok := repairer.Progress()
 				return p.BytesMoved, ok

@@ -92,15 +92,7 @@ func (e *harnessEnv) startStats(i int) {
 			Health:   func() admin.VolumeHealth { return admin.ScanHealth(nd.Node.FSM, nd.Prober, 10*time.Minute) },
 			Stats:    nd.Node.FSM.Stats,
 			Members:  nd.Node.FSM.Nodes,
-			Live: func(idx meta.NodeIdx) int {
-				switch {
-				case nd.Prober.IsSuspect(idx):
-					return 2
-				case nd.Prober.IsLive(idx):
-					return 1
-				}
-				return 0
-			},
+			Live:     func(idx meta.NodeIdx) int { return stats.LiveState(nd.Prober.IsLive(idx), nd.Prober.IsSuspect(idx)) },
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
