@@ -343,7 +343,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       if (e.type === "file" && isAudioName(e.name)) link.append(playBtn(e));
     }
     const cls = [e.upload ? "dim" : e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", sel.has(e.name) ? "selected" : "", e.type === "file" && player.isCurrent(pathOf(e), ctx.root) ? "playing" : ""].filter(Boolean).join(" ");
-    return h("tr", { class: cls }, h("td", { class: "sel" }, selectBox(e, "sel").firstChild ?? ""), h("td", { class: "name" }, link), h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""), h("td", { class: "mtime", title: e.mtime }, when(e.mtime)));
+    return h("tr", { class: cls, "data-name": e.name }, h("td", { class: "sel" }, selectBox(e, "sel").firstChild ?? ""), h("td", { class: "name" }, link), h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""), h("td", { class: "mtime", title: e.mtime }, when(e.mtime)));
   };
 
   const tiles = () => {
@@ -371,7 +371,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     const meta = h("span", { class: "tmeta" });
     if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
     const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, ctx.root) ? "playing" : ""].filter(Boolean).join(" ");
-    const a = h("a", { class: cls, href }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta);
+    const a = h("a", { class: cls, href, "data-name": e.name }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta);
     if (e.type === "file" && isAudioName(e.name) && !e.upload) a.insertBefore(playBtn(e), a.querySelector(".tname"));
     if (thumb.classList.contains("nsfw")) {
       thumb.addEventListener("click", (ev) => {
@@ -522,12 +522,19 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
   document.addEventListener("keydown", onKey);
 
   const unsubSel = sel.subscribe(draw);
+  // a change in the player re-marks the rows in place (the playing row, the play
+  // buttons): the listing is neither fetched nor rebuilt, so nothing flickers (docs/13 §6)
   const unsubPlayer = player.subscribe(() => {
     if (alb) alb.refresh();
-    for (const b of root.querySelectorAll<HTMLButtonElement>("button.play")) b.textContent = b.textContent?.startsWith("⏸") ? "▶ Play" : b.textContent ?? "";
     root.querySelectorAll("tr.playing, .ftile.playing").forEach((el) => el.classList.remove("playing"));
     const c = player.current();
-    if (c && c.root === ctx.root && c.path.startsWith(dir === "/" ? "/" : dir + "/")) draw();
+    const here = c && c.root === ctx.root && c.path.startsWith(dir === "/" ? "/" : dir + "/") ? c.path.slice(dir === "/" ? 1 : dir.length + 1) : "";
+    for (const el of root.querySelectorAll<HTMLElement>("tr[data-name], .ftile[data-name]")) {
+      const mine = here !== "" && el.dataset["name"] === here;
+      el.classList.toggle("playing", mine);
+      const b = el.querySelector<HTMLButtonElement>("button.play");
+      if (b) b.textContent = mine && player.playing ? "⏸ Playing" : "▶ Play";
+    }
   });
   onQueueChange = draw;
   onJobDone = (j) => {
