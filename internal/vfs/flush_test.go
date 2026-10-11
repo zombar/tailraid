@@ -655,8 +655,12 @@ func TestFlusher_RunIdleTriggerAndShutdownFlush(t *testing.T) {
 	ino := f.Create("a")
 	data := testharness.Pattern(5000, 16)
 	must(t, f.Ov.Write(ino, 0, 0, data))
-	f.Clk.Advance(3 * time.Second) // idle trigger
-	testharness.Eventually(t, func() bool { return f.Inode(ino).Version == 1 }, "idle flush")
+	// the idle trigger: Run arms its tick timer on its own goroutine, so the clock moves
+	// inside the condition (a single Advance before the timer exists would never fire it)
+	testharness.Eventually(t, func() bool {
+		f.Clk.Advance(time.Second)
+		return f.Inode(ino).Version == 1
+	}, "idle flush")
 	// shutdown flushes what is dirty
 	must(t, f.Ov.Write(ino, 5000, 5000, []byte("more")))
 	cancel()
