@@ -25,6 +25,7 @@ func (v readaheadVolume) Hash(p string) ([32]byte, int64, error) {
 		v.e.mu.Lock()
 		v.e.gateway.ReadaheadFetched += v.chunks - 1
 		v.e.gateway.ReadaheadJoined += v.chunks - 1
+		v.e.gateway.ReadsEarly++ // the first chunk's range came from a verified shard (I-202)
 		v.e.mu.Unlock()
 	}
 	return v.Volume.Hash(p)
@@ -82,8 +83,8 @@ func TestPhaseHotPath_ConformingGatewayPasses(t *testing.T) {
 // Invariant: I-166
 func TestPhaseHotPath_NonConformingGatewayFails(t *testing.T) {
 	phases, out := runHotPath(t, 2, false, vfs.ReadAhead+1)
-	if len(phases) != 1 || phases[0].Failed != 2 {
-		t.Fatalf("want the served and in-flight checks failed, got %d:\n%s", phases[0].Failed, out)
+	if len(phases) != 1 || phases[0].Failed != 3 {
+		t.Fatalf("want the served, early and in-flight checks failed, got %d:\n%s", phases[0].Failed, out)
 	}
 	if ok, _ := checksNamed(phases[0], "content hash exact"); ok != 1 {
 		t.Fatalf("content check did not pass:\n%s", out)

@@ -83,6 +83,14 @@ func (w *writer) nodeIdxs(p []NodeIdx) {
 	}
 }
 
+// hashes writes a list of hashes: its length, then each one (a chunk's data-shard sums).
+func (w *writer) hashes(hs []Hash) {
+	w.uvarint(uint64(len(hs)))
+	for i := range hs {
+		w.hash(hs[i])
+	}
+}
+
 type reader struct {
 	b   []byte
 	pos int
@@ -230,6 +238,19 @@ func (r *reader) bool() bool {
 		r.fail(fmt.Errorf("meta: bad bool"))
 		return false
 	}
+}
+
+// hashes reads a list written by writer.hashes; an empty list reads as nil.
+func (r *reader) hashes() []Hash {
+	n := r.length(256) // a chunk has at most k ≤ 255 data shards
+	if r.err != nil || n == 0 {
+		return nil
+	}
+	out := make([]Hash, n)
+	for i := range out {
+		out[i] = r.hash()
+	}
+	return out
 }
 
 func (r *reader) nodeIdxs() []NodeIdx {

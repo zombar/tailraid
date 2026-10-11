@@ -42,6 +42,7 @@ type Chunk struct {
     Refs         uint32       // number of (inode, index) positions referencing it
     Placement    []NodeIdx    // len K+M; Placement[i] holds shard i; 0 = missing
     TombstonedAt int64        // unix nanos when Refs reached 0; 0 while live
+    Sums         [][32]byte   // SHA-256 of each data shard's stored payload, len K, once recorded (04 §4, I-201); nil until then
 }
 
 type NodeKind  uint8          // KindDevice = 1, KindS3 = 2
@@ -272,7 +273,8 @@ section  Meta     {ClusterID 16B, JoinToken string, CreatedAt i64}
 u64      NextIno, u16 NextNode
 section  Nodes    uvarint count, then each Node (fields in struct order; strings as bytes; Host u16 (v ≥ 3))
 section  Chunks   uvarint count, then each Chunk {hash, Size u32, K u8, M u8, Refs u32,
-                  uvarint len(Placement), Placement u16..., TombstonedAt i64}
+                  uvarint len(Placement), Placement u16..., TombstonedAt i64,
+                  uvarint len(Sums), Sums 32B... (v ≥ 5)}
 section  Inodes   uvarint count, then each Inode {Ino, Gen, Type, Mode, Uid, Gid, Size,
                   Atime, Mtime, Ctime, Nlink, Version, Parent, Name,
                   Flags u8, DeletedAt i64 (v ≥ 4),
@@ -294,9 +296,10 @@ restored replica and one that applied the log agree on every count (I-5).
 | per chunk of file data, 4 MiB by default (one `Hash` in `Chunks`) | 32 |
 | per directory child (`Children` entry) | ~60 |
 | `Chunk` struct + map slot + `Placement` (K+M ≤ 8) | ~110 |
+| `Chunk.Sums`, once recorded (04 §4, I-201) | 32 × K (96 at 3+2) |
 
 Rule of thumb: 1 M files + 1 TB unique data ≈ 200 MB + 110 MB ≈ **320 MB** of resident
-metadata per node. Soft documented limits: 2 M inodes, 4 TB unique data per volume.
+metadata per node, plus 24 MB of data-shard sums at 4 MiB chunks and 3+2 (250k chunks). Soft documented limits: 2 M inodes, 4 TB unique data per volume.
 Snapshot clone (for `raft.FSM.Snapshot`) of 1 M inodes takes roughly 100–300 ms.
 
 ## NFS file handle

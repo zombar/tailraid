@@ -109,6 +109,8 @@ func phaseHotPath(ctx context.Context, r *Run) error {
 		} else {
 			r.checkAt("I-166", "readahead served the sequential read", joined >= uint64(hotpathChunks-vfs.ReadaheadDepth(uint32(r.Profile.ChunkSize))-1), text, p, "", reader.Name)
 			r.checkAt("I-166", "readahead fetched no more than the file's chunks", fetched <= hotpathChunks, text, p, "", reader.Name)
+			early := after.Gateway.ReadsEarly - before.Gateway.ReadsEarly
+			r.checkAt("I-202", "a cold ranged read was served from verified data shards", early > 0, fmt.Sprintf("%d ranges served early via %s", early, reader.Name), p, "", reader.Name)
 		}
 		r.checkAt("I-166", "prefetches in flight within ReadAhead", peak <= vfs.ReadAhead, fmt.Sprintf("peak %d of %d allowed over %d samples", peak, vfs.ReadAhead, samples), p, "", reader.Name)
 	}

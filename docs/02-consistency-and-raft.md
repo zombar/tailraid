@@ -69,6 +69,7 @@ const (
     OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4)
     OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
     OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
+    OpSetShardSums            // {Hash, Sums [][32]byte}: the data shards' hashes of a chunk committed without them (04 §4, codec 5)
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
@@ -250,9 +251,13 @@ comes back full. Deterministic because `Before` and `Limit` are in the command a
 victim list is emitted in hash order.
 
 **Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
-disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`) or 4 (`Trash`, `Restore`,
-`Purge`, `SetAttr` with `Flags`), snapshots in version 4 (01 §Binary codec); every reader
-decodes every older version. `meta.CodecVersion` is the newest a binary writes; `/health`
+disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore`,
+`Purge`, `SetAttr` with `Flags`) or 5 (`Commit` whose `NewChunks` carry `Sums`,
+`SetShardSums`), snapshots in version 5 (01 §Binary codec); every reader
+decodes every older version. A `Commit` carries `Sums` only while every live active member
+reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
+gate: in a mixed cluster the chunk is committed without sums and the repair scanner's
+backfill records them later (06 §4, I-201). `meta.CodecVersion` is the newest a binary writes; `/health`
 reports it and `join` refuses a cluster that reports a newer one (I-105,
 [12](12-operations.md) §6). An entry a binary cannot decode still advances its applied
 index (so replicas stay aligned) and is counted and logged (I-105). Because a version-4
@@ -261,6 +266,12 @@ propose one with `ErrCodec` while any live active member reports an older codec 
 `/health` (the prober records it); the gateways fall back to `Unlink`/`Rmdir` for a
 delete and to the version-3 replace on `Rename` in that window, so a mixed cluster keeps
 working without the trash until every node is updated (I-156, 12 §6).
+
+**`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
+hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
+equal and refuses different ones (`ErrConflict`: two leaders cannot disagree about a pure
+function of the bytes, so a difference is a bug caught here); refs, placement and
+tombstones are untouched, so the command never changes what GC or repair see.
 
 **Idempotency.** Raft may re-deliver entries on restore; `Apply` is pure with respect to the
 log so re-applying from a snapshot's index yields the same state (I-5).

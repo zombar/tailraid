@@ -135,6 +135,9 @@ func CheckInvariants(st *State) []string {
 				bad("chunk %x: live with tombstone time %d", h[:4], c.TombstonedAt)
 			}
 		}
+		if len(c.Sums) != 0 && len(c.Sums) != int(c.K) {
+			bad("chunk %x: %d sums for k=%d", h[:4], len(c.Sums), c.K)
+		}
 		if !validPlacement(c.K, c.M, c.Placement) {
 			bad("chunk %x: placement %v invalid for k=%d m=%d", h[:4], c.Placement, c.K, c.M)
 		}

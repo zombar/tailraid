@@ -181,7 +181,19 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
 - **I-12** — Every acknowledged byte is readable, unchanged, from the issuing gateway immediately and from any live gateway once flushed, after the loss of any m nodes, provided the failures are within the contract of §3.
 - **I-38** — For every write, after a crash at any point C1..C7 and a restart, exactly one holds: the write was not acknowledged and the file equals its pre-write content with no visible orphan shard, or it was acknowledged and the file equals its post-write content on every live gateway.
 - **I-39** — A gateway that cannot reach a Raft leader for longer than the `Stale` threshold refuses metadata mutations with `EROFS`, keeps accepting data WRITEs into its WAL until the dirty caps, and continues to serve reads from its local FSM.
-- **I-40** — No read path ever returns bytes that do not hash to the chunk's recorded hash; on shortage of shards it returns `EIO`.
+- **I-40** — No read path returns bytes that do not hash to the chunk's recorded hash,
+  except that a range within one data shard may be returned once that shard hashes to
+  the shard hash recorded with the chunk in Raft (`Chunk.Sums`, I-201), before the
+  chunk's own check; a chunk enters the cache only after its hash check; on shortage of
+  shards every read path returns `EIO`.
+- **I-202** — `Reader.ReadAtEarly` returns a range as soon as every data shard it covers
+  arrived and hashed to its `Sums[j]`, and otherwise (a covered shard whose holder is
+  dead, whose GET failed or whose sum did not match, a chunk without sums) after the
+  chunk's own hash check as `ReadAt` does, bytes at or past the chunk's size being zero; a shard that fails its sum is a bad slot
+  and the fetch moves on; a chunk whose decode fails its hash fails every reader still
+  waiting with `EIO`, records E-134 and never enters the cache; `ReadAt`, `ReadChunk` and
+  `BaseReader` never return early and are what the flusher, repair, scrub and the pins
+  worker use; `status` counts the ranges served early.
 - **I-170** — A node whose shard RPC failed at the transport level, or whose PUT outlasted
   the straggler grace, is excluded from `Live()` (with its disks) until the first probe
   that succeeds after the mark; an HTTP-status reply or a request the gateway itself
@@ -194,5 +206,6 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
 | I-12 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestCrash_AtEveryPoint`, `TestDurability_AckImpliesReadableFromKSurvivors`, `TestFlusher_DedupHit_LiveButMissingShards_RePuts`, `TestModelCheck_Long` |
 | I-38 | `TestCrash_AtEveryPoint` |
 | I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale`, `TestStaleness_Table` |
-| I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO` |
+| I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO`, `TestReader_ReadRange_ChunkHashMismatch_LateReadersEIO_EventRecorded` |
+| I-202 | `TestPhaseHotPath_ConformingGatewayPasses`, `TestReader_ReadRange_ServedFromDataShardBeforeDecode`, `TestReader_ReadRange_StraddlesTwoDataShards`, `TestReader_ReadRange_CorruptDataShard_WaitsForDecode`, `TestReader_ReadRange_DeadDataHolder_WaitsForDecode`, `TestReader_ReadRange_NoSums_WholeChunk`, `TestReader_ReadRange_HolesAndShortChunk_Table`, `TestReader_ReadRange_ChunkHashMismatch_LateReadersEIO_EventRecorded`, `TestReader_FlusherBaseRead_NeverEarly`, `FuzzReadRange`, `TestCluster_EarlyServe_HolderKilledMidRead_StillExact`, `TestCluster_EarlyRange_SameBytesEveryGateway` |
 | I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |

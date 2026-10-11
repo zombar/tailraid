@@ -226,6 +226,14 @@ Chunks with < k good live slots are **unrepairable**; they are counted and liste
 `tailraid check --files` and retried on the next pass (a node may come back). Both repair
 and the GC worker are leader-only and run only while the leader is `Healthy`.
 
+**Sums backfill (04 §4, I-201).** A chunk committed before codec 5, or in a mixed
+cluster, carries no `Sums`, so the read path serves it whole. Each pass takes at most
+`SumsBatch` (256) such chunks, in hash order, among those it found healthy: it fetches k
+shards (background priority), decodes, verifies the chunk's hash, re-encodes and hashes
+the k data shards, and proposes `SetShardSums`; a chunk that fails its hash is left for
+the scrub. `status` reports `sums_recorded` and `sums_pending` in the last pass's stats;
+the backfill is complete when the latter reads 0. A cluster written on an older release is covered at the pass rate (256 a minute).
+
 ## 5. Scrub
 
 Every scan pass also verifies a sample of chunks (default 1 % per pass, so a full scrub

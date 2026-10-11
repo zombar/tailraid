@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -61,6 +62,9 @@ type Config struct {
 	// Workers is how many chunks a pass repairs at once (docs/06 §4, I-174): each chunk's
 	// steps stay in sequence, chunks overlap; at most MaxWorkers, below 1 means 1.
 	Workers int
+	// SumsBatch is how many chunks without recorded data-shard sums a pass fetches,
+	// verifies and records sums for (docs/06 §4, I-201); 0 disables the backfill.
+	SumsBatch int
 }
 
 // DefaultRetention is how long a deleted entry waits in the trash (docs/12 §10).
@@ -74,7 +78,7 @@ func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
-		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64, Workers: 4,
+		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64, Workers: 4, SumsBatch: 256,
 	}
 }
 
@@ -104,6 +108,10 @@ type Stats struct {
 	Rebalanced   int   `json:"rebalanced"` // slots moved between disks of one host (docs/14 §7)
 	BytesMoved   int64 `json:"bytes_moved"`
 	Errors       int   `json:"errors"`
+	// the data-shard sums backfill (docs/06 §4, I-201): chunks whose sums this pass
+	// recorded, and chunks still without them after it
+	SumsRecorded int `json:"sums_recorded"`
+	SumsPending  int `json:"sums_pending"`
 }
 
 // add sums o into s: a pass's statistics are the sum over its chunks, whatever the overlap.
@@ -120,12 +128,14 @@ func (s *Stats) add(o Stats) {
 	s.Rebalanced += o.Rebalanced
 	s.BytesMoved += o.BytesMoved
 	s.Errors += o.Errors
+	s.SumsRecorded += o.SumsRecorded
 }
 
 // Repairer is the leader's scanner.
 type Repairer struct {
 	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
 	warnRepair, warnPut logx.Limiter
+	sumsLeft            atomic.Int64 // the pass's remaining sums backfills (SumsBatch, I-201)
 	st                  *meta.Store
 	prop                meta.Proposer
 	live                Liveness
@@ -293,12 +303,17 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 
 	// policy migration order: fewest effective parity first
 	var work []meta.Chunk
+	noSums := 0 // live chunks without recorded data-shard sums (the backfill's queue, I-201)
 	r.st.ForEachChunk(func(c meta.Chunk) bool {
 		if c.Refs > 0 {
 			work = append(work, c)
+			if c.Sums == nil {
+				noSums++
+			}
 		}
 		return true
 	})
+	r.sumsLeft.Store(int64(r.cfg.SumsBatch))
 	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
 	slots := map[meta.NodeIdx]int{} // per target, for the capacity rebalance (docs/14 §7)
 	for i := range work {
@@ -360,6 +375,7 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 	if ctx.Err() != nil {
 		return st, ctx.Err()
 	}
+	st.SumsPending = max(noSums-st.SumsRecorded, 0)
 	st.Rebalanced, st.BytesMoved = r.rebalance(ctx, &st, all, slots, len(work))
 	r.mu.Lock()
 	r.last, r.lastAt = st, r.clk.Now()
@@ -387,6 +403,14 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 	}
 	bad, kept, migrate, readable := r.classify(c, vol, nodes, reported)
 	if len(bad) == 0 && !migrate {
+		if c.Sums == nil && r.sumsLeft.Add(-1) >= 0 { // a healthy chunk without sums: record them (I-201)
+			if err := r.backfillSums(ctx, c); err != nil {
+				st.Errors++
+				r.warnRepair.Warn(r.log, "shard sums not recorded", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+			} else {
+				st.SumsRecorded++
+			}
+		}
 		if scrubShare <= 0 || int(c.Hash[0])%scrubShare != pass%scrubShare {
 			return st
 		}
@@ -446,6 +470,33 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 		r.Events.Record(c.Hash, meta.EvPartial, fmt.Sprintf("%d bad slots", len(bad)))
 	}
 	return st
+}
+
+// backfillSums fetches, decodes and verifies a chunk through the reader, re-encodes it
+// and records the data shards' hashes with SetShardSums (docs/06 §4, I-201): what the
+// flusher would have recorded had every member read codec 5 when the chunk was written.
+func (r *Repairer) backfillSums(ctx context.Context, c meta.Chunk) error {
+	data, err := r.rd.ReadChunk(ctx, c.Hash) // hash-verified, hedged across holders
+	if err != nil {
+		return err
+	}
+	codec, err := r.codecs.Get(c.K, c.M)
+	if err != nil {
+		return err
+	}
+	shards, err := codec.Encode(data)
+	if err != nil {
+		return err
+	}
+	sums := make([]meta.Hash, int(c.K))
+	for j := range sums {
+		sums[j] = sha256.Sum256(shards[j])
+	}
+	res, _, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetShardSums, SetShardSums: &meta.SetShardSums{Hash: c.Hash, Sums: sums}})
+	if err != nil {
+		return err
+	}
+	return res.Err
 }
 
 // rebalance evens out each host's disks by capacity (docs/14 §7, I-172): for every

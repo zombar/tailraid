@@ -20,6 +20,7 @@ const (
 	EvCommitted    EventKind = "committed"      // the Commit referencing it applied
 	EvUnknownChunk EventKind = "unknown_chunk"  // L-54: dedup target collected before Commit
 	EvReadBadSlot  EventKind = "read_bad_slot"  // a reader got 404/corrupt from a slot
+	EvReadBadChunk EventKind = "read_bad_chunk" // E-134: k shards decoded to the wrong hash; EIO, not cached
 	EvRepaired     EventKind = "repaired"       // every slot restored
 	EvPartial      EventKind = "partial_repair" // some slots restored, still degraded
 	EvMigrated     EventKind = "migrated"       // re-encoded to the volume policy

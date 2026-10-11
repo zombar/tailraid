@@ -384,6 +384,12 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	cfg := vfs.DefaultConfig()
 	cfg.PutDeadline = 2 * time.Second
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
+	nd.Flush.MinCodec = func() uint8 { // a Commit carries shard sums only once every member reads codec 5 (I-201)
+		if nd.Node.MinCodec == nil {
+			return meta.CodecVersion
+		}
+		return nd.Node.MinCodec()
+	}
 	nd.Client.OnUnreachable = nd.Prober.Suspect // as node.go wires them (docs/05 §6, I-170)
 	nd.Flush.Suspect = nd.Prober.Suspect
 	nd.Flush.Events = nd.Events
@@ -604,6 +610,9 @@ func (c *Cluster) Kill(i int) {
 	if err := nd.Node.Close(); err != nil {
 		c.T.Logf("close n%d: %v", i, err)
 	}
+	// A cache write still in flight would race a Restart's new cache on the same directory,
+	// or the temp directory's removal after Close (I-204).
+	nd.Cache.Close()
 	_ = nd.trans.Close()
 	nd.trans = nil
 	for _, other := range c.Nodes {

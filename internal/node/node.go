@@ -269,6 +269,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gc.Retention = rcfg.Retention
 	node.MinCodec = prober.MinCodec // the trash and the flags wait until every live member reads codec 4 (docs/12 §6)
 	fs.SetFlusher(fl)
+	fl.MinCodec = prober.MinCodec // a Commit carries shard sums once every live member reads codec 5 (I-201)
 	// the stats history (docs/17): this node's rows every stats.every, the cluster's while
 	// it leads, sealed into the volume at the hour; its reader has no chunk cache (I-196)
 	statsEvery, err := cfg.StatsEvery()

@@ -73,7 +73,12 @@ type Flusher struct {
 	// chunk stopped waiting (the straggler grace or the deadline): the prober excludes
 	// it until its next good probe (docs/05 §6, I-170). Must not block.
 	Suspect func(meta.NodeIdx)
-	putLat  latencyRing // recent PUT durations: the straggler grace follows their p95
+	// MinCodec, when set, is the oldest codec a live active member reads (the prober's
+	// view): a Commit carries the chunks' data-shard sums only when it is at least
+	// meta.CodecShardSums, so a flush never fails the leader's codec gate (I-201). nil
+	// means every member is current.
+	MinCodec func() uint8
+	putLat   latencyRing // recent PUT durations: the straggler grace follows their p95
 
 	sem     chan struct{} // ChunkWorkers slots: chunks in memory across every flush
 	buffers atomic.Int64  // chunk and shard bytes held right now
@@ -289,6 +294,7 @@ type chunkWork struct {
 	hash     meta.Hash
 	k, m     uint8
 	place    []meta.NodeIdx
+	sums     []meta.Hash // the data shards' hashes, from the encode (I-201)
 	uploaded bool
 }
 
@@ -588,6 +594,10 @@ func (f *Flusher) upload(ctx context.Context, w *chunkWork, data []byte, keep []
 	if err != nil {
 		return err
 	}
+	w.sums = make([]meta.Hash, int(w.k)) // a pure function of the chunk's bytes and (k, m), I-201
+	for j := range w.sums {
+		w.sums[j] = sha256Sum(shards[j])
+	}
 	f.hold(total * len(shards[0]))
 	defer f.release(total * len(shards[0]))
 	place := make([]meta.NodeIdx, total)
@@ -798,12 +808,17 @@ func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWo
 	cs := uint64(f.st.Volume().ChunkSize)
 	cmd := &meta.Commit{Ino: plan.Ino, BaseVersion: base.Version, Now: f.clk.Now().UnixNano()}
 	seen := map[meta.Hash]bool{}
+	withSums := f.MinCodec == nil || f.MinCodec() >= meta.CodecShardSums // else the backfill records them (docs/06 §4)
 	var lastFull uint64
 	for _, w := range works {
 		cmd.Writes = append(cmd.Writes, meta.ChunkWrite{Idx: uint32(w.idx), Hash: w.hash})
 		if !w.hole && w.uploaded && !seen[w.hash] {
 			seen[w.hash] = true
-			cmd.NewChunks = append(cmd.NewChunks, meta.ChunkDesc{Hash: w.hash, Size: w.size, K: w.k, M: w.m, Placement: w.place})
+			d := meta.ChunkDesc{Hash: w.hash, Size: w.size, K: w.k, M: w.m, Placement: w.place}
+			if withSums {
+				d.Sums = w.sums
+			}
+			cmd.NewChunks = append(cmd.NewChunks, d)
 		}
 		lastFull = max(lastFull, (w.idx+1)*cs)
 	}

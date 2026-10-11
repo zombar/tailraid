@@ -228,7 +228,13 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    `ChunkWorkers`: the chunk's bytes and shards are released the moment it is decided, and
    nothing of it but `(idx, hash, k, m, placement)` survives into step 10 (I-78). The flush
    does not populate the read cache; the first read after a flush fetches shards and the
-   `Reader` caches then, so a bulk upload never evicts the hot set.
+   `Reader` caches then, so a bulk upload never evicts the hot set. The flusher also
+   hashes the k data shards it just encoded (`Sums`, 32 B each): they are a pure function
+   of the chunk's bytes and `(k, m)`, so every node that encodes the chunk computes the
+   same ones, and the read path uses them to serve a range from one shard before the whole
+   chunk is in hand (§5, I-201, I-202). The `Commit` carries them only while every live
+   member reads codec 5 (02 §Codec versions); otherwise the chunk is committed without them
+   and the repair scanner's backfill records them (06 §4).
 10. **Commit.** A plan is committed in **batches** of at most `FileDirtyHi` bytes of chunks
     (8 at 4 MiB): `assemble` keeps the lowest-indexed touched chunks that fit and leaves
     the rest dirty as residual, exactly like a partial flush; a plan with a truncate is
@@ -288,9 +294,33 @@ func (r *Reader) ReadAt(ctx context.Context, ino meta.Inode, p []byte, off int64
 4. Fetch the first `k` shards in parallel. On any failure or `ErrCorrupt`, pull the next slot
    in `order` until `k` good shards or the list is exhausted (→ `EIO`, logged with the chunk
    hash and the slots tried).
-5. `codec.Decode(shards, c.Size)`; verify `sha256 == h`. Mismatch → `EIO`; the scrubber
-   finds the bad shard (06 §6).
+5. `codec.Decode(shards, c.Size)`; verify `sha256 == h`. Mismatch → `EIO` for every reader
+   still waiting on the chunk, the event E-134 and an error log; the scrubber finds the
+   bad shard (06 §5).
 6. `cache.Put(h, chunk)`.
+
+**A range from one data shard (I-202).** The web UI, NFS and SMB ask for ranges, and a
+client that opens a video or seeks in it waits for the first bytes of one chunk; waiting
+for the whole 4 MiB (k shards, a decode and a hash) before the first byte is what the
+user felt as slow (measured 2026-10-11, docs/reports/bench-2026-10-open-media.txt). With
+systematic Reed-Solomon, data shard *j* holds the chunk's bytes `[j·S, (j+1)·S)` with
+`S = ShardLen(c.Size, k)` (03 §Shards), so a range inside one data shard needs only that
+shard. `vfs.File.ReadAt` therefore reads through `Reader.ReadAtEarly`: the fetch is the
+same (step 4, the data slots first), but as each data shard arrives it is hashed and
+compared with `c.Sums[j]`, the hash recorded with the chunk in Raft; a shard that matches
+is published to the readers waiting for a range inside it, who copy their bytes and
+return while the other shards are still in flight; a shard that does not match is a bad
+slot (`BadSlot`, as a corrupt frame) and the fetch pulls the next slot. A range that
+crosses data shards is served once each of them verified (their bytes are exactly what a
+decode would concatenate, each checked against Raft); a range reaching a shard that never
+verified (its holder dead, its GET failed, its sum wrong) and a chunk without `Sums` wait
+for the decode as before, and every byte at or past `c.Size` is zero-filled by `ReadAt`,
+never taken from shard padding.
+Steps 5 and 6 still run: the chunk enters the cache only once it hashed to `h`. Because
+early bytes are verified against committed metadata, nothing a client receives can differ
+from the chunk's content (I-40). The flusher's base reads (`BaseReader`, §4 step 3),
+repair, scrub and the pins worker keep the strict `ReadAt`/`ReadChunk`. `status` counts
+`reads_early` (12 §8).
 
 `ReadAt` walks chunk indexes, copies `min(eff, c.Size)` bytes from each chunk and zero-fills
 the remainder (a short dedup'd chunk under a truncate-up). The overlay is consulted first:
@@ -460,6 +490,14 @@ the WAL cap.
   shares the in-flight table with foreground reads so no chunk is fetched twice, holds no
   bytes beyond its own fetch (the result goes only to the cache), and its failure changes
   nothing a client sees.
+- **I-201** — A chunk's `Sums` are the SHA-256 of each of its k data shards' stored
+  payload, a pure function of the chunk's bytes and `(k, m)`: the flusher computes them
+  from the shards it encodes and the `Commit` carries them while every live member reads
+  codec 5, otherwise the chunk is committed without them and the leader's backfill
+  records them with `SetShardSums` after fetching, decoding and verifying the chunk, at
+  most `SumsBatch` chunks a pass; a `SetPlacement` to another `(k, m)` clears them; a
+  chunk never carries sums that differ from the ones another node computes, and `status`
+  reports the chunks still lacking them.
 - **I-203** — Readahead reaches `ReadAheadBytes` (8 MiB) ahead of a sequential client: a
   stream's depth is `ReadaheadDepth(ChunkSize)` = `min(ReadAhead, ReadAheadBytes /
   ChunkSize)`, at least one chunk; a prefetch starts only after the READ that triggered
@@ -483,6 +521,7 @@ the WAL cap.
 | I-169 | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks`, `TestFlusher_StragglerGrace_Table`, `TestFlusher_StragglerGrace_NotBeforeKAcks` |
 | I-171 | `TestClient_GetDeadline_FromContentLength` |
 | I-168 | `TestWAL_GroupCommit_OneFsyncCoversConcurrentAppends`, `TestWAL_GroupCommit_FailedFsyncFailsEveryWaiter`, `TestWAL_GroupCommit_LateAppendWaitsForNextFsync`, `TestOverlay_PendingWrite_NotVisibleUntilFsynced`, `TestOverlay_FailedGroupFsync_DropsEveryPendingWrite`, `TestOverlay_CommitFlushed_WaitsForPendingAppend`, `TestOverlay_WriteDoesNotHoldInodeLockDuringFsync`, `TestOverlay_TruncateDuringPendingAppend_MatchesReplay` |
+| I-201 | `TestFSM_Commit_SumsPureFunctionOfChunk`, `TestFSM_SetShardSums_Table`, `TestFSM_SetPlacement_PolicyChangeClearsSums`, `TestFlusher_CommitCarriesSumsOnlyAtCodec5`, `TestRepair_BackfillSums_Bounded`, `TestCluster_V5CommitWithoutSumsWhileMemberOld`, `TestCodec_ReadsVersion4Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V5Gating`, `FuzzDecodeCommand` |
 | I-203 | `TestReader_Readahead_DepthByBytes_Table`, `TestReader_Readahead_PrefetchIsBackgroundPriority`, `TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch`, `TestReader_Readahead_JoinedPrefetchSurvivesCancel`, `TestFile_ReadAt_PrefetchStartsAfterTheRead` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenFlushFailed`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |

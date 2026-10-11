@@ -551,8 +551,12 @@ func TestCodec_ReadsVersion3Snapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, s) {
-		t.Fatalf("v3 round trip\n got %+v\nwant %+v", got, s)
+	want := s.Clone()
+	for _, c := range want.Chunks {
+		c.Sums = nil // version 5 carries the sums (I-201); older versions never did
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("v3 round trip\n got %+v\nwant %+v", got, want)
 	}
 	// a state with trash and flags survives version 4 and rebuilds its index
 	tf := newTFSM(t)

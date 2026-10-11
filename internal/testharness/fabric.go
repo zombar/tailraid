@@ -59,6 +59,7 @@ type Fabric struct {
 	failPutOnce    map[meta.NodeIdx]int
 	failPutWith    map[meta.NodeIdx]error     // every PUT to the node fails with this
 	stallPut       map[meta.NodeIdx]*putStall // every PUT to the node blocks until released
+	stallGet       map[meta.NodeIdx]*putStall // every GET from the node blocks until released
 	cancelledPuts  map[meta.NodeIdx]int       // stalled PUTs whose caller cancelled them
 	stallNow       int                        // PUTs waiting in a stall right now, every node
 	stallPeak      int                        // the most at once since the fabric was built
@@ -353,17 +354,53 @@ func (f *Fabric) Put(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey,
 	return err
 }
 
-func (f *Fabric) Get(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
+func (f *Fabric) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey) ([]byte, error) {
 	f.mu.Lock()
 	node = f.hostLocked(node)
 	f.gets[node]++
 	st, ok := f.Stores[node]
 	down := f.down[node]
+	stall := f.stallGet[node]
+	if stall != nil {
+		stall.inflight.Add(1)
+	}
 	f.mu.Unlock()
+	if stall != nil {
+		defer stall.inflight.Done()
+		stall.enteredOnce.Do(func() { close(stall.entered) })
+		select {
+		case <-stall.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if !ok || down {
 		return nil, errNodeDown
 	}
 	return st.Get(key)
+}
+
+// StallGet makes every GET from node block until release is called; entered closes when
+// the first one is waiting. release waits for the stalled GETs to finish.
+func (f *Fabric) StallGet(node meta.NodeIdx) (entered <-chan struct{}, release func()) {
+	s := &putStall{entered: make(chan struct{}), release: make(chan struct{})}
+	f.mu.Lock()
+	node = f.hostLocked(node)
+	if f.stallGet == nil {
+		f.stallGet = map[meta.NodeIdx]*putStall{}
+	}
+	f.stallGet[node] = s
+	f.mu.Unlock()
+	var once sync.Once
+	return s.entered, func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.stallGet, node)
+			f.mu.Unlock()
+			close(s.release)
+		})
+		s.inflight.Wait()
+	}
 }
 
 func (f *Fabric) Has(_ context.Context, node meta.NodeIdx, key chunk.ShardKey) (bool, error) {
@@ -440,11 +477,11 @@ func (f *Fabric) drain(rd *vfs.Reader) {
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	deadline := time.After(10 * time.Second)
-	for rd.Prefetching() != 0 {
+	for rd.Prefetching() != 0 || rd.Fetching() != 0 {
 		select {
 		case <-tick.C:
 		case <-deadline:
-			f.TB.Fatalf("readahead prefetches still running: %d", rd.Prefetching())
+			f.TB.Fatalf("readahead prefetches still running: %d, fetches: %d", rd.Prefetching(), rd.Fetching())
 			return
 		}
 	}

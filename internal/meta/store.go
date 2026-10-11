@@ -34,6 +34,9 @@ func copyInode(in *Inode) Inode {
 func copyChunk(c *Chunk) Chunk {
 	cp := *c
 	cp.Placement = append([]NodeIdx(nil), c.Placement...)
+	if c.Sums != nil {
+		cp.Sums = append([]Hash(nil), c.Sums...)
+	}
 	return cp
 }
 
