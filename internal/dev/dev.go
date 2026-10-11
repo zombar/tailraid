@@ -29,11 +29,10 @@ type FSMHash struct {
 
 // Store is the shard store surface /dev/corrupt needs.
 type Store interface {
-	// Paths lists every copy of k this host holds, one per disk. A move within the host
-	// (docs/14 §7) leaves a stale copy behind until its fenced delete or the sweep gets
-	// it, and only the placement's copy is ever read, so /dev/corrupt hits them all.
+	// Paths lists the file of every copy of k on this host's open disks: a rebalance
+	// within the host (docs/14 §7) leaves the old copy where the grace fence refused
+	// its delete until the sweep, and a corruption must reach the placed copy.
 	Paths(k chunk.ShardKey) []string
-	Has(k chunk.ShardKey) bool
 	// Disks lists this host's open disks as their budgets see them (docs/14 §3); a
 	// diskless host has none. Fill writes (0 removes) the scratch file on the named disk.
 	Disks() []DiskInfo
@@ -90,12 +89,12 @@ func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit
 	})
 	mux.HandleFunc("POST /dev/corrupt", func(w http.ResponseWriter, r *http.Request) {
 		key := chunk.ShardKey(r.URL.Query().Get("key"))
-		if key == "" || !store.Has(key) {
+		paths := store.Paths(key)
+		if key == "" || len(paths) == 0 {
 			http.Error(w, "unknown shard key", http.StatusNotFound)
 			return
 		}
-		paths := store.Paths(key)
-		for _, p := range paths {
+		for _, p := range paths { // every copy on the host, so the placed one is among them
 			if err := Corrupt(p); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

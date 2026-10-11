@@ -2,6 +2,8 @@ package repair_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -116,5 +118,147 @@ func TestGC_GraceBoundary(t *testing.T) {
 				t.Fatalf("victims %d, want %d", res.Victims, tc.want)
 			}
 		})
+	}
+}
+
+// fanoutFabric is a five-host 3+1 fabric with n flushed chunks whose most-held target is
+// then taken down, so every chunk that held a slot there has one to re-place onto the
+// one spare; PUTs to every live host stall until release is called.
+func fanoutFabric(t *testing.T, n int) (f *testharness.Fabric, inos []meta.Ino, victim meta.NodeIdx, release func()) {
+	t.Helper()
+	f = testharness.NewFabric(t, 5, 3, 1)
+	held := map[meta.NodeIdx]int{}
+	for i := range n {
+		ino := f.Create(fmt.Sprintf("f%d", i))
+		if err := f.Ov.Write(ino, 0, 0, testharness.Pattern(int(testharness.ChunkSize), byte(i+1))); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Flusher().FlushInode(ctx, ino); err != nil {
+			t.Fatal(err)
+		}
+		c, ok := f.FSM.GetChunk(f.Inode(ino).Chunks[0])
+		if !ok {
+			t.Fatal("no chunk after flush")
+		}
+		for _, s := range c.Placement {
+			held[s]++
+		}
+		inos = append(inos, ino)
+	}
+	for s, k := range held {
+		if k > held[victim] {
+			victim = s
+		}
+	}
+	f.SetDown(victim, true)
+	var releases []func()
+	for h := meta.NodeIdx(1); h <= 5; h++ {
+		if f.Target(h) == victim {
+			continue
+		}
+		_, rel := f.StallPut(h)
+		releases = append(releases, rel)
+	}
+	return f, inos, victim, func() {
+		for _, rel := range releases {
+			rel()
+		}
+	}
+}
+
+// slotsOn counts the slots of the chunks of inos placed on target.
+func slotsOn(f *testharness.Fabric, inos []meta.Ino, target meta.NodeIdx) int {
+	n := 0
+	for _, ino := range inos {
+		c, _ := f.FSM.GetChunk(f.Inode(ino).Chunks[0])
+		for _, s := range c.Placement {
+			if s == target {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func fanoutCfg(workers int) repair.Config {
+	cfg := repair.DefaultConfig()
+	cfg.ScrubShare, cfg.RateBytes, cfg.Workers = 0, 0, workers
+	return cfg
+}
+
+// A pass works on at most Workers chunks at once: with every PUT stalled, the stall's
+// high-water mark reaches Workers and never passes it, Progress reports the pass while
+// it runs and not after, and the statistics equal a serial pass's over the same chunks.
+//
+// Invariant: I-174
+func TestRepair_FanOut_Bounded(t *testing.T) {
+	const workers = 4
+	f, inos, victim, release := fanoutFabric(t, 12)
+	if slotsOn(f, inos, victim) < workers {
+		t.Fatalf("setup: the dead target held %d slots, want at least %d", slotsOn(f, inos, victim), workers)
+	}
+	r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, fanoutCfg(workers), nil)
+	done := make(chan repair.Stats, 1)
+	go func() {
+		st, err := r.Scan(ctx)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- st
+	}()
+	testharness.Eventually(t, func() bool { return f.StallPeak() >= workers }, "the pass never had Workers PUTs in flight")
+	p, running := r.Progress()
+	if !running || p.Workers != workers || p.InFlight != workers || p.Total != 12 || p.Pass != 1 {
+		t.Fatalf("progress mid-pass: %+v running %v", p, running)
+	}
+	release()
+	st := <-done
+	if f.StallPeak() != workers {
+		t.Fatalf("%d PUTs in flight at peak, want %d", f.StallPeak(), workers)
+	}
+	if _, running := r.Progress(); running {
+		t.Fatal("still running after the pass")
+	}
+	if n := slotsOn(f, inos, victim) + slotsOn(f, inos, 0); n != 0 {
+		t.Fatalf("%d slots still on the dead target or holed after the pass", n)
+	}
+	// the same chunks one at a time: the same statistics
+	f1, _, _, release1 := fanoutFabric(t, 12)
+	release1()
+	st1, err := repair.New(f1.FSM, f1, f1, f1, f1.ReaderNoCache(), f1.Clk, fanoutCfg(1), nil).Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != st1 {
+		t.Fatalf("fan-out pass %+v, serial pass %+v", st, st1)
+	}
+}
+
+// A cancelled pass starts no more chunks and returns once the ones in flight end, with
+// nothing committed by the PUTs it cut short.
+//
+// Invariant: I-174
+func TestRepair_FanOut_CancelDrains(t *testing.T) {
+	f, inos, victim, release := fanoutFabric(t, 12)
+	defer release()
+	r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, fanoutCfg(4), nil)
+	cctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { _, err := r.Scan(cctx); done <- err }()
+	testharness.Eventually(t, func() bool { return f.StallPeak() >= 1 }, "no PUT reached the stall")
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled pass returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Scan did not return after cancel")
+	}
+	if _, running := r.Progress(); running {
+		t.Fatal("still running after the cancel")
+	}
+	if slotsOn(f, inos, victim) == 0 {
+		t.Fatal("a cancelled pass re-placed every chunk")
 	}
 }

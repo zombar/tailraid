@@ -220,6 +220,24 @@
       <div class="small dim">degraded + pending, last 10 min (this tab only)</div>
     </div>
     <div class="note">Repair runs on the leader. This node (pike) is a follower. <a href="http://100.64.0.3:20482/">Open atlas's dashboard</a> for the repairer's counters.</div>
+    <!-- on the leader, in place of the note: the pass under way, then the last completed pass -->
+    <h3>Repair · pass 3 running</h3>
+    <div class="bar-row"><span class="bar-label">scanned</span><div class="bar"><i style="width:12%"></i></div><span class="bar-val">12,345 of 106,452 · 4 in flight of 4 workers · 1.2 GiB moved · started 06:01</span></div>
+    <div class="small dim">the pass under way; the counters below are the last completed pass, 2 h ago</div>
+    <dl class="kv">
+      <div><dt>scanned</dt><dd>106,452</dd></div>
+      <div><dt>repaired</dt><dd>98,390</dd></div>
+      <div><dt>partial</dt><dd>0</dd></div>
+      <div><dt>unrepairable</dt><dd>0</dd></div>
+      <div><dt>deferred</dt><dd>0</dd></div>
+      <div><dt>migrated</dt><dd>30,596</dd></div>
+      <div><dt>policy stale</dt><dd>0</dd></div>
+      <div><dt>scrubbed</dt><dd>1,064</dd></div>
+      <div><dt>scrub bad</dt><dd>0</dd></div>
+      <div><dt>bytes moved</dt><dd>41.3 GiB</dd></div>
+      <div><dt>errors</dt><dd>0</dd></div>
+      <div><dt>reported bad slots</dt><dd>0</dd></div>
+    </dl>
     <h3>Gateway</h3>
     <div class="bar-row"><span class="bar-label">dirty bytes</span><div class="bar"><i style="width:7%"></i></div><span class="bar-val">18.2 MiB in 3 files of 256 MiB · flushing</span></div>
     <div class="bar-row"><span class="bar-label">WAL</span><div class="bar"><i style="width:17%"></i></div><span class="bar-val">22.0 MiB of 128 MiB</span></div>

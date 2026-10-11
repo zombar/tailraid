@@ -129,8 +129,18 @@ type Server struct {
 	clusID   string
 	putSem   chan struct{}
 	getSem   chan struct{}
+	// background requests (HeaderPriority) take one of these before an ordinary slot, so
+	// client-path requests always find the other half free (docs/06 §4, I-175)
+	bgPutSem chan struct{}
+	bgGetSem chan struct{}
 	handler  http.Handler
 }
+
+// backgroundSlots is the share of slots background requests may hold: half, at least one.
+func backgroundSlots(slots int) int { return max(1, slots/2) }
+
+// background reports whether r carries the background priority.
+func background(r *http.Request) bool { return r.Header.Get(HeaderPriority) == PriorityBackground }
 
 // NewServer validates options and builds the handler.
 func NewServer(o Options) (*Server, error) {
@@ -158,7 +168,10 @@ func NewServer(o Options) (*Server, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	s := &Server{o: o, clusID: meta.HexID(o.ClusterID), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots)}
+	s := &Server{
+		o: o, clusID: meta.HexID(o.ClusterID), putSem: make(chan struct{}, o.PutSlots), getSem: make(chan struct{}, o.GetSlots),
+		bgPutSem: make(chan struct{}, backgroundSlots(o.PutSlots)), bgGetSem: make(chan struct{}, backgroundSlots(o.GetSlots)),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
@@ -339,6 +352,13 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
+		if background(r) {
+			if !acquire(r.Context(), s.bgGetSem) {
+				writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+				return
+			}
+			defer func() { <-s.bgGetSem }()
+		}
 		if !acquire(r.Context(), s.getSem) {
 			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
 			return
@@ -362,6 +382,13 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
 	case http.MethodPut:
+		if background(r) {
+			if !acquire(r.Context(), s.bgPutSem) {
+				writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+				return
+			}
+			defer func() { <-s.bgPutSem }()
+		}
 		if !acquire(r.Context(), s.putSem) {
 			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
 			return

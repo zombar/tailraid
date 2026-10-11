@@ -90,57 +90,6 @@ func TestDev_FSMHashCorruptAndExit(t *testing.T) {
 	}
 }
 
-// A host with the same key on two disks (a move within the host left a stale copy,
-// docs/14 §7) has both corrupted: the placement's copy must not survive by being the
-// second one found.
-func TestDev_CorruptHitsEveryCopy(t *testing.T) {
-	var disks twoDisks
-	for i := range disks {
-		s, err := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "shards"), 1<<30)
-		if err != nil {
-			t.Fatal(err)
-		}
-		disks[i] = s
-	}
-	key := chunk.Key([32]byte{2}, 2, 1, 1)
-	for _, s := range disks {
-		if _, err := s.Put(key, []byte("payload")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	srv := httptest.NewServer(handler(meta.NewFSM(), disks, nil, nil, func(int) {}))
-	defer srv.Close()
-	resp, err := http.Post(srv.URL+"/dev/corrupt?key="+string(key), "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("corrupt: %d", resp.StatusCode)
-	}
-	for i, s := range disks {
-		if _, err := s.Get(key); !errors.Is(err, chunk.ErrCorrupt) {
-			t.Fatalf("disk %d after corrupt: %v", i, err)
-		}
-	}
-}
-
-// twoDisks is a host with two open disks.
-type twoDisks [2]*chunk.Store
-
-func (d twoDisks) Paths(k chunk.ShardKey) []string {
-	var out []string
-	for _, s := range d {
-		if s.Has(k) {
-			out = append(out, s.Path(k))
-		}
-	}
-	return out
-}
-func (d twoDisks) Has(k chunk.ShardKey) bool { return len(d.Paths(k)) != 0 }
-func (d twoDisks) Disks() []DiskInfo         { return nil }
-func (d twoDisks) Fill(string, uint64) error { return nil }
-
 // oneDisk is a host with one open disk, as /dev/* sees it.
 type oneDisk struct {
 	store *chunk.Store
@@ -153,7 +102,6 @@ func (d oneDisk) Paths(k chunk.ShardKey) []string {
 	}
 	return []string{d.store.Path(k)}
 }
-func (d oneDisk) Has(k chunk.ShardKey) bool { return d.store.Has(k) }
 
 func (d oneDisk) Disks() []DiskInfo {
 	used, free, total, _ := d.store.Disk()
@@ -161,3 +109,55 @@ func (d oneDisk) Disks() []DiskInfo {
 }
 
 func (d oneDisk) Fill(_ string, n uint64) error { return Fill(d.dir, n) }
+
+// twoDisks is a host with two open disks, as /dev/* sees it.
+type twoDisks struct{ a, b *chunk.Store }
+
+func (d twoDisks) Paths(k chunk.ShardKey) []string {
+	var out []string
+	for _, s := range []*chunk.Store{d.a, d.b} {
+		if s.Has(k) {
+			out = append(out, s.Path(k))
+		}
+	}
+	return out
+}
+
+func (d twoDisks) Disks() []DiskInfo         { return nil }
+func (d twoDisks) Fill(string, uint64) error { return nil }
+
+// /dev/corrupt reaches every copy of the key on the host: a rebalance within the host
+// leaves the old copy on its disk until the sweep, and a corruption that hit only that
+// orphan left the placed copy intact (the soak's phase 5 on the harness, 2026-10-11).
+// Invariant: I-172
+func TestHandler_CorruptEveryCopy(t *testing.T) {
+	open := func() *chunk.Store {
+		s, err := chunk.Open(sysfs.OS{}, filepath.Join(t.TempDir(), "shards"), 1<<30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	a, b := open(), open()
+	key := chunk.Key([32]byte{2}, 2, 1, 0)
+	for _, s := range []*chunk.Store{a, b} {
+		if _, err := s.Put(key, []byte("payload")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer(handler(meta.NewFSM(), twoDisks{a, b}, nil, nil, func(int) {}))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/dev/corrupt?key="+string(key), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("corrupt: %d", resp.StatusCode)
+	}
+	for i, s := range []*chunk.Store{a, b} {
+		if _, err := s.Get(key); !errors.Is(err, chunk.ErrCorrupt) {
+			t.Fatalf("disk %d after corrupt: %v", i, err)
+		}
+	}
+}
