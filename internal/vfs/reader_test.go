@@ -67,8 +67,8 @@ type flatPeers struct{ *testharness.Fabric }
 
 func (p flatPeers) Rank(nodes []meta.NodeIdx) []meta.NodeIdx { return nodes }
 
-// With every holder reachable and equally ranked the reader fetches exactly the k data
-// shards, so no parity shard is transferred and no reconstruction is needed.
+// With every holder reachable and equally ranked the reader fetches exactly k shards:
+// this host's own (free) and then data slots, so no parity shard crosses the network.
 // Lifecycle: L-63
 func TestReader_FetchFirstK(t *testing.T) {
 	f := testharness.NewFabric(t, 4, 2, 2)
@@ -84,13 +84,10 @@ func TestReader_FetchFirstK(t *testing.T) {
 	if !bytes.Equal(got, data) {
 		t.Fatalf("content differs at %d", testharness.FirstDiff(got, data))
 	}
+	want := WantGets(f, c)
 	for i, n := range c.Placement {
-		want := 0
-		if i < int(c.K) {
-			want = 1
-		}
-		if g := f.Gets(n); g != want {
-			t.Fatalf("slot %d (node %d): %d GETs, want %d; placement %v", i, n, g, want, c.Placement)
+		if g := f.Gets(n); g != want[n] {
+			t.Fatalf("slot %d (node %d): %d GETs, want %d; placement %v", i, n, g, want[n], c.Placement)
 		}
 	}
 }

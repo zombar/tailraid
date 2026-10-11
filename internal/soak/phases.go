@@ -40,6 +40,7 @@ var phases = []phase{
 	{"14 diskless host", phaseDiskless},
 	{"15 s3 bucket", phaseBucket},
 	{"16 web ui", phaseWeb},
+	{"17 hot path", phaseHotPath},
 }
 
 // model is the client's belief about the corpus: path → content.
@@ -231,7 +232,7 @@ func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
 			return admin.Report{}, err
 		}
 		r.lastRepair = st
-		if st.Repaired+st.Partial+st.Migrated+st.Deferred == 0 {
+		if st.Repaired+st.Partial+st.Migrated+st.Deferred+st.Rebalanced == 0 {
 			break
 		}
 		if err := r.Env.Wait(ctx, 200*time.Millisecond); err != nil {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -51,6 +52,12 @@ type Config struct {
 	ScanInterval time.Duration
 	ReportTTL    time.Duration // reported bad slots expire after this
 	Retention    time.Duration // the trash's retention (docs/06 §2, trash.retention); 0 = never purged on its own
+	// Capacity rebalance within a host (docs/14 §7, I-172): a disk more than
+	// RebalanceSkew (a fraction) above its share of its host's slots has slots moved to
+	// a disk of the same host below its share, at most RebalanceBatch chunks per pass
+	// (0 disables it).
+	RebalanceSkew  float64
+	RebalanceBatch int
 }
 
 // DefaultRetention is how long a deleted entry waits in the trash (docs/12 §10).
@@ -61,6 +68,7 @@ func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
+		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64,
 	}
 }
 
@@ -74,7 +82,8 @@ type Stats struct {
 	Migrated     int   `json:"migrated"`     // moved to the current (k,m)
 	PolicyStale  int   `json:"policy_stale"` // still on an older (k,m) after the pass
 	Scrubbed     int   `json:"scrubbed"`
-	ScrubBad     int   `json:"scrub_bad"` // slots found corrupt by scrub
+	ScrubBad     int   `json:"scrub_bad"`  // slots found corrupt by scrub
+	Rebalanced   int   `json:"rebalanced"` // slots moved between disks of one host (docs/14 §7)
 	BytesMoved   int64 `json:"bytes_moved"`
 	Errors       int   `json:"errors"`
 }
@@ -248,6 +257,14 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 		return true
 	})
 	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
+	slots := map[meta.NodeIdx]int{} // per target, for the capacity rebalance (docs/14 §7)
+	for i := range work {
+		for _, s := range work[i].Placement {
+			if s != 0 {
+				slots[s]++
+			}
+		}
+	}
 
 	for _, c := range work {
 		if ctx.Err() != nil {
@@ -330,10 +347,101 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 			r.Events.Record(c.Hash, meta.EvPartial, fmt.Sprintf("%d bad slots", len(bad)))
 		}
 	}
+	if ctx.Err() == nil {
+		st.Rebalanced, st.BytesMoved = r.rebalance(ctx, &st, all, slots, len(work))
+	}
 	r.mu.Lock()
 	r.last, r.lastAt = st, r.clk.Now()
 	r.mu.Unlock()
 	return st, nil
+}
+
+// rebalance evens out each host's disks by capacity (docs/14 §7, I-172): for every
+// move meta.RebalanceMoves lists, chunks holding a slot on the fuller disk and none on
+// the emptier one get that slot moved there, at most RebalanceBatch per pass. It returns
+// the slots moved and the bytes total including st.BytesMoved.
+func (r *Repairer) rebalance(ctx context.Context, st *Stats, nodes []meta.Node, slots map[meta.NodeIdx]int, chunks int) (int, int64) {
+	moved, total := 0, st.BytesMoved
+	if r.cfg.RebalanceBatch <= 0 {
+		return 0, total
+	}
+	for _, mv := range meta.RebalanceMoves(nodes, slots, chunks, r.cfg.RebalanceSkew, r.live.IsLive) {
+		n := min(mv.N, r.cfg.RebalanceBatch-moved)
+		if n <= 0 {
+			break
+		}
+		var cands []meta.Chunk
+		r.st.ForEachChunk(func(c meta.Chunk) bool {
+			if c.Refs == 0 || slices.Contains(c.Placement, mv.To) || !slices.Contains(c.Placement, mv.From) {
+				return true
+			}
+			cands = append(cands, c)
+			return len(cands) < n
+		})
+		for _, c := range cands {
+			if ctx.Err() != nil {
+				return moved, total
+			}
+			b, err := r.moveSlot(ctx, c, slices.Index(c.Placement, mv.From), mv.To)
+			total += b
+			if err != nil {
+				st.Errors++
+				r.warnRepair.Warn(r.log, "rebalance failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+				continue
+			}
+			moved++
+			r.Events.Record(c.Hash, meta.EvRepaired, fmt.Sprintf("rebalance: slot moved %d -> %d within host %d", mv.From, mv.To, mv.Host))
+		}
+	}
+	return moved, total
+}
+
+// moveSlot re-places one slot of c onto `to`: PUT the shard there, commit the placement
+// (Expect fences a concurrent change, I-102), then the fenced DELETE of the old shard,
+// so the chunk never has fewer readable slots than before (I-65). Returns the bytes put.
+func (r *Repairer) moveSlot(ctx context.Context, c meta.Chunk, slot int, to meta.NodeIdx) (int64, error) {
+	if slot < 0 {
+		return 0, errors.New("slot not in the placement")
+	}
+	data, err := r.rd.ReadChunk(ctx, c.Hash)
+	if err != nil {
+		return 0, fmt.Errorf("read: %w", err)
+	}
+	codec, err := r.codecs.Get(c.K, c.M)
+	if err != nil {
+		return 0, err
+	}
+	shards, err := codec.Encode(data)
+	if err != nil {
+		return 0, err
+	}
+	key := chunk.Key(c.Hash, c.K, c.M, slot)
+	r.limit.wait(ctx, int64(len(shards[slot])))
+	if err := r.shards.Put(ctx, to, key, shards[slot]); err != nil {
+		return 0, fmt.Errorf("put: %w", err)
+	}
+	moved := int64(len(shards[slot]))
+	newPlace := slices.Clone(c.Placement)
+	newPlace[slot] = to
+	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: newPlace, Expect: c.Placement}})
+	if err == nil {
+		err = res.Err
+	}
+	if errors.Is(err, meta.ErrConflict) {
+		return moved, nil // re-placed meanwhile: the next pass plans afresh; the shard is an orphan the sweep clears
+	}
+	if err != nil {
+		return moved, fmt.Errorf("set placement: %w", err)
+	}
+	if err := r.st.WaitApplied(ctx, index); err != nil {
+		return moved, err
+	}
+	if old := c.Placement[slot]; r.live.IsLive(old) {
+		if err := r.shards.DeleteFenced(ctx, old, key, index); err != nil {
+			r.log.Debug("stale shard delete refused", "node", old, "slot", slot, "err", err)
+		}
+	}
+	return moved, nil
 }
 
 type outcome struct {

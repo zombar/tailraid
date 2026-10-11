@@ -424,7 +424,8 @@ colour-alone. No dual axes, no stacked bars, no pie.
    the repairer's counters on the leader; "last scan never" on a fresh cluster.
 3. Polling pauses while the tab is hidden and resumes with one immediate fetch.
 4. Balance: filling a device's disk lowers its budget and expected share within a minute;
-   a draining node shows "slots to move".
+   a draining node shows "slots to move"; after `node add-disk` of a large disk its host's
+   bars move toward their ticks over the following repair passes (docs/14 §7).
 5. Browser: nested folders, every sort both ways, names with spaces, `#`, `%`, `?` and
    non-ASCII; a 409 toast on an existing folder name; an upload of a 100 MB file with
    progress, a cancel mid-way, five files queued in order, a 507 toast on a full volume.

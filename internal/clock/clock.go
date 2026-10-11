@@ -76,6 +76,13 @@ func (f *Fake) NewTimer(d time.Duration) Timer {
 	return t
 }
 
+// Pending is the number of armed timers: what is waiting on this clock right now.
+func (f *Fake) Pending() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.timers)
+}
+
 // Advance moves the clock forward by d, firing every timer due at or before the new time.
 func (f *Fake) Advance(d time.Duration) {
 	f.mu.Lock()
