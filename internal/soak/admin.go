@@ -115,21 +115,33 @@ func (a *Admin) nodeOp(ctx context.Context, n NodeRef, op rpc.AdminOp, out any) 
 	return a.call(ctx, n.RPC, http.MethodPost, "/v1/admin", body, out)
 }
 
+// PassTimeout bounds an admin op that runs a pass over the live volume (repair, scrub,
+// GC): the leader answers when the pass is done, and the caller's deadline is the only
+// one (docs/08, I-189), so the environment sets this one.
+const PassTimeout = 30 * time.Minute
+
+// passOp runs a pass op on the leader under PassTimeout.
+func (a *Admin) passOp(ctx context.Context, op rpc.AdminOp, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, PassTimeout)
+	defer cancel()
+	return a.leaderOp(ctx, op, out)
+}
+
 func (a *Admin) RepairNow(ctx context.Context) (repair.Stats, error) {
 	var st repair.Stats
-	err := a.leaderOp(ctx, rpc.AdminOp{Op: "repair_now"}, &st)
+	err := a.passOp(ctx, rpc.AdminOp{Op: "repair_now"}, &st)
 	return st, err
 }
 
 func (a *Admin) Scrub(ctx context.Context) (repair.Stats, error) {
 	var rep admin.CheckReport
-	err := a.leaderOp(ctx, rpc.AdminOp{Op: "check", Scrub: true}, &rep)
+	err := a.passOp(ctx, rpc.AdminOp{Op: "check", Scrub: true}, &rep)
 	return rep.Scan, err
 }
 
 func (a *Admin) GCNow(ctx context.Context) (repair.Result, error) {
 	var res repair.Result
-	err := a.leaderOp(ctx, rpc.AdminOp{Op: "gc_now"}, &res)
+	err := a.passOp(ctx, rpc.AdminOp{Op: "gc_now"}, &res)
 	return res, err
 }
 
