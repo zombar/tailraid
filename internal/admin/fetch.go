@@ -14,10 +14,11 @@ type Caller interface {
 	Call(ctx context.Context, addr, method, path string, body []byte) ([]byte, error)
 }
 
-// FetchStatus asks a node for its status report (GET /v1/status).
+// FetchStatus asks a node for a status report built after the request (GET
+// /v1/status?fresh=1, I-214): the CLI and verify read what follows the action before.
 func FetchStatus(ctx context.Context, c Caller, addr string) (Report, error) {
 	var rep Report
-	raw, err := c.Call(ctx, addr, http.MethodGet, "/v1/status", nil)
+	raw, err := c.Call(ctx, addr, http.MethodGet, "/v1/status?fresh=1", nil)
 	if err != nil {
 		return rep, err
 	}
