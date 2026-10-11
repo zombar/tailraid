@@ -325,3 +325,29 @@ export function upload(path: string, file: File, onProgress: (sent: number) => v
     },
   };
 }
+
+// The Stats page (docs/13 §3, docs/17 §3): the charts of a range as server-rendered SVG.
+export interface StatsMember {
+  name: string;
+  addr: string; // the tailnet IP
+  live: boolean;
+  self: boolean;
+  web?: number; // the member's browser UI port, absent when off
+}
+
+export interface StatsChart {
+  id: string;
+  title: string;
+  svg: string;
+  caption: string;
+}
+
+export interface StatsResponse {
+  range: { from: number; to: number; live: boolean; tier: string; step: number };
+  node: string;
+  nodes: StatsMember[];
+  charts: StatsChart[];
+}
+
+export const getStats = (from: number, to: number | "now", node: string): Promise<StatsResponse> =>
+  call(`/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}`);

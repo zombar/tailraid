@@ -57,6 +57,7 @@ type Cell struct {
 type Axis struct {
 	Clock bool
 	Start time.Time
+	Span  float64 // when positive, the x axis ends here (seconds) rather than at the data's last point
 }
 
 // tick is an axis tick label for x over a span of maxX seconds.
@@ -187,6 +188,9 @@ func Line(title, yLabel string, ss []Series, marks []Marker, bands []Band, ax Ax
 	}
 	for _, bd := range bands {
 		maxX = math.Max(maxX, bd.X1)
+	}
+	if ax.Span > 0 {
+		maxX = ax.Span
 	}
 	if maxX == 0 {
 		maxX = 1

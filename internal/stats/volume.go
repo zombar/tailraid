@@ -84,3 +84,13 @@ func (v VFS) List(_ context.Context, dir string) ([]string, error) {
 
 // Remove unlinks a file.
 func (v VFS) Remove(_ context.Context, name string) error { return v.FS.Remove(name) }
+
+// Version names a file's current content, `<ino>.<gen>.<version>` as the web UI's ETag:
+// a sealed segment keeps it for life, the month segment changes it with every rebuild.
+func (v VFS) Version(_ context.Context, name string) (string, error) {
+	in, err := v.St.Resolve(meta.SplitPath(name))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d.%d.%d", in.Ino, in.Gen, in.Version), nil
+}

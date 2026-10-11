@@ -325,8 +325,33 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		if login != "" {
 			webUsers = login
 		}
+		cacheBytes, err := cfg.StatsCacheBytes()
+		if err != nil {
+			return err
+		}
+		query := &stats.Query{
+			Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Keep: statsSvc.Keep, CacheBytes: cacheBytes, Log: log,
+			Self: statsSvc.Live, Fetch: stats.FetchRPC(client),
+			Members: func() []stats.Member {
+				probes := prober.Snapshot()
+				var out []stats.Member
+				all := node.FSM.Nodes()
+				for i := range all {
+					n := &all[i]
+					if n.Kind != meta.KindDevice || n.State == meta.Removed {
+						continue
+					}
+					m := stats.Member{Name: n.Name, Addr: net.JoinHostPort(n.Addr, strconv.Itoa(int(n.RPCPort))), Live: prober.IsLive(n.Idx), Self: n.Idx == selfIdx, Web: probes[n.Idx].Web}
+					if m.Self {
+						m.Web = webPort(cfg)
+					}
+					out = append(out, m)
+				}
+				return out
+			},
+		}
 		web, err = webui.New(webui.Options{
-			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Hosts: webui.Hosts(webAddr, ident.DNSName),
+			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: status, Stats: query, Hosts: webui.Hosts(webAddr, ident.DNSName),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log,

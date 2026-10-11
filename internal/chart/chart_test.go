@@ -267,3 +267,16 @@ func TestChart_TruncateMarkerLabel(t *testing.T) {
 		}
 	}
 }
+
+// Invariant: I-197
+func TestChart_AxisSpan(t *testing.T) {
+	ss := []Series{{Name: "v", Points: [][2]float64{{0, 1}, {100, 2}}}}
+	free := Line("t", "y", ss, nil, nil, Axis{})
+	if !strings.Contains(free, `>100s</text>`) {
+		t.Error("without a span the axis ends at the data")
+	}
+	pinned := Line("t", "y", ss, nil, nil, Axis{Span: 600})
+	if !strings.Contains(pinned, `>600s</text>`) || !strings.Contains(pinned, `>500s</text>`) {
+		t.Error("with a span the axis ends at the span")
+	}
+}

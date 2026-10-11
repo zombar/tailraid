@@ -53,6 +53,51 @@ function setWidth(el, frac) {
   el.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(2) + "%";
 }
 
+// internal/webui/src/theme.ts
+var KEY = "theme";
+var NEXT = { system: "light", light: "dark", dark: "system" };
+function stored() {
+  try {
+    const v = localStorage.getItem(KEY);
+    return v === "light" || v === "dark" ? v : "system";
+  } catch {
+    return "system";
+  }
+}
+function apply(t) {
+  if (t === "system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+  try {
+    if (t === "system") localStorage.removeItem(KEY);
+    else localStorage.setItem(KEY, t);
+  } catch {
+  }
+}
+function next(t) {
+  return NEXT[t];
+}
+var GLYPHS = {
+  system: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("circle", { cx: 8, cy: 8, r: 6 }), svg("path", { d: "M8 2a6 6 0 0 1 0 12z", fill: "currentColor", stroke: "none" })),
+  light: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("circle", { cx: 8, cy: 8, r: 3 }), svg("path", { d: "M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" })),
+  dark: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d: "M13.5 9.8A6 6 0 0 1 6.2 2.5a6 6 0 1 0 7.3 7.3z" }))
+};
+function wire(button) {
+  const draw = (t) => {
+    const label = `Theme: ${t} (tap for ${next(t)})`;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.replaceChildren(GLYPHS[t](), Object.assign(document.createElement("span"), { textContent: t }));
+  };
+  let current = stored();
+  draw(current);
+  button.addEventListener("click", () => {
+    current = next(current);
+    apply(current);
+    draw(current);
+  });
+}
+apply(stored());
+
 // internal/webui/src/api.ts
 var ApiError = class extends Error {
   constructor(status2, message) {
@@ -186,6 +231,7 @@ function upload(path, file, onProgress, onNote) {
     }
   };
 }
+var getStats = (from, to, node) => call(`/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}`);
 
 // internal/webui/src/status.ts
 var INTERVAL = 5e3;
@@ -797,10 +843,10 @@ function render5(path, expected) {
 function row(i, c) {
   const km = c.k + c.m;
   const live = h("span", { class: "live" + (c.live_slots < c.k ? " bad" : c.live_slots < km ? " warn" : "") }, `${c.live_slots}/${km}`);
-  const hash = h("span", { title: c.hash }, c.hash.slice(0, 10));
-  if (c.policy_stale) hash.append(" ", h("span", { class: "badge warn" }, "stale"));
-  if (!c.found) hash.append(" ", h("span", { class: "badge bad" }, c.state));
-  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots));
+  const hash2 = h("span", { title: c.hash }, c.hash.slice(0, 10));
+  if (c.policy_stale) hash2.append(" ", h("span", { class: "badge warn" }, "stale"));
+  if (!c.found) hash2.append(" ", h("span", { class: "badge bad" }, c.state));
+  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash2, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots));
 }
 
 // internal/webui/src/player.ts
@@ -877,7 +923,7 @@ function render6(root, path) {
     const group = siblings.filter((s) => sameGroup(mediaKind(ext(s.name)), kind));
     const index = group.findIndex((s) => s.name === name);
     const prev = index > 0 ? group[index - 1] : void 0;
-    const next = index >= 0 && index < group.length - 1 ? group[index + 1] : void 0;
+    const next2 = index >= 0 && index < group.length - 1 ? group[index + 1] : void 0;
     const go = (e) => {
       if (e) location.hash = "#/file" + encodeForHash(join(dir, e.name));
     };
@@ -897,7 +943,7 @@ function render6(root, path) {
         el.src = fileURL(path);
         media = { el, dir };
       }
-      el.onended = () => go(next);
+      el.onended = () => go(next2);
       viewer.append(el);
       if (mime && el.canPlayType(mime) === "") {
         section.append(
@@ -906,7 +952,7 @@ function render6(root, path) {
       }
     } else if (kind === "image") {
       viewer.append(h("img", { src: fileURL(path), alt: name }));
-      if (next) new Image().src = fileURL(join(dir, next.name));
+      if (next2) new Image().src = fileURL(join(dir, next2.name));
     } else if (kind === "text") {
       if (entry && entry.size > TEXT_MAX) {
         viewer.append(h("div", { class: "placeholder" }, "too large to preview", h("a", { class: "btn", href: fileURL(path, true) }, "Download")));
@@ -931,8 +977,8 @@ function render6(root, path) {
           "div",
           { class: "controls" },
           h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, "\u25C0 Previous"),
-          h("button", { type: "button", disabled: !next, onClick: () => go(next) }, "Next \u25B6"),
-          h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next ? ` \xB7 next: ${next.name}` : ""))
+          h("button", { type: "button", disabled: !next2, onClick: () => go(next2) }, "Next \u25B6"),
+          h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next2 ? ` \xB7 next: ${next2.name}` : ""))
         )
       );
     }
@@ -943,7 +989,7 @@ function render6(root, path) {
     keyHandler = (ev) => {
       const t = ev.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "VIDEO" || t.tagName === "AUDIO")) return;
-      if (ev.key === "ArrowRight") go(next);
+      if (ev.key === "ArrowRight") go(next2);
       else if (ev.key === "ArrowLeft") go(prev);
       else if (ev.key === "Escape") location.hash = "#/browse" + encodeForHash(dir);
       else if (ev.key === " " && media) {
@@ -1244,6 +1290,156 @@ function compare(a, b, s) {
   return s.desc ? -c : c;
 }
 
+// internal/webui/src/stats.ts
+var RANGES = [
+  ["1h", 3600],
+  ["6h", 6 * 3600],
+  ["24h", 86400],
+  ["7d", 7 * 86400],
+  ["30d", 30 * 86400],
+  ["1y", 365 * 86400]
+];
+var INTERVAL2 = 5e3;
+function parse(query) {
+  const q = new URLSearchParams(query);
+  const from = Number(q.get("from"));
+  const to = Number(q.get("to"));
+  if (from > 0 && to > from) return { range: "custom", from, to, node: q.get("node") ?? "" };
+  const range = RANGES.some(([r]) => r === q.get("range")) ? q.get("range") : "6h";
+  return { range, from: 0, to: 0, node: q.get("node") ?? "" };
+}
+function hash(s) {
+  const q = new URLSearchParams();
+  if (s.range === "custom") {
+    q.set("from", String(s.from));
+    q.set("to", String(s.to));
+  } else q.set("range", s.range);
+  if (s.node) q.set("node", s.node);
+  return "#/stats?" + q.toString();
+}
+function bounds(s, now) {
+  if (s.range === "custom") return { from: s.from, to: s.to };
+  const secs = RANGES.find(([r]) => r === s.range)?.[1] ?? 6 * 3600;
+  return { from: Math.floor(now / 1e3) - secs, to: "now" };
+}
+function local(t) {
+  const d = new Date(t * 1e3);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function render8(root, query) {
+  const state = parse(query);
+  let timer;
+  let disposed = false;
+  let last = null;
+  let lastAt = 0;
+  const go = (next2) => {
+    location.hash = hash({ ...state, ...next2 });
+  };
+  const seg = h("span", { class: "seg", role: "group", "aria-label": "range" });
+  for (const [r] of RANGES) seg.append(h("button", { type: "button", "aria-pressed": String(state.range === r), onclick: () => go({ range: r, from: 0, to: 0 }) }, r));
+  const form = h("form", { class: "inline-form range" });
+  const customBtn = h("button", { type: "button", "aria-pressed": String(state.range === "custom"), onclick: () => form.toggleAttribute("hidden") }, "custom");
+  seg.append(customBtn);
+  const now = Math.floor(Date.now() / 1e3);
+  const fromIn = h("input", { type: "datetime-local", "aria-label": "from", value: local(state.range === "custom" ? state.from : now - 6 * 3600) });
+  const toIn = h("input", { type: "datetime-local", "aria-label": "to", value: local(state.range === "custom" ? state.to : now) });
+  const apply2 = h("button", { type: "submit" }, "Apply");
+  const check = () => {
+    const f = Date.parse(fromIn.value) / 1e3;
+    const t = Date.parse(toIn.value) / 1e3;
+    apply2.disabled = !(f > 0 && t > f);
+  };
+  fromIn.addEventListener("input", check);
+  toIn.addEventListener("input", check);
+  check();
+  form.append(h("label", null, "from ", fromIn), h("label", null, "to ", toIn), apply2, h("button", { type: "button", onclick: () => form.setAttribute("hidden", "") }, "Cancel"));
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    go({ range: "custom", from: Math.floor(Date.parse(fromIn.value) / 1e3), to: Math.floor(Date.parse(toIn.value) / 1e3) });
+  });
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") form.setAttribute("hidden", "");
+  });
+  if (state.range !== "custom") form.setAttribute("hidden", "");
+  const menu = h("details", { class: "menu" });
+  const summary = h("summary", null, "Node: " + (state.node || "this device"));
+  const body = h("div", { class: "menu-body" });
+  menu.append(summary, body);
+  const pill2 = h("span", { class: "pill", title: "waiting for the first fetch" }, "loading");
+  const toolbar = h("div", { class: "toolbar" }, seg, menu, h("span", { class: "spacer" }), pill2);
+  const charts = h("div", { class: "charts" });
+  const head = h("section", null, h("h2", null, "Stats", h("span", { class: "h-sub" }, "")), toolbar, form);
+  root.append(head, charts);
+  const sub = head.querySelector(".h-sub");
+  const drawMembers = (nodes, current) => {
+    clear(body);
+    const row2 = (name, label, dot, note, m) => {
+      const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
+      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name }, "\u2197"));
+      body.append(el);
+    };
+    row2("all", "all nodes", "off", "one series per member");
+    for (const m of nodes) row2(m.name, m.name, m.live ? "ok" : "bad", (m.self ? "this device \xB7 " : "") + (m.live ? "live" : "dead") + (m.web ? "" : " \xB7 no web listener"), m);
+  };
+  const draw = (r) => {
+    last = r;
+    lastAt = Date.now();
+    const nodeName = state.node === "" ? r.node : state.node;
+    summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
+    drawMembers(r.nodes, nodeName);
+    const span = r.range.to - r.range.from;
+    sub.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
+    clear(charts);
+    if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
+    for (const c of r.charts) {
+      const card2 = h("div", { class: "chart-card" });
+      card2.innerHTML = c.svg;
+      card2.append(h("div", { class: "small dim" }, c.caption + " \xB7 " + c.title));
+      charts.append(card2);
+    }
+    setPill(r.range.live ? "live" : "paused");
+  };
+  const setPill = (mode, err) => {
+    pill2.className = "pill" + (mode === "live" ? " ok" : mode === "error" ? " bad" : "");
+    pill2.textContent = mode === "error" ? "unreachable" : mode;
+    pill2.title = mode === "error" ? err ?? "" : mode === "live" ? "last fetch " + new Date(lastAt).toLocaleTimeString() + " \xB7 next in 5 s" : "a custom range never refreshes";
+  };
+  const fetchOnce = async () => {
+    const b = bounds(state, Date.now());
+    try {
+      const r = await getStats(b.from, b.to, state.node);
+      if (!disposed) draw(r);
+    } catch (e) {
+      if (disposed) return;
+      setPill("error", e instanceof Error ? e.message : String(e));
+      if (!last) charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + (e instanceof Error ? e.message : String(e))));
+    }
+  };
+  const loop = async () => {
+    stop();
+    await fetchOnce();
+    if (!disposed && state.range !== "custom" && document.visibilityState !== "hidden") timer = window.setTimeout(() => void loop(), INTERVAL2);
+  };
+  const stop = () => {
+    if (timer !== void 0) window.clearTimeout(timer);
+    timer = void 0;
+  };
+  const onVisible = () => {
+    if (document.visibilityState === "hidden") {
+      stop();
+      if (last) setPill("paused");
+    } else void loop();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  void loop();
+  return () => {
+    disposed = true;
+    stop();
+    document.removeEventListener("visibilitychange", onVisible);
+  };
+}
+
 // internal/webui/src/main.ts
 var view = document.getElementById("view");
 var pill = document.getElementById("health");
@@ -1285,8 +1481,9 @@ function drawShell() {
 }
 var dispose = null;
 function route() {
-  const hash = location.hash || "#/";
-  const [head = "", ...rest] = hash.replace(/^#\/?/, "").split("/");
+  const hash2 = location.hash || "#/";
+  const [where = "", query = ""] = hash2.replace(/^#\/?/, "").split("?");
+  const [head = "", ...rest] = where.split("/");
   const tail = rest.join("/");
   dispose?.();
   dispose = null;
@@ -1298,12 +1495,17 @@ function route() {
   } else if (head === "file") {
     tab = "files";
     dispose = render6(view, decodeHashPath(tail));
+  } else if (head === "stats") {
+    tab = "stats";
+    dispose = render8(view, query);
   } else {
     dispose = render4(view);
   }
   for (const a of tabs) a.classList.toggle("active", a.dataset.tab === tab);
   window.scrollTo(0, 0);
 }
+var themeButton = document.querySelector("button.theme");
+if (themeButton) wire(themeButton);
 status.subscribe(drawShell);
 window.addEventListener("hashchange", route);
 route();

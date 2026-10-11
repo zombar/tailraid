@@ -1,12 +1,14 @@
 // tailraid web UI entry (docs/13): the shell (health pill, warnings, tabs) and the hash
 // router over the dashboard, the file browser and the file view.
 
+import * as theme from "./theme.ts"; // first: applies the stored theme before any view renders (I-200)
 import { clear, h } from "./dom.ts";
 import { status } from "./status.ts";
 import { decodeHashPath } from "./util.ts";
 import * as dashboard from "./dashboard.ts";
 import * as browser from "./browser.ts";
 import * as player from "./player.ts";
+import * as stats from "./stats.ts";
 import type { Report } from "./api.ts";
 
 const view = document.getElementById("view") as HTMLElement;
@@ -63,7 +65,8 @@ let dispose: (() => void) | null = null;
 
 function route(): void {
   const hash = location.hash || "#/";
-  const [head = "", ...rest] = hash.replace(/^#\/?/, "").split("/");
+  const [where = "", query = ""] = hash.replace(/^#\/?/, "").split("?");
+  const [head = "", ...rest] = where.split("/");
   const tail = rest.join("/");
   dispose?.();
   dispose = null;
@@ -75,6 +78,9 @@ function route(): void {
   } else if (head === "file") {
     tab = "files";
     dispose = player.render(view, decodeHashPath(tail));
+  } else if (head === "stats") {
+    tab = "stats";
+    dispose = stats.render(view, query);
   } else {
     dispose = dashboard.render(view);
   }
@@ -82,6 +88,8 @@ function route(): void {
   window.scrollTo(0, 0);
 }
 
+const themeButton = document.querySelector<HTMLButtonElement>("button.theme");
+if (themeButton) theme.wire(themeButton);
 status.subscribe(drawShell);
 window.addEventListener("hashchange", route);
 route();
