@@ -91,13 +91,17 @@ func phaseStats(ctx context.Context, r *Run) error {
 		r.check("I-193", "stats seal --rollup", false, err.Error())
 		return nil
 	}
+	// the rollup seal sealed the rows sampled since the first seal into a second raw
+	// segment before rolling the day up: the raw rows are read again, after it, since a
+	// segment changes only on a seal
+	rawNow, _, _ := r.statsSegments(v, stats.Raw, gw.Name)
 	minute, _, ok := r.statsSegments(v, stats.Minute, gw.Name)
-	want := stats.Rollup(rawRows[gw.Name], stats.Minute)
+	want := stats.Rollup(rawNow, stats.Minute)
 	var wantBuf, gotBuf bytes.Buffer
 	_ = stats.Encode(&wantBuf, want)
 	_ = stats.Encode(&gotBuf, minute)
 	r.check("I-193", "today's minute rollup equals the rollup of the raw rows", ok && bytes.Equal(wantBuf.Bytes(), gotBuf.Bytes()),
-		fmt.Sprintf("%d minute rows from %d raw rows", len(minute), len(rawRows[gw.Name])))
+		fmt.Sprintf("%d minute rows from %d raw rows", len(minute), len(rawNow)))
 	if coarse, _, ok := r.statsSegments(v, stats.Coarse, gw.Name); !ok || len(coarse) == 0 {
 		r.check("I-193", "today's coarse rollup", false, "no coarse segment")
 	} else {
