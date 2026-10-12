@@ -166,8 +166,52 @@ func CheckInvariants(st *State) []string {
 			bad("trash index: empty set under %d", parent)
 		}
 	}
+	checkSnaps(st, bad)
 	sort.Strings(v)
 	return v
+}
+
+// checkSnaps verifies the snapshot catalogue (docs/16 §5, I-179, I-184): every row on a
+// live mirror row, with a valid name unique on its mirror, an ID below NextSnap, a known
+// state, at most one sync per mirror; and no mirror is ever a placement slot.
+func checkSnaps(st *State, bad func(string, ...any)) {
+	type key struct {
+		m    NodeIdx
+		name string
+	}
+	names := map[key]SnapID{}
+	syncing := map[NodeIdx]SnapID{}
+	for id, sn := range st.Snaps {
+		if sn.ID != id || id == 0 || id >= st.NextSnap {
+			bad("snapshot %d: ID %d, NextSnap %d", id, sn.ID, st.NextSnap)
+		}
+		if m, ok := st.Nodes[sn.Mirror]; !ok || m.Kind != KindMirror || m.State == Removed {
+			bad("snapshot %d: mirror %d is not a live mirror row", id, sn.Mirror)
+		}
+		if !validSnapName(sn.Name) {
+			bad("snapshot %d: invalid name %q", id, sn.Name)
+		}
+		if other, dup := names[key{sn.Mirror, sn.Name}]; dup {
+			bad("snapshots %d and %d share the name %q on mirror %d", other, id, sn.Name, sn.Mirror)
+		}
+		names[key{sn.Mirror, sn.Name}] = id
+		if sn.State < SnapSyncing || sn.State > SnapDeleting {
+			bad("snapshot %d: invalid state %d", id, sn.State)
+		}
+		if sn.State == SnapSyncing {
+			if other, dup := syncing[sn.Mirror]; dup {
+				bad("snapshots %d and %d both sync to mirror %d", other, id, sn.Mirror)
+			}
+			syncing[sn.Mirror] = id
+		}
+	}
+	for h, ch := range st.Chunks {
+		for _, n := range ch.Placement {
+			if nd, ok := st.Nodes[n]; ok && nd.Kind == KindMirror {
+				bad("chunk %x: a slot on mirror %d", h[:4], n)
+			}
+		}
+	}
 }
 
 // CheckStats compares the stats the applier kept against a recount (I-153, I-156).

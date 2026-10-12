@@ -242,7 +242,7 @@ func TestEncodeCommand_AllOpsCovered(t *testing.T) {
 	for _, g := range goldenCommands {
 		seen[g.cmd.Op] = true
 	}
-	for op := OpSetVolume; op <= OpSetShardSums; op++ {
+	for op := OpSetVolume; op <= OpSnapshotDelete; op++ {
 		if !seen[op] {
 			t.Errorf("op %d has no golden", op)
 		}

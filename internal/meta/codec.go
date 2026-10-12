@@ -11,11 +11,13 @@ import (
 
 var stateMagic = []byte("TRM1")
 
-// stateVersion 2 adds Volume.Auto, 3 Node.Host and 4 Inode.Flags and DeletedAt; older
+// stateVersion 2 adds Volume.Auto, 3 Node.Host, 4 Inode.Flags and DeletedAt, 5 Chunk.Sums
+// and 7 the snapshot catalogue; older
 // snapshots are still read (the fields zero) so a cluster upgrades without a format
 // break (docs/12 §6, I-156).
 const (
-	stateVersion   = 5
+	stateVersion   = 7 // the snapshot catalogue (docs/16, I-184); 6 is never written: the log codec 6 added no state
+	stateVersionV5 = 5
 	stateVersionV4 = 4
 	stateVersionV3 = 3
 	stateVersionV2 = 2
@@ -74,7 +76,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		w.u32(c.Refs)
 		w.nodeIdxs(c.Placement)
 		w.i64(c.TombstonedAt)
-		if version >= stateVersion {
+		if version >= stateVersionV5 {
 			w.hashes(c.Sums)
 		}
 		w.spill()
@@ -130,7 +132,58 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		}
 		w.spill()
 	}
+	if version >= stateVersion {
+		writeSnaps(w, s)
+	}
 	return w.flush()
+}
+
+// writeSnaps writes the snapshot catalogue in ID order, then NextSnap (version 7).
+func writeSnaps(w *writer, s *State) {
+	ids := make([]SnapID, 0, len(s.Snaps))
+	for id := range s.Snaps {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	w.uvarint(uint64(len(ids)))
+	for _, id := range ids {
+		sn := s.Snaps[id]
+		w.u32(uint32(sn.ID))
+		w.u16(uint16(sn.Mirror))
+		w.str(sn.Name)
+		w.u64(sn.Index)
+		w.i64(sn.At)
+		w.bool(sn.Auto)
+		w.u8(uint8(sn.State))
+		w.hash(sn.Root)
+		w.u64(sn.Files)
+		w.u64(sn.Bytes)
+		w.u64(sn.NewBytes)
+		w.u32(sn.Missing)
+	}
+	w.u32(uint32(s.NextSnap))
+}
+
+// readSnaps is the inverse of writeSnaps; IDs must ascend and states be known.
+func readSnaps(r *reader, s *State) error {
+	n := r.length(maxListLen)
+	var prev SnapID
+	for i := 0; i < n && r.err == nil; i++ {
+		sn := &Snapshot{
+			ID: SnapID(r.u32()), Mirror: NodeIdx(r.u16()), Name: r.str(), Index: r.u64(), At: r.i64(), Auto: r.bool(),
+			State: SnapState(r.u8()), Root: r.hash(), Files: r.u64(), Bytes: r.u64(), NewBytes: r.u64(), Missing: r.u32(),
+		}
+		if r.err == nil && (sn.ID == 0 || sn.ID <= prev) {
+			return fmt.Errorf("meta: snapshot catalogue not in canonical order")
+		}
+		if r.err == nil && (sn.State < SnapSyncing || sn.State > SnapDeleting) {
+			return fmt.Errorf("meta: snapshot %d has invalid state %d", sn.ID, sn.State)
+		}
+		prev = sn.ID
+		s.Snaps[sn.ID] = sn
+	}
+	s.NextSnap = SnapID(r.u32())
+	return nil
 }
 
 // DecodeState parses a snapshot written by EncodeState. It rejects unknown versions,
@@ -142,7 +195,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
-	if r.err == nil && version != stateVersion && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
@@ -151,6 +204,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		Nodes:  map[NodeIdx]*Node{},
 		Tombs:  map[Hash]struct{}{},
 		Trash:  map[Ino]map[Ino]struct{}{},
+		Snaps:  map[SnapID]*Snapshot{},
 	}
 	s.Applied = r.u64()
 	s.LastNow = r.i64()
@@ -185,7 +239,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		}
 		prevHash = h
 		c := &Chunk{Hash: h, Size: r.u32(), K: r.u8(), M: r.u8(), Refs: r.u32(), Placement: r.nodeIdxs(), TombstonedAt: r.i64()}
-		if version >= stateVersion {
+		if version >= stateVersionV5 {
 			c.Sums = r.hashes()
 		}
 		if h == HashZero {
@@ -243,6 +297,13 @@ func DecodeState(rd io.Reader) (*State, error) {
 		if in.DeletedAt != 0 {
 			s.indexTrash(in.Parent, in.Ino) // the trash index is rebuilt, like Tombs (I-156)
 		}
+	}
+	if version >= stateVersion {
+		if err := readSnaps(r, s); err != nil {
+			return nil, err
+		}
+	} else {
+		s.NextSnap = 1 // an older snapshot has no catalogue (I-184)
 	}
 	if err := r.done(); err != nil {
 		return nil, err

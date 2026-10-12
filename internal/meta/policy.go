@@ -37,7 +37,7 @@ func targets(nodes []Node) []target {
 			if h := devs[n.Host]; h != nil {
 				out = append(out, target{idx: n.Idx, host: h.Idx, voter: h.Voter})
 			}
-		case KindDevice:
+		case KindDevice, KindMirror: // a device stores nothing; a mirror holds snapshots, not slots (docs/16)
 		}
 	}
 	return out

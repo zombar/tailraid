@@ -154,6 +154,12 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.purge(c.Purge)
 	case OpSetShardSums:
 		return Result{}, a.setShardSums(c.SetShardSums)
+	case OpSnapshotBegin:
+		return a.snapshotBegin(c.SnapshotBegin)
+	case OpSnapshotEnd:
+		return Result{}, a.snapshotEnd(c.SnapshotEnd)
+	case OpSnapshotDelete:
+		return Result{}, a.snapshotDelete(c.SnapshotDelete)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -235,10 +241,14 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 		if n.Host != 0 {
 			return Result{}, ErrBadCommand
 		}
-	case KindDisk:
-		// a disk belongs to an Active device for its whole life (docs/14 §1)
+	case KindDisk, KindMirror:
+		// a disk or a mirror belongs to an Active device for its whole life (docs/14 §1,
+		// docs/16 §1); a re-homed mirror changes only its Host
 		if h, ok := st.Nodes[n.Host]; !ok || h.Kind != KindDevice || h.State != Active {
 			return Result{}, ErrBadCommand
+		}
+		if n.Kind == KindMirror && (n.Capacity != 0 || n.Voter) {
+			return Result{}, ErrBadCommand // never a placement target, never a voter (I-184)
 		}
 	default:
 		return Result{}, ErrBadCommand
@@ -283,10 +293,27 @@ func (a *applier) nodeSetState(c *NodeSetState) error {
 		return ErrBadCommand
 	}
 	if c.State == Removed && n.Kind == KindDevice {
-		// a host leaves after its disks (docs/14 §1)
+		// a host leaves after its disks and its mirrors (docs/14 §1, docs/16 §1)
 		for _, d := range a.st.Nodes {
-			if d.Kind == KindDisk && d.Host == c.Idx && d.State != Removed {
+			if (d.Kind == KindDisk || d.Kind == KindMirror) && d.Host == c.Idx && d.State != Removed {
 				return ErrNodeNotEmpty
+			}
+		}
+	}
+	if n.Kind == KindMirror && c.State == Draining {
+		return ErrBadCommand // a mirror holds no slot to move
+	}
+	if c.State == Removed && n.Kind == KindMirror {
+		// its catalogue rows go with it (the disk keeps its snapshots, docs/16 §5); a
+		// sync must end first, so no hold is dropped silently
+		for _, sn := range a.st.Snaps {
+			if sn.Mirror == c.Idx && sn.State == SnapSyncing {
+				return ErrNodeNotEmpty
+			}
+		}
+		for id, sn := range a.st.Snaps {
+			if sn.Mirror == c.Idx {
+				delete(a.st.Snaps, id)
 			}
 		}
 	}
@@ -729,6 +756,17 @@ func validPlacement(k, m uint8, p []NodeIdx) bool {
 	return true
 }
 
+// onMirror reports whether a placement names a mirror row: a mirror holds snapshots,
+// never a slot (docs/16 §1, I-184), so such a placement is a bad command.
+func (a *applier) onMirror(p []NodeIdx) bool {
+	for _, idx := range p {
+		if n, ok := a.st.Nodes[idx]; ok && n.Kind == KindMirror {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *applier) commit(c *Commit) error {
 	if c == nil {
 		return ErrBadCommand
@@ -782,7 +820,7 @@ func (a *applier) commit(c *Commit) error {
 			}
 			continue
 		}
-		if d.Size == 0 || uint64(d.Size) > cs || !validPlacement(d.K, d.M, d.Placement) {
+		if d.Size == 0 || uint64(d.Size) > cs || !validPlacement(d.K, d.M, d.Placement) || a.onMirror(d.Placement) {
 			return ErrBadCommand
 		}
 		if len(d.Sums) != 0 && len(d.Sums) != int(d.K) {
@@ -906,7 +944,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	if !ok {
 		return ErrUnknownChunk
 	}
-	if !validPlacement(c.K, c.M, c.Placement) {
+	if !validPlacement(c.K, c.M, c.Placement) || a.onMirror(c.Placement) {
 		return ErrBadCommand
 	}
 	if c.Expect != nil && !slices.Equal(ch.Placement, c.Expect) {
@@ -955,10 +993,16 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 		return Result{}, ErrBadCommand
 	}
 	st := a.st
+	before := c.Before
+	if at, ok := st.syncHold(); ok && at < before {
+		// the sync hold (docs/16 §4, I-181): a chunk tombstoned after a snapshot began
+		// may be referenced by it, so it waits until the copy to its mirror ends
+		before = at
+	}
 	var victims []GCVictim
 	for h := range st.Tombs {
 		ch := st.Chunks[h]
-		if ch.Refs == 0 && ch.TombstonedAt < c.Before {
+		if ch.Refs == 0 && ch.TombstonedAt < before {
 			victims = append(victims, GCVictim{Hash: h, K: ch.K, M: ch.M, Placement: append([]NodeIdx(nil), ch.Placement...)})
 		}
 	}

@@ -287,7 +287,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 				r.Lost = pr.Lost
 			}
 		}
-		if nd.State == meta.Active && nd.Kind != meta.KindDevice { // a device stores nothing (docs/14 §9)
+		if nd.State == meta.Active && nd.Kind.Target() { // a device stores nothing (docs/14 §9), a mirror holds snapshots (docs/16)
 			rep.Volume.Capacity += nd.Capacity
 		}
 		rep.Nodes = append(rep.Nodes, r)

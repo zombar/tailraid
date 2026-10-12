@@ -62,7 +62,7 @@ func Candidates(nodes []Node, live func(NodeIdx) bool) []Candidate {
 	out := make([]Candidate, 0, len(nodes))
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Kind == KindDevice || n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
+		if !n.Kind.Target() || n.State != Active || n.Capacity == 0 || n.Idx == 0 || !live(n.Idx) {
 			continue
 		}
 		c := Candidate{Idx: n.Idx, Weight: n.Capacity}

@@ -21,7 +21,7 @@ func TestCluster_Codec6RefusedWhileMemberOld(t *testing.T) {
 	films, err := leader.Node.FSM.Resolve([]string{"films"})
 	must(t, err)
 	now := c.Clk.Now().UnixNano()
-	leader.Node.MinCodec = func() uint8 { return meta.CodecVersion - 1 } // one member still reads codec 5
+	leader.Node.MinCodec = func() uint8 { return meta.CodecShardSums } // one member still reads codec 5
 	defer func() { leader.Node.MinCodec = nil }()
 	res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetAttr, SetAttr: &meta.SetAttr{Ino: films.Ino, Mask: meta.AttrFlags, Flags: meta.WithLibrary(0, meta.LibraryMovies), Now: now}})
 	if err != nil || !errors.Is(res.Err, meta.ErrCodec) {

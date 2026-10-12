@@ -167,7 +167,13 @@ const (
 	KindDevice NodeKind = 1
 	KindS3     NodeKind = 2
 	KindDisk   NodeKind = 3 // an added disk of a device: a placement target, never a Raft member (docs/14)
+	KindMirror NodeKind = 4 // a disk of a device given to snapshots: never a placement target (docs/16)
 )
+
+// Target reports whether a node of this kind can hold a chunk's shard: anything but a
+// device, which stores nothing (docs/14 §9), and a mirror, which holds snapshots, not
+// slots (docs/16 §1). The filters that use it said "not a device" before mirrors existed.
+func (k NodeKind) Target() bool { return k != KindDevice && k != KindMirror }
 
 // NodeState is the membership state of a node.
 type NodeState uint8
@@ -195,7 +201,7 @@ type Node struct {
 	Capacity   uint64 // shard-byte budget; also the placement weight
 	Version    string // software version last reported
 	JoinedAt   int64
-	Host       NodeIdx // KindDisk: the device that serves this disk; 0 for every other kind
+	Host       NodeIdx // KindDisk, KindMirror: the device that serves the disk; 0 for every other kind
 	// S3 nodes only
 	S3Endpoint  string
 	S3Bucket    string
@@ -229,7 +235,7 @@ func ParseNodeState(s string) (NodeState, error) {
 
 // ParseNodeKind is the inverse of NodeKind.String; an unknown name is an error.
 func ParseNodeKind(s string) (NodeKind, error) {
-	for _, k := range []NodeKind{KindDevice, KindDisk, KindS3} {
+	for _, k := range []NodeKind{KindDevice, KindDisk, KindS3, KindMirror} {
 		if k.String() == s {
 			return k, nil
 		}
@@ -244,6 +250,8 @@ func (k NodeKind) String() string {
 		return "s3"
 	case KindDisk:
 		return "disk"
+	case KindMirror:
+		return "mirror"
 	case KindDevice:
 		return "device"
 	}
@@ -305,9 +313,79 @@ type State struct {
 	// Trash indexes the deleted roots (inodes with DeletedAt != 0, absent from their
 	// parent's Children) by the parent they came from (docs/01). Derived like Tombs:
 	// never serialized, rebuilt on decode and in Clone.
-	Trash   map[Ino]map[Ino]struct{}
-	Applied uint64
-	LastNow int64 // monotonic FSM clock: max of every applied command's Now
+	Trash map[Ino]map[Ino]struct{}
+	// Snaps is the snapshot catalogue (docs/16 §5): the snapshots themselves live on
+	// their mirrors; a row's only effect on the pool is the sync hold of GCDelete.
+	Snaps    map[SnapID]*Snapshot
+	NextSnap SnapID
+	Applied  uint64
+	LastNow  int64 // monotonic FSM clock: max of every applied command's Now
+}
+
+// SnapID identifies a snapshot; allocated from State.NextSnap, never reused, never 0.
+type SnapID uint32
+
+// SnapState is where a snapshot is in its life (docs/16 §3, §5).
+type SnapState uint8
+
+// Snapshot states.
+const (
+	SnapSyncing    SnapState = 1 // being copied to its mirror; holds GC (I-181)
+	SnapComplete   SnapState = 2
+	SnapIncomplete SnapState = 3 // complete but for Missing chunks the sync could not read
+	SnapDeleting   SnapState = 4 // chosen by thinning; its mirror's host has not swept it yet
+)
+
+// String names a snapshot state as the reports print it.
+func (s SnapState) String() string {
+	switch s {
+	case SnapSyncing:
+		return "syncing"
+	case SnapComplete:
+		return "complete"
+	case SnapIncomplete:
+		return "incomplete"
+	case SnapDeleting:
+		return "deleting"
+	}
+	return fmt.Sprintf("SnapState(%d)", uint8(s))
+}
+
+// Snapshot is one catalogue row: the volume as of every entry up to Index, held on
+// Mirror (docs/16).
+type Snapshot struct {
+	ID       SnapID
+	Mirror   NodeIdx // a KindMirror row
+	Name     string  // unique per mirror
+	Index    uint64  // the SnapshotBegin's own Raft index
+	At       int64   // FSM clock at the begin; the sync hold's bound
+	Auto     bool    // taken by the leader's schedule (thinned); false = manual, permanent
+	State    SnapState
+	Root     Hash // the root tree on the mirror, once ended
+	Files    uint64
+	Bytes    uint64
+	NewBytes uint64
+	Missing  uint32
+}
+
+// MaxSnapName bounds a snapshot's name (docs/16 §8).
+const MaxSnapName = 64
+
+// validSnapName reports whether name may name a snapshot: 1..MaxSnapName bytes, no '/'
+// or NUL, not "." or "..".
+func validSnapName(name string) bool {
+	return name != "" && len(name) <= MaxSnapName && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00")
+}
+
+// syncHold is the GC bound the syncing rows impose (I-181): the oldest syncing row's At,
+// or ok false when nothing is syncing.
+func (s *State) syncHold() (at int64, ok bool) {
+	for _, sn := range s.Snaps {
+		if sn.State == SnapSyncing && (!ok || sn.At < at) {
+			at, ok = sn.At, true
+		}
+	}
+	return at, ok
 }
 
 // NewState returns an empty state containing only the root directory.
@@ -318,10 +396,12 @@ func NewState() *State {
 		Inodes: map[Ino]*Inode{
 			RootIno: {Ino: RootIno, Type: TDir, Mode: 0o755, Nlink: 2, Children: map[string]Ino{}},
 		},
-		Chunks: map[Hash]*Chunk{},
-		Nodes:  map[NodeIdx]*Node{},
-		Tombs:  map[Hash]struct{}{},
-		Trash:  map[Ino]map[Ino]struct{}{},
+		Chunks:   map[Hash]*Chunk{},
+		Nodes:    map[NodeIdx]*Node{},
+		Tombs:    map[Hash]struct{}{},
+		Trash:    map[Ino]map[Ino]struct{}{},
+		Snaps:    map[SnapID]*Snapshot{},
+		NextSnap: 1,
 	}
 }
 
@@ -394,6 +474,12 @@ func (s *State) Clone() *State {
 		Nodes:    make(map[NodeIdx]*Node, len(s.Nodes)),
 		Tombs:    make(map[Hash]struct{}, len(s.Tombs)),
 		Trash:    make(map[Ino]map[Ino]struct{}, len(s.Trash)),
+		Snaps:    make(map[SnapID]*Snapshot, len(s.Snaps)),
+		NextSnap: s.NextSnap,
+	}
+	for id, sn := range s.Snaps {
+		cp := *sn
+		c.Snaps[id] = &cp
 	}
 	for parent, set := range s.Trash {
 		cp := make(map[Ino]struct{}, len(set))
