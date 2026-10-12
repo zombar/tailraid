@@ -520,6 +520,9 @@ function slotStrip(slots) {
 }
 
 // internal/webui/src/balance.ts
+function devTone(dev) {
+  return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.5 ? "bad" : Math.abs(dev) > 0.25 ? "warn" : "";
+}
 function shares(nodes, maxSlots = () => Infinity) {
   const total = nodes.reduce((s, n) => s + n.slots, 0);
   const expected = /* @__PURE__ */ new Map();
@@ -595,7 +598,7 @@ function card(n, share, scale) {
     slots = barRow("slots", bar(n.slots / scale, n.slots > 0 ? "warn" : ""), `${count(n.slots)} slots to move`);
   } else {
     const dev = share.deviation;
-    const tone = Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
+    const tone = devTone(dev);
     const val = h("span", null, `${count(n.slots)} \xB7 expected ${count(Math.round(share.expected))}`);
     if (!Number.isNaN(dev)) val.append(" \xB7 " + signedPct(dev));
     if (n.missing_slots > 0) {
@@ -618,9 +621,6 @@ function card(n, share, scale) {
 // internal/webui/src/disks.ts
 function hosts(nodes) {
   return nodes.filter((n) => n.kind === "device" && n.state !== "removed").map((n) => ({ node: n, targets: nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed") }));
-}
-function devTone(dev) {
-  return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
 }
 function off(t) {
   return t.state === "active" && t.capacity === 0;

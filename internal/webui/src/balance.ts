@@ -13,6 +13,14 @@ interface Share {
 }
 
 /**
+ * devTone is the balance rule: neutral within the repairer's RebalanceSkew (25 %) of the
+ * expected share, amber past it (a pass will move slots), red past 50 %.
+ */
+export function devTone(dev: number): Tone {
+  return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.5 ? "bad" : Math.abs(dev) > 0.25 ? "warn" : "";
+}
+
+/**
  * shares computes each node's expected slot count: the total slots spread over the active
  * nodes by capacity, except that a node never expects more than maxSlots(n) — one slot per
  * chunk for a single target (I-9) — and what a capped node cannot take is spread over the
@@ -111,7 +119,7 @@ function card(n: NodeReport, share: Share, scale: number): HTMLElement {
     slots = barRow("slots", bar(n.slots / scale, n.slots > 0 ? "warn" : ""), `${count(n.slots)} slots to move`);
   } else {
     const dev = share.deviation;
-    const tone: Tone = Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
+    const tone = devTone(dev);
     const val = h("span", null, `${count(n.slots)} · expected ${count(Math.round(share.expected))}`);
     if (!Number.isNaN(dev)) val.append(" · " + signedPct(dev));
     if (n.missing_slots > 0) {
