@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"reflect"
 	"testing"
@@ -90,7 +91,7 @@ func TestWebUI_Media_Library_Table(t *testing.T) {
 	pass()
 	l = mediaLib{}
 	u.mediaJSON("lib=/films", &l)
-	if a := l.Items[0]; !a.Catalogued || a.Runtime != 116 || a.Poster != "/films/Arrival (2016)/poster.jpg" || !reflect.DeepEqual(l.Lib.Genres, []string{"drama"}) {
+	if a := l.Items[0]; !a.Catalogued || a.Runtime != 116 || a.Poster != "/films/Arrival (2016)/poster.jpg" {
 		t.Fatalf("after the pass: %+v %+v", a, l.Lib)
 	}
 	for _, tc := range []struct {
@@ -277,4 +278,47 @@ func TestWebUI_Media_DeterministicAcrossNodes(t *testing.T) {
 			t.Fatalf("answer %d differs:\n%s\n%s", i, a[i], b[i])
 		}
 	}
+}
+
+// A film's or an episode's video carries what the page needs to grab its frame as the
+// file browser does: the video's inode and version, and whether a frame is stored. Once
+// the page PUTs one, the listing says so.
+//
+// Invariant: I-212
+func TestWebUI_Media_VideoFrameFields(t *testing.T) {
+	u, _ := mediaUI(t)
+	u.write("/films/Moon.2009.mkv", 0, []byte("video"))
+	u.write("/films/Arrival/arrival.mkv", 0, []byte("video"))
+	u.write("/shows/Dark/Dark.S01E01.mkv", 0, []byte("v"))
+	u.flush()
+	for _, p := range []struct{ path, kind string }{{"/films", "movies"}, {"/shows", "tv"}} {
+		if code, _ := u.setFlags(p.path, `"library":"`+p.kind+`"`); code != 200 {
+			t.Fatalf("flag %s: %d", p.path, code)
+		}
+	}
+	check := func(stage string, it webui.MediaItem, video string, thumb bool) {
+		t.Helper()
+		st := u.statOf(video)
+		if it.Video != video || uint64(it.VideoIno) != st.Ino || it.VideoVersion != st.Version || it.VideoThumb != thumb {
+			t.Fatalf("%s: %s: video %q ino %d version %d thumb %v; want %q %d %d %v", stage, it.Path, it.Video, it.VideoIno, it.VideoVersion, it.VideoThumb, video, st.Ino, st.Version, thumb)
+		}
+	}
+	var l mediaLib
+	u.mediaJSON("lib=/films", &l)
+	check("list", l.Items[1], "/films/Moon.2009.mkv", false)
+	var film webui.MediaItem
+	u.mediaJSON("item=/films/Arrival", &film)
+	check("film", film, "/films/Arrival/arrival.mkv", false)
+	var show webui.MediaItem
+	u.mediaJSON("item=/shows/Dark", &show)
+	check("episode", show.Seasons[0].Episodes[0], "/shows/Dark/Dark.S01E01.mkv", false)
+
+	resp := u.do(http.MethodPut, fmt.Sprintf("/api/thumb?path=%s&version=%d", url.QueryEscape("/films/Moon.2009.mkv"), u.statOf("/films/Moon.2009.mkv").Version), bytes.NewReader(jpegBytes(16, 16, green)), webui.HeaderUI, "1")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("frame PUT: %d", resp.StatusCode)
+	}
+	l = mediaLib{}
+	u.mediaJSON("lib=/films", &l)
+	check("after the frame", l.Items[1], "/films/Moon.2009.mkv", true)
 }

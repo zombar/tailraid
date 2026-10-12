@@ -121,7 +121,7 @@ export function render(root: HTMLElement, q: string, params: string): () => void
   if (scope !== "/") {
     const toggle = h("input", { type: "checkbox", checked: under !== "" }) as HTMLInputElement;
     toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
-    bar.append(h("label", { class: "under" }, toggle, " in ", h("code", null, scope), " only"));
+    bar.append(h("label", { class: "toggle" }, toggle, " in ", h("code", null, scope), " only"));
   }
   section.append(bar);
 

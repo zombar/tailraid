@@ -580,6 +580,77 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 	}
 }
 
+// A folder without a cover of its own takes the first subfolder's by name, one level
+// deep: an album kept as editions, and an artist's folder of albums, get a tile. A track
+// whose thumbnail is a cover.* sibling counts as having one. A listing marks a folder
+// resolved to none no_cover, and forgets a cover once a subfolder it looked into changes.
+//
+// Invariant: I-165
+func TestWebUI_Ls_DirCoverFromSubfolder(t *testing.T) {
+	u := newUI(t)
+	pic := jpegBytes(16, 16, green)
+	audio := testharness.Pattern(500, 1)
+	plain := func(title string) []byte { return append(id3v2(map[string]string{"TIT2": title}, nil), audio...) }
+	u.write("/Fugazi/1 CBR/a.mp3", 0, plain("a"))
+	u.write("/Fugazi/2 VBR/a.mp3", 0, append(id3v2(map[string]string{"TIT2": "a"}, pic), audio...))
+	u.write("/Fugazi/notes.txt", 0, []byte("liner notes"))
+	u.write("/Sib/b.mp3", 0, plain("b"))
+	u.write("/Sib/a.mp3", 0, plain("a"))
+	u.write("/Sib/cover.jpg", 0, jpegBytes(64, 64, blue))
+	u.write("/Deep/x/y/a.mp3", 0, append(id3v2(map[string]string{"TIT2": "a"}, pic), audio...))
+	u.write("/Bare/a.mp3", 0, plain("a"))
+	u.write("/Unasked/a.mp3", 0, plain("a"))
+	u.flush()
+	cases := []struct {
+		path, cover string
+		code        int
+	}{
+		{"/Fugazi", "2 VBR/a.mp3", 200},
+		{"/Sib", "a.mp3", 200},
+		{"/Deep", "", 404}, // the picture is two levels down
+		{"/Bare", "", 404},
+	}
+	for _, c := range cases {
+		if code, _, _ := u.get("/api/thumb?path=" + c.path); code != c.code {
+			t.Fatalf("thumb %s: %d, want %d", c.path, code, c.code)
+		}
+		l := u.lsOf("path=" + c.path)
+		if l.Dir.Cover != c.cover || l.Dir.NoCover != (c.cover == "") {
+			t.Fatalf("%s: cover %q no_cover %v, want %q", c.path, l.Dir.Cover, l.Dir.NoCover, c.cover)
+		}
+		if e := u.lsOf("path=/").entry(c.path[1:]); e.Cover != c.cover || e.NoCover != (c.cover == "") {
+			t.Fatalf("root entry %s: cover %q no_cover %v", c.path, e.Cover, e.NoCover)
+		}
+	}
+	if code, _, body := u.thumb("path=/Fugazi"); code != 200 || hue(decodeJPEG(t, body)) != "green" {
+		t.Fatalf("/Fugazi serves %d", code)
+	}
+	if code, _, body := u.thumb("path=/Sib"); code != 200 || hue(decodeJPEG(t, body)) != "blue" {
+		t.Fatalf("/Sib serves %d", code)
+	}
+	if l := u.lsOf("path=/Unasked"); l.Dir.NoCover || l.Dir.Cover != "" {
+		t.Fatalf("an unresolved folder is marked: %+v", l.Dir)
+	}
+
+	// a picture added to the first subfolder changes that subfolder, not /Fugazi: the
+	// remembered cover is dropped and the next resolve picks the new first
+	u.write("/Fugazi/1 CBR/0.mp3", 0, append(id3v2(map[string]string{"TIT2": "0"}, pic), audio...))
+	u.flush()
+	if l := u.lsOf("path=/Fugazi"); l.Dir.Cover != "" || l.Dir.NoCover {
+		t.Fatalf("stale cover after a subfolder changed: %+v", l.Dir)
+	}
+	u.get("/api/thumb?path=/Fugazi")
+	if l := u.lsOf("path=/Fugazi"); l.Dir.Cover != "1 CBR/0.mp3" {
+		t.Fatalf("cover after the subfolder changed: %q", l.Dir.Cover)
+	}
+	// and a folder resolved to none forgets that once it changes
+	u.write("/Bare/cover.png", 0, pngBytes(64, 64, red))
+	u.flush()
+	if l := u.lsOf("path=/Bare"); l.Dir.NoCover {
+		t.Fatal("no_cover kept after the folder changed")
+	}
+}
+
 // A listing reads no file: the covers of a folder of albums cost no shard GET until a
 // folder's thumbnail is asked for, which resolves and remembers that folder's cover.
 // Invariant: I-165

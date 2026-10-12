@@ -25,6 +25,18 @@ func TestCatalog_CleanName_Table(t *testing.T) {
 		{"1917", "1917", 0},
 		{"2001 A Space Odyssey (1968)", "2001 A Space Odyssey", 1968},
 		{"Show.Name.S01E02.720p.HDTV", "Show Name", 0},
+		// season packs as release folders name them (the real tailnet, 2026-10-12)
+		{"Invasion.2021.S01.PROPER.WEBRip.x264-ION10", "Invasion", 2021},
+		{"Pluribus.S01.1080p.x265-ELiTE", "Pluribus", 0},
+		{"Severance 2022 Seasons 1 and 2 Complete 1080p WEB x264 [i_c]", "Severance", 2022},
+		{"Star Trek Starfleet Academy S01e01-10 (1080p Ita Eng Spa h265 10bit SubS) byMe7alh", "Star Trek Starfleet Academy", 0},
+		{"Star.Trek.Strange.New.Worlds.S01.ITA.ENG.1080p.AMZN.WEBRip.AAC.x265-Pir8", "Star Trek Strange New Worlds", 0},
+		{"Show Name Season 2", "Show Name", 0},
+		{"Dune Part Two 2024 Extended Cut", "Dune Part Two", 2024},
+		// a season word only cuts before its number, a year only after the first token
+		{"The Four Seasons 1990 1080p", "The Four Seasons", 1990},
+		{"Season of the Witch", "Season of the Witch", 0},
+		{"2012 2009 1080p", "2012", 2009},
 		{"", "", 0},
 	} {
 		title, year := CleanName(tc.in)

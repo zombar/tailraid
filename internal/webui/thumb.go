@@ -230,22 +230,20 @@ func (s *Server) makeAudioThumb(ctx context.Context, t target) ([]byte, error) {
 		}
 	}
 	dir := t.parts[:len(t.parts)-1]
-	for _, base := range []string{"cover", "folder"} {
-		for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
-			sib := target{parts: append(append([]string{}, dir...), base+ext), root: t.root, trashed: t.trashed}
-			sib.canonical = "/" + strings.Join(sib.parts, "/")
-			var err error
-			if t.trashed {
-				sib.in, err = s.o.Store.ResolveFrom(t.root.Ino, sib.parts)
-			} else {
-				sib.in, err = s.o.Store.Resolve(sib.parts)
-			}
-			if err != nil || sib.in.Type != meta.TFile {
-				continue
-			}
-			if data, err := s.makeImageThumb(ctx, sib); err == nil {
-				return data, nil
-			}
+	for _, name := range coverNames {
+		sib := target{parts: append(append([]string{}, dir...), name), root: t.root, trashed: t.trashed}
+		sib.canonical = "/" + strings.Join(sib.parts, "/")
+		var err error
+		if t.trashed {
+			sib.in, err = s.o.Store.ResolveFrom(t.root.Ino, sib.parts)
+		} else {
+			sib.in, err = s.o.Store.Resolve(sib.parts)
+		}
+		if err != nil || sib.in.Type != meta.TFile {
+			continue
+		}
+		if data, err := s.makeImageThumb(ctx, sib); err == nil {
+			return data, nil
 		}
 	}
 	return nil, noThumb(t.canonical)
