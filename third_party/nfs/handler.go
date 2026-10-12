@@ -50,3 +50,11 @@ type CachingHandler interface {
 	// fs.FileInfo needs to be sorted by Name(), nil in case of a cache-miss
 	DataForVerifier(path string, verifier uint64) []fs.FileInfo
 }
+
+// ListingPruner is the optional capability of a handler that hands out a listing after
+// its directory changed (tailraid, I-232): an entry Gone reports is left out of the
+// page, its cookie still counted, so a listing continued through a kept listing does not
+// show a file removed meanwhile and every cookie keeps its place.
+type ListingPruner interface {
+	Gone(dir string, entry fs.FileInfo) bool
+}

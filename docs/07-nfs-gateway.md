@@ -116,10 +116,15 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **READDIR / READDIRPLUS**: go-nfs pages with cookies over the `[]os.FileInfo` returned by
   `ReadDir`, which the FSM returns sorted by name. The handler implements go-nfs's
   `CachingHandler` verifier hooks only: the cookie verifier is a hash of the directory
-  inode's identity and `Version` (bumped by every name-table change), and the listing is kept (64 most recent)
-  so the following pages reuse it instead of listing and sorting the directory again; a
-  change to the directory changes the verifier, so a stale cookie gets
-  `NFS3ERR_BAD_COOKIE` (I-47, `TestNFS_ReadDirPlus_RemoveBetweenPages`). Directories of
+  inode's identity and `Version` (bumped by every name-table change), and the listing is kept (the 64 most recently used)
+  so the following pages reuse it instead of listing and sorting the directory again. A
+  listing continued after its directory changed goes on through the kept listing, a
+  consistent snapshot, every surviving entry once and an entry removed meanwhile left out
+  (go-nfs's `ListingPruner` hook, which keeps every cookie's place); a new listing
+  (cookie 0) lists afresh whatever verifier it carries. Only a listing evicted from the
+  cache gets `NFS3ERR_BAD_COOKIE` (I-47, I-232). Until 2026-10-12 any change got it, and
+  macOS ends a listing there (Linux after one retry), so a folder changing under a Finder
+  copy, an `ls` or an rsync showed truncated. Directories of
   10k+ entries are tested (`TestNFS_ReadDirPlusLargeDirectory`).
 - **Attribute caching**: the gateway sets no special attribute TTL; clients use their
   defaults (`actimeo` 3–60 s). Another device's writes become visible on this device within
@@ -257,6 +262,12 @@ device"), not `EIO`.
   request again, before the client's SETATTR replaces the times, answers that file; a
   name holding a file whose mtime is not the verifier, or a directory, is
   `NFS3ERR_EXIST` and the file is untouched.
+- **I-232** — A READDIR or READDIRPLUS continued with the verifier of a listing still
+  kept (the 64 most recently used) answers from that listing even after its directory
+  changed: every entry of it that still names the same inode is listed exactly once
+  across the pages, an entry removed or replaced meanwhile is left out, and no page
+  answers `NFS3ERR_BAD_COOKIE`; a listing started with cookie 0 lists the directory
+  afresh whatever verifier it carries.
 
 ## Tests
 
@@ -269,5 +280,6 @@ device"), not `EIO`.
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
 | I-231 | `TestNFS_CreateExclusive_Verifier` |
+| I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
 | I-185 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_SnapshotsDir_HiddenResolvesLists`, `TestVFS_SnapshotRead_PoolThenMirror`, `TestVFS_SnapshotOfflineMirror_EIO`, `TestVFS_SnapshotMutation_IsROFS`, `TestVFS_SnapshotHandle_StaleTable`, `TestHandle_Snapshot_RoundTrip`, `FuzzDecodeHandle`, `TestNFS_Snapshots_OverTheWire`, `TestSMB_SnapshotsDir_ReadOnly`, `TestMirrorRPC_ObjectsAndTrees`, `TestMirrorSource_LocalDetachedRemote`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` |
