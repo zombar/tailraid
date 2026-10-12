@@ -221,6 +221,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	client.OnUnreachable = prober.Suspect // a shard RPC that fails at the transport level (docs/05 §6, I-170)
 	rd := vfs.NewReader(node.FSM, prober, client, cache, nil)
+	defer rd.Close() // before cache.Drain: no fetch Puts into a draining cache (I-204)
 	rd.Events = ring
 	pinned, err := pins.Open(cfg.Node.DataDir, node.FSM, rd, cache, clk, log) // the folders kept on this device (docs/01 §Pins)
 	if err != nil {

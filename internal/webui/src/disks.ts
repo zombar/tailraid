@@ -5,9 +5,9 @@
 // docs/assets/lookdev/disks.html.
 
 import { h } from "./dom.ts";
-import { bar, type Tone } from "./chart.ts";
+import { bar } from "./chart.ts";
 import { bytes, count, signedPct } from "./fmt.ts";
-import { chunksPerTarget, shares } from "./balance.ts";
+import { chunksPerTarget, devTone, shares } from "./balance.ts";
 import type { NodeReport, Report } from "./api.ts";
 
 interface Host {
@@ -20,11 +20,6 @@ export function hosts(nodes: NodeReport[]): Host[] {
   return nodes
     .filter((n) => n.kind === "device" && n.state !== "removed")
     .map((n) => ({ node: n, targets: nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed") }));
-}
-
-/** devTone is the balance rule: amber past 10 % off the expected share, red past 25 %. */
-function devTone(dev: number): Tone {
-  return Number.isNaN(dev) ? "" : Math.abs(dev) > 0.25 ? "bad" : Math.abs(dev) > 0.1 ? "warn" : "";
 }
 
 /** off reports a disk that holds no budget: one pinned to 0. */

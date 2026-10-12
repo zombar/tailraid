@@ -64,10 +64,12 @@ var (
 		regexp.MustCompile(`(?i)(?:^|[^a-z])episode[ ._-]?(\d{1,4})`),
 	}
 	seasonDir = regexp.MustCompile(`(?i)^(?:season|series)[ ._-]?(\d{1,3})$`)
+	seasonTok = regexp.MustCompile(`^s\d{1,2}$`) // a season pack's S01 (lower-cased)
+	seasonNum = regexp.MustCompile(`^\d{1,2}$`)
 )
 
 // junk is the scene-name vocabulary docs/18 §8 strips: a title ends at the first of
-// these, at a year or at an episode number.
+// these, at a year or at a season or episode number.
 var junk = map[string]bool{
 	"1080p": true, "720p": true, "2160p": true, "480p": true, "4k": true, "x264": true, "x265": true, "h264": true, "h265": true,
 	"hevc": true, "bluray": true, "webrip": true, "web-dl": true, "webdl": true, "hdtv": true, "dvdrip": true, "remux": true,
@@ -75,7 +77,7 @@ var junk = map[string]bool{
 }
 
 // CleanName is a file or folder name's title and year (docs/18 §8): `Title (2019)`, or
-// a scene name cut at its first year, episode number or release token.
+// a scene name cut at its first year, season or episode number, or release token.
 func CleanName(name string) (title string, year int) {
 	s := strings.TrimSpace(name)
 	if m := parenYear.FindStringSubmatch(s); len(m) == 3 && strings.TrimSpace(m[1]) != "" {
@@ -90,20 +92,33 @@ func CleanName(name string) (title string, year int) {
 		s = strings.ReplaceAll(s, "_", " ")
 	}
 	toks := strings.Fields(s)
-	// the title ends at the first release token or episode number, and a year just
-	// before it (or last, when there is none) is the year: Blade Runner 2049 2017
+	// the title ends at the first release token, season or episode number, or year
+	// (after the first token, and not followed by another year: Blade Runner 2049 2017);
+	// a year at or just before the cut is the year
 	cut := len(toks)
 	for i, t := range toks {
 		lt := strings.ToLower(t)
 		if base, _, ok := strings.Cut(lt, "-"); ok && junk[base] {
 			lt = base
 		}
-		if i > 0 && (junk[lt] || episodeRe[0].MatchString(lt)) {
+		if i == 0 {
+			continue
+		}
+		next := ""
+		if i+1 < len(toks) {
+			next = toks[i+1]
+		}
+		if junk[lt] || episodeRe[0].MatchString(lt) || seasonTok.MatchString(lt) ||
+			((lt == "season" || lt == "seasons") && seasonNum.MatchString(next)) ||
+			(yearTok.MatchString(t) && !yearTok.MatchString(next)) {
 			cut = i
 			break
 		}
 	}
-	if cut > 1 && yearTok.MatchString(toks[cut-1]) {
+	switch {
+	case cut < len(toks) && yearTok.MatchString(toks[cut]):
+		year, _ = strconv.Atoi(toks[cut])
+	case cut > 1 && yearTok.MatchString(toks[cut-1]):
 		year, _ = strconv.Atoi(toks[cut-1])
 		cut--
 	}

@@ -154,9 +154,12 @@ effective library kind (§9) is set, stored in the segment beside the docs:
 
 - *Movies* (`movies`): each child folder of the library is a film, and so is each video
   file directly in it. Title and year come from the folder or file name — `Title (2019)`,
-  or a scene name cleaned of its tokens (`1080p 720p 2160p 4k x264 x265 h264 h265 hevc
-  bluray webrip web-dl hdtv dvdrip remux aac dts atmos proper repack`, a trailing
-  `[hash]` or `-GROUP`, dots and underscores as spaces) — and are overridden by
+  or a scene name cut at its first release token (`1080p 720p 2160p 4k x264 x265 h264
+  h265 hevc bluray webrip web-dl hdtv dvdrip remux aac dts atmos proper repack`), season
+  or episode number (`S01`, `Season 2`, `Seasons 1 and 2`, `S01E02`) or year (after the
+  first word and not followed by another year, which then is the year), with `[…]`
+  dropped and dots and underscores as spaces, so a season pack's folder
+  `Invasion.2021.S01.PROPER.WEBRip` is the show `Invasion` (2021) — and are overridden by
   `movie.nfo` or `<name>.nfo` (Kodi XML: `title`, `originaltitle`, `year`, `plot`,
   `outline`, `tagline`, `runtime`, `genre`, `rating` or `ratings/rating/value`, `mpaa`,
   `director`, `actor/name`). Art: `poster.*`, `<name>-poster.*`, `folder.*` for the
