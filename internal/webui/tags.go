@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"slices"
 	"sync"
 
 	"github.com/dhowden/tag"
@@ -56,75 +57,149 @@ func (s *Server) tags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tags)
 }
 
-// coverCache remembers each folder's cover entry by its listing, so a listing costs
-// no tag parse twice (docs/13 §5).
+// coverCache remembers each folder's cover, so a listing costs no tag parse twice
+// (docs/13 §5).
 type coverCache struct {
 	mu      sync.Mutex
 	entries map[meta.Ino]coverEntry
 }
 
-// coverEntry is keyed by the folder's Version, which the FSM bumps whenever its name
-// table changes (docs/01), and its Mtime.
+// coverEntry holds while every folder it read is unchanged: the folder itself first, then
+// each subfolder it looked into. The FSM bumps a folder's Version whenever its name table
+// changes (docs/01).
 type coverEntry struct {
+	deps []coverDep
+	name string
+}
+
+type coverDep struct {
+	ino     meta.Ino
 	version uint64
 	mtime   int64
-	name    string
 }
 
 const coverCacheMax = 1024
 
-// coverCached is the folder's cover when this node has already resolved it for the
-// folder's current version; a listing reports only that and never reads a file to find
-// one (I-165): GET /api/thumb of the folder resolves it (coverOf).
-func (s *Server) coverCached(dir meta.Inode) string {
-	if dir.Type != meta.TDir {
-		return ""
-	}
-	s.covers.mu.Lock()
-	defer s.covers.mu.Unlock()
-	if e, ok := s.covers.entries[dir.Ino]; ok && e.version == dir.Version && e.mtime == dir.Mtime {
-		return e.name
-	}
-	return ""
+// CoverSubdirs is how many subfolders a folder without a cover of its own looks into,
+// one level deep (docs/13 §5, I-165).
+const CoverSubdirs = 16
+
+func depOf(in meta.Inode) coverDep {
+	return coverDep{ino: in.Ino, version: in.Version, mtime: in.Mtime}
 }
 
-// coverOf is the folder's first audio entry by name that has a picture, "" when none
-// (I-165). It is the same on every node: the FSM orders names and the files are the
-// same bytes. Resolving it reads each candidate's tags, so only the folder's thumbnail
-// request pays for it, once per folder version.
+// cached is the remembered cover of dir and whether one is remembered for the current
+// versions of everything it read.
+func (s *Server) cached(dir meta.Inode) (string, bool) {
+	s.covers.mu.Lock()
+	e, ok := s.covers.entries[dir.Ino]
+	s.covers.mu.Unlock()
+	if !ok || len(e.deps) == 0 || e.deps[0] != depOf(dir) {
+		return "", false
+	}
+	for _, d := range e.deps[1:] {
+		if in, ok := s.o.Store.GetInodeAny(d.ino); !ok || depOf(in) != d {
+			return "", false
+		}
+	}
+	return e.name, true
+}
+
+// coverCached is the folder's cover and whether this node has already resolved it for
+// the current versions; a listing reports only that and never reads a file to find one
+// (I-165): GET /api/thumb of the folder resolves it (coverOf).
+func (s *Server) coverCached(dir meta.Inode) (string, bool) {
+	if dir.Type != meta.TDir {
+		return "", false
+	}
+	return s.cached(dir)
+}
+
+// coverOf is the folder's first audio entry by name that has a thumbnail, else
+// "<subfolder>/<entry>" for the first of at most CoverSubdirs subfolders whose own audio
+// gives one, "" when none (I-165). It is the same on every node: the FSM orders names
+// and the files are the same bytes. Resolving it reads candidates' tags, so only the
+// folder's thumbnail request pays for it, once per version of what it read.
 func (s *Server) coverOf(dir meta.Inode) string {
 	if dir.Type != meta.TDir {
 		return ""
 	}
-	s.covers.mu.Lock()
-	if e, ok := s.covers.entries[dir.Ino]; ok && e.version == dir.Version && e.mtime == dir.Mtime {
-		s.covers.mu.Unlock()
-		return e.name
+	if name, ok := s.cached(dir); ok {
+		return name
 	}
-	s.covers.mu.Unlock()
 	kids, err := s.o.Store.ReadDir(dir.Ino)
 	if err != nil {
 		return ""
 	}
-	name := ""
-	for i := range kids {
-		k := &kids[i]
-		if k.Type != meta.TFile || !isAudio(k.Name) || IsOSMetadata(k.Name) {
-			continue
-		}
-		if s.hasPicture(*k) {
-			name = k.Name
-			break
+	deps := []coverDep{depOf(dir)}
+	name := s.directCover(kids)
+	if name == "" {
+		n := 0
+		for i := range kids {
+			k := &kids[i]
+			if k.Type != meta.TDir {
+				continue
+			}
+			if n == CoverSubdirs {
+				break
+			}
+			n++
+			sub, err := s.o.Store.ReadDir(k.Ino)
+			if err != nil {
+				continue
+			}
+			deps = append(deps, depOf(*k))
+			if c := s.directCover(sub); c != "" {
+				name = k.Name + "/" + c
+				break
+			}
 		}
 	}
 	s.covers.mu.Lock()
 	if s.covers.entries == nil || len(s.covers.entries) >= coverCacheMax {
 		s.covers.entries = map[meta.Ino]coverEntry{}
 	}
-	s.covers.entries[dir.Ino] = coverEntry{version: dir.Version, mtime: dir.Mtime, name: name}
+	s.covers.entries[dir.Ino] = coverEntry{deps: deps, name: name}
 	s.covers.mu.Unlock()
 	return name
 }
+
+// directCover is the first audio entry of kids by name that has a thumbnail: any, when
+// they hold a cover.* or folder.* image (every track's thumbnail is then that image),
+// else the first with an embedded picture.
+func (s *Server) directCover(kids []meta.Inode) string {
+	first, sibling := "", false
+	for i := range kids {
+		k := &kids[i]
+		if k.Type != meta.TFile || IsOSMetadata(k.Name) {
+			continue
+		}
+		if isAudio(k.Name) && first == "" {
+			first = k.Name
+		}
+		if isCoverImage(k.Name) {
+			sibling = true
+		}
+	}
+	if first == "" {
+		return ""
+	}
+	if sibling {
+		return first
+	}
+	for i := range kids {
+		k := &kids[i]
+		if k.Type == meta.TFile && isAudio(k.Name) && !IsOSMetadata(k.Name) && s.hasPicture(*k) {
+			return k.Name
+		}
+	}
+	return ""
+}
+
+// coverNames are the sibling images an audio file's thumbnail falls back to, in order.
+var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "cover.webp", "folder.jpg", "folder.jpeg", "folder.png", "folder.webp"}
+
+func isCoverImage(name string) bool { return slices.Contains(coverNames, name) }
 
 // hasPicture reports whether the audio file in carries an embedded picture.
 func (s *Server) hasPicture(in meta.Inode) bool {

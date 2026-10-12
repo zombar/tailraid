@@ -197,6 +197,8 @@ export interface Entry {
   purge_at?: string;
   thumb?: boolean;
   cover?: string;
+  /** a folder resolved to no cover: the page asks for no thumbnail (I-165) */
+  no_cover?: boolean;
 }
 
 /** DirInfo describes the listed folder: effective flags, pin, place in the trash. */
@@ -208,6 +210,7 @@ export interface DirInfo {
   deleted_at?: string;
   purge_at?: string;
   cover?: string;
+  no_cover?: boolean;
 }
 
 export interface Ls {

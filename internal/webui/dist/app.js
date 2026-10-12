@@ -2196,7 +2196,7 @@ function render7(ctx, cover, entries) {
   const audio = entries.filter((e) => !e.deleted_at && !e.upload && e.type === "file" && isAudioName(e.name)).sort((a, b) => trackNo(a.name) - trackNo(b.name) || a.name.localeCompare(b.name, void 0, { numeric: true }));
   const tracks = audio.map((e) => ({ path: join(ctx.path, e.name), root: ctx.root }));
   const img = h("img", { class: "cover", alt: "" });
-  img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root);
+  if (cover !== null) img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root);
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, basename(ctx.path) || "/");
   const artist = h("div", { class: "artist" });
@@ -2463,7 +2463,7 @@ function render8(root, ctx) {
     alb = null;
     if (entries.length === 0) section.append(h("div", { class: "empty" }, "empty folder"));
     else if (asAlbum) {
-      alb = render7(ctx, info.cover, entries);
+      alb = render7(ctx, info.no_cover ? null : info.cover, entries);
       section.append(alb.el);
       const rest = entries.filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section.append(table(rest));
@@ -2645,7 +2645,7 @@ function render8(root, ctx) {
     const showIcon = () => thumb.replaceChildren(icon(kind));
     const path = pathOf(e);
     const thumbPath = e.type === "dir" && e.cover ? join(path, e.cover) : path;
-    const canThumb = e.type === "dir" ? !e.deleted_at || !!e.cover : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
+    const canThumb = e.type === "dir" ? !e.no_cover && (!e.deleted_at || !!e.cover) : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
     if (canThumb) {
       const img = h("img", { alt: "" });
       thumb.append(img);

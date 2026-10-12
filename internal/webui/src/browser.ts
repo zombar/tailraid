@@ -174,7 +174,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     alb = null;
     if (entries.length === 0) section.append(h("div", { class: "empty" }, "empty folder"));
     else if (asAlbum) {
-      alb = album.render(ctx, info.cover, entries);
+      alb = album.render(ctx, info.no_cover ? null : info.cover, entries);
       section.append(alb.el);
       const rest = entries.filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section.append(table(rest));
@@ -363,7 +363,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     // a folder's tile asks for the folder itself: the node resolves its cover (an album's
     // first track with a picture) then, so a listing never reads a file to find one
     const thumbPath = e.type === "dir" && e.cover ? join(path, e.cover) : path;
-    const canThumb = e.type === "dir" ? !e.deleted_at || !!e.cover : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
+    const canThumb = e.type === "dir" ? !e.no_cover && (!e.deleted_at || !!e.cover) : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
     if (canThumb) {
       const img = h("img", { alt: "" }) as HTMLImageElement;
       thumb.append(img);

@@ -33,6 +33,7 @@ type Entry struct {
 	PurgeAt   string    `json:"purge_at,omitempty"`   // when the retention purge takes it; absent with retention 0
 	Thumb     bool      `json:"thumb,omitempty"`      // GET /api/thumb answers without a PUT: stored, or an image or audio file
 	Cover     string    `json:"cover,omitempty"`      // directories: the audio entry whose picture is the folder's tile (I-165)
+	NoCover   bool      `json:"no_cover,omitempty"`   // directories: resolved to no cover (I-165)
 }
 
 // DirInfo describes the listed folder itself: the effective flags (its own or an
@@ -45,6 +46,7 @@ type DirInfo struct {
 	DeletedAt string `json:"deleted_at,omitempty"`
 	PurgeAt   string `json:"purge_at,omitempty"`
 	Cover     string `json:"cover,omitempty"`
+	NoCover   bool   `json:"no_cover,omitempty"`
 }
 
 // cleanPath resolves ".", "..", repeated and backslash separators (meta.SplitPath) and
@@ -147,7 +149,8 @@ func (s *Server) entry(in meta.Inode, canonical string) Entry {
 		}
 		e.Thumb = s.hasThumb(in) || isImage(in.Name) || isAudio(in.Name)
 	case meta.TDir:
-		e.Cover = s.coverCached(in) // known covers only: a listing reads no file (I-165)
+		cover, known := s.coverCached(in) // known covers only: a listing reads no file (I-165)
+		e.Cover, e.NoCover = cover, known && cover == ""
 	case meta.TSymlink:
 	}
 	return e
@@ -209,7 +212,8 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 			entries = append(entries, s.entry(roots[i], ""))
 		}
 	}
-	dir := DirInfo{Cover: s.coverCached(t.in)}
+	cover, known := s.coverCached(t.in)
+	dir := DirInfo{Cover: cover, NoCover: known && cover == ""}
 	var lib meta.LibraryKind
 	dir.Protected, dir.NSFW, lib = s.effective(t.in)
 	if lib != meta.LibraryNone {
