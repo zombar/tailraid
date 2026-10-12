@@ -629,3 +629,66 @@ func TestWebUI_Ls_ReadsNoFile(t *testing.T) {
 		}
 	}
 }
+
+// A frame the browser grabbed is stored under the current frame recipe: a video's
+// thumbnail from an older recipe (the plain key, or another .f<n>) is neither listed nor
+// served, and the sweep removes it, while an image's plain key stays; once the page
+// PUTs a new frame, that is the one listed and served, and the sweep keeps it.
+//
+// Invariant: I-216
+func TestWebUI_Thumb_FrameRecipe_ReplacesOldVideoThumbs(t *testing.T) {
+	u := newUI(t)
+	u.write("/clip.mp4", 0, []byte("video"))
+	u.write("/pic.png", 0, pngBytes(32, 16, red))
+	u.flush()
+	if code, _, _ := u.thumb("path=/pic.png"); code != 200 {
+		t.Fatalf("image thumb: %d", code)
+	}
+	in := u.statOf("/clip.mp4")
+	base := fmt.Sprintf("%d-%d-%d", in.Ino, u.f.Inode(meta.Ino(in.Ino)).Gen, in.Version)
+	must(t, u.fs.MkdirAll(webui.ThumbDir, 0o755))
+	black := jpegBytes(320, 180, color.NRGBA{A: 255})
+	stale := []string{base + ".jpg", base + ".f1.jpg", fmt.Sprintf("%s.f%d.jpg", base, webui.FrameRecipe+1)}
+	for _, k := range stale {
+		u.write(webui.ThumbDir+"/"+k, 0, black)
+	}
+	u.flush()
+	if u.lsOf("path=/").entry("clip.mp4").Thumb {
+		t.Fatal("a video with only old-recipe frames is listed as having a thumbnail")
+	}
+	if code, _, _ := u.thumb("path=/clip.mp4"); code != 404 {
+		t.Fatalf("an old-recipe frame is served: %d", code)
+	}
+	n, err := webui.SweepThumbs(context.Background(), u.fs, u.f.FSM)
+	must(t, err)
+	if n != len(stale) {
+		t.Fatalf("the sweep removed %d, want the %d old-recipe frames", n, len(stale))
+	}
+	for _, k := range stale {
+		if u.exists(webui.ThumbDir + "/" + k) {
+			t.Fatalf("%s survived the sweep", k)
+		}
+	}
+	if !u.lsOf("path=/").entry("pic.png").Thumb {
+		t.Fatal("the sweep took the image's thumbnail")
+	}
+	frame := jpegBytes(320, 180, green)
+	resp := u.do(http.MethodPut, fmt.Sprintf("/api/thumb?path=/clip.mp4&version=%d", in.Version), bytes.NewReader(frame), webui.HeaderUI, "1")
+	resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("PUT: %d", resp.StatusCode)
+	}
+	if !u.exists(fmt.Sprintf("%s/%s.f%d.jpg", webui.ThumbDir, base, webui.FrameRecipe)) {
+		t.Fatal("the frame is not stored under the current recipe")
+	}
+	// the tile asks with its cache tag (I-216)
+	if code, _, body := u.thumb(fmt.Sprintf("path=/clip.mp4&t=%d.f%d", in.Version, webui.FrameRecipe)); code != 200 || !bytes.Equal(body, frame) {
+		t.Fatalf("the new frame: %d, %d bytes", code, len(body))
+	}
+	if !u.lsOf("path=/").entry("clip.mp4").Thumb {
+		t.Fatal("the new frame is not listed")
+	}
+	if n, err := webui.SweepThumbs(context.Background(), u.fs, u.f.FSM); err != nil || n != 0 {
+		t.Fatalf("the sweep removed %d current thumbnails, %v", n, err)
+	}
+}
