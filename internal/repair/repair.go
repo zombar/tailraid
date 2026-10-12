@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -45,7 +46,7 @@ type ChunkReader interface {
 // Config tunes the repairer.
 type Config struct {
 	FillAfter    time.Duration // dead-node hold-down before re-placing its slots
-	ScrubShare   int           // 1 in ScrubShare chunks verified per pass (0 = none, 1 = all)
+	ScrubPeriod  time.Duration // the background passes verify every chunk once per ScrubPeriod (0 = none; docs/06 §5, I-215)
 	S3ScrubBytes int64         // bucket bytes the scrub may fetch per day to verify objects (0 = HEAD only)
 	RateBytes    int64         // shard bytes per second moved by repair (0 = unlimited)
 	Grace        time.Duration // GC grace
@@ -67,6 +68,10 @@ type Config struct {
 	SumsBatch int
 }
 
+// DefaultScrubPeriod is how long the background scrub takes to verify the whole volume
+// (`repair.scrub_period`): a week, about stored bytes ÷ 7 days of reads and traffic.
+const DefaultScrubPeriod = 7 * 24 * time.Hour
+
 // DefaultRetention is how long a deleted entry waits in the trash (docs/12 §10).
 const DefaultRetention = 30 * 24 * time.Hour
 
@@ -76,7 +81,7 @@ const MaxWorkers = 64
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
 	return Config{
-		FillAfter: 10 * time.Minute, ScrubShare: 100, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
+		FillAfter: 10 * time.Minute, ScrubPeriod: DefaultScrubPeriod, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
 		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64, Workers: 4, SumsBatch: 256,
 	}
@@ -154,6 +159,7 @@ type Repairer struct {
 	reported map[chunk.ShardKey]time.Time // reader bad-slot reports
 	last     Stats
 	lastAt   time.Time
+	prevScan time.Time // the start of the previous pass while leading (zero: none, I-215)
 	pass     int
 	progress Progress // the pass under way, while running
 	running  bool
@@ -215,6 +221,8 @@ func (r *Repairer) Run(ctx context.Context, isLeader func() bool) {
 			if _, err := r.Scan(ctx); err != nil {
 				r.log.Warn("repair scan failed", "err", err)
 			}
+		} else {
+			r.LostLeadership()
 		}
 		t.Reset(r.cfg.ScanInterval)
 	}
@@ -263,13 +271,43 @@ func (r *Repairer) autoPolicy(ctx context.Context, nodes []meta.Node, vol meta.V
 func (r *Repairer) Config() Config { return r.cfg }
 
 // Scan performs one pass: repair, migrate, scrub (docs/06 §4–5).
-func (r *Repairer) Scan(ctx context.Context) (Stats, error) { return r.scan(ctx, r.cfg.ScrubShare) }
+func (r *Repairer) Scan(ctx context.Context) (Stats, error) { return r.scan(ctx, false) }
 
 // Scrub is one pass that verifies every chunk (`check --scrub`), with the configured
 // hold-downs and rate limit, serialized with the background passes.
-func (r *Repairer) Scrub(ctx context.Context) (Stats, error) { return r.scan(ctx, 1) }
+func (r *Repairer) Scrub(ctx context.Context) (Stats, error) { return r.scan(ctx, true) }
 
-func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
+// LostLeadership forgets the previous pass, so the next pass as leader scrubs the
+// ScanInterval before it rather than everything since this node last led (I-215).
+func (r *Repairer) LostLeadership() {
+	r.mu.Lock()
+	r.prevScan = time.Time{}
+	r.mu.Unlock()
+}
+
+// ScrubDue reports whether a pass covering (from, to] scrubs the chunk h under a scrub
+// period of p (docs/06 §5, I-215): its phase, the first eight bytes of the hash mod p,
+// lies in the arc (from mod p, to mod p]. An arc of p or longer covers every chunk; p = 0
+// covers none. The phase is spread evenly by the hash, so each pass verifies about
+// (to − from) ÷ p of the volume and every chunk comes round once per period.
+func ScrubDue(h meta.Hash, from, to time.Time, p time.Duration) bool {
+	if p <= 0 || !to.After(from) {
+		return false
+	}
+	if to.Sub(from) >= p {
+		return true
+	}
+	period := uint64(p)
+	phase := binary.BigEndian.Uint64(h[:8]) % period
+	a := uint64(from.UnixNano()) % period //nolint:gosec // a wall-clock time after 1970
+	b := uint64(to.UnixNano()) % period   //nolint:gosec // a wall-clock time after 1970
+	if a < b {
+		return a < phase && phase <= b
+	}
+	return phase > a || phase <= b // the arc wraps past p
+}
+
+func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	r.scanMu.Lock()
 	defer r.scanMu.Unlock()
 	var st Stats
@@ -286,6 +324,12 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 	r.pass++
 	pass := r.pass
 	now := r.clk.Now()
+	from := r.prevScan // the scrub's arc: since the previous pass, or one interval on the first (I-215)
+	if from.IsZero() {
+		from = now.Add(-r.cfg.ScanInterval)
+	}
+	r.prevScan = now
+	scrub := func(h meta.Hash) bool { return scrubAll || ScrubDue(h, from, now, r.cfg.ScrubPeriod) }
 	reportedKeys := map[meta.Hash]map[int]bool{}
 	for k, at := range r.reported {
 		if now.Sub(at) > r.cfg.ReportTTL {
@@ -360,7 +404,7 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 			r.mu.Lock()
 			r.progress.InFlight++
 			r.mu.Unlock()
-			one := r.scanOne(ctx, c, vol, nodes, reportedKeys[c.Hash], pass, scrubShare)
+			one := r.scanOne(ctx, c, vol, nodes, reportedKeys[c.Hash], scrub(c.Hash))
 			r.mu.Lock()
 			r.progress.InFlight--
 			r.progress.Scanned++
@@ -385,7 +429,7 @@ func (r *Repairer) scan(ctx context.Context, scrubShare int) (Stats, error) {
 
 // scanOne classifies one chunk and repairs, migrates or scrubs it (docs/06 §4 cases
 // 1–6), returning what it did as that chunk's share of the pass statistics.
-func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reportedIdx map[int]bool, pass, scrubShare int) (st Stats) {
+func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reportedIdx map[int]bool, scrubDue bool) (st Stats) {
 	st.Scanned++
 	// re-verify reported slots with a HEAD; a present shard is not bad (docs/06 §4 case 5)
 	reported := map[int]bool{}
@@ -411,7 +455,7 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 				st.SumsRecorded++
 			}
 		}
-		if scrubShare <= 0 || int(c.Hash[0])%scrubShare != pass%scrubShare {
+		if !scrubDue {
 			return st
 		}
 		st.Scrubbed++

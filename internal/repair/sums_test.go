@@ -40,7 +40,7 @@ func TestRepair_BackfillSums_Bounded(t *testing.T) {
 				}
 			}
 			cfg := repair.DefaultConfig()
-			cfg.ScrubShare = 0
+			cfg.ScrubPeriod = 0
 			cfg.SumsBatch = batch
 			r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, cfg, nil)
 			st, err := r.Scan(ctx)

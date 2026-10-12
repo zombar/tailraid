@@ -200,6 +200,7 @@ repair:
   s3_scrub: 1G          # bucket bytes the scrub may download per day to verify objects ("0": HEAD only)
   workers: 4            # chunks a repair pass works on at once (1..64)
   rate: 50M             # shard bytes per second repair may move ("0": no limit)
+  scrub_period: 168h    # how long the background scrub takes to re-read and verify everything ("0": off)
 stats:
   every: 10s            # how often each device samples itself for the Stats page
   keep:

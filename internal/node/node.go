@@ -260,6 +260,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if rateSet {
 		rcfg.RateBytes = rate
 	}
+	scrubPeriod, scrubSet, err := cfg.RepairScrubPeriod()
+	if err != nil {
+		return err
+	}
+	if scrubSet {
+		rcfg.ScrubPeriod = scrubPeriod
+	}
 	client.SetGrace(rcfg.Grace)
 	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
