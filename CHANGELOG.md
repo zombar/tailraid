@@ -2,6 +2,18 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.6.1 (2026-10-12)
+
+### Changes
+
+- webui: the Media tab grabs missing video frames ([b863ab6](https://github.com/zombar/tailraid/commit/b863ab6))
+- webui: fold media sections, drop genre chips, hide deleted by default ([9c51051](https://github.com/zombar/tailraid/commit/9c51051))
+- search: cut scene names at season markers and a mid-name year ([b6c0eb5](https://github.com/zombar/tailraid/commit/b6c0eb5))
+- webui: folder covers from a subfolder, and no_cover in listings ([06a2904](https://github.com/zombar/tailraid/commit/06a2904))
+- webui: disk balance tones follow the rebalance skew ([abf98dd](https://github.com/zombar/tailraid/commit/abf98dd))
+- webui: integrity rows in three columns, zero chunks grey ([cf144b8](https://github.com/zombar/tailraid/commit/cf144b8))
+- vfs: Reader.Close cuts and waits for detached fetches before the cache drains (I-204) ([edf1e41](https://github.com/zombar/tailraid/commit/edf1e41))
+
 ## v0.6.0 (2026-10-12)
 
 ### Changes

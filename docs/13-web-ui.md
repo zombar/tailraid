@@ -440,7 +440,14 @@ tapped (I-163). Art comes through the routes that exist: a poster or cover tile 
 /api/thumb?path=<poster>` (at most 320 px, generated once and shared, I-160), the detail
 page's poster and the background are `GET /files/<fanart>` as stored, and a film or an episode without a sidecar frame shows its browser-made thumbnail,
 grabbed and stored by the page exactly as the file browser's tiles do (§5) when none is
-stored yet: an item carries its video's `video_ino`, `video_version` and `video_thumb`. A section lists at most
+stored yet: an item carries its video's `video_ino`, `video_version` and `video_thumb`. A show kept as one folder per season, as release packs are
+(`Invasion.2021.S01.WEBRip`, `Invasion.2021.S02.1080p`), is one item: a TV library's child
+folders whose names clean to the same title and year (docs/18 §8, compared folded) are
+one show, listed once under the first of them by name with that folder's metadata (its
+poster, else the first folder's with one), `children` the number of distinct seasons
+across them, and `item=` any of the folders answers the whole show, its seasons the union
+of every folder's (two copies of one episode are both listed, by path). The grouping uses
+the names only, so it is the same before and after a pass. A section lists at most
 `MediaPage` (500) items a page from `offset`, sorted by `sort_title` then path, the same on
 every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
 now-playing bar (§6); "Open folder" goes to the file browser.
@@ -832,7 +839,9 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   `.md` link becomes the file route, a relative link to anything else `/files/`, an image
   only a relative volume path; the fragment's bytes are a pure function of the source.
 - **I-212** — `/api/media` lists a flagged folder's items from the live FSM with the
-  catalogue's metadata where an entry exists and the item's name otherwise, never an
+  catalogue's metadata where an entry exists and the item's name otherwise, a TV
+  library's folders whose names clean to the same title and year as one show with the
+  union of their seasons, never an
   entry under a deleted root or `/.tailraid`, carries `nsfw` for an item under an nsfw
   folder, pages at most `MediaPage` items sorted by `sort_title` then path, answers 404
   for a folder that is not a library and 400 for `offset` or `sort` outside their bounds,
@@ -880,6 +889,6 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
 | I-187 | planned (docs/16): TestWebUI_Snapshots_ListTake_NoDeleteRoute, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409, TestWebUI_Versions_DistinctContents, TestWebUI_Revert_Copy_RestoreTree, `TestSoak_AllPhasesAgainstHarness` |
-| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
+| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
