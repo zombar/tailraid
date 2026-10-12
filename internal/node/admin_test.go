@@ -139,6 +139,11 @@ func TestAdminOp_StatsSeal(t *testing.T) {
 		Writer: &stats.Writer{Vol: stats.VFS{FS: nd.FS, St: nd.Node.FSM, Rd: nd.Reader}, Name: "n1"},
 	}
 	h := c.Clk.Now().UTC().Truncate(time.Hour)
+	// the rows must lie in the past: on a fake clock frozen in the first 20 s of an hour the
+	// seal (which cuts at now) left them unsealed (CI, macOS, a run across 21:00)
+	if d := h.Add(30 * time.Second).Sub(c.Clk.Now()); d > 0 {
+		c.Clk.Advance(d)
+	}
 	for s := 0; s < 30; s += 10 {
 		ops.stats.Writer.Add(stats.Row{T: h.Add(time.Duration(s) * time.Second).Unix(), N: "n1", M: map[string]float64{"load1": 1}})
 	}
