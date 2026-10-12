@@ -571,7 +571,13 @@ func (m *mirrorRun) offlineAndBack(ctx context.Context, u *undo, snap1, snap2 st
 	if ok {
 		m.labels[catchup.Name] = "catch-up on attach"
 	}
-	got, err := r.volume(m.reader).ReadAll(remote)
+	// every other gateway learns the mirror is back from its host's next health reply,
+	// within a probe interval (docs/16 §1): the read is retried that long
+	var got []byte
+	r.poll(ctx, 30*time.Second, time.Second, func() bool {
+		got, err = r.volume(m.reader).ReadAll(remote)
+		return err == nil && bytes.Equal(got, newBin)
+	})
 	r.checkAt("I-185", "a file only the mirror holds reads exact once it is back", err == nil && bytes.Equal(got, newBin),
 		fmt.Sprintf("%d bytes, want %d, %v", len(got), len(newBin), err), remote, "", m.reader.Name)
 	if err == nil && bytes.Equal(got, newBin) {
