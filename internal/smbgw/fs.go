@@ -103,6 +103,26 @@ func (f *FS) CanDelete(p string) error {
 	return nil
 }
 
+// CanDeleteOwn answers for a handle whose CREATE made the file (docs/15 §8): a failed copy
+// may delete what it created, so under a protected folder a file is allowed and a
+// directory is still refused (I-220).
+func (f *FS) CanDeleteOwn(p string) error {
+	in, err := f.st.Resolve(meta.SplitPath(p))
+	if err != nil {
+		return os.ErrNotExist
+	}
+	if in.Type != meta.TFile {
+		return f.CanDelete(p)
+	}
+	return nil
+}
+
+// DeleteOwnFile is that handle's delete-on-close: an own cleanup, which a protected folder
+// takes (I-220).
+func (f *FS) DeleteOwnFile(p string) error {
+	return f.refused(&f.warnDelete, "delete", p, wrap(f.fs.RemoveOwn(p)))
+}
+
 // POSIX type bits of a Stat mode, which is what the server reads.
 const (
 	modeDir     uint16 = 0o040000

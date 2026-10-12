@@ -66,7 +66,7 @@ const (
     OpSetPlacement            // {Hash, Placement []NodeIdx, K, M}   (repair / migration)
     OpGCDelete                // {Before int64} → Result.Victims
     OpSetVolumeMode           // {Auto bool, Now}   (03: automatic redundancy)
-    OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4)
+    OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4); in codec 8 it is an own cleanup (Own, I-220)
     OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
     OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
     OpSetShardSums            // {Hash, Sums [][32]byte}: the data shards' hashes of a chunk committed without them (04 §4, codec 5)
@@ -205,7 +205,12 @@ directory with `FlagProtected` was crossed or is the inode itself. It costs one 
 lookup per level, what `pathLen` (I-115) already pays per `Create`. `Unlink`, `Rmdir`,
 `Trash`, `Purge{Ino}` and `Rename` consult it as described (I-154); `Create`, `Mkdir`,
 `Symlink`, `Commit` and a `Rename` *into* a protected directory are unaffected: a
-protected folder accepts new content and refuses to lose any. The same walk guards the
+protected folder accepts new content and refuses to lose any. One `Trash` gets through:
+an **own cleanup**, a `Trash` of a file written in codec 8 (`Own`), which the SMB gateway
+proposes only for a handle whose CREATE made the file and which the client marked
+delete-on-close: a copy that failed removing what it wrote, as Explorer does on Skip or
+Cancel (I-220, docs/15 §8). It never removes a directory, and nothing else sets it. The
+same walk guards the
 trash: `Create`, `Mkdir`, `Unlink`, `Rmdir`, `Rename`, `Trash` and a `SetAttr` of
 `Flags` refuse a parent (or entry) that lies in the trash with `ErrInTrash`; only
 `Commit` writes inside it, for the flusher of a file deleted while dirty (L-203), and
@@ -290,7 +295,9 @@ is `Syncing`.
 disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore`,
 `Purge`, `SetAttr` with `Flags`), 5 (`Commit` whose `NewChunks` carry `Sums`,
 `SetShardSums`), 6 (`SetAttr` with the library bits of 18 §9) or 7 (`SnapshotBegin`,
-`SnapshotEnd`, `SnapshotDelete`, `NodeUpsert` of a mirror, 16), snapshots in version 7 (01 §Binary codec); every reader
+`SnapshotEnd`, `SnapshotDelete`, `NodeUpsert` of a mirror, 16) or 8 (`Trash` with `Own`,
+an own cleanup, I-220; the version is the flag, no field is added), snapshots in version
+7 (01 §Binary codec; codec 8 adds no state); every reader
 decodes every older version. A `Commit` carries `Sums` only while every live active member
 reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
 gate: in a mixed cluster the chunk is committed without sums and the repair scanner's
@@ -559,8 +566,17 @@ no divergent state to merge because it never applied uncommitted entries.
   namespace: `Unlink`, `Rmdir`, `Trash` and a user's `Purge` of such an entry, a `Rename`
   of the protected directory itself, a `Rename` that moves an entry out of a protected
   subtree, and a `Rename` that would replace an entry under one are refused with
-  `ErrProtected` before anything changes; creating, writing and moving into a protected
-  directory succeed; `Flags` are accepted on directories only.
+  `ErrProtected` before anything changes, the own cleanup of I-220 alone excepted;
+  creating, writing and moving into a protected directory succeed; `Flags` are accepted
+  on directories only.
+- **I-220** — A `Trash` with `Own` (codec 8) of a file under a protected directory moves it
+  into the trash like any delete; with `Own` a directory is still refused with
+  `ErrProtected`, and without it everything under a protected directory is (I-154). The
+  leader refuses the codec-8 entry while a live member reads less (I-156), and the
+  gateway then answers the plain refusal. The SMB gateway proposes it for exactly the
+  handle whose CREATE created the file and which is marked delete-on-close, at SET_INFO
+  disposition and at CLOSE; a delete through another handle, NFS, or the browser is a
+  plain `Trash`.
 - **I-155** — The trash is invisible to the gateways and readable by the browser UI: a
   deleted root and everything under it fail `GetInode`, `Lookup`, `Resolve` and `ReadDir`
   (a handle is stale, a name is free, a listing omits it) and are reachable through
@@ -594,5 +610,6 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-136 | `TestMember_RemovedRowRefusesOps`, `TestFindNode_PrefersLiveRow` |
 | I-152 | `TestFSM_Trash_Table`, `TestFSM_Trash_FoldsEarlierRoots`, `TestFSM_Restore_Table`, `TestFSM_DeterministicAcrossReplicas`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
 | I-153 | `TestFSM_Purge_Table`, `TestFSM_Purge_Boundary`, `TestFSM_Purge_CascadesNestedRoots`, `TestFSM_TrashStats_MatchComputed`, `TestCheckInvariants_DetectsEachViolation`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestFSM_DeterministicAcrossReplicas`, `TestModelCheck_Long` |
+| I-220 | `TestFSM_Protected_OwnCleanup_Table`, `TestEncodeCommand_OwnTrashIsCodec8`, `TestSMB_FailedCopyCleanup_UnderProtected`, `TestSMB_DeleteExistingUnderProtected_StillRefused`, `TestDeleteOnClose_OwnCreationIsOwnCleanup` |
 | I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
 | I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
