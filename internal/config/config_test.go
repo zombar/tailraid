@@ -178,6 +178,40 @@ func TestConfig_RepairWorkersAndRate(t *testing.T) {
 	}
 }
 
+// repair.scrub_period is 0 (off) or a duration of 1h to 8760h: {unset, 0, 1h−1ns, 1h,
+// 168h, 8760h, 8760h+1ns}, and Validate refuses what the parser refuses.
+// Invariant: I-215
+func TestConfig_ScrubPeriod(t *testing.T) {
+	for _, c := range []struct {
+		in       string
+		d        time.Duration
+		set, bad bool
+	}{
+		{"", 0, false, false},
+		{"0", 0, true, false},
+		{"59m59.999999999s", 0, false, true},
+		{"1h", time.Hour, true, false},
+		{"168h", 168 * time.Hour, true, false},
+		{"8760h", 8760 * time.Hour, true, false},
+		{"8760h0m0.000000001s", 0, false, true},
+		{"7d", 0, false, true},
+		{"-1h", 0, false, true},
+	} {
+		var cfg Config
+		cfg.Repair.ScrubPeriod = c.in
+		d, set, err := cfg.RepairScrubPeriod()
+		if (err != nil) != c.bad || d != c.d || set != c.set {
+			t.Fatalf("repair.scrub_period %q: got %v set %v, %v; want %v set %v bad %v", c.in, d, set, err, c.d, c.set, c.bad)
+		}
+		full := Default()
+		full.Node.DataDir = t.TempDir()
+		full.Repair.ScrubPeriod = c.in
+		if err := full.Validate(); (err != nil) != c.bad {
+			t.Fatalf("Validate with repair.scrub_period %q: %v, want bad %v", c.in, err, c.bad)
+		}
+	}
+}
+
 // A file this build writes names repair.workers and repair.rate only when they are set:
 // a release from before the keys reads it strictly and must still start after a
 // rollback (I-61); set, they round-trip.
@@ -194,7 +228,7 @@ func TestConfig_NewRepairKeysWrittenOnlyWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"workers", "rate", "stats", "every", "keep", "cache"} {
+	for _, key := range []string{"workers", "rate", "scrub_period", "stats", "every", "keep", "cache"} {
 		if strings.Contains(string(b), key+":") {
 			t.Fatalf("an unset %s was written:\n%s", key, b)
 		}

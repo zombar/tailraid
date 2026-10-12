@@ -182,7 +182,7 @@ func slotsOn(f *testharness.Fabric, inos []meta.Ino, target meta.NodeIdx) int {
 
 func fanoutCfg(workers int) repair.Config {
 	cfg := repair.DefaultConfig()
-	cfg.ScrubShare, cfg.RateBytes, cfg.Workers = 0, 0, workers
+	cfg.ScrubPeriod, cfg.RateBytes, cfg.Workers = 0, 0, workers
 	return cfg
 }
 

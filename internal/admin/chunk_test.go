@@ -62,7 +62,7 @@ func TestChunkDescribe_StateFilesAndEvents(t *testing.T) {
 	}
 	// a scrub pass records scrub_ok on the scanning node
 	cfg := repair.DefaultConfig()
-	cfg.ScrubShare = 1
+	cfg.ScrubPeriod = time.Nanosecond // a fresh repairer's first pass then scrubs every chunk (I-215)
 	rp := repair.New(n0.Node.FSM, n0.Node, n0.Prober, n0.Client, n0.Reader, c.Clk, cfg, nil)
 	rp.Events = n0.Events
 	leader := c.Leader()

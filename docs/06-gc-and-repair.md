@@ -171,7 +171,7 @@ A slot `i` of chunk `c` is **bad** when any of:
    (fire-and-forget, deduplicated per key for 10 min on the sender; the leader keeps a
    bounded set). Reported slots are re-verified by a `HEAD` before repair; a slot whose
    `HEAD` succeeds is dropped from the set. This is how a lost rename, a quarantined file
-   or a stale shard gets repaired without waiting for the 1 % scrub sample;
+   or a stale shard gets repaired without waiting for the scrub to reach it;
 6. the chunk is **skewed** (14 §7): one host holds more than `ceil((k+m)/D)` of its slots
    while the candidates admit a placement within that cap; the excess slots (highest
    index first) are bad and move like draining slots;
@@ -233,14 +233,25 @@ cluster, carries no `Sums`, so the read path serves it whole. Each pass takes at
 shards (background priority), decodes, verifies the chunk's hash, re-encodes and hashes
 the k data shards, and proposes `SetShardSums`; a chunk that fails its hash is left for
 the scrub. `status` reports `sums_recorded` and `sums_pending` in the last pass's stats;
-the backfill is complete when the latter reads 0. A cluster written on an older release is covered at the pass rate (256 a minute).
+the backfill is complete when the latter reads 0. A cluster written on an older release is covered at the pass rate: 256 chunks a pass, a pass about every four minutes while the backfill reads 1 GiB per pass at 4 MiB chunks (110k chunks took about 30 hours on the real cluster).
 
 ## 5. Scrub
 
-Every scan pass also verifies a sample of chunks (default 1 % per pass, so a full scrub
-completes in ~100 passes; `tailraid check --scrub` runs one 100 % pass through the leader's
+Every scan pass also verifies the chunks whose turn has come, so that the background
+passes verify the whole volume once per `repair.scrub_period` (default `168h`, a week; `0` turns
+the background scrub off; `tailraid check --scrub` runs one 100 % pass through the leader's
 repairer, with the configured `fill_after` and rate limit, serialized with the background
-passes): fetch **all** k+m shards,
+passes). The turn is a function of time, not of the pass count: chunk `c` has the phase
+`φ(c) = BigEndian(c.Hash[0:8]) mod P` (P the period in nanoseconds), and a pass starting
+at `t` scrubs the chunks whose phase lies in the arc `(t₀ mod P, t mod P]`, where `t₀` is
+the start of the repairer's previous pass, or `t − ScanInterval` on its first pass as
+leader; an arc of P or more covers every chunk (I-215). The cost is therefore stored bytes
+÷ P whatever the pass rate and the volume size, and nothing has to survive a leader
+change. (Until 0.5.2 the sample was 1 % of the chunks per pass: a pass starts a minute
+after the last one ends, so a 720 GB volume was re-read every 6–7 hours, ~2.5 TB a day of
+disk reads and tailnet traffic on an idle cluster, measured on the real cluster on
+2026-10-12.) A scrubbed chunk's verification is to
+fetch **all** k+m shards,
 `codec.Verify`. A `false` result or any `ErrCorrupt` from a node marks the offending slots
 bad and repairs them via §4 (the chunk itself is decoded from a hash-verified subset).
 A slot on an S3 node is checked with a HEAD, and an absent object is a bad slot (L-112,
@@ -348,6 +359,12 @@ state to patch.
   and the leader's retention purge takes exactly the roots whose `DeletedAt` is older
   than `trash.retention` on the FSM clock (`max(leader clock, LastNow)`), in bounded
   batches, never when the retention is zero.
+- **I-215** — The background scrub verifies every chunk with `Refs > 0` at least once in
+  any span of `repair.scrub_period` (P) covered by passes, and a pass scrubs only the
+  chunks whose phase `BigEndian(hash[0:8]) mod P` lies in the arc from the previous
+  pass's start (or `ScanInterval` before a leader's first pass) to its own start, every
+  chunk when that arc is P or longer, none when P is 0; `check --scrub` verifies every
+  chunk whatever P.
 - **I-195** — Every path under `/.tailraid/` is ephemeral: a replace or a delete of one
   unlinks it at once and never trashes it, and the web file browser lists nothing under it
   (I-160); on the mounts the tree is plain files and folders.
@@ -367,4 +384,5 @@ state to patch.
 | I-174 | `TestRepair_FanOut_Bounded`, `TestRepair_FanOut_CancelDrains`, `TestConfig_RepairWorkersAndRate`, `TestPhaseFanOut_ConformingPassPasses`, `TestPhaseFanOut_OverWorkersFails`, `TestPhaseFanOut_FastPassSkips` |
 | I-175 | `TestServer_BackgroundShare`, `TestBackgroundSlots_Table`, `TestClient_BackgroundHeader`, `TestPhaseFanOut_ConformingPassPasses`, `TestPins_WalkFetchesBackground` |
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
+| I-215 | `TestScrubDue_Window`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_ScrubPeriod_FirstPassAsLeader`, `TestConfig_ScrubPeriod` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |

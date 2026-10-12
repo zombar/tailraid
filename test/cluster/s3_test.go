@@ -158,7 +158,6 @@ func TestS3Node_ObjectMissing_Repaired(t *testing.T) {
 	name := "c/" + rpc.ShardObject(chunk.Key(ch.Hash, ch.K, ch.M, i))
 	srv.DeleteObject(name)
 	cfg := repairCfg()
-	cfg.ScrubShare = 1
 	cfg.S3ScrubBytes = 0 // HEAD only: the absence is found without a fetch (L-112)
 	gets := srv.Count(http.MethodGet)
 	st, err := newRepairer(c, c.Leader(), cfg).Scrub(ctx)
@@ -484,7 +483,6 @@ func TestS3Node_ScrubFetchesSample(t *testing.T) {
 			bad[len(bad)-1] ^= 0xff
 			srv.PutObject(name, bad)
 			cfg := repairCfg()
-			cfg.ScrubShare = 1
 			cfg.S3ScrubBytes = tc.budget
 			gets := srv.Count(http.MethodGet)
 			st, err := newRepairer(c, c.Leader(), cfg).Scrub(ctx)
