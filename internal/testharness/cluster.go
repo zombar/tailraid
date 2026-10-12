@@ -31,10 +31,19 @@ import (
 // FaultNet is an http.RoundTripper that drops or delays requests per destination
 // address, so the production RPC client and server are exercised under partitions.
 type FaultNet struct {
-	base http.RoundTripper
-	mu   sync.Mutex
-	cut  map[string]bool // destination host:port → unreachable
-	all  bool
+	base     http.RoundTripper
+	mu       sync.Mutex
+	cut      map[string]bool // destination host:port → unreachable
+	all      bool
+	putDelay time.Duration // every shard PUT waits this long first (soak phase 22)
+}
+
+// DelayPuts holds every shard PUT this client sends for d first (0: none), on the wall
+// clock: the flush falls behind its writers as on a slow link.
+func (f *FaultNet) DelayPuts(d time.Duration) {
+	f.mu.Lock()
+	f.putDelay = d
+	f.mu.Unlock()
 }
 
 var errCut = errors.New("faultnet: link cut")
@@ -47,9 +56,22 @@ func NewFaultNet(base http.RoundTripper) *FaultNet {
 func (f *FaultNet) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Lock()
 	cut := f.all || f.cut[r.URL.Host]
+	delay := f.putDelay
 	f.mu.Unlock()
 	if cut {
-		return nil, errCut
+		// a cut link drops the request before it leaves, as a refused dial does: the
+		// forwarder retries it like a missing leader rather than resolving an unknown
+		// outcome (I-95), the same as dev.Faults on the compose rig
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errCut}
+	}
+	if delay > 0 && r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/shards/") {
+		t := time.NewTimer(delay)
+		select {
+		case <-t.C:
+		case <-r.Context().Done():
+			t.Stop()
+			return nil, r.Context().Err()
+		}
 	}
 	return f.base.RoundTrip(r)
 }
@@ -388,6 +410,8 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	// keeps the node it was built with: a stats writer still holding these handles after a
 	// restart calls it when nd.Node is another node, or nil while the node is down.
 	self := nd.Node
+	// the leader refuses a command newer than a live member reads (I-156), as node.go wires it
+	nd.Node.MinCodec = nd.Prober.MinCodec
 	nd.Flush.MinCodec = func() uint8 {
 		if self.MinCodec == nil {
 			return meta.CodecVersion
@@ -400,15 +424,39 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
 	nd.FS.SetFlusher(nd.Flush)
 	if c.retryUntilStale {
+		// the Stale rule of cluster.Node.Health, measured on the harness clock alone: Raft
+		// stamps LastContact on the wall clock, and comparing it with a fake clock that
+		// tests advance by seconds at a time makes any follower stale once the clock has
+		// run 30 s ahead. A contact is noted at the fake time it is first seen.
+		var (
+			hmu           sync.Mutex
+			seenContact   time.Time // Raft's last-contact stamp, wall clock
+			contactAt     time.Time // when it was seen, harness clock
+			noLeaderSince time.Time
+		)
+		raftNode := nd.Node
 		nd.FS.SetHealth(func() bool {
-			switch h := nd.Node.Health(c.Clk, nd.Prober); h.State {
-			case cluster.Healthy:
-			case cluster.Stale:
-				return true
-			case cluster.NoLeader:
-				return c.Clk.Now().Sub(nd.Node.Raft.LastContact()) >= cluster.StaleThreshold
+			now := c.Clk.Now()
+			hmu.Lock()
+			defer hmu.Unlock()
+			if contactAt.IsZero() {
+				contactAt = now
 			}
-			return false
+			if raftNode.IsLeader() {
+				contactAt, noLeaderSince = now, time.Time{}
+				return false
+			}
+			if _, id := raftNode.Raft.LeaderWithID(); id == "" {
+				if noLeaderSince.IsZero() {
+					noLeaderSince = now
+				}
+				return now.Sub(noLeaderSince) >= cluster.StaleThreshold
+			}
+			noLeaderSince = time.Time{}
+			if lc := raftNode.Raft.LastContact(); lc.After(seenContact) {
+				seenContact, contactAt = lc, now
+			}
+			return now.Sub(contactAt) >= cluster.StaleThreshold
 		})
 	}
 	nd.RPC, err = rpc.NewServer(rpc.Options{

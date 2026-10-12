@@ -74,11 +74,6 @@ type openFile struct {
 	// (writeAsync): a CLOSE waits for them, so a handle is never closed under
 	// a write it accepted.
 	writes sync.WaitGroup
-
-	// created is whether this handle's CREATE made the file: its delete-on-close is the
-	// creator's own cleanup, which an OwnDeleter may allow where it refuses any other
-	// delete (a failed copy removing what it wrote).
-	created bool
 }
 
 // allOnesFileID is how a chained request says "the file the previous operation
@@ -194,15 +189,16 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusNotADirectory), nil
 	}
 
-	created := action == actionCreated && !dir
 	if options&optDeleteOnClose != 0 && !tc.ro {
 		// the delete happens at CLOSE, whose reply carries no failure: a backend that
 		// may refuse it is asked now, where the client reads the status
-		if err := canDelete(sh.fsys, p, created); err != nil {
-			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+		if d, ok := sh.fsys.(DeleteChecker); ok {
+			if err := d.CanDelete(p); err != nil {
+				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+			}
 		}
 	}
-	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID, created: created}
+	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID}
 	if !dir {
 		if o, canOpen := sh.fsys.(filesystem.Opener); canOpen {
 			if f, err := o.OpenFile(p); err == nil {
@@ -250,27 +246,6 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 // delete-on-close, at CREATE or through SET_INFO, and the client reads the status.
 type DeleteChecker interface {
 	CanDelete(path string) error
-}
-
-// OwnDeleter is the optional capability of a filesystem that lets the handle which
-// created a file delete it where any other delete would be refused (a protected folder
-// taking a failed copy's cleanup): CanDeleteOwn answers for such a handle in place of
-// CanDelete, and its delete-on-close calls DeleteOwnFile in place of DeleteFile.
-type OwnDeleter interface {
-	CanDeleteOwn(path string) error
-	DeleteOwnFile(path string) error
-}
-
-// canDelete asks the backend whether a handle may mark path delete-on-close: as its
-// creator's own cleanup when created and the backend tells the two apart.
-func canDelete(fsys filesystem.Filesystem, path string, created bool) error {
-	if o, ok := fsys.(OwnDeleter); ok && created {
-		return o.CanDeleteOwn(path)
-	}
-	if d, ok := fsys.(DeleteChecker); ok {
-		return d.CanDelete(path)
-	}
-	return nil
 }
 
 // Timestamper is the optional capability of a Stat that knows its times. The
@@ -327,9 +302,7 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 	// otherwise leave one behind each time.
 	delete(c.searches, of.id)
 	if of.deleteOnClose && !of.ro {
-		if o, ok := of.share.fsys.(OwnDeleter); ok && of.created {
-			o.DeleteOwnFile(of.path)
-		} else if of.dir {
+		if of.dir {
 			of.share.fsys.DeleteDir(of.path)
 		} else {
 			of.share.fsys.DeleteFile(of.path)

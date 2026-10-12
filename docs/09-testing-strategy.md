@@ -427,7 +427,28 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   then every node's `/api/search` and `/api/media` compared byte for byte, a renamed file
   found at once, a trashed one gone from both, a snippet range equal to the bytes, a
   markdown file rendered with only the renderer's tags, the film's plot and poster and the
-  episode numbering; flags restored under `Caps.Mutate`; I-206..I-212). The compose rig gives four nodes two disks each, one
+  episode numbering; flags restored under `Caps.Mutate`; I-206..I-212); 22 copies under
+  faults (written after the 2026-10-12 copies that left files of holes: each round starts
+  copy jobs on two gateways that the round does not fault, one over SMB on one
+  connection and one over NFS with one open handle per file, each file created, sized
+  to its final length first and written front to back in 1 MiB writes the way Explorer
+  copies, then injects one fault while they run: (a) every other node restarted in turn
+  the way an update restarts it, graceful, each back before the next; (b) the leader
+  killed and brought back; (c) a minority partitioned off and healed; (d) the leader's
+  prober taking one member for codec 4 while the gateways' do not (`/dev/codec`), the
+  disagreement of the 2026-10-12 upgrade, held through the round's checks; (e) every
+  shard PUT delayed so the flush falls behind the copies; (f) a copying gateway
+  restarted the way `update --restart` restarts it, which must wait for its copies to
+  finish (`admin.WaitIdle`). Checks per round: every copy reported success with no
+  client error (I-217, I-219, I-221); every copy reads back with its sha256 through
+  another gateway (I-7); no copied file is all holes (the integrity panel's "zero"); the
+  cluster is healthy; FSM hashes agree after the last round. Against a build before
+  I-219, round (d) fails: every copy reports success and none reads back whole, the
+  commits carrying shard sums refused for as long as the leader sees the old member.
+  The stall of I-217 and the update of I-221 do not bite at the phase's file sizes and
+  are pinned by their own tests. A failed copy's cleanup
+  under a protected folder (docs/15 §8) is not driven here, the Go SMB client having no call
+  to mark an open handle delete-on-close, and is covered by the SMB gateway's own tests). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, and publishes each node's web port for
