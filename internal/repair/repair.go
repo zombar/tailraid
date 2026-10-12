@@ -138,6 +138,10 @@ func (s *Stats) add(o Stats) {
 
 // Repairer is the leader's scanner.
 type Repairer struct {
+	// MinCodec, when set, is the oldest codec a live member reads (the prober's): no
+	// sums are backfilled while it is below codec 5, so a pass fetches no chunk only to
+	// have its SetShardSums refused (I-219). nil backfills.
+	MinCodec func() uint8
 	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
 	warnRepair, warnPut logx.Limiter
 	sumsLeft            atomic.Int64 // the pass's remaining sums backfills (SumsBatch, I-201)
@@ -357,7 +361,11 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 		}
 		return true
 	})
-	r.sumsLeft.Store(int64(r.cfg.SumsBatch))
+	batch := r.cfg.SumsBatch
+	if r.MinCodec != nil && r.MinCodec() < meta.CodecShardSums {
+		batch = 0 // a member could not read SetShardSums: the leader would refuse it (I-219)
+	}
+	r.sumsLeft.Store(int64(batch))
 	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
 	slots := map[meta.NodeIdx]int{} // per target, for the capacity rebalance (docs/14 §7)
 	for i := range work {
