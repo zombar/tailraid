@@ -605,3 +605,74 @@ func TestMirror_ForeignClusterUntouched(t *testing.T) {
 		t.Fatalf("open of a directory without a marker: %v", err)
 	}
 }
+
+// A sync never replaces a manifest on the disk, and an imported manifest moves to its
+// row's ID: written first, the old file removed after, and a crash between the two
+// leaves a copy that the next renumber removes (docs/16 §5).
+// Invariant: I-183
+func TestMirror_RenumberNeverReplaces(t *testing.T) {
+	m, _ := newMirror(t, sysfs.OS{})
+	v := newVolume()
+	v.put(1, "f", 10, bytes.Repeat([]byte{7}, testCS))
+	first := snap(t, m, v, 3)
+	if _, err := m.WriteSnapshot(context.Background(), v, 1, Manifest{ID: 3, Name: "other", ChunkSize: testCS}); !errors.Is(err, ErrExists) {
+		t.Fatalf("a sync over manifest 3: %v", err)
+	}
+	if mans, _ := m.Manifests(); len(mans) != 1 || mans[0].Name != first.Name {
+		t.Fatalf("manifests after the refused sync %+v", mans)
+	}
+	if err := m.Renumber(3, 9, first.Name); err != nil {
+		t.Fatal(err)
+	}
+	mans, _ := m.Manifests()
+	if len(mans) != 1 || mans[0].ID != 9 || mans[0].Name != first.Name || mans[0].Root != first.Root {
+		t.Fatalf("after renumber %+v", mans)
+	}
+	// the crash between the write and the remove: both files, the same snapshot
+	dup := mans[0]
+	dup.ID = 4
+	if err := m.PutManifest(dup); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Renumber(4, 9, first.Name); err != nil {
+		t.Fatal(err)
+	}
+	if mans, _ := m.Manifests(); len(mans) != 1 || mans[0].ID != 9 {
+		t.Fatalf("the copy survived: %+v", mans)
+	}
+	// another snapshot under the target ID: refused, nothing changes
+	snap(t, m, v, 5)
+	if err := m.Renumber(5, 9, "s5"); !errors.Is(err, ErrExists) {
+		t.Fatalf("renumber onto another snapshot: %v", err)
+	}
+	if mans, _ := m.Manifests(); len(mans) != 2 {
+		t.Fatalf("manifests after the refused renumber %+v", mans)
+	}
+	complete(t, m)
+}
+
+// Invariant: I-188
+func TestMirror_AdoptKeepsIDRewritesCluster(t *testing.T) {
+	m, root := newMirror(t, sysfs.OS{})
+	v := newVolume()
+	v.put(1, "f", 10, bytes.Repeat([]byte{8}, testCS))
+	snap(t, m, v, 1)
+	mk, err := Adopt(sysfs.OS{}, root, "bb", "h2")
+	if err != nil || mk.ClusterID != "bb" || mk.HostID != "h2" || mk.MirrorID != "m1" {
+		t.Fatalf("adopt %+v %v", mk, err)
+	}
+	if _, err := Open(sysfs.OS{}, root, "aa"); !errors.Is(err, ErrForeign) {
+		t.Fatalf("the old cluster still opens it: %v", err)
+	}
+	m2, err := Open(sysfs.OS{}, root, "bb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mans, _ := m2.Manifests(); len(mans) != 1 {
+		t.Fatalf("manifests after adopt %+v", mans)
+	}
+	complete(t, m2)
+	if _, err := Adopt(sysfs.OS{}, t.TempDir(), "bb", "h2"); !errors.Is(err, ErrNotMirror) {
+		t.Fatalf("adopt of an empty dir: %v", err)
+	}
+}

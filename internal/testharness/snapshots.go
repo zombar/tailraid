@@ -106,7 +106,7 @@ func (f *Fabric) AddMirror(src *Mirrors, name string) meta.NodeIdx {
 func (f *Fabric) TakeSnapshot(src *Mirrors, m meta.NodeIdx, name string) meta.Snapshot {
 	f.TB.Helper()
 	var clone *meta.State
-	f.FSM.SetSnapshotHook(func(_ meta.Snapshot, _ meta.NodeIdx, c func() *meta.State) { clone = c() })
+	f.FSM.SetSnapshotHook(func(_ meta.Snapshot, _ meta.NodeIdx, _ string, c func() *meta.State) { clone = c() })
 	r := f.Apply(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: m, Name: name, Now: f.Clk.Now().UnixNano()}})
 	f.FSM.SetSnapshotHook(nil)
 	if r.Err != nil || clone == nil {

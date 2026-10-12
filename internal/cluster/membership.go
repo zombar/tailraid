@@ -264,10 +264,19 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		m := meta.Node{ID: op.DiskID, Name: op.Name, Kind: meta.KindMirror, Host: op.NodeIdx, JoinedAt: time.Now().UnixNano()}
 		nodes := n.FSM.Nodes()
+		live := map[string]bool{}
+		for i := range nodes {
+			if cur := &nodes[i]; cur.Kind == meta.KindMirror && cur.State != meta.Removed {
+				live[cur.Name] = true
+			}
+		}
 		for i := range nodes {
 			cur := &nodes[i]
-			if cur.ID == op.DiskID && cur.State != meta.Removed {
+			switch {
+			case cur.ID == op.DiskID && cur.State != meta.Removed:
 				m.Idx, m.Name, m.JoinedAt = cur.Idx, cur.Name, cur.JoinedAt // a re-home keeps the row's name
+			case cur.ID == op.DiskID && m.Idx == 0 && !live[cur.Name]:
+				m.Name = cur.Name // a disk removed and added back takes its old name, so its paths stay
 			}
 		}
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: m}})

@@ -1166,6 +1166,13 @@ func (g *cmdGen) snapshotCmd(name string) Command {
 		return Command{Op: OpSnapshotEnd, SnapshotEnd: &SnapshotEnd{ID: sn.ID, OK: g.rng.Intn(4) != 0, Missing: uint32(g.rng.Intn(2)), Now: g.now}}
 	case 1:
 		return Command{Op: OpSnapshotDelete, SnapshotDelete: &SnapshotDelete{ID: sn.ID, Done: sn.State == SnapDeleting, Now: g.now}}
+	case 2:
+		if g.rng.Intn(2) == 0 { // a rowless manifest found on the disk (docs/16 §5)
+			return Command{Op: OpSnapshotImport, SnapshotImport: &SnapshotImport{
+				Mirror: mirror, After: SnapID(g.rng.Intn(50)), Name: "imp-" + name,
+				At: g.now - 1000, Auto: g.rng.Intn(2) == 0, Root: Hash{byte(g.rng.Intn(256))}, Files: 1, Missing: uint32(g.rng.Intn(2)), Now: g.now,
+			}}
+		}
 	}
 	return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now}}
 }

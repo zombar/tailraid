@@ -327,7 +327,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	mlimit := repair.NewLimiter(mpol.Rate, clk)
 	mirrors := newMirrorSet(sysfs.OS{}, cfg, mpol, clusterID, node.FSM, clk, log)
-	mirrors.self, mirrors.propose = node.SelfIdx, ops.propose
+	mirrors.self, mirrors.selfID, mirrors.propose, mirrors.minCodec = node.SelfIdx, node.ID, ops.propose, prober.MinCodec
 	mirrors.read = func(ctx context.Context, h meta.Hash) ([]byte, error) {
 		b, err := rd.ReadChunk(chunk.Background(ctx), h) // at background priority: client reads keep their half (I-175)
 		mlimit.Wait(ctx, int64(len(b)))
@@ -1009,6 +1009,15 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"dir": dir, "index": m.Index, "term": m.Term}, nil
+	case "open_mirror": // `mirror add` on this host: open the path it wrote to the config (docs/16 §1)
+		if !filepath.IsAbs(op.Path) {
+			return nil, fmt.Errorf("open_mirror: %q is not an absolute path", op.Path)
+		}
+		state := a.mirrors.add(op.Path)
+		if state == "online" && a.healthy() {
+			a.mirrors.tick(ctx) // its snapshots are imported and the first one begun now, not a minute later
+		}
+		return map[string]string{"state": state}, nil
 	case "open_disk":
 		if !filepath.IsAbs(op.Path) {
 			return nil, fmt.Errorf("open_disk: %q is not an absolute path", op.Path)

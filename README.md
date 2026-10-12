@@ -135,7 +135,7 @@ On the device the disk is attached to:
 tailraid mirror add /Volumes/Archive/tailraid    # an empty directory on the mirror disk
 ```
 
-The mirror is named after its device, `pike/m1`, `pike/m2` and so on. The device opens it within a minute and takes the first snapshot, which copies the whole volume; later ones copy only the difference. On Linux, restart the service after adding a mirror so the confined unit may write there.
+The mirror is named after its device, `pike/m1`, `pike/m2` and so on. The device opens it at once and takes the first snapshot, which copies the whole volume; later ones copy only the difference. On Linux, `mirror add` rewrites the confined service unit so it may write there, as `node add-disk` does.
 
 Unplug the disk whenever you like. A mirror that comes back after missing a scheduled snapshot gets one on its next minute, and the snapshots it missed are simply not taken; nothing is held in the pool for it while it is away. A disk moved to another device keeps its name and history: `mirror add` the same path on the new device.
 

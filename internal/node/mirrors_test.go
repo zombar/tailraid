@@ -44,7 +44,7 @@ func newMirrorRig(t *testing.T, pol config.MirrorPolicy) *mirrorRig {
 	r := &mirrorRig{t: t, f: meta.NewFSM(), clk: clock.NewFake(time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)), path: filepath.Join(t.TempDir(), "m"), chunks: map[meta.Hash][]byte{}}
 	r.ok(meta.Command{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: tcs, K: 1, Now: 1}})
 	r.ok(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "dev-1", Name: "h1", Kind: meta.KindDevice, Addr: "100.64.0.1"}}})
-	id, err := PrepareMirror(r.path, rigCluster, "dev-1")
+	id, err := PrepareMirror(r.path, rigCluster, "dev-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,13 @@ func newMirrorRig(t *testing.T, pol config.MirrorPolicy) *mirrorRig {
 	var cfg config.Config
 	cfg.Node.Mirrors = []config.Mirror{{Path: r.path}}
 	r.s = newMirrorSet(sysfs.OS{}, cfg, pol, rigCluster, r.f, r.clk, slog.New(slog.DiscardHandler))
-	r.s.self = func() (meta.NodeIdx, bool) { return 1, true }
+	// self reads the FSM as the node's does: the hook must never call it, or the apply
+	// that runs the hook waits on its own lock (a real node hung at its first snapshot)
+	r.s.self = func() (meta.NodeIdx, bool) {
+		n, ok := r.f.NodeByID("dev-1")
+		return n.Idx, ok
+	}
+	r.s.selfID = "dev-1"
 	r.s.propose = func(_ context.Context, c meta.Command) error { return r.apply(c).Err }
 	r.s.read = func(_ context.Context, h meta.Hash) ([]byte, error) {
 		b, ok := r.chunks[h]
@@ -62,6 +68,7 @@ func newMirrorRig(t *testing.T, pol config.MirrorPolicy) *mirrorRig {
 		return b, nil
 	}
 	r.f.SetSnapshotHook(r.s.onBegin)
+	r.s.refresh() // the mirror is open, as after the host's first tick
 	return r
 }
 
@@ -367,5 +374,234 @@ func TestAdminOps_NoSnapshotDelete(t *testing.T) {
 	}
 	if want := []string{"../../internal/node/mirrors.go"}; !slices.Equal(users, want) {
 		t.Fatalf("SnapshotDelete is proposed from %v, want only %v", users, want)
+	}
+}
+
+// warnLog points the rig's mirror set at a buffer that takes its warnings.
+func (r *mirrorRig) warnLog() *bytes.Buffer {
+	var b bytes.Buffer
+	r.s.log = slog.New(slog.NewTextHandler(&b, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	return &b
+}
+
+// countProposals wraps the rig's proposer and counts what the mirror set proposes.
+func (r *mirrorRig) countProposals() map[meta.Op]int {
+	n := map[meta.Op]int{}
+	r.s.propose = func(_ context.Context, c meta.Command) error {
+		n[c.Op]++
+		return r.apply(c).Err
+	}
+	return n
+}
+
+// readd removes the rig's mirror row and registers the disk again, as `mirror remove`
+// then `mirror add` do: the catalogue forgets every snapshot on it.
+func (r *mirrorRig) readd() {
+	r.t.Helper()
+	row, _ := r.f.Node(r.mirror)
+	r.ok(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: r.mirror, State: meta.Removed, Now: r.clk.Now().UnixNano()}})
+	r.mirror = meta.NodeIdx(r.ok(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: row.ID, Name: row.Name, Kind: meta.KindMirror, Host: 1}}}).Ino)
+	r.s.refresh()
+}
+
+func (r *mirrorRig) manifests() []mirror.Manifest {
+	r.t.Helper()
+	m, err := mirror.Open(sysfs.OS{}, r.path, "")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	mans, err := m.Manifests()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return mans
+}
+
+// An automatic snapshot whose minute name is taken counts as taken that minute: one
+// attempt a tick, no warning, and the next minute's name begins (docs/16 §4).
+// Invariant: I-182
+func TestSchedule_AutoNameTaken_NoRetry(t *testing.T) {
+	r := newMirrorRig(t, pol())
+	r.write(meta.RootIno, "a", []byte("bytes"))
+	minute := r.clk.Now().UTC().Format("2006-01-02-1504Z")
+	r.ok(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: r.mirror, Name: minute, Now: r.clk.Now().UnixNano()}}) // a manual one under the minute's name
+	r.drain()
+	warn := r.warnLog()
+	n := r.countProposals()
+	r.s.tick(context.Background())
+	if n[meta.OpSnapshotBegin] != 1 || warn.Len() != 0 {
+		t.Fatalf("begins %d, warnings %q: want one attempt and no warning", n[meta.OpSnapshotBegin], warn.String())
+	}
+	if snaps := r.f.Snapshots(); len(snaps) != 1 || snaps[0].Auto {
+		t.Fatalf("catalogue %+v: want only the manual one", snaps)
+	}
+	r.clk.Advance(time.Minute)
+	r.s.tick(context.Background())
+	if snaps := r.f.Snapshots(); len(snaps) != 2 || !snaps[1].Auto || snaps[1].Name == minute {
+		t.Fatalf("the next minute: %+v", snaps)
+	}
+}
+
+// While a live member reads a codec older than 7 the host proposes nothing: no begin,
+// no thinning, no end of a lost sync, no import (docs/16 §4).
+// Invariant: I-182
+func TestSchedule_SkipsWhileCodecOld(t *testing.T) {
+	p := pol()
+	p.Hourly, p.Daily, p.Weekly, p.Monthly = 1, 0, 0, 0
+	r := newMirrorRig(t, p)
+	r.write(meta.RootIno, "a", []byte("bytes"))
+	for range 2 {
+		r.s.tick(context.Background())
+		r.drain()
+		r.clk.Advance(2 * time.Hour)
+	}
+	r.f.SetSnapshotHook(nil) // a lost sync as well
+	r.ok(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: r.mirror, Name: "lost", Now: r.clk.Now().UnixNano()}})
+	r.f.SetSnapshotHook(r.s.onBegin)
+	codec := uint8(meta.CodecMirrors - 1)
+	r.s.minCodec = func() uint8 { return codec }
+	n := r.countProposals()
+	for range 3 {
+		r.s.tick(context.Background())
+		r.clk.Advance(2 * time.Hour)
+	}
+	if len(n) != 0 {
+		t.Fatalf("proposed %v while a member reads codec %d", n, codec)
+	}
+	if rep, _ := r.s.report(r.clk.Now(), r.f.Snapshots()); len(rep) != 1 || !rep[0].Online {
+		t.Fatalf("the refresh still runs: %+v", rep)
+	}
+	codec = meta.CodecMirrors
+	r.s.tick(context.Background())
+	if n[meta.OpSnapshotEnd] != 1 || n[meta.OpSnapshotDelete] == 0 {
+		t.Fatalf("once every member reads codec 7: %v", n)
+	}
+}
+
+// A Deleting row whose mirror went offline before its host swept it waits; the first
+// tick after attach removes the manifest, sweeps and ends the deletion (docs/16 §5).
+// Invariant: I-183
+func TestMirror_OfflineDeleteReconciledOnAttach(t *testing.T) {
+	p := pol()
+	p.Every, p.Hourly, p.Daily, p.Weekly, p.Monthly = 0, 0, 1, 0, 0 // today's newest stays
+	r := newMirrorRig(t, p)
+	auto := func(name string, content byte) meta.SnapID {
+		r.write(meta.RootIno, "f", bytes.Repeat([]byte{content}, 2*tcs))
+		id := r.ok(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: r.mirror, Name: name, Auto: true, Now: r.clk.Now().UnixNano()}}).SnapID
+		r.drain()
+		r.clk.Advance(2 * time.Hour)
+		return id
+	}
+	old := auto("old", 1)
+	auto("new", 2)
+	r.s.tick(context.Background()) // thinning marks the old one Deleting
+	if sn, _ := r.f.SnapshotRow(old); sn.State != meta.SnapDeleting {
+		t.Fatalf("old row %+v, want deleting", sn)
+	}
+	away := r.path + ".unplugged"
+	if err := os.Rename(r.path, away); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.s.tick(context.Background())
+		r.clk.Advance(time.Hour)
+	}
+	if sn, ok := r.f.SnapshotRow(old); !ok || sn.State != meta.SnapDeleting {
+		t.Fatalf("the deletion of an offline mirror's snapshot moved on: %+v %v", sn, ok)
+	}
+	if err := os.Rename(away, r.path); err != nil {
+		t.Fatal(err)
+	}
+	r.s.tick(context.Background())
+	if _, ok := r.f.SnapshotRow(old); ok {
+		t.Fatal("the row survived the tick after attach")
+	}
+	if mans := r.manifests(); len(mans) != 1 || mans[0].Name != "new" {
+		t.Fatalf("manifests after attach %+v", mans)
+	}
+	if got, err := r.read("new", "/f"); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{2}, 2*tcs)) {
+		t.Fatalf("the kept snapshot: %v", err)
+	}
+	m, _ := mirror.Open(sysfs.OS{}, r.path, "")
+	if old := sha256.Sum256(bytes.Repeat([]byte{1}, tcs)); m.HasObject(old) {
+		t.Fatal("the deleted snapshot's object was not swept")
+	}
+}
+
+// A mirror removed and added back has no rows: each manifest on it becomes a row again,
+// with its own name, time and kind, under an ID above every manifest on the disk; a
+// crash between the import and the rename is finished by the next tick; a name another
+// snapshot took is imported as <name>.<old id>; later syncs never touch the imported
+// manifests (docs/16 §5).
+// Invariant: I-183
+func TestMirror_RowlessManifestsImportedOnTick(t *testing.T) {
+	p := pol()
+	p.Every = 0
+	r := newMirrorRig(t, p)
+	take := func(name string, auto bool, content string) {
+		r.write(meta.RootIno, "doc", []byte(content))
+		r.ok(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: r.mirror, Name: name, Auto: auto, Now: r.clk.Now().UnixNano()}})
+		r.drain()
+		r.clk.Advance(time.Hour)
+	}
+	take("a", true, "first")
+	take("b", false, "second")
+	take("c", false, "third")
+	before := r.f.Snapshots()
+	r.readd()
+	if n := len(r.f.Snapshots()); n != 0 {
+		t.Fatalf("%d rows after mirror remove", n)
+	}
+	take("c", false, "a new c, taken before the host's tick") // takes the name "c"
+	// a crash after an import of "b" was proposed, before its rename: the row exists
+	bman := before[1]
+	r.ok(meta.Command{Op: meta.OpSnapshotImport, SnapshotImport: &meta.SnapshotImport{Mirror: r.mirror, After: 3, Name: "b", At: bman.At, Root: bman.Root, Files: bman.Files, Bytes: bman.Bytes, Now: r.clk.Now().UnixNano()}})
+	warn := r.warnLog()
+	r.s.tick(context.Background())
+	if warn.Len() != 0 {
+		t.Fatalf("warnings: %s", warn)
+	}
+	byName := map[string]meta.Snapshot{}
+	for _, sn := range r.f.Snapshots() {
+		byName[sn.Name] = sn
+	}
+	if len(byName) != 4 {
+		t.Fatalf("catalogue after the tick %+v", byName)
+	}
+	for _, c := range []struct {
+		name, was, content string
+	}{{"a", "a", "first"}, {"b", "b", "second"}, {"c.3", "c", "third"}, {"c", "c", "a new c, taken before the host's tick"}} {
+		sn, ok := byName[c.name]
+		if !ok || sn.State != meta.SnapComplete {
+			t.Fatalf("%s: %+v", c.name, sn)
+		}
+		if got, err := r.read(c.name, "/doc"); err != nil || string(got) != c.content {
+			t.Errorf("%s reads %q %v", c.name, got, err)
+		}
+		for _, old := range before {
+			if old.Name == c.was && c.name != "c" && (sn.At != old.At || sn.Auto != old.Auto || sn.Root != old.Root || sn.ID <= 3) {
+				t.Errorf("%s imported as %+v from %+v", c.name, sn, old)
+			}
+		}
+	}
+	ids := map[uint32]bool{}
+	for _, man := range r.manifests() {
+		ids[man.ID] = true
+		if sn := byName[man.Name]; uint32(sn.ID) != man.ID {
+			t.Errorf("manifest %s carries ID %d, its row %d", man.Name, man.ID, sn.ID)
+		}
+	}
+	if len(ids) != 4 {
+		t.Fatalf("manifest IDs %v: want one file per row", ids)
+	}
+	// nothing is left to import, and the next sync takes a fresh ID
+	n := r.countProposals()
+	r.s.tick(context.Background())
+	if n[meta.OpSnapshotImport] != 0 {
+		t.Fatalf("a second tick imported again: %v", n)
+	}
+	take("d", false, "fourth")
+	if len(r.manifests()) != 5 {
+		t.Fatal("a sync after the imports replaced a manifest")
 	}
 }

@@ -29,6 +29,11 @@ func init() {
 			Command{Op: OpSnapshotDelete, SnapshotDelete: &SnapshotDelete{ID: 42, Done: true, Now: 1}},
 			"07 15 2a000000 01 0100000000000000",
 		},
+		{
+			"SnapshotImport",
+			Command{Op: OpSnapshotImport, SnapshotImport: &SnapshotImport{Mirror: 5, After: 9, Name: "old", At: 3, Auto: true, Root: Hash{0xcc}, Files: 1, Bytes: 2, NewBytes: 3, Missing: 4, Now: 7}},
+			"07 16 0500 09000000 03 6f6c64 0300000000000000 01 cc" + repeatHex(0, 31) + " 0100000000000000 0200000000000000 0300000000000000 04000000 0700000000000000",
+		},
 	}...)
 }
 
@@ -89,6 +94,52 @@ func TestFSM_SnapshotBegin_Table(t *testing.T) {
 	// another mirror syncs at the same time, and may reuse a name: names are per mirror
 	m2 := NodeIdx(tf.ok(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "mirror2", Name: "n2/m1", Kind: KindMirror, Host: 2}}}).Ino)
 	tf.begin(m2, "first", 80)
+}
+
+// A manifest found with no row becomes one (docs/16 §5): complete or incomplete at once,
+// with its own time, under an ID above both NextSnap and every manifest on its disk.
+// Invariant: I-183
+func TestFSM_SnapshotImport_Table(t *testing.T) {
+	tf, m := mirrorFSM(t)
+	imp := func(mirror NodeIdx, after SnapID, name string, missing uint32) Command {
+		return Command{Op: OpSnapshotImport, SnapshotImport: &SnapshotImport{
+			Mirror: mirror, After: after, Name: name, At: 5, Auto: true,
+			Root: Hash{9}, Files: 2, Bytes: 30, NewBytes: 10, Missing: missing, Now: 100,
+		}}
+	}
+	tf.fails(imp(99, 0, "a", 0), ErrNoSuchNode)
+	tf.fails(imp(1, 0, "a", 0), ErrNoSuchNode) // a device is not a mirror
+	tf.fails(imp(m, 0, "a/b", 0), ErrBadCommand)
+	tf.fails(imp(m, ^SnapID(0), "a", 0), ErrBadCommand) // no ID above it
+	first := tf.begin(m, "taken", 50)
+	tf.ok(Command{Op: OpSnapshotEnd, SnapshotEnd: &SnapshotEnd{ID: first, OK: true, Now: 60}})
+	tf.fails(imp(m, 0, "taken", 0), ErrExist)
+
+	before := tf.f.state().Clone()
+	id := tf.ok(imp(m, 0, "old", 0)).SnapID
+	sn := tf.row(id)
+	if id != first+1 || sn.State != SnapComplete || sn.At != 5 || !sn.Auto || sn.Root != (Hash{9}) || sn.Files != 2 || sn.Bytes != 30 || sn.NewBytes != 10 || sn.Index != tf.idx {
+		t.Fatalf("imported row %+v (id %d)", sn, id)
+	}
+	after := tf.f.state().Clone()
+	after.Snaps, after.NextSnap, after.Applied, after.LastNow = before.Snaps, before.NextSnap, before.Applied, before.LastNow
+	if !reflect.DeepEqual(after, before) {
+		t.Fatal("SnapshotImport changed the volume")
+	}
+	// After lifts the counter past every manifest on the disk, and a later begin follows
+	if id := tf.ok(imp(m, 40, "older", 2)).SnapID; id != 41 || tf.row(id).State != SnapIncomplete {
+		t.Fatalf("import after 40: id %d %+v", id, tf.row(id))
+	}
+	if id := tf.ok(imp(m, 3, "low", 0)).SnapID; id != 42 {
+		t.Fatalf("an After below NextSnap: id %d, want 42", id)
+	}
+	if id := tf.begin(m, "next", 200); id != 43 {
+		t.Fatalf("begin after the imports: id %d, want 43", id)
+	}
+	// no hold: an imported row is never syncing, so GC is not clamped by it
+	if tf.row(41).State == SnapSyncing {
+		t.Fatal("an import is syncing")
+	}
 }
 
 // Invariant: I-179
@@ -287,6 +338,7 @@ func TestEncodeCommand_V7Gating(t *testing.T) {
 		{Op: OpSnapshotBegin, SnapshotBegin: &SnapshotBegin{Mirror: 1, Name: "a"}},
 		{Op: OpSnapshotEnd, SnapshotEnd: &SnapshotEnd{ID: 1}},
 		{Op: OpSnapshotDelete, SnapshotDelete: &SnapshotDelete{ID: 1}},
+		{Op: OpSnapshotImport, SnapshotImport: &SnapshotImport{Mirror: 1, Name: "a"}},
 	} {
 		if v := CommandCodec(c); v != CodecMirrors {
 			t.Errorf("op %d is codec %d, want %d", c.Op, v, CodecMirrors)
@@ -298,6 +350,7 @@ func TestEncodeCommand_V7Gating(t *testing.T) {
 		"disk upsert in version 7":   append([]byte{commandVersionV7}, disk[1:]...),
 		"unlink in version 7":        append([]byte{commandVersionV7}, MustEncodeCommand(Command{Op: OpUnlink, Unlink: &Unlink{Parent: 1, Name: "a"}})[1:]...),
 		"version 8":                  append([]byte{8}, mirror[1:]...),
+		"import in version 6":        append([]byte{commandVersionV6}, MustEncodeCommand(Command{Op: OpSnapshotImport, SnapshotImport: &SnapshotImport{Mirror: 1, Name: "a"}})[1:]...),
 	}
 	for name, in := range bad {
 		if _, err := DecodeCommand(in); err == nil {

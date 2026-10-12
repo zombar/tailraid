@@ -64,6 +64,10 @@ func (a *adminOps) snapshotCreate(ctx context.Context, op rpc.AdminOp) (any, err
 			syncing[sn.Mirror] = true
 		}
 	}
+	online := func(m meta.NodeIdx) bool { // a mirror open here is online now; another host's by the probes (docs/16 §1)
+		_, here := a.mirrors.get(m)
+		return here || a.prober.MirrorOnline(m)
+	}
 	var begun []SnapshotInfo
 	named := false
 	nodes := a.node.FSM.Nodes()
@@ -74,11 +78,11 @@ func (a *adminOps) snapshotCreate(ctx context.Context, op rpc.AdminOp) (any, err
 		}
 		named = op.Mirror != ""
 		switch {
-		case !a.prober.MirrorOnline(m.Idx) && named:
+		case !online(m.Idx) && named:
 			return nil, fmt.Errorf("mirror %s: %w: attach it first", m.Name, vfs.ErrMirrorOffline)
 		case syncing[m.Idx] && named:
 			return nil, fmt.Errorf("mirror %s is syncing a snapshot already: %w", m.Name, meta.ErrExist)
-		case !a.prober.MirrorOnline(m.Idx), syncing[m.Idx]:
+		case !online(m.Idx), syncing[m.Idx]:
 			continue
 		}
 		cmd := meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: m.Idx, Name: name, Now: now.UnixNano()}}
