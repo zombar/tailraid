@@ -132,7 +132,8 @@ cluster has re-placed elsewhere.
 The hourly tick also runs the namespace sweeps of the web UI (13): upload temps idle for
 24 h are removed (I-81), and so is every thumbnail under `/.tailraid/thumbs` whose
 `<ino>-<gen>-<version>` names no live file at that version (the file changed, was
-purged, or never existed), through `Unlink` since the names are ephemeral (I-160). A
+purged, or never existed), through `Unlink` since the names are ephemeral (I-160), and
+every video frame grabbed by an older recipe (13 §5, I-216). A
 thumbnail of a file in the trash is kept: the browser UI shows the deleted file's tile.
 
 **S3 sweep (leader only, daily).** For each S3 node the leader lists the bucket prefix with

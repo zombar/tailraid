@@ -121,8 +121,8 @@ function fileURL(path, download = false, root) {
   if (root !== void 0) q.push("in=" + root);
   return "/files" + encodePath(path) + (q.length ? "?" + q.join("&") : "");
 }
-function thumbURL(path, root) {
-  return "/api/thumb?path=" + encodeURIComponent(path) + inQuery(root);
+function thumbURL(path, root, tag) {
+  return "/api/thumb?path=" + encodeURIComponent(path) + inQuery(root) + (tag ? "&t=" + encodeURIComponent(tag) : "");
 }
 async function call(url, init) {
   const r = await fetch(url, init);
@@ -1854,6 +1854,11 @@ var Selection = class {
 // internal/webui/src/thumbs.ts
 var CONCURRENT = 3;
 var WIDTH = 320;
+var RECIPE = 2;
+var POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
+var MIN_LUMA = 28;
+var MIN_SPREAD = 14;
+var PROBE = 64;
 var queue = [];
 var active = 0;
 var observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
@@ -1893,11 +1898,12 @@ function lazy(img, e, path, root, kind, onMiss) {
       };
       img.src = src;
     };
+    const tag = kind === "video" ? `${e.version}.f${RECIPE}` : void 0;
     if (e.thumb || kind !== "video" || root !== void 0) {
-      show(thumbURL(path, root));
+      show(thumbURL(path, root, tag));
       return;
     }
-    void grab(path, e).then((ok) => ok ? show(thumbURL(path)) : (onMiss(), done())).catch(() => {
+    void grab(path, e).then((ok) => ok ? show(thumbURL(path, void 0, tag)) : (onMiss(), done())).catch(() => {
       onMiss();
       done();
     });
@@ -1912,7 +1918,7 @@ function lazy(img, e, path, root, kind, onMiss) {
   }
 }
 async function grab(path, e) {
-  const key = `tr.vthumb:${e.ino}.${e.version}`;
+  const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
   if (session.get(key, false)) return false;
   session.set(key, true);
   const blob = await frame(fileURL(path));
@@ -1920,48 +1926,105 @@ async function grab(path, e) {
   await putThumb(path, e.version, blob);
   return true;
 }
-function frame(src) {
-  return new Promise((resolve) => {
-    const v = document.createElement("video");
-    v.preload = "metadata";
-    v.muted = true;
-    v.playsInline = true;
-    v.crossOrigin = "anonymous";
-    const finish = (b) => {
-      v.removeAttribute("src");
-      v.load();
-      resolve(b);
-    };
-    const timer = setTimeout(() => finish(null), 2e4);
-    v.onerror = () => {
-      clearTimeout(timer);
-      finish(null);
-    };
-    v.onloadedmetadata = () => {
-      if (!Number.isFinite(v.duration) || v.duration <= 0) {
-        clearTimeout(timer);
-        finish(null);
-        return;
-      }
-      v.currentTime = v.duration / 2;
-    };
-    v.onseeked = () => {
-      clearTimeout(timer);
-      const w = Math.min(WIDTH, v.videoWidth || WIDTH);
-      const h2 = Math.max(1, Math.round((v.videoHeight || 9) * (w / (v.videoWidth || 16))));
+async function frame(src) {
+  const v = document.createElement("video");
+  v.preload = "auto";
+  v.muted = true;
+  v.playsInline = true;
+  v.crossOrigin = "anonymous";
+  let timer = 0;
+  const expired = new Promise((resolve) => {
+    timer = window.setTimeout(() => resolve(null), 3e4);
+  });
+  const choose = async () => {
+    v.src = src;
+    await event(v, "loadedmetadata");
+    if (!Number.isFinite(v.duration) || v.duration <= 0) return null;
+    const w = Math.min(WIDTH, v.videoWidth || WIDTH);
+    const h2 = Math.max(1, Math.round((v.videoHeight || 9) * (w / (v.videoWidth || 16))));
+    let best = null;
+    let bestScore = -1;
+    for (const at of POSITIONS) {
+      v.currentTime = v.duration * at;
+      await event(v, "seeked");
+      await presented(v);
       const c = document.createElement("canvas");
       c.width = w;
       c.height = h2;
       const g = c.getContext("2d");
-      if (!g) {
-        finish(null);
-        return;
-      }
+      if (!g) return null;
       g.drawImage(v, 0, 0, w, h2);
-      c.toBlob((b) => finish(b), "image/jpeg", 0.8);
+      const { mean, spread: spread2 } = luma(c);
+      if (mean >= MIN_LUMA && spread2 >= MIN_SPREAD) {
+        best = c;
+        break;
+      }
+      const score = spread2 + mean / 4;
+      if (score > bestScore) {
+        best = c;
+        bestScore = score;
+      }
+    }
+    if (!best) return null;
+    const chosen = best;
+    return new Promise((resolve) => chosen.toBlob((b) => resolve(b), "image/jpeg", 0.8));
+  };
+  try {
+    return await Promise.race([choose().catch(() => null), expired]);
+  } finally {
+    clearTimeout(timer);
+    v.removeAttribute("src");
+    v.load();
+  }
+}
+function event(v, name) {
+  return new Promise((resolve, reject) => {
+    const ok = () => {
+      v.removeEventListener("error", bad);
+      resolve();
     };
-    v.src = src;
+    const bad = () => {
+      v.removeEventListener(name, ok);
+      reject(new Error("video error"));
+    };
+    v.addEventListener(name, ok, { once: true });
+    v.addEventListener("error", bad, { once: true });
   });
+}
+function presented(v) {
+  return new Promise((resolve) => {
+    const t = window.setTimeout(resolve, 1e3);
+    const done = () => {
+      clearTimeout(t);
+      resolve();
+    };
+    if (typeof v.requestVideoFrameCallback === "function") {
+      v.requestVideoFrameCallback(() => done());
+    } else if (v.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      done();
+    } else {
+      v.addEventListener("loadeddata", done, { once: true });
+    }
+  });
+}
+function luma(c) {
+  const p = document.createElement("canvas");
+  p.width = PROBE;
+  p.height = Math.max(1, Math.round(c.height * PROBE / c.width));
+  const g = p.getContext("2d", { willReadFrequently: true });
+  if (!g) return { mean: 0, spread: 0 };
+  g.drawImage(c, 0, 0, p.width, p.height);
+  const d = g.getImageData(0, 0, p.width, p.height).data;
+  let sum = 0;
+  let sq = 0;
+  const n = d.length / 4;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    sum += y;
+    sq += y * y;
+  }
+  const mean = sum / n;
+  return { mean, spread: Math.sqrt(Math.max(0, sq / n - mean * mean)) };
 }
 
 // internal/webui/src/flags.ts

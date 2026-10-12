@@ -277,8 +277,9 @@ export function fileURL(path: string, download = false, root?: number): string {
   return "/files" + encodePath(path) + (q.length ? "?" + q.join("&") : "");
 }
 
-export function thumbURL(path: string, root?: number): string {
-  return "/api/thumb?path=" + encodeURIComponent(path) + inQuery(root);
+/** thumbURL is the thumbnail of path; tag, when given, keys the browser's cache (a video's version and frame recipe, docs/13 §5). */
+export function thumbURL(path: string, root?: number, tag?: string): string {
+  return "/api/thumb?path=" + encodeURIComponent(path) + inQuery(root) + (tag ? "&t=" + encodeURIComponent(tag) : "");
 }
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {

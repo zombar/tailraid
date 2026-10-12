@@ -24,7 +24,8 @@ import (
 )
 
 // Thumbnails (docs/13 §5, I-160) live in the volume at
-// /.tailraid/thumbs/<ino>-<gen>-<version>.jpg, at most ThumbWidth wide.
+// /.tailraid/thumbs/<ino>-<gen>-<version>.jpg, at most ThumbWidth wide; a frame the
+// browser grabbed carries its recipe, <ino>-<gen>-<version>.f<FrameRecipe>.jpg (I-216).
 const (
 	ThumbDir   = "/" + meta.ReservedDir + "/thumbs"
 	ThumbWidth = 320
@@ -35,18 +36,33 @@ const (
 	// ThumbDecoders bounds the decodes in flight.
 	ThumbDecoders = 2
 	thumbQuality  = 80
+	// FrameRecipe is the browser's frame choice for a video (docs/13 §5, thumbs.ts
+	// RECIPE): 2 waits for a presented frame and skips dark and flat ones. A frame of
+	// another recipe is not this file's thumbnail, so bumping it re-grabs every video.
+	FrameRecipe = 2
 )
 
-// thumbKey is the file name of in's thumbnail.
+// thumbKey is the file name of in's thumbnail: the node makes an image's or an audio
+// file's itself, anything else's is a frame the browser grabbed under FrameRecipe.
 func thumbKey(in meta.Inode) string {
-	return fmt.Sprintf("%d-%d-%d.jpg", in.Ino, in.Gen, in.Version)
+	if isImage(in.Name) || isAudio(in.Name) {
+		return fmt.Sprintf("%d-%d-%d.jpg", in.Ino, in.Gen, in.Version)
+	}
+	return fmt.Sprintf("%d-%d-%d.f%d.jpg", in.Ino, in.Gen, in.Version, FrameRecipe)
 }
 
-// parseThumbKey reads a key back; ok is false for a foreign name.
+// parseThumbKey reads a key back, with or without a frame recipe; ok is false for a
+// foreign name.
 func parseThumbKey(name string) (ino meta.Ino, gen uint32, version uint64, ok bool) {
 	base, found := strings.CutSuffix(name, ".jpg")
 	if !found {
 		return 0, 0, 0, false
+	}
+	if i := strings.LastIndex(base, ".f"); i >= 0 {
+		if _, err := strconv.ParseUint(base[i+2:], 10, 32); err != nil {
+			return 0, 0, 0, false
+		}
+		base = base[:i]
 	}
 	parts := strings.Split(base, "-")
 	if len(parts) != 3 {
@@ -305,7 +321,9 @@ func (s *Server) thumbPut(w http.ResponseWriter, r *http.Request) {
 }
 
 // SweepThumbs removes every thumbnail whose (ino, gen, version) no longer names a file,
-// live or in the trash (I-160); the hourly sweep runs it beside SweepUploads.
+// live or in the trash (I-160), and every one that is not the file's current key: a
+// video's frame of another recipe or under the plain key (I-216). The hourly sweep runs
+// it beside SweepUploads.
 func SweepThumbs(ctx context.Context, fs Remover, st *meta.Store) (int, error) {
 	dir, err := st.Resolve([]string{meta.ReservedDir, "thumbs"})
 	if err != nil {
@@ -324,12 +342,12 @@ func SweepThumbs(ctx context.Context, fs Remover, st *meta.Store) (int, error) {
 		if k.Type != meta.TFile || IsUploadTemp(k.Name) {
 			continue
 		}
-		ino, gen, version, ok := parseThumbKey(k.Name)
+		ino, _, _, ok := parseThumbKey(k.Name)
 		if !ok {
 			continue // not a thumbnail of ours: left alone
 		}
-		if in, found := st.GetInodeAny(ino); found && in.Gen == gen && in.Version == version {
-			continue // names a file, live or in the trash
+		if in, found := st.GetInodeAny(ino); found && thumbKey(in) == k.Name {
+			continue // the current thumbnail of a file, live or in the trash
 		}
 		if err := fs.Remove(path.Join(ThumbDir, k.Name)); err != nil {
 			return removed, err

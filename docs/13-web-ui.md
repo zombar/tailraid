@@ -120,8 +120,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `POST /api/restore` `{"ino","to"?,"name"?}` | required | 200 `{"path"}`; `to` and `name` default to the original place; a taken name → 409 `{"error","taken":true}`; an original parent that is itself deleted → 409 `{"error","in_trash":true}` (the page then asks for a destination); not a deleted root → 404 |
 | `POST /api/purge` `{"ino"}` or `{"all":true}` | required | 204; permanent: the entry's references are dropped and GC reclaims its chunks after grace (docs/06); `all` proposes purges until the trash is empty |
 | `POST /api/flags` `{"path","protected"?,"nsfw"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409) |
-| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg` (§5); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
-| `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser grabbed from the middle of a video (§5): 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
+| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
+| `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser chose from a video (§5), stored as `<ino>-<gen>-<version>.f2.jpg`: 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
 | `GET /api/pins` | – | `{"size","used","pinned_bytes","pins":[{path,bytes,cached_bytes}]}`, the same object `/api/status` carries as `cache` |
@@ -236,7 +236,10 @@ file like any other: replicated, erasure-coded and deduplicated. `/.tailraid` is
 folder on the mount, left out of this UI's listings and refused as a target of user
 operations (400). The key carries `Version`, which bumps on every commit, so a changed
 file gets a new thumbnail and the hourly sweep (docs/06 §3) removes any whose
-`(ino, gen, version)` no longer names a file (I-160).
+`(ino, gen, version)` no longer names a file (I-160). A thumbnail the browser grabbed
+from a video carries the frame recipe that chose it, `<ino>-<gen>-<version>.f2.jpg`: when
+the recipe changes, every video's stored frame stops counting as its thumbnail, the
+sweep removes it and the page grabs a new one as the tile comes into view (I-216).
 
 - **Images** are made by the node on the first `GET /api/thumb` for the file: decoded
   with Go's own `image/jpeg`, `image/png`, `image/gif` and `golang.org/x/image/webp`,
@@ -246,10 +249,20 @@ file gets a new thumbnail and the hourly sweep (docs/06 §3) removes any whose
   HEIC has no pure-Go decoder; those tiles stay generic.
 - **Videos** have no pure-Go decoder either, so the browser makes the thumbnail with the
   decoder it already uses to play the file: the page loads the file into an off-screen
-  `<video preload="metadata">`, seeks to half its duration, draws the frame on a 320-px
-  canvas, encodes a JPEG and `PUT`s it with the file's `Version`. The node stores it like
-  an image thumbnail and every later tile on every device reads it back. A video the
-  browser cannot decode (mkv, avi where no decoder exists) keeps the generic tile.
+  `<video preload="auto">` and tries the frames at 50 %, 25 %, 75 %, 10 % and 90 % of its
+  duration in that order. After each seek it waits for the frame to be presented
+  (`requestVideoFrameCallback`, else `readyState ≥ HAVE_CURRENT_DATA`) before reading it,
+  since a frame drawn at `seeked` alone is often still black. It scores the frame on a
+  64-px probe: mean luma at least 28 of 255 and luma spread (standard deviation) at least
+  14. It keeps the first frame that passes, else the one with the highest
+  `spread + mean ÷ 4`, so a fade, a title card or a black opening is never chosen while
+  the clip holds a better frame. It draws the chosen frame on a 320-px canvas, encodes a
+  JPEG and `PUT`s it with the file's `Version`. This is recipe 2 (recipe 1, the frame at
+  `seeked` at half the duration, drew black tiles). The node stores it like an image
+  thumbnail and every later tile on every device reads it back. A video the browser
+  cannot decode (mkv, avi where no decoder exists) keeps the generic tile. The tile asks
+  for the thumbnail with the file's version and recipe in the URL, so a browser that
+  cached a recipe-1 frame for a day fetches the new one.
 - **Audio** answers its embedded picture (§6), else a `cover.*`/`folder.*` sibling, scaled
   like an image. A folder's own tile uses its first audio entry by name that has a
   picture (`dir.cover`), chosen the same way on every node (I-165). Finding it reads each
@@ -604,11 +617,18 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   no path or more than `MaxBatch` paths is refused as a whole (400, 413) before any entry
   is touched.
 - **I-160** — A thumbnail is stored only at `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`
+  (with the frame recipe, `….f<recipe>.jpg`, for a frame the browser grabbed, I-216)
   and served only from there; the node generates one itself only for an image it can
   decode within 64 megapixels, two at a time; a `PUT` is accepted only as JPEG of at most
   256 KiB for the file's current `Version`, else 415 or 409; `/.tailraid` is absent from
   every listing and refused as the target of every user operation with 400; and the
   sweep removes a thumbnail whose `(ino, gen, version)` no longer names a file.
+- **I-216** — A thumbnail `PUT` for a file that is neither an image nor audio is stored
+  as `<ino>-<gen>-<version>.f<FrameRecipe>.jpg`, and for such a file only that key is
+  listed (`thumb`) and served. The hourly sweep removes the plain key of such a file and
+  any key of another recipe. The page asks for a video's thumbnail with its version and
+  recipe in the URL, and for each file and version it grabs at most once per recipe and
+  session.
 - **I-161** — `/api/chunks` issues the shard checks of one page concurrently, at most
   sixteen in flight, in report order, and every report carries `slots` as an array
   (empty for a hole or an unknown hash), never `null`; the integrity panel is built once
@@ -667,6 +687,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-158 | `TestWebUI_Delete_LandsInTrash_ListedInPlace`, `TestWebUI_TrashAddressing_LsStatGet`, `TestWebUI_Restore_TakenName_409_ThenAs`, `TestWebUI_Purge_FreesRefs`, `TestWebUI_Put_OverwriteKeepsPreviousInTrash`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-159 | `TestWebUI_Rename_Table`, `TestWebUI_Move_PerItemResults`, `TestWebUI_Batch_SizeBoundaries`, `TestWebUI_BodyCaps_AllMutatingRoutes`, `TestSoak_AllPhasesAgainstHarness` |
 | I-160 | `TestWebUI_Thumb_Image_Generated_Cached_Hidden`, `TestWebUI_Thumb_Put_Boundaries`, `TestWebUI_Thumb_SweptWhenFileChanges`, `TestSoak_AllPhasesAgainstHarness` |
+| I-216 | `TestWebUI_Thumb_FrameRecipe_ReplacesOldVideoThumbs` |
 | I-161 | `TestDescribeChunksPage_Concurrent`, `TestWebUI_Chunks_HolesHaveSlots`, `TestSoak_AllPhasesAgainstHarness` |
 | I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs`, `TestWebUI_Pins`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
