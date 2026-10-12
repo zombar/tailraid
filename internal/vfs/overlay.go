@@ -106,6 +106,10 @@ type dirtyFile struct {
 	counted   uint64 // this entry's share of Overlay.total (fresh + plan bytes)
 	lastErr   error  // the last flush attempt's failure, nil after a success (I-79)
 	lastWrite time.Time
+	// times are the access and modification times a client set while the file was dirty
+	// and after its last write, re-applied after each flush's Commit, which stamps its own
+	// (I-230); a later write or truncate clears them, being newer
+	times *userTimes
 	// Group commit (docs/04 §2.1, I-168): a record's in-memory effect waits in pending
 	// until its fsync succeeded and is applied in log order; gate holds new appends while
 	// a snapshot, compaction or eviction waits for pending to drain.
@@ -623,6 +627,7 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
 		d.ext.insert(extent{off: off, n: n, walOff: walOff})
 		d.size = max(d.size, off+n)
 		d.lastWrite = o.clk.Now()
+		d.times = nil
 		o.recount(d)
 	}})
 	d.mu.Unlock()
@@ -662,6 +667,7 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 			d.planTrunc = true
 		}
 		d.lastWrite = o.clk.Now()
+		d.times = nil
 		o.recount(d)
 	}})
 	d.mu.Unlock()
@@ -681,6 +687,36 @@ func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	}
 	defer d.mu.Unlock()
 	return d.effSize(committed), true
+}
+
+// userTimes are a client's access and modification times, in nanoseconds (meta.SetAttr).
+type userTimes struct{ atime, mtime int64 }
+
+// NoteTimes records the times a client set on ino, when it has dirty data: the flusher
+// sets them again after it commits that data (I-230). A file with nothing dirty needs
+// nothing: no Commit follows to stamp over them.
+func (o *Overlay) NoteTimes(ino meta.Ino, atime, mtime int64) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return
+	}
+	defer d.mu.Unlock()
+	if d.dirty() {
+		d.times = &userTimes{atime: atime, mtime: mtime}
+	}
+}
+
+// UserTimes returns the times NoteTimes recorded on ino and no write has superseded.
+func (o *Overlay) UserTimes(ino meta.Ino) (atime, mtime int64, ok bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return 0, 0, false
+	}
+	defer d.mu.Unlock()
+	if d.times == nil {
+		return 0, 0, false
+	}
+	return d.times.atime, d.times.mtime, true
 }
 
 // DataEnd reports what the overlay holds of an inode's data: the end of its last dirty

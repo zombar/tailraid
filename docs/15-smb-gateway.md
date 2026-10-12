@@ -49,7 +49,8 @@ upstream, each with a test in the copy:
   basic forwards the access and write times a client sets to `MetadataSetter.Chtimes`
   (0, −1 and −2 mean "leave it", per MS-FSCC 2.4.7); without the capability the server
   keeps reporting the time of the reply. Explorer therefore shows the FSM's modification
-  times and `robocopy /COPY:DAT` preserves them.
+  times and `robocopy /COPY:DAT` preserves them, through the flush that commits the
+  copied data (04 §6, I-230).
 - `file.go`, `status.go`: a READ the backend fails (here: a chunk with too few shards,
   `EIO`) answers `STATUS_UNEXPECTED_IO_ERROR`, not `STATUS_END_OF_FILE`, which upstream
   used as the fallback for every read error. A client takes END_OF_FILE for a shorter
