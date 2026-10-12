@@ -273,6 +273,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
 	repairer.Events = ring
+	repairer.MinCodec = prober.MinCodec // no sums backfill while a member reads codec 4 (I-219)
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
 	gc.Retention = rcfg.Retention

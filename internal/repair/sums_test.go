@@ -93,3 +93,48 @@ func TestRepair_BackfillSums_Bounded(t *testing.T) {
 		})
 	}
 }
+
+// While a live member still reads codec 4, a pass backfills no sums: it fetches no chunk
+// and proposes nothing the leader would refuse, and reports every chunk still pending.
+// Invariant: I-219
+func TestRepair_BackfillSums_WaitsForCodec5(t *testing.T) {
+	const n = 3
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fl := f.Flusher()
+	fl.MinCodec = func() uint8 { return meta.CodecShardSums - 1 }
+	for i := range n {
+		ino := f.Create("f" + strconv.Itoa(i))
+		if err := f.Ov.Write(ino, 0, 0, testharness.Pattern(int(testharness.ChunkSize), byte(60+i))); err != nil {
+			t.Fatal(err)
+		}
+		if err := fl.FlushInode(ctx, ino); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := repair.DefaultConfig()
+	cfg.ScrubPeriod = 0
+	r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, cfg, nil)
+	r.MinCodec = func() uint8 { return meta.CodecShardSums - 1 }
+	gets := 0
+	for _, idx := range f.Targets() {
+		gets += f.Gets(idx)
+	}
+	st, err := r.Scan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := 0
+	for _, idx := range f.Targets() {
+		after += f.Gets(idx)
+	}
+	if st.SumsRecorded != 0 || st.SumsPending != n || st.Errors != 0 {
+		t.Fatalf("recorded %d pending %d errors %d, want 0, %d, 0", st.SumsRecorded, st.SumsPending, st.Errors, n)
+	}
+	if after != gets {
+		t.Fatalf("the pass fetched %d shards for a backfill it could not record", after-gets)
+	}
+	r.MinCodec = func() uint8 { return meta.CodecShardSums } // the upgrade finished
+	if st, err = r.Scan(ctx); err != nil || st.SumsRecorded != n {
+		t.Fatalf("after the upgrade: recorded %d, err %v", st.SumsRecorded, err)
+	}
+}

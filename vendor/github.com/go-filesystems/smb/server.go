@@ -353,11 +353,17 @@ type conn struct {
 	// (see async.go), so writes are serialised and the state the two share is
 	// locked. Before that the loop read one message, answered it and read the
 	// next: everything was serial by construction, and none of this existed.
-	wmu          sync.Mutex // one writer at a time
-	mu           sync.Mutex // guards waiting and nextAsync
-	waiting      map[uint64]*pendingOp
-	nextAsync    uint64
-	asyncSession uint64 // whose key signs a reply sent from elsewhere
+	wmu       sync.Mutex // one writer at a time
+	mu        sync.Mutex // guards waiting and nextAsync
+	waiting   map[uint64]*pendingOp
+	nextAsync uint64
+
+	// alone is set by the read loop while it dispatches a request that is
+	// not part of a chain: only such a WRITE may be answered later
+	// (writeAsync), since a chain's replies travel together.
+	alone bool
+	// writeSlots bounds the WRITEs running off the read loop (asyncWrites).
+	writeSlots chan struct{}
 }
 
 func newConn(s *Server, nc net.Conn) *conn {
@@ -368,6 +374,8 @@ func newConn(s *Server, nc net.Conn) *conn {
 		files:    map[[16]byte]*openFile{},
 		searches: map[[16]byte]*search{},
 		waiting:  map[uint64]*pendingOp{},
+
+		writeSlots: make(chan struct{}, asyncWrites),
 	}
 }
 
@@ -393,6 +401,7 @@ func (c *conn) serve() {
 	// the driver's memory, not ours, and nothing else will close them.
 	defer func() {
 		for _, of := range c.files {
+			of.writes.Wait() // a WRITE still running holds the driver's handle
 			if of.f != nil {
 				of.f.Close()
 			}
@@ -415,7 +424,9 @@ func (c *conn) serve() {
 		if out == nil {
 			continue
 		}
-		if err := writeFrame(c.nc, out); err != nil {
+		// through send: a reply answered later (async.go) may be written by
+		// another goroutine at the same moment
+		if err := c.send(out); err != nil {
 			return
 		}
 	}
@@ -481,6 +492,7 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		if haveFirst && h.flags&flagRelatedOps != 0 {
 			one = withInheritedIDs(one, first)
 		}
+		haveChain := haveFirst // a request before this one in the frame
 		if !haveFirst {
 			first, haveFirst = h, true
 		}
@@ -527,7 +539,9 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 			}
 		}
 
+		c.alone = !haveChain && h.nextCommand == 0
 		reply, err := c.dispatch(one)
+		c.alone = false
 		if err != nil {
 			return nil, err
 		}
