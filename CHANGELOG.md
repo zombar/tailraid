@@ -2,6 +2,54 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.7.0 (2026-10-12)
+
+### Changes
+
+- soak: phase 23, many users at once (I-222..I-226) ([df9bbf9](https://github.com/zombar/tailraid/commit/df9bbf9))
+- webui: uploads of one name through two gateways never mix (I-226) ([8cefb46](https://github.com/zombar/tailraid/commit/8cefb46))
+- smb, vfs: rename and delete-on-close judged by the file, not its old name (I-224, I-225) ([1532843](https://github.com/zombar/tailraid/commit/1532843))
+- meta, vfs: two clients replacing one file leave one whole version (I-223, codec 9) ([0a73a46](https://github.com/zombar/tailraid/commit/0a73a46))
+- vfs, smb, nfs: an exclusive create succeeds once across gateways (I-222) ([6485c85](https://github.com/zombar/tailraid/commit/6485c85))
+- soak: phase 19 retries the read of a mirror back online for a probe interval ([e66e864](https://github.com/zombar/tailraid/commit/e66e864))
+- soak: a mirror is never a down node; phase 19 unplugs its mirror when it ends ([08e7114](https://github.com/zombar/tailraid/commit/08e7114))
+- vfs: an unknown outcome during a leader failover is retried until stale (I-95) ([8085416](https://github.com/zombar/tailraid/commit/8085416))
+- soak: phase 22 fixes from its Docker runs, and a harness Kill/Restart race ([43e52a3](https://github.com/zombar/tailraid/commit/43e52a3))
+- chore: remove the soak binary #143 committed at the root, and ignore it ([eebfe0f](https://github.com/zombar/tailraid/commit/eebfe0f))
+- meta, smb: restore the own cleanup that #143 reverted (I-220) ([7d411a2](https://github.com/zombar/tailraid/commit/7d411a2))
+- mirror: a write to an unplugged mirror fails instead of recreating its path ([8269194](https://github.com/zombar/tailraid/commit/8269194))
+- soak: phase 22, copies under faults ([8ef0441](https://github.com/zombar/tailraid/commit/8ef0441))
+- soak: phase 19 keeps every snapshot it saw for the report (the schedule thins automatic ones within the hour) ([a1ebda1](https://github.com/zombar/tailraid/commit/a1ebda1))
+- meta, smb: a failed copy cleans up after itself under protection (I-220) ([345c455](https://github.com/zombar/tailraid/commit/345c455))
+- vfs: a flush cancelled before every chunk started is an error, not nil works ([16da26c](https://github.com/zombar/tailraid/commit/16da26c))
+- smb: keep the share lock for drivers that never said they can skip it (I-217) ([6ad1e9d](https://github.com/zombar/tailraid/commit/6ad1e9d))
+- smb: answer slow WRITEs later, log write-path refusals (I-217, I-218) ([acd4c7d](https://github.com/zombar/tailraid/commit/acd4c7d))
+- vfs, repair: a peer's restart or upgrade never fails a client WRITE (I-219, L-219) ([5ef0f16](https://github.com/zombar/tailraid/commit/5ef0f16))
+- mirror: adopt, import rowless manifests, open an added mirror at once, fix the hook deadlock ([c919c9b](https://github.com/zombar/tailraid/commit/c919c9b))
+- webui: snapshots and versions in the browser, every mirror's state on every node (I-187, I-188) ([40d336d](https://github.com/zombar/tailraid/commit/40d336d))
+- soak: phase 19 snapshots on the compose rig's mirror and its report figures ([828c3ef](https://github.com/zombar/tailraid/commit/828c3ef))
+- update: restart only once the gateway is idle (I-221) ([5436ffe](https://github.com/zombar/tailraid/commit/5436ffe))
+- config: TestConfig_Mirrors builds its paths under a temp dir (Windows CI) ([8196a16](https://github.com/zombar/tailraid/commit/8196a16))
+- vfs, node, cli: versions and restore from a snapshot (I-186, L-216, L-217) ([729408c](https://github.com/zombar/tailraid/commit/729408c))
+- vfs, nfsgw, smbgw, rpc: /.snapshots on the mounts (I-185) ([58c51aa](https://github.com/zombar/tailraid/commit/58c51aa))
+- vfs: pin the readahead order by holding the client's GETs ([175fb4b](https://github.com/zombar/tailraid/commit/175fb4b))
+- webui: one show for its season-pack folders ([57cc0fd](https://github.com/zombar/tailraid/commit/57cc0fd))
+- node, config, cli: mirrors on their hosts, the sync worker and the schedule (I-179, I-181..I-183, I-188) ([eb667a4](https://github.com/zombar/tailraid/commit/eb667a4))
+- meta, mirror: the snapshot catalogue, the sync hold and the mirror store (I-179..I-181, I-183, I-184) ([701dc81](https://github.com/zombar/tailraid/commit/701dc81))
+
+### Documentation
+
+- docs: many users at once, exclusive create, whole rewrites, SMB handles by inode (I-222..I-226) ([561936b](https://github.com/zombar/tailraid/commit/561936b))
+- docs: soak report on main with the snapshot stack (22 phases, 0 failed) ([3d21ac3](https://github.com/zombar/tailraid/commit/3d21ac3))
+- docs: soak report on the snapshot stack (21 phases, 251 checks, 0 failed) ([c199c69](https://github.com/zombar/tailraid/commit/c199c69))
+- docs: README with a feature list, snapshots and mirrors guide, and a command reference ([fbedf86](https://github.com/zombar/tailraid/commit/fbedf86))
+- docs: no user removal of snapshots (I-183, I-187, I-188) ([08aaefb](https://github.com/zombar/tailraid/commit/08aaefb))
+- docs: snapshots on mirror disks, design, lookdev and stubs (I-179..I-188) ([ad13bf6](https://github.com/zombar/tailraid/commit/ad13bf6))
+
+### Tooling
+
+- test: snapshots on the harness cluster and in the model checker; report a detached mirror by its row ([640290a](https://github.com/zombar/tailraid/commit/640290a))
+
 ## v0.6.1 (2026-10-12)
 
 ### Changes
