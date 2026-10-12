@@ -68,6 +68,8 @@ type Fabric struct {
 	proposeErr     error // returned once by Propose as a transport failure
 	proposeDown    error // returned by every Propose while set
 	proposeUnknown int   // Propose applies the command and then reports an unknown outcome, this many times
+	refusedSums    int   // Commits carrying Sums refused with ErrCodec, as by a leader seeing an older member
+	leaderCodec    uint8 // when set, Propose refuses a command of a newer codec with ErrCodec (I-156)
 	stale          bool  // the gateway's health view given to vfs.FS
 	proposed       []meta.Op
 }
@@ -244,6 +246,13 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 	}
 	if f.proposeDown != nil {
 		return meta.Result{}, 0, f.proposeDown
+	}
+	if c.Op == meta.OpCommit && f.refusedSums > 0 && commitCarriesSums(c.Commit) {
+		f.refusedSums--
+		return meta.Result{Err: meta.ErrCodec}, 0, nil // refused before Raft, as applyLocal does (I-156)
+	}
+	if f.leaderCodec != 0 && meta.CommandCodec(c) > f.leaderCodec {
+		return meta.Result{Err: meta.ErrCodec}, 0, nil // refused before Raft, as applyLocal does
 	}
 	res := f.applyLocked(c)
 	if f.proposeUnknown > 0 { // applied, but the gateway never learns it (docs/02 §forwarding)
@@ -694,6 +703,31 @@ func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release f
 }
 
 // ProposeErrOnce makes the next Propose fail as a transport error.
+// RefuseCommitSums makes the next n Commits that carry shard Sums fail with ErrCodec, as a
+// leader whose prober still sees a member on codec 4 refuses them (I-219).
+func (f *Fabric) RefuseCommitSums(n int) {
+	f.mu.Lock()
+	f.refusedSums = n
+	f.mu.Unlock()
+}
+
+func commitCarriesSums(c *meta.Commit) bool {
+	for _, d := range c.NewChunks {
+		if d.Sums != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// SetLeaderCodec makes Propose refuse, with meta.ErrCodec, every command written in a codec
+// newer than v, as a leader does while a live member reads only v (I-156); 0 clears it.
+func (f *Fabric) SetLeaderCodec(v uint8) {
+	f.mu.Lock()
+	f.leaderCodec = v
+	f.mu.Unlock()
+}
+
 // ProposeUnknown makes the next n proposals apply and then report meta.ErrUnknownOutcome:
 // the leader did its work, the reply was lost (I-95).
 func (f *Fabric) ProposeUnknown(n int) {

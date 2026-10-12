@@ -140,7 +140,9 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
   `ErrProtected` to `EPERM`, which satisfies `os.ErrPermission`, the error go-nfs already
   turns into `ACCES` for the SETATTR change hook; the kernel client maps the status to
   `EACCES`, so macOS and Linux show "Permission denied". CREATE, WRITE and a RENAME into
-  the folder succeed.
+  the folder succeed. NFSv3 has no open handle to tie a delete to its creator, so the own
+  cleanup of I-220 is SMB's alone: a copy that fails into a protected folder over NFS
+  leaves its partial file, and Finder's cleanup of it is refused.
 
 ## Ports and mount commands
 

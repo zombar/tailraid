@@ -1,6 +1,7 @@
 package vfs_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"testing"
@@ -67,4 +68,37 @@ func TestFlusher_CommitCarriesSumsOnlyAtCodec5(t *testing.T) {
 		t.Fatalf("without a hook the flusher recorded %d sums", len(c.Sums))
 	}
 	_ = vfs.ReadAhead
+}
+
+// A leader that still sees a member on codec 4 refuses a Commit carrying Sums: the flusher
+// builds it again without them in the same attempt, the flush succeeds, the inode's last
+// flush is not in error, and the chunks are committed without sums.
+// Invariant: I-219
+func TestFlusher_CommitRefusedForCodec_CommitsWithoutSums(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	cs := int(testharness.ChunkSize)
+	data := testharness.Pattern(2*cs+11, 3)
+	ino := f.Create("skew")
+	must(t, f.Ov.Write(ino, 0, 7, data))
+	fl := f.Flusher()
+	fl.MinCodec = func() uint8 { return meta.CodecShardSums } // the gateway's view: everyone reads 5
+	f.RefuseCommitSums(1000)                                  // the leader's view: someone does not
+	must(t, fl.FlushInode(context.Background(), ino))
+	if d := f.Ov.Dirty(); len(d) != 0 {
+		t.Fatalf("still dirty after the flush: %+v", d)
+	}
+	in := f.Inode(ino)
+	for idx, h := range in.Chunks {
+		c, ok := f.FSM.GetChunk(h)
+		if !ok {
+			t.Fatalf("chunk %d missing", idx)
+		}
+		if c.Sums != nil {
+			t.Fatalf("chunk %d carries sums the leader refused", idx)
+		}
+	}
+	want := append(make([]byte, 7), data...)
+	if got := f.ReadFile(ino); !bytes.Equal(got, want) {
+		t.Fatalf("content differs at %d", testharness.FirstDiff(got, want))
+	}
 }
