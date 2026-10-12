@@ -182,6 +182,13 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 		res, index, err := f.prop.Propose(ctx, cmd)
 		if err == nil {
 			if res.Err != nil {
+				if index > 0 {
+					// a refusal is decided at an index too: once it is applied here, the
+					// state that refused (the other gateway's Create, I-222) resolves
+					if werr := f.st.WaitApplied(ctx, index); werr != nil {
+						return res, werr
+					}
+				}
 				if afterUnknown && (errors.Is(res.Err, meta.ErrExist) || errors.Is(res.Err, meta.ErrNotExist)) {
 					return res, fmt.Errorf("%w (%w)", res.Err, meta.ErrUnknownOutcome)
 				}
@@ -234,6 +241,15 @@ func landedEarlier(err, want error) bool {
 
 func (f *FS) now() int64 { return f.clk.Now().UnixNano() }
 
+// ownCreate reports whether in, found under a name whose exclusive Create answered
+// ErrExist after an unknown outcome, is the file that first attempt made: an empty file
+// created between asked and now (the FSM never dates a create before its command, and
+// clamps it forward only to its own last time). Two clients can both be told "created"
+// only inside that window, an unknown outcome racing another create of the name (I-222).
+func ownCreate(in meta.Inode, asked, now int64) bool {
+	return in.Type == meta.TFile && in.Size == 0 && in.Ctime >= asked && in.Ctime <= now
+}
+
 func (f *FS) resolve(name string) (meta.Inode, error) {
 	return f.st.Resolve(meta.SplitPath(name))
 }
@@ -280,18 +296,25 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 		if err != nil {
 			return nil, mapErr("open", filename, err)
 		}
+		asked := f.now()
 		res, err := f.propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{
-			Parent: parent.Ino, Name: base, Type: meta.TFile, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: f.now(),
+			Parent: parent.Ino, Name: base, Type: meta.TFile, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: asked,
 		}})
 		if err != nil {
-			if errors.Is(err, meta.ErrExist) { // lost a create race; open what is there
-				in, err = f.resolve(filename)
-				if err != nil {
-					return nil, mapErr("open", filename, err)
-				}
-				break
+			if !errors.Is(err, meta.ErrExist) {
+				return nil, mapErr("open", filename, err)
 			}
-			return nil, mapErr("open", filename, err)
+			// lost a create race, or our own first attempt landed (I-95); the answer was
+			// applied here before propose returned, so the name resolves to the winner
+			unknown := errors.Is(err, meta.ErrUnknownOutcome)
+			in, err = f.resolve(filename)
+			if err != nil {
+				return nil, mapErr("open", filename, err)
+			}
+			if flag&os.O_EXCL != 0 && (!unknown || !ownCreate(in, asked, f.now())) {
+				return nil, mapErr("open", filename, meta.ErrExist) // another client's file (I-222)
+			}
+			break
 		}
 		in, _ = f.st.GetInode(res.Ino)
 	default:

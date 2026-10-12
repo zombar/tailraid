@@ -72,6 +72,7 @@ type Fabric struct {
 	leaderCodec    uint8 // when set, Propose refuses a command of a newer codec with ErrCodec (I-156)
 	stale          bool  // the gateway's health view given to vfs.FS
 	proposed       []meta.Op
+	forestall      map[meta.Op]func() // run once before the next proposal of the op applies
 }
 
 const (
@@ -237,6 +238,13 @@ func (f *Fabric) MustApply(c meta.Command) meta.Result {
 // --- meta.Proposer ---
 
 func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64, error) {
+	f.mu.Lock()
+	fn := f.forestall[c.Op]
+	delete(f.forestall, c.Op)
+	f.mu.Unlock()
+	if fn != nil {
+		fn() // another gateway's work, applied before this proposal reaches the leader
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.proposeErr != nil {
@@ -700,6 +708,18 @@ func (f *Fabric) StallPut(node meta.NodeIdx) (entered <-chan struct{}, release f
 		})
 		s.inflight.Wait()
 	}
+}
+
+// ForestallNext runs fn once, without the fabric's lock, just before the next proposal of
+// op applies: another gateway's command landing between this gateway's lookup and its
+// proposal, which a gateway whose FSM lags sees as a lost race (I-222).
+func (f *Fabric) ForestallNext(op meta.Op, fn func()) {
+	f.mu.Lock()
+	if f.forestall == nil {
+		f.forestall = map[meta.Op]func(){}
+	}
+	f.forestall[op] = fn
+	f.mu.Unlock()
 }
 
 // ProposeErrOnce makes the next Propose fail as a transport error.

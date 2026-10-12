@@ -239,6 +239,21 @@ func (a *FS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return wrap(f.Close())
 }
 
+// CreateExcl is the server's FILE_CREATE (smb.ExclusiveCreator): an empty file made only
+// when the name is free, as the leader decides, so a name another gateway created first
+// is a collision whether or not this gateway has applied that create yet (I-222). A
+// collision is the client's answer, not a failure, and is not logged.
+func (a *FS) CreateExcl(path string, perm os.FileMode) error {
+	f, err := a.fs.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
+	if errors.Is(err, os.ErrExist) {
+		return wrap(err)
+	}
+	if err != nil {
+		return a.refused(&a.warnCreate, "create", path, wrap(err))
+	}
+	return wrap(f.Close())
+}
+
 func (a *FS) ReadLink(path string) (string, error) {
 	target, err := a.fs.Readlink(path)
 	return target, wrap(err)

@@ -157,8 +157,15 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusObjectNameNotFound), nil
 	case !exists && (disposition == dispCreate || disposition == dispOpenIf ||
 		disposition == dispOverwriteIf || disposition == dispSupersede):
+		x, excl := sh.fsys.(ExclusiveCreator)
 		if options&optDirectoryFile != 0 {
 			if err := sh.fsys.MkDir(p, 0o755); err != nil {
+				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+			}
+		} else if excl && disposition == dispCreate {
+			// another server over the same volume may have made the name since Stat
+			// looked: the backend decides, and a name taken there is a collision
+			if err := x.CreateExcl(p, 0o644); err != nil {
 				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 			}
 		} else if err := sh.fsys.WriteFile(p, nil, 0o644); err != nil {
@@ -271,6 +278,16 @@ func canDelete(fsys filesystem.Filesystem, path string, created bool) error {
 		return d.CanDelete(path)
 	}
 	return nil
+}
+
+// ExclusiveCreator is the optional capability of a filesystem shared with other servers
+// (several gateways over one volume): CreateExcl makes an empty file at path or fails
+// with an error matching os.ErrExist when the name exists, decided by the backend rather
+// than by this server's Stat, which may not have seen the other server's create yet.
+// FILE_CREATE uses it, so the losing client sees STATUS_OBJECT_NAME_COLLISION and the
+// winner's file is never truncated.
+type ExclusiveCreator interface {
+	CreateExcl(path string, perm os.FileMode) error
 }
 
 // Timestamper is the optional capability of a Stat that knows its times. The

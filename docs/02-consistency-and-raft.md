@@ -614,7 +614,11 @@ no divergent state to merge because it never applied uncommitted entries.
   `If-None-Match: *` publish all go through it, so two clients creating one name on two
   gateways, or on one gateway over two connections, see one success and one
   `EEXIST`/`STATUS_OBJECT_NAME_COLLISION`/`NFS3ERR_EXIST`/412, and the file holds the
-  winner's bytes.
+  winner's bytes; a refused proposal is waited for at its index, so the winner's file
+  resolves on the losing gateway. After an unknown outcome (I-95) the repeat's
+  `ErrExist` opens the file as the gateway's own only when it is an empty file created
+  between the command's time and the answer, the one window in which two clients can
+  both be told "created".
 - **I-220** — A `Trash` with `Own` (codec 8) of a file under a protected directory moves it
   into the trash like any delete; with `Own` a directory is still refused with
   `ErrProtected`, and without it everything under a protected directory is (I-154). The
@@ -659,4 +663,4 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-220 | `TestFSM_Protected_OwnCleanup_Table`, `TestEncodeCommand_OwnTrashIsCodec8`, `TestSMB_FailedCopyCleanup_UnderProtected`, `TestSMB_DeleteExistingUnderProtected_StillRefused`, `TestDeleteOnClose_OwnCreationIsOwnCleanup` |
 | I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
 | I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
-| I-222 | planned (PR excl-create): TestVFS_ExclCreate_LostRace_EEXIST, TestCluster_ExclCreate_TwoGateways_OneWins, TestSMB_FileCreate_RacingBackend_Collision, TestNFS_CreateGuarded_RacingBackend_Exist, TestSoak_MultiUserAgainstHarness |
+| I-222 | `TestVFS_ExclCreate_LostRace_EEXIST`, `TestVFS_ExclCreate_UnknownOutcome_OwnFileOpens`, `TestCluster_ExclCreate_TwoGateways_OneWins`, `TestSMB_FileCreate_RacingBackend_Collision`, `TestNFS_CreateGuarded_RacingBackend_Exist`; planned: TestSoak_MultiUserAgainstHarness |

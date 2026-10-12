@@ -6,12 +6,6 @@ import "testing"
 // Each stub is deleted in the commit that lands the real tests named in its doc's Tests
 // table (PR excl-create, whole-rewrite, smb-handles, web-upload-race, soak-multiuser).
 
-// Invariant: I-222
-// Becomes: TestVFS_ExclCreate_LostRace_EEXIST, TestCluster_ExclCreate_TwoGateways_OneWins (PR excl-create).
-func TestStub_I_222(t *testing.T) {
-	t.Skip("stub until PR excl-create; see docs/02-consistency-and-raft.md")
-}
-
 // Invariant: I-223
 // Becomes: TestFSM_Commit_Rewrite_Table, TestCluster_TwoRewrites_OneWholeWins (PR whole-rewrite).
 func TestStub_I_223(t *testing.T) {
