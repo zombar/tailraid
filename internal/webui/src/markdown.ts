@@ -4,7 +4,7 @@
 // instead of reaching the hash router.
 
 import { clear, h } from "./dom.ts";
-import { rendered, text } from "./api.ts";
+import { rendered, text, type Src } from "./api.ts";
 import { session } from "./util.ts";
 
 export function isMarkdown(name: string): boolean {
@@ -16,7 +16,7 @@ function message(e: unknown): string {
 }
 
 /** view builds the switch for the title row and the body that follows it. */
-export function view(path: string, root: number | undefined): { seg: HTMLElement; body: HTMLElement } {
+export function view(path: string, root: Src): { seg: HTMLElement; body: HTMLElement } {
   const body = h("div");
   const asRendered = h("button", { type: "button" }, "Rendered");
   const asRaw = h("button", { type: "button" }, "Raw");

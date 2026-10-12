@@ -16,9 +16,11 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mirror"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/sysfs"
 )
 
@@ -43,7 +45,15 @@ type mirrorSet struct {
 	open     map[meta.NodeIdx]*mirrorDisk // online mirrors by row
 	seen     []mirrorDisk                 // every configured path, as the last tick saw it (status)
 	inflight map[meta.SnapID]bool
+	syncing  map[meta.NodeIdx]syncing // the snapshot being copied to each mirror, for /health
 	jobs     chan syncJob
+}
+
+// syncing is a sync under way: the snapshot and the file bytes it holds.
+type syncing struct {
+	id    meta.SnapID
+	name  string
+	total uint64
 }
 
 type mirrorDisk struct {
@@ -68,7 +78,7 @@ func mirrorReserve(total uint64) uint64 { return max(total/20, 4<<30) }
 func newMirrorSet(fsys sysfs.FS, cfg config.Config, pol config.MirrorPolicy, clusterID [16]byte, st *meta.Store, clk clock.Clock, log *slog.Logger) *mirrorSet {
 	s := &mirrorSet{
 		fsys: fsys, pol: pol, clusterID: hex.EncodeToString(clusterID[:]), st: st, clk: clk, log: log,
-		open: map[meta.NodeIdx]*mirrorDisk{}, inflight: map[meta.SnapID]bool{}, jobs: make(chan syncJob, 4),
+		open: map[meta.NodeIdx]*mirrorDisk{}, inflight: map[meta.SnapID]bool{}, syncing: map[meta.NodeIdx]syncing{}, jobs: make(chan syncJob, 4),
 	}
 	for _, m := range cfg.Node.Mirrors {
 		s.paths = append(s.paths, m.Path)
@@ -121,7 +131,17 @@ func (s *mirrorSet) sync(ctx context.Context, j syncJob, ready func(context.Cont
 	if d == nil {
 		s.log.Warn("snapshot sync: the mirror is offline", "snapshot", j.sn.Name, "mirror", j.sn.Mirror)
 	} else {
-		man, err := d.m.WriteSnapshot(ctx, mirror.StateSource(j.clone, s.read), uint64(meta.RootIno), mirror.Manifest{
+		src := mirror.StateSource(j.clone, s.read)
+		total, _ := mirror.TotalBytes(src, uint64(meta.RootIno))
+		s.mu.Lock()
+		s.syncing[j.sn.Mirror] = syncing{id: j.sn.ID, name: j.sn.Name, total: total}
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.syncing, j.sn.Mirror)
+			s.mu.Unlock()
+		}()
+		man, err := d.m.WriteSnapshot(ctx, src, uint64(meta.RootIno), mirror.Manifest{
 			ID: uint32(j.sn.ID), Name: j.sn.Name, Index: j.sn.Index, At: j.sn.At, Auto: j.sn.Auto, ChunkSize: j.clone.Vol.ChunkSize,
 		})
 		if err != nil {
@@ -333,10 +353,11 @@ func expireSyncs(ctx context.Context, snaps []meta.Snapshot, now time.Time, hold
 	return n
 }
 
-// report is what `status` shows of this host's mirrors, and the warnings `status` and
-// `check` carry (docs/12 §11, I-188): a mirror whose newest snapshot is older than
-// stale_after (offline that long, or failing), an online one whose schedule is behind
-// by twice every, one under its free-space reserve, and an incomplete snapshot on any.
+// report is what `status` shows of this host's configured paths, and the warnings
+// `status` and `check` carry (docs/12 §11, I-188): a mirror whose newest snapshot is older
+// than stale_after (offline that long, or failing), an online one whose schedule is
+// behind by twice every, one under its free-space reserve, and an incomplete snapshot on
+// any. clusterMirrors merges the paths into the cluster-wide list.
 func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.MirrorReport, []string) {
 	if s == nil {
 		return nil, nil
@@ -348,7 +369,8 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 	var warn []string
 	for i := range seen {
 		d := &seen[i]
-		r := admin.MirrorReport{Name: d.Row.Name, Path: d.Path, Online: d.Online, Reason: d.Reason, Used: d.Used, Free: d.Free, Total: d.Total}
+		r := admin.MirrorReport{Idx: d.Row.Idx, Name: d.Row.Name, Self: true, Path: d.Path, Online: d.Online, Reason: d.Reason, Used: d.Used, Free: d.Free, Total: d.Total}
+		syncing := false
 		for j := range snaps {
 			sn := &snaps[j]
 			if sn.Mirror != d.Row.Idx || d.Row.Idx == 0 {
@@ -356,7 +378,7 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 			}
 			switch sn.State {
 			case meta.SnapSyncing:
-				r.Syncing = sn.Name
+				syncing = true
 			case meta.SnapComplete, meta.SnapIncomplete:
 				r.Newest = max(r.Newest, sn.At)
 				if sn.State == meta.SnapIncomplete {
@@ -371,7 +393,7 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 		case d.Row.Idx == 0:
 		case r.Newest != 0 && age > s.pol.StaleAfter:
 			warn = append(warn, fmt.Sprintf("mirror %s: newest snapshot is %s old (%s)", name, age.Round(time.Hour), cmp.Or(d.Reason, "online")))
-		case d.Online && s.pol.Every > 0 && r.Newest != 0 && age > 2*s.pol.Every && r.Syncing == "":
+		case d.Online && s.pol.Every > 0 && r.Newest != 0 && age > 2*s.pol.Every && !syncing:
 			warn = append(warn, fmt.Sprintf("mirror %s: no snapshot for %s while online", name, age.Round(time.Minute)))
 		}
 		if d.Online && d.Total > 0 && d.Free < mirrorReserve(d.Total) {
@@ -380,6 +402,88 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 		out = append(out, r)
 	}
 	return out, warn
+}
+
+// mirrorProbe is what clusterMirrors needs from the prober (docs/16 §1).
+type mirrorProbe interface {
+	Mirror(idx meta.NodeIdx) (cluster.MirrorProbe, bool)
+	MirrorOnline(idx meta.NodeIdx) bool
+}
+
+// clusterMirrors is every mirror of the cluster as `status` shows it (docs/12 §11): each
+// registered row with its host, online by the probes, the use and the sync under way from
+// its host's last health reply, and the newest complete snapshot from the catalogue; the
+// rows of this host carry their path, and this host's configured paths that no row
+// claims are listed after them.
+func clusterMirrors(nodes []meta.Node, snaps []meta.Snapshot, pr mirrorProbe, self meta.NodeIdx, local []admin.MirrorReport) []admin.MirrorReport {
+	names := map[meta.NodeIdx]string{}
+	for i := range nodes {
+		names[nodes[i].Idx] = nodes[i].Name
+	}
+	var out []admin.MirrorReport
+	for i := range nodes {
+		nd := &nodes[i]
+		if nd.Kind != meta.KindMirror || nd.State == meta.Removed {
+			continue
+		}
+		r := admin.MirrorReport{Idx: nd.Idx, Name: nd.Name, Host: names[nd.Host], Self: nd.Host == self, Online: pr.MirrorOnline(nd.Idx)}
+		if mp, ok := pr.Mirror(nd.Idx); ok {
+			h := mp.Health
+			r.Reason, r.Used, r.Free, r.Total = h.Reason, h.Used, h.Free, h.Total
+			if !mp.LastSeen.IsZero() {
+				r.LastSeen = mp.LastSeen.UnixNano()
+			}
+			if h.Syncing != nil && r.Online {
+				r.Syncing = &admin.SyncReport{ID: h.Syncing.ID, Snapshot: h.Syncing.Snapshot, Read: h.Syncing.Read, Total: h.Syncing.Total, BytesNew: h.Syncing.BytesNew}
+			}
+		} else {
+			r.Reason = "not heard from its host yet"
+		}
+		if !r.Online && r.Reason == "" {
+			r.Reason = "its host is not live"
+		}
+		for j := range snaps {
+			if sn := &snaps[j]; sn.Mirror == nd.Idx && (sn.State == meta.SnapComplete || sn.State == meta.SnapIncomplete) {
+				r.Newest = max(r.Newest, sn.At)
+			}
+		}
+		for j := range local {
+			if local[j].Idx == nd.Idx {
+				r.Path = local[j].Path
+			}
+		}
+		out = append(out, r)
+	}
+	for j := range local {
+		if local[j].Idx == 0 {
+			out = append(out, local[j])
+		}
+	}
+	return out
+}
+
+// health lists this host's registered mirrors for /health (docs/16 §1): online or not,
+// the disk's use and the sync under way with its progress.
+func (s *mirrorSet) health() []rpc.MirrorHealth {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []rpc.MirrorHealth
+	for i := range s.seen {
+		d := &s.seen[i]
+		if d.Row.Idx == 0 { // not registered here: nothing for the other nodes to match
+			continue
+		}
+		h := rpc.MirrorHealth{ID: d.Row.ID, Online: d.Online, Reason: d.Reason, Used: d.Used, Free: d.Free, Total: d.Total}
+		if sy, ok := s.syncing[d.Row.Idx]; ok && d.m != nil {
+			read, added, _ := d.m.Progress()
+			h.Syncing = &rpc.SyncHealth{ID: uint32(sy.id), Snapshot: sy.name, Read: min(read, sy.total), Total: sy.total, BytesNew: added}
+		}
+		out = append(out, h)
+	}
+	return out
 }
 
 // PrepareMirror marks path as a mirror of this cluster for host (docs/16 §1), or returns

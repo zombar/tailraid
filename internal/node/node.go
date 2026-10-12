@@ -336,8 +336,14 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	node.FSM.SetSnapshotHook(mirrors.onBegin)
 	defer node.FSM.SetSnapshotHook(nil)
 	ops.mirrors, ops.mirrorPol = mirrors, mpol
-	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, live: prober.IsLive}) // /.snapshots (docs/16 §6)
-	webAddr := ""                                                                                  // the browser UI listener (docs/13); listen.web 0 turns it off
+	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, online: prober.MirrorOnline}) // /.snapshots (docs/16 §6)
+	selfHealth := prober.SelfHealth
+	prober.SelfHealth = func() rpc.Health { // this host's mirrors, as /health lists them (docs/16 §1)
+		h := selfHealth()
+		h.Mirrors = mirrors.health()
+		return h
+	}
+	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
 	}
@@ -354,8 +360,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		cacheRep := pinned.List()
 		rep.Cache = &cacheRep
-		var mwarn []string
-		rep.Mirrors, mwarn = mirrors.report(clk.Now(), node.FSM.Snapshots())
+		snaps := node.FSM.Snapshots()
+		local, mwarn := mirrors.report(clk.Now(), snaps)
+		me, _ := node.SelfIdx()
+		rep.Mirrors = clusterMirrors(node.FSM.Nodes(), snaps, prober, me, local)
 		rep.Warnings = append(rep.Warnings, mwarn...)
 		searchRep := searchSvc.Status()
 		rep.Search = &searchRep
@@ -367,7 +375,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	defer reporter.Close()
 	status := func(fresh bool) any { return reporter.Get(fresh) }
 	srv, err := rpc.NewServer(rpc.Options{
-		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, Applier: node, Fence: fence{node},
+		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, MirrorHealth: mirrors.health, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
@@ -414,6 +422,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
+			Snapshots: webSnapshots{ops: ops, flush: fl.FlushAll},
 		})
 		if err != nil {
 			return err

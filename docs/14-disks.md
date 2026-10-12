@@ -116,7 +116,8 @@ device index is refused by the client as `ErrUnavailable` (a device is not a tar
 `X-Tailraid-Disk: closed`, which the client maps to `ErrUnavailable` (never to "shard
 absent"). On the host itself the client goes straight to the store.
 
-`/health` reports each target: `{idx, used, free, capacity, ok}`. The prober still probes
+`/health` reports each target: `{idx, used, free, capacity, ok}`, and each mirror of the
+host (docs/16 §1). The prober still probes
 hosts only. A disk is **live** iff its host is live and the host's last `/health` reported
 it `ok`; it is dead from the probe that first reports it not OK. A disk that fails while
 its host stays up is therefore dead to every node within one probe interval, and the

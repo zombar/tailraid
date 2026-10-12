@@ -4,7 +4,7 @@
 
 import { h } from "./dom.ts";
 import { tags, thumbURL, fileURL, type Entry, type Tags } from "./api.ts";
-import { basename, ext, join, mmss, type Ctx } from "./util.ts";
+import { basename, ext, join, mmss, src, type Ctx } from "./util.ts";
 import { isAudioName, player, type Track } from "./audio.ts";
 
 export interface Album {
@@ -26,9 +26,9 @@ const PROBES = 4;
 /** render draws the album; cover is null for a folder known to have none (I-165). */
 export function render(ctx: Ctx, cover: string | null | undefined, entries: Entry[]): Album {
   const audio = entries.filter((e) => !e.deleted_at && !e.upload && e.type === "file" && isAudioName(e.name)).sort((a, b) => trackNo(a.name) - trackNo(b.name) || a.name.localeCompare(b.name, undefined, { numeric: true }));
-  const tracks: Track[] = audio.map((e) => ({ path: join(ctx.path, e.name), root: ctx.root }));
+  const tracks: Track[] = audio.map((e) => ({ path: join(ctx.path, e.name), root: src(ctx) }));
   const img = h("img", { class: "cover", alt: "" }) as HTMLImageElement;
-  if (cover !== null) img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root); // the folder itself resolves its cover when the listing did not carry one
+  if (cover !== null) img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, src(ctx)); // the folder itself resolves its cover when the listing did not carry one
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, basename(ctx.path) || "/");
   const artist = h("div", { class: "artist" });

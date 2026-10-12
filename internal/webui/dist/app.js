@@ -44,9 +44,9 @@ var ICONS = {
   media: "M4 2.5l9 5.5-9 5.5z",
   image: "M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"
 };
-function icon(kind) {
-  const el = svg("svg", { class: "icon", viewBox: "0 0 16 16" }, svg("path", { d: ICONS[kind] ?? ICONS.file }));
-  if (kind === "image") el.append(svg("circle", { cx: 11, cy: 5.5, r: 1 }));
+function icon(kind2) {
+  const el = svg("svg", { class: "icon", viewBox: "0 0 16 16" }, svg("path", { d: ICONS[kind2] ?? ICONS.file }));
+  if (kind2 === "image") el.append(svg("circle", { cx: 11, cy: 5.5, r: 1 }));
   return el;
 }
 function setWidth(el, frac) {
@@ -108,17 +108,24 @@ var ApiError = class extends Error {
   status;
   body;
 };
+function offline(e) {
+  return e instanceof ApiError && e.body?.["offline"] === true;
+}
 var HEADER = "X-Tailraid-UI";
 function encodePath(p) {
   return p.split("/").map(encodeURIComponent).join("/");
 }
+function srcParam(root) {
+  if (root === void 0) return "";
+  return typeof root === "string" ? "at=" + root.slice(1) : "in=" + root;
+}
 function inQuery(root, first = false) {
-  return root === void 0 ? "" : (first ? "?" : "&") + "in=" + root;
+  return root === void 0 ? "" : (first ? "?" : "&") + srcParam(root);
 }
 function fileURL(path, download = false, root) {
   const q = [];
   if (download) q.push("download=1");
-  if (root !== void 0) q.push("in=" + root);
+  if (root !== void 0) q.push(srcParam(root));
   return "/files" + encodePath(path) + (q.length ? "?" + q.join("&") : "");
 }
 function thumbURL(path, root, tag) {
@@ -182,13 +189,13 @@ async function text(path, root) {
 }
 var PART = 32 << 20;
 var RETRIES = 5;
-function sendPart(path, blob, range, onProgress, track) {
+function sendPart(path, blob, range2, onProgress, track) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     track(xhr);
     xhr.open("PUT", fileURL(path));
     xhr.setRequestHeader(HEADER, "1");
-    if (range) xhr.setRequestHeader("Content-Range", range);
+    if (range2) xhr.setRequestHeader("Content-Range", range2);
     xhr.upload.onprogress = (e) => onProgress(e.loaded);
     xhr.onload = () => {
       const reply = { status: xhr.status };
@@ -275,6 +282,12 @@ function upload(path, file, onProgress, onNote) {
   };
 }
 var getStats = (from, to, node) => call(`/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}`);
+var snapshots = () => call("/api/snapshots");
+var takeSnapshot = (opts = {}) => post("/api/snapshot", opts);
+var versions = (path) => call("/api/versions?path=" + encodeURIComponent(path));
+var revert = (path, snapshot) => post("/api/revert", { path, snapshot });
+var copyVersion = (path, snapshot, name) => post("/api/copy", { path, snapshot, name });
+var restoreTree = (snapshot, path, opts = {}) => post("/api/restore-tree", { snapshot, path, ...opts });
 
 // internal/webui/src/status.ts
 var INTERVAL = 5e3;
@@ -415,11 +428,15 @@ function ext(name) {
 }
 
 // internal/webui/src/util.ts
+function src(ctx) {
+  return ctx.at !== void 0 ? `@${ctx.at}` : ctx.root;
+}
+var atSuffix = (ctx) => ctx.at !== void 0 ? "?at=" + ctx.at : "";
 function browseHash(ctx) {
-  return ctx.root === void 0 ? "#/browse" + encodePathForHash(ctx.path) : `#/trash/${ctx.root}` + encodePathForHash(ctx.path);
+  return (ctx.root === void 0 ? "#/browse" + encodePathForHash(ctx.path) : `#/trash/${ctx.root}` + encodePathForHash(ctx.path)) + atSuffix(ctx);
 }
 function fileHash(ctx) {
-  return ctx.root === void 0 ? "#/file" + encodePathForHash(ctx.path) : `#/trashfile/${ctx.root}` + encodePathForHash(ctx.path);
+  return (ctx.root === void 0 ? "#/file" + encodePathForHash(ctx.path) : `#/trashfile/${ctx.root}` + encodePathForHash(ctx.path)) + atSuffix(ctx);
 }
 var session = {
   get(key, fallback) {
@@ -702,11 +719,11 @@ function hostCard(g, sh, scale) {
   }
   const strip = h("div", { class: "disk-strip" });
   for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
-  const card2 = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
+  const card3 = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
   for (const group of sharedGroups(g.targets)) {
-    card2.append(h("div", { class: "host-note" }, h("span", { class: "warn-icon" }), `${listOf(group)} are on one physical disk: they fail together, so data spread across them is not redundant`));
+    card3.append(h("div", { class: "host-note" }, h("span", { class: "warn-icon" }), `${listOf(group)} are on one physical disk: they fail together, so data spread across them is not redundant`));
   }
-  return card2;
+  return card3;
 }
 function listOf(names) {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
@@ -765,8 +782,8 @@ function render3(root, r, history) {
     tile("Stale policy", v.stale_policy_chunks, `chunks not yet at ${v.k}+${v.m}`, "warn"),
     tile("Host skew", v.domain_skew, "chunks above the host cap", "warn")
   );
-  const last = history[history.length - 1];
-  const lastTone = last && last.degraded + last.pending > 0 ? "warn" : "";
+  const last2 = history[history.length - 1];
+  const lastTone = last2 && last2.degraded + last2.pending > 0 ? "warn" : "";
   const spark = h(
     "div",
     null,
@@ -776,17 +793,17 @@ function render3(root, r, history) {
     ),
     h("div", { class: "small dim" }, "degraded + pending, last 10 min (this tab only)")
   );
-  const section = h("section", null, h("h2", null, "Integrity"), tiles, spark, repair(r));
+  const section2 = h("section", null, h("h2", null, "Integrity"), tiles, spark, repair(r));
   if (r.gateway) {
     const g = r.gateway;
-    section.append(
+    section2.append(
       h("h3", null, "Gateway"),
       barRow("dirty bytes", bar(g.dirty_bytes / MAX_DIRTY, fillTone(g.dirty_bytes / MAX_DIRTY)), `${bytes(g.dirty_bytes)} in ${g.dirty_inodes} ${g.dirty_inodes === 1 ? "file" : "files"} of ${bytes(MAX_DIRTY)}` + (g.flushing ? " \xB7 flushing" : "")),
       barRow("WAL", bar(g.wal_bytes / WAL_CAP, fillTone(g.wal_bytes / WAL_CAP)), `${bytes(g.wal_bytes)} of ${bytes(WAL_CAP)}`),
       h("div", { class: "small dim" }, "acknowledged writes not yet committed to the cluster")
     );
   }
-  root.append(section);
+  root.append(section2);
 }
 function tile(label, value, sub2, tone) {
   const zero = value === 0;
@@ -831,6 +848,443 @@ function repair(r) {
   return h("div", null, h("h3", null, `Repair \xB7 pass ${p.pass} running`), progress, note, kv);
 }
 
+// internal/webui/src/picker.ts
+function pick(opts) {
+  return new Promise((resolve) => {
+    const dlg = h("dialog", { class: "picker", "aria-label": "move to" });
+    let cur = opts.start;
+    const crumbs2 = h("div", { class: "crumbs" });
+    const list = h("ul", { class: "picker-list" });
+    const confirm = h("button", { type: "button" }, "");
+    const cancel = h("button", { type: "button" }, "Cancel");
+    dlg.append(crumbs2, list, h("div", { class: "picker-actions" }, cancel, confirm));
+    const close = (v) => {
+      dlg.close();
+      dlg.remove();
+      resolve(v);
+    };
+    cancel.addEventListener("click", () => close(null));
+    confirm.addEventListener("click", () => {
+      if (!opts.disabled(cur)) close(cur);
+    });
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      close(null);
+    });
+    dlg.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !(ev.target instanceof HTMLButtonElement)) {
+        ev.preventDefault();
+        if (!opts.disabled(cur)) close(cur);
+      }
+    });
+    const draw = async () => {
+      crumbs2.replaceChildren(h("a", { href: "#", onClick: (ev) => {
+        ev.preventDefault();
+        go("/");
+      } }, "/"));
+      const parts = cur.split("/").filter(Boolean);
+      let acc = "";
+      parts.forEach((p, i) => {
+        acc += "/" + p;
+        if (i > 0) crumbs2.append(h("span", { class: "sep" }, "/"));
+        const target = acc;
+        if (i === parts.length - 1) crumbs2.append(h("span", null, p));
+        else crumbs2.append(h("a", { href: "#", onClick: (ev) => {
+          ev.preventDefault();
+          go(target);
+        } }, p));
+      });
+      const reason = opts.disabled(cur);
+      confirm.textContent = opts.action(cur);
+      confirm.disabled = reason !== null;
+      confirm.title = reason ?? "";
+      list.replaceChildren();
+      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("dir"), ".."));
+      try {
+        const r = await ls(cur);
+        for (const e of r.entries) {
+          if (e.type !== "dir" || e.deleted_at) continue;
+          const path = cur === "/" ? "/" + e.name : cur + "/" + e.name;
+          const why = opts.disabled(path);
+          const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("dir"), e.name);
+          if (!why) li.addEventListener("click", () => go(path));
+          list.append(li);
+        }
+      } catch (e) {
+        list.append(h("li", { "aria-disabled": "true" }, "could not list: " + (e instanceof Error ? e.message : String(e))));
+      }
+    };
+    const go = (path) => {
+      cur = path;
+      void draw();
+    };
+    document.body.append(dlg);
+    dlg.showModal();
+    void draw();
+    void basename;
+  });
+}
+
+// internal/webui/src/snapshots.ts
+var FRESH_MS = 1e4;
+var cached = null;
+var pending = null;
+function catalogue(force = false) {
+  if (!force && cached && Date.now() - cached.at < FRESH_MS) return Promise.resolve(cached.v);
+  pending ??= snapshots().then(
+    (v) => {
+      cached = { at: Date.now(), v };
+      pending = null;
+      return v;
+    },
+    (e) => {
+      pending = null;
+      throw e;
+    }
+  );
+  return pending;
+}
+function last() {
+  return cached?.v ?? null;
+}
+var errText = (e) => e instanceof Error ? e.message : String(e);
+function kind(sn, c) {
+  const mine = c.snapshots.filter((s2) => s2.mirror === sn.mirror && s2.state !== "syncing");
+  if (mine.length > 1 && mine[mine.length - 1]?.id === sn.id) return "first";
+  if (!sn.auto) return "";
+  const hours = (Date.now() - Date.parse(sn.at)) / 36e5;
+  const s = c.schedule;
+  if (hours < s.hourly) return "hourly";
+  if (hours < s.daily * 24) return "daily";
+  if (hours < s.weekly * 24 * 7) return "weekly";
+  return "monthly";
+}
+function taken(sn, c) {
+  const k = kind(sn, c);
+  return when(sn.at) + (k ? " \xB7 " + k : "");
+}
+function offlineFor(m) {
+  if (!m.last_seen) return "offline";
+  const d = daysAgo(m.last_seen);
+  return d === "today" ? "offline" : "offline " + d.replace(" ago", "");
+}
+function asofMenu(ctx, view3, current) {
+  const body = h("div", { class: "menu-body", role: "radiogroup", "aria-label": "as of" });
+  const details = h("details", { class: "menu asof" }, h("summary", null, current ? current.name : "Now"), body);
+  const go = (at) => {
+    const next2 = { path: ctx.path, root: ctx.root };
+    if (at !== void 0) next2.at = at;
+    location.hash = view3 === "browse" ? browseHash(next2) : fileHash(next2);
+  };
+  const row2 = (label, note, checked, disabled, onPick) => {
+    const radio = h("input", { type: "radio", name: "asof", checked, disabled: !!disabled });
+    const lab = h("label", { class: "menu-row" }, radio, h("span", null, label), h("span", { class: "small dim" }, disabled ? "offline: attach it to browse" : note));
+    if (disabled) {
+      lab.setAttribute("aria-disabled", "true");
+      lab.title = disabled;
+    }
+    radio.addEventListener("change", () => {
+      if (radio.checked) onPick();
+    });
+    return lab;
+  };
+  const fill = async () => {
+    clear(body);
+    body.append(row2("Now", "the live volume", !current, null, () => go()));
+    try {
+      const c = await catalogue();
+      clear(body);
+      body.append(row2("Now", "the live volume", !current, null, () => go()));
+      let n = 0;
+      for (const m of c.mirrors) {
+        const mine = c.snapshots.filter((s) => s.mirror === m.name && s.state !== "syncing");
+        if (!mine.length) continue;
+        body.append(h("div", { class: "menu-group" }, h("span", { class: "dot " + (m.online ? "ok" : "off") }), `${m.name} \xB7 ${m.online ? "online" : offlineFor(m)}`));
+        for (const s of mine) {
+          n++;
+          const label = h("span", null, s.name);
+          if (!s.auto) label.append(h("span", { class: "badge" }, "manual"));
+          body.append(row2(label, taken(s, c), current?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go(s.id)));
+        }
+      }
+      const mirrors = new Set(c.snapshots.map((s) => s.mirror)).size;
+      body.append(h("div", { class: "menu-foot small dim" }, n ? `${n} snapshots on ${mirrors} ${mirrors === 1 ? "mirror" : "mirrors"} \xB7 ` : "no snapshot yet \xB7 ", h("a", { href: "#/" }, "manage on the dashboard")));
+    } catch (e) {
+      body.append(h("div", { class: "menu-foot small dim" }, "snapshots: " + errText(e)));
+    }
+  };
+  details.addEventListener("toggle", () => {
+    if (details.open) void fill();
+  });
+  return details;
+}
+function banner(ctx, ref, summary, folder2, back) {
+  const name = ref?.name ?? (ctx.at !== void 0 ? `#${ctx.at}` : "");
+  const text2 = h("span", null, "As of ", h("span", { class: "mono" }, name));
+  if (ref) text2.append(" on ", h("span", { class: "mono" }, ref.mirror), ` \xB7 taken ${ago(ref.at)}`);
+  text2.append(" \xB7 read-only" + (summary ? " \xB7 " + summary : ""));
+  const actions = h("span", { class: "actions" });
+  if (folder2 && ref) actions.append(h("button", { type: "button", onClick: () => void restoreFolder(ctx, ref) }, "Restore folder to\u2026"));
+  actions.append(h("button", { type: "button", onClick: () => location.hash = back }, "Back to now"));
+  return h("div", { class: "banner snapshot" }, text2, actions);
+}
+function offlineView(ctx, e, back) {
+  const c = last();
+  const sn = c?.snapshots.find((s) => s.id === ctx.at);
+  const m = c?.mirrors.find((x) => x.name === sn?.mirror);
+  const text2 = h("span", null, "As of ", h("span", { class: "mono" }, sn?.name ?? `#${ctx.at}`));
+  if (sn) text2.append(" on ", h("span", { class: "mono" }, sn.mirror), ` \xB7 taken ${ago(sn.at)}`);
+  const why = m ? h("div", { class: "empty" }, h("span", { class: "mono" }, m.name), ` is offline${m.last_seen ? ` (last seen ${ago(m.last_seen)} on ${m.host})` : ""}: attach it to browse this snapshot`) : h("div", { class: "empty" }, errText(e));
+  return [h("div", { class: "banner snapshot" }, text2, h("span", { class: "actions" }, h("button", { type: "button", onClick: () => location.hash = back }, "Back to now"))), why];
+}
+var isOffline = offline;
+async function restoreFolder(ctx, ref) {
+  const to = await pick({ start: dirname(ctx.path) || "/", disabled: () => null, action: (p) => `Restore here as ${basename(ctx.path) || ref.name}` + (p === "/" ? "" : "") });
+  if (to === null) return;
+  try {
+    const r = await restoreTree(ref.id, ctx.path, { to });
+    const made = r.files + r.dirs + r.links;
+    toast(`restored ${made} ${made === 1 ? "entry" : "entries"} to ${r.path}` + (r.skipped_count ? ` \xB7 ${r.skipped_count} existing left alone` : "") + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${ref.mirror}` : ""), "ok");
+    location.hash = browseHash({ path: r.path });
+  } catch (e) {
+    toast("restore: " + errText(e), "bad");
+  }
+}
+function range(v) {
+  const names = v.snapshots.map((s) => s.name);
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names[names.length - 1]} \u2013 ${names[0]}`;
+}
+function holders(v) {
+  const mirrors = [...new Set(v.snapshots.map((s) => s.mirror))].join(", ");
+  const ends = /* @__PURE__ */ new Set([v.snapshots[0]?.name, v.snapshots[v.snapshots.length - 1]?.name]);
+  const manual = v.snapshots.filter((s) => !s.auto && !ends.has(s.name)).map((s) => s.name).slice(0, 2);
+  const n = v.snapshots.length;
+  return [`${n} ${n === 1 ? "snapshot" : "snapshots"}`, ...manual, mirrors].filter(Boolean).join(" \xB7 ");
+}
+function copyName(name, snap) {
+  const e = ext(name);
+  const stem = e ? name.slice(0, name.length - e.length - 1) : name;
+  return `${stem} (${snap})${e ? "." + e : ""}`;
+}
+function versionsPanel(path, onChange) {
+  const summary = h("summary", null, "Versions");
+  const body = h("div", { class: "body" });
+  const panel2 = h("details", { class: "panel" }, summary, body);
+  let loaded = false;
+  const load = async () => {
+    clear(body);
+    body.append(h("div", { class: "small dim" }, "loading\u2026"));
+    try {
+      const r = await versions(path);
+      loaded = true;
+      draw(r.versions, r.offline);
+    } catch (e) {
+      clear(body);
+      body.append(h("div", { class: "error" }, "versions: " + errText(e)));
+    }
+  };
+  const draw = (vs, off2) => {
+    clear(body);
+    const held = vs.reduce((n, v) => n + v.snapshots.length, 0);
+    const mirrors = [...new Set(vs.flatMap((v) => v.snapshots.map((s) => s.mirror)))];
+    summary.textContent = `Versions (${vs.length} ${vs.length === 1 ? "content" : "contents"} \xB7 ${held} snapshots${mirrors.length ? " on " + mirrors.join(", ") : ""})`;
+    const current = vs.find((v) => v.current);
+    const tbody = h("tbody");
+    for (const v of vs) {
+      const asof = h("td", { class: "asof" }, v.current ? "now" : range(v), h("span", { class: "small dim" }, v.current ? v.snapshots.length ? "also in " + holders(v) : "in no snapshot yet" : holders(v)));
+      const acts = h("td", { class: "acts" });
+      const first = v.snapshots[0];
+      if (v.current) acts.append(h("span", { class: "badge strong" }, "current"));
+      else if (first) {
+        acts.append(
+          h("button", { type: "button", onClick: () => location.hash = fileHash({ path, at: first.id }) }, "View"),
+          h("button", { type: "button", onClick: () => askRevert(first, !!current && current.snapshots.length === 0) }, "Revert"),
+          h("button", { type: "button", onClick: () => void saveCopy(first) }, "Save a copy")
+        );
+      }
+      tbody.append(h("tr", { class: v.current ? "current" : "" }, asof, h("td", { class: "size" }, bytes(v.size)), h("td", { class: "mtime", title: v.mtime }, when(v.mtime)), acts));
+    }
+    body.append(h("table", { class: "versions" }, h("thead", null, h("tr", null, h("th", null, "as of"), h("th", { class: "size" }, "size"), h("th", { class: "mtime" }, "modified"), h("th", { class: "acts" }))), tbody));
+    if (!vs.some((v) => !v.current)) body.append(h("div", { class: "small dim" }, "no snapshot holds another version of this file"));
+    for (const o of off2) body.append(h("div", { class: "small dim" }, `${o.count} more ${o.count === 1 ? "snapshot" : "snapshots"} on `, h("span", { class: "mono" }, o.mirror), ", offline: attach it to see them"));
+  };
+  const doRevert = async (s) => {
+    try {
+      const r = await revert(path, s.id);
+      toast(`reverted to ${s.name}` + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${s.mirror}` : ""), "ok");
+      onChange();
+      void load();
+    } catch (e) {
+      toast("revert: " + errText(e), "bad");
+    }
+  };
+  const askRevert = (s, unsaved) => {
+    body.querySelector(".banner")?.remove();
+    if (!unsaved) {
+      void doRevert(s);
+      return;
+    }
+    const confirm = h(
+      "div",
+      { class: "banner" },
+      h("span", null, "The current content is in no snapshot yet: reverting replaces it for good."),
+      h(
+        "span",
+        { class: "actions" },
+        h("button", { type: "button", onClick: () => void takeSnapshot().then(() => toast("snapshot started; revert once it is complete", "ok"), (e) => toast("snapshot: " + errText(e), "bad")).finally(() => confirm.remove()) }, "Take a snapshot first"),
+        h("button", { type: "button", onClick: () => {
+          confirm.remove();
+          void doRevert(s);
+        } }, "Revert anyway"),
+        h("button", { type: "button", onClick: () => confirm.remove() }, "Cancel")
+      )
+    );
+    body.append(confirm);
+  };
+  const saveCopy = async (s) => {
+    const name = copyName(basename(path), s.name);
+    try {
+      const r = await copyVersion(path, s.id, name);
+      toast(`saved a copy as ${name}` + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${s.mirror}` : ""), "ok");
+    } catch (e) {
+      toast("save a copy: " + (e instanceof ApiError && e.status === 409 ? `${name} exists` : errText(e)), "bad");
+    }
+  };
+  panel2.addEventListener("toggle", () => {
+    if (panel2.open && !loaded) void load();
+  });
+  return panel2;
+}
+function tile2(c) {
+  if (!c || !c.mirrors.length) return null;
+  const off2 = c.mirrors.filter((m) => !m.online).length;
+  const n = c.snapshots.filter((s) => s.state !== "syncing").length;
+  return h(
+    "div",
+    { class: "tile" },
+    h("div", { class: "label" }, "Snapshots"),
+    h("div", { class: "value" }, String(n)),
+    h("div", { class: "sub" }, `on ${c.mirrors.length} ${c.mirrors.length === 1 ? "mirror" : "mirrors"}` + (off2 ? ` \xB7 ${off2} offline` : ""))
+  );
+}
+var WARN = { stale: "stale", reserve: "nearly full", incomplete: "incomplete" };
+function card2(m, c) {
+  const mine = c.snapshots.filter((s) => s.mirror === m.name && s.state !== "syncing");
+  const badges = h("span", { class: "badges" }, h("span", { class: "badge" }, "on " + m.host));
+  if (m.self) badges.append(h("span", { class: "badge self" }, "self"));
+  if (m.warn) badges.append(h("span", { class: "badge warn" }, WARN[m.warn]));
+  const el = h("div", { class: "card mirror" + (m.online ? "" : " off") + (m.warn && m.online ? " warn" : "") }, h("div", { class: "name-row" }, h("span", { class: "dot " + (m.online ? "ok" : "off") }), h("span", { class: "name" }, m.name), badges));
+  const disk = m.used + m.free;
+  if (m.online) {
+    const frac = m.total > 0 ? (m.total - m.free) / m.total : disk > 0 ? m.used / disk : 0;
+    const val = `${bytes(m.used)} used of ${bytes(m.total || disk)} \xB7 ${mine.length} ${mine.length === 1 ? "snapshot" : "snapshots"}` + (m.warn === "reserve" ? " \xB7 under its reserve: the oldest automatic snapshots go first" : "");
+    el.append(barRow("disk", bar(frac, m.warn === "reserve" ? "warn" : fillTone(frac)), val));
+  } else {
+    el.append(barRow("disk", bar(0, "off"), `${offlineFor(m)} \xB7 ${mine.length} snapshots` + (m.used ? ` \xB7 ${bytes(m.used)} when last seen` : "")));
+  }
+  if (m.syncing) {
+    const s = m.syncing;
+    const frac = s.total > 0 ? s.read / s.total : 0;
+    el.append(barRow("syncing", bar(frac), `${s.snapshot} \xB7 ${Math.floor(frac * 100)} % read \xB7 ${bytes(s.bytes_new)} new`));
+  }
+  const meta = h("div", { class: "meta" });
+  const newest = mine[0];
+  const first = mine[mine.length - 1];
+  if (newest) meta.append(h("span", null, "newest " + when(newest.at)));
+  if (first && first !== newest) meta.append(h("span", null, "first " + shortDate(first.at)));
+  if (!newest) meta.append(h("span", null, m.syncing ? "the first snapshot copies the whole volume" : "no snapshot yet"));
+  const incomplete = mine.filter((s) => s.state === "incomplete");
+  if (incomplete.length) meta.append(h("span", null, `${incomplete.length} incomplete: ${incomplete.reduce((n, s) => n + s.missing, 0)} chunks unreadable`));
+  if (!m.online) meta.append(h("span", null, m.reason ? `${m.reason} \xB7 attach it to sync and browse` : "attach it to sync and browse"));
+  if (m.path) meta.append(h("span", null, m.path));
+  el.append(meta);
+  return el;
+}
+function schedule(c) {
+  const s = c.schedule;
+  if (!s.every) return "no automatic snapshots (mirrors.every 0)";
+  const parts = [`hourly ${s.hourly}`, `daily ${s.daily}`, `weekly ${s.weekly}`, `monthly ${s.monthly}`];
+  if (s.next) {
+    const mins = Math.max(0, Math.round((Date.parse(s.next) - Date.now()) / 6e4));
+    parts.push(mins < 1 ? "next now" : mins < 120 ? `next in ${mins} m` : `next in ${Math.round(mins / 60)} h`);
+  }
+  return parts.join(" \xB7 ");
+}
+function section(c, onTaken) {
+  if (!c || !c.mirrors.length) return null;
+  const sec = h("section", null, h("h2", null, "Mirrors", h("span", { class: "h-sub" }, schedule(c))));
+  sec.append(h("div", { class: "cards" }, ...c.mirrors.map((m) => card2(m, c))));
+  const manual = c.snapshots.filter((s) => !s.auto).length;
+  const online = c.mirrors.filter((m) => m.online).length;
+  const take = h("button", { type: "button", disabled: online === 0, title: online ? "" : "no mirror is online" }, "Take a snapshot");
+  take.addEventListener("click", () => void takeDialog(onTaken));
+  sec.append(h("div", { class: "snap-head" }, take, h("span", { class: "small dim" }, `every online mirror \xB7 ${c.snapshots.length} snapshots \xB7 ${manual} manual`)));
+  const byName = new Map(c.mirrors.map((m) => [m.name, m]));
+  const tbody = h("tbody");
+  for (const s of c.snapshots) {
+    const m = byName.get(s.mirror);
+    const on = !!m?.online;
+    const name = h("td", { class: "name" }, s.name);
+    if (!s.auto) name.append(h("span", { class: "badge" }, "manual"));
+    const sync = m?.syncing && m.syncing.id === s.id ? m.syncing : void 0;
+    if (s.state === "syncing") name.append(h("span", { class: "badge" }, sync && sync.total ? `syncing ${Math.floor(sync.read / sync.total * 100)} %` : "syncing"));
+    if (s.state === "incomplete") name.append(h("span", { class: "badge warn" }, `${s.missing} missing`));
+    const why = s.state === "syncing" ? "still syncing" : on ? "" : `${s.mirror} is offline: attach it to browse`;
+    const browse = h("button", { type: "button", disabled: !!why, title: why, onClick: () => location.hash = browseHash({ path: "/", at: s.id }) }, "Browse");
+    const added = s.state === "syncing" ? sync ? `${bytes(sync.bytes_new)} so far` : "" : bytes(s.new_bytes);
+    tbody.append(
+      h("tr", { class: on ? "" : "offline" }, name, h("td", { class: "mirror" }, s.mirror), h("td", { class: "taken", title: s.at }, taken(s, c)), h("td", { class: "holds" }, added), h("td", { class: "acts" }, browse))
+    );
+  }
+  if (c.snapshots.length) {
+    sec.append(h("table", { class: "snapshots" }, h("thead", null, h("tr", null, h("th", null, "name"), h("th", { class: "mirror" }, "mirror"), h("th", { class: "taken" }, "taken"), h("th", { class: "holds" }, "added"), h("th", { class: "acts" }))), tbody));
+  } else sec.append(h("div", { class: "empty" }, "no snapshot yet: the first one copies the whole volume"));
+  sec.append(h("div", { class: "small dim" }, "a snapshot copies only what changed since the last one on its mirror; \u201Cadded\u201D is what it wrote"));
+  return sec;
+}
+function takeDialog(onTaken) {
+  return new Promise((resolve) => {
+    const dlg = h("dialog", { class: "picker", "aria-label": "take a snapshot" });
+    const name = h("input", { type: "text", placeholder: "name (optional: the UTC minute)", "aria-label": "snapshot name", maxlength: 64 });
+    const go = h("button", { type: "submit" }, "Take a snapshot");
+    const cancel = h("button", { type: "button" }, "Cancel");
+    const form = h("form", { class: "inline-form" }, name);
+    dlg.append(
+      h("div", { class: "small dim" }, "A manual snapshot is permanent: the schedule never thins it and no page removes it. This device's unsaved writes land first."),
+      form,
+      h("div", { class: "picker-actions" }, cancel, go)
+    );
+    const close = () => {
+      dlg.close();
+      dlg.remove();
+      resolve();
+    };
+    const submit = (ev) => {
+      ev?.preventDefault();
+      const n = name.value.trim();
+      takeSnapshot(n ? { name: n } : {}).then(
+        (rows) => {
+          toast(`snapshot ${rows[0]?.name ?? n} started on ${rows.map((r) => r.mirror).join(", ")}`, "ok");
+          close();
+          void catalogue(true).then(onTaken, onTaken);
+        },
+        (e) => toast("snapshot: " + (offline(e) ? "no mirror is online" : errText(e)), "bad")
+      );
+    };
+    form.addEventListener("submit", submit);
+    go.addEventListener("click", () => submit());
+    cancel.addEventListener("click", close);
+    dlg.addEventListener("cancel", (ev) => {
+      ev.preventDefault();
+      close();
+    });
+    document.body.append(dlg);
+    dlg.showModal();
+    queueMicrotask(() => name.focus());
+  });
+}
+
 // internal/webui/src/dashboard.ts
 function render4(root) {
   const draw = () => {
@@ -844,9 +1298,23 @@ function render4(root) {
     render2(root, r);
     render(root, r);
     render3(root, r, status.history);
+    const mirrors = section(last(), draw);
+    if (mirrors) root.append(mirrors);
     cache(root, r);
   };
-  const unsub = status.subscribe(draw);
+  let drawn = last();
+  const unsub = status.subscribe(() => {
+    draw();
+    catalogue().then(
+      (c) => {
+        if (c !== drawn) {
+          drawn = c;
+          draw();
+        }
+      },
+      () => void 0
+    );
+  });
   draw();
   return unsub;
 }
@@ -855,17 +1323,19 @@ function volume(root, r) {
   const tiles = h(
     "div",
     { class: "tiles" },
-    tile2("Policy", `${v.k}+${v.m}`, `${v.auto ? "auto" : "manual"} \xB7 ${bytes(v.chunk_size)} chunks \xB7 policy v${v.policy_version}`),
-    tile2("Files", count(v.inodes), `${count(v.chunks)} chunks \xB7 ${count(v.tombstoned)} tombstoned`),
-    tile2("Dedup", v.dedup_ratio.toFixed(2) + "\xD7", bytes(v.logical_bytes) + " logical"),
-    tile2("Trash", count(v.trash_inodes ?? 0), v.trash_inodes ? `${bytes(v.trash_bytes ?? 0)} \xB7 restore from its folder` : "nothing deleted")
+    tile3("Policy", `${v.k}+${v.m}`, `${v.auto ? "auto" : "manual"} \xB7 ${bytes(v.chunk_size)} chunks \xB7 policy v${v.policy_version}`),
+    tile3("Files", count(v.inodes), `${count(v.chunks)} chunks \xB7 ${count(v.tombstoned)} tombstoned`),
+    tile3("Dedup", v.dedup_ratio.toFixed(2) + "\xD7", bytes(v.logical_bytes) + " logical"),
+    tile3("Trash", count(v.trash_inodes ?? 0), v.trash_inodes ? `${bytes(v.trash_bytes ?? 0)} \xB7 restore from its folder` : "nothing deleted")
   );
+  const st = tile2(last());
+  if (st) tiles.append(st);
   const s = r.search;
   if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
     let sub2 = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
     if (s.pending > 0) sub2 += ` \xB7 ${count(s.pending)} pending`;
     if (s.capped) sub2 += " \xB7 capped: contents no longer indexed";
-    tiles.append(tile2("Index", count(s.docs), sub2));
+    tiles.append(tile3("Index", count(s.docs), sub2));
   }
   const scale = Math.max(1, v.logical_bytes, v.stored_bytes);
   const used = Math.max(0, v.usable_capacity - v.free);
@@ -879,7 +1349,7 @@ function volume(root, r) {
   );
   root.append(h("section", null, h("h2", null, "Volume"), tiles, compare2));
 }
-function tile2(label, value, sub2) {
+function tile3(label, value, sub2) {
   return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub2));
 }
 function cache(root, r) {
@@ -888,7 +1358,7 @@ function cache(root, r) {
   const self = r.nodes.find((n) => n.self)?.name ?? r.node;
   const low = !!r.machine?.disk_total && (r.machine.disk_free ?? 0) * 5 < r.machine.disk_total;
   const usedFrac = c.size > 0 ? Math.min(1, (c.used - c.pinned_bytes) / c.size) : 0;
-  const card2 = h(
+  const card3 = h(
     "div",
     { class: "card cache" + (low ? " warn" : "") },
     h("div", { class: "name-row" }, h("span", { class: "name" }, self), h("span", { class: "badges" }, h("span", { class: "badge self" }, "self"))),
@@ -901,9 +1371,9 @@ function cache(root, r) {
       const frac = p.bytes > 0 ? p.cached_bytes / p.bytes : 1;
       pins.append(h("div", { class: "pin-row" }, h("span", { class: "n", title: p.path }, p.path), bar(frac), h("span", { class: "v" }, `${bytes(p.cached_bytes)} of ${bytes(p.bytes)}` + (frac < 1 ? " \xB7 fetching" : ""))));
     }
-    card2.append(pins);
-  } else card2.append(h("div", { class: "small dim" }, "no folder is kept on this device \xB7 the folder menu has \u201CKeep on this device\u201D"));
-  root.append(h("section", null, h("h2", null, "Cache"), h("div", { class: "cards" }, card2)));
+    card3.append(pins);
+  } else card3.append(h("div", { class: "small dim" }, "no folder is kept on this device \xB7 the folder menu has \u201CKeep on this device\u201D"));
+  root.append(h("section", null, h("h2", null, "Cache"), h("div", { class: "cards" }, card3)));
 }
 
 // internal/webui/src/chunks.ts
@@ -1001,85 +1471,8 @@ function row(i, c) {
   return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash2, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, strip);
 }
 
-// internal/webui/src/picker.ts
-function pick(opts) {
-  return new Promise((resolve) => {
-    const dlg = h("dialog", { class: "picker", "aria-label": "move to" });
-    let cur = opts.start;
-    const crumbs2 = h("div", { class: "crumbs" });
-    const list = h("ul", { class: "picker-list" });
-    const confirm = h("button", { type: "button" }, "");
-    const cancel = h("button", { type: "button" }, "Cancel");
-    dlg.append(crumbs2, list, h("div", { class: "picker-actions" }, cancel, confirm));
-    const close = (v) => {
-      dlg.close();
-      dlg.remove();
-      resolve(v);
-    };
-    cancel.addEventListener("click", () => close(null));
-    confirm.addEventListener("click", () => {
-      if (!opts.disabled(cur)) close(cur);
-    });
-    dlg.addEventListener("cancel", (ev) => {
-      ev.preventDefault();
-      close(null);
-    });
-    dlg.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && !(ev.target instanceof HTMLButtonElement)) {
-        ev.preventDefault();
-        if (!opts.disabled(cur)) close(cur);
-      }
-    });
-    const draw = async () => {
-      crumbs2.replaceChildren(h("a", { href: "#", onClick: (ev) => {
-        ev.preventDefault();
-        go("/");
-      } }, "/"));
-      const parts = cur.split("/").filter(Boolean);
-      let acc = "";
-      parts.forEach((p, i) => {
-        acc += "/" + p;
-        if (i > 0) crumbs2.append(h("span", { class: "sep" }, "/"));
-        const target = acc;
-        if (i === parts.length - 1) crumbs2.append(h("span", null, p));
-        else crumbs2.append(h("a", { href: "#", onClick: (ev) => {
-          ev.preventDefault();
-          go(target);
-        } }, p));
-      });
-      const reason = opts.disabled(cur);
-      confirm.textContent = opts.action(cur);
-      confirm.disabled = reason !== null;
-      confirm.title = reason ?? "";
-      list.replaceChildren();
-      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("dir"), ".."));
-      try {
-        const r = await ls(cur);
-        for (const e of r.entries) {
-          if (e.type !== "dir" || e.deleted_at) continue;
-          const path = cur === "/" ? "/" + e.name : cur + "/" + e.name;
-          const why = opts.disabled(path);
-          const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("dir"), e.name);
-          if (!why) li.addEventListener("click", () => go(path));
-          list.append(li);
-        }
-      } catch (e) {
-        list.append(h("li", { "aria-disabled": "true" }, "could not list: " + (e instanceof Error ? e.message : String(e))));
-      }
-    };
-    const go = (path) => {
-      cur = path;
-      void draw();
-    };
-    document.body.append(dlg);
-    dlg.showModal();
-    void draw();
-    void basename;
-  });
-}
-
 // internal/webui/src/trash.ts
-function banner(info) {
+function banner2(info) {
   const r = info.root;
   const text2 = h("span");
   const parts = [`Deleted ${daysAgo(r.deleted_at)}`];
@@ -1663,41 +2056,52 @@ function render6(root, ctx) {
   const path = ctx.path;
   const dir = dirname(path);
   const name = basename(path) || "/";
-  const kind = mediaKind(ext(name));
+  const kind2 = mediaKind(ext(name));
   const inTrash = ctx.root !== void 0;
+  const asOf = ctx.at !== void 0;
+  let snap;
+  let offlineErr = null;
+  let versionsPanel2 = null;
   let siblings = [];
   let entry;
   let trashRoot;
   let nsfw = false;
   let keyHandler = null;
-  if (kind === "video") player.pause();
+  if (kind2 === "video") player.pause();
   const draw = () => {
     clear(root);
-    const section = h("section", { class: "player" }, crumbsAll({ path: dir, root: ctx.root }));
+    const section2 = h("section", { class: "player" }, crumbsAll({ path: dir, root: ctx.root, at: ctx.at }, snap?.name));
+    if (asOf && offlineErr) {
+      section2.append(...offlineView(ctx, offlineErr, fileHash({ path })));
+      root.append(section2);
+      return;
+    }
+    if (asOf) section2.append(banner(ctx, snap, "", false, fileHash({ path })));
     if (inTrash && (trashRoot || entry?.deleted_at)) {
       const r = trashRoot ?? { ino: ctx.root, name, type: "file", size: entry?.size ?? 0, path: name, deleted_at: entry?.deleted_at ?? "", restorable: true };
-      section.append(banner({ root: { ...r, purge_at: r.purge_at ?? entry?.purge_at }, bytes: entry?.size }));
+      section2.append(banner2({ root: { ...r, purge_at: r.purge_at ?? entry?.purge_at }, bytes: entry?.size }));
     }
     const info = entry ? `${bytes(entry.size)} \xB7 ${when(entry.mtime)}` : "";
-    const actions = h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download"));
+    const actions = h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, src(ctx)) }, "Download"));
+    if (!inTrash) actions.prepend(asofMenu(ctx, "file", snap));
     const titleRow = h("div", { class: "title-row" }, h("h1", null, name), h("span", { class: "small dim mono" }, info), actions);
-    section.append(titleRow);
+    section2.append(titleRow);
     const veiled = nsfw && !session.get("tr.revealed", false);
     const viewer = h("div", { class: "viewer" + (nsfw ? " nsfw" : "") + (nsfw && !veiled ? " revealed" : "") });
-    section.append(viewer);
-    const group = siblings.filter((s) => sameGroup(mediaKind(ext(s.name)), kind));
+    section2.append(viewer);
+    const group = siblings.filter((s) => sameGroup(mediaKind(ext(s.name)), kind2));
     const index = group.findIndex((s) => s.name === name);
     const prev = index > 0 ? group[index - 1] : void 0;
     const next2 = index >= 0 && index < group.length - 1 ? group[index + 1] : void 0;
     const go = (e) => {
-      if (e) location.hash = fileHash({ path: join(dir, e.name), root: ctx.root });
+      if (e) location.hash = fileHash({ path: join(dir, e.name), root: ctx.root, at: ctx.at });
     };
-    if (kind === "video") {
+    if (kind2 === "video") {
       const mime = KINDS[ext(name)]?.[1] ?? "";
       let el;
       if (media2 && media2.dir === dir) {
         el = media2.el;
-        el.src = fileURL(path, false, ctx.root);
+        el.src = fileURL(path, false, src(ctx));
         void el.play().catch(() => void 0);
       } else {
         media2?.el.pause();
@@ -1705,42 +2109,42 @@ function render6(root, ctx) {
         el.controls = true;
         el.preload = "metadata";
         el.playsInline = true;
-        el.src = fileURL(path, false, ctx.root);
+        el.src = fileURL(path, false, src(ctx));
         media2 = { el, dir };
       }
       el.onended = () => go(next2);
       viewer.append(el);
       if (mime && el.canPlayType(mime) === "") {
-        section.append(
-          h("div", { class: "note" }, "Your browser reports it cannot play ", h("span", { class: "mono" }, mime), ". tailraid serves files as stored, without transcoding; mkv, avi and flac play only where the browser has a native decoder. ", h("a", { href: fileURL(path, true, ctx.root) }, "Download instead"), ".")
+        section2.append(
+          h("div", { class: "note" }, "Your browser reports it cannot play ", h("span", { class: "mono" }, mime), ". tailraid serves files as stored, without transcoding; mkv, avi and flac play only where the browser has a native decoder. ", h("a", { href: fileURL(path, true, src(ctx)) }, "Download instead"), ".")
         );
       }
-    } else if (kind === "audio") {
+    } else if (kind2 === "audio") {
       viewer.append(audioCard(ctx, name, entry, group));
-    } else if (kind === "image") {
-      viewer.append(h("img", { src: fileURL(path, false, ctx.root), alt: name }));
-      if (next2) new Image().src = fileURL(join(dir, next2.name), false, ctx.root);
-    } else if (kind === "text") {
+    } else if (kind2 === "image") {
+      viewer.append(h("img", { src: fileURL(path, false, src(ctx)), alt: name }));
+      if (next2) new Image().src = fileURL(join(dir, next2.name), false, src(ctx));
+    } else if (kind2 === "text") {
       if (entry && entry.size > TEXT_MAX) {
-        viewer.append(h("div", { class: "placeholder" }, "too large to preview", h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download")));
+        viewer.append(h("div", { class: "placeholder" }, "too large to preview", h("a", { class: "btn", href: fileURL(path, true, src(ctx)) }, "Download")));
       } else if (isMarkdown(name)) {
-        const doc = view(path, ctx.root);
+        const doc = view(path, src(ctx));
         titleRow.insertBefore(doc.seg, actions);
         if (nsfw) viewer.append(doc.body);
         else viewer.replaceWith(doc.body);
       } else {
         const pre = h("pre", null, "loading\u2026");
         viewer.append(pre);
-        text(path, ctx.root).then(
+        text(path, src(ctx)).then(
           (t) => pre.textContent = t,
           (e) => pre.textContent = "could not load: " + (e instanceof Error ? e.message : String(e))
         );
       }
-    } else if (kind === "pdf") {
-      viewer.append(h("iframe", { src: fileURL(path, false, ctx.root), title: name }));
-      section.append(h("div", { class: "small dim" }, h("a", { href: fileURL(path, false, ctx.root), target: "_blank", rel: "noopener" }, "Open in a new tab")));
+    } else if (kind2 === "pdf") {
+      viewer.append(h("iframe", { src: fileURL(path, false, src(ctx)), title: name }));
+      section2.append(h("div", { class: "small dim" }, h("a", { href: fileURL(path, false, src(ctx)), target: "_blank", rel: "noopener" }, "Open in a new tab")));
     } else {
-      viewer.append(h("div", { class: "placeholder" }, info || name, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download")));
+      viewer.append(h("div", { class: "placeholder" }, info || name, h("a", { class: "btn", href: fileURL(path, true, src(ctx)) }, "Download")));
     }
     if (nsfw) {
       viewer.append(h("span", { class: "veil" }, "nsfw \xB7 tap to show"));
@@ -1749,9 +2153,9 @@ function render6(root, ctx) {
         session.set("tr.revealed", true);
       });
     }
-    if (group.length > 1 && kind !== "text" && kind !== "other" && kind !== "pdf") {
-      const label = kind === "image" ? "image" : "track";
-      section.append(
+    if (group.length > 1 && kind2 !== "text" && kind2 !== "other" && kind2 !== "pdf") {
+      const label = kind2 === "image" ? "image" : "track";
+      section2.append(
         h(
           "div",
           { class: "controls" },
@@ -1761,22 +2165,24 @@ function render6(root, ctx) {
         )
       );
     }
-    if (!inTrash) {
+    if (!inTrash && !asOf) {
+      versionsPanel2 ??= versionsPanel(path, () => void reload());
+      section2.append(versionsPanel2);
       const cs = status.current?.volume.chunk_size;
       const expected = entry && cs ? Math.ceil(entry.size / cs) : void 0;
       if (!panel || panel.path !== path) panel = { path, p: render5(path, expected) };
       else if (expected !== void 0) panel.p.expect(expected);
-      section.append(panel.p.el);
+      section2.append(panel.p.el);
     }
-    root.append(section);
+    root.append(section2);
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
     keyHandler = (ev) => {
       const t = ev.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "VIDEO" || t.tagName === "AUDIO")) return;
-      if (kind === "audio") return;
+      if (kind2 === "audio") return;
       if (ev.key === "ArrowRight") go(next2);
       else if (ev.key === "ArrowLeft") go(prev);
-      else if (ev.key === "Escape") location.hash = inTrash ? `#/trash/${ctx.root}` + encodeForHash(dir) : "#/browse" + encodeForHash(dir);
+      else if (ev.key === "Escape") location.hash = inTrash ? `#/trash/${ctx.root}` + encodeForHash(dir) : browseHash({ path: dir, at: ctx.at });
       else if (ev.key === " " && media2) {
         ev.preventDefault();
         if (media2.el.paused) void media2.el.play().catch(() => void 0);
@@ -1786,15 +2192,30 @@ function render6(root, ctx) {
     document.addEventListener("keydown", keyHandler);
   };
   draw();
-  const listing = inTrash && dir === "/" && name !== "/" ? ls("/", ctx.root) : ls(dir, ctx.root);
+  const reload = async () => {
+    const r = await ls(dir, src(ctx)).catch(() => null);
+    if (r) {
+      siblings = r.entries.filter((e) => e.type === "file" && !e.upload && !e.deleted_at);
+      entry = siblings.find((e) => e.name === name);
+    }
+    if (media2 && media2.dir === dir) media2.dir = "";
+    draw();
+  };
+  const listing = inTrash && dir === "/" && name !== "/" ? ls("/", ctx.root) : ls(dir, src(ctx));
   listing.then(
     (r) => {
       siblings = r.entries.filter((e) => e.type === "file" && !e.upload && !e.deleted_at);
       entry = siblings.find((e) => e.name === name);
       nsfw = r.dir.nsfw || !!entry?.nsfw;
+      snap = r.dir.snapshot;
       draw();
     },
     (e) => {
+      if (asOf && isOffline(e)) {
+        offlineErr = e;
+        void catalogue().then(draw, draw);
+        return;
+      }
       if (inTrash) {
         stat("/", ctx.root).then(
           (st) => {
@@ -1829,18 +2250,18 @@ function render6(root, ctx) {
 }
 function audioCard(ctx, name, entry, group) {
   const img = h("img", { class: "cover", alt: "" });
-  img.src = thumbURL(ctx.path, ctx.root);
+  img.src = thumbURL(ctx.path, src(ctx));
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, name.replace(/\.[^.]+$/, ""));
   const artist = h("div", { class: "artist" });
   const meta = h("div", { class: "meta" });
   const dirPath = dirname(ctx.path);
-  const tracks = group.filter((e) => mediaKind(ext(e.name)) === "audio").map((e) => ({ path: join(dirPath, e.name), root: ctx.root }));
+  const tracks = group.filter((e) => mediaKind(ext(e.name)) === "audio").map((e) => ({ path: join(dirPath, e.name), root: src(ctx) }));
   const index = Math.max(0, tracks.findIndex((t) => t.path === ctx.path));
-  const play = h("button", { type: "button", onClick: () => tracks.length ? player.play(tracks, index) : player.playNow({ path: ctx.path, root: ctx.root }) }, player.isCurrent(ctx.path, ctx.root) && player.playing ? "\u23F8 Playing" : "\u25B6 Play");
-  const queueBtn = h("button", { type: "button", onClick: () => player.enqueue([{ path: ctx.path, root: ctx.root }]) }, "Add to queue");
+  const play = h("button", { type: "button", onClick: () => tracks.length ? player.play(tracks, index) : player.playNow({ path: ctx.path, root: src(ctx) }) }, player.isCurrent(ctx.path, src(ctx)) && player.playing ? "\u23F8 Playing" : "\u25B6 Play");
+  const queueBtn = h("button", { type: "button", onClick: () => player.enqueue([{ path: ctx.path, root: src(ctx) }]) }, "Add to queue");
   const head = h("div", { class: "album-head" }, img, h("div", null, title, artist, meta, h("div", { class: "controls" }, play, queueBtn)));
-  tags(ctx.path, ctx.root).then(
+  tags(ctx.path, src(ctx)).then(
     (g) => {
       if (g.title) title.textContent = g.title;
       artist.textContent = [g.artist, g.album].filter(Boolean).join(" \u2014 ");
@@ -1960,19 +2381,19 @@ function pump() {
     });
   }
 }
-function lazy(img, e, path, root, kind, onMiss) {
+function lazy(img, e, path, root, kind2, onMiss) {
   const load = () => new Promise((resolve) => {
     const done = () => resolve();
-    const show = (src) => {
+    const show = (src2) => {
       img.onload = done;
       img.onerror = () => {
         onMiss();
         done();
       };
-      img.src = src;
+      img.src = src2;
     };
-    const tag = kind === "video" ? `${e.version}.f${RECIPE}` : void 0;
-    if (e.thumb || kind !== "video" || root !== void 0) {
+    const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
+    if (e.thumb || kind2 !== "video" || root !== void 0) {
       show(thumbURL(path, root, tag));
       return;
     }
@@ -1999,7 +2420,7 @@ async function grab(path, e) {
   await putThumb(path, e.version, blob);
   return true;
 }
-async function frame(src) {
+async function frame(src2) {
   const v = document.createElement("video");
   v.preload = "auto";
   v.muted = true;
@@ -2010,7 +2431,7 @@ async function frame(src) {
     timer = window.setTimeout(() => resolve(null), 3e4);
   });
   const choose = async () => {
-    v.src = src;
+    v.src = src2;
     await event(v, "loadedmetadata");
     if (!Number.isFinite(v.duration) || v.duration <= 0) return null;
     const w = Math.min(WIDTH, v.videoWidth || WIDTH);
@@ -2194,9 +2615,9 @@ function isAlbum(entries) {
 var PROBES = 4;
 function render7(ctx, cover, entries) {
   const audio = entries.filter((e) => !e.deleted_at && !e.upload && e.type === "file" && isAudioName(e.name)).sort((a, b) => trackNo(a.name) - trackNo(b.name) || a.name.localeCompare(b.name, void 0, { numeric: true }));
-  const tracks = audio.map((e) => ({ path: join(ctx.path, e.name), root: ctx.root }));
+  const tracks = audio.map((e) => ({ path: join(ctx.path, e.name), root: src(ctx) }));
   const img = h("img", { class: "cover", alt: "" });
-  if (cover !== null) img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root);
+  if (cover !== null) img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, src(ctx));
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, basename(ctx.path) || "/");
   const artist = h("div", { class: "artist" });
@@ -2244,7 +2665,7 @@ function render7(ctx, cover, entries) {
   });
   describe();
   let active2 = 0;
-  const pending = [];
+  const pending2 = [];
   const probe = async (i) => {
     const t = tracks[i];
     try {
@@ -2265,8 +2686,8 @@ function render7(ctx, cover, entries) {
     describe();
   };
   const pump2 = () => {
-    while (active2 < PROBES && pending.length) {
-      const i = pending.shift();
+    while (active2 < PROBES && pending2.length) {
+      const i = pending2.shift();
       active2++;
       void probe(i).finally(() => {
         active2--;
@@ -2280,7 +2701,7 @@ function render7(ctx, cover, entries) {
         for (const x of es) {
           if (!x.isIntersecting) continue;
           io.unobserve(x.target);
-          pending.push(rows.indexOf(x.target));
+          pending2.push(rows.indexOf(x.target));
         }
         pump2();
       },
@@ -2288,7 +2709,7 @@ function render7(ctx, cover, entries) {
     );
     for (const tr of rows) io.observe(tr);
   } else {
-    rows.forEach((_, i) => pending.push(i));
+    rows.forEach((_, i) => pending2.push(i));
     pump2();
   }
   return {
@@ -2301,7 +2722,7 @@ function trackNo(name) {
   const m = /^\s*(\d{1,3})\b/.exec(name);
   return m ? Number(m[1]) : 0;
 }
-function duration(src) {
+function duration(src2) {
   return new Promise((resolve) => {
     const a = document.createElement("audio");
     a.preload = "metadata";
@@ -2319,7 +2740,7 @@ function duration(src) {
       clearTimeout(timer);
       done(void 0);
     };
-    a.src = src;
+    a.src = src2;
   });
 }
 
@@ -2371,6 +2792,8 @@ async function runQueue() {
 function render8(root, ctx) {
   const dir = ctx.path;
   const inTrash = ctx.root !== void 0;
+  const asOf = ctx.at !== void 0;
+  const source = src(ctx);
   let sort = session.get("tr.sort", { key: "name", desc: false });
   let view3 = session.get("tr.view", "list");
   let showDeleted = session.get("tr.deleted", false);
@@ -2385,7 +2808,7 @@ function render8(root, ctx) {
   const pathOf = (e) => join(dir, e.name);
   const refresh = async () => {
     try {
-      const r = await ls(dir, ctx.root);
+      const r = await ls(dir, source);
       entries = r.entries;
       info = r.dir;
       if (inTrash && !trashRoot) {
@@ -2398,6 +2821,11 @@ function render8(root, ctx) {
       draw();
     } catch (e) {
       clear(root);
+      if (asOf && isOffline(e)) {
+        await catalogue().catch(() => null);
+        root.append(h("section", null, crumbs(ctx), ...offlineView(ctx, e, browseHash({ path: dir }))));
+        return;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       root.append(h("section", null, crumbs(ctx), h("div", { class: "error" }, `Could not list ${dir}: ${msg}. `, h("a", { href: "#", onClick: (ev) => {
         ev.preventDefault();
@@ -2407,12 +2835,12 @@ function render8(root, ctx) {
   };
   const draw = () => {
     clear(root);
-    const section = h("section", null, crumbs(ctx, info, inTrash));
+    const section2 = h("section", null, crumbs(ctx, info, inTrash));
     if (inTrash) {
       const files = entries.filter((e) => e.type === "file");
       const rootEntry = trashRoot ?? { ino: ctx.root, name: "", type: "dir", size: 0, path: "", deleted_at: info.deleted_at ?? "", restorable: true };
       if (info.purge_at && !trashRoot) rootEntry.purge_at = info.purge_at;
-      section.append(banner({ root: { ...rootEntry, purge_at: rootEntry.purge_at ?? info.purge_at }, items: entries.length, bytes: files.reduce((s, e) => s + e.size, 0) }));
+      section2.append(banner2({ root: { ...rootEntry, purge_at: rootEntry.purge_at ?? info.purge_at }, items: entries.length, bytes: files.reduce((s, e) => s + e.size, 0) }));
     }
     const input = h("input", { type: "file", multiple: true, "aria-label": "upload files" });
     input.addEventListener("change", () => {
@@ -2421,6 +2849,7 @@ function render8(root, ctx) {
     });
     const total = live().reduce((s, e) => s + (e.type === "file" ? e.size : 0), 0);
     const deleted = entries.length - live().length;
+    if (asOf) section2.append(banner(ctx, info.snapshot, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}`, true, browseHash({ path: dir })));
     const toolbar = h("div", { class: "toolbar" });
     const asAlbum = view3 === "list" && !isAlbum(entries) ? false : view3 === "list";
     if (asAlbum) {
@@ -2434,7 +2863,7 @@ function render8(root, ctx) {
         } }, "Shuffle")
       );
     }
-    if (!inTrash) {
+    if (!inTrash && !asOf) {
       toolbar.append(
         h("label", { class: "btn" }, "Upload", input),
         h("button", { type: "button", "aria-pressed": formOpen ? "true" : "false", onClick: () => {
@@ -2444,7 +2873,8 @@ function render8(root, ctx) {
         } }, "New folder")
       );
     }
-    toolbar.append(menu({ path: dir, inTrash, dir: info, onChange: () => void refresh() }));
+    if (!asOf) toolbar.append(menu({ path: dir, inTrash, dir: info, onChange: () => void refresh() }));
+    if (!inTrash) toolbar.append(asofMenu(ctx, "browse", info.snapshot));
     const seg = h(
       "span",
       { class: "seg", role: "group", "aria-label": "view" },
@@ -2452,7 +2882,7 @@ function render8(root, ctx) {
       h("button", { type: "button", "aria-pressed": view3 === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles")
     );
     toolbar.append(seg);
-    if (!inTrash) {
+    if (!inTrash && !asOf) {
       const box = h("input", { type: "checkbox" });
       box.checked = showDeleted;
       box.addEventListener("change", () => {
@@ -2463,26 +2893,26 @@ function render8(root, ctx) {
       toolbar.append(h("label", { class: "toggle" }, box, "show deleted"));
     }
     toolbar.append(h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}` + (deleted ? ` \xB7 ${deleted} deleted` : "")));
-    section.append(toolbar);
+    section2.append(toolbar);
     const shown = queue2.filter((j) => j.state !== "done");
     if (shown.length) {
       const list = h("div", { class: "uploads" });
       for (const j of shown) list.append(jobRow(j));
-      section.append(list);
+      section2.append(list);
     }
-    if (formOpen) section.append(folderForm());
-    if (renaming) section.append(renameForm(renaming));
+    if (formOpen) section2.append(folderForm());
+    if (renaming) section2.append(renameForm(renaming));
     alb = null;
-    if (sorted(entries).length === 0) section.append(h("div", { class: "empty" }, deleted ? "empty folder \xB7 tick show deleted to list what was deleted here" : "empty folder"));
+    if (sorted(entries).length === 0) section2.append(h("div", { class: "empty" }, deleted ? "empty folder \xB7 tick show deleted to list what was deleted here" : "empty folder"));
     else if (asAlbum) {
       alb = render7(ctx, info.no_cover ? null : info.cover, entries);
-      section.append(alb.el);
+      section2.append(alb.el);
       const rest = sorted(entries).filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
-      if (rest.length) section.append(table(rest));
-    } else if (view3 === "tiles") section.append(tiles());
-    else section.append(table(entries));
-    section.append(selbar());
-    root.append(section);
+      if (rest.length) section2.append(table(rest));
+    } else if (view3 === "tiles") section2.append(tiles());
+    else section2.append(table(entries));
+    section2.append(selbar());
+    root.append(section2);
   };
   const setView = (v) => {
     view3 = v;
@@ -2567,7 +2997,7 @@ function render8(root, ctx) {
     ev.stopPropagation();
     sel.click(e.name, ev.shiftKey, order());
   };
-  const selectBox = (e, cls) => e.deleted_at ? h("span", { class: cls }) : (() => {
+  const selectBox = (e, cls) => e.deleted_at || asOf ? h("span", { class: cls }) : (() => {
     const box = h("input", { type: "checkbox", "aria-label": "select" });
     box.checked = sel.has(e.name);
     box.addEventListener("click", (ev) => onSelect(e, ev));
@@ -2576,11 +3006,11 @@ function render8(root, ctx) {
   const linkOf = (e) => {
     const path = pathOf(e);
     if (e.deleted_at) return e.type === "dir" ? { href: `#/trash/${e.ino}/`, kind: "dir" } : { href: `#/trashfile/${e.ino}/`, kind: iconFor(e.name) };
-    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root }), kind: "dir" };
-    return { href: fileHash({ path, root: ctx.root }), kind: iconFor(e.name) };
+    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root, at: ctx.at }), kind: "dir" };
+    return { href: fileHash({ path, root: ctx.root, at: ctx.at }), kind: iconFor(e.name) };
   };
   const playBtn = (e) => {
-    const t = { path: pathOf(e), root: e.deleted_at ? e.ino : ctx.root };
+    const t = { path: pathOf(e), root: e.deleted_at ? e.ino : source };
     if (e.deleted_at) t.path = "/";
     const now = player.isCurrent(t.path, t.root) && player.playing;
     return h("button", { type: "button", class: "play", onClick: (ev) => {
@@ -2591,7 +3021,7 @@ function render8(root, ctx) {
     } }, now ? "\u23F8 Playing" : "\u25B6 Play");
   };
   const playFrom = (e) => {
-    const tracks = sorted(entries).filter((x) => !x.deleted_at && x.type === "file" && isAudioName(x.name)).map((x) => ({ path: pathOf(x), root: ctx.root }));
+    const tracks = sorted(entries).filter((x) => !x.deleted_at && x.type === "file" && isAudioName(x.name)).map((x) => ({ path: pathOf(x), root: source }));
     if (e.deleted_at) {
       player.play([{ path: "/", root: e.ino }]);
       return;
@@ -2623,38 +3053,42 @@ function render8(root, ctx) {
     const names = live().map((e) => e.name);
     all.checked = names.length > 0 && names.every((n) => sel.has(n));
     all.addEventListener("click", () => all.checked ? sel.all(names) : sel.clear());
-    const t = h("table", { class: "files" }, h("thead", null, h("tr", null, h("th", { class: "sel" }, all), th("name", "name"), th("size", "size", "size"), th("mtime", "modified", "mtime"))));
+    const head = h("tr", null, th("name", "name"), th("size", "size", "size"), th("mtime", "modified", "mtime"));
+    if (!asOf) head.prepend(h("th", { class: "sel" }, all));
+    const t = h("table", { class: "files" }, h("thead", null, head));
     const body = h("tbody");
     for (const e of sorted(list)) body.append(row2(e));
     t.append(body);
     return t;
   };
   const row2 = (e) => {
-    const { href, kind } = linkOf(e);
+    const { href, kind: kind2 } = linkOf(e);
     let link;
     if (e.type === "symlink") link = h("span", { class: "linkname" }, icon("link"), e.name + " ", h("span", { class: "target" }, "\u2192 " + (e.target ?? "")));
     else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("file"), e.name);
     else {
-      link = h("a", { href }, icon(kind), e.name);
+      link = h("a", { href }, icon(kind2), e.name);
       if (e.protected) link.append(h("span", { class: "badge lock" }, "protected"));
       if (e.nsfw) link.append(h("span", { class: "badge nsfw" }, "nsfw"));
       if (e.library) link.append(h("span", { class: "badge lib" }, e.library));
       if (e.deleted_at) link.append(badge(e.purge_at));
       if (e.type === "file" && isAudioName(e.name)) link.append(playBtn(e));
     }
-    const cls = [e.upload ? "dim" : e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", sel.has(e.name) ? "selected" : "", e.type === "file" && player.isCurrent(pathOf(e), ctx.root) ? "playing" : ""].filter(Boolean).join(" ");
-    return h("tr", { class: cls, "data-name": e.name }, h("td", { class: "sel" }, selectBox(e, "sel").firstChild ?? ""), h("td", { class: "name" }, link), h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""), h("td", { class: "mtime", title: e.mtime }, when(e.mtime)));
+    const cls = [e.upload ? "dim" : e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", sel.has(e.name) ? "selected" : "", e.type === "file" && player.isCurrent(pathOf(e), source) ? "playing" : ""].filter(Boolean).join(" ");
+    const tr = h("tr", { class: cls, "data-name": e.name }, h("td", { class: "name" }, link), h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""), h("td", { class: "mtime", title: e.mtime }, when(e.mtime)));
+    if (!asOf) tr.prepend(h("td", { class: "sel" }, selectBox(e, "sel").firstChild ?? ""));
+    return tr;
   };
   const tiles = () => {
     const grid = h("div", { class: "ftiles" });
-    for (const e of sorted(entries)) grid.append(tile3(e));
+    for (const e of sorted(entries)) grid.append(tile4(e));
     return grid;
   };
-  const tile3 = (e) => {
-    const { href, kind } = linkOf(e);
+  const tile4 = (e) => {
+    const { href, kind: kind2 } = linkOf(e);
     const kindOf = mediaKind(ext(e.name));
     const thumb = h("span", { class: "thumb" + (info.nsfw || e.nsfw ? " nsfw" : "") });
-    const showIcon = () => thumb.replaceChildren(icon(kind));
+    const showIcon = () => thumb.replaceChildren(icon(kind2));
     const path = pathOf(e);
     const thumbPath = e.type === "dir" && e.cover ? join(path, e.cover) : path;
     const canThumb = e.type === "dir" ? !e.no_cover && (!e.deleted_at || !!e.cover) : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
@@ -2662,13 +3096,13 @@ function render8(root, ctx) {
       const img = h("img", { alt: "" });
       thumb.append(img);
       if (thumb.classList.contains("nsfw")) thumb.append(h("span", { class: "veil" }, "nsfw \xB7 tap to show"));
-      const root2 = e.deleted_at ? e.ino : ctx.root;
+      const root2 = e.deleted_at ? e.ino : source;
       const tp = e.deleted_at ? e.type === "dir" && e.cover ? "/" + e.cover : "/" : thumbPath;
       lazy(img, e, tp, root2, e.type === "dir" ? "audio" : kindOf, showIcon);
     } else showIcon();
     const meta = h("span", { class: "tmeta" });
     if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
-    const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, ctx.root) ? "playing" : ""].filter(Boolean).join(" ");
+    const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, source) ? "playing" : ""].filter(Boolean).join(" ");
     const a = h("a", { class: cls, href, "data-name": e.name }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta);
     if (e.type === "file" && isAudioName(e.name) && !e.upload) a.insertBefore(playBtn(e), a.querySelector(".tname"));
     if (thumb.classList.contains("nsfw")) {
@@ -2719,11 +3153,11 @@ function render8(root, ctx) {
     for (const e of chosen) {
       if (e.type === "dir") {
         try {
-          const r = await ls(pathOf(e), ctx.root);
-          for (const x of r.entries) if (x.type === "file" && isAudioName(x.name) && !x.deleted_at && !x.upload) tracks.push({ path: join(pathOf(e), x.name), root: ctx.root });
+          const r = await ls(pathOf(e), source);
+          for (const x of r.entries) if (x.type === "file" && isAudioName(x.name) && !x.deleted_at && !x.upload) tracks.push({ path: join(pathOf(e), x.name), root: source });
         } catch {
         }
-      } else tracks.push({ path: pathOf(e), root: ctx.root });
+      } else tracks.push({ path: pathOf(e), root: source });
     }
     if (!tracks.length) {
       toast("Nothing to play in the selection", "bad");
@@ -2782,13 +3216,13 @@ function render8(root, ctx) {
     return el;
   };
   const onDragOver = (ev) => {
-    if (inTrash) return;
+    if (inTrash || asOf) return;
     ev.preventDefault();
     root.querySelector("table.files")?.classList.add("drop");
   };
   const onDragLeave = () => root.querySelector("table.files")?.classList.remove("drop");
   const onDrop = (ev) => {
-    if (inTrash) return;
+    if (inTrash || asOf) return;
     ev.preventDefault();
     onDragLeave();
     const files = Array.from(ev.dataTransfer?.files ?? []);
@@ -2808,8 +3242,8 @@ function render8(root, ctx) {
       renaming = null;
       formOpen = false;
       draw();
-    } else if (ev.key === "Delete" && chosen.length && !info.protected && !inTrash && !chosen.some((e) => e.protected)) void doDelete(chosen);
-    else if (ev.key === "F2" && chosen.length === 1 && !inTrash) {
+    } else if (ev.key === "Delete" && chosen.length && !info.protected && !inTrash && !asOf && !chosen.some((e) => e.protected)) void doDelete(chosen);
+    else if (ev.key === "F2" && chosen.length === 1 && !inTrash && !asOf) {
       renaming = chosen[0].name;
       draw();
     }
@@ -2820,7 +3254,7 @@ function render8(root, ctx) {
     if (alb) alb.refresh();
     root.querySelectorAll("tr.playing, .ftile.playing").forEach((el) => el.classList.remove("playing"));
     const c = player.current();
-    const here = c && c.root === ctx.root && c.path.startsWith(dir === "/" ? "/" : dir + "/") ? c.path.slice(dir === "/" ? 1 : dir.length + 1) : "";
+    const here = c && c.root === source && c.path.startsWith(dir === "/" ? "/" : dir + "/") ? c.path.slice(dir === "/" ? 1 : dir.length + 1) : "";
     for (const el of root.querySelectorAll("tr[data-name], .ftile[data-name]")) {
       const mine = here !== "" && el.dataset["name"] === here;
       el.classList.toggle("playing", mine);
@@ -2845,32 +3279,34 @@ function render8(root, ctx) {
   };
 }
 function crumbs(ctx, info, inTrash = false) {
-  const el = h("div", { class: "crumbs" }, h("a", { href: "#/browse/" }, "/"));
+  const el = h("div", { class: "crumbs" }, h("a", { href: browseHash({ path: "/", at: ctx.at }) }, "/"));
   const parts = ctx.path.split("/").filter(Boolean);
   let acc = "";
   parts.forEach((p, i) => {
     acc += "/" + p;
     if (i > 0 || inTrash) el.append(h("span", { class: "sep" }, "/"));
     if (i === parts.length - 1) el.append(h("span", null, p));
-    else el.append(h("a", { href: browseHash({ path: acc, root: ctx.root }) }, p));
+    else el.append(h("a", { href: browseHash({ path: acc, root: ctx.root, at: ctx.at }) }, p));
   });
   if (inTrash) el.append(h("span", { class: "badge" }, "deleted"));
+  if (info?.snapshot) el.append(h("span", { class: "badge" }, "as of " + info.snapshot.name));
   if (info?.protected) el.append(h("span", { class: "badge lock" }, "protected"));
   if (info?.nsfw) el.append(h("span", { class: "badge nsfw" }, "nsfw"));
   if (info?.library) el.append(h("span", { class: "badge lib" }, info.library));
   if (info?.pinned) el.append(h("span", { class: "badge pin" }, "kept here"));
   return el;
 }
-function crumbsAll(ctx) {
-  const el = h("div", { class: "crumbs" }, h("a", { href: "#/browse/" }, "/"));
+function crumbsAll(ctx, asOf) {
+  const el = h("div", { class: "crumbs" }, h("a", { href: browseHash({ path: "/", at: ctx.at }) }, "/"));
   const parts = ctx.path.split("/").filter(Boolean);
   let acc = "";
   parts.forEach((p, i) => {
     acc += "/" + p;
     if (i > 0) el.append(h("span", { class: "sep" }, "/"));
-    el.append(h("a", { href: browseHash({ path: acc, root: ctx.root }) }, p));
+    el.append(h("a", { href: browseHash({ path: acc, root: ctx.root, at: ctx.at }) }, p));
   });
   if (ctx.root !== void 0) el.append(h("span", { class: "badge" }, "deleted"));
+  if (asOf) el.append(h("span", { class: "badge" }, "as of " + asOf));
   return el;
 }
 function iconFor(name, dir = false) {
@@ -2906,8 +3342,8 @@ function parse(query) {
   const from = Number(q.get("from"));
   const to = Number(q.get("to"));
   if (from > 0 && to > from) return { range: "custom", from, to, node: q.get("node") ?? "" };
-  const range = RANGES.some(([r]) => r === q.get("range")) ? q.get("range") : "6h";
-  return { range, from: 0, to: 0, node: q.get("node") ?? "" };
+  const range2 = RANGES.some(([r]) => r === q.get("range")) ? q.get("range") : "6h";
+  return { range: range2, from: 0, to: 0, node: q.get("node") ?? "" };
 }
 function hash(s) {
   const q = new URLSearchParams();
@@ -2932,7 +3368,7 @@ function render9(root, query) {
   const state = parse(query);
   let timer;
   let disposed = false;
-  let last = null;
+  let last2 = null;
   let lastAt = 0;
   const go = (next2) => {
     location.hash = hash({ ...state, ...next2 });
@@ -2984,7 +3420,7 @@ function render9(root, query) {
     for (const m of nodes) row2(m.name, m.name, m.live ? "ok" : "bad", (m.self ? "this device \xB7 " : "") + (m.live ? "live" : "dead") + (m.web ? "" : " \xB7 no web listener"), m);
   };
   const draw = (r) => {
-    last = r;
+    last2 = r;
     lastAt = Date.now();
     const nodeName = state.node === "" ? r.node : state.node;
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
@@ -2994,10 +3430,10 @@ function render9(root, query) {
     clear(charts);
     if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
     for (const c of r.charts) {
-      const card2 = h("div", { class: "chart-card" });
-      card2.innerHTML = c.svg;
-      card2.append(h("div", { class: "small dim" }, c.caption + " \xB7 " + c.title));
-      charts.append(card2);
+      const card3 = h("div", { class: "chart-card" });
+      card3.innerHTML = c.svg;
+      card3.append(h("div", { class: "small dim" }, c.caption + " \xB7 " + c.title));
+      charts.append(card3);
     }
     setPill(r.range.live ? "live" : "paused");
   };
@@ -3014,7 +3450,7 @@ function render9(root, query) {
     } catch (e) {
       if (disposed) return;
       setPill("error", e instanceof Error ? e.message : String(e));
-      if (!last) charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + (e instanceof Error ? e.message : String(e))));
+      if (!last2) charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + (e instanceof Error ? e.message : String(e))));
     }
   };
   const loop = async () => {
@@ -3029,7 +3465,7 @@ function render9(root, query) {
   const onVisible = () => {
     if (document.visibilityState === "hidden") {
       stop();
-      if (last) setPill("paused");
+      if (last2) setPill("paused");
     } else void loop();
   };
   document.addEventListener("visibilitychange", onVisible);
@@ -3133,8 +3569,8 @@ function render10(root, q, params) {
   const input = document.querySelector("form.search input");
   if (input && document.activeElement !== input) input.value = q;
   const abort = new AbortController();
-  const section = h("section", { class: "results" });
-  root.append(section);
+  const section2 = h("section", { class: "results" });
+  root.append(section2);
   const scope = under || folder;
   const sub2 = h("span", { class: "h-sub" }, "searching\u2026");
   const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub2), h("span", { class: "spacer" }));
@@ -3143,7 +3579,7 @@ function render10(root, q, params) {
     toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
     bar2.append(h("label", { class: "toggle" }, toggle, " in ", h("code", null, scope), " only"));
   }
-  section.append(bar2);
+  section2.append(bar2);
   const queue3 = [];
   let running2 = 0;
   const pump2 = () => {
@@ -3163,19 +3599,19 @@ function render10(root, q, params) {
       });
     }
   };
-  const pending = /* @__PURE__ */ new Map();
+  const pending2 = /* @__PURE__ */ new Map();
   const seen = new IntersectionObserver((entries) => {
     for (const e of entries) {
-      const hit = pending.get(e.target);
+      const hit = pending2.get(e.target);
       if (!e.isIntersecting || !hit) continue;
-      pending.delete(e.target);
+      pending2.delete(e.target);
       seen.unobserve(e.target);
       queue3.push([e.target, hit]);
     }
     pump2();
   });
   const want = (el, hit) => {
-    pending.set(el, hit);
+    pending2.set(el, hit);
     seen.observe(el);
   };
   search(q, under).then(
@@ -3183,16 +3619,16 @@ function render10(root, q, params) {
       if (abort.signal.aborted) return;
       clear(sub2);
       sub2.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
-      if (res.index) section.append(h("div", { class: "note" }, "index unavailable on this node: names only until the leader's next pass"));
+      if (res.index) section2.append(h("div", { class: "note" }, "index unavailable on this node: names only until the leader's next pass"));
       if (res.hits.length === 0) {
         const empty = h("div", { class: "empty" }, "no matches for ", h("code", null, q));
         if (under) empty.append(" under ", h("code", null, under));
-        section.append(empty);
+        section2.append(empty);
         return;
       }
       const ol = h("ol");
       for (const hit of res.hits) ol.append(hitRow(hit, want));
-      section.append(ol);
+      section2.append(ol);
     },
     (e) => {
       if (!abort.signal.aborted) sub2.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
@@ -3206,8 +3642,8 @@ function render10(root, q, params) {
 
 // internal/webui/src/media.ts
 var NOUN = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"] };
-function glyph(kind) {
-  const d = kind === "album" ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" : kind === "episode" ? "M4 2.5l9 5.5-9 5.5z" : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
+function glyph(kind2) {
+  const d = kind2 === "album" ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" : kind2 === "episode" ? "M4 2.5l9 5.5-9 5.5z" : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
   return svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d }));
 }
 function duration2(min) {
@@ -3245,11 +3681,11 @@ function posterTile(it) {
     box.append(glyph(it.kind));
     a.classList.add("missing");
   };
-  const src = art(it);
+  const src2 = art(it);
   const frame2 = h("img", { alt: "" });
   if (frameOf(frame2, it, missing)) box.append(frame2);
-  else if (src) {
-    const img = h("img", { alt: "", loading: "lazy", src });
+  else if (src2) {
+    const img = h("img", { alt: "", loading: "lazy", src: src2 });
     img.addEventListener("error", missing);
     box.append(img);
   } else missing();
@@ -3284,7 +3720,7 @@ function librarySection(lib) {
   const key = `tr.media.closed.${lib.path}`;
   const fold2 = h("details", null, h("summary", null, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl)));
   fold2.open = !stored2(key);
-  const section = h("section", { class: "lib " + lib.kind }, fold2);
+  const section2 = h("section", { class: "lib " + lib.kind }, fold2);
   const grid = h("div", { class: "posters" });
   const sorts = ["title", "year", "added"];
   let sort = session.get(`tr.media.sort.${lib.path}`, "title");
@@ -3328,7 +3764,7 @@ function librarySection(lib) {
     open();
   });
   open();
-  return section;
+  return section2;
 }
 function overview(root) {
   media().then(
@@ -3358,8 +3794,8 @@ function detail(root, path) {
     (it) => {
       const backdrop = it.fanart ? fileURL(it.fanart) : it.poster ? fileURL(it.poster) : "";
       const cls = "hero" + (it.fanart ? "" : it.poster ? " poster-only" : " no-art");
-      const section = h("section", { class: cls });
-      if (backdrop) section.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
+      const section2 = h("section", { class: cls });
+      if (backdrop) section2.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
       const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
       const poster = h("img", { class: "hero-poster", alt: "" });
       const hide = () => poster.style.visibility = "hidden";
@@ -3430,8 +3866,8 @@ function detail(root, path) {
         body.append(strip, table);
         show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
       }
-      section.append(h("div", { class: "hero-body" }, poster, body));
-      root.append(section);
+      section2.append(h("div", { class: "hero-body" }, poster, body));
+      root.append(section2);
     },
     (e) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
   );
@@ -3489,7 +3925,10 @@ function parse2(hash2) {
     const ino = Number(rest.shift() ?? "");
     return { head, ctx: { path: decodeHashPath(rest.join("/")), root: Number.isFinite(ino) && ino > 0 ? ino : void 0 }, query };
   }
-  return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
+  const ctx = { path: decodeHashPath(rest.join("/")) };
+  const at = Number(new URLSearchParams(query).get("at") ?? "");
+  if ((head === "browse" || head === "file") && Number.isInteger(at) && at > 0) ctx.at = at;
+  return { head, ctx, query };
 }
 function rawRest(hash2) {
   const where = hash2.replace(/^#\/?/, "").split("?")[0] ?? "";

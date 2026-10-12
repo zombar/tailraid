@@ -91,6 +91,10 @@ func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if t.snap != nil {
+		s.thumbAt(w, r, t)
+		return
+	}
 	if t.in.Type == meta.TDir { // a folder's tile is its cover track's picture, resolved here and remembered (I-165)
 		name := s.coverOf(t.in)
 		if name == "" {
@@ -231,6 +235,16 @@ func (s *Server) makeAudioThumb(ctx context.Context, t target) ([]byte, error) {
 	}
 	dir := t.parts[:len(t.parts)-1]
 	for _, name := range coverNames {
+		if t.snap != nil { // a sibling as of the same snapshot
+			sib := target{parts: append(append([]string{}, dir...), name), snap: t.snap}
+			sib.canonical = "/" + strings.Join(sib.parts, "/")
+			if sib, err := s.statAt(sib); err == nil && sib.in.Type == meta.TFile {
+				if data, err := s.makeImageThumb(ctx, sib); err == nil {
+					return data, nil
+				}
+			}
+			continue
+		}
 		sib := target{parts: append(append([]string{}, dir...), name), root: t.root, trashed: t.trashed}
 		sib.canonical = "/" + strings.Join(sib.parts, "/")
 		var err error

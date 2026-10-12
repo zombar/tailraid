@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -82,7 +83,7 @@ func (s *Mirrors) Mirror(m meta.NodeIdx) *mirror.Mirror {
 // disk in a temp dir.
 func (f *Fabric) AddMirror(src *Mirrors, name string) meta.NodeIdx {
 	f.TB.Helper()
-	id := fmt.Sprintf("mirror-%s", filepath.Base(name))
+	id := "mirror-" + strings.ReplaceAll(name, "/", "-") // unique per name: pike/m1 and atlas/m1 are two mirrors
 	r := f.Apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: id, Name: name, Kind: meta.KindMirror, Host: f.SelfIdx}}})
 	idx := meta.NodeIdx(r.Ino)
 	dir := filepath.Join(f.TB.TempDir(), "mirror")

@@ -29,7 +29,7 @@ type mirrorSource struct {
 	local  *mirrorSet
 	client *rpc.Client
 	st     *meta.Store
-	live   func(meta.NodeIdx) bool
+	online func(meta.NodeIdx) bool // a remote mirror's state from the probes (docs/16 §1)
 }
 
 var _ vfs.MirrorSource = mirrorSource{}
@@ -62,7 +62,7 @@ func (s mirrorSource) Online(m meta.NodeIdx) bool {
 	if !ok || row.Kind != meta.KindMirror || row.State == meta.Removed || s.mine(m) {
 		return false
 	}
-	return s.live(row.Host)
+	return s.online(m)
 }
 
 // mine is whether mirror m's row is on this host (which then knows it is not attached).

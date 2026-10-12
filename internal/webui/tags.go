@@ -29,8 +29,11 @@ type Tags = mediatag.Tags
 // rejects, is empty tags and no error.
 func readTags(f io.ReadSeeker, size int64) (Tags, *tag.Picture) { return mediatag.Read(f, size) }
 
-// open opens a file for reading, live or inside a deleted root.
+// open opens a file for reading, live, inside a deleted root or as of a snapshot.
 func (s *Server) open(t target) (io.ReadSeekCloser, error) {
+	if t.snap != nil {
+		return s.o.FS.Open(t.vpath)
+	}
 	if t.trashed {
 		return s.o.FS.OpenTrash(t.root.Ino, t.parts)
 	}

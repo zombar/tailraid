@@ -5,8 +5,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/vfs"
+	"github.com/zombar/tailraid/internal/webui"
 )
 
 // SnapshotInfo is one catalogue row as `snapshot ls` and the web UI show it.
@@ -47,17 +50,35 @@ func snapshotList(nodes []meta.Node, snaps []meta.Snapshot, mirrorName string) [
 	return out
 }
 
-// snapshotCreate begins a manual snapshot on one mirror by name, or on every mirror; a
-// mirror that is offline ends it as failed when its host's worker meets it. A manual
-// snapshot is permanent: nothing removes it (docs/16 §4, I-183).
+// snapshotCreate begins a manual snapshot on one mirror by name, or on every online
+// mirror. A named mirror that is offline is refused with vfs.ErrMirrorOffline, one already
+// syncing with meta.ErrExist; with no name, the offline and syncing mirrors are passed
+// over and none left is ErrMirrorOffline. A manual snapshot is permanent: nothing removes
+// it (docs/16 §4, I-183).
 func (a *adminOps) snapshotCreate(ctx context.Context, op rpc.AdminOp) (any, error) {
 	now := a.clk.Now()
 	name := cmp.Or(op.Name, now.UTC().Format("2006-01-02-1504Z"))
+	syncing := map[meta.NodeIdx]bool{}
+	for _, sn := range a.node.FSM.Snapshots() {
+		if sn.State == meta.SnapSyncing {
+			syncing[sn.Mirror] = true
+		}
+	}
 	var begun []SnapshotInfo
+	named := false
 	nodes := a.node.FSM.Nodes()
 	for i := range nodes {
 		m := &nodes[i]
 		if m.Kind != meta.KindMirror || m.State != meta.Active || (op.Mirror != "" && m.Name != op.Mirror) {
+			continue
+		}
+		named = op.Mirror != ""
+		switch {
+		case !a.prober.MirrorOnline(m.Idx) && named:
+			return nil, fmt.Errorf("mirror %s: %w: attach it first", m.Name, vfs.ErrMirrorOffline)
+		case syncing[m.Idx] && named:
+			return nil, fmt.Errorf("mirror %s is syncing a snapshot already: %w", m.Name, meta.ErrExist)
+		case !a.prober.MirrorOnline(m.Idx), syncing[m.Idx]:
 			continue
 		}
 		cmd := meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: m.Idx, Name: name, Now: now.UnixNano()}}
@@ -66,8 +87,49 @@ func (a *adminOps) snapshotCreate(ctx context.Context, op rpc.AdminOp) (any, err
 		}
 		begun = append(begun, SnapshotInfo{Mirror: m.Name, Name: name, State: meta.SnapSyncing.String()})
 	}
-	if len(begun) == 0 {
+	switch {
+	case len(begun) > 0:
+		return begun, nil
+	case op.Mirror != "" && !named:
 		return nil, fmt.Errorf("%w: no such mirror %q", meta.ErrNoSuchNode, op.Mirror)
+	case op.Mirror == "" && !named && !hasMirror(nodes):
+		return nil, fmt.Errorf("%w: the cluster has no mirror (tailraid mirror add)", meta.ErrNoSuchNode)
 	}
-	return begun, nil
+	return nil, fmt.Errorf("%w: no mirror is online and idle", vfs.ErrMirrorOffline)
+}
+
+func hasMirror(nodes []meta.Node) bool {
+	for i := range nodes {
+		if nodes[i].Kind == meta.KindMirror && nodes[i].State == meta.Active {
+			return true
+		}
+	}
+	return false
+}
+
+// webSnapshots is the web UI's snapshot service (docs/13 §3): the cluster's mirrors from
+// the probes, the schedule, and a manual snapshot after this gateway's dirty files land.
+type webSnapshots struct {
+	ops   *adminOps
+	flush func(ctx context.Context) error
+}
+
+var _ webui.SnapshotService = webSnapshots{}
+
+func (w webSnapshots) Mirrors() []admin.MirrorReport {
+	snaps := w.ops.node.FSM.Snapshots()
+	local, _ := w.ops.mirrors.report(w.ops.clk.Now(), snaps)
+	return clusterMirrors(w.ops.node.FSM.Nodes(), snaps, w.ops.prober, w.ops.self, local)
+}
+
+func (w webSnapshots) Take(ctx context.Context, name, mirror string) (any, error) {
+	if err := w.flush(ctx); err != nil { // the user's own last writes are in it (I-187)
+		return nil, fmt.Errorf("flush before the snapshot: %w", err)
+	}
+	return w.ops.snapshotCreate(ctx, rpc.AdminOp{Op: "snapshot_create", Name: name, Mirror: mirror})
+}
+
+func (w webSnapshots) Schedule() webui.Schedule {
+	p := w.ops.mirrorPol
+	return webui.Schedule{Every: p.Every, Hourly: p.Hourly, Daily: p.Daily, Weekly: p.Weekly, Monthly: p.Monthly, StaleAfter: p.StaleAfter}
 }

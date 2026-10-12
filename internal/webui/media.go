@@ -320,7 +320,7 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 		s.fail(w, err)
 		return
 	}
-	if t.trashed || (len(t.parts) > 0 && t.parts[0] == meta.ReservedDir) || t.in.Library() != meta.LibraryNone {
+	if t.trashed || t.snap != nil || (len(t.parts) > 0 && t.parts[0] == meta.ReservedDir) || t.in.Library() != meta.LibraryNone {
 		writeErr(w, http.StatusNotFound, "media "+t.canonical+": not in a library")
 		return
 	}

@@ -63,6 +63,9 @@ type Options struct {
 	// Catalog is the node's media catalogue (docs/18 §8); nil lists the Media tab's items
 	// by their names only.
 	Catalog Cataloger
+	// Snapshots takes snapshots and reports the mirrors (docs/16); nil answers 503 on
+	// GET /api/snapshots and POST /api/snapshot. The other snapshot routes need the FS only.
+	Snapshots SnapshotService
 	// Hosts are the Host header values the UI answers (I-127): the listener's
 	// <tsIP>:port and the node's MagicDNS name with the port. Any other Host is a 421,
 	// so a page on another origin that resolves a name to this node's IP (DNS
@@ -134,6 +137,12 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("POST /api/purge", csrf(s.purge))
 	mux.HandleFunc("POST /api/flags", csrf(s.flags))
 	mux.HandleFunc("POST /api/pin", csrf(s.pin))
+	mux.HandleFunc("GET /api/snapshots", s.snapshots)
+	mux.HandleFunc("GET /api/versions", s.versions)
+	mux.HandleFunc("POST /api/snapshot", csrf(s.takeSnapshot))
+	mux.HandleFunc("POST /api/revert", csrf(s.revert))
+	mux.HandleFunc("POST /api/copy", csrf(s.copyVersion))
+	mux.HandleFunc("POST /api/restore-tree", csrf(s.restoreTree))
 	s.refused.Clk = o.Clk
 	s.handler = s.hostCheck(s.authz(mux))
 	return s, nil
@@ -196,11 +205,16 @@ func (s *Server) authz(next http.Handler) http.Handler {
 	})
 }
 
-// csrf refuses a mutating request without HeaderUI before its body is read (I-71).
+// csrf refuses a mutating request without HeaderUI before its body is read (I-71), and
+// one given at=: a snapshot is read-only (docs/13 §3, I-187).
 func csrf(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(HeaderUI) == "" {
 			writeErr(w, http.StatusForbidden, "missing "+HeaderUI+" header")
+			return
+		}
+		if r.URL.Query().Has("at") {
+			writeErr(w, http.StatusBadRequest, "a snapshot is read-only")
 			return
 		}
 		next(w, r)
@@ -230,12 +244,18 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	if code == http.StatusInternalServerError {
 		s.o.Logger.Error("web ui", "err", err)
 	}
+	if errors.Is(err, vfs.ErrMirrorOffline) { // the page says why and offers the way back (docs/13 §3)
+		writeJSON(w, code, map[string]any{"error": err.Error(), "offline": true})
+		return
+	}
 	writeErr(w, code, err.Error())
 }
 
 func errStatus(err error) int {
 	switch {
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, meta.ErrNotExist):
+	case errors.Is(err, vfs.ErrMirrorOffline):
+		return http.StatusConflict
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, meta.ErrNotExist), errors.Is(err, meta.ErrNoSuchNode):
 		return http.StatusNotFound
 	case errors.Is(err, os.ErrExist), errors.Is(err, meta.ErrExist), errors.Is(err, admin.ErrAmbiguous),
 		errors.Is(err, meta.ErrInTrash), errors.Is(err, meta.ErrNotEmpty), errors.Is(err, syscall.ENOTEMPTY):

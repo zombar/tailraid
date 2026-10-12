@@ -48,7 +48,9 @@ func TestVFS_Revert_FromPoolAndMirror(t *testing.T) {
 	ino := r.f.InodeOf(r.fs, "/docs/a.bin")
 	r.change(t, 9)
 	puts := r.f.Puts()
-	must(t, r.fs.RevertFile(ctx, snapFile, "/docs/a.bin"))
+	if _, err := r.fs.RevertFile(ctx, snapFile, "/docs/a.bin"); err != nil {
+		t.Fatal(err)
+	}
 	if got := r.content(t, "/docs/a.bin"); !bytes.Equal(got, r.old) {
 		t.Fatalf("revert from the pool differs at %d", testharness.FirstDiff(got, r.old))
 	}
@@ -67,7 +69,9 @@ func TestVFS_Revert_FromPoolAndMirror(t *testing.T) {
 		}
 	}
 	puts = r.f.Puts()
-	must(t, r.fs.RevertFile(ctx, snapFile, "/docs/a.bin"))
+	if _, err := r.fs.RevertFile(ctx, snapFile, "/docs/a.bin"); err != nil {
+		t.Fatal(err)
+	}
 	if got := r.content(t, "/docs/a.bin"); !bytes.Equal(got, r.old) {
 		t.Fatalf("revert from the mirror differs at %d", testharness.FirstDiff(got, r.old))
 	}
@@ -87,7 +91,9 @@ func TestVFS_Revert_FlushesDirtyFirst(t *testing.T) {
 	_, err = fh.(*vfs.File).WriteAt([]byte("dirty, never flushed"), 4097)
 	must(t, err)
 	must(t, fh.Close())
-	must(t, r.fs.RevertFile(ctx, snapFile, "/docs/a.bin"))
+	if _, err := r.fs.RevertFile(ctx, snapFile, "/docs/a.bin"); err != nil {
+		t.Fatal(err)
+	}
 	must(t, r.f.Flusher().FlushAll(ctx))
 	if got := r.content(t, "/docs/a.bin"); !bytes.Equal(got, r.old) {
 		t.Fatalf("after revert and flush: differs at %d", testharness.FirstDiff(got, r.old))

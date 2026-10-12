@@ -90,6 +90,15 @@ type Probe struct {
 	Lost      bool      // MemberLost already emitted
 }
 
+// MirrorProbe is what the mirror's host last said of it (docs/16 §1). Online holds only
+// while the host is live and its last reply listed the mirror online; Used, Free and
+// Total stay from the last reply that listed it, and LastSeen is when it was last online.
+type MirrorProbe struct {
+	Health   rpc.MirrorHealth
+	Online   bool
+	LastSeen time.Time
+}
+
 // HealthClient probes a node (rpc.Client).
 type HealthClient interface {
 	Health(ctx context.Context, addr string) (rpc.Health, error)
@@ -112,8 +121,9 @@ type Prober struct {
 
 	mu      sync.Mutex
 	probes  map[meta.NodeIdx]*Probe
-	s3Tried map[meta.NodeIdx]time.Time // last S3 probe sent, good or not
-	suspect map[meta.NodeIdx]time.Time // hosts marked suspect, by host idx, until their next good probe (I-170)
+	s3Tried map[meta.NodeIdx]time.Time    // last S3 probe sent, good or not
+	suspect map[meta.NodeIdx]time.Time    // hosts marked suspect, by host idx, until their next good probe (I-170)
+	mirrors map[meta.NodeIdx]*MirrorProbe // by mirror row: the host's last /health word on it (docs/16 §1)
 	events  chan Event
 
 	fillAfter, evictAfter time.Duration
@@ -124,7 +134,7 @@ var _ meta.Peers = (*Prober)(nil)
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
 	return &Prober{
-		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, s3Tried: map[meta.NodeIdx]time.Time{}, events: make(chan Event, 64),
+		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, s3Tried: map[meta.NodeIdx]time.Time{}, mirrors: map[meta.NodeIdx]*MirrorProbe{}, events: make(chan Event, 64),
 		fillAfter: FillAfter, evictAfter: EvictAfter,
 	}
 }
@@ -177,9 +187,15 @@ func (p *Prober) Tick(ctx context.Context) {
 	nodes := p.node.FSM.Nodes()
 	now := p.clk.Now()
 	disks := map[meta.NodeIdx][]meta.Node{}
+	mirrors := map[meta.NodeIdx][]meta.Node{}
 	for i := range nodes {
-		if nd := &nodes[i]; nd.Kind == meta.KindDisk && nd.State != meta.Removed {
+		nd := &nodes[i]
+		switch {
+		case nd.State == meta.Removed:
+		case nd.Kind == meta.KindDisk:
 			disks[nd.Host] = append(disks[nd.Host], *nd)
+		case nd.Kind == meta.KindMirror:
+			mirrors[nd.Host] = append(mirrors[nd.Host], *nd)
 		}
 	}
 	var wg sync.WaitGroup
@@ -189,6 +205,7 @@ func (p *Prober) Tick(ctx context.Context) {
 			p.mu.Lock()
 			delete(p.probes, nd.Idx)
 			delete(p.s3Tried, nd.Idx)
+			delete(p.mirrors, nd.Idx)
 			p.mu.Unlock()
 			continue
 		}
@@ -206,6 +223,7 @@ func (p *Prober) Tick(ctx context.Context) {
 			}
 			p.record(nd.Idx, now, 0, true, h, nil)
 			p.recordDisks(disks[nd.Idx], now, 0, true, h)
+			p.recordMirrors(mirrors[nd.Idx], now, true, h)
 			continue
 		}
 		if p.client == nil {
@@ -216,7 +234,7 @@ func (p *Prober) Tick(ctx context.Context) {
 			continue
 		}
 		wg.Add(1)
-		go func(idx meta.NodeIdx, addr string, ds []meta.Node) {
+		go func(idx meta.NodeIdx, addr string, ds, ms []meta.Node) {
 			defer wg.Done()
 			pctx, cancel := context.WithTimeout(ctx, p.timeout)
 			defer cancel()
@@ -225,7 +243,8 @@ func (p *Prober) Tick(ctx context.Context) {
 			at, rtt := p.clk.Now(), p.clk.Now().Sub(start)
 			p.record(idx, at, rtt, err == nil, h, nil)
 			p.recordDisks(ds, at, rtt, err == nil, h)
-		}(nd.Idx, addr, disks[nd.Idx])
+			p.recordMirrors(ms, at, err == nil, h)
+		}(nd.Idx, addr, disks[nd.Idx], mirrors[nd.Idx])
 	}
 	wg.Wait()
 	p.holdDowns(now)
@@ -327,6 +346,64 @@ func (p *Prober) recordDisks(ds []meta.Node, now time.Time, rtt time.Duration, h
 		}
 		p.mu.Unlock()
 	}
+}
+
+// recordMirrors settles a host's mirrors from its health reply (docs/16 §1): a mirror the
+// reply lists online is online, one it lists offline or leaves out is offline; an
+// unreachable host's mirrors are offline and keep what the last reply said of them.
+func (p *Prober) recordMirrors(ms []meta.Node, now time.Time, hostOK bool, h rpc.Health) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i := range ms {
+		m := &ms[i]
+		mp := p.mirrors[m.Idx]
+		if mp == nil {
+			mp = &MirrorProbe{Health: rpc.MirrorHealth{ID: m.ID}}
+			p.mirrors[m.Idx] = mp
+		}
+		if !hostOK {
+			mp.Online, mp.Health.Online, mp.Health.Syncing = false, false, nil
+			mp.Health.Reason = "the host is unreachable"
+			continue
+		}
+		var mh *rpc.MirrorHealth
+		for j := range h.Mirrors {
+			if h.Mirrors[j].ID == m.ID {
+				mh = &h.Mirrors[j]
+			}
+		}
+		if mh == nil {
+			mp.Online, mp.Health.Online, mp.Health.Syncing = false, false, nil
+			mp.Health.Reason = "not attached"
+			continue
+		}
+		mp.Health, mp.Online = *mh, mh.Online
+		if mh.Online {
+			mp.LastSeen = now
+		}
+	}
+}
+
+// Mirror is the last word on mirror row idx from its host, false before any.
+func (p *Prober) Mirror(idx meta.NodeIdx) (MirrorProbe, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	mp, ok := p.mirrors[idx]
+	if !ok {
+		return MirrorProbe{}, false
+	}
+	return *mp, true
+}
+
+// MirrorOnline is whether mirror row idx is online (docs/16 §1, I-188): its host is live
+// and its host's last health reply listed it online.
+func (p *Prober) MirrorOnline(idx meta.NodeIdx) bool {
+	mp, ok := p.Mirror(idx)
+	if !ok || !mp.Online {
+		return false
+	}
+	nd, found := p.node.nodeByIdx(idx)
+	return found && p.IsLive(nd.Host)
 }
 
 // holdDowns emits MemberDown/MemberLost once a node has been dead long enough.

@@ -105,27 +105,28 @@ func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mi
 }
 
 // RevertFile makes the live file at dst hold the bytes of the snapshot file src (a
-// /.snapshots path), keeping the file's inode, name and attributes (docs/16 §6, I-186).
-func (f *FS) RevertFile(ctx context.Context, src, dst string) error {
+// /.snapshots path), keeping the file's inode, name and attributes (docs/16 §6, I-186);
+// uploaded counts the chunks copied back from the mirror.
+func (f *FS) RevertFile(ctx context.Context, src, dst string) (uploaded int, err error) {
 	m, e, err := f.snapEntry(ctx, src)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if e.Type != mirror.TypeFile {
-		return mapErr("revert", src, meta.ErrIsDir)
+		return 0, mapErr("revert", src, meta.ErrIsDir)
 	}
 	if isSnapshotPath(meta.SplitPath(dst)) {
-		return mapErr("revert", dst, ErrReadOnly)
+		return 0, mapErr("revert", dst, ErrReadOnly)
 	}
 	in, err := f.resolve(dst)
 	if err != nil {
-		return mapErr("revert", dst, err)
+		return 0, mapErr("revert", dst, err)
 	}
 	if in.Type != meta.TFile {
-		return mapErr("revert", dst, meta.ErrIsDir)
+		return 0, mapErr("revert", dst, meta.ErrIsDir)
 	}
-	_, err = f.writeEntry(ctx, in.Ino, m, &e)
-	return mapErr("revert", dst, err)
+	uploaded, err = f.writeEntry(ctx, in.Ino, m, &e)
+	return uploaded, mapErr("revert", dst, err)
 }
 
 // RestoreReport is what a restore did: entries created, chunks uploaded from the mirror,

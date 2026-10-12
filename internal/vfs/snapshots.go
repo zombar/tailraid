@@ -125,8 +125,37 @@ func snapRootEntry(sn *meta.Snapshot) mirror.Entry {
 	return mirror.Entry{Name: sn.Name, Type: mirror.TypeDir, Mode: 0o555, Mtime: sn.At, Child: sn.Root}
 }
 
-// errOffline is a read in an offline mirror's snapshot: EIO, the browser says why.
-var errOffline = errors.New("vfs: the mirror is offline")
+// ErrMirrorOffline is a snapshot whose mirror is offline: a read under /.snapshots maps
+// it to EIO, the browser answers 409 offline and says why (docs/13 §3).
+var ErrMirrorOffline = errors.New("vfs: the mirror is offline")
+
+// SnapshotRef is one readable snapshot as the browser addresses it (docs/13 §3): its
+// catalogue row, its root under /.snapshots, its mirror's directory name and whether the
+// mirror is online now.
+type SnapshotRef struct {
+	Snapshot meta.Snapshot
+	Root     string // "/.snapshots/<mirror>/<name>"
+	Mirror   string // pike-m1
+	Online   bool
+}
+
+// Snapshot finds the complete or incomplete snapshot id, false when the catalogue has
+// no such readable row.
+func (f *FS) Snapshot(id meta.SnapID) (SnapshotRef, bool) {
+	sn, ok := f.st.SnapshotRow(id)
+	if !ok || !readable(&sn) {
+		return SnapshotRef{}, false
+	}
+	row, ok := f.st.Node(sn.Mirror)
+	if !ok || row.Kind != meta.KindMirror || row.State == meta.Removed {
+		return SnapshotRef{}, false
+	}
+	dir := mirrorDirName(&row)
+	return SnapshotRef{Snapshot: sn, Root: "/" + SnapshotDir + "/" + dir + "/" + sn.Name, Mirror: dir, Online: f.snaps.online(sn.Mirror) != nil}, true
+}
+
+// MirrorDirName is a mirror's directory under /.snapshots: its row name with "/" as "-".
+func MirrorDirName(row *meta.Node) string { return mirrorDirName(row) }
 
 // snapLookup resolves parts (parts[0] == SnapshotDir).
 func (f *FS) snapLookup(ctx context.Context, parts []string) (snapNode, error) {
@@ -171,7 +200,7 @@ func (f *FS) snapTree(ctx context.Context, m meta.NodeIdx, h meta.Hash) (mirror.
 	s := &f.snaps
 	src := s.online(m)
 	if src == nil { // before the cache: offline reads EIO even where a tree is cached
-		return mirror.Tree{}, errOffline
+		return mirror.Tree{}, ErrMirrorOffline
 	}
 	s.mu.Lock()
 	t, ok := s.trees[h]
@@ -408,7 +437,7 @@ func (f *FS) snapChunk(ctx context.Context, m meta.NodeIdx, h meta.Hash) ([]byte
 	}
 	src := f.snaps.online(m)
 	if src == nil {
-		return nil, errOffline
+		return nil, ErrMirrorOffline
 	}
 	return src.Object(ctx, m, h)
 }

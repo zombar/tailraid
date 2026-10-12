@@ -145,18 +145,19 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/media` | – | `{"libs":[{path,kind}]}`: every live flagged folder in kind-then-path order (docs/18 §9), the Media tab's sections |
 | `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,video?,video_ino?,video_version?,video_thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
 | `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album; `in=` reads a deleted root as `ls` does |
-| `GET /api/snapshots` | – | `{"mirrors":[{id,name,host,online,used,free,syncing?:{id,read,total,bytes_new}}],"snapshots":[{id,mirror,name,at,auto,state,files,bytes,new_bytes,missing}]}`, snapshots newest first, from the catalogue: offline mirrors' snapshots included (docs/16 §5) |
+| `GET /api/snapshots` | – | `{"mirrors":[{id,name,host,self,path?,online,reason?,used,free,total,last_seen?,warn?,syncing?:{id,snapshot,read,total,bytes_new}}],"snapshots":[{id,mirror,name,at,auto,state,files,bytes,new_bytes,missing}],"schedule":{every,hourly,daily,weekly,monthly,next?}}`, snapshots newest first, from the catalogue: offline mirrors' snapshots included (docs/16 §5); a mirror's `name` is its directory under `/.snapshots` (`pike-m1`), its state from the probes (docs/16 §1); `warn` says why its card warns (`stale`, `reserve`, `incomplete`); `schedule` is this node's `mirrors` config, `next` when the newest automatic snapshot on an online mirror falls due |
 | `POST /api/snapshot` `{"name"?,"mirror"?}` | required | 201 the begun rows (one per online mirror, or the one named); the serving gateway flushes its dirty files first; a taken name or a mirror already syncing → 409; an offline mirror → 409 `{"error","offline":true}`; a member too old for codec 7 → 503 |
 | `GET /api/versions?path=` | – | `{"versions":[{key,size,mtime,snapshots:[{id,mirror,name}],current}],"offline":[{mirror,count}]}`: the file's distinct contents on the online mirrors, newest first, the live one `current` with the snapshots holding it (possibly none); `offline` counts what the offline mirrors would add |
 | `POST /api/revert` `{"path","snapshot"}` | required | 200 `{"uploaded":n}`: the content as of that snapshot becomes current (docs/16 §6), `n` the chunks copied back from the mirror because the pool no longer held them; a dirty file is flushed first; an offline mirror → 409 `offline` |
 | `POST /api/copy` `{"path","snapshot","name"}` | required | 201 the new entry beside the file; a taken name → 409 |
-| `POST /api/restore-tree` `{"snapshot","path","to"?,"name"?}` | required | 200 `{"created":[…],"skipped":[…],"uploaded":n}`: the snapshot's tree at `path` recreated under `to` (its parent unless given) as `name`, an existing directory descended, an existing file skipped and listed; at most `MaxBatch` entries a request, 413 above (the page continues from the last created path) |
+| `POST /api/restore-tree` `{"snapshot","path","to"?,"name"?}` | required | 200 `{"path","files","dirs","links","skipped":[…],"skipped_count","uploaded"}`: the snapshot's tree at `path` recreated under `to` (its parent unless given) as `name`, an existing directory descended, an existing file skipped and counted, the first `MaxBatch` skipped paths listed; the request runs until the tree is restored, and a second request after an interruption continues it, since what exists is skipped |
 
 - `ls`, `stat`, `files`, `thumb` and `tags` take `at=<snapid>` and then read as of that
   snapshot from its mirror (docs/16 §6): no `dirty`, `deleted_at` or `upload` fields, and
   `dir` carries `snapshot` (`{id, name, mirror, at}`); a mutating route given `at` is 400;
   an unknown snapshot 404; an offline mirror 409 `{"error","offline":true}`; `in=` with
-  `at=` is 400.
+  `at=` is 400. A thumbnail as of a snapshot is made for an image or an audio file on each
+  request and never stored; a video has none (404), so its tile shows its icon.
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
   `ErrNotExist` 404 · `ErrExist` 409 · `EISDIR`, `ENOTDIR`, `EINVAL`, `ENAMETOOLONG` 400 ·
   `EROFS` (stale gateway, docs/02) 503 with `Retry-After: 5` · `ENOSPC` 507 · `EIO` 503 ·
@@ -888,7 +889,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
-| I-187 | planned (docs/16): TestWebUI_Snapshots_ListTake_NoDeleteRoute, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409, TestWebUI_Versions_DistinctContents, TestWebUI_Revert_Copy_RestoreTree, `TestSoak_AllPhasesAgainstHarness` |
+| I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
