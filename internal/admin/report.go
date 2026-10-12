@@ -147,6 +147,9 @@ type GatewayReport struct {
 	ReadaheadSkipped   uint64 `json:"readahead_skipped"`   // candidates skipped with every slot busy (I-166)
 	ReadsEarly         uint64 `json:"reads_early"`         // ranges served from verified data shards rather than the decoded chunk (I-202)
 	Prefetching        int    `json:"prefetching"`
+	// rewrites this gateway dropped because another client's rewrite of the same file
+	// started later (docs/04 §6, I-223)
+	RewritesSuperseded uint64 `json:"rewrites_superseded"`
 	// every byte clients read and wrote through this gateway's files, cumulative
 	// (docs/17 §1, I-191)
 	BytesRead    uint64 `json:"bytes_read"`
@@ -189,6 +192,7 @@ func GatewayFromDirty(infos []vfs.DirtyInfo) *GatewayReport {
 // WithFlusher adds the flusher's and the overlay's bounds to the gateway view.
 func (g *GatewayReport) WithFlusher(fl *vfs.Flusher, ov *vfs.Overlay) *GatewayReport {
 	g.FlushBytes, g.FlushPeak = fl.Buffers()
+	g.RewritesSuperseded = fl.RewritesSuperseded()
 	g.FlushCap = fl.BufferCap()
 	g.WALCap = uint64(max(ov.WALCap(), 0))
 	return g

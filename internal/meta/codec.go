@@ -11,12 +11,14 @@ import (
 
 var stateMagic = []byte("TRM1")
 
-// stateVersion 2 adds Volume.Auto, 3 Node.Host, 4 Inode.Flags and DeletedAt, 5 Chunk.Sums
-// and 7 the snapshot catalogue; older
+// stateVersion 2 adds Volume.Auto, 3 Node.Host, 4 Inode.Flags and DeletedAt, 5 Chunk.Sums,
+// 7 the snapshot catalogue and 9 Inode.RewriteAt; older
 // snapshots are still read (the fields zero) so a cluster upgrades without a format
 // break (docs/12 §6, I-156).
 const (
-	stateVersion   = 7 // the snapshot catalogue (docs/16, I-184); 6 is never written: the log codec 6 added no state
+	stateVersion   = stateVersionV9 // the newest written; 6 and 8 are never written: those log codecs added no state
+	stateVersionV9 = 9              // Inode.RewriteAt; gate a field on its own version, never on stateVersion
+	stateVersionV7 = 7              // the snapshot catalogue (docs/16, I-184)
 	stateVersionV5 = 5
 	stateVersionV4 = 4
 	stateVersionV3 = 3
@@ -108,6 +110,9 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 			w.u8(in.Flags)
 			w.i64(in.DeletedAt)
 		}
+		if version >= stateVersionV9 {
+			w.u64(in.RewriteAt)
+		}
 		switch in.Type {
 		case TFile:
 			w.uvarint(uint64(len(in.Chunks)))
@@ -132,7 +137,7 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		}
 		w.spill()
 	}
-	if version >= stateVersion {
+	if version >= stateVersionV7 {
 		writeSnaps(w, s)
 	}
 	return w.flush()
@@ -195,7 +200,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
-	if r.err == nil && version != stateVersion && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV7 && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
@@ -266,6 +271,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 			in.Flags = r.u8()
 			in.DeletedAt = r.i64()
 		}
+		if version >= stateVersionV9 {
+			in.RewriteAt = r.u64()
+		}
 		switch in.Type {
 		case TFile:
 			if cnt := r.length(maxListLen); cnt > 0 {
@@ -298,7 +306,7 @@ func DecodeState(rd io.Reader) (*State, error) {
 			s.indexTrash(in.Parent, in.Ino) // the trash index is rebuilt, like Tombs (I-156)
 		}
 	}
-	if version >= stateVersion {
+	if version >= stateVersionV7 {
 		if err := readSnaps(r, s); err != nil {
 			return nil, err
 		}

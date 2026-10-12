@@ -64,6 +64,7 @@ type Inode struct {
 	Name      string
 	Flags     uint8          // FlagProtected, FlagNSFW, the library kind in FlagLibraryMask (docs/02 §Apply rules, docs/18 §9); directories only
 	DeletedAt int64          // FSM clock of the delete that made this entry a trash root; 0 while live
+	RewriteAt uint64         // TFile: the Version the current rewrite started at (docs/04 §6, I-223); 0 for none
 	Chunks    []Hash         // TFile only; len == ceil(Size/ChunkSize)
 	Target    string         // TSymlink only
 	Children  map[string]Ino // TDir only

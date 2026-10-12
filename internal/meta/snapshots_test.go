@@ -399,8 +399,8 @@ func TestCodec_ReadsVersion5Snapshot(t *testing.T) {
 	if len(got.Snaps) != 0 || got.NextSnap != 1 {
 		t.Fatalf("a version 5 snapshot decoded with catalogue %v, NextSnap %d", got.Snaps, got.NextSnap)
 	}
-	if !reflect.DeepEqual(got, s) {
-		t.Fatalf("v5 round trip\n got %+v\nwant %+v", got, s)
+	if want := withoutRewrites(s.Clone()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("v5 round trip\n got %+v\nwant %+v", got, want)
 	}
 }
 

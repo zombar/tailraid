@@ -84,6 +84,8 @@ type Flusher struct {
 	buffers atomic.Int64  // chunk and shard bytes held right now
 	peak    atomic.Int64
 
+	superseded atomic.Uint64 // rewrites dropped because another started later (I-223)
+
 	mu      sync.Mutex
 	backoff map[meta.Ino]backoffState
 	full    map[meta.NodeIdx]time.Time // nodes that answered ErrFull, excluded for a while
@@ -111,6 +113,10 @@ func NewFlusher(ov *Overlay, st *meta.Store, prop meta.Proposer, peers meta.Peer
 // Buffers reports the chunk and shard bytes the flusher holds in memory right now and
 // the most it has held since start: at most ChunkWorkers chunks with their shards,
 // whatever the file or the plan (docs/04 §9, I-78).
+// RewritesSuperseded counts the flushes whose rewrite another client's later rewrite of
+// the same file replaced, so their dirty data was dropped (docs/04 §6, I-223).
+func (f *Flusher) RewritesSuperseded() uint64 { return f.superseded.Load() }
+
 func (f *Flusher) Buffers() (cur, peak uint64) {
 	return uint64(max(f.buffers.Load(), 0)), uint64(max(f.peak.Load(), 0))
 }
@@ -186,6 +192,7 @@ func (f *Flusher) Run(ctx context.Context) {
 		case <-timer.C():
 		}
 		now := f.clk.Now()
+		f.ov.PruneRewrites() // the claim table holds only the inodes written within RewriteHold
 		dirty := f.ov.Dirty()
 		// the threshold weighs what this loop can still flush: bytes in outstanding plans
 		// are already draining (they count toward MaxDirty, I-80, not toward the trigger)
@@ -267,6 +274,19 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	if !ok {
 		return nil
 	}
+	if f.MinCodec == nil || f.MinCodec() >= meta.CodecRewrite {
+		// a writer's O_TRUNC open, or a truncate to 0 replayed or set since, starts a
+		// rewrite; a later plan carries its id (docs/04 §6, I-223)
+		start, id := f.ov.Rewrite(ino)
+		if !start && id == 0 && plan.SizeSet && plan.MinSize == 0 {
+			f.ov.MarkRewrite(ino)
+			start = true
+		}
+		if start {
+			plan.SizeSet, plan.MinSize = true, 0
+		}
+		plan.rewriteStart, plan.rewrite = start, id
+	}
 	if plan.SizeSet {
 		partial = false // truncates are never partially flushed
 	}
@@ -275,6 +295,18 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 		if errors.Is(err, meta.ErrNotExist) {
 			f.ov.Drop(ino)
 			f.clearRetry(ino) // nothing left to retry: the backoff entry goes with the inode
+			return nil
+		}
+		if errors.Is(err, meta.ErrSuperseded) {
+			// another client's rewrite of the file started after this one: this copy ran
+			// first and was replaced, so its dirty data goes; the claim stays, so the rest
+			// of this copy is refused the same way rather than mixed into theirs (I-223)
+			f.ov.Drop(ino)
+			f.clearRetry(ino)
+			f.superseded.Add(1)
+			if f.log != nil {
+				f.log.Info("rewrite superseded by a later one, dirty data dropped", "ino", ino)
+			}
 			return nil
 		}
 		f.ov.AbortFlush(plan)
@@ -347,10 +379,10 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 			if perr != nil {
 				return 0, fmt.Errorf("propose commit: %w", perr)
 			}
-			if errors.Is(res.Err, meta.ErrCodec) && !noSums && carriesSums(cmd) {
+			if errors.Is(res.Err, meta.ErrCodec) && !noSums && (carriesSums(cmd) || cmd.Rewrite != 0 || cmd.RewriteStart) {
 				// the leader sees a member older than this gateway does (a rolling
 				// upgrade): the same chunks without their sums, which the backfill
-				// records later (I-219)
+				// records later (I-219), and as a plain write
 				noSums = true
 				continue
 			}
@@ -358,6 +390,9 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		}
 		switch {
 		case res.Err == nil:
+			if cmd.RewriteStart {
+				f.ov.SetRewrite(plan.Ino, res.Version) // the id later Commits carry (I-223)
+			}
 			if f.Hooks.AfterRaftCommit != nil {
 				f.Hooks.AfterRaftCommit()
 			}
@@ -387,6 +422,8 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 			return 0, res.Err
 		case errors.Is(res.Err, meta.ErrNotExist), errors.Is(res.Err, meta.ErrIsDir):
 			return 0, meta.ErrNotExist
+		case errors.Is(res.Err, meta.ErrSuperseded):
+			return 0, meta.ErrSuperseded
 		default:
 			return 0, fmt.Errorf("commit rejected: %w", res.Err)
 		}
@@ -841,6 +878,9 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c me
 func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWork, partial, noSums bool) *meta.Commit {
 	cs := uint64(f.st.Volume().ChunkSize)
 	cmd := &meta.Commit{Ino: plan.Ino, BaseVersion: base.Version, Now: f.clk.Now().UnixNano()}
+	if !noSums { // noSums also marks a leader that refused codec 9: then a plain write
+		cmd.RewriteStart, cmd.Rewrite = plan.rewriteStart, plan.rewrite
+	}
 	seen := map[meta.Hash]bool{}
 	// else the backfill records them (docs/06 §4)
 	withSums := !noSums && (f.MinCodec == nil || f.MinCodec() >= meta.CodecShardSums)

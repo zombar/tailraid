@@ -6,12 +6,6 @@ import "testing"
 // Each stub is deleted in the commit that lands the real tests named in its doc's Tests
 // table (PR excl-create, whole-rewrite, smb-handles, web-upload-race, soak-multiuser).
 
-// Invariant: I-223
-// Becomes: TestFSM_Commit_Rewrite_Table, TestCluster_TwoRewrites_OneWholeWins (PR whole-rewrite).
-func TestStub_I_223(t *testing.T) {
-	t.Skip("stub until PR whole-rewrite; see docs/04-write-path-and-durability.md")
-}
-
 // Invariant: I-224
 // Becomes: TestFSM_Rename_NoReplace_Exist, TestRename_OtherHandlesFollow (PR smb-handles).
 func TestStub_I_224(t *testing.T) {

@@ -23,6 +23,9 @@ var (
 	ErrProtected       = errors.New("meta: entry is under a protected directory")
 	ErrInTrash         = errors.New("meta: entry is in the trash")
 	ErrCodec           = errors.New("meta: a member runs a codec too old for this command")
+	// ErrSuperseded refuses a Commit that continues a rewrite another rewrite of the
+	// file started after (docs/04 §6, I-223); the flusher drops the inode's dirty data.
+	ErrSuperseded = errors.New("meta: another rewrite of the file started later")
 )
 
 // ErrUnknownOutcome is returned by a Proposer (never in Result.Err, so it has no wire
@@ -36,7 +39,7 @@ var errByCode = []error{
 	nil, // 0
 	ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
 	ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
-	ErrNameTooLong, ErrProtected, ErrInTrash, ErrCodec, // appended; codes are never renumbered
+	ErrNameTooLong, ErrProtected, ErrInTrash, ErrCodec, ErrSuperseded, // appended; codes are never renumbered
 }
 
 // ErrorCode maps a sentinel error to its wire code. nil is 0; a non-sentinel error is

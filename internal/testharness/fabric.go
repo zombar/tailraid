@@ -525,6 +525,21 @@ func (f *Fabric) Flusher(opts ...func(*vfs.Config)) *vfs.Flusher {
 	return vfs.NewFlusher(f.Ov, f.FSM, f, f, f, f.Reader(), f.Clk, cfg, nil)
 }
 
+// OtherGateway is a second gateway over the fabric's FSM and shard stores: its own
+// overlay (a fresh staging directory), filesystem and flusher, as another device's
+// tailraid writing the same volume (docs/04 §6).
+func (f *Fabric) OtherGateway() (*vfs.FS, *vfs.Flusher) {
+	f.TB.Helper()
+	ov, err := vfs.OpenOverlay(filepath.Join(f.TB.TempDir(), "staging"), ChunkSize, f.Clk)
+	if err != nil {
+		f.TB.Fatalf("other gateway's overlay: %v", err)
+	}
+	f.TB.Cleanup(func() { _ = ov.Close() })
+	fs := vfs.New(f.FSM, f, ov, f.Reader(), f.Clk, 501, 20)
+	fs.SetHealth(f.isStale)
+	return fs, vfs.NewFlusher(ov, f.FSM, f, f, f, f.Reader(), f.Clk, vfs.DefaultConfig(), nil)
+}
+
 // --- helpers ---
 
 // Create makes an empty file in the root directory.

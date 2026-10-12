@@ -382,22 +382,30 @@ reader's lock, where the cancel decides). `status` counts them as `readahead_can
   is byte-exact for disjoint ranges and last-commit-wins for overlapping ones. A truncate
   rebased over a concurrent append wins over the append. This is documented, not hidden.
 - **Two clients replacing the same file** (codec 9, I-223): a copy that replaces a file
-  opens it truncated (`O_TRUNC`, SMB overwrite or supersede, NFS SETATTR size 0) and
-  writes it front to back, and two such copies at once must leave one whole version,
-  never chunks of both. A plan whose truncation point is 0 is a **rewrite start**: its
-  Commit carries `RewriteStart`, replaces the file whatever was committed since it was
-  planned (02 §Apply rules) and returns the version it produced, which the gateway keeps
-  as the inode's **rewrite id**. Every later Commit of the inode from that gateway
-  carries the id; the FSM refuses one whose id is no longer the inode's `RewriteAt` with
-  `ErrSuperseded`, because another rewrite started after this one, and the flusher then
-  drops the inode's dirty extents and WAL (the client's copy ran, and the other replaced
-  it, exactly as if they had run one after the other). The rewrite whose start applied
-  last wins, whole. The gateway keeps the id while the inode is in the overlay and for
-  `RewriteHold` (10 min) after its last WRITE, and forgets it when it sees `RewriteAt`
-  change, so a slow copy whose overlay empties between WRITEs stays one rewrite; a
-  gateway restart forgets it (the WAL holds no commit results), and that copy's later
-  WRITEs commit as plain writes. Until every live member reads codec 9 the flusher
-  sends neither field and the in-place rule above applies.
+  opens it truncated (`O_TRUNC`: SMB overwrite, overwrite-if or supersede, an NFS
+  `UNCHECKED` CREATE) and writes it front to back, and two such copies at once must
+  leave one whole version, never chunks of both. A writer's `O_TRUNC` open marks a
+  **rewrite** on the inode, even of an empty file (where it records no truncate), and so
+  does a plan whose truncation point is 0 (a SETATTR to size 0, a truncate replayed from
+  the WAL). The inode's next flush is the **rewrite start**: the plan becomes a truncate
+  to 0, its Commit carries `RewriteStart`, replaces the file whatever was committed since
+  it was planned (02 §Apply rules) and returns the version it produced, which the
+  gateway keeps as the inode's **rewrite id** (`Overlay.MarkRewrite`, `SetRewrite`).
+  Every later Commit of the inode from that gateway carries the id; the FSM refuses one
+  whose id is no longer the inode's `RewriteAt` with `ErrSuperseded`, because another
+  rewrite started after this one, and the flusher then drops the inode's dirty extents
+  and WAL (the client's copy ran, and the other replaced it, exactly as if they had run
+  one after the other). The claim stays after that, so the rest of the same copy is
+  refused the same way rather than mixed into the winner. The rewrite whose start
+  applied last wins, whole. A claim lives while WRITEs of the inode keep reaching this
+  gateway and lapses `RewriteHold` (60 s) after the last one: a copy whose writes pause
+  stays one rewrite, and an in-place edit a minute later is a plain write again. A
+  gateway restart forgets its claims (the WAL holds no commit results); a replayed
+  truncate to 0 starts a new rewrite, and anything else commits as plain writes. Until
+  every live member reads codec 9 the flusher sends neither field (it asks the prober's
+  `MinCodec`: a codec-9 entry forwarded to an older leader is refused as malformed, not
+  with `ErrCodec`), and the in-place rule above applies; a leader that still answers
+  `ErrCodec` gets the same chunks again as a plain write.
 
 ## 7. When the cluster is unavailable
 
@@ -483,17 +491,18 @@ the WAL cap.
 - **I-34** — The issuing gateway returns its own acknowledged bytes on any subsequent READ (read-your-writes), before and after flush.
 - **I-35** — A flush never drops dirty extents or a truncation point, save on `ErrSuperseded` (I-223): on `ErrConflict`, `ErrUnknownChunk` or PUT failure the same plan (extents, `minSize`, `sizeSet`) is retried against the newer base with `NewSize` recomputed so that no other gateway's committed bytes are cut off except by an explicit truncate; extents are removed only after `WaitApplied` of the Commit that carries them.
 - **I-36** — Other gateways observe either the previous committed chunk list or the new one, never a mixture.
-- **I-223** — Two rewrites of one file leave one of them whole: a flush whose plan
-  truncates to 0 commits with `RewriteStart`, which applies over any version and makes
-  the version it produces the inode's `RewriteAt`; every later Commit of that inode from
-  the same gateway carries that id while the gateway holds it (overlay or `RewriteHold`
-  since the last WRITE, never past a restart or a change of `RewriteAt` it has seen); a
-  Commit whose id is not the inode's `RewriteAt` is `ErrSuperseded` and changes nothing,
-  and its flusher drops the inode's dirty extents and WAL and counts it; so after two
-  clients each truncate one path and write a payload through two gateways, every
-  gateway reads exactly one of the payloads, the one whose start applied last; a plain
-  Commit neither starts nor ends a rewrite; the fields are sent only while every live
-  member reads codec 9.
+- **I-223** — Two rewrites of one file leave one of them whole: a writer's `O_TRUNC`
+  open, or a plan truncating to 0, makes the inode's next flush a truncate to 0 that
+  commits with `RewriteStart`, which applies over any version and makes the version it
+  produces the inode's `RewriteAt` (returned in `Result.Version`); every later Commit of
+  that inode from the same gateway carries that id until `RewriteHold` passes without a
+  WRITE of the inode or the gateway restarts; a Commit whose id is not the inode's
+  `RewriteAt` is `ErrSuperseded` and changes nothing, and its flusher drops the inode's
+  dirty extents and WAL, keeps the claim and counts it in `gateway.rewrites_superseded`;
+  so after two clients each truncate one path and write a payload through two gateways,
+  in any interleaving of their flushes, every gateway reads exactly one of the payloads
+  whole and every FSM holds the same state; a plain Commit neither starts nor ends a
+  rewrite; the fields are sent only while every live member reads codec 9.
 - **I-37** — WAL replay after a crash restores exactly the records whose CRC verifies, in order, and discards the torn tail; replayed bytes equal the acknowledged bytes.
 - **I-63** — A WRITE is acknowledged only when every file its durability depends on has a durable directory entry: a newly created WAL file's directory is fsynced before its first record is appended.
 - **I-78** — The bytes a gateway holds in memory for flushing are bounded independently of file and plan size: at most `ChunkWorkers` chunks are assembled at once, a chunk's buffer and shards are released once its PUTs are decided (acked, failed or cancelled), a Commit retry re-assembles from the WAL, and `Flusher.Buffers()` never exceeds `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))`.
@@ -564,7 +573,7 @@ the WAL cap.
 | I-34 | `TestExtents_InsertOverlap_Property`, `TestMount_Workload`, `TestNFS_WriteSequence_MultiRPC`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_WriteAtNonZeroOffset_PreservesBase`, `TestVFS_MaxDirty_ReturnsEIO`, `TestVFS_OracleRandomOps`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
 | I-35 | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_ConflictRebase_TruncateWins`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_ProposeFailureRetriesSamePlan`, `TestOverlay_AbortFlush_MergesBackNewerWins`, `TestOverlay_StaleEntry_FollowsCommittedSize`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestWAL_Compact_KeepsOnlyLive` |
 | I-36 | `TestCluster_OtherGatewaySeesPreviousVersionUntilApply`, `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` |
-| I-223 | planned (PR whole-rewrite): TestFSM_Commit_Rewrite_Table, TestFlusher_Superseded_DropsDirty, TestCluster_TwoRewrites_OneWholeWins, TestCluster_RewriteIDs_SameOnEveryNode, TestSoak_MultiUserAgainstHarness |
+| I-223 | `TestFSM_Commit_Rewrite_Table`, `TestEncodeCommand_RewriteIsCodec9`, `TestResult_VersionRoundTrip`, `TestCodec_ReadsVersion7Snapshot`, `TestFlusher_Superseded_DropsDirty`, `TestFlusher_Rewrite_GatedOnMinCodec`, `TestCluster_TwoRewrites_OneWholeWins`, `TestCluster_Codec9RefusedWhileMemberOld`; planned: TestSoak_MultiUserAgainstHarness |
 | I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |

@@ -79,7 +79,7 @@ func TestSMB_FailedCopyCleanup_UnderProtected(t *testing.T) {
 	must(t, fh.Close())
 	f.MustApply(meta.Command{Op: meta.OpSetAttr, SetAttr: &meta.SetAttr{Ino: f.InodeOf(f.FS(), "/p"), Mask: meta.AttrFlags, Flags: meta.FlagProtected, Now: 1}})
 	// an older member: the own cleanup is refused for its codec, the plain delete for protection
-	f.SetLeaderCodec(meta.CodecVersion - 1)
+	f.SetLeaderCodec(7) // before codec 8 (I-220); not CodecVersion-1, which moves with every bump
 	if err := a.DeleteOwnFile("/p/copy.bin"); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("own cleanup with an older member: %v, want a permission error", err)
 	}

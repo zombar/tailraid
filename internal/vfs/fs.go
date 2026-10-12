@@ -328,6 +328,9 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 				return nil, mapErr("open", filename, err)
 			}
 		}
+		// a writer that opens the file truncated replaces it: its flushes are one
+		// rewrite, so two such copies at once leave one whole (docs/04 §6, I-223)
+		f.ov.MarkRewrite(in.Ino)
 	}
 	if flag&os.O_APPEND != 0 {
 		file.pos = int64(file.size())

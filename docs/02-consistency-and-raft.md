@@ -345,7 +345,13 @@ propose one with `ErrCodec` while any live active member reports an older codec 
 delete and to the version-3 replace on `Rename` in that window, so a mixed cluster keeps
 working without the trash until every node is updated (I-156, 12 §6). Codec 7 is gated
 the same way: `mirror add` and every snapshot command are `ErrCodec` until every live
-member reads it, so no node ever applies a hold it cannot see (I-184).
+member reads it, so no node ever applies a hold it cannot see (I-184). Codec 9 is gated
+by the gateway before it proposes: a codec-9 entry forwarded to a leader that predates
+it fails to decode there (a malformed command, not `ErrCodec`), so the flusher sends
+`Rewrite`/`RewriteStart` and the SMB gateway `Trash.Expect` and `Rename.NoReplace`
+only while the prober's `MinCodec` is 9 or more (`meta.CodecRewrite`); before that a
+replacing copy commits as plain writes (04 §6), a delete-on-close checks the inode
+itself and a no-replace rename looks the name up first (I-223..I-226).
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are

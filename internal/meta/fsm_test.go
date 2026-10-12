@@ -1186,7 +1186,14 @@ func (g *cmdGen) next() Command {
 	case 18, 19:
 		return g.snapshotCmd(name)
 	case 9:
-		return Command{Op: OpTrash, Trash: &Trash{Parent: d.Ino, Name: name, Recursive: g.rng.Intn(2) == 0, Now: g.now}}
+		c := &Trash{Parent: d.Ino, Name: name, Recursive: g.rng.Intn(2) == 0, Now: g.now}
+		if g.rng.Intn(3) == 0 { // codec 9: the inode meant, right or wrong (I-225)
+			c.Expect, c.Own = d.Children[name], g.rng.Intn(2) == 0
+			if c.Expect == 0 || g.rng.Intn(3) == 0 {
+				c.Expect = Ino(g.rng.Intn(8) + 1)
+			}
+		}
+		return Command{Op: OpTrash, Trash: c}
 	case 10:
 		roots := g.f.Trash()
 		if len(roots) == 0 {
@@ -1235,7 +1242,10 @@ func (g *cmdGen) next() Command {
 		return Command{Op: OpRmdir, Rmdir: &Rmdir{Parent: d.Ino, Name: name, Now: g.now}}
 	case 4:
 		d2 := dirs[g.rng.Intn(len(dirs))]
-		return Command{Op: OpRename, Rename: &Rename{OldParent: d.Ino, OldName: name, NewParent: d2.Ino, NewName: string(rune('a' + g.rng.Intn(6))), Now: g.now}}
+		return Command{Op: OpRename, Rename: &Rename{
+			OldParent: d.Ino, OldName: name, NewParent: d2.Ino, NewName: string(rune('a' + g.rng.Intn(6))), Now: g.now,
+			NoReplace: g.rng.Intn(3) == 0,
+		}} // codec 9 (I-224)
 	case 5:
 		return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now - int64(g.rng.Intn(20))}}
 	case 6:
@@ -1269,6 +1279,15 @@ func (g *cmdGen) next() Command {
 	c := &Commit{Ino: fl.Ino, BaseVersion: base, NewSize: newSize, Now: g.now}
 	if g.rng.Intn(3) == 0 && newSize < fl.Size {
 		c.HasTruncate, c.TruncateTo = true, uint64(g.rng.Intn(int(newSize)+1))
+	}
+	switch g.rng.Intn(6) { // codec 9: rewrites started, continued and superseded (I-223)
+	case 0:
+		c.HasTruncate, c.TruncateTo, c.RewriteStart = true, 0, true
+	case 1:
+		c.Rewrite = fl.RewriteAt
+		if c.Rewrite == 0 || g.rng.Intn(3) == 0 {
+			c.Rewrite = uint64(g.rng.Intn(8) + 1)
+		}
 	}
 	n := ChunkCount(newSize, testCS)
 	for i := range n {

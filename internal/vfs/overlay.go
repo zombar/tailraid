@@ -84,6 +84,9 @@ type FlushPlan struct {
 	SizeSet  bool   // a truncate happened since the last successful flush
 	Extents  extents
 	Residual extents // subset of Extents the flusher did not commit (partial flush)
+
+	rewriteStart bool   // this flush starts a rewrite (docs/04 §6, I-223)
+	rewrite      uint64 // the rewrite this flush continues; 0 for a plain write
 }
 
 // dirtyFile is the per-inode overlay state. All fields are guarded by mu.
@@ -227,6 +230,86 @@ type Overlay struct {
 	total    atomic.Int64  // dirty bytes, fresh and in outstanding plans, across every inode
 	pmu      sync.Mutex    // guards progress
 	progress chan struct{} // closed and replaced whenever a flush frees room (cap waiters)
+
+	rmu      sync.Mutex                // guards rewrites
+	rewrites map[meta.Ino]rewriteClaim // this gateway's rewrites (docs/04 §6, I-223)
+}
+
+// RewriteHold is how long a rewrite claim outlives the last WRITE of the inode through
+// this gateway: a copy whose writes pause stays one rewrite, and an in-place edit a
+// minute after the copy is a plain write again (docs/04 §6, I-223).
+const RewriteHold = time.Minute
+
+// rewriteClaim is a rewrite this gateway started on an inode: pending (id 0) from an
+// O_TRUNC open until its start commits, then the version that start produced.
+type rewriteClaim struct {
+	id uint64
+	at time.Time // the open or the last WRITE
+}
+
+// touchRewrite is every WRITE's look at ino's claim: a lapsed one is forgotten, so this
+// WRITE and the ones after it are plain; a live one is refreshed.
+func (o *Overlay) touchRewrite(ino meta.Ino) {
+	o.rmu.Lock()
+	defer o.rmu.Unlock()
+	c, ok := o.rewrites[ino]
+	if !ok {
+		return
+	}
+	now := o.clk.Now()
+	if now.Sub(c.at) > RewriteHold {
+		delete(o.rewrites, ino)
+		return
+	}
+	c.at = now
+	o.rewrites[ino] = c
+}
+
+// MarkRewrite records that a writer opened ino truncated: its next flush starts a
+// rewrite, whatever this gateway held for the inode before (docs/04 §6, I-223).
+func (o *Overlay) MarkRewrite(ino meta.Ino) {
+	o.rmu.Lock()
+	defer o.rmu.Unlock()
+	if o.rewrites == nil {
+		o.rewrites = map[meta.Ino]rewriteClaim{}
+	}
+	o.rewrites[ino] = rewriteClaim{at: o.clk.Now()}
+}
+
+// Rewrite reports ino's claim for the flush about to commit: start when a rewrite is
+// pending, else the id the flush's Commits carry (0: a plain write). A flush never
+// refreshes a claim and never lapses one: the WRITEs it carries were made under it.
+func (o *Overlay) Rewrite(ino meta.Ino) (start bool, id uint64) {
+	o.rmu.Lock()
+	defer o.rmu.Unlock()
+	c, ok := o.rewrites[ino]
+	if !ok {
+		return false, 0
+	}
+	return c.id == 0, c.id
+}
+
+// SetRewrite records the version ino's rewrite start produced, its id from now on.
+func (o *Overlay) SetRewrite(ino meta.Ino, id uint64) {
+	o.rmu.Lock()
+	defer o.rmu.Unlock()
+	if c, ok := o.rewrites[ino]; ok && c.id == 0 {
+		c.id = id
+		o.rewrites[ino] = c
+	}
+}
+
+// PruneRewrites forgets every claim that has lapsed; the flusher's loop calls it so the
+// table holds only the inodes written within RewriteHold.
+func (o *Overlay) PruneRewrites() {
+	o.rmu.Lock()
+	defer o.rmu.Unlock()
+	now := o.clk.Now()
+	for ino, c := range o.rewrites {
+		if now.Sub(c.at) > RewriteHold {
+			delete(o.rewrites, ino)
+		}
+	}
 }
 
 // OpenOverlay opens dir, replaying every `<ino>.wal` into dirty state (restart with a
@@ -481,6 +564,7 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	if limit := meta.MaxFileSize(o.chunkSize); off > limit || uint64(len(p)) > limit-off {
 		return ErrFileTooLarge
 	}
+	o.touchRewrite(ino)
 	deadline := o.clk.Now().Add(o.capWait)
 	for {
 		// the channel is taken before the attempt so a flush that frees room between
