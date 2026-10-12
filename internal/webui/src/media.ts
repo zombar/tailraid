@@ -6,6 +6,7 @@
 
 import { clear, h, svg } from "./dom.ts";
 import { fileURL, media, mediaItem, thumbURL, type MediaItem, type MediaLibrary } from "./api.ts";
+import { lazy } from "./thumbs.ts";
 import { basename, browseHash, count, dirname, encodePathForHash, fileHash, session } from "./util.ts";
 
 const NOUN: Record<string, [string, string]> = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"] };
@@ -37,6 +38,17 @@ function art(it: MediaItem): string | undefined {
   return undefined;
 }
 
+/**
+ * frameOf shows a film's or an episode's video frame in img, grabbing and storing it
+ * first when none is stored, as the file browser's tiles do (docs/13 §5); false when
+ * the item has no video to grab from.
+ */
+function frameOf(img: HTMLImageElement, it: MediaItem, onMiss: () => void): boolean {
+  if (it.poster || it.thumb || !it.video || it.video_ino === undefined) return false;
+  lazy(img, { ino: it.video_ino, version: it.video_version ?? 0, thumb: it.video_thumb }, it.video, undefined, "video", onMiss);
+  return true;
+}
+
 function sub(it: MediaItem): string {
   if (it.kind === "album") return [it.artist, it.year].filter(Boolean).join(" · ");
   const parts: string[] = [];
@@ -56,7 +68,9 @@ function posterTile(it: MediaItem): HTMLElement {
     a.classList.add("missing");
   };
   const src = art(it);
-  if (src) {
+  const frame = h("img", { alt: "" }) as HTMLImageElement;
+  if (frameOf(frame, it, missing)) box.append(frame);
+  else if (src) {
     const img = h("img", { alt: "", loading: "lazy", src }) as HTMLImageElement;
     img.addEventListener("error", missing);
     box.append(img);
@@ -159,8 +173,12 @@ function detail(root: HTMLElement, path: string): void {
       const section = h("section", { class: cls });
       if (backdrop) section.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
       const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
-      const poster = h("img", { class: "hero-poster", alt: "", src: posterSrc || undefined }) as HTMLImageElement;
-      poster.addEventListener("error", () => (poster.style.visibility = "hidden"));
+      const poster = h("img", { class: "hero-poster", alt: "" }) as HTMLImageElement;
+      const hide = () => (poster.style.visibility = "hidden");
+      if (!frameOf(poster, it, hide)) {
+        if (posterSrc) poster.src = posterSrc;
+        poster.addEventListener("error", hide);
+      }
       const facts = h("div", { class: "facts" });
       const seasons = it.seasons ?? [];
       const episodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
@@ -201,8 +219,13 @@ function detail(root: HTMLElement, path: string): void {
           clear(tbody);
           for (const e of seasons[i]!.episodes) {
             const thumb = h("td", { class: "thumb" });
-            const img = h("img", { alt: "", loading: "lazy", src: thumbURL(e.thumb || e.path) }) as HTMLImageElement;
-            img.addEventListener("error", () => img.replaceWith(glyph("episode")));
+            const img = h("img", { alt: "" }) as HTMLImageElement;
+            const miss = () => img.replaceWith(glyph("episode"));
+            if (!frameOf(img, e, miss)) {
+              img.loading = "lazy";
+              img.src = thumbURL(e.thumb || e.path);
+              img.addEventListener("error", miss);
+            }
             thumb.append(img);
             const title = h("td", { class: "title" }, e.title);
             if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));

@@ -137,7 +137,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/search?q=&under=&limit=` | – | `{"query","hits":[{path,type,size,mtime,ino,match,title?,artist?,album?,terms:[{term,off}]}],"index"?}`: the words of `q` ANDed, the last as a prefix, names from the FSM and tags and contents from the index (docs/18 §6); `under` limits to a live folder; `limit` 50 by default, 200 at most, 400 outside `1..200`; `index: "unavailable"` when the node has no loadable index and only names answered; never an entry in the trash or under `/.tailraid` |
 | `GET /api/render?path=&in=` | – | `text/html; charset=utf-8`: the file rendered as a document by the node's own markdown renderer (§4); `.md` and `.markdown` only, else 400; a source over `TEXT_MAX` (1 MiB) → 413; the ETag rule of `/files/`; `Cache-Control: no-cache` |
 | `GET /api/media` | – | `{"libs":[{path,kind}]}`: every live flagged folder in kind-then-path order (docs/18 §9), the Media tab's sections |
-| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
+| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,video?,video_ino?,video_version?,video_thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
 | `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album; `in=` reads a deleted root as `ls` does |
 
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
@@ -385,8 +385,9 @@ and episodes, or, for an album, its tracks through the tags of §6. Nothing unde
 root appears; an item under an nsfw folder carries `nsfw` and its art is blurred until
 tapped (I-163). Art comes through the routes that exist: a poster or cover tile is `GET
 /api/thumb?path=<poster>` (at most 320 px, generated once and shared, I-160), the detail
-page's poster and the background are `GET /files/<fanart>` as stored, and a film or an
-episode without a sidecar frame shows its browser-made thumbnail. A section lists at most
+page's poster and the background are `GET /files/<fanart>` as stored, and a film or an episode without a sidecar frame shows its browser-made thumbnail,
+grabbed and stored by the page exactly as the file browser's tiles do (§5) when none is
+stored yet: an item carries its video's `video_ino`, `video_version` and `video_thumb`. A section lists at most
 `MediaPage` (500) items a page from `offset`, sorted by `sort_title` then path, the same on
 every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
 now-playing bar (§6); "Open folder" goes to the file browser.
@@ -792,6 +793,6 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
-| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
+| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
