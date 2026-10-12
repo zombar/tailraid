@@ -255,14 +255,22 @@ func (s *share) moveHandles(from, to string) {
 	defer s.hmu.Unlock()
 	for of := range s.handles {
 		of.pmu.Lock()
-		switch {
-		case of.path == from:
-			of.path = to
-		case strings.HasPrefix(of.path, from+"/"):
-			of.path = to + of.path[len(from):]
-		}
+		of.path = movedPath(of.path, from, to)
 		of.pmu.Unlock()
 	}
+	s.locks.move(from, to) // a byte-range lock is the file's, and goes with it
+}
+
+// movedPath is p after a rename of from to to: the file itself and, for a directory,
+// everything under it.
+func movedPath(p, from, to string) string {
+	switch {
+	case p == from:
+		return to
+	case strings.HasPrefix(p, from+"/"):
+		return to + p[len(from):]
+	}
+	return p
 }
 
 // reading takes the share's lock for a command that only reads, and returns
