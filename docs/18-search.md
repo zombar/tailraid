@@ -172,7 +172,9 @@ effective library kind (§9) is set, stored in the segment beside the docs:
   (`<name>.nfo`: `title`, `plot`, `aired`, `season`, `episode`, `runtime`; `<name>-thumb.*`
   else the browser-made thumbnail; a title that is only the show's name again becomes
   "Episode N"); a double episode `S01E01E02` is one entry spanning
-  both numbers; an episode directly under the show belongs to the season its name says.
+  both numbers; an episode directly under the show belongs to the season its name says. The catalogue keeps an entry
+  per folder; the Media tab shows sibling folders whose names clean to the same title
+  and year as one show (13 §10).
 - *Music* (`music`): artist folders of album folders as the album view defines them
   (13 §6: a folder whose audio files outnumber its other files). The catalogue stores
   album, artist, year, genre and track count from the first track's tags and the cover
