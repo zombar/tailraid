@@ -5,6 +5,7 @@ import (
 	"os"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/zombar/tailraid/internal/testharness"
 )
@@ -12,7 +13,8 @@ import (
 // A proposal whose outcome is unknown was applied by the leader, but the gateway never
 // heard. Every mutation resolves it instead of retrying blindly: a create or mkdir opens
 // what is there, a symlink accepts the link it made, a rename and a remove take "already
-// gone" as their own first attempt, chmod repeats. Two unknown outcomes in a row are EIO.
+// gone" as their own first attempt, chmod repeats. Repeated unknown outcomes are proposed
+// again, each read the same way, until the gateway is stale; then EIO.
 //
 // Invariant: I-95
 func TestVFS_UnknownOutcome_ResolvesPerCommand(t *testing.T) {
@@ -76,9 +78,30 @@ func TestVFS_UnknownOutcome_ResolvesPerCommand(t *testing.T) {
 		t.Fatalf("remove of a missing entry: %v", err)
 	}
 
-	// two unknown outcomes in a row: the gateway gives up with EIO
-	f.ProposeUnknown(2)
-	if err := fs.MkdirAll("/e", 0o755); !errors.Is(err, syscall.EIO) {
-		t.Fatalf("two unknown outcomes: %v, want EIO", err)
+	// three unknown outcomes in a row, as a leader killed mid-failover leaves them: the
+	// repeats back off on the clock and the mkdir resolves
+	f.ProposeUnknown(3)
+	done := make(chan error, 1)
+	go func() { done <- fs.MkdirAll("/e", 0o755) }()
+	testharness.Eventually(t, func() bool {
+		f.Clk.Advance(time.Second)
+		select {
+		case err := <-done:
+			must(t, err)
+			return true
+		default:
+			return false
+		}
+	}, "mkdir never resolved its unknown outcomes")
+	if st, err := fs.Stat("/e"); err != nil || !st.IsDir() {
+		t.Fatalf("mkdir after three unknown outcomes: %v", err)
 	}
+
+	// unknown outcomes while the gateway is stale: EIO, the outcome never resolved
+	f.SetStale(true)
+	f.ProposeUnknown(2)
+	if err := fs.MkdirAll("/g", 0o755); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("unknown outcomes on a stale gateway: %v, want EIO", err)
+	}
+	f.SetStale(false)
 }

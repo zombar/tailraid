@@ -193,10 +193,22 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 			return res, nil
 		}
 		if errors.Is(err, meta.ErrUnknownOutcome) {
-			if afterUnknown {
+			if !afterUnknown {
+				afterUnknown = true // the repeat goes at once; its answer is read knowing the first may have landed
+				continue
+			}
+			// unknown again (a leader killed mid-failover leaves a forward in flight and
+			// the repeat aimed at its address): proposed again with backoff, every answer
+			// read the same way, until the gateway is stale (I-95)
+			if f.stale == nil || f.stale() {
 				return meta.Result{}, fmt.Errorf("%w: %w", syscall.EIO, err)
 			}
-			afterUnknown = true
+			select {
+			case <-ctx.Done():
+				return meta.Result{}, fmt.Errorf("%w: %w", syscall.EIO, err)
+			case <-f.clk.After(delay):
+			}
+			delay = min(delay*2, proposeRetryMax)
 			continue
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
