@@ -2,6 +2,13 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.5.3 (2026-10-12)
+
+### Changes
+
+- webui: a video's tile frame is a presented, non-dark frame; re-grab old ones (I-216) ([92eec24](https://github.com/zombar/tailraid/commit/92eec24))
+- repair, config: the background scrub verifies the volume once per scrub_period (I-215) ([1e96e56](https://github.com/zombar/tailraid/commit/1e96e56))
+
 ## v0.5.2 (2026-10-11)
 
 ### Changes
