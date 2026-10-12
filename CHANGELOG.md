@@ -6,6 +6,7 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- vfs: pin the readahead order by holding the client's GETs ([175fb4b](https://github.com/zombar/tailraid/commit/175fb4b))
 - webui: the Media tab grabs missing video frames ([b863ab6](https://github.com/zombar/tailraid/commit/b863ab6))
 - webui: fold media sections, drop genre chips, hide deleted by default ([9c51051](https://github.com/zombar/tailraid/commit/9c51051))
 - search: cut scene names at season markers and a mid-name year ([b6c0eb5](https://github.com/zombar/tailraid/commit/b6c0eb5))
