@@ -154,6 +154,9 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	st, statErr := sh.fsys.Stat(p)
 	exists := statErr == nil
 	action := actionOpened
+	if !exists && parentMissing(sh.fsys, p) {
+		return errorResponse(h, statusObjectPathNotFound), nil // never made on the way (I-233)
+	}
 
 	switch {
 	case exists && (disposition == dispCreate):

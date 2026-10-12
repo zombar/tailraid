@@ -34,7 +34,8 @@ func resolveCase(fsys filesystem.Filesystem, p string) string {
 	// Walk down from the root, folding one element at a time. A parent whose
 	// case is wrong has to be found before its child can be.
 	resolved := "/"
-	for _, want := range strings.Split(strings.Trim(p, "/"), "/") {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	for i, want := range parts {
 		if want == "" {
 			continue
 		}
@@ -45,13 +46,45 @@ func resolveCase(fsys filesystem.Filesystem, p string) string {
 		}
 		match, found := foldedMatch(fsys, resolved, want)
 		if !found {
-			// Nothing here differs by case either. Return the path the client
-			// asked for, so the error it gets names what it asked about.
-			return p
+			// Nothing here differs by case either: the rest is new, and goes under the
+			// folders that do exist as they are spelled there. Returning the client's
+			// spelling whole made a create of photos\new.jpg, with Photos there, a
+			// second folder photos (I-233).
+			return path.Join(append([]string{resolved}, parts[i:]...)...)
 		}
 		resolved = path.Join(resolved, match)
 	}
 	return resolved
+}
+
+// parentMissing reports whether the folder p would live in does not exist (or is not a
+// folder): MS-FSA fails such an open with STATUS_OBJECT_PATH_NOT_FOUND, and a backend that
+// would make the folders on the way must not be asked to (I-233).
+func parentMissing(fsys filesystem.Filesystem, p string) bool {
+	st, err := fsys.Stat(path.Dir(p))
+	return err != nil || !isDir(st)
+}
+
+// renameTarget is where a rename of the handle's file ino to to lands: to's folder as it
+// exists, and a leaf that names another file only by case taken as that file, so replace
+// and no-replace act on it rather than making a twin that differs by case. A leaf that
+// differs only by case from the file itself is a case-only rename and is kept as asked.
+func renameTarget(fsys filesystem.Filesystem, to string, ino uint64) (string, bool) {
+	dir := resolveCase(fsys, path.Dir(to))
+	if parentMissing(fsys, path.Join(dir, "x")) {
+		return "", false
+	}
+	target := path.Join(dir, path.Base(to))
+	if _, err := fsys.Stat(target); err == nil {
+		return target, true
+	}
+	if m, found := foldedMatch(fsys, dir, path.Base(to)); found {
+		other := path.Join(dir, m)
+		if st, err := fsys.Stat(other); err == nil && (ino == 0 || st.Inode() != ino) {
+			return other, true
+		}
+	}
+	return target, true
 }
 
 // foldedMatch finds the one entry of dir whose name differs from want only by

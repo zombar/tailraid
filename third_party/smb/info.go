@@ -373,6 +373,10 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 			return errorResponse(h, statusObjectNameNotFound), nil
 		}
 		from := of.p()
+		to, ok = renameTarget(of.share.fsys, to, of.ino)
+		if !ok {
+			return errorResponse(h, statusObjectPathNotFound), nil // its folder does not exist (I-233)
+		}
 		if err := renameFor(of, from, to, in[0] != 0); err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
