@@ -322,3 +322,64 @@ func TestWebUI_Media_VideoFrameFields(t *testing.T) {
 	u.mediaJSON("lib=/films", &l)
 	check("after the frame", l.Items[1], "/films/Moon.2009.mkv", true)
 }
+
+// A show kept as one folder per season is one item: the TV library's folders whose names
+// clean to the same title and year list once, under the first by name, with the union of
+// their seasons, and any of the folders answers the whole show. Another year is another
+// show.
+//
+// Invariant: I-212
+func TestWebUI_Media_ShowSplitAcrossFolders(t *testing.T) {
+	u, pass := mediaUI(t)
+	u.write("/tv/Invasion.2021.S01.PROPER.WEBRip.x264-ION10/Invasion.S01E01.WEBRip.mp4", 0, []byte("v"))
+	u.write("/tv/Invasion.2021.S01.PROPER.WEBRip.x264-ION10/Invasion.S01E02.WEBRip.mp4", 0, []byte("v"))
+	u.write("/tv/Invasion.2021.S02.1080p.x265-ELiTE/Invasion.S02E01.mkv", 0, []byte("v"))
+	u.write("/tv/Invasion (2021)/Season 3/Invasion.S03E01.mkv", 0, []byte("v"))
+	u.write("/tv/Invasion (2021)/poster.jpg", 0, []byte{0xff, 0xd8})
+	u.write("/tv/Invasion.2019.S01/Invasion.S01E01.mkv", 0, []byte("v"))
+	u.write("/tv/Pluribus.S01.1080p.x265-ELiTE/Pluribus.S01E01.mkv", 0, []byte("v"))
+	u.flush()
+	if code, _ := u.setFlags("/tv", `"library":"tv"`); code != 200 {
+		t.Fatal("flag")
+	}
+	q := func(k, p string) string { return k + "=" + url.QueryEscape(p) }
+	for _, stage := range []string{"before the pass", "after the pass"} {
+		var l mediaLib
+		if code := u.mediaJSON("lib=/tv", &l); code != 200 {
+			t.Fatalf("%s: list %d", stage, code)
+		}
+		type row struct {
+			path     string
+			year     int
+			children int
+		}
+		var got []row
+		for _, it := range l.Items {
+			got = append(got, row{it.Path, it.Year, it.Children})
+		}
+		want := []row{{"/tv/Invasion (2021)", 2021, 3}, {"/tv/Invasion.2019.S01", 2019, 1}, {"/tv/Pluribus.S01.1080p.x265-ELiTE", 0, 1}}
+		if !reflect.DeepEqual(got, want) || l.Lib.Count != 3 {
+			t.Fatalf("%s: list %+v (count %d), want %+v", stage, got, l.Lib.Count, want)
+		}
+		if l.Items[0].Title != "Invasion" {
+			t.Fatalf("%s: title %q", stage, l.Items[0].Title)
+		}
+		for _, p := range []string{"/tv/Invasion (2021)", "/tv/Invasion.2021.S02.1080p.x265-ELiTE"} {
+			var it webui.MediaItem
+			if code := u.mediaJSON(q("item", p), &it); code != 200 {
+				t.Fatalf("%s: item %s: %d", stage, p, code)
+			}
+			eps := map[int]int{}
+			for _, s := range it.Seasons {
+				eps[s.N] = len(s.Episodes)
+			}
+			if it.Path != "/tv/Invasion (2021)" || it.Children != 3 || !reflect.DeepEqual(eps, map[int]int{1: 2, 2: 1, 3: 1}) {
+				t.Fatalf("%s: item %s: path %q children %d seasons %v", stage, p, it.Path, it.Children, eps)
+			}
+			if it.Seasons[0].Episodes[0].Title != "Episode 1" {
+				t.Fatalf("%s: episode title %q", stage, it.Seasons[0].Episodes[0].Title)
+			}
+		}
+		pass()
+	}
+}
