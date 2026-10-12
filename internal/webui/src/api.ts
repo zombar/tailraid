@@ -197,6 +197,8 @@ export interface Entry {
   purge_at?: string;
   thumb?: boolean;
   cover?: string;
+  /** a folder resolved to no cover: the page asks for no thumbnail (I-165) */
+  no_cover?: boolean;
 }
 
 /** DirInfo describes the listed folder: effective flags, pin, place in the trash. */
@@ -208,6 +210,7 @@ export interface DirInfo {
   deleted_at?: string;
   purge_at?: string;
   cover?: string;
+  no_cover?: boolean;
 }
 
 export interface Ls {
@@ -379,6 +382,10 @@ export interface MediaItem {
   fanart?: string;
   thumb?: string;
   video?: string;
+  /** the video's inode and version and whether its frame is stored: the page grabs a missing one (docs/13 §10) */
+  video_ino?: number;
+  video_version?: number;
+  video_thumb?: boolean;
   size?: number;
   added: string;
   nsfw: boolean;
@@ -398,7 +405,6 @@ export interface MediaLibrary {
   path: string;
   kind: string;
   count: number;
-  genres?: string[];
 }
 
 /** media lists the libraries, or one library's items (docs/13 §10). */

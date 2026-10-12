@@ -51,6 +51,13 @@ type Reader struct {
 	raSkipped   atomic.Uint64 // readahead candidates skipped because every slot was busy (I-166)
 	readsEarly  atomic.Uint64 // ranges served from verified data shards rather than the decoded chunk (I-202)
 	fetching    atomic.Int32  // fetches running on their own goroutine (ReadAtEarly)
+
+	// The fetches that outlive a client's read (readahead, the early path) run under stop
+	// and are counted in bg, so Close can cut and wait for them before the cache drains.
+	stop   context.Context
+	halt   context.CancelFunc
+	bg     sync.WaitGroup
+	closed bool // under mu: no detached fetch starts once set
 }
 
 // ReadAhead is the most prefetches in flight gateway-wide, and the most chunks a
@@ -210,12 +217,25 @@ func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache
 	if codecs == nil {
 		codecs = &ec.Pool{}
 	}
+	stop, halt := context.WithCancel(context.Background())
 	return &Reader{
 		st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(),
 		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]uint64{}, prefetched: map[meta.Hash]struct{}{},
 		pf:    map[meta.Ino][]*fetchCall{},
 		slots: make(chan struct{}, ReadAhead),
+		stop:  stop, halt: halt,
 	}
+}
+
+// Close cancels the fetches still running on their own goroutines and waits for them, so
+// no Put reaches the cache after it returns (the node drains the cache next, I-204). Reads
+// on the caller's goroutine keep working; no readahead starts afterwards.
+func (r *Reader) Close() {
+	r.mu.Lock()
+	r.closed = true
+	r.mu.Unlock()
+	r.halt()
+	r.bg.Wait()
 }
 
 // Prefetching reports the prefetches in flight; it never exceeds ReadAhead (I-166).
@@ -287,15 +307,21 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 			return
 		}
 		r.mu.Lock()
+		if r.closed {
+			r.mu.Unlock()
+			<-r.slots
+			return
+		}
 		if _, running := r.inflight[h]; running {
 			r.mu.Unlock()
 			<-r.slots
 			continue
 		}
-		pctx, cancel := context.WithCancel(chunk.Background(context.Background()))
+		pctx, cancel := context.WithCancel(chunk.Background(r.stop))
 		call := &fetchCall{done: make(chan struct{}), prefetch: true, cancel: cancel}
 		r.inflight[h] = call
 		r.pf[in.Ino] = append(r.pruneLocked(r.pf[in.Ino]), call)
+		r.bg.Add(1) // under mu while not closed: never concurrent with Close's Wait
 		r.mu.Unlock()
 		r.prefetching.Add(1)
 		go func() {
@@ -303,6 +329,7 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 				r.prefetching.Add(-1)
 				<-r.slots
 				cancel()
+				r.bg.Done()
 			}()
 			if _, err := r.run(pctx, h, call); err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -710,18 +737,33 @@ func (r *Reader) joinOrStart(ctx context.Context, h meta.Hash) *fetchCall {
 	if !running {
 		call = &fetchCall{done: make(chan struct{})}
 		r.inflight[h] = call
+		if !r.closed {
+			r.bg.Add(1) // under mu while not closed: never concurrent with Close's Wait
+		}
 	} else if call.prefetch && !call.joined {
 		call.joined = true
 		r.raJoined.Add(1)
 	}
+	closed := r.closed
 	r.mu.Unlock()
-	if !running {
-		r.fetching.Add(1)
-		go func() {
-			defer r.fetching.Add(-1)
-			_, _ = r.run(context.WithoutCancel(ctx), h, call)
-		}()
+	if running {
+		return call
 	}
+	fctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	unhook := context.AfterFunc(r.stop, cancel) // Close cuts it
+	fetch := func() {
+		defer func() { unhook(); cancel() }()
+		_, _ = r.run(fctx, h, call)
+	}
+	if closed { // a closed reader detaches nothing: the fetch runs cut, here
+		fetch()
+		return call
+	}
+	r.fetching.Add(1)
+	go func() {
+		defer func() { r.fetching.Add(-1); r.bg.Done() }()
+		fetch()
+	}()
 	return call
 }
 

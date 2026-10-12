@@ -2,6 +2,23 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.6.0 (2026-10-12)
+
+### Changes
+
+- soak: phase 21 search and media (I-206..I-212) ([0644c4c](https://github.com/zombar/tailraid/commit/0644c4c))
+- webui: the Media tab (I-212) ([20a6d22](https://github.com/zombar/tailraid/commit/20a6d22))
+- webui: search, the markdown document and the Index tile (I-208, I-209) ([3a521ec](https://github.com/zombar/tailraid/commit/3a521ec))
+- search: the index in the volume, the leader's pass and the media catalogue (I-206, I-207, I-208, I-211) ([c8a689a](https://github.com/zombar/tailraid/commit/c8a689a))
+- meta, webui: the library folder flag, two bits of Flags at codec 6 (I-210) ([cfc1695](https://github.com/zombar/tailraid/commit/cfc1695))
+- node: the stats seal test's rows lie in the past whatever the hour ([e2e3dbe](https://github.com/zombar/tailraid/commit/e2e3dbe))
+- lookdev: the search box on its own row below 900 px with one focus ring, real 360 px frames, the Library row stacked ([3640603](https://github.com/zombar/tailraid/commit/3640603))
+- docs, lookdev: search, the index in the volume, the media catalogue and the Media tab (I-206..I-212, stubs) ([deb1d5d](https://github.com/zombar/tailraid/commit/deb1d5d))
+
+### Tooling
+
+- tests: CLI ports below the ephemeral range; the harness's MinCodec keeps its node ([1b1adb2](https://github.com/zombar/tailraid/commit/1b1adb2))
+
 ## v0.5.3 (2026-10-12)
 
 ### Changes

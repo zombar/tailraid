@@ -240,6 +240,10 @@ A `Get` of an entry whose write is pending is served from memory, or waits for t
 when the memory tier let it go, never misses and refetches; an entry evicted before its
 write leaves no file (the writer removes what it wrote); a write that fails drops the
 entry; `Drain` returns once nothing is outstanding and the node drains at shutdown.
+A fetch that outlives the client's read (readahead, the early path of 04 §5) would `Put`
+into a draining cache, so the node closes its reader first: `Reader.Close` cancels those
+fetches and waits for them, and a closed reader starts no more (found as a race in
+`make check` on 2026-10-12).
 
 **Pins.** A folder the user keeps on a device (`tailraid cache pin <path>`, or "Keep on
 this device" in the browser UI, 13 §4) is recorded in `<data_dir>/pins.json` as
@@ -410,7 +414,8 @@ defined in `04-write-path-and-durability.md`.
   and at most `CacheQueue` are outstanding, past which a `Put` writes synchronously; a
   `Get` of an entry whose write is pending is served from memory or waits for the write,
   never misses; an entry evicted before its write leaves no file; a failed write drops the
-  entry; `Drain` returns once no write is outstanding.
+  entry; `Drain` returns once no write is outstanding; `Reader.Close` cancels and waits
+  for the fetches running on their own goroutines, so no `Put` follows it.
 
 - **I-156** — Snapshot version 4 carries `Flags` and `DeletedAt`, and log entries carry
   codec version 4 only for `Trash`, `Restore`, `Purge` and a `SetAttr` with `Flags`;
@@ -443,5 +448,5 @@ defined in `04-write-path-and-durability.md`.
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
-| I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously` |
 | I-184 | planned (16): TestCodec_ReadsVersion6Snapshot, TestEncodeCommand_V7Gating, TestCodec_CatalogueRoundTrip, TestCandidates_MirrorNeverATarget, TestCluster_CatalogueSurvivesSnapshotInstall, `TestCodec_StateRoundTrip`, `FuzzDecodeCommand`, `FuzzDecodeState` |
+| I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously`, `TestReader_Close_CancelsDetachedFetches` |

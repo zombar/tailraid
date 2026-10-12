@@ -121,7 +121,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
+| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none, on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,live,tier,step},"node","nodes":[{name,addr,live,self,web?}],"charts":[{id,title,svg,caption}]}`: the charts of docs/17 §4 over `[from, to)` (Unix seconds; `to=now` or absent for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; `nodes` carries each device member's tailnet IP, liveness and web port for the member menu's links; a missing or malformed `from`, `from ≥ to` or a range longer than `stats.keep.coarse` → 400; no query wired (`listen.web` on a node without the sampler) → 503; `Cache-Control: no-store` |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
@@ -143,7 +143,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/search?q=&under=&limit=` | – | `{"query","hits":[{path,type,size,mtime,ino,match,title?,artist?,album?,terms:[{term,off}]}],"index"?}`: the words of `q` ANDed, the last as a prefix, names from the FSM and tags and contents from the index (docs/18 §6); `under` limits to a live folder; `limit` 50 by default, 200 at most, 400 outside `1..200`; `index: "unavailable"` when the node has no loadable index and only names answered; never an entry in the trash or under `/.tailraid` |
 | `GET /api/render?path=&in=` | – | `text/html; charset=utf-8`: the file rendered as a document by the node's own markdown renderer (§4); `.md` and `.markdown` only, else 400; a source over `TEXT_MAX` (1 MiB) → 413; the ETag rule of `/files/`; `Cache-Control: no-cache` |
 | `GET /api/media` | – | `{"libs":[{path,kind}]}`: every live flagged folder in kind-then-path order (docs/18 §9), the Media tab's sections |
-| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
+| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,video?,video_ino?,video_version?,video_thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
 | `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album; `in=` reads a deleted root as `ls` does |
 | `GET /api/snapshots` | – | `{"mirrors":[{id,name,host,online,used,free,syncing?:{id,read,total,bytes_new}}],"snapshots":[{id,mirror,name,at,auto,state,files,bytes,new_bytes,missing}]}`, snapshots newest first, from the catalogue: offline mirrors' snapshots included (docs/16 §5) |
 | `POST /api/snapshot` `{"name"?,"mirror"?}` | required | 201 the begun rows (one per online mirror, or the one named); the serving gateway flushes its dirty files first; a taken name or a mirror already syncing → 409; an offline mirror → 409 `{"error","offline":true}`; a member too old for codec 7 → 503 |
@@ -228,7 +228,9 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   came from. The NFS and SMB gateways see exactly a delete: LOOKUP fails, READDIR omits
   the name, the handle is stale, a new entry may take the name at once; only the free
   space does not move until the purge. This UI lists a folder's deleted roots after its
-  live entries with `deleted_at` and `purge_at`, dimmed, and addresses them by inode:
+  live entries with `deleted_at` and `purge_at`, dimmed, once the viewer ticks the
+  toolbar's **show deleted** (off by default, kept for the session; the toolbar's count
+  says how many are hidden), and addresses them by inode:
   `in=<ino>` on `ls`, `stat`, `files`, `thumb` and `tags` reads inside the deleted root,
   so a deleted folder is browsed and a deleted video plays as before the delete, from the
   same bytes (I-158). A folder deleted from a mount with `rm -rf` arrives piece by piece
@@ -335,11 +337,18 @@ sweep removes it and the page grabs a new one as the tile comes into view (I-216
   cached a recipe-1 frame for a day fetches the new one.
 - **Audio** answers its embedded picture (§6), else a `cover.*`/`folder.*` sibling, scaled
   like an image. A folder's own tile uses its first audio entry by name that has a
-  picture (`dir.cover`), chosen the same way on every node (I-165). Finding it reads each
-  candidate's tags, so the folder's tile asks `GET /api/thumb?path=<folder>` and the node
-  resolves the cover then, once per folder version, and remembers it; a listing reports
-  `cover` only when already known and reads no file (measured 2026-10-11: a cold listing
-  of 99 album folders took 5.5 s while it resolved every cover in line).
+  thumbnail (`dir.cover`): an embedded picture, or, when the folder holds a `cover.*` or
+  `folder.*` image, its first audio entry outright. A folder with none takes the cover
+  of its first subfolder by name that has one, looking at the audio directly inside at
+  most `CoverSubdirs` (16) subfolders and never deeper, so an album kept as editions or
+  discs (`Fugazi/CBR Original/…`) and an artist's folder of albums both get a tile
+  (`cover` is then `<subfolder>/<entry>`). The choice is the same on every node (I-165).
+  Finding it reads each candidate's tags, so the folder's tile asks
+  `GET /api/thumb?path=<folder>` and the node resolves the cover then and remembers it
+  until the folder or a subfolder it looked into changes; a listing reports `cover`, or
+  `no_cover` for a folder resolved to none, only when already known and reads no file
+  (measured 2026-10-11: a cold listing of 99 album folders took 5.5 s while it resolved
+  every cover in line). The page asks for no thumbnail of a folder marked `no_cover`.
 - The page loads thumbnails lazily (three at a time as tiles scroll into view) and never
   more than one `PUT` per file per version; a tile under an nsfw folder draws its
   thumbnail blurred.
@@ -429,8 +438,9 @@ and episodes, or, for an album, its tracks through the tags of §6. Nothing unde
 root appears; an item under an nsfw folder carries `nsfw` and its art is blurred until
 tapped (I-163). Art comes through the routes that exist: a poster or cover tile is `GET
 /api/thumb?path=<poster>` (at most 320 px, generated once and shared, I-160), the detail
-page's poster and the background are `GET /files/<fanart>` as stored, and a film or an
-episode without a sidecar frame shows its browser-made thumbnail. A section lists at most
+page's poster and the background are `GET /files/<fanart>` as stored, and a film or an episode without a sidecar frame shows its browser-made thumbnail,
+grabbed and stored by the page exactly as the file browser's tiles do (§5) when none is
+stored yet: an item carries its video's `video_ino`, `video_version` and `video_thumb`. A section lists at most
 `MediaPage` (500) items a page from `offset`, sorted by `sort_title` then path, the same on
 every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
 now-playing bar (§6); "Open folder" goes to the file browser.
@@ -531,10 +541,10 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Upload row | `.upload` | queued (dim), uploading (bar), done `ok`, failed `bad` with the server's message |
 | Inline form | `.inline-form` | the new-folder input; Enter submits, Escape cancels |
 | Toast | `.toast` | `ok` / `bad`, bottom right, 6 s, click to dismiss, `aria-live="polite"` |
-| Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±10 %, `warn` past 10 %, `bad` past 25 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
+| Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±25 % (the repairer's `RebalanceSkew`, docs/14 §7: within it nothing moves), `warn` past 25 %, `bad` past 50 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
 | Diskless host | `.host-row.diskless` + `.host-note` | a host card with no target rows and the note `gateway only · no disks`; its border dimmed |
 | Warning icon | `.warn-icon` | the warnings strip's amber `!` disc at 14 px, inline after a name; the title says why (a target on the same physical disk as others: they fail together) |
-| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), then the slot counts and used of budget; at ≤ 480 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
+| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; at ≤ 480 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
 | Slot cell | `.cell` | present (green), `warn` `!` live but absent, `bad` `×` dead, `unplaced` dashed, `unverified` 50 % |
 | Panel | `details.panel` | collapsed by default; summary names the count; a `.loading` row ("loading 64 of 1,946…") while a page is in flight, a "Retry" button in the error row |
 | Empty / error | `.empty`, `.error` | "empty folder"; the error block quotes the server's `error` string and status |
@@ -559,9 +569,9 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Member menu | `.toolbar details.menu` > `summary` ("Node: pike") + `.menu-body` of `a.menu-row` (`.dot` + name + `.small.dim` state) + `a.menu-link` (↗) | one row per device member with its live dot and state; choosing a row re-renders the node section from this gateway; the ↗ link opens that member's own Stats page at the same range (`http://<tsIP>:<web>/#/stats?…`); a member without a web listener has no link; "all nodes" is the first row |
 | Chart card | `.charts` > `.chart-card` > `svg.chart` + `.small.dim` caption | the soak report's chart drawn in the page's tokens: text in `--text` and `--dim`, grid in `--line`, series in `--c0`…`--c7`, status cells in the status colours, the spread bins in the under/even/over tokens; one chart per row at every width; the caption names the unit, the window and the tier; hover shows the chart's `<title>` tooltips |
 | Search box | `header.top form.search` > `input[type=search]` + `button` | in the header after the tabs; `/` focuses it, Escape clears it, Enter opens `#/search/<q>`; one focus ring around input and button; below 900 px it takes a second header row of its own |
-| Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.under` toggle) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
+| Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.toggle`) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
 | Markdown document | `article.md.md-doc` | a 760 px measure with a gutter hairline on the left and faint `##`, `###` markers in the margin before `h3`–`h6` (the file's `#` is the page's `h2`); headings in mono as the UI's; code on `--surface`; tables with `--line` hairlines; `mark` in the accent tint; "Rendered \| Raw" as a `.seg` in the toolbar |
-| Library section | `section.lib` > `h2` (title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added, `.chips` of genres) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape |
+| Library section | `section.lib` > `details` > `summary` > `h2` (▾/▸, title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape; a section folds away on its heading, the choice kept per viewer in `localStorage`, and a folded library is listed only once opened |
 | Poster grid | `.posters` > `a.poster` > `.art` (`img`, or the kind glyph) + `.ptitle` + `.pyear` | `auto-fill, minmax(140px, 1fr)` (120 px under 480 px); `.art` is 2:3 letterboxed on `--surface`, square for music; `nsfw` blurs the art; `missing` shows the kind glyph over the title; loaded lazily like tiles |
 | Hero | `section.hero` > `img.backdrop` + `.hero-body` (`img.poster`, `h1`, `.facts`, `.plot`, `.actions`, `.people`) | the fanart as a full-width background 32 vh tall, `object-fit: cover`, darkened to 55 % and faded into `--bg` with a gradient so the ink stays legible in both themes; the poster overlaps its bottom edge; `.facts` year · runtime · rating · genres · mpaa in `--dim`; `.plot` sans 15/1.55 on a 65-ch measure; `.actions` "Play" and "Open folder" buttons; `.people` director and up to six actors as text chips; `.hero.no-art` is a plain `--surface` band, `.hero.poster-only` uses the poster's blurred copy at low opacity |
 | Season strip | `.seasons` > `button[aria-pressed]` per season | the selected season's episodes follow; "Specials" last |
@@ -751,7 +761,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   refuses every other with `421` before authorization; the index page's CSP contains
   `frame-ancestors 'none'`; `/api/status` never carries the join token.
 - **I-158** — The web UI lists a folder's deleted roots in that folder with their
-  `deleted_at` and `purge_at`, after the live entries; `ls`, `stat`, `files`, `thumb` and
+  `deleted_at` and `purge_at`, after the live entries, when show deleted is ticked; `ls`, `stat`, `files`, `thumb` and
   `tags` with `in=<ino>` read inside a deleted root and `GET /files` there returns exactly
   the bytes the file returned before its delete; `restore` returns the entry with the
   same `(ino, gen)` under its original name, or under the name or into the live folder
@@ -797,10 +807,13 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   the file's embedded picture.
 - **I-165** — The thumbnail of an audio file is its embedded picture, else a `cover.*` or
   `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
-  its first audio entry by name that has a picture, the same on every node, and absent
-  when none has one; a listing reports it only once this node has resolved it and reads
-  no file to do so, and `GET /api/thumb` of the folder resolves it, serves that picture
-  and answers 404 for a folder without one.
+  its first audio entry by name that has a thumbnail, else `<subfolder>/<entry>` for the
+  first of at most `CoverSubdirs` subfolders by name whose own audio gives one (one
+  level only), the same on every node, and absent when none has one; a listing reports
+  it, or `no_cover` for a folder resolved to none, only once this node has resolved it
+  for the current versions of the folder and of every subfolder it looked into, and
+  reads no file to do so; `GET /api/thumb` of the folder resolves it, serves that
+  picture and answers 404 for a folder without one.
 - **I-197** — One chart package renders the soak report and the Stats page: the same
   series render byte-identical SVG for both; it emits no colour and no inline `style`,
   only classes, and every class it emits is defined in `app.css` and in the report's
@@ -861,12 +874,12 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs`, `TestWebUI_Pins`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
 | I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
-| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
+| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_DirCoverFromSubfolder`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
-| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 | I-187 | planned (docs/16): TestWebUI_Snapshots_ListTake_NoDeleteRoute, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409, TestWebUI_Versions_DistinctContents, TestWebUI_Revert_Copy_RestoreTree, `TestSoak_AllPhasesAgainstHarness` |
+| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
