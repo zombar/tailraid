@@ -195,9 +195,6 @@ func (c *conn) lock(h header, body []byte) ([]byte, error) {
 // deadlock, which a hand-rolled wakeup between two clients easily can.
 func (c *conn) waitForLocks(h header, of *openFile, elements []lockElement) []byte {
 	op, interim := c.beginAsync(h, of.id)
-	c.mu.Lock()
-	c.asyncSession = h.sessionID
-	c.mu.Unlock()
 
 	go func() {
 		const (
