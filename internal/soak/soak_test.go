@@ -396,9 +396,9 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 func (e *harnessEnv) repairer(scrub bool) *repair.Repairer {
 	cfg := repair.DefaultConfig()
 	cfg.RateBytes = 0
-	cfg.ScrubShare = 0
+	cfg.ScrubPeriod = 0
 	if scrub {
-		cfg.ScrubShare = 1
+		cfg.ScrubPeriod = time.Nanosecond // a fresh repairer's first pass then scrubs every chunk (I-215)
 	}
 	l := e.c.Leader()
 	r := repair.New(l.Node.FSM, l.Node, l.Prober, l.Client, l.Reader, e.c.Clk, cfg, nil)

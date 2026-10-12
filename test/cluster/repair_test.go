@@ -27,7 +27,7 @@ func newRepairer(c *testharness.Cluster, nd *testharness.ClusterNode, cfg repair
 
 func repairCfg() repair.Config {
 	cfg := repair.DefaultConfig()
-	cfg.ScrubShare = 0
+	cfg.ScrubPeriod = 0
 	cfg.RateBytes = 0
 	return cfg
 }
@@ -530,7 +530,7 @@ func TestRepair_ReportedBadSlot_AndScrub_RepairCorruption(t *testing.T) {
 	// scrub finds silent corruption without a report
 	corruptShardFile(t, c.StoreOf(s).Path(chunk.Key(after.Hash, after.K, after.M, 2)))
 	cfg := repairCfg()
-	cfg.ScrubShare = 1
+	cfg.ScrubPeriod = time.Nanosecond // a fresh repairer's first pass then scrubs every chunk (I-215)
 	st, err = newRepairer(c, c.Leader(), cfg).Scan(ctx)
 	must(t, err)
 	if st.Scrubbed != 1 || st.ScrubBad != 1 || st.Repaired != 1 {

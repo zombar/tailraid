@@ -58,6 +58,8 @@ type Config struct {
 		// file this build wrote (a rollback after update, I-61)
 		Workers int    `yaml:"workers,omitempty"` // chunks a repair pass works on at once (default 4, at most 64; docs/06 §4)
 		Rate    string `yaml:"rate,omitempty"`    // shard bytes per second repair may move (default 50M; "0": no limit)
+		// how long the background scrub takes to verify the whole volume (default 168h; "0": off; docs/06 §5)
+		ScrubPeriod string `yaml:"scrub_period,omitempty"`
 	} `yaml:"repair"`
 	// these sections are written only when set, so a release from before them can still
 	// read a file this build wrote (a rollback after update, I-61)
@@ -161,6 +163,25 @@ func (c Config) RepairWorkers() (int, error) {
 		return 0, fmt.Errorf("config: repair.workers %d: want 1..64", w)
 	}
 	return c.Repair.Workers, nil
+}
+
+// MaxScrubPeriod bounds repair.scrub_period: a year.
+const MaxScrubPeriod = 8760 * time.Hour
+
+// RepairScrubPeriod parses repair.scrub_period (docs/06 §5, I-215): set reports whether
+// the key is present; "0" turns the background scrub off, otherwise 1h..MaxScrubPeriod.
+func (c Config) RepairScrubPeriod() (d time.Duration, set bool, err error) {
+	switch c.Repair.ScrubPeriod {
+	case "":
+		return 0, false, nil
+	case "0":
+		return 0, true, nil
+	}
+	d, err = time.ParseDuration(c.Repair.ScrubPeriod)
+	if err != nil || d < time.Hour || d > MaxScrubPeriod {
+		return 0, false, fmt.Errorf("config: repair.scrub_period %q: want 0 or a duration of 1h to 8760h", c.Repair.ScrubPeriod)
+	}
+	return d, true, nil
 }
 
 // RepairRateBytes parses repair.rate, the shard bytes a second repair may move: set is
@@ -448,6 +469,9 @@ func (c Config) Validate() error {
 	}
 	if c.Mount.Path != "" && runtime.GOOS != "windows" && !filepath.IsAbs(c.Mount.Path) {
 		return fmt.Errorf("config: mount.path %q: want an absolute path (~ is expanded)", c.Mount.Path)
+	}
+	if _, _, err := c.RepairScrubPeriod(); err != nil {
+		return err
 	}
 	if _, err := c.TrashRetention(); err != nil {
 		return err

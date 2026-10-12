@@ -338,7 +338,9 @@ it as one line (`repair  pass 3 running: 12345/106452 scanned, 4 in flight of 4 
 integrity panel shows it above the last pass's counters, so a first pass over a large
 backlog is visible as progress rather than read as a stall. `repair.workers` (1..64,
 default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in the config
-set the fan-out and the byte rate; `serve` refuses a value outside those bounds. Both
+set the fan-out and the byte rate, and `repair.scrub_period` (a duration of 1h to 8760h,
+`0` for no background scrub, default 168h, a week) how long the background scrub takes to verify the
+whole volume once (06 §5, I-215); `serve` refuses a value outside those bounds. All three
 are written to the file only when set, so a release from before them, which reads the
 file strictly, still starts after a rollback (I-61).
 
