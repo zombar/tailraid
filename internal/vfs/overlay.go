@@ -683,6 +683,23 @@ func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	return d.effSize(committed), true
 }
 
+// DataEnd reports what the overlay holds of an inode's data: the end of its last dirty
+// byte (a plan's below the lowest truncate since it was captured, fresh ones whole) and
+// the offset below which committed bytes still show. ok is false when the inode has no
+// dirty state, and then the committed inode is all there is.
+func (o *Overlay) DataEnd(ino meta.Ino) (dirtyEnd, baseLim uint64, ok bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return 0, 0, false
+	}
+	defer d.mu.Unlock()
+	end := d.ext.maxEnd()
+	if d.plan != nil {
+		end = max(end, min(d.plan.Extents.maxEnd(), d.planMin))
+	}
+	return end, baseLimit(d.sizeSet, d.minSize), true
+}
+
 // Read fills p from the overlay view of an inode whose committed size is committed:
 // base bytes below the truncation point (everywhere without one), zeros above it, and
 // WAL extents (both the in-flight plan's and fresh ones) on top. base may return fewer

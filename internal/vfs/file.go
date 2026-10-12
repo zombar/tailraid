@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"syscall"
 	"time"
 
@@ -182,6 +183,47 @@ func (f *File) Truncate(size int64) error {
 		return mapErr("truncate", f.name, err)
 	}
 	return nil
+}
+
+// ValidData is the file's valid data length and its size, as NTFS keeps them and SMB's
+// FSCTL_QUERY_FILE_REGIONS reports them (docs/15 §3, I-227): every byte at or past valid
+// reads as zero, and valid is never short of a byte that reads otherwise. It is the end
+// of the last committed chunk that is not a hole, held below a truncate the overlay still
+// carries, or the end of the last dirty byte, whichever is larger, capped at the size. A
+// chunk written as zeros is a hole once flushed, so valid may fall short of a write of
+// zeros; a committed chunk counts whole, so it may pass the end of a write by less than a
+// chunk of zeros. A snapshot file reports its size.
+func (f *File) ValidData() (valid, size int64, err error) {
+	if err := f.checkOpen("query"); err != nil {
+		return 0, 0, err
+	}
+	if f.snap != nil {
+		sz := int64(f.snap.e.Size) //nolint:gosec // a file size fits an int64
+		return sz, sz, nil
+	}
+	// The overlay first, then the inode: a flush moves dirty bytes into the inode before
+	// it clears them here, so whatever commits in between shows in one of the two.
+	dirtyEnd, limit, dirty := f.fs.ov.DataEnd(f.ino)
+	in, err := f.inode()
+	if err != nil {
+		return 0, 0, err
+	}
+	end := uint64(0)
+	cs := uint64(f.fs.st.Volume().ChunkSize)
+	for i, h := range slices.Backward(in.Chunks) {
+		if h != meta.HashZero {
+			end = min(in.Size, uint64(i+1)*cs) //nolint:gosec // i is an index
+			break
+		}
+	}
+	sz := in.Size
+	if dirty {
+		end = max(min(end, limit), dirtyEnd)
+		if s, ok := f.fs.ov.Size(f.ino, in.Size); ok {
+			sz = s
+		}
+	}
+	return int64(min(end, sz)), int64(sz), nil //nolint:gosec // file sizes fit an int64
 }
 
 // Close only marks the handle: durability is the WAL fsync that already happened in Write.

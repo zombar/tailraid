@@ -90,6 +90,8 @@ func TestValidateNegotiateInfo(t *testing.T) {
 		binary.LittleEndian.PutUint32(body[4:], fsctlValidateNegotiateInfo)
 		binary.LittleEndian.PutUint32(body[24:], uint32(headerLen+56))
 		binary.LittleEndian.PutUint32(body[28:], uint32(len(in)))
+		binary.LittleEndian.PutUint32(body[44:], 1<<16)
+		binary.LittleEndian.PutUint32(body[48:], ioctlIsFsctl)
 		out, err := c.dispatch(request(cmdIoctl, 0, append(body, in...)))
 		if err != nil {
 			t.Fatalf("the control code: %v", err)
@@ -127,15 +129,21 @@ func TestValidateNegotiateInfo(t *testing.T) {
 		t.Errorf("a mismatched security mode answered %#x", st)
 	}
 
-	// Everything else is refused by name.
+	// Everything else is refused by name: a file-system FSCTL as not supported on this
+	// file system, any other as not allowed here (MS-SMB2 §3.3.5.15, I-228).
 	body := make([]byte, 56)
+	binary.LittleEndian.PutUint32(body[48:], ioctlIsFsctl)
 	binary.LittleEndian.PutUint32(body[4:], fsctlDfsGetReferrals)
 	if st := statusOf(t, mustDispatch(t, c, cmdIoctl, body)); st != statusNotSupported {
 		t.Error("a referral request was not refused by name")
 	}
 	binary.LittleEndian.PutUint32(body[4:], 0x00090000)
+	if st := statusOf(t, mustDispatch(t, c, cmdIoctl, body)); st != statusInvalidDeviceRequest {
+		t.Error("a file-system control code was not refused as unsupported here")
+	}
+	binary.LittleEndian.PutUint32(body[4:], 0x00220000)
 	if st := statusOf(t, mustDispatch(t, c, cmdIoctl, body)); st != statusNotSupported {
-		t.Error("an unknown control code was not refused by name")
+		t.Error("another device's control code was not refused by name")
 	}
 	// A payload that is not inside the message is refused rather than read.
 	binary.LittleEndian.PutUint32(body[4:], fsctlValidateNegotiateInfo)
