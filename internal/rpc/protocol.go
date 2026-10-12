@@ -124,7 +124,7 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op     string `json:"op"`               // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | export (was snapshot) | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal | snapshot_ls | snapshot_create (docs/16: Name, Mirror; no op removes a snapshot, I-183)
+	Op     string `json:"op"`               // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | export (was snapshot) | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal | snapshot_ls | snapshot_create | snapshot_restore | versions | versions_revert | versions_copy (docs/16: Name, Mirror, Path, To, As; no op removes a snapshot, I-183)
 	Mirror string `json:"mirror,omitempty"` // snapshot_create, snapshot_ls: one mirror by name ("" every one)
 	Name   string `json:"name,omitempty"`   // snapshot_create: the snapshot's name ("" the UTC minute)
 	K      uint8  `json:"k,omitempty"`

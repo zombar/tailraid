@@ -13,7 +13,7 @@ holds back garbage collection only for the length of that copy (§4), and from t
 the mirror owns it. Previous versions of a file are its content in the snapshots the
 online mirrors hold.
 
-*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes). The numbers
+*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes); PR 2c built (revert, copy, tree restore and versions in the vfs, `snapshot restore`, `versions`). The numbers
 below are stubs in `test/invariants/` until each PR lands its tests (PR 1 meta and the
 mirror store, PR 2a sync and the tick, PR 2b the gateways, PR 2c versions and restore, PR 3 the web UI, PR 4 soak
 phase 19).*
@@ -330,4 +330,4 @@ stub in `test/invariants/` meanwhile.
 | I-180 | `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`; planned: TestCLI_MirrorStandalone_LsCatExport |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`; planned: TestCluster_OverwriteDuringSync_SnapshotExact |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`; planned: TestWebUI_NoSnapshotDeleteRoute, TestMirror_OfflineDeleteReconciledOnAttach |
-| I-186 | TestVFS_Revert_FromPoolAndMirror, TestVFS_Revert_FlushesDirtyFirst, TestVFS_SaveCopy, TestVFS_RestoreTree_SkipsExisting, TestCluster_RestoreAfterGC_UploadsFromMirror |
+| I-186 | `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

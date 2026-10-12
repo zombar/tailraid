@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // mirrorCmd is `tailraid mirror` (docs/16, docs/12 §11): disks given to snapshots.
@@ -321,6 +324,124 @@ func snapshotCmd() *cobra.Command {
 	}
 	create.Flags().StringVar(&mirrorName, "mirror", "", "one mirror by name")
 	addNodeFlags(create)
-	c.AddCommand(ls, create)
+	var to, as string
+	restore := &cobra.Command{
+		Use:   "restore <mirror>/<name> <path>",
+		Short: "Copy a file or folder of a snapshot into the live volume (an existing file is skipped, never overwritten)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m, name, err := splitSnapshotRef(args[0])
+			if err != nil {
+				return err
+			}
+			raw, err := localCall(cmd, rpc.AdminOp{Op: "snapshot_restore", Mirror: m, Name: name, Path: args[1], To: to, As: as})
+			if err != nil {
+				return err
+			}
+			return printRestore(cmd.OutOrStdout(), raw)
+		},
+	}
+	restore.Flags().StringVar(&to, "to", "", "the folder to restore into (default: where it was)")
+	restore.Flags().StringVar(&as, "as", "", "the name to restore it as")
+	addNodeFlags(restore)
+	c.AddCommand(ls, create, restore)
+	return c
+}
+
+// splitSnapshotRef splits <mirror>/<name>: the mirror's name holds a slash (pike/m1), so
+// the snapshot's name is what follows the last one.
+func splitSnapshotRef(ref string) (mirrorName, name string, err error) {
+	i := strings.LastIndexByte(ref, '/')
+	if i <= 0 || i == len(ref)-1 {
+		return "", "", fmt.Errorf("%q: want <mirror>/<name>, e.g. pike/m1/2026-10-12T1400", ref)
+	}
+	return ref[:i], ref[i+1:], nil
+}
+
+func printRestore(w io.Writer, raw json.RawMessage) error {
+	var r struct {
+		Path   string            `json:"path"`
+		Report vfs.RestoreReport `json:"report"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "restored to %s: %d files, %d folders, %d links, %d chunks read from the mirror\n", r.Path, r.Report.Files, r.Report.Dirs, r.Report.Links, r.Report.Uploaded)
+	for _, s := range r.Report.Skipped {
+		fmt.Fprintf(w, "  skipped %s (exists)\n", s)
+	}
+	return nil
+}
+
+func versionsCmd() *cobra.Command {
+	var revert, copyFrom, as string
+	c := &cobra.Command{
+		Use:   "versions <path>",
+		Short: "The versions of a file on the online mirrors; --revert or --copy one back",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			op := rpc.AdminOp{Op: "versions", Path: args[0]}
+			switch {
+			case revert != "" && copyFrom != "":
+				return errors.New("--revert or --copy, not both")
+			case revert != "":
+				op.Op = "versions_revert"
+				var err error
+				if op.Mirror, op.Name, err = splitSnapshotRef(revert); err != nil {
+					return err
+				}
+			case copyFrom != "":
+				if as == "" {
+					return errors.New("--copy needs --as <name>")
+				}
+				op.Op, op.As = "versions_copy", as
+				var err error
+				if op.Mirror, op.Name, err = splitSnapshotRef(copyFrom); err != nil {
+					return err
+				}
+			}
+			raw, err := localCall(cmd, op)
+			if err != nil {
+				return err
+			}
+			switch op.Op {
+			case "versions_revert":
+				fmt.Fprintf(cmd.OutOrStdout(), "%s now holds its content of %s\n", args[0], revert)
+				return nil
+			case "versions_copy":
+				return printRestore(cmd.OutOrStdout(), raw)
+			}
+			var r node.VersionsReply
+			if err := json.Unmarshal(raw, &r); err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+			fmt.Fprintln(w, "VERSION\tSIZE\tMODIFIED\tIN SNAPSHOTS")
+			for i := range r.Versions {
+				v := &r.Versions[i]
+				label := fmt.Sprint(i)
+				if v.Current {
+					label = "current"
+				}
+				var in []string
+				for _, s := range v.Snapshots {
+					in = append(in, s.Mirror+"/"+s.Name)
+				}
+				held := strings.Join(in, ", ")
+				if held == "" {
+					held = "in no snapshot yet"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", label, bytesStr(v.Size), time.Unix(0, v.Mtime).Local().Format("2006-01-02 15:04"), held)
+			}
+			for _, o := range r.Offline {
+				fmt.Fprintf(w, "\t\t\t%d snapshots on %s, offline\n", o.Snapshots, o.Mirror)
+			}
+			return w.Flush()
+		},
+	}
+	c.Flags().StringVar(&revert, "revert", "", "make the file hold its content of <mirror>/<name>")
+	c.Flags().StringVar(&copyFrom, "copy", "", "copy the file's content of <mirror>/<name> beside it")
+	c.Flags().StringVar(&as, "as", "", "the copy's name (with --copy)")
+	addNodeFlags(c)
 	return c
 }

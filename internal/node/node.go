@@ -992,6 +992,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return snapshotList(a.node.FSM.Nodes(), a.node.FSM.Snapshots(), op.Mirror), nil
 	case "snapshot_create": // manual snapshots: permanent, never thinned (docs/16 §4)
 		return a.snapshotCreate(ctx, op)
+	case "versions", "versions_revert", "versions_copy", "snapshot_restore": // on the node asked (docs/12 §11)
+		return a.restoreOp(ctx, op)
 	case "export", "snapshot": // docs/12 §9: the newest state, exported under the data directory for the CLI to copy out ("snapshot" is the name before docs/16)
 		dir, m, err := a.node.ExportSnapshot(filepath.Join(a.dataDir, "export"))
 		if err != nil {
