@@ -9,3 +9,5 @@
 test/soak/*-linux-*
 /.claude/
 /test/vms/
+/client
+/soak

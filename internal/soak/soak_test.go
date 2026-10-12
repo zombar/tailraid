@@ -719,7 +719,15 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	defer env.stopAllStats()
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
-	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed}
+	// phase 22 needs the gateways' retry-until-stale (production's) and runs in its own
+	// test on such a cluster; this one's gateways fail fast for the other fault phases
+	var all []string
+	for _, ph := range soak.StandardPhases() {
+		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" {
+			all = append(all, num)
+		}
+	}
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases(all...)}
 	sum, err := run.Execute(context.Background())
 	if err != nil {
 		t.Fatal(err)

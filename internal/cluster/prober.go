@@ -124,7 +124,9 @@ type Prober struct {
 	s3Tried map[meta.NodeIdx]time.Time    // last S3 probe sent, good or not
 	suspect map[meta.NodeIdx]time.Time    // hosts marked suspect, by host idx, until their next good probe (I-170)
 	mirrors map[meta.NodeIdx]*MirrorProbe // by mirror row: the host's last /health word on it (docs/16 §1)
-	events  chan Event
+	// codecView overrides what MinCodec takes a peer to read (dev.enabled only, SetCodecView)
+	codecView map[meta.NodeIdx]uint8
+	events    chan Event
 
 	fillAfter, evictAfter time.Duration
 }
@@ -517,6 +519,22 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	return false
 }
 
+// SetCodecView makes MinCodec take peer idx as reading codec v whatever it reports (0:
+// its report again): a rolling upgrade in which this node sees an old member that another
+// node does not. Only /dev/codec calls it (dev.enabled, soak phase 22, docs/09 §6).
+func (p *Prober) SetCodecView(idx meta.NodeIdx, v uint8) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if v == 0 {
+		delete(p.codecView, idx)
+		return
+	}
+	if p.codecView == nil {
+		p.codecView = map[meta.NodeIdx]uint8{}
+	}
+	p.codecView[idx] = v
+}
+
 // MinCodec is the oldest codec version a live active device reports, this node's own
 // included: what the leader may write without leaving a live member unable to read it
 // (docs/12 §6, I-156). A member that predates the field reports 0 and counts as oldest.
@@ -532,6 +550,9 @@ func (p *Prober) MinCodec() uint8 {
 		codec := uint8(0)
 		if ok {
 			codec = pr.Codec
+		}
+		if v, set := p.codecView[nd.Idx]; set && ok {
+			codec = v
 		}
 		p.mu.Unlock()
 		if ok && codec < minCodec {
