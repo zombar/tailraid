@@ -289,11 +289,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   I-154; the vfs answers `EPERM`), answers success and the file stays. The next listing
   shows it. SET_INFO disposition, which Explorer sends before the close, does carry the
   refusal: the adapter checks the protection there and answers `STATUS_ACCESS_DENIED`, so
-  Explorer shows "Access denied" for a protected entry rather than a silent no-op. The
-  one delete a protected folder takes is a failed copy's own cleanup: a handle whose
-  CREATE created the file may mark it delete-on-close and the CLOSE trashes it (I-220),
-  so Skip or Cancel in Explorer leaves no half-copied file behind; before 2026-10-12 it
-  did, and the integrity panel showed them as files of holes.
+  Explorer shows "Access denied" for a protected entry rather than a silent no-op.
 - **A delete goes to the trash** (docs/02 §Apply rules): `DeleteFile` and `DeleteDir`
   propose `Trash` for every name but the ephemeral ones of docs/06 §1, and the share sees
   a delete: the name is `STATUS_OBJECT_NAME_NOT_FOUND`, the listing omits it, a create of

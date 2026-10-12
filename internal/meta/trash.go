@@ -121,9 +121,7 @@ func (a *applier) trash(c *Trash) error {
 		return ErrNotExist
 	}
 	in := st.Inodes[ino]
-	if st.lineage(ino).protected && (!c.Own || in.Type != TFile) {
-		// an own cleanup, a failed copy removing the file it created, is the one delete
-		// a protected folder takes, and never of a directory (I-220)
+	if st.lineage(ino).protected {
 		return ErrProtected
 	}
 	if in.Type == TDir && len(in.Children) != 0 && !c.Recursive {

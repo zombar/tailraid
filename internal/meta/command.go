@@ -42,7 +42,6 @@ const (
 	commandVersionV5 = 5 // a Commit whose NewChunks carry Sums, and SetShardSums (docs/04 §4, I-201)
 	commandVersionV6 = 6 // a SetAttr whose Flags carry the library kind (docs/18 §9, I-210)
 	commandVersionV7 = 7 // the snapshot commands and a NodeUpsert of a mirror (docs/16, I-184)
-	commandVersionV8 = 8 // a Trash with Own, an own cleanup (docs/02 §Protection, I-220)
 	// CodecMirrors is the codec every live member must read before a mirror or a
 	// snapshot command is proposed (docs/02 §Codec versions).
 	CodecMirrors = commandVersionV7
@@ -52,7 +51,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 8
+	CodecVersion = 7
 )
 
 // SetAttr mask bits.
@@ -140,10 +139,6 @@ type (
 		Name      string
 		Recursive bool
 		Now       int64
-		// Own marks an own cleanup: the SMB handle that created the file deletes it, as a
-		// failed copy does, and protection lets that one through (I-220). Codec 8: the
-		// version is the flag, no byte is added.
-		Own bool
 	}
 	// Restore puts a deleted root back: under NewParent/NewName, or (0, "") its own place.
 	Restore struct {
@@ -276,13 +271,6 @@ type Command struct {
 // needsV7 reports whether c is a snapshot command or registers a mirror (docs/16): an
 // older binary cannot decode the ops and would place on a mirror row, so the leader
 // refuses them while such a member is live (I-184).
-// needsV8 reports whether c is an own cleanup, a codec-8 Trash: an older binary would
-// apply it as a plain Trash and refuse what this one allows, so the leader refuses the
-// entry while such a member is live (I-156, I-220).
-func needsV8(c Command) bool {
-	return c.Op == OpTrash && c.Trash != nil && c.Trash.Own
-}
-
 func needsV7(c Command) bool {
 	switch c.Op { //nolint:exhaustive // every other op is version 1–6
 	case OpSnapshotBegin, OpSnapshotEnd, OpSnapshotDelete:
@@ -369,8 +357,6 @@ func CommandCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
-	case needsV8(c):
-		return commandVersionV8
 	case needsV7(c):
 		return commandVersionV7
 	case needsV6(c):
@@ -570,7 +556,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && (v < commandVersion || v > commandVersionV8) {
+	if r.err == nil && (v < commandVersion || v > commandVersionV7) {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -593,8 +579,6 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSetAttr
 	case commandVersionV7:
 		legal = c.Op == OpSnapshotBegin || c.Op == OpSnapshotEnd || c.Op == OpSnapshotDelete || c.Op == OpNodeUpsert
-	case commandVersionV8:
-		legal = c.Op == OpTrash
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete
@@ -678,7 +662,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	case OpSetVolumeMode:
 		c.SetVolumeMode = &SetVolumeMode{Auto: r.bool(), Now: r.i64()}
 	case OpTrash:
-		c.Trash = &Trash{Parent: Ino(r.u64()), Name: r.str(), Recursive: r.bool(), Now: r.i64(), Own: v == commandVersionV8}
+		c.Trash = &Trash{Parent: Ino(r.u64()), Name: r.str(), Recursive: r.bool(), Now: r.i64()}
 	case OpRestore:
 		c.Restore = &Restore{Ino: Ino(r.u64()), NewParent: Ino(r.u64()), NewName: r.str(), Now: r.i64()}
 	case OpPurge:
