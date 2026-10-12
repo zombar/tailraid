@@ -39,7 +39,15 @@ func IsUploadTemp(name string) bool { return meta.IsUploadTemp(name) }
 // leaves them out (I-140). Both are ephemeral names: a delete unlinks them (docs/06 §1).
 func IsOSMetadata(name string) bool { return meta.IsOSMetadata(name) }
 
-func tempName(name string) string { return "." + name + uploadSuffix }
+// tempName is the upload temp of name on node: ".<name>.<node>.tailraid-upload", so two
+// gateways uploading one name never write one temp (I-226); node "" is the plain
+// ".<name>.tailraid-upload".
+func tempName(name, node string) string {
+	if node == "" {
+		return "." + name + uploadSuffix
+	}
+	return "." + name + "." + node + uploadSuffix
+}
 
 // uploads tracks the temps being written right now (a second upload of the same path is
 // refused) and the slots.
@@ -169,7 +177,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "put "+canonical+": protected: unprotect the folder to replace the file")
 		return
 	}
-	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1]))
+	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1], s.o.Node))
 	var cur uint64 // the temp's current size: where the next part must start
 	if fi, err := s.o.FS.Stat(temp); err == nil {
 		cur = uint64(fi.Size())
@@ -257,12 +265,18 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, map[string]any{"offset": part.end})
 		return
 	}
-	if existed && noOverwrite { // raced into existence since part 0
-		writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
-		return
+	publish := s.o.FS.Rename
+	if noOverwrite {
+		// exclusive: a name another gateway published since this request looked is
+		// refused by the leader, not replaced (Rename.NoReplace, I-226)
+		publish = s.o.FS.RenameNoReplace
 	}
-	if err := s.o.FS.Rename(temp, canonical); err != nil {
+	if err := publish(temp, canonical); err != nil {
 		_ = s.o.FS.Remove(temp) // a refused publish leaves nothing behind (docs/13 §4)
+		if errors.Is(err, os.ErrExist) {
+			writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
+			return
+		}
 		s.fail(w, err)
 		return
 	}

@@ -66,6 +66,9 @@ type Options struct {
 	// Snapshots takes snapshots and reports the mirrors (docs/16); nil answers 503 on
 	// GET /api/snapshots and POST /api/snapshot. The other snapshot routes need the FS only.
 	Snapshots SnapshotService
+	// Node is this node's name: an upload's temp carries it, so uploads of one name
+	// through two gateways never share one (docs/13 §4, I-226). "" = the plain temp name.
+	Node string
 	// Hosts are the Host header values the UI answers (I-127): the listener's
 	// <tsIP>:port and the node's MagicDNS name with the port. Any other Host is a 421,
 	// so a page on another origin that resolves a name to this node's IP (DNS

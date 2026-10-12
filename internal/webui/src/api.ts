@@ -515,18 +515,6 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** uploadedSoFar asks the server how much of an upload's temp already exists (0 when none). */
-async function uploadedSoFar(path: string): Promise<number> {
-  const i = path.lastIndexOf("/");
-  const temp = path.slice(0, i + 1) + "." + path.slice(i + 1) + ".tailraid-upload";
-  try {
-    return (await stat(temp)).size;
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return 0;
-    throw e;
-  }
-}
-
 /**
  * upload stores a File atomically and resumably (docs/13 §4): a file up to PART goes in
  * one PUT; a larger one in sequential parts with Content-Range, each a request of its
@@ -572,7 +560,9 @@ export function upload(path: string, file: File, onProgress: (sent: number) => v
         if (++retries > RETRIES) throw failure(r);
         onNote?.(`resuming ${retries}/${RETRIES}`);
         await wait(1000 * Math.min(8, 2 ** (retries - 1)));
-        offset = await uploadedSoFar(path);
+        // the part is sent again from where this upload was; a server that holds more
+        // (the reply was lost after the part landed) answers 409 with its offset, which
+        // the loop adopts: the temp is the node's own, its name not the browser's to know
         continue;
       }
       throw failure(r);
