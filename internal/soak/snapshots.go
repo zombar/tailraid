@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -112,9 +113,10 @@ type mirrorRun struct {
 	writer NodeRef // the gateway that writes
 	reader NodeRef // another gateway, which reads the snapshots
 	dir    string
-	labels map[string]string // snapshot name → its label in the report
-	reads  map[string]string // snapshot name → how its read went
-	first  string            // the mirror's first snapshot
+	labels map[string]string       // snapshot name → its label in the report
+	reads  map[string]string       // snapshot name → how its read went
+	first  string                  // the mirror's first snapshot
+	seen   map[uint32]SnapshotInfo // every row the phase saw, by ID: the schedule thins automatic ones within the hour
 }
 
 func (m *mirrorRun) run(ctx context.Context, gws []NodeRef) error {
@@ -317,9 +319,16 @@ func (m *mirrorRun) drained(ctx context.Context) bool {
 	return ok
 }
 
-// catalogue is the mirror's rows, newest first.
+// catalogue is the mirror's rows, newest first; it remembers every row it returns.
 func (m *mirrorRun) catalogue(ctx context.Context) ([]SnapshotInfo, error) {
-	return m.r.snapshotList(ctx, m.writer, m.name)
+	rows, err := m.r.snapshotList(ctx, m.writer, m.name)
+	if m.seen == nil {
+		m.seen = map[uint32]SnapshotInfo{}
+	}
+	for i := range rows {
+		m.seen[rows[i].ID] = rows[i]
+	}
+	return rows, err
 }
 
 // snapshotList is the catalogue of one mirror (every mirror for ""), newest first.
@@ -570,13 +579,25 @@ func (m *mirrorRun) offlineAndBack(ctx context.Context, u *undo, snap1, snap2 st
 // summary (report.go's figures and table).
 func (m *mirrorRun) recordRoundTrip(ctx context.Context, gone, overwritten int) {
 	r := m.r
-	rows, err := m.catalogue(ctx)
+	now, err := m.catalogue(ctx)
 	if err != nil {
 		return
 	}
-	slices.Reverse(rows) // oldest first
-	for i := range rows {
-		s := &rows[i]
+	still := map[uint32]bool{}
+	for i := range now {
+		still[now[i].ID] = true
+	}
+	ids := slices.Sorted(maps.Keys(m.seen)) // oldest first
+	for _, id := range ids {
+		s := m.seen[id]
+		state := s.State
+		switch {
+		case still[id]:
+		case state == "syncing":
+			state = "ended unfinished" // the sync failed and its row went (docs/16 §3)
+		default:
+			state += ", thinned since" // an automatic one the hourly bucket replaced (docs/16 §4)
+		}
 		label := m.labels[s.Name]
 		switch {
 		case s.Name == m.first:
@@ -589,7 +610,7 @@ func (m *mirrorRun) recordRoundTrip(ctx context.Context, gone, overwritten int) 
 		r.emit(Record{Kind: "event", Name: snapshotEvent, Text: s.Name, Attrs: map[string]string{
 			"mirror": snapshotDir(s.Mirror), "label": label, "at": strconv.FormatInt(s.At, 10), "index": strconv.FormatUint(s.Index, 10),
 			"files": strconv.FormatUint(s.Files, 10), "bytes": strconv.FormatUint(s.Bytes, 10), "new_bytes": strconv.FormatUint(s.NewBytes, 10),
-			"state": s.State, "auto": strconv.FormatBool(s.Auto), "read": m.reads[s.Name],
+			"state": state, "auto": strconv.FormatBool(s.Auto), "read": m.reads[s.Name],
 		}})
 	}
 	r.event(roundTripEvent, fmt.Sprintf("GC collected %d of the %d overwritten chunks from the pool after the first sync ended; %s; offline: the catalogue kept listing the snapshots and reads inside failed; back: a catch-up began within one tick",
