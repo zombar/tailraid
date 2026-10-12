@@ -278,9 +278,9 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 		// a writer's O_TRUNC open, or a truncate to 0 replayed or set since, starts a
 		// rewrite; a later plan carries its id (docs/04 §6, I-223)
 		start, id := f.ov.Rewrite(ino)
-		if !start && id == 0 && plan.SizeSet && plan.MinSize == 0 {
+		if !start && plan.SizeSet && plan.MinSize == 0 { // a new copy, even over this gateway's last
 			f.ov.MarkRewrite(ino)
-			start = true
+			start, id = true, 0
 		}
 		if start {
 			plan.SizeSet, plan.MinSize = true, 0
@@ -392,6 +392,8 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		case res.Err == nil:
 			if cmd.RewriteStart {
 				f.ov.SetRewrite(plan.Ino, res.Version) // the id later Commits carry (I-223)
+			} else {
+				f.ov.ForgetPendingRewrite(plan.Ino) // committed plain: nothing left to start
 			}
 			if f.Hooks.AfterRaftCommit != nil {
 				f.Hooks.AfterRaftCommit()

@@ -397,9 +397,14 @@ reader's lock, where the cancel decides). `status` counts them as `readahead_can
   and WAL (the client's copy ran, and the other replaced it, exactly as if they had run
   one after the other). The claim stays after that, so the rest of the same copy is
   refused the same way rather than mixed into the winner. The rewrite whose start
-  applied last wins, whole. A claim lives while WRITEs of the inode keep reaching this
-  gateway and lapses `RewriteHold` (60 s) after the last one: a copy whose writes pause
-  stays one rewrite, and an in-place edit a minute later is a plain write again. A
+  applied last wins, whole. A plan truncating to 0 starts a new rewrite even while an
+  older claim of this gateway holds the inode (a second copy over the same file). A claim
+  lives while WRITEs of the inode keep reaching this gateway or its data is still dirty,
+  and lapses `RewriteHold` (60 s) after the last WRITE once its data has landed: a copy
+  whose writes pause, or whose flushes retry, stays one rewrite, and an in-place edit a
+  minute later is a plain write again. A pending claim whose flush committed as a plain
+  write (the gate below was closed, or the leader refused it) is gone: no later flush of
+  that copy may start a rewrite, which would truncate what the plain one committed. A
   gateway restart forgets its claims (the WAL holds no commit results); a replayed
   truncate to 0 starts a new rewrite, and anything else commits as plain writes. Until
   every live member reads codec 9 the flusher sends neither field (it asks the prober's
@@ -496,7 +501,8 @@ the WAL cap.
   commits with `RewriteStart`, which applies over any version and makes the version it
   produces the inode's `RewriteAt` (returned in `Result.Version`); every later Commit of
   that inode from the same gateway carries that id until `RewriteHold` passes without a
-  WRITE of the inode or the gateway restarts; a Commit whose id is not the inode's
+  WRITE of the inode and with no dirty data of it, a new truncate to 0 starts another,
+  or the gateway restarts; a copy whose first flush committed plain starts none; a Commit whose id is not the inode's
   `RewriteAt` is `ErrSuperseded` and changes nothing, and its flusher drops the inode's
   dirty extents and WAL, keeps the claim and counts it in `gateway.rewrites_superseded`;
   so after two clients each truncate one path and write a payload through two gateways,

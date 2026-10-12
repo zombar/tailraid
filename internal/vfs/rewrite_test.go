@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-git/go-billy/v5"
+
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -115,5 +117,126 @@ func TestFlusher_Rewrite_GatedOnMinCodec(t *testing.T) {
 	must(t, fl.FlushAll(ctx))
 	if in := f.Inode(f.InodeOf(fs, "/f")); in.RewriteAt != 0 || in.Size != 5 {
 		t.Fatalf("a flush before codec 9 started a rewrite: %+v", in)
+	}
+}
+
+// A replacing copy whose first flushes committed as plain writes (the gate was closed,
+// or the leader refused the rewrite and the same chunks went plain) has no rewrite left
+// to start: a later flush, with the gate open, must not truncate what they committed.
+// Regression: I-223
+func TestFlusher_Rewrite_PlainFlushConsumesClaim(t *testing.T) {
+	cs := int(testharness.ChunkSize)
+	for _, tc := range []struct {
+		name  string
+		block func(f *testharness.Fabric, fl *vfs.Flusher, open func())
+	}{
+		{"gate closed", func(_ *testharness.Fabric, fl *vfs.Flusher, open func()) {
+			fl.MinCodec = func() uint8 { return meta.CodecRewrite - 1 }
+			open()
+		}},
+		{"leader refuses", func(f *testharness.Fabric, _ *vfs.Flusher, open func()) {
+			f.SetLeaderCodec(meta.CodecRewrite - 1)
+			open()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testharness.NewFabric(t, 3, 2, 1)
+			fs := f.FS()
+			fl := f.Flusher()
+			first, second := testharness.Pattern(cs, 1), testharness.Pattern(cs, 2)
+			var h billy.File
+			tc.block(f, fl, func() {
+				o, err := fs.OpenFile("/f", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+				must(t, err)
+				h = o
+				writeAt(t, h, 5, first) // a non-zero offset
+				must(t, fl.FlushAll(ctx))
+			})
+			// every member reads codec 9 now; the copy goes on
+			fl.MinCodec = nil
+			f.SetLeaderCodec(0)
+			writeAt(t, h, int64(cs+5), second)
+			must(t, h.Close())
+			must(t, fl.FlushAll(ctx))
+			want := make([]byte, 5, 5+2*cs)
+			want = append(append(want, first...), second...)
+			if got := f.ReadFile(f.InodeOf(fs, "/f")); !bytes.Equal(got, want) {
+				t.Fatalf("the copy's first flush was lost: %d bytes, differs at %d", len(got), testharness.FirstDiff(got, want))
+			}
+		})
+	}
+}
+
+// A truncate to 0 is a new rewrite even while an older one of this gateway holds the
+// inode: a second copy through the same gateway starts its own, so a rewrite another
+// gateway started in between does not supersede it (docs/04 §6).
+// Regression: I-223
+func TestFlusher_Rewrite_TruncateStartsAnother(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fl := f.Flusher()
+	cs := int(testharness.ChunkSize)
+	h, err := fs.OpenFile("/f", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	must(t, err)
+	writeAt(t, h, 5, testharness.Pattern(cs, 1))
+	must(t, h.Close())
+	must(t, fl.FlushAll(ctx))
+
+	ofs, ofl := f.OtherGateway() // another copy starts and lands
+	o, err := ofs.OpenFile("/f", os.O_RDWR|os.O_TRUNC, 0)
+	must(t, err)
+	if _, err := o.Write(testharness.Pattern(cs, 9)); err != nil {
+		t.Fatal(err)
+	}
+	must(t, o.Close())
+	must(t, ofl.FlushAll(ctx))
+
+	// a third copy through this gateway, truncating by SETATTR as NFS does
+	h, err = fs.OpenFile("/f", os.O_RDWR, 0)
+	must(t, err)
+	must(t, h.Truncate(0))
+	mine := testharness.Pattern(cs, 3)
+	writeAt(t, h, 0, mine)
+	must(t, h.Close())
+	must(t, fl.FlushAll(ctx))
+	if got := fl.RewritesSuperseded(); got != 0 {
+		t.Fatalf("the newest copy was superseded %d times", got)
+	}
+	if got := f.ReadFile(f.InodeOf(fs, "/f")); !bytes.Equal(got, mine) {
+		t.Fatalf("the newest copy did not win: differs at %d", testharness.FirstDiff(got, mine))
+	}
+}
+
+// A claim whose copy is still dirty does not lapse, however long its flush retries: the
+// rest of the copy stays one rewrite (docs/04 §6).
+// Regression: I-223
+func TestOverlay_PruneRewrites_KeepsDirty(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	h, err := fs.OpenFile("/f", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	must(t, err)
+	writeAt(t, h, 5, []byte("dirty"))
+	must(t, h.Close())
+	ino := f.InodeOf(fs, "/f")
+	f.Clk.Advance(vfs.RewriteHold + 1)
+	f.Ov.PruneRewrites()
+	if start, _ := f.Ov.Rewrite(ino); !start {
+		t.Fatal("the claim of a dirty file lapsed")
+	}
+	must(t, f.Flusher().FlushAll(ctx))
+	f.Clk.Advance(vfs.RewriteHold + 1)
+	f.Ov.PruneRewrites()
+	if start, id := f.Ov.Rewrite(ino); start || id != 0 {
+		t.Fatalf("a clean file's lapsed claim stayed: start %v id %d", start, id)
+	}
+}
+
+func writeAt(t *testing.T, h billy.File, off int64, b []byte) {
+	t.Helper()
+	if _, err := h.Seek(off, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Write(b); err != nil {
+		t.Fatal(err)
 	}
 }
