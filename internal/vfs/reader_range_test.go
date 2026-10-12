@@ -339,3 +339,37 @@ func FuzzReadRange(fz *testing.F) {
 		}
 	})
 }
+
+// A fetch that outlives the client's read (here the early path's, waiting on a stalled
+// shard) is cancelled and waited for by Close, so nothing reaches the cache after the
+// reader is closed and the node can drain the cache (a late Put raced the harness's
+// Drain, macOS make check 2026-10-12); a closed reader starts no prefetch.
+// Invariant: I-204, I-202
+func TestReader_Close_CancelsDetachedFetches(t *testing.T) {
+	f := testharness.NewFabric(t, 4, 2, 1)
+	in, c := oneChunk(t, f, "a", 24)
+	s := ec.ShardLen(int(testharness.ChunkSize), 2)
+	_, rel1 := f.StallGet(c.Placement[1])
+	_, rel2 := f.StallGet(c.Placement[2])
+	defer rel1()
+	defer rel2()
+	rd := f.Reader()
+	_, errs := readEarly(rd, in, s/2, 4096)
+	must(t, <-errs)
+	if n := rd.Fetching(); n != 1 {
+		t.Fatalf("fetching %d before close, want 1", n)
+	}
+	rd.Close()
+	if n := rd.Fetching(); n != 0 {
+		t.Fatalf("fetching %d after close", n)
+	}
+	if cached(f, c.Hash) {
+		t.Fatal("a fetch cut by Close cached its chunk")
+	}
+	two := f.Inode(writeAndFlush(t, f, "b", testharness.Pattern(2*int(testharness.ChunkSize), 25)))
+	rd.Prefetch(two, 0) // a sequential first READ: chunk 1 would be prefetched
+	if n := rd.Prefetching(); n != 0 {
+		t.Fatalf("a closed reader prefetches %d", n)
+	}
+	rd.Close() // idempotent
+}
