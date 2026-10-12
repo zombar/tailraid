@@ -587,6 +587,42 @@ func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
 	return nil
 }
 
+// MkdirExcl makes the directory filename only when the name is free, as the leader
+// decides: a name another client took first is os.ErrExist whether or not this gateway
+// has applied that create yet, as an exclusive file create is (I-222). Missing parents
+// are made. SMB's FILE_CREATE of a directory is this.
+func (f *FS) MkdirExcl(filename string, perm os.FileMode) error {
+	ctx := context.Background()
+	parts := meta.SplitPath(filename)
+	if isSnapshotPath(parts) {
+		return mapErr("mkdir", filename, ErrReadOnly)
+	}
+	dp, name := parentOf(parts)
+	if name == "" {
+		return mapErr("mkdir", filename, meta.ErrExist) // the root
+	}
+	if err := f.mkdirAll(ctx, dp, 0o755); err != nil {
+		return mapErr("mkdir", filename, err)
+	}
+	parent, err := f.st.Resolve(dp)
+	if err != nil {
+		return mapErr("mkdir", filename, err)
+	}
+	asked := f.now()
+	_, err = f.propose(ctx, meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{
+		Parent: parent.Ino, Name: name, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: asked,
+	}})
+	if errors.Is(err, meta.ErrExist) && errors.Is(err, meta.ErrUnknownOutcome) {
+		// our own first attempt may have landed (I-95): an empty directory made in the window
+		if in, ok := f.st.Lookup(parent.Ino, name); ok && in.Type == meta.TDir && in.Ctime >= asked && in.Ctime <= f.now() {
+			if ents, _ := f.st.ReadDir(in.Ino); len(ents) == 0 {
+				return nil
+			}
+		}
+	}
+	return mapErr("mkdir", filename, err)
+}
+
 func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) error {
 	if isSnapshotPath(parts) {
 		return ErrReadOnly

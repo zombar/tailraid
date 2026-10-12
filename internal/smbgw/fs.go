@@ -13,6 +13,7 @@ import (
 	"time"
 
 	filesystem "github.com/go-filesystems/interface"
+	smb "github.com/go-filesystems/smb"
 
 	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
@@ -278,6 +279,29 @@ func (a *FS) ReadLink(path string) (string, error) {
 }
 
 func (a *FS) MkDir(path string, perm os.FileMode) error { return wrap(a.fs.MkdirAll(path, perm)) }
+
+// MkDirExcl is the server's FILE_CREATE of a directory (smb.ExclusiveDirCreator): made
+// only when the name is free, as the leader decides (I-222). A collision is the client's
+// answer, not a failure, and is not logged.
+func (a *FS) MkDirExcl(path string, perm os.FileMode) error {
+	err := wrap(a.fs.MkdirExcl(path, perm))
+	if errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return a.refused(&a.warnCreate, "mkdir", path, err)
+}
+
+// The server finds these capabilities by type assertion and falls back without them, so
+// a signature that drifts would turn a guarantee off silently: the compiler checks them.
+var (
+	_ smb.ExclusiveCreator    = (*FS)(nil)
+	_ smb.ExclusiveDirCreator = (*FS)(nil)
+	_ smb.InodeDeleter        = (*FS)(nil)
+	_ smb.NoReplaceRenamer    = (*FS)(nil)
+	_ smb.OwnDeleter          = (*FS)(nil)
+	_ smb.DeleteChecker       = (*FS)(nil)
+	_ smb.ConcurrentWriter    = (*FS)(nil)
+)
 
 func (a *FS) DeleteFile(path string) error {
 	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.Remove(path)))

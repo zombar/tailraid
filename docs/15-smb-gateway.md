@@ -105,23 +105,28 @@ Adapter: `internal/smbgw` implements that contract over `*vfs.FS` and `*vfs.File
 
 ## 3. What the server does on the backend (verified against v0.7.0)
 
-Every command holds the share's lock for its whole duration: reads share it, anything that
-changes the volume holds it exclusively. Two clients (macOS opens two connections for one
+Every command but a WRITE holds the share's lock for its whole duration: reads share it,
+anything that changes the volume holds it exclusively (a WRITE needs none: the vfs locks
+per inode, I-217). Two clients (macOS opens two connections for one
 mount) therefore never interleave inside one command on one gateway; between gateways
 the FSM decides (an exclusive create, I-222; two rewrites of one file, I-223). The share
-also keeps its open handles by inode, so what one handle does to a file (a rename, a
-delete-on-close) is judged by the file, not by the name it had when opened (I-224,
-I-225).
+also keeps a list of its open handles, each with the inode it opened: a rename moves
+every handle (and every byte-range lock) on the renamed path or under it to the new one,
+and a delete-on-close removes the handle's inode or nothing, so what one handle does to a
+file is judged by the file, not by the name it had when opened (I-224, I-225). A rename
+made on another gateway, over NFS or in the browser moves no handle here: such a handle
+keeps answering by its old path until it is reopened.
 
 | SMB2 command | What the server calls on the adapter |
 |---|---|
 | CREATE (open) | `Stat(path)`; on a miss, the case-insensitive walk of §5; then `OpenFile(path)` for a file, which the adapter answers with a `WritableFile` over `vfs.OpenFile(path, O_RDWR)` |
-| CREATE (create) | `FILE_CREATE`: `CreateExcl(path)` (`vfs.OpenFile` with `O_CREATE\|O_EXCL`), or `MkDir(path, 0755)` for a directory; an existing name, seen by this gateway or by the leader, is `STATUS_OBJECT_NAME_COLLISION` (I-222); then `Stat` and `OpenFile` as above |
-| CREATE (overwrite, supersede, open-if, overwrite-if) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`): on an existing file the truncate starts a rewrite, so two clients replacing one file leave one whole copy (04 §6, I-223) |
+| CREATE (create) | `FILE_CREATE`: `CreateExcl(path)` (`vfs.OpenFile` with `O_CREATE\|O_EXCL`), or `MkDirExcl(path, 0755)` (`vfs.MkdirExcl`) for a directory; an existing name, seen by this gateway or by the leader, is `STATUS_OBJECT_NAME_COLLISION` (I-222); then `Stat` and `OpenFile` as above |
+| CREATE (open-if) | a missing name: `CreateExcl(path)`; a name another gateway created first opens that file, never truncated; a directory: `MkDir(path, 0755)` |
+| CREATE (overwrite, supersede, overwrite-if) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`): on an existing file the truncate starts a rewrite, so two clients replacing one file leave one whole copy (04 §6, I-223) |
 | READ | `File.ReadAt(buf, offset)`; a short read at the end is `STATUS_END_OF_FILE`, which is how a listing of bytes ends |
 | WRITE | `WritableFile.WriteAt(data, offset)` then `Sync()`; the reply is sent only after both return. `WriteAt` is `vfs.File.WriteAt`, durable in the WAL when it returns (I-7), so `Sync` is a no-op |
 | FLUSH | `Sync()`, success |
-| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFile` or `DeleteDir` of the handle's current path with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
+| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFileIno(path, ino)` (`vfs.RemoveIno`) of the handle's current path, for a file or a directory, with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
 | SET_INFO end-of-file, allocation | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
 | SET_INFO rename | `Rename(old, new)` when `ReplaceIfExists` is set; without it `RenameNoReplace(old, new)` (the FSM's `NoReplace`, docs/02), so an existing `new`, created on this gateway or another, is `STATUS_OBJECT_NAME_COLLISION` and nothing moves (I-224). Every open handle of the file on the share follows the new path, not only the renaming one |
 | SET_INFO disposition | marks the handle delete-on-close (SMB2 has no delete command) |
