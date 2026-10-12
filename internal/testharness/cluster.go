@@ -427,6 +427,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
 	nd.FS.SetFlusher(nd.Flush)
+	nd.FS.MinCodec = nd.Flush.MinCodec // the same view, as node.go wires it
 	if c.retryUntilStale {
 		// the Stale rule of cluster.Node.Health, measured on the harness clock alone: Raft
 		// stamps LastContact on the wall clock, and comparing it with a fake clock that

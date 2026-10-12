@@ -5,6 +5,7 @@ package smb
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
 	"time"
 
 	filesystem "github.com/go-filesystems/interface"
@@ -56,7 +57,7 @@ func (c *conn) queryInfo(h header, body []byte) ([]byte, error) {
 	if of.pipe == nil {
 		release := of.share.reading()
 		var err error
-		st, err = of.share.fsys.Stat(of.path)
+		st, err = of.share.fsys.Stat(of.p())
 		if err != nil {
 			release()
 			return errorResponse(h, statusFor(err, statusObjectNameNotFound)), nil
@@ -124,7 +125,7 @@ func fixedPart(infoType, class uint8, n int) int {
 
 func fileInfo(class uint8, of *openFile, st filesystem.Stat) []byte {
 	size := sizeOf(st)
-	attrs := attributesOf(of.path, st, of.ro)
+	attrs := attributesOf(of.p(), st, of.ro)
 	switch class {
 	case fileBasicInformation:
 		b := make([]byte, 40)
@@ -165,7 +166,7 @@ func fileInfo(class uint8, of *openFile, st filesystem.Stat) []byte {
 		return b
 
 	case fileNameInformation:
-		name := utf16le(`\` + fsPathToSMB(of.path))
+		name := utf16le(`\` + fsPathToSMB(of.p()))
 		b := make([]byte, 4+len(name))
 		binary.LittleEndian.PutUint32(b, uint32(len(name)))
 		copy(b[4:], name)
@@ -352,7 +353,7 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 		if in[0] != 0 {
 			// the delete happens at CLOSE, whose reply carries no failure: a backend
 			// that may refuse it is asked now, where the client reads the status
-			if err := canDelete(of.share.fsys, of.path, of.created); err != nil {
+			if err := canDelete(of.share.fsys, of.p(), of.created); err != nil {
 				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 			}
 		}
@@ -371,12 +372,16 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 		if !ok {
 			return errorResponse(h, statusObjectNameNotFound), nil
 		}
-		if err := of.share.fsys.Rename(of.path, to); err != nil {
+		from := of.p()
+		if err := renameFor(of, from, to, in[0] != 0); err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
-		of.share.notify(of.path, actionRemoved)
+		of.share.notify(from, actionRemoved)
 		of.share.notify(to, actionAdded)
-		of.path = to
+		of.share.moveHandles(from, to) // every other handle of the file
+		of.pmu.Lock()
+		of.path = to // and this one, registered or not
+		of.pmu.Unlock()
 
 	case fileEndOfFileInformation, fileAllocationInformation:
 		if len(in) < 8 {
@@ -386,7 +391,7 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 		if err := c.truncate(of, size); err != nil {
 			return errorResponse(h, statusFor(err, statusNotSupported)), nil
 		}
-		of.share.notify(of.path, actionModified)
+		of.share.notify(of.p(), actionModified)
 
 	case fileBasicInformationSet:
 		// Access and write times go to a driver that can set them; attributes,
@@ -428,7 +433,7 @@ func (c *conn) setTimes(of *openFile, in []byte) error {
 	if !setA && !setM {
 		return nil
 	}
-	st, err := of.share.fsys.Stat(of.path)
+	st, err := of.share.fsys.Stat(of.p())
 	if err != nil {
 		return err
 	}
@@ -443,7 +448,7 @@ func (c *conn) setTimes(of *openFile, in []byte) error {
 	if !setM {
 		mtime = m
 	}
-	return ms.Chtimes(of.path, atime, mtime)
+	return ms.Chtimes(of.p(), atime, mtime)
 }
 
 // truncate resizes a file through whichever capability the driver has.
@@ -452,12 +457,12 @@ func (c *conn) truncate(of *openFile, size int64) error {
 		return of.w.Truncate(size)
 	}
 	if t, ok := of.share.fsys.(filesystem.Truncater); ok {
-		return t.Truncate(of.path, size)
+		return t.Truncate(of.p(), size)
 	}
 	// Neither capability: do it the only way left, which is to rewrite the
 	// file. It is O(size), and it is better than telling a client its copy
 	// failed.
-	data, err := of.share.fsys.ReadFile(of.path)
+	data, err := of.share.fsys.ReadFile(of.p())
 	if err != nil {
 		return err
 	}
@@ -468,5 +473,23 @@ func (c *conn) truncate(of *openFile, size int64) error {
 		copy(grown, data)
 		data = grown
 	}
-	return of.share.fsys.WriteFile(of.path, data, 0o644)
+	return of.share.fsys.WriteFile(of.p(), data, 0o644)
+}
+
+// renameFor renames the file of a handle. With replace an existing destination is
+// replaced; without it, it is os.ErrExist and nothing moves, decided by the backend when
+// it can (NoReplaceRenamer), else by a look first; the handle's own file under another
+// spelling of its name (a case-only rename) is no collision (I-224).
+func renameFor(of *openFile, from, to string, replace bool) error {
+	fsys := of.share.fsys
+	if replace {
+		return fsys.Rename(from, to)
+	}
+	if r, ok := fsys.(NoReplaceRenamer); ok {
+		return r.RenameNoReplace(from, to)
+	}
+	if st, err := fsys.Stat(to); err == nil && to != from && (of.ino == 0 || st.Inode() != of.ino) {
+		return os.ErrExist
+	}
+	return fsys.Rename(from, to)
 }

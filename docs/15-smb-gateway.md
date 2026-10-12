@@ -422,7 +422,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-141 | `TestSMB_DotFilesHidden` |
 | I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |
 | I-213 | `TestQueryInfo_OutputBufferLength` |
-| I-224 | `TestFSM_Rename_NoReplace_Exist`, `TestEncodeCommand_RewriteIsCodec9`; planned (PR smb-handles): TestRename_NoReplace_Collision, TestRename_OtherHandlesFollow, TestSMB_TwoSessions_RenameMovesOtherHandle, TestSoak_MultiUserAgainstHarness |
-| I-225 | `TestFSM_Trash_Expect_Mismatch`, `TestEncodeCommand_RewriteIsCodec9`; planned (PR smb-handles): TestDeleteOnClose_RenamedAway_NewFileSurvives, TestSMB_OwnCleanup_ByInode_UnderProtection, TestSoak_MultiUserAgainstHarness |
+| I-224 | `TestFSM_Rename_NoReplace_Exist`, `TestEncodeCommand_RewriteIsCodec9`, `TestRename_NoReplace_Collision`, `TestRename_OtherHandlesFollow`, `TestSMB_TwoSessions_RenameMovesOtherHandle`; planned: TestSoak_MultiUserAgainstHarness |
+| I-225 | `TestFSM_Trash_Expect_Mismatch`, `TestEncodeCommand_RewriteIsCodec9`, `TestDeleteOnClose_RenamedAway_NewFileSurvives`, `TestSMB_OwnCleanup_ByInode_UnderProtection`; planned: TestSoak_MultiUserAgainstHarness |
 | I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites`, `TestSeveralClientsOneShare` |
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |

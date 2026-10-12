@@ -124,19 +124,19 @@ func (c *conn) queryDirectory(h header, body []byte, msg []byte) ([]byte, error)
 // Those two are not optional. A client that does not see them concludes it is
 // not looking at a directory, and go-filesystems drivers do not report them.
 func (c *conn) listDir(of *openFile, pattern string) ([]dirEntry, uint32) {
-	self, err := of.share.fsys.Stat(of.path)
+	self, err := of.share.fsys.Stat(of.p())
 	if err != nil {
 		return nil, statusFor(err, statusObjectNameNotFound)
 	}
 	parent := self
-	if of.path != "/" {
-		if st, err := of.share.fsys.Stat(path.Dir(of.path)); err == nil {
+	if of.p() != "/" {
+		if st, err := of.share.fsys.Stat(path.Dir(of.p())); err == nil {
 			parent = st
 		}
 	}
 	out := []dirEntry{{name: ".", st: self}, {name: "..", st: parent}}
 
-	children, err := of.share.fsys.ListDir(of.path)
+	children, err := of.share.fsys.ListDir(of.p())
 	if err != nil {
 		return nil, statusFor(err, statusObjectNameNotFound)
 	}
@@ -145,7 +145,7 @@ func (c *conn) listDir(of *openFile, pattern string) ([]dirEntry, uint32) {
 		if name == "." || name == ".." {
 			continue // a driver that reports them itself must not report them twice
 		}
-		st, err := of.share.fsys.Stat(path.Join(of.path, name))
+		st, err := of.share.fsys.Stat(path.Join(of.p(), name))
 		if err != nil {
 			continue // a name that vanished between the listing and the stat
 		}
