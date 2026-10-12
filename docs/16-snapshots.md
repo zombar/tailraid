@@ -13,7 +13,7 @@ holds back garbage collection only for the length of that copy (§4), and from t
 the mirror owns it. Previous versions of a file are its content in the snapshots the
 online mirrors hold.
 
-*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes); PR 2c built (revert, copy, tree restore and versions in the vfs, `snapshot restore`, `versions`); the gaps built (`mirror add --adopt`, `SnapshotImport`, `open_mirror`, the hook's host ID, a detached mirror reported by its row, the CLI, schedule and harness cluster tests and the model checker's snapshot steps); PR 3 built (the web routes and pages of docs/13 §3, §4, §7, and every mirror's state on every node through `/health`, §1). The numbers
+*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes); PR 2c built (revert, copy, tree restore and versions in the vfs, `snapshot restore`, `versions`); the gaps built (`mirror add --adopt`, `SnapshotImport`, `open_mirror`, the hook's host ID, a detached mirror reported by its row, the CLI, schedule and harness cluster tests and the model checker's snapshot steps); PR 3 built (the web routes and pages of docs/13 §3, §4, §7, and every mirror's state on every node through `/health`, §1); PR 4 built (soak phase 19 on the compose rig's mirror and its report figures, 09 §6). The numbers
 below are stubs in `test/invariants/` until each PR lands its tests (PR 1 meta and the
 mirror store, PR 2a sync and the tick, PR 2b the gateways, PR 2c versions and restore, PR 3 the web UI, PR 4 soak
 phase 19).*
@@ -51,7 +51,10 @@ cluster and this mirror; anything else (unplugged, unmounted, host asleep or dea
 **offline**. The host checks the marker on every maintenance tick (each minute) and
 reports its mirrors in its `status` (online, used, free, newest snapshot). Only the host
 can tell whether its disk is attached, so the host drives its mirrors (§4); nothing else
-waits for a mirror, and an offline mirror costs the cluster nothing.
+waits for a mirror, and an offline mirror costs the cluster nothing. A write to a mirror
+whose directory is gone fails rather than recreate the path: a disk unplugged mid-sync
+leaves its mount point behind, and a recreated path would put the mirror on the host's
+own disk, hidden under the mount point once the disk is back.
 
 Every other node learns it from the host's `/health` reply, which lists the host's
 mirrors as disks are listed (14 §4): `{id, online, reason, used, free, total, syncing?:
@@ -354,8 +357,8 @@ stub in `test/invariants/` meanwhile.
 
 | Invariant | Tests |
 |---|---|
-| I-179 | `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
-| I-180 | `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
+| I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
+| I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestModelCheck_Long` |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`, `TestWebUI_Snapshots_ListTake_NoDeleteRoute` |
-| I-186 | `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |
+| I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

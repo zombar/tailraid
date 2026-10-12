@@ -247,7 +247,7 @@ has none, and a live run already has the OS mount.
 type Env interface {
     Name() string; Nodes(ctx) ([]NodeRef, error)   // name, idx, RPC address
     Volume(node NodeRef) (Volume, bool)            // file IO through that node's gateway
-    Caps() Caps                                    // Kill, Partition, Corrupt, MultiGateway, Disks, Mutate
+    Caps() Caps                                    // Kill, Partition, Corrupt, MultiGateway, Disks, Mutate, Mirror
     Wait(ctx, d time.Duration) error               // real time, or the fake clock in tests
     // admin surface (one node's view; leader-only ops routed by the Env)
     Status, RepairNow, Scrub, GCNow, SetPolicy, SetPolicyAuto, SetState, Remove, Fsck,
@@ -255,6 +255,9 @@ type Env interface {
     PurgeTrash(ctx) (int, error)                   // `trash purge --all`: what phase 8 needs before GC can reclaim
     WebURL(ctx, node NodeRef) (string, error)      // the node's browser UI (docs/13), for phase 16; "" skips it
     WebClient() *http.Client                       // how the driver reaches it (nil: directly); compose dials its published ports
+    AddMirror(ctx) (name string, host NodeRef, err error)  // phase 19's scratch mirror (`mirror add`); "" on a live cluster
+    SetMirrorOnline(ctx, name string, online bool) error   // unplug it and plug it back in
+    SnapshotOp(ctx, node NodeRef, op rpc.AdminOp) (json.RawMessage, error)  // snapshot_ls, snapshot_create, versions, versions_revert, snapshot_restore
     // faults
     Kill, Start, Restart, Partition, Heal, Corrupt, FailDisk, RestoreDisk, AddDisk ...
 }
@@ -397,24 +400,36 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   at least a third of its idle throughput, then the policy restored and the migration
   back complete; the in-flight and during-the-pass checks are skipped when the pass
   ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 19
-  snapshots (docs/16; the compose rig gives one node a mirror directory beside its disks;
-  needs `Caps.Mutate`, skipped otherwise, and restores what it changes: a manual snapshot
-  synced to the mirror, then one file overwritten in place through the mount, another
-  renamed, a third deleted and purged, a fourth truncated and a new one written; GC run
-  through the admin RPC so the overwritten chunks are collected from the pool; every path
-  under `/.snapshots/<mirror>/<name>/` read through another gateway byte-exact against the
-  model, the new file absent, the deleted one present, the overwritten one served from the
-  mirror; a second snapshot whose `new_bytes` is the changed chunks and trees only, not
-  the corpus; `/api/versions` of the overwritten file listing two contents, a revert of it
-  reading back the snapshot's bytes with the chunks copied back counted, and the deleted
-  folder restored by `restore-tree` under a new name and compared; the mirror taken
-  offline (its marker moved, as phase 13 closes a disk): the catalogue still lists it,
-  reads inside fail with `EIO` and the as-of route answers 409, and on its return a
-  catch-up snapshot begins at once; the rig's mirror is a scratch directory, so the phase's manual snapshots, which no user removes, stay on it (the thinning that removes automatic ones is proven by the
+  snapshots (docs/16; the compose rig lists `/mirrors/m1`, a volume of n2's own, as a
+  mirror with a one-minute schedule, `Caps.Mirror`; needs `Caps.Mutate`, and restores
+  what it changes: the phase's files are written and committed, then the mirror
+  registered with `tailraid mirror add` and online on its host within a tick, and a
+  manual snapshot synced (after the schedule's own first sync, which copied the volume:
+  its `new_bytes` are at least the phase's files); then one file overwritten in place
+  through the mount, another renamed, a folder deleted and purged from the trash, a
+  fourth truncated and a new one written, and GC run through the admin RPC after grace
+  until the overwritten chunks are gone from the pool; every file of the first snapshot
+  read through another gateway under `/.snapshots/<mirror>/<name>/` byte-exact against
+  the model (the overwritten one from the mirror), the new file absent, a write, a mkdir
+  and a remove under it refused; a second snapshot whose `new_bytes`, with those of any
+  automatic one in between, are the changed chunks and trees only, not the corpus; the
+  overwritten file's versions (the `versions` admin op) two contents with the first held
+  by the first snapshot, a revert of it reading back the snapshot's bytes, and the
+  deleted folder restored by `snapshot_restore` under a new name and compared; the new
+  file then deleted and collected, so only the mirror holds it; the mirror unplugged (its
+  directory moved away): its host reports it offline within a tick, the catalogue still
+  lists its snapshots, reads inside fail on its host and, for the file only the mirror
+  holds, on another gateway, nothing is begun for it over a whole interval, and on its
+  return an automatic catch-up snapshot begins within a tick and the file reads exact
+  again; the rig's mirror is a scratch directory, so the phase's manual snapshots, which
+  no user removes, stay on it (the thinning that removes automatic ones is proven by the
   schedule's tests); on a live cluster the phase takes no snapshot at all, since one it
-  took could never be removed: it reads the existing ones and, with the schedule on,
-  checks a complete snapshot younger than `2 × every`; the phase records one `snapshot round trip` event
-  with the snapshots' sizes and what each added; I-179..I-188, L-212..L-218); 20 stats (with `stats.every: 5s`
+  took could never be removed: it reads the newest complete snapshot through every
+  gateway and checks a mkdir under it is refused, and is skipped where the cluster has
+  none; the browser's as-of route (409 for an offline mirror) joins with docs/13's
+  snapshot routes; the phase records one event per snapshot with its sizes and what it
+  added, the mirror's offline stretch, and one `snapshot round trip` event; I-179..I-182,
+  I-185, I-186, I-188); 20 stats (with `stats.every: 5s`
   on the rig and 1 s on the harness: after `stats seal` every node's raw segment is
   under its own directory, decodes and is below the small-chunk threshold and the
   leader's cluster segment is there, `stats seal --rollup` writes today's minute and
@@ -424,7 +439,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   node answers over `/v1/stats`, a member killed mid-phase answers no live edge and the
   leader's rows mark it dead and never a zero, and the stored bytes grow by no more
   than docs/17 §6's estimate for one sealed hour and the rollups per node, printed
-  measured against estimated; 19 is taken by snapshots; I-191..I-194, I-196); 21 search and
+  measured against estimated; I-191..I-194, I-196); 21 search and
   media (text files with known words, a tagged track, a Kodi-style film folder and a show
   folder written through the mount, the libraries flagged, `index_now` over the admin RPC,
   then every node's `/api/search` and `/api/media` compared byte for byte, a renamed file
@@ -454,8 +469,8 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   to mark an open handle delete-on-close, and is covered by the SMB gateway's own tests). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
-  signature checking on, as phase 15's bucket, and publishes each node's web port for
-  phase 16; `cmd/soak -phases 15` runs a subset of
+  signature checking on, as phase 15's bucket, a mirror directory on n2 for phase 19,
+  and publishes each node's web port for phase 16; `cmd/soak -phases 15` runs a subset of
   the phases on the rig; `cmd/soak -topology single` runs one node with four
   disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure, disk

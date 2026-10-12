@@ -6,7 +6,9 @@
 # targets; n5 has none: a diskless voter and gateway (docs/14 §9, phase 14). Every node has
 # an empty /disks/spare that phase 13 adds, drains and removes. The s3 service is phase
 # 15's bucket (docs/10 §4): rclone's S3 server, which checks every signature, reached by
-# the nodes at 172.30.0.20:8080 and by the driver on a published port. Build the binaries
+# the nodes at 172.30.0.20:8080 and by the driver on a published port. n2 lists
+# /mirrors/m1, on a volume of its own, as a mirror (docs/16) with a one-minute schedule;
+# phase 19 registers it, snapshots it and unplugs it. Build the binaries
 # first: make soak-binary. docker-compose.single.yml is one host with four disks.
 x-node: &node
   build: .
@@ -44,10 +46,10 @@ services:
     volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-spare:/disks/spare']
   n2:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2}
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2, MIRRORS: /mirrors/m1, MIRRORS_EVERY: 1m}
     networks: {tailraid: {ipv4_address: 172.30.0.12}}
     ports: ["127.0.0.1:20502:20495", "127.0.0.1:20522:20482"]
-    volumes: ['n2:/var/lib/tailraid', 'n2-d1:/disks/d1', 'n2-d2:/disks/d2', 'n2-spare:/disks/spare']
+    volumes: ['n2:/var/lib/tailraid', 'n2-d1:/disks/d1', 'n2-d2:/disks/d2', 'n2-spare:/disks/spare', 'n2-mirror:/mirrors']
     depends_on: [n1]
   n3:
     !!merge <<: *node
@@ -128,3 +130,4 @@ volumes:
   n3-spare: {}
   n4-spare: {}
   n5-spare: {}
+  n2-mirror: {}

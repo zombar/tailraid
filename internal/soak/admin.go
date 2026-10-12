@@ -154,6 +154,20 @@ func (a *Admin) IndexNow(ctx context.Context) (search.PassResult, error) {
 	return res, err
 }
 
+// SnapshotOp sends one snapshot admin op to the node (docs/12 §11).
+func (a *Admin) SnapshotOp(ctx context.Context, n NodeRef, op rpc.AdminOp) (json.RawMessage, error) {
+	var raw json.RawMessage
+	err := a.nodeOp(ctx, n, op, &raw)
+	return raw, err
+}
+
+// AddMirror registers nothing: a live cluster's mirrors are its own, and phase 19 only
+// reads them (Caps.Mirror is false).
+func (a *Admin) AddMirror(context.Context) (string, NodeRef, error) { return "", NodeRef{}, nil }
+
+// SetMirrorOnline cannot unplug a live cluster's disk.
+func (a *Admin) SetMirrorOnline(context.Context, string, bool) error { return errors.ErrUnsupported }
+
 // WebURL is the node's browser UI from its status report.
 func (a *Admin) WebURL(ctx context.Context, n NodeRef) (string, error) {
 	rep, err := a.Status(ctx, n)

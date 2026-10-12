@@ -121,7 +121,7 @@ func (e *composeEnv) WebClient() *http.Client {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile}
 }
 
 // multiFile is the compose file with phase 15's bucket, the s3 service (docs/10 §4).
@@ -199,6 +199,36 @@ func (e *composeEnv) RestoreDisk(ctx context.Context, disk soak.NodeRef) error {
 // again and never closes it, so it needs no diskDir mapping.
 func (e *composeEnv) AddDisk(ctx context.Context, host soak.NodeRef) error {
 	return e.compose(ctx, "exec", "-T", host.Name, "tailraid", "node", "add-disk", "/disks/spare", "--capacity", "8G")
+}
+
+// The compose file's mirror (docs/16): n2 lists /mirrors/m1 under node.mirrors (MIRRORS
+// in test/soak/entry.sh) on a volume of its own; nothing else mounts it.
+const (
+	mirrorHost = "n2"
+	mirrorPath = "/mirrors/m1"
+)
+
+// AddMirror runs `tailraid mirror add` on n2 (the config already lists the path, so the
+// command only marks it and registers the row) and returns the row name.
+func (e *composeEnv) AddMirror(ctx context.Context) (string, soak.NodeRef, error) {
+	if e.file != multiFile {
+		return "", soak.NodeRef{}, nil
+	}
+	host := e.node(soak.NodeRef{Name: mirrorHost}).ref
+	if err := e.compose(ctx, "exec", "-T", mirrorHost, "tailraid", "mirror", "add", mirrorPath); err != nil {
+		return "", soak.NodeRef{}, err
+	}
+	return mirrorHost + "/m1", host, nil
+}
+
+// SetMirrorOnline moves the mirror's directory away and back, as an unplugged disk
+// looks to its host's next tick (docs/16 §1); no restart.
+func (e *composeEnv) SetMirrorOnline(ctx context.Context, _ string, online bool) error {
+	from, to := mirrorPath, mirrorPath+".away"
+	if online {
+		from, to = to, from
+	}
+	return e.compose(ctx, "exec", "-T", mirrorHost, "mv", from, to)
 }
 
 func (e *composeEnv) moveMarker(ctx context.Context, disk soak.NodeRef, from, to string) error {

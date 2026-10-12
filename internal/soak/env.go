@@ -2,12 +2,14 @@ package soak
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/stats"
@@ -46,6 +48,10 @@ type Caps struct {
 	Mutate bool
 	// Stats: the nodes run the stats sampler of docs/17 (StatsSeal, StatsLive).
 	Stats bool
+	// Mirror: the environment has a scratch mirror disk of its own for phase 19 to
+	// register, snapshot and unplug (AddMirror, SetMirrorOnline, docs/16). A live
+	// cluster has none: a snapshot taken there could never be removed (I-183).
+	Mirror bool
 }
 
 // Env is one target cluster (docs/09 §6).
@@ -119,4 +125,14 @@ type Env interface {
 	// IndexNow is `tailraid search index`: the leader's index pass now (docs/18 §5), what
 	// it indexed and what is still pending.
 	IndexNow(ctx context.Context) (search.PassResult, error)
+
+	// mirrors and snapshots (docs/16): AddMirror registers the environment's scratch
+	// mirror (`tailraid mirror add` on the host the environment gives it) and returns its
+	// row name ("n2/m1") and host; SetMirrorOnline unplugs it or plugs it back in (its
+	// directory moved away and back, as phase 13 closes a disk). SnapshotOp sends one
+	// admin op of docs/12 §11 to node (snapshot_ls, snapshot_create, versions,
+	// versions_revert, snapshot_restore) and returns its JSON reply.
+	AddMirror(ctx context.Context) (name string, host NodeRef, err error)
+	SetMirrorOnline(ctx context.Context, name string, online bool) error
+	SnapshotOp(ctx context.Context, node NodeRef, op rpc.AdminOp) (json.RawMessage, error)
 }

@@ -42,7 +42,8 @@ var phases = []phase{
 	{"16 web ui", phaseWeb},
 	{"17 hot path", phaseHotPath},
 	{"18 repair fan-out", phaseFanOut},
-	{"20 stats", phaseStats}, // 19 is snapshots' (its branch)
+	{"19 snapshots", phaseSnapshots},
+	{"20 stats", phaseStats},
 	{"21 search and media", phaseSearch},
 	{"22 copies under faults", phaseCopies},
 }
@@ -203,7 +204,8 @@ func (r *Run) checkFSMAgreement(ctx context.Context, cites, name string) {
 }
 
 // waitHealthy polls status until the cluster is healthy with every node live (except
-// removed rows and the targets named in excused, such as a disk the phase closed); the
+// removed rows, mirrors, which are never probed as targets and may be offline at will
+// (docs/16 §1), and the targets named in excused, such as a disk the phase closed); the
 // detail describes the last view.
 func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ...string) (bool, string) {
 	deadline := time.Now().Add(timeout)
@@ -213,7 +215,7 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ..
 		if err == nil {
 			var down []string
 			for i := range rep.Nodes {
-				if !rep.Nodes[i].Live && rep.Nodes[i].State != "removed" && !slices.Contains(excused, rep.Nodes[i].Name) {
+				if !rep.Nodes[i].Live && rep.Nodes[i].State != "removed" && rep.Nodes[i].Kind != meta.KindMirror.String() && !slices.Contains(excused, rep.Nodes[i].Name) {
 					down = append(down, rep.Nodes[i].Name)
 				}
 			}

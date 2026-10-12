@@ -1,6 +1,7 @@
 // Package chart draws the inline SVG charts of the soak report (docs/09 §6) and the web
 // UI's Stats page (docs/13 §Design, docs/17 §4): lines over a shared time axis with phase
-// bands and event markers, grouped bars, liveness lanes, a strip, and the disk-spread lanes.
+// bands and event markers, grouped bars, bars on a log axis, liveness lanes, a strip, and
+// the disk-spread lanes.
 // Everything is inline, no scripts, no external assets, and no colour: the package emits
 // classes only (series s0…s7, status, the spread bins, bands, text and grid), so the
 // report's stylesheet and the web UI's app.css each theme the same bytes (I-197). Every
@@ -336,6 +337,61 @@ func Bars(title string, labels []string, ss []Series) string {
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%s</text>`, gx+gw*0.4, Height-padB+16, html.EscapeString(label))
 	}
 	legend(&b, ss)
+	b.WriteString("</svg>")
+	return b.String()
+}
+
+// Bar is one bar of LogBars: its label under the axis, its value, its class (s0 when
+// empty) and its tooltip.
+type Bar struct {
+	Label string
+	Value float64
+	Class string
+	Tip   string
+}
+
+// LogBars draws one bar per entry on a log₂ axis whose gridlines are 2⁵ apart (1 Mi,
+// 32 Mi, 1 Gi for bytes), each bar with its value above it; tick formats an axis or a
+// bar value. A value below 1 draws no bar, only its label and value.
+func LogBars(title string, bars []Bar, tick func(float64) string) string {
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, b := range bars {
+		if b.Value >= 1 {
+			e := math.Log2(b.Value)
+			lo, hi = math.Min(lo, e), math.Max(hi, e)
+		}
+	}
+	if math.IsInf(lo, 1) {
+		lo, hi = 0, 5
+	}
+	lo = math.Floor(lo/5) * 5
+	hi = math.Max(math.Ceil(hi/5)*5, lo+5)
+	iw, ih := float64(Width-padL-padR), float64(Height-padT-padB)
+	sy := func(e float64) float64 { return float64(padT) + ih - (e-lo)/(hi-lo)*ih }
+	var b strings.Builder
+	open(&b, title, Height)
+	for e := lo; e <= hi; e += 5 {
+		y := sy(e)
+		fmt.Fprintf(&b, `<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" class="grid"/><text x="%d" y="%.1f" class="tick" text-anchor="end">%s</text>`,
+			padL, y, Width-padR, y, padL-6, y+4, html.EscapeString(tick(math.Exp2(e))))
+	}
+	if len(bars) == 0 {
+		b.WriteString("</svg>")
+		return b.String()
+	}
+	gw := iw / float64(len(bars))
+	for i, bar := range bars {
+		x := float64(padL) + gw*float64(i) + gw*0.15
+		w := gw * 0.7
+		top := sy(lo)
+		if bar.Value >= 1 {
+			top = sy(math.Max(math.Log2(bar.Value), lo))
+			fmt.Fprintf(&b, `<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" class="%s"><title>%s</title></rect>`,
+				x, top, w, sy(lo)-top, seriesClass(Series{Class: bar.Class}, 0), html.EscapeString(bar.Tip))
+		}
+		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" class="tick" text-anchor="middle">%s</text>`, x+w/2, top-6, html.EscapeString(tick(bar.Value)))
+		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%s</text>`, x+w/2, Height-padB+16, html.EscapeString(truncate(bar.Label, int(gw/6.5)+1)))
+	}
 	b.WriteString("</svg>")
 	return b.String()
 }

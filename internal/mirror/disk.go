@@ -12,7 +12,14 @@ import (
 // writeDurable writes b to final through a temp in tmpDir: write, fsync, close, rename,
 // fsync of final's directory, the shard store's sequence (docs/01, I-180). On any error
 // the temp is removed and final is untouched.
+//
+// The mirror's root must exist: a disk unplugged mid-sync leaves its mount point behind,
+// and recreating the path would write the mirror onto the host's own disk, under the
+// mount point, where the disk hides it once it is back.
 func writeDurable(fsys sysfs.FS, tmpDir, final string, b []byte) error {
+	if _, err := fsys.Stat(filepath.Dir(tmpDir)); err != nil {
+		return err
+	}
 	if err := fsys.MkdirAll(tmpDir, 0o700); err != nil {
 		return err
 	}

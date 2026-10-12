@@ -64,6 +64,8 @@ type harnessEnv struct {
 	stats map[int]*harnessStats
 	// the index of docs/18 on every node, rebuilt when a restart replaced its handles
 	search map[int]*harnessSearch
+	// phase 19's mirror once AddMirror registered it (mirror_harness_test.go)
+	mirror *harnessMirror
 }
 
 type harnessSearch struct {
@@ -342,11 +344,11 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 	if !e.c.Alive(nd.I) {
 		return nil, false
 	}
-	return soak.BillyVolume{FS: nd.FS}, true
+	return soak.BillyVolume{FS: e.fsOf(n)}, true
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil, Stats: e.stats != nil}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil, Stats: e.stats != nil, Mirror: true}
 }
 
 func (e *harnessEnv) quorum() bool {
@@ -428,6 +430,7 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		c := p.List()
 		rep.Cache = &c
 	}
+	rep.Mirrors = e.mirrorReports(nd.I)
 	return rep, nil
 }
 
@@ -748,7 +751,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		if len(ph.Checks) == 0 {
 			t.Errorf("%s has no checks", ph.Name)
 		}
-		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "21 search and media" { // the harness offers everything these phases can use
+		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "19 snapshots" || ph.Name == "21 search and media" { // the harness offers everything these phases can use
 			for _, chk := range ph.Checks {
 				if chk.OK == nil {
 					t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
@@ -756,7 +759,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 20 {
+	if sum.Failed != 0 || len(sum.Phases) != 21 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -791,6 +794,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		"15 s3 bucket", "every slot on the bucket is its shard, in the disk layout and framing", "a read right after the holder died falls through to the bucket", "a read with a data holder down is served from the bucket",
 		"the scrub finds the missing object and repair puts it back", "gc collects a file on the bucket without deleting its objects",
 		"the drained bucket is out of the node table",
+		"19 snapshots", "Snapshot round trip", "bytes on the disk (mirrors[].used)", "What each snapshot added to its mirror", "catch-up on attach", "every file of soak-",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q", want)
