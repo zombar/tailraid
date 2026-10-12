@@ -324,8 +324,8 @@ s9_disk_and_recover() {
   live_nodes "$FIRST"
   [ "$(live_nodes "$FIRST" | cut -d' ' -f2)" = "$disks" ] || { echo "the added disk is not live"; return 1; }
   case "$FIRST" in
-    win) tr_ win snapshot "C:\\tailraid\\snap"; vm_ssh win 'Get-ChildItem -Recurse C:\tailraid\snap | Select-Object -ExpandProperty FullName' | tr -d '\r' ;;
-    *) tr_ "$FIRST" snapshot "$home/tailraid-snap"; vm_ssh "$FIRST" "ls -R $home/tailraid-snap" ;;
+    win) tr_ win export "C:\\tailraid\\snap"; vm_ssh win 'Get-ChildItem -Recurse C:\tailraid\snap | Select-Object -ExpandProperty FullName' | tr -d '\r' ;;
+    *) tr_ "$FIRST" export "$home/tailraid-snap"; vm_ssh "$FIRST" "ls -R $home/tailraid-snap" ;;
   esac
   id=$(node_id "$FIRST")
   tr_ "$FIRST" stop

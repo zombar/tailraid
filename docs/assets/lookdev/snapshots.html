@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid snapshots</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  /* lookdev-only: the variants stacked with a label */
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  /* the open as-of menu floats over the listing below, exactly as in the app */
+  .inflow .toast { position: static; max-width: none; }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a class="active" href="#/browse/">Files</a><a href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
+  <span class="pill ok">healthy</span>
+  <span class="who">pike · leader atlas · 3/3 voters live</span>
+  <button type="button" class="theme" title="Theme: system (tap for light)" aria-label="Theme: system (tap for light)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></svg><span>system</span></button>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section class="inflow">
+    <div class="variant">variant: the live listing with the as-of menu open, floating over it: snapshots grouped by mirror, newest first; an offline mirror's snapshots greyed with the reason</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span></div>
+    <div class="toolbar">
+      <label class="btn">Upload<input type="file" multiple></label>
+      <button type="button" aria-pressed="false">New folder</button>
+      <details class="menu"><summary>Folder</summary></details>
+      <details class="menu asof" open>
+        <summary>Now</summary>
+        <div class="menu-body" role="radiogroup" aria-label="as of">
+          <label class="menu-row"><input type="radio" name="asof" checked><span>Now</span><span class="small dim">the live volume</span></label>
+          <div class="menu-group"><span class="dot ok"></span>pike-m1 · online</div>
+          <label class="menu-row"><input type="radio" name="asof"><span>2026-10-12-1200Z</span><span class="small dim">12 min ago · hourly</span></label>
+          <label class="menu-row"><input type="radio" name="asof"><span>2026-10-12-1100Z</span><span class="small dim">1 h ago · hourly</span></label>
+          <label class="menu-row"><input type="radio" name="asof"><span>before reinstall<span class="badge">manual</span></span><span class="small dim">2026-10-09 18:30</span></label>
+          <label class="menu-row"><input type="radio" name="asof"><span>2026-10-01-0000Z</span><span class="small dim">2026-10-01 00:00 · monthly</span></label>
+          <div class="menu-group"><span class="dot off"></span>atlas-m1 · offline 3 d</div>
+          <label class="menu-row" aria-disabled="true" title="atlas-m1 is offline: attach it to browse"><input type="radio" name="asof" disabled><span>2026-10-09-0000Z</span><span class="small dim">offline: attach it to browse</span></label>
+          <label class="menu-row" aria-disabled="true" title="atlas-m1 is offline: attach it to browse"><input type="radio" name="asof" disabled><span>2026-10-05-0000Z</span><span class="small dim">offline: attach it to browse</span></label>
+          <div class="menu-foot small dim">41 snapshots on 2 mirrors · <a href="#/">manage on the dashboard</a></div>
+        </div>
+      </details>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>
+      <span class="spacer"></span>
+      <span class="small dim">9 items · 2.2 GiB</span>
+    </div>
+    <table class="files">
+      <thead><tr><th class="sel"><input type="checkbox" aria-label="select all"></th><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <tbody>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/browse/media/Concerts%202024/Day%201%20(soundboard)"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)</a></td><td class="size"></td><td class="mtime">2 h ago</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Opening #1.mp4</a></td><td class="size">1.9 GiB</td><td class="mtime">2026-10-02 21:14</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>03 - Jam.flac</a></td><td class="size">212.4 MiB</td><td class="mtime">2026-10-02 21:16</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>setlist — final (v2).txt</a></td><td class="size">1.3 KiB</td><td class="mtime">2 h ago</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>04 - Crowd.mov</a></td><td class="size">660.3 MiB</td><td class="mtime">2026-10-02 21:40</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"/><circle cx="11" cy="5.5" r="1"/></svg>cover 100%.jpg</a></td><td class="size">3.4 MiB</td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>05 - Encore.m4a</a></td><td class="size">48.0 MiB</td><td class="mtime">2026-10-02 21:52</td></tr>
+        <tr><td class="sel"><input type="checkbox" aria-label="select"></td><td class="name"><a href="#/file/x"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>06 - Outro.m4a</a></td><td class="size">31.2 MiB</td><td class="mtime">2026-10-02 22:01</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: the same folder as of a snapshot on an online mirror: read-only (no select boxes, no upload, no folder menu), the crumbs end in the snapshot's badge, the banner names the mirror and offers the way back and a folder restore</div>
+    <div class="crumbs"><a href="#/browse/?at=31">/</a><a href="#/browse/media?at=31">media</a><span class="sep">/</span><span>Concerts 2024</span><span class="badge">as of 2026-10-12-0900Z</span></div>
+    <div class="banner snapshot"><span>As of <span class="mono">2026-10-12-0900Z</span> on <span class="mono">pike-m1</span> · taken 3 h ago · read-only · 11 items · 2.3 GiB</span><span class="actions"><button type="button">Restore folder to…</button><button type="button">Back to now</button></span></div>
+    <div class="toolbar">
+      <details class="menu asof"><summary>2026-10-12-0900Z</summary></details>
+      <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>
+      <span class="spacer"></span>
+      <span class="small dim">11 items · 2.3 GiB</span>
+    </div>
+    <table class="files">
+      <thead><tr><th aria-sort="ascending">name</th><th class="size">size</th><th class="mtime">modified</th></tr></thead>
+      <tbody>
+        <tr><td class="name"><a href="#/browse/x?at=31"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 1 (soundboard)</a></td><td class="size"></td><td class="mtime">2026-10-02 21:20</td></tr>
+        <tr><td class="name"><a href="#/browse/x?at=31"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z"/></svg>Day 2</a></td><td class="size"></td><td class="mtime">2026-10-03 11:41</td></tr>
+        <tr><td class="name"><a href="#/file/x?at=31"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>01 - Opening #1.mp4</a></td><td class="size">1.9 GiB</td><td class="mtime">2026-10-02 21:14</td></tr>
+        <tr><td class="name"><a href="#/file/x?at=31"><svg class="icon" viewBox="0 0 16 16"><path d="M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3"/></svg>setlist — final.txt</a></td><td class="size">1.2 KiB</td><td class="mtime">2026-09-30 09:02</td></tr>
+        <tr><td class="name"><a href="#/file/x?at=31"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg>old mix.wav</a></td><td class="size">98.1 MiB</td><td class="mtime">2026-09-28 16:10</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: a file's Versions panel: one row per distinct content across the online mirrors, the live content current with what holds it, a line for the offline mirror; then the confirm before reverting content that no snapshot holds, and the toasts</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><a href="#/browse/media/Concerts%202024">Concerts 2024</a><span class="sep">/</span><span>setlist — final (v2).txt</span></div>
+    <details class="panel" open>
+      <summary>Versions (3 contents · 29 snapshots on pike-m1)</summary>
+      <div class="body">
+        <table class="versions">
+          <thead><tr><th>as of</th><th class="size">size</th><th class="mtime">modified</th><th class="acts"></th></tr></thead>
+          <tbody>
+            <tr class="current"><td class="asof">now<span class="small dim">in no snapshot yet</span></td><td class="size">1.3 KiB</td><td class="mtime">20 min ago</td><td class="acts"><span class="badge strong">current</span></td></tr>
+            <tr><td class="asof">2026-10-12-0600Z – 2026-10-12-1200Z<span class="small dim">7 hourly · pike-m1</span></td><td class="size">1.3 KiB</td><td class="mtime">2026-10-12 05:40</td><td class="acts"><button type="button">View</button><button type="button">Revert</button><button type="button">Save a copy</button></td></tr>
+            <tr><td class="asof">2026-10-01-0000Z – 2026-10-12-0500Z<span class="small dim">21 snapshots · before reinstall · pike-m1</span></td><td class="size">1.2 KiB</td><td class="mtime">2026-09-30 09:02</td><td class="acts"><button type="button">View</button><button type="button">Revert</button><button type="button">Save a copy</button></td></tr>
+          </tbody>
+        </table>
+        <div class="small dim">12 more snapshots on <span class="mono">atlas-m1</span>, offline: attach it to see them</div>
+      </div>
+    </details>
+    <div class="banner"><span>The current content is in no snapshot yet: reverting replaces it for good.</span><span class="actions"><button type="button">Take a snapshot first</button><button type="button">Revert anyway</button><button type="button">Cancel</button></span></div>
+    <div class="toast ok">reverted to 2026-10-12-0900Z · 3 chunks copied back from pike-m1</div>
+    <div class="toast ok">saved a copy as setlist — final (v2) (2026-10-12-0900Z).txt</div>
+  </section>
+
+  <section class="inflow">
+    <div class="variant">variant: a snapshot whose mirror is offline, reached from a link: the name and the mirror, why it cannot be read, and the way back</div>
+    <div class="crumbs"><a href="#/browse/">/</a><a href="#/browse/media">media</a><span class="sep">/</span><span>Concerts 2024</span><span class="badge">as of 2026-10-05-0000Z</span></div>
+    <div class="banner snapshot"><span>As of <span class="mono">2026-10-05-0000Z</span> on <span class="mono">atlas-m1</span> · taken 7 d ago</span><span class="actions"><button type="button">Back to now</button></span></div>
+    <div class="empty"><span class="mono">atlas-m1</span> is offline (last seen 3 d ago on atlas): attach it to browse this snapshot</div>
+  </section>
+
+</main>
+<div id="toasts" aria-live="polite"></div>
+</body>
+</html>

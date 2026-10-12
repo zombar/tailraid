@@ -64,6 +64,9 @@ func wrap(err error) error {
 // delete itself happens at CLOSE, whose reply carries no failure, so a protected entry
 // (I-154) is refused here, where the client reads STATUS_ACCESS_DENIED.
 func (f *FS) CanDelete(p string) error {
+	if parts := meta.SplitPath(p); len(parts) > 0 && parts[0] == vfs.SnapshotDir {
+		return os.ErrPermission // read-only (I-185)
+	}
 	in, err := f.st.Resolve(meta.SplitPath(p))
 	if err != nil {
 		return os.ErrNotExist
@@ -209,6 +212,9 @@ func (a *FS) Rename(oldPath, newPath string) error { return wrap(a.fs.Rename(old
 // it rather than the whole-file calls.
 func (a *FS) OpenFile(path string) (filesystem.File, error) {
 	f, err := a.fs.OpenFile(path, os.O_RDWR, 0)
+	if errors.Is(err, vfs.ErrReadOnly) {
+		f, err = a.fs.OpenFile(path, os.O_RDONLY, 0) // a snapshot reads; its writes are refused (I-185)
+	}
 	if err != nil {
 		return nil, wrap(err)
 	}

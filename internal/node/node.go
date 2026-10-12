@@ -320,7 +320,24 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
-	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
+	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
+	mpol, err := cfg.Mirroring()
+	if err != nil {
+		return err
+	}
+	mlimit := repair.NewLimiter(mpol.Rate, clk)
+	mirrors := newMirrorSet(sysfs.OS{}, cfg, mpol, clusterID, node.FSM, clk, log)
+	mirrors.self, mirrors.propose = node.SelfIdx, ops.propose
+	mirrors.read = func(ctx context.Context, h meta.Hash) ([]byte, error) {
+		b, err := rd.ReadChunk(chunk.Background(ctx), h) // at background priority: client reads keep their half (I-175)
+		mlimit.Wait(ctx, int64(len(b)))
+		return b, err
+	}
+	node.FSM.SetSnapshotHook(mirrors.onBegin)
+	defer node.FSM.SetSnapshotHook(nil)
+	ops.mirrors, ops.mirrorPol = mirrors, mpol
+	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, live: prober.IsLive}) // /.snapshots (docs/16 §6)
+	webAddr := ""                                                                                  // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
 	}
@@ -337,6 +354,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		}
 		cacheRep := pinned.List()
 		rep.Cache = &cacheRep
+		var mwarn []string
+		rep.Mirrors, mwarn = mirrors.report(clk.Now(), node.FSM.Snapshots())
+		rep.Warnings = append(rep.Warnings, mwarn...)
 		searchRep := searchSvc.Status()
 		rep.Search = &searchRep
 		if webAddr != "" {
@@ -347,7 +367,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	defer reporter.Close()
 	status := func(fresh bool) any { return reporter.Get(fresh) }
 	srv, err := rpc.NewServer(rpc.Options{
-		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node},
+		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
@@ -466,7 +486,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, stats, search, web UI
 	bg, cancelBg := context.WithCancel(context.Background())
-	loops := 9
+	loops := 10 // mirrors.worker included (docs/16 §3)
 	if web != nil {
 		loops++
 	}
@@ -492,6 +512,10 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		done <- struct{}{}
 	}()
 	go func() { ops.maintenance(bg, rcfg); done <- struct{}{} }()
+	go func() {
+		mirrors.worker(bg, func(ctx context.Context) error { return node.WaitReady(ctx, time.Hour) })
+		done <- struct{}{}
+	}()
 	go func() { pinned.Run(bg); done <- struct{}{} }()
 	go func() { statsSvc.Run(bg); done <- struct{}{} }()
 	go func() { ops.searchLoop(bg, sset.Interval); done <- struct{}{} }()
@@ -587,24 +611,26 @@ var ErrAddressChanged = errors.New("node: tailscale address changed and re-regis
 
 // adminOps implements rpc.Admin and runs the periodic GC and sweep.
 type adminOps struct {
-	node     *cluster.Node
-	prober   *cluster.Prober
-	repairer *repair.Repairer
-	gc       *repair.GC
-	disks    *diskSet
-	client   *rpc.Client
-	rd       *vfs.Reader
-	ring     *meta.EventRing
-	fs       *vfs.FS
-	pins     *pins.Pins
-	stats    *stats.Service
-	search   *search.Service
-	self     meta.NodeIdx
-	clk      clock.Clock
-	log      *slog.Logger
-	dataDir  string
-	seedKey  string    // the device members the seed file holds (refreshSeed)
-	s3Swept  time.Time // the leader's last S3 sweep (docs/06 §3)
+	node      *cluster.Node
+	prober    *cluster.Prober
+	repairer  *repair.Repairer
+	gc        *repair.GC
+	disks     *diskSet
+	client    *rpc.Client
+	rd        *vfs.Reader
+	ring      *meta.EventRing
+	fs        *vfs.FS
+	pins      *pins.Pins
+	stats     *stats.Service
+	search    *search.Service
+	self      meta.NodeIdx
+	clk       clock.Clock
+	log       *slog.Logger
+	dataDir   string
+	seedKey   string     // the device members the seed file holds (refreshSeed)
+	s3Swept   time.Time  // the leader's last S3 sweep (docs/06 §3)
+	mirrors   *mirrorSet // this host's mirrors (docs/16)
+	mirrorPol config.MirrorPolicy
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -825,6 +851,14 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 		case <-budgetT.C():
 			a.rebudget(ctx) // derived budgets past the hysteresis, pinned ones whenever they differ
 			a.refreshSeed()
+			if a.mirrors != nil && a.healthy() {
+				a.mirrors.tick(ctx) // this host's mirrors: schedule, thinning, reconcile (docs/16 §4, §5)
+				if a.node.IsLeader() {
+					if n := expireSyncs(ctx, a.node.FSM.Snapshots(), a.clk.Now(), a.mirrorPol.HoldMax, a.propose); n > 0 {
+						a.log.Warn("snapshot syncs ended past hold_max", "count", n)
+					}
+				}
+			}
 			budgetT.Reset(cfg.ScanInterval)
 		case <-gcT.C():
 			if a.node.IsLeader() && a.healthy() {
@@ -954,7 +988,13 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]string{"join_token": token}, nil
 	case "set_policy":
 		return a.setPolicy(ctx, op)
-	case "snapshot": // docs/12 §9: the newest state, exported under the data directory for the CLI to copy out
+	case "snapshot_ls": // the catalogue (docs/16 §5), every mirror online or not
+		return snapshotList(a.node.FSM.Nodes(), a.node.FSM.Snapshots(), op.Mirror), nil
+	case "snapshot_create": // manual snapshots: permanent, never thinned (docs/16 §4)
+		return a.snapshotCreate(ctx, op)
+	case "versions", "versions_revert", "versions_copy", "snapshot_restore": // on the node asked (docs/12 §11)
+		return a.restoreOp(ctx, op)
+	case "export", "snapshot": // docs/12 §9: the newest state, exported under the data directory for the CLI to copy out ("snapshot" is the name before docs/16)
 		dir, m, err := a.node.ExportSnapshot(filepath.Join(a.dataDir, "export"))
 		if err != nil {
 			return nil, err
@@ -982,7 +1022,9 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		if p, running := a.repairer.Progress(); running {
 			prog = &p
 		}
-		return admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files), nil
+		rep := admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files)
+		_, rep.Warnings = a.mirrors.report(a.clk.Now(), a.node.FSM.Snapshots())
+		return rep, nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
 		if err != nil {

@@ -187,6 +187,9 @@ these numbers.
 - E-128 Purge of a deleted root, by the user or by the retention tick (06 §2)
 - E-129 a shard RPC to a node fails at the transport level, or a PUT to it outlasts the straggler grace (05 §6)
 - E-130 a repair pass finds a disk far above its capacity share of its host's slots while another disk of that host is below (14 §7)
+- E-131 SnapshotBegin: a sync to a mirror starts and holds GC (16 §3, §4)
+- E-132 SnapshotEnd: the sync completes, completes with missing chunks, or fails (16 §3)
+- E-133 a revert, copy or tree restore from a snapshot (16 §6)
 - E-134 a chunk decoded from k shards fails its hash: every reader waiting for it gets `EIO`, the chunk stays out of the cache, the scrub finds the bad shard (04 §5, I-202); ranges already served from a data shard were verified against its recorded sum (I-201)
 
 **5. Transition table.**
@@ -314,6 +317,12 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-198 | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | ErrCorrupt on the GET → bad slot → repair re-PUTs; outside the budget the slot is only HEADed and the corruption waits for a read | `TestS3Node_ScrubFetchesSample` |
 | L-209 | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | the PUT is cancelled and awaited (L-190), its slot re-placed or recorded 0, and its node marked suspect (I-169, I-170) | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
 | L-210 | Durable | E-129 | Unreachable (until the next successful probe of its host) | `Live()` excludes the host and its disks: reads and placement skip it without a dial, as L-131; the hold-downs do not start | `TestProber_SuspectUntilNextProbe`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |
+| L-212 | Committed (referenced by a syncing snapshot) | Commit overwrite or truncate, or a Purge, after E-131 | Tombstoned (held) | `Refs` → 0 and `TombstonedAt` set as usual, but `GCDelete` skips it: its `TombstonedAt` is at or after the oldest syncing row's `At`; still placed and readable, so the sync copies it (I-181) | `TestFSM_GCDelete_HeldBySyncingRow`; planned: TestCluster_OverwriteDuringSync_SnapshotExact |
+| L-213 | Tombstoned (held) | E-132 | Tombstoned → Collected | the hold ends with the row; `GCDelete` collects the chunk after grace as any tombstone, the mirror keeps its object | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table` |
+| L-214 | Committed | E-131 sync reads it | Committed (and an object on the mirror) | read through the reader at background priority, verified against its hash, written to the mirror once whatever the number of snapshots that reference it; no change in the pool | `TestMirror_SecondSyncWritesOnlyChanges` |
+| L-215 | Unreadable (< k live slots) | E-131 sync reads it | Unreadable | the sync goes on, the hash is listed missing in the manifest, the row ends Incomplete; the next sync to that mirror tries it again | `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
+| L-216 | Collected (or never in the pool), an object on a mirror | E-133 | Uploading → Committed | the object is read from the mirror, verified, and uploaded as a new chunk before the restore's Commit, exactly as a flush would | `TestVFS_Revert_FromPoolAndMirror` |
+| L-217 | Committed or Tombstoned (the pool still holds it) | E-133 | Committed (Refs + 1 per position) | committed by hash with no upload (the dedup path of 04 §4, reviving a tombstone), nothing read from the mirror | `TestVFS_Revert_FromPoolAndMirror` |
 | L-211 | Committed (a slot on a disk far above its share) | E-130 rebalance pass | Repairing → Committed | the slot moves to the emptier disk of the same host: PUT, `SetPlacement` with `Expect`, fenced DELETE; readable throughout, never two slots on one target, the host's count unchanged; at most `RebalanceBatch` chunks a pass (I-172) | `TestRepair_Rebalance_MovesWithinHost` |
 | L-113 | Dirty | E-100 C1 crash before WAL fsync | (none) or Dirty | write not acked; after restart content is exactly pre-write; torn record ignored | `TestOverlay_RestartReplaysDirtyWALs`, `TestWAL_ReplayStopsAtTornTail` |
 | L-114 | Dirty | E-101 C2 crash after WAL fsync | Dirty (replayed) | acked; replay on restart; flushed; readable everywhere | `TestOverlay_RestartReplaysDirtyWALs` |
@@ -420,6 +429,7 @@ event ring or the final state).
 | L-197 | Committed or Degraded (placement P) | SetPlacement{Expect: Q}, Q ≠ P | any change | forbidden (I-102): ErrConflict, placement stays P; the proposer re-plans from P or skips the chunk this pass | `TestFSM_SetPlacement_ExpectConflict` |
 | L-206 | Committed (under a protected directory) | E-13 unlink, E-126 Trash, E-15 rename over, a rename out of the subtree, or a user's Purge | any loss of the entry | forbidden (I-154): `ErrProtected`, nothing changes; a `Rename` within the subtree and new content into it are allowed | `TestFSM_Protected_Table`, `TestVFS_Protected_EPERM` |
 | L-207 | Committed (referenced only from the trash) | GCDelete, or a Purge with `DeletedAt ≥ Before` | Collected / Tombstoned | forbidden (I-153, I-157): a chunk referenced from a deleted file has `Refs > 0` and is never a victim; a root younger than the retention is never purged by the tick | `TestFSM_Purge_Boundary`, `TestGC_PurgeTrash_RetentionBoundary` |
+| L-218 | Tombstoned at or after the oldest syncing row's `At` | GCDelete while that row is `Syncing` | Collected | forbidden (I-181): the FSM clamps `Before` to the hold, so the chunk a snapshot references is never collected before its copy ends | `TestFSM_GCDelete_HeldBySyncingRow` |
 | L-208 | Dirty or Committed (an ephemeral name: an upload temp, a thumbnail, `._<name>`, `.DS_Store`) | delete or rename over | in the trash | forbidden (I-157): an ephemeral name is unlinked (L-13, L-15, L-17), never trashed | `TestVFS_Remove_EphemeralIsImmediate`, `TestVFS_RenameOver_TrashesReplaced` |
 
 ## 7. How the matrix is tested

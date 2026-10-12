@@ -228,7 +228,11 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 - Defending against an attacker who controls a **member device** or the headscale control
   plane. Such an attacker can read all data and corrupt metadata; Raft and hashing detect
   accidents, not malice from an authorized member.
-- Encryption at rest.
+- Encryption at rest. This includes mirrors (docs/16): a mirror disk holds every byte of
+  every snapshot it captured in the clear and is readable with no cluster and no
+  Tailscale (`tailraid mirror export`), by design, so a USB mirror is as sensitive as the
+  volume itself. The node RPC routes that serve a mirror's trees and objects
+  (`/v1/mirrors/{id}/…`) are authorized exactly as the shard routes are.
 - Per-user access control inside the volume (POSIX modes are stored, not enforced across
   devices; S3 keys are per cluster, not per path).
 - Audit logging.

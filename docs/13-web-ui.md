@@ -48,6 +48,12 @@ operation stays in the CLI.
 - **Folder flags**: `protected` (the FSM refuses to delete, replace or move out anything
   under it, from every gateway) and `nsfw` (this UI blurs its tiles and previews until
   tapped; nothing else changes). Set from the folder menu, shown as badges.
+- **Snapshots and versions** (docs/16): the file browser shows any folder *as of* a
+  snapshot on an online mirror (read-only, with a folder restore), a file's view lists its
+  versions across the online mirrors (view, revert, save a copy), and the dashboard's
+  Mirrors section shows every mirror, online or not, its snapshots and the sync under way,
+  and takes snapshots. Taking and restoring a snapshot are the
+  user's file operations; no page removes a snapshot (only the schedule's thinning does, docs/16 §4), and adding or removing a mirror stays in the CLI.
 - **Local cache**: "Keep on this device" pins a folder so the node serving the page keeps
   every chunk under it in its local chunk cache (docs/01 §Local chunk cache); the
   dashboard's Cache card shows what is pinned and how much of it has arrived.
@@ -139,7 +145,18 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/media` | – | `{"libs":[{path,kind}]}`: every live flagged folder in kind-then-path order (docs/18 §9), the Media tab's sections |
 | `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,video?,video_ino?,video_version?,video_thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
 | `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album; `in=` reads a deleted root as `ls` does |
+| `GET /api/snapshots` | – | `{"mirrors":[{id,name,host,online,used,free,syncing?:{id,read,total,bytes_new}}],"snapshots":[{id,mirror,name,at,auto,state,files,bytes,new_bytes,missing}]}`, snapshots newest first, from the catalogue: offline mirrors' snapshots included (docs/16 §5) |
+| `POST /api/snapshot` `{"name"?,"mirror"?}` | required | 201 the begun rows (one per online mirror, or the one named); the serving gateway flushes its dirty files first; a taken name or a mirror already syncing → 409; an offline mirror → 409 `{"error","offline":true}`; a member too old for codec 7 → 503 |
+| `GET /api/versions?path=` | – | `{"versions":[{key,size,mtime,snapshots:[{id,mirror,name}],current}],"offline":[{mirror,count}]}`: the file's distinct contents on the online mirrors, newest first, the live one `current` with the snapshots holding it (possibly none); `offline` counts what the offline mirrors would add |
+| `POST /api/revert` `{"path","snapshot"}` | required | 200 `{"uploaded":n}`: the content as of that snapshot becomes current (docs/16 §6), `n` the chunks copied back from the mirror because the pool no longer held them; a dirty file is flushed first; an offline mirror → 409 `offline` |
+| `POST /api/copy` `{"path","snapshot","name"}` | required | 201 the new entry beside the file; a taken name → 409 |
+| `POST /api/restore-tree` `{"snapshot","path","to"?,"name"?}` | required | 200 `{"created":[…],"skipped":[…],"uploaded":n}`: the snapshot's tree at `path` recreated under `to` (its parent unless given) as `name`, an existing directory descended, an existing file skipped and listed; at most `MaxBatch` entries a request, 413 above (the page continues from the last created path) |
 
+- `ls`, `stat`, `files`, `thumb` and `tags` take `at=<snapid>` and then read as of that
+  snapshot from its mirror (docs/16 §6): no `dirty`, `deleted_at` or `upload` fields, and
+  `dir` carries `snapshot` (`{id, name, mirror, at}`); a mutating route given `at` is 400;
+  an unknown snapshot 404; an offline mirror 409 `{"error","offline":true}`; `in=` with
+  `at=` is 400.
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
   `ErrNotExist` 404 · `ErrExist` 409 · `EISDIR`, `ENOTDIR`, `EINVAL`, `ENAMETOOLONG` 400 ·
   `EROFS` (stale gateway, docs/02) 503 with `Retry-After: 5` · `ENOSPC` 507 · `EIO` 503 ·
@@ -263,6 +280,22 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   of its eviction, renames keep the pin (it is stored by inode), and `/api/pins` and the
   Cache card report how much of each pin has arrived (docs/01 §Local chunk cache, I-162).
   A pin is "Keep on this device" in the folder menu, for the device whose URL is open.
+- **Snapshots and versions** (docs/16). The toolbar's *as-of* menu lists the snapshots by
+  mirror, newest first, "Now" at the top; an offline mirror's snapshots are listed greyed
+  with "offline: attach it to browse". Choosing one puts `at=<id>` on the route and on
+  every read, and the listing becomes read-only: no select boxes, no upload, no folder
+  menu, no dirty or deleted rows; the breadcrumb ends in the snapshot's badge, and a
+  banner says "As of `2026-10-12-0900Z` on `pike-m1` · taken 3 h ago · read-only" with
+  "Restore folder to…" (the picker, then `restore-tree`) and "Back to now". A file's view
+  carries a **Versions** panel: one row per distinct content, the snapshots holding it
+  folded into a range ("2026-10-12-0600Z – 0900Z · 4 hourly · pike-m1"), its size and
+  modified time, and View (the file view with `at=`), Revert and Save a copy; the live
+  content is the `current` row, saying which snapshots hold it or "in no snapshot yet",
+  and Revert asks first when the current content is in no snapshot. Offline mirrors add
+  one dim line ("12 more snapshots on `atlas-m1`, offline"). The toasts say how many
+  chunks came back from the mirror. The dashboard's Mirrors section (§7) is where
+  snapshots are taken (a manual one is permanent, and the dialog says so); "Take a snapshot" flushes the serving gateway's dirty
+  files first so the user's own last writes are in it.
 
 ## 5. Tiles and thumbnails
 
@@ -364,6 +397,16 @@ loading row at once, keeps the rows it has when a later page fails, and is built
 file so the page's second draw (after the folder listing arrives) re-attaches it instead
 of discarding a panel the user had opened (I-161).
 
+The dashboard's **Mirrors** section (docs/16) sits after Integrity: a Snapshots tile under
+Volume (the count, the mirrors and how many are offline), then one card per mirror (name
+and host, an online dot, used and free on its disk, the newest snapshot, the sync under
+way as a progress bar with the bytes it is adding, `warn` when it is offline past
+`stale_after`, under its reserve or holding an incomplete snapshot), "Take a snapshot",
+and a table of every snapshot newest first (name with a `manual` badge, mirror, taken,
+state, what it added to the mirror, and Browse, disabled
+with the reason for an offline mirror's rows; there is no Delete). The section's heading carries the schedule
+(`hourly 24 · daily 30 · weekly 8 · monthly 12 · next in 23 m`).
+
 ## 8. Build and assets
 
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
@@ -378,7 +421,8 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 User management and per-user access control, mutating admin operations from the browser
 (repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
 loopback, transcoding, saved playlists, a queue shared between tabs or devices,
-server-side video decoding, versions beyond the one the trash keeps, online metadata
+server-side video decoding, adding or removing a mirror, a diff between two versions or
+two snapshots, the Windows Previous Versions tab (docs/15 §8), online metadata
 providers for the Media tab (docs/18 §10). Search was a non-goal until docs/18.
 
 ## 10. The Media tab (I-212)
@@ -542,6 +586,11 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Library badge | `.badge.lib` | the mono word `movies`, `tv` or `music` after the breadcrumb's last segment (effective) and in rows and tiles (own) |
 | Library menu row | `.toolbar details.menu` > `label.menu-row.library` > `select` | "Library" with none · movies · tv · music; disabled with the reason on the root, in the trash and while a member reads a codec older than 6 |
 | Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word hides below 480 px; cycles on tap |
+| As-of menu | `.toolbar details.menu.asof` > `summary` (a dim "as of", then "Now" or the snapshot's name) + `.menu-body` of `.menu-group` (the mirror's name, its online dot) and `label.menu-row` (radio + name (+ `.badge` manual) + `.small.dim` when and kind) + `.menu-foot` | floats over the listing (the folder menu's z-order); newest first per mirror after "Now"; an offline mirror's rows `aria-disabled` with "offline: attach it to browse"; the foot counts snapshots and links the dashboard |
+| Snapshot banner | `.banner.snapshot` > text + `.actions` (Restore folder to… · Back to now) | above a listing or a file view as of a snapshot: "As of `2026-10-12-0900Z` on `pike-m1` · taken 3 h ago · read-only · 11 items · 2.3 GiB"; accent border and tint (information, not a warning) |
+| Versions list | `details.panel` > `table.versions` > `tr` (`td.asof`, `td.size`, `td.mtime`, `td.acts`) + `.small.dim` offline line | one row per distinct content, newest first; `td.asof` the snapshot range in mono with the count and mirror under it; the live content `tr.current` with a `.badge.strong` "current" and its holders or "in no snapshot yet"; others View · Revert · Save a copy; the table sizes to its content, the actions never wrap; at ≤ 480 px the modified column drops |
+| Mirror card | `.cards` > `.card.mirror` > `.name-row` (dot, name, host, badges) + bar rows (used of the disk; the sync's progress) + `.meta` | `ok` online, `off` dashed offline with "offline 3 d"; `warn` past `stale_after`, under its reserve, or holding an incomplete snapshot (the word says which) |
+| Snapshots table | `section` > `h2` + `.h-sub` (the schedule) + `.snap-head` (Take a snapshot · counts) + `table.snapshots` > `tr` (`td.name` (+ `.badge` manual), `td.mirror`, `td.taken`, `td.holds`, `td.acts` Browse; no delete) | newest first; a syncing row carries `.badge` "syncing 41 %", an incomplete one `.badge.warn` "3 missing"; an offline mirror's actions disabled with the reason; at ≤ 480 px mirror, taken and holds drop under the name |
 
 ### Copy
 
@@ -552,7 +601,11 @@ server prints them (`3m0s`, `12ms`); track times as `m:ss`. Errors say what and 
 quoting the server: "mkdir photos: already exists (409)". Buttons state the action:
 "Upload", "New folder", "Download", "Restore", "Delete now", "Move to…". The trash banner
 counts days: "Deleted 3 d ago · gone for good in 27 d". A refusal names the cause:
-"protected: unprotect Concerts 2024 to delete". Tooltips on the health pill quote the
+"protected: unprotect Concerts 2024 to delete", "pike-m1 is offline: attach it to
+browse". A snapshot is named as the server names it, in mono (`2026-10-12-0900Z`, or the
+user's own name), with its mirror after it (`on pike-m1`), never reformatted; "as of"
+introduces it everywhere; a restore's toast says what came back from the mirror ("3
+chunks copied back from pike-m1"). Tooltips on the health pill quote the
 degraded-operation table of docs/00.
 
 ### Charts
@@ -648,6 +701,18 @@ does not is a clock time axis in place of seconds since the run started (I-197).
     in light and dark.
 21. A show folder with `Season 01` and `Season 02` and `tvshow.nfo`: the season strip, the
     episode list with numbers, titles and plots, the episode's frame after it played once.
+22. Mirrors: plug a USB disk into the laptop, `tailraid mirror add` it, and watch the
+    dashboard's card sync the first snapshot; overwrite a file on the mount, take a
+    snapshot, open the file in the browser and see two versions; View the old one, Save a
+    copy, Revert, and read the reverted bytes on the mount; `ls ~/TailRAID/.snapshots/`
+    shows the mirror and its snapshots, and `touch` there says "Read-only file system".
+23. Unplug the disk: the card goes offline, the as-of menu greys its snapshots, the file
+    view says how many versions are on it; plug it back: a catch-up snapshot starts at
+    once. Move the disk to the desktop and `mirror add` it there: same name, same
+    history.
+24. No page offers to delete a snapshot; lower `keep.hourly` on the leader and watch the mirror's used
+    space fall as the next tick thins it; on a machine with no cluster, `tailraid mirror ls <path>` and
+    `mirror export` read the disk.
 
 ## Invariants
 
@@ -785,6 +850,15 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   document (absent for system), keeps the choice in the browser's `localStorage` only and
   applies it before the first view renders; a storage failure means system; the server
   never sees the choice.
+- **I-187** — The web UI lists every snapshot of every mirror with its state, online or
+  not, reads as of a snapshot on an online mirror with `at=` and refuses a mutation given
+  `at` with 400, lists a file's distinct contents across the online mirrors with the
+  snapshots holding each and counts the offline mirrors' snapshots, takes
+  snapshots, and reverts, copies and restores trees through the endpoints of §3 with the
+  bytes of the snapshot and the count of chunks copied back from the mirror; an offline
+  mirror's snapshot is answered 409 `offline`, never with stale or partial bytes; no
+  route removes a snapshot; and the page flushes the serving gateway's dirty files
+  before a snapshot it takes.
 
 ## Tests
 
@@ -814,6 +888,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
+| I-187 | planned (docs/16): TestWebUI_Snapshots_ListTake_NoDeleteRoute, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409, TestWebUI_Versions_DistinctContents, TestWebUI_Revert_Copy_RestoreTree, `TestSoak_AllPhasesAgainstHarness` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

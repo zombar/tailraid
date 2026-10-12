@@ -1130,12 +1130,54 @@ func (g *cmdGen) files() (dirs, files []Inode) {
 	return dirs, files
 }
 
+// snapshotCmd registers a device and a mirror on it the first times it is asked (its
+// index is above every slot the generator places: placements name 1..10), then begins,
+// ends and deletes snapshots on that mirror (docs/16, I-179, I-181, I-183).
+func (g *cmdGen) snapshotCmd(name string) Command {
+	var host, mirror, maxIdx NodeIdx
+	nodes := g.f.Nodes()
+	for i := range nodes {
+		n := &nodes[i]
+		maxIdx = max(maxIdx, n.Idx)
+		switch n.Kind {
+		case KindDevice:
+			if host == 0 {
+				host = n.Idx
+			}
+		case KindMirror:
+			mirror = n.Idx
+		case KindDisk, KindS3:
+		}
+	}
+	switch {
+	case mirror == 0 && maxIdx < 10:
+		// devices until the next index is past every slot the generator places
+		return Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: fmt.Sprintf("gen-dev-%d", maxIdx+1), Kind: KindDevice, Addr: "100.64.0.9"}}}
+	case mirror == 0:
+		return Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "gen-mirror", Kind: KindMirror, Host: host}}}
+	}
+	snaps := g.f.Snapshots()
+	if len(snaps) == 0 || g.rng.Intn(3) == 0 {
+		return Command{Op: OpSnapshotBegin, SnapshotBegin: &SnapshotBegin{Mirror: mirror, Name: name + name, Auto: g.rng.Intn(2) == 0, Now: g.now}}
+	}
+	sn := snaps[g.rng.Intn(len(snaps))]
+	switch g.rng.Intn(3) {
+	case 0:
+		return Command{Op: OpSnapshotEnd, SnapshotEnd: &SnapshotEnd{ID: sn.ID, OK: g.rng.Intn(4) != 0, Missing: uint32(g.rng.Intn(2)), Now: g.now}}
+	case 1:
+		return Command{Op: OpSnapshotDelete, SnapshotDelete: &SnapshotDelete{ID: sn.ID, Done: sn.State == SnapDeleting, Now: g.now}}
+	}
+	return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now}}
+}
+
 func (g *cmdGen) next() Command {
 	g.now += int64(g.rng.Intn(3)) - 1 // occasionally skewed backwards
 	dirs, files := g.files()
 	d := dirs[g.rng.Intn(len(dirs))]
 	name := string(rune('a' + g.rng.Intn(6)))
-	switch g.rng.Intn(18) {
+	switch g.rng.Intn(20) {
+	case 18, 19:
+		return g.snapshotCmd(name)
 	case 9:
 		return Command{Op: OpTrash, Trash: &Trash{Parent: d.Ino, Name: name, Recursive: g.rng.Intn(2) == 0, Now: g.now}}
 	case 10:
@@ -1332,7 +1374,7 @@ func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	}
 }
 
-// Invariant: I-4, I-43, I-152, I-153
+// Invariant: I-4, I-43, I-152, I-153, I-181
 // Lifecycle: L-159
 func TestFSM_DeterministicAcrossReplicas(t *testing.T) {
 	rng := testseed.Seed(t)

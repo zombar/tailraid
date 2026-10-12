@@ -589,3 +589,35 @@ table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
 .menu-row.library { grid-template-columns: 1fr; gap: 6px; }
 .menu-row.library > * { grid-column: 1; }
 .menu-row.library select { min-height: 36px; padding: 4px 8px; font-size: 14px; width: 100%; }
+
+/* ---- snapshots on mirrors (docs/13 §4, §7, docs/16) ------------------------------------- */
+/* the as-of menu: the summary names the snapshot ("Now" for the live volume) after a dim "as of" */
+details.asof > summary::before { content: "as of"; color: var(--dim); font-size: 12px; }
+.menu-group { display: flex; gap: 6px; align-items: center; padding: 8px 10px 2px; font: 600 12px var(--mono); color: var(--dim); }
+.menu-foot { padding: 8px 10px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+/* information, not a warning: a snapshot's banner takes the accent */
+.banner.snapshot { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+/* both tables size to their content: the first column takes what is left, the figures and the
+   actions shrink to fit and never wrap */
+table.versions, table.snapshots { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.versions th, table.snapshots th { text-align: left; font: 500 12px/1 var(--mono); color: var(--dim); padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.versions td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.versions td.asof { font-family: var(--mono); display: grid; gap: 2px; min-height: 44px; align-content: center; overflow-wrap: normal; }
+table.versions td.asof .small { overflow-wrap: anywhere; }
+table.versions th.size, table.versions td.size { width: 1%; text-align: right; font-family: var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.versions th.mtime, table.versions td.mtime { width: 1%; font-family: var(--mono); color: var(--dim); white-space: nowrap; }
+table.versions th.acts, table.versions td.acts, table.snapshots th.acts, table.snapshots td.acts { width: 1%; text-align: right; white-space: nowrap; }
+table.versions td.acts button, table.snapshots td.acts button { min-height: 28px; padding: 2px 8px; font-size: 12px; margin-left: 4px; }
+table.versions tr.current td { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+@media (max-width: 480px) { table.versions th.mtime, table.versions td.mtime { display: none; } }
+.snap-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+table.snapshots td { padding: 0 8px; border-bottom: 1px solid var(--line); height: 44px; vertical-align: middle; }
+table.snapshots td.name { font-family: var(--mono); overflow-wrap: normal; }
+table.snapshots td.name .badge { margin-left: 8px; }
+table.snapshots td.mirror, table.snapshots td.taken, table.snapshots td.holds { font-family: var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; width: 1%; }
+table.snapshots th.holds, table.snapshots td.holds { text-align: right; }
+table.snapshots tr.offline td { color: var(--dim); }
+@media (max-width: 480px) { table.snapshots th.mirror, table.snapshots td.mirror, table.snapshots th.taken, table.snapshots td.taken, table.snapshots th.holds, table.snapshots td.holds { display: none; } }
+/* a mirror's card: online, offline (dashed, as a closed disk) or warn */
+.card.mirror.off { border-style: dashed; }
+.card.mirror.warn { border-color: var(--warn); }

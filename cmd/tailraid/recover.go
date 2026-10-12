@@ -15,12 +15,13 @@ import (
 	"github.com/zombar/tailraid/internal/rpc"
 )
 
-// snapshotCmd copies the newest metadata snapshot out of the running node (docs/12 §9).
-func snapshotCmd() *cobra.Command {
+// exportCmd copies the newest metadata snapshot out of the running node (docs/12 §9); it
+// was `tailraid snapshot <dir>` until the volume snapshots of docs/16 took that word.
+func exportCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "snapshot <dir>",
+		Use:   "export <dir>",
 		Short: "Export the cluster metadata (a fresh Raft snapshot) into a directory",
-		Long: `snapshot asks the local node for a fresh Raft snapshot and copies it to <dir>/<id>/
+		Long: `export asks the local node for a fresh Raft snapshot and copies it to <dir>/<id>/
 (state.bin and meta.json). It is the metadata only: file names, chunk hashes and where
 each shard lives. Shards stay on their nodes. Keep a recent copy somewhere outside the
 cluster; "tailraid recover" rebuilds a node's membership from the node's own newest
@@ -32,7 +33,7 @@ snapshot and log after a majority is lost (docs/12 §9).`,
 			if err != nil {
 				return err
 			}
-			raw, err := c.Admin(ctx, addr, rpc.AdminOp{Op: "snapshot"})
+			raw, err := c.Admin(ctx, addr, rpc.AdminOp{Op: "export"})
 			if err != nil {
 				return err
 			}
@@ -41,7 +42,7 @@ snapshot and log after a majority is lost (docs/12 §9).`,
 				Index uint64 `json:"index"`
 			}
 			if err := json.Unmarshal(raw, &res); err != nil {
-				return fmt.Errorf("snapshot reply: %w", err)
+				return fmt.Errorf("export reply: %w", err)
 			}
 			dst := filepath.Join(args[0], filepath.Base(res.Dir))
 			if err := os.MkdirAll(dst, 0o700); err != nil {

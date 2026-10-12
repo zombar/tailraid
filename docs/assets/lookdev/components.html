@@ -402,6 +402,55 @@
   </section>
 
   <section>
+    <h2>Snapshots and mirrors <span>docs/13 §4, §7, docs/16</span></h2>
+    <div class="row">
+      <details class="menu asof"><summary>Now</summary></details>
+      <span class="badge">as of 2026-10-12-0900Z</span>
+      <span class="badge">syncing 41 %</span>
+      <span class="badge warn">3 missing</span>
+    </div>
+    <div class="menu-body" style="position:static" role="radiogroup" aria-label="as of">
+      <label class="menu-row"><input type="radio" name="asof-c" checked><span>Now</span><span class="small dim">the live volume</span></label>
+      <div class="menu-group"><span class="dot ok"></span>pike-m1 · online</div>
+      <label class="menu-row"><input type="radio" name="asof-c"><span>before reinstall<span class="badge">manual</span></span><span class="small dim">2026-10-09 18:30</span></label>
+      <div class="menu-group"><span class="dot off"></span>atlas-m1 · offline 3 d</div>
+      <label class="menu-row" aria-disabled="true"><input type="radio" name="asof-c" disabled><span>2026-10-09-0000Z</span><span class="small dim">offline: attach it to browse</span></label>
+      <div class="menu-foot small dim">41 snapshots on 2 mirrors · <a href="#/">manage on the dashboard</a></div>
+    </div>
+    <div class="banner snapshot"><span>As of <span class="mono">2026-10-12-0900Z</span> on <span class="mono">pike-m1</span> · taken 3 h ago · read-only</span><span class="actions"><button type="button">Restore folder to…</button><button type="button">Back to now</button></span></div>
+    <table class="versions">
+      <thead><tr><th>as of</th><th class="size">size</th><th class="mtime">modified</th><th class="acts"></th></tr></thead>
+      <tbody>
+        <tr class="current"><td class="asof">now<span class="small dim">in 2026-10-12-1200Z</span></td><td class="size">1.3 KiB</td><td class="mtime">2 h ago</td><td class="acts"><span class="badge strong">current</span></td></tr>
+        <tr><td class="asof">2026-10-12-0600Z – 2026-10-12-1100Z<span class="small dim">6 hourly · pike-m1</span></td><td class="size">1.2 KiB</td><td class="mtime">2026-10-10 09:02</td><td class="acts"><button type="button">View</button><button type="button">Revert</button><button type="button">Save a copy</button></td></tr>
+      </tbody>
+    </table>
+    <div class="cards">
+      <div class="card mirror">
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike-m1</span><span class="badges"><span class="badge">on pike</span></span></div>
+        <div class="bar-row"><span class="bar-label">disk</span><div class="bar"><i style="width:34%"></i></div><span class="bar-val">1.2 TiB used of 3.6 TiB · 29 snapshots</span></div>
+        <div class="meta"><span>newest 12 min ago</span></div>
+      </div>
+      <div class="card mirror off">
+        <div class="name-row"><span class="dot off"></span><span class="name">atlas-m1</span><span class="badges"><span class="badge">on atlas</span></span></div>
+        <div class="bar-row"><span class="bar-label">disk</span><div class="bar off"></div><span class="bar-val">offline 3 d · 12 snapshots</span></div>
+      </div>
+      <div class="card mirror warn">
+        <div class="name-row"><span class="dot ok"></span><span class="name">nomad-m1</span><span class="badges"><span class="badge warn">nearly full</span></span></div>
+        <div class="bar-row"><span class="bar-label">disk</span><div class="bar warn"><i style="width:96%"></i></div><span class="bar-val">1.9 TiB used of 2.0 TiB</span></div>
+      </div>
+    </div>
+    <div class="snap-head"><button type="button">Take a snapshot</button><span class="small dim">every online mirror · 41 snapshots</span></div>
+    <table class="snapshots">
+      <thead><tr><th>name</th><th class="mirror">mirror</th><th class="taken">taken</th><th class="holds">added</th><th class="acts"></th></tr></thead>
+      <tbody>
+        <tr><td class="name">2026-10-12-1200Z</td><td class="mirror">pike-m1</td><td class="taken">12 min ago · hourly</td><td class="holds">4.0 MiB</td><td class="acts"><button type="button">Browse</button></td></tr>
+        <tr class="offline"><td class="name">2026-10-09-0000Z</td><td class="mirror">atlas-m1</td><td class="taken">2026-10-09 00:00 · daily</td><td class="holds">312.0 MiB</td><td class="acts"><button type="button" disabled title="atlas-m1 is offline: attach it to browse">Browse</button></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
     <h2>Cache card <span>the dashboard's pins</span></h2>
     <div class="cards">
       <div class="card cache">

@@ -51,7 +51,7 @@ func HasTargets(nodes []Node) bool {
 			if active[n.Host] {
 				return true
 			}
-		case KindDevice:
+		case KindDevice, KindMirror: // a device stores nothing; a mirror holds snapshots, not slots (docs/16)
 		}
 	}
 	return false

@@ -124,13 +124,15 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op    string `json:"op"` // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | snapshot | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal
-	K     uint8  `json:"k,omitempty"`
-	M     uint8  `json:"m,omitempty"`
-	Auto  bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
-	Scrub bool   `json:"scrub,omitempty"` // check: force a full scrub pass
-	Files bool   `json:"files,omitempty"` // check: list affected files
-	Chunk string `json:"chunk,omitempty"` // chunk: hex hash (prefix ≥ 8) or a /path
+	Op     string `json:"op"`               // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | export (was snapshot) | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal | snapshot_ls | snapshot_create | snapshot_restore | versions | versions_revert | versions_copy (docs/16: Name, Mirror, Path, To, As; no op removes a snapshot, I-183)
+	Mirror string `json:"mirror,omitempty"` // snapshot_create, snapshot_ls: one mirror by name ("" every one)
+	Name   string `json:"name,omitempty"`   // snapshot_create: the snapshot's name ("" the UTC minute)
+	K      uint8  `json:"k,omitempty"`
+	M      uint8  `json:"m,omitempty"`
+	Auto   bool   `json:"auto,omitempty"`  // set_policy: hand the policy back to the leader (docs/03)
+	Scrub  bool   `json:"scrub,omitempty"` // check: force a full scrub pass
+	Files  bool   `json:"files,omitempty"` // check: list affected files
+	Chunk  string `json:"chunk,omitempty"` // chunk: hex hash (prefix ≥ 8) or a /path
 	// open_disk (this host only): start serving a disk `node add-disk` has just added;
 	// trash_ls: the folder to list (empty: every root); cache_pin and cache_unpin (this
 	// host only): the folder to keep on this device, or release (docs/12 §10)

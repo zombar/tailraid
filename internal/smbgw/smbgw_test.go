@@ -40,6 +40,7 @@ const password = "correct-horse"
 type gateway struct {
 	t    *testing.T
 	f    *testharness.Fabric
+	fs   *vfs.FS
 	sh   *smb2.Share
 	addr string
 }
@@ -56,7 +57,8 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	if prep != nil {
 		prep(f)
 	}
-	srv, err := smbgw.NewServer(f.FS(), f.FSM, password)
+	fs := f.FS()
+	srv, err := smbgw.NewServer(fs, f.FSM, password)
 	must(t, err)
 	l, err := smbgw.Listen(t.Context(), "127.0.0.1:0")
 	must(t, err)
@@ -64,7 +66,7 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	done := make(chan struct{})
 	go func() { _ = smbgw.Serve(sctx, l, srv); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
-	g := &gateway{t: t, f: f, addr: l.Addr().String()}
+	g := &gateway{t: t, f: f, fs: fs, addr: l.Addr().String()}
 	sess := dial(t, g.addr, smbgw.User, password)
 	g.sh, err = sess.Mount(smbgw.ShareName)
 	must(t, err)

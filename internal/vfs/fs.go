@@ -21,6 +21,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/mirror"
 )
 
 // FS is the billy.Filesystem the NFS and S3 gateways serve (docs/04, docs/07). Every
@@ -36,6 +37,7 @@ type FS struct {
 	uid   uint32
 	gid   uint32
 	stale func() bool // no leader contact for the Stale threshold (docs/02 §Health); nil = always
+	snaps snapState   // /.snapshots: the mirrors and the gateway's caches (docs/16 §6)
 
 	// every byte a client read or wrote through a File (docs/17 §1: bytes_r, bytes_w)
 	bytesRead, bytesWritten atomic.Uint64
@@ -43,7 +45,10 @@ type FS struct {
 
 // New wires a filesystem. uid/gid are stamped on created inodes.
 func New(st *meta.Store, prop meta.Proposer, ov *Overlay, rd *Reader, clk clock.Clock, uid, gid uint32) *FS {
-	return &FS{st: st, prop: prop, ov: ov, rd: rd, clk: clk, uid: uid, gid: gid}
+	return &FS{
+		st: st, prop: prop, ov: ov, rd: rd, clk: clk, uid: uid, gid: gid,
+		snaps: snapState{trees: map[meta.Hash]mirror.Tree{}, index: map[meta.SnapID]map[snapKey][]string{}},
+	}
 }
 
 // SetHealth gives the filesystem the gateway's health view: while stale reports false a
@@ -237,6 +242,9 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 	if len(parts) == 0 {
 		return nil, mapErr("open", filename, meta.ErrIsDir)
 	}
+	if isSnapshotPath(parts) {
+		return f.snapOpen(filename, parts, flag)
+	}
 	in, err := f.resolve(filename)
 	switch {
 	case err == nil:
@@ -293,6 +301,9 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 }
 
 func (f *FS) Stat(filename string) (os.FileInfo, error) {
+	if parts := meta.SplitPath(filename); isSnapshotPath(parts) {
+		return f.snapStat(filename, parts)
+	}
 	in, err := f.resolve(filename)
 	if err != nil {
 		return nil, mapErr("stat", filename, err)
@@ -319,6 +330,9 @@ func (f *FS) info(in meta.Inode) *fileInfo {
 
 func (f *FS) Rename(oldpath, newpath string) error {
 	ctx := context.Background()
+	if isSnapshotPath(meta.SplitPath(oldpath)) || isSnapshotPath(meta.SplitPath(newpath)) {
+		return mapErr("rename", oldpath, ErrReadOnly) // nothing moves into, out of or within /.snapshots (I-185)
+	}
 	op, on := parentOf(meta.SplitPath(oldpath))
 	np, nn := parentOf(meta.SplitPath(newpath))
 	if on == "" || nn == "" {
@@ -372,6 +386,9 @@ func hardDelete(dir []string, name string) bool {
 // the plain unlink, so rm keeps working through an update.
 func (f *FS) Remove(filename string) error {
 	ctx := context.Background()
+	if isSnapshotPath(meta.SplitPath(filename)) {
+		return mapErr("remove", filename, ErrReadOnly)
+	}
 	dp, name := parentOf(meta.SplitPath(filename))
 	if name == "" {
 		return mapErr("remove", filename, meta.ErrBadCommand)
@@ -444,6 +461,9 @@ func (f *FS) TempFile(dir, prefix string) (billy.File, error) {
 // --- billy.Dir -----------------------------------------------------------------------
 
 func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
+	if parts := meta.SplitPath(p); isSnapshotPath(parts) {
+		return f.snapReadDir(p, parts)
+	}
 	in, err := f.resolve(p)
 	if err != nil {
 		return nil, mapErr("readdir", p, err)
@@ -452,9 +472,12 @@ func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
 	if err != nil {
 		return nil, mapErr("readdir", p, err)
 	}
-	out := make([]os.FileInfo, len(ents))
+	out := make([]os.FileInfo, 0, len(ents))
 	for i := range ents {
-		out[i] = f.info(ents[i])
+		if in.Ino == meta.RootIno && ents[i].Name == SnapshotDir {
+			continue // the reserved name: /.snapshots resolves to the snapshots, never lists (I-185)
+		}
+		out = append(out, f.info(ents[i]))
 	}
 	return out, nil
 }
@@ -467,6 +490,9 @@ func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
 }
 
 func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) error {
+	if isSnapshotPath(parts) {
+		return ErrReadOnly
+	}
 	cur := meta.RootIno
 	for _, name := range parts {
 		child, ok := f.st.Lookup(cur, name)
@@ -499,6 +525,9 @@ func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) err
 
 func (f *FS) Symlink(target, link string) error {
 	ctx := context.Background()
+	if isSnapshotPath(meta.SplitPath(link)) {
+		return mapErr("symlink", link, ErrReadOnly)
+	}
 	dp, name := parentOf(meta.SplitPath(link))
 	if name == "" {
 		return mapErr("symlink", link, meta.ErrBadCommand)
@@ -524,6 +553,9 @@ func (f *FS) Symlink(target, link string) error {
 }
 
 func (f *FS) Readlink(link string) (string, error) {
+	if parts := meta.SplitPath(link); isSnapshotPath(parts) {
+		return f.snapReadlink(link, parts)
+	}
 	in, err := f.resolve(link)
 	if err != nil {
 		return "", mapErr("readlink", link, err)
@@ -549,6 +581,9 @@ func (f *FS) Capabilities() billy.Capability {
 // --- billy.Change --------------------------------------------------------------------
 
 func (f *FS) setAttr(name string, sa meta.SetAttr) error {
+	if isSnapshotPath(meta.SplitPath(name)) {
+		return mapErr("setattr", name, ErrReadOnly)
+	}
 	in, err := f.resolve(name)
 	if err != nil {
 		return mapErr("setattr", name, err)

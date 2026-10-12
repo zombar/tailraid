@@ -24,10 +24,11 @@ import (
 // it lives in the replicated metadata and is set by `init`.
 type Config struct {
 	Node struct {
-		Name    string `yaml:"name"`
-		DataDir string `yaml:"data_dir"`
-		Voter   bool   `yaml:"voter"`
-		Disks   []Disk `yaml:"disks"` // added disks, each a placement target of its own (docs/14)
+		Name    string   `yaml:"name"`
+		DataDir string   `yaml:"data_dir"`
+		Voter   bool     `yaml:"voter"`
+		Disks   []Disk   `yaml:"disks"`             // added disks, each a placement target of its own (docs/14)
+		Mirrors []Mirror `yaml:"mirrors,omitempty"` // disks given to snapshots, never placement targets (docs/16)
 	} `yaml:"node"`
 	Listen struct {
 		Raft int    `yaml:"raft"` // tailnet TCP port
@@ -69,6 +70,19 @@ type Config struct {
 	Cache struct {
 		Size string `yaml:"size,omitempty"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
 	} `yaml:"cache,omitempty"`
+	// Mirrors is the snapshot schedule of docs/16 §4, run by each mirror's host.
+	Mirrors struct {
+		Every string `yaml:"every,omitempty"` // an automatic snapshot of every online mirror this often (default 1h; "0" none)
+		Keep  struct {
+			Hourly  *int `yaml:"hourly,omitempty"`
+			Daily   *int `yaml:"daily,omitempty"`
+			Weekly  *int `yaml:"weekly,omitempty"`
+			Monthly *int `yaml:"monthly,omitempty"`
+		} `yaml:"keep,omitempty"`
+		Rate       string `yaml:"rate,omitempty"`        // bytes a second a sync reads from the pool (default 50M; "0" no limit)
+		HoldMax    string `yaml:"hold_max,omitempty"`    // a sync older than this is ended as failed (default 24h; at least 1h)
+		StaleAfter string `yaml:"stale_after,omitempty"` // check warns for a mirror whose newest snapshot is this old (default 168h)
+	} `yaml:"mirrors,omitempty"`
 	// Stats is the Stats page's history (docs/17 §5): every key is written only when set
 	// (I-61), so a release from before them still starts after a rollback.
 	Stats struct {
@@ -129,6 +143,73 @@ func (c Config) CacheSize() (int64, error) {
 		return 0, fmt.Errorf("config: cache.size %q: want a size of at least 64MiB", c.Cache.Size)
 	}
 	return int64(n), nil
+}
+
+// Mirror is one disk given to snapshots (docs/16 §1).
+type Mirror struct {
+	Path string `yaml:"path"`
+}
+
+// MirrorPolicy is the parsed snapshot schedule (docs/16 §4).
+type MirrorPolicy struct {
+	Every                          time.Duration // 0: no automatic snapshots
+	Hourly, Daily, Weekly, Monthly int
+	Rate                           int64 // bytes a second; 0 no limit
+	HoldMax, StaleAfter            time.Duration
+}
+
+// MaxKeep bounds each mirrors.keep count.
+const MaxKeep = 10000
+
+// Mirroring parses the mirrors section: every 1h (0, or at least a minute), keep 24, 30,
+// 8 and 12 (0..MaxKeep), rate 50M, hold_max 24h (at least 1h), stale_after 168h.
+func (c Config) Mirroring() (MirrorPolicy, error) {
+	m := c.Mirrors
+	p := MirrorPolicy{Every: time.Hour, Hourly: 24, Daily: 30, Weekly: 8, Monthly: 12, Rate: 50 << 20, HoldMax: 24 * time.Hour, StaleAfter: 7 * 24 * time.Hour}
+	dur := func(key, s string, min time.Duration, zero bool, out *time.Duration) error {
+		if s == "" {
+			return nil
+		}
+		if s == "0" && zero {
+			*out = 0
+			return nil
+		}
+		d, err := time.ParseDuration(s)
+		if err != nil || d < min {
+			return fmt.Errorf("config: mirrors.%s %q: want a duration of at least %s", key, s, min)
+		}
+		*out = d
+		return nil
+	}
+	if err := dur("every", m.Every, time.Minute, true, &p.Every); err != nil {
+		return p, err
+	}
+	if err := dur("hold_max", m.HoldMax, time.Hour, false, &p.HoldMax); err != nil {
+		return p, err
+	}
+	if err := dur("stale_after", m.StaleAfter, time.Hour, false, &p.StaleAfter); err != nil {
+		return p, err
+	}
+	for key, kv := range map[string]struct {
+		v   *int
+		out *int
+	}{"hourly": {m.Keep.Hourly, &p.Hourly}, "daily": {m.Keep.Daily, &p.Daily}, "weekly": {m.Keep.Weekly, &p.Weekly}, "monthly": {m.Keep.Monthly, &p.Monthly}} {
+		if kv.v == nil {
+			continue
+		}
+		if *kv.v < 0 || *kv.v > MaxKeep {
+			return p, fmt.Errorf("config: mirrors.keep.%s %d: want 0..%d", key, *kv.v, MaxKeep)
+		}
+		*kv.out = *kv.v
+	}
+	if m.Rate != "" {
+		n, err := ParseBytes(m.Rate)
+		if err != nil {
+			return p, fmt.Errorf("config: mirrors.rate: %w", err)
+		}
+		p.Rate = int64(n)
+	}
+	return p, nil
 }
 
 // Disk is one added disk: its mount path and its budget ("" derives it from the disk).
@@ -420,6 +501,9 @@ func (c *Config) expandHome() {
 	for i := range c.Node.Disks {
 		c.Node.Disks[i].Path = ExpandHome(c.Node.Disks[i].Path)
 	}
+	for i := range c.Node.Mirrors {
+		c.Node.Mirrors[i].Path = ExpandHome(c.Node.Mirrors[i].Path)
+	}
 }
 
 // ExpandHome replaces a leading "~" or "~/" with the home directory.
@@ -476,6 +560,19 @@ func (c Config) Validate() error {
 				return fmt.Errorf("config: node.disks[%d].capacity: %w", i, err)
 			}
 		}
+	}
+	for i, m := range c.Node.Mirrors {
+		if m.Path == "" || !filepath.IsAbs(m.Path) {
+			return fmt.Errorf("config: node.mirrors[%d].path %q: want an absolute path", i, m.Path)
+		}
+		p := filepath.Clean(m.Path)
+		if seen[p] || p == filepath.Clean(c.Node.DataDir) {
+			return fmt.Errorf("config: node.mirrors[%d].path %q is listed twice, is a disk or is the data directory", i, m.Path)
+		}
+		seen[p] = true
+	}
+	if _, err := c.Mirroring(); err != nil {
+		return err
 	}
 	if w := c.Listen.Web; w < 0 || w > 65535 {
 		return fmt.Errorf("config: listen.web %d: want 0 (off) or a TCP port", w)

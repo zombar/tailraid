@@ -46,7 +46,7 @@ disk, or iteration order of a map when deciding anything (I-4). The FSM keeps
 a timestamp is recorded, so a proposer with a slow clock cannot back-date a tombstone or an
 mtime; the FSM clock is monotonic across proposers (`TombstonedAt`, `Mtime`, `Ctime`,
 `JoinedAt` all use it). Results are returned in
-`Result{Ino, Gen, Victims, Err}` with `Err` one of the sentinel errors below — never a Go
+`Result{Ino, Gen, Victims, SnapID, Err}` with `Err` one of the sentinel errors below — never a Go
 panic or a non-deterministic error string.
 
 ```go
@@ -70,6 +70,9 @@ const (
     OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
     OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
     OpSetShardSums            // {Hash, Sums [][32]byte}: the data shards' hashes of a chunk committed without them (04 §4, codec 5)
+    OpSnapshotBegin           // {Mirror NodeIdx, Name, Auto bool, Now} → Result.SnapID (16 §3, codec 7)
+    OpSnapshotEnd             // {ID, OK bool, Root Hash, Files, Bytes, NewBytes uint64, Missing uint32, Now} (codec 7)
+    OpSnapshotDelete          // {ID, Done bool, Now}: the mirror host's thinning only, never a user (codec 7)
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
@@ -251,12 +254,43 @@ which `Tombs` guarantees), in hash order and at most `Limit` of them (I-103; `0`
 unbounded): delete it from `Chunks` and `Tombs` and append `GCVictim{Hash, Placement}` to
 `Result.Victims`. The leader then deletes the shards and proposes again while a batch
 comes back full. Deterministic because `Before` and `Limit` are in the command and the
-victim list is emitted in hash order.
+victim list is emitted in hash order. **The sync hold:** while any catalogue row is
+`Syncing`, the FSM uses `min(Before, the oldest syncing row's At)` in place of `Before`,
+so no chunk tombstoned after a snapshot began is collected before its copy to the mirror
+ends (16 §4, I-181); the bound is state, so every replica applies the same one.
+
+**SnapshotBegin** (16 §3). `Mirror` must be an `Active` `KindMirror` row (`ErrNoSuchNode`);
+`Name` 1 to 64 bytes, no `/`, not `.` or `..` (`ErrBadCommand`) and free on that mirror
+(`ErrExist`); the mirror must have no `Syncing` row (`ErrExist`). Allocates `ID =
+NextSnap++` and records `{ID, Mirror, Name, Index: the command's own index, At: now, Auto,
+State: Syncing}`; returns the ID. Nothing else in the state changes. On the mirror's host
+the apply also hands a clone of the state at this index to the sync worker; that clone is
+local and changes nothing replicated.
+
+**SnapshotEnd.** `ID` must be `Syncing` (`ErrNotExist` otherwise, so a late or repeated end
+is harmless). With `OK` the row takes `Root`, `Files`, `Bytes`, `NewBytes` and `Missing`,
+and its state becomes `Complete`, or `Incomplete` when `Missing > 0`; without `OK` the row
+is removed. Either way the hold it carried ends.
+
+**SnapshotDelete.** `ID` must exist (`ErrNotExist`). Without `Done` a `Complete` or
+`Incomplete` row becomes `Deleting` (a `Syncing` row is `ErrExist`: end it first; a
+`Deleting` one is unchanged); with `Done` a `Deleting` row is removed (any other is
+`ErrExist`). The mirror's disk is cleaned by its host between the two (16 §5), never by
+the FSM. The only proposer is the mirror's host, on its tick (thinning and the free-space reserve)
+and after its sweep (`Done`): no admin op or web route carries the command, so no
+user removes a snapshot (I-183).
+
+**NodeUpsert of a mirror** (16 §1): a `KindMirror` row must name an `Active` device as its
+`Host`, as a disk row does (14 §1), carries no budget and no ports, and is never a
+placement, policy or repair candidate; a re-home changes only its `Host`. Removing a mirror
+row (`NodeSetState{Removed}`) removes its catalogue rows with it and is refused while one
+is `Syncing`.
 
 **Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
 disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore`,
 `Purge`, `SetAttr` with `Flags`), 5 (`Commit` whose `NewChunks` carry `Sums`,
-`SetShardSums`) or 6 (`SetAttr` with the library bits of 18 §9), snapshots in version 5 (01 §Binary codec); every reader
+`SetShardSums`), 6 (`SetAttr` with the library bits of 18 §9) or 7 (`SnapshotBegin`,
+`SnapshotEnd`, `SnapshotDelete`, `NodeUpsert` of a mirror, 16), snapshots in version 7 (01 §Binary codec); every reader
 decodes every older version. A `Commit` carries `Sums` only while every live active member
 reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
 gate: in a mixed cluster the chunk is committed without sums and the repair scanner's
@@ -268,7 +302,9 @@ entry would be exactly that on a member still running codec 3, the leader refuse
 propose one with `ErrCodec` while any live active member reports an older codec in its
 `/health` (the prober records it); the gateways fall back to `Unlink`/`Rmdir` for a
 delete and to the version-3 replace on `Rename` in that window, so a mixed cluster keeps
-working without the trash until every node is updated (I-156, 12 §6).
+working without the trash until every node is updated (I-156, 12 §6). Codec 7 is gated
+the same way: `mirror add` and every snapshot command are `ErrCodec` until every live
+member reads it, so no node ever applies a hold it cannot see (I-184).
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
@@ -294,7 +330,8 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error
 concurrently with `Persist`. Hence `Snapshot()` clones under the read lock (Children maps
 deep-copied; `Chunks` slices shared because they are immutable) and `Persist` works on the
 clone with no lock. Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
-on close. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db` with
+on close. These Raft snapshots (log compaction) are not the volume snapshots of 16,
+which are catalogue rows here and trees and chunks on a mirror disk. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db` with
 `NoSync = false`.
 
 Raft configuration: `HeartbeatTimeout 2s`, `ElectionTimeout 2s`, `LeaderLeaseTimeout 1s`,

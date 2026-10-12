@@ -17,6 +17,9 @@ import (
 // is unlinked for good. While a member is too old for the trash a file falls back to
 // the plain unlink; a folder cannot and the caller sees ErrCodec.
 func (f *FS) Trash(filename string) error {
+	if isSnapshotPath(meta.SplitPath(filename)) {
+		return ErrReadOnly
+	}
 	ctx := context.Background()
 	dp, name := parentOf(meta.SplitPath(filename))
 	if name == "" {
@@ -90,6 +93,9 @@ func (f *FS) PurgeAll() error {
 
 // SetFlags sets a directory's protected and nsfw flags (docs/01, docs/13 §4).
 func (f *FS) SetFlags(filename string, flags uint8) error {
+	if isSnapshotPath(meta.SplitPath(filename)) {
+		return ErrReadOnly
+	}
 	in, err := f.resolve(filename)
 	if err != nil {
 		return err

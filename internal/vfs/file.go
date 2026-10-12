@@ -24,6 +24,7 @@ type File struct {
 	flag   int
 	pos    int64
 	closed bool
+	snap   *snapFile // a file under /.snapshots: read from its snapshot, never written (I-185)
 }
 
 func (f *File) checkOpen(op string) error {
@@ -47,6 +48,9 @@ func (f *File) inode() (meta.Inode, error) {
 
 // size is the client-visible size: the overlay's while dirty, else the committed size.
 func (f *File) size() uint64 {
+	if f.snap != nil {
+		return f.snap.e.Size
+	}
 	in, ok := f.fs.st.GetInodeAny(f.ino) // an open file in the trash still reads and flushes (I-155)
 	if !ok {
 		return 0
@@ -109,6 +113,13 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, mapErr("read", f.name, syscall.EINVAL)
 	}
+	if f.snap != nil {
+		n, err := f.fs.snapReadAt(context.Background(), f.snap, p, off)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return n, snapErr("read", f.name, err)
+		}
+		return n, err
+	}
 	in, err := f.inode()
 	if err != nil {
 		return 0, err
@@ -157,6 +168,9 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (f *File) Truncate(size int64) error {
+	if f.snap != nil {
+		return mapErr("truncate", f.name, ErrReadOnly)
+	}
 	if !f.writable() || size < 0 {
 		return mapErr("truncate", f.name, syscall.EINVAL)
 	}

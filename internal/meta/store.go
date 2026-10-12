@@ -2,6 +2,7 @@ package meta
 
 import (
 	"bytes"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -448,6 +449,30 @@ func (f *FSM) Nodes() []Node {
 	return out
 }
 
+// Snapshots returns the snapshot catalogue in ID order (docs/16 §5): every mirror's rows,
+// online or not, Deleting ones included (callers that list for a user skip them).
+func (f *FSM) Snapshots() []Snapshot {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	ids := slices.Sorted(maps.Keys(f.st.Snaps))
+	out := make([]Snapshot, len(ids))
+	for i, id := range ids {
+		out[i] = *f.st.Snaps[id]
+	}
+	return out
+}
+
+// SnapshotRow returns one catalogue row (FSM.Snapshot is Raft's).
+func (f *FSM) SnapshotRow(id SnapID) (Snapshot, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	sn, ok := f.st.Snaps[id]
+	if !ok {
+		return Snapshot{}, false
+	}
+	return *sn, true
+}
+
 // Stats returns the volume statistics. They are kept in step with every apply, so FSSTAT
 // (which macOS issues constantly) costs O(1) rather than a walk of every inode and chunk.
 func (f *FSM) Stats() Stats {
@@ -525,7 +550,7 @@ func (s *Stats) chunkOut(c *Chunk, wasLive bool) {
 func Usage(vol Volume, nodes []Node, st Stats) (total, used, free uint64) {
 	var capacity uint64
 	for i := range nodes {
-		if nodes[i].State == Active && nodes[i].Kind != KindDevice { // a device stores nothing (docs/14 §9)
+		if nodes[i].State == Active && nodes[i].Kind.Target() { // a device stores nothing (docs/14 §9), a mirror holds snapshots (docs/16)
 			capacity += nodes[i].Capacity
 		}
 	}
