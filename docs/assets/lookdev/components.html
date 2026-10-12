@@ -306,6 +306,7 @@
     </div>
     <div class="row">
       <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>
+      <label class="toggle"><input type="checkbox">show deleted</label>
       <details class="menu" open>
         <summary>Folder</summary>
         <div class="menu-body" style="position:static;margin-top:8px">
@@ -415,7 +416,7 @@
   <section>
     <h2>Search box and results <span>docs/13 §1, docs/18 §6: the box lives in the header; a hit is name, path, why and a snippet</span></h2>
     <form class="search" role="search" style="max-width:320px"><input type="search" value="agnes riverside" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
-    <label class="under"><input type="checkbox"> in <code>/music</code> only</label>
+    <label class="toggle"><input type="checkbox"> in <code>/music</code> only</label>
     <ol style="list-style:none;margin:0;padding:0">
       <li class="hit"><a class="hname" href="#">06 Riverside.flac</a><span class="hpath">/music/Agnes Obel/Aventine · Riverside — Agnes Obel</span><span class="hwhy badge">tags</span></li>
       <li class="hit"><a class="hname" href="#">concerts.md</a><span class="hpath">/notes</span><span class="hwhy badge">content</span><span class="hsnip">…the encore was <mark>Riverside</mark> on a single piano…</span></li>

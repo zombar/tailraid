@@ -2369,6 +2369,7 @@ function render8(root, ctx) {
   const inTrash = ctx.root !== void 0;
   let sort = session.get("tr.sort", { key: "name", desc: false });
   let view3 = session.get("tr.view", "list");
+  let showDeleted = session.get("tr.deleted", false);
   let entries = [];
   let info = { protected: false, nsfw: false, pinned: false };
   let trashRoot;
@@ -2446,7 +2447,18 @@ function render8(root, ctx) {
       h("button", { type: "button", "aria-pressed": view3 === "list" ? "true" : "false", onClick: () => setView("list") }, "List"),
       h("button", { type: "button", "aria-pressed": view3 === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles")
     );
-    toolbar.append(seg, h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}` + (deleted ? ` \xB7 ${deleted} deleted` : "")));
+    toolbar.append(seg);
+    if (!inTrash) {
+      const box = h("input", { type: "checkbox" });
+      box.checked = showDeleted;
+      box.addEventListener("change", () => {
+        showDeleted = box.checked;
+        session.set("tr.deleted", showDeleted);
+        draw();
+      });
+      toolbar.append(h("label", { class: "toggle" }, box, "show deleted"));
+    }
+    toolbar.append(h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}` + (deleted ? ` \xB7 ${deleted} deleted` : "")));
     section.append(toolbar);
     const shown = queue2.filter((j) => j.state !== "done");
     if (shown.length) {
@@ -2457,11 +2469,11 @@ function render8(root, ctx) {
     if (formOpen) section.append(folderForm());
     if (renaming) section.append(renameForm(renaming));
     alb = null;
-    if (entries.length === 0) section.append(h("div", { class: "empty" }, "empty folder"));
+    if (sorted(entries).length === 0) section.append(h("div", { class: "empty" }, deleted ? "empty folder \xB7 tick show deleted to list what was deleted here" : "empty folder"));
     else if (asAlbum) {
       alb = render7(ctx, info.cover, entries);
       section.append(alb.el);
-      const rest = entries.filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
+      const rest = sorted(entries).filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section.append(table(rest));
     } else if (view3 === "tiles") section.append(tiles());
     else section.append(table(entries));
@@ -2543,7 +2555,7 @@ function render8(root, ctx) {
   };
   const sorted = (list) => {
     const livePart = list.filter((e) => !e.deleted_at).sort((a, b) => compare(a, b, sort));
-    const gone = list.filter((e) => e.deleted_at).sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "") || a.name.localeCompare(b.name));
+    const gone = list.filter((e) => e.deleted_at && (showDeleted || inTrash)).sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "") || a.name.localeCompare(b.name));
     return [...livePart, ...gone];
   };
   const order = () => sorted(entries).filter((e) => !e.deleted_at).map((e) => e.name);
@@ -3125,7 +3137,7 @@ function render10(root, q, params) {
   if (scope !== "/") {
     const toggle = h("input", { type: "checkbox", checked: under !== "" });
     toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
-    bar2.append(h("label", { class: "under" }, toggle, " in ", h("code", null, scope), " only"));
+    bar2.append(h("label", { class: "toggle" }, toggle, " in ", h("code", null, scope), " only"));
   }
   section.append(bar2);
   const queue3 = [];
@@ -3241,21 +3253,35 @@ function posterTile(it) {
   }
   return a;
 }
+function stored2(key) {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+function remember(key, on) {
+  try {
+    if (on) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+  }
+}
 function librarySection(lib) {
   const [one, many] = NOUN[lib.kind] ?? ["item", "items"];
   const countEl = h("span", { class: "count" }, "\u2026");
-  const section = h("section", { class: "lib " + lib.kind }, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl));
+  const key = `tr.media.closed.${lib.path}`;
+  const fold2 = h("details", null, h("summary", null, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl)));
+  fold2.open = !stored2(key);
+  const section = h("section", { class: "lib " + lib.kind }, fold2);
   const grid = h("div", { class: "posters" });
   const sorts = ["title", "year", "added"];
   let sort = session.get(`tr.media.sort.${lib.path}`, "title");
-  const pressed = /* @__PURE__ */ new Set();
   let items = [];
   const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s[0].toUpperCase() + s.slice(1)));
-  const chips = h("div", { class: "chips" });
   const draw = () => {
     clear(grid);
-    const shown = pressed.size === 0 ? items : items.filter((it) => (it.genres ?? []).some((g) => pressed.has(g.toLowerCase())));
-    for (const it of shown) grid.append(posterTile(it));
+    for (const it of items) grid.append(posterTile(it));
   };
   const load = () => {
     media(lib.path, sort).then(
@@ -3263,17 +3289,6 @@ function librarySection(lib) {
         items = res.items;
         clear(countEl);
         countEl.append(`${count(res.lib.count)} ${res.lib.count === 1 ? one : many}${res.lib.count > res.items.length ? ` (first ${res.items.length})` : ""} \xB7 `, h("a", { href: browseHash({ path: lib.path }) }, "open folder"));
-        clear(chips);
-        for (const g of res.lib.genres ?? []) {
-          const chip = h("button", { type: "button", class: "chip", "aria-pressed": String(pressed.has(g)) }, g);
-          chip.addEventListener("click", () => {
-            if (pressed.has(g)) pressed.delete(g);
-            else pressed.add(g);
-            chip.setAttribute("aria-pressed", String(pressed.has(g)));
-            draw();
-          });
-          chips.append(chip);
-        }
         draw();
       },
       (e) => {
@@ -3289,8 +3304,19 @@ function librarySection(lib) {
       load();
     })
   );
-  section.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons), chips), grid);
-  load();
+  fold2.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons)), grid);
+  let loaded = false;
+  const open = () => {
+    if (fold2.open && !loaded) {
+      loaded = true;
+      load();
+    }
+  };
+  fold2.addEventListener("toggle", () => {
+    remember(key, !fold2.open);
+    open();
+  });
+  open();
   return section;
 }
 function overview(root) {

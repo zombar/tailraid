@@ -24,10 +24,9 @@ const MediaPage = 500
 
 // MediaLib is one library folder.
 type MediaLib struct {
-	Path   string   `json:"path"`
-	Kind   string   `json:"kind"`
-	Count  int      `json:"count"`
-	Genres []string `json:"genres,omitempty"`
+	Path  string `json:"path"`
+	Kind  string `json:"kind"`
+	Count int    `json:"count"`
 }
 
 // MediaItem is a film, show, season, episode or album (docs/13 §3).
@@ -289,17 +288,7 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 		}
 		return a.Path < b.Path
 	})
-	genres := map[string]bool{}
-	for i := range items {
-		for _, g := range items[i].Genres {
-			genres[strings.ToLower(g)] = true
-		}
-	}
 	lib := MediaLib{Path: canonical, Kind: kind.String(), Count: len(items)}
-	for g := range genres {
-		lib.Genres = append(lib.Genres, g)
-	}
-	sort.Strings(lib.Genres)
 	page := []MediaItem{}
 	if offset < len(items) {
 		page = items[offset:min(offset+MediaPage, len(items))]

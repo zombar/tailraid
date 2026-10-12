@@ -398,7 +398,6 @@ export interface MediaLibrary {
   path: string;
   kind: string;
   count: number;
-  genres?: string[];
 }
 
 /** media lists the libraries, or one library's items (docs/13 §10). */
