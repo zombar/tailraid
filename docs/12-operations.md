@@ -191,8 +191,8 @@ Versions are plain semver with a `v` prefix; a build from a commit prints
 
 ## 5. Self-update
 
-`tailraid update [--check] [--version vX.Y.Z] [--allow-downgrade] [--yes] [--restart]
-[--rollback]` replaces the running binary with a release artifact (`internal/update`,
+`tailraid update [--check] [--version vX.Y.Z] [--allow-downgrade] [--yes] [--restart
+[--wait d] [--now]] [--rollback]` replaces the running binary with a release artifact (`internal/update`,
 I-128):
 
 1. Resolve the release: `GET /repos/zombar/tailraid/releases/latest` (or `/tags/<v>`),
@@ -217,7 +217,14 @@ I-128):
    download into place. `.old` stays: `serve` removes it a minute into a clean start, and
    `tailraid update --rollback` puts it back before then (or until the next update).
 7. Print how to restart the service (`tailraid stop && tailraid start`, or `sc.exe`), or
-   do it when `--restart` is given.
+   do it when `--restart` is given, **once the gateway is idle** (I-221): the restart
+   drops every client's open files (the SMB gateway has no durable handles, docs/15 §8),
+   so it waits until the node's `status` shows no dirty, plan or WAL bytes and no growth
+   in `gateway.bytes_written` for `IdleFor` (10 s), polling every 2 s and printing what
+   it waits for. After `--wait` (default 10m) it says so and restarts anyway; `--now`
+   skips the wait; a node whose status cannot be read is restarted at once (nothing to
+   protect). Updating during a copy cost the copies in flight on 2026-10-11 and 12:
+   Explorer's "The specified network name is no longer available" and a partial file.
 
 `--check` stops after step 2 and exits 2 when an update is available.
 
@@ -567,6 +574,11 @@ volume's bytes in the clear: keep the disk where the data may be.
   request (the CLI's and `verify`'s), gets a report whose build started after the request
   arrived, never an older one; concurrent such requests share one build; after `Close` a
   request serves the last report.
+- **I-221** — `update --restart` (and `--rollback --restart`) stops the service only after
+  the local node's status has shown, for `IdleFor` (10 s) without a break, zero dirty,
+  plan and WAL bytes and an unchanged `gateway.bytes_written`; a report that breaks the
+  run restarts the count; after `--wait` it restarts anyway and says so; `--now`, or a
+  status it cannot read, restarts at once.
 - **I-131** — `tailraid stop` returns only once the service manager reports no process
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
@@ -605,5 +617,6 @@ volume's bytes in the clear: keep the disk where the data may be.
 | I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
+| I-221 | `TestWaitIdle_Table`, `TestWaitIdle_StatusUnreadable_ReturnsAtOnce` |
 | I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |
 | I-188 | `TestConfig_Mirrors`, `TestAdminOps_NoSnapshotDelete`, `TestAdminOps_RestoreAndVersions`, `TestCLI_SplitSnapshotRef`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`; planned: TestCLI_MirrorAdd_MarkRehomeAdopt, TestMirror_OnlineFollowsMarkerAndHost, TestCLI_MirrorRemove_LeavesDisk, TestCLI_Export, TestReport_MirrorFields, TestCheck_MirrorWarnings, `TestSoak_AllPhasesAgainstHarness` |
