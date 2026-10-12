@@ -42,6 +42,7 @@ import (
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/soak"
+	"github.com/zombar/tailraid/internal/soak/smbclient"
 )
 
 func main() {
@@ -62,6 +63,9 @@ func main() {
 	mux.HandleFunc("POST /heal", w.heal)
 	mux.HandleFunc("POST /copy", w.copyStart)
 	mux.HandleFunc("GET /copy/{id}", w.copyState)
+	mux.HandleFunc("POST /smbraces", w.smbRaces)
+	mux.HandleFunc("POST /smbhold", w.smbHold)
+	mux.HandleFunc("POST /smbrelease", w.smbRelease)
 	mux.HandleFunc("GET /goroutines", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_ = pprof.Lookup("goroutine").WriteTo(rw, 2)
@@ -83,7 +87,8 @@ type worker struct {
 	gen    uint64 // bumped on every dropTarget: a request that outran its client must not drop the next one
 	client *rpc.Client
 
-	jobs   map[string]*copyJob // soak phase 22's copies, by id
+	jobs   map[string]*copyJob     // soak phase 22's copies, by id
+	held   map[string]func() error // phase 23's delete-on-close handles held open, by id
 	nextID int
 }
 
@@ -545,63 +550,49 @@ func (w *worker) copyStart(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, err.Error(), http.StatusBadRequest)
 		return
 	}
-	var copyOne func(soak.CopySpec) error
-	var after func()
+	var run func() []soak.CopyResult
 	switch req.Proto {
 	case "smb":
-		d := &smb2.Dialer{Initiator: &smb2.NTLMInitiator{User: smbgw.User, Password: os.Getenv("SMB_PASSWORD")}}
-		sess, err := d.Dial(r.Context(), smbAddr)
-		if err != nil {
-			http.Error(rw, "smb: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		sh, err := sess.Mount(smbgw.ShareName)
-		if err != nil {
-			_ = sess.Logoff()
-			http.Error(rw, "smb: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		// one connection for every file, as Windows has to a server
-		copyOne = func(f soak.CopySpec) error {
-			h, err := sh.OpenFile(strings.TrimPrefix(f.Path, "/"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
-			if err != nil {
-				return err
-			}
-			err = copyPieces(f, h.Truncate, h.WriteAt)
-			return errors.Join(err, h.Close())
-		}
-		after = func() { _ = sh.Umount(); _ = sess.Logoff() }
+		// one connection per distinct Conn, as several Windows clients have to a server
+		run = func() []soak.CopyResult { return smbclient.Copy(context.Background(), smbDial, req.Files) }
 	case "nfs":
-		// a connection of the job's own: the shared one is dropped when a partition is
-		// set, which would cut the copies rather than the cluster
-		t, closeT, err := dialTarget(w.nfsAddr)
-		if err != nil {
-			http.Error(rw, "nfs: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		after = closeT
-		copyOne = func(f soak.CopySpec) error { // concurrent calls on one target, as the worker's /fs makes
-			if _, err := t.Create(f.Path, 0o644); err != nil {
-				return fmt.Errorf("create: %w", err)
+		// connections of the job's own, one per distinct Conn: the shared one is dropped
+		// when a partition is set, which would cut the copies rather than the cluster
+		targets := map[int]*nfsc.Target{}
+		var closers []func()
+		for _, f := range req.Files {
+			if _, ok := targets[f.Conn]; ok {
+				continue
 			}
-			if err := t.Setattr(f.Path, nfsc.Sattr3{Size: nfsc.SetSize{SetIt: true, Size: uint64(f.Size)}}); err != nil {
-				return fmt.Errorf("size: %w", err)
-			}
-			h, err := t.OpenFile(f.Path, 0o644) // one handle held across every write
+			t, closeT, err := dialTarget(w.nfsAddr)
 			if err != nil {
-				return err
-			}
-			defer h.Close()
-			data := soak.CopyPayload(f.Size, f.Seed)
-			for off := 0; off < len(data); off += soak.CopyPiece {
-				if _, err := h.Seek(int64(off), io.SeekStart); err != nil {
-					return err
+				for _, c := range closers {
+					c()
 				}
-				if _, err := h.Write(data[off:min(off+soak.CopyPiece, len(data))]); err != nil {
-					return fmt.Errorf("write @%d: %w", off, err)
-				}
+				http.Error(rw, "nfs: "+err.Error(), http.StatusServiceUnavailable)
+				return
 			}
-			return nil
+			targets[f.Conn], closers = t, append(closers, closeT)
+		}
+		run = func() []soak.CopyResult {
+			defer func() {
+				for _, c := range closers {
+					c()
+				}
+			}()
+			results := make([]soak.CopyResult, len(req.Files))
+			var wg sync.WaitGroup
+			for i, f := range req.Files {
+				wg.Go(func() { // concurrent calls on one target, as the worker's /fs makes
+					results[i] = soak.CopyResult{Path: f.Path}
+					if err := nfsCopy(targets[f.Conn], f); err != nil {
+						results[i].Err = err.Error()
+						results[i].Exists = errors.Is(err, os.ErrExist)
+					}
+				})
+			}
+			wg.Wait()
+			return results
 		}
 	default:
 		http.Error(rw, "unknown proto "+req.Proto, http.StatusBadRequest)
@@ -617,26 +608,107 @@ func (w *worker) copyStart(rw http.ResponseWriter, r *http.Request) {
 	w.jobs[id] = job
 	w.mu.Unlock()
 	go func() {
-		results := make([]soak.CopyResult, len(req.Files))
-		var wg sync.WaitGroup
-		for i, f := range req.Files {
-			wg.Go(func() {
-				results[i] = soak.CopyResult{Path: f.Path}
-				if err := copyOne(f); err != nil {
-					results[i].Err = err.Error()
-				}
-			})
-		}
-		wg.Wait()
-		if after != nil {
-			after()
-		}
+		results := run()
 		job.mu.Lock()
 		job.done, job.results = true, results
 		job.mu.Unlock()
 	}()
 	rw.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(rw).Encode(map[string]string{"id": id})
+}
+
+// smbDial opens a session to the node's loopback SMB gateway with the fixed password
+// entry.sh writes into every node's config.
+func smbDial(ctx context.Context) (*smb2.Share, func(), error) {
+	d := &smb2.Dialer{Initiator: &smb2.NTLMInitiator{User: smbgw.User, Password: os.Getenv("SMB_PASSWORD")}}
+	sess, err := d.Dial(ctx, smbAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("smb: %w", err)
+	}
+	sh, err := sess.Mount(smbgw.ShareName)
+	if err != nil {
+		_ = sess.Logoff()
+		return nil, nil, fmt.Errorf("smb: %w", err)
+	}
+	return sh, func() { _ = sh.Umount(); _ = sess.Logoff() }, nil
+}
+
+// nfsCopy copies one file over NFS with one handle held across every write: an
+// exclusive copy creates with CREATE GUARDED (the client library sends only UNCHECKED,
+// which would truncate a file another client made), a replacing one with UNCHECKED.
+func nfsCopy(t *nfsc.Target, f soak.CopySpec) error {
+	if f.Mode == soak.CopyReplace {
+		if _, err := t.Create(f.Path, 0o644); err != nil {
+			return fmt.Errorf("create: %w", err)
+		}
+	} else if err := createGuarded(t, f.Path); err != nil {
+		return fmt.Errorf("create: %w", err)
+	}
+	if err := t.Setattr(f.Path, nfsc.Sattr3{Size: nfsc.SetSize{SetIt: true, Size: uint64(f.Size)}}); err != nil {
+		return fmt.Errorf("size: %w", err)
+	}
+	h, err := t.OpenFile(f.Path, 0o644)
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+	data := soak.CopyPayload(f.Size, f.Seed)
+	for off := 0; off < len(data); off += soak.CopyPiece {
+		if _, err := h.Seek(int64(off), io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := h.Write(data[off:min(off+soak.CopyPiece, len(data))]); err != nil {
+			return fmt.Errorf("write @%d: %w", off, err)
+		}
+	}
+	return nil
+}
+
+// createGuarded sends CREATE GUARDED for p; NFS3ERR_EXIST is os.ErrExist.
+func createGuarded(t *nfsc.Target, p string) error {
+	dir, name := path.Split(p)
+	_, fh, err := t.Lookup(dir)
+	if err != nil {
+		return err
+	}
+	type how struct {
+		Mode uint32
+		Attr nfsc.Sattr3
+	}
+	res, err := t.Call(&struct {
+		Header nfsrpc.Header
+		Where  nfsc.Diropargs3
+		HW     how
+	}{
+		Header: nfsrpc.Header{Rpcvers: 2, Prog: nfsc.Nfs3Prog, Vers: nfsc.Nfs3Vers, Proc: nfsc.NFSProc3Create, Cred: nfsrpc.AuthNull, Verf: nfsrpc.AuthNull},
+		Where:  nfsc.Diropargs3{FH: fh, Filename: name},
+		HW:     how{Mode: 1, Attr: nfsc.Sattr3{Mode: nfsc.SetMode{SetIt: true, Mode: 0o644}}},
+	})
+	if err != nil {
+		return err
+	}
+	switch status, err := xdr.ReadUint32(res); {
+	case err != nil:
+		return err
+	case status == uint32(nfsc.NFS3ErrExist):
+		return os.ErrExist
+	case status != 0:
+		return fmt.Errorf("create guarded: NFS status %d", status)
+	}
+	return nil
+}
+
+// smbRaces runs phase 23's SMB handle races (smbclient.Races) on this node's gateway.
+func (w *worker) smbRaces(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Dir string `json:"dir"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(rw, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(smbclient.Races(r.Context(), smbDial, req.Dir))
 }
 
 func (w *worker) copyState(rw http.ResponseWriter, r *http.Request) {
@@ -648,22 +720,64 @@ func (w *worker) copyState(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job.mu.Lock()
-	defer job.mu.Unlock()
+	done, results := job.done, job.results
+	job.mu.Unlock()
+	if done { // read once it has ended: the job goes, so the table does not grow for the worker's life
+		w.mu.Lock()
+		delete(w.jobs, r.PathValue("id"))
+		w.mu.Unlock()
+	}
 	rw.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(rw).Encode(map[string]any{"done": job.done, "results": job.results})
+	_ = json.NewEncoder(rw).Encode(map[string]any{"done": done, "results": results})
 }
 
-// copyPieces is the copy engine's sequence on an open SMB handle: the final length
-// first, then the bytes front to back.
-func copyPieces(f soak.CopySpec, truncate func(int64) error, writeAt func([]byte, int64) (int, error)) error {
-	if err := truncate(int64(f.Size)); err != nil {
-		return err
+// smbHold holds a delete-on-close handle open on this node's gateway (smbclient.Hold)
+// until /smbrelease names it.
+func (w *worker) smbHold(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
 	}
-	data := soak.CopyPayload(f.Size, f.Seed)
-	for off := 0; off < len(data); off += soak.CopyPiece {
-		if _, err := writeAt(data[off:min(off+soak.CopyPiece, len(data))], int64(off)); err != nil {
-			return err
-		}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(rw, err.Error(), http.StatusBadRequest)
+		return
 	}
-	return nil
+	release, err := smbclient.Hold(context.Background(), smbDial, req.Path)
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusConflict)
+		return
+	}
+	w.mu.Lock()
+	if w.held == nil {
+		w.held = map[string]func() error{}
+	}
+	w.nextID++
+	id := fmt.Sprintf("h%d", w.nextID)
+	w.held[id] = release
+	w.mu.Unlock()
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(map[string]string{"id": id})
+}
+
+func (w *worker) smbRelease(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(rw, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.mu.Lock()
+	release := w.held[req.ID]
+	delete(w.held, req.ID)
+	w.mu.Unlock()
+	if release == nil {
+		http.Error(rw, "no such handle", http.StatusNotFound)
+		return
+	}
+	if err := release(); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	rw.Header().Set("Content-Type", "application/json")
+	_, _ = rw.Write([]byte("{}"))
 }

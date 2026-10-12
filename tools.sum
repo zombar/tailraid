@@ -120,8 +120,6 @@ github.com/clipperhouse/displaywidth v0.11.0 h1:lBc6kY44VFw+TDx4I8opi/EtL9m20WSE
 github.com/clipperhouse/displaywidth v0.11.0/go.mod h1:bkrFNkf81G8HyVqmKGxsPufD3JhNl3dSqnGhOoSD/o0=
 github.com/clipperhouse/uax29/v2 v2.7.0 h1:+gs4oBZ2gPfVrKPthwbMzWZDaAFPGYK72F0NJv2v7Vk=
 github.com/clipperhouse/uax29/v2 v2.7.0/go.mod h1:EFJ2TJMRUaplDxHKj1qAEhCtQPW2tJSwu5BF98AuoVM=
-github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701 h1:xiTow1n7oNJPzn9QH+U2sT65mO2F12zNNlY4ZzOew70=
-github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701/go.mod h1:1pQXB0vAlzRlqcY7LYKOOZMw0wKfJPFxTLsJRF2Gswo=
 github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc h1:0xCWmFKBmarCqqqLeM7jFBSw/Or81UEElFqO8MY+GDs=
 github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc/go.mod h1:uvR42Hb/t52HQd7x5/ZLzZEK8oihrFpgnodIJ1vte2E=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=

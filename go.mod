@@ -57,3 +57,5 @@ require (
 replace github.com/go-filesystems/smb => ./third_party/smb
 
 replace github.com/willscott/go-nfs => ./third_party/nfs
+
+replace github.com/cloudsoda/go-smb2 => ./third_party/smb2client

@@ -1,7 +1,7 @@
 # github.com/boltdb/bolt v1.3.1
 ## explicit
 github.com/boltdb/bolt
-# github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701
+# github.com/cloudsoda/go-smb2 v0.0.0-20260918041005-0c5d69b69701 => ./third_party/smb2client
 ## explicit; go 1.25
 github.com/cloudsoda/go-smb2
 github.com/cloudsoda/go-smb2/internal/crypto/ccm
@@ -212,3 +212,4 @@ golang.org/x/text/unicode/norm
 gopkg.in/check.v1
 # github.com/go-filesystems/smb => ./third_party/smb
 # github.com/willscott/go-nfs => ./third_party/nfs
+# github.com/cloudsoda/go-smb2 => ./third_party/smb2client

@@ -19,12 +19,27 @@ type CopySpec struct {
 	Path string `json:"path"`
 	Size int    `json:"size"`
 	Seed uint64 `json:"seed"`
+	// Mode is how the copy opens the file: CopyExclusive (the default) creates it and
+	// fails on an existing name, as Explorer's copy of a new file does; CopyReplace
+	// opens it truncated, Explorer's "Replace the file in the destination".
+	Mode string `json:"mode,omitempty"`
+	// Conn is which of the job's connections copies the file: the job opens one per
+	// distinct value, several clients of one gateway (phase 23).
+	Conn int `json:"conn,omitempty"`
 }
 
-// CopyResult is how one file's copy ended: Err is what the client saw, "" for success.
+// The open modes of a copy (CopySpec.Mode).
+const (
+	CopyExclusive = ""
+	CopyReplace   = "replace"
+)
+
+// CopyResult is how one file's copy ended: Err is what the client saw, "" for success;
+// Exists marks a create refused because the name exists (an exclusive copy that lost).
 type CopyResult struct {
-	Path string `json:"path"`
-	Err  string `json:"err,omitempty"`
+	Path   string `json:"path"`
+	Err    string `json:"err,omitempty"`
+	Exists bool   `json:"exists,omitempty"`
 }
 
 // CopyPayload is the content of a copied file, a function of its size and seed alone, so
@@ -41,6 +56,23 @@ func CopyPayload(size int, seed uint64) []byte {
 		copy(b[i:], w[:])
 	}
 	return b
+}
+
+// RaceResult is one handle race of phase 23 (round g) as the client saw it.
+type RaceResult struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// RaceEnv is the optional part of an Env that phase 23's SMB handle races drive (round
+// g, docs/09 §6): two sessions of node's SMB gateway, one marking a handle
+// delete-on-close or holding it open while the other renames and replaces its file.
+type RaceEnv interface {
+	SMBRaces(ctx context.Context, node NodeRef, dir string) ([]RaceResult, error)
+	// HoldDeleteOnClose creates path through node's SMB gateway, writes to it, marks it
+	// delete-on-close and holds it open until release closes it (smbclient.Hold).
+	HoldDeleteOnClose(ctx context.Context, node NodeRef, path string) (release func(context.Context) error, err error)
 }
 
 // CopyJob is copies under way; Poll reports whether all have ended and, then, how.
@@ -255,7 +287,7 @@ func phaseCopies(ctx context.Context, r *Run) error {
 		if err := r.Env.Wait(ctx, r.Profile.FlushIdle); err != nil {
 			return err
 		}
-		r.checkCopies(ctx, i+1, rd.name, copiers, want)
+		r.checkCopies(ctx, fmt.Sprintf("22.%d %s", i+1, rd.name), copiers, want)
 		if undo != nil {
 			if err := undo(ctx); err != nil {
 				return fmt.Errorf("round %q: end the fault: %w", rd.name, err)
@@ -330,7 +362,7 @@ func flatten(rs [][]CopyResult) []CopyResult {
 
 // checkCopies reads every copy back through a gateway that did not write it and asks the
 // leader for its chunks: the bytes are the payload's, and no file is all holes.
-func (r *Run) checkCopies(ctx context.Context, round int, name string, copiers []NodeRef, want map[string]string) {
+func (r *Run) checkCopies(ctx context.Context, label string, copiers []NodeRef, want map[string]string) {
 	var reader NodeRef
 	for _, n := range r.gateways() {
 		if !slices.Contains(copiers, n) {
@@ -380,8 +412,8 @@ func (r *Run) checkCopies(ctx context.Context, round int, name string, copiers [
 			holes = append(holes, p)
 		}
 	}
-	r.check("I-7", fmt.Sprintf("22.%d %s: every copy reads back whole via %s", round, name, reader.Name), len(bad) == 0,
+	r.check("I-7", fmt.Sprintf("%s: every copy reads back whole via %s", label, reader.Name), len(bad) == 0,
 		fmt.Sprintf("%d of %d differ: %s", len(bad), len(want), strings.Join(bad, "; ")))
-	r.check("I-7", fmt.Sprintf("22.%d %s: no copy is a file of holes", round, name), len(holes) == 0,
+	r.check("I-7", label+": no copy is a file of holes", len(holes) == 0,
 		fmt.Sprintf("%d of %d all holes: %s", len(holes), len(want), strings.Join(holes, "; ")))
 }

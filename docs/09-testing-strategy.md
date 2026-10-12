@@ -473,27 +473,39 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   payload's sha256 and for holes as in phase 22): (a) many streams into one gateway,
   three SMB sessions of four files each and an NFS job at once (I-217, I-167);
   (b) two gateways copying one folder tree into the same new folder, both making the
-  same subfolders, a third gateway's listing reaching the union (I-35); (c) one name
-  created exclusively by two clients, on two gateways and on two sessions of one,
-  exactly one success per name and the file its winner's (I-222); (d) one name
-  replaced by two clients through two gateways with different payloads, several times
-  with staggered starts, every gateway reading one whole payload (I-223); (e) a
+  same subfolders, a third gateway's listing reaching the union (I-35); (c) 24 names
+  each created exclusively by four clients, two SMB sessions of one gateway and an SMB
+  and an NFS client of another, exactly one success per name, the others told the name
+  exists, and the file its winner's (I-222; the race only bites a name whose losing
+  gateway had not yet applied the winner's create, so this round's power to find the
+  bug is a matter of timing, and `TestCluster_ExclCreate_TwoGateways_OneWins` is the
+  deterministic test); (d) two names each replaced at once by two clients through two
+  gateways with different payloads larger than a flush (16 chunks and 40 MiB, at most
+  half the profile's large file), so each copy commits in several flushes that
+  interleave with the other's, every gateway reading one payload whole, the same one
+  (I-223); (e) a
   gateway reading a file another gateway is copying, every read the old bytes or the
   new chunk by chunk and never other bytes (I-36), the whole file once the copy has
-  ended and `FlushIdle` passed; (f) a copy's folder renamed and another copy's file
-  deleted through another gateway mid-copy, the first file whole under its new name,
-  the second whole in the trash and restored (I-155); (g) on one gateway, a handle
+  ended and `FlushIdle` passed; (f) the folder of SMB and NFS copies renamed through
+  another gateway once every copy has made its file, every file whole under the new
+  name (a delete under an open copy differs by protocol, an NFS handle going stale and
+  an SMB one writing on into the trash entry, and is pinned by I-155's own tests); (g) on one gateway, a handle
   marked delete-on-close whose file another session renames away and replaces with a
   new file before the close, the new file surviving and the renamed one gone, a
   no-replace rename onto an existing name refused, and a rename seen by the other
-  session's open handle (I-224, I-225; with a protected folder, the own cleanup of
-  I-220 by inode); (h) two browser uploads of one name through two gateways, plain and
+  session's open handle (I-224); then across gateways, the case the inode check is for:
+  a delete-on-close handle held open on one gateway (`RaceEnv.HoldDeleteOnClose`, the
+  worker's `/smbhold` and `/smbrelease`) while another gateway renames its file away and
+  puts a new one under the name, the new file surviving the close (I-225, the own
+  cleanup of I-220 included); (h) two browser uploads of one name through two gateways, plain and
   with `If-None-Match: *` (I-226); (i) round (a) again while the leader is killed. After
-  the last round the FSM hashes agree and `fsck` finds no violation. `soak.CopySpec`
-  carries the open mode (exclusive, the default, or replace) and `CopyEnv.StartCopies`
-  a number of sessions; the handle races go through the optional `ClientEnv` (open,
-  write, mark delete-on-close, rename with or without replace, close), served by the
-  compose worker and the harness alike; the SMB side uses `third_party/smb2client`, the
+  the last round the FSM hashes agree. `soak.CopySpec`
+  carries the open mode (exclusive, the default, or replace) and
+  which of the job's sessions copies it (`Conn`), and a result says when a create lost
+  to an existing name (`Exists`); the handle races are `smbclient.Races`
+  (`internal/soak/smbclient`, kept out of the tailraid binary) behind the optional
+  `RaceEnv`, run by the compose worker's `/smbraces` and by the harness against one
+  SMB gateway per node; the SMB side uses `third_party/smb2client`, the
   in-tree copy of `cloudsoda/go-smb2` with the two calls upstream lacks (mark an open
   handle delete-on-close, rename without replace). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
