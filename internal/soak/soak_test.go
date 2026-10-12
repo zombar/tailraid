@@ -31,6 +31,7 @@ import (
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/s3/s3test"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/soak"
 	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/tailscale"
@@ -61,6 +62,38 @@ type harnessEnv struct {
 	once sync.Once
 	// the stats sampler of docs/17 on every node, as serve runs it, on the fake clock
 	stats map[int]*harnessStats
+	// the index of docs/18 on every node, rebuilt when a restart replaced its handles
+	search map[int]*harnessSearch
+}
+
+type harnessSearch struct {
+	fs  *vfs.FS
+	svc *search.Service
+}
+
+// searchOf is node i's index service over its current handles, as serve builds it.
+func (e *harnessEnv) searchOf(nd *testharness.ClusterNode) *search.Service {
+	if e.search == nil {
+		e.search = map[int]*harnessSearch{}
+	}
+	if h := e.search[nd.I]; h != nil && h.fs == nd.FS {
+		return h.svc
+	}
+	svc := &search.Service{
+		Src: nd.Node.FSM, Clk: e.c.Clk, Cfg: search.DefaultConfig(), Log: slog.New(slog.DiscardHandler),
+		Vol: search.VFS{FS: nd.FS, St: nd.Node.FSM, Rd: vfs.NewReader(nd.Node.FSM, nd.Prober, nd.Client, nil, nil)},
+	}
+	e.search[nd.I] = &harnessSearch{fs: nd.FS, svc: svc}
+	return svc
+}
+
+// IndexNow runs the leader's pass (docs/18 §5).
+func (e *harnessEnv) IndexNow(ctx context.Context) (search.PassResult, error) {
+	l := e.c.Leader()
+	e.mu.Lock()
+	svc := e.searchOf(l)
+	e.mu.Unlock()
+	return svc.Pass(ctx)
 }
 
 type harnessStats struct {
@@ -183,6 +216,7 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 	}}
 	ui, err := webui.New(webui.Options{
 		FS: nd.FS, Store: nd.Node.FSM, Auth: auth, Clk: e.c.Clk, Logger: slog.New(slog.DiscardHandler), Retention: 30 * 24 * time.Hour, Pins: p,
+		Search: e.searchOf(nd), Catalog: e.searchOf(nd),
 		Status: func() any { rep, _ := e.Status(context.Background(), n); return rep },
 		Chunks: func(ctx context.Context, sel string, off, lim int) (int, []admin.ChunkReport, error) {
 			return admin.DescribeChunksPage(ctx, nd.Node.FSM, nd.Prober, nd.Client, nd.Events, sel, off, lim)
@@ -702,7 +736,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		if len(ph.Checks) == 0 {
 			t.Errorf("%s has no checks", ph.Name)
 		}
-		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" { // the harness offers everything these phases can use
+		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "21 search and media" { // the harness offers everything these phases can use
 			for _, chk := range ph.Checks {
 				if chk.OK == nil {
 					t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
@@ -710,7 +744,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 19 {
+	if sum.Failed != 0 || len(sum.Phases) != 20 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

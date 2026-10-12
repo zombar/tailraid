@@ -58,6 +58,11 @@ type Options struct {
 	Retention time.Duration
 	// Pins is this node's pinned folders (docs/13 §4); nil answers 503 on the pin routes.
 	Pins Pinner
+	// Search is the node's index (docs/18 §6); nil answers 503 on /api/search.
+	Search Searcher
+	// Catalog is the node's media catalogue (docs/18 §8); nil lists the Media tab's items
+	// by their names only.
+	Catalog Cataloger
 	// Hosts are the Host header values the UI answers (I-127): the listener's
 	// <tsIP>:port and the node's MagicDNS name with the port. Any other Host is a 421,
 	// so a page on another origin that resolves a name to this node's IP (DNS
@@ -116,6 +121,9 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("PUT /api/thumb", csrf(s.thumbPut))
 	mux.HandleFunc("GET /api/tags", s.tags)
 	mux.HandleFunc("GET /api/pins", s.pinList)
+	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("GET /api/render", s.render)
+	mux.HandleFunc("GET /api/media", s.media)
 	mux.HandleFunc("GET /files/{path...}", s.get) // a GET pattern serves HEAD too
 	mux.HandleFunc("PUT /files/{path...}", csrf(s.put))
 	mux.HandleFunc("POST /api/mkdir", csrf(s.mkdir))

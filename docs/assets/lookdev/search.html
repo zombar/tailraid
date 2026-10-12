@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid search</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  /* lookdev-only: the variants stacked with a label; a 360-px frame for the phone layout */
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  iframe.phone { border: 1px dashed var(--line); border-radius: 12px; display: block; }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a href="#/browse/">Files</a><a href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="agnes riverside" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
+  <span class="pill ok">healthy</span>
+  <span class="who">pike · leader atlas · 3/3 voters live</span>
+  <button type="button" class="theme" title="Theme: system (tap for light)" aria-label="Theme: system (tap for light)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></svg><span>system</span></button>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section class="results">
+    <div class="variant">variant: results for "agnes riverside", the three groups, one snippet still loading</div>
+    <div class="toolbar">
+      <h2>Search<span class="h-sub">7 hits for <code>agnes riverside</code> · names from the tree, tags and contents from the index of 14:02</span></h2>
+      <span class="spacer"></span>
+      <label class="under"><input type="checkbox"> in <code>/music</code> only</label>
+    </div>
+    <ol>
+      <li class="hit"><a class="hname" href="#/browse/music/Agnes%20Obel/Aventine">Agnes Obel / Aventine</a><span class="hpath">/music/Agnes Obel/Aventine</span><span class="hwhy badge">name</span></li>
+      <li class="hit"><a class="hname" href="#/file/music/Agnes%20Obel/Aventine/06%20Riverside.flac">06 Riverside.flac</a><span class="hpath">/music/Agnes Obel/Aventine · Riverside — Agnes Obel — Aventine</span><span class="hwhy badge">tags</span></li>
+      <li class="hit"><a class="hname" href="#/file/music/Agnes%20Obel/Philharmonics/01%20Riverside.flac">01 Riverside.flac</a><span class="hpath">/music/Agnes Obel/Philharmonics · Riverside — Agnes Obel — Philharmonics</span><span class="hwhy badge">tags</span></li>
+      <li class="hit"><a class="hname" href="#/file/notes/concerts.md">concerts.md</a><span class="hpath">/notes</span><span class="hwhy badge">content</span><span class="hsnip">…Berlin, Oct 2024: <mark>Agnes</mark> Obel at the Admiralspalast. The encore was <mark>Riverside</mark> on a single piano, the hall silent for…</span></li>
+      <li class="hit"><a class="hname" href="#/file/notes/playlists/quiet%20evenings.txt">quiet evenings.txt</a><span class="hpath">/notes/playlists</span><span class="hwhy badge">content</span><span class="hsnip">Dorian Concept — Trilingual Dance Sexperience · <mark>Agnes</mark> Obel — <mark>Riverside</mark> · Max Richter — On the Nature of Daylight · Ólafur Arnalds…</span></li>
+      <li class="hit"><a class="hname" href="#/file/docs/liner%20notes/Philharmonics.md">Philharmonics.md</a><span class="hpath">/docs/liner notes</span><span class="hwhy badge">content</span><span class="hsnip loading">loading the snippet…</span></li>
+      <li class="hit"><a class="hname" href="#/file/notes/2024-10.md">2024-10.md</a><span class="hpath">/notes</span><span class="hwhy badge">content</span><span class="hsnip">…tickets for <mark>Agnes</mark> Obel booked; she opens with <mark>Riverside</mark> most nights according to the setlists…</span></li>
+    </ol>
+  </section>
+
+  <section class="results">
+    <div class="variant">variant: nothing matched</div>
+    <div class="toolbar">
+      <h2>Search<span class="h-sub">0 hits for <code>zxq</code></span></h2>
+      <span class="spacer"></span>
+      <label class="under"><input type="checkbox" checked> in <code>/music</code> only</label>
+    </div>
+    <div class="empty">no matches for <code>zxq</code> under <code>/music</code></div>
+  </section>
+
+  <section class="results">
+    <div class="variant">variant: the node has no loadable index yet: names only, said so</div>
+    <div class="toolbar">
+      <h2>Search<span class="h-sub">2 hits for <code>obel</code></span></h2>
+      <span class="spacer"></span>
+      <label class="under"><input type="checkbox"> in <code>/</code> only</label>
+    </div>
+    <div class="note">index unavailable on this node: names only until the leader's next pass</div>
+    <ol>
+      <li class="hit"><a class="hname" href="#/browse/music/Agnes%20Obel">Agnes Obel</a><span class="hpath">/music</span><span class="hwhy badge">name</span></li>
+      <li class="hit"><a class="hname" href="#/file/music/Agnes%20Obel/Aventine/cover.jpg">cover.jpg</a><span class="hpath">/music/Agnes Obel/Aventine</span><span class="hwhy badge">name</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="variant">variant: the phone layout at 360 px (a real viewport in an iframe, so the media queries apply): the box on its own header row, two hits and a snippet</div>
+    <iframe class="phone" src="search-phone.html" width="360" height="520" title="phone frame"></iframe>
+  </section>
+
+</main>
+</body>
+</html>

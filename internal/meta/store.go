@@ -2,7 +2,9 @@ package meta
 
 import (
 	"bytes"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/zombar/tailraid/internal/ec"
 )
@@ -108,6 +110,56 @@ func (f *FSM) Trash() []Inode {
 	return f.trashList(all)
 }
 
+// EffectiveLibrary is the kind of the nearest flagged ancestor of ino, its own first;
+// none for a missing inode or one with no flagged ancestor (docs/18 §9, I-210).
+func (f *FSM) EffectiveLibrary(ino Ino) LibraryKind {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	in, ok := f.st.Inodes[ino]
+	for n := 0; ok && n <= len(f.st.Inodes); n++ {
+		if k := in.Library(); k != LibraryNone {
+			return k
+		}
+		if in.Ino == RootIno || in.Parent == 0 {
+			break
+		}
+		in, ok = f.st.Inodes[in.Parent]
+	}
+	return LibraryNone
+}
+
+// Library is a flagged folder the Media tab lists.
+type Library struct {
+	Ino  Ino
+	Kind LibraryKind
+	Path string
+}
+
+// Libraries lists every live flagged folder in kind-then-path order, the same on every
+// node (docs/18 §9, I-210); a flagged folder in the trash is left out.
+func (f *FSM) Libraries() []Library {
+	f.mu.RLock()
+	var out []Library
+	for ino, in := range f.st.Inodes {
+		if in.Type != TDir || in.Library() == LibraryNone || f.st.lineage(ino).inTrash {
+			continue
+		}
+		parts, err := f.pathLocked(ino)
+		if err != nil {
+			continue
+		}
+		out = append(out, Library{Ino: ino, Kind: in.Library(), Path: "/" + strings.Join(parts, "/")})
+	}
+	f.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
 func (f *FSM) trashList(set map[Ino]struct{}) []Inode {
 	out := make([]Inode, 0, len(set))
 	for ino := range set {
@@ -204,6 +256,11 @@ func (f *FSM) Resolve(path []string) (Inode, error) {
 func (f *FSM) PathOf(ino Ino) ([]string, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	return f.pathLocked(ino)
+}
+
+// pathLocked is PathOf under the caller's read lock.
+func (f *FSM) pathLocked(ino Ino) ([]string, error) {
 	in, ok := f.st.Inodes[ino]
 	if !ok {
 		return nil, ErrNotExist
@@ -270,14 +327,48 @@ func (f *FSM) ForEachChunk(fn func(Chunk) bool) {
 	}
 	f.mu.RUnlock()
 	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
+	walkBatches(f, keys, func(h Hash) (Chunk, bool) {
+		c, ok := f.st.Chunks[h]
+		if !ok {
+			return Chunk{}, false
+		}
+		return copyChunk(c), true
+	}, fn)
+}
+
+// ForEachInode calls fn for every inode present when the walk starts, in inode order,
+// until fn returns false, by ForEachChunk's rules: keys sorted once, copies taken in
+// batches of 1000 under the read lock so Apply is never starved (an inode deleted
+// meanwhile is skipped, one added meanwhile is not visited). Entries in the trash are
+// visited too: GetInode tells the caller which are live (docs/18 §5).
+func (f *FSM) ForEachInode(fn func(Inode) bool) {
+	f.mu.RLock()
+	keys := make([]Ino, 0, len(f.st.Inodes))
+	for ino := range f.st.Inodes {
+		keys = append(keys, ino)
+	}
+	f.mu.RUnlock()
+	slices.Sort(keys)
+	walkBatches(f, keys, func(ino Ino) (Inode, bool) {
+		in, ok := f.st.Inodes[ino]
+		if !ok {
+			return Inode{}, false
+		}
+		return copyInode(in), true
+	}, fn)
+}
+
+// walkBatches copies the entries of the sorted keys in batches of 1000 under the read
+// lock and calls fn for each with the lock released, until fn returns false.
+func walkBatches[K, V any](f *FSM, keys []K, get func(K) (V, bool), fn func(V) bool) {
 	const batchSize = 1000
 	for start := 0; start < len(keys); start += batchSize {
 		end := min(start+batchSize, len(keys))
-		batch := make([]Chunk, 0, end-start)
+		batch := make([]V, 0, end-start)
 		f.mu.RLock()
-		for _, h := range keys[start:end] {
-			if c, ok := f.st.Chunks[h]; ok {
-				batch = append(batch, copyChunk(c))
+		for _, k := range keys[start:end] {
+			if v, ok := get(k); ok {
+				batch = append(batch, v)
 			}
 		}
 		f.mu.RUnlock()

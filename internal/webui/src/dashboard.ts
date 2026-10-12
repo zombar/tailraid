@@ -39,6 +39,13 @@ function volume(root: HTMLElement, r: Report): void {
     tile("Dedup", v.dedup_ratio.toFixed(2) + "×", bytes(v.logical_bytes) + " logical"),
     tile("Trash", count(v.trash_inodes ?? 0), v.trash_inodes ? `${bytes(v.trash_bytes ?? 0)} · restore from its folder` : "nothing deleted"),
   );
+  const s = r.search;
+  if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
+    let sub = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
+    if (s.pending > 0) sub += ` · ${count(s.pending)} pending`;
+    if (s.capped) sub += " · capped: contents no longer indexed";
+    tiles.append(tile("Index", count(s.docs), sub)); // docs/18 §5: files whose contents or tags are searchable
+  }
   const scale = Math.max(1, v.logical_bytes, v.stored_bytes);
   const used = Math.max(0, v.usable_capacity - v.free);
   const usedFrac = v.usable_capacity > 0 ? used / v.usable_capacity : 0;

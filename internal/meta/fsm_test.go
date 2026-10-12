@@ -1611,7 +1611,7 @@ func TestCheckInvariants_DetectsEachViolation(t *testing.T) {
 			s.indexTrash(RootIno, g.Ino)
 		}, "trash index"},
 		{"flags on a file", func(s *State) { s.Inodes[findIno(s, "f")].Flags = FlagProtected }, "flags"},
-		{"unknown flag bit", func(s *State) { s.Inodes[findIno(s, "d")].Flags = 8 }, "flags"},
+		{"unknown flag bit", func(s *State) { s.Inodes[findIno(s, "d")].Flags = 1 << 4 }, "flags"},
 		{"deleted subdir still counted in nlink", func(s *State) {
 			d := s.Inodes[findIno(s, "d")]
 			sub := &Inode{Ino: 90, Type: TDir, Nlink: 2, Parent: d.Ino, Name: "sub", Children: map[string]Ino{}, DeletedAt: 9}

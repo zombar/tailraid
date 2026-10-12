@@ -167,6 +167,19 @@ func printStatus(w io.Writer, r admin.Report) {
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
 	}
+	if s := r.Search; s != nil && (s.Docs > 0 || s.Pending > 0 || s.Index != "") {
+		line := fmt.Sprintf("index   %d files, %d segments, %s, catalogue %d", s.Docs, s.Segments, bytesStr(uint64(max(s.Bytes, 0))), s.Catalog)
+		if s.Pending > 0 {
+			line += fmt.Sprintf(", %d pending", s.Pending)
+		}
+		if s.Capped {
+			line += ", capped: contents past search.max_bytes are not indexed"
+		}
+		if s.Index != "" {
+			line += ", " + s.Index
+		}
+		fmt.Fprintln(w, line)
+	}
 	printNodes(w, r.Nodes, false)
 	for _, warn := range r.Warnings {
 		fmt.Fprintf(w, "! %s\n", warn)

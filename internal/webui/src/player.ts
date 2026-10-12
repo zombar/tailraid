@@ -11,6 +11,7 @@ import * as chunksPanel from "./chunks.ts";
 import { status } from "./status.ts";
 import { banner } from "./trash.ts";
 import { player as audio } from "./audio.ts";
+import * as markdown from "./markdown.ts";
 
 export type Kind = "video" | "audio" | "image" | "text" | "pdf" | "other";
 
@@ -59,15 +60,9 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       section.append(banner({ root: { ...r, purge_at: r.purge_at ?? entry?.purge_at }, bytes: entry?.size }));
     }
     const info = entry ? `${bytes(entry.size)} · ${when(entry.mtime)}` : "";
-    section.append(
-      h(
-        "div",
-        { class: "title-row" },
-        h("h1", null, name),
-        h("span", { class: "small dim mono" }, info),
-        h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download")),
-      ),
-    );
+    const actions = h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download"));
+    const titleRow = h("div", { class: "title-row" }, h("h1", null, name), h("span", { class: "small dim mono" }, info), actions);
+    section.append(titleRow);
     const veiled = nsfw && !session.get("tr.revealed", false);
     const viewer = h("div", { class: "viewer" + (nsfw ? " nsfw" : "") + (nsfw && !veiled ? " revealed" : "") });
     section.append(viewer);
@@ -110,6 +105,11 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     } else if (kind === "text") {
       if (entry && entry.size > TEXT_MAX) {
         viewer.append(h("div", { class: "placeholder" }, "too large to preview", h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download")));
+      } else if (markdown.isMarkdown(name)) {
+        const doc = markdown.view(path, ctx.root);
+        titleRow.insertBefore(doc.seg, actions);
+        if (nsfw) viewer.append(doc.body);
+        else viewer.replaceWith(doc.body); // a document reads on the page, not in the media frame
       } else {
         const pre = h("pre", null, "loading…");
         viewer.append(pre);

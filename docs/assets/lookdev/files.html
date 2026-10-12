@@ -18,7 +18,8 @@
 <body>
 <header class="top">
   <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
-  <nav class="tabs"><a href="#/">Dashboard</a><a class="active" href="#/browse/">Files</a><a href="#/stats">Stats</a></nav>
+  <nav class="tabs"><a href="#/">Dashboard</a><a class="active" href="#/browse/">Files</a><a href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
   <span class="pill warn" title="leader reachable, k ≤ live < k+m">degraded</span>
   <span class="who">pike · leader atlas · 2/3 voters live</span>
   <button type="button" class="theme" title="Theme: system (tap for light)" aria-label="Theme: system (tap for light)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></svg><span>system</span></button>
@@ -38,6 +39,7 @@
           <label class="menu-row"><input type="checkbox" checked><span>Protect</span><span class="small dim">nothing in it can be deleted, replaced or moved out, from any device</span></label>
           <label class="menu-row"><input type="checkbox"><span>Mark nsfw</span><span class="small dim">thumbnails and previews are blurred until tapped</span></label>
           <label class="menu-row"><input type="checkbox" checked><span>Keep on this device</span><span class="small dim">pike holds every chunk in its cache · 2.2 GiB of 2.2 GiB here</span></label>
+          <label class="menu-row library"><span>Library</span><select aria-label="library kind"><option>none</option><option selected>movies</option><option>tv</option><option>music</option></select><span class="small dim">the Media tab lists this folder as films, shows or music (docs/18 §9)</span></label>
         </div>
       </details>
       <span class="seg" role="group" aria-label="view"><button type="button" aria-pressed="true">List</button><button type="button" aria-pressed="false">Tiles</button></span>

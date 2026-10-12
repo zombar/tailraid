@@ -145,13 +145,17 @@ type AdminOp struct {
 	OlderThan string `json:"older_than,omitempty"`
 	All       bool   `json:"all,omitempty"`
 	Rollup    bool   `json:"rollup,omitempty"` // stats_seal: also write today's rollups so far (docs/17 §7)
+	// search (docs/18 §6, this node's index): the words, the folder to search under (Path)
+	// and the most hits to return; index_now runs the leader's pass (a pass op, I-189)
+	Query string `json:"query,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 // IsPass reports an op the leader answers only once a pass over the volume is done
 // (docs/08, I-189): the client gives it no deadline of its own.
 func (op AdminOp) IsPass() bool {
 	switch op.Op {
-	case "repair_now", "gc_now":
+	case "repair_now", "gc_now", "index_now":
 		return true
 	case "check":
 		return op.Scrub

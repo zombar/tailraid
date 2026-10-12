@@ -62,7 +62,7 @@ type Inode struct {
 	Version   uint64
 	Parent    Ino
 	Name      string
-	Flags     uint8          // FlagProtected, FlagNSFW (docs/02 §Apply rules); directories only
+	Flags     uint8          // FlagProtected, FlagNSFW, the library kind in FlagLibraryMask (docs/02 §Apply rules, docs/18 §9); directories only
 	DeletedAt int64          // FSM clock of the delete that made this entry a trash root; 0 while live
 	Chunks    []Hash         // TFile only; len == ceil(Size/ChunkSize)
 	Target    string         // TSymlink only
@@ -70,13 +70,56 @@ type Inode struct {
 }
 
 // Directory flags (docs/01). FlagProtected is enforced by the FSM (I-154); FlagNSFW is
-// carried for the browser UI.
+// carried for the browser UI; the two bits under FlagLibraryMask hold the folder's
+// library kind (docs/18 §9, I-210), a codec-6 field.
 const (
 	FlagProtected uint8 = 1 << 0
 	FlagNSFW      uint8 = 1 << 1
 
-	knownFlags = FlagProtected | FlagNSFW
+	FlagLibraryShift       = 2
+	FlagLibraryMask  uint8 = 0b11 << FlagLibraryShift
+
+	knownFlags = FlagProtected | FlagNSFW | FlagLibraryMask
 )
+
+// LibraryKind is what the Media tab lists a flagged folder as (docs/18 §9).
+type LibraryKind uint8
+
+const (
+	LibraryNone LibraryKind = iota
+	LibraryMovies
+	LibraryTV
+	LibraryMusic
+)
+
+var libraryWords = [...]string{"none", "movies", "tv", "music"}
+
+func (k LibraryKind) String() string {
+	if int(k) < len(libraryWords) {
+		return libraryWords[k]
+	}
+	return "none"
+}
+
+// ParseLibraryKind reads the word of a kind: exactly one of none, movies, tv, music.
+func ParseLibraryKind(s string) (LibraryKind, bool) {
+	for i, w := range libraryWords {
+		if s == w {
+			return LibraryKind(i), true
+		}
+	}
+	return LibraryNone, false
+}
+
+// Library is the kind in in's own flags (none unless the directory was flagged).
+func (in Inode) Library() LibraryKind {
+	return LibraryKind(in.Flags&FlagLibraryMask) >> FlagLibraryShift
+}
+
+// WithLibrary returns flags with the library bits set to k.
+func WithLibrary(flags uint8, k LibraryKind) uint8 {
+	return flags&^FlagLibraryMask | uint8(k)<<FlagLibraryShift&FlagLibraryMask
+}
 
 // UploadSuffix ends a web upload's temp name, ".<name>.tailraid-upload" (docs/13 §4).
 const UploadSuffix = ".tailraid-upload"

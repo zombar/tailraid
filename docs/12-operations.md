@@ -319,6 +319,18 @@ absent when the OS does not expose a counter, never zero (I-190). The soak sampl
 them into rates and the report draws a network chart next to the disk one; the Stats page
 (docs/13 §1, docs/17) keeps them as history.
 
+**Search.** The leader keeps the index of docs/18: `search.interval` (default 10m, `"0"`
+turns the pass off) is how often it looks for changed files, `search.max_file` (1MiB,
+64KiB to one chunk) how much of a text file is indexed, `search.workers` (2) how many
+files a pass reads at once, `search.batch` (2000) how many it takes per pass,
+`search.batch_bytes` (64MiB) how much text a pass holds while it writes its segment and
+`search.max_bytes` (256MiB) the index size past which contents are no longer indexed;
+`serve` refuses a value outside those bounds and every key is written only when set
+(I-61). `tailraid search <words> [--under <path>] [--limit n]` queries the local node and
+`tailraid search index` runs a pass now (`/v1/admin` op `index_now`, a pass op, I-189);
+`status --json` carries `search: {docs, segments, bytes, pending, last_pass, in_progress,
+capped}`.
+
 **Stats.** Every node keeps the history docs/17 describes: `stats.every` (default 10 s,
 5 s to 1 min) is the sample interval, `stats.keep.raw` (48 h, at least 26 h),
 `stats.keep.minute` (30 d, at least 48 h) and `stats.keep.coarse` (2 y) the retention of

@@ -452,3 +452,137 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 @media (max-width: 480px) { .theme { margin-left: auto; padding: 4px 8px; } .theme span { display: none; } }
 .menu-row .dot { grid-row: 1 / span 2; }
 .menu-row > a { color: var(--text); }
+
+/* ---- search (docs/13 §1, docs/18): the box in the header and the results page ------------ */
+form.search { display: flex; align-items: center; flex: 0 1 320px; min-width: 0; border-radius: var(--radius); }
+form.search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+form.search input[type=search] { flex: 1; min-width: 0; min-height: 36px; padding: 6px 10px; font-size: 14px; border-radius: var(--radius) 0 0 var(--radius); appearance: none; -webkit-appearance: none; }
+form.search input[type=search]:focus-visible { outline: none; }
+form.search button { min-height: 36px; padding: 4px 10px; color: var(--dim); border-left: 0; border-radius: 0 var(--radius) var(--radius) 0; }
+@media (max-width: 900px) {
+  /* when the header is tight (a phone, or a narrow window) the box takes a second header
+     row of its own, so the tabs keep their room and nothing scrolls sideways */
+  header.top { flex-wrap: wrap; row-gap: 6px; }
+  form.search { order: 10; flex: 1 1 100%; }
+}
+label.under { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
+section.results ol { list-style: none; margin: 0; padding: 0; display: grid; }
+li.hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+li.hit .hname { font: 14px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+li.hit .hname:hover { color: var(--accent); text-decoration: none; }
+li.hit .hpath { grid-column: 1; font: 12px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+li.hit .hwhy { grid-column: 2; grid-row: 1 / span 2; }
+li.hit .hsnip { grid-column: 1 / -1; font: 13px/1.45 var(--sans); color: var(--dim); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+li.hit .hsnip.loading { padding: 0; }
+mark { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); color: var(--text); border-radius: 2px; padding: 0 1px; }
+
+/* ---- markdown document (docs/13 §4, I-209): a reading pane in errol's manner ------------ */
+article.md { font: 15px/1.55 var(--sans); max-width: 760px; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h2 { font-size: 20px; border: 0; padding: 0; margin: 24px 0 8px; }
+.md h3 { font-size: 17px; margin: 20px 0 6px; }
+.md h4, .md h5, .md h6 { font: 600 15px/1.45 var(--mono); margin: 16px 0 4px; }
+.md h6 { color: var(--dim); }
+.md p { margin: 8px 0; }
+.md ul, .md ol { margin: 8px 0; padding-left: 24px; }
+.md li { margin: 4px 0; }
+.md li.task { list-style: none; margin-left: -20px; }
+.md li.task input { margin: 0 6px 0 0; vertical-align: -1px; }
+.md code { font: 13px var(--mono); background: var(--surface); padding: 1px 4px; border-radius: 3px; }
+.md pre { margin: 8px 0; padding: 8px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; }
+.md pre code { background: none; padding: 0; line-height: 1.55; }
+.md blockquote { margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line); color: var(--dim); }
+.md blockquote p { margin: 4px 0; }
+.md table { border-collapse: collapse; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+.md th { background: var(--surface); font-weight: 600; }
+.md [align=center] { text-align: center; }
+.md [align=right] { text-align: right; }
+.md img { max-width: 100%; height: auto; border-radius: var(--radius); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 24px auto; width: 90%; }
+/* the document surface: a gutter hairline on the left and the heading levels as faint
+   markers in the margin; the page's h2 (the file's #) interrupts the hairline */
+.md-doc { position: relative; --md-gutter: 48px; padding-left: var(--md-gutter); }
+.md-doc::before { content: ""; position: absolute; left: 34px; top: 2px; bottom: 2px; border-left: 1px solid var(--line); }
+.md-doc h2, .md-doc h3, .md-doc h4, .md-doc h5, .md-doc h6 { position: relative; }
+.md-doc h2::before { content: ""; position: absolute; right: 100%; width: var(--md-gutter); top: -8px; bottom: -8px; background: var(--bg); }
+.md-doc h3::before { content: "##"; }
+.md-doc h4::before { content: "###"; }
+.md-doc h5::before { content: "####"; }
+.md-doc h6::before { content: "#####"; }
+.md-doc h3::before, .md-doc h4::before, .md-doc h5::before, .md-doc h6::before { position: absolute; right: 100%; margin-right: 18px; top: 0; font: 400 11px var(--mono); line-height: inherit; color: var(--dim); opacity: .55; user-select: none; white-space: nowrap; }
+@media (max-width: 480px) {
+  .md-doc { --md-gutter: 28px; }
+  .md-doc::before { left: 18px; }
+  .md-doc h3::before, .md-doc h4::before, .md-doc h5::before, .md-doc h6::before { margin-right: 6px; font-size: 9px; }
+}
+
+/* ---- the Media tab (docs/13 §10, docs/18 §8): libraries, posters, the hero ------------- */
+section.lib h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+section.lib h2 .count { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: auto; }
+.badge.lib { color: var(--text); border-color: var(--dim); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px/1 var(--mono); color: var(--dim); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; min-height: 0; }
+.chip[aria-pressed=true] { color: var(--text); border-color: var(--dim); background: var(--surface); }
+.posters { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px; }
+@media (max-width: 480px) { .posters { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; } }
+a.poster { display: grid; gap: 4px; color: var(--text); min-width: 0; }
+a.poster:hover { text-decoration: none; }
+a.poster:hover .art { border-color: var(--dim); }
+.poster .art { position: relative; aspect-ratio: 2 / 3; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: grid; place-items: center; color: var(--dim); }
+section.lib.music .poster .art { aspect-ratio: 1; }
+.poster .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.poster .art .icon { width: 32px; height: 32px; }
+.poster.missing .art { border-style: dashed; }
+.poster.nsfw .art img { filter: blur(14px) scale(1.1); }
+.poster .ptitle { font: 13px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.poster .pyear { font: 11px var(--mono); color: var(--dim); }
+section.hero { position: relative; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.hero img.backdrop { display: block; width: 100%; height: 32vh; min-height: 180px; max-height: 360px; object-fit: cover; filter: brightness(.55); mask-image: linear-gradient(to bottom, #000 45%, transparent); }
+.hero.poster-only img.backdrop { filter: blur(24px) brightness(.55); opacity: .6; }
+.hero-body { position: relative; display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px; padding: 0 16px 16px; margin-top: -96px; }
+.hero.no-art img.backdrop { display: none; }
+.hero.no-art .hero-body { margin-top: 0; padding-top: 16px; }
+.hero img.hero-poster { width: 160px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+.hero-body > div { padding-top: 104px; min-width: 0; }
+.hero.no-art .hero-body > div { padding-top: 0; }
+.hero h1 { font-size: 22px; }
+.hero .facts { font: 13px var(--mono); color: var(--dim); display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+.hero .plot { font: 15px/1.55 var(--sans); max-width: 65ch; margin: 10px 0 0; }
+.hero .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.hero .people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.person { font: 12px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; }
+@media (max-width: 480px) {
+  .hero img.backdrop { height: 24vh; min-height: 140px; }
+  .hero-body { grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 0 12px 12px; margin-top: -64px; }
+  .hero img.hero-poster { width: 96px; }
+  .hero-body > div { padding-top: 70px; }
+  .hero h1 { font-size: 18px; }
+}
+.seasons { display: flex; flex-wrap: wrap; gap: 6px; }
+.seasons button { min-height: 36px; padding: 4px 12px; font: 13px var(--mono); color: var(--dim); }
+.seasons button[aria-pressed=true] { color: var(--text); border-color: var(--dim); background: var(--surface); }
+table.episodes { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
+table.episodes td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.episodes td.no { width: 72px; font: 13px var(--mono); color: var(--dim); }
+table.episodes td.thumb { width: 112px; padding-left: 0; }
+table.episodes td.thumb img { display: block; width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: var(--surface); }
+table.episodes td.thumb .icon { width: 96px; height: 54px; color: var(--dim); background: var(--surface); border-radius: 4px; padding: 16px 36px; }
+table.episodes td.title { overflow: hidden; }
+table.episodes td.title .plot { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
+table.episodes td.dur { width: 64px; font: 13px var(--mono); color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+table.episodes tr:hover { cursor: pointer; background: var(--surface); }
+table.episodes tr.playing td.title { color: var(--accent); }
+table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
+@media (max-width: 480px) {
+  table.episodes td.no { width: 60px; font-size: 12px; padding: 6px 4px; }
+  table.episodes td.thumb { display: none; }
+  /* the season strip and the episodes run under the poster column: the text column alone is too narrow */
+  .hero-body .seasons, .hero-body table.episodes { margin-left: -108px; width: calc(100% + 108px); }
+}
+/* the Library row stacks label, select and note in one column (the other rows put their
+   checkbox in a first column and send the note to the second) */
+.menu-row.library { grid-template-columns: 1fr; gap: 6px; }
+.menu-row.library > * { grid-column: 1; }
+.menu-row.library select { min-height: 36px; padding: 4px 8px; font-size: 14px; width: 100%; }

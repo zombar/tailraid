@@ -413,6 +413,67 @@
   </section>
 
   <section>
+    <h2>Search box and results <span>docs/13 §1, docs/18 §6: the box lives in the header; a hit is name, path, why and a snippet</span></h2>
+    <form class="search" role="search" style="max-width:320px"><input type="search" value="agnes riverside" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></button></form>
+    <label class="under"><input type="checkbox"> in <code>/music</code> only</label>
+    <ol style="list-style:none;margin:0;padding:0">
+      <li class="hit"><a class="hname" href="#">06 Riverside.flac</a><span class="hpath">/music/Agnes Obel/Aventine · Riverside — Agnes Obel</span><span class="hwhy badge">tags</span></li>
+      <li class="hit"><a class="hname" href="#">concerts.md</a><span class="hpath">/notes</span><span class="hwhy badge">content</span><span class="hsnip">…the encore was <mark>Riverside</mark> on a single piano…</span></li>
+      <li class="hit"><a class="hname" href="#">liner notes.md</a><span class="hpath">/docs</span><span class="hwhy badge">content</span><span class="hsnip loading">loading the snippet…</span></li>
+    </ol>
+    <div class="note">index unavailable on this node: names only until the leader's next pass</div>
+  </section>
+
+  <section>
+    <h2>Markdown document <span>docs/13 §4: escape-first, the file's # is the page's h2, deeper levels marked in the margin</span></h2>
+    <article class="md md-doc">
+      <h2 id="c-title">Title</h2>
+      <p>A paragraph with <em>emphasis</em>, <strong>strength</strong>, <code>code</code> and a <a href="#">link</a>.</p>
+      <h3 id="c-section">Section</h3>
+      <ul><li class="task"><input type="checkbox" checked disabled> done</li><li class="task"><input type="checkbox" disabled> to do</li></ul>
+      <pre><code data-lang="go">fmt.Println("hi")</code></pre>
+      <blockquote><p>a quote</p></blockquote>
+      <table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>
+      <h4 id="c-sub">Subsection</h4>
+      <p>Text with a <mark>marked</mark> term.</p>
+    </article>
+  </section>
+
+  <section>
+    <h2>Media: library section, posters, hero, seasons, episodes <span>docs/13 §10, docs/18 §8</span></h2>
+    <section class="lib movies">
+      <h2>films <span class="badge lib">movies</span><span class="count">3 films</span></h2>
+      <div class="toolbar"><span class="seg" role="group" aria-label="sort"><button type="button" aria-pressed="true">Title</button><button type="button" aria-pressed="false">Year</button><button type="button" aria-pressed="false">Added</button></span><div class="chips"><button type="button" class="chip" aria-pressed="true">drama</button><button type="button" class="chip" aria-pressed="false">comedy</button></div></div>
+      <div class="posters">
+        <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3C/svg%3E"></span><span class="ptitle">Arrival</span><span class="pyear">2016</span></a>
+        <a class="poster missing" href="#"><span class="art"><svg class="icon" viewBox="0 0 16 16"><path d="M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9"/></svg></span><span class="ptitle">Moon</span><span class="pyear">2009 · no sidecar</span></a>
+        <a class="poster nsfw" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%239f1239'/%3E%3C/svg%3E"></span><span class="ptitle">late</span><span class="pyear">nsfw</span></a>
+      </div>
+    </section>
+    <section class="hero">
+      <img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%231e3a5f'/%3E%3C/svg%3E">
+      <div class="hero-body">
+        <img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e3a5f'/%3E%3C/svg%3E">
+        <div>
+          <h1>Arrival</h1>
+          <div class="facts"><span>2016</span><span>1 h 56</span><span>★ 7.9</span></div>
+          <p class="plot">A linguist is recruited to communicate with alien lifeforms.</p>
+          <div class="actions"><button type="button">▶ Play</button><a class="btn" href="#">Open folder</a></div>
+          <div class="people"><span class="person">Denis Villeneuve · director</span><span class="person">Amy Adams</span></div>
+          <div class="seasons"><button type="button" aria-pressed="true">Season 1</button><button type="button" aria-pressed="false">Season 2</button></div>
+          <table class="episodes"><tbody>
+            <tr><td class="no">S01E01</td><td class="thumb"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23172554'/%3E%3C/svg%3E"></td><td class="title">Dulcinea<div class="plot small dim">A detective is hired to find a missing heiress.</div></td><td class="dur">46:19</td></tr>
+            <tr class="playing"><td class="no">S01E02</td><td class="thumb"><svg class="icon" viewBox="0 0 16 16"><path d="M4 2.5l9 5.5-9 5.5z"/></svg></td><td class="title">The Big Empty</td><td class="dur">42:51</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+    </section>
+    <section class="hero no-art"><div class="hero-body"><img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 9'%3E%3Crect width='16' height='9' fill='%23334155'/%3E%3C/svg%3E"><div><h1>Moon</h1><div class="facts"><span>2009</span></div><p class="plot dim">No description: add a <code>movie.nfo</code>.</p></div></div></section>
+    <section class="hero poster-only"><img class="backdrop" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3C/svg%3E"><div class="hero-body"><img class="hero-poster" alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%23553c1b'/%3E%3C/svg%3E"><div><h1>Stalker</h1><div class="facts"><span>1979</span></div></div></div></section>
+    <label class="menu-row library" style="max-width:320px"><span>Library</span><select aria-label="library kind"><option>none</option><option selected>tv</option></select><span class="small dim">the Media tab lists this folder as films, shows or music</span></label>
+  </section>
+
+  <section>
     <h2>Stats page <span>docs/13 §1, docs/17: the soak report's charts in the page's tokens, one per row</span></h2>
     <div class="toolbar">
       <span class="seg" role="group" aria-label="range"><button type="button" aria-pressed="false">1h</button><button type="button" aria-pressed="true">6h</button><button type="button" aria-pressed="false">24h</button><button type="button" aria-pressed="false">7d</button><button type="button" aria-pressed="false">30d</button><button type="button" aria-pressed="false">1y</button><button type="button" aria-pressed="false">custom</button></span>

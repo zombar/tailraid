@@ -384,11 +384,15 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 	cfg := vfs.DefaultConfig()
 	cfg.PutDeadline = 2 * time.Second
 	nd.Flush = vfs.NewFlusher(nd.Ov, nd.Node.FSM, nd.Node, nd.Prober, nd.Client, nd.Reader, c.Clk, cfg, nil)
-	nd.Flush.MinCodec = func() uint8 { // a Commit carries shard sums only once every member reads codec 5 (I-201)
-		if nd.Node.MinCodec == nil {
+	// a Commit carries shard sums only once every member reads codec 5 (I-201). The closure
+	// keeps the node it was built with: a stats writer still holding these handles after a
+	// restart calls it when nd.Node is another node, or nil while the node is down.
+	self := nd.Node
+	nd.Flush.MinCodec = func() uint8 {
+		if self.MinCodec == nil {
 			return meta.CodecVersion
 		}
-		return nd.Node.MinCodec()
+		return self.MinCodec()
 	}
 	nd.Client.OnUnreachable = nd.Prober.Suspect // as node.go wires them (docs/05 §6, I-170)
 	nd.Flush.Suspect = nd.Prober.Suspect

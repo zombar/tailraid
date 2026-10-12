@@ -40,6 +40,30 @@ export function menu(ctx: MenuContext): HTMLElement {
     });
     return lab;
   };
+  // the Library row: a four-way select, the Media tab lists the folder as films, shows
+  // or music (docs/18 §9)
+  const libraryRow = (current: string, why: string | null) => {
+    const select = h("select", { "aria-label": "library kind" }) as HTMLSelectElement;
+    for (const word of ["none", "movies", "tv", "music"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : undefined }, word));
+    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows or music");
+    const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
+    if (why) {
+      select.disabled = true;
+      lab.setAttribute("aria-disabled", "true");
+    }
+    select.addEventListener("change", () => {
+      select.disabled = true;
+      setFlags(ctx.path, { library: select.value }).then(
+        () => ctx.onChange(),
+        (e: unknown) => {
+          select.value = current || "none";
+          select.disabled = false;
+          toast("Library: " + (e instanceof Error ? e.message : String(e)), "bad");
+        },
+      );
+    });
+    return lab;
+  };
   const fill = async () => {
     body.replaceChildren(h("div", { class: "loading" }, "loading"));
     let own: Entry | undefined;
@@ -69,6 +93,7 @@ export function menu(ctx: MenuContext): HTMLElement {
         why,
         (on) => pin(ctx.path, on),
       ),
+      libraryRow(own?.library ?? "", why ?? (ctx.dir.library && !own?.library ? `inside a ${ctx.dir.library} library: this folder is listed as part of it` : null)),
     );
   };
   details.addEventListener("toggle", () => {

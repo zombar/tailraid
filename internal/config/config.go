@@ -80,6 +80,16 @@ type Config struct {
 		} `yaml:"keep,omitempty"`
 		Cache string `yaml:"cache,omitempty"` // the gateway's parsed-segment cache (default 32MiB)
 	} `yaml:"stats,omitempty"`
+	// Search is the leader's index of docs/18 (12 §10): every key is written only when
+	// set (I-61).
+	Search struct {
+		Interval   string `yaml:"interval,omitempty"`    // how often the leader looks for changed files (default 10m; "0" off)
+		MaxFile    string `yaml:"max_file,omitempty"`    // how much of a text file is indexed (default 1MiB; 64KiB to one chunk)
+		Workers    int    `yaml:"workers,omitempty"`     // files a pass reads at once (default 2; 1..16)
+		Batch      int    `yaml:"batch,omitempty"`       // candidates a pass takes (default 2000; 1..100000)
+		BatchBytes string `yaml:"batch_bytes,omitempty"` // text a pass holds while it writes its segment (default 64MiB; at least 1MiB)
+		MaxBytes   string `yaml:"max_bytes,omitempty"`   // index size past which contents are no longer indexed (default 256MiB; at least 16MiB)
+	} `yaml:"search,omitempty"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
@@ -228,6 +238,62 @@ func (c Config) StatsCacheBytes() (int64, error) {
 	n, err := ParseBytes(c.Stats.Cache)
 	if err != nil || n < 1<<20 || n > 1<<40 {
 		return 0, fmt.Errorf("config: stats.cache %q: want a size of 1MiB to 1TiB", c.Stats.Cache)
+	}
+	return int64(n), nil //nolint:gosec // bounded above
+}
+
+// SearchSettings is the search block parsed (docs/18 §2 and §5, docs/12 §10).
+type SearchSettings struct {
+	Interval             time.Duration // 0: the pass is off
+	MaxFile              int
+	Workers, Batch       int
+	BatchBytes, MaxBytes int64
+}
+
+// SearchSettings parses the search block: the defaults when unset, an error outside the bounds
+// the comments on Config.Search give. MaxFile's upper bound is the chunk size, which
+// the daemon applies once it knows it.
+func (c Config) SearchSettings() (SearchSettings, error) {
+	s := SearchSettings{Interval: 10 * time.Minute, MaxFile: 1 << 20, Workers: 2, Batch: 2000, BatchBytes: 64 << 20, MaxBytes: 256 << 20}
+	var err error
+	if c.Search.Interval == "0" {
+		s.Interval = 0
+	} else if s.Interval, err = statsDuration("search.interval", c.Search.Interval, s.Interval, time.Minute, 24*time.Hour); err != nil {
+		return s, err
+	}
+	if n, err := searchBytes("search.max_file", c.Search.MaxFile, int64(s.MaxFile), 64<<10, 64<<20); err != nil {
+		return s, err
+	} else {
+		s.MaxFile = int(n)
+	}
+	if w := c.Search.Workers; w != 0 {
+		if w < 1 || w > 16 {
+			return s, fmt.Errorf("config: search.workers %d: want 1..16", w)
+		}
+		s.Workers = w
+	}
+	if b := c.Search.Batch; b != 0 {
+		if b < 1 || b > 100000 {
+			return s, fmt.Errorf("config: search.batch %d: want 1..100000", b)
+		}
+		s.Batch = b
+	}
+	if s.BatchBytes, err = searchBytes("search.batch_bytes", c.Search.BatchBytes, s.BatchBytes, 1<<20, 1<<40); err != nil {
+		return s, err
+	}
+	if s.MaxBytes, err = searchBytes("search.max_bytes", c.Search.MaxBytes, s.MaxBytes, 16<<20, 1<<40); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+func searchBytes(key, v string, def, lo, hi int64) (int64, error) {
+	if v == "" {
+		return def, nil
+	}
+	n, err := ParseBytes(v)
+	if err != nil || int64(n) < lo || int64(n) > hi { //nolint:gosec // hi bounds it
+		return 0, fmt.Errorf("config: %s %q: want a size of %d to %d bytes", key, v, lo, hi)
 	}
 	return int64(n), nil //nolint:gosec // bounded above
 }
@@ -486,6 +552,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, err := c.StatsCacheBytes(); err != nil {
+		return err
+	}
+	if _, err := c.SearchSettings(); err != nil {
 		return err
 	}
 	return nil

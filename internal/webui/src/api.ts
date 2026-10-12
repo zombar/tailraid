@@ -141,7 +141,41 @@ export interface Report {
   machine?: MachineReport | null;
   cache?: CacheReport | null;
   web_url?: string;
+  search?: SearchStatus | null;
   generated_at: string;
+}
+
+/** SearchStatus is `status.search` (docs/12 §8, docs/18 §5). */
+export interface SearchStatus {
+  docs: number;
+  segments: number;
+  bytes: number;
+  catalog: number;
+  pending: number;
+  last_pass?: string;
+  in_progress?: boolean;
+  capped?: boolean;
+  index?: string;
+}
+
+/** SearchHit is one result of GET /api/search (docs/13 §3). */
+export interface SearchHit {
+  path: string;
+  type: "file" | "dir" | "symlink";
+  size: number;
+  mtime: string;
+  ino: number;
+  match: "name" | "tags" | "content";
+  title?: string;
+  artist?: string;
+  album?: string;
+  terms: { term: string; off: number }[];
+}
+
+export interface SearchResult {
+  query: string;
+  hits: SearchHit[];
+  index?: string;
 }
 
 export interface Entry {
@@ -158,6 +192,7 @@ export interface Entry {
   path?: string;
   protected?: boolean;
   nsfw?: boolean;
+  library?: string;
   deleted_at?: string;
   purge_at?: string;
   thumb?: boolean;
@@ -168,6 +203,7 @@ export interface Entry {
 export interface DirInfo {
   protected: boolean;
   nsfw: boolean;
+  library?: string;
   pinned: boolean;
   deleted_at?: string;
   purge_at?: string;
@@ -317,13 +353,76 @@ export const move = (paths: string[], to: string): Promise<MoveResult> => post("
 export const del = (paths: string[]): Promise<DeleteResult> => post("/api/delete", { paths });
 export const restore = (ino: number, opts: { to?: string; name?: string } = {}): Promise<{ path: string }> => post("/api/restore", { ino, ...opts });
 export const purge = (sel: { ino: number } | { all: true }): Promise<void> => post("/api/purge", sel);
-export const setFlags = (path: string, flags: { protected?: boolean; nsfw?: boolean }): Promise<Entry> => post("/api/flags", { path, ...flags });
+export const setFlags = (path: string, flags: { protected?: boolean; nsfw?: boolean; library?: string }): Promise<Entry> => post("/api/flags", { path, ...flags });
 export const pin = (path: string, pinned: boolean): Promise<{ path: string; pinned: boolean; bytes: number }> => post("/api/pin", { path, pinned });
 
 /** putThumb stores the frame the browser grabbed from a video (docs/13 §5). */
 export async function putThumb(path: string, version: number, jpeg: Blob): Promise<void> {
   const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
   if (!r.ok) throw await apiError(r);
+}
+
+/** MediaItem is a film, show, season, episode or album of the Media tab (docs/13 §3). */
+export interface MediaItem {
+  ino: number;
+  path: string;
+  kind: "movie" | "show" | "season" | "episode" | "album";
+  title: string;
+  sort_title: string;
+  year?: number;
+  genres?: string[];
+  rating?: string;
+  runtime?: number;
+  mpaa?: string;
+  artist?: string;
+  poster?: string;
+  fanart?: string;
+  thumb?: string;
+  video?: string;
+  size?: number;
+  added: string;
+  nsfw: boolean;
+  children?: number;
+  plot?: string;
+  people?: string[];
+  season?: number;
+  episode?: number;
+  episode_to?: number;
+  aired?: string;
+  seasons?: { n: number; title: string; poster?: string; episodes: MediaItem[] }[];
+  tracks?: string[];
+  catalogued: boolean;
+}
+
+export interface MediaLibrary {
+  path: string;
+  kind: string;
+  count: number;
+  genres?: string[];
+}
+
+/** media lists the libraries, or one library's items (docs/13 §10). */
+export function media(): Promise<{ libs: MediaLibrary[] }>;
+export function media(lib: string, sort: string, offset?: number): Promise<{ lib: MediaLibrary; items: MediaItem[] }>;
+export function media(lib?: string, sort = "title", offset = 0): Promise<unknown> {
+  if (lib === undefined) return call("/api/media");
+  return call(`/api/media?lib=${encodeURIComponent(lib)}&sort=${sort}&offset=${offset}`);
+}
+
+export function mediaItem(path: string): Promise<MediaItem> {
+  return call<MediaItem>("/api/media?item=" + encodeURIComponent(path));
+}
+
+/** search asks the node's index (docs/18 §6). */
+export function search(q: string, under: string): Promise<SearchResult> {
+  return call<SearchResult>("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
+}
+
+/** rendered fetches a markdown file as the node's HTML fragment (docs/13 §4, I-209). */
+export async function rendered(path: string, root?: number): Promise<string> {
+  const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
+  if (!r.ok) throw await apiError(r);
+  return r.text();
 }
 
 /** text fetches a small file as text (previews). */

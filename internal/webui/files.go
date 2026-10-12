@@ -28,6 +28,7 @@ type Entry struct {
 	Path      string    `json:"path,omitempty"`       // stat only
 	Protected bool      `json:"protected,omitempty"`  // the entry's own flag (directories)
 	NSFW      bool      `json:"nsfw,omitempty"`       // the entry's own flag (directories)
+	Library   string    `json:"library,omitempty"`    // the entry's own library kind (directories; docs/18 §9)
 	DeletedAt string    `json:"deleted_at,omitempty"` // a deleted root (RFC 3339 UTC)
 	PurgeAt   string    `json:"purge_at,omitempty"`   // when the retention purge takes it; absent with retention 0
 	Thumb     bool      `json:"thumb,omitempty"`      // GET /api/thumb answers without a PUT: stored, or an image or audio file
@@ -39,6 +40,7 @@ type Entry struct {
 type DirInfo struct {
 	Protected bool   `json:"protected"`
 	NSFW      bool   `json:"nsfw"`
+	Library   string `json:"library,omitempty"` // effective: the nearest flagged ancestor's kind (docs/18 §9)
 	Pinned    bool   `json:"pinned"`
 	DeletedAt string `json:"deleted_at,omitempty"`
 	PurgeAt   string `json:"purge_at,omitempty"`
@@ -127,6 +129,9 @@ func (s *Server) entry(in meta.Inode, canonical string) Entry {
 	e := Entry{Name: in.Name, Type: typeName(in), Size: in.Size, Mtime: time.Unix(0, in.Mtime).UTC(), Mode: in.Mode & 0o7777, Ino: uint64(in.Ino), Version: in.Version, Target: in.Target}
 	e.Protected = in.Flags&meta.FlagProtected != 0
 	e.NSFW = in.Flags&meta.FlagNSFW != 0
+	if k := in.Library(); k != meta.LibraryNone {
+		e.Library = k.String()
+	}
 	e.DeletedAt = rfc3339(in.DeletedAt)
 	e.PurgeAt = s.purgeAt(in.DeletedAt)
 	switch in.Type {
@@ -148,12 +153,16 @@ func (s *Server) entry(in meta.Inode, canonical string) Entry {
 	return e
 }
 
-// effective reports the flags in's ancestors and in itself carry (docs/13 §4).
-func (s *Server) effective(in meta.Inode) (protected, nsfw bool) {
+// effective reports the flags in's ancestors and in itself carry (docs/13 §4); the
+// library kind is the nearest flagged ancestor's, in's own first (docs/18 §9).
+func (s *Server) effective(in meta.Inode) (protected, nsfw bool, library meta.LibraryKind) {
 	seen := 0
 	for cur := in; ; seen++ {
 		protected = protected || cur.Flags&meta.FlagProtected != 0
 		nsfw = nsfw || cur.Flags&meta.FlagNSFW != 0
+		if library == meta.LibraryNone {
+			library = cur.Library()
+		}
 		if cur.Ino == meta.RootIno || cur.Parent == 0 || seen > 4096 {
 			return
 		}
@@ -201,7 +210,11 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	dir := DirInfo{Cover: s.coverCached(t.in)}
-	dir.Protected, dir.NSFW = s.effective(t.in)
+	var lib meta.LibraryKind
+	dir.Protected, dir.NSFW, lib = s.effective(t.in)
+	if lib != meta.LibraryNone {
+		dir.Library = lib.String()
+	}
 	if t.trashed {
 		dir.DeletedAt, dir.PurgeAt = rfc3339(t.root.DeletedAt), s.purgeAt(t.root.DeletedAt)
 	} else {
@@ -222,7 +235,12 @@ func (s *Server) stat(w http.ResponseWriter, r *http.Request) {
 	}
 	e := s.entry(t.in, live)
 	e.Path = t.canonical
-	e.Protected, e.NSFW = s.effective(t.in)
+	var lib meta.LibraryKind
+	e.Protected, e.NSFW, lib = s.effective(t.in)
+	e.Library = ""
+	if lib != meta.LibraryNone {
+		e.Library = lib.String()
+	}
 	if t.trashed {
 		e.DeletedAt, e.PurgeAt = rfc3339(t.root.DeletedAt), s.purgeAt(t.root.DeletedAt)
 	}

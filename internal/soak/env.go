@@ -9,6 +9,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/s3"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/stats"
 )
 
@@ -115,4 +116,7 @@ type Env interface {
 	// than since (GET /v1/stats).
 	StatsSeal(ctx context.Context, node NodeRef, rollup bool) (int, error)
 	StatsLive(ctx context.Context, node NodeRef, since int64) ([]stats.Row, error)
+	// IndexNow is `tailraid search index`: the leader's index pass now (docs/18 §5), what
+	// it indexed and what is still pending.
+	IndexNow(ctx context.Context) (search.PassResult, error)
 }

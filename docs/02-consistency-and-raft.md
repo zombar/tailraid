@@ -73,6 +73,7 @@ const (
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
+const FlagLibraryMask uint8 = 0b1100 // the library kind of 18 §9: none, movies, tv, music (codec 6)
 type ChunkWrite struct { Idx uint32; Hash Hash }                         // Hash may be HashZero
 type ChunkDesc  struct { Hash Hash; Size uint32; K, M uint8; Placement []NodeIdx }
 type GCVictim   struct { Hash Hash; Placement []NodeIdx }
@@ -151,7 +152,9 @@ stay valid (I-16).
 
 **SetAttr.** `Mask` selects Mode, Uid, Gid, Atime, Mtime and, with `AttrFlags`, `Flags`.
 `Ctime = Now`. Size is *not* settable here; truncation is a `Commit`. `Flags` is accepted
-on a `TDir` only (`ErrNotDir`) and only with the bits of 01 (`ErrBadCommand`).
+on a `TDir` only (`ErrNotDir`) and only with the bits of 01 (`ErrBadCommand`); a `Flags`
+with the library bits (18 §9) is a codec-6 entry, refused with `ErrCodec` while a live
+member reads an older codec, since that member would reject the bits (I-210).
 
 **Trash.** `Parent` must be a live `TDir` holding `Name`; a `TDir` child with children is
 refused with `ErrNotEmpty` unless `Recursive` (a POSIX `rmdir` through a mount is not
@@ -252,8 +255,8 @@ victim list is emitted in hash order.
 
 **Codec versions.** Log entries are written in codec version 1, 2 (`NodeUpsert` with a
 disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore`,
-`Purge`, `SetAttr` with `Flags`) or 5 (`Commit` whose `NewChunks` carry `Sums`,
-`SetShardSums`), snapshots in version 5 (01 §Binary codec); every reader
+`Purge`, `SetAttr` with `Flags`), 5 (`Commit` whose `NewChunks` carry `Sums`,
+`SetShardSums`) or 6 (`SetAttr` with the library bits of 18 §9), snapshots in version 5 (01 §Binary codec); every reader
 decodes every older version. A `Commit` carries `Sums` only while every live active member
 reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
 gate: in a mixed cluster the chunk is committed without sums and the repair scanner's

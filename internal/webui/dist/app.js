@@ -100,8 +100,8 @@ apply(stored());
 
 // internal/webui/src/api.ts
 var ApiError = class extends Error {
-  constructor(status2, message, body) {
-    super(message);
+  constructor(status2, message2, body) {
+    super(message2);
     this.status = status2;
     this.body = body;
   }
@@ -159,6 +159,21 @@ var pin = (path, pinned) => post("/api/pin", { path, pinned });
 async function putThumb(path, version, jpeg) {
   const r = await fetch(`/api/thumb?path=${encodeURIComponent(path)}&version=${version}`, { method: "PUT", headers: { [HEADER]: "1", "Content-Type": "image/jpeg" }, body: jpeg });
   if (!r.ok) throw await apiError(r);
+}
+function media(lib, sort = "title", offset = 0) {
+  if (lib === void 0) return call("/api/media");
+  return call(`/api/media?lib=${encodeURIComponent(lib)}&sort=${sort}&offset=${offset}`);
+}
+function mediaItem(path) {
+  return call("/api/media?item=" + encodeURIComponent(path));
+}
+function search(q, under) {
+  return call("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
+}
+async function rendered(path, root) {
+  const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
+  if (!r.ok) throw await apiError(r);
+  return r.text();
 }
 async function text(path, root) {
   const r = await fetch(fileURL(path, false, root));
@@ -623,14 +638,14 @@ function render2(root, r) {
   const active2 = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
   const perHost = targets.length / Math.max(1, groups.length);
   const layout = Number.isInteger(perHost) ? `${plural(groups.length, "host")} \xD7 ${plural(perHost, "target")}` : `${plural(groups.length, "host")}, ${plural(targets.length, "target")}`;
-  const sub = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
+  const sub2 = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
   const n = v.k + v.m;
   const capPer = Math.ceil(n / Math.max(1, active2.length));
   const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active2.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active2[0]?.node.name ?? "it"}`);
   const scale = Math.max(1, ...targets.map((t) => Math.max(t.slots, sh.get(t.idx)?.expected ?? 0))) * 1.1;
   const block = h("div", { class: "disks" }, spread(groups, sh), capNote);
   for (const g of groups) block.append(hostCard(g, sh, scale));
-  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub)), block));
+  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub2)), block));
 }
 function spread(groups, sh) {
   const devs = groups.flatMap((g) => g.targets.filter((t) => t.state === "active" && !off(t)).map((t) => Math.abs(sh.get(t.idx)?.deviation ?? 0)));
@@ -773,12 +788,12 @@ function render3(root, r, history) {
   }
   root.append(section);
 }
-function tile(label, value, sub, tone) {
+function tile(label, value, sub2, tone) {
   const zero = value === 0;
   const lab = h("div", { class: "label" });
   if (!zero) lab.append(h("span", { class: "dot " + tone }));
   lab.append(label);
-  return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub));
+  return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub2));
 }
 function repair(r) {
   if (!r.repair) {
@@ -845,6 +860,13 @@ function volume(root, r) {
     tile2("Dedup", v.dedup_ratio.toFixed(2) + "\xD7", bytes(v.logical_bytes) + " logical"),
     tile2("Trash", count(v.trash_inodes ?? 0), v.trash_inodes ? `${bytes(v.trash_bytes ?? 0)} \xB7 restore from its folder` : "nothing deleted")
   );
+  const s = r.search;
+  if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
+    let sub2 = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
+    if (s.pending > 0) sub2 += ` \xB7 ${count(s.pending)} pending`;
+    if (s.capped) sub2 += " \xB7 capped: contents no longer indexed";
+    tiles.append(tile2("Index", count(s.docs), sub2));
+  }
   const scale = Math.max(1, v.logical_bytes, v.stored_bytes);
   const used = Math.max(0, v.usable_capacity - v.free);
   const usedFrac = v.usable_capacity > 0 ? used / v.usable_capacity : 0;
@@ -857,8 +879,8 @@ function volume(root, r) {
   );
   root.append(h("section", null, h("h2", null, "Volume"), tiles, compare2));
 }
-function tile2(label, value, sub) {
-  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
+function tile2(label, value, sub2) {
+  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub2));
 }
 function cache(root, r) {
   const c = r.cache;
@@ -1448,7 +1470,7 @@ var Player = class {
     const cover = h("img", { class: "cover", alt: "" });
     cover.addEventListener("error", () => cover.removeAttribute("src"));
     const title = h("div", { class: "title" });
-    const sub = h("div", { class: "sub" });
+    const sub2 = h("div", { class: "sub" });
     const prev = h("button", { type: "button", "aria-label": "previous", onClick: () => this.prev() }, "\u23EE");
     const playBtn = h("button", { type: "button", "aria-label": "play", onClick: () => this.toggle() }, "\u25B6");
     const next2 = h("button", { type: "button", "aria-label": "next", onClick: () => this.next() }, "\u23ED");
@@ -1465,7 +1487,7 @@ var Player = class {
       "aside",
       { class: "nowbar", hidden: true },
       cover,
-      h("div", { class: "titles" }, title, sub),
+      h("div", { class: "titles" }, title, sub2),
       h("div", { class: "transport" }, prev, playBtn, next2),
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),
@@ -1477,7 +1499,7 @@ var Player = class {
     document.body.append(bar2, queue3);
     this.bar = bar2;
     this.queueEl = queue3;
-    this.els = { cover, title, sub, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
+    this.els = { cover, title, sub: sub2, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
   }
   notify() {
     this.drawBar();
@@ -1535,6 +1557,54 @@ function isAudioName(name) {
   return ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(ext(name));
 }
 
+// internal/webui/src/markdown.ts
+function isMarkdown(name) {
+  return /\.(md|markdown)$/i.test(name);
+}
+function message(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+function view(path, root) {
+  const body = h("div");
+  const asRendered = h("button", { type: "button" }, "Rendered");
+  const asRaw = h("button", { type: "button" }, "Raw");
+  const seg = h("span", { class: "seg", role: "group", "aria-label": "view" }, asRendered, asRaw);
+  const show = (raw) => {
+    session.set("tr.md.raw", raw);
+    asRendered.setAttribute("aria-pressed", String(!raw));
+    asRaw.setAttribute("aria-pressed", String(raw));
+    clear(body);
+    if (raw) {
+      const pre = h("pre", null, "loading\u2026");
+      body.append(pre);
+      text(path, root).then(
+        (t) => pre.textContent = t,
+        (e) => pre.textContent = "could not load: " + message(e)
+      );
+      return;
+    }
+    const article = h("article", { class: "md md-doc" }, "loading\u2026");
+    body.append(article);
+    rendered(path, root).then(
+      (html) => {
+        article.innerHTML = html;
+      },
+      (e) => article.textContent = "could not render: " + message(e)
+    );
+  };
+  body.addEventListener("click", (ev) => {
+    const a = ev.target.closest("a");
+    const href = a?.getAttribute("href") ?? "";
+    if (!href.startsWith("#") || href.startsWith("#/")) return;
+    ev.preventDefault();
+    document.getElementById(decodeURIComponent(href.slice(1)))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  asRendered.addEventListener("click", () => show(false));
+  asRaw.addEventListener("click", () => show(true));
+  show(session.get("tr.md.raw", false));
+  return { seg, body };
+}
+
 // internal/webui/src/player.ts
 var KINDS = {
   mp4: ["video", "video/mp4"],
@@ -1583,7 +1653,7 @@ var TEXT_MAX = 1024 * 1024;
 function mediaKind(e) {
   return KINDS[e]?.[0] ?? "other";
 }
-var media = null;
+var media2 = null;
 var panel = null;
 function render6(root, ctx) {
   const path = ctx.path;
@@ -1605,15 +1675,9 @@ function render6(root, ctx) {
       section.append(banner({ root: { ...r, purge_at: r.purge_at ?? entry?.purge_at }, bytes: entry?.size }));
     }
     const info = entry ? `${bytes(entry.size)} \xB7 ${when(entry.mtime)}` : "";
-    section.append(
-      h(
-        "div",
-        { class: "title-row" },
-        h("h1", null, name),
-        h("span", { class: "small dim mono" }, info),
-        h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download"))
-      )
-    );
+    const actions = h("span", { class: "actions" }, h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download"));
+    const titleRow = h("div", { class: "title-row" }, h("h1", null, name), h("span", { class: "small dim mono" }, info), actions);
+    section.append(titleRow);
     const veiled = nsfw && !session.get("tr.revealed", false);
     const viewer = h("div", { class: "viewer" + (nsfw ? " nsfw" : "") + (nsfw && !veiled ? " revealed" : "") });
     section.append(viewer);
@@ -1627,18 +1691,18 @@ function render6(root, ctx) {
     if (kind === "video") {
       const mime = KINDS[ext(name)]?.[1] ?? "";
       let el;
-      if (media && media.dir === dir) {
-        el = media.el;
+      if (media2 && media2.dir === dir) {
+        el = media2.el;
         el.src = fileURL(path, false, ctx.root);
         void el.play().catch(() => void 0);
       } else {
-        media?.el.pause();
+        media2?.el.pause();
         el = document.createElement("video");
         el.controls = true;
         el.preload = "metadata";
         el.playsInline = true;
         el.src = fileURL(path, false, ctx.root);
-        media = { el, dir };
+        media2 = { el, dir };
       }
       el.onended = () => go(next2);
       viewer.append(el);
@@ -1655,6 +1719,11 @@ function render6(root, ctx) {
     } else if (kind === "text") {
       if (entry && entry.size > TEXT_MAX) {
         viewer.append(h("div", { class: "placeholder" }, "too large to preview", h("a", { class: "btn", href: fileURL(path, true, ctx.root) }, "Download")));
+      } else if (isMarkdown(name)) {
+        const doc = view(path, ctx.root);
+        titleRow.insertBefore(doc.seg, actions);
+        if (nsfw) viewer.append(doc.body);
+        else viewer.replaceWith(doc.body);
       } else {
         const pre = h("pre", null, "loading\u2026");
         viewer.append(pre);
@@ -1704,10 +1773,10 @@ function render6(root, ctx) {
       if (ev.key === "ArrowRight") go(next2);
       else if (ev.key === "ArrowLeft") go(prev);
       else if (ev.key === "Escape") location.hash = inTrash ? `#/trash/${ctx.root}` + encodeForHash(dir) : "#/browse" + encodeForHash(dir);
-      else if (ev.key === " " && media) {
+      else if (ev.key === " " && media2) {
         ev.preventDefault();
-        if (media.el.paused) void media.el.play().catch(() => void 0);
-        else media.el.pause();
+        if (media2.el.paused) void media2.el.play().catch(() => void 0);
+        else media2.el.pause();
       }
     };
     document.addEventListener("keydown", keyHandler);
@@ -1746,11 +1815,11 @@ function render6(root, ctx) {
     if (keyHandler) document.removeEventListener("keydown", keyHandler);
     panel = null;
     const leaving = !location.hash.startsWith("#/file") && !location.hash.startsWith("#/trashfile");
-    if (leaving && media) {
-      media.el.pause();
-      media.el.removeAttribute("src");
-      media.el.load();
-      media = null;
+    if (leaving && media2) {
+      media2.el.pause();
+      media2.el.removeAttribute("src");
+      media2.el.load();
+      media2 = null;
     }
   };
 }
@@ -2054,6 +2123,28 @@ function menu(ctx) {
     });
     return lab;
   };
+  const libraryRow = (current, why) => {
+    const select = h("select", { "aria-label": "library kind" });
+    for (const word of ["none", "movies", "tv", "music"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : void 0 }, word));
+    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows or music");
+    const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
+    if (why) {
+      select.disabled = true;
+      lab.setAttribute("aria-disabled", "true");
+    }
+    select.addEventListener("change", () => {
+      select.disabled = true;
+      setFlags(ctx.path, { library: select.value }).then(
+        () => ctx.onChange(),
+        (e) => {
+          select.value = current || "none";
+          select.disabled = false;
+          toast("Library: " + (e instanceof Error ? e.message : String(e)), "bad");
+        }
+      );
+    });
+    return lab;
+  };
   const fill = async () => {
     body.replaceChildren(h("div", { class: "loading" }, "loading"));
     let own;
@@ -2080,7 +2171,8 @@ function menu(ctx) {
         ctx.dir.pinned,
         why,
         (on) => pin(ctx.path, on)
-      )
+      ),
+      libraryRow(own?.library ?? "", why ?? (ctx.dir.library && !own?.library ? `inside a ${ctx.dir.library} library: this folder is listed as part of it` : null))
     );
   };
   details.addEventListener("toggle", () => {
@@ -2276,7 +2368,7 @@ function render8(root, ctx) {
   const dir = ctx.path;
   const inTrash = ctx.root !== void 0;
   let sort = session.get("tr.sort", { key: "name", desc: false });
-  let view2 = session.get("tr.view", "list");
+  let view3 = session.get("tr.view", "list");
   let entries = [];
   let info = { protected: false, nsfw: false, pinned: false };
   let trashRoot;
@@ -2325,7 +2417,7 @@ function render8(root, ctx) {
     const total = live().reduce((s, e) => s + (e.type === "file" ? e.size : 0), 0);
     const deleted = entries.length - live().length;
     const toolbar = h("div", { class: "toolbar" });
-    const asAlbum = view2 === "list" && !isAlbum(entries) ? false : view2 === "list";
+    const asAlbum = view3 === "list" && !isAlbum(entries) ? false : view3 === "list";
     if (asAlbum) {
       toolbar.append(
         h("button", { type: "button", onClick: () => alb && player.play(alb.tracks, 0) }, "Play all"),
@@ -2351,8 +2443,8 @@ function render8(root, ctx) {
     const seg = h(
       "span",
       { class: "seg", role: "group", "aria-label": "view" },
-      h("button", { type: "button", "aria-pressed": view2 === "list" ? "true" : "false", onClick: () => setView("list") }, "List"),
-      h("button", { type: "button", "aria-pressed": view2 === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles")
+      h("button", { type: "button", "aria-pressed": view3 === "list" ? "true" : "false", onClick: () => setView("list") }, "List"),
+      h("button", { type: "button", "aria-pressed": view3 === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles")
     );
     toolbar.append(seg, h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}` + (deleted ? ` \xB7 ${deleted} deleted` : "")));
     section.append(toolbar);
@@ -2371,13 +2463,13 @@ function render8(root, ctx) {
       section.append(alb.el);
       const rest = entries.filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section.append(table(rest));
-    } else if (view2 === "tiles") section.append(tiles());
+    } else if (view3 === "tiles") section.append(tiles());
     else section.append(table(entries));
     section.append(selbar());
     root.append(section);
   };
   const setView = (v) => {
-    view2 = v;
+    view3 = v;
     session.set("tr.view", v);
     draw();
   };
@@ -2495,6 +2587,7 @@ function render8(root, ctx) {
     const b = h("span", { class: "badges" });
     if (e.protected) b.append(h("span", { class: "badge lock" }, "protected"));
     if (e.nsfw) b.append(h("span", { class: "badge nsfw" }, "nsfw"));
+    if (e.library) b.append(h("span", { class: "badge lib" }, e.library));
     if (e.deleted_at) b.append(badge(e.purge_at));
     return b;
   };
@@ -2529,6 +2622,7 @@ function render8(root, ctx) {
       link = h("a", { href }, icon(kind), e.name);
       if (e.protected) link.append(h("span", { class: "badge lock" }, "protected"));
       if (e.nsfw) link.append(h("span", { class: "badge nsfw" }, "nsfw"));
+      if (e.library) link.append(h("span", { class: "badge lib" }, e.library));
       if (e.deleted_at) link.append(badge(e.purge_at));
       if (e.type === "file" && isAudioName(e.name)) link.append(playBtn(e));
     }
@@ -2747,6 +2841,7 @@ function crumbs(ctx, info, inTrash = false) {
   if (inTrash) el.append(h("span", { class: "badge" }, "deleted"));
   if (info?.protected) el.append(h("span", { class: "badge lock" }, "protected"));
   if (info?.nsfw) el.append(h("span", { class: "badge nsfw" }, "nsfw"));
+  if (info?.library) el.append(h("span", { class: "badge lib" }, info.library));
   if (info?.pinned) el.append(h("span", { class: "badge pin" }, "kept here"));
   return el;
 }
@@ -2861,7 +2956,7 @@ function render9(root, query) {
   const charts = h("div", { class: "charts" });
   const head = h("section", null, h("h2", null, "Stats", h("span", { class: "h-sub" }, "")), toolbar, form);
   root.append(head, charts);
-  const sub = head.querySelector(".h-sub");
+  const sub2 = head.querySelector(".h-sub");
   const drawMembers = (nodes, current) => {
     clear(body);
     const row2 = (name, label, dot, note, m) => {
@@ -2879,7 +2974,7 @@ function render9(root, query) {
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
     drawMembers(r.nodes, nodeName);
     const span = r.range.to - r.range.from;
-    sub.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
+    sub2.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
     clear(charts);
     if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
     for (const c of r.charts) {
@@ -2930,8 +3025,379 @@ function render9(root, query) {
   };
 }
 
+// internal/webui/src/search.ts
+var folder = "/";
+function setFolder(p) {
+  folder = p || "/";
+}
+function searchHash(q, under) {
+  return "#/search/" + encodeURIComponent(q) + (under ? "?under=" + encodeURIComponent(under) : "");
+}
+function typing(t) {
+  return t instanceof HTMLElement && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
+}
+function wire2(form) {
+  const input = form.querySelector("input");
+  let timer = 0;
+  const go = () => {
+    const q = input.value.trim();
+    if (!q) return;
+    const on = location.hash.startsWith("#/search/");
+    const under = on ? new URLSearchParams(location.hash.split("?")[1] ?? "").get("under") ?? "" : "";
+    const target = searchHash(q, under);
+    if (target === location.hash) return;
+    if (on) location.replace(target);
+    else location.hash = target;
+  };
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    clearTimeout(timer);
+    go();
+  });
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      if (input.value.trim().length >= 2) go();
+    }, 150);
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      input.value = "";
+      input.blur();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "/" && !ev.metaKey && !ev.ctrlKey && !typing(ev.target)) {
+      ev.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+}
+function fold(s) {
+  return s.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+function marked(text2, terms) {
+  const out = [];
+  for (const part of text2.split(/([\p{L}\p{N}]+)/u)) {
+    if (!part) continue;
+    const f = fold(part);
+    out.push(/[\p{L}\p{N}]/u.test(part) && terms.some((t) => f.startsWith(t)) ? h("mark", null, part) : part);
+  }
+  return out;
+}
+var SNIP_BEFORE = 100;
+var SNIP_AFTER = 140;
+var SNIP_AT_ONCE = 3;
+async function snippet(hit, signal) {
+  const off2 = Math.min(...hit.terms.map((t) => t.off));
+  const start = Math.max(0, off2 - SNIP_BEFORE);
+  const end = Math.min(hit.size, off2 + SNIP_AFTER) - 1;
+  const r = await fetch(fileURL(hit.path), { headers: { Range: `bytes=${start}-${Math.max(end, start)}` }, signal });
+  if (!r.ok) throw new Error(`${r.status}`);
+  let text2 = new TextDecoder("utf-8").decode(await r.arrayBuffer()).replace(/�/g, "");
+  if (start > 0) text2 = "\u2026" + text2.replace(/^[\p{L}\p{N}]*\s*/u, "");
+  if (end < hit.size - 1) text2 = text2.replace(/\s*[\p{L}\p{N}]*$/u, "") + "\u2026";
+  return marked(text2.replace(/\s+/g, " "), hit.terms.map((t) => t.term));
+}
+function hitRow(hit, want) {
+  const href = hit.type === "dir" ? browseHash({ path: hit.path }) : fileHash({ path: hit.path });
+  let where = dirname(hit.path);
+  if (hit.match === "tags" && hit.title) where += " \xB7 " + [hit.title, hit.artist, hit.album].filter(Boolean).join(" \u2014 ");
+  const li = h("li", { class: "hit" }, h("a", { class: "hname", href }, basename(hit.path) || "/"), h("span", { class: "hpath" }, where), h("span", { class: "hwhy badge" }, hit.match));
+  if (hit.match === "content" && hit.terms.length > 0 && hit.size > 0) {
+    const snip = h("span", { class: "hsnip loading" }, "loading the snippet\u2026");
+    li.append(snip);
+    want(snip, hit);
+  }
+  return li;
+}
+function render10(root, q, params) {
+  const under = new URLSearchParams(params).get("under") ?? "";
+  const input = document.querySelector("form.search input");
+  if (input && document.activeElement !== input) input.value = q;
+  const abort = new AbortController();
+  const section = h("section", { class: "results" });
+  root.append(section);
+  const scope = under || folder;
+  const sub2 = h("span", { class: "h-sub" }, "searching\u2026");
+  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub2), h("span", { class: "spacer" }));
+  if (scope !== "/") {
+    const toggle = h("input", { type: "checkbox", checked: under !== "" });
+    toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
+    bar2.append(h("label", { class: "under" }, toggle, " in ", h("code", null, scope), " only"));
+  }
+  section.append(bar2);
+  const queue3 = [];
+  let running2 = 0;
+  const pump2 = () => {
+    while (running2 < SNIP_AT_ONCE && queue3.length > 0) {
+      const [el, hit] = queue3.shift();
+      running2++;
+      snippet(hit, abort.signal).then(
+        (parts) => {
+          clear(el);
+          el.classList.remove("loading");
+          el.append(...parts);
+        },
+        () => el.remove()
+      ).finally(() => {
+        running2--;
+        pump2();
+      });
+    }
+  };
+  const pending = /* @__PURE__ */ new Map();
+  const seen = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const hit = pending.get(e.target);
+      if (!e.isIntersecting || !hit) continue;
+      pending.delete(e.target);
+      seen.unobserve(e.target);
+      queue3.push([e.target, hit]);
+    }
+    pump2();
+  });
+  const want = (el, hit) => {
+    pending.set(el, hit);
+    seen.observe(el);
+  };
+  search(q, under).then(
+    (res) => {
+      if (abort.signal.aborted) return;
+      clear(sub2);
+      sub2.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
+      if (res.index) section.append(h("div", { class: "note" }, "index unavailable on this node: names only until the leader's next pass"));
+      if (res.hits.length === 0) {
+        const empty = h("div", { class: "empty" }, "no matches for ", h("code", null, q));
+        if (under) empty.append(" under ", h("code", null, under));
+        section.append(empty);
+        return;
+      }
+      const ol = h("ol");
+      for (const hit of res.hits) ol.append(hitRow(hit, want));
+      section.append(ol);
+    },
+    (e) => {
+      if (!abort.signal.aborted) sub2.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
+    }
+  );
+  return () => {
+    abort.abort();
+    seen.disconnect();
+  };
+}
+
+// internal/webui/src/media.ts
+var NOUN = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"] };
+function glyph(kind) {
+  const d = kind === "album" ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" : kind === "episode" ? "M4 2.5l9 5.5-9 5.5z" : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
+  return svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d }));
+}
+function duration2(min) {
+  if (!min) return "";
+  return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}` : `${min} min`;
+}
+function itemHash(it) {
+  return it.kind === "album" ? browseHash({ path: it.path }) : "#/media/item" + encodePathForHash(it.path);
+}
+function art(it) {
+  if (it.poster) return thumbURL(it.poster);
+  if (it.kind === "album") return thumbURL(it.path);
+  if (it.video) return thumbURL(it.video);
+  return void 0;
+}
+function sub(it) {
+  if (it.kind === "album") return [it.artist, it.year].filter(Boolean).join(" \xB7 ");
+  const parts = [];
+  if (it.year) parts.push(String(it.year));
+  if (it.kind === "show" && it.children) parts.push(`${it.children} ${it.children === 1 ? "season" : "seasons"}`);
+  if (it.kind === "movie") parts.push(it.runtime ? duration2(it.runtime) : it.plot ? "" : "no sidecar");
+  return parts.filter(Boolean).join(" \xB7 ");
+}
+function posterTile(it) {
+  const veiled = it.nsfw && !session.get("tr.revealed", false);
+  const box = h("span", { class: "art" });
+  const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), h("span", { class: "pyear" }, veiled ? "nsfw \xB7 tap to show" : sub(it)));
+  const missing = () => {
+    clear(box);
+    box.append(glyph(it.kind));
+    a.classList.add("missing");
+  };
+  const src = art(it);
+  if (src) {
+    const img = h("img", { alt: "", loading: "lazy", src });
+    img.addEventListener("error", missing);
+    box.append(img);
+  } else missing();
+  if (veiled) {
+    a.addEventListener("click", (ev) => {
+      if (!a.classList.contains("nsfw")) return;
+      ev.preventDefault();
+      session.set("tr.revealed", true);
+      a.classList.remove("nsfw");
+      a.querySelector(".pyear").textContent = sub(it);
+    });
+  }
+  return a;
+}
+function librarySection(lib) {
+  const [one, many] = NOUN[lib.kind] ?? ["item", "items"];
+  const countEl = h("span", { class: "count" }, "\u2026");
+  const section = h("section", { class: "lib " + lib.kind }, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl));
+  const grid = h("div", { class: "posters" });
+  const sorts = ["title", "year", "added"];
+  let sort = session.get(`tr.media.sort.${lib.path}`, "title");
+  const pressed = /* @__PURE__ */ new Set();
+  let items = [];
+  const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s[0].toUpperCase() + s.slice(1)));
+  const chips = h("div", { class: "chips" });
+  const draw = () => {
+    clear(grid);
+    const shown = pressed.size === 0 ? items : items.filter((it) => (it.genres ?? []).some((g) => pressed.has(g.toLowerCase())));
+    for (const it of shown) grid.append(posterTile(it));
+  };
+  const load = () => {
+    media(lib.path, sort).then(
+      (res) => {
+        items = res.items;
+        clear(countEl);
+        countEl.append(`${count(res.lib.count)} ${res.lib.count === 1 ? one : many}${res.lib.count > res.items.length ? ` (first ${res.items.length})` : ""} \xB7 `, h("a", { href: browseHash({ path: lib.path }) }, "open folder"));
+        clear(chips);
+        for (const g of res.lib.genres ?? []) {
+          const chip = h("button", { type: "button", class: "chip", "aria-pressed": String(pressed.has(g)) }, g);
+          chip.addEventListener("click", () => {
+            if (pressed.has(g)) pressed.delete(g);
+            else pressed.add(g);
+            chip.setAttribute("aria-pressed", String(pressed.has(g)));
+            draw();
+          });
+          chips.append(chip);
+        }
+        draw();
+      },
+      (e) => {
+        countEl.textContent = "could not list: " + (e instanceof Error ? e.message : String(e));
+      }
+    );
+  };
+  buttons.forEach(
+    (b, i) => b.addEventListener("click", () => {
+      sort = sorts[i];
+      session.set(`tr.media.sort.${lib.path}`, sort);
+      buttons.forEach((o, j) => o.setAttribute("aria-pressed", String(i === j)));
+      load();
+    })
+  );
+  section.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons), chips), grid);
+  load();
+  return section;
+}
+function overview(root) {
+  media().then(
+    (res) => {
+      if (res.libs.length === 0) {
+        root.append(
+          h(
+            "section",
+            null,
+            h("h2", null, "Media"),
+            h("div", { class: "empty" }, "No library yet: open a folder in Files, choose its menu and set ", h("b", null, "Library"), " to movies, tv or music.")
+          )
+        );
+        return;
+      }
+      for (const lib of res.libs) root.append(librarySection(lib));
+    },
+    (e) => root.append(h("div", { class: "note" }, "could not list the libraries: " + (e instanceof Error ? e.message : String(e))))
+  );
+}
+function episodeNo(e) {
+  const two = (n) => String(n).padStart(2, "0");
+  return `S${two(e.season ?? 0)}E${two(e.episode ?? 0)}` + (e.episode_to && e.episode_to !== e.episode ? `E${two(e.episode_to)}` : "");
+}
+function detail(root, path) {
+  mediaItem(path).then(
+    (it) => {
+      const backdrop = it.fanart ? fileURL(it.fanart) : it.poster ? fileURL(it.poster) : "";
+      const cls = "hero" + (it.fanart ? "" : it.poster ? " poster-only" : " no-art");
+      const section = h("section", { class: cls });
+      if (backdrop) section.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
+      const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
+      const poster = h("img", { class: "hero-poster", alt: "", src: posterSrc || void 0 });
+      poster.addEventListener("error", () => poster.style.visibility = "hidden");
+      const facts = h("div", { class: "facts" });
+      const seasons = it.seasons ?? [];
+      const episodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
+      for (const f of [
+        it.year ? String(it.year) : "",
+        it.kind === "show" ? `${seasons.length} ${seasons.length === 1 ? "season" : "seasons"} \xB7 ${episodes} ${episodes === 1 ? "episode" : "episodes"}` : duration2(it.runtime),
+        it.rating ? `\u2605 ${it.rating}` : "",
+        (it.genres ?? []).join(" \xB7 ").toLowerCase(),
+        it.mpaa ?? ""
+      ])
+        if (f) facts.append(h("span", null, f));
+      facts.append(h("span", { class: "dim" }, it.path));
+      const body = h("div", null, h("h1", null, it.title), facts);
+      if (it.plot) body.append(h("p", { class: "plot" }, it.plot));
+      else {
+        const sidecar = it.kind === "show" ? "tvshow.nfo" : it.path.includes(".") && it.video === it.path ? basename(it.path).replace(/\.[^.]+$/, "") + ".nfo" : "movie.nfo";
+        body.append(h("p", { class: "plot dim" }, "No description: add a ", h("code", null, sidecar), it.kind === "show" ? " to the show's folder." : " beside the file."));
+      }
+      const first = seasons.find((s) => s.n > 0)?.episodes[0] ?? seasons[0]?.episodes[0];
+      const play = h("button", { type: "button" }, it.kind === "show" ? first ? `\u25B6 Play ${episodeNo(first)}` : "\u25B6 Play" : "\u25B6 Play");
+      const target = it.kind === "show" ? first?.path : it.video;
+      if (target) play.addEventListener("click", () => location.hash = fileHash({ path: target }));
+      else play.disabled = true;
+      const folder2 = it.video === it.path ? dirname(it.path) : it.path;
+      body.append(h("div", { class: "actions" }, play, h("a", { class: "btn", href: browseHash({ path: folder2 }) }, "Open folder")));
+      if (it.people?.length) {
+        const people = h("div", { class: "people" });
+        it.people.forEach((p, i) => people.append(h("span", { class: "person" }, i === 0 && it.kind === "movie" && it.people.length > 1 ? `${p} \xB7 director` : p)));
+        body.append(people);
+      }
+      if (seasons.length > 0) {
+        const strip = h("div", { class: "seasons" });
+        const table = h("table", { class: "episodes" });
+        const tbody = h("tbody");
+        table.append(tbody);
+        const show = (i) => {
+          strip.querySelectorAll("button").forEach((b, j) => b.setAttribute("aria-pressed", String(i === j)));
+          clear(tbody);
+          for (const e of seasons[i].episodes) {
+            const thumb = h("td", { class: "thumb" });
+            const img = h("img", { alt: "", loading: "lazy", src: thumbURL(e.thumb || e.path) });
+            img.addEventListener("error", () => img.replaceWith(glyph("episode")));
+            thumb.append(img);
+            const title = h("td", { class: "title" }, e.title);
+            if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));
+            const row2 = h("tr", null, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration2(e.runtime)));
+            row2.addEventListener("click", () => location.hash = fileHash({ path: e.path }));
+            tbody.append(row2);
+          }
+        };
+        seasons.forEach((s, i) => {
+          const b = h("button", { type: "button", "aria-pressed": "false" }, s.title);
+          b.addEventListener("click", () => show(i));
+          strip.append(b);
+        });
+        body.append(strip, table);
+        show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
+      }
+      section.append(h("div", { class: "hero-body" }, poster, body));
+      root.append(section);
+    },
+    (e) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
+  );
+}
+function render11(root, rest) {
+  if (rest.startsWith("/item/")) detail(root, rest.slice("/item".length));
+  else overview(root);
+  return () => void 0;
+}
+
 // internal/webui/src/main.ts
-var view = document.getElementById("view");
+var view2 = document.getElementById("view");
 var pill = document.getElementById("health");
 var who = document.getElementById("who");
 var warnings = document.getElementById("warnings");
@@ -2979,28 +3445,42 @@ function parse2(hash2) {
   }
   return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
 }
+function rawRest(hash2) {
+  const where = hash2.replace(/^#\/?/, "").split("?")[0] ?? "";
+  const i = where.indexOf("/");
+  return i < 0 ? "" : where.slice(i + 1);
+}
 function route() {
   const { head, ctx, query } = parse2(location.hash || "#/");
   dispose?.();
   dispose = null;
-  clear(view);
+  clear(view2);
   let tab = "dash";
   if (head === "browse" || head === "trash" && ctx.root !== void 0) {
     tab = "files";
-    dispose = render8(view, ctx);
+    if (head === "browse") setFolder(ctx.path);
+    dispose = render8(view2, ctx);
+  } else if (head === "media") {
+    tab = "media";
+    dispose = render11(view2, decodeHashPath(rawRest(location.hash)));
+  } else if (head === "search") {
+    tab = "";
+    dispose = render10(view2, decodeHashPath(rawRest(location.hash)).slice(1), query);
   } else if (head === "file" || head === "trashfile" && ctx.root !== void 0) {
     tab = "files";
-    dispose = render6(view, ctx);
+    dispose = render6(view2, ctx);
   } else if (head === "stats") {
     tab = "stats";
-    dispose = render9(view, query);
+    dispose = render9(view2, query);
   } else {
-    dispose = render4(view);
+    dispose = render4(view2);
   }
   for (const a of tabs) a.classList.toggle("active", a.dataset.tab === tab);
   window.scrollTo(0, 0);
 }
 player.mount();
+var searchForm = document.querySelector("form.search");
+if (searchForm) wire2(searchForm);
 var themeButton = document.querySelector("button.theme");
 if (themeButton) wire(themeButton);
 status.subscribe(drawShell);

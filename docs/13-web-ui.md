@@ -56,8 +56,17 @@ operation stays in the CLI.
   as an album with its cover and tags, playback continues in a bar at the bottom while
   the user browses anything else, with a queue, repeat and shuffle, and the lock screen
   shows title, artist and cover through the Media Session API.
+- **Search**: a box in the header finds files and folders by name across the volume and
+  text files and audio tracks by what is in them, from the index the leader keeps in the
+  volume (docs/18); a hit opens the file or the folder, a content hit with a snippet.
+- **Markdown**: a `.md` file renders as a document on the node, escape-first (§4), with
+  the raw text a tap away.
+- **Media**: a fourth tab, `#/media`, browses the folders flagged as libraries (docs/18
+  §9) as films, shows and music by poster and cover, with the descriptions and background
+  art the volume holds (§10).
 - A single-page TypeScript app, no framework, bundled by esbuild into one committed file and
-  embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`, `#/stats`).
+  embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`, `#/stats`,
+  `#/search/<q>`, `#/media`, `#/media/<lib>`, `#/media/item/<path>`).
 - A separate listener, not a route on the RPC port: the caller set differs (same-user
   devices that are not members), a page load cannot send the `X-Tailraid-Cluster` header,
   and the RPC port's member-only rule must stay exactly as docs/08 states it.
@@ -119,12 +128,17 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `POST /api/delete` `{"paths":[…]}` | required | 200 `{"deleted":[…],"failed":[…]}`; each entry lands in the trash (a folder as one unit); 403 for an item under a protected folder; the same `MaxBatch` bound |
 | `POST /api/restore` `{"ino","to"?,"name"?}` | required | 200 `{"path"}`; `to` and `name` default to the original place; a taken name → 409 `{"error","taken":true}`; an original parent that is itself deleted → 409 `{"error","in_trash":true}` (the page then asks for a destination); not a deleted root → 404 |
 | `POST /api/purge` `{"ino"}` or `{"all":true}` | required | 204; permanent: the entry's references are dropped and GC reclaims its chunks after grace (docs/06); `all` proposes purges until the trash is empty |
-| `POST /api/flags` `{"path","protected"?,"nsfw"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409) |
+| `POST /api/flags` `{"path","protected"?,"nsfw"?,"library"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409); `library` is one of `none`, `movies`, `tv`, `music` and needs every member on codec 6 (docs/18 §9, 503 `Retry-After: 30` otherwise) |
 | `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
 | `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser chose from a video (§5), stored as `<ino>-<gen>-<version>.f2.jpg`: 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
 | `GET /api/pins` | – | `{"size","used","pinned_bytes","pins":[{path,bytes,cached_bytes}]}`, the same object `/api/status` carries as `cache` |
+| `GET /api/search?q=&under=&limit=` | – | `{"query","hits":[{path,type,size,mtime,ino,match,title?,artist?,album?,terms:[{term,off}]}],"index"?}`: the words of `q` ANDed, the last as a prefix, names from the FSM and tags and contents from the index (docs/18 §6); `under` limits to a live folder; `limit` 50 by default, 200 at most, 400 outside `1..200`; `index: "unavailable"` when the node has no loadable index and only names answered; never an entry in the trash or under `/.tailraid` |
+| `GET /api/render?path=&in=` | – | `text/html; charset=utf-8`: the file rendered as a document by the node's own markdown renderer (§4); `.md` and `.markdown` only, else 400; a source over `TEXT_MAX` (1 MiB) → 413; the ETag rule of `/files/`; `Cache-Control: no-cache` |
+| `GET /api/media` | – | `{"libs":[{path,kind}]}`: every live flagged folder in kind-then-path order (docs/18 §9), the Media tab's sections |
+| `GET /api/media?lib=&offset=&sort=` | – | `{"lib":{path,kind,count},"items":[{ino,path,kind,title,sort_title,year?,genres?,rating?,runtime?,poster?,fanart?,thumb?,nsfw,children?}]}`: a library folder's items, structure live from the FSM and metadata from the catalogue (§10, docs/18 §8); `sort` is `title` (default), `year` or `added`; at most `MediaPage` (500) items from `offset`; a path that is not a flagged folder → 404 |
+| `GET /api/media?item=&in=` | – | one item with `plot`, `people`, `seasons:[{n,poster?,episodes:[…]}]` for a show or `tracks` (through the tags of §6) for an album; `in=` reads a deleted root as `ls` does |
 
 - Every error is a non-2xx status with a JSON body `{"error":"…"}`. Mapping by `errors.Is`:
   `ErrNotExist` 404 · `ErrExist` 409 · `EISDIR`, `ENOTDIR`, `EINVAL`, `ENAMETOOLONG` 400 ·
@@ -219,6 +233,29 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   everything under the folder until the user taps "show" (I-163). Both flags are
   inherited for display: `ls` and `stat` carry the effective value next to the entry's
   own.
+- **Library** is the third folder flag (docs/18 §9): "Library: none · movies · tv ·
+  music" in the folder menu, inherited for display like the other two, and what the
+  Media tab (§10) lists; it needs every member on codec 6 and is refused with 503 and
+  `Retry-After: 30` until then, like the trash was at codec 4.
+- **Markdown (I-209).** `GET /api/render` returns a `.md` file as a document fragment the
+  page inserts into `article.md.md-doc`. A table cell's alignment is the `align`
+  attribute (the CSP forbids inline style), and an `#anchor` link scrolls to its heading
+  without reaching the hash router. The node renders it with its own escape-first
+  renderer (`internal/webui/md.go`, in the manner of errol's): the source is HTML-escaped
+  line by line *before* any construct is recognised, so no tag, attribute or entity of the
+  file reaches the output unescaped, and the output's tags are only the renderer's own.
+  Constructs: ATX headings (the file's `#` becomes the page's `h2`, down to `h6`, each
+  with an `id` from its slug), paragraphs, `*`/`_` emphasis, `**` strong, `~~` strike,
+  backtick code, fenced and indented code blocks (the info string becomes `data-lang`; no
+  highlighting), block quotes, ordered, unordered and task lists nested by indentation,
+  pipe tables with alignment, thematic breaks, hard breaks and autolinks. **Links:**
+  `http:`, `https:`, `mailto:` and `#anchor` pass, external ones with `rel="noopener
+  noreferrer"`; a relative link to a `.md` becomes the UI route `#/file/<resolved path>`
+  (the `in=` of a deleted root carried along), to any other volume file `/files/<resolved
+  path>`; every other scheme is text. **Images:** relative paths only, served from
+  `/files/`; an absolute URL becomes its alt text (the CSP forbids it anyway). A raw HTML
+  block renders as escaped text. The viewer offers "Rendered | Raw" (the `<pre>` of
+  today), remembered in `sessionStorage`.
 - **Pins** are local state of the node serving the page (`<data_dir>/pins.json`, never in
   Raft): a pinned folder's chunks are prefetched into the node's chunk cache and kept out
   of its eviction, renames keep the pin (it is stored by inode), and `/api/pins` and the
@@ -331,8 +368,28 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 
 User management and per-user access control, mutating admin operations from the browser
 (repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
-loopback, transcoding, search, saved playlists, a queue shared between tabs or devices,
-server-side video decoding, versions beyond the one the trash keeps.
+loopback, transcoding, saved playlists, a queue shared between tabs or devices,
+server-side video decoding, versions beyond the one the trash keeps, online metadata
+providers for the Media tab (docs/18 §10). Search was a non-goal until docs/18.
+
+## 10. The Media tab (I-212)
+
+A fourth tab, `#/media`, with one section per folder whose effective library kind is set
+(docs/18 §9), in the order movies, tv, music, then by path. `GET /api/media?lib=<path>`
+lists a library's items: the **structure is live** (folders and files from the FSM, so a
+film copied a second ago is listed at once, by its cleaned name) and the **metadata comes
+from the catalogue** (docs/18 §8), so an item without an entry yet shows its name and the
+generic or browser-made thumbnail and fills in after the next pass. `GET
+/api/media?item=<path>` returns one item with its plot, people and, for a show, its seasons
+and episodes, or, for an album, its tracks through the tags of §6. Nothing under a deleted
+root appears; an item under an nsfw folder carries `nsfw` and its art is blurred until
+tapped (I-163). Art comes through the routes that exist: a poster or cover tile is `GET
+/api/thumb?path=<poster>` (at most 320 px, generated once and shared, I-160), the detail
+page's poster and the background are `GET /files/<fanart>` as stored, and a film or an
+episode without a sidecar frame shows its browser-made thumbnail. A section lists at most
+`MediaPage` (500) items a page from `offset`, sorted by `sort_title` then path, the same on
+every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
+now-playing bar (§6); "Open folder" goes to the file browser.
 
 ## Design
 
@@ -457,6 +514,16 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Live pill | `.pill.ok` "live" / `.pill` "paused" | at the toolbar's right: live while the range ends now and the tab is visible (a refresh every 5 s), paused for a custom range or a hidden tab; the title says when the last fetch landed |
 | Member menu | `.toolbar details.menu` > `summary` ("Node: pike") + `.menu-body` of `a.menu-row` (`.dot` + name + `.small.dim` state) + `a.menu-link` (↗) | one row per device member with its live dot and state; choosing a row re-renders the node section from this gateway; the ↗ link opens that member's own Stats page at the same range (`http://<tsIP>:<web>/#/stats?…`); a member without a web listener has no link; "all nodes" is the first row |
 | Chart card | `.charts` > `.chart-card` > `svg.chart` + `.small.dim` caption | the soak report's chart drawn in the page's tokens: text in `--text` and `--dim`, grid in `--line`, series in `--c0`…`--c7`, status cells in the status colours, the spread bins in the under/even/over tokens; one chart per row at every width; the caption names the unit, the window and the tier; hover shows the chart's `<title>` tooltips |
+| Search box | `header.top form.search` > `input[type=search]` + `button` | in the header after the tabs; `/` focuses it, Escape clears it, Enter opens `#/search/<q>`; one focus ring around input and button; below 900 px it takes a second header row of its own |
+| Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.under` toggle) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
+| Markdown document | `article.md.md-doc` | a 760 px measure with a gutter hairline on the left and faint `##`, `###` markers in the margin before `h3`–`h6` (the file's `#` is the page's `h2`); headings in mono as the UI's; code on `--surface`; tables with `--line` hairlines; `mark` in the accent tint; "Rendered \| Raw" as a `.seg` in the toolbar |
+| Library section | `section.lib` > `h2` (title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added, `.chips` of genres) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape |
+| Poster grid | `.posters` > `a.poster` > `.art` (`img`, or the kind glyph) + `.ptitle` + `.pyear` | `auto-fill, minmax(140px, 1fr)` (120 px under 480 px); `.art` is 2:3 letterboxed on `--surface`, square for music; `nsfw` blurs the art; `missing` shows the kind glyph over the title; loaded lazily like tiles |
+| Hero | `section.hero` > `img.backdrop` + `.hero-body` (`img.poster`, `h1`, `.facts`, `.plot`, `.actions`, `.people`) | the fanart as a full-width background 32 vh tall, `object-fit: cover`, darkened to 55 % and faded into `--bg` with a gradient so the ink stays legible in both themes; the poster overlaps its bottom edge; `.facts` year · runtime · rating · genres · mpaa in `--dim`; `.plot` sans 15/1.55 on a 65-ch measure; `.actions` "Play" and "Open folder" buttons; `.people` director and up to six actors as text chips; `.hero.no-art` is a plain `--surface` band, `.hero.poster-only` uses the poster's blurred copy at low opacity |
+| Season strip | `.seasons` > `button[aria-pressed]` per season | the selected season's episodes follow; "Specials" last |
+| Episode list | `table.episodes` > `tr` > `.no` (`SnnEnn` mono) + `.thumb` (16:9 at 96 px) + `.title` + `.dur` + `.plot.small.dim` (clamped to two lines) | a row opens the player; `playing` on the one in the bar |
+| Library badge | `.badge.lib` | the mono word `movies`, `tv` or `music` after the breadcrumb's last segment (effective) and in rows and tiles (own) |
+| Library menu row | `.toolbar details.menu` > `label.menu-row.library` > `select` | "Library" with none · movies · tv · music; disabled with the reason on the root, in the trash and while a member reads a codec older than 6 |
 | Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word hides below 480 px; cycles on tap |
 
 ### Copy
@@ -549,6 +616,21 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 17. The theme switch: set dark on the dashboard, reload, open Files and Stats: all dark
     with no flash of light on load; set system and change the OS theme live; the charts
     follow the theme, every series legible on navy.
+18. Search from a phone: type three letters of an artist, the hits appear within a
+    keystroke; a renamed file is found under its new name at once; a trashed file is gone
+    from the hits; a content hit shows its snippet as it scrolls into view; "in this
+    folder" narrows to the open folder; a word with an accent finds its unaccented spelling.
+19. A README with a table, a task list, an image beside it and a link to another `.md`
+    renders and the link navigates inside the UI; a file containing `<script>` renders as
+    text; "Raw" shows the source and the choice survives a reload.
+20. Flag `/music` as music and a `movies` folder holding one Kodi-style film (`poster.jpg`,
+    `fanart.jpg`, `movie.nfo`) and one bare `.mkv`: after `tailraid search index` the Media
+    tab shows the album covers, the film with its poster, plot and background, and the bare
+    file by its cleaned name with the browser's frame; "Play" plays; an nsfw library is
+    blurred; the phone layout has no horizontal scroll and the hero keeps the title legible
+    in light and dark.
+21. A show folder with `Season 01` and `Season 02` and `tvshow.nfo`: the season strip, the
+    episode list with numbers, titles and plots, the episode's frame after it played once.
 
 ## Invariants
 
@@ -664,6 +746,19 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   range never refreshes; the member dropdown lists every device member with its liveness
   and links each that has a web listener to its own Stats page at the same range and
   node by its tailnet address and web port, exactly the Host form that page admits.
+- **I-209** — `GET /api/render` renders only `.md` and `.markdown` files of at most
+  `TEXT_MAX` bytes (400 and 413 otherwise) with the node's escape-first renderer: the
+  source is HTML-escaped before any construct is parsed, every tag in the output is one the
+  renderer emits and every attribute value is one it built, so no markup of the file
+  reaches the page; a link keeps only an `http`, `https`, `mailto` or `#` target, a relative
+  `.md` link becomes the file route, a relative link to anything else `/files/`, an image
+  only a relative volume path; the fragment's bytes are a pure function of the source.
+- **I-212** — `/api/media` lists a flagged folder's items from the live FSM with the
+  catalogue's metadata where an entry exists and the item's name otherwise, never an
+  entry under a deleted root or `/.tailraid`, carries `nsfw` for an item under an nsfw
+  folder, pages at most `MediaPage` items sorted by `sort_title` then path, answers 404
+  for a folder that is not a library and 400 for `offset` or `sort` outside their bounds,
+  and two nodes with the same chain and FSM return byte-identical bodies.
 - **I-200** — The theme switch cycles system, light and dark, sets `data-theme` on the
   document (absent for system), keeps the choice in the browser's `localStorage` only and
   applies it before the first view renders; a storage failure means system; the server
@@ -696,5 +791,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
+| I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
+| I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
