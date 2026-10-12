@@ -107,9 +107,19 @@ func (w *worker) target() (*nfsc.Target, uint64, error) {
 	if w.tgt != nil {
 		return w.tgt, w.gen, nil
 	}
-	cl, err := nfsrpc.DialTCP("tcp", w.nfsAddr, false)
+	tgt, closeT, err := dialTarget(w.nfsAddr)
 	if err != nil {
 		return nil, 0, err
+	}
+	w.tgt, w.closeT = tgt, closeT
+	return tgt, w.gen, nil
+}
+
+// dialTarget mounts the gateway's root over a connection of its own.
+func dialTarget(addr string) (*nfsc.Target, func(), error) {
+	cl, err := nfsrpc.DialTCP("tcp", addr, false)
+	if err != nil {
+		return nil, nil, err
 	}
 	type mountArgs struct {
 		nfsrpc.Header
@@ -118,24 +128,23 @@ func (w *worker) target() (*nfsc.Target, uint64, error) {
 	res, err := cl.Call(&mountArgs{Rpcvers: 2, Prog: nfsc.MountProg, Vers: nfsc.MountVers, Proc: nfsc.MountProc3MNT, Cred: nfsrpc.AuthNull, Verf: nfsrpc.AuthNull, Dirpath: "/"})
 	if err != nil {
 		cl.Close()
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if status, _ := xdr.ReadUint32(res); status != nfsc.MNT3Ok {
 		cl.Close()
-		return nil, 0, fmt.Errorf("mount status %d", status)
+		return nil, nil, fmt.Errorf("mount status %d", status)
 	}
 	fh, err := xdr.ReadOpaque(res)
 	if err != nil {
 		cl.Close()
-		return nil, 0, err
+		return nil, nil, err
 	}
 	tgt, err := nfsc.NewTargetWithClient(cl, nfsrpc.NewAuthUnix("soak", 0, 0).Auth(), fh, "/", 0)
 	if err != nil {
 		cl.Close()
-		return nil, 0, err
+		return nil, nil, err
 	}
-	w.tgt, w.closeT = tgt, cl.Close
-	return tgt, w.gen, nil
+	return tgt, func() { cl.Close() }, nil
 }
 
 // dropCurrent drops whatever connection is current.
@@ -563,11 +572,15 @@ func (w *worker) copyStart(rw http.ResponseWriter, r *http.Request) {
 		}
 		after = func() { _ = sh.Umount(); _ = sess.Logoff() }
 	case "nfs":
-		copyOne = func(f soak.CopySpec) error {
-			t, _, err := w.target()
-			if err != nil {
-				return err
-			}
+		// a connection of the job's own: the shared one is dropped when a partition is
+		// set, which would cut the copies rather than the cluster
+		t, closeT, err := dialTarget(w.nfsAddr)
+		if err != nil {
+			http.Error(rw, "nfs: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		after = closeT
+		copyOne = func(f soak.CopySpec) error { // concurrent calls on one target, as the worker's /fs makes
 			if _, err := t.Create(f.Path, 0o644); err != nil {
 				return fmt.Errorf("create: %w", err)
 			}
