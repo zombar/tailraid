@@ -11,6 +11,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,14 +37,18 @@ type mirrorSet struct {
 	propose   func(ctx context.Context, cmd meta.Command) error
 	read      func(ctx context.Context, h meta.Hash) ([]byte, error)
 	self      func() (meta.NodeIdx, bool)
+	selfID    string       // this node's ID, for the FSM hook (it may not read the FSM)
+	minCodec  func() uint8 // the oldest codec a live member reads; nil: every one is current
 	clk       clock.Clock
 	log       *slog.Logger
 
-	mu       sync.Mutex
-	open     map[meta.NodeIdx]*mirrorDisk // online mirrors by row
-	seen     []mirrorDisk                 // every configured path, as the last tick saw it (status)
-	inflight map[meta.SnapID]bool
-	jobs     chan syncJob
+	tickMu    sync.Mutex // one tick at a time: the maintenance loop's and `mirror add`'s
+	refreshMu sync.Mutex // one refresh at a time, so a disk is opened once and its sweep excludes every write
+	mu        sync.Mutex
+	open      map[meta.NodeIdx]*mirrorDisk // online mirrors by row
+	seen      []mirrorDisk                 // every configured path, as the last tick saw it (status)
+	inflight  map[meta.SnapID]bool
+	jobs      chan syncJob
 }
 
 type mirrorDisk struct {
@@ -76,10 +81,35 @@ func newMirrorSet(fsys sysfs.FS, cfg config.Config, pol config.MirrorPolicy, clu
 	return s
 }
 
+// add takes a path `mirror add` just wrote to the config and opens it now (docs/16 §1):
+// the running node never rereads its config. It returns how the path looks: "online", or
+// why it is offline.
+func (s *mirrorSet) add(path string) string {
+	s.refreshMu.Lock()
+	if !slices.Contains(s.paths, path) {
+		s.paths = append(s.paths, path)
+	}
+	s.refreshMu.Unlock()
+	s.refresh()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.seen {
+		if d := &s.seen[i]; d.Path == path {
+			if d.Online {
+				return "online"
+			}
+			return d.Reason
+		}
+	}
+	return "not configured"
+}
+
 // onBegin is the FSM hook: a snapshot begun on one of this host's mirrors takes the
-// clone of the state at its index; every other node returns at once (docs/16 §3).
-func (s *mirrorSet) onBegin(sn meta.Snapshot, host meta.NodeIdx, clone func() *meta.State) {
-	if self, ok := s.self(); !ok || host != self {
+// clone of the state at its index; every other node returns at once (docs/16 §3). It
+// runs under the FSM's apply lock, so it knows its host by node ID, never by asking the
+// FSM (a read there would wait on the lock this call holds).
+func (s *mirrorSet) onBegin(sn meta.Snapshot, _ meta.NodeIdx, hostID string, clone func() *meta.State) {
+	if hostID == "" || hostID != s.selfID {
 		return
 	}
 	s.mu.Lock()
@@ -118,6 +148,12 @@ func (s *mirrorSet) sync(ctx context.Context, j syncJob, ready func(context.Cont
 	s.mu.Lock()
 	d := s.open[j.sn.Mirror]
 	s.mu.Unlock()
+	if d == nil { // added since the last tick (`mirror add` then `snapshot create`): look now
+		s.refresh()
+		s.mu.Lock()
+		d = s.open[j.sn.Mirror]
+		s.mu.Unlock()
+	}
 	if d == nil {
 		s.log.Warn("snapshot sync: the mirror is offline", "snapshot", j.sn.Name, "mirror", j.sn.Mirror)
 	} else {
@@ -140,6 +176,8 @@ func (s *mirrorSet) sync(ctx context.Context, j syncJob, ready func(context.Cont
 // refresh opens the configured mirrors whose marker names this cluster and a live mirror
 // row of this host, and closes the others (docs/16 §1: online or offline).
 func (s *mirrorSet) refresh() {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 	self, ok := s.self()
 	rows := map[string]meta.Node{}
 	nodes := s.st.Nodes()
@@ -187,10 +225,16 @@ func (s *mirrorSet) refresh() {
 }
 
 // tick is one minute of the host's mirror work, in this order: refresh, end the syncs
-// this host lost (a restart drops its clone), reconcile each disk, delete for space and
-// thin, then begin what is due (docs/16 §4, §5, I-182, I-183).
+// this host lost (a restart drops its clone), reconcile each disk and import what it
+// holds with no row, delete for space and thin, then begin what is due (docs/16 §4, §5,
+// I-182, I-183). While a live member reads a codec older than 7 it only refreshes.
 func (s *mirrorSet) tick(ctx context.Context) {
+	s.tickMu.Lock()
+	defer s.tickMu.Unlock()
 	s.refresh()
+	if s.minCodec != nil && s.minCodec() < meta.CodecMirrors {
+		return // an older member could not decode a snapshot command: nothing is proposed (docs/16 §4)
+	}
 	now := s.clk.Now()
 	snaps := s.st.Snapshots()
 	s.mu.Lock()
@@ -229,7 +273,13 @@ func (s *mirrorSet) tick(ctx context.Context) {
 			s.log.Info("mirror swept", "mirror", d.Row.Name, "freed", freed)
 		}
 		if len(imported) > 0 {
-			s.log.Warn("mirror holds snapshots the catalogue does not list; they are kept", "mirror", d.Row.Name, "count", len(imported))
+			s.importManifests(ctx, d, imported, now)
+			rows = rows[:0]
+			for _, sn := range s.st.Snapshots() {
+				if sn.Mirror == idx {
+					rows = append(rows, sn)
+				}
+			}
 		}
 		full := d.Total > 0 && d.Free < mirrorReserve(d.Total)
 		for _, id := range drop(rows, now, s.pol, full) {
@@ -243,6 +293,69 @@ func (s *mirrorSet) tick(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// importManifests gives every manifest on a mirror with no catalogue row a row of its
+// own and moves the manifest to the row's ID (docs/16 §5, I-183): a mirror removed and
+// added back, copied to a larger disk or adopted from another cluster lists its
+// snapshots again. A row of the same name and root is an import a crash or an unknown
+// outcome interrupted: only the rename is left to do.
+func (s *mirrorSet) importManifests(ctx context.Context, d *mirrorDisk, mans []mirror.Manifest, now time.Time) {
+	var after uint32
+	if all, err := d.m.Manifests(); err == nil {
+		for i := range all {
+			after = max(after, all[i].ID)
+		}
+	}
+	for i := range mans {
+		man := &mans[i]
+		name := man.Name
+		to, ok := s.importedAs(d.Row.Idx, name, meta.Hash(man.Root))
+		for _, try := range []string{man.Name, importName(man.Name, man.ID)} {
+			if ok {
+				break
+			}
+			name = try
+			err := s.propose(ctx, meta.Command{Op: meta.OpSnapshotImport, SnapshotImport: &meta.SnapshotImport{
+				Mirror: d.Row.Idx, After: meta.SnapID(after), Name: try, At: man.At, Auto: man.Auto, Root: meta.Hash(man.Root),
+				Files: man.Files, Bytes: man.Bytes, NewBytes: man.NewBytes, Missing: uint32(len(man.Missing)), Now: now.UnixNano(),
+			}})
+			if err != nil && !errors.Is(err, meta.ErrExist) {
+				s.log.Warn("mirror: snapshot not imported", "mirror", d.Row.Name, "snapshot", man.Name, "err", err)
+				break
+			}
+			to, ok = s.importedAs(d.Row.Idx, try, meta.Hash(man.Root))
+		}
+		if !ok {
+			continue // kept on the disk as it is; the next tick tries again
+		}
+		if err := d.m.Renumber(man.ID, uint32(to), name); err != nil {
+			s.log.Warn("mirror: imported snapshot not renumbered", "mirror", d.Row.Name, "snapshot", man.Name, "err", err)
+			continue
+		}
+		s.log.Info("mirror: snapshot imported", "mirror", d.Row.Name, "snapshot", name, "id", to)
+	}
+}
+
+// importedAs finds the catalogue row of mirror idx that a manifest named name with root
+// became.
+func (s *mirrorSet) importedAs(idx meta.NodeIdx, name string, root meta.Hash) (meta.SnapID, bool) {
+	for _, sn := range s.st.Snapshots() {
+		if sn.Mirror == idx && sn.Name == name && sn.Root == root && (sn.State == meta.SnapComplete || sn.State == meta.SnapIncomplete) {
+			return sn.ID, true
+		}
+	}
+	return 0, false
+}
+
+// importName is the name a manifest is imported under when its own is taken on the
+// mirror by another snapshot: "<name>.<old id>", within the name bound.
+func importName(name string, id uint32) string {
+	suffix := fmt.Sprintf(".%d", id)
+	if len(name)+len(suffix) > meta.MaxSnapName {
+		name = strings.ToValidUTF8(name[:meta.MaxSnapName-len(suffix)], "")
+	}
+	return name + suffix
 }
 
 func (s *mirrorSet) do(ctx context.Context, what string, cmd meta.Command) {
@@ -383,19 +496,29 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 }
 
 // PrepareMirror marks path as a mirror of this cluster for host (docs/16 §1), or returns
-// the ID of the mirror of this cluster already there (a moved disk re-homes).
-func PrepareMirror(path string, clusterID [16]byte, hostID string) (string, error) {
+// the ID of the mirror of this cluster already there (a moved disk re-homes). A mirror of
+// another cluster is refused unless adopt is set; then its marker is rewritten to this
+// cluster and host, and the host imports its snapshots (docs/16 §5, §7).
+func PrepareMirror(path string, clusterID [16]byte, hostID string, adopt bool) (string, error) {
 	fsys := sysfs.OS{}
+	cid := hex.EncodeToString(clusterID[:])
 	if mk, err := mirror.ReadMarker(fsys, path); err == nil {
-		if mk.ClusterID != hex.EncodeToString(clusterID[:]) {
-			return "", fmt.Errorf("%w (%s): `tailraid mirror add --adopt` takes it over", mirror.ErrForeign, mk.ClusterID)
+		if mk.ClusterID != cid {
+			if !adopt {
+				return "", fmt.Errorf("%w (%s): `tailraid mirror add --adopt` takes it over", mirror.ErrForeign, mk.ClusterID)
+			}
+			if mk, err = mirror.Adopt(fsys, path, cid, hostID); err != nil {
+				return "", err
+			}
 		}
 		return mk.MirrorID, nil
+	} else if !errors.Is(err, mirror.ErrNotMirror) {
+		return "", err
 	}
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
 	id := hex.EncodeToString(b[:])
-	return id, mirror.Create(fsys, path, mirror.Marker{ClusterID: hex.EncodeToString(clusterID[:]), MirrorID: id, HostID: hostID, Created: time.Now().UnixNano()})
+	return id, mirror.Create(fsys, path, mirror.Marker{ClusterID: cid, MirrorID: id, HostID: hostID, Created: time.Now().UnixNano()})
 }

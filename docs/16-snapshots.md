@@ -13,7 +13,7 @@ holds back garbage collection only for the length of that copy (§4), and from t
 the mirror owns it. Previous versions of a file are its content in the snapshots the
 online mirrors hold.
 
-*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes); PR 2c built (revert, copy, tree restore and versions in the vfs, `snapshot restore`, `versions`). The numbers
+*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes); PR 2c built (revert, copy, tree restore and versions in the vfs, `snapshot restore`, `versions`); the gaps built (`mirror add --adopt`, `SnapshotImport`, `open_mirror`, the hook's host ID, the CLI and schedule tests). The numbers
 below are stubs in `test/invariants/` until each PR lands its tests (PR 1 meta and the
 mirror store, PR 2a sync and the tick, PR 2b the gateways, PR 2c versions and restore, PR 3 the web UI, PR 4 soak
 phase 19).*
@@ -39,7 +39,11 @@ to the config and proposes `NodeUpsert{Kind: KindMirror, Host: self}` through th
 (the member op `add_mirror`). A path that already carries a marker of this cluster
 re-homes its row to this host instead (a USB disk moved from the laptop to the desktop
 keeps its history and its name); a marker of another cluster is refused unless `--adopt`
-is given (§7). `mirror remove <name>` takes the row and its catalogue rows out of the
+is given (§7); a disk removed and added back takes its old name again unless another
+mirror took it meanwhile. The running node never rereads its config, so `mirror add` then asks it to
+open the path (the admin op `open_mirror`, after rewriting a systemd unit as `node
+add-disk` does, 14 §2) and the node runs the mirror's tick at once: its snapshots are
+listed and the first one begins without waiting for the next minute. `mirror remove <name>` takes the row and its catalogue rows out of the
 table and leaves the disk as it is.
 
 **Online** means the host is live and the marker at the configured path names this
@@ -213,12 +217,23 @@ worker's own set, so the sweep never races a sync), and then proposes
 `SnapshotDelete{ID, Done: true}`, which removes the row. An offline mirror keeps its
 `Deleting` rows until it returns.
 
-A manifest on the disk with **no** row at all is never removed: it is a snapshot the
-catalogue forgot (the mirror was removed with `mirror remove` and added back, or the disk
-was copied to a larger one), and the host imports it as a catalogue row when the mirror
-is opened, as `--adopt` does for another cluster's disk. So no sequence of `mirror remove`,
-`mirror add` and reconciliation removes a snapshot that thinning did not choose. The host
-never touches a disk whose marker names another cluster.
+A manifest on the disk with **no** row at all is never lost: it is a snapshot the
+catalogue forgot (the mirror was removed with `mirror remove` and added back, the disk was
+copied to a larger one, or `--adopt` took over another cluster's disk, §7), and the host
+imports it on the mirror's tick with `SnapshotImport{Mirror, After, Name, At, Auto, Root,
+Files, Bytes, NewBytes, Missing, Now}` (op 22). The FSM gives the row a fresh ID above both
+`NextSnap` and `After`, the largest manifest ID on the disk, so neither the import nor any
+later sync can name a manifest already there, and records it `complete` (or `incomplete`)
+with the manifest's own name, time, auto flag, root and sizes; an imported automatic
+snapshot is thinned by this cluster's schedule like any other. The host then writes the
+manifest under the new ID and removes the old file. A crash between the two leaves the old
+file beside a row of the same name and root: the next tick finishes the rename, or removes
+the old file when the new one is already there, the one manifest ever removed without a
+`Deleting` row, since it is a copy. A rowless manifest whose name another row of the
+mirror holds with another root is imported as `<name>.<old id>`. A sync never replaces a
+manifest on the disk: it fails instead, and the next one takes a higher ID. So no sequence of `mirror remove`, `mirror add` and reconciliation
+removes a snapshot that thinning did not choose. The host never touches a disk whose
+marker names another cluster until `mirror add --adopt` rewrites the marker.
 
 ## 6. Reading, versions and restore
 
@@ -263,8 +278,9 @@ browser (13 §4) use the same `vfs` calls.
 A mirror is a copy of the volume's history that needs nothing from the cluster: its trees
 carry names, modes, owners and times, and its objects the bytes. When a cluster is lost
 beyond `recover` (05 (h), 12 §9), a new cluster adopts the mirror with `tailraid mirror
-add <path> --adopt`: the marker is rewritten to the new cluster, the manifests become
-catalogue rows, and `tailraid snapshot restore <name> /` puts the volume back, uploading
+add <path> --adopt`: the marker is rewritten to the new cluster and this host (its mirror
+ID and so its history stay), the manifests become catalogue rows on the host's next tick
+(§5), and `tailraid snapshot restore <mirror>/<name> /` puts the volume back, uploading
 every object the new pool lacks. Without any cluster, `tailraid mirror export <path>
 <snapshot> <dir>` copies the files out.
 
@@ -311,8 +327,10 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   nothing else, and the mirror's host, while the mirror is online, removes exactly the
   manifests of its `Deleting` rows, then every tree and object no remaining manifest or
   running sync reaches and never one that a remaining manifest reaches, then removes the
-  rows with `Done: true`; a manifest with no row is imported, never removed; and a disk
-  whose marker names another cluster is never changed except by `mirror add --adopt`.
+  rows with `Done: true`; a manifest with no row is imported by `SnapshotImport` under an
+  ID above every manifest on the disk and removed only as the duplicate of the row it
+  became; a sync never replaces a manifest; and a disk whose marker names another cluster
+  is never changed except by `mirror add --adopt`.
 - **I-186** — A revert, a copy or a tree restore from a snapshot writes into the live
   volume exactly the snapshot's bytes, committing by hash every chunk the pool still holds
   and uploading every other from the mirror after verifying it; a revert flushes or drops
@@ -327,7 +345,7 @@ stub in `test/invariants/` meanwhile.
 | Invariant | Tests |
 |---|---|
 | I-179 | `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`; planned: TestCluster_SnapshotReadsAsOfIndexOnEveryGateway, and the model checker's snapshot steps |
-| I-180 | `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`; planned: TestCLI_MirrorStandalone_LsCatExport |
+| I-180 | `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`; planned: TestCluster_OverwriteDuringSync_SnapshotExact |
-| I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`; planned: TestWebUI_NoSnapshotDeleteRoute, TestMirror_OfflineDeleteReconciledOnAttach |
+| I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`; planned: TestWebUI_NoSnapshotDeleteRoute |
 | I-186 | `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

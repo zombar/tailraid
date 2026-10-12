@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/zombar/tailraid/internal/mirror"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/svc"
 	"github.com/zombar/tailraid/internal/sysfs"
 	"github.com/zombar/tailraid/internal/vfs"
 )
@@ -34,8 +36,9 @@ func mirrorCmd() *cobra.Command {
 // mirrorAddCmd marks an empty directory (or a moved mirror of this cluster) as a mirror of
 // this device, saves it in the config and registers it through the leader (docs/16 §1).
 func mirrorAddCmd() *cobra.Command {
+	var adopt bool
 	c := &cobra.Command{
-		Use: "add <path>", Short: "Give a disk of this device to snapshots (a moved mirror keeps its history)", Args: cobra.ExactArgs(1),
+		Use: "add <path>", Short: "Give a disk of this device to snapshots (a moved mirror keeps its history; --adopt takes over another cluster's)", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, path, err := loadConfig(cmd)
 			if err != nil {
@@ -68,7 +71,7 @@ func mirrorAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			id, err := node.PrepareMirror(p, cid, host.ID)
+			id, err := node.PrepareMirror(p, cid, host.ID, adopt)
 			if err != nil {
 				return err
 			}
@@ -81,10 +84,33 @@ func mirrorAddCmd() *cobra.Command {
 			if err := c.Members(cmd.Context(), leaderOr(rep, addr), rpc.MemberOp{Op: "add_mirror", NodeIdx: host.Idx, DiskID: id, Name: name}); err != nil {
 				return fmt.Errorf("register mirror at %s (the marker and the config entry stay; re-run to retry): %w", p, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "mirror at %s registered; the node opens it within a minute and takes the first snapshot (restart the service if it runs under systemd, so its unit may write there)\n", p)
+			// a systemd service may write only what its unit names: rewrite the unit with the
+			// mirror and restart, as add-disk does (I-147)
+			if runtime.GOOS == "linux" && svc.UnitInstalled() {
+				if err := refreshUnit(cmd); err != nil {
+					return fmt.Errorf("registered mirror %s, but the service unit was not updated (run `tailraid install`, then restart the service): %w", name, err)
+				}
+			}
+			raw, err := openDiskWhenUp(cmd, c, addr, rpc.AdminOp{Op: "open_mirror", Path: p})
+			if err != nil {
+				return fmt.Errorf("registered mirror %s; the node did not open it yet (it looks again within a minute): %w", name, err)
+			}
+			var st struct {
+				State string `json:"state"`
+			}
+			_ = json.Unmarshal(raw, &st)
+			if rep, _, _, err := fetchReport(cmd.Context(), cmd); err == nil { // a re-home keeps the row's name
+				for i := range rep.Nodes {
+					if rep.Nodes[i].ID == id && rep.Nodes[i].State != meta.Removed.String() {
+						name = rep.Nodes[i].Name
+					}
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "mirror %s at %s: %s (`tailraid snapshot ls` lists its snapshots; the schedule takes one when due)\n", name, p, st.State)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&adopt, "adopt", false, "take over a mirror of another cluster: rewrite its marker and import its snapshots (docs/16 §7)")
 	addNodeFlags(c)
 	return c
 }
