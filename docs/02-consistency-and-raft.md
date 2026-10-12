@@ -421,8 +421,11 @@ when leader, otherwise forwards the encoded command to the current leader with
   `Mkdir` may hit `ErrExist`, which the gateway maps to success when the existing child
   matches; a `Symlink` only when the existing link has the same target. `Unlink`, `Rmdir`
   and `Rename` take `ErrNotExist` after an unknown outcome as the first attempt having
-  landed. `SetAttr` sets absolute values and is simply repeated. A second unknown outcome
-  in a row is `EIO`. Commands whose first proposal was *not* applied (`ErrNotLeader`,
+  landed. `SetAttr` sets absolute values and is simply repeated. A repeat whose outcome is
+  unknown again is proposed again, with the backoff below, each answer read the same way,
+  until the gateway is stale (`EIO` then): a leader killed mid-failover leaves a forward
+  in flight and a second one aimed at its address before the new leader is known, and a
+  client's CREATE must ride that out (soak phase 22 found it failing). Commands whose first proposal was *not* applied (`ErrNotLeader`,
   `ErrNoLeader`, or a forward whose request never left because the leader's address
   refused the dial or a fault rule dropped it) are retried with backoff until the gateway
   is stale: the leader is out of reach, which an election or a heal mends within seconds.
@@ -540,8 +543,8 @@ no divergent state to merge because it never applied uncommitted entries.
   node reports a newer one.
 - **I-95** — A proposal that may have been applied (leadership lost, timeout, cancelled
   while pending, a transport error after the request was sent, or the leader's `500`) is reported as
-  `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it once
-  and resolves the second answer per command (`ErrExist`/`ErrNotExist` after an unknown
+  `meta.ErrUnknownOutcome` and never as "not the leader"; the gateway re-proposes it (with
+  backoff, until stale) and resolves the answer per command (`ErrExist`/`ErrNotExist` after an unknown
   outcome count as the first attempt having landed), so an acknowledged mutation is never
   reported as failed and a failed one is never silently repeated. No proposal outlives
   its node: `Close` refuses new proposals and, on a leader, drains what Raft committed
