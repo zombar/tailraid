@@ -81,6 +81,11 @@ func wrap(err error) error {
 	return err
 }
 
+// ConcurrentWrites tells the server a WRITE needs no share lock: vfs.File.WriteAt is safe
+// alongside every other call (the overlay locks per inode, I-168), so a WRITE waiting at
+// a cap delays no other copy on the share (I-217).
+func (a *FS) ConcurrentWrites() bool { return true }
+
 // CanDelete is asked when a client marks a handle delete-on-close (docs/15 §8): the
 // delete itself happens at CLOSE, whose reply carries no failure, so a protected entry
 // (I-154) is refused here, where the client reads STATUS_ACCESS_DENIED.

@@ -221,7 +221,9 @@ func equal(a, b []string) bool {
 // The driver underneath has no lock of its own -- see memfs_test.go -- so this
 // is a test of the SERVER's serialisation and nothing else. Under -race it
 // finds any command that forgot to take the share's lock, which is how the
-// missing one was found in the first place.
+// missing one was found in the first place -- and, again, the WRITE answered
+// later (I-217) that skipped it for a driver that never said it could take it.
+// Invariant: I-217
 func TestSeveralClientsOneShare(t *testing.T) {
 	mem := newMemFS(true)
 	addr, srv := serve(t)

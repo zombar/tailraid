@@ -414,12 +414,15 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusFileLockConflict), nil
 	}
 	if of.w != nil {
-		// Positional: no share lock, and off the read loop once it takes
-		// long (writeAsync), so a WRITE waiting in the driver holds up no
-		// other request on the connection or the share.
+		// Positional, and off the read loop once it takes long (writeAsync),
+		// so a WRITE waiting in the driver holds up no other request on the
+		// connection. The share lock is held around it unless the driver
+		// says its positional writes are safe alongside its other calls
+		// (ConcurrentWriter): a Filesystem promises nothing of the kind.
 		if c.alone {
 			return c.writeAsync(h, of, data, offset), nil
 		}
+		defer lockUnlessConcurrent(of.share)()
 		return writeAt(h, of, data, offset), nil
 	}
 	defer of.share.changing()()
@@ -500,7 +503,9 @@ func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []b
 	go func() {
 		defer of.writes.Done()
 		defer func() { <-c.writeSlots }()
+		unlock := lockUnlessConcurrent(of.share)
 		reply := writeAt(h, of, data, offset)
+		unlock()
 		done <- reply
 		if op := <-later; op != nil {
 			c.finishAsyncWith(op, asFinal(reply, op.asyncID), key)
@@ -521,6 +526,24 @@ func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []b
 	_ = c.send(interim) // a failed send ends the connection at the next read
 	later <- op
 	return nil
+}
+
+// ConcurrentWriter is the optional capability of a filesystem whose positional writes
+// (WritableFile.WriteAt and Sync) may run alongside any of its other calls: a WRITE to
+// it then takes no share lock, so one waiting in the driver delays no other request on
+// the share. A driver without it has every WRITE serialised with the share's other
+// changes, as before.
+type ConcurrentWriter interface {
+	ConcurrentWrites() bool
+}
+
+// lockUnlessConcurrent takes the share lock for a positional write unless the driver is a
+// ConcurrentWriter, and returns its release.
+func lockUnlessConcurrent(sh *share) func() {
+	if cw, ok := sh.fsys.(ConcurrentWriter); ok && cw.ConcurrentWrites() {
+		return func() {}
+	}
+	return sh.changing()
 }
 
 // asFinal turns a reply built for a synchronous answer into the final reply

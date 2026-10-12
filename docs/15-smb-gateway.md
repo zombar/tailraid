@@ -254,8 +254,10 @@ username=tailraid,vers=3.0` mount the same share when `listen.smb` is set there.
 ## 7. Large copies and the caps
 
 A WRITE that meets the WAL cap or `MaxDirty` waits for the flusher for up to `CapWait`
-(20 s, docs/04 §3, I-79) before it is answered. It waits off the connection's read loop
-and outside the share lock: a WRITE on a positional handle that has not finished within
+(20 s, docs/04 §3, I-79) before it is answered. It waits off the connection's read loop,
+and outside the share lock for a backend that declares its positional writes safe
+alongside its other calls (`ConcurrentWriter`; the adapter does, the overlay locking per
+inode; a backend that does not keeps every WRITE under the share lock): a WRITE on a positional handle that has not finished within
 `WriteGrace` (5 ms) is answered `STATUS_PENDING` with an AsyncId at once and gets its
 real reply when the write returns, at most `AsyncWrites` (64) such WRITEs per connection,
 a CLOSE of the handle waiting for its own (I-217). Windows sends every copy to a server
@@ -365,7 +367,8 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   refused with `STATUS_INFO_LENGTH_MISMATCH` and no data when b is shorter than the fixed
   part; for every file and filesystem class the server answers.
 
-- **I-217** — A WRITE waiting in the gateway delays no other request: while one handle's
+- **I-217** — A WRITE waiting in the gateway delays no other request (the share lock is
+  skipped only for a `ConcurrentWriter` backend, as the adapter is): while one handle's
   WRITE waits (at a cap, on a fsync), the same connection's CREATE, SET_INFO, READ, WRITE
   and CLOSE of other handles are answered; a slow WRITE is answered `STATUS_PENDING` and
   then exactly once with its real status under the same MessageId and AsyncId, signed
@@ -391,5 +394,5 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-141 | `TestSMB_DotFilesHidden` |
 | I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |
 | I-213 | `TestQueryInfo_OutputBufferLength` |
-| I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites` |
+| I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites`, `TestSeveralClientsOneShare` |
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |
