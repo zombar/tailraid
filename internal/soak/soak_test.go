@@ -369,6 +369,10 @@ func (e *harnessEnv) Wait(ctx context.Context, d time.Duration) error {
 		e.c.Clk.Advance(step)
 		d -= step
 	}
+	// the node handles below are what a restart replaces (phase 22 restarts a gateway on
+	// a goroutine of its own while the phase keeps waiting)
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	e.c.Probe()
 	if !e.quorum() {
 		return nil

@@ -191,7 +191,11 @@ func phaseCopies(ctx context.Context, r *Run) error {
 			}, nil
 		}},
 		{"an update of a copying gateway", func(ctx context.Context, copiers []NodeRef) (string, func(context.Context) error, error) {
-			return "restarted " + copiers[0].Name + " once idle", nil, ce.RestartIdle(ctx, copiers[0])
+			// the update runs beside the copies, as an administrator's would: it must wait
+			// for them (I-221), and their results are read before it restarts the node
+			done := make(chan error, 1)
+			go func() { done <- ce.RestartIdle(ctx, copiers[0]) }()
+			return copiers[0].Name + " updated once idle", func(context.Context) error { return <-done }, nil
 		}},
 	}
 	var seed uint64 = 0x22
@@ -204,8 +208,10 @@ func phaseCopies(ctx context.Context, r *Run) error {
 			return fmt.Errorf("round %q: fewer than two gateways besides the leader", rd.name)
 		}
 		rdir := join(dir, fmt.Sprintf("r%d", i+1))
-		if err := r.volume(copiers[0]).Mkdir(rdir); err != nil {
-			return err
+		for _, n := range copiers { // through each: a folder reaches another gateway only once it has replicated
+			if err := r.volume(n).Mkdir(rdir); err != nil {
+				return err
+			}
 		}
 		want := map[string]string{} // path → hex sha256
 		var jobs []CopyJob
@@ -343,7 +349,20 @@ func (r *Run) checkCopies(ctx context.Context, round int, name string, copiers [
 	}
 	slices.Sort(paths)
 	for _, p := range paths {
-		sum, _, err := v.Hash(p)
+		// a file committed through one gateway is visible on another once the commit has
+		// replicated to it; a reader just restarted may still be catching up
+		var (
+			sum [32]byte
+			err error
+		)
+		for try := 0; ; try++ {
+			if sum, _, err = v.Hash(p); err == nil && hex.EncodeToString(sum[:]) == want[p] || try == 30 {
+				break
+			}
+			if werr := r.Env.Wait(ctx, time.Second); werr != nil {
+				break
+			}
+		}
 		if got := hex.EncodeToString(sum[:]); err != nil || got != want[p] {
 			bad = append(bad, fmt.Sprintf("%s (%v)", p, err))
 		}
