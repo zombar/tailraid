@@ -223,4 +223,4 @@ exactly one design doc transition table and cited by at least one test via
 | L-215 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Unreadable (< k live slots) | E-131 sync reads it | Unreadable | `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | L-216 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Collected (or never in the pool), an object on a mirror | E-133 | Uploading → Committed | `TestVFS_Revert_FromPoolAndMirror` |
 | L-217 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed or Tombstoned (the pool still holds it) | E-133 | Committed (Refs + 1 per position) | `TestVFS_Revert_FromPoolAndMirror` |
-| L-218 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned at or after the oldest syncing row's `At` | GCDelete while that row is `Syncing` | Collected | `TestFSM_GCDelete_HeldBySyncingRow` |
+| L-218 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned at or after the oldest syncing row's `At` | GCDelete while that row is `Syncing` | Collected | `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestFSM_GCDelete_HeldBySyncingRow` |

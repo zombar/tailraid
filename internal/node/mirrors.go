@@ -49,6 +49,7 @@ type mirrorSet struct {
 	seen      []mirrorDisk                 // every configured path, as the last tick saw it (status)
 	inflight  map[meta.SnapID]bool
 	jobs      chan syncJob
+	lastID    map[string]string // path → the mirror ID its marker last named (refreshMu): an unplugged disk keeps its row
 }
 
 type mirrorDisk struct {
@@ -73,7 +74,7 @@ func mirrorReserve(total uint64) uint64 { return max(total/20, 4<<30) }
 func newMirrorSet(fsys sysfs.FS, cfg config.Config, pol config.MirrorPolicy, clusterID [16]byte, st *meta.Store, clk clock.Clock, log *slog.Logger) *mirrorSet {
 	s := &mirrorSet{
 		fsys: fsys, pol: pol, clusterID: hex.EncodeToString(clusterID[:]), st: st, clk: clk, log: log,
-		open: map[meta.NodeIdx]*mirrorDisk{}, inflight: map[meta.SnapID]bool{}, jobs: make(chan syncJob, 4),
+		open: map[meta.NodeIdx]*mirrorDisk{}, inflight: map[meta.SnapID]bool{}, jobs: make(chan syncJob, 4), lastID: map[string]string{},
 	}
 	for _, m := range cfg.Node.Mirrors {
 		s.paths = append(s.paths, m.Path)
@@ -201,6 +202,9 @@ func (s *mirrorSet) refresh() {
 		case !known || !ok || row.Host != self:
 			d.Reason = "not registered on this host (tailraid mirror add)"
 		}
+		if err == nil && known && ok && row.Host == self {
+			s.lastID[p] = mk.MirrorID
+		}
 		if d.Reason == "" {
 			d.Row = row
 			s.mu.Lock()
@@ -219,9 +223,44 @@ func (s *mirrorSet) refresh() {
 		}
 		seen = append(seen, d)
 	}
+	s.rowsOfDetached(seen, rows, self, ok)
 	s.mu.Lock()
 	s.open, s.seen = open, seen
 	s.mu.Unlock()
+}
+
+// rowsOfDetached names the row of each configured path whose disk is not attached, so
+// status and check still say which mirror is away and warn once it has been away past
+// stale_after (I-188): the row its marker named when it was last seen, or, when exactly
+// one path is detached and exactly one row of this host is unmatched, that row.
+func (s *mirrorSet) rowsOfDetached(seen []mirrorDisk, rows map[string]meta.Node, self meta.NodeIdx, ok bool) {
+	if !ok {
+		return
+	}
+	matched := map[meta.NodeIdx]bool{}
+	var detached []int
+	for i := range seen {
+		d := &seen[i]
+		if d.Row.Idx == 0 && strings.HasPrefix(d.Reason, "not attached") {
+			if row, known := rows[s.lastID[d.Path]]; known && row.Host == self {
+				d.Row = row
+			}
+		}
+		if d.Row.Idx != 0 {
+			matched[d.Row.Idx] = true
+		} else if strings.HasPrefix(d.Reason, "not attached") {
+			detached = append(detached, i)
+		}
+	}
+	var unmatched []meta.Node
+	for id := range rows {
+		if rows[id].Host == self && !matched[rows[id].Idx] {
+			unmatched = append(unmatched, rows[id])
+		}
+	}
+	if len(detached) == 1 && len(unmatched) == 1 {
+		seen[detached[0]].Row = unmatched[0]
+	}
 }
 
 // tick is one minute of the host's mirror work, in this order: refresh, end the syncs
