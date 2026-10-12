@@ -121,7 +121,7 @@ func (s *mirrorSet) sync(ctx context.Context, j syncJob, ready func(context.Cont
 	if d == nil {
 		s.log.Warn("snapshot sync: the mirror is offline", "snapshot", j.sn.Name, "mirror", j.sn.Mirror)
 	} else {
-		man, err := d.m.WriteSnapshot(ctx, stateSource{st: j.clone, read: s.read}, uint64(meta.RootIno), mirror.Manifest{
+		man, err := d.m.WriteSnapshot(ctx, mirror.StateSource(j.clone, s.read), uint64(meta.RootIno), mirror.Manifest{
 			ID: uint32(j.sn.ID), Name: j.sn.Name, Index: j.sn.Index, At: j.sn.At, Auto: j.sn.Auto, ChunkSize: j.clone.Vol.ChunkSize,
 		})
 		if err != nil {
@@ -381,42 +381,6 @@ func (s *mirrorSet) report(now time.Time, snaps []meta.Snapshot) ([]admin.Mirror
 	}
 	return out, warn
 }
-
-// stateSource adapts the FSM clone of a snapshot's index to the mirror writer: the tree
-// reachable from the root, without /.tailraid and the ephemeral names (docs/16 §3).
-type stateSource struct {
-	st   *meta.State
-	read func(ctx context.Context, h meta.Hash) ([]byte, error)
-}
-
-func (s stateSource) Dir(ino uint64) ([]mirror.Entry, error) {
-	dir, ok := s.st.Inodes[meta.Ino(ino)]
-	if !ok || dir.Type != meta.TDir {
-		return nil, fmt.Errorf("no directory %d", ino)
-	}
-	out := make([]mirror.Entry, 0, len(dir.Children))
-	for name, child := range dir.Children {
-		if meta.IsEphemeral(name) || (dir.Ino == meta.RootIno && name == meta.ReservedDir) {
-			continue
-		}
-		in, ok := s.st.Inodes[child]
-		if !ok {
-			return nil, fmt.Errorf("directory %d names a missing inode %d", ino, child)
-		}
-		e := mirror.Entry{Name: name, Type: mirror.EntryType(in.Type), Mode: in.Mode, Uid: in.Uid, Gid: in.Gid, Mtime: in.Mtime, Ino: uint64(in.Ino), Gen: in.Gen}
-		switch in.Type {
-		case meta.TFile:
-			e.Size, e.Chunks = in.Size, in.Chunks
-		case meta.TSymlink:
-			e.Target = in.Target
-		case meta.TDir:
-		}
-		out = append(out, e)
-	}
-	return out, nil
-}
-
-func (s stateSource) Chunk(ctx context.Context, h meta.Hash) ([]byte, error) { return s.read(ctx, h) }
 
 // PrepareMirror marks path as a mirror of this cluster for host (docs/16 §1), or returns
 // the ID of the mirror of this cluster already there (a moved disk re-homes).

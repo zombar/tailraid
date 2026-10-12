@@ -286,7 +286,10 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   §4) restores it; the SMB gateway has no view of the trash.
 - **Snapshots are a folder, not the Previous Versions tab.** `\.snapshots\<mirror>\<name>\`
   reads through the adapter as on NFS, read-only (`EROFS` reaches the wire as
-  `STATUS_ACCESS_DENIED`, docs/07, I-185), and the browser UI lists a file's versions
+  `STATUS_ACCESS_DENIED`, docs/07, I-185: the adapter opens a snapshot file read-only
+  when the read-write open is refused, and `CanDelete` refuses a delete-on-close under
+  it; an attribute-only SET_INFO is ignored there as everywhere on the share), and the
+  browser UI lists a file's versions
   (docs/16 §6). Explorer's Previous Versions tab needs VSS over SMB
   (`FSCTL_SRV_ENUMERATE_SNAPSHOTS`, `@GMT-` path tokens), which the server does not
   implement; out of scope.

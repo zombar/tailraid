@@ -46,7 +46,7 @@ func (n *Node) LeaderRPCAddr() string {
 // to its host's (docs/14 §4).
 func (n *Node) RPCAddrOf(idx meta.NodeIdx) (addr string, self, ok bool) {
 	nd, found := n.FSM.Node(idx)
-	if found && nd.Kind == meta.KindDisk {
+	if found && (nd.Kind == meta.KindDisk || nd.Kind == meta.KindMirror) { // served by its host
 		nd, found = n.FSM.Node(nd.Host)
 	}
 	if !found || nd.Kind != meta.KindDevice || nd.Addr == "" {

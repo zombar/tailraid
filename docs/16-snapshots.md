@@ -13,9 +13,9 @@ holds back garbage collection only for the length of that copy (§4), and from t
 the mirror owns it. Previous versions of a file are its content in the snapshots the
 online mirrors hold.
 
-*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`). The numbers
+*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`); PR 2b built (`/.snapshots` on NFS and SMB, the 24-byte handles, the mirror RPC routes). The numbers
 below are stubs in `test/invariants/` until each PR lands its tests (PR 1 meta and the
-mirror store, PR 2 sync, the tick, the gateways and the CLI, PR 3 the web UI, PR 4 soak
+mirror store, PR 2a sync and the tick, PR 2b the gateways, PR 2c versions and restore, PR 3 the web UI, PR 4 soak
 phase 19).*
 
 ## 1. Mirrors

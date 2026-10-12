@@ -363,9 +363,12 @@ offset  size  field
 A snapshot's tree entries carry the `(Ino, Gen)` the inode had when it was taken, unique
 within the snapshot. A gateway resolves such a handle through a per-snapshot index from
 `(Ino, Gen)` to path, filled as `LOOKUP` and `READDIR` hand handles out and rebuilt by a
-walk of the snapshot's trees on a miss; a catalogue row that is gone, an index without the
-pair, or a mirror that is offline is `NFS3ERR_STALE` (I-185). The 16-byte live layout is
-untouched.
+walk of the snapshot's trees on a miss (the index holds at most 2^20 entries across
+snapshots and starts over when full); a catalogue row that is gone or deleting, an index
+without the pair, or a mirror that is offline is `NFS3ERR_STALE` (I-185). `SnapID` 0 names
+the synthetic directories: `Ino` 0 and `Gen` 0 is `/.snapshots`, `Gen` `0xFFFFFFFF` with
+`Ino` a mirror's row is that mirror's directory; `Ino` 0 and `Gen` 0 under a real `SnapID`
+is the snapshot's root. The 16-byte live layout is untouched.
 
 ## Node budget
 

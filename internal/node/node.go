@@ -336,7 +336,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	node.FSM.SetSnapshotHook(mirrors.onBegin)
 	defer node.FSM.SetSnapshotHook(nil)
 	ops.mirrors, ops.mirrorPol = mirrors, mpol
-	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
+	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, live: prober.IsLive}) // /.snapshots (docs/16 §6)
+	webAddr := ""                                                                                  // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
 	}
@@ -366,7 +367,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	defer reporter.Close()
 	status := func(fresh bool) any { return reporter.Get(fresh) }
 	srv, err := rpc.NewServer(rpc.Options{
-		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Applier: node, Fence: fence{node},
+		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),

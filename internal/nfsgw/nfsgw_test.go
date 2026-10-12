@@ -23,6 +23,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/nfsgw"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 func TestMain(m *testing.M) {
@@ -36,6 +37,7 @@ var ctx = context.Background()
 type gateway struct {
 	t   *testing.T
 	f   *testharness.Fabric
+	fs  *vfs.FS
 	tgt *nfsc.Target
 	cl  *rpc.Client
 }
@@ -58,7 +60,8 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	if prep != nil {
 		prep(f)
 	}
-	h := nfsgw.New(f.FS(), f.FSM)
+	fs := f.FS()
+	h := nfsgw.New(fs, f.FSM)
 	l, err := nfsgw.Listen(t.Context(), "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +102,7 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &gateway{t: t, f: f, tgt: tgt, cl: cl}
+	return &gateway{t: t, f: f, fs: fs, tgt: tgt, cl: cl}
 }
 
 // writeAt performs the WRITE sequence a kernel client would: open, seek, write.

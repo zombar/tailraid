@@ -90,9 +90,21 @@ func (h *Handler) FSStat(_ context.Context, _ billy.Filesystem, s *nfs.FSStat) e
 	return nil
 }
 
-// ToHandle encodes the inode behind path. Unknown paths yield an empty handle, which
-// FromHandle rejects as stale.
+// readOnly is the filesystem a /.snapshots handle resolves to: the same vfs without the
+// write capability, so go-nfs answers every mutation under it NFS3ERR_ROFS, and a RENAME
+// across the boundary NFS3ERR_NOTSUPP (two filesystems, I-185).
+type readOnly struct{ *vfs.FS }
+
+func (readOnly) Capabilities() billy.Capability {
+	return billy.ReadCapability | billy.SeekCapability
+}
+
+// ToHandle encodes the inode behind path, or the 24-byte handle of an entry under
+// /.snapshots. Unknown paths yield an empty handle, which FromHandle rejects as stale.
 func (h *Handler) ToHandle(_ billy.Filesystem, path []string) []byte {
+	if sh, ok := h.fs.SnapshotHandle(path); ok {
+		return meta.EncodeSnapHandle(sh)
+	}
 	in, err := h.st.Resolve(path)
 	if err != nil {
 		return nil
@@ -102,6 +114,13 @@ func (h *Handler) ToHandle(_ billy.Filesystem, path []string) []byte {
 
 // FromHandle resolves a handle to the current path of its inode.
 func (h *Handler) FromHandle(fh []byte) (billy.Filesystem, []string, error) {
+	if sh, ok := meta.DecodeSnapHandle(fh); ok {
+		path, found := h.fs.SnapshotPath(sh)
+		if !found {
+			return nil, nil, &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusStale, WrappedErr: fmt.Errorf("snapshot handle %+v", sh)}
+		}
+		return readOnly{h.fs}, path, nil
+	}
 	ino, gen, ok := meta.DecodeHandle(fh)
 	if !ok {
 		return nil, nil, &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusStale, WrappedErr: errors.New("malformed handle")}
@@ -127,11 +146,10 @@ var _ nfs.CachingHandler = (*Handler)(nil)
 // so the following pages of the same READDIR(PLUS) do not list and sort the directory
 // again (docs/07).
 func (h *Handler) VerifierFor(path string, contents []iofs.FileInfo) uint64 {
-	in, err := h.st.Resolve(meta.SplitPath(path))
-	if err != nil {
+	key, ok := h.dirKeyOf(path)
+	if !ok {
 		return hashListing(path, contents)
 	}
-	key := dirKey{Ino: in.Ino, Gen: in.Gen, Version: in.Version}
 	v := key.verifier(path)
 	h.dirs.put(v, key, contents)
 	return v
@@ -144,11 +162,28 @@ func (h *Handler) DataForVerifier(path string, verifier uint64) []iofs.FileInfo 
 	if !ok {
 		return nil
 	}
-	in, err := h.st.Resolve(meta.SplitPath(path))
-	if err != nil || in.Ino != key.Ino || in.Gen != key.Gen || in.Version != key.Version {
+	if now, ok := h.dirKeyOf(path); !ok || now != key {
 		return nil
 	}
 	return contents
+}
+
+// dirKeyOf is what a directory's listing depends on: its inode's identity and Version,
+// or, in a snapshot, the hash of its tree (immutable, docs/07). The directories above a
+// snapshot's tree have none and fall back to hashing the listing.
+func (h *Handler) dirKeyOf(path string) (dirKey, bool) {
+	parts := meta.SplitPath(path)
+	if th, ok := h.fs.SnapshotTreeHash(parts); ok {
+		return dirKey{Tree: th}, true
+	}
+	if len(parts) > 0 && parts[0] == vfs.SnapshotDir {
+		return dirKey{}, false
+	}
+	in, err := h.st.Resolve(parts)
+	if err != nil {
+		return dirKey{}, false
+	}
+	return dirKey{Ino: in.Ino, Gen: in.Gen, Version: in.Version}, true
 }
 
 // hashListing is the verifier for a path that no longer resolves (go-nfs's own scheme).
@@ -166,6 +201,7 @@ type dirKey struct {
 	Ino     meta.Ino
 	Gen     uint32
 	Version uint64
+	Tree    meta.Hash // a snapshot's directory: its tree
 }
 
 func (k dirKey) verifier(path string) uint64 {
@@ -176,6 +212,7 @@ func (k dirKey) verifier(path string) uint64 {
 	binary.LittleEndian.PutUint32(b[8:12], k.Gen)
 	binary.LittleEndian.PutUint64(b[12:], k.Version)
 	_, _ = h.Write(b[:])
+	_, _ = h.Write(k.Tree[:])
 	v := h.Sum64()
 	if v == 0 {
 		v = 1 // 0 means "no verifier" on the wire

@@ -22,6 +22,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/mirror"
 )
 
 // ShardStore is what the shard endpoints need from chunk.Store.
@@ -86,25 +87,28 @@ type Options struct {
 	// lists every configured disk for /health. Both nil on a diskless host (docs/14 §9).
 	Disk       func(id string) (ShardStore, meta.NodeIdx, bool)
 	DiskHealth func() []DiskHealth
-	Applier    Applier
-	Fence      Fence
-	Joiner     Joiner
-	Admin      Admin
-	Auth       Authorizer
-	Members    func() []meta.Node
-	JoinToken  func() string
-	Status     func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
-	Stats      func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
-	Web        uint16                // the browser UI's port for /health (0 when off)
-	BadSlot    func(key chunk.ShardKey, node meta.NodeIdx)
-	Dev        http.Handler           // /dev/* (docs/08): nil unless dev.enabled
-	Blocked    func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
-	Clk        clock.Clock
-	Logger     *slog.Logger
-	MaxShard   int64         // PUT body cap; default 2 MiB
-	Grace      time.Duration // DELETE fence minimum shard age; default 10 min
-	PutSlots   int           // concurrent PUTs; default 16
-	GetSlots   int           // concurrent GETs; default 32
+	// Mirror looks up a mirror open on this host by its row (docs/16 §6); nil on a host
+	// with none.
+	Mirror    func(idx meta.NodeIdx) (*mirror.Mirror, bool)
+	Applier   Applier
+	Fence     Fence
+	Joiner    Joiner
+	Admin     Admin
+	Auth      Authorizer
+	Members   func() []meta.Node
+	JoinToken func() string
+	Status    func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
+	Stats     func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
+	Web       uint16                // the browser UI's port for /health (0 when off)
+	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
+	Dev       http.Handler           // /dev/* (docs/08): nil unless dev.enabled
+	Blocked   func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
+	Clk       clock.Clock
+	Logger    *slog.Logger
+	MaxShard  int64         // PUT body cap; default 2 MiB
+	Grace     time.Duration // DELETE fence minimum shard age; default 10 min
+	PutSlots  int           // concurrent PUTs; default 16
+	GetSlots  int           // concurrent GETs; default 32
 	// BodyTimeout bounds reading a PUT or apply body and writing a GET body, so a peer
 	// that stalls mid-transfer cannot hold a slot (I-97); default callTimeout(MaxShard).
 	BodyTimeout time.Duration
@@ -177,6 +181,7 @@ func NewServer(o Options) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
+	mux.Handle("GET /v1/mirrors/{idx}/{kind}/{hash}", s.clusterCheck(s.member(http.HandlerFunc(s.mirrorGet))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
 	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership, or the update_addr exception (docs/08 step 6, I-93)
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))

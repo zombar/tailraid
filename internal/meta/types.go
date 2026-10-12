@@ -557,6 +557,43 @@ func DecodeHandle(b []byte) (ino Ino, gen uint32, ok bool) {
 	return Ino(binary.BigEndian.Uint64(b[8:16])), binary.BigEndian.Uint32(b[4:8]), true
 }
 
+// SnapHandleMagic opens a handle under /.snapshots ("TRHS"), SnapHandleLen its size
+// (docs/01 §NFS file handle).
+const (
+	SnapHandleMagic uint32 = 0x54524853
+	SnapHandleLen   int    = 24
+)
+
+// SnapGenMirror is the Gen of a mirror's directory handle, whose Ino is the mirror's row.
+const SnapGenMirror uint32 = 1<<32 - 1
+
+// SnapHandle names an entry under /.snapshots (I-185): Snap 0 is a synthetic directory
+// (Ino 0 /.snapshots itself, Gen SnapGenMirror a mirror's), otherwise the entry of
+// snapshot Snap whose tree recorded (Ino, Gen); Ino 0 is the snapshot's root.
+type SnapHandle struct {
+	Snap SnapID
+	Gen  uint32
+	Ino  uint64
+}
+
+// EncodeSnapHandle builds the 24-byte handle magic | snap | gen | ino | zero.
+func EncodeSnapHandle(h SnapHandle) []byte {
+	b := make([]byte, SnapHandleLen)
+	binary.BigEndian.PutUint32(b[0:4], SnapHandleMagic)
+	binary.BigEndian.PutUint32(b[4:8], uint32(h.Snap))
+	binary.BigEndian.PutUint32(b[8:12], h.Gen)
+	binary.BigEndian.PutUint64(b[12:20], h.Ino)
+	return b
+}
+
+// DecodeSnapHandle parses a handle produced by EncodeSnapHandle; ok is false otherwise.
+func DecodeSnapHandle(b []byte) (SnapHandle, bool) {
+	if len(b) != SnapHandleLen || binary.BigEndian.Uint32(b[0:4]) != SnapHandleMagic || binary.BigEndian.Uint32(b[20:24]) != 0 {
+		return SnapHandle{}, false
+	}
+	return SnapHandle{Snap: SnapID(binary.BigEndian.Uint32(b[4:8])), Gen: binary.BigEndian.Uint32(b[8:12]), Ino: binary.BigEndian.Uint64(b[12:20])}, true
+}
+
 // NewJoinToken returns a fresh join token: 8 random base32 characters (docs/08 §Join).
 func NewJoinToken() string {
 	var b [5]byte

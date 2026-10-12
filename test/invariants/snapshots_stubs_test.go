@@ -8,10 +8,6 @@ import "testing"
 // table (PR 2 sync, the tick, the gateways and the CLI, PR 3 the web UI, PR 4 soak
 // phase 19).
 
-// Invariant: I-185
-// Becomes: TestNFS_SnapshotsDir_HiddenResolvesLists, TestNFS_SnapshotRead_PoolThenMirror, TestNFS_SnapshotHandle_StaleTable (PR 2).
-func TestStub_I_185(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/07-nfs-gateway.md") }
-
 // Invariant: I-186
 // Becomes: TestVFS_Revert_FromPoolAndMirror, TestVFS_RestoreTree_SkipsExisting, TestCluster_RestoreAfterGC_UploadsFromMirror (PR 2).
 func TestStub_I_186(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/16-snapshots.md") }
