@@ -348,10 +348,11 @@ the same way: `mirror add` and every snapshot command are `ErrCodec` until every
 member reads it, so no node ever applies a hold it cannot see (I-184). Codec 9 is gated
 by the gateway before it proposes: a codec-9 entry forwarded to a leader that predates
 it fails to decode there (a malformed command, not `ErrCodec`), so the flusher sends
-`Rewrite`/`RewriteStart` and the SMB gateway `Trash.Expect` and `Rename.NoReplace`
-only while the prober's `MinCodec` is 9 or more (`meta.CodecRewrite`); before that a
+`Rewrite`/`RewriteStart`, the SMB gateway `Trash.Expect` and `Rename.NoReplace`, and
+the browser's exclusive publish `Rename.NoReplace` only while the prober's `MinCodec` is 9 or more (`meta.CodecRewrite`); before that a
 replacing copy commits as plain writes (04 §6), a delete-on-close checks the inode
-itself and a no-replace rename looks the name up first (I-223..I-226).
+itself and a no-replace rename looks the name up first, on this gateway only, so two
+exclusive uploads through two gateways can then both succeed (I-223..I-226).
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
@@ -616,8 +617,9 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-222** — An exclusive create of one name succeeds exactly once across the cluster:
   `vfs.OpenFile` with `O_CREATE|O_EXCL` answers `EEXIST` when the name resolves locally
   and also when its `Create` proposal returns `ErrExist`, never opening or truncating the
-  file another gateway created; SMB `FILE_CREATE`, NFS CREATE `GUARDED` and the browser's
-  `If-None-Match: *` publish all go through it, so two clients creating one name on two
+  file another gateway created; SMB `FILE_CREATE` (`MkdirExcl` for a directory) and NFS
+  CREATE `GUARDED` go through it, and the browser's `If-None-Match: *` publish through
+  `Rename.NoReplace`, decided by the FSM likewise once every member reads codec 9, so two clients creating one name on two
   gateways, or on one gateway over two connections, see one success and one
   `EEXIST`/`STATUS_OBJECT_NAME_COLLISION`/`NFS3ERR_EXIST`/412, and the file holds the
   winner's bytes; a refused proposal is waited for at its index, so the winner's file
