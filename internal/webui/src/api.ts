@@ -382,6 +382,10 @@ export interface MediaItem {
   fanart?: string;
   thumb?: string;
   video?: string;
+  /** the video's inode and version and whether its frame is stored: the page grabs a missing one (docs/13 §10) */
+  video_ino?: number;
+  video_version?: number;
+  video_thumb?: boolean;
   size?: number;
   added: string;
   nsfw: boolean;

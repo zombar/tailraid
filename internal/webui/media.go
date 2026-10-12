@@ -31,34 +31,39 @@ type MediaLib struct {
 
 // MediaItem is a film, show, season, episode or album (docs/13 §3).
 type MediaItem struct {
-	Ino        meta.Ino      `json:"ino"`
-	Path       string        `json:"path"`
-	Kind       string        `json:"kind"` // movie | show | season | episode | album
-	Title      string        `json:"title"`
-	SortTitle  string        `json:"sort_title"`
-	Year       int           `json:"year,omitempty"`
-	Genres     []string      `json:"genres,omitempty"`
-	Rating     string        `json:"rating,omitempty"`
-	Runtime    int           `json:"runtime,omitempty"`
-	MPAA       string        `json:"mpaa,omitempty"`
-	Artist     string        `json:"artist,omitempty"`
-	Poster     string        `json:"poster,omitempty"` // volume paths
-	Fanart     string        `json:"fanart,omitempty"`
-	Thumb      string        `json:"thumb,omitempty"`
-	Video      string        `json:"video,omitempty"` // the file a film or an episode plays
-	Size       uint64        `json:"size,omitempty"`
-	Added      time.Time     `json:"added"`
-	NSFW       bool          `json:"nsfw"`
-	Children   int           `json:"children,omitempty"` // a show's seasons, an album's tracks
-	Plot       string        `json:"plot,omitempty"`
-	People     []string      `json:"people,omitempty"`
-	Season     int           `json:"season,omitempty"`
-	Episode    int           `json:"episode,omitempty"`
-	EpisodeTo  int           `json:"episode_to,omitempty"`
-	Aired      string        `json:"aired,omitempty"`
-	Seasons    []MediaSeason `json:"seasons,omitempty"`
-	Tracks     []string      `json:"tracks,omitempty"` // an album's audio files, by name
-	Catalogued bool          `json:"catalogued"`       // false: named from the tree only, until the next pass
+	Ino       meta.Ino `json:"ino"`
+	Path      string   `json:"path"`
+	Kind      string   `json:"kind"` // movie | show | season | episode | album
+	Title     string   `json:"title"`
+	SortTitle string   `json:"sort_title"`
+	Year      int      `json:"year,omitempty"`
+	Genres    []string `json:"genres,omitempty"`
+	Rating    string   `json:"rating,omitempty"`
+	Runtime   int      `json:"runtime,omitempty"`
+	MPAA      string   `json:"mpaa,omitempty"`
+	Artist    string   `json:"artist,omitempty"`
+	Poster    string   `json:"poster,omitempty"` // volume paths
+	Fanart    string   `json:"fanart,omitempty"`
+	Thumb     string   `json:"thumb,omitempty"`
+	Video     string   `json:"video,omitempty"` // the file a film or an episode plays
+	// the video's inode and version and whether its frame is stored: the page grabs and
+	// PUTs a missing frame as the file browser does (docs/13 §5, §10)
+	VideoIno     meta.Ino      `json:"video_ino,omitempty"`
+	VideoVersion uint64        `json:"video_version,omitempty"`
+	VideoThumb   bool          `json:"video_thumb,omitempty"`
+	Size         uint64        `json:"size,omitempty"`
+	Added        time.Time     `json:"added"`
+	NSFW         bool          `json:"nsfw"`
+	Children     int           `json:"children,omitempty"` // a show's seasons, an album's tracks
+	Plot         string        `json:"plot,omitempty"`
+	People       []string      `json:"people,omitempty"`
+	Season       int           `json:"season,omitempty"`
+	Episode      int           `json:"episode,omitempty"`
+	EpisodeTo    int           `json:"episode_to,omitempty"`
+	Aired        string        `json:"aired,omitempty"`
+	Seasons      []MediaSeason `json:"seasons,omitempty"`
+	Tracks       []string      `json:"tracks,omitempty"` // an album's audio files, by name
+	Catalogued   bool          `json:"catalogued"`       // false: named from the tree only, until the next pass
 }
 
 // MediaSeason is one season of a show and its episodes.
@@ -157,7 +162,20 @@ func (v mediaView) item(in meta.Inode, p, kind string) MediaItem {
 	if it.SortTitle == "" {
 		it.SortTitle = search.SortTitle(it.Title)
 	}
+	v.video(&it)
 	return it
+}
+
+// video fills the video's inode, version and stored-frame flag from it.Video.
+func (v mediaView) video(it *MediaItem) {
+	if it.Video == "" {
+		return
+	}
+	in, err := v.s.o.Store.Resolve(meta.SplitPath(it.Video))
+	if err != nil || in.Type != meta.TFile {
+		return
+	}
+	it.VideoIno, it.VideoVersion, it.VideoThumb = in.Ino, in.Version, v.s.hasThumb(in)
 }
 
 // liveKids is a folder's children a listing shows: live, not ephemeral, not hidden.
@@ -315,6 +333,7 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 		if in.Type == meta.TDir && it.Video == "" {
 			if vid, ok := v.firstVideo(in.Ino); ok {
 				it.Video = path.Join(p, vid.Name)
+				v.video(&it)
 			}
 		}
 	case lib == meta.LibraryTV && in.Type == meta.TDir:

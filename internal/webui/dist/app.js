@@ -3223,6 +3223,11 @@ function art(it) {
   if (it.video) return thumbURL(it.video);
   return void 0;
 }
+function frameOf(img, it, onMiss) {
+  if (it.poster || it.thumb || !it.video || it.video_ino === void 0) return false;
+  lazy(img, { ino: it.video_ino, version: it.video_version ?? 0, thumb: it.video_thumb }, it.video, void 0, "video", onMiss);
+  return true;
+}
 function sub(it) {
   if (it.kind === "album") return [it.artist, it.year].filter(Boolean).join(" \xB7 ");
   const parts = [];
@@ -3241,7 +3246,9 @@ function posterTile(it) {
     a.classList.add("missing");
   };
   const src = art(it);
-  if (src) {
+  const frame2 = h("img", { alt: "" });
+  if (frameOf(frame2, it, missing)) box.append(frame2);
+  else if (src) {
     const img = h("img", { alt: "", loading: "lazy", src });
     img.addEventListener("error", missing);
     box.append(img);
@@ -3354,8 +3361,12 @@ function detail(root, path) {
       const section = h("section", { class: cls });
       if (backdrop) section.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
       const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
-      const poster = h("img", { class: "hero-poster", alt: "", src: posterSrc || void 0 });
-      poster.addEventListener("error", () => poster.style.visibility = "hidden");
+      const poster = h("img", { class: "hero-poster", alt: "" });
+      const hide = () => poster.style.visibility = "hidden";
+      if (!frameOf(poster, it, hide)) {
+        if (posterSrc) poster.src = posterSrc;
+        poster.addEventListener("error", hide);
+      }
       const facts = h("div", { class: "facts" });
       const seasons = it.seasons ?? [];
       const episodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
@@ -3396,8 +3407,13 @@ function detail(root, path) {
           clear(tbody);
           for (const e of seasons[i].episodes) {
             const thumb = h("td", { class: "thumb" });
-            const img = h("img", { alt: "", loading: "lazy", src: thumbURL(e.thumb || e.path) });
-            img.addEventListener("error", () => img.replaceWith(glyph("episode")));
+            const img = h("img", { alt: "" });
+            const miss = () => img.replaceWith(glyph("episode"));
+            if (!frameOf(img, e, miss)) {
+              img.loading = "lazy";
+              img.src = thumbURL(e.thumb || e.path);
+              img.addEventListener("error", miss);
+            }
             thumb.append(img);
             const title = h("td", { class: "title" }, e.title);
             if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));

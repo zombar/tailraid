@@ -55,8 +55,11 @@ function pump(): void {
   }
 }
 
+/** Thumbable is what a thumbnail needs of a file: a listing entry, or a media item's video (docs/13 §10). */
+export type Thumbable = Pick<Entry, "ino" | "version" | "thumb">;
+
 /** lazy schedules img to show the thumbnail of path once it is near the viewport; onMiss replaces it with the generic icon. */
-export function lazy(img: HTMLImageElement, e: Entry, path: string, root: number | undefined, kind: "image" | "video" | "audio", onMiss: () => void): void {
+export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: number | undefined, kind: "image" | "video" | "audio", onMiss: () => void): void {
   const load = () =>
     new Promise<void>((resolve) => {
       const done = () => resolve();
@@ -91,7 +94,7 @@ export function lazy(img: HTMLImageElement, e: Entry, path: string, root: number
 }
 
 /** grab chooses a frame of the video and stores it; one attempt per file, version and recipe per session. */
-async function grab(path: string, e: Entry): Promise<boolean> {
+async function grab(path: string, e: Thumbable): Promise<boolean> {
   const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
   if (session.get(key, false)) return false;
   session.set(key, true);
