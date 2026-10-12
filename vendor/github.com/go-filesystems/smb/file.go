@@ -619,6 +619,7 @@ func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []b
 		unlock := lockUnlessConcurrent(of.share)
 		reply := writeAt(h, of, data, offset)
 		unlock()
+		c.trace("write_done", "session", h.sessionID, "msg", h.messageID, "path", of.p(), "ino", of.ino, "len", len(data), "off", offset, "status", fmt.Sprintf("%#x", replyStatus(reply)))
 		done <- reply
 		if op := <-later; op != nil {
 			c.finishAsyncWith(op, asFinal(reply, op.asyncID), key)
