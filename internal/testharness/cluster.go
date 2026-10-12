@@ -121,6 +121,10 @@ type ClusterNode struct {
 	disks   nodeDisks    // the node's disks (docs/14), kept across restarts; the first is its Store
 	idx     meta.NodeIdx // the device row's index, recorded at bootstrap or join
 	s3      nodeS3Keys   // this node's S3 credentials (docs/10 §4.1), kept across restarts
+	// lifecycle serialises Kill and Restart of this node: Kill marks the node dead before
+	// it has torn it down, and a test that restarts it on seeing it dead (one killed from
+	// a flusher hook on another goroutine) must not start it under the teardown
+	lifecycle sync.Mutex
 }
 
 // RaftTiming is the harness's shortened Raft timing: quick elections, but a lease long
@@ -647,6 +651,8 @@ func (c *Cluster) Probe() {
 func (c *Cluster) Kill(i int) {
 	c.T.Helper()
 	nd := c.Nodes[i]
+	nd.lifecycle.Lock()
+	defer nd.lifecycle.Unlock()
 	if !c.isAlive(nd) {
 		return
 	}
@@ -680,6 +686,8 @@ func (c *Cluster) Kill(i int) {
 func (c *Cluster) Restart(i int) {
 	c.T.Helper()
 	nd := c.Nodes[i]
+	nd.lifecycle.Lock()
+	defer nd.lifecycle.Unlock()
 	if c.isAlive(nd) {
 		return
 	}
