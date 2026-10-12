@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 // Entry is one directory entry or stat result (docs/13 §3).
@@ -37,16 +38,18 @@ type Entry struct {
 }
 
 // DirInfo describes the listed folder itself: the effective flags (its own or an
-// ancestor's), whether this node keeps it, and its place in the trash.
+// ancestor's), whether this node keeps it, its place in the trash, and the snapshot it is
+// read as of (at=).
 type DirInfo struct {
-	Protected bool   `json:"protected"`
-	NSFW      bool   `json:"nsfw"`
-	Library   string `json:"library,omitempty"` // effective: the nearest flagged ancestor's kind (docs/18 §9)
-	Pinned    bool   `json:"pinned"`
-	DeletedAt string `json:"deleted_at,omitempty"`
-	PurgeAt   string `json:"purge_at,omitempty"`
-	Cover     string `json:"cover,omitempty"`
-	NoCover   bool   `json:"no_cover,omitempty"`
+	Snapshot  *SnapInfo `json:"snapshot,omitempty"`
+	Protected bool      `json:"protected"`
+	NSFW      bool      `json:"nsfw"`
+	Library   string    `json:"library,omitempty"` // effective: the nearest flagged ancestor's kind (docs/18 §9)
+	Pinned    bool      `json:"pinned"`
+	DeletedAt string    `json:"deleted_at,omitempty"`
+	PurgeAt   string    `json:"purge_at,omitempty"`
+	Cover     string    `json:"cover,omitempty"`
+	NoCover   bool      `json:"no_cover,omitempty"`
 }
 
 // cleanPath resolves ".", "..", repeated and backslash separators (meta.SplitPath) and
@@ -62,19 +65,25 @@ func reserved(parts []string) bool {
 	return len(parts) > 0 && parts[0] == meta.ReservedDir
 }
 
-// target is a resolved request path: live, or inside the deleted root `in` (§4).
+// target is a resolved request path: live, inside the deleted root `in` (§4), or as of
+// the snapshot `at` (docs/16 §6), where in carries the snapshot entry's fields.
 type target struct {
 	in        meta.Inode
 	parts     []string
 	canonical string
 	root      meta.Inode // the deleted root when addressed with in=
 	trashed   bool
+	snap      *vfs.SnapshotRef // the snapshot when addressed with at=
+	vpath     string           // the entry's /.snapshots path when snap is set
 }
 
-// resolveTarget resolves the path (and `in`) of a read request.
+// resolveTarget resolves the path (and `in` or `at`) of a read request.
 func (s *Server) resolveTarget(r *http.Request, raw string) (target, error) {
 	parts, canonical := cleanPath(raw)
 	t := target{parts: parts, canonical: canonical}
+	if r.URL.Query().Has("at") {
+		return s.resolveAt(r, t)
+	}
 	if q := r.URL.Query().Get("in"); q != "" {
 		ino, err := strconv.ParseUint(q, 10, 64)
 		if err != nil {
@@ -187,6 +196,10 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, fmt.Errorf("ls %s: %w", t.canonical, meta.ErrNotDir))
 		return
 	}
+	if t.snap != nil {
+		s.lsAt(w, t)
+		return
+	}
 	kids, err := s.o.Store.ReadDir(t.in.Ino)
 	if err != nil {
 		s.fail(w, err)
@@ -236,6 +249,12 @@ func (s *Server) stat(w http.ResponseWriter, r *http.Request) {
 	live := ""
 	if !t.trashed {
 		live = t.canonical
+	}
+	if t.snap != nil {
+		e := snapEntry(t.in)
+		e.Path = t.canonical
+		writeJSON(w, http.StatusOK, e)
+		return
 	}
 	e := s.entry(t.in, live)
 	e.Path = t.canonical
@@ -299,14 +318,22 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		Seek(int64, int) (int64, error)
 		Close() error
 	}
-	if t.trashed {
+	switch {
+	case t.snap != nil: // a snapshot never changes: its ID and the entry name the bytes
+		f, err = s.o.FS.Open(t.vpath)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		h.Set("ETag", fmt.Sprintf(`"s%d.%d.%d"`, t.snap.Snapshot.ID, in.Ino, in.Gen))
+	case t.trashed:
 		f, err = s.o.FS.OpenTrash(t.root.Ino, t.parts)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		h.Set("ETag", fmt.Sprintf(`"%d.%d.%d"`, in.Ino, in.Gen, in.Version))
-	} else {
+	default:
 		f, err = s.o.FS.Open(canonical)
 		if err != nil {
 			s.fail(w, err)

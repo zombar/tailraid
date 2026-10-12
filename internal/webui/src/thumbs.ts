@@ -2,7 +2,7 @@
 // three at a time; a video without a stored thumbnail has a frame chosen by the browser
 // and PUT once per file, version and recipe.
 
-import { fileURL, putThumb, thumbURL, type Entry } from "./api.ts";
+import { fileURL, putThumb, thumbURL, type Entry, type Src } from "./api.ts";
 import { session } from "./util.ts";
 
 const CONCURRENT = 3;
@@ -59,7 +59,7 @@ function pump(): void {
 export type Thumbable = Pick<Entry, "ino" | "version" | "thumb">;
 
 /** lazy schedules img to show the thumbnail of path once it is near the viewport; onMiss replaces it with the generic icon. */
-export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: number | undefined, kind: "image" | "video" | "audio", onMiss: () => void): void {
+export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Src, kind: "image" | "video" | "audio", onMiss: () => void): void {
   const load = () =>
     new Promise<void>((resolve) => {
       const done = () => resolve();

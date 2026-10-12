@@ -168,7 +168,8 @@ func printStatus(w io.Writer, r admin.Report) {
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
 	}
-	for _, m := range r.Mirrors { // this host's mirrors (docs/12 §11)
+	for i := range r.Mirrors { // every mirror of the cluster, from the probes (docs/12 §11)
+		m := &r.Mirrors[i]
 		state := "offline (" + m.Reason + ")"
 		if m.Online {
 			state = fmt.Sprintf("online · %s used, %s free", bytesStr(uint64(max(m.Used, 0))), bytesStr(m.Free))
@@ -177,8 +178,8 @@ func printStatus(w io.Writer, r admin.Report) {
 		if m.Newest != 0 {
 			newest = "newest " + time.Unix(0, m.Newest).Local().Format("2006-01-02 15:04")
 		}
-		if m.Syncing != "" {
-			newest += " · syncing " + m.Syncing
+		if m.Syncing != nil {
+			newest += fmt.Sprintf(" · syncing %s %d %%", m.Syncing.Snapshot, m.Syncing.Percent())
 		}
 		fmt.Fprintf(w, "mirror  %s  %s · %s\n", cmp.Or(m.Name, m.Path), state, newest)
 	}

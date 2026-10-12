@@ -483,8 +483,10 @@ mirrors:
 `every` is at least a minute or `0`, a `keep` count at most 10 000, `hold_max` at least an
 hour, and each key is written only when set, so a rollback reads the file (I-61).
 
-`status --json` carries `mirrors[{name, host, online, used, free, newest, syncing{snapshot,
-read, total, bytes_new}}]` and `volume.snapshots`; `tailraid status` prints one line per
+`status --json` carries `mirrors[{name, host, path, online, reason, used, free, total,
+last_seen, newest, syncing{id, snapshot, read, total, bytes_new}}]` for every mirror of the
+cluster, from the probes (docs/16 §1; `path` only on the mirror's own host), and
+`volume.snapshots`; `tailraid status` prints one line per
 mirror (`mirror  pike/m1  online · 1.2 TiB used, 2.4 TiB free · newest 12 min ago ·
 syncing 41 %`). `check` warns when a mirror has been offline longer than
 `mirrors.stale_after`, when an online mirror's newest snapshot is older than `2 × every`,
@@ -619,4 +621,4 @@ volume's bytes in the clear: keep the disk where the data may be.
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
 | I-221 | `TestWaitIdle_Table`, `TestWaitIdle_StatusUnreadable_ReturnsAtOnce` |
 | I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |
-| I-188 | `TestConfig_Mirrors`, `TestAdminOps_NoSnapshotDelete`, `TestAdminOps_RestoreAndVersions`, `TestCLI_SplitSnapshotRef`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`, `TestCLI_MirrorAdd_MarkRehomeAdopt`, `TestCLI_MirrorRemove_LeavesDisk`, `TestCLI_Export`, `TestMirror_AdoptKeepsIDRewritesCluster`; `TestCheck_MirrorWarnings`; planned: TestMirror_OnlineFollowsMarkerAndHost, TestReport_MirrorFields, `TestSoak_AllPhasesAgainstHarness` |
+| I-188 | `TestConfig_Mirrors`, `TestAdminOps_NoSnapshotDelete`, `TestAdminOps_RestoreAndVersions`, `TestCLI_SplitSnapshotRef`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`, `TestCLI_MirrorAdd_MarkRehomeAdopt`, `TestCLI_MirrorRemove_LeavesDisk`, `TestCLI_Export`, `TestMirror_AdoptKeepsIDRewritesCluster`, `TestCheck_MirrorWarnings`, `TestMirror_OnlineFollowsMarkerAndHost`, `TestMirrorSet_HealthCarriesSyncProgress`, `TestReport_MirrorFields`; planned: `TestSoak_AllPhasesAgainstHarness` |

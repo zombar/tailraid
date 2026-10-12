@@ -10,7 +10,7 @@ import (
 
 // The gateways read a mirror from its disk when it is open on this host; a mirror of this
 // host whose disk is detached is offline at once (no RPC to itself); a mirror on another
-// host is online while that host is live (docs/16 §6).
+// host is online while the probes say so: its host live and listing it online (docs/16 §1, §6).
 //
 // Invariant: I-185
 func TestMirrorSource_LocalDetachedRemote(t *testing.T) {
@@ -19,8 +19,8 @@ func TestMirrorSource_LocalDetachedRemote(t *testing.T) {
 	r.s.tick(context.Background())
 	r.drain()
 	sn := r.f.Snapshots()[0]
-	hostLive := false
-	src := mirrorSource{local: r.s, st: r.f, live: func(meta.NodeIdx) bool { return hostLive }}
+	remoteOnline := false
+	src := mirrorSource{local: r.s, st: r.f, online: func(meta.NodeIdx) bool { return remoteOnline }}
 
 	if !src.Online(r.mirror) {
 		t.Fatal("an open local mirror is offline")
@@ -48,11 +48,11 @@ func TestMirrorSource_LocalDetachedRemote(t *testing.T) {
 	other := meta.NodeIdx(r.ok(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "dev-2", Name: "h2", Kind: meta.KindDevice, Addr: "100.64.0.2"}}}).Ino)
 	remote := meta.NodeIdx(r.ok(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "m-2", Name: "h2/m1", Kind: meta.KindMirror, Host: other}}}).Ino)
 	if src.Online(remote) {
-		t.Fatal("a mirror on a dead host is online")
+		t.Fatal("a mirror the probes call offline is online")
 	}
-	hostLive = true
+	remoteOnline = true
 	if !src.Online(remote) {
-		t.Fatal("a mirror on a live host is offline")
+		t.Fatal("a mirror the probes call online is offline")
 	}
 	if src.Online(other) {
 		t.Fatal("a device row is a mirror")

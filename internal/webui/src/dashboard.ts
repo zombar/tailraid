@@ -8,6 +8,7 @@ import { status } from "./status.ts";
 import * as balance from "./balance.ts";
 import * as disks from "./disks.ts";
 import * as integrity from "./integrity.ts";
+import * as snaps from "./snapshots.ts";
 import type { Report } from "./api.ts";
 
 export function render(root: HTMLElement): () => void {
@@ -22,9 +23,25 @@ export function render(root: HTMLElement): () => void {
     disks.render(root, r);
     balance.render(root, r);
     integrity.render(root, r, status.history);
+    const mirrors = snaps.section(snaps.last(), draw); // docs/13 §7: after Integrity
+    if (mirrors) root.append(mirrors);
     cache(root, r);
   };
-  const unsub = status.subscribe(draw);
+  // the catalogue is fetched beside the status, at most every few seconds; a fetch that
+  // brings it draws again
+  let drawn = snaps.last();
+  const unsub = status.subscribe(() => {
+    draw();
+    snaps.catalogue().then(
+      (c) => {
+        if (c !== drawn) {
+          drawn = c;
+          draw();
+        }
+      },
+      () => undefined,
+    );
+  });
   draw();
   return unsub;
 }
@@ -39,6 +56,8 @@ function volume(root: HTMLElement, r: Report): void {
     tile("Dedup", v.dedup_ratio.toFixed(2) + "×", bytes(v.logical_bytes) + " logical"),
     tile("Trash", count(v.trash_inodes ?? 0), v.trash_inodes ? `${bytes(v.trash_bytes ?? 0)} · restore from its folder` : "nothing deleted"),
   );
+  const st = snaps.tile(snaps.last()); // docs/16: the count, the mirrors and how many are offline
+  if (st) tiles.append(st);
   const s = r.search;
   if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
     let sub = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;

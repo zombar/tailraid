@@ -117,6 +117,15 @@
     <div class="empty"><span class="mono">atlas-m1</span> is offline (last seen 3 d ago on atlas): attach it to browse this snapshot</div>
   </section>
 
+  <section class="inflow">
+    <div class="variant">variant: the dashboard's "Take a snapshot" dialog (the folder picker's frame): an optional name, and why a manual snapshot is for keeps</div>
+    <dialog class="picker" open style="position: static">
+      <div class="small dim">A manual snapshot is permanent: the schedule never thins it and no page removes it. This device's unsaved writes land first.</div>
+      <form class="inline-form"><input type="text" placeholder="name (optional: the UTC minute)" aria-label="snapshot name" value="before-trip"></form>
+      <div class="picker-actions"><button type="button">Cancel</button><button type="submit">Take a snapshot</button></div>
+    </dialog>
+  </section>
+
 </main>
 <div id="toasts" aria-live="polite"></div>
 </body>

@@ -156,14 +156,15 @@ func mirrorLsCmd() *cobra.Command {
 					continue
 				}
 				state, used, free, newest, path := "elsewhere", "-", "-", "-", "-"
-				for _, m := range rep.Mirrors {
+				for j := range rep.Mirrors {
+					m := &rep.Mirrors[j]
 					if m.Name == nd.Name {
 						state, used, free, path = "offline", bytesStr(uint64(max(m.Used, 0))), bytesStr(m.Free), m.Path
 						if m.Online {
 							state = "online"
 						}
-						if m.Syncing != "" {
-							state += ", syncing " + m.Syncing
+						if m.Syncing != nil {
+							state += fmt.Sprintf(", syncing %s %d %%", m.Syncing.Snapshot, m.Syncing.Percent())
 						}
 						if m.Newest != 0 {
 							newest = time.Unix(0, m.Newest).Local().Format("2006-01-02 15:04")

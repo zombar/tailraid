@@ -4,12 +4,12 @@
 // in sessionStorage so a reload resumes where it was.
 
 import { h } from "./dom.ts";
-import { fileURL, tags, thumbURL } from "./api.ts";
+import { fileURL, tags, thumbURL, type Src } from "./api.ts";
 import { basename, ext, mmss, session } from "./util.ts";
 
 export interface Track {
   path: string;
-  root?: number;
+  root?: Src;
   title?: string;
   artist?: string;
   album?: string;
@@ -54,7 +54,7 @@ class Player {
     return !this.a.paused && !this.a.ended;
   }
 
-  isCurrent(path: string, root?: number): boolean {
+  isCurrent(path: string, root?: Src): boolean {
     const c = this.current();
     return !!c && c.path === path && c.root === root;
   }
