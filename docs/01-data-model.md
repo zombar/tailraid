@@ -98,7 +98,7 @@ type State struct {
 }
 
 type SnapID    uint32         // from State.NextSnap; never reused
-type SnapState uint8          // Syncing = 1, Complete = 2, Incomplete = 3 (16 §3)
+type SnapState uint8          // Syncing = 1, Complete = 2, Incomplete = 3, Deleting = 4 (16 §3, §5)
 type Snapshot struct {        // a catalogue row: the snapshot is on its mirror (16)
     ID       SnapID
     Mirror   NodeIdx          // a KindMirror row

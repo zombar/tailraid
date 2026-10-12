@@ -25,7 +25,7 @@ func TestStub_I_181(t *testing.T) { t.Skip("stub until snapshots PR 1; see docs/
 func TestStub_I_182(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/06-gc-and-repair.md") }
 
 // Invariant: I-183
-// Becomes: TestMirror_DeleteReconciles_MarkAndSweep, TestMirror_OfflineDeleteReconciledOnAttach, TestMirror_ForeignClusterUntouched (PR 1).
+// Becomes: TestAdminOps_NoSnapshotDelete, TestMirror_DeleteReconciles_MarkAndSweep, TestMirror_RowlessManifestImported (PR 1, PR 2).
 func TestStub_I_183(t *testing.T) { t.Skip("stub until snapshots PR 1; see docs/16-snapshots.md") }
 
 // Invariant: I-184
@@ -41,7 +41,7 @@ func TestStub_I_185(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/
 func TestStub_I_186(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/16-snapshots.md") }
 
 // Invariant: I-187
-// Becomes: TestWebUI_Snapshots_ListTakeDelete, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409 (PR 3).
+// Becomes: TestWebUI_Snapshots_ListTake_NoDeleteRoute, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409 (PR 3).
 func TestStub_I_187(t *testing.T) { t.Skip("stub until snapshots PR 3; see docs/13-web-ui.md") }
 
 // Invariant: I-188

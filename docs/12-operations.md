@@ -447,12 +447,11 @@ device of the cluster can carry one; a USB disk moves between devices with its h
 ```
 tailraid mirror add <path> [--adopt]   # on the host: mark the disk, add it to the config, register it (re-homes one of this cluster)
 tailraid mirror ls                     # every mirror: host, online, used and free, newest snapshot, the sync under way
-tailraid mirror remove <name>          # forget it and its catalogue rows; the disk is left as it is
+tailraid mirror remove <name>          # forget it; the disk and every snapshot on it are left as they are (added back, they are imported)
 tailraid mirror ls|cat|export <path> … # read a mirror disk with no cluster (docs/16 §2, §7)
 
 tailraid snapshot ls [--mirror <name>]                  # name, mirror, taken, state, size, what it added
-tailraid snapshot create [name] [--mirror <name>]       # a manual snapshot (never thinned); every online mirror unless named
-tailraid snapshot rm <mirror>/<name>
+tailraid snapshot create [name] [--mirror <name>]       # a manual snapshot: permanent; every online mirror unless named
 tailraid snapshot restore <mirror>/<name> <path> [--to <dir>] [--as <name>]   # a file or a folder, into the live volume
 tailraid versions <path>                                # the file's versions on the online mirrors
 tailraid versions <path> --revert <mirror>/<name> | --copy <mirror>/<name> --as <name>
@@ -484,10 +483,13 @@ syncing 41 %`). `check` warns when a mirror has been offline longer than
 `mirrors.stale_after`, when an online mirror's newest snapshot is older than `2 × every`,
 when a snapshot is incomplete, and when a mirror is under its free-space reserve.
 
-Two things to know as an operator. A first sync copies the whole volume and may take many
-hours; it is resumable (a failed sync keeps what it wrote), and the pool holds GC back for
-at most `hold_max` while it runs. And the mirror is the volume's bytes in the clear: keep
-the disk where the data may be.
+Three things to know as an operator. A first sync copies the whole volume and may take
+many hours; it is resumable (a failed sync keeps what it wrote), and the pool holds GC back
+for at most `hold_max` while it runs. Snapshots are never removed by hand: only the
+schedule's thinning and the free-space reserve take automatic ones, and a manual snapshot
+is permanent, so take one deliberately; a mirror full of manual snapshots stops syncing
+until it has another disk beside it or is copied to a larger one. And the mirror is the
+volume's bytes in the clear: keep the disk where the data may be.
 
 ## Invariants
 
@@ -573,8 +575,8 @@ the disk where the data may be.
   cluster, or with `--adopt` takes over one of another cluster and imports its
   manifests as catalogue rows) and registers it as a `KindMirror` row of its host; a
   mirror is online exactly while its host is live and its marker names this cluster and
-  this mirror; `mirror remove` takes the row and its catalogue rows and leaves the disk;
-  `tailraid export` is the metadata export of §9; `snapshot ls|create|rm|restore` and
+  this mirror; `mirror remove` takes the row and its catalogue rows and leaves the disk, whose manifests are imported again if it is added back;
+  `tailraid export` is the metadata export of §9; `snapshot ls|create|restore` (no removal verb) and
   `versions` drive docs/16 through the admin RPC; `status` reports each mirror and the
   catalogue count; `check` warns for a mirror offline past `stale_after`, an online
   mirror whose newest snapshot is older than `2 × every`, an incomplete snapshot and a
@@ -604,4 +606,4 @@ the disk where the data may be.
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
 | I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |
-| I-188 | planned (docs/16): TestCLI_MirrorAdd_MarkRehomeAdopt, TestMirror_OnlineFollowsMarkerAndHost, TestCLI_MirrorRemove_LeavesDisk, TestCLI_Export, TestCLI_Snapshot_LsCreateRmRestore, TestCLI_Versions, TestReport_MirrorFields, TestCheck_MirrorWarnings, TestConfig_Mirrors, `TestSoak_AllPhasesAgainstHarness` |
+| I-188 | planned (docs/16): TestCLI_MirrorAdd_MarkRehomeAdopt, TestMirror_OnlineFollowsMarkerAndHost, TestCLI_MirrorRemove_LeavesDisk, TestCLI_Export, TestCLI_Snapshot_LsCreateRestore_NoRemoval, TestCLI_Versions, TestReport_MirrorFields, TestCheck_MirrorWarnings, TestConfig_Mirrors, `TestSoak_AllPhasesAgainstHarness` |

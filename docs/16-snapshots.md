@@ -168,6 +168,15 @@ by the host) the oldest automatic snapshot goes first, then syncs to that mirror
 a warning in `status` and `check` until space is freed; a manual snapshot is never deleted
 for space.
 
+**Nobody removes a snapshot by hand.** Thinning and the free-space reserve, both on the
+leader's tick, are the only ways a snapshot ever leaves a mirror: there is no CLI verb,
+admin op or browser route that proposes `SnapshotDelete`, and the leader's tick is its only
+proposer. A manual snapshot is therefore permanent: it is never thinned, never deleted for
+space, and outlives every automatic one on its mirror. A mirror whose free space is taken
+by manual snapshots stops syncing with a warning; the remedies are another mirror, or a
+larger disk (copy the mirror's directory over and `mirror add` the new path, which
+re-homes it), never a deletion.
+
 ```yaml
 mirrors:
   every: 1h                # an automatic snapshot of every online mirror this often; 0 = none
@@ -183,18 +192,27 @@ under a minute, a `keep` count over 10 000 and a `hold_max` under an hour.
 ## 5. The catalogue, deletion and reconciliation
 
 Raft holds the **catalogue**, not the snapshots: `State.Snaps`, one row per snapshot,
-`{ID SnapID, Mirror NodeIdx, Name, Index, At, Auto, State (syncing | complete | incomplete),
+`{ID SnapID, Mirror NodeIdx, Name, Index, At, Auto, State (syncing | complete | incomplete | deleting),
 Root Hash, Files, Bytes, NewBytes, Missing}`, about 150 bytes each. It is what lets every
 gateway list every snapshot of every mirror, online or not, and say where a snapshot is
 when its mirror is away.
 
-`SnapshotDelete{ID, Now}` removes a row and nothing else in the FSM. The mirror's host,
-whenever the mirror is online, reconciles the disk with the catalogue: a manifest of this
-cluster whose row is gone is removed, and then a mark-and-sweep removes every tree and
-object that no remaining manifest reaches. A syncing row's trees and objects are marked
-from the worker's own set, so the sweep never races a sync. Reconciliation runs when a
-mirror is opened (a disk plugged back in after its snapshots were deleted) and after
-every delete; it never touches a disk whose marker names another cluster.
+Deletion is two steps, so that nothing leaves a disk without an explicit decision of the
+schedule. `SnapshotDelete{ID, Done: false}`, proposed by the leader's tick only, marks a
+complete or incomplete row `Deleting`: it disappears from every listing at once. The
+mirror's host, whenever the mirror is online, removes the manifest of every `Deleting`
+row of its mirror, then runs a mark-and-sweep that removes every tree and object no
+remaining manifest reaches (a syncing row's trees and objects are marked from the
+worker's own set, so the sweep never races a sync), and then proposes
+`SnapshotDelete{ID, Done: true}`, which removes the row. An offline mirror keeps its
+`Deleting` rows until it returns.
+
+A manifest on the disk with **no** row at all is never removed: it is a snapshot the
+catalogue forgot (the mirror was removed with `mirror remove` and added back, or the disk
+was copied to a larger one), and the host imports it as a catalogue row when the mirror
+is opened, as `--adopt` does for another cluster's disk. So no sequence of `mirror remove`,
+`mirror add` and reconciliation removes a snapshot that thinning did not choose. The host
+never touches a disk whose marker names another cluster.
 
 ## 6. Reading, versions and restore
 
@@ -281,11 +299,14 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   snapshot references stays readable until `SnapshotEnd`; a sync ends `complete`,
   `incomplete` with its missing chunks listed, or failed with its row removed and no
   manifest written; and the leader ends as failed a sync older than `mirrors.hold_max`.
-- **I-183** — `SnapshotDelete` removes only the catalogue row; the mirror's host, while
-  the mirror is online, removes the manifests of this cluster whose rows are gone and
-  then every tree and object no remaining manifest or running sync reaches, and never one
-  that a remaining manifest reaches; a disk whose marker names another cluster is never
-  changed except by `mirror add --adopt`.
+- **I-183** — A snapshot leaves a mirror only by the leader's thinning or free-space
+  rule: no CLI verb, admin op or web route proposes `SnapshotDelete`, and a manual
+  snapshot is never deleted; `SnapshotDelete{Done: false}` marks a row `Deleting` and
+  nothing else, and the mirror's host, while the mirror is online, removes exactly the
+  manifests of its `Deleting` rows, then every tree and object no remaining manifest or
+  running sync reaches and never one that a remaining manifest reaches, then removes the
+  rows with `Done: true`; a manifest with no row is imported, never removed; and a disk
+  whose marker names another cluster is never changed except by `mirror add --adopt`.
 - **I-186** — A revert, a copy or a tree restore from a snapshot writes into the live
   volume exactly the snapshot's bytes, committing by hash every chunk the pool still holds
   and uploading every other from the mirror after verifying it; a revert flushes or drops
@@ -302,5 +323,5 @@ stub in `test/invariants/` meanwhile.
 | I-179 | TestFSM_SnapshotBegin_Table, TestFSM_SnapshotName_Boundaries, TestMirror_SyncCapturesIndex, TestMirror_SyncExcludesReservedEphemeralTrash, TestCluster_SnapshotReadsAsOfIndexOnEveryGateway, `TestModelCheck_Long` |
 | I-180 | TestMirror_TreeEncoding_Canonical, TestMirror_SecondSyncWritesOnlyChanges, TestMirror_CrashAtEveryWrite_ManifestImpliesComplete, TestMirror_ObjectVerifiedOnRead, TestMirror_OpenSweepsTemps, TestCLI_MirrorStandalone_LsCatExport |
 | I-181 | TestFSM_GCDelete_HeldBySyncingRow, TestFSM_SnapshotEnd_Table, TestCluster_OverwriteDuringSync_SnapshotExact, TestMirror_UnreadableChunk_Incomplete_RetriedNext, TestSchedule_HoldMaxEndsSync, `TestFSM_DeterministicAcrossReplicas` |
-| I-183 | TestMirror_DeleteReconciles_MarkAndSweep, TestMirror_SweepNeverTakesReachable, TestMirror_OfflineDeleteReconciledOnAttach, TestMirror_ForeignClusterUntouched |
+| I-183 | TestAdminOps_NoSnapshotDelete, TestWebUI_NoSnapshotDeleteRoute, TestMirror_DeleteReconciles_MarkAndSweep, TestMirror_RowlessManifestImported, TestMirror_SweepNeverTakesReachable, TestMirror_OfflineDeleteReconciledOnAttach, TestMirror_ForeignClusterUntouched |
 | I-186 | TestVFS_Revert_FromPoolAndMirror, TestVFS_Revert_FlushesDirtyFirst, TestVFS_SaveCopy, TestVFS_RestoreTree_SkipsExisting, TestCluster_RestoreAfterGC_UploadsFromMirror |

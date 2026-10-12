@@ -186,7 +186,7 @@ test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
 With docs/16 one node carries a mirror and the scheduler also begins snapshots, takes the
-mirror offline and back, deletes snapshots and runs GC while a sync is under way; it keeps
+mirror offline and back, thins snapshots through the leader's tick and runs GC while a sync is under way; it keeps
 the world as of each snapshot's index, and at every quiescence every complete snapshot
 reads byte-exact against its world through every gateway, no chunk a syncing snapshot
 references was collected, and the catalogue agrees on every node (I-179, I-181, L-218).
@@ -407,9 +407,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   folder restored by `restore-tree` under a new name and compared; the mirror taken
   offline (its marker moved, as phase 13 closes a disk): the catalogue still lists it,
   reads inside fail with `EIO` and the as-of route answers 409, and on its return a
-  catch-up snapshot begins at once; a snapshot deleted and the mirror's used bytes falling
-  after its host's sweep; on a live cluster with a mirror and the schedule on, a complete
-  snapshot younger than `2 × every`; the phase records one `snapshot round trip` event
+  catch-up snapshot begins at once; the rig's mirror is a scratch directory, so the phase's manual snapshots, which no user removes, stay on it (the thinning that removes automatic ones is proven by the
+  schedule's tests); on a live cluster the phase takes no snapshot at all, since one it
+  took could never be removed: it reads the existing ones and, with the schedule on,
+  checks a complete snapshot younger than `2 × every`; the phase records one `snapshot round trip` event
   with the snapshots' sizes and what each added; I-179..I-188, L-212..L-218); 20 stats (with `stats.every: 5s`
   on the rig and 1 s on the harness: after `stats seal` every node's raw segment is
   under its own directory, decodes and is below the small-chunk threshold and the

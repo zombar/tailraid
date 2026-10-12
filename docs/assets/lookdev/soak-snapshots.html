@@ -28,11 +28,11 @@ table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid
 <rect x="590" y="166" width="24" height="12" class="off"/><text x="593" y="162" class="marklabel">offline</text>
 <line x1="64" y1="178" x2="744" y2="178" class="grid"/><line x1="64" y1="128" x2="744" y2="128" class="grid"/><line x1="64" y1="78" x2="744" y2="78" class="grid"/><line x1="64" y1="28" x2="744" y2="28" class="grid"/>
 <text x="58" y="182" class="tick" text-anchor="end">0</text><text x="58" y="132" class="tick" text-anchor="end">0.5 GiB</text><text x="58" y="82" class="tick" text-anchor="end">1.0 GiB</text><text x="58" y="32" class="tick" text-anchor="end">1.5 GiB</text>
-<polyline class="line" points="64,178 517,178 528,150 540,120 552,96 560,70 575,70 578,66 590,66 614,66 618,64 640,64 652,71 744,71"/>
+<polyline class="line" points="64,178 517,178 528,150 540,120 552,96 560,70 575,70 578,66 590,66 614,66 618,64 640,64 744,64"/>
 <line x1="517" y1="28" x2="517" y2="178" class="marker"/><text x="520" y="190" class="marklabel">first sync</text>
 <line x1="575" y1="28" x2="575" y2="178" class="marker"/><text x="578" y="200" class="marklabel">second (differential)</text>
 <line x1="614" y1="28" x2="614" y2="178" class="marker"/><text x="617" y="190" class="marklabel">back · catch-up</text>
-<line x1="652" y1="28" x2="652" y2="178" class="marker"/><text x="655" y="200" class="marklabel">delete · sweep</text>
+
 <text x="64.0" y="212" class="tick" text-anchor="middle">0s</text>
 <text x="290.7" y="212" class="tick" text-anchor="middle">200s</text>
 <text x="517.3" y="212" class="tick" text-anchor="middle">400s</text>
@@ -61,6 +61,6 @@ table{border-collapse:collapse;width:100%;font-size:13px} th,td{border:1px solid
 <tr><td>soak-1760263200</td><td>n2-m1</td><td>412 s · index 182,344</td><td class="num">154</td><td class="num">1.1 GiB</td><td class="num">1.1 GiB</td><td>complete</td><td>exact · the overwritten file from the mirror, the rest from the pool</td></tr>
 <tr><td>soak-1760263260</td><td>n2-m1</td><td>470 s · index 182,910</td><td class="num">155</td><td class="num">1.1 GiB</td><td class="num">12.3 MiB</td><td>complete</td><td>exact</td></tr>
 <tr><td>2026-10-12-1300Z</td><td>n2-m1</td><td>614 s · catch-up, automatic</td><td class="num">155</td><td class="num">1.1 GiB</td><td class="num">4.1 MiB</td><td>complete</td><td>exact</td></tr>
-<tr><td colspan="8" class="meta">GC collected the 3 overwritten chunks from the pool after the first sync ended (held while it ran); the revert copied 3 chunks back from the mirror; <code>restore-tree</code> recreated the deleted folder as <code>restored-day2</code> (24 created, 0 skipped); offline at 590 s: the catalogue kept listing 2 snapshots, reads inside failed with EIO and the as-of route answered 409; back at 614 s: a catch-up began within one tick; one snapshot deleted, the mirror's used bytes fell by 12.3 MiB after its host's sweep</td></tr></table>
+<tr><td colspan="8" class="meta">GC collected the 3 overwritten chunks from the pool after the first sync ended (held while it ran); the revert copied 3 chunks back from the mirror; <code>restore-tree</code> recreated the deleted folder as <code>restored-day2</code> (24 created, 0 skipped); offline at 590 s: the catalogue kept listing 2 snapshots, reads inside failed with EIO and the as-of route answered 409; back at 614 s: a catch-up began within one tick</td></tr></table>
 </body>
 </html>

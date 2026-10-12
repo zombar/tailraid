@@ -72,7 +72,7 @@ const (
     OpSetShardSums            // {Hash, Sums [][32]byte}: the data shards' hashes of a chunk committed without them (04 §4, codec 5)
     OpSnapshotBegin           // {Mirror NodeIdx, Name, Auto bool, Now} → Result.SnapID (16 §3, codec 7)
     OpSnapshotEnd             // {ID, OK bool, Root Hash, Files, Bytes, NewBytes uint64, Missing uint32, Now} (codec 7)
-    OpSnapshotDelete          // {ID, Now} (codec 7)
+    OpSnapshotDelete          // {ID, Done bool, Now}: the leader's thinning only, never a user (codec 7)
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
@@ -272,9 +272,13 @@ is harmless). With `OK` the row takes `Root`, `Files`, `Bytes`, `NewBytes` and `
 and its state becomes `Complete`, or `Incomplete` when `Missing > 0`; without `OK` the row
 is removed. Either way the hold it carried ends.
 
-**SnapshotDelete.** `ID` must exist (`ErrNotExist`); the row is removed. A `Syncing` row
-cannot be deleted (`ErrExist`: end it first). The mirror's disk is cleaned by its host
-(16 §5), never by the FSM.
+**SnapshotDelete.** `ID` must exist (`ErrNotExist`). Without `Done` a `Complete` or
+`Incomplete` row becomes `Deleting` (a `Syncing` row is `ErrExist`: end it first; a
+`Deleting` one is unchanged); with `Done` a `Deleting` row is removed (any other is
+`ErrExist`). The mirror's disk is cleaned by its host between the two (16 §5), never by
+the FSM. The only proposers are the leader's tick (thinning and the free-space reserve)
+and, for `Done`, the mirror's host: no admin op or web route carries the command, so no
+user removes a snapshot (I-183).
 
 **NodeUpsert of a mirror** (16 §1): a `KindMirror` row must name an `Active` device as its
 `Host`, as a disk row does (14 §1), carries no budget and no ports, and is never a
