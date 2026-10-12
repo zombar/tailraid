@@ -42,7 +42,9 @@ type reportData struct {
 	Coverage   []CoverageRow
 	Charts     []template.HTML
 	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
-	PeakSkew   int        // most chunks above the host cap in any sample
+	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
+	RoundTrip  string
+	PeakSkew   int // most chunks above the host cap in any sample
 	Generated  string
 	Throughput string
 	Mark       template.HTML // the logo mark, inline
@@ -192,6 +194,9 @@ func buildReport(s Summary) reportData {
 		{"gc", fmt.Sprintf("%d chunk entries collected, %d shards deleted, %d deletes refused", t.GC.Victims, t.GC.Deleted, t.GC.Refused)},
 	}
 	d.Charts, d.Throughput = charts(s)
+	snapCharts, snaps, roundTrip := snapshotFigures(s)
+	d.Charts = append(d.Charts, snapCharts...)
+	d.Snapshots, d.RoundTrip = snaps, roundTrip
 	var spread []*Sample
 	for i := range s.Records {
 		if s.Records[i].Kind == "sample" && s.Records[i].S != nil {
@@ -254,7 +259,7 @@ func charts(s Summary) ([]template.HTML, string) {
 				placement = rec
 				continue
 			}
-			if rec.Name != "note" && rec.Name != "baseline written" {
+			if rec.Name != "note" && rec.Name != "baseline written" && rec.Name != snapshotEvent {
 				marks = append(marks, chart.Marker{X: x(rec), Label: strings.TrimSpace(rec.Name + " " + rec.Text)})
 			}
 		case "phase":
@@ -521,6 +526,11 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 {{if .Notes}}<table><tr><th>Phase</th><th>Note</th></tr>{{range .Notes}}<tr><td>{{.Phase}}</td><td>{{.Text}}</td></tr>{{end}}</table>{{else}}<p class="meta">none</p>{{end}}
 <h2>Charts</h2>
 {{range .Charts}}{{.}}{{end}}
+{{if .Snapshots}}<h2>Snapshot round trip</h2>
+<p class="meta">phase 19 (docs/16): every snapshot on the mirror, oldest first, with what it added and how a read of it went</p>
+<table><tr><th>Snapshot</th><th>Mirror</th><th>Taken</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Added</th><th>State</th><th>Read</th></tr>
+{{range .Snapshots}}<tr><td>{{.Name}}</td><td>{{.Mirror}}</td><td>{{.Taken}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Added}}</td><td>{{.State}}</td><td>{{.Read}}</td></tr>{{end}}
+{{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
 {{if .Disks}}<h2>Disks</h2>
 <p class="meta">every placement target as of the last sample that held data, grouped by host (docs/14); expected is the capacity share capped at one slot per chunk; most chunks above the host cap in any sample: {{.PeakSkew}}</p>
 <table><tr><th>Host</th><th>Target</th><th class="num">Budget</th><th class="num">Slots</th><th class="num">Expected</th><th class="num">Δ</th><th>State</th></tr>

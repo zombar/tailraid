@@ -3,6 +3,8 @@
 #   ROLE=init|join   SELF_IP, NODE_NAME, LEADER (ip for join), TOKEN, K, M, VOTER
 #   DISKS (space-separated disks, docs/14, each `path` or `path=capacity`; empty for a
 #   diskless host, docs/14 §9)
+#   MIRRORS (space-separated mirror paths, docs/16: listed under node.mirrors on every
+#   start, registered by `tailraid mirror add` from the driver), MIRRORS_EVERY
 #   DRIVER_IP (the address the driver's published-port connections arrive from, the
 #   compose bridge's gateway by default: the fake tailnet knows it as a device of the
 #   nodes' own user, so phase 16 reaches the browser UI under the same-user rule)
@@ -83,6 +85,18 @@ fi
 if [ -f "$TAILRAID_HOME/disks.saved.yaml" ]; then
   # a restart rewrites config.yaml from scratch: keep the disks added since
   sed -i "/^  voter:/r $TAILRAID_HOME/disks.saved.yaml" "$TAILRAID_HOME/config.yaml"
+fi
+if [ -n "${MIRRORS:-}" ]; then
+  # a restart rewrites config.yaml from scratch: the mirrors are listed every time
+  {
+    echo "  mirrors:"
+    for m in $MIRRORS; do
+      mkdir -p "$m"
+      printf '    - path: %s\n' "$m"
+    done
+  } > "$TAILRAID_HOME/mirrors.yaml"
+  sed -i "/^  voter:/r $TAILRAID_HOME/mirrors.yaml" "$TAILRAID_HOME/config.yaml"
+  printf 'mirrors:\n  every: %s\n' "${MIRRORS_EVERY:-1m}" >> "$TAILRAID_HOME/config.yaml"
 fi
 if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
   # CLI output goes through jsonlog without losing the exit status (no pipefail in ash)

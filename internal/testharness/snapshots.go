@@ -68,6 +68,13 @@ func (s *Mirrors) SetOnline(m meta.NodeIdx, online bool) {
 	s.mu.Unlock()
 }
 
+// Add registers mirror store mm as row idx.
+func (s *Mirrors) Add(idx meta.NodeIdx, mm *mirror.Mirror) {
+	s.mu.Lock()
+	s.ms[idx] = mm
+	s.mu.Unlock()
+}
+
 // Objects is how many objects were read from the mirrors.
 func (s *Mirrors) Objects() int64 { return s.objects.Load() }
 

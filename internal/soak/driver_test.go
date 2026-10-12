@@ -3,6 +3,7 @@ package soak
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/stats"
@@ -108,6 +110,16 @@ func (e *fakeEnv) IndexNow(context.Context) (search.PassResult, error) {
 	return search.PassResult{}, nil
 }
 func (e *fakeEnv) PurgeTrash(context.Context) (int, error) { return 0, nil }
+func (e *fakeEnv) AddMirror(context.Context) (string, NodeRef, error) {
+	return "", NodeRef{}, nil
+}
+func (e *fakeEnv) SetMirrorOnline(context.Context, string, bool) error { return nil }
+
+// SnapshotOp answers an empty catalogue: the fake cluster has no mirror.
+func (e *fakeEnv) SnapshotOp(context.Context, NodeRef, rpc.AdminOp) (json.RawMessage, error) {
+	return json.RawMessage("[]"), nil
+}
+
 func (e *fakeEnv) SetPolicy(ctx context.Context, k, m uint8) error {
 	e.record(ctx, fmt.Sprintf("set-policy %d+%d", k, m))
 	e.mu.Lock()

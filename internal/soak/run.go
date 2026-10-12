@@ -105,10 +105,12 @@ type Sample struct {
 	FlushBytes    uint64                     `json:"flush_bytes"`  // the sampled node's flush buffers (docs/04 §9)
 	TrashInodes   int                        `json:"trash_inodes"` // deleted entries waiting in the trash (docs/06 §1)
 	TrashBytes    uint64                     `json:"trash_bytes"`
-	CachePinned   int64                      `json:"cache_pinned"`   // bytes the sampled node's cache holds for its pins (docs/13 §4)
-	SearchDocs    int                        `json:"search_docs"`    // files in the sampled node's index (docs/18 §5)
-	SearchPending int                        `json:"search_pending"` // candidates the leader's last pass left
-	HeapInuse     uint64                     `json:"heap_inuse"`     // the sampled node's process (docs/12 §8)
+	CachePinned   int64                      `json:"cache_pinned"`          // bytes the sampled node's cache holds for its pins (docs/13 §4)
+	SearchDocs    int                        `json:"search_docs"`           // files in the sampled node's index (docs/18 §5)
+	SearchPending int                        `json:"search_pending"`        // candidates the leader's last pass left
+	Snapshots     int                        `json:"snapshots"`             // catalogue rows on every mirror (docs/16 §5)
+	MirrorUsed    map[string]int64           `json:"mirror_used,omitempty"` // bytes on each mirror of phase 19's host, by row name
+	HeapInuse     uint64                     `json:"heap_inuse"`            // the sampled node's process (docs/12 §8)
 	Sys           uint64                     `json:"sys"`
 	Goroutines    int                        `json:"goroutines"`
 	// the sampled node's machine vitals (docs/12 §8); rates are between this node's
@@ -193,6 +195,9 @@ type Run struct {
 	sampDone  chan struct{}
 	shared    map[string]any // cross-phase state (the corpus model)
 	dumpBytes int            // goroutine dump bytes recorded so far (dumpTotalMax)
+	// mirrorHost is the host of phase 19's mirror once it is registered: the sampler then
+	// records the host's mirrors (docs/16, the report's mirror chart)
+	mirrorHost *NodeRef
 }
 
 // opLatency is one measured operation.
@@ -529,6 +534,7 @@ func (r *Run) sample(ctx context.Context, round int) {
 			s.SearchDocs, s.SearchPending = rep.Search.Docs, rep.Search.Pending
 		}
 		s.Health = rep.Health
+		s.Snapshots = rep.Volume.Snapshots
 		s.Slots, s.LiveNodes = map[string]int{}, map[string]bool{}
 		for i := range rep.Nodes {
 			s.Slots[rep.Nodes[i].Name] = rep.Nodes[i].Slots
@@ -546,6 +552,19 @@ func (r *Run) sample(ctx context.Context, round int) {
 		}
 		if rep.Machine != nil {
 			r.vitalsSample(&s, node, *rep.Machine)
+		}
+	}
+	r.mu.Lock()
+	host := r.mirrorHost
+	r.mu.Unlock()
+	if host != nil {
+		if hr, err := r.Env.Status(ctx, *host); err == nil {
+			s.MirrorUsed = map[string]int64{}
+			for _, m := range hr.Mirrors {
+				if m.Name != "" {
+					s.MirrorUsed[m.Name] = m.Used
+				}
+			}
 		}
 	}
 	if round%5 == 0 {

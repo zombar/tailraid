@@ -57,9 +57,39 @@ func goldenSpread() string {
 	return Spread(10, []float64{0, 5}, []SpreadSample{{Targets: ts, Chunks: 10, DomainSkew: 3}, {Targets: ts, Chunks: 10}}, Axis{})
 }
 
+func goldenLogBars() string {
+	return LogBars("What each snapshot added (new_bytes), log scale", []Bar{
+		{Label: "first", Value: 1.1 * (1 << 30), Class: "chart-off", Tip: "soak-1 (first): 1.1 GiB"},
+		{Label: "after 5 changes", Value: 12.3 * (1 << 20), Tip: "soak-2: 12.3 MiB"},
+		{Label: "automatic", Value: 0, Tip: "nothing changed"},
+		{Label: "catch-up on attach", Value: 4.1 * (1 << 20), Tip: "catch-up: 4.1 MiB"},
+	}, fmtNum)
+}
+
 // everyKind renders one chart of each kind.
 func everyKind() map[string]string {
-	return map[string]string{"line": goldenLine(), "bars": goldenBars(), "lanes": goldenLanes(), "strip": goldenStrip(), "spread": goldenSpread()}
+	return map[string]string{"line": goldenLine(), "bars": goldenBars(), "lanes": goldenLanes(), "strip": goldenStrip(), "spread": goldenSpread(), "logbars": goldenLogBars()}
+}
+
+// LogBars puts its gridlines 2⁵ apart around the values, draws no bar for a value below
+// 1 (log 0), keeps the value labels and every bar's class, and survives no bars at all.
+// Invariant: I-197
+func TestChart_LogBars(t *testing.T) {
+	svg := goldenLogBars()
+	for _, want := range []string{">1.1G<", ">33.6M<", ">1.0M<", `class="chart-off"`, `class="s0"`, "<title>soak-2: 12.3 MiB</title>"} {
+		if !strings.Contains(svg, want) {
+			t.Errorf("logbars lacks %q", want)
+		}
+	}
+	if strings.Count(svg, "<rect") != 3 {
+		t.Errorf("want 3 bars (the zero value draws none), got %d", strings.Count(svg, "<rect"))
+	}
+	if strings.Contains(svg, "<title>nothing changed</title>") {
+		t.Error("a zero value drew a bar")
+	}
+	if empty := LogBars("none", nil, fmtNum); !strings.HasSuffix(empty, "</svg>") || strings.Contains(empty, "<rect") {
+		t.Errorf("no bars: %s", empty)
+	}
 }
 
 // Invariant: I-197
@@ -121,11 +151,12 @@ func TestChart_EscapesHostileNames(t *testing.T) {
 	hostile := `<script>alert(1)</script>&"'`
 	ss := []Series{{Name: hostile, Points: [][2]float64{{0, 1}, {1, 2}}}}
 	for name, svg := range map[string]string{
-		"line":   Line(hostile, hostile, ss, []Marker{{0.5, hostile}}, []Band{{0, 1, hostile}}, Axis{}),
-		"bars":   Bars(hostile, []string{hostile}, ss),
-		"lanes":  Lanes(hostile, 1, []string{hostile}, map[string][]Cell{hostile: {{0, OK}}}, Axis{}),
-		"strip":  Strip(hostile, 1, []Cell{{0, OK}}, Axis{}),
-		"spread": Spread(1, []float64{0}, []SpreadSample{{Targets: []Target{{Name: hostile, Host: hostile, Slots: 1, Capacity: 1, Live: true, Active: true}}, Chunks: 1}}, Axis{}),
+		"line":    Line(hostile, hostile, ss, []Marker{{0.5, hostile}}, []Band{{0, 1, hostile}}, Axis{}),
+		"bars":    Bars(hostile, []string{hostile}, ss),
+		"lanes":   Lanes(hostile, 1, []string{hostile}, map[string][]Cell{hostile: {{0, OK}}}, Axis{}),
+		"strip":   Strip(hostile, 1, []Cell{{0, OK}}, Axis{}),
+		"spread":  Spread(1, []float64{0}, []SpreadSample{{Targets: []Target{{Name: hostile, Host: hostile, Slots: 1, Capacity: 1, Live: true, Active: true}}, Chunks: 1}}, Axis{}),
+		"logbars": LogBars(hostile, []Bar{{Label: hostile, Value: 2, Tip: hostile}}, fmtNum),
 	} {
 		if strings.Contains(svg, "<script") || strings.Contains(svg, `alert(1)</`) {
 			t.Errorf("%s: hostile text not escaped", name)
