@@ -92,7 +92,10 @@ func (e *composeEnv) RestartIdle(ctx context.Context, ref soak.NodeRef) error {
 	return e.RestartGraceful(ctx, ref)
 }
 
-var _ soak.CopyEnv = (*composeEnv)(nil)
+var (
+	_ soak.CopyEnv = (*composeEnv)(nil)
+	_ soak.RaceEnv = (*composeEnv)(nil)
+)
 
 // SMBRaces runs phase 23's SMB handle races on the worker beside node (smbclient.Races).
 func (e *composeEnv) SMBRaces(ctx context.Context, ref soak.NodeRef, dir string) ([]soak.RaceResult, error) {

@@ -43,7 +43,7 @@ func phaseMultiUser(ctx context.Context, r *Run) error {
 	}{
 		{"many streams into one gateway", m.manyStreams},
 		{"two gateways into one folder", m.oneFolder},
-		{"one name created exclusively by three clients", m.exclusiveName},
+		{"one name created exclusively by four clients", m.exclusiveName},
 		{"one name replaced by two clients", m.replacedName},
 		{"a gateway reading what another is copying", m.readWhileWritten},
 		{"a folder renamed under open copies", m.renameUnderCopies},
@@ -217,8 +217,8 @@ func (m *multi) oneFolder(ctx context.Context, label, rdir string) error {
 	return nil
 }
 
-// (c) one name created exclusively by three clients: two SMB sessions of one gateway and
-// an NFS client of another. Each name has exactly one winner, the rest are told it
+// (c) one name created exclusively by four clients: two SMB sessions of one gateway and
+// an SMB and an NFS client of another. Each name has exactly one winner, the rest are told it
 // exists, and the file is the winner's (I-222).
 func (m *multi) exclusiveName(ctx context.Context, label, rdir string) error {
 	gws := m.r.gateways()
@@ -299,7 +299,7 @@ func (m *multi) exclusiveName(ctx context.Context, label, rdir string) error {
 }
 
 // (d) one name replaced by two clients through two gateways with different payloads,
-// starts staggered: every gateway reads one payload whole, the same one (I-223).
+// started back to back: every gateway reads one payload whole, the same one (I-223).
 func (m *multi) replacedName(ctx context.Context, label, rdir string) error {
 	gws := m.r.gateways()
 	a, b, c := gws[0], gws[1], gws[2]
@@ -386,13 +386,18 @@ func (m *multi) readWhileWritten(ctx context.Context, label, rdir string) error 
 	zero := make([]byte, cs)
 	var torn []string
 	reads := 0
+	var results []CopyResult
+	var perr error
+	done := false
 	for range 200 {
-		if done, _, _ := job.Poll(ctx); done {
+		// the worker forgets a job once it has reported it ended: the poll that sees the
+		// end keeps its results
+		if done, results, perr = job.Poll(ctx); done || perr != nil {
 			break
 		}
 		got, err := m.r.volume(b).ReadAll(p)
-		reads++
 		if err == nil {
+			reads++
 			for i := 0; i < len(got); i += cs {
 				end := min(i+cs, len(got))
 				chunk := got[i:end]
@@ -408,9 +413,15 @@ func (m *multi) readWhileWritten(ctx context.Context, label, rdir string) error 
 			return err
 		}
 	}
-	results, perr := m.r.pollCopies(ctx, []CopyJob{job})
+	if !done && perr == nil {
+		results, perr = m.r.pollCopies(ctx, []CopyJob{job})
+	}
 	m.allSucceeded(label, "I-36", results, 1, perr)
-	m.r.check("I-36", fmt.Sprintf("%s: %d reads through %s saw no torn chunk", label, reads, b.Name), len(torn) == 0, strings.Join(torn, "; "))
+	if reads == 0 {
+		m.r.checkSkipped("I-36", label+": reads during the copy", "the copy ended before a read through "+b.Name+" landed")
+	} else {
+		m.r.check("I-36", fmt.Sprintf("%s: %d reads through %s saw no torn chunk", label, reads, b.Name), len(torn) == 0, strings.Join(torn, "; "))
+	}
 	if err := m.r.Env.Wait(ctx, m.r.Profile.FlushIdle); err != nil {
 		return err
 	}
@@ -493,6 +504,7 @@ func (m *multi) handleRaces(ctx context.Context, label, rdir string) error {
 		m.r.check("I-224 I-225", label+": the races ran", false, err.Error())
 		return nil
 	}
+	m.r.check("I-224 I-225", fmt.Sprintf("%s: every race reported (%d)", label, len(results)), len(results) == smbRaces, "")
 	for _, res := range results {
 		m.r.check("I-224 I-225", label+": "+res.Name, res.OK, res.Detail)
 	}
@@ -512,6 +524,12 @@ func (m *multi) handleRaces(ctx context.Context, label, rdir string) error {
 		m.r.check("I-225", label+": a delete-on-close handle held open", false, err.Error())
 		return nil
 	}
+	released := false
+	defer func() { // a round ended early closes the handle and its session on the worker
+		if !released {
+			_ = release(context.WithoutCancel(ctx))
+		}
+	}()
 	if err := m.r.Env.Wait(ctx, m.r.Profile.FlushIdle); err != nil { // the create reaches b
 		return err
 	}
@@ -525,6 +543,7 @@ func (m *multi) handleRaces(ctx context.Context, label, rdir string) error {
 		return err
 	}
 	rerr := release(ctx)
+	released = true
 	if err := m.r.Env.Wait(ctx, m.r.Profile.FlushIdle); err != nil {
 		return err
 	}
@@ -636,9 +655,13 @@ func (m *multi) streamsUnderLeaderKill(ctx context.Context, label, rdir string) 
 		return err
 	}
 	l := m.r.leaderRef(ctx)
+	u := m.r.undoer(ctx) // the leader comes back even when the round ends early (I-112)
+	defer u.run()
 	if err := m.r.Env.Kill(ctx, l); err != nil {
 		return err
 	}
+	step := "start " + l.Name
+	u.add(step, func(c context.Context) error { return m.r.Env.Start(c, l) })
 	m.r.event("fault", fmt.Sprintf("%s: killed %s", label, l.Name))
 	if err := m.r.Env.Wait(ctx, 3*time.Second); err != nil {
 		return err
@@ -646,6 +669,7 @@ func (m *multi) streamsUnderLeaderKill(ctx context.Context, label, rdir string) 
 	if err := m.r.Env.Start(ctx, l); err != nil {
 		return err
 	}
+	u.done(step)
 	results, perr := m.r.pollCopies(ctx, jobs)
 	m.allSucceeded(label, "I-95 I-217", results, len(want), perr)
 	healthy, detail := m.r.waitHealthy(ctx, m.r.Profile.RestartSettle+60*time.Second)
