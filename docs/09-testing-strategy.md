@@ -185,11 +185,14 @@ rotate the gateway; 20 iterations short / 200 long). **`TestModelCheck_Long`** (
 test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`, `Restart`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
-With docs/16 one node carries a mirror and the scheduler also begins snapshots, takes the
-mirror offline and back, thins snapshots through the host's tick and runs GC while a sync is under way; it keeps
-the world as of each snapshot's index, and at every quiescence every complete snapshot
-reads byte-exact against its world through every gateway, no chunk a syncing snapshot
-references was collected, and the catalogue agrees on every node (I-179, I-181, L-218).
+With docs/16 node 0 carries a mirror: after every quiescence the checker begins a snapshot
+and keeps the world as of its index, runs the copy some steps later as the host's worker
+would while the volume moves on, takes the mirror offline and back and runs GC (held while
+the sync runs); a sync whose host restarted or whose mirror is away ends failed. At every
+quiescence every complete snapshot reads byte-exact against its world through every
+gateway, no chunk a sync could not read was collected while held, and the catalogue agrees
+on every node with the rest of the state (I-179, I-181, I-185). Thinning is the host's
+schedule, covered by the `TestSchedule_*` tests.
 
 **End to end** — `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` (in `-short`, ≈5 s).
 `test/mount/TestMount_Workload`, gated on `TAILRAID_MOUNT_TEST=1` and `sudo -n true`: real

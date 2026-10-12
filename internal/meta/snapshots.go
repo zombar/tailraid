@@ -79,3 +79,34 @@ func (a *applier) snapshotDelete(c *SnapshotDelete) error {
 	sn.State = SnapDeleting // a second mark changes nothing
 	return nil
 }
+
+// snapshotImport records a row for a manifest its mirror's host found with no row
+// (docs/16 §5): complete or incomplete at once, with the manifest's own time, and an ID
+// above every manifest on that disk so no later sync can name one of them.
+func (a *applier) snapshotImport(c *SnapshotImport) (Result, error) {
+	if c == nil || !validSnapName(c.Name) || c.After == ^SnapID(0) {
+		return Result{}, ErrBadCommand
+	}
+	st := a.st
+	m, ok := st.Nodes[c.Mirror]
+	if !ok || m.Kind != KindMirror || m.State != Active {
+		return Result{}, ErrNoSuchNode
+	}
+	for _, sn := range st.Snaps {
+		if sn.Mirror == c.Mirror && sn.Name == c.Name {
+			return Result{}, ErrExist
+		}
+	}
+	a.clock(c.Now)
+	id := max(st.NextSnap, c.After+1, 1)
+	st.NextSnap = id + 1
+	state := SnapComplete
+	if c.Missing > 0 {
+		state = SnapIncomplete
+	}
+	st.Snaps[id] = &Snapshot{
+		ID: id, Mirror: c.Mirror, Name: c.Name, Index: a.index, At: c.At, Auto: c.Auto, State: state,
+		Root: c.Root, Files: c.Files, Bytes: c.Bytes, NewBytes: c.NewBytes, Missing: c.Missing,
+	}
+	return Result{SnapID: id}, nil
+}

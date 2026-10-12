@@ -40,10 +40,11 @@ type FSM struct {
 }
 
 // SnapshotHook is called inside Apply for every SnapshotBegin that applied, with the new
-// row, its mirror's host and a clone of the state at its index: the host takes the clone
-// (docs/16 §3), every other node returns at once. It runs under the apply lock, so it
-// must not call back into the FSM, and clone is valid only during the call.
-type SnapshotHook func(sn Snapshot, host NodeIdx, clone func() *State)
+// row, its mirror's host (index and node ID) and a clone of the state at its index: the
+// host takes the clone (docs/16 §3), every other node returns at once. It runs under the
+// apply lock, so it must not call back into the FSM (not even a read: the lock is not
+// reentrant), and clone is valid only during the call.
+type SnapshotHook func(sn Snapshot, host NodeIdx, hostID string, clone func() *State)
 
 // SetSnapshotHook installs (or, with nil, removes) the hook; safe while Apply runs.
 func (f *FSM) SetSnapshotHook(h SnapshotHook) {
@@ -84,10 +85,14 @@ func (f *FSM) Apply(l *raft.Log) any {
 		// valid only during the call, under the apply lock; nothing replicated changes
 		sn := *f.st.Snaps[r.SnapID]
 		var host NodeIdx
+		var hostID string
 		if m := f.st.Nodes[sn.Mirror]; m != nil {
 			host = m.Host
+			if h := f.st.Nodes[host]; h != nil {
+				hostID = h.ID
+			}
 		}
-		(*f.snapHook.Load())(sn, host, f.st.Clone)
+		(*f.snapHook.Load())(sn, host, hostID, f.st.Clone)
 	}
 	f.mu.Unlock()
 	f.setApplied(l.Index)
@@ -186,6 +191,8 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.snapshotEnd(c.SnapshotEnd)
 	case OpSnapshotDelete:
 		return Result{}, a.snapshotDelete(c.SnapshotDelete)
+	case OpSnapshotImport:
+		return a.snapshotImport(c.SnapshotImport)
 	}
 	return Result{}, ErrBadCommand
 }

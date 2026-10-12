@@ -287,7 +287,7 @@ Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM retur
 A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3:
 `SetPlacement`, `GCDelete`; 4: `Trash`, `Restore`, `Purge` and a `SetAttr` carrying
 `Flags`; 5 and 6: 02 §Codec versions; 7: `SnapshotBegin`, `SnapshotEnd`,
-`SnapshotDelete` and a `NodeUpsert` of a `KindMirror` row), so an entry can never smuggle
+`SnapshotDelete`, `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row), so an entry can never smuggle
 a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
@@ -426,8 +426,8 @@ defined in `04-write-path-and-durability.md`.
   `Trash` and `Stats` rebuilt on decode equal the ones kept incrementally by the applies;
   and `DecodeState(EncodeState(s)) == s` for a state with deleted roots and flags.
 - **I-184** — Snapshot version 7 carries the snapshot catalogue and `NextSnap`, and log
-  entries carry codec version 7 only for `SnapshotBegin`, `SnapshotEnd`, `SnapshotDelete`
-  and a `NodeUpsert` of a `KindMirror` row; every snapshot and entry of an older version
+  entries carry codec version 7 only for `SnapshotBegin`, `SnapshotEnd`, `SnapshotDelete`,
+  `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row; every snapshot and entry of an older version
   decodes as before with an empty catalogue; a mirror row is never a placement, policy,
   repair or budget candidate; and `DecodeState(EncodeState(s)) == s` for a state with
   mirrors and catalogue rows in every state.
@@ -451,5 +451,5 @@ defined in `04-write-path-and-durability.md`.
 | I-66 | `TestFSM_Create_NameBoundaries`, `TestVFS_NameTooLong_ENAMETOOLONG` |
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
-| I-184 | `TestEncodeCommand_V7Gating`, `TestEncodeCommand_Golden`, `TestCodec_CatalogueRoundTrip`, `TestCodec_ReadsVersion5Snapshot`, `TestCodec_StateRoundTrip`, `TestFSM_MirrorRow_Table`, `TestCandidates_MirrorNeverATarget`, `TestResult_SnapIDRoundTrip`, `FuzzDecodeCommand`, `FuzzDecodeState`; planned: TestCluster_CatalogueSurvivesSnapshotInstall |
+| I-184 | `TestEncodeCommand_V7Gating`, `TestEncodeCommand_Golden`, `TestCodec_CatalogueRoundTrip`, `TestCodec_ReadsVersion5Snapshot`, `TestCodec_StateRoundTrip`, `TestFSM_MirrorRow_Table`, `TestCandidates_MirrorNeverATarget`, `TestResult_SnapIDRoundTrip`, `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCluster_CatalogueSurvivesSnapshotInstall` |
 | I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously`, `TestReader_Close_CancelsDetachedFetches` |
