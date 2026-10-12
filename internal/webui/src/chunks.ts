@@ -24,8 +24,8 @@ export function render(path: string, expected?: number): Panel {
   let loaded = 0;
   let total = 0;
   let fetching = false;
-  const counts = { committed: 0, degraded: 0, unreadable: 0, tombstoned: 0, stale: 0 };
-  const rows = h("div");
+  const counts = { committed: 0, degraded: 0, unreadable: 0, tombstoned: 0, stale: 0, holes: 0 };
+  const rows = h("div", { class: "chunk-rows" });
   const more = h("button", { type: "button" }, "Load more");
   const caption = h("div", { class: "small dim" });
   const loading = h("div", { class: "loading" });
@@ -43,6 +43,7 @@ export function render(path: string, expected?: number): Panel {
     if (counts.degraded) parts.push(`${count(counts.degraded)} degraded`);
     if (counts.unreadable) parts.push(`${count(counts.unreadable)} unreadable`);
     if (counts.tombstoned) parts.push(`${count(counts.tombstoned)} tombstoned`);
+    if (counts.holes) parts.push(`${count(counts.holes)} zero`);
     if (counts.stale) parts.push(`${count(counts.stale)} policy stale`);
     summaryExtra.textContent = parts.length ? " · " + parts.join(" · ") : "";
     caption.textContent = `a hash that appears more than once is the same stored chunk (dedup) · ${count(loaded)} of ${count(total)}`;
@@ -68,6 +69,7 @@ export function render(path: string, expected?: number): Panel {
         else if (c.state === "degraded") counts.degraded++;
         else if (c.state === "unreadable") counts.unreadable++;
         else if (c.state === "tombstoned") counts.tombstoned++;
+        else if (c.state === "zero") counts.holes++;
         if (c.policy_stale) counts.stale++;
       });
       loaded += page.chunks.length;
@@ -104,6 +106,9 @@ function row(i: number, c: ChunkReport): HTMLElement {
   const live = h("span", { class: "live" + (c.live_slots < c.k ? " bad" : c.live_slots < km ? " warn" : "") }, `${c.live_slots}/${km}`);
   const hash = h("span", { title: c.hash }, c.hash.slice(0, 10));
   if (c.policy_stale) hash.append(" ", h("span", { class: "badge warn" }, "stale"));
-  if (!c.found) hash.append(" ", h("span", { class: "badge bad" }, c.state));
-  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, slotStrip(c.slots ?? []));
+  // an all-zero chunk is a hole: nothing stored, it reads as zeros
+  const hole = c.state === "zero";
+  if (!c.found && !hole) hash.append(" ", h("span", { class: "badge bad" }, c.state));
+  const strip = hole ? h("span", null, h("span", { class: "badge" }, "zero")) : slotStrip(c.slots ?? []);
+  return h("div", { class: "chunk-row" }, h("span", { class: "dim" }, "#" + i), hash, h("span", { class: "km dim" }, `${c.k}+${c.m}`), live, strip);
 }
