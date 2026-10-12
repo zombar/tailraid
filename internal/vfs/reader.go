@@ -373,9 +373,15 @@ func (r *Reader) pruneLocked(calls []*fetchCall) []*fetchCall {
 	return live
 }
 
-// run performs the fetch registered as call and settles every waiter.
+// run performs the fetch registered as call and settles every waiter. A caller looks in
+// the cache before it takes r.mu and finds no fetch running, so a fetch that put the
+// chunk in the cache and left inflight in between is looked for here, not run again.
 func (r *Reader) run(ctx context.Context, h meta.Hash, call *fetchCall) ([]byte, error) {
-	call.data, call.err = r.fetchChunk(ctx, h, call)
+	if b, ok := r.cachedLate(h); ok {
+		call.data = b
+	} else {
+		call.data, call.err = r.fetchChunk(ctx, h, call)
+	}
 	call.finish()
 	r.mu.Lock()
 	delete(r.inflight, h)
@@ -388,6 +394,15 @@ func (r *Reader) run(ctx context.Context, h meta.Hash, call *fetchCall) ([]byte,
 	r.mu.Unlock()
 	close(call.done)
 	return call.data, call.err
+}
+
+// cachedLate is the cache's chunk h when it is held already: Has first, so a miss costs
+// no file open.
+func (r *Reader) cachedLate(h meta.Hash) ([]byte, bool) {
+	if r.cache == nil || !r.cache.Has(h) {
+		return nil, false
+	}
+	return r.cache.Get(h)
 }
 
 func sha256Sum(b []byte) meta.Hash { return sha256.Sum256(b) }
