@@ -548,16 +548,19 @@ func TestReader_Readahead_JoinedPrefetchSurvivesCancel(t *testing.T) {
 	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "prefetches done")
 }
 
-// File.ReadAt starts the readahead after its own chunk is in hand, never alongside it:
-// every GET of the client's chunk precedes the first GET of a prefetch, so the bytes the
-// client waits for are not queued behind the ones it may want later.
+// File.ReadAt starts the readahead only once its own read is served, never alongside it:
+// while the client's GETs are held nothing but its own chunk is asked for, and the
+// prefetches follow once the read returns. (With early serve, I-202, a read is served by
+// its data shard alone, so the chunk's other GET may be issued after a prefetch's; the
+// order of GET calls across goroutines is not the rule, and CI on Windows saw it vary.)
 // Invariant: I-203
 func TestFile_ReadAt_PrefetchStartsAfterTheRead(t *testing.T) {
 	f := testharness.NewFabric(t, 4, 2, 1)
 	cs := int(testharness.ChunkSize)
 	data := testharness.Pattern(8*cs, 17)
 	in := f.Inode(writeAndFlush(t, f, "a", data))
-	p := &priorityLog{ShardClient: f}
+	g := &countGate{ShardClient: f, release: make(chan struct{})}
+	p := &priorityLog{ShardClient: g}
 	rd := vfs.NewReader(f.FSM, f, p, f.Cache, nil)
 	drained(t, rd)
 	fs := vfs.New(f.FSM, f, f.Ov, rd, f.Clk, 501, 20)
@@ -565,17 +568,35 @@ func TestFile_ReadAt_PrefetchStartsAfterTheRead(t *testing.T) {
 	must(t, err)
 	defer file.Close()
 	buf := make([]byte, 32<<10)
-	if _, err := file.ReadAt(buf, 0); err != nil {
-		t.Fatal(err)
+	errs := make(chan error, 1)
+	go func() {
+		_, err := file.ReadAt(buf, 0)
+		errs <- err
+	}()
+	k := 2
+	testharness.Eventually(t, func() bool { return g.entered.Load() >= int32(k) }, "the client's GETs are held")
+	own := hex.EncodeToString(in.Chunks[0][:])
+	others := func() []string {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		var out []string
+		for _, key := range p.keys {
+			if !strings.HasPrefix(key, own) {
+				out = append(out, key)
+			}
+		}
+		return out
+	}
+	if o := others(); len(o) != 0 {
+		t.Fatalf("GETs %v started while the client's read was unserved", o)
+	}
+	close(g.release)
+	must(t, <-errs)
+	if !bytes.Equal(buf, data[:len(buf)]) {
+		t.Fatalf("read differs at %d", testharness.FirstDiff(buf, data[:len(buf)]))
 	}
 	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "prefetches done")
-	own := hex.EncodeToString(in.Chunks[0][:])
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	k := 2
-	for i, key := range p.keys {
-		if strings.HasPrefix(key, own) != (i < k) {
-			t.Fatalf("GET order %v: the client's %d GETs must come first", p.keys, k)
-		}
+	if len(others()) == 0 {
+		t.Fatal("no prefetch followed the read")
 	}
 }
