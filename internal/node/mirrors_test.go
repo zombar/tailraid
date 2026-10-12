@@ -605,3 +605,70 @@ func TestMirror_RowlessManifestsImportedOnTick(t *testing.T) {
 		t.Fatal("a sync after the imports replaced a manifest")
 	}
 }
+
+// freeFS reports a chosen free space for every path, as a nearly full mirror disk would.
+type freeFS struct {
+	sysfs.OS
+	free, total uint64
+}
+
+func (f freeFS) Free(string) (free, total uint64, err error) { return f.free, f.total, nil }
+
+// The warnings `status` and `check` carry for a host's mirrors (docs/12 §11): none for a
+// healthy one; an incomplete snapshot; a schedule behind by twice every while online; a
+// mirror under its free-space reserve; and one whose newest snapshot is older than
+// stale_after, offline that long.
+// Invariant: I-188
+func TestCheck_MirrorWarnings(t *testing.T) {
+	r := newMirrorRig(t, pol())
+	r.write(meta.RootIno, "a", []byte("bytes"))
+	r.s.tick(context.Background())
+	r.drain()
+	warns := func() string {
+		r.s.refresh()
+		_, w := r.s.report(r.clk.Now(), r.f.Snapshots())
+		return strings.Join(w, "\n")
+	}
+	if w := warns(); w != "" {
+		t.Fatalf("a healthy mirror warns: %s", w)
+	}
+	// an incomplete snapshot: its chunk is unreadable
+	r.write(meta.RootIno, "lost", []byte("this chunk cannot be read"))
+	for h := range r.chunks {
+		if string(r.chunks[h]) == "this chunk canno" {
+			delete(r.chunks, h)
+		}
+	}
+	r.ok(meta.Command{Op: meta.OpSnapshotBegin, SnapshotBegin: &meta.SnapshotBegin{Mirror: r.mirror, Name: "partial", Now: r.clk.Now().UnixNano()}})
+	r.drain()
+	if w := warns(); !strings.Contains(w, "snapshot partial is missing 1 chunks") {
+		t.Fatalf("incomplete: %q", w)
+	}
+	// the schedule is behind: the newest snapshot is older than twice every
+	r.clk.Advance(3 * time.Hour)
+	if w := warns(); !strings.Contains(w, "no snapshot for 3h0m0s while online") {
+		t.Fatalf("behind: %q", w)
+	}
+	// under the reserve: max(5 %, 4 GiB) of the filesystem
+	r.s.fsys = freeFS{free: 3 << 30, total: 100 << 30}
+	if w := warns(); !strings.Contains(w, "under its free-space reserve") {
+		t.Fatalf("reserve: %q", w)
+	}
+	r.s.fsys = freeFS{free: 6 << 30, total: 100 << 30}
+	if w := warns(); strings.Contains(w, "reserve") {
+		t.Fatalf("6 GiB free of 100 GiB is above the reserve: %q", w)
+	}
+	r.s.fsys = sysfs.OS{}
+	// offline past stale_after
+	if err := os.Rename(r.path, r.path+".away"); err != nil {
+		t.Fatal(err)
+	}
+	r.clk.Advance(8 * 24 * time.Hour)
+	w := warns()
+	if !strings.Contains(w, "mirror h1/m1: newest snapshot is 195h0m0s old (not attached") || strings.Contains(w, "while online") {
+		t.Fatalf("stale: %q", w)
+	}
+	if rep, _ := r.s.report(r.clk.Now(), r.f.Snapshots()); len(rep) != 1 || rep[0].Name != "h1/m1" || rep[0].Online {
+		t.Fatalf("an unplugged mirror is reported by its name: %+v", rep)
+	}
+}

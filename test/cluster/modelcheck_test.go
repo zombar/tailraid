@@ -16,6 +16,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/mirror"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/testharness"
@@ -56,7 +57,13 @@ const maxWorlds = 8
 // A remove and a rename over a name are trashes (docs/02): the checker keeps the bytes
 // it believes each trashed inode holds, restores and purges them at random, and after
 // every quiescence reads every trashed root it knows on every node (I-152, I-153, I-155).
-// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155
+// Node 0 carries a mirror (docs/16): after every quiescence the checker begins a snapshot
+// and keeps the world as of its index; the copy runs some steps later, while the volume
+// moves on, GC runs and the mirror goes offline and back; a sync whose host restarted or
+// whose mirror went away fails. Every complete snapshot then reads byte-exact against its
+// world through every gateway, and no chunk a sync could not read was collected while it
+// was held (I-179, I-181, I-185).
+// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155, I-179, I-181, I-185
 // Lifecycle: L-162, L-163, L-173, L-199, L-200, L-201, L-203, L-204, L-205
 func TestModelCheck_Long(t *testing.T) {
 	n := *steps
@@ -73,6 +80,16 @@ func TestModelCheck_Long(t *testing.T) {
 	cs := int(testharness.ChunkSize)
 	worlds := []world{{}}
 	names := []string{"/a", "/b", "/d/c", "/d/e", "/big"}
+	cm := newClusterMirror(t, c, 0)
+	type pendingSync struct {
+		sn    meta.Snapshot
+		clone *meta.State
+		host  *cluster.Node // the host process that holds the clone: a restart loses it
+		w     world         // the volume as of the begin's index
+		due   int
+	}
+	var syncing *pendingSync
+	snapWorlds := map[string]world{} // complete snapshots → the world as of their index
 	// A node serves NFS only once WaitReady has passed (node.Serve), so a restarted node
 	// becomes a gateway only when its FSM has caught up with the log it holds.
 	pending := map[int]bool{}
@@ -194,8 +211,61 @@ func TestModelCheck_Long(t *testing.T) {
 		return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrExist) || errors.Is(err, meta.ErrNotExist) || errors.Is(err, meta.ErrExist)
 	}
 
+	// finishSync runs the copy of the pending snapshot as its host's worker would, and ends
+	// it: complete, or failed when the host restarted (its clone is gone) or the mirror is
+	// offline (docs/16 §3).
+	finishSync := func(step int) {
+		p := syncing
+		var man *mirror.Manifest
+		switch {
+		case !c.Alive(cm.host) || c.Nodes[cm.host].Node != p.host:
+			log("%d sync %s: its host restarted, the clone is gone", step, p.sn.Name)
+		case cm.offline.Load():
+			log("%d sync %s: the mirror is offline", step, p.sn.Name)
+		default:
+			m, err := cm.sync(p.sn, p.clone)
+			if err != nil {
+				log("%d sync %s failed: %v", step, p.sn.Name, err)
+				break
+			}
+			man = &m
+			for _, h := range m.Missing { // unreadable is allowed (nodes are down); collected is not (I-181)
+				if _, ok := c.Nodes[cm.host].Node.FSM.GetChunk(meta.Hash(h)); !ok {
+					t.Fatalf("step %d: chunk %x of snapshot %s was collected while its sync held it", step, h[:6], p.sn.Name)
+				}
+			}
+		}
+		if err := cm.end(p.sn, man); err != nil && !errors.Is(err, meta.ErrNotExist) {
+			log("%d end %s failed: %v (retried)", step, p.sn.Name, err)
+			return
+		}
+		if row, ok := c.Leader().Node.FSM.SnapshotRow(p.sn.ID); ok && row.State == meta.SnapComplete {
+			snapWorlds[p.sn.Name] = p.w
+			log("%d snapshot %s complete (%d files, %d new bytes)", step, p.sn.Name, row.Files, row.NewBytes)
+		} else {
+			log("%d snapshot %s ended without completing (%+v)", step, p.sn.Name, row)
+		}
+		syncing = nil
+	}
+
 	doStep := func(step int) {
 		gws := liveGateways()
+		if syncing != nil && step >= syncing.due && !partitioned {
+			finishSync(step)
+		}
+		if rng.Intn(25) == 0 && !partitioned { // the mirror's disk comes and goes; GC runs, held by a running sync
+			if rng.Intn(3) == 0 {
+				cm.offline.Store(!cm.offline.Load())
+				log("%d mirror offline=%v", step, cm.offline.Load())
+				return
+			}
+			leader := c.Leader()
+			c.Clk.Advance(11 * time.Minute)
+			c.Probe()
+			res, err := repair.NewGC(leader.Node.FSM, leader.Node, leader.Client, leader.Prober, c.Clk, 10*time.Minute, nil).RunOnce(ctx)
+			log("%d gc: %+v %v (sync running: %v)", step, res, err, syncing != nil)
+			return
+		}
 		switch r := rng.Intn(100); {
 		case r < 52 && len(gws) > 0: // client write at a random offset through the file's gateway
 			name := names[rng.Intn(len(names))]
@@ -557,6 +627,50 @@ func TestModelCheck_Long(t *testing.T) {
 			checkTrash(t, c, trashed, step)
 			owner = map[string]int{}
 			frozen = map[string]bool{}
+			// snapshots: end a syncing row the run lost track of (an ambiguous begin),
+			// read every complete one, and begin the next as of this quiescence
+			cm.offline.Store(false)
+			cm.attach()
+			for _, sn := range c.Leader().Node.FSM.Snapshots() {
+				if sn.State == meta.SnapSyncing && (syncing == nil || syncing.sn.ID != sn.ID) {
+					_ = cm.end(sn, nil)
+				}
+			}
+			c.Settle()
+			checkSnapshots(t, c, cm, snapWorlds, names, step)
+			if syncing == nil {
+				name := fmt.Sprintf("s%d", step)
+				if sn, clone, err := cm.begin(name); err == nil {
+					syncing = &pendingSync{sn: sn, clone: clone, host: c.Nodes[cm.host].Node, w: worlds[0].clone(), due: step + 1 + rng.Intn(20)}
+					log("%d begin snapshot %s at index %d", step, name, sn.Index)
+				} else {
+					log("%d begin snapshot %s failed: %v", step, name, err)
+				}
+			}
+		}
+	}
+}
+
+// checkSnapshots reads every complete snapshot the model knows through every gateway
+// and compares it with the world as of its index (I-179, I-185); a name the world lacks
+// must not be in it.
+func checkSnapshots(t *testing.T, c *testharness.Cluster, cm *clusterMirror, snaps map[string]world, names []string, step int) {
+	t.Helper()
+	for _, name := range slices.Sorted(maps.Keys(snaps)) {
+		w := snaps[name]
+		for i := range c.Nodes {
+			for _, f := range names {
+				got, err := c.ReadFile(i, cm.path(name, f))
+				switch {
+				case w[f] == nil && err == nil:
+					t.Fatalf("step %d: n%d snapshot %s holds %s, removed before its begin", step, i, name, f)
+				case w[f] == nil:
+				case err != nil:
+					t.Fatalf("step %d: n%d snapshot %s %s: %v", step, i, name, f, err)
+				case !bytes.Equal(got, w[f]):
+					t.Fatalf("step %d: n%d snapshot %s %s differs at %d (len %d want %d)", step, i, name, f, testharness.FirstDiff(got, w[f]), len(got), len(w[f]))
+				}
+			}
 		}
 	}
 }

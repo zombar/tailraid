@@ -16,8 +16,8 @@ import (
 
 // A host's /health lists each registered mirror it has open with the sync under way: the
 // file bytes walked of the snapshot's total, and the bytes written so far; once the sync
-// ends the progress is gone, and a detached mirror is listed offline by nobody, so every
-// other node calls it offline (docs/16 §1).
+// ends the progress is gone, and a detached mirror is listed offline with the reason,
+// which every other node shows (docs/16 §1).
 //
 // Invariant: I-188
 func TestMirrorSet_HealthCarriesSyncProgress(t *testing.T) {
@@ -58,8 +58,8 @@ func TestMirrorSet_HealthCarriesSyncProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.s.refresh()
-	if h := r.s.health(); len(h) != 0 {
-		t.Fatalf("a detached mirror is listed: %+v", h)
+	if h := r.s.health(); len(h) != 1 || h[0].Online || h[0].Reason == "" || h[0].Syncing != nil {
+		t.Fatalf("a detached mirror = %+v, want it listed offline with the reason", h)
 	}
 }
 
