@@ -29,6 +29,7 @@ const (
 	OpSnapshotBegin  Op = 19 // {Mirror, Name, Auto, Now} → Result.SnapID: a sync begins and holds GC
 	OpSnapshotEnd    Op = 20 // {ID, OK, Root, Files, Bytes, NewBytes, Missing, Now}
 	OpSnapshotDelete Op = 21 // {ID, Done, Now}: the leader's thinning only, never a user (I-183)
+	OpSnapshotImport Op = 22 // {Mirror, After, Name, At, Auto, Root, Files, Bytes, NewBytes, Missing, Now} → Result.SnapID: a rowless manifest (docs/16 §5)
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
@@ -210,6 +211,23 @@ type SnapshotDelete struct {
 	Now  int64
 }
 
+// SnapshotImport records a catalogue row for a manifest the mirror's host found on its
+// disk with no row (docs/16 §5): the row takes an ID above both NextSnap and After (the
+// largest manifest ID on the disk) and the manifest's own name, time and sizes.
+type SnapshotImport struct {
+	Mirror   NodeIdx
+	After    SnapID
+	Name     string
+	At       int64
+	Auto     bool
+	Root     Hash
+	Files    uint64
+	Bytes    uint64
+	NewBytes uint64
+	Missing  uint32
+	Now      int64
+}
+
 // ChunkWrite assigns chunk slot Idx of the committed file; Hash may be HashZero.
 type ChunkWrite struct {
 	Idx  uint32
@@ -266,6 +284,7 @@ type Command struct {
 	SnapshotBegin  *SnapshotBegin
 	SnapshotEnd    *SnapshotEnd
 	SnapshotDelete *SnapshotDelete
+	SnapshotImport *SnapshotImport
 }
 
 // needsV7 reports whether c is a snapshot command or registers a mirror (docs/16): an
@@ -273,7 +292,7 @@ type Command struct {
 // refuses them while such a member is live (I-184).
 func needsV7(c Command) bool {
 	switch c.Op { //nolint:exhaustive // every other op is version 1–6
-	case OpSnapshotBegin, OpSnapshotEnd, OpSnapshotDelete:
+	case OpSnapshotBegin, OpSnapshotEnd, OpSnapshotDelete, OpSnapshotImport:
 		return true
 	case OpNodeUpsert:
 		return c.NodeUpsert != nil && c.NodeUpsert.Node.Kind == KindMirror
@@ -536,6 +555,19 @@ func encodeCommand(c Command) []byte {
 		w.u32(uint32(p.ID))
 		w.bool(p.Done)
 		w.i64(p.Now)
+	case OpSnapshotImport:
+		p := mustPayload(c.SnapshotImport, c.Op)
+		w.u16(uint16(p.Mirror))
+		w.u32(uint32(p.After))
+		w.str(p.Name)
+		w.i64(p.At)
+		w.bool(p.Auto)
+		w.hash(p.Root)
+		w.u64(p.Files)
+		w.u64(p.Bytes)
+		w.u64(p.NewBytes)
+		w.u32(p.Missing)
+		w.i64(p.Now)
 	default:
 		panic(fmt.Sprintf("meta: EncodeCommand: unknown op %d", c.Op))
 	}
@@ -578,10 +610,10 @@ func DecodeCommand(b []byte) (Command, error) {
 	case commandVersionV6:
 		legal = c.Op == OpSetAttr
 	case commandVersionV7:
-		legal = c.Op == OpSnapshotBegin || c.Op == OpSnapshotEnd || c.Op == OpSnapshotDelete || c.Op == OpNodeUpsert
+		legal = c.Op == OpSnapshotBegin || c.Op == OpSnapshotEnd || c.Op == OpSnapshotDelete || c.Op == OpSnapshotImport || c.Op == OpNodeUpsert
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
-			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete
+			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
@@ -673,6 +705,11 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.SnapshotEnd = &SnapshotEnd{ID: SnapID(r.u32()), OK: r.bool(), Root: r.hash(), Files: r.u64(), Bytes: r.u64(), NewBytes: r.u64(), Missing: r.u32(), Now: r.i64()}
 	case OpSnapshotDelete:
 		c.SnapshotDelete = &SnapshotDelete{ID: SnapID(r.u32()), Done: r.bool(), Now: r.i64()}
+	case OpSnapshotImport:
+		c.SnapshotImport = &SnapshotImport{
+			Mirror: NodeIdx(r.u16()), After: SnapID(r.u32()), Name: r.str(), At: r.i64(), Auto: r.bool(), Root: r.hash(),
+			Files: r.u64(), Bytes: r.u64(), NewBytes: r.u64(), Missing: r.u32(), Now: r.i64(),
+		}
 	default:
 		return c, fmt.Errorf("meta: unknown op %d", c.Op)
 	}

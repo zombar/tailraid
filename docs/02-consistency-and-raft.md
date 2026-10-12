@@ -73,6 +73,7 @@ const (
     OpSnapshotBegin           // {Mirror NodeIdx, Name, Auto bool, Now} → Result.SnapID (16 §3, codec 7)
     OpSnapshotEnd             // {ID, OK bool, Root Hash, Files, Bytes, NewBytes uint64, Missing uint32, Now} (codec 7)
     OpSnapshotDelete          // {ID, Done bool, Now}: the mirror host's thinning only, never a user (codec 7)
+    OpSnapshotImport          // {Mirror, After SnapID, Name, At, Auto, Root, Files, Bytes, NewBytes, Missing, Now} → Result.SnapID (16 §5, codec 7)
 )
 const AttrFlags uint8 = 1 << 5  // SetAttr.Mask bit: {Flags uint8} follows Now (codec 4)
 const FlagProtected, FlagNSFW uint8 = 1, 2
@@ -280,6 +281,16 @@ the FSM. The only proposer is the mirror's host, on its tick (thinning and the f
 and after its sweep (`Done`): no admin op or web route carries the command, so no
 user removes a snapshot (I-183).
 
+**SnapshotImport** (16 §5). A manifest the mirror's host found on its disk with no row
+becomes one: `Mirror` must be an `Active` `KindMirror` row (`ErrNoSuchNode`), `Name` valid
+and free on that mirror (`ErrBadCommand`, `ErrExist`). Sets `NextSnap = max(NextSnap,
+After + 1)`, allocates `ID = NextSnap++` and records `{ID, Mirror, Name, Index: the
+command's own index, At, Auto, Root, Files, Bytes, NewBytes, Missing, State: Complete}`
+(`Incomplete` when `Missing > 0`); returns the ID. `At` is the manifest's own time, not
+the clock's, so the schedule thins an imported snapshot by when it was taken. No hold
+begins: the snapshot is already on the disk. The op joined codec 7 before that codec's
+first release.
+
 **NodeUpsert of a mirror** (16 §1): a `KindMirror` row must name an `Active` device as its
 `Host`, as a disk row does (14 §1), carries no budget and no ports, and is never a
 placement, policy or repair candidate; a re-home changes only its `Host`. Removing a mirror
@@ -290,7 +301,7 @@ is `Syncing`.
 disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore`,
 `Purge`, `SetAttr` with `Flags`), 5 (`Commit` whose `NewChunks` carry `Sums`,
 `SetShardSums`), 6 (`SetAttr` with the library bits of 18 §9) or 7 (`SnapshotBegin`,
-`SnapshotEnd`, `SnapshotDelete`, `NodeUpsert` of a mirror, 16), snapshots in version 7 (01 §Binary codec); every reader
+`SnapshotEnd`, `SnapshotDelete`, `SnapshotImport`, `NodeUpsert` of a mirror, 16), snapshots in version 7 (01 §Binary codec); every reader
 decodes every older version. A `Commit` carries `Sums` only while every live active member
 reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
 gate: in a mixed cluster the chunk is committed without sums and the repair scanner's

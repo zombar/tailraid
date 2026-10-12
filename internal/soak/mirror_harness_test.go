@@ -172,7 +172,7 @@ func (e *harnessEnv) takeSnapshot(ctx context.Context, name string, auto bool) (
 	}
 	host := e.c.Nodes[hm.host]
 	clones := make(chan *meta.State, 1)
-	host.Node.FSM.SetSnapshotHook(func(_ meta.Snapshot, h meta.NodeIdx, clone func() *meta.State) {
+	host.Node.FSM.SetSnapshotHook(func(_ meta.Snapshot, h meta.NodeIdx, _ string, clone func() *meta.State) {
 		if h == host.Idx() {
 			clones <- clone()
 		}

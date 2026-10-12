@@ -35,6 +35,7 @@ var (
 	ErrNotEmpty  = errors.New("mirror: the path holds something other than a mirror")
 	ErrCorrupt   = errors.New("mirror: corrupt object or tree")
 	ErrNotFound  = errors.New("mirror: not on this mirror")
+	ErrExists    = errors.New("mirror: a manifest with this ID is on the disk")
 )
 
 // Marker is the mirror's identity (docs/16 §2).
@@ -102,6 +103,25 @@ func Create(fsys sysfs.FS, root string, m Marker) error {
 		return err
 	}
 	return writeDurable(fsys, filepath.Join(root, "tmp"), filepath.Join(root, MarkerFile), b)
+}
+
+// Adopt rewrites the marker of a mirror of another cluster so that it belongs to
+// clusterID (hex) on hostID (docs/16 §7, `mirror add --adopt`): its mirror ID, and so
+// its objects, trees and manifests, stay; the new cluster imports the manifests (§5).
+func Adopt(fsys sysfs.FS, root, clusterID, hostID string) (Marker, error) {
+	mk, err := ReadMarker(fsys, root)
+	if err != nil {
+		return Marker{}, err
+	}
+	mk.ClusterID, mk.HostID = clusterID, hostID
+	b, err := json.Marshal(mk)
+	if err != nil {
+		return Marker{}, err
+	}
+	if err := writeDurable(fsys, filepath.Join(root, "tmp"), filepath.Join(root, MarkerFile), b); err != nil {
+		return Marker{}, err
+	}
+	return mk, nil
 }
 
 // ReadMarker reads a mirror's identity without opening it.
@@ -286,7 +306,8 @@ func (m *Mirror) manifestPath(id uint32) string {
 }
 
 // PutManifest writes a snapshot's manifest: the last write of a sync, after every tree
-// and object it names (I-180).
+// and object it names (I-180). It never replaces a manifest already on the disk
+// (ErrExists): one the catalogue has not imported yet keeps its snapshot (I-183).
 func (m *Mirror) PutManifest(man Manifest) error {
 	if man.Format == 0 {
 		man.Format = Format
@@ -300,7 +321,55 @@ func (m *Mirror) PutManifest(man Manifest) error {
 	if err := m.mkdir(filepath.Join(m.root, "snaps")); err != nil {
 		return err
 	}
+	if _, err := m.fsys.Stat(m.manifestPath(man.ID)); err == nil {
+		return fmt.Errorf("%w: %d", ErrExists, man.ID)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	return writeDurable(m.fsys, m.tmpDir(), m.manifestPath(man.ID), b)
+}
+
+// Renumber moves the manifest from to the ID and name its imported catalogue row took
+// (docs/16 §5): it writes the manifest under the new ID, then removes the old file. When
+// the new file is already there (a crash between the two) and names the same snapshot,
+// the old one is a copy and is removed; any other manifest under the new ID is ErrExists
+// and nothing changes.
+func (m *Mirror) Renumber(from, to uint32, name string) error {
+	if from == to {
+		return nil
+	}
+	b, err := readAll(m.fsys, m.manifestPath(from))
+	if err != nil {
+		return err
+	}
+	var man Manifest
+	if err := json.Unmarshal(b, &man); err != nil {
+		return fmt.Errorf("mirror: manifest %d: %w", from, err)
+	}
+	if nb, err := readAll(m.fsys, m.manifestPath(to)); err == nil {
+		var cur Manifest
+		if json.Unmarshal(nb, &cur) != nil || cur.Name != name || cur.Root != man.Root {
+			return fmt.Errorf("%w: %d", ErrExists, to)
+		}
+		return m.RemoveManifest(from)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	man.ID, man.Name = to, name
+	if man.Format == 0 {
+		man.Format = Format
+	}
+	nb, err := json.MarshalIndent(man, "", "  ")
+	if err != nil {
+		return err
+	}
+	m.sweep.RLock()
+	err = writeDurable(m.fsys, m.tmpDir(), m.manifestPath(to), nb)
+	m.sweep.RUnlock()
+	if err != nil {
+		return err
+	}
+	return m.RemoveManifest(from)
 }
 
 // Manifests lists the snapshots on the mirror in ID order.

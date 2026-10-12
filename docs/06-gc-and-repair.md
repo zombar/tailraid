@@ -422,4 +422,4 @@ state to patch.
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
 | I-215 | `TestScrubDue_Window`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_ScrubPeriod_FirstPassAsLeader`, `TestConfig_ScrubPeriod` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
-| I-182 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`; planned: TestSchedule_AutoNameTaken_NoRetry, TestSchedule_SkipsWhileCodecOld |
+| I-182 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`, `TestSchedule_AutoNameTaken_NoRetry`, `TestSchedule_SkipsWhileCodecOld` |

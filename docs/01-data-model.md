@@ -287,7 +287,7 @@ Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM retur
 A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3:
 `SetPlacement`, `GCDelete`; 4: `Trash`, `Restore`, `Purge` and a `SetAttr` carrying
 `Flags`; 5 and 6: 02 §Codec versions; 7: `SnapshotBegin`, `SnapshotEnd`,
-`SnapshotDelete` and a `NodeUpsert` of a `KindMirror` row), so an entry can never smuggle
+`SnapshotDelete`, `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row), so an entry can never smuggle
 a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
@@ -426,8 +426,8 @@ defined in `04-write-path-and-durability.md`.
   `Trash` and `Stats` rebuilt on decode equal the ones kept incrementally by the applies;
   and `DecodeState(EncodeState(s)) == s` for a state with deleted roots and flags.
 - **I-184** — Snapshot version 7 carries the snapshot catalogue and `NextSnap`, and log
-  entries carry codec version 7 only for `SnapshotBegin`, `SnapshotEnd`, `SnapshotDelete`
-  and a `NodeUpsert` of a `KindMirror` row; every snapshot and entry of an older version
+  entries carry codec version 7 only for `SnapshotBegin`, `SnapshotEnd`, `SnapshotDelete`,
+  `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row; every snapshot and entry of an older version
   decodes as before with an empty catalogue; a mirror row is never a placement, policy,
   repair or budget candidate; and `DecodeState(EncodeState(s)) == s` for a state with
   mirrors and catalogue rows in every state.
