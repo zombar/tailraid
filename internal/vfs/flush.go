@@ -285,6 +285,16 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 	return f.ov.CommitFlushed(plan, newSize)
 }
 
+// carriesSums reports whether a Commit records any chunk's shard sums (a codec-5 command).
+func carriesSums(c *meta.Commit) bool {
+	for _, d := range c.NewChunks {
+		if d.Sums != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // chunkWork is what survives of a touched chunk once it is decided: the bytes themselves
 // live only inside processChunk (docs/04 §9, I-78).
 type chunkWork struct {
@@ -319,15 +329,32 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		if f.Hooks.AfterAllShardsAcked != nil {
 			f.Hooks.AfterAllShardsAcked()
 		}
-		cmd := f.buildCommit(plan, base, works, partial || limited)
-		if f.Hooks.BeforeCommit != nil {
-			f.Hooks.BeforeCommit()
-		}
-		pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
-		res, index, perr := f.prop.Propose(pctx, meta.Command{Op: meta.OpCommit, Commit: cmd})
-		cancel()
-		if perr != nil {
-			return 0, fmt.Errorf("propose commit: %w", perr)
+		var (
+			cmd    *meta.Commit
+			res    meta.Result
+			index  uint64
+			noSums bool
+		)
+		for {
+			cmd = f.buildCommit(plan, base, works, partial || limited, noSums)
+			if f.Hooks.BeforeCommit != nil {
+				f.Hooks.BeforeCommit()
+			}
+			pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
+			var perr error
+			res, index, perr = f.prop.Propose(pctx, meta.Command{Op: meta.OpCommit, Commit: cmd})
+			cancel()
+			if perr != nil {
+				return 0, fmt.Errorf("propose commit: %w", perr)
+			}
+			if errors.Is(res.Err, meta.ErrCodec) && !noSums && carriesSums(cmd) {
+				// the leader sees a member older than this gateway does (a rolling
+				// upgrade): the same chunks without their sums, which the backfill
+				// records later (I-219)
+				noSums = true
+				continue
+			}
+			break
 		}
 		switch {
 		case res.Err == nil:
@@ -804,11 +831,12 @@ func (f *Flusher) fillSlots(ctx context.Context, w *chunkWork, data []byte, c me
 // buildCommit assembles the Commit command (step 10) including the NewSize rules. partial
 // covers both the FileDirtyHi trigger and a plan cut to one batch (I-80): either way only
 // the chunks in works are committed and the rest of the plan stays dirty.
-func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWork, partial bool) *meta.Commit {
+func (f *Flusher) buildCommit(plan *FlushPlan, base meta.Inode, works []*chunkWork, partial, noSums bool) *meta.Commit {
 	cs := uint64(f.st.Volume().ChunkSize)
 	cmd := &meta.Commit{Ino: plan.Ino, BaseVersion: base.Version, Now: f.clk.Now().UnixNano()}
 	seen := map[meta.Hash]bool{}
-	withSums := f.MinCodec == nil || f.MinCodec() >= meta.CodecShardSums // else the backfill records them (docs/06 §4)
+	// else the backfill records them (docs/06 §4)
+	withSums := !noSums && (f.MinCodec == nil || f.MinCodec() >= meta.CodecShardSums)
 	var lastFull uint64
 	for _, w := range works {
 		cmd.Writes = append(cmd.Writes, meta.ChunkWrite{Idx: uint32(w.idx), Hash: w.hash})

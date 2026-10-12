@@ -3,9 +3,11 @@ package vfs
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -89,17 +91,17 @@ func TestOverlay_WALCap_FailsAfterCapWait(t *testing.T) {
 	}
 }
 
-// Behind a flush that failed, a WRITE at the cap does not wait: it fails at once with the
-// cap error wrapping the flush's.
+// Behind a flush that failed because the cluster is full, a WRITE at the cap does not
+// wait: it fails at once with the cap error wrapping the flush's (ENOSPC on the wire).
 // Lifecycle: L-189
-func TestOverlay_WALCap_FailsFastWhenFlushFailed(t *testing.T) {
+func TestOverlay_WALCap_FailsFastWhenClusterFull(t *testing.T) {
 	ov, _ := newOverlay(t, t.TempDir(), WithWALCap(1000))
 	ino := meta.Ino(43)
 	fillToCap(t, ov, ino)
-	flushErr := errors.New("too few acks")
+	flushErr := fmt.Errorf("put: %w", chunk.ErrFull)
 	ov.NoteFlush(ino, flushErr)
 	err := ov.Write(ino, 0, 5000, []byte("late"))
-	if !errors.Is(err, ErrWALFull) || !errors.Is(err, flushErr) {
+	if !errors.Is(err, ErrWALFull) || !errors.Is(err, chunk.ErrFull) {
 		t.Fatalf("err = %v, want ErrWALFull wrapping the flush error", err)
 	}
 	if d := ov.Dirty(); len(d) != 1 || d[0].LastErr != flushErr.Error() {
@@ -108,6 +110,55 @@ func TestOverlay_WALCap_FailsFastWhenFlushFailed(t *testing.T) {
 	ov.NoteFlush(ino, nil) // a later success clears it
 	if d := ov.Dirty(); d[0].LastErr != "" {
 		t.Fatalf("flush error not cleared: %+v", d)
+	}
+}
+
+// Behind a flush that failed for a reason that passes (no leader, too few acks while
+// peers restart, a codec refusal), a WRITE at the cap waits as behind a slow flush: it is
+// acknowledged once the next flush frees room, and fails only when CapWait expires.
+// Lifecycle: L-219
+func TestOverlay_WALCap_WaitsBehindTransientFlushFailure(t *testing.T) {
+	for _, flushErr := range []error{
+		errors.New("too few acks"),
+		fmt.Errorf("commit rejected: %w", meta.ErrCodec),
+		fmt.Errorf("propose commit: %w", meta.ErrUnknownOutcome),
+	} {
+		t.Run(flushErr.Error(), func(t *testing.T) {
+			ov, clk := newOverlay(t, t.TempDir(), WithWALCap(1000), WithCapWait(5*time.Second))
+			ino := meta.Ino(46)
+			fillToCap(t, ov, ino)
+			ov.NoteFlush(ino, flushErr)
+			done := make(chan error, 1)
+			go func() { done <- ov.Write(ino, 0, 5000, []byte("late")) }()
+			// the WRITE either parks on the clock (waiting) or returns (failed fast)
+			var early error
+			returned := false
+			eventually(t, func() bool {
+				select {
+				case early = <-done:
+					returned = true
+					return true
+				default:
+					return clk.Pending() > 0
+				}
+			}, "the WRITE neither waited nor returned")
+			if returned {
+				t.Fatalf("the WRITE returned behind a transient flush failure: %v", early)
+			}
+			clk.Advance(4 * time.Second) // inside CapWait: still waiting
+			select {
+			case err := <-done:
+				t.Fatalf("the WRITE returned inside CapWait: %v", err)
+			default:
+			}
+			plan, ok := ov.SnapshotForFlush(ino)
+			if !ok {
+				t.Fatal("no plan")
+			}
+			must(t, ov.CommitFlushed(plan, 1000))
+			ov.NoteFlush(ino, nil)
+			must(t, <-done)
+		})
 	}
 }
 

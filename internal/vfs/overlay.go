@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/sysfs"
@@ -345,8 +346,8 @@ func (o *Overlay) progressCh() <-chan struct{} {
 }
 
 // NoteFlush records how the inode's last flush attempt ended (nil for success). A WRITE
-// that meets a cap consults it: it waits for a flusher that is making progress and fails
-// at once behind one that is not (I-79, L-189).
+// that meets a cap consults it: it fails at once behind a flush the cluster had no room
+// for and waits out any other failure (I-79, L-189, L-219).
 func (o *Overlay) NoteFlush(ino meta.Ino, err error) {
 	d, _ := o.get(ino, 0, false)
 	if d == nil {
@@ -471,8 +472,8 @@ func (o *Overlay) evict(d *dirtyFile) error {
 
 // Write records p at off. baseSize is the inode's committed size (used on first touch).
 // At the inode's WAL cap or the gateway's dirty cap it waits for the flusher to free
-// room, up to CapWait, and fails only when the wait expires or the inode's last flush
-// attempt failed (I-79, L-188, L-189).
+// room, up to CapWait, and fails only when the wait expires or, at once, when the inode's
+// last flush attempt failed because the cluster is full (I-79, L-188, L-189, L-219).
 func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	if len(p) == 0 {
 		return nil
@@ -489,8 +490,11 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 		if err == nil || (!errors.Is(err, ErrWALFull) && !errors.Is(err, ErrDirtyFull)) {
 			return err
 		}
-		if ferr := o.flushErr(ino); ferr != nil {
-			return fmt.Errorf("%w: %w", err, ferr) // the flusher is not draining this inode
+		if ferr := o.flushErr(ino); ferr != nil && errors.Is(ferr, chunk.ErrFull) {
+			// the cluster has no room: waiting frees none (L-189). Any other failure (a
+			// leader or peer restarting, a codec refusal) passes, and is waited out like
+			// a slow flush (L-219)
+			return fmt.Errorf("%w: %w", err, ferr)
 		}
 		remaining := deadline.Sub(o.clk.Now())
 		if remaining <= 0 {
