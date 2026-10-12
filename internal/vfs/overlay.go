@@ -248,8 +248,11 @@ type rewriteClaim struct {
 }
 
 // touchRewrite is every WRITE's look at ino's claim: a lapsed one is forgotten, so this
-// WRITE and the ones after it are plain; a live one is refreshed.
+// WRITE and the ones after it are plain; a live one is refreshed. A claim whose copy is
+// still dirty never lapses: the rest of it lands as the same rewrite, however long its
+// flushes retried.
 func (o *Overlay) touchRewrite(ino meta.Ino) {
+	dirty := o.dirty(ino)
 	o.rmu.Lock()
 	defer o.rmu.Unlock()
 	c, ok := o.rewrites[ino]
@@ -257,7 +260,7 @@ func (o *Overlay) touchRewrite(ino meta.Ino) {
 		return
 	}
 	now := o.clk.Now()
-	if now.Sub(c.at) > RewriteHold {
+	if now.Sub(c.at) > RewriteHold && !dirty {
 		delete(o.rewrites, ino)
 		return
 	}
@@ -299,17 +302,49 @@ func (o *Overlay) SetRewrite(ino meta.Ino, id uint64) {
 	}
 }
 
-// PruneRewrites forgets every claim that has lapsed; the flusher's loop calls it so the
-// table holds only the inodes written within RewriteHold.
-func (o *Overlay) PruneRewrites() {
+// ForgetPendingRewrite drops ino's claim if its start is still pending: a flush committed
+// the copy's first bytes as a plain write (the gate was closed, or the leader refused the
+// rewrite), so no later flush may start one, which would truncate what that flush
+// committed. A truncate to 0 still in the overlay starts a fresh one (I-223).
+func (o *Overlay) ForgetPendingRewrite(ino meta.Ino) {
 	o.rmu.Lock()
 	defer o.rmu.Unlock()
+	if c, ok := o.rewrites[ino]; ok && c.id == 0 {
+		delete(o.rewrites, ino)
+	}
+}
+
+// PruneRewrites forgets every claim that has lapsed and whose copy has landed; the
+// flusher's loop calls it so the table holds only the inodes written within RewriteHold
+// or still dirty.
+func (o *Overlay) PruneRewrites() {
 	now := o.clk.Now()
+	o.rmu.Lock()
+	var lapsed []meta.Ino
 	for ino, c := range o.rewrites {
 		if now.Sub(c.at) > RewriteHold {
-			delete(o.rewrites, ino)
+			lapsed = append(lapsed, ino)
 		}
 	}
+	o.rmu.Unlock()
+	for _, ino := range lapsed {
+		if o.dirty(ino) {
+			continue
+		}
+		o.rmu.Lock()
+		if c, ok := o.rewrites[ino]; ok && now.Sub(c.at) > RewriteHold { // a WRITE since refreshed it
+			delete(o.rewrites, ino)
+		}
+		o.rmu.Unlock()
+	}
+}
+
+// dirty reports whether ino has dirty data or a flush in flight.
+func (o *Overlay) dirty(ino meta.Ino) bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	_, ok := o.files[ino]
+	return ok
 }
 
 // OpenOverlay opens dir, replaying every `<ino>.wal` into dirty state (restart with a

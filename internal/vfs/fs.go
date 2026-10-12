@@ -495,6 +495,13 @@ func (f *FS) remove(filename string, own bool, expect meta.Ino) error {
 		trash.Expect = expect // the leader decides; this gateway may not have seen a rename yet
 	}
 	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: trash})
+	if trash.Expect != 0 && errors.Is(err, meta.ErrCodec) {
+		// the leader sees a member older than codec 9 (a rolling upgrade): the lookup
+		// above decided, and the delete still goes to the trash, not a hard unlink
+		plain := *trash
+		plain.Expect = 0
+		_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: &plain})
+	}
 	if expect != 0 && errors.Is(err, meta.ErrConflict) {
 		return mapErr("remove", filename, meta.ErrNotExist) // the name is another file's now
 	}
