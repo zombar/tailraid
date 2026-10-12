@@ -45,13 +45,15 @@ func TestConfig_Mirrors(t *testing.T) {
 	}
 
 	// paths: absolute, not twice, not a disk, not the data directory
+	root := t.TempDir() // absolute on every OS (a Windows path needs its volume)
+	data, disk, usb := filepath.Join(root, "data"), filepath.Join(root, "a"), filepath.Join(root, "usb")
 	base := Default()
-	base.Node.DataDir = "/var/lib/tailraid"
-	base.Node.Disks = []Disk{{Path: "/mnt/a"}}
+	base.Node.DataDir = data
+	base.Node.Disks = []Disk{{Path: disk}}
 	for _, c := range []struct {
 		path string
 		bad  bool
-	}{{"/mnt/usb", false}, {"relative", true}, {"/mnt/a", true}, {"/var/lib/tailraid", true}} {
+	}{{usb, false}, {"relative", true}, {disk, true}, {data, true}} {
 		cfg := base
 		cfg.Node.Mirrors = []Mirror{{Path: c.path}}
 		if err := cfg.Validate(); (err != nil) != c.bad {
@@ -68,7 +70,7 @@ func TestConfig_Mirrors(t *testing.T) {
 	if b, _ := os.ReadFile(p); strings.Contains(string(b), "mirrors") {
 		t.Fatalf("an unset mirrors section was written:\n%s", b)
 	}
-	base.Node.Mirrors = []Mirror{{Path: "/mnt/usb"}}
+	base.Node.Mirrors = []Mirror{{Path: usb}}
 	base.Mirrors.Every = "2h"
 	if err := Save(p, base); err != nil {
 		t.Fatal(err)

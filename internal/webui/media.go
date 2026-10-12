@@ -255,12 +255,12 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 			}
 		case meta.LibraryTV:
 			if k.Type == meta.TDir {
-				it := v.item(*k, p, "show")
-				for _, sk := range v.liveKids(k.Ino) {
-					if _, ok := search.SeasonOf(sk.Name); ok && sk.Type == meta.TDir {
-						it.Children++
-					}
+				group := v.showGroup(in.Ino, k)
+				if group[0].in.Ino != k.Ino {
+					continue // listed under the group's first folder
 				}
+				it := v.showItem(group, canonical)
+				it.Children = len(v.seasonNumbers(group))
 				items = append(items, it)
 			}
 		case meta.LibraryMusic:
@@ -337,8 +337,9 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 			}
 		}
 	case lib == meta.LibraryTV && in.Type == meta.TDir:
-		it = v.item(in, p, "show")
-		it.Seasons = v.seasons(in, p)
+		group := v.showGroup(in.Parent, &in)
+		it = v.showItem(group, path.Dir(p))
+		it.Seasons = v.seasons(group)
 		it.Children = len(it.Seasons)
 	case lib == meta.LibraryMusic && in.Type == meta.TDir:
 		tracks, _ := v.album(in.Ino)
@@ -351,9 +352,83 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 	writeJSON(w, http.StatusOK, it)
 }
 
-// seasons walks a show live: episode files in the show and in its season folders, with
-// the catalogue's fields where they exist, grouped by season, specials last.
-func (v mediaView) seasons(show meta.Inode, p string) []MediaSeason {
+// showDir is one folder of a show and its path.
+type showDir struct {
+	in   *meta.Inode
+	path string
+}
+
+// showKey is what makes sibling folders one show: the title and year their names clean
+// to, folded (docs/13 §10).
+func showKey(name string) string {
+	t, y := search.CleanName(name)
+	return search.SortTitle(t) + "\x00" + strconv.Itoa(y)
+}
+
+// showGroup is the show folder dir and every sibling under parent whose name cleans to
+// the same title and year, in name order; dir alone when parent lists none.
+func (v mediaView) showGroup(parent meta.Ino, dir *meta.Inode) []showDir {
+	key := showKey(dir.Name)
+	var group []showDir
+	for _, k := range v.liveKids(parent) {
+		if k.Type == meta.TDir && k.Library() == meta.LibraryNone && showKey(k.Name) == key {
+			group = append(group, showDir{in: k, path: k.Name})
+		}
+	}
+	if len(group) == 0 {
+		group = []showDir{{in: dir, path: dir.Name}}
+	}
+	return group
+}
+
+// showItem is a show listed once for its folders: the first folder's item, its poster
+// else the first folder's with one, added when the newest folder was. libPath is the
+// folders' parent; the group's paths become full paths.
+func (v mediaView) showItem(group []showDir, libPath string) MediaItem {
+	for i := range group {
+		group[i].path = path.Join(libPath, group[i].path)
+	}
+	it := v.item(*group[0].in, group[0].path, "show")
+	for _, d := range group[1:] {
+		o := v.item(*d.in, d.path, "show")
+		if it.Poster == "" {
+			it.Poster, it.Fanart = o.Poster, o.Fanart
+		}
+		if o.Added.After(it.Added) {
+			it.Added = o.Added
+		}
+	}
+	return it
+}
+
+// seasonNumbers is the set of seasons the folders hold, from names alone: season
+// folders and the episode files directly in a show folder.
+func (v mediaView) seasonNumbers(group []showDir) map[int]bool {
+	out := map[int]bool{}
+	for _, d := range group {
+		for _, k := range v.liveKids(d.in.Ino) {
+			if k.Type == meta.TDir {
+				if n, ok := search.SeasonOf(k.Name); ok {
+					out[n] = true
+				}
+				continue
+			}
+			if !search.IsVideo(k.Name) {
+				continue
+			}
+			if season, _, _, ok := search.ParseEpisode(strings.TrimSuffix(k.Name, path.Ext(k.Name))); ok {
+				out[max(season, 1)] = true
+			}
+		}
+	}
+	return out
+}
+
+// seasons walks a show live: episode files in each of its folders and in their season
+// folders, with the catalogue's fields where they exist, grouped by season, specials
+// last.
+func (v mediaView) seasons(group []showDir) []MediaSeason {
+	show := *group[0].in
 	by := map[int]*MediaSeason{}
 	get := func(n int) *MediaSeason {
 		if s, ok := by[n]; ok {
@@ -393,23 +468,26 @@ func (v mediaView) seasons(show meta.Inode, p string) []MediaSeason {
 			s.Episodes = append(s.Episodes, it)
 		}
 	}
-	episodes(show.Ino, p, -1)
-	for _, k := range v.liveKids(show.Ino) {
-		n, ok := search.SeasonOf(k.Name)
-		if k.Type != meta.TDir || !ok {
-			continue
-		}
-		s := get(n)
-		s.Title = k.Name
-		if e, ok := v.cat[k.Ino]; ok && e.Poster != "" {
-			// seasonNN-poster.* lives in the show's folder, poster.* or folder.* in the season's (docs/18 §8)
-			if strings.HasPrefix(strings.ToLower(e.Poster), "season") {
-				s.Poster = path.Join(p, e.Poster)
-			} else {
-				s.Poster = path.Join(p, k.Name, e.Poster)
+	for _, d := range group {
+		p := d.path
+		episodes(d.in.Ino, p, -1)
+		for _, k := range v.liveKids(d.in.Ino) {
+			n, ok := search.SeasonOf(k.Name)
+			if k.Type != meta.TDir || !ok {
+				continue
 			}
+			s := get(n)
+			s.Title = k.Name
+			if e, ok := v.cat[k.Ino]; ok && e.Poster != "" {
+				// seasonNN-poster.* lives in the show's folder, poster.* or folder.* in the season's (docs/18 §8)
+				if strings.HasPrefix(strings.ToLower(e.Poster), "season") {
+					s.Poster = path.Join(p, e.Poster)
+				} else {
+					s.Poster = path.Join(p, k.Name, e.Poster)
+				}
+			}
+			episodes(k.Ino, path.Join(p, k.Name), n)
 		}
-		episodes(k.Ino, path.Join(p, k.Name), n)
 	}
 	out := make([]MediaSeason, 0, len(by))
 	for _, s := range by {
