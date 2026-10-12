@@ -211,6 +211,16 @@ export interface DirInfo {
   purge_at?: string;
   cover?: string;
   no_cover?: boolean;
+  /** the snapshot the listing is read as of (at=, docs/16 §6) */
+  snapshot?: SnapRef;
+}
+
+/** SnapRef names the snapshot a listing is read as of. */
+export interface SnapRef {
+  id: number;
+  name: string;
+  mirror: string;
+  at: string;
 }
 
 export interface Ls {
@@ -297,6 +307,11 @@ export class ApiError extends Error {
   }
 }
 
+/** offline reports whether an error is a snapshot whose mirror is offline (409 offline, docs/13 §3). */
+export function offline(e: unknown): boolean {
+  return e instanceof ApiError && e.body?.["offline"] === true;
+}
+
 /** HEADER is the CSRF header every mutating request carries (docs/13 §3). */
 export const HEADER = "X-Tailraid-UI";
 
@@ -304,20 +319,33 @@ export function encodePath(p: string): string {
   return p.split("/").map(encodeURIComponent).join("/");
 }
 
-/** inQuery is the `in=<ino>` parameter that addresses a deleted root (docs/13 §4). */
-function inQuery(root: number | undefined, first = false): string {
-  return root === undefined ? "" : (first ? "?" : "&") + "in=" + root;
+/**
+ * Src is where a read looks besides the live volume: a deleted root's inode (`in=`,
+ * docs/13 §4), or a snapshot as "@<id>" (`at=`, docs/16 §6). A string keeps two
+ * sources comparable with ===, which the player's queue relies on.
+ */
+export type Src = number | `@${number}` | undefined;
+
+/** srcParam is the query parameter of a source, without its separator. */
+export function srcParam(root: Src): string {
+  if (root === undefined) return "";
+  return typeof root === "string" ? "at=" + root.slice(1) : "in=" + root;
 }
 
-export function fileURL(path: string, download = false, root?: number): string {
+/** inQuery is the `in=<ino>` or `at=<id>` parameter of a source. */
+function inQuery(root: Src, first = false): string {
+  return root === undefined ? "" : (first ? "?" : "&") + srcParam(root);
+}
+
+export function fileURL(path: string, download = false, root?: Src): string {
   const q: string[] = [];
   if (download) q.push("download=1");
-  if (root !== undefined) q.push("in=" + root);
+  if (root !== undefined) q.push(srcParam(root));
   return "/files" + encodePath(path) + (q.length ? "?" + q.join("&") : "");
 }
 
 /** thumbURL is the thumbnail of path; tag, when given, keys the browser's cache (a video's version and frame recipe, docs/13 §5). */
-export function thumbURL(path: string, root?: number, tag?: string): string {
+export function thumbURL(path: string, root?: Src, tag?: string): string {
   return "/api/thumb?path=" + encodeURIComponent(path) + inQuery(root) + (tag ? "&t=" + encodeURIComponent(tag) : "");
 }
 
@@ -343,12 +371,12 @@ function post<T>(route: string, body: unknown): Promise<T> {
 }
 
 export const getStatus = (): Promise<Report> => call("/api/status");
-export const ls = (path: string, root?: number): Promise<Ls> => call("/api/ls?path=" + encodeURIComponent(path) + inQuery(root));
-export const stat = (path: string, root?: number): Promise<Entry> => call("/api/stat?path=" + encodeURIComponent(path) + inQuery(root));
+export const ls = (path: string, root?: Src): Promise<Ls> => call("/api/ls?path=" + encodeURIComponent(path) + inQuery(root));
+export const stat = (path: string, root?: Src): Promise<Entry> => call("/api/stat?path=" + encodeURIComponent(path) + inQuery(root));
 export const trashList = (): Promise<{ entries: TrashEntry[] }> => call("/api/trash");
 export const chunks = (path: string, offset: number, limit: number): Promise<ChunksPage> =>
   call(`/api/chunks?path=${encodeURIComponent(path)}&offset=${offset}&limit=${limit}`);
-export const tags = (path: string, root?: number): Promise<Tags> => call("/api/tags?path=" + encodeURIComponent(path) + inQuery(root));
+export const tags = (path: string, root?: Src): Promise<Tags> => call("/api/tags?path=" + encodeURIComponent(path) + inQuery(root));
 export const getPins = (): Promise<CacheReport> => call("/api/pins");
 export const mkdir = (path: string): Promise<{ path: string }> => post("/api/mkdir", { path });
 export const rename = (path: string, name: string): Promise<{ path: string }> => post("/api/rename", { path, name });
@@ -425,14 +453,14 @@ export function search(q: string, under: string): Promise<SearchResult> {
 }
 
 /** rendered fetches a markdown file as the node's HTML fragment (docs/13 §4, I-209). */
-export async function rendered(path: string, root?: number): Promise<string> {
+export async function rendered(path: string, root?: Src): Promise<string> {
   const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
   if (!r.ok) throw await apiError(r);
   return r.text();
 }
 
 /** text fetches a small file as text (previews). */
-export async function text(path: string, root?: number): Promise<string> {
+export async function text(path: string, root?: Src): Promise<string> {
   const r = await fetch(fileURL(path, false, root));
   if (!r.ok) throw await apiError(r);
   return r.text();
@@ -584,3 +612,97 @@ export interface StatsResponse {
 
 export const getStats = (from: number, to: number | "now", node: string): Promise<StatsResponse> =>
   call(`/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}`);
+
+// --- snapshots on mirror disks (docs/13 §3, docs/16) -------------------------------------
+
+export interface MirrorSync {
+  id: number;
+  snapshot: string;
+  read: number;
+  total: number;
+  bytes_new: number;
+}
+
+export interface Mirror {
+  id: number;
+  /** its directory under /.snapshots: pike-m1 */
+  name: string;
+  host: string;
+  self?: boolean;
+  path?: string;
+  online: boolean;
+  reason?: string;
+  used: number;
+  free: number;
+  total: number;
+  last_seen?: string;
+  warn?: "stale" | "reserve" | "incomplete";
+  syncing?: MirrorSync;
+}
+
+export interface Snapshot {
+  id: number;
+  mirror: string;
+  name: string;
+  at: string;
+  auto: boolean;
+  state: "syncing" | "complete" | "incomplete";
+  files: number;
+  bytes: number;
+  new_bytes: number;
+  missing: number;
+}
+
+export interface Schedule {
+  every: number;
+  hourly: number;
+  daily: number;
+  weekly: number;
+  monthly: number;
+  next?: string;
+}
+
+export interface Snapshots {
+  mirrors: Mirror[];
+  snapshots: Snapshot[];
+  schedule: Schedule;
+}
+
+export interface VersionSnap {
+  id: number;
+  mirror: string;
+  name: string;
+  at: string;
+  auto: boolean;
+}
+
+export interface Version {
+  key: string;
+  size: number;
+  mtime: string;
+  current?: boolean;
+  snapshots: VersionSnap[];
+}
+
+export interface Versions {
+  path: string;
+  versions: Version[];
+  offline: { mirror: string; count: number }[];
+}
+
+export interface TreeRestore {
+  path: string;
+  files: number;
+  dirs: number;
+  links: number;
+  skipped: string[];
+  skipped_count: number;
+  uploaded: number;
+}
+
+export const snapshots = (): Promise<Snapshots> => call("/api/snapshots");
+export const takeSnapshot = (opts: { name?: string; mirror?: string } = {}): Promise<{ mirror: string; name: string }[]> => post("/api/snapshot", opts);
+export const versions = (path: string): Promise<Versions> => call("/api/versions?path=" + encodeURIComponent(path));
+export const revert = (path: string, snapshot: number): Promise<{ path: string; uploaded: number }> => post("/api/revert", { path, snapshot });
+export const copyVersion = (path: string, snapshot: number, name: string): Promise<{ entry: Entry; uploaded: number }> => post("/api/copy", { path, snapshot, name });
+export const restoreTree = (snapshot: number, path: string, opts: { to?: string; name?: string } = {}): Promise<TreeRestore> => post("/api/restore-tree", { snapshot, path, ...opts });

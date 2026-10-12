@@ -55,6 +55,9 @@ listen:
   raft: 20480
   rpc: 20481
   nfs: 127.0.0.1:20490
+  smb: 127.0.0.1:20445
+smb:
+  password: ${SMB_PASSWORD:-soak-copies}
 mount:
   path: /mnt/tailraid
 repair:

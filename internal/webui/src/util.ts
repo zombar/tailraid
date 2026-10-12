@@ -2,21 +2,33 @@
 // encoded on its own so "#", "?" and "%" in names survive the URL fragment.
 
 export { basename, bytes, count, daysAgo, daysUntil, dirname, ext, join, mmss, when } from "./fmt.ts";
+import type { Src } from "./api.ts";
 
-/** Ctx is where a view looks: a live folder, or a path inside the deleted root `root` (docs/13 §4). */
+/**
+ * Ctx is where a view looks: a live folder, a path inside the deleted root `root`
+ * (docs/13 §4), or a path as of the snapshot `at` (docs/16 §6).
+ */
 export interface Ctx {
   path: string;
   root?: number;
+  at?: number;
 }
 
-/** browseHash is the route to a folder, live or inside a deleted root. */
+/** src is the source a view's reads carry: the snapshot, the deleted root, or none. */
+export function src(ctx: Ctx): Src {
+  return ctx.at !== undefined ? `@${ctx.at}` : ctx.root;
+}
+
+const atSuffix = (ctx: Ctx) => (ctx.at !== undefined ? "?at=" + ctx.at : "");
+
+/** browseHash is the route to a folder, live, inside a deleted root or as of a snapshot. */
 export function browseHash(ctx: Ctx): string {
-  return ctx.root === undefined ? "#/browse" + encodePathForHash(ctx.path) : `#/trash/${ctx.root}` + encodePathForHash(ctx.path);
+  return (ctx.root === undefined ? "#/browse" + encodePathForHash(ctx.path) : `#/trash/${ctx.root}` + encodePathForHash(ctx.path)) + atSuffix(ctx);
 }
 
-/** fileHash is the route to a file view, live or inside a deleted root. */
+/** fileHash is the route to a file view, live, inside a deleted root or as of a snapshot. */
 export function fileHash(ctx: Ctx): string {
-  return ctx.root === undefined ? "#/file" + encodePathForHash(ctx.path) : `#/trashfile/${ctx.root}` + encodePathForHash(ctx.path);
+  return (ctx.root === undefined ? "#/file" + encodePathForHash(ctx.path) : `#/trashfile/${ctx.root}` + encodePathForHash(ctx.path)) + atSuffix(ctx);
 }
 
 /** session reads and writes one sessionStorage key, silently when storage is unavailable. */

@@ -560,8 +560,8 @@ func (r *Run) sample(ctx context.Context, round int) {
 	if host != nil {
 		if hr, err := r.Env.Status(ctx, *host); err == nil {
 			s.MirrorUsed = map[string]int64{}
-			for _, m := range hr.Mirrors {
-				if m.Name != "" {
+			for i := range hr.Mirrors {
+				if m := &hr.Mirrors[i]; m.Name != "" {
 					s.MirrorUsed[m.Name] = m.Used
 				}
 			}

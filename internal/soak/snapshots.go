@@ -279,8 +279,8 @@ func (m *mirrorRun) online() int {
 	if err != nil {
 		return -1
 	}
-	for _, mr := range rep.Mirrors {
-		if mr.Name == m.name && mr.Online {
+	for i := range rep.Mirrors {
+		if mr := &rep.Mirrors[i]; mr.Name == m.name && mr.Online {
 			return 1
 		}
 	}
@@ -293,7 +293,8 @@ func (m *mirrorRun) mirrorReason() string {
 		return err.Error()
 	}
 	var out []string
-	for _, mr := range rep.Mirrors {
+	for i := range rep.Mirrors {
+		mr := &rep.Mirrors[i]
 		out = append(out, fmt.Sprintf("%s %s online=%v %s", mr.Name, mr.Path, mr.Online, mr.Reason))
 	}
 	return fmt.Sprintf("host reports %v", out)

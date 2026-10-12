@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/zombar/tailraid/internal/meta"
 )
@@ -33,6 +34,51 @@ type Writer struct {
 
 	files, dirs, bytes, newBytes uint64
 	missing                      map[meta.Hash]struct{}
+
+	chunkSize   uint64
+	read, added atomic.Uint64 // progress: file bytes walked, bytes written (Progress)
+}
+
+// Progress is how far the snapshot being written to m has come: the file bytes it has
+// walked and the bytes it has written to the mirror; false when nothing is being written.
+func (m *Mirror) Progress() (read, added uint64, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for w := range m.active {
+		read, added, ok = read+w.read.Load(), added+w.added.Load(), true
+	}
+	return read, added, ok
+}
+
+// TotalBytes is the file bytes of the tree under directory ino root: what a snapshot of
+// src walks, the total its Progress counts towards.
+func TotalBytes(src Source, root uint64) (uint64, error) {
+	var walk func(ino uint64, depth int) (uint64, error)
+	walk = func(ino uint64, depth int) (uint64, error) {
+		if depth > maxDepth {
+			return 0, errors.New("mirror: directory tree deeper than any path")
+		}
+		ents, err := src.Dir(ino)
+		if err != nil {
+			return 0, err
+		}
+		var n uint64
+		for i := range ents {
+			switch ents[i].Type {
+			case TypeDir:
+				sub, err := walk(ents[i].Ino, depth+1)
+				if err != nil {
+					return 0, err
+				}
+				n += sub
+			case TypeFile:
+				n += ents[i].Size
+			case TypeSymlink:
+			}
+		}
+		return n, nil
+	}
+	return walk(root, 0)
 }
 
 // WriteSnapshot writes the snapshot of src rooted at directory ino root and its manifest
@@ -41,7 +87,7 @@ type Writer struct {
 // cannot read is listed in Missing and the rest is written. man's ID, Name, Index, At,
 // Auto, ClusterID and ChunkSize are kept; the rest is filled in.
 func (m *Mirror) WriteSnapshot(ctx context.Context, src Source, root uint64, man Manifest) (Manifest, error) {
-	w := &Writer{m: m, src: src, refs: map[meta.Hash]struct{}{}, missing: map[meta.Hash]struct{}{}}
+	w := &Writer{m: m, src: src, refs: map[meta.Hash]struct{}{}, missing: map[meta.Hash]struct{}{}, chunkSize: uint64(man.ChunkSize)}
 	m.mu.Lock()
 	m.active[w] = struct{}{}
 	m.mu.Unlock()
@@ -114,13 +160,21 @@ func (w *Writer) dir(ctx context.Context, ino uint64, depth int) (meta.Hash, err
 		return meta.Hash{}, err
 	}
 	w.newBytes += uint64(n)
+	w.added.Add(uint64(n))
 	return h, nil
 }
 
 func (w *Writer) file(ctx context.Context, e *Entry) error {
 	w.files++
 	w.bytes += e.Size
+	left := e.Size
 	for _, h := range e.Chunks {
+		step := left
+		if w.chunkSize > 0 {
+			step = min(left, w.chunkSize)
+		}
+		left -= step
+		w.read.Add(step)
 		if h == meta.HashZero {
 			continue
 		}
@@ -144,7 +198,9 @@ func (w *Writer) file(ctx context.Context, e *Entry) error {
 			return err
 		}
 		w.newBytes += uint64(n)
+		w.added.Add(uint64(n))
 	}
+	w.read.Add(left) // a file with no chunk list (size 0, or all holes past the list)
 	return nil
 }
 

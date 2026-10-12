@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/svc"
 	"github.com/zombar/tailraid/internal/update"
 )
@@ -22,7 +25,9 @@ OS and architecture together with the release's sha256sums.txt, verifies the che
 runs the download's "version", and swaps it into place; the release's sha256sums.txt
 must carry the minisign signature of the release key (docs/12 §4). The previous binary
 stays as <exe>.old until the next clean start; --rollback puts it back. The running
-service is not restarted unless --restart is given. The repository is public, so no
+service is not restarted unless --restart is given, and then only once the gateway has
+been idle for 10 s (no unflushed bytes, no client writing), at most --wait; --now skips
+the wait. The repository is public, so no
 token is needed; one is read from TAILRAID_GITHUB_TOKEN, GITHUB_TOKEN or the gh CLI when
 present (a private fork needs it).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -105,7 +110,9 @@ present (a private fork needs it).`,
 	c.Flags().BoolP("yes", "y", false, "do not ask before replacing the binary")
 	c.Flags().Bool("allow-downgrade", false, "with --version: install a release older than the running one")
 	c.Flags().Bool("rollback", false, "put the previous binary (<exe>.old) back instead of updating")
-	c.Flags().Bool("restart", false, "stop and start the installed service after the swap")
+	c.Flags().Bool("restart", false, "stop and start the installed service after the swap, once the gateway is idle")
+	c.Flags().Duration("wait", admin.DefaultIdleWait.Max, "with --restart: wait at most this long for the gateway to go idle")
+	c.Flags().Bool("now", false, "with --restart: restart without waiting for the gateway to go idle")
 	return c
 }
 
@@ -125,6 +132,9 @@ func restartService(cmd *cobra.Command, p *svc.Params) error {
 	if p == nil {
 		return nil
 	}
+	if err := waitIdleBeforeRestart(cmd); err != nil {
+		return err
+	}
 	stop, err := svc.Stop(*p)
 	if err != nil {
 		return err
@@ -137,4 +147,30 @@ func restartService(cmd *cobra.Command, p *svc.Params) error {
 		return err
 	}
 	return svc.Apply(cmd.Context(), cmd.OutOrStdout(), start)
+}
+
+// waitIdleBeforeRestart holds the restart until the local gateway has been idle for
+// IdleFor, at most --wait (docs/12 §5, I-221): a restart drops every client's open files,
+// and a copy in flight fails with it. --now, or a node whose status cannot be read, does
+// not wait.
+func waitIdleBeforeRestart(cmd *cobra.Command) error {
+	if now, _ := cmd.Flags().GetBool("now"); now {
+		return nil
+	}
+	w := admin.DefaultIdleWait
+	if d, _ := cmd.Flags().GetDuration("wait"); d > 0 {
+		w.Max = d
+	}
+	out := cmd.OutOrStdout()
+	idle, err := admin.WaitIdle(cmd.Context(), clock.Real(), w, func(ctx context.Context) (admin.Report, error) {
+		rep, _, _, err := fetchReport(ctx, cmd)
+		return rep, err
+	}, func(s string) { fmt.Fprintln(out, s) })
+	if err != nil {
+		return err
+	}
+	if !idle {
+		fmt.Fprintf(out, "the gateway did not go idle within %s; restarting anyway (copies in flight will fail)\n", w.Max)
+	}
+	return nil
 }

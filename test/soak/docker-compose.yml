@@ -35,7 +35,7 @@ x-node: &node
 x-worker: &worker
   build: {context: ., dockerfile: Dockerfile.client}
   cap_add: [NET_ADMIN]
-  environment: {TAILRAID_LOG_LEVEL: info, TAILRAID_LOG_FORMAT: json}
+  environment: {TAILRAID_LOG_LEVEL: info, TAILRAID_LOG_FORMAT: json, SMB_PASSWORD: soak-copies} # the nodes' smb.password (entry.sh), phase 22
 
 services:
   n1:

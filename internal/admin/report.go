@@ -90,17 +90,40 @@ type VolumeReport struct {
 	Snapshots      int     `json:"snapshots"`       // catalogue rows on every mirror, Deleting ones excluded (docs/16 §5)
 }
 
-// MirrorReport is one of this host's mirrors as its last tick saw it (docs/12 §11).
+// MirrorReport is one mirror of the cluster as the probes see it (docs/12 §11, docs/16
+// §1), or a configured path of this host that is not registered (Idx 0, Self).
 type MirrorReport struct {
-	Name    string `json:"name,omitempty"` // the row's name; "" when the path is not registered here
-	Path    string `json:"path"`
-	Online  bool   `json:"online"`
-	Reason  string `json:"reason,omitempty"` // why it is offline
-	Used    int64  `json:"used"`
-	Free    uint64 `json:"free,omitempty"`
-	Total   uint64 `json:"total,omitempty"`
-	Newest  int64  `json:"newest,omitempty"`  // the newest complete snapshot's At, unix nanos
-	Syncing string `json:"syncing,omitempty"` // the snapshot being copied to it
+	Idx      meta.NodeIdx `json:"idx,omitempty"`
+	Name     string       `json:"name,omitempty"` // the row's name (pike/m1); "" when the path is not registered here
+	Host     string       `json:"host,omitempty"`
+	Self     bool         `json:"self,omitempty"` // attached to this node's host
+	Path     string       `json:"path,omitempty"` // on its own host only
+	Online   bool         `json:"online"`
+	Reason   string       `json:"reason,omitempty"` // why it is offline
+	Used     int64        `json:"used"`
+	Free     uint64       `json:"free,omitempty"`
+	Total    uint64       `json:"total,omitempty"`
+	LastSeen int64        `json:"last_seen,omitempty"` // when it was last online, unix nanos
+	Newest   int64        `json:"newest,omitempty"`    // the newest complete snapshot's At, unix nanos
+	Syncing  *SyncReport  `json:"syncing,omitempty"`   // the snapshot being copied to it
+}
+
+// SyncReport is a sync under way: the file bytes walked of the snapshot's total, and the
+// bytes written to the mirror so far.
+type SyncReport struct {
+	ID       uint32 `json:"id"`
+	Snapshot string `json:"snapshot"`
+	Read     uint64 `json:"read"`
+	Total    uint64 `json:"total"`
+	BytesNew uint64 `json:"bytes_new"`
+}
+
+// Percent is how far the sync has read, 0..100.
+func (s *SyncReport) Percent() int {
+	if s == nil || s.Total == 0 {
+		return 0
+	}
+	return int(min(s.Read, s.Total) * 100 / s.Total)
 }
 
 // GatewayReport is this node's overlay: what is acknowledged but not yet committed, and

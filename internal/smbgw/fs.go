@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"syscall"
 	"time"
 
 	filesystem "github.com/go-filesystems/interface"
 
+	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/vfs"
 )
@@ -27,8 +29,12 @@ const (
 // FS adapts a vfs.FS to the go-filesystems backend contract: the required Filesystem plus
 // the positional, truncate, symlink and metadata capabilities the server probes for.
 type FS struct {
-	fs *vfs.FS
-	st *meta.Store
+	fs  *vfs.FS
+	st  *meta.Store
+	log *slog.Logger
+	// one line a minute per kind of refusal (I-218): the server itself logs nothing, so
+	// these are the only record of why a client's copy failed
+	warnWrite, warnSize, warnCreate, warnDelete, warnRename logx.Limiter
 }
 
 var (
@@ -41,7 +47,22 @@ var (
 )
 
 // New wraps fs; st answers the share's size (meta.Usage, as NFS FSSTAT and status do).
-func New(fs *vfs.FS, st *meta.Store) *FS { return &FS{fs: fs, st: st} }
+func New(fs *vfs.FS, st *meta.Store) *FS { return &FS{fs: fs, st: st, log: slog.Default()} }
+
+// WithLogger sets where the adapter logs the refusals it answers (I-218).
+func (a *FS) WithLogger(l *slog.Logger) *FS {
+	a.log = l
+	return a
+}
+
+// refused logs err, the reason a write-path operation on path is answered with a failure
+// status, at most once a minute per kind (I-218), and returns it for the server.
+func (a *FS) refused(lim *logx.Limiter, op, path string, err error) error {
+	if err != nil {
+		lim.Warn(a.log, "smb: "+op+" refused", "path", path, "err", err)
+	}
+	return err
+}
 
 // Capacity is the share's total and free bytes: meta.Usage over the node table.
 func (a *FS) Capacity() (total, avail uint64) {
@@ -60,6 +81,11 @@ func wrap(err error) error {
 	return err
 }
 
+// ConcurrentWrites tells the server a WRITE needs no share lock: vfs.File.WriteAt is safe
+// alongside every other call (the overlay locks per inode, I-168), so a WRITE waiting at
+// a cap delays no other copy on the share (I-217).
+func (a *FS) ConcurrentWrites() bool { return true }
+
 // CanDelete is asked when a client marks a handle delete-on-close (docs/15 §8): the
 // delete itself happens at CLOSE, whose reply carries no failure, so a protected entry
 // (I-154) is refused here, where the client reads STATUS_ACCESS_DENIED.
@@ -72,9 +98,29 @@ func (f *FS) CanDelete(p string) error {
 		return os.ErrNotExist
 	}
 	if f.st.Protected(in.Ino) {
-		return os.ErrPermission
+		return f.refused(&f.warnDelete, "delete", p, os.ErrPermission)
 	}
 	return nil
+}
+
+// CanDeleteOwn answers for a handle whose CREATE made the file (docs/15 §8): a failed copy
+// may delete what it created, so under a protected folder a file is allowed and a
+// directory is still refused (I-220).
+func (f *FS) CanDeleteOwn(p string) error {
+	in, err := f.st.Resolve(meta.SplitPath(p))
+	if err != nil {
+		return os.ErrNotExist
+	}
+	if in.Type != meta.TFile {
+		return f.CanDelete(p)
+	}
+	return nil
+}
+
+// DeleteOwnFile is that handle's delete-on-close: an own cleanup, which a protected folder
+// takes (I-220).
+func (f *FS) DeleteOwnFile(p string) error {
+	return f.refused(&f.warnDelete, "delete", p, wrap(f.fs.RemoveOwn(p)))
 }
 
 // POSIX type bits of a Stat mode, which is what the server reads.
@@ -182,12 +228,12 @@ func (a *FS) ReadFile(path string) ([]byte, error) {
 func (a *FS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	f, err := a.fs.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
-		return wrap(err)
+		return a.refused(&a.warnCreate, "create", path, wrap(err))
 	}
 	if len(data) > 0 {
 		if _, err := f.Write(data); err != nil {
 			_ = f.Close()
-			return wrap(err)
+			return a.refused(&a.warnWrite, "write", path, wrap(err))
 		}
 	}
 	return wrap(f.Close())
@@ -200,11 +246,17 @@ func (a *FS) ReadLink(path string) (string, error) {
 
 func (a *FS) MkDir(path string, perm os.FileMode) error { return wrap(a.fs.MkdirAll(path, perm)) }
 
-func (a *FS) DeleteFile(path string) error { return wrap(a.fs.Remove(path)) }
+func (a *FS) DeleteFile(path string) error {
+	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.Remove(path)))
+}
 
-func (a *FS) DeleteDir(path string) error { return wrap(a.fs.Remove(path)) }
+func (a *FS) DeleteDir(path string) error {
+	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.Remove(path)))
+}
 
-func (a *FS) Rename(oldPath, newPath string) error { return wrap(a.fs.Rename(oldPath, newPath)) }
+func (a *FS) Rename(oldPath, newPath string) error {
+	return a.refused(&a.warnRename, "rename", oldPath+" -> "+newPath, wrap(a.fs.Rename(oldPath, newPath)))
+}
 
 // --- optional capabilities ---------------------------------------------------------------
 
@@ -223,17 +275,17 @@ func (a *FS) OpenFile(path string) (filesystem.File, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("smbgw: %s: not a vfs file", path)
 	}
-	return &file{f: vf}, nil
+	return &file{f: vf, a: a, path: path}, nil
 }
 
 func (a *FS) Truncate(path string, size int64) error {
 	f, err := a.fs.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
-		return wrap(err)
+		return a.refused(&a.warnSize, "end of file", path, wrap(err))
 	}
 	if err := f.Truncate(size); err != nil {
 		_ = f.Close()
-		return wrap(err)
+		return a.refused(&a.warnSize, "end of file", path, wrap(err))
 	}
 	return wrap(f.Close())
 }
@@ -252,7 +304,11 @@ func (a *FS) Chtimes(path string, atime, mtime time.Time) error {
 
 // file is a filesystem.WritableFile over a vfs handle. WriteAt is durable in the WAL when
 // it returns (I-7), which is why Sync has nothing left to do.
-type file struct{ f *vfs.File }
+type file struct {
+	f    *vfs.File
+	a    *FS
+	path string
+}
 
 func (f *file) ReadAt(p []byte, off int64) (int, error) {
 	n, err := f.f.ReadAt(p, off)
@@ -264,14 +320,14 @@ func (f *file) ReadAt(p []byte, off int64) (int, error) {
 
 func (f *file) WriteAt(p []byte, off int64) (int, error) {
 	n, err := f.f.WriteAt(p, off)
-	return n, wrap(err)
+	return n, f.a.refused(&f.a.warnWrite, "write", f.path, wrap(err))
 }
 
 func (f *file) Truncate(size int64) error {
 	if size < 0 {
 		return syscall.EINVAL
 	}
-	return wrap(f.f.Truncate(size))
+	return f.a.refused(&f.a.warnSize, "end of file", f.path, wrap(f.f.Truncate(size)))
 }
 
 func (f *file) Sync() error { return nil }

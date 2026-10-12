@@ -58,6 +58,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag := fmt.Sprintf(`"%d.%d.%d.md"`, t.in.Ino, t.in.Gen, t.in.Version)
+	if t.snap != nil {
+		tag = fmt.Sprintf(`"s%d.%d.%d.md"`, t.snap.Snapshot.ID, t.in.Ino, t.in.Gen)
+	}
 	h := w.Header()
 	h.Set("Cache-Control", "no-cache")
 	h.Set("ETag", tag)

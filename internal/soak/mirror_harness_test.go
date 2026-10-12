@@ -117,7 +117,8 @@ func (e *harnessEnv) SnapshotOp(ctx context.Context, n soak.NodeRef, op rpc.Admi
 			vs, off, verr := fs.Versions(ctx, p)
 			out, err = map[string]any{"path": p, "versions": vs, "offline": off}, verr
 		case "versions_revert":
-			out, err = map[string]string{"path": p}, fs.RevertFile(ctx, src, p)
+			n, rerr := fs.RevertFile(ctx, src, p)
+			out, err = map[string]any{"path": p, "uploaded": n}, rerr
 		case "snapshot_restore":
 			dst := p
 			if op.As != "" {

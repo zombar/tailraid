@@ -257,6 +257,19 @@ func (a *Admin) Corrupt(ctx context.Context, n NodeRef, key string) error {
 	return a.call(ctx, n.RPC, http.MethodPost, "/dev/corrupt?key="+key, nil, nil)
 }
 
+// SetCodecView makes observer's prober take about as reading codec v (0: its report
+// again): /dev/codec, soak phase 22's rolling-upgrade skew.
+func (a *Admin) SetCodecView(ctx context.Context, observer, about NodeRef, v uint8) error {
+	body, _ := json.Marshal(map[string]any{"node": about.Idx, "codec": v})
+	return a.call(ctx, observer.RPC, http.MethodPost, "/dev/codec", body, nil)
+}
+
+// DelayPuts holds every shard PUT n sends for d first (0: none): /dev/delay, soak phase 22.
+func (a *Admin) DelayPuts(ctx context.Context, n NodeRef, d time.Duration) error {
+	body, _ := json.Marshal(map[string]int64{"put_ms": d.Milliseconds()})
+	return a.call(ctx, n.RPC, http.MethodPost, "/dev/delay", body, nil)
+}
+
 // SetFault installs the node's drop rules (nil clears them): /dev/fault, docs/08.
 func (a *Admin) SetFault(ctx context.Context, n NodeRef, drop []string) error {
 	body, _ := json.Marshal(map[string]any{"drop": drop})

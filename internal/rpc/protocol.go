@@ -40,16 +40,39 @@ var (
 
 // Health is the unauthenticated GET /health body.
 type Health struct {
-	NodeID    string       `json:"node_id"`
-	ClusterID string       `json:"cluster_id"`
-	Version   string       `json:"version"`
-	Applied   uint64       `json:"applied"`
-	Codec     uint8        `json:"codec,omitempty"` // meta.CodecVersion of this binary (docs/12 §6)
-	Ready     bool         `json:"ready"`           // a leader is known and the FSM has every committed entry (I-125)
-	Leader    bool         `json:"leader"`
-	Dev       bool         `json:"dev,omitempty"`   // /dev/* endpoints enabled on this node
-	Web       uint16       `json:"web,omitempty"`   // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
-	Disks     []DiskHealth `json:"disks,omitempty"` // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
+	NodeID    string         `json:"node_id"`
+	ClusterID string         `json:"cluster_id"`
+	Version   string         `json:"version"`
+	Applied   uint64         `json:"applied"`
+	Codec     uint8          `json:"codec,omitempty"` // meta.CodecVersion of this binary (docs/12 §6)
+	Ready     bool           `json:"ready"`           // a leader is known and the FSM has every committed entry (I-125)
+	Leader    bool           `json:"leader"`
+	Dev       bool           `json:"dev,omitempty"`     // /dev/* endpoints enabled on this node
+	Web       uint16         `json:"web,omitempty"`     // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
+	Disks     []DiskHealth   `json:"disks,omitempty"`   // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
+	Mirrors   []MirrorHealth `json:"mirrors,omitempty"` // this host's mirrors (docs/16 §1): online on every node only while listed online here
+}
+
+// MirrorHealth is one mirror of the host in /health (docs/16 §1): ID is the mirror's
+// marker ID, the row's ID.
+type MirrorHealth struct {
+	ID      string      `json:"id"`
+	Online  bool        `json:"online"`
+	Reason  string      `json:"reason,omitempty"` // why it is offline
+	Used    int64       `json:"used"`
+	Free    uint64      `json:"free,omitempty"`
+	Total   uint64      `json:"total,omitempty"`
+	Syncing *SyncHealth `json:"syncing,omitempty"`
+}
+
+// SyncHealth is the snapshot a mirror's host is copying: the file bytes walked of the
+// snapshot's total, and the bytes written to the mirror so far.
+type SyncHealth struct {
+	ID       uint32 `json:"id"`
+	Snapshot string `json:"snapshot"`
+	Read     uint64 `json:"read"`
+	Total    uint64 `json:"total"`
+	BytesNew uint64 `json:"bytes_new"`
 }
 
 // DiskHealth is one added disk in /health: OK is false while the disk is closed (its

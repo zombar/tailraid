@@ -77,6 +77,36 @@ func handler(st *meta.Store, store Store, faults *Faults, log *slog.Logger, exit
 			log.Warn("dev: fault rules set", "drop", faults.List())
 			w.WriteHeader(http.StatusNoContent)
 		})
+		// soak phase 22's rolling-upgrade skew and slow flush (docs/09 §6)
+		mux.HandleFunc("POST /dev/codec", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Node  meta.NodeIdx `json:"node"`
+				Codec uint8        `json:"codec"` // 0: the peer's own report again
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil || req.Node == 0 {
+				http.Error(w, "want {node, codec}", http.StatusBadRequest)
+				return
+			}
+			if faults.View == nil {
+				http.Error(w, "no prober on this node", http.StatusServiceUnavailable)
+				return
+			}
+			faults.View.SetCodecView(req.Node, req.Codec)
+			log.Warn("dev: codec view set", "node", req.Node, "codec", req.Codec)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("POST /dev/delay", func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				PutMS int64 `json:"put_ms"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil || req.PutMS < 0 {
+				http.Error(w, "put_ms: a non-negative number", http.StatusBadRequest)
+				return
+			}
+			faults.SetPutDelay(time.Duration(req.PutMS) * time.Millisecond)
+			log.Warn("dev: shard PUT delay set", "ms", req.PutMS)
+			w.WriteHeader(http.StatusNoContent)
+		})
 	}
 	mux.HandleFunc("GET /dev/fsm-hash", func(w http.ResponseWriter, _ *http.Request) {
 		h, err := Hash(st)

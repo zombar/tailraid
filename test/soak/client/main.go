@@ -7,6 +7,8 @@
 //	POST /rpc        {method, path, body}              → {body, error}
 //	POST /partition  {ips: [...]}                      drop traffic to/from those peers
 //	POST /heal                                         lift every drop rule
+//	POST /copy       {proto, files}                    → {id}: copies the way Explorer does
+//	GET  /copy/{id}                                    → {done, results}
 //	GET  /ready                                        200 once gateway and RPC answer
 //
 // Usage: soak-client worker <listen> <nfs gateway> <node rpc addr>
@@ -31,12 +33,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudsoda/go-smb2"
 	nfsc "github.com/willscott/go-nfs-client/nfs"
 	nfsrpc "github.com/willscott/go-nfs-client/nfs/rpc"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/smbgw"
+	"github.com/zombar/tailraid/internal/soak"
 )
 
 func main() {
@@ -55,6 +60,8 @@ func main() {
 	mux.HandleFunc("POST /rpc", w.rpc)
 	mux.HandleFunc("POST /partition", w.partition)
 	mux.HandleFunc("POST /heal", w.heal)
+	mux.HandleFunc("POST /copy", w.copyStart)
+	mux.HandleFunc("GET /copy/{id}", w.copyState)
 	mux.HandleFunc("GET /goroutines", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_ = pprof.Lookup("goroutine").WriteTo(rw, 2)
@@ -75,6 +82,9 @@ type worker struct {
 	closeT func()
 	gen    uint64 // bumped on every dropTarget: a request that outran its client must not drop the next one
 	client *rpc.Client
+
+	jobs   map[string]*copyJob // soak phase 22's copies, by id
+	nextID int
 }
 
 // opDeadline bounds one gateway operation. The pure-Go NFS client times a call out after
@@ -503,4 +513,144 @@ func (w *worker) heal(rw http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	rw.WriteHeader(http.StatusNoContent)
+}
+
+// --- copies (soak phase 22) ---------------------------------------------------------------
+
+// smbAddr is the node's loopback SMB gateway; SMB_PASSWORD is the fixed password entry.sh
+// writes into every node's config.
+const smbAddr = "127.0.0.1:20445"
+
+type copyJob struct {
+	mu      sync.Mutex
+	done    bool
+	results []soak.CopyResult
+}
+
+func (w *worker) copyStart(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Proto string          `json:"proto"`
+		Files []soak.CopySpec `json:"files"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(rw, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var copyOne func(soak.CopySpec) error
+	var after func()
+	switch req.Proto {
+	case "smb":
+		d := &smb2.Dialer{Initiator: &smb2.NTLMInitiator{User: smbgw.User, Password: os.Getenv("SMB_PASSWORD")}}
+		sess, err := d.Dial(r.Context(), smbAddr)
+		if err != nil {
+			http.Error(rw, "smb: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		sh, err := sess.Mount(smbgw.ShareName)
+		if err != nil {
+			_ = sess.Logoff()
+			http.Error(rw, "smb: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		// one connection for every file, as Windows has to a server
+		copyOne = func(f soak.CopySpec) error {
+			h, err := sh.OpenFile(strings.TrimPrefix(f.Path, "/"), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+			if err != nil {
+				return err
+			}
+			err = copyPieces(f, h.Truncate, h.WriteAt)
+			return errors.Join(err, h.Close())
+		}
+		after = func() { _ = sh.Umount(); _ = sess.Logoff() }
+	case "nfs":
+		copyOne = func(f soak.CopySpec) error {
+			t, _, err := w.target()
+			if err != nil {
+				return err
+			}
+			if _, err := t.Create(f.Path, 0o644); err != nil {
+				return fmt.Errorf("create: %w", err)
+			}
+			if err := t.Setattr(f.Path, nfsc.Sattr3{Size: nfsc.SetSize{SetIt: true, Size: uint64(f.Size)}}); err != nil {
+				return fmt.Errorf("size: %w", err)
+			}
+			h, err := t.OpenFile(f.Path, 0o644) // one handle held across every write
+			if err != nil {
+				return err
+			}
+			defer h.Close()
+			data := soak.CopyPayload(f.Size, f.Seed)
+			for off := 0; off < len(data); off += soak.CopyPiece {
+				if _, err := h.Seek(int64(off), io.SeekStart); err != nil {
+					return err
+				}
+				if _, err := h.Write(data[off:min(off+soak.CopyPiece, len(data))]); err != nil {
+					return fmt.Errorf("write @%d: %w", off, err)
+				}
+			}
+			return nil
+		}
+	default:
+		http.Error(rw, "unknown proto "+req.Proto, http.StatusBadRequest)
+		return
+	}
+	job := &copyJob{}
+	w.mu.Lock()
+	if w.jobs == nil {
+		w.jobs = map[string]*copyJob{}
+	}
+	w.nextID++
+	id := fmt.Sprintf("%d", w.nextID)
+	w.jobs[id] = job
+	w.mu.Unlock()
+	go func() {
+		results := make([]soak.CopyResult, len(req.Files))
+		var wg sync.WaitGroup
+		for i, f := range req.Files {
+			wg.Go(func() {
+				results[i] = soak.CopyResult{Path: f.Path}
+				if err := copyOne(f); err != nil {
+					results[i].Err = err.Error()
+				}
+			})
+		}
+		wg.Wait()
+		if after != nil {
+			after()
+		}
+		job.mu.Lock()
+		job.done, job.results = true, results
+		job.mu.Unlock()
+	}()
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(map[string]string{"id": id})
+}
+
+func (w *worker) copyState(rw http.ResponseWriter, r *http.Request) {
+	w.mu.Lock()
+	job := w.jobs[r.PathValue("id")]
+	w.mu.Unlock()
+	if job == nil {
+		http.Error(rw, "no such job", http.StatusNotFound)
+		return
+	}
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	rw.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(rw).Encode(map[string]any{"done": job.done, "results": job.results})
+}
+
+// copyPieces is the copy engine's sequence on an open SMB handle: the final length
+// first, then the bytes front to back.
+func copyPieces(f soak.CopySpec, truncate func(int64) error, writeAt func([]byte, int64) (int, error)) error {
+	if err := truncate(int64(f.Size)); err != nil {
+		return err
+	}
+	data := soak.CopyPayload(f.Size, f.Seed)
+	for off := 0; off < len(data); off += soak.CopyPiece {
+		if _, err := writeAt(data[off:min(off+soak.CopyPiece, len(data))], int64(off)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

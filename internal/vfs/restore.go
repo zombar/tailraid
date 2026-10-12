@@ -22,7 +22,7 @@ import (
 // (L-217); any other is read through fetch, checked against its hash and filled or
 // uploaded as a flush would (L-216). It returns how many chunks it uploaded or filled.
 func (f *Flusher) CommitChunks(ctx context.Context, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error)) (uploaded int, err error) {
-	force := false
+	force, noSums := false, false
 	for range 16 {
 		base, ok := f.st.GetInode(ino)
 		if !ok || base.Type != meta.TFile {
@@ -56,7 +56,7 @@ func (f *Flusher) CommitChunks(ctx context.Context, ino meta.Ino, size uint64, h
 			uploaded++
 		}
 		// a truncate to zero, then the chunks: buildCommit's truncate case sizes it to size
-		cmd := f.buildCommit(&FlushPlan{Ino: ino, Size: size, SizeSet: true}, base, works, false)
+		cmd := f.buildCommit(&FlushPlan{Ino: ino, Size: size, SizeSet: true}, base, works, false, noSums)
 		pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
 		res, index, perr := f.prop.Propose(pctx, meta.Command{Op: meta.OpCommit, Commit: cmd})
 		cancel()
@@ -69,6 +69,9 @@ func (f *Flusher) CommitChunks(ctx context.Context, ino meta.Ino, size uint64, h
 			continue
 		case errors.Is(res.Err, meta.ErrUnknownChunk): // a dedup'd chunk was collected meanwhile
 			force = true
+			continue
+		case errors.Is(res.Err, meta.ErrCodec) && !noSums && carriesSums(cmd):
+			noSums = true // the leader sees an older member than this gateway does (I-219)
 			continue
 		default:
 			return 0, fmt.Errorf("commit rejected: %w", res.Err)
@@ -105,27 +108,28 @@ func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mi
 }
 
 // RevertFile makes the live file at dst hold the bytes of the snapshot file src (a
-// /.snapshots path), keeping the file's inode, name and attributes (docs/16 §6, I-186).
-func (f *FS) RevertFile(ctx context.Context, src, dst string) error {
+// /.snapshots path), keeping the file's inode, name and attributes (docs/16 §6, I-186);
+// uploaded counts the chunks copied back from the mirror.
+func (f *FS) RevertFile(ctx context.Context, src, dst string) (uploaded int, err error) {
 	m, e, err := f.snapEntry(ctx, src)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if e.Type != mirror.TypeFile {
-		return mapErr("revert", src, meta.ErrIsDir)
+		return 0, mapErr("revert", src, meta.ErrIsDir)
 	}
 	if isSnapshotPath(meta.SplitPath(dst)) {
-		return mapErr("revert", dst, ErrReadOnly)
+		return 0, mapErr("revert", dst, ErrReadOnly)
 	}
 	in, err := f.resolve(dst)
 	if err != nil {
-		return mapErr("revert", dst, err)
+		return 0, mapErr("revert", dst, err)
 	}
 	if in.Type != meta.TFile {
-		return mapErr("revert", dst, meta.ErrIsDir)
+		return 0, mapErr("revert", dst, meta.ErrIsDir)
 	}
-	_, err = f.writeEntry(ctx, in.Ino, m, &e)
-	return mapErr("revert", dst, err)
+	uploaded, err = f.writeEntry(ctx, in.Ino, m, &e)
+	return uploaded, mapErr("revert", dst, err)
 }
 
 // RestoreReport is what a restore did: entries created, chunks uploaded from the mirror,

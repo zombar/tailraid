@@ -6,7 +6,8 @@
 
 import { clear, h, icon, setWidth, toast, type IconKind } from "./dom.ts";
 import { ApiError, del, ls, mkdir, move, rename, trashList, upload, type DirInfo, type Entry, type TrashEntry, type Upload } from "./api.ts";
-import { browseHash, bytes, encodePathForHash, ext, fileHash, join, session, when, type Ctx } from "./util.ts";
+import { browseHash, bytes, encodePathForHash, ext, fileHash, join, session, src, when, type Ctx } from "./util.ts";
+import * as snaps from "./snapshots.ts";
 import { mediaKind } from "./player.ts";
 import { Selection } from "./select.ts";
 import { lazy } from "./thumbs.ts";
@@ -88,6 +89,8 @@ async function runQueue(): Promise<void> {
 export function render(root: HTMLElement, ctx: Ctx): () => void {
   const dir = ctx.path;
   const inTrash = ctx.root !== undefined;
+  const asOf = ctx.at !== undefined; // read-only: no selection, upload, folder menu or deleted rows (docs/13 §4)
+  const source = src(ctx);
   let sort = session.get<Sort>("tr.sort", { key: "name", desc: false });
   let view = session.get<View>("tr.view", "list");
   let showDeleted = session.get<boolean>("tr.deleted", false); // the folder's deleted roots, hidden by default
@@ -103,7 +106,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
 
   const refresh = async () => {
     try {
-      const r = await ls(dir, ctx.root);
+      const r = await ls(dir, source);
       entries = r.entries;
       info = r.dir;
       if (inTrash && !trashRoot) {
@@ -117,6 +120,11 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       draw();
     } catch (e) {
       clear(root);
+      if (asOf && snaps.isOffline(e)) {
+        await snaps.catalogue().catch(() => null);
+        root.append(h("section", null, crumbs(ctx), ...snaps.offlineView(ctx, e, browseHash({ path: dir }))));
+        return;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       root.append(h("section", null, crumbs(ctx), h("div", { class: "error" }, `Could not list ${dir}: ${msg}. `, h("a", { href: "#", onClick: (ev: Event) => { ev.preventDefault(); void refresh(); } }, "Retry"))));
     }
@@ -139,6 +147,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     });
     const total = live().reduce((s, e) => s + (e.type === "file" ? e.size : 0), 0);
     const deleted = entries.length - live().length;
+    if (asOf) section.append(snaps.banner(ctx, info.snapshot, `${live().length} ${live().length === 1 ? "item" : "items"} · ${bytes(total)}`, true, browseHash({ path: dir })));
     const toolbar = h("div", { class: "toolbar" });
     const asAlbum = view === "list" && !album.isAlbum(entries) ? false : view === "list";
     if (asAlbum) {
@@ -147,13 +156,14 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
         h("button", { type: "button", onClick: () => { if (alb) { if (!player.shuffle) player.toggleShuffle(); player.play(alb.tracks, 0); } } }, "Shuffle"),
       );
     }
-    if (!inTrash) {
+    if (!inTrash && !asOf) {
       toolbar.append(
         h("label", { class: "btn" }, "Upload", input),
         h("button", { type: "button", "aria-pressed": formOpen ? "true" : "false", onClick: () => { formOpen = !formOpen; renaming = null; draw(); } }, "New folder"),
       );
     }
-    toolbar.append(menu({ path: dir, inTrash, dir: info, onChange: () => void refresh() }));
+    if (!asOf) toolbar.append(menu({ path: dir, inTrash, dir: info, onChange: () => void refresh() }));
+    if (!inTrash) toolbar.append(snaps.asofMenu(ctx, "browse", info.snapshot));
     const seg = h(
       "span",
       { class: "seg", role: "group", "aria-label": "view" },
@@ -161,7 +171,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       h("button", { type: "button", "aria-pressed": view === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles"),
     );
     toolbar.append(seg);
-    if (!inTrash) {
+    if (!inTrash && !asOf) {
       const box = h("input", { type: "checkbox" }) as HTMLInputElement;
       box.checked = showDeleted;
       box.addEventListener("change", () => {
@@ -277,7 +287,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     sel.click(e.name, (ev as MouseEvent).shiftKey, order());
   };
   const selectBox = (e: Entry, cls: "sel") =>
-    e.deleted_at
+    e.deleted_at || asOf
       ? h("span", { class: cls })
       : (() => {
           const box = h("input", { type: "checkbox", "aria-label": "select" }) as HTMLInputElement;
@@ -289,12 +299,12 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
   const linkOf = (e: Entry): { href: string; kind: IconKind } => {
     const path = pathOf(e);
     if (e.deleted_at) return e.type === "dir" ? { href: `#/trash/${e.ino}/`, kind: "dir" } : { href: `#/trashfile/${e.ino}/`, kind: iconFor(e.name) };
-    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root }), kind: "dir" };
-    return { href: fileHash({ path, root: ctx.root }), kind: iconFor(e.name) };
+    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root, at: ctx.at }), kind: "dir" };
+    return { href: fileHash({ path, root: ctx.root, at: ctx.at }), kind: iconFor(e.name) };
   };
 
   const playBtn = (e: Entry) => {
-    const t: Track = { path: pathOf(e), root: e.deleted_at ? e.ino : ctx.root };
+    const t: Track = { path: pathOf(e), root: e.deleted_at ? e.ino : source };
     if (e.deleted_at) t.path = "/";
     const now = player.isCurrent(t.path, t.root) && player.playing;
     return h("button", { type: "button", class: "play", onClick: (ev: Event) => { ev.preventDefault(); ev.stopPropagation(); if (player.isCurrent(t.path, t.root)) player.toggle(); else playFrom(e); } }, now ? "⏸ Playing" : "▶ Play");
@@ -302,7 +312,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
 
   /** playFrom plays the folder's audio in listing order, starting at e. */
   const playFrom = (e: Entry) => {
-    const tracks = sorted(entries).filter((x) => !x.deleted_at && x.type === "file" && isAudioName(x.name)).map((x): Track => ({ path: pathOf(x), root: ctx.root }));
+    const tracks = sorted(entries).filter((x) => !x.deleted_at && x.type === "file" && isAudioName(x.name)).map((x): Track => ({ path: pathOf(x), root: source }));
     if (e.deleted_at) {
       player.play([{ path: "/", root: e.ino }]);
       return;
@@ -336,7 +346,9 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     const names = live().map((e) => e.name);
     all.checked = names.length > 0 && names.every((n) => sel.has(n));
     all.addEventListener("click", () => (all.checked ? sel.all(names) : sel.clear()));
-    const t = h("table", { class: "files" }, h("thead", null, h("tr", null, h("th", { class: "sel" }, all), th("name", "name"), th("size", "size", "size"), th("mtime", "modified", "mtime"))));
+    const head = h("tr", null, th("name", "name"), th("size", "size", "size"), th("mtime", "modified", "mtime"));
+    if (!asOf) head.prepend(h("th", { class: "sel" }, all));
+    const t = h("table", { class: "files" }, h("thead", null, head));
     const body = h("tbody");
     for (const e of sorted(list)) body.append(row(e));
     t.append(body);
@@ -356,8 +368,10 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       if (e.deleted_at) link.append(deletedBadge(e.purge_at));
       if (e.type === "file" && isAudioName(e.name)) link.append(playBtn(e));
     }
-    const cls = [e.upload ? "dim" : e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", sel.has(e.name) ? "selected" : "", e.type === "file" && player.isCurrent(pathOf(e), ctx.root) ? "playing" : ""].filter(Boolean).join(" ");
-    return h("tr", { class: cls, "data-name": e.name }, h("td", { class: "sel" }, selectBox(e, "sel").firstChild ?? ""), h("td", { class: "name" }, link), h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""), h("td", { class: "mtime", title: e.mtime }, when(e.mtime)));
+    const cls = [e.upload ? "dim" : e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", sel.has(e.name) ? "selected" : "", e.type === "file" && player.isCurrent(pathOf(e), source) ? "playing" : ""].filter(Boolean).join(" ");
+    const tr = h("tr", { class: cls, "data-name": e.name }, h("td", { class: "name" }, link), h("td", { class: "size" }, e.type === "file" ? bytes(e.size) : ""), h("td", { class: "mtime", title: e.mtime }, when(e.mtime)));
+    if (!asOf) tr.prepend(h("td", { class: "sel" }, selectBox(e, "sel").firstChild ?? ""));
+    return tr;
   };
 
   const tiles = () => {
@@ -380,13 +394,13 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       const img = h("img", { alt: "" }) as HTMLImageElement;
       thumb.append(img);
       if (thumb.classList.contains("nsfw")) thumb.append(h("span", { class: "veil" }, "nsfw · tap to show"));
-      const root = e.deleted_at ? e.ino : ctx.root;
+      const root = e.deleted_at ? e.ino : source;
       const tp = e.deleted_at ? (e.type === "dir" && e.cover ? "/" + e.cover : "/") : thumbPath;
       lazy(img, e, tp, root, e.type === "dir" ? "audio" : (kindOf as "image" | "video" | "audio"), showIcon);
     } else showIcon();
     const meta = h("span", { class: "tmeta" });
     if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
-    const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, ctx.root) ? "playing" : ""].filter(Boolean).join(" ");
+    const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, source) ? "playing" : ""].filter(Boolean).join(" ");
     const a = h("a", { class: cls, href, "data-name": e.name }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta);
     if (e.type === "file" && isAudioName(e.name) && !e.upload) a.insertBefore(playBtn(e), a.querySelector(".tname"));
     if (thumb.classList.contains("nsfw")) {
@@ -435,12 +449,12 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     for (const e of chosen) {
       if (e.type === "dir") {
         try {
-          const r = await ls(pathOf(e), ctx.root);
-          for (const x of r.entries) if (x.type === "file" && isAudioName(x.name) && !x.deleted_at && !x.upload) tracks.push({ path: join(pathOf(e), x.name), root: ctx.root });
+          const r = await ls(pathOf(e), source);
+          for (const x of r.entries) if (x.type === "file" && isAudioName(x.name) && !x.deleted_at && !x.upload) tracks.push({ path: join(pathOf(e), x.name), root: source });
         } catch {
           // a folder that cannot be listed adds nothing
         }
-      } else tracks.push({ path: pathOf(e), root: ctx.root });
+      } else tracks.push({ path: pathOf(e), root: source });
     }
     if (!tracks.length) {
       toast("Nothing to play in the selection", "bad");
@@ -501,13 +515,13 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
 
   // drag and drop onto the view
   const onDragOver = (ev: DragEvent) => {
-    if (inTrash) return;
+    if (inTrash || asOf) return;
     ev.preventDefault();
     root.querySelector("table.files")?.classList.add("drop");
   };
   const onDragLeave = () => root.querySelector("table.files")?.classList.remove("drop");
   const onDrop = (ev: DragEvent) => {
-    if (inTrash) return;
+    if (inTrash || asOf) return;
     ev.preventDefault();
     onDragLeave();
     const files = Array.from(ev.dataTransfer?.files ?? []);
@@ -529,8 +543,8 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       renaming = null;
       formOpen = false;
       draw();
-    } else if (ev.key === "Delete" && chosen.length && !info.protected && !inTrash && !chosen.some((e) => e.protected)) void doDelete(chosen);
-    else if (ev.key === "F2" && chosen.length === 1 && !inTrash) {
+    } else if (ev.key === "Delete" && chosen.length && !info.protected && !inTrash && !asOf && !chosen.some((e) => e.protected)) void doDelete(chosen);
+    else if (ev.key === "F2" && chosen.length === 1 && !inTrash && !asOf) {
       renaming = chosen[0]!.name;
       draw();
     }
@@ -544,7 +558,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     if (alb) alb.refresh();
     root.querySelectorAll("tr.playing, .ftile.playing").forEach((el) => el.classList.remove("playing"));
     const c = player.current();
-    const here = c && c.root === ctx.root && c.path.startsWith(dir === "/" ? "/" : dir + "/") ? c.path.slice(dir === "/" ? 1 : dir.length + 1) : "";
+    const here = c && c.root === source && c.path.startsWith(dir === "/" ? "/" : dir + "/") ? c.path.slice(dir === "/" ? 1 : dir.length + 1) : "";
     for (const el of root.querySelectorAll<HTMLElement>("tr[data-name], .ftile[data-name]")) {
       const mine = here !== "" && el.dataset["name"] === here;
       el.classList.toggle("playing", mine);
@@ -571,16 +585,17 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
 
 /** crumbs is the breadcrumb of a folder, with the folder's effective flags after the last segment. */
 export function crumbs(ctx: Ctx, info?: DirInfo, inTrash = false): HTMLElement {
-  const el = h("div", { class: "crumbs" }, h("a", { href: "#/browse/" }, "/"));
+  const el = h("div", { class: "crumbs" }, h("a", { href: browseHash({ path: "/", at: ctx.at }) }, "/"));
   const parts = ctx.path.split("/").filter(Boolean);
   let acc = "";
   parts.forEach((p, i) => {
     acc += "/" + p;
     if (i > 0 || inTrash) el.append(h("span", { class: "sep" }, "/"));
     if (i === parts.length - 1) el.append(h("span", null, p));
-    else el.append(h("a", { href: browseHash({ path: acc, root: ctx.root }) }, p));
+    else el.append(h("a", { href: browseHash({ path: acc, root: ctx.root, at: ctx.at }) }, p));
   });
   if (inTrash) el.append(h("span", { class: "badge" }, "deleted"));
+  if (info?.snapshot) el.append(h("span", { class: "badge" }, "as of " + info.snapshot.name));
   if (info?.protected) el.append(h("span", { class: "badge lock" }, "protected"));
   if (info?.nsfw) el.append(h("span", { class: "badge nsfw" }, "nsfw"));
   if (info?.library) el.append(h("span", { class: "badge lib" }, info.library));
@@ -589,16 +604,17 @@ export function crumbs(ctx: Ctx, info?: DirInfo, inTrash = false): HTMLElement {
 }
 
 /** crumbsAll links every segment, for the file view's breadcrumb. */
-export function crumbsAll(ctx: Ctx): HTMLElement {
-  const el = h("div", { class: "crumbs" }, h("a", { href: "#/browse/" }, "/"));
+export function crumbsAll(ctx: Ctx, asOf?: string): HTMLElement {
+  const el = h("div", { class: "crumbs" }, h("a", { href: browseHash({ path: "/", at: ctx.at }) }, "/"));
   const parts = ctx.path.split("/").filter(Boolean);
   let acc = "";
   parts.forEach((p, i) => {
     acc += "/" + p;
     if (i > 0) el.append(h("span", { class: "sep" }, "/"));
-    el.append(h("a", { href: browseHash({ path: acc, root: ctx.root }) }, p));
+    el.append(h("a", { href: browseHash({ path: acc, root: ctx.root, at: ctx.at }) }, p));
   });
   if (ctx.root !== undefined) el.append(h("span", { class: "badge" }, "deleted"));
+  if (asOf) el.append(h("span", { class: "badge" }, "as of " + asOf));
   return el;
 }
 

@@ -75,7 +75,10 @@ export function parse(hash: string): { head: string; ctx: Ctx; query: string } {
     const ino = Number(rest.shift() ?? "");
     return { head, ctx: { path: decodeHashPath(rest.join("/")), root: Number.isFinite(ino) && ino > 0 ? ino : undefined }, query };
   }
-  return { head, ctx: { path: decodeHashPath(rest.join("/")) }, query };
+  const ctx: Ctx = { path: decodeHashPath(rest.join("/")) };
+  const at = Number(new URLSearchParams(query).get("at") ?? "");
+  if ((head === "browse" || head === "file") && Number.isInteger(at) && at > 0) ctx.at = at; // as of a snapshot (docs/16 §6)
+  return { head, ctx, query };
 }
 
 /** rawRest is the route's text after its head, before any "?": the search query keeps its slashes. */

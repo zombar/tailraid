@@ -39,10 +39,11 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		if op.Mirror == "" || op.Name == "" {
 			return nil, errors.New("versions --revert needs <mirror>/<name>")
 		}
-		if err := a.fs.RevertFile(ctx, snapshotPath(op.Mirror, op.Name, p), p); err != nil {
+		n, err := a.fs.RevertFile(ctx, snapshotPath(op.Mirror, op.Name, p), p)
+		if err != nil {
 			return nil, err
 		}
-		return map[string]string{"path": p}, nil
+		return map[string]any{"path": p, "uploaded": n}, nil
 	case "versions_copy":
 		if op.Mirror == "" || op.Name == "" || op.As == "" || strings.Contains(op.As, "/") {
 			return nil, errors.New("versions --copy needs <mirror>/<name> and --as <name>")
