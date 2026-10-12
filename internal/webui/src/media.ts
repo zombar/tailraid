@@ -73,21 +73,41 @@ function posterTile(it: MediaItem): HTMLElement {
   return a;
 }
 
+/** stored reads a per-viewer flag from localStorage, false when storage is unavailable. */
+function stored(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function remember(key: string, on: boolean): void {
+  try {
+    if (on) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    // storage may be unavailable
+  }
+}
+
 function librarySection(lib: MediaLibrary): HTMLElement {
   const [one, many] = NOUN[lib.kind] ?? ["item", "items"];
   const countEl = h("span", { class: "count" }, "…");
-  const section = h("section", { class: "lib " + lib.kind }, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl));
+  // a section folds away; the choice is a per-viewer convenience, and a folded library
+  // is listed only once it is opened
+  const key = `tr.media.closed.${lib.path}`;
+  const fold = h("details", null, h("summary", null, h("h2", null, basename(lib.path) || "/", " ", h("span", { class: "badge lib" }, lib.kind), countEl))) as HTMLDetailsElement;
+  fold.open = !stored(key);
+  const section = h("section", { class: "lib " + lib.kind }, fold);
   const grid = h("div", { class: "posters" });
   const sorts = ["title", "year", "added"];
   let sort = session.get(`tr.media.sort.${lib.path}`, "title");
-  const pressed = new Set<string>();
   let items: MediaItem[] = [];
   const buttons = sorts.map((s) => h("button", { type: "button", "aria-pressed": String(s === sort) }, s[0]!.toUpperCase() + s.slice(1)));
-  const chips = h("div", { class: "chips" });
   const draw = () => {
     clear(grid);
-    const shown = pressed.size === 0 ? items : items.filter((it) => (it.genres ?? []).some((g) => pressed.has(g.toLowerCase())));
-    for (const it of shown) grid.append(posterTile(it));
+    for (const it of items) grid.append(posterTile(it));
   };
   const load = () => {
     media(lib.path, sort).then(
@@ -95,17 +115,6 @@ function librarySection(lib: MediaLibrary): HTMLElement {
         items = res.items;
         clear(countEl);
         countEl.append(`${count(res.lib.count)} ${res.lib.count === 1 ? one : many}${res.lib.count > res.items.length ? ` (first ${res.items.length})` : ""} · `, h("a", { href: browseHash({ path: lib.path }) }, "open folder"));
-        clear(chips);
-        for (const g of res.lib.genres ?? []) {
-          const chip = h("button", { type: "button", class: "chip", "aria-pressed": String(pressed.has(g)) }, g);
-          chip.addEventListener("click", () => {
-            if (pressed.has(g)) pressed.delete(g);
-            else pressed.add(g);
-            chip.setAttribute("aria-pressed", String(pressed.has(g)));
-            draw();
-          });
-          chips.append(chip);
-        }
         draw();
       },
       (e: unknown) => {
@@ -121,8 +130,19 @@ function librarySection(lib: MediaLibrary): HTMLElement {
       load();
     }),
   );
-  section.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons), chips), grid);
-  load();
+  fold.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons)), grid);
+  let loaded = false;
+  const open = () => {
+    if (fold.open && !loaded) {
+      loaded = true;
+      load();
+    }
+  };
+  fold.addEventListener("toggle", () => {
+    remember(key, !fold.open);
+    open();
+  });
+  open();
   return section;
 }
 

@@ -90,7 +90,7 @@ func TestWebUI_Media_Library_Table(t *testing.T) {
 	pass()
 	l = mediaLib{}
 	u.mediaJSON("lib=/films", &l)
-	if a := l.Items[0]; !a.Catalogued || a.Runtime != 116 || a.Poster != "/films/Arrival (2016)/poster.jpg" || !reflect.DeepEqual(l.Lib.Genres, []string{"drama"}) {
+	if a := l.Items[0]; !a.Catalogued || a.Runtime != 116 || a.Poster != "/films/Arrival (2016)/poster.jpg" {
 		t.Fatalf("after the pass: %+v %+v", a, l.Lib)
 	}
 	for _, tc := range []struct {

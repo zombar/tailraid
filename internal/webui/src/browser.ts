@@ -90,6 +90,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
   const inTrash = ctx.root !== undefined;
   let sort = session.get<Sort>("tr.sort", { key: "name", desc: false });
   let view = session.get<View>("tr.view", "list");
+  let showDeleted = session.get<boolean>("tr.deleted", false); // the folder's deleted roots, hidden by default
   let entries: Entry[] = [];
   let info: DirInfo = { protected: false, nsfw: false, pinned: false };
   let trashRoot: TrashEntry | undefined; // the deleted root we are inside
@@ -159,7 +160,18 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       h("button", { type: "button", "aria-pressed": view === "list" ? "true" : "false", onClick: () => setView("list") }, "List"),
       h("button", { type: "button", "aria-pressed": view === "tiles" ? "true" : "false", onClick: () => setView("tiles") }, "Tiles"),
     );
-    toolbar.append(seg, h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} · ${bytes(total)}` + (deleted ? ` · ${deleted} deleted` : "")));
+    toolbar.append(seg);
+    if (!inTrash) {
+      const box = h("input", { type: "checkbox" }) as HTMLInputElement;
+      box.checked = showDeleted;
+      box.addEventListener("change", () => {
+        showDeleted = box.checked;
+        session.set("tr.deleted", showDeleted);
+        draw();
+      });
+      toolbar.append(h("label", { class: "toggle" }, box, "show deleted"));
+    }
+    toolbar.append(h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} · ${bytes(total)}` + (deleted ? ` · ${deleted} deleted` : "")));
     section.append(toolbar);
     // upload queue: finished jobs leave the list, failures stay until the next navigation
     const shown = queue.filter((j) => j.state !== "done");
@@ -172,11 +184,11 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     if (renaming) section.append(renameForm(renaming));
     // listing
     alb = null;
-    if (entries.length === 0) section.append(h("div", { class: "empty" }, "empty folder"));
+    if (sorted(entries).length === 0) section.append(h("div", { class: "empty" }, deleted ? "empty folder · tick show deleted to list what was deleted here" : "empty folder"));
     else if (asAlbum) {
       alb = album.render(ctx, info.no_cover ? null : info.cover, entries);
       section.append(alb.el);
-      const rest = entries.filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
+      const rest = sorted(entries).filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section.append(table(rest));
     } else if (view === "tiles") section.append(tiles());
     else section.append(table(entries));
@@ -256,7 +268,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
 
   const sorted = (list: Entry[]) => {
     const livePart = list.filter((e) => !e.deleted_at).sort((a, b) => compare(a, b, sort));
-    const gone = list.filter((e) => e.deleted_at).sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "") || a.name.localeCompare(b.name));
+    const gone = list.filter((e) => e.deleted_at && (showDeleted || inTrash)).sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "") || a.name.localeCompare(b.name));
     return [...livePart, ...gone];
   };
   const order = () => sorted(entries).filter((e) => !e.deleted_at).map((e) => e.name);

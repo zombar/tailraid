@@ -211,7 +211,9 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   came from. The NFS and SMB gateways see exactly a delete: LOOKUP fails, READDIR omits
   the name, the handle is stale, a new entry may take the name at once; only the free
   space does not move until the purge. This UI lists a folder's deleted roots after its
-  live entries with `deleted_at` and `purge_at`, dimmed, and addresses them by inode:
+  live entries with `deleted_at` and `purge_at`, dimmed, once the viewer ticks the
+  toolbar's **show deleted** (off by default, kept for the session; the toolbar's count
+  says how many are hidden), and addresses them by inode:
   `in=<ino>` on `ls`, `stat`, `files`, `thumb` and `tags` reads inside the deleted root,
   so a deleted folder is browsed and a deleted video plays as before the delete, from the
   same bytes (I-158). A folder deleted from a mount with `rm -rf` arrives piece by piece
@@ -522,9 +524,9 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Member menu | `.toolbar details.menu` > `summary` ("Node: pike") + `.menu-body` of `a.menu-row` (`.dot` + name + `.small.dim` state) + `a.menu-link` (↗) | one row per device member with its live dot and state; choosing a row re-renders the node section from this gateway; the ↗ link opens that member's own Stats page at the same range (`http://<tsIP>:<web>/#/stats?…`); a member without a web listener has no link; "all nodes" is the first row |
 | Chart card | `.charts` > `.chart-card` > `svg.chart` + `.small.dim` caption | the soak report's chart drawn in the page's tokens: text in `--text` and `--dim`, grid in `--line`, series in `--c0`…`--c7`, status cells in the status colours, the spread bins in the under/even/over tokens; one chart per row at every width; the caption names the unit, the window and the tier; hover shows the chart's `<title>` tooltips |
 | Search box | `header.top form.search` > `input[type=search]` + `button` | in the header after the tabs; `/` focuses it, Escape clears it, Enter opens `#/search/<q>`; one focus ring around input and button; below 900 px it takes a second header row of its own |
-| Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.under` toggle) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
+| Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.toggle`) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
 | Markdown document | `article.md.md-doc` | a 760 px measure with a gutter hairline on the left and faint `##`, `###` markers in the margin before `h3`–`h6` (the file's `#` is the page's `h2`); headings in mono as the UI's; code on `--surface`; tables with `--line` hairlines; `mark` in the accent tint; "Rendered \| Raw" as a `.seg` in the toolbar |
-| Library section | `section.lib` > `h2` (title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added, `.chips` of genres) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape |
+| Library section | `section.lib` > `details` > `summary` > `h2` (▾/▸, title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape; a section folds away on its heading, the choice kept per viewer in `localStorage`, and a folded library is listed only once opened |
 | Poster grid | `.posters` > `a.poster` > `.art` (`img`, or the kind glyph) + `.ptitle` + `.pyear` | `auto-fill, minmax(140px, 1fr)` (120 px under 480 px); `.art` is 2:3 letterboxed on `--surface`, square for music; `nsfw` blurs the art; `missing` shows the kind glyph over the title; loaded lazily like tiles |
 | Hero | `section.hero` > `img.backdrop` + `.hero-body` (`img.poster`, `h1`, `.facts`, `.plot`, `.actions`, `.people`) | the fanart as a full-width background 32 vh tall, `object-fit: cover`, darkened to 55 % and faded into `--bg` with a gradient so the ink stays legible in both themes; the poster overlaps its bottom edge; `.facts` year · runtime · rating · genres · mpaa in `--dim`; `.plot` sans 15/1.55 on a 65-ch measure; `.actions` "Play" and "Open folder" buttons; `.people` director and up to six actors as text chips; `.hero.no-art` is a plain `--surface` band, `.hero.poster-only` uses the poster's blurred copy at low opacity |
 | Season strip | `.seasons` > `button[aria-pressed]` per season | the selected season's episodes follow; "Specials" last |
@@ -693,7 +695,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   refuses every other with `421` before authorization; the index page's CSP contains
   `frame-ancestors 'none'`; `/api/status` never carries the join token.
 - **I-158** — The web UI lists a folder's deleted roots in that folder with their
-  `deleted_at` and `purge_at`, after the live entries; `ls`, `stat`, `files`, `thumb` and
+  `deleted_at` and `purge_at`, after the live entries, when show deleted is ticked; `ls`, `stat`, `files`, `thumb` and
   `tags` with `in=<ino>` read inside a deleted root and `GET /files` there returns exactly
   the bytes the file returned before its delete; `restore` returns the entry with the
   same `(ino, gen)` under its original name, or under the name or into the live folder
