@@ -51,7 +51,10 @@ cluster and this mirror; anything else (unplugged, unmounted, host asleep or dea
 **offline**. The host checks the marker on every maintenance tick (each minute) and
 reports its mirrors in its `status` (online, used, free, newest snapshot). Only the host
 can tell whether its disk is attached, so the host drives its mirrors (§4); nothing else
-waits for a mirror, and an offline mirror costs the cluster nothing.
+waits for a mirror, and an offline mirror costs the cluster nothing. A write to a mirror
+whose directory is gone fails rather than recreate the path: a disk unplugged mid-sync
+leaves its mount point behind, and a recreated path would put the mirror on the host's
+own disk, hidden under the mount point once the disk is back.
 
 ## 2. The mirror format (self-describing)
 
@@ -345,7 +348,7 @@ stub in `test/invariants/` meanwhile.
 | Invariant | Tests |
 |---|---|
 | I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
-| I-180 | `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
+| I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestModelCheck_Long` |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`; planned: TestWebUI_NoSnapshotDeleteRoute |
 | I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

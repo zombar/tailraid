@@ -357,6 +357,38 @@ func TestMirror_ObjectVerifiedOnRead(t *testing.T) {
 	}
 }
 
+// A mirror unplugged while it is open (its directory gone, as an unmounted disk leaves
+// an empty mount point or none) refuses every write rather than recreate its path on
+// the host's own disk: an object, a tree and a manifest all fail and the path stays
+// absent; plugged back, the same handle writes again.
+// Invariant: I-180
+func TestMirror_DetachedRootNotRecreated(t *testing.T) {
+	m, root := newMirror(t, sysfs.OS{})
+	away := root + ".away"
+	if err := os.Rename(root, away); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("written while unplugged")
+	h := meta.Hash(sha256.Sum256(data))
+	if _, err := m.PutObject(h, data); err == nil {
+		t.Error("an object written to an unplugged mirror")
+	}
+	v := newVolume()
+	v.put(1, "f", 10, bytes.Repeat([]byte{3}, testCS))
+	if _, err := m.WriteSnapshot(context.Background(), v, 1, Manifest{ID: 1, Name: "s", ChunkSize: testCS}); err == nil {
+		t.Error("a snapshot written to an unplugged mirror")
+	}
+	if _, err := os.Stat(root); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the unplugged mirror's path was recreated: %v", err)
+	}
+	if err := os.Rename(away, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.PutObject(h, data); err != nil {
+		t.Fatalf("plugged back: %v", err)
+	}
+}
+
 // Invariant: I-180
 func TestMirror_OpenSweepsTemps(t *testing.T) {
 	m, root := newMirror(t, sysfs.OS{})
