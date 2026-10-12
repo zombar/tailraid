@@ -60,13 +60,13 @@ const (
     OpMkdir                   // {Parent, Name, Mode, Uid, Gid, Now}
     OpUnlink                  // {Parent, Name, Now}
     OpRmdir                   // {Parent, Name, Now}
-    OpRename                  // {OldParent, OldName, NewParent, NewName, Now}
+    OpRename                  // {OldParent, OldName, NewParent, NewName, Now}; codec 9 adds {NoReplace bool} (I-224, I-226)
     OpSetAttr                 // {Ino, Mask, Mode, Uid, Gid, Atime, Mtime, Now}
-    OpCommit                  // {Ino, BaseVersion, HasTruncate, TruncateTo, NewSize, Writes []ChunkWrite, NewChunks []ChunkDesc, Now}
+    OpCommit                  // {Ino, BaseVersion, HasTruncate, TruncateTo, NewSize, Writes []ChunkWrite, NewChunks []ChunkDesc, Now}; codec 9 adds {Rewrite u64, RewriteStart bool} (04 §6, I-223)
     OpSetPlacement            // {Hash, Placement []NodeIdx, K, M}   (repair / migration)
     OpGCDelete                // {Before int64} → Result.Victims
     OpSetVolumeMode           // {Auto bool, Now}   (03: automatic redundancy)
-    OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4); in codec 8 it is an own cleanup (Own, I-220)
+    OpTrash                   // {Parent, Name, Recursive bool, Now}: the entry into the trash (codec 4); in codec 8 it is an own cleanup (Own, I-220); codec 9 adds {Expect Ino} (I-225)
     OpRestore                 // {Ino, NewParent (0 = original), NewName ("" = original), Now} (codec 4)
     OpPurge                   // {Ino (0 = every root due), Before int64, Limit uint32, Now} (codec 4)
     OpSetShardSums            // {Hash, Sums [][32]byte}: the data shards' hashes of a chunk committed without them (04 §4, codec 5)
@@ -86,7 +86,7 @@ var (
     ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop,
     ErrConflict, ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand,
     ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
-    ErrProtected, ErrInTrash, ErrCodec error   // appended: wire codes are never renumbered
+    ErrProtected, ErrInTrash, ErrCodec, ErrSuperseded error   // appended: wire codes are never renumbered
 )
 ```
 
@@ -126,7 +126,11 @@ tries to join again until it has been `reset`.
 
 **Create / Mkdir.** `Parent` must exist and be `TDir` (`ErrNotExist`/`ErrNotDir`). `Name`
 must be non-empty, not `.` or `..`, contain no `/`, and be ≤ 255 bytes (`ErrBadCommand`).
-Existing child ⇒ `ErrExist`. Allocates `Ino = NextIno++`, `Gen = uint32(logIndex)`, sets
+Existing child ⇒ `ErrExist`. This refusal is what makes an exclusive create exclusive
+across gateways: a gateway whose FSM had not yet applied another gateway's `Create` of
+the name proposes its own and gets `ErrExist`, and for `O_EXCL` (SMB `FILE_CREATE`, NFS
+CREATE `GUARDED`, the browser's `If-None-Match: *`) it answers `EEXIST` rather than
+opening what is there (I-222). Allocates `Ino = NextIno++`, `Gen = uint32(logIndex)`, sets
 times to `Now`, `Nlink` 1 (dirs: 2, and parent `Nlink++`). Returns `Ino, Gen`.
 
 **Unlink.** Child must exist and not be `TDir` (`ErrIsDir`), and nothing on its parent
@@ -141,7 +145,10 @@ propose `Unlink` only for the ephemeral names of 06 §1 (upload temps, `._*`,
 protected and under no protected directory. Removes it; parent `Nlink--`. Like `Unlink`,
 proposed only for ephemeral names and in the mixed-version window.
 
-**Rename.** Source must exist. If destination exists: file/symlink over file/symlink
+**Rename.** Source must exist. With `NoReplace` (codec 9) an existing destination is
+`ErrExist` and nothing changes: the no-replace rename of SMB (I-224) and the browser's
+exclusive publish (I-226) are decided by the FSM, not by a lookup on a gateway that may
+not have applied the other client's create. Otherwise, if destination exists: file/symlink over file/symlink
 replaces it (the destination goes to the trash as by `Trash`, or is unlinked when its
 name is ephemeral, then the move); dir over *empty* dir replaces it the same way; dir
 over non-empty dir ⇒ `ErrNotEmpty`; type mismatch ⇒ `ErrIsDir` or `ErrNotDir`. Moving a
@@ -210,7 +217,11 @@ protected folder accepts new content and refuses to lose any. One `Trash` gets t
 an **own cleanup**, a `Trash` of a file written in codec 8 (`Own`), which the SMB gateway
 proposes only for a handle whose CREATE made the file and which the client marked
 delete-on-close: a copy that failed removing what it wrote, as Explorer does on Skip or
-Cancel (I-220, docs/15 §8). It never removes a directory, and nothing else sets it. The
+Cancel (I-220, docs/15 §8). It never removes a directory, and nothing else sets it. In codec 9 a `Trash` may carry
+`Expect`, the inode the proposer means: when the name resolves to another inode (a client
+renamed the file away and something else took its name) the Trash is `ErrConflict` and
+changes nothing, so a delete-on-close never removes a file its handle did not open
+(I-225). The
 same walk guards the
 trash: `Create`, `Mkdir`, `Unlink`, `Rmdir`, `Rename`, `Trash` and a `SetAttr` of
 `Flags` refuse a parent (or entry) that lies in the trash with `ErrInTrash`; only
@@ -220,6 +231,13 @@ only `Restore` and `Purge` take anything out.
 **Commit** — the only command that changes file data. Applied atomically or not at all:
 
 1. `inode` must exist and be `TFile` (`ErrNotExist`/`ErrIsDir`).
+   **Rewrites** (codec 9, 04 §6, I-223): a Commit with `RewriteStart` must carry
+   `HasTruncate` with `TruncateTo` 0 (`ErrBadCommand`) and skips the `BaseVersion` check
+   of step 2: it replaces the whole file whatever was committed since the gateway planned
+   it. A Commit with `Rewrite` ≠ 0 and no `RewriteStart` continues the rewrite whose
+   start applied at version `Rewrite`; if `inode.RewriteAt != Rewrite` another rewrite
+   started since, and the Commit is `ErrSuperseded` (checked before step 2). A Commit with
+   neither is a plain write, as before codec 9.
 2. `inode.Version != BaseVersion` ⇒ `ErrConflict` (optimistic concurrency; the gateway
    rebases and retries, see 04).
 3. Each `NewChunks[j]`: `Hash != HashZero`, `1 <= Size <= ChunkSize`, `K >= 1`,
@@ -243,7 +261,11 @@ only `Restore` and `Purge` take anything out.
    dropped by the truncate): old hash (if not `HashZero`) `Refs--` with tombstone on zero;
    new hash (if not `HashZero`) `Refs++` and, if it was tombstoned, `TombstonedAt = 0` and
    remove from `Tombs`. A `Refs--` that would underflow is `ErrBadCommand` (never a panic).
-8. `inode.Chunks = newChunks; Size = NewSize; Version++; Mtime = Ctime = now`.
+8. `inode.Chunks = newChunks; Size = NewSize; Version++; Mtime = Ctime = now`. A
+   `RewriteStart` then sets `inode.RewriteAt = Version` and returns it in
+   `Result.Version`; a continuation and a plain Commit leave `RewriteAt` alone, so a third
+   writer's in-place WRITE merges into the current rewrite at chunk granularity, as any
+   two writers did before codec 9.
 
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
@@ -307,8 +329,9 @@ disk or host), 3 (`SetPlacement.Expect`, `GCDelete.Limit`), 4 (`Trash`, `Restore
 `Purge`, `SetAttr` with `Flags`), 5 (`Commit` whose `NewChunks` carry `Sums`,
 `SetShardSums`), 6 (`SetAttr` with the library bits of 18 §9) or 7 (`SnapshotBegin`,
 `SnapshotEnd`, `SnapshotDelete`, `SnapshotImport`, `NodeUpsert` of a mirror, 16) or 8 (`Trash` with `Own`,
-an own cleanup, I-220; the version is the flag, no field is added), snapshots in version
-7 (01 §Binary codec; codec 8 adds no state); every reader
+an own cleanup, I-220; the version is the flag, no field is added) or 9 (`Commit` with
+`Rewrite`/`RewriteStart`, `Trash` with `Expect`, `Rename` with `NoReplace`; I-223..I-226), snapshots in version 9
+(01 §Binary codec: `Inode.RewriteAt`; codec 8 added no state); every reader
 decodes every older version. A `Commit` carries `Sums` only while every live active member
 reads codec 5 (the flusher asks the prober's `MinCodec`), so a flush never fails on the
 gate: in a mixed cluster the chunk is committed without sums and the repair scanner's
@@ -386,7 +409,8 @@ whole partition on a minority side: a gateway that has not yet applied another g
 unlink, rename or create resolves the *old* name table. A client there may open an inode
 that is already unlinked (its later WRITEs are accepted into the WAL and dropped when the
 Commit answers `ErrNotExist`, docs/04), see `ENOENT` for a file that exists elsewhere, or
-create a name that the leader then reports as `ErrExist`. These are the NFS close-to-open
+create a name that the leader then reports as `ErrExist` (for an exclusive create the
+client sees `EEXIST`, for any other the gateway opens the winner's file, I-222). These are the NFS close-to-open
 anomalies of any multi-server filesystem with asynchronous metadata; what never happens is
 a committed byte changing because of them (I-12, I-35). The model checker encodes exactly
 this rule: after a remove or rename nobody writes the affected names until every node has
@@ -583,6 +607,14 @@ no divergent state to merge because it never applied uncommitted entries.
   `ErrProtected` before anything changes, the own cleanup of I-220 alone excepted;
   creating, writing and moving into a protected directory succeed; `Flags` are accepted
   on directories only.
+- **I-222** — An exclusive create of one name succeeds exactly once across the cluster:
+  `vfs.OpenFile` with `O_CREATE|O_EXCL` answers `EEXIST` when the name resolves locally
+  and also when its `Create` proposal returns `ErrExist`, never opening or truncating the
+  file another gateway created; SMB `FILE_CREATE`, NFS CREATE `GUARDED` and the browser's
+  `If-None-Match: *` publish all go through it, so two clients creating one name on two
+  gateways, or on one gateway over two connections, see one success and one
+  `EEXIST`/`STATUS_OBJECT_NAME_COLLISION`/`NFS3ERR_EXIST`/412, and the file holds the
+  winner's bytes.
 - **I-220** — A `Trash` with `Own` (codec 8) of a file under a protected directory moves it
   into the trash like any delete; with `Own` a directory is still refused with
   `ErrProtected`, and without it everything under a protected directory is (I-154). The
@@ -627,3 +659,4 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-220 | `TestFSM_Protected_OwnCleanup_Table`, `TestEncodeCommand_OwnTrashIsCodec8`, `TestSMB_FailedCopyCleanup_UnderProtected`, `TestSMB_DeleteExistingUnderProtected_StillRefused`, `TestDeleteOnClose_OwnCreationIsOwnCleanup` |
 | I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
 | I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
+| I-222 | planned (PR excl-create): TestVFS_ExclCreate_LostRace_EEXIST, TestCluster_ExclCreate_TwoGateways_OneWins, TestSMB_FileCreate_RacingBackend_Collision, TestNFS_CreateGuarded_RacingBackend_Exist, TestSoak_MultiUserAgainstHarness |

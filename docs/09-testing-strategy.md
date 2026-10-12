@@ -465,8 +465,37 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   commits carrying shard sums refused for as long as the leader sees the old member.
   The stall of I-217 and the update of I-221 do not bite at the phase's file sizes and
   are pinned by their own tests. A failed copy's cleanup
-  under a protected folder (docs/15 §8) is not driven here, the Go SMB client having no call
-  to mark an open handle delete-on-close, and is covered by the SMB gateway's own tests). The compose rig gives four nodes two disks each, one
+  under a protected folder (docs/15 §8) is not driven here but in phase 23); 23 many
+  users at once (written after research for the 2026-10-12 incident found that two
+  clients meeting in one name could truncate each other's copy: every round is
+  contention between clients rather than a fault, each in its own folder, and every
+  file is read back through a gateway that wrote none of it, checked against its
+  payload's sha256 and for holes as in phase 22): (a) many streams into one gateway,
+  three SMB sessions of four files each and an NFS job at once (I-217, I-167);
+  (b) two gateways copying one folder tree into the same new folder, both making the
+  same subfolders, a third gateway's listing reaching the union (I-35); (c) one name
+  created exclusively by two clients, on two gateways and on two sessions of one,
+  exactly one success per name and the file its winner's (I-222); (d) one name
+  replaced by two clients through two gateways with different payloads, several times
+  with staggered starts, every gateway reading one whole payload (I-223); (e) a
+  gateway reading a file another gateway is copying, every read the old bytes or the
+  new chunk by chunk and never other bytes (I-36), the whole file once the copy has
+  ended and `FlushIdle` passed; (f) a copy's folder renamed and another copy's file
+  deleted through another gateway mid-copy, the first file whole under its new name,
+  the second whole in the trash and restored (I-155); (g) on one gateway, a handle
+  marked delete-on-close whose file another session renames away and replaces with a
+  new file before the close, the new file surviving and the renamed one gone, a
+  no-replace rename onto an existing name refused, and a rename seen by the other
+  session's open handle (I-224, I-225; with a protected folder, the own cleanup of
+  I-220 by inode); (h) two browser uploads of one name through two gateways, plain and
+  with `If-None-Match: *` (I-226); (i) round (a) again while the leader is killed. After
+  the last round the FSM hashes agree and `fsck` finds no violation. `soak.CopySpec`
+  carries the open mode (exclusive, the default, or replace) and `CopyEnv.StartCopies`
+  a number of sessions; the handle races go through the optional `ClientEnv` (open,
+  write, mark delete-on-close, rename with or without replace, close), served by the
+  compose worker and the harness alike; the SMB side uses `third_party/smb2client`, the
+  in-tree copy of `cloudsoda/go-smb2` with the two calls upstream lacks (mark an open
+  handle delete-on-close, rename without replace). The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, a mirror directory on n2 for phase 19,

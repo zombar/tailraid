@@ -297,8 +297,9 @@ runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under w
 I-203), `gateway.readahead_skipped` (readahead candidates skipped because every slot was
 busy: readahead saturated, the client fetches those chunks itself, I-166),
 `gateway.reads_early` (ranges served from verified data shards rather than from
-the decoded chunk, 04 §5, I-202) and `gateway.prefetching` (prefetches in flight
-right now). On the leader `repair.stats.sums_recorded` and `repair.stats.sums_pending`
+the decoded chunk, 04 §5, I-202), `gateway.prefetching` (prefetches in flight
+right now) and `gateway.rewrites_superseded` (rewrites of a file this gateway dropped
+because another client's rewrite of it started later, 04 §6, I-223). On the leader `repair.stats.sums_recorded` and `repair.stats.sums_pending`
 count the chunks whose data-shard sums the last pass recorded and the chunks still
 without them (06 §4, I-201). The soak sampler records them every second
 and the report charts the heap next to the WAL depth, so a memory regression under a

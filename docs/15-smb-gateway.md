@@ -107,18 +107,23 @@ Adapter: `internal/smbgw` implements that contract over `*vfs.FS` and `*vfs.File
 
 Every command holds the share's lock for its whole duration: reads share it, anything that
 changes the volume holds it exclusively. Two clients (macOS opens two connections for one
-mount) therefore never interleave inside one command.
+mount) therefore never interleave inside one command on one gateway; between gateways
+the FSM decides (an exclusive create, I-222; two rewrites of one file, I-223). The share
+also keeps its open handles by inode, so what one handle does to a file (a rename, a
+delete-on-close) is judged by the file, not by the name it had when opened (I-224,
+I-225).
 
 | SMB2 command | What the server calls on the adapter |
 |---|---|
 | CREATE (open) | `Stat(path)`; on a miss, the case-insensitive walk of §5; then `OpenFile(path)` for a file, which the adapter answers with a `WritableFile` over `vfs.OpenFile(path, O_RDWR)` |
-| CREATE (create, overwrite, supersede) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`), or `MkDir(path, 0755)` for a directory; then `Stat` and `OpenFile` as above. `FILE_CREATE` on an existing name is `STATUS_OBJECT_NAME_COLLISION` before the backend is touched |
+| CREATE (create) | `FILE_CREATE`: `CreateExcl(path)` (`vfs.OpenFile` with `O_CREATE\|O_EXCL`), or `MkDir(path, 0755)` for a directory; an existing name, seen by this gateway or by the leader, is `STATUS_OBJECT_NAME_COLLISION` (I-222); then `Stat` and `OpenFile` as above |
+| CREATE (overwrite, supersede, open-if, overwrite-if) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`): on an existing file the truncate starts a rewrite, so two clients replacing one file leave one whole copy (04 §6, I-223) |
 | READ | `File.ReadAt(buf, offset)`; a short read at the end is `STATUS_END_OF_FILE`, which is how a listing of bytes ends |
 | WRITE | `WritableFile.WriteAt(data, offset)` then `Sync()`; the reply is sent only after both return. `WriteAt` is `vfs.File.WriteAt`, durable in the WAL when it returns (I-7), so `Sync` is a no-op |
 | FLUSH | `Sync()`, success |
-| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFile` or `DeleteDir` |
+| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFile` or `DeleteDir` of the handle's current path with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
 | SET_INFO end-of-file, allocation | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
-| SET_INFO rename | `Rename(old, new)`; the handle follows the new path |
+| SET_INFO rename | `Rename(old, new)` when `ReplaceIfExists` is set; without it `RenameNoReplace(old, new)` (the FSM's `NoReplace`, docs/02), so an existing `new`, created on this gateway or another, is `STATUS_OBJECT_NAME_COLLISION` and nothing moves (I-224). Every open handle of the file on the share follows the new path, not only the renaming one |
 | SET_INFO disposition | marks the handle delete-on-close (SMB2 has no delete command) |
 | SET_INFO basic (times, attributes) | the access and write times go to `Chtimes` (0, −1 and −2 leave a time alone); attributes are dropped (§8) |
 | QUERY_INFO file classes | `Stat(path)`: size, the type and permission bits as Windows attributes (`DIRECTORY`, `ARCHIVE`, `READONLY` when no write bit is set), the inode number as the FileId, the inode's own times (creation is the change time: there is no birth time) |
@@ -294,6 +299,11 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   CREATE created the file may mark it delete-on-close and the CLOSE trashes it (I-220),
   so Skip or Cancel in Explorer leaves no half-copied file behind; before 2026-10-12 it
   did, and the integrity panel showed them as files of holes.
+- **No share modes or delete-pending.** A handle's share access is not enforced and a
+  file marked delete-on-close stays openable until the CLOSE, which deletes it then by
+  inode (I-225); a client that renamed it away in the meantime loses it, one that
+  created a new file at its old name keeps that one. Across gateways the delete is a
+  Trash with `Expect`, so the same holds whichever gateway the other client used.
 - **A delete goes to the trash** (docs/02 §Apply rules): `DeleteFile` and `DeleteDir`
   propose `Trash` for every name but the ephemeral ones of docs/06 §1, and the share sees
   a delete: the name is `STATUS_OBJECT_NAME_NOT_FOUND`, the listing omits it, a create of
@@ -380,6 +390,20 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   and files copied concurrently on one connection, each created, sized with SET_INFO
   end-of-file and written front to back while the flusher runs, read back byte for byte.
 
+- **I-224** — A rename through SET_INFO without `ReplaceIfExists` onto an existing name,
+  whichever gateway created it, is `STATUS_OBJECT_NAME_COLLISION` and changes nothing
+  (the FSM's `Rename` with `NoReplace` is `ErrExist`, codec 9; before it, the gateway's
+  own lookup); with it the replaced file goes to
+  the trash as any rename over (docs/02); and after a rename every open handle of that
+  file on the share, of any session, answers QUERY_INFO, READ and a whole-file read for
+  the file at its new name, never for whatever then holds the old one.
+- **I-225** — A delete-on-close removes the file its handle opened or nothing: the CLOSE
+  (and the own cleanup of I-220) proposes `Trash` of the handle's current path with the
+  handle's inode as `Expect` while every live member reads codec 9, and checks the name
+  still resolves to that inode before proposing otherwise; when another file holds the
+  name the delete is skipped and logged (I-218), so a file created at the old name by
+  another session or gateway survives and a protected folder never loses a file through
+  another file's own cleanup.
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -398,5 +422,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-141 | `TestSMB_DotFilesHidden` |
 | I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |
 | I-213 | `TestQueryInfo_OutputBufferLength` |
+| I-224 | planned (PR smb-handles): TestFSM_Rename_NoReplace_Exist, TestRename_NoReplace_Collision, TestRename_OtherHandlesFollow, TestSMB_TwoSessions_RenameMovesOtherHandle, TestSoak_MultiUserAgainstHarness |
+| I-225 | planned (PR smb-handles): TestDeleteOnClose_RenamedAway_NewFileSurvives, TestFSM_Trash_Expect_Mismatch, TestSMB_OwnCleanup_ByInode_UnderProtection, TestSoak_MultiUserAgainstHarness |
 | I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites`, `TestSeveralClientsOneShare` |
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |

@@ -239,8 +239,10 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
     (8 at 4 MiB): `assemble` keeps the lowest-indexed touched chunks that fit and leaves
     the rest dirty as residual, exactly like a partial flush; a plan with a truncate is
     never split (I-80, L-191). Then `Propose(Commit{Ino, BaseVersion: base.Version,
-    HasTruncate: plan.sizeSet, TruncateTo: plan.minSize, NewSize, Writes, NewChunks, Now})`
-    where `NewSize` is:
+    HasTruncate: plan.sizeSet, TruncateTo: plan.minSize, NewSize, Writes, NewChunks, Now,
+    Rewrite, RewriteStart})` (the last two while every live member reads codec 9, §6:
+    `RewriteStart` when `plan.sizeSet` and `plan.minSize` is 0, else `Rewrite` is the
+    rewrite id the gateway holds for the inode, or 0) where `NewSize` is:
     - full flush, no truncate: `max(base.Size, maxExtentEnd)`;
     - full flush with truncate: `max(plan.minSize, maxExtentEnd)`;
     - partial or batched flush: `max(base.Size, min(end of the last committed chunk,
@@ -250,8 +252,8 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
     - `ErrConflict`: another gateway committed first. Reload `base`, recompute steps 3–9 for
       the same plan (dedup makes untouched chunks free), propose again with `NewSize`
       recomputed from the *new* base by the rules above: another gateway's append is
-      preserved, and our truncate still wins over it (last-writer-wins at chunk granularity
-      is the documented behaviour of concurrent writers). Dirty extents are never dropped on
+      preserved, and our truncate still wins over it (§6 states the resulting rule for
+      concurrent writers). Dirty extents are never dropped on
       conflict (I-35).
     - `ErrUnknownChunk`: a dedup'd chunk was GC'd between step 6 and commit. Upload it (steps
       7–9 for that chunk) and propose again.
@@ -264,6 +266,10 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
       however late the retry. Holding the assembled bytes across the retry would cost a
       plan's worth of memory per inode for nothing (I-78).
     - `ErrNotExist`: inode gone → `ov.Drop(ino)`, return nil.
+    - `ErrSuperseded` (codec 9, §6): another rewrite of the file started after this
+      gateway's → `ov.Drop(ino)`, forget the rewrite id, count it in `status`
+      (`gateway.rewrites_superseded`), log once per inode at Info, return nil. The chunks
+      uploaded for the refused Commit are orphan shards (L-190).
     - `ErrNeedTailRewrite`: programming error in step 3; log at error level and retry with
       the tail chunk included.
 11. **Wait and clear.** `st.WaitApplied(index)`; `ov.commitFlushed(ino, plan)` removes the
@@ -369,10 +375,29 @@ reader's lock, where the cancel decides). `status` counts them as `readahead_can
 - **Other gateways:** see the previous committed version until their FSM applies the Commit
   (milliseconds after Raft commit). They never see a torn mixture of old and new chunks,
   because the chunk list is replaced atomically by one Commit.
-- **Two gateways writing the same file:** disjoint chunks → both Commits land (the second
-  rebases, keeping the larger size); same chunk → the second Commit wins for that whole
-  chunk and the first committer's version of it is tombstoned; a truncate rebased over a
-  concurrent append wins over the append. This is documented, not hidden.
+- **Two gateways writing the same file in place:** disjoint chunks → both Commits land
+  (the second rebases, keeping the larger size); same chunk → the second Commit's chunk,
+  re-assembled over the base as it is then (§4 step 10), replaces the first's: bytes
+  the second gateway did not write in that chunk keep the first gateway's, so the merge
+  is byte-exact for disjoint ranges and last-commit-wins for overlapping ones. A truncate
+  rebased over a concurrent append wins over the append. This is documented, not hidden.
+- **Two clients replacing the same file** (codec 9, I-223): a copy that replaces a file
+  opens it truncated (`O_TRUNC`, SMB overwrite or supersede, NFS SETATTR size 0) and
+  writes it front to back, and two such copies at once must leave one whole version,
+  never chunks of both. A plan whose truncation point is 0 is a **rewrite start**: its
+  Commit carries `RewriteStart`, replaces the file whatever was committed since it was
+  planned (02 §Apply rules) and returns the version it produced, which the gateway keeps
+  as the inode's **rewrite id**. Every later Commit of the inode from that gateway
+  carries the id; the FSM refuses one whose id is no longer the inode's `RewriteAt` with
+  `ErrSuperseded`, because another rewrite started after this one, and the flusher then
+  drops the inode's dirty extents and WAL (the client's copy ran, and the other replaced
+  it, exactly as if they had run one after the other). The rewrite whose start applied
+  last wins, whole. The gateway keeps the id while the inode is in the overlay and for
+  `RewriteHold` (10 min) after its last WRITE, and forgets it when it sees `RewriteAt`
+  change, so a slow copy whose overlay empties between WRITEs stays one rewrite; a
+  gateway restart forgets it (the WAL holds no commit results), and that copy's later
+  WRITEs commit as plain writes. Until every live member reads codec 9 the flusher
+  sends neither field and the in-place rule above applies.
 
 ## 7. When the cluster is unavailable
 
@@ -456,8 +481,19 @@ the WAL cap.
 - **I-7** — A WRITE is acknowledged only after its bytes are fsynced to the WAL, and a Commit is proposed only after ≥ k shards of every new chunk are durable (file and directory fsynced) on distinct nodes; the Commit becomes visible only after Raft commit.
 - **I-11** — A shard file visible under its final name has content matching its header hash; temp files are never served.
 - **I-34** — The issuing gateway returns its own acknowledged bytes on any subsequent READ (read-your-writes), before and after flush.
-- **I-35** — A flush never drops dirty extents or a truncation point: on `ErrConflict`, `ErrUnknownChunk` or PUT failure the same plan (extents, `minSize`, `sizeSet`) is retried against the newer base with `NewSize` recomputed so that no other gateway's committed bytes are cut off except by an explicit truncate; extents are removed only after `WaitApplied` of the Commit that carries them.
+- **I-35** — A flush never drops dirty extents or a truncation point, save on `ErrSuperseded` (I-223): on `ErrConflict`, `ErrUnknownChunk` or PUT failure the same plan (extents, `minSize`, `sizeSet`) is retried against the newer base with `NewSize` recomputed so that no other gateway's committed bytes are cut off except by an explicit truncate; extents are removed only after `WaitApplied` of the Commit that carries them.
 - **I-36** — Other gateways observe either the previous committed chunk list or the new one, never a mixture.
+- **I-223** — Two rewrites of one file leave one of them whole: a flush whose plan
+  truncates to 0 commits with `RewriteStart`, which applies over any version and makes
+  the version it produces the inode's `RewriteAt`; every later Commit of that inode from
+  the same gateway carries that id while the gateway holds it (overlay or `RewriteHold`
+  since the last WRITE, never past a restart or a change of `RewriteAt` it has seen); a
+  Commit whose id is not the inode's `RewriteAt` is `ErrSuperseded` and changes nothing,
+  and its flusher drops the inode's dirty extents and WAL and counts it; so after two
+  clients each truncate one path and write a payload through two gateways, every
+  gateway reads exactly one of the payloads, the one whose start applied last; a plain
+  Commit neither starts nor ends a rewrite; the fields are sent only while every live
+  member reads codec 9.
 - **I-37** — WAL replay after a crash restores exactly the records whose CRC verifies, in order, and discards the torn tail; replayed bytes equal the acknowledged bytes.
 - **I-63** — A WRITE is acknowledged only when every file its durability depends on has a durable directory entry: a newly created WAL file's directory is fsynced before its first record is appended.
 - **I-78** — The bytes a gateway holds in memory for flushing are bounded independently of file and plan size: at most `ChunkWorkers` chunks are assembled at once, a chunk's buffer and shards are released once its PUTs are decided (acked, failed or cancelled), a Commit retry re-assembles from the WAL, and `Flusher.Buffers()` never exceeds `ChunkWorkers × (ChunkSize + (k+m) · ShardLen(ChunkSize, k))`.
@@ -528,6 +564,7 @@ the WAL cap.
 | I-34 | `TestExtents_InsertOverlap_Property`, `TestMount_Workload`, `TestNFS_WriteSequence_MultiRPC`, `TestOverlay_OracleRandomOps`, `TestOverlay_TruncateDuringFlush_HidesPlanBytes`, `TestOverlay_WriteAtNonZeroOffset_PreservesBase`, `TestVFS_MaxDirty_ReturnsEIO`, `TestVFS_OracleRandomOps`, `TestVFS_PerRPCOpenCloseSequence`, `TestVFS_WriteAtNonZeroOffset_PreservesPrefix` |
 | I-35 | `TestCluster_StaleGatewayOverlay_KeepsOtherGatewaysBytes`, `TestFlusher_ConflictRebase_PreservesConcurrentAppend`, `TestFlusher_ConflictRebase_TruncateWins`, `TestFlusher_PartialFlush_SizeNeverAheadOfData`, `TestFlusher_PartialFlush_TwoExtents_KeepsPartialChunks`, `TestFlusher_PartialFlush_UnalignedAppend_KeepsHeadChunk`, `TestFlusher_ProposeFailureRetriesSamePlan`, `TestOverlay_AbortFlush_MergesBackNewerWins`, `TestOverlay_StaleEntry_FollowsCommittedSize`, `TestVFS_OracleRandomOps`, `TestVFS_TruncateThenGrow_OldBytesDoNotResurface`, `TestWAL_Compact_KeepsOnlyLive` |
 | I-36 | `TestCluster_OtherGatewaySeesPreviousVersionUntilApply`, `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` |
+| I-223 | planned (PR whole-rewrite): TestFSM_Commit_Rewrite_Table, TestFlusher_Superseded_DropsDirty, TestCluster_TwoRewrites_OneWholeWins, TestCluster_RewriteIDs_SameOnEveryNode, TestSoak_MultiUserAgainstHarness |
 | I-37 | `FuzzWALReplay`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_OracleRandomOps`, `TestOverlay_RestartReplaysDirtyWALs`, `TestOverlay_StaleCompactTempRemoved`, `TestOverlay_TruncateUpDuringFlush_SurvivesReopen`, `TestWAL_AppendAfterFailedSync_NoResurrectedRecord`, `TestWAL_AppendReplayRoundTrip`, `TestWAL_Compact_KeepsOnlyLive`, `TestWAL_RecordSizeBoundaries`, `TestWAL_ReplayStopsAtTornTail` |
 | I-63 | `TestWAL_CreateFsyncsDirectory` |
 | I-78 | `TestFlusher_Buffers_BoundedByChunkWorkers`, `TestFlusher_ConflictRetry_ReassemblesFromWAL`, `TestFlusher_DoesNotFillCache` |
