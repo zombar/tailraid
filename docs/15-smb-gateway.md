@@ -309,7 +309,9 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   found" (error 53) or "The specified server cannot perform the requested operation"
   (58). Explorer and the next command recover on their own; `verify` on Windows retries
   such errors for up to 30 s, which is how its restart-storm phase passes there (the
-  NFS clients on macOS and Linux ride out a restart without help).
+  NFS clients on macOS and Linux ride out a restart without help). A copy in flight does
+  not survive the restart; `update --restart` therefore waits for the gateway to be idle
+  first (docs/12 §5, I-221).
 
 ## Invariants
 
