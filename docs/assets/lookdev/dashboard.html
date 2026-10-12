@@ -28,6 +28,7 @@
       <div class="tile"><div class="label">Dedup</div><div class="value">1.12×</div><div class="sub">41.3 GiB logical</div></div>
       <div class="tile"><div class="label">Trash</div><div class="value">12</div><div class="sub">1.2 GiB · purged after 30 d</div></div>
       <div class="tile"><div class="label">Index</div><div class="value">8,204</div><div class="sub">41.2 MiB in 3 segments · 120 pending</div></div>
+      <div class="tile"><div class="label">Snapshots</div><div class="value">41</div><div class="sub">on 2 mirrors · 1 offline</div></div>
     </div>
     <div class="compare">
       <div class="bar-row"><span class="bar-label">logical</span><div class="bar tall"><i style="width:74%"></i></div><span class="bar-val">41.3 GiB</span></div>
@@ -250,6 +251,41 @@
     <div class="bar-row"><span class="bar-label">dirty bytes</span><div class="bar"><i style="width:7%"></i></div><span class="bar-val">18.2 MiB in 3 files of 256 MiB · flushing</span></div>
     <div class="bar-row"><span class="bar-label">WAL</span><div class="bar"><i style="width:17%"></i></div><span class="bar-val">22.0 MiB of 128 MiB</span></div>
     <div class="small dim">acknowledged writes not yet committed to the cluster</div>
+  </section>
+
+  <section>
+    <h2>Mirrors<span class="h-sub">hourly 24 · daily 30 · weekly 8 · monthly 12 · next in 48 m</span></h2>
+    <div class="cards">
+      <div class="card mirror">
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike-m1</span><span class="badges"><span class="badge">on pike</span><span class="badge self">self</span></span></div>
+        <div class="bar-row"><span class="bar-label">disk</span><div class="bar"><i style="width:34%"></i></div><span class="bar-val">1.2 TiB used of 3.6 TiB · 29 snapshots</span></div>
+        <div class="bar-row"><span class="bar-label">syncing</span><div class="bar"><i style="width:41%"></i></div><span class="bar-val">2026-10-12-1300Z · 41 % read · 212.4 MiB new</span></div>
+        <div class="meta"><span>newest 12 min ago</span><span>first 2026-09-14</span><span>/Volumes/Archive/tailraid</span></div>
+      </div>
+      <div class="card mirror off">
+        <div class="name-row"><span class="dot off"></span><span class="name">atlas-m1</span><span class="badges"><span class="badge">on atlas</span></span></div>
+        <div class="bar-row"><span class="bar-label">disk</span><div class="bar off"></div><span class="bar-val">offline 3 d · 12 snapshots · 980.0 GiB when last seen</span></div>
+        <div class="meta"><span>newest 2026-10-09 00:00</span><span>attach it to sync and browse</span></div>
+      </div>
+      <div class="card mirror warn">
+        <div class="name-row"><span class="dot ok"></span><span class="name">nomad-m1</span><span class="badges"><span class="badge">on nomad</span><span class="badge warn">nearly full</span></span></div>
+        <div class="bar-row"><span class="bar-label">disk</span><div class="bar warn"><i style="width:96%"></i></div><span class="bar-val">1.9 TiB used of 2.0 TiB · under its reserve: the oldest automatic snapshots go first</span></div>
+        <div class="meta"><span>newest 1 h ago</span><span>1 incomplete: 3 chunks unreadable</span></div>
+      </div>
+    </div>
+    <div class="snap-head"><button type="button">Take a snapshot</button><span class="small dim">every online mirror · 41 snapshots · 2 manual</span></div>
+    <table class="snapshots">
+      <thead><tr><th>name</th><th class="mirror">mirror</th><th class="taken">taken</th><th class="holds">added</th><th class="acts"></th></tr></thead>
+      <tbody>
+        <tr><td class="name">2026-10-12-1300Z<span class="badge">syncing 41 %</span></td><td class="mirror">pike-m1</td><td class="taken">now · hourly</td><td class="holds">212.4 MiB so far</td><td class="acts"><button type="button" disabled title="still syncing">Browse</button><button type="button" disabled title="still syncing">Delete</button></td></tr>
+        <tr><td class="name">2026-10-12-1200Z</td><td class="mirror">pike-m1</td><td class="taken">12 min ago · hourly</td><td class="holds">4.0 MiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">2026-10-12-1100Z<span class="badge warn">3 missing</span></td><td class="mirror">nomad-m1</td><td class="taken">1 h ago · hourly</td><td class="holds">96.0 MiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr><td class="name">before reinstall<span class="badge">manual</span></td><td class="mirror">pike-m1</td><td class="taken">2026-10-09 18:30</td><td class="holds">1.1 GiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+        <tr class="offline"><td class="name">2026-10-09-0000Z</td><td class="mirror">atlas-m1</td><td class="taken">2026-10-09 00:00 · daily</td><td class="holds">312.0 MiB</td><td class="acts"><button type="button" disabled title="atlas-m1 is offline: attach it to browse">Browse</button><button type="button" title="removed from the catalogue now; the disk is cleaned when it is attached">Delete</button></td></tr>
+        <tr><td class="name">2026-09-14-1400Z</td><td class="mirror">pike-m1</td><td class="taken">2026-09-14 14:00 · first</td><td class="holds">1.0 TiB</td><td class="acts"><button type="button">Browse</button><button type="button">Delete</button></td></tr>
+      </tbody>
+    </table>
+    <div class="small dim">a snapshot copies only what changed since the last one on its mirror; "added" is what it wrote</div>
   </section>
 
   <section>

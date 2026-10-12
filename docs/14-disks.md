@@ -265,6 +265,14 @@ reset --yes` on every device, then `init` and `join`, and the data copied back; 
 The FSM itself still applies such entries, so a replayed log restores before the check
 runs.
 
+**Mirrors are not targets.** A host may also carry mirrors (docs/16): disks given to
+snapshots, `KindMirror` rows with the host as their `Host`. A mirror is never a placement
+candidate, never counted by the automatic policy, the host cap, the budget or the skew,
+and never repaired; a host whose only disks are mirrors is a diskless host for this
+document. It shares the disk machinery that makes sense for it: a marker that keeps an
+unmounted path closed, liveness through its host, and `node ls` listing it under its host
+as `<host>/m<n>`.
+
 ## Invariants
 
 - **I-86** — A disk that is not marked for this cluster and this host (`disk_id` missing,

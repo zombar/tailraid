@@ -105,6 +105,27 @@ old delete is reclaimed about ten minutes after its day and a "delete now" from 
 browser UI the same way (I-157). Nothing in the trash is ever a GC victim while it is in
 the trash (L-207).
 
+**The sync hold** (16 §4). While a snapshot is being copied to a mirror, its catalogue row
+is `syncing`, and the FSM clamps every `GCDelete` to `Before = min(cmd.Before, the oldest
+syncing row's At)`: a chunk the snapshot references that loses its last reference during
+the copy is tombstoned as usual but not collected until the row ends, so the copy never
+meets a hole (I-181, L-212). The clamp is applied by the FSM from its own state, so every
+replica deletes the same entries (I-43). Nothing else changes for the pool: the purge
+still tombstones, the sweep still removes only unplaced shards, and the hold lasts at most
+`mirrors.hold_max`.
+
+**Mirrors.** The same tick runs the mirror schedule of 16 §4 before the purge, with the
+same clamped clock: for each online mirror with no sync running, a `SnapshotBegin` named by
+the UTC minute when its newest automatic snapshot is older than `mirrors.every`, and at
+once for a mirror that has just come online; nothing for an offline one. Then, per mirror,
+`SnapshotDelete` for every automatic snapshot outside the keep set (the newest of each of
+the last `keep.hourly`, `keep.daily`, `keep.weekly` and `keep.monthly` buckets), oldest
+first, and the oldest automatic one first while the mirror's free space is under its
+reserve; a manual snapshot is never deleted by the tick. Finally a `SnapshotEnd{OK: false}`
+for any sync older than `mirrors.hold_max`. A mirror's disk is cleaned by its own host,
+never by this tick (16 §5). Nothing is proposed while a live member runs a codec older
+than 7 (I-182).
+
 ## 3. Sweep (every node, hourly)
 
 ```go
@@ -371,6 +392,15 @@ state to patch.
 - **I-195** — Every path under `/.tailraid/` is ephemeral: a replace or a delete of one
   unlinks it at once and never trashes it, and the web file browser lists nothing under it
   (I-160); on the mounts the tree is plain files and folders.
+- **I-182** — With `mirrors.every > 0` the leader begins an automatic snapshot, named by
+  the UTC minute, for every online mirror with no sync running whose newest automatic
+  snapshot is older than `every`, and at once for a mirror that has just come online;
+  it begins nothing for an offline mirror, so nothing is held for it; it keeps on each
+  mirror the newest automatic snapshot of each of the last `hourly`, `daily`, `weekly`
+  and `monthly` buckets and deletes the other automatic ones oldest first, and the oldest
+  automatic one first while the mirror is under its free-space reserve, never a manual
+  one; it ends as failed a sync older than `hold_max`; an `ErrExist` on the automatic
+  name is not retried; and nothing is proposed while a live member lacks codec 7.
 
 ## Tests
 
@@ -389,3 +419,4 @@ state to patch.
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
 | I-215 | `TestScrubDue_Window`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_ScrubPeriod_FirstPassAsLeader`, `TestConfig_ScrubPeriod` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
+| I-182 | planned (16): TestSchedule_TakesAndThins_Table, TestSchedule_CatchUpOnAttach, TestSchedule_OfflineMirrorNothingHeld, TestSchedule_FreeSpaceReserve, TestSchedule_ManualNeverDeleted, TestSchedule_AutoNameTaken_NoRetry, TestSchedule_SkipsWhileCodecOld, TestConfig_Mirrors |

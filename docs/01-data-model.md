@@ -45,7 +45,7 @@ type Chunk struct {
     Sums         [][32]byte   // SHA-256 of each data shard's stored payload, len K, once recorded (04 §4, I-201); nil until then
 }
 
-type NodeKind  uint8          // KindDevice = 1, KindS3 = 2
+type NodeKind  uint8          // KindDevice = 1, KindS3 = 2, KindDisk = 3 (14), KindMirror = 4 (16: never a placement target)
 type NodeState uint8          // Active = 1, Draining = 2, Removed = 3
 
 type Node struct {           // the ONE node struct; 02 and 10 refer to it, never redefine it
@@ -91,8 +91,25 @@ type State struct {
     Nodes   map[NodeIdx]*Node
     Tombs   map[Hash]struct{} // index of Chunks with Refs == 0
     Trash   map[Ino]map[Ino]struct{} // index of the trash: original parent → the deleted roots under it
+    Snaps    map[SnapID]*Snapshot    // the snapshot catalogue (16 §5); the snapshots themselves live on mirrors
+    NextSnap SnapID
     Applied uint64            // last applied Raft index
     LastNow int64             // the FSM clock (02): the greatest Now any applied command carried
+}
+
+type SnapID    uint32         // from State.NextSnap; never reused
+type SnapState uint8          // Syncing = 1, Complete = 2, Incomplete = 3 (16 §3)
+type Snapshot struct {        // a catalogue row: the snapshot is on its mirror (16)
+    ID       SnapID
+    Mirror   NodeIdx          // a KindMirror row
+    Name     string           // 1..64 bytes, unique per mirror; automatic: the UTC minute
+    Index    uint64           // the SnapshotBegin's own index: the volume as of every entry ≤ Index
+    At       int64            // FSM clock at the begin; also the sync hold's bound (06 §2)
+    Auto     bool             // taken by the leader's schedule (thinned); false = manual
+    State    SnapState
+    Root     Hash             // the root tree on the mirror, once complete
+    Files, Bytes, NewBytes uint64 // what the snapshot holds and what it added to the mirror
+    Missing  uint32           // chunks the sync could not read (Incomplete)
 }
 ```
 
@@ -123,6 +140,11 @@ Rules:
   (`FlagLibraryMask = 0b1100`) hold the library kind of 18 §9: 0 none, 1 movies, 2 tv,
   3 music (codec 6, I-210). All are inherited by what lies under the directory when a
   gateway reports an *effective* flag; the FSM stores each directory's own bits.
+- **Snapshots are not in the state.** `Snaps` is their catalogue: a row per snapshot
+  naming its mirror, the index it was taken at and what it holds (16 §5). The snapshot's
+  trees and chunks live on the mirror disk in the format of 16 §2, and the live pool keeps
+  no history; the only effect a row has on the pool is the sync hold on `GCDelete` while
+  it is `Syncing` (02 §Apply rules, 06 §2).
 
 ## Chunking
 
@@ -260,7 +282,9 @@ Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM retur
 `ErrBadCommand` in `Result.Err` and applies nothing (deterministically on every node).
 A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3:
 `SetPlacement`, `GCDelete`; 4: `Trash`, `Restore`, `Purge` and a `SetAttr` carrying
-`Flags`), so an entry can never smuggle a field an older reader would misparse.
+`Flags`; 5 and 6: 02 §Codec versions; 7: `SnapshotBegin`, `SnapshotEnd`,
+`SnapshotDelete` and a `NodeUpsert` of a `KindMirror` row), so an entry can never smuggle
+a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
 
@@ -281,6 +305,9 @@ section  Inodes   uvarint count, then each Inode {Ino, Gen, Type, Mode, Uid, Gid
                   Flags u8, DeletedAt i64 (v ≥ 4),
                   TFile: uvarint len(Chunks) + hashes; TSymlink: Target;
                   TDir: uvarint len(Children) + (name, Ino) pairs sorted by name}
+section  Snaps    uvarint count, then each Snapshot in ID order {ID u32, Mirror u16, Name,
+                  Index u64, At i64, Auto bool, State u8, Root hash, Files u64, Bytes u64,
+                  NewBytes u64, Missing u32}, then NextSnap u32 (v ≥ 7)
 ```
 
 Maps are emitted in sorted key order (inos ascending, hashes bytewise, node idx ascending,
@@ -298,6 +325,7 @@ restored replica and one that applied the log agree on every count (I-5).
 | per directory child (`Children` entry) | ~60 |
 | `Chunk` struct + map slot + `Placement` (K+M ≤ 8) | ~110 |
 | `Chunk.Sums`, once recorded (04 §4, I-201) | 32 × K (96 at 3+2) |
+| a snapshot catalogue row (16 §5; the snapshot itself is on its mirror) | ~150 |
 
 Rule of thumb: 1 M files + 1 TB unique data ≈ 200 MB + 110 MB ≈ **320 MB** of resident
 metadata per node, plus 24 MB of data-shard sums at 4 MiB chunks and 3+2 (250k chunks). Soft documented limits: 2 M inodes, 4 TB unique data per volume.
@@ -315,6 +343,25 @@ offset  size  field
 16 bytes, fixed, big-endian throughout (network order; it is an opaque wire value). `FromHandle` looks up `Ino`; a missing inode or a `Gen` mismatch returns
 `NFS3ERR_STALE`. Handles are therefore stable across renames, gateway restarts, and across
 gateways on different devices (they encode cluster-wide identity, not a path).
+
+An entry under `/.snapshots/<mirror>/<snapshot>/` (16 §6, 07) has a second fixed layout,
+24 bytes, big-endian:
+
+```
+offset  size  field
+0       4     magic 0x54524853 ("TRHS")
+4       4     SnapID uint32
+8       4     Gen uint32 (the entry's gen as the snapshot's tree recorded it)
+12      8     Ino uint64 (likewise)
+20      4     reserved, zero
+```
+
+A snapshot's tree entries carry the `(Ino, Gen)` the inode had when it was taken, unique
+within the snapshot. A gateway resolves such a handle through a per-snapshot index from
+`(Ino, Gen)` to path, filled as `LOOKUP` and `READDIR` hand handles out and rebuilt by a
+walk of the snapshot's trees on a miss; a catalogue row that is gone, an index without the
+pair, or a mirror that is offline is `NFS3ERR_STALE` (I-185). The 16-byte live layout is
+untouched.
 
 ## Node budget
 
@@ -370,6 +417,12 @@ defined in `04-write-path-and-durability.md`.
   every snapshot and entry of versions 1–3 decodes as before with those fields zero;
   `Trash` and `Stats` rebuilt on decode equal the ones kept incrementally by the applies;
   and `DecodeState(EncodeState(s)) == s` for a state with deleted roots and flags.
+- **I-184** — Snapshot version 7 carries the snapshot catalogue and `NextSnap`, and log
+  entries carry codec version 7 only for `SnapshotBegin`, `SnapshotEnd`, `SnapshotDelete`
+  and a `NodeUpsert` of a `KindMirror` row; every snapshot and entry of an older version
+  decodes as before with an empty catalogue; a mirror row is never a placement, policy,
+  repair or budget candidate; and `DecodeState(EncodeState(s)) == s` for a state with
+  mirrors and catalogue rows in every state.
 - **I-74** — A disk's derived budget is `used + free − reserve` of the filesystem holding
   its store (reserve `max(10 %, 8 GiB)`), re-derived every maintenance tick with the
   store's cap following at once and a `set_capacity` proposal only past the hysteresis
@@ -391,3 +444,4 @@ defined in `04-write-path-and-durability.md`.
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
 | I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously` |
+| I-184 | planned (16): TestCodec_ReadsVersion6Snapshot, TestEncodeCommand_V7Gating, TestCodec_CatalogueRoundTrip, TestCandidates_MirrorNeverATarget, TestCluster_CatalogueSurvivesSnapshotInstall, `TestCodec_StateRoundTrip`, `FuzzDecodeCommand`, `FuzzDecodeState` |

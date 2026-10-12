@@ -185,6 +185,11 @@ rotate the gateway; 20 iterations short / 200 long). **`TestModelCheck_Long`** (
 test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`, `Restart`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
+With docs/16 one node carries a mirror and the scheduler also begins snapshots, takes the
+mirror offline and back, deletes snapshots and runs GC while a sync is under way; it keeps
+the world as of each snapshot's index, and at every quiescence every complete snapshot
+reads byte-exact against its world through every gateway, no chunk a syncing snapshot
+references was collected, and the catalogue agrees on every node (I-179, I-181, L-218).
 
 **End to end** — `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes` (in `-short`, ≈5 s).
 `test/mount/TestMount_Workload`, gated on `TAILRAID_MOUNT_TEST=1` and `sudo -n true`: real
@@ -388,7 +393,24 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `repair.workers`, the pass having overlapped chunks, the read during the pass keeping
   at least a third of its idle throughput, then the policy restored and the migration
   back complete; the in-flight and during-the-pass checks are skipped when the pass
-  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 20 stats (with `stats.every: 5s`
+  ended before a sample saw it; needs `--destructive` on a live cluster; I-174, I-175); 19
+  snapshots (docs/16; the compose rig gives one node a mirror directory beside its disks;
+  needs `Caps.Mutate`, skipped otherwise, and restores what it changes: a manual snapshot
+  synced to the mirror, then one file overwritten in place through the mount, another
+  renamed, a third deleted and purged, a fourth truncated and a new one written; GC run
+  through the admin RPC so the overwritten chunks are collected from the pool; every path
+  under `/.snapshots/<mirror>/<name>/` read through another gateway byte-exact against the
+  model, the new file absent, the deleted one present, the overwritten one served from the
+  mirror; a second snapshot whose `new_bytes` is the changed chunks and trees only, not
+  the corpus; `/api/versions` of the overwritten file listing two contents, a revert of it
+  reading back the snapshot's bytes with the chunks copied back counted, and the deleted
+  folder restored by `restore-tree` under a new name and compared; the mirror taken
+  offline (its marker moved, as phase 13 closes a disk): the catalogue still lists it,
+  reads inside fail with `EIO` and the as-of route answers 409, and on its return a
+  catch-up snapshot begins at once; a snapshot deleted and the mirror's used bytes falling
+  after its host's sweep; on a live cluster with a mirror and the schedule on, a complete
+  snapshot younger than `2 × every`; the phase records one `snapshot round trip` event
+  with the snapshots' sizes and what each added; I-179..I-188, L-212..L-218); 20 stats (with `stats.every: 5s`
   on the rig and 1 s on the harness: after `stats seal` every node's raw segment is
   under its own directory, decodes and is below the small-chunk threshold and the
   leader's cluster segment is there, `stats seal --rollup` writes today's minute and
@@ -443,8 +465,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   sample (bytes moved, cumulative write/read latency histograms over fixed log-spaced
   buckets, degraded / repair-pending / unreadable / stale-policy chunks, stored and
   logical bytes, dedup ratio, slots and liveness per node, the sampled node's overlay WAL
-  depth, FSM-hash agreement, the trash's inodes and bytes and the sampled node's pinned
-  cache bytes) to `results.jsonl`; every record carries its line number.
+  depth, FSM-hash agreement, the trash's inodes and bytes, the sampled node's pinned
+  cache bytes, the catalogue's snapshot count and each mirror's used bytes) to
+  `results.jsonl`; every record carries its line number.
   Every check cites the invariants and lifecycle cells it exercises (`I-n`, `L-n`; a
   test keeps the citations defined). The driver then renders a self-contained
   `report.html` with inline SVG charts drawn in Go: the header (target, profile, policy
@@ -461,7 +484,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
   bytes, overlay WAL depth, slots per node, network throughput, latency histograms, the
-  FSM-hash strip, the trash and the pinned cache over time, and the data spread across disks (one lane per
+  FSM-hash strip, the trash and the pinned cache over time, the snapshot count and each mirror's used bytes over time with a bar per snapshot of what it added to its mirror and the phase's round-trip table (drawn only when a snapshot was taken; the lookdev is `assets/lookdev/soak-snapshots.html`), and the data spread across disks (one lane per
   target grouped by host, each sample coloured by the target's slot share against its
   expected share, dead hatched, with a host-cap strip underneath that is green while no
   chunk exceeds the cap and amber while `domain_skew > 0`).

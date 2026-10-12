@@ -33,8 +33,11 @@ S3 features beyond the implemented subset (versioning, ACLs, policies, lifecycle
 SSE, object lock, presigned POST); web UI beyond the dashboard and file browser of docs/13
 (no user management, no mutating admin operations from the browser); metrics stack (a
 `status` JSON instead);
-encryption at rest (WireGuard covers transit); quotas; file versioning / recycle bin;
-xattrs; NLM locking (mount with `nolock`); snapshots; hard links; NFSv4; SMB encryption,
+encryption at rest (WireGuard covers transit, and a mirror disk is plaintext); quotas;
+history in the live pool (the trash keeps deletes for a while; snapshots live on mirror
+disks, docs/16, with no per-save history, no writable clone, no snapshot of one folder,
+no diff and not the Windows Previous Versions tab);
+xattrs; NLM locking (mount with `nolock`); hard links; NFSv4; SMB encryption,
 dialect 3.1.1, oplocks and leases, SMB security descriptors; Windows before 11 24H2; multiple
 independent volumes (S3 buckets are top-level directories of the one volume);
 content-defined chunking; compression (hook left); tiering; fsck-from-shards metadata
@@ -57,6 +60,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **placement** | The `k+m` node indices that hold a chunk's shards, chosen by rendezvous hashing at write time and **stored** in the chunk table. |
 | **policy version** | `Volume.PolicyVersion`, bumped by `volume set-redundancy`. Chunks whose `(K,M)` differ from the current policy are migrated lazily by the repairer. |
 | **gateway** | The NFS or SMB (and later S3) front end running on a device; any device is a gateway for its own user. |
+| **mirror** | A disk given to snapshots (docs/16): `Kind=mirror`, attached to a device, never a placement target, often offline; an independent, self-describing, differential copy of every snapshot it captured. |
 | **diskless host** | A device with no disks: a member, voter if configured, and gateway whose reads and writes go to other hosts' disks (docs/14 §9). |
 | **live** | A node that answered `/health` within the last 15 s (probed every 5 s). Not stored in Raft. |
 | **WAL** | Per-inode write-ahead log on the gateway's disk that makes NFS `FILE_SYNC` honest before the chunk is flushed to the cluster. |
@@ -167,6 +171,7 @@ for a member. No TLS of our own.
 | Early serve (PR A2 `early-serve`, measured 2026-10-11 as the net diff): data-shard sums in the chunk table, codec 5 and `SetShardSums` (meta 0.12k), the flusher's sums and codec gate 0.02k, the reader's per-shard publish and `ReadAtEarly` 0.22k, the repair backfill 0.06k, the test fabric's GET stall 0.05k | +0.47k |
 | Stats page (docs/17, planned 2026-10-11): the sampler, rows, gzip segments, rollups, retention and the live-edge RPC in `internal/stats` (1.0k), the chart helpers moved to `internal/chart` with a clock time axis (net +0.15k), the network vitals on three OSes (0.15k), the web port in the probe and `/v1/stats` (0.15k), `/api/stats` with its cache and fan-out (0.25k), `vfs.FS.Flush` and the client byte counters (0.05k), config, node wiring and `stats seal` (0.15k); the TypeScript grows by about 0.45k (the page, the range picker, the member menu, the theme switch), not Go | +1.9k planned |
 | Search, markdown and the Media tab (docs/18, docs/13 §4 and §10, planned 2026-10-11): the library flag and codec 6 (0.12k), `internal/search` with its tokenizer, segment codec, leader pass, catalogue rules and query (0.95k + 0.3k), the markdown renderer (0.45k), the search, render and media routes with the status and CLI (0.25k), soak phase 21 (0.3k); the TypeScript grows by about 1.0k (search box and results, the markdown view, the Media tab), not Go | +2.4k planned |
+| Snapshots on mirror disks (docs/16, planned 2026-10-12): the mirror row, the catalogue, ops 19–21, the sync hold in `GCDelete` and codec 7 (meta 0.25k); `internal/mirror`, the disk format, the object and tree store, the sync walker, reconciliation and the standalone readers (0.75k); the tick's schedule and thinning (0.15k); `/.snapshots`, the snapshot handle index, the mirror RPC routes, the ROFS mapping, revert and tree restore (vfs, rpc and gateways 0.45k); `mirror`, `snapshot`, `versions`, the `export` rename, status and check (0.35k); the web handler's routes (0.3k); soak phase 19 and the report's charts and table (0.35k); config (0.05k); the TypeScript grows by about 0.6k, not Go | +2.65k planned |
 | `internal/s3srv` (the S3 gateway, deferred; not in the tree) | ~900 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
@@ -206,7 +211,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [03-erasure-coding-and-placement](03-erasure-coding-and-placement.md) | `ec.Codec`, rendezvous placement, degraded writes, policy migration. I-8..I-10, I-30, I-32, I-33 |
 | [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model, readahead. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83, I-166, I-168, I-169, I-171 |
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived, suspect marks. I-12, I-38..I-40, I-170 |
-| [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, the retention purge, DELETE fence, sweep, repair scanner, scrub, drain, migration, the ephemeral `/.tailraid` tree. I-13..I-15, I-41..I-44, I-157, I-195 |
+| [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, the retention purge, DELETE fence, sweep, repair scanner, scrub, drain, migration, the ephemeral `/.tailraid` tree, the sync hold and the mirror schedule. I-13..I-15, I-41..I-44, I-157, I-182, I-195 |
 | [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, macOS and Linux mounts, the in-tree go-nfs copy. I-16, I-17, I-45..I-47, I-100, I-167 |
 | [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys, the stats route. I-18, I-48..I-50, I-199 |
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
@@ -216,6 +221,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, batch rename/move/delete, the trash view, folder flags, tiles and thumbnails, the album view and now-playing bar, pins, the Stats page and the theme switch, the style guide. I-68..I-73, I-81, I-82, I-158..I-165, I-197, I-198, I-200 |
 | [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, domain skew, capacity rebalance within a host. I-86..I-91, I-172 |
 | [15-smb-gateway](15-smb-gateway.md) | SMB2 gateway for Windows: the library and its backend contract, the adapter over the vfs, case-insensitive names, password and `net use` mount, caps, known gaps. I-106..I-110 |
+| [16-snapshots](16-snapshots.md) | Snapshots on mirror disks: mirrors, the self-describing differential format, the sync and its GC hold, the schedule and thinning, the catalogue and reconciliation, reading, versions and restore, disaster recovery. I-179..I-181, I-183, I-186 (I-182 in 06; I-184 in 01; I-185 in 07; I-187 in 13; I-188 in 12) |
 | [17-stats](17-stats.md) | Time series kept in the volume: the sampler and its rows, gzip segments per node and hour, daily and monthly rollups, retention, the live-edge RPC and the Stats page's query, the storage budget. I-191..I-194, I-196 |
 | [18-search](18-search.md) | Search and the index kept in the volume: what is indexed, segments and the leader's pass, queries, the media catalogue from sidecars and tags, the library folder flag |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |

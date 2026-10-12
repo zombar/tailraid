@@ -172,6 +172,10 @@ Every command takes `--json`, and `--node <ip>` to talk to another device.
 
 Each device serves a web page at `http://<tailscale-ip>:20482/`, `tailraid status` prints the address, and `tailraid dashboard` opens it. The dashboard shows balance across devices and disks and the volume's integrity; the file browser streams audio, video and images, uploads files and makes folders; the Stats page draws the cluster's history (throughput, repair, data spread, each device's CPU, memory, disk and network) over any range, kept inside the volume itself so a lost device loses none of it. Cluster members and your own devices (same Tailscale user) can open it, so your phone works. Changing the cluster stays in the CLI.
 
+## Snapshots on mirror disks
+
+Snapshots live on mirrors: disks you give to history, attached to any device, that never hold the live volume and may be offline most of the time, such as a USB disk plugged in now and then. `tailraid mirror add <path>` on the device registers one. While a mirror is online the leader takes a snapshot every hour and keeps the newest of each of the last 24 hours, 30 days, 8 weeks and 12 months (`mirrors` in the config); a mirror that was away gets one as soon as it is back. Each snapshot copies only what changed since the last one on that disk, and each mirror is a complete, independent copy: two mirrors are two copies. On the mount, `.snapshots/<mirror>/<snapshot>/` holds the volume as it was, read-only. In the browser a file's view lists its versions and reverts or saves a copy; `tailraid versions <path>` and `tailraid snapshot restore` do the same from a terminal. A mirror needs nothing from the cluster to be read: `tailraid mirror export <path>` copies a snapshot out on any machine, and a new cluster can adopt a mirror after losing everything else. A mirror holds your files in the clear, so keep the disk where the data may be. Design: [docs/16-snapshots.md](docs/16-snapshots.md).
+
 ## Configuration
 
 `init` and `join` write the config file. Its location depends on the OS:
@@ -205,6 +209,9 @@ stats:
   every: 10s            # how often each device samples itself for the Stats page
   keep:
     raw: 48h            # 10 s samples; then 1-minute rows for 30 d and 10-minute rows for 2 y
+mirrors:
+  every: 1h             # a snapshot of the volume on every online mirror this often ("0": none)
+  keep: {hourly: 24, daily: 30, weekly: 8, monthly: 12}
 log:
   level: info           # debug | info | warn | error
   file: ~/tailraid.log  # optional; rotates at 64 MiB keeping five generations
@@ -268,7 +275,7 @@ Run `tailraid update` on every device, voters first, then `tailraid stop && tail
 
 ## Backup and recovery
 
-The volume's metadata is replicated on the voters; the data is on the devices and disks. `tailraid snapshot <dir>` exports the metadata (a fresh Raft snapshot) to a directory, which is small and worth copying somewhere outside the cluster now and then. Losing any `m` devices or disks is survived without any of this.
+The volume's metadata is replicated on the voters; the data is on the devices and disks. `tailraid export <dir>` (`tailraid snapshot <dir>` until mirrors land) exports the metadata (a fresh Raft snapshot) to a directory, which is small and worth copying somewhere outside the cluster now and then. A mirror (above) is the backup of the data itself. Losing any `m` devices or disks is survived without any of this.
 
 Losing more voters than Raft can spare, permanently, is the one failure the cluster cannot heal on its own ([docs/05-failure-model.md](docs/05-failure-model.md) §3). On one surviving voter, with its service stopped, `tailraid recover --voters <its node id>` makes it continue alone with everything it knew; every file whose shards survive is readable again. Start it, then `tailraid reset` and re-join the other devices.
 
@@ -290,6 +297,7 @@ Details: [docs/12-operations.md](docs/12-operations.md) §4.
 | [docs/README.md](docs/README.md) | the design, in reading order |
 | [docs/05-failure-model.md](docs/05-failure-model.md) | exactly what "no data loss" covers |
 | [docs/14-disks.md](docs/14-disks.md) | several disks per device |
+| [docs/16-snapshots.md](docs/16-snapshots.md) | snapshots on mirror disks |
 | [docs/12-operations.md](docs/12-operations.md) | services, logs, releases, self-update, backup and recovery |
 | [docs/09-testing-strategy.md](docs/09-testing-strategy.md) | the test tiers, the soak suite and its report |
 | [docs/vms.md](docs/vms.md) | the three-VM rig: setup, what a round proves, results |

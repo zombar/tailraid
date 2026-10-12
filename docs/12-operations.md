@@ -272,7 +272,7 @@ most once a minute and retried (I-176). Nothing reads the key but an operator.
 **Validation.** `Load` expands a leading `~` in every path (`node.data_dir`, the disks,
 `mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
 shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
-`log.level` or `log.format`, a relative `mount.path`, a `trash.retention` that is neither
+`log.level` or `log.format`, a relative `mount.path`, the `mirrors` keys outside the bounds of §11, a `trash.retention` that is neither
 `0` nor at least an hour, and a `cache.size` under 64 MiB (§10); `serve` warns at start
 when the config file or the data directory is readable by other users of the machine
 (I-126).
@@ -385,12 +385,15 @@ the voters and lives in each one's Raft log and snapshots under `<data_dir>/raft
 data is the shards on every device and disk. Losing any `m` targets is survived (05 §3)
 and needs nothing from this section.
 
-**Backup.** `tailraid snapshot <dir>` asks the local node for a fresh Raft snapshot
-(`/v1/admin` op `snapshot`, which the node writes under `<data_dir>/export/<id>/` with
+**Backup.** `tailraid export <dir>` asks the local node for a fresh Raft snapshot
+(`/v1/admin` op `export`, which the node writes under `<data_dir>/export/<id>/` with
 `state.bin` and `meta.json`, each fsynced) and copies it to `<dir>/<id>/`. It is small
 (the metadata only) and a copy outside the cluster is worth keeping; `state.bin` is the
 `DecodeState` format of 02, so a future `fsck-from-snapshot` can read it. Shards are not
-part of it.
+part of it. The verb was `tailraid snapshot <dir>` until the volume snapshots of docs/16
+took the word (their PR 2 renames the command and the op). The backup of the data itself
+is a mirror (§11, docs/16): a disk holding every snapshot it captured, readable with or
+without the cluster.
 
 **Quorum loss (05 (h)).** When more voters are gone for good than Raft can lose, the
 survivors can never elect a leader: every gateway goes stale and read-only. On one
@@ -404,7 +407,9 @@ read exactly; a file whose only shards died with the lost nodes is `EIO`, never 
 the member table still lists the lost nodes until they are removed or `reset` and re-join.
 `recover` refuses to run while `serve` holds the data directory, on an uninitialised
 directory, and when the list leaves this node out (I-129). Run it on one node only: two
-recovered nodes are two clusters.
+recovered nodes are two clusters. When nothing of the cluster can be recovered, a mirror
+still holds the volume as of its newest snapshot: a new cluster adopts it (`tailraid
+mirror add <path> --adopt`) and restores from it (docs/16 §7).
 
 ## 10. The trash and the local cache
 
@@ -432,6 +437,57 @@ from the device with every other node away; `cache unpin <path>` releases it and
 `cache ls` shows each pin's bytes and how many have arrived. The browser UI's folder menu
 ("Keep on this device", 13 §4) is the same per-node state. Pinned bytes may exceed
 `cache.size`; `status` warns when the data disk falls under 20 % free (I-162).
+
+## 11. Mirrors and snapshots
+
+A mirror (docs/16) is a disk given to snapshots: never a placement target, often
+offline, an independent and self-describing copy of every snapshot it captured. Any
+device of the cluster can carry one; a USB disk moves between devices with its history.
+
+```
+tailraid mirror add <path> [--adopt]   # on the host: mark the disk, add it to the config, register it (re-homes one of this cluster)
+tailraid mirror ls                     # every mirror: host, online, used and free, newest snapshot, the sync under way
+tailraid mirror remove <name>          # forget it and its catalogue rows; the disk is left as it is
+tailraid mirror ls|cat|export <path> … # read a mirror disk with no cluster (docs/16 §2, §7)
+
+tailraid snapshot ls [--mirror <name>]                  # name, mirror, taken, state, size, what it added
+tailraid snapshot create [name] [--mirror <name>]       # a manual snapshot (never thinned); every online mirror unless named
+tailraid snapshot rm <mirror>/<name>
+tailraid snapshot restore <mirror>/<name> <path> [--to <dir>] [--as <name>]   # a file or a folder, into the live volume
+tailraid versions <path>                                # the file's versions on the online mirrors
+tailraid versions <path> --revert <mirror>/<name> | --copy <mirror>/<name> --as <name>
+```
+
+Every verb but the standalone readers goes through the admin RPC to the leader (`mirror`,
+`snapshot` and `versions` ops); a restore runs on the node asked, as the gateways' writes
+do (docs/16 §6). The config:
+
+```yaml
+node:
+  mirrors:
+    - path: /Volumes/Archive/tailraid
+mirrors:
+  every: 1h
+  keep: {hourly: 24, daily: 30, weekly: 8, monthly: 12}
+  rate: 50M
+  hold_max: 24h
+  stale_after: 7d
+```
+
+`every` is at least a minute or `0`, a `keep` count at most 10 000, `hold_max` at least an
+hour, and each key is written only when set, so a rollback reads the file (I-61).
+
+`status --json` carries `mirrors[{name, host, online, used, free, newest, syncing{snapshot,
+read, total, bytes_new}}]` and `volume.snapshots`; `tailraid status` prints one line per
+mirror (`mirror  pike/m1  online · 1.2 TiB used, 2.4 TiB free · newest 12 min ago ·
+syncing 41 %`). `check` warns when a mirror has been offline longer than
+`mirrors.stale_after`, when an online mirror's newest snapshot is older than `2 × every`,
+when a snapshot is incomplete, and when a mirror is under its free-space reserve.
+
+Two things to know as an operator. A first sync copies the whole volume and may take many
+hours; it is resumable (a failed sync keeps what it wrote), and the pool holds GC back for
+at most `hold_max` while it runs. And the mirror is the volume's bytes in the clear: keep
+the disk where the data may be.
 
 ## Invariants
 
@@ -485,7 +541,8 @@ from the device with every other node away; `cache unpin <path>` releases it and
   binary stays as `<exe>.old` until a minute into a clean `serve` or until
   `update --rollback` restores it; a release older than the running one needs
   `--version` and `--allow-downgrade`.
-- **I-129** — `tailraid snapshot` exports a fresh Raft snapshot whose `state.bin`
+- **I-129** — `tailraid export` (named `snapshot` until docs/16's PR 2 renames it)
+  exports a fresh Raft snapshot whose `state.bin`
   decodes to the node's current metadata; `tailraid recover --voters` on a stopped node
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
@@ -512,6 +569,16 @@ from the device with every other node away; `cache unpin <path>` releases it and
   (`launchctl print` not running, `sc.exe query` STOPPED, `systemctl stop` returned),
   bounded by 60 s, and succeeds when there was no process to stop; `update --restart` and
   `stop && start` therefore start the new binary.
+- **I-188** — `tailraid mirror add` marks an empty path (or re-homes a mirror of this
+  cluster, or with `--adopt` takes over one of another cluster and imports its
+  manifests as catalogue rows) and registers it as a `KindMirror` row of its host; a
+  mirror is online exactly while its host is live and its marker names this cluster and
+  this mirror; `mirror remove` takes the row and its catalogue rows and leaves the disk;
+  `tailraid export` is the metadata export of §9; `snapshot ls|create|rm|restore` and
+  `versions` drive docs/16 through the admin RPC; `status` reports each mirror and the
+  catalogue count; `check` warns for a mirror offline past `stale_after`, an online
+  mirror whose newest snapshot is older than `2 × every`, an incomplete snapshot and a
+  mirror under its reserve; and `Validate` refuses the `mirrors` keys out of bounds.
 
 ## Tests
 
@@ -537,3 +604,4 @@ from the device with every other node away; `cache unpin <path>` releases it and
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
 | I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |
+| I-188 | planned (docs/16): TestCLI_MirrorAdd_MarkRehomeAdopt, TestMirror_OnlineFollowsMarkerAndHost, TestCLI_MirrorRemove_LeavesDisk, TestCLI_Export, TestCLI_Snapshot_LsCreateRmRestore, TestCLI_Versions, TestReport_MirrorFields, TestCheck_MirrorWarnings, TestConfig_Mirrors, `TestSoak_AllPhasesAgainstHarness` |

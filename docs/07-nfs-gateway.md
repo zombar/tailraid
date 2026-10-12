@@ -90,6 +90,22 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
   cluster-wide inode numbers (I-16). Inode numbers are never reused and `gen` is the low 32
   bits of the creating Raft index, so a handle can never resolve to a different file (I-17).
   go-nfs's `CachingHandler` (random UUID → path LRU) is **not** used.
+- **`/.snapshots`** (docs/16 §6) is synthesized by the vfs at the root: absent from the
+  root's READDIR, found by LOOKUP, holding one directory per mirror (`<host>-m<n>`) and in
+  each one directory per complete or incomplete snapshot, by name, from the catalogue. A
+  snapshot's tree is read from its mirror's trees; a file's bytes come from the pool while
+  the chunk is still there (the reader, its cache and readahead as for any file) and
+  otherwise from the mirror object, fetched from the mirror's host and verified. Every
+  mutation under it (CREATE, WRITE, SETATTR, REMOVE, RMDIR, RENAME into, out of or within
+  it, MKDIR, SYMLINK) is `EROFS`, which the in-tree go-nfs copy maps to `NFS3ERR_ROFS` (a
+  change it gains with the snapshots, alongside the two of the list above; the stale
+  gateway's `EROFS` keeps its own mapping, below). Inside an offline mirror's snapshot
+  every read is `NFS3ERR_IO`; its listing of snapshot names still works. Entries carry
+  24-byte handles (docs/01 §NFS file handle), `STALE` once the catalogue row is gone; the
+  fileid of an entry is its recorded `Ino`, and the synthetic directories carry fixed
+  fileids above any real inode. The READDIR cookie verifier of a tree is the tree's hash.
+  `.snapshots` is a reserved name at the root: CREATE, MKDIR, RENAME onto it and a tree
+  restore into it are refused.
 - **FSStat**: `Total = Σ Node.Capacity · K/(K+M)` over Active nodes, `Free = Total − stored·K/(K+M)`,
   `Files = inodes`, `FreeFiles = 1<<32 − inodes`. Degraded chunks count at their nominal size.
 - **READDIR / READDIRPLUS**: go-nfs pages with cookies over the `[]os.FileInfo` returned by
@@ -210,6 +226,16 @@ device"), not `EIO`.
   requests nor other connections, FSINFO advertises `MaxFrame`'s payload as the largest
   transfer, and a connection holds at most `InFlight × MaxFrame` request bytes.
 
+- **I-185** — `/.snapshots` is absent from the root's READDIR, resolves by name and lists
+  every mirror and, in each, its complete and incomplete snapshots from the catalogue;
+  every file under a snapshot of an online mirror reads exactly the snapshot's bytes
+  through every gateway, from the pool while the chunk is there and from the mirror
+  otherwise; inside an offline mirror's snapshot reads fail with `EIO`; every mutation
+  under `/.snapshots` is `EROFS` (`NFS3ERR_ROFS`, `STATUS_ACCESS_DENIED` on SMB); a
+  snapshot handle is 24 bytes with its own magic and is `STALE` once the row is gone or
+  the mirror offline; and `.snapshots` cannot be created, renamed, removed or restored
+  into.
+
 ## Tests
 
 | Invariant | Tests |
@@ -221,3 +247,4 @@ device"), not `EIO`.
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
+| I-185 | planned (docs/16): TestNFS_SnapshotsDir_HiddenResolvesLists, TestNFS_SnapshotRead_PoolThenMirror, TestNFS_SnapshotOfflineMirror_EIO, TestNFS_SnapshotMutation_IsROFS, TestHandle_Snapshot_RoundTrip, TestNFS_SnapshotHandle_StaleTable, TestSMB_SnapshotsDir_ReadOnly, TestVFS_SnapshotsName_Reserved, `FuzzDecodeHandle` |
