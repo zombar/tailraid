@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"slices"
 	"syscall"
 	"time"
 
@@ -201,29 +200,11 @@ func (f *File) ValidData() (valid, size int64, err error) {
 		sz := int64(f.snap.e.Size) //nolint:gosec // a file size fits an int64
 		return sz, sz, nil
 	}
-	// The overlay first, then the inode: a flush moves dirty bytes into the inode before
-	// it clears them here, so whatever commits in between shows in one of the two.
-	dirtyEnd, limit, dirty := f.fs.ov.DataEnd(f.ino)
-	in, err := f.inode()
+	v, sz, err := f.fs.validData(f.ino)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, mapErr("query", f.name, err)
 	}
-	end := uint64(0)
-	cs := uint64(f.fs.st.Volume().ChunkSize)
-	for i, h := range slices.Backward(in.Chunks) {
-		if h != meta.HashZero {
-			end = min(in.Size, uint64(i+1)*cs) //nolint:gosec // i is an index
-			break
-		}
-	}
-	sz := in.Size
-	if dirty {
-		end = max(min(end, limit), dirtyEnd)
-		if s, ok := f.fs.ov.Size(f.ino, in.Size); ok {
-			sz = s
-		}
-	}
-	return int64(min(end, sz)), int64(sz), nil //nolint:gosec // file sizes fit an int64
+	return int64(v), int64(sz), nil //nolint:gosec // file sizes fit an int64
 }
 
 // Close only marks the handle: durability is the WAL fsync that already happened in Write.

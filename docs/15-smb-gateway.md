@@ -159,6 +159,17 @@ NTFS. Any other FSCTL the server does not implement is `STATUS_INVALID_DEVICE_RE
 `STATUS_NOT_SUPPORTED`, and an input buffer that is misaligned or outside the message is
 `STATUS_INVALID_PARAMETER` (I-228).
 
+**Explorer's first pass.** For a batch of files the copy engine runs two passes. The
+first creates each destination, sets its end-of-file to the source's size, marks it
+delete-on-close, asks `FSCTL_QUERY_FILE_REGIONS` and closes it without a write, so the
+file goes again; the progress bar counts this pass. Only when it reaches the end does the
+bar reset and the second pass create and write every file. Each first-pass file costs a
+`Create` and a `Trash` here, a Raft round trip each, so a batch of thousands spends
+minutes before a byte moves; a copy cancelled then has copied nothing. Such a file never
+held data, so its delete leaves nothing in the trash: the gateway purges the inode once
+the name is gone (I-229). Until 2026-10-12 each one stayed in the trash, about 22,000
+empty entries after a few large drags.
+
 **Request trace.** At `log.level: debug` the server logs one line per CREATE, SET_INFO,
 CLOSE, READ, WRITE (and the final status of a WRITE answered later), FLUSH, QUERY_INFO,
 QUERY_DIRECTORY, IOCTL and LOCK, with the session, the handle, the file's path and
@@ -453,6 +464,12 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   a file created and sized without a write has V = 0, a write at offset o of n bytes
   makes V ≥ o + n until a truncate below it, before and after its flush; a file whose
   handle cannot report V has the FSCTL refused with `STATUS_INVALID_DEVICE_REQUEST`.
+- **I-229** — A delete-on-close by the handle whose CREATE made the file, of a file that
+  holds no data (its valid data length is 0: no committed chunk but holes and no dirty
+  byte, so every byte reads as zero), removes the name and then purges the inode, so the
+  trash does not grow; a file into which any byte other than zero was written, at any
+  offset, before or after its flush, goes to the trash as every other delete (I-220), and
+  a protected folder keeps it in the trash. The name is free again for the second pass.
 - **I-228** — An IOCTL whose Flags are not `SMB2_0_IOCTL_IS_FSCTL` is
   `STATUS_NOT_SUPPORTED`; an FSCTL the server does not implement is
   `STATUS_INVALID_DEVICE_REQUEST`; a request with a non-zero InputCount whose InputOffset
@@ -484,3 +501,4 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |
 | I-227 | `TestQueryFileRegions_FSA`, `TestVFS_ValidDataLength`, `TestSMB_QueryFileRegions_ExplorerProbe` |
 | I-228 | `TestIoctl_Statuses` |
+| I-229 | `TestSMB_ScratchCreate_NotTrashed` |
