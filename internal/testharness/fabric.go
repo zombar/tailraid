@@ -69,6 +69,7 @@ type Fabric struct {
 	proposeDown    error // returned by every Propose while set
 	proposeUnknown int   // Propose applies the command and then reports an unknown outcome, this many times
 	refusedSums    int   // Commits carrying Sums refused with ErrCodec, as by a leader seeing an older member
+	leaderCodec    uint8 // when set, Propose refuses a command of a newer codec with ErrCodec (I-156)
 	stale          bool  // the gateway's health view given to vfs.FS
 	proposed       []meta.Op
 }
@@ -249,6 +250,9 @@ func (f *Fabric) Propose(_ context.Context, c meta.Command) (meta.Result, uint64
 	if c.Op == meta.OpCommit && f.refusedSums > 0 && commitCarriesSums(c.Commit) {
 		f.refusedSums--
 		return meta.Result{Err: meta.ErrCodec}, 0, nil // refused before Raft, as applyLocal does (I-156)
+	}
+	if f.leaderCodec != 0 && meta.CommandCodec(c) > f.leaderCodec {
+		return meta.Result{Err: meta.ErrCodec}, 0, nil // refused before Raft, as applyLocal does
 	}
 	res := f.applyLocked(c)
 	if f.proposeUnknown > 0 { // applied, but the gateway never learns it (docs/02 §forwarding)
@@ -714,6 +718,14 @@ func commitCarriesSums(c *meta.Commit) bool {
 		}
 	}
 	return false
+}
+
+// SetLeaderCodec makes Propose refuse, with meta.ErrCodec, every command written in a codec
+// newer than v, as a leader does while a live member reads only v (I-156); 0 clears it.
+func (f *Fabric) SetLeaderCodec(v uint8) {
+	f.mu.Lock()
+	f.leaderCodec = v
+	f.mu.Unlock()
 }
 
 // ProposeUnknown makes the next n proposals apply and then report meta.ErrUnknownOutcome:

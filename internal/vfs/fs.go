@@ -384,7 +384,21 @@ func hardDelete(dir []string, name string) bool {
 // directory must be empty, as POSIX asks. An ephemeral name is unlinked outright. While
 // a member is too old for the trash (meta.ErrCodec, docs/12 §6) the delete falls back to
 // the plain unlink, so rm keeps working through an update.
-func (f *FS) Remove(filename string) error {
+func (f *FS) Remove(filename string) error { return f.remove(filename, false) }
+
+// RemoveOwn is Remove for an own cleanup: the SMB handle that created the file deletes it,
+// as a failed copy does, and a protected folder lets that through for a file (I-220).
+// While a member is too old for it (meta.ErrCodec) it is a plain Remove, whose refusal
+// under protection is the answer.
+func (f *FS) RemoveOwn(filename string) error {
+	err := f.remove(filename, true)
+	if errors.Is(err, syscall.EOPNOTSUPP) {
+		return f.remove(filename, false)
+	}
+	return err
+}
+
+func (f *FS) remove(filename string, own bool) error {
 	ctx := context.Background()
 	if isSnapshotPath(meta.SplitPath(filename)) {
 		return mapErr("remove", filename, ErrReadOnly)
@@ -402,7 +416,10 @@ func (f *FS) Remove(filename string) error {
 		return mapErr("remove", filename, meta.ErrNotExist)
 	}
 	hard := hardDelete(dp, name)
-	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: &meta.Trash{Parent: dir.Ino, Name: name, Now: f.now()}})
+	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: &meta.Trash{Parent: dir.Ino, Name: name, Own: own, Now: f.now()}})
+	if own && errors.Is(err, meta.ErrCodec) {
+		return mapErr("remove", filename, err) // RemoveOwn retries it plain
+	}
 	if errors.Is(err, meta.ErrCodec) {
 		hard = true
 		var cmd meta.Command
