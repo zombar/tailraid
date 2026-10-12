@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 
 	smb "github.com/go-filesystems/smb"
@@ -22,6 +23,7 @@ func NewServer(fs *vfs.FS, st *meta.Store, password string) (*smb.Server, error)
 	a := New(fs, st)
 	srv := smb.New()
 	srv.SetName(ShareName)
+	srv.SetLogger(slog.Default()) // the request trace, at log.level debug
 	srv.AddUser(User, password)
 	if err := srv.Share(ShareName, a, smb.WithCapacityFunc(a.Capacity)); err != nil {
 		return nil, fmt.Errorf("smbgw: share: %w", err)

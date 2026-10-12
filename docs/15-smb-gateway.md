@@ -135,6 +135,47 @@ keeps answering by its old path until it is reopened.
 | QUERY_INFO filesystem size | the share's `WithCapacityFunc`, which the adapter answers with `meta.Usage(volume, nodes, stats)`: the same total and free bytes as NFS `FSSTAT` and `tailraid status` |
 | QUERY_DIRECTORY | `ListDir(dir)` then `Stat` of every entry, kept server-side per handle and paged with `STATUS_NO_MORE_FILES` at the end; "." and ".." are added by the server; entries are sorted case-insensitively so paging is stable |
 | SYMLINK, READLINK | Windows creates reparse points through ioctl, which the server does not implement; the adapter's `Symlink`/`ReadLink` are reachable from macOS and Linux clients only |
+| IOCTL `FSCTL_QUERY_FILE_REGIONS` | `File.ValidDataLength()` of the handle's file (`vfs.File.ValidDataLength`), answered as MS-FSA computes the regions from a valid data length (I-227) |
+| IOCTL, any other | `FSCTL_VALIDATE_NEGOTIATE_INFO`, `FSCTL_PIPE_TRANSCEIVE` and server-side copy (`FSCTL_SRV_REQUEST_RESUME_KEY`, `FSCTL_SRV_COPYCHUNK[_WRITE]`) are answered; every other request gets the status MS-SMB2 §3.3.5.15 names for it (I-228) |
+
+**IOCTLs.** Windows' copy engine (Windows 11 24H2 Explorer, drag and drop or paste of
+many files) probes each destination before writing it: it creates the file, sets its
+end-of-file to the source's size, marks the handle delete-on-close as a guard against a
+copy that dies halfway, and asks `FSCTL_QUERY_FILE_REGIONS` for the file's valid data. A
+refusal, with either `STATUS_NOT_SUPPORTED` or `STATUS_INVALID_DEVICE_REQUEST`, fails
+that attempt: the engine closes the handle, the guard deletes the file, and it retries
+the file later or not at all. Until 2026-10-12 the server refused the FSCTL, and a large
+Explorer copy put every file it created in the trash while its dialog counted on. The
+answer is the one MS-FSA gives: the regions before the file's valid data length (VDL)
+carry the asked usage, the rest up to the end of file usage 0. Here the VDL is the end of
+the last byte written: the end of the last committed chunk that is not a hole, held
+below a truncate still in the overlay, or the end of the last unflushed write, whichever
+is larger, and never past the size. Everything at or past it reads as zeros, which is
+what a VDL promises; a chunk written as zeros counts as a hole (the flusher stores it as
+one, 04 §4), so the VDL may fall short of a write of zeros but never short of a byte
+that reads otherwise. A file Explorer has just created and sized has a VDL of 0, as on
+NTFS. Any other FSCTL the server does not implement is `STATUS_INVALID_DEVICE_REQUEST`
+("allowed but not supported on this file system"), an IOCTL that is not an FSCTL is
+`STATUS_NOT_SUPPORTED`, and an input buffer that is misaligned or outside the message is
+`STATUS_INVALID_PARAMETER` (I-228).
+
+**Explorer's first pass.** For a batch of files the copy engine runs two passes. The
+first creates each destination, sets its end-of-file to the source's size, marks it
+delete-on-close, asks `FSCTL_QUERY_FILE_REGIONS` and closes it without a write, so the
+file goes again; the progress bar counts this pass. Only when it reaches the end does the
+bar reset and the second pass create and write every file. Each first-pass file costs a
+`Create` and a `Trash` here, a Raft round trip each, so a batch of thousands spends
+minutes before a byte moves; a copy cancelled then has copied nothing. Such a file never
+held data, so its delete leaves nothing in the trash: the gateway purges the inode once
+the name is gone (I-229). Until 2026-10-12 each one stayed in the trash, about 22,000
+empty entries after a few large drags.
+
+**Request trace.** At `log.level: debug` the server logs one line per CREATE, SET_INFO,
+CLOSE, READ, WRITE (and the final status of a WRITE answered later), FLUSH, QUERY_INFO,
+QUERY_DIRECTORY, IOCTL and LOCK, with the session, the handle, the file's path and
+inode, the request's parameters and the status answered, plus a refused signature, a
+credit charge too low and a chained request after a failure. It is how the probe above
+was found; it is verbose, so leave the level at `info` otherwise.
 
 Paths arrive with backslashes relative to the share root; the server turns them into
 `/sub/file` and refuses a name that climbs out of the root or names an alternate data
@@ -409,6 +450,33 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   name the delete is skipped and logged (I-218), so a file created at the old name by
   another session or gateway survives and a protected folder never loses a file through
   another file's own cleanup.
+- **I-227** — `FSCTL_QUERY_FILE_REGIONS` on a file is answered as [MS-FSA's FSCTL_QUERY_FILE_REGIONS](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/acadee02-c40d-4f73-92d0-0f10e866e11f)
+  computes it from the file's valid data length V and end of file E: with no input the
+  range is [0, MAXLONGLONG) with usage `FILE_REGION_USAGE_VALID_CACHED_DATA`; an input
+  shorter than `FILE_REGION_INPUT` (24 bytes) or an output buffer shorter than
+  `FILE_REGION_OUTPUT` with one region (40 bytes) is `STATUS_BUFFER_TOO_SMALL`; a length
+  ≤ 0, an offset plus length past 63 bits, a usage without the cached-data flag or a
+  directory handle is `STATUS_INVALID_PARAMETER`; an offset past E, or at E with E > 0,
+  is success with no output; otherwise the regions are [offset, min(V, end)) with the
+  asked usage when offset < V, then [max(offset, V), min(E, end)) with usage 0, the
+  second answered `STATUS_BUFFER_OVERFLOW` with the total count when it does not fit. V
+  never exceeds E and is never below the end of a byte that reads as anything but zero:
+  a file created and sized without a write has V = 0, a write at offset o of n bytes
+  makes V ≥ o + n until a truncate below it, before and after its flush; a file whose
+  handle cannot report V has the FSCTL refused with `STATUS_INVALID_DEVICE_REQUEST`.
+- **I-229** — A delete-on-close by the handle whose CREATE made the file, of a file that
+  holds no data (its valid data length is 0: no committed chunk but holes and no dirty
+  byte, so every byte reads as zero), removes the name and then purges the inode, so the
+  trash does not grow; a file into which any byte other than zero was written, at any
+  offset, before or after its flush, goes to the trash as every other delete (I-220), and
+  a protected folder keeps it in the trash. The name is free again for the second pass.
+- **I-228** — An IOCTL whose Flags are not `SMB2_0_IOCTL_IS_FSCTL` is
+  `STATUS_NOT_SUPPORTED`; an FSCTL the server does not implement is
+  `STATUS_INVALID_DEVICE_REQUEST`; a request with a non-zero InputCount whose InputOffset
+  is inside the fixed header, not a multiple of 8, or whose input runs past the message is
+  `STATUS_INVALID_PARAMETER`; an answer never carries more output than
+  MaxOutputResponse, and an answer cut to fit carries the bytes that fit with
+  `STATUS_BUFFER_OVERFLOW` ([MS-SMB2 §3.3.5.15](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/c348a671-7750-49f8-9e61-cc59fa1a5701)).
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -431,3 +499,6 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-225 | `TestFSM_Trash_Expect_Mismatch`, `TestEncodeCommand_RewriteIsCodec9`, `TestDeleteOnClose_RenamedAway_NewFileSurvives`, `TestSMB_OwnCleanup_ByInode_UnderProtection`, `TestSoak_MultiUserAgainstHarness` |
 | I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites`, `TestSeveralClientsOneShare` |
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |
+| I-227 | `TestQueryFileRegions_FSA`, `TestVFS_ValidDataLength`, `TestSMB_QueryFileRegions_ExplorerProbe` |
+| I-228 | `TestIoctl_Statuses` |
+| I-229 | `TestSMB_ScratchCreate_NotTrashed` |

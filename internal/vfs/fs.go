@@ -452,10 +452,17 @@ func (f *FS) Remove(filename string) error { return f.remove(filename, false, 0)
 // and nothing otherwise (ErrNotExist): a client may have renamed the file away and made
 // a new one under the name. Once every live member reads codec 9 the leader decides it
 // (Trash.Expect); before, this gateway's lookup does. own is RemoveOwn's (I-225).
+//
+// An own delete of a file that holds no data (I-229), Windows' copy engine's first pass
+// over a batch, leaves nothing in the trash: the inode is purged once the name is gone.
 func (f *FS) RemoveIno(filename string, ino meta.Ino, own bool) error {
+	scratch := own && ino != 0 && f.unwritten(ino)
 	err := f.remove(filename, own, ino)
 	if own && errors.Is(err, syscall.EOPNOTSUPP) {
-		return f.remove(filename, false, ino)
+		err = f.remove(filename, false, ino)
+	}
+	if err == nil && scratch {
+		f.purgeScratch(ino)
 	}
 	return err
 }
@@ -470,6 +477,53 @@ func (f *FS) RemoveOwn(filename string) error {
 		return f.remove(filename, false, 0)
 	}
 	return err
+}
+
+// validData is ino's valid data length and size (File.ValidData, I-227). The overlay is
+// read first, then the inode: a flush moves dirty bytes into the inode before it clears
+// them here, so whatever commits in between shows in one of the two.
+func (f *FS) validData(ino meta.Ino) (valid, size uint64, err error) {
+	dirtyEnd, limit, dirty := f.ov.DataEnd(ino)
+	in, ok := f.st.GetInodeAny(ino) // an open file in the trash still reads and flushes (I-155)
+	if !ok {
+		return 0, 0, meta.ErrNotExist
+	}
+	end := uint64(0)
+	cs := uint64(f.st.Volume().ChunkSize)
+	for i, h := range slices.Backward(in.Chunks) {
+		if h != meta.HashZero {
+			end = min(in.Size, uint64(i+1)*cs) //nolint:gosec // i is an index
+			break
+		}
+	}
+	size = in.Size
+	if dirty {
+		end = max(min(end, limit), dirtyEnd)
+		if s, ok := f.ov.Size(ino, in.Size); ok {
+			size = s
+		}
+	}
+	return min(end, size), size, nil
+}
+
+// unwritten reports whether ino holds no data: every byte of it reads as zero (I-229).
+func (f *FS) unwritten(ino meta.Ino) bool {
+	v, _, err := f.validData(ino)
+	return err == nil && v == 0
+}
+
+// purgeScratch removes for good a file an SMB handle created and deleted without
+// writing a byte into it (I-229): it went to the trash as any delete does, and holds
+// nothing to restore. It is checked again first: a byte that landed since is kept in
+// the trash. A protected folder keeps it in the trash too (Purge obeys the flag).
+func (f *FS) purgeScratch(ino meta.Ino) {
+	if !f.unwritten(ino) {
+		return
+	}
+	if err := f.Purge(ino); err != nil {
+		return // left in the trash, where the retention purge takes it
+	}
+	f.ov.Drop(ino)
 }
 
 func (f *FS) remove(filename string, own bool, expect meta.Ino) error {

@@ -45,6 +45,7 @@ var (
 	_ filesystem.Symlinker      = (*FS)(nil)
 	_ filesystem.MetadataSetter = (*FS)(nil)
 	_ filesystem.WritableFile   = (*file)(nil)
+	_ smb.ValidDataReporter     = (*file)(nil)
 )
 
 // New wraps fs; st answers the share's size (meta.Usage, as NFS FSSTAT and status do).
@@ -396,6 +397,13 @@ func (f *file) Size() int64 {
 		return 0
 	}
 	return n
+}
+
+// ValidData answers FSCTL_QUERY_FILE_REGIONS (docs/15 §3, I-227): the vfs file's valid
+// data length and size.
+func (f *file) ValidData() (valid, size int64, err error) {
+	valid, size, err = f.f.ValidData()
+	return valid, size, wrap(err)
 }
 
 func (f *file) Close() error { return wrap(f.f.Close()) }
