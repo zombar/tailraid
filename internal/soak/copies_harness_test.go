@@ -20,16 +20,22 @@ import (
 )
 
 // harnessCopyJob is a copy job on the in-process cluster: one goroutine per file, the
-// outcome of each kept for Poll.
+// outcome of each kept for Poll. As the compose worker does, a job that has reported its
+// end is forgotten: a second Poll of it fails.
 type harnessCopyJob struct {
-	mu      sync.Mutex
-	done    bool
-	results []soak.CopyResult
+	mu       sync.Mutex
+	done     bool
+	reported bool
+	results  []soak.CopyResult
 }
 
 func (j *harnessCopyJob) Poll(context.Context) (bool, []soak.CopyResult, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.reported {
+		return false, nil, errors.New("no such job: its end was already reported")
+	}
+	j.reported = j.done
 	return j.done, append([]soak.CopyResult(nil), j.results...), nil
 }
 
@@ -220,7 +226,10 @@ func (e *harnessEnv) RestartIdle(ctx context.Context, n soak.NodeRef) error {
 	return e.RestartGraceful(ctx, n)
 }
 
-var _ soak.CopyEnv = (*harnessEnv)(nil)
+var (
+	_ soak.CopyEnv = (*harnessEnv)(nil)
+	_ soak.RaceEnv = (*harnessEnv)(nil)
+)
 
 // Phase 22 alone on the in-process cluster: Explorer-style copies over SMB and NFS on two
 // gateways while each fault hits the rest, every copy whole afterwards (docs/09 §6).
