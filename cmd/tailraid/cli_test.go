@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -27,6 +28,15 @@ const fakeTailnet = `{"status":{"BackendState":"Running","TailscaleIPs":["127.0.
  "Self":{"ID":"ts-dev","HostName":"dev","TailscaleIPs":["127.0.0.1"],"Online":true},"Peer":{}},
  "whois":{"127.0.0.1":{"Node":{"StableID":"ts-dev","Name":"dev.","Addresses":["127.0.0.1/32"]},"UserProfile":{"LoginName":"jim@example.com"}}}}`
 
+// testPorts is where freePorts picks: below every OS's ephemeral range (Linux 32768+,
+// macOS and Windows 49152+). freePorts must release its ports before a node binds them;
+// in that window a port from the ephemeral range can be taken by any other process's
+// outgoing connection or :0 listener (another test package), and the node then fails to
+// bind while its test talks to someone else's node ("bad join token", "address already
+// in use" in CI). Below the range only another freePorts could take it, and this
+// package's tests run one at a time.
+const testPortLo, testPortHi = 20000, 32000
+
 func freePorts(t *testing.T, n int) []int {
 	t.Helper()
 	out := make([]int, 0, n)
@@ -38,13 +48,18 @@ func freePorts(t *testing.T, n int) []int {
 			_ = l.Close()
 		}
 	}()
-	for range n {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
+	start := testPortLo + rand.IntN(testPortHi-testPortLo) //nolint:gosec // not a secret
+	for i := 0; len(out) < n && i < testPortHi-testPortLo; i++ {
+		port := testPortLo + (start-testPortLo+i)%(testPortHi-testPortLo)
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
-			t.Fatal(err)
+			continue // taken: try the next
 		}
 		ls = append(ls, l)
-		out = append(out, l.Addr().(*net.TCPAddr).Port)
+		out = append(out, port)
+	}
+	if len(out) < n {
+		t.Fatalf("no %d free ports in %d..%d", n, testPortLo, testPortHi)
 	}
 	return out
 }
