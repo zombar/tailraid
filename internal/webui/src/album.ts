@@ -23,11 +23,12 @@ export function isAlbum(entries: Entry[]): boolean {
 
 const PROBES = 4;
 
-export function render(ctx: Ctx, cover: string | undefined, entries: Entry[]): Album {
+/** render draws the album; cover is null for a folder known to have none (I-165). */
+export function render(ctx: Ctx, cover: string | null | undefined, entries: Entry[]): Album {
   const audio = entries.filter((e) => !e.deleted_at && !e.upload && e.type === "file" && isAudioName(e.name)).sort((a, b) => trackNo(a.name) - trackNo(b.name) || a.name.localeCompare(b.name, undefined, { numeric: true }));
   const tracks: Track[] = audio.map((e) => ({ path: join(ctx.path, e.name), root: ctx.root }));
   const img = h("img", { class: "cover", alt: "" }) as HTMLImageElement;
-  img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root); // the folder itself resolves its cover when the listing did not carry one
+  if (cover !== null) img.src = thumbURL(cover ? join(ctx.path, cover) : ctx.path, ctx.root); // the folder itself resolves its cover when the listing did not carry one
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, basename(ctx.path) || "/");
   const artist = h("div", { class: "artist" });

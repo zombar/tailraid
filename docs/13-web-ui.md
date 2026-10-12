@@ -115,7 +115,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
+| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none, on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,live,tier,step},"node","nodes":[{name,addr,live,self,web?}],"charts":[{id,title,svg,caption}]}`: the charts of docs/17 §4 over `[from, to)` (Unix seconds; `to=now` or absent for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; `nodes` carries each device member's tailnet IP, liveness and web port for the member menu's links; a missing or malformed `from`, `from ≥ to` or a range longer than `stats.keep.coarse` → 400; no query wired (`listen.web` on a node without the sampler) → 503; `Cache-Control: no-store` |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
@@ -302,11 +302,18 @@ sweep removes it and the page grabs a new one as the tile comes into view (I-216
   cached a recipe-1 frame for a day fetches the new one.
 - **Audio** answers its embedded picture (§6), else a `cover.*`/`folder.*` sibling, scaled
   like an image. A folder's own tile uses its first audio entry by name that has a
-  picture (`dir.cover`), chosen the same way on every node (I-165). Finding it reads each
-  candidate's tags, so the folder's tile asks `GET /api/thumb?path=<folder>` and the node
-  resolves the cover then, once per folder version, and remembers it; a listing reports
-  `cover` only when already known and reads no file (measured 2026-10-11: a cold listing
-  of 99 album folders took 5.5 s while it resolved every cover in line).
+  thumbnail (`dir.cover`): an embedded picture, or, when the folder holds a `cover.*` or
+  `folder.*` image, its first audio entry outright. A folder with none takes the cover
+  of its first subfolder by name that has one, looking at the audio directly inside at
+  most `CoverSubdirs` (16) subfolders and never deeper, so an album kept as editions or
+  discs (`Fugazi/CBR Original/…`) and an artist's folder of albums both get a tile
+  (`cover` is then `<subfolder>/<entry>`). The choice is the same on every node (I-165).
+  Finding it reads each candidate's tags, so the folder's tile asks
+  `GET /api/thumb?path=<folder>` and the node resolves the cover then and remembers it
+  until the folder or a subfolder it looked into changes; a listing reports `cover`, or
+  `no_cover` for a folder resolved to none, only when already known and reads no file
+  (measured 2026-10-11: a cold listing of 99 album folders took 5.5 s while it resolved
+  every cover in line). The page asks for no thumbnail of a folder marked `no_cover`.
 - The page loads thumbnails lazily (three at a time as tiles scroll into view) and never
   more than one `PUT` per file per version; a tile under an nsfw folder draws its
   thumbnail blurred.
@@ -732,10 +739,13 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   the file's embedded picture.
 - **I-165** — The thumbnail of an audio file is its embedded picture, else a `cover.*` or
   `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
-  its first audio entry by name that has a picture, the same on every node, and absent
-  when none has one; a listing reports it only once this node has resolved it and reads
-  no file to do so, and `GET /api/thumb` of the folder resolves it, serves that picture
-  and answers 404 for a folder without one.
+  its first audio entry by name that has a thumbnail, else `<subfolder>/<entry>` for the
+  first of at most `CoverSubdirs` subfolders by name whose own audio gives one (one
+  level only), the same on every node, and absent when none has one; a listing reports
+  it, or `no_cover` for a folder resolved to none, only once this node has resolved it
+  for the current versions of the folder and of every subfolder it looked into, and
+  reads no file to do so; `GET /api/thumb` of the folder resolves it, serves that
+  picture and answers 404 for a folder without one.
 - **I-197** — One chart package renders the soak report and the Stats page: the same
   series render byte-identical SVG for both; it emits no colour and no inline `style`,
   only classes, and every class it emits is defined in `app.css` and in the report's
@@ -787,7 +797,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-162 | `TestCache_PinnedNeverEvicted`, `TestPins_PrefetchFillsThenReadsOffline`, `TestPins_RenameKeepsPin`, `TestPins_UnpinReleases`, `TestPins_SurviveRestart`, `TestPins_NewFileInPinnedDirIsFetched`, `TestConfig_CacheSize`, `TestLowDiskWarning_Boundary`, `TestReport_TrashAndCacheFields`, `TestCLI_Cache_PinUnpinLs`, `TestWebUI_Pins`, `TestReport_TrashCacheChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
 | I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
-| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
+| I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_DirCoverFromSubfolder`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
