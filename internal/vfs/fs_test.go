@@ -756,3 +756,92 @@ func TestVFS_WriteAt_ExactOffset_PosUnchanged(t *testing.T) {
 		t.Fatalf("Times() = %v %v %v, want the inode's %d %d %d", a, m, c, in.Atime, in.Mtime, in.Ctime)
 	}
 }
+
+// Invariant: I-222
+// Another gateway's Create of the name lands between this gateway's lookup and its own
+// Create (its FSM lagged): an exclusive open answers EEXIST and leaves the winner's bytes
+// alone, a plain O_CREATE opens the winner's file.
+func TestVFS_ExclCreate_LostRace_EEXIST(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		flag    int
+		wantErr bool
+	}{
+		{"excl", os.O_RDWR | os.O_CREATE | os.O_EXCL, true},
+		{"excl trunc", os.O_RDWR | os.O_CREATE | os.O_EXCL | os.O_TRUNC, true},
+		{"plain create", os.O_RDWR | os.O_CREATE, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := testharness.NewFabric(t, 3, 2, 1)
+			fs := f.FS()
+			must(t, fs.MkdirAll("/d", 0o755))
+			dir := f.InodeOf(fs, "/d")
+			winner := []byte("the winner's copy")
+			f.ForestallNext(meta.OpCreate, func() {
+				res := f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{
+					Parent: dir, Name: "x", Type: meta.TFile, Mode: 0o644, Now: f.Clk.Now().UnixNano(),
+				}})
+				wh, err := fs.OpenFile("/d/x", os.O_RDWR, 0)
+				must(t, err)
+				if _, err := wh.Seek(100, io.SeekStart); err != nil { // a non-zero offset
+					t.Error(err)
+				}
+				if _, err := wh.Write(winner); err != nil {
+					t.Error(err)
+				}
+				must(t, wh.Close())
+				if res.Ino == 0 {
+					t.Error("winner's create made no inode")
+				}
+			})
+			h, err := fs.OpenFile("/d/x", tc.flag, 0o644)
+			if tc.wantErr {
+				if !errors.Is(err, os.ErrExist) {
+					t.Fatalf("open: err=%v, want EEXIST", err)
+				}
+			} else {
+				must(t, err)
+				must(t, h.Close())
+			}
+			rh, err := fs.Open("/d/x")
+			must(t, err)
+			got, err := io.ReadAll(rh)
+			must(t, err)
+			must(t, rh.Close())
+			if want := append(make([]byte, 100), winner...); !bytes.Equal(got, want) {
+				t.Fatalf("winner's file is %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Invariant: I-222, I-95
+// The exclusive Create applied but its answer was lost: the repeat answers ErrExist for the
+// gateway's own file, which opens; a file another client made in that window does not.
+func TestVFS_ExclCreate_UnknownOutcome_OwnFileOpens(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	f.ProposeUnknown(1)
+	h, err := fs.OpenFile("/mine", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	must(t, err)
+	if _, err := h.Seek(7, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Write([]byte("ours")); err != nil {
+		t.Fatal(err)
+	}
+	must(t, h.Close())
+
+	// another client's file, dated before this gateway asked: not ours
+	theirs := f.Clk.Now().UnixNano()
+	f.Clk.Advance(time.Second)
+	f.ForestallNext(meta.OpCreate, func() {
+		f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{
+			Parent: meta.RootIno, Name: "theirs", Type: meta.TFile, Mode: 0o644, Now: theirs,
+		}})
+	})
+	f.ProposeUnknown(1)
+	if _, err := fs.OpenFile("/theirs", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("open of another client's file after an unknown outcome: err=%v, want EEXIST", err)
+	}
+}

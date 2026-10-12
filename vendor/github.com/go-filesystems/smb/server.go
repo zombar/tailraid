@@ -42,6 +42,10 @@ type share struct {
 	name string
 	fsys filesystem.Filesystem
 	ro   bool
+	// handles is every open handle of the share, of every connection, so a rename
+	// moves them all (I-224); guarded by hmu, not by the share's lock
+	hmu     sync.Mutex
+	handles map[*openFile]struct{}
 	// allow and writers are who may connect and who may write. See access.go:
 	// empty means everyone who authenticated.
 	allow   []string
@@ -228,6 +232,39 @@ func (s *Server) Share(name string, fsys filesystem.Filesystem, opts ...ShareOpt
 	return nil
 }
 
+// register and unregister keep the share's handle list.
+func (s *share) register(of *openFile) {
+	s.hmu.Lock()
+	defer s.hmu.Unlock()
+	if s.handles == nil {
+		s.handles = map[*openFile]struct{}{}
+	}
+	s.handles[of] = struct{}{}
+}
+
+func (s *share) unregister(of *openFile) {
+	s.hmu.Lock()
+	defer s.hmu.Unlock()
+	delete(s.handles, of)
+}
+
+// moveHandles follows a rename of from to to in every open handle of the share: the
+// file itself and, for a directory, everything under it (I-224).
+func (s *share) moveHandles(from, to string) {
+	s.hmu.Lock()
+	defer s.hmu.Unlock()
+	for of := range s.handles {
+		of.pmu.Lock()
+		switch {
+		case of.path == from:
+			of.path = to
+		case strings.HasPrefix(of.path, from+"/"):
+			of.path = to + of.path[len(from):]
+		}
+		of.pmu.Unlock()
+	}
+}
+
 // reading takes the share's lock for a command that only reads, and returns
 // the release: `defer sh.reading()()`.
 func (s *share) reading() func() {
@@ -408,6 +445,7 @@ func (c *conn) serve() {
 			// A client that crashes holding a lock must not keep the file
 			// reserved for the life of the server, and an operation waiting
 			// on a handle nobody has open will never complete on its own.
+			of.share.unregister(of)
 			of.share.locks.releaseAll(of.id)
 			c.cancelForFile(of.id)
 		}

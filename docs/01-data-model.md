@@ -277,7 +277,7 @@ Primitives: `u8`, `u16 LE`, `u32 LE`, `u64 LE`, `uvarint` (Go `encoding/binary`)
 **Command frame** (one Raft log entry):
 
 ```
-u8      codec version (1, 2, 3 or 4: the lowest that carries the entry's fields, 02 §Codec versions)
+u8      codec version (1 to 9: the lowest that carries the entry's fields, 02 §Codec versions)
 u8      Op
 ...     payload fields in the fixed order documented for that Op in 02
 ```
@@ -287,14 +287,16 @@ Unknown codec version or trailing bytes ⇒ `DecodeCommand` error; the FSM retur
 A version is legal only for the ops that need it (2: `NodeUpsert` with a host; 3:
 `SetPlacement`, `GCDelete`; 4: `Trash`, `Restore`, `Purge` and a `SetAttr` carrying
 `Flags`; 5 and 6: 02 §Codec versions; 7: `SnapshotBegin`, `SnapshotEnd`,
-`SnapshotDelete`, `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row), so an entry can never smuggle
+`SnapshotDelete`, `SnapshotImport` and a `NodeUpsert` of a `KindMirror` row; 8: a `Trash`
+with `Own`; 9: a `Commit` with `Rewrite` or `RewriteStart`, a `Trash` with `Expect` and a `Rename`
+with `NoReplace`, I-223..I-226), so an entry can never smuggle
 a field an older reader would misparse.
 
 **Snapshot frame** (`EncodeState`):
 
 ```
 4 bytes  magic "TRM1"
-u8       codec version (4; versions 1–3 are still read: a field a version lacks decodes as zero)
+u8       codec version (9; every older version is still read: a field a version lacks decodes as zero)
 u64      Applied
 i64      LastNow
 section  Volume   {ChunkSize u32, K u8, M u8, PolicyVersion u32, Auto bool (v ≥ 2)}
@@ -306,7 +308,7 @@ section  Chunks   uvarint count, then each Chunk {hash, Size u32, K u8, M u8, Re
                   uvarint len(Sums), Sums 32B... (v ≥ 5)}
 section  Inodes   uvarint count, then each Inode {Ino, Gen, Type, Mode, Uid, Gid, Size,
                   Atime, Mtime, Ctime, Nlink, Version, Parent, Name,
-                  Flags u8, DeletedAt i64 (v ≥ 4),
+                  Flags u8, DeletedAt i64 (v ≥ 4), RewriteAt u64 (v ≥ 9),
                   TFile: uvarint len(Chunks) + hashes; TSymlink: Target;
                   TDir: uvarint len(Children) + (name, Ino) pairs sorted by name}
 section  Snaps    uvarint count, then each Snapshot in ID order {ID u32, Mirror u16, Name,

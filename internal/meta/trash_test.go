@@ -551,7 +551,7 @@ func TestCodec_ReadsVersion3Snapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := s.Clone()
+	want := withoutRewrites(s.Clone())
 	for _, c := range want.Chunks {
 		c.Sums = nil // version 5 carries the sums (I-201); older versions never did
 	}

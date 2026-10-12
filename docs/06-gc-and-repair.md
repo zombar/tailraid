@@ -36,7 +36,7 @@ State.Tombs map[Hash]struct{}  // index of chunks with Refs == 0
   file used is reclaimed until the entry is purged, by the user ("delete now") or by the
   retention purge of §2. The same holds for the entry a `Rename` replaces. The only
   entries that are unlinked outright are the **ephemeral names**: an upload's temp
-  (`.<name>.tailraid-upload`), everything under `/.tailraid` (the thumbnails of 13 §5 and
+  (`.<name>.<node>.tailraid-upload`, any name ending `.tailraid-upload`), everything under `/.tailraid` (the thumbnails of 13 §5 and
   the stats segments of 17 §2: a tree the node writes for itself, never the user; I-195)
   and the files macOS writes beside the user's over NFS (`._<name>`, `.DS_Store`);
   `meta.IsEphemeral` is the one list, used by the FSM's `Rename`, the vfs and the web UI

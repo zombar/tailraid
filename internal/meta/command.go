@@ -44,6 +44,15 @@ const (
 	commandVersionV6 = 6 // a SetAttr whose Flags carry the library kind (docs/18 §9, I-210)
 	commandVersionV7 = 7 // the snapshot commands and a NodeUpsert of a mirror (docs/16, I-184)
 	commandVersionV8 = 8 // a Trash with Own, an own cleanup (docs/02 §Protection, I-220)
+	// commandVersionV9: a Commit of a rewrite (Rewrite, RewriteStart; docs/04 §6, I-223),
+	// a Trash with Expect (I-225) and a Rename with NoReplace (I-224, I-226). Fields are
+	// gated by version equality, so a v9 Commit still carries Sums and a v9 Trash writes
+	// Own as a byte (in v8 the version was the flag).
+	commandVersionV9 = 9
+	// CodecRewrite is the codec every live member must read before a gateway sends a
+	// codec-9 field: a v9 entry forwarded to an older leader is refused as malformed,
+	// not with ErrCodec, so the gateway asks the prober's MinCodec first.
+	CodecRewrite = commandVersionV9
 	// CodecMirrors is the codec every live member must read before a mirror or a
 	// snapshot command is proposed (docs/02 §Codec versions).
 	CodecMirrors = commandVersionV7
@@ -53,7 +62,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 8
+	CodecVersion = 9
 )
 
 // SetAttr mask bits.
@@ -123,6 +132,8 @@ type (
 		NewParent Ino
 		NewName   string
 		Now       int64
+		// NoReplace refuses an existing destination with ErrExist (codec 9, I-224, I-226).
+		NoReplace bool
 	}
 	SetAttr struct {
 		Ino      Ino
@@ -143,8 +154,11 @@ type (
 		Now       int64
 		// Own marks an own cleanup: the SMB handle that created the file deletes it, as a
 		// failed copy does, and protection lets that one through (I-220). Codec 8: the
-		// version is the flag, no byte is added.
+		// version is the flag, no byte is added; codec 9 writes it as a byte.
 		Own bool
+		// Expect, when not 0, is the inode the proposer means: a name that resolves to
+		// another is ErrConflict and nothing changes (codec 9, I-225).
+		Expect Ino
 	}
 	// Restore puts a deleted root back: under NewParent/NewName, or (0, "") its own place.
 	Restore struct {
@@ -170,6 +184,11 @@ type (
 		Writes      []ChunkWrite
 		NewChunks   []ChunkDesc
 		Now         int64
+		// Rewrite is the rewrite this Commit continues: the version its RewriteStart
+		// produced. RewriteStart begins one (TruncateTo 0, no BaseVersion check). A
+		// Commit with neither is a plain write (codec 9, docs/04 §6, I-223).
+		Rewrite      uint64
+		RewriteStart bool
 	}
 	SetPlacement struct {
 		Hash      Hash
@@ -302,6 +321,22 @@ func needsV8(c Command) bool {
 	return c.Op == OpTrash && c.Trash != nil && c.Trash.Own
 }
 
+// needsV9 reports whether c carries a codec-9 field: a Commit of a rewrite, a Trash with
+// Expect or a Rename with NoReplace. An older binary would misparse or ignore each, so
+// the leader refuses the entry while such a member is live (I-156) and the gateways do
+// not send one until every live member reads codec 9 (CodecRewrite).
+func needsV9(c Command) bool {
+	switch c.Op { //nolint:exhaustive // every other op is version 1–8
+	case OpCommit:
+		return c.Commit != nil && (c.Commit.Rewrite != 0 || c.Commit.RewriteStart)
+	case OpTrash:
+		return c.Trash != nil && c.Trash.Expect != 0
+	case OpRename:
+		return c.Rename != nil && c.Rename.NoReplace
+	}
+	return false
+}
+
 func needsV7(c Command) bool {
 	switch c.Op { //nolint:exhaustive // every other op is version 1–6
 	case OpSnapshotBegin, OpSnapshotEnd, OpSnapshotDelete, OpSnapshotImport:
@@ -355,6 +390,7 @@ type Result struct {
 	Gen     uint32
 	Victims []GCVictim
 	SnapID  SnapID // SnapshotBegin's new row
+	Version uint64 // a RewriteStart Commit's new version, the gateway's rewrite id (I-223)
 	Err     error  // nil or one of the sentinel errors
 }
 
@@ -388,6 +424,8 @@ func CommandCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV9(c):
+		return commandVersionV9
 	case needsV8(c):
 		return commandVersionV8
 	case needsV7(c):
@@ -410,7 +448,8 @@ func CommandCodec(c Command) uint8 {
 func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
 	v := CommandCodec(c)
-	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6, v == commandVersionV5
+	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6, v == commandVersionV5 || v == commandVersionV9
+	v9 := v == commandVersionV9
 	v2 := v == commandVersionV2 || v == commandVersionV7 // a mirror row carries its Host as a disk row does
 	w.u8(v)
 	w.u8(uint8(c.Op))
@@ -469,6 +508,9 @@ func encodeCommand(c Command) []byte {
 		w.u64(uint64(p.NewParent))
 		w.str(p.NewName)
 		w.i64(p.Now)
+		if v9 {
+			w.bool(p.NoReplace)
+		}
 	case OpSetAttr:
 		p := mustPayload(c.SetAttr, c.Op)
 		w.u64(uint64(p.Ino))
@@ -507,6 +549,10 @@ func encodeCommand(c Command) []byte {
 			}
 		}
 		w.i64(p.Now)
+		if v9 {
+			w.u64(p.Rewrite)
+			w.bool(p.RewriteStart)
+		}
 	case OpSetShardSums:
 		p := mustPayload(c.SetShardSums, c.Op)
 		w.hash(p.Hash)
@@ -536,6 +582,10 @@ func encodeCommand(c Command) []byte {
 		w.str(p.Name)
 		w.bool(p.Recursive)
 		w.i64(p.Now)
+		if v9 {
+			w.bool(p.Own)
+			w.u64(uint64(p.Expect))
+		}
 	case OpRestore:
 		p := mustPayload(c.Restore, c.Op)
 		w.u64(uint64(p.Ino))
@@ -602,7 +652,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && (v < commandVersion || v > commandVersionV8) {
+	if r.err == nil && (v < commandVersion || v > commandVersionV9) {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -627,6 +677,8 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSnapshotBegin || c.Op == OpSnapshotEnd || c.Op == OpSnapshotDelete || c.Op == OpSnapshotImport || c.Op == OpNodeUpsert
 	case commandVersionV8:
 		legal = c.Op == OpTrash
+	case commandVersionV9:
+		legal = c.Op == OpCommit || c.Op == OpTrash || c.Op == OpRename
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport
@@ -660,6 +712,12 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.Rmdir = &Rmdir{Parent: Ino(r.u64()), Name: r.str(), Now: r.i64()}
 	case OpRename:
 		c.Rename = &Rename{OldParent: Ino(r.u64()), OldName: r.str(), NewParent: Ino(r.u64()), NewName: r.str(), Now: r.i64()}
+		if v == commandVersionV9 {
+			c.Rename.NoReplace = r.bool()
+			if r.err == nil && !c.Rename.NoReplace {
+				return c, fmt.Errorf("meta: Rename in command version 9 without NoReplace") // canonical bytes (I-22)
+			}
+		}
 	case OpSetAttr:
 		c.SetAttr = &SetAttr{Ino: Ino(r.u64()), Mask: r.u8(), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(), Atime: r.i64(), Mtime: r.i64(), Now: r.i64()}
 		if v == commandVersionV4 || v == commandVersionV6 {
@@ -683,12 +741,18 @@ func DecodeCommand(b []byte) (Command, error) {
 			p.NewChunks = make([]ChunkDesc, n)
 			for i := range p.NewChunks {
 				p.NewChunks[i] = ChunkDesc{Hash: r.hash(), Size: r.u32(), K: r.u8(), M: r.u8(), Placement: r.nodeIdxs()}
-				if v == commandVersionV5 {
+				if v == commandVersionV5 || v == commandVersionV9 {
 					p.NewChunks[i].Sums = r.hashes()
 				}
 			}
 		}
 		p.Now = r.i64()
+		if v == commandVersionV9 {
+			p.Rewrite, p.RewriteStart = r.u64(), r.bool()
+			if r.err == nil && p.Rewrite == 0 && !p.RewriteStart {
+				return c, fmt.Errorf("meta: Commit in command version 9 without a rewrite") // canonical bytes (I-22)
+			}
+		}
 		c.Commit = p
 	case OpSetShardSums:
 		c.SetShardSums = &SetShardSums{Hash: r.hash(), Sums: r.hashes()}
@@ -711,6 +775,12 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.SetVolumeMode = &SetVolumeMode{Auto: r.bool(), Now: r.i64()}
 	case OpTrash:
 		c.Trash = &Trash{Parent: Ino(r.u64()), Name: r.str(), Recursive: r.bool(), Now: r.i64(), Own: v == commandVersionV8}
+		if v == commandVersionV9 {
+			c.Trash.Own, c.Trash.Expect = r.bool(), Ino(r.u64())
+			if r.err == nil && c.Trash.Expect == 0 {
+				return c, fmt.Errorf("meta: Trash in command version 9 without Expect") // canonical bytes (I-22)
+			}
+		}
 	case OpRestore:
 		c.Restore = &Restore{Ino: Ino(r.u64()), NewParent: Ino(r.u64()), NewName: r.str(), Now: r.i64()}
 	case OpPurge:
@@ -786,10 +856,14 @@ func EncodeResult(res Result) []byte {
 		w.u8(res.Victims[i].M)
 		w.nodeIdxs(res.Victims[i].Placement)
 	}
-	if res.SnapID != 0 {
-		// appended only when set: only SnapshotBegin sets it, and it is codec 7, so a
-		// node that reads the extra field is the only kind that ever receives it
+	if res.SnapID != 0 || res.Version != 0 {
+		// appended only when set: only SnapshotBegin sets SnapID (codec 7) and only a
+		// RewriteStart Commit sets Version (codec 9), so a node that reads the extra
+		// fields is the only kind that ever receives them
 		w.u32(uint32(res.SnapID))
+	}
+	if res.Version != 0 {
+		w.u64(res.Version)
 	}
 	return w.b
 }
@@ -817,6 +891,9 @@ func DecodeResult(b []byte) (Result, error) {
 	}
 	if r.err == nil && r.pos < len(r.b) {
 		res.SnapID = SnapID(r.u32())
+	}
+	if r.err == nil && r.pos < len(r.b) {
+		res.Version = r.u64()
 	}
 	if err := r.done(); err != nil {
 		return Result{}, err

@@ -41,8 +41,13 @@ const (
 
 // An openFile is one handle a client holds.
 type openFile struct {
-	id            [16]byte
-	path          string // as the driver spells it: "/sub/file.txt"
+	id [16]byte
+	// path is as the driver spells it: "/sub/file.txt". A rename through any handle of
+	// the share moves it (share.moveHandles), so it is read through p() and written
+	// under pmu: a handle of another connection may be using it at that moment.
+	path          string
+	pmu           sync.Mutex
+	ino           uint64 // the file's inode when it was opened: what a delete-on-close removes (I-225)
 	share         *share
 	dir           bool
 	deleteOnClose bool
@@ -157,8 +162,15 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusObjectNameNotFound), nil
 	case !exists && (disposition == dispCreate || disposition == dispOpenIf ||
 		disposition == dispOverwriteIf || disposition == dispSupersede):
+		x, excl := sh.fsys.(ExclusiveCreator)
 		if options&optDirectoryFile != 0 {
 			if err := sh.fsys.MkDir(p, 0o755); err != nil {
+				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+			}
+		} else if excl && disposition == dispCreate {
+			// another server over the same volume may have made the name since Stat
+			// looked: the backend decides, and a name taken there is a collision
+			if err := x.CreateExcl(p, 0o644); err != nil {
 				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 			}
 		} else if err := sh.fsys.WriteFile(p, nil, 0o644); err != nil {
@@ -203,6 +215,9 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 		}
 	}
 	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID, created: created}
+	if st != nil {
+		of.ino = st.Inode()
+	}
 	if !dir {
 		if o, canOpen := sh.fsys.(filesystem.Opener); canOpen {
 			if f, err := o.OpenFile(p); err == nil {
@@ -224,6 +239,7 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint64(of.id[:8], c.nextFile)
 	binary.LittleEndian.PutUint64(of.id[8:], uint64(h.treeID))
 	c.files[of.id] = of
+	sh.register(of)
 	c.lastFile = of.id
 
 	const bodyLen = 88
@@ -235,7 +251,7 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	size := sizeOf(st)
 	binary.LittleEndian.PutUint64(rb[40:], allocationOf(size))
 	binary.LittleEndian.PutUint64(rb[48:], size)
-	binary.LittleEndian.PutUint32(rb[56:], attributesOf(of.path, st, tc.ro))
+	binary.LittleEndian.PutUint32(rb[56:], attributesOf(of.p(), st, tc.ro))
 	copy(rb[64:], of.id[:])
 	// The contexts offset stays ZERO because there are none. Pointing it at
 	// the one pad byte the structure size accounts for is what a real client
@@ -271,6 +287,46 @@ func canDelete(fsys filesystem.Filesystem, path string, created bool) error {
 		return d.CanDelete(path)
 	}
 	return nil
+}
+
+// ExclusiveCreator is the optional capability of a filesystem shared with other servers
+// (several gateways over one volume): CreateExcl makes an empty file at path or fails
+// with an error matching os.ErrExist when the name exists, decided by the backend rather
+// than by this server's Stat, which may not have seen the other server's create yet.
+// FILE_CREATE uses it, so the losing client sees STATUS_OBJECT_NAME_COLLISION and the
+// winner's file is never truncated.
+type ExclusiveCreator interface {
+	CreateExcl(path string, perm os.FileMode) error
+}
+
+// InodeDeleter is the optional capability of a filesystem that deletes by identity:
+// DeleteFileIno removes the file at path only when it is still the inode ino, and does
+// nothing otherwise, decided where the names live (a shared volume, where another
+// server may have renamed the file away and made a new one under the name). own is as
+// for OwnDeleter: the handle that created the file is deleting it. A delete-on-close
+// of a file uses it (I-225).
+type InodeDeleter interface {
+	DeleteFileIno(path string, ino uint64, own bool) error
+}
+
+// NoReplaceRenamer is the optional capability of a filesystem that renames without
+// replacing, decided where the names live: an existing destination is an error matching
+// os.ErrExist and nothing moves. A rename without ReplaceIfExists uses it (I-224).
+type NoReplaceRenamer interface {
+	RenameNoReplace(from, to string) error
+}
+
+// sameFile reports whether path still names the inode ino (0: unknown, taken as yes).
+func sameFile(fsys filesystem.Filesystem, path string, ino uint64) bool {
+	st, err := fsys.Stat(path)
+	return err == nil && (ino == 0 || st.Inode() == ino)
+}
+
+// p is the handle's path now.
+func (of *openFile) p() string {
+	of.pmu.Lock()
+	defer of.pmu.Unlock()
+	return of.path
 }
 
 // Timestamper is the optional capability of a Stat that knows its times. The
@@ -318,6 +374,7 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 		of.f.Close()
 	}
 	delete(c.files, of.id)
+	of.share.unregister(of)
 	of.share.locks.releaseAll(of.id)
 	c.cancelForFile(of.id)
 	defer of.share.changing()() // the file may go with the handle
@@ -327,14 +384,25 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 	// otherwise leave one behind each time.
 	delete(c.searches, of.id)
 	if of.deleteOnClose && !of.ro {
-		if o, ok := of.share.fsys.(OwnDeleter); ok && of.created {
-			o.DeleteOwnFile(of.path)
-		} else if of.dir {
-			of.share.fsys.DeleteDir(of.path)
-		} else {
-			of.share.fsys.DeleteFile(of.path)
+		// the file this handle opened, or nothing: another client may have renamed it
+		// away (the handle followed) and made a new file under its old name (I-225)
+		p := of.p()
+		d, byIno := of.share.fsys.(InodeDeleter)
+		switch {
+		case byIno && !of.dir && of.ino != 0:
+			d.DeleteFileIno(p, of.ino, of.created) // the backend decides, atomically
+		case !sameFile(of.share.fsys, p, of.ino):
+			// someone else's file now: left alone
+		default:
+			if o, ok := of.share.fsys.(OwnDeleter); ok && of.created {
+				o.DeleteOwnFile(p)
+			} else if of.dir {
+				of.share.fsys.DeleteDir(p)
+			} else {
+				of.share.fsys.DeleteFile(p)
+			}
 		}
-		of.share.notify(of.path, actionRemoved)
+		of.share.notify(p, actionRemoved)
 	}
 
 	b := append(responseTo(h, statusSuccess), make([]byte, 60)...)
@@ -370,7 +438,7 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 	}
 	// A lock nobody enforces is decoration. A read may cross a SHARED lock
 	// held by somebody else; an exclusive one stops it.
-	if of.share.locks.held(of.path, uint64(offset), uint64(length), of.id, false) {
+	if of.share.locks.held(of.p(), uint64(offset), uint64(length), of.id, false) {
 		return errorResponse(h, statusFileLockConflict), nil
 	}
 
@@ -386,7 +454,7 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 		// No positional read: the whole file, every time. See Opener's
 		// documentation for why a driver that cannot answer a byte range
 		// should not pretend to.
-		data, err := of.share.fsys.ReadFile(of.path)
+		data, err := of.share.fsys.ReadFile(of.p())
 		if err != nil {
 			return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
 		}
@@ -437,7 +505,7 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusInvalidDeviceRequest), nil
 	}
 	// A write crosses NO lock held by anybody else, shared or exclusive.
-	if of.share.locks.held(of.path, uint64(offset), uint64(length), of.id, true) {
+	if of.share.locks.held(of.p(), uint64(offset), uint64(length), of.id, true) {
 		return errorResponse(h, statusFileLockConflict), nil
 	}
 	if of.w != nil {
@@ -458,7 +526,7 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 		// a client streaming in blocks turns into O(n^2) -- the reason
 		// WritableFile exists. A failure here is reported and NEVER retried
 		// through another path: it has already changed the file.
-		old, err := of.share.fsys.ReadFile(of.path)
+		old, err := of.share.fsys.ReadFile(of.p())
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
@@ -469,12 +537,12 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 			old = grown
 		}
 		copy(old[offset:], data)
-		if err := of.share.fsys.WriteFile(of.path, old, 0o644); err != nil {
+		if err := of.share.fsys.WriteFile(of.p(), old, 0o644); err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
 	}
 
-	of.share.notify(of.path, actionModified)
+	of.share.notify(of.p(), actionModified)
 	return writeReply(h, length), nil
 }
 
@@ -494,7 +562,7 @@ func writeAt(h header, of *openFile, data []byte, offset int64) []byte {
 	if err := of.w.Sync(); err != nil {
 		return errorResponse(h, statusFor(err, statusAccessDenied))
 	}
-	of.share.notify(of.path, actionModified)
+	of.share.notify(of.p(), actionModified)
 	return writeReply(h, len(data))
 }
 

@@ -218,16 +218,6 @@ function failure(r) {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-async function uploadedSoFar(path) {
-  const i = path.lastIndexOf("/");
-  const temp = path.slice(0, i + 1) + "." + path.slice(i + 1) + ".tailraid-upload";
-  try {
-    return (await stat(temp)).size;
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return 0;
-    throw e;
-  }
-}
 function upload(path, file, onProgress, onNote) {
   let current = null;
   let aborted = false;
@@ -267,7 +257,6 @@ function upload(path, file, onProgress, onNote) {
         if (++retries > RETRIES) throw failure(r);
         onNote?.(`resuming ${retries}/${RETRIES}`);
         await wait(1e3 * Math.min(8, 2 ** (retries - 1)));
-        offset = await uploadedSoFar(path);
         continue;
       }
       throw failure(r);

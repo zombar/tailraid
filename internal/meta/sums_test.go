@@ -117,7 +117,7 @@ func TestCodec_ReadsVersion4Snapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := s.Clone()
+	want := withoutRewrites(s.Clone())
 	for _, c := range want.Chunks {
 		c.Sums = nil
 	}

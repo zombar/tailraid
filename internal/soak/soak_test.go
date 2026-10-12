@@ -66,6 +66,9 @@ type harnessEnv struct {
 	search map[int]*harnessSearch
 	// phase 19's mirror once AddMirror registered it (mirror_harness_test.go)
 	mirror *harnessMirror
+	// one SMB gateway per node, shared by every copy job and handle race (phases 22, 23),
+	// rebuilt when a restart replaced the node's filesystem
+	smb map[int]*harnessSMB
 }
 
 type harnessSearch struct {
@@ -218,6 +221,7 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 	}}
 	ui, err := webui.New(webui.Options{
 		FS: nd.FS, Store: nd.Node.FSM, Auth: auth, Clk: e.c.Clk, Logger: slog.New(slog.DiscardHandler), Retention: 30 * 24 * time.Hour, Pins: p,
+		Node:   n.Name, // an upload's temp is the node's own, as node.go wires it (I-226)
 		Search: e.searchOf(nd), Catalog: e.searchOf(nd),
 		Status: func() any { rep, _ := e.Status(context.Background(), n); return rep },
 		Chunks: func(ctx context.Context, sel string, off, lim int) (int, []admin.ChunkReport, error) {
@@ -726,11 +730,12 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	defer env.stopAllStats()
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
-	// phase 22 needs the gateways' retry-until-stale (production's) and runs in its own
-	// test on such a cluster; this one's gateways fail fast for the other fault phases
+	// phases 22 and 23 need the gateways' retry-until-stale (production's) and run in
+	// tests of their own on such a cluster; this one's gateways fail fast for the other
+	// fault phases
 	var all []string
 	for _, ph := range soak.StandardPhases() {
-		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" {
+		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" {
 			all = append(all, num)
 		}
 	}

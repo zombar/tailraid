@@ -120,6 +120,9 @@ func (a *applier) trash(c *Trash) error {
 	if !ok {
 		return ErrNotExist
 	}
+	if c.Expect != 0 && ino != c.Expect {
+		return ErrConflict // the name now holds another file than the proposer's (I-225)
+	}
 	in := st.Inodes[ino]
 	if st.lineage(ino).protected && (!c.Own || in.Type != TFile) {
 		// an own cleanup, a failed copy removing the file it created, is the one delete

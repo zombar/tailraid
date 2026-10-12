@@ -109,8 +109,8 @@ func (c *conn) copyChunk(h header, code uint32, dst *openFile, in []byte) []byte
 	for _, ch := range chunks {
 		// Locks hold as they do for READ and WRITE: the source range crosses
 		// no exclusive lock of another open, the target range no lock.
-		if src.share.locks.held(src.path, uint64(ch.src), uint64(ch.n), src.id, false) ||
-			dst.share.locks.held(dst.path, uint64(ch.dst), uint64(ch.n), dst.id, true) {
+		if src.share.locks.held(src.p(), uint64(ch.src), uint64(ch.n), src.id, false) ||
+			dst.share.locks.held(dst.p(), uint64(ch.dst), uint64(ch.n), dst.id, true) {
 			return c.copyStopped(h, code, dst, statusFileLockConflict, written, bytes)
 		}
 		// The target's final length first: a driver whose WriteAt cannot
@@ -134,7 +134,7 @@ func (c *conn) copyChunk(h header, code uint32, dst *openFile, in []byte) []byte
 	if err := dst.w.Sync(); err != nil {
 		return c.copyStopped(h, code, dst, statusFor(err, statusAccessDenied), written, bytes)
 	}
-	dst.share.notify(dst.path, actionModified)
+	dst.share.notify(dst.p(), actionModified)
 	out := make([]byte, 12)
 	binary.LittleEndian.PutUint32(out[0:], written)
 	binary.LittleEndian.PutUint32(out[8:], uint32(bytes)) // ChunkBytesWritten stays zero

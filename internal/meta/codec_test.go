@@ -13,7 +13,7 @@ func TestCodec_StateRoundTrip(t *testing.T) {
 	if err := EncodeState(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x07")) {
+	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x09")) {
 		t.Fatalf("bad header %x", buf.Bytes()[:5])
 	}
 	got, err := DecodeState(bytes.NewReader(buf.Bytes()))
@@ -153,4 +153,44 @@ func FuzzDecodeState(f *testing.F) {
 			t.Fatalf("decode/encode not identity")
 		}
 	})
+}
+
+// withoutRewrites is s as a snapshot older than version 9 holds it: no inode records a
+// rewrite (docs/04 §6, I-223).
+func withoutRewrites(s *State) *State {
+	for _, in := range s.Inodes {
+		in.RewriteAt = 0
+	}
+	return s
+}
+
+// A version 7 snapshot, written before Inode.RewriteAt, keeps its snapshot catalogue
+// and decodes with no rewrite recorded: the catalogue is gated on version 7, not on
+// the newest version (a gate on stateVersion would have dropped it at version 9).
+// Invariant: I-223, I-184
+func TestCodec_ReadsVersion7Snapshot(t *testing.T) {
+	s := sampleState()
+	s.Snaps = map[SnapID]*Snapshot{3: {ID: 3, Mirror: 2, Name: "daily", Index: 6, At: 50, Auto: true, State: SnapComplete, Root: sampleHash(9), Files: 4, Bytes: 100, NewBytes: 10}}
+	s.NextSnap = 4
+	var buf bytes.Buffer
+	if err := encodeStateVersion(&buf, s, stateVersionV7); err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeState(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := withoutRewrites(s.Clone()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("v7 round trip\n got %+v\nwant %+v", got, want)
+	}
+	// and version 9 keeps both
+	buf.Reset()
+	s = sampleState()
+	s.Snaps, s.NextSnap = map[SnapID]*Snapshot{3: {ID: 3, Mirror: 2, Name: "daily", State: SnapComplete}}, 4
+	if err := EncodeState(&buf, s); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = DecodeState(bytes.NewReader(buf.Bytes())); err != nil || !reflect.DeepEqual(got, s) {
+		t.Fatalf("v9 round trip: err=%v\n got %+v\nwant %+v", err, got, s)
+	}
 }

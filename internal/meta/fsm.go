@@ -170,7 +170,13 @@ func (a *applier) apply(c Command) (Result, error) {
 	case OpSetAttr:
 		return Result{}, a.setAttr(c.SetAttr)
 	case OpCommit:
-		return Result{}, a.commit(c.Commit)
+		if err := a.commit(c.Commit); err != nil {
+			return Result{}, err
+		}
+		if c.Commit.RewriteStart { // the gateway's rewrite id (docs/04 §6, I-223)
+			return Result{Version: a.st.Inodes[c.Commit.Ino].RewriteAt}, nil
+		}
+		return Result{}, nil
 	case OpSetPlacement:
 		return Result{}, a.setPlacement(c.SetPlacement)
 	case OpGCDelete:
@@ -660,6 +666,9 @@ func (a *applier) rename(c *Rename) error {
 	if c.OldParent == c.NewParent && c.OldName == c.NewName {
 		return nil
 	}
+	if _, taken := np.Children[c.NewName]; taken && c.NoReplace {
+		return ErrExist // decided here, not by a gateway's lookup (I-224, I-226)
+	}
 	if src.Type == TDir && a.isAncestor(srcIno, c.NewParent) {
 		return ErrLoop
 	}
@@ -816,7 +825,16 @@ func (a *applier) commit(c *Commit) error {
 	if in.Type != TFile {
 		return ErrIsDir
 	}
-	if in.Version != c.BaseVersion {
+	switch {
+	case c.RewriteStart:
+		// a rewrite replaces the whole file whatever was committed since it was planned
+		// (docs/04 §6, I-223): no BaseVersion check, and it must truncate to 0
+		if !c.HasTruncate || c.TruncateTo != 0 || c.Rewrite != 0 {
+			return ErrBadCommand
+		}
+	case c.Rewrite != 0 && in.RewriteAt != c.Rewrite:
+		return ErrSuperseded // another rewrite of the file started after this one
+	case in.Version != c.BaseVersion:
 		return ErrConflict
 	}
 	if c.HasTruncate && c.TruncateTo > c.NewSize {
@@ -965,6 +983,9 @@ func (a *applier) commit(c *Commit) error {
 	}
 	in.Size = c.NewSize
 	in.Version++
+	if c.RewriteStart {
+		in.RewriteAt = in.Version
+	}
 	in.Mtime, in.Ctime = now, now
 	return nil
 }

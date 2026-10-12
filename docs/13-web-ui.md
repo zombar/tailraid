@@ -127,7 +127,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
 | `GET /api/chunks?path=&offset=&limit=` | – | `{"total":N,"chunks":[ChunkReport…]}`; default limit 64, max 256; the event ring is omitted; the shard checks of a page run concurrently and `slots` is always an array (I-161) |
 | `GET`, `HEAD /files/{path}?in=` | – | the bytes through `http.ServeContent`; `?download=1` adds `Content-Disposition: attachment`; `in=<ino>` reads inside a deleted root with the same headers |
-| `PUT /files/{path}` | required | the whole file (`Content-Length` required, 411 without) or one part (`Content-Range: bytes a-b/total`): the bytes stream into `.<name>.tailraid-upload` beside the target and the last byte renames it over the target; 201 for a new file, 204 for an overwrite (the previous version is now in the trash, §4), 202 `{"offset"}` for a part that is not the last; a part whose `a` is not the temp's size → 409 `{"offset"}`; `If-None-Match: *` on an existing file → 412; more than four uploads at once → 503 `Retry-After: 2`; a size the volume cannot hold → 507 (§4); an overwrite under a protected folder → 403 |
+| `PUT /files/{path}` | required | the whole file (`Content-Length` required, 411 without) or one part (`Content-Range: bytes a-b/total`): the bytes stream into `.<name>.<node>.tailraid-upload` beside the target and the last byte renames it over the target; 201 for a new file, 204 for an overwrite (the previous version is now in the trash, §4), 202 `{"offset"}` for a part that is not the last; a part whose `a` is not the temp's size → 409 `{"offset"}`; `If-None-Match: *` on an existing file, or on a name another gateway publishes first, → 412 (I-226); more than four uploads at once → 503 `Retry-After: 2`; a size the volume cannot hold → 507 (§4); an overwrite under a protected folder → 403 |
 | `POST /api/mkdir` `{"path"}` | required | 201 `{"path"}`; parents are created; an existing entry → 409 |
 | `POST /api/rename` `{"path","name"}` | required | 200 `{"path"}` (the new path); a taken name → 409; a protected folder, or a replace under one → 403; the root → 400 |
 | `POST /api/move` `{"paths":[…],"to"}` | required | 200 `{"moved":[…],"failed":[{path,error,status}]}`; `to` must be a live directory (404/400 for the whole request otherwise); every path is tried on its own, one `Rename` each, never over an existing entry (409 for that item); at most `MaxBatch` (1000) paths, 413 above, 400 for none |
@@ -201,7 +201,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   a conditional GET can therefore never 304 stale bytes.
 - **Uploads** are atomic and resumable, and the vfs is their only state. The body streams
   through `OpenFile(O_WRONLY|O_CREATE)`, `Seek` and `Write` on a hidden sibling
-  `.<name>.tailraid-upload` in the target's directory, the path an NFS WRITE takes: each
+  `.<name>.<node>.tailraid-upload` in the target's directory (the gateway's node name in
+  it, so uploads of one name through two gateways never share a temp, I-226), the path an NFS WRITE takes: each
   chunk-sized read is one fsynced WAL record, the flusher commits chunks on the idle timer
   or the thresholds (a WRITE at a cap waits inside the vfs, docs/04 §3), and the bytes are
   readable through the vfs at once. Only when every byte announced by `Content-Length` (or
@@ -213,7 +214,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   sequential parts with `Content-Range: bytes a-b/total`; a part is accepted only when `a`
   equals the temp's current size (0 when there is none), otherwise 409 with the offset the
   client should continue from, which is also how a dropped connection resumes (the browser
-  asks `/api/stat` for the temp's size, or simply retries and reads the 409). Temps show in
+  sends the part again from where it was and adopts the 409's offset: the temp is the
+  node's own, so its name is not the browser's to know). Temps show in
   listings with `"upload": true`, are skipped by the player, and are removed by the node's
   hourly sweep once idle for 24 h (I-81).
 - Before any body byte is read the gateway refuses what cannot succeed: no length (411),
@@ -732,6 +734,12 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   identical bytes through the vfs at once; a new file is 201, an overwrite 204 and truncates
   first; a PUT or `POST /api/mkdir` on a stale gateway is 503 and changes nothing; a WAL or
   dirty-byte cap waits for the flusher instead of failing.
+- **I-226** — Uploads of one name through two gateways never mix: each gateway writes its
+  own temp (`.<name>.<node>.tailraid-upload`), one gateway refuses a second concurrent
+  upload of a name with 409, and the publish is one `Rename`, so the name ends up holding
+  exactly one upload's bytes, the last to publish; with `If-None-Match: *` the publish is
+  a `Rename` with `NoReplace` (codec 9, docs/02), so of two exclusive uploads through two
+  gateways one gets 2xx and the other 412, and its temp is removed.
 - **I-81** — A web upload becomes visible under its name only when every byte announced by
   `Content-Length` or the `Content-Range` total has arrived: the bytes stream into
   `.<name>.tailraid-upload` beside the target and one `Rename` publishes them; a
@@ -871,6 +879,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
 | I-72 | `TestWebUI_Paths` |
 | I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |
+| I-226 | `TestFSM_Rename_NoReplace_Exist`, `TestWebUI_Put_TwoGateways_OneName_OneWhole`, `TestWebUI_Put_TwoGateways_IfNoneMatch_One412`, `TestSoak_MultiUserAgainstHarness` |
 | I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
 | I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |

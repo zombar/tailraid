@@ -146,7 +146,7 @@ func (c *conn) lock(h header, body []byte) ([]byte, error) {
 		flags := binary.LittleEndian.Uint32(e[16:])
 		elements = append(elements, lockElement{
 			l: byteLock{
-				path:      of.path,
+				path:      of.p(),
 				offset:    binary.LittleEndian.Uint64(e[0:]),
 				length:    binary.LittleEndian.Uint64(e[8:]),
 				exclusive: flags&lockExclusive != 0,

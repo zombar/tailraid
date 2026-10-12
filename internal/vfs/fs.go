@@ -41,7 +41,15 @@ type FS struct {
 
 	// every byte a client read or wrote through a File (docs/17 §1: bytes_r, bytes_w)
 	bytesRead, bytesWritten atomic.Uint64
+
+	// MinCodec, when set, is the oldest codec a live active member reads (the prober's
+	// view): a codec-9 field (Trash.Expect, Rename.NoReplace) is sent only once it is
+	// 9, since an older leader refuses the entry as malformed (docs/02 §Codec versions).
+	MinCodec func() uint8
 }
+
+// codecAtLeast reports whether every live member reads codec v (no view: yes).
+func (f *FS) codecAtLeast(v uint8) bool { return f.MinCodec == nil || f.MinCodec() >= v }
 
 // New wires a filesystem. uid/gid are stamped on created inodes.
 func New(st *meta.Store, prop meta.Proposer, ov *Overlay, rd *Reader, clk clock.Clock, uid, gid uint32) *FS {
@@ -182,6 +190,13 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 		res, index, err := f.prop.Propose(ctx, cmd)
 		if err == nil {
 			if res.Err != nil {
+				if index > 0 {
+					// a refusal is decided at an index too: once it is applied here, the
+					// state that refused (the other gateway's Create, I-222) resolves
+					if werr := f.st.WaitApplied(ctx, index); werr != nil {
+						return res, werr
+					}
+				}
 				if afterUnknown && (errors.Is(res.Err, meta.ErrExist) || errors.Is(res.Err, meta.ErrNotExist)) {
 					return res, fmt.Errorf("%w (%w)", res.Err, meta.ErrUnknownOutcome)
 				}
@@ -234,6 +249,15 @@ func landedEarlier(err, want error) bool {
 
 func (f *FS) now() int64 { return f.clk.Now().UnixNano() }
 
+// ownCreate reports whether in, found under a name whose exclusive Create answered
+// ErrExist after an unknown outcome, is the file that first attempt made: an empty file
+// created between asked and now (the FSM never dates a create before its command, and
+// clamps it forward only to its own last time). Two clients can both be told "created"
+// only inside that window, an unknown outcome racing another create of the name (I-222).
+func ownCreate(in meta.Inode, asked, now int64) bool {
+	return in.Type == meta.TFile && in.Size == 0 && in.Ctime >= asked && in.Ctime <= now
+}
+
 func (f *FS) resolve(name string) (meta.Inode, error) {
 	return f.st.Resolve(meta.SplitPath(name))
 }
@@ -280,18 +304,25 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 		if err != nil {
 			return nil, mapErr("open", filename, err)
 		}
+		asked := f.now()
 		res, err := f.propose(ctx, meta.Command{Op: meta.OpCreate, Create: &meta.Create{
-			Parent: parent.Ino, Name: base, Type: meta.TFile, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: f.now(),
+			Parent: parent.Ino, Name: base, Type: meta.TFile, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: asked,
 		}})
 		if err != nil {
-			if errors.Is(err, meta.ErrExist) { // lost a create race; open what is there
-				in, err = f.resolve(filename)
-				if err != nil {
-					return nil, mapErr("open", filename, err)
-				}
-				break
+			if !errors.Is(err, meta.ErrExist) {
+				return nil, mapErr("open", filename, err)
 			}
-			return nil, mapErr("open", filename, err)
+			// lost a create race, or our own first attempt landed (I-95); the answer was
+			// applied here before propose returned, so the name resolves to the winner
+			unknown := errors.Is(err, meta.ErrUnknownOutcome)
+			in, err = f.resolve(filename)
+			if err != nil {
+				return nil, mapErr("open", filename, err)
+			}
+			if flag&os.O_EXCL != 0 && (!unknown || !ownCreate(in, asked, f.now())) {
+				return nil, mapErr("open", filename, meta.ErrExist) // another client's file (I-222)
+			}
+			break
 		}
 		in, _ = f.st.GetInode(res.Ino)
 	default:
@@ -305,6 +336,9 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 				return nil, mapErr("open", filename, err)
 			}
 		}
+		// a writer that opens the file truncated replaces it: its flushes are one
+		// rewrite, so two such copies at once leave one whole (docs/04 §6, I-223)
+		f.ov.MarkRewrite(in.Ino)
 	}
 	if flag&os.O_APPEND != 0 {
 		file.pos = int64(file.size())
@@ -340,7 +374,17 @@ func (f *FS) info(in meta.Inode) *fileInfo {
 	return fi
 }
 
-func (f *FS) Rename(oldpath, newpath string) error {
+func (f *FS) Rename(oldpath, newpath string) error { return f.rename(oldpath, newpath, false) }
+
+// RenameNoReplace is Rename that refuses an existing newpath with EEXIST and moves
+// nothing: decided by the leader (Rename.NoReplace) once every live member reads codec
+// 9, so a name another gateway created first is refused too; before, by this gateway's
+// lookup (I-224, I-226).
+func (f *FS) RenameNoReplace(oldpath, newpath string) error {
+	return f.rename(oldpath, newpath, true)
+}
+
+func (f *FS) rename(oldpath, newpath string, noReplace bool) error {
 	ctx := context.Background()
 	if isSnapshotPath(meta.SplitPath(oldpath)) || isSnapshotPath(meta.SplitPath(newpath)) {
 		return mapErr("rename", oldpath, ErrReadOnly) // nothing moves into, out of or within /.snapshots (I-185)
@@ -372,8 +416,14 @@ func (f *FS) Rename(oldpath, newpath string) error {
 	if dst, ok := f.st.Lookup(newDir.Ino, nn); ok && dst.Type != meta.TDir && hardDelete(np, nn) {
 		replaced = dst.Ino
 	}
+	if dst, ok := f.st.Lookup(newDir.Ino, nn); noReplace && ok && (oldDir.Ino != newDir.Ino || on != nn) {
+		if src, ok := f.st.Lookup(oldDir.Ino, on); !ok || src.Ino != dst.Ino {
+			return mapErr("rename", newpath, meta.ErrExist)
+		}
+	}
 	if _, err := f.propose(ctx, meta.Command{Op: meta.OpRename, Rename: &meta.Rename{
 		OldParent: oldDir.Ino, OldName: on, NewParent: newDir.Ino, NewName: nn, Now: f.now(),
+		NoReplace: noReplace && f.codecAtLeast(meta.CodecRewrite),
 	}}); err != nil && !landedEarlier(err, meta.ErrNotExist) { // the first attempt moved it
 		return mapErr("rename", oldpath, err)
 	}
@@ -396,21 +446,33 @@ func hardDelete(dir []string, name string) bool {
 // directory must be empty, as POSIX asks. An ephemeral name is unlinked outright. While
 // a member is too old for the trash (meta.ErrCodec, docs/12 §6) the delete falls back to
 // the plain unlink, so rm keeps working through an update.
-func (f *FS) Remove(filename string) error { return f.remove(filename, false) }
+func (f *FS) Remove(filename string) error { return f.remove(filename, false, 0) }
+
+// RemoveIno is Remove of the file filename names only while it is still the inode ino,
+// and nothing otherwise (ErrNotExist): a client may have renamed the file away and made
+// a new one under the name. Once every live member reads codec 9 the leader decides it
+// (Trash.Expect); before, this gateway's lookup does. own is RemoveOwn's (I-225).
+func (f *FS) RemoveIno(filename string, ino meta.Ino, own bool) error {
+	err := f.remove(filename, own, ino)
+	if own && errors.Is(err, syscall.EOPNOTSUPP) {
+		return f.remove(filename, false, ino)
+	}
+	return err
+}
 
 // RemoveOwn is Remove for an own cleanup: the SMB handle that created the file deletes it,
 // as a failed copy does, and a protected folder lets that through for a file (I-220).
 // While a member is too old for it (meta.ErrCodec) it is a plain Remove, whose refusal
 // under protection is the answer.
 func (f *FS) RemoveOwn(filename string) error {
-	err := f.remove(filename, true)
+	err := f.remove(filename, true, 0)
 	if errors.Is(err, syscall.EOPNOTSUPP) {
-		return f.remove(filename, false)
+		return f.remove(filename, false, 0)
 	}
 	return err
 }
 
-func (f *FS) remove(filename string, own bool) error {
+func (f *FS) remove(filename string, own bool, expect meta.Ino) error {
 	ctx := context.Background()
 	if isSnapshotPath(meta.SplitPath(filename)) {
 		return mapErr("remove", filename, ErrReadOnly)
@@ -424,11 +486,18 @@ func (f *FS) remove(filename string, own bool) error {
 		return mapErr("remove", filename, err)
 	}
 	in, ok := f.st.Lookup(dir.Ino, name)
-	if !ok {
-		return mapErr("remove", filename, meta.ErrNotExist)
+	if !ok || (expect != 0 && in.Ino != expect) {
+		return mapErr("remove", filename, meta.ErrNotExist) // another file holds the name (I-225)
 	}
 	hard := hardDelete(dp, name)
-	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: &meta.Trash{Parent: dir.Ino, Name: name, Own: own, Now: f.now()}})
+	trash := &meta.Trash{Parent: dir.Ino, Name: name, Own: own, Now: f.now()}
+	if f.codecAtLeast(meta.CodecRewrite) {
+		trash.Expect = expect // the leader decides; this gateway may not have seen a rename yet
+	}
+	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: trash})
+	if expect != 0 && errors.Is(err, meta.ErrConflict) {
+		return mapErr("remove", filename, meta.ErrNotExist) // the name is another file's now
+	}
 	if own && errors.Is(err, meta.ErrCodec) {
 		return mapErr("remove", filename, err) // RemoveOwn retries it plain
 	}

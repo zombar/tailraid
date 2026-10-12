@@ -283,6 +283,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	fs.SetFlusher(fl)
 	fl.MinCodec = prober.MinCodec // a Commit carries shard sums once every live member reads codec 5 (I-201)
+	fs.MinCodec = prober.MinCodec // Trash.Expect and Rename.NoReplace once every live member reads codec 9 (I-224, I-225)
 	// the stats history (docs/17): this node's rows every stats.every, the cluster's while
 	// it leads, sealed into the volume at the hour; its reader has no chunk cache (I-196)
 	statsEvery, err := cfg.StatsEvery()
@@ -427,6 +428,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
 			Snapshots: webSnapshots{ops: ops, flush: fl.FlushAll},
+			Node:      cfg.Node.Name, // an upload's temp is this node's own (I-226)
 		})
 		if err != nil {
 			return err

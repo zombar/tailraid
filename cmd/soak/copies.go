@@ -93,3 +93,27 @@ func (e *composeEnv) RestartIdle(ctx context.Context, ref soak.NodeRef) error {
 }
 
 var _ soak.CopyEnv = (*composeEnv)(nil)
+
+// SMBRaces runs phase 23's SMB handle races on the worker beside node (smbclient.Races).
+func (e *composeEnv) SMBRaces(ctx context.Context, ref soak.NodeRef, dir string) ([]soak.RaceResult, error) {
+	var out []soak.RaceResult
+	if err := e.post(ctx, e.node(ref), "/smbraces", map[string]string{"dir": dir}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// HoldDeleteOnClose holds a delete-on-close handle open on the worker beside node until
+// release (smbclient.Hold).
+func (e *composeEnv) HoldDeleteOnClose(ctx context.Context, ref soak.NodeRef, path string) (func(context.Context) error, error) {
+	n := e.node(ref)
+	var held struct {
+		ID string `json:"id"`
+	}
+	if err := e.post(ctx, n, "/smbhold", map[string]string{"path": path}, &held); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context) error {
+		return e.post(ctx, n, "/smbrelease", map[string]string{"id": held.ID}, nil)
+	}, nil
+}

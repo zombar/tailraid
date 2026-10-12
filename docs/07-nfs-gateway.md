@@ -37,7 +37,7 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 | READ | `Open(path)` → `file.ReadAt(buf, offset)` → `file.Close()` |
 | SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()`; a size past `MaxFileSize` (I-64) fails with `EFBIG` |
 | SETATTR mode/uid/gid/times | `Handler.Change(fs)` → `Chmod`/`Lchown`/`Chtimes`; if `Change` returns nil every such call fails with NFS3ERR_NOTSUPP |
-| CREATE | `fs.Create(path)` → `Close()` (then SETATTR for mode) |
+| CREATE | `UNCHECKED`: `fs.Create(path)` → `Close()` (then SETATTR for mode); on an existing file that is the truncate a rewrite starts with (04 §6, I-223). `GUARDED`: `fs.OpenFile(path, O_RDWR\|O_CREATE\|O_EXCL)`, `EEXIST` → `NFS3ERR_EXIST` whether this gateway or the leader saw the name first (I-222). `EXCLUSIVE` (a verifier): `NFS3ERR_NOTSUPP`, on which the Linux client retries `GUARDED` |
 | MKDIR / RMDIR / REMOVE / RENAME | `MkdirAll`, `Remove`, `Remove`, `Rename` |
 | LOOKUP / GETATTR / READDIR(PLUS) | `Lstat`, `ReadDir`; fileid from `FileInfo.Sys()` when it returns `*file.FileInfo{Fileid, Nlink, UID, GID}` (go-nfs's own type), otherwise an FNV hash of the path |
 | LINK | optional `UnixChange.Link`; not implemented → NFS3ERR_NOTSUPP |
@@ -205,8 +205,8 @@ device"), not `EIO`.
 - Permissions are stored and returned but not enforced by the gateway: the loopback
   listener trusts the local OS, which already enforces access to the mount point.
 - Cross-device visibility is eventually consistent within the client's attribute cache
-- **atime and ctime on the wire are the mtime.** go-nfs fills every reply's `atime`, `mtime` and `ctime` from the billy `ModTime()`; a client-supplied atime is stored in the FSM (and seen by every gateway through `tailraid` itself) but GETATTR reports it as the mtime. No consumer of this volume is known to depend on atime.
   window; the FSM itself is linearizable through Raft.
+- **atime and ctime on the wire are the mtime.** go-nfs fills every reply's `atime`, `mtime` and `ctime` from the billy `ModTime()`; a client-supplied atime is stored in the FSM (and seen by every gateway through `tailraid` itself) but GETATTR reports it as the mtime. No consumer of this volume is known to depend on atime.
 - **Name length.** go-nfs refuses a name longer than 255 bytes with `NFS3ERR_NAMETOOLONG` before it reaches the volume; the FSM enforces the same limit (I-66) for every other proposer. A path longer than 4096 bytes is refused the same way at CREATE, MKDIR, SYMLINK and RENAME (I-115, docs/01); depth alone is not limited, each LOOKUP resolves one component.
 
 ## Invariants

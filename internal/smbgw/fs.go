@@ -239,6 +239,39 @@ func (a *FS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return wrap(f.Close())
 }
 
+// CreateExcl is the server's FILE_CREATE (smb.ExclusiveCreator): an empty file made only
+// when the name is free, as the leader decides, so a name another gateway created first
+// is a collision whether or not this gateway has applied that create yet (I-222). A
+// collision is the client's answer, not a failure, and is not logged.
+func (a *FS) CreateExcl(path string, perm os.FileMode) error {
+	f, err := a.fs.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
+	if errors.Is(err, os.ErrExist) {
+		return wrap(err)
+	}
+	if err != nil {
+		return a.refused(&a.warnCreate, "create", path, wrap(err))
+	}
+	return wrap(f.Close())
+}
+
+// DeleteFileIno is the server's delete-on-close (smb.InodeDeleter): the file its handle
+// opened, ino, or nothing when another file now holds the name, decided by the leader
+// once every member reads codec 9 (I-225). own is the creator's own cleanup (I-220). A
+// skipped delete is logged with the refusals (I-218).
+func (a *FS) DeleteFileIno(path string, ino uint64, own bool) error {
+	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.RemoveIno(path, meta.Ino(ino), own)))
+}
+
+// RenameNoReplace is the server's rename without ReplaceIfExists (smb.NoReplaceRenamer):
+// an existing destination, made on this gateway or another, is a collision (I-224).
+func (a *FS) RenameNoReplace(oldPath, newPath string) error {
+	err := wrap(a.fs.RenameNoReplace(oldPath, newPath))
+	if errors.Is(err, os.ErrExist) {
+		return err // the client's answer, not a failure
+	}
+	return a.refused(&a.warnRename, "rename", oldPath+" -> "+newPath, err)
+}
+
 func (a *FS) ReadLink(path string) (string, error) {
 	target, err := a.fs.Readlink(path)
 	return target, wrap(err)

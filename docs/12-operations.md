@@ -233,7 +233,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1 to 5 and snapshots version 5 (02 §Codec versions;
+Log entries carry codec version 1 to 9 and snapshots version 9 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows
@@ -297,8 +297,9 @@ runtime, and on the gateway `gateway.plan_bytes` (dirty bytes in flushes under w
 I-203), `gateway.readahead_skipped` (readahead candidates skipped because every slot was
 busy: readahead saturated, the client fetches those chunks itself, I-166),
 `gateway.reads_early` (ranges served from verified data shards rather than from
-the decoded chunk, 04 §5, I-202) and `gateway.prefetching` (prefetches in flight
-right now). On the leader `repair.stats.sums_recorded` and `repair.stats.sums_pending`
+the decoded chunk, 04 §5, I-202), `gateway.prefetching` (prefetches in flight
+right now) and `gateway.rewrites_superseded` (rewrites of a file this gateway dropped
+because another client's rewrite of it started later, 04 §6, I-223). On the leader `repair.stats.sums_recorded` and `repair.stats.sums_pending`
 count the chunks whose data-shard sums the last pass recorded and the chunks still
 without them (06 §4, I-201). The soak sampler records them every second
 and the report charts the heap next to the WAL depth, so a memory regression under a

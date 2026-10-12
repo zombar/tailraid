@@ -30,6 +30,9 @@ func CheckInvariants(st *State) []string {
 		if in.Ino != ino {
 			bad("inode %d: Ino field is %d", ino, in.Ino)
 		}
+		if in.RewriteAt != 0 && (in.Type != TFile || in.RewriteAt > in.Version) {
+			bad("inode %d: rewrite at version %d on a %d at version %d", ino, in.RewriteAt, in.Type, in.Version) // I-223
+		}
 		if in.Flags&^knownFlags != 0 || (in.Flags != 0 && in.Type != TDir) {
 			bad("inode %d: flags %#x on a %d", ino, in.Flags, in.Type)
 		}

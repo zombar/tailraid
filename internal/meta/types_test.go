@@ -105,7 +105,7 @@ func sampleState() *State {
 	s.Tombs[sampleHash(2)] = struct{}{}
 	s.Inodes[2] = &Inode{
 		Ino: 2, Gen: 3, Type: TFile, Mode: 0o644, Uid: 501, Gid: 20, Size: 1<<20 + 5,
-		Atime: 1, Mtime: 2, Ctime: 3, Nlink: 1, Version: 4, Parent: RootIno, Name: "f", Chunks: []Hash{sampleHash(1), HashZero},
+		Atime: 1, Mtime: 2, Ctime: 3, Nlink: 1, Version: 4, RewriteAt: 3, Parent: RootIno, Name: "f", Chunks: []Hash{sampleHash(1), HashZero},
 	}
 	s.Inodes[3] = &Inode{Ino: 3, Gen: 4, Type: TDir, Mode: 0o755, Nlink: 2, Parent: RootIno, Name: "d", Children: map[string]Ino{}}
 	s.Inodes[4] = &Inode{Ino: 4, Gen: 5, Type: TSymlink, Mode: 0o777, Nlink: 1, Parent: RootIno, Name: "l", Target: "/f"}

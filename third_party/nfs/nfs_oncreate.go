@@ -3,6 +3,7 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 
 	"github.com/go-git/go-billy/v5"
@@ -76,7 +77,18 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		}
 	}
 
-	file, err := fs.Create(newFilePath)
+	var file billy.File
+	if how == createModeGuarded {
+		// tailraid: GUARDED is exclusive. The Stat above saw this server's view only;
+		// another server over the same volume may have made the name since, and the
+		// filesystem's O_EXCL decides (docs/07, I-222).
+		file, err = fs.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			return &NFSStatusError{NFSStatusExist, err}
+		}
+	} else {
+		file, err = fs.Create(newFilePath)
+	}
 	if err != nil {
 		Log.Errorf("Error Creating: %v", err)
 		return &NFSStatusError{NFSStatusAccess, err}

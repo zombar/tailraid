@@ -134,7 +134,7 @@ func (c *conn) changeNotify(h header, body []byte) ([]byte, error) {
 	// Sixteen is enough for a window that is being looked at, and small enough
 	// that a burst overflows quickly and says so instead of queueing megabytes
 	// nobody will read.
-	x := &watcher{dir: of.path, tree: flags&watchTree != 0, events: make(chan change, 16)}
+	x := &watcher{dir: of.p(), tree: flags&watchTree != 0, events: make(chan change, 16)}
 	of.share.watchers.add(x)
 
 	op, interim := c.beginAsync(h, of.id)
