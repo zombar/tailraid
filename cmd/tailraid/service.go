@@ -39,6 +39,9 @@ func svcParams(cmd *cobra.Command) (svc.Params, config.Config, string, error) {
 	for _, d := range cfg.Node.Disks {
 		p.Disks = append(p.Disks, d.Path)
 	}
+	for _, m := range cfg.Node.Mirrors { // a mirror is written by serve as a disk is (docs/16 §1)
+		p.Disks = append(p.Disks, m.Path)
+	}
 	if u, err := user.Current(); err == nil {
 		p.User = u.Username
 		p.UID, _ = strconv.Atoi(u.Uid)

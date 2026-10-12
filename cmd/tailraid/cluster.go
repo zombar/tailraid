@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -166,6 +167,23 @@ func printStatus(w io.Writer, r admin.Report) {
 	}
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
+	}
+	for _, m := range r.Mirrors { // this host's mirrors (docs/12 §11)
+		state := "offline (" + m.Reason + ")"
+		if m.Online {
+			state = fmt.Sprintf("online · %s used, %s free", bytesStr(uint64(max(m.Used, 0))), bytesStr(m.Free))
+		}
+		newest := "no snapshot yet"
+		if m.Newest != 0 {
+			newest = "newest " + time.Unix(0, m.Newest).Local().Format("2006-01-02 15:04")
+		}
+		if m.Syncing != "" {
+			newest += " · syncing " + m.Syncing
+		}
+		fmt.Fprintf(w, "mirror  %s  %s · %s\n", cmp.Or(m.Name, m.Path), state, newest)
+	}
+	if v.Snapshots > 0 {
+		fmt.Fprintf(w, "        %d snapshots on the mirrors\n", v.Snapshots)
 	}
 	if s := r.Search; s != nil && (s.Docs > 0 || s.Pending > 0 || s.Index != "") {
 		line := fmt.Sprintf("index   %d files, %d segments, %s, catalogue %d", s.Docs, s.Segments, bytesStr(uint64(max(s.Bytes, 0))), s.Catalog)

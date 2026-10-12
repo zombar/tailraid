@@ -8,10 +8,6 @@ import "testing"
 // table (PR 2 sync, the tick, the gateways and the CLI, PR 3 the web UI, PR 4 soak
 // phase 19).
 
-// Invariant: I-182
-// Becomes: TestSchedule_TakesAndThins_Table, TestSchedule_CatchUpOnAttach, TestSchedule_OfflineMirrorNothingHeld (PR 2).
-func TestStub_I_182(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/06-gc-and-repair.md") }
-
 // Invariant: I-185
 // Becomes: TestNFS_SnapshotsDir_HiddenResolvesLists, TestNFS_SnapshotRead_PoolThenMirror, TestNFS_SnapshotHandle_StaleTable (PR 2).
 func TestStub_I_185(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/07-nfs-gateway.md") }
@@ -23,10 +19,6 @@ func TestStub_I_186(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/
 // Invariant: I-187
 // Becomes: TestWebUI_Snapshots_ListTake_NoDeleteRoute, TestWebUI_LsAt_ReadOnly, TestWebUI_OfflineMirror_409 (PR 3).
 func TestStub_I_187(t *testing.T) { t.Skip("stub until snapshots PR 3; see docs/13-web-ui.md") }
-
-// Invariant: I-188
-// Becomes: TestCLI_MirrorAdd_MarkRehomeAdopt, TestCLI_Export, TestCheck_MirrorWarnings, TestConfig_Mirrors (PR 2).
-func TestStub_I_188(t *testing.T) { t.Skip("stub until snapshots PR 2; see docs/12-operations.md") }
 
 // Lifecycle: L-216
 // Collected, an object on a mirror --[E-133 restore]--> Uploading → Committed

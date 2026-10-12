@@ -219,7 +219,7 @@ exactly one design doc transition table and cited by at least one test via
 | L-211 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (a slot on a disk far above its share) | E-130 rebalance pass | Repairing → Committed | `TestRepair_Rebalance_MovesWithinHost` |
 | L-212 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed (referenced by a syncing snapshot) | Commit overwrite or truncate, or a Purge, after E-131 | Tombstoned (held) | `TestFSM_GCDelete_HeldBySyncingRow` |
 | L-213 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Tombstoned (held) | E-132 | Tombstoned → Collected | `TestFSM_GCDelete_HeldBySyncingRow` |
-| L-214 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-131 sync reads it | Committed (and an object on the mirror) | `TestMirror_SecondSyncWritesOnlyChanges` |
+| L-214 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed | E-131 sync reads it | Committed (and an object on the mirror) | `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_SyncCapturesIndex` |
 | L-215 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Unreadable (< k live slots) | E-131 sync reads it | Unreadable | `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | L-216 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Collected (or never in the pool), an object on a mirror | E-133 | Uploading → Committed | `TestStubLifecycle_L_216` |
 | L-217 | [11-chunk-lifecycle.md](11-chunk-lifecycle.md) | Committed or Tombstoned (the pool still holds it) | E-133 | Committed (Refs + 1 per position) | `TestStubLifecycle_L_217` |

@@ -186,7 +186,7 @@ test-long`): 5 nodes 3+2, `Durable()`, a seeded scheduler of client ops, `Kill`,
 `Partition`, `Heal`, `Clock.Advance`, `Scrub`, mid-run `SetVolume` and `node drain`; every 50
 steps heal + quiesce and assert I-4, I-9, I-11, I-12, I-13; `-seed`/`-replay` reproduce.
 With docs/16 one node carries a mirror and the scheduler also begins snapshots, takes the
-mirror offline and back, thins snapshots through the leader's tick and runs GC while a sync is under way; it keeps
+mirror offline and back, thins snapshots through the host's tick and runs GC while a sync is under way; it keeps
 the world as of each snapshot's index, and at every quiescence every complete snapshot
 reads byte-exact against its world through every gateway, no chunk a syncing snapshot
 references was collected, and the catalogue agrees on every node (I-179, I-181, L-218).

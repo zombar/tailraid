@@ -150,7 +150,7 @@ type Repairer struct {
 	cfg                 Config
 	log                 *slog.Logger
 	codecs              *ec.Pool
-	limit               *limiter
+	limit               *Limiter
 	s3scrub             *budget         // bucket bytes the scrub may fetch (docs/06 §5, I-151)
 	Events              *meta.EventRing // chunk history (nil unless dev.enabled)
 
@@ -172,7 +172,7 @@ func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd Ch
 	}
 	return &Repairer{
 		st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
-		limit: newLimiter(cfg.RateBytes, clk), s3scrub: newBudget(cfg.S3ScrubBytes, 24*time.Hour, clk), reported: map[chunk.ShardKey]time.Time{},
+		limit: NewLimiter(cfg.RateBytes, clk), s3scrub: newBudget(cfg.S3ScrubBytes, 24*time.Hour, clk), reported: map[chunk.ShardKey]time.Time{},
 	}
 }
 
@@ -603,7 +603,7 @@ func (r *Repairer) moveSlot(ctx context.Context, c meta.Chunk, slot int, to meta
 		return 0, err
 	}
 	key := chunk.Key(c.Hash, c.K, c.M, slot)
-	r.limit.wait(ctx, int64(len(shards[slot])))
+	r.limit.Wait(ctx, int64(len(shards[slot])))
 	if err := r.shards.Put(ctx, to, key, shards[slot]); err != nil {
 		return 0, fmt.Errorf("put: %w", err)
 	}
@@ -695,7 +695,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			acked++
 			continue
 		}
-		r.limit.wait(ctx, int64(len(shards[i])))
+		r.limit.Wait(ctx, int64(len(shards[i])))
 		if err := r.shards.Put(ctx, n, chunk.Key(c.Hash, k, m, i), shards[i]); err != nil {
 			r.warnPut.Warn(r.log, "repair put failed", "node", n, "slot", i, "err", err)
 			newPlace[i] = 0
@@ -855,7 +855,9 @@ func (b *budget) take(n int64) bool {
 
 // --- rate limiter ------------------------------------------------------------------
 
-type limiter struct {
+// Limiter is a token bucket of bytes a second, shared by repair and the mirror syncs
+// (docs/06 §4, docs/16 §3); a rate of 0 or less never waits.
+type Limiter struct {
 	rate   int64
 	clk    clock.Clock
 	mu     sync.Mutex
@@ -863,12 +865,13 @@ type limiter struct {
 	last   time.Time
 }
 
-func newLimiter(rate int64, clk clock.Clock) *limiter {
-	return &limiter{rate: rate, clk: clk, tokens: rate, last: clk.Now()}
+// NewLimiter returns a limiter of rate bytes a second.
+func NewLimiter(rate int64, clk clock.Clock) *Limiter {
+	return &Limiter{rate: rate, clk: clk, tokens: rate, last: clk.Now()}
 }
 
-// wait blocks until n bytes may be moved.
-func (l *limiter) wait(ctx context.Context, n int64) {
+// Wait blocks until n bytes may be moved, or ctx ends.
+func (l *Limiter) Wait(ctx context.Context, n int64) {
 	if l.rate <= 0 {
 		return
 	}

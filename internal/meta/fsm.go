@@ -26,7 +26,8 @@ type FSM struct {
 	Log *slog.Logger
 
 	incompatible atomic.Uint64 // entries that failed to decode (I-105)
-	lastBadLog   time.Time     // rate limit for the log line above; not state
+	snapHook     atomic.Pointer[SnapshotHook]
+	lastBadLog   time.Time // rate limit for the log line above; not state
 
 	mu      sync.RWMutex
 	st      *State
@@ -36,6 +37,21 @@ type FSM struct {
 	waitMu sync.Mutex
 	waitCh chan struct{} // closed and replaced on every applied index: one broadcast, no goroutine per waiter
 	closed bool          // set by Close: no further index will ever be applied
+}
+
+// SnapshotHook is called inside Apply for every SnapshotBegin that applied, with the new
+// row, its mirror's host and a clone of the state at its index: the host takes the clone
+// (docs/16 §3), every other node returns at once. It runs under the apply lock, so it
+// must not call back into the FSM, and clone is valid only during the call.
+type SnapshotHook func(sn Snapshot, host NodeIdx, clone func() *State)
+
+// SetSnapshotHook installs (or, with nil, removes) the hook; safe while Apply runs.
+func (f *FSM) SetSnapshotHook(h SnapshotHook) {
+	if h == nil {
+		f.snapHook.Store(nil)
+		return
+	}
+	f.snapHook.Store(&h)
 }
 
 // NewFSM returns an empty FSM holding only the root directory.
@@ -63,6 +79,16 @@ func (f *FSM) Apply(l *raft.Log) any {
 		res = f.applyLocked(cmd, decodeErr, l.Index)
 	}
 	f.st.Applied = l.Index
+	if r, ok := res.(Result); ok && r.SnapID != 0 && cmd.Op == OpSnapshotBegin && f.snapHook.Load() != nil {
+		// the volume as of this index, for the mirror's host (docs/16 §3): clone is
+		// valid only during the call, under the apply lock; nothing replicated changes
+		sn := *f.st.Snaps[r.SnapID]
+		var host NodeIdx
+		if m := f.st.Nodes[sn.Mirror]; m != nil {
+			host = m.Host
+		}
+		(*f.snapHook.Load())(sn, host, f.st.Clone)
+	}
 	f.mu.Unlock()
 	f.setApplied(l.Index)
 	return res

@@ -87,6 +87,20 @@ type VolumeReport struct {
 	ToleratesHosts int     `json:"tolerates_hosts"` // whole hosts it survives losing (docs/14 §6)
 	TrashInodes    int     `json:"trash_inodes"`    // deleted entries waiting in the trash (docs/06 §1)
 	TrashBytes     uint64  `json:"trash_bytes"`     // their file bytes, not counted in logical_bytes
+	Snapshots      int     `json:"snapshots"`       // catalogue rows on every mirror, Deleting ones excluded (docs/16 §5)
+}
+
+// MirrorReport is one of this host's mirrors as its last tick saw it (docs/12 §11).
+type MirrorReport struct {
+	Name    string `json:"name,omitempty"` // the row's name; "" when the path is not registered here
+	Path    string `json:"path"`
+	Online  bool   `json:"online"`
+	Reason  string `json:"reason,omitempty"` // why it is offline
+	Used    int64  `json:"used"`
+	Free    uint64 `json:"free,omitempty"`
+	Total   uint64 `json:"total,omitempty"`
+	Newest  int64  `json:"newest,omitempty"`  // the newest complete snapshot's At, unix nanos
+	Syncing string `json:"syncing,omitempty"` // the snapshot being copied to it
 }
 
 // GatewayReport is this node's overlay: what is acknowledged but not yet committed, and
@@ -197,6 +211,7 @@ type Report struct {
 	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
+	Mirrors             []MirrorReport `json:"mirrors,omitempty"` // this host's mirrors (docs/16, docs/12 §11)
 	GeneratedAt         time.Time      `json:"generated_at"`
 	WalkMS              int64          `json:"walk_ms"` // how long this report's chunk walk took (docs/12 §8, I-205)
 }
@@ -231,7 +246,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	rep.Volume = VolumeReport{
 		K: vol.K, M: vol.M, Auto: vol.Auto, ChunkSize: vol.ChunkSize, PolicyVersion: vol.PolicyVersion,
 		Inodes: stats.Inodes, Chunks: stats.Chunks, Tombstoned: stats.Tombstoned, LogicalBytes: stats.LogicalBytes, StoredBytes: stats.StoredBytes,
-		TrashInodes: stats.TrashInodes, TrashBytes: stats.TrashBytes,
+		TrashInodes: stats.TrashInodes, TrashBytes: stats.TrashBytes, Snapshots: liveSnapshots(st.Snapshots()),
 	}
 
 	nodes := st.Nodes()
@@ -449,3 +464,14 @@ func (s selfLiveness) IsLive(idx meta.NodeIdx) bool {
 }
 
 func (selfLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
+
+// liveSnapshots counts the catalogue rows a user sees: every state but Deleting.
+func liveSnapshots(rows []meta.Snapshot) int {
+	n := 0
+	for i := range rows {
+		if rows[i].State != meta.SnapDeleting {
+			n++
+		}
+	}
+	return n
+}

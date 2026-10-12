@@ -114,17 +114,18 @@ replica deletes the same entries (I-43). Nothing else changes for the pool: the 
 still tombstones, the sweep still removes only unplaced shards, and the hold lasts at most
 `mirrors.hold_max`.
 
-**Mirrors.** The same tick runs the mirror schedule of 16 §4 before the purge, with the
-same clamped clock: for each online mirror with no sync running, a `SnapshotBegin` named by
-the UTC minute when its newest automatic snapshot is older than `mirrors.every`, and at
-once for a mirror that has just come online; nothing for an offline one. Then, per mirror,
-`SnapshotDelete` for every automatic snapshot outside the keep set (the newest of each of
-the last `keep.hourly`, `keep.daily`, `keep.weekly` and `keep.monthly` buckets), oldest
-first, and the oldest automatic one first while the mirror's free space is under its
-reserve; a manual snapshot is never deleted by the tick. Finally a `SnapshotEnd{OK: false}`
-for any sync older than `mirrors.hold_max`. A mirror's disk is cleaned by its own host,
-never by this tick (16 §5). Nothing is proposed while a live member runs a codec older
-than 7 (I-182).
+**Mirrors.** Each mirror's schedule (16 §4) runs on its own host's minute tick, since only
+the host knows whether the disk is attached: for each online mirror of the host with no
+sync running, a `SnapshotBegin` named by the UTC minute when its newest automatic snapshot
+is older than `mirrors.every`, at once after an offline stretch; nothing for an offline
+one. Per mirror, `SnapshotDelete` for every automatic snapshot outside the keep set (the
+newest of each of the last `keep.hourly`, `keep.daily`, `keep.weekly` and `keep.monthly`
+buckets), oldest first, and the oldest kept automatic one too while the mirror's free
+space is under its reserve; a manual snapshot is never deleted. The host also ends a sync
+of its own that lost its clone, and cleans its disk (16 §5). The leader's one part, on
+its own minute tick: a `SnapshotEnd{OK: false}` for any sync older than
+`mirrors.hold_max`, whose host may be gone. Nothing is proposed while a live member runs
+a codec older than 7 (I-182).
 
 ## 3. Sweep (every node, hourly)
 
@@ -392,15 +393,17 @@ state to patch.
 - **I-195** — Every path under `/.tailraid/` is ephemeral: a replace or a delete of one
   unlinks it at once and never trashes it, and the web file browser lists nothing under it
   (I-160); on the mounts the tree is plain files and folders.
-- **I-182** — With `mirrors.every > 0` the leader begins an automatic snapshot, named by
-  the UTC minute, for every online mirror with no sync running whose newest automatic
-  snapshot is older than `every`, and at once for a mirror that has just come online;
-  it begins nothing for an offline mirror, so nothing is held for it; it keeps on each
-  mirror the newest automatic snapshot of each of the last `hourly`, `daily`, `weekly`
-  and `monthly` buckets and deletes the other automatic ones oldest first, and the oldest
-  automatic one first while the mirror is under its free-space reserve, never a manual
-  one; it ends as failed a sync older than `hold_max`; an `ErrExist` on the automatic
-  name is not retried; and nothing is proposed while a live member lacks codec 7.
+- **I-182** — With `mirrors.every > 0` a mirror's host begins an automatic snapshot,
+  named by the UTC minute, on each of its online mirrors with no sync running whose
+  newest automatic snapshot is older than `every`, so the first tick after an offline
+  stretch catches up at once; it begins nothing for an offline mirror, so nothing is
+  held for it; it keeps on each mirror the newest automatic snapshot of each of the last
+  `hourly`, `daily`, `weekly` and `monthly` buckets and deletes the other automatic ones
+  oldest first, and the oldest kept automatic one too while the mirror is under its
+  free-space reserve, never a manual one; it ends a sync of its own whose clone it lost;
+  the leader ends as failed any sync older than `hold_max`; an `ErrExist` on the
+  automatic name is not retried; and nothing is proposed while a live member lacks
+  codec 7.
 
 ## Tests
 
@@ -419,4 +422,4 @@ state to patch.
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
 | I-215 | `TestScrubDue_Window`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_ScrubPeriod_FirstPassAsLeader`, `TestConfig_ScrubPeriod` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
-| I-182 | planned (16): TestSchedule_TakesAndThins_Table, TestSchedule_CatchUpOnAttach, TestSchedule_OfflineMirrorNothingHeld, TestSchedule_FreeSpaceReserve, TestSchedule_ManualNeverDeleted, TestSchedule_AutoNameTaken_NoRetry, TestSchedule_SkipsWhileCodecOld, TestConfig_Mirrors |
+| I-182 | `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`; planned: TestSchedule_AutoNameTaken_NoRetry, TestSchedule_SkipsWhileCodecOld |

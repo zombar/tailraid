@@ -84,7 +84,8 @@ type CheckReport struct {
 	Degraded      int              `json:"degraded_chunks"`       // fewer than k+m copies reachable now
 	RepairPending int              `json:"repair_pending_chunks"` // a slot to re-place (after fill_after)
 	Unreadable    int              `json:"unreadable_chunks"`
-	Files         []string         `json:"files,omitempty"` // paths touching degraded/unreadable chunks
+	Files         []string         `json:"files,omitempty"`    // paths touching degraded/unreadable chunks
+	Warnings      []string         `json:"warnings,omitempty"` // things to look at that do not fail the check (this host's mirrors, docs/12 §11)
 	OK            bool             `json:"ok"`
 }
 

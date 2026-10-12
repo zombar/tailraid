@@ -606,4 +606,4 @@ volume's bytes in the clear: keep the disk where the data may be.
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
 | I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |
-| I-188 | planned (docs/16): TestCLI_MirrorAdd_MarkRehomeAdopt, TestMirror_OnlineFollowsMarkerAndHost, TestCLI_MirrorRemove_LeavesDisk, TestCLI_Export, TestCLI_Snapshot_LsCreateRestore_NoRemoval, TestCLI_Versions, TestReport_MirrorFields, TestCheck_MirrorWarnings, TestConfig_Mirrors, `TestSoak_AllPhasesAgainstHarness` |
+| I-188 | `TestConfig_Mirrors`; planned: TestCLI_MirrorAdd_MarkRehomeAdopt, TestMirror_OnlineFollowsMarkerAndHost, TestCLI_MirrorRemove_LeavesDisk, TestCLI_Export, TestCLI_Snapshot_LsCreateRestore_NoRemoval, TestCLI_Versions, TestReport_MirrorFields, TestCheck_MirrorWarnings, `TestSoak_AllPhasesAgainstHarness` |

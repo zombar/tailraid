@@ -13,7 +13,7 @@ holds back garbage collection only for the length of that copy (§4), and from t
 the mirror owns it. Previous versions of a file are its content in the snapshots the
 online mirrors hold.
 
-*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export). The numbers
+*Status (2026-10-12): designed, docs, invariants, lookdev and stubs first; PR 1 built (the mirror row, the catalogue, ops 19–21, the sync hold, codec 7, and `internal/mirror`: the format, the differential writer, sweep, reconcile and the standalone export); PR 2a built (the host's sync worker, schedule and reconcile, the leader's hold_max, the config, `mirror` and `snapshot ls|create`). The numbers
 below are stubs in `test/invariants/` until each PR lands its tests (PR 1 meta and the
 mirror store, PR 2 sync, the tick, the gateways and the CLI, PR 3 the web UI, PR 4 soak
 phase 19).*
@@ -44,9 +44,10 @@ table and leaves the disk as it is.
 
 **Online** means the host is live and the marker at the configured path names this
 cluster and this mirror; anything else (unplugged, unmounted, host asleep or dead) is
-**offline**. The host checks the marker on every maintenance tick and reports each mirror
-in its `/health` (online, used, free); the leader's prober records it like a disk's
-liveness (14 §4). Nothing waits for a mirror: an offline mirror costs the cluster nothing.
+**offline**. The host checks the marker on every maintenance tick (each minute) and
+reports its mirrors in its `status` (online, used, free, newest snapshot). Only the host
+can tell whether its disk is attached, so the host drives its mirrors (§4); nothing else
+waits for a mirror, and an offline mirror costs the cluster nothing.
 
 ## 2. The mirror format (self-describing)
 
@@ -96,7 +97,7 @@ the recovery path when the cluster itself is gone.
 
 ## 3. Taking a snapshot (a sync)
 
-1. `SnapshotBegin{Mirror, Name, Auto, Now}` is proposed by the leader's schedule (§4) or by
+1. `SnapshotBegin{Mirror, Name, Auto, Now}` is proposed by its host's schedule (§4) or by
    a user (`snapshot create`, the browser's "Take a snapshot"). The FSM records a
    catalogue row `{ID, Mirror, Name, Index: its own index, At: now, Auto, State: syncing}`.
    The mirror must be an active mirror row (`ErrNoSuchNode`), the name valid and unique on
@@ -145,13 +146,18 @@ the chunk table does not place. The leader ends a sync whose row is older than
 `mirrors.hold_max` (24 h unless set) with `SnapshotEnd{OK: false}`, so a stalled copy never
 holds GC for longer than that.
 
-**The schedule** runs on the leader's maintenance tick with the clamped clock of 06 §2:
+**The schedule** runs on each mirror's host, on its maintenance tick (each minute), for
+the host's own mirrors; the leader's one part is ending a sync past `hold_max`, above,
+since a dead host cannot end its own:
 
 - for every online mirror with no syncing row, `SnapshotBegin{Auto: true, Name: <the UTC
   minute, 2026-10-12-0900Z>}` when its newest automatic snapshot is older than
   `mirrors.every` (1 h unless set; `0` takes none on its own);
-- a mirror that has just come online (offline on the previous tick) whose newest snapshot
-  is older than `every` gets one at once: the catch-up;
+- a mirror that has just come online after an offline stretch longer than `every` is due
+  at once on the first tick: the catch-up;
+- a syncing row of the host's mirror that the host is not copying (a restart dropped the
+  clone the begin handed it) is ended as failed on the next tick, so it never holds GC
+  until `hold_max`;
 - an offline mirror gets nothing: no row, no hold, nothing kept in the pool for it. The
   snapshots it missed are simply not taken (the trash still keeps deletes for
   `trash.retention`);
@@ -159,18 +165,18 @@ holds GC for longer than that.
   minute) counts as taken this minute, never a retry;
 - while any live member runs a codec older than 7 nothing is proposed (02 §Codec versions).
 
-**Thinning**, per mirror, on the same tick: of the mirror's automatic snapshots the leader
+**Thinning**, per mirror, on the same tick: of the mirror's automatic snapshots the host
 keeps the newest of each of the last `keep.hourly` hour, `keep.daily` day, `keep.weekly`
 ISO week and `keep.monthly` month buckets (UTC; 24, 30, 8 and 12 unless set) and proposes
 `SnapshotDelete` for the rest, oldest first. A manual snapshot is never thinned. When the
-mirror's free space falls under its reserve (`max(5 %, 4 GiB)` of its filesystem, reported
+mirror's free space falls under its reserve (`max(5 %, 4 GiB)` of its filesystem, measured
 by the host) the oldest automatic snapshot goes first, then syncs to that mirror stop with
 a warning in `status` and `check` until space is freed; a manual snapshot is never deleted
 for space.
 
 **Nobody removes a snapshot by hand.** Thinning and the free-space reserve, both on the
-leader's tick, are the only ways a snapshot ever leaves a mirror: there is no CLI verb,
-admin op or browser route that proposes `SnapshotDelete`, and the leader's tick is its only
+host's tick, are the only ways a snapshot ever leaves a mirror: there is no CLI verb,
+admin op or browser route that proposes `SnapshotDelete`, and the host's mirror tick is its only
 proposer. A manual snapshot is therefore permanent: it is never thinned, never deleted for
 space, and outlives every automatic one on its mirror. A mirror whose free space is taken
 by manual snapshots stops syncing with a warning; the remedies are another mirror, or a
@@ -198,7 +204,7 @@ gateway list every snapshot of every mirror, online or not, and say where a snap
 when its mirror is away.
 
 Deletion is two steps, so that nothing leaves a disk without an explicit decision of the
-schedule. `SnapshotDelete{ID, Done: false}`, proposed by the leader's tick only, marks a
+schedule. `SnapshotDelete{ID, Done: false}`, proposed by the host's tick only, marks a
 complete or incomplete row `Deleting`: it disappears from every listing at once. The
 mirror's host, whenever the mirror is online, removes the manifest of every `Deleting`
 row of its mirror, then runs a mark-and-sweep that removes every tree and object no
@@ -299,7 +305,7 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   snapshot references stays readable until `SnapshotEnd`; a sync ends `complete`,
   `incomplete` with its missing chunks listed, or failed with its row removed and no
   manifest written; and the leader ends as failed a sync older than `mirrors.hold_max`.
-- **I-183** — A snapshot leaves a mirror only by the leader's thinning or free-space
+- **I-183** — A snapshot leaves a mirror only by its host's thinning or free-space
   rule: no CLI verb, admin op or web route proposes `SnapshotDelete`, and a manual
   snapshot is never deleted; `SnapshotDelete{Done: false}` marks a row `Deleting` and
   nothing else, and the mirror's host, while the mirror is online, removes exactly the
@@ -320,8 +326,8 @@ stub in `test/invariants/` meanwhile.
 
 | Invariant | Tests |
 |---|---|
-| I-179 | `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`; planned: TestMirror_SyncCapturesIndex, TestMirror_SyncExcludesReservedEphemeralTrash, TestCluster_SnapshotReadsAsOfIndexOnEveryGateway, and the model checker's snapshot steps |
+| I-179 | `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`; planned: TestCluster_SnapshotReadsAsOfIndexOnEveryGateway, and the model checker's snapshot steps |
 | I-180 | `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`; planned: TestCLI_MirrorStandalone_LsCatExport |
-| I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`; planned: TestCluster_OverwriteDuringSync_SnapshotExact, TestSchedule_HoldMaxEndsSync |
-| I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`; planned: TestAdminOps_NoSnapshotDelete, TestWebUI_NoSnapshotDeleteRoute, TestMirror_OfflineDeleteReconciledOnAttach |
+| I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`; planned: TestCluster_OverwriteDuringSync_SnapshotExact |
+| I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`; planned: TestWebUI_NoSnapshotDeleteRoute, TestMirror_OfflineDeleteReconciledOnAttach |
 | I-186 | TestVFS_Revert_FromPoolAndMirror, TestVFS_Revert_FlushesDirtyFirst, TestVFS_SaveCopy, TestVFS_RestoreTree_SkipsExisting, TestCluster_RestoreAfterGC_UploadsFromMirror |

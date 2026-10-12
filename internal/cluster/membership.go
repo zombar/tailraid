@@ -256,6 +256,21 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		}
 		disk := meta.Node{ID: op.DiskID, Name: n.diskName(op), Kind: meta.KindDisk, Host: op.NodeIdx, Capacity: op.Capacity, JoinedAt: time.Now().UnixNano()}
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: disk}})
+	case "add_mirror":
+		// mirror add on the host: a mirror row under it, keyed by the marker's mirror ID,
+		// so adding a moved disk on another host re-homes its row (docs/16 §1)
+		if op.DiskID == "" {
+			return fmt.Errorf("%w: add_mirror needs disk_id (the mirror's ID)", ErrBadMemberOp)
+		}
+		m := meta.Node{ID: op.DiskID, Name: op.Name, Kind: meta.KindMirror, Host: op.NodeIdx, JoinedAt: time.Now().UnixNano()}
+		nodes := n.FSM.Nodes()
+		for i := range nodes {
+			cur := &nodes[i]
+			if cur.ID == op.DiskID && cur.State != meta.Removed {
+				m.Idx, m.Name, m.JoinedAt = cur.Idx, cur.Name, cur.JoinedAt // a re-home keeps the row's name
+			}
+		}
+		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: m}})
 	case "set_voter":
 		if nd.Kind != meta.KindDevice {
 			return fmt.Errorf("%w: only devices vote", ErrBadMemberOp)
