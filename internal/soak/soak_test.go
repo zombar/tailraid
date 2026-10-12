@@ -160,6 +160,24 @@ func (e *harnessEnv) StatsSeal(ctx context.Context, n soak.NodeRef, rollup bool)
 	if h == nil {
 		return 0, errors.New("node is down")
 	}
+	// the sampler samples on its own goroutine: a clock advance fires its timer and the
+	// row lands once that goroutine runs, and a sampler (re)started just before the phase
+	// makes its timer only after Recover, so an advance before that never fired it. A real
+	// node has sampled by the time a second of wall time passes; here, a second of fake
+	// time at a time until a row is in
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
+	for h.svc.Writer.Unsealed() == 0 {
+		e.c.Clk.Advance(time.Second)
+		select {
+		case <-tick.C:
+		case <-deadline:
+			return 0, errors.New("the sampler took no sample in 10 s")
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
 	rows := h.svc.Writer.Unsealed()
 	if err := h.svc.Seal(ctx, rollup); err != nil {
 		return 0, err
