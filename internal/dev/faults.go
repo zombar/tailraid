@@ -5,7 +5,12 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // Faults holds the /dev/fault drop rules of one node (docs/12 §3): peers whose traffic
@@ -14,7 +19,23 @@ import (
 type Faults struct {
 	mu   sync.RWMutex
 	drop map[string]bool // IP (no port)
+
+	// View, when set, is this node's prober: /dev/codec makes it believe a peer reads an
+	// older codec than it reports, the leader-only view of a rolling upgrade (soak phase
+	// 22, docs/09 §6)
+	View CodecViewer
+	// putDelay holds every outbound shard PUT this long first, so the flusher falls
+	// behind its clients and the caps are met (soak phase 22)
+	putDelay atomic.Int64
 }
+
+// CodecViewer is a prober whose view of a peer's codec can be overridden.
+type CodecViewer interface {
+	SetCodecView(idx meta.NodeIdx, v uint8)
+}
+
+// SetPutDelay holds every outbound shard PUT for d first (0: none).
+func (f *Faults) SetPutDelay(d time.Duration) { f.putDelay.Store(int64(d)) }
 
 // NewFaults returns an empty rule set.
 func NewFaults() *Faults { return &Faults{drop: map[string]bool{}} }
@@ -77,6 +98,15 @@ func (t faultTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if t.f.Blocked(r.URL.Host) {
 		// a refused dial: the request never left, which a proposer may retry (I-95)
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: ErrDropped}
+	}
+	if d := time.Duration(t.f.putDelay.Load()); d > 0 && r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/shards/") {
+		timer := time.NewTimer(d)
+		select {
+		case <-timer.C:
+		case <-r.Context().Done():
+			timer.Stop()
+			return nil, r.Context().Err()
+		}
 	}
 	return t.base.RoundTrip(r)
 }
