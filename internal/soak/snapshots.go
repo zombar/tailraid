@@ -166,6 +166,9 @@ func (m *mirrorRun) run(ctx context.Context, gws []NodeRef) error {
 	r.check("I-188", "the mirror is online on its host within a tick", true, fmt.Sprintf("%s on %s", name, host.Name))
 	u := r.undoer(ctx)
 	defer u.run()
+	// the phases after this one run with the mirror unplugged, as a mirror usually is: a
+	// one-minute schedule would otherwise sync and hold GC through every later phase
+	u.add("unplug the mirror for the later phases", func(c context.Context) error { return r.Env.SetMirrorOnline(c, m.name, false) })
 
 	// the schedule's own first sync may already run (a mirror with no automatic snapshot
 	// is due at once); the manual one waits for it
