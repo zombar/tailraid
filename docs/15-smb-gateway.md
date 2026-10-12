@@ -254,9 +254,20 @@ username=tailraid,vers=3.0` mount the same share when `listen.smb` is set there.
 ## 7. Large copies and the caps
 
 A WRITE that meets the WAL cap or `MaxDirty` waits for the flusher for up to `CapWait`
-(20 s, docs/04 §3, I-79) before it is answered; the server holds the share lock meanwhile,
-so every other operation on the share pauses as every NFS RPC did. The wait must stay
-inside the client's request timeout:
+(20 s, docs/04 §3, I-79) before it is answered. It waits off the connection's read loop,
+and outside the share lock for a backend that declares its positional writes safe
+alongside its other calls (`ConcurrentWriter`; the adapter does, the overlay locking per
+inode; a backend that does not keeps every WRITE under the share lock): a WRITE on a positional handle that has not finished within
+`WriteGrace` (5 ms) is answered `STATUS_PENDING` with an AsyncId at once and gets its
+real reply when the write returns, at most `AsyncWrites` (64) such WRITEs per connection,
+a CLOSE of the handle waiting for its own (I-217). Windows sends every copy to a server
+over one connection, so before this one copy's WRITE waiting at its cap held up every
+other copy's CREATE, end of file and WRITE behind it, and seven copies at once through a
+gateway whose flusher drained 16 MB/s left 18 files committed with their length and none
+of their bytes (2026-10-12). The wait must stay inside the client's request timeout. When a write-path operation
+does fail, the adapter logs why (I-218): the server records nothing of the statuses it
+answers, and the incident above left only the client's "An unexpected network error
+occurred" (`STATUS_UNEXPECTED_IO_ERROR`) to go on.
 
 | Client | Request timeout before it gives up | Verified |
 |---|---|---|
@@ -356,6 +367,21 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   refused with `STATUS_INFO_LENGTH_MISMATCH` and no data when b is shorter than the fixed
   part; for every file and filesystem class the server answers.
 
+- **I-217** — A WRITE waiting in the gateway delays no other request (the share lock is
+  skipped only for a `ConcurrentWriter` backend, as the adapter is): while one handle's
+  WRITE waits (at a cap, on a fsync), the same connection's CREATE, SET_INFO, READ, WRITE
+  and CLOSE of other handles are answered; a slow WRITE is answered `STATUS_PENDING` and
+  then exactly once with its real status under the same MessageId and AsyncId, signed
+  with its own session's key; a CLOSE answers only after every WRITE of its handle has;
+  and files copied concurrently on one connection, each created, sized with SET_INFO
+  end-of-file and written front to back while the flusher runs, read back byte for byte.
+
+- **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
+  create, a delete (a refusal by a protected folder included) or a rename is logged at
+  Warn with the operation, the path and the error, at most one line a minute per kind of
+  operation, the next line carrying the count it swallowed; a lookup that misses (a
+  client probing whether a name exists) is not such a failure and logs nothing.
+
 ## Tests
 
 | Invariant | Tests |
@@ -368,3 +394,5 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-141 | `TestSMB_DotFilesHidden` |
 | I-142 | `TestSvc_Windows_LogonMount`, `TestMount_WaitGateway`, `TestMount_Explain1219` |
 | I-213 | `TestQueryInfo_OutputBufferLength` |
+| I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites`, `TestSeveralClientsOneShare` |
+| I-218 | `TestSMB_RefusedWrite_IsLogged` |

@@ -138,9 +138,6 @@ func (c *conn) changeNotify(h header, body []byte) ([]byte, error) {
 	of.share.watchers.add(x)
 
 	op, interim := c.beginAsync(h, of.id)
-	c.mu.Lock()
-	c.asyncSession = h.sessionID
-	c.mu.Unlock()
 
 	go func() {
 		defer of.share.watchers.remove(x)

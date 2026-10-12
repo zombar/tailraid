@@ -31,6 +31,7 @@ type pendingOp struct {
 	messageID uint64
 	asyncID   uint64
 	file      [16]byte // the handle it belongs to, so closing that handle ends it
+	key       []byte   // signs the final reply: its own session's, not the last one's
 	cancel    chan struct{}
 	once      sync.Once
 }
@@ -48,6 +49,7 @@ func (c *conn) beginAsync(h header, file [16]byte) (*pendingOp, []byte) {
 		messageID: h.messageID,
 		asyncID:   c.nextAsync,
 		file:      file,
+		key:       c.replyKey(h),
 		cancel:    make(chan struct{}),
 	}
 	c.waiting[op.asyncID] = op
@@ -62,19 +64,33 @@ func (c *conn) beginAsync(h header, file [16]byte) (*pendingOp, []byte) {
 
 // finishAsync sends the real reply and forgets the operation.
 func (c *conn) finishAsync(op *pendingOp, reply []byte) {
+	c.finishAsyncWith(op, reply, op.key)
+}
+
+// finishAsyncWith is finishAsync signing with key (nil: unsigned).
+func (c *conn) finishAsyncWith(op *pendingOp, reply []byte, key []byte) {
 	c.mu.Lock()
 	_, live := c.waiting[op.asyncID]
 	delete(c.waiting, op.asyncID)
-	sess := c.sessions[c.asyncSession]
 	c.mu.Unlock()
 	if !live {
 		// Cancelled, and already answered by whoever cancelled it.
 		return
 	}
-	if sess != nil {
-		signMessage(c.dialect, sess.signingKey, reply)
+	if key != nil {
+		signMessage(c.dialect, key, reply)
 	}
 	c.send(reply)
+}
+
+// replyKey is the key that signs a reply to h sent from another goroutine,
+// read on the read loop, which is the only goroutine that changes sessions:
+// the session's signing key when there is one.
+func (c *conn) replyKey(h header) []byte {
+	if sess := c.sessions[h.sessionID]; sess != nil {
+		return sess.signingKey
+	}
+	return nil
 }
 
 // asyncResponse builds the header of a reply that carries an AsyncId.

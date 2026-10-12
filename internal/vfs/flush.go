@@ -494,6 +494,7 @@ func parallel(ctx context.Context, workers, n int, fn func(i int) error) error {
 		first error
 	)
 	sem := make(chan struct{}, workers)
+	started := 0
 	for i := 0; i < n; i++ {
 		select {
 		case sem <- struct{}{}:
@@ -501,6 +502,7 @@ func parallel(ctx context.Context, workers, n int, fn func(i int) error) error {
 			i = n
 			continue
 		}
+		started++
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -516,6 +518,11 @@ func parallel(ctx context.Context, workers, n int, fn func(i int) error) error {
 		}(i)
 	}
 	wg.Wait()
+	if first == nil && started < n {
+		// the caller's context ended before every item started: the work is incomplete,
+		// which a nil error would hide (a flush cancelled at shutdown, nil works)
+		return ctx.Err()
+	}
 	return first
 }
 

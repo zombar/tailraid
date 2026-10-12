@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	filesystem "github.com/go-filesystems/interface"
@@ -68,6 +69,11 @@ type openFile struct {
 	session      uint64
 	resumeKey    [24]byte
 	hasResumeKey bool
+
+	// writes are this handle's WRITEs still running off the read loop
+	// (writeAsync): a CLOSE waits for them, so a handle is never closed under
+	// a write it accepted.
+	writes sync.WaitGroup
 }
 
 // allOnesFileID is how a chained request says "the file the previous operation
@@ -282,6 +288,7 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 	if of == nil {
 		return errorResponse(h, statusFileClosed), nil
 	}
+	of.writes.Wait() // every WRITE this handle accepted is answered first
 	if of.f != nil {
 		of.f.Close()
 	}
@@ -406,16 +413,20 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 	if of.share.locks.held(of.path, uint64(offset), uint64(length), of.id, true) {
 		return errorResponse(h, statusFileLockConflict), nil
 	}
-	defer of.share.changing()()
-
 	if of.w != nil {
-		if _, err := of.w.WriteAt(data, offset); err != nil {
-			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+		// Positional, and off the read loop once it takes long (writeAsync),
+		// so a WRITE waiting in the driver holds up no other request on the
+		// connection. The share lock is held around it unless the driver
+		// says its positional writes are safe alongside its other calls
+		// (ConcurrentWriter): a Filesystem promises nothing of the kind.
+		if c.alone {
+			return c.writeAsync(h, of, data, offset), nil
 		}
-		if err := of.w.Sync(); err != nil {
-			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
-		}
-	} else {
+		defer lockUnlessConcurrent(of.share)()
+		return writeAt(h, of, data, offset), nil
+	}
+	defer of.share.changing()()
+	{
 		// Read, splice, write the whole file back. O(size) per request, which
 		// a client streaming in blocks turns into O(n^2) -- the reason
 		// WritableFile exists. A failure here is reported and NEVER retried
@@ -437,12 +448,113 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 	}
 
 	of.share.notify(of.path, actionModified)
+	return writeReply(h, length), nil
+}
 
+func writeReply(h header, length int) []byte {
 	b := append(responseTo(h, statusSuccess), make([]byte, 16)...)
 	rb := b[headerLen:]
 	binary.LittleEndian.PutUint16(rb[0:], 17)
 	binary.LittleEndian.PutUint32(rb[4:], uint32(length))
-	return b, nil
+	return b
+}
+
+// writeAt is one WRITE through the driver's positional handle, and its reply.
+func writeAt(h header, of *openFile, data []byte, offset int64) []byte {
+	if _, err := of.w.WriteAt(data, offset); err != nil {
+		return errorResponse(h, statusFor(err, statusAccessDenied))
+	}
+	if err := of.w.Sync(); err != nil {
+		return errorResponse(h, statusFor(err, statusAccessDenied))
+	}
+	of.share.notify(of.path, actionModified)
+	return writeReply(h, len(data))
+}
+
+// The bounds of WRITEs answered later.
+const (
+	// writeGrace is how long the read loop waits for a WRITE before it
+	// answers STATUS_PENDING and goes on: a WAL fsync fits inside it, a
+	// WRITE waiting for room in the gateway's caps does not.
+	writeGrace = 5 * time.Millisecond
+	// asyncWrites bounds the WRITEs one connection runs at once, each
+	// holding its payload (a megabyte at most); one more waits for a slot,
+	// which is the backpressure a client feels.
+	asyncWrites = 64
+)
+
+// writeAsync runs a WRITE off the read loop. One that finishes within
+// writeGrace is answered as any other; a slower one is answered
+// STATUS_PENDING at once, and its real reply goes out when the driver
+// returns, under the same MessageId and the AsyncId the interim named
+// (MS-SMB2 3.3.4.2). Windows copies every file to a server over one
+// connection: before this, one copy's WRITE waiting at a cap was every
+// copy's stall.
+//
+// It sends the interim itself and returns nil, so that nothing the read
+// loop sends later can overtake it; it is only used for a request that is
+// not part of a chain (conn.alone).
+func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []byte {
+	c.writeSlots <- struct{}{}
+	of.writes.Add(1)
+	done := make(chan []byte, 1)
+	later := make(chan *pendingOp, 1)
+	key := c.replyKey(h)
+	go func() {
+		defer of.writes.Done()
+		defer func() { <-c.writeSlots }()
+		unlock := lockUnlessConcurrent(of.share)
+		reply := writeAt(h, of, data, offset)
+		unlock()
+		done <- reply
+		if op := <-later; op != nil {
+			c.finishAsyncWith(op, asFinal(reply, op.asyncID), key)
+		}
+	}()
+	t := time.NewTimer(writeGrace)
+	defer t.Stop()
+	select {
+	case reply := <-done:
+		later <- nil
+		return reply
+	case <-t.C:
+	}
+	op, interim := c.beginAsync(h, of.id)
+	if key != nil {
+		signMessage(c.dialect, key, interim)
+	}
+	_ = c.send(interim) // a failed send ends the connection at the next read
+	later <- op
+	return nil
+}
+
+// ConcurrentWriter is the optional capability of a filesystem whose positional writes
+// (WritableFile.WriteAt and Sync) may run alongside any of its other calls: a WRITE to
+// it then takes no share lock, so one waiting in the driver delays no other request on
+// the share. A driver without it has every WRITE serialised with the share's other
+// changes, as before.
+type ConcurrentWriter interface {
+	ConcurrentWrites() bool
+}
+
+// lockUnlessConcurrent takes the share lock for a positional write unless the driver is a
+// ConcurrentWriter, and returns its release.
+func lockUnlessConcurrent(sh *share) func() {
+	if cw, ok := sh.fsys.(ConcurrentWriter); ok && cw.ConcurrentWrites() {
+		return func() {}
+	}
+	return sh.changing()
+}
+
+// asFinal turns a reply built for a synchronous answer into the final reply
+// of an operation answered STATUS_PENDING: the async flag and AsyncId in the
+// header, and no credits, which the interim granted already.
+func asFinal(reply []byte, asyncID uint64) []byte {
+	flags := binary.LittleEndian.Uint32(reply[offFlags:]) | flagAsyncCommand
+	binary.LittleEndian.PutUint32(reply[offFlags:], flags)
+	binary.LittleEndian.PutUint64(reply[offAsyncID:], asyncID)
+	binary.LittleEndian.PutUint16(reply[offCredits:], 0)
+	return reply
 }
 
 // flush has nothing to do for a driver that has already written, and says so
