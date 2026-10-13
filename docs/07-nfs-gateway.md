@@ -306,6 +306,12 @@ device"), not `EIO`.
   the retransmission ran again beside them: a REMOVE answered NOENT for the file it had
   removed, and a WRITE still waiting at a cap could land after the client's next WRITE of
   the same range.
+- **I-266** — Every refusal carries the body RFC 1813 gives that procedure's failure:
+  REMOVE3resfail and RMDIR3resfail the directory's `wcc_data` with its attributes after
+  the call (as I-242's CREATE and MKDIR), FSSTAT3resfail, FSINFO3resfail and
+  PATHCONF3resfail an `obj_attributes` `post_op_attr`. Before, RMDIR's carried no
+  attributes and the other three the status alone, which a client that decodes the body
+  takes for an I/O error: `rmdir` of a non-empty folder said "Input/output error".
 - **I-269** — A reply the socket refuses ends its connection: the socket is closed and
   the connection's context cancelled, so the reader and every handler waiting to hand
   over its reply stop. Before, the reply writer returned alone, the handlers blocked on
@@ -328,6 +334,7 @@ device"), not `EIO`.
 | I-245 | `TestConn_RPCReplyCodes`, `TestNFS_FSStatAndUnsupported` |
 | I-248 | `TestNFS_ListingFillsTheClientsCount`, `TestListEntrySizes_MatchTheEncoder` |
 | I-260 | `TestDRC_RetransmissionRunsOnce`, `TestDRC_Bounded_CoversOnlyChanges` |
+| I-266 | `TestNFS_FailureBodies` |
 | I-269 | `TestConn_WriteFailure_ClosesTheConnection` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |

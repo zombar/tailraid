@@ -87,6 +87,14 @@ func renameTarget(fsys filesystem.Filesystem, to string, ino uint64) (string, bo
 	return target, true
 }
 
+// CaseFolder is the optional capability of a filesystem that can find an entry by its
+// name regardless of case without listing the folder (tailraid, I-267): every CREATE of
+// a name not there yet asks, so a copy into a folder of N files listed it N times. ok
+// false means "list it instead"; the rule is foldedMatch's, the first by sorted name.
+type CaseFolder interface {
+	FoldName(dir, want string) (match string, found, ok bool)
+}
+
 // foldedMatch finds the one entry of dir whose name differs from want only by
 // case.
 //
@@ -95,6 +103,11 @@ func renameTarget(fsys filesystem.Filesystem, to string, ino uint64) (string, bo
 // then. The names are sorted and the first is taken, so at least the same
 // client asking twice gets the same file.
 func foldedMatch(fsys filesystem.Filesystem, dir, want string) (string, bool) {
+	if cf, isFolder := fsys.(CaseFolder); isFolder {
+		if match, found, ok := cf.FoldName(dir, want); ok {
+			return match, found
+		}
+	}
 	entries, err := fsys.ListDir(dir)
 	if err != nil {
 		return "", false
