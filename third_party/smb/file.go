@@ -691,6 +691,12 @@ func (c *conn) flush(h header, body []byte) ([]byte, error) {
 
 // statusFor maps a driver's error onto the status a client reads. The default
 // is the caller's, because what "not found" means depends on what was asked.
+// ErrDirectoryNotEmpty is what a DeleteChecker answers for a folder that still holds
+// entries: the client is told STATUS_DIRECTORY_NOT_EMPTY when it marks the folder, as
+// MS-FSA's FileDispositionInformation has it (I-236), rather than success and a folder
+// that stays.
+var ErrDirectoryNotEmpty = errors.New("smb: the directory is not empty")
+
 func statusFor(err error, fallback uint32) uint32 {
 	switch {
 	case err == nil:
@@ -701,6 +707,8 @@ func statusFor(err error, fallback uint32) uint32 {
 		return statusObjectNameCollision
 	case errors.Is(err, os.ErrPermission):
 		return statusAccessDenied
+	case errors.Is(err, ErrDirectoryNotEmpty):
+		return statusDirectoryNotEmpty
 	case isDiskFull(err):
 		return statusDiskFull
 	case errors.Is(err, io.EOF):

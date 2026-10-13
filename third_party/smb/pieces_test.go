@@ -103,19 +103,43 @@ func TestStatusMapping(t *testing.T) {
 	}
 }
 
-// The wildcards a client sends, compared the way the protocol compares them:
-// without case.
+// The wildcards a client sends, compared as MS-FSA 2.1.4.4 has it: without case, with
+// "*", "?" and the DOS wildcards "<" (DOS_STAR), ">" (DOS_QM) and the quotation mark
+// (DOS_DOT), and every other character literal, so a name with brackets is found by its
+// own name.
+// Invariant: I-237
 func TestWildcards(t *testing.T) {
 	for _, tc := range []struct {
 		pattern, name string
 		want          bool
 	}{
 		{"*", "anything.txt", true},
+		{"*.*", "noextension", true},
+		{"", "x", false},
 		{"*.txt", "notes.TXT", true},
 		{"*.txt", "notes.doc", false},
 		{"note?.txt", "note1.txt", true},
 		{"note?.txt", "note12.txt", false},
-		{"[", "x", false}, // a pattern that does not compile matches nothing
+		{"note?.txt", "note.txt", false},
+		{"[", "x", false},
+		{"[", "[", true},
+		{"Photo [1].jpg", "photo [1].JPG", true},
+		{"Photo [1].jpg", "Photo 1.jpg", false},
+		{`a`, "ab", false},
+		{"<.txt", "a.b.txt", true}, // FindFirstFile's "*.txt"
+		{"<.txt", "a.txt.bak", false},
+		{"<.*", "readme", false},
+		{"<", "readme", true},
+		{"a>c", "abc", true}, // FindFirstFile's "a?c"
+		{"a>c", "ac", false},
+		{"note>>>.txt", "no.txt", false},
+		{"note>>>.txt", "note.txt", true},
+		{"note>>>.txt", "note12.txt", true},
+		{"note>>>.txt", "note1234.txt", false},
+		{"readme\"", "readme", true}, // DOS_DOT: a dot or nothing at the end
+		{"readme\"", "readme.", true},
+		{"readme\"", "readmex", false},
+		{"<\"*", "file.txt", true}, // FindFirstFile's "*.*"
 	} {
 		if got := matchSMB(tc.pattern, tc.name); got != tc.want {
 			t.Errorf("matchSMB(%q, %q) = %v", tc.pattern, tc.name, got)

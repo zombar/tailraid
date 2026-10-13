@@ -128,13 +128,14 @@ keeps answering by its old path until it is reopened.
 | WRITE | `WritableFile.WriteAt(data, offset)` then `Sync()`; the reply is sent only after both return. `WriteAt` is `vfs.File.WriteAt`, durable in the WAL when it returns (I-7), so `Sync` is a no-op |
 | FLUSH | `Sync()`, success |
 | CLOSE | `File.Close()`; with delete-on-close set, `DeleteFileIno(path, ino)` (`vfs.RemoveIno`) of the handle's current path, for a file or a directory, with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
-| SET_INFO end-of-file, allocation | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
+| SET_INFO end-of-file | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
+| SET_INFO allocation | a reservation, not an end of file (MS-FSA 2.1.5.15.1, I-235): one at or above the file's size changes nothing, one below it is `Truncate(size)`. It had been the end of file, so a program that preallocated and wrote less left zeros at the end |
 | SET_INFO rename | `Rename(old, new)` when `ReplaceIfExists` is set; without it `RenameNoReplace(old, new)` (the FSM's `NoReplace`, docs/02), so an existing `new`, created on this gateway or another, is `STATUS_OBJECT_NAME_COLLISION` and nothing moves (I-224). Every open handle of the file on the share follows the new path, not only the renaming one |
-| SET_INFO disposition | marks the handle delete-on-close (SMB2 has no delete command) |
+| SET_INFO disposition | marks the handle delete-on-close (SMB2 has no delete command); a folder that still holds entries is `STATUS_DIRECTORY_NOT_EMPTY` here and stays (`CanDelete`, I-236), where it had answered success and kept the folder |
 | SET_INFO basic (times, attributes) | the access and write times go to `Chtimes` (0, −1 and −2 leave a time alone); attributes are dropped (§8) |
 | QUERY_INFO file classes | `Stat(path)`: size, the type and permission bits as Windows attributes (`DIRECTORY`, `ARCHIVE`, `READONLY` when no write bit is set), the inode number as the FileId, the inode's own times (creation is the change time: there is no birth time) |
 | QUERY_INFO filesystem size | the share's `WithCapacityFunc`, which the adapter answers with `meta.Usage(volume, nodes, stats)`: the same total and free bytes as NFS `FSSTAT` and `tailraid status` |
-| QUERY_DIRECTORY | `ListDir(dir)` then `Stat` of every entry, kept server-side per handle and paged with `STATUS_NO_MORE_FILES` at the end; "." and ".." are added by the server; entries are sorted case-insensitively so paging is stable |
+| QUERY_DIRECTORY | `ListDir(dir)` then `Stat` of every entry, kept server-side per handle and paged with `STATUS_NO_MORE_FILES` at the end; "." and ".." are added by the server; entries are sorted case-insensitively so paging is stable; the search pattern matches as MS-FSA 2.1.4.4 has it, without case: `*`, `?` and the DOS wildcards `<`, `>` and `"` that FindFirstFile writes for `*.txt` and `a?c`, every other character literal (I-237; Go's `path.Match` had read `[` as a class, so `Photo [1].jpg` was not found by its name) |
 | SYMLINK, READLINK | Windows creates reparse points through ioctl, which the server does not implement; the adapter's `Symlink`/`ReadLink` are reachable from macOS and Linux clients only |
 | IOCTL `FSCTL_QUERY_FILE_REGIONS` | `File.ValidDataLength()` of the handle's file (`vfs.File.ValidDataLength`), answered as MS-FSA computes the regions from a valid data length (I-227) |
 | IOCTL, any other | `FSCTL_VALIDATE_NEGOTIATE_INFO`, `FSCTL_PIPE_TRANSCEIVE` and server-side copy (`FSCTL_SRV_REQUEST_RESUME_KEY`, `FSCTL_SRV_COPYCHUNK[_WRITE]`) are answered; every other request gets the status MS-SMB2 §3.3.5.15 names for it (I-228) |
@@ -496,6 +497,15 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   `STATUS_OBJECT_PATH_NOT_FOUND` and nothing is made; a rename onto another file's name in
   another case collides without `ReplaceIfExists` and replaces that file with it; a rename
   that changes only the case of the file's own name renames it.
+- **I-235** — SET_INFO `FileAllocationInformation` with a size at or above the file's
+  leaves the file's size and bytes as they are; with a size below it the file ends there.
+- **I-236** — Marking a folder that holds an entry delete-on-close (SET_INFO disposition
+  or the CREATE option) is `STATUS_DIRECTORY_NOT_EMPTY`, and the folder and its entries
+  stay; an empty folder is deleted.
+- **I-237** — A QUERY_DIRECTORY pattern matches a name exactly as MS-FSA 2.1.4.4's
+  wildcards do, without case: `*` and `*.*` every name, `*` any run, `?` one character,
+  `<` any run up to and including the name's last dot, `>` one character or none at a
+  dot or the end, `"` a dot or nothing at the end, every other character itself.
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -522,3 +532,6 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-228 | `TestIoctl_Statuses` |
 | I-229 | `TestSMB_ScratchCreate_NotTrashed` |
 | I-233 | `TestSMB_CaseFold_NoTwins` |
+| I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
+| I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |
+| I-237 | `TestWildcards` |
