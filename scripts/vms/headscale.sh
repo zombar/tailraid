@@ -10,7 +10,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 export HS_DIR="$RUN/headscale" # the generated config and the pinned URL; the compose file mounts from here
 HS_COMPOSE="$RIG/headscale/compose.yml"
-HS_USER=tr
+HS_USER="tr"
 hs() { docker compose -f "$HS_COMPOSE" exec -T headscale headscale "$@"; }
 # user_id: headscale 0.26+ addresses users by numeric ID on the command line
 user_id() { hs users list -o json | tr -d '\n\t ' | sed -n "s/.*\"id\":\"\{0,1\}\([0-9]*\)\"\{0,1\},\"name\":\"$HS_USER\".*/\1/p"; }

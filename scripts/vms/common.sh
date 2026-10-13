@@ -11,6 +11,7 @@ export LC_ALL=C
 
 VMS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 STATE="$VMS_ROOT/test/vms"      # ignored state: ssh key, images, run files, results, Packer's cache and builds
+# shellcheck disable=SC2034 # used by the scripts that source this file
 RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts, Packer templates, the headscale compose file
 RUN="$STATE/run"                  # pid files, logs, qcow2 overlays of running instances
 IMAGES="$STATE/images"            # the Windows golden image (Tart keeps its own under ~/.tart)
@@ -27,7 +28,7 @@ BREW_PREFIX=${BREW_PREFIX:-$(brew --prefix 2>/dev/null || echo /opt/homebrew)}
 # The guests. Instance names are what `tart list` and the pid files show; the golden
 # images carry an -image suffix so an instance is always a clone.
 OSES=${OSES:-"mac linux win"} # OSES="mac linux" runs the rig without the Windows guest
-VM_USER=admin
+VM_USER="admin"
 vm_name() { echo "tailraid-$1"; }
 image_name() { echo "tailraid-$1-image"; }
 WIN_SSH_PORT=2222 # the Windows guest's SSH, forwarded by QEMU to 127.0.0.1
@@ -107,7 +108,9 @@ vm_ssh() {
   ip=$(vm_ip "$os")
   [ -n "$ip" ] || die "$os: no address (is it running?)"
   case "$os" in
-    win) ssh "${SSH_OPTS[@]}" $WIN_SSH_OPTS -p "$(vm_port "$os")" "$VM_USER@$ip" "$@" ;;
+    win)
+      # shellcheck disable=SC2086 # WIN_SSH_OPTS is a list of options, split on purpose
+      ssh "${SSH_OPTS[@]}" $WIN_SSH_OPTS -p "$(vm_port "$os")" "$VM_USER@$ip" "$@" ;;
     # a non-interactive SSH shell has no ~/.local/bin (tailraid), /usr/local/bin or
     # Homebrew on its PATH
     *) ssh "${SSH_OPTS[@]}" -p "$(vm_port "$os")" "$VM_USER@$ip" "export PATH=\$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:\$PATH; $*" ;;
@@ -119,6 +122,7 @@ vm_scp() {
   local os=$1 ip
   ip=$(vm_ip "$os")
   [ -n "$ip" ] || die "$os: no address (is it running?)"
+  # shellcheck disable=SC2046 # scp_mode prints a list of options (or none), split on purpose
   scp -q $(scp_mode "$os") "${SSH_OPTS[@]}" -P "$(vm_port "$os")" "$2" "$VM_USER@$ip:$3"
 }
 
@@ -126,6 +130,7 @@ vm_scp_from() { # <os> <remote path> <local>
   local os=$1 ip
   ip=$(vm_ip "$os")
   [ -n "$ip" ] || die "$os: no address (is it running?)"
+  # shellcheck disable=SC2046 # scp_mode prints a list of options (or none), split on purpose
   scp -q $(scp_mode "$os") "${SSH_OPTS[@]}" -P "$(vm_port "$os")" "$VM_USER@$ip:$2" "$3"
 }
 
