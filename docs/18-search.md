@@ -8,7 +8,7 @@ the leader, into an **index kept inside the volume** under `/.tailraid/index`, s
 node reads the same index as it reads any other file, and a device that joins tomorrow
 has it at once. This reverses the "search" non-goal 13 §9 carried until now.
 
-*Status (2026-10-11): designed; docs, invariants, lookdev and stubs first. I-206..I-212
+*Status: `tailraid media scrape` (§11) is built (2026-10-13). (2026-10-11): designed; docs, invariants, lookdev and stubs first. I-206..I-212
 are stubs in `test/invariants/` until each PR lands its tests: `library-flag` (I-210),
 `search-index` (I-206, I-207, I-211), `search-web` (I-208, I-209), `media-web` (I-212),
 `search-soak` (phase 21).*
@@ -356,7 +356,8 @@ many files it wrote for how many items, and the items it skipped and why.
 (+https://github.com/zombar/tailraid)`, JSON bodies read through a 4 MiB limit and
 images through 20 MiB, a 429 retried after its `Retry-After` at most three times. It
 speaks only to `api.themoviedb.org`, `image.tmdb.org`, `musicbrainz.org` and
-`coverartarchive.org`; MusicBrainz is asked at most once a second, as its rules ask;
+`coverartarchive.org` (and the `archive.org` hosts the archive redirects an image to), a
+redirect anywhere else refused; MusicBrainz is asked at most once a second, as its rules ask;
 TMDB with at most four requests in flight. The key goes only to `api.themoviedb.org`
 (as `api_key`, or as a bearer token for a v4 token), never to a node, and never into a
 log line or an error (a request's URL is printed with the key removed). TMDB's terms
@@ -383,7 +384,8 @@ the Cover Art Archive data are CC0 and need none.
   skipped and reported; the same answers give the same matches.
 - **I-302** — The TMDB key lives only in `<data_dir>/tmdb.key` (mode 0600) on the device
   that saved it, travels only to `api.themoviedb.org`, and never appears in a log line,
-  an error or a node request; the client speaks only to the four provider hosts, sends
+  an error or a node request; the client speaks only to the four provider hosts (and
+  `archive.org`, where the Cover Art Archive redirects), sends
   its user agent, reads bounded bodies, retries a 429 at most three times after its
   `Retry-After`, and asks MusicBrainz at most once a second.
 - **I-206** — The index is written only by the leader, only under `/.tailraid/index`,
@@ -443,11 +445,11 @@ the Cover Art Archive data are CC0 and need none.
 
 | Invariant | Tests |
 |---|---|
-| I-298 | stub `TestStub_I_298` until the `media-scrape` PR |
-| I-299 | stub `TestStub_I_299` until the `media-scrape` PR |
-| I-300 | stub `TestStub_I_300` until the `media-scrape` PR |
-| I-301 | stub `TestStub_I_301` until the `media-scrape` PR |
-| I-302 | stub `TestStub_I_302` until the `media-scrape` PR |
+| I-298 | `TestNoNodePackageImportsScrape` |
+| I-299 | `TestScrapePlan_Slots`, `TestScrapePlan_SameOnEveryNode`, `TestPlanPage_Sizes_Table`, `TestPlanPage_Under`, `TestRun_WritesMissingSlotsOnly`, `TestWebWriter_ExclusiveCreate` |
+| I-300 | `TestNFO_RoundTrip_Table`, `TestScrapePlan_Slots` |
+| I-301 | `TestClear_Table`, `TestClearAlbum_Table`, `TestRun_UnclearMatch_Table` |
+| I-302 | `TestClient_KeyOnlyToTMDB_UserAgent_Redacted`, `TestClient_ProviderHostsOnly`, `TestClient_429Retries_BoundedBody`, `TestClient_MusicBrainzOncePerSecond`, `TestKey_SavedPrivate_EnvWins` |
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
