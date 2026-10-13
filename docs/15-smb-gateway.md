@@ -520,6 +520,14 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   Before, every READ ran on the read loop under the share's read lock: one cold chunk's
   network fetch held up every other request on the connection, and with a CREATE, CLOSE
   or rename waiting for the lock, every new request on the share.
+- **I-267** — The case-insensitive lookup of a name not found as spelled (every CREATE of
+  a new name, every probe for one) asks the backend for the entry that differs by case
+  alone (`CaseFolder`: the FSM's `LookupFold`, one pass over the folder's names, nothing
+  copied) and lists the folder only where the backend cannot answer (under
+  `/.snapshots`); the first match by sorted name wins, as before. Before, it listed the
+  folder each time, building an entry for every file in it: a copy of N files into one
+  folder listed it N times (measured on 2,000 files: 414 µs and 800 KB a lookup by
+  listing, 18 µs and 64 B by `LookupFold`).
 - **I-247** — A CANCEL of a WRITE answered `STATUS_PENDING` takes nothing back: the
   write is already in the driver, so the CANCEL is answered nothing and the WRITE its real
   reply with the bytes it wrote (MS-SMB2 3.3.5.16); a lock wait or a change notification
@@ -557,6 +565,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |
+| I-267 | `TestFSM_LookupFold`, `TestFoldedMatch_AsksTheCaseFolder` |
 | I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |
