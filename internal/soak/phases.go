@@ -233,13 +233,13 @@ func (r *Run) waitHealthy(ctx context.Context, timeout time.Duration, excused ..
 
 // repairUntilClean runs repair passes until one finds nothing to do (or 8 passes).
 func (r *Run) repairUntilClean(ctx context.Context) (admin.Report, error) {
-	for range 8 {
+	for range 64 { // a pass that moves nothing ends it, unless the home gate just opened
 		st, err := r.repairNow(ctx)
 		if err != nil {
 			return admin.Report{}, err
 		}
 		r.lastRepair = st
-		if st.Repaired+st.Partial+st.Migrated+st.Deferred+st.Rebalanced == 0 {
+		if st.Repaired+st.Partial+st.Migrated+st.Deferred+st.Homed == 0 && !st.HomeOpen {
 			break
 		}
 		if err := r.Env.Wait(ctx, 200*time.Millisecond); err != nil {

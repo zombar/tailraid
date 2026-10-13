@@ -65,6 +65,9 @@ type Env interface {
 	// admin surface (one node's view; leader-only ops are routed by the Env)
 	Status(ctx context.Context, node NodeRef) (admin.Report, error)
 	RepairNow(ctx context.Context) (repair.Stats, error)
+	// Rebalance opens the leader's home gate once (`tailraid volume rebalance`, docs/14 §7):
+	// the following RepairNow passes move the slots away from home.
+	Rebalance(ctx context.Context) (repair.HomePlan, error)
 	Scrub(ctx context.Context) (repair.Stats, error)
 	GCNow(ctx context.Context) (repair.Result, error)
 	// PurgeTrash deletes every entry in the trash for good (`tailraid trash purge --all`,

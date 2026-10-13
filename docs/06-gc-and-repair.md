@@ -204,8 +204,9 @@ A slot `i` of chunk `c` is **bad** when any of:
 7. after the per-chunk pass, while the **home gate** is open (14 §7, I-295), slots that
    are away from their home for placement only (a data slot on a non-voter, the wrong disk
    of a host, a host that is not home since a target joined) move to their home, at most
-   `HomeBatch` chunks a pass and only in a pass whose per-chunk work found no bad slot, by
-   the move sequence below (PUT, `SetPlacement` with `Expect`, fenced DELETE). This one
+   `HomeBatch` chunks a pass and none when the pass before found a bad slot or a pending
+   migration, as readable bad slots (reason `away from home`) through the repair of one
+   chunk below, which sends them home or leaves them where they are. This one
    rule replaces the separate capacity rebalance within a host of earlier releases
    (I-172).
 
@@ -216,7 +217,11 @@ A chunk with ≥ 1 bad slot and ≥ k good live slots is **repairable**. Repair 
 3. `newPlacement`: each refilled slot goes to its home target (14 §7) when that target
    holds no slot of the chunk and is live, not suspect and has room (I-296); the rest
    `FillPlacement(hash, liveCandidates − goodNodes(kept slots))`, counting the domains of
-   the kept slots against the host cap (I-89). For case 4
+   the kept slots against the host cap (I-89). Slots no one serves are filled before
+   slots whose holder still serves them (draining, skewed, away): their holders stand in
+   while the others are filled, so a lone spare replaces a missing shard first (I-65); an
+   away slot goes home or keeps its holder; a PUT that fails leaves a still-served slot on
+   its holder. For case 4
    every slot is re-placed (under the new keys `hex.k'-m'.idx`, which cannot collide with
    the old files); for cases 1–3 and 5 only the bad slots, keeping good ones in place; slot
    `i` keeps index `i`.

@@ -135,6 +135,12 @@ func (a *Admin) RepairNow(ctx context.Context) (repair.Stats, error) {
 	return st, err
 }
 
+func (a *Admin) Rebalance(ctx context.Context) (repair.HomePlan, error) {
+	var p repair.HomePlan
+	err := a.leaderOp(ctx, rpc.AdminOp{Op: "rebalance"}, &p)
+	return p, err
+}
+
 func (a *Admin) Scrub(ctx context.Context) (repair.Stats, error) {
 	var rep admin.CheckReport
 	err := a.passOp(ctx, rpc.AdminOp{Op: "check", Scrub: true}, &rep)
