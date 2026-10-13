@@ -371,7 +371,14 @@ reader's lock, where the cancel decides). `status` counts them as `readahead_can
 
 - **Issuing gateway:** read-your-writes immediately after the WRITE reply, from the overlay
   (WAL extents over base, with base bytes at or beyond `minSize` reading as zero).
-  `GETATTR` size comes from the overlay while dirty.
+  `GETATTR` size comes from the overlay while dirty, and so do its times: mtime and ctime
+  are the file's last write or truncate on this gateway, or for mtime the time a client
+  set after it (I-230), never earlier than the committed ones; the flush then stamps the
+  leader's time (I-261). Until 2026-10-13 a write left the committed mtime in place until
+  the flush, about 2 s later, so `make`, `rsync` and an NFS client's cache saw a file of
+  the new size with the old time. The write time is this gateway's clock and the flush's
+  the leader's, so a gateway whose clock runs ahead can see mtime step back slightly at
+  the flush.
 - **A client's times outlive the flush** (I-230). A Commit stamps the inode's mtime and
   ctime with its own time, as the data's change. A copy, though, writes a file and then
   sets the source's times as its last step (`cp -p`, `rsync -a`, robocopy, Explorer's
@@ -574,6 +581,10 @@ the WAL cap.
   one after it) cancels the inode's in-flight prefetches no READ has joined, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
   cancelled; a READ that joined a prefetch which then failed fetches the chunk itself
   and returns only its own result.
+- **I-261** — While a file has unflushed writes on a gateway, that gateway reports its
+  mtime and ctime as the time of its last write or truncate there (the mtime a client set
+  after it, when one did), never earlier than the committed times, as it reports the
+  overlay's size; after the flush they are the Commit's.
 - **I-230** — Times a client sets on a file (`Chtimes`: SMB SET_INFO basic, NFS SETATTR)
   after its last write and while that write is unflushed are the file's times after the
   flush; a write or truncate after them makes the
@@ -611,5 +622,6 @@ the WAL cap.
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |
 | I-98 | `TestReader_HedgesStalledHolder` |
+| I-261 | `TestVFS_DirtyFile_ReportsItsWriteTime` |
 | I-230 | `TestVFS_UserTimes_SurviveFlush`, `TestSMB_CopyTimes_SurviveFlush` |
 | I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |
