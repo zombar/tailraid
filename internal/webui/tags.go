@@ -1,12 +1,14 @@
 package webui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/dhowden/tag"
@@ -81,6 +83,100 @@ type coverDep struct {
 	mtime   int64
 }
 
+// coverRecord is a folder's resolved cover as stored in the volume beside the thumbnails
+// (docs/13 §5, I-256): the choice, "" for none, and every folder it read, so any node
+// serves it while they are unchanged and resolves it again once one changed.
+type coverRecord struct {
+	Name string           `json:"name"`
+	Deps []coverRecordDep `json:"deps"`
+}
+
+type coverRecordDep struct {
+	Ino     meta.Ino `json:"ino"`
+	Version uint64   `json:"version"`
+	Mtime   int64    `json:"mtime"`
+}
+
+// coverKey is the name of a folder's cover record in ThumbDir.
+func coverKey(dir meta.Inode) string { return fmt.Sprintf("%d-%d.cover", dir.Ino, dir.Gen) }
+
+// parseCoverKey reads a cover record's name back; ok is false for any other name.
+func parseCoverKey(name string) (ino meta.Ino, gen uint32, ok bool) {
+	base, found := strings.CutSuffix(name, ".cover")
+	if !found {
+		return 0, 0, false
+	}
+	var i uint64
+	var g uint32
+	if n, err := fmt.Sscanf(base, "%d-%d", &i, &g); err != nil || n != 2 || fmt.Sprintf("%d-%d", i, g) != base {
+		return 0, 0, false
+	}
+	return meta.Ino(i), g, true
+}
+
+// current reports whether every folder deps names is as it was when they were read.
+func (s *Server) current(deps []coverDep) bool {
+	for _, d := range deps {
+		if in, ok := s.o.Store.GetInodeAny(d.ino); !ok || depOf(in) != d {
+			return false
+		}
+	}
+	return true
+}
+
+// storedCover is the folder's cover from its record in the volume, when the record exists
+// and every folder it read is unchanged: one small read where resolving reads the tags of
+// the folder's tracks over the network.
+func (s *Server) storedCover(dir meta.Inode) (coverEntry, bool) {
+	f, err := s.o.FS.Open(path.Join(ThumbDir, coverKey(dir)))
+	if err != nil {
+		return coverEntry{}, false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	if err != nil {
+		return coverEntry{}, false
+	}
+	var rec coverRecord
+	if json.Unmarshal(b, &rec) != nil || len(rec.Deps) == 0 {
+		return coverEntry{}, false
+	}
+	e := coverEntry{name: rec.Name}
+	for _, d := range rec.Deps {
+		e.deps = append(e.deps, coverDep{ino: d.Ino, version: d.Version, mtime: d.Mtime})
+	}
+	if e.deps[0] != depOf(dir) || !s.current(e.deps[1:]) {
+		return coverEntry{}, false
+	}
+	return e, true
+}
+
+// storeCover writes the folder's resolved cover to the volume for every node; a failure
+// only costs another node the resolve.
+func (s *Server) storeCover(dir meta.Inode, e coverEntry) {
+	rec := coverRecord{Name: e.name}
+	for _, d := range e.deps {
+		rec.Deps = append(rec.Deps, coverRecordDep{Ino: d.ino, Version: d.version, Mtime: d.mtime})
+	}
+	b, err := json.Marshal(rec)
+	if err == nil {
+		err = s.storeThumb(coverKey(dir), b)
+	}
+	if err != nil {
+		s.o.Logger.Warn("folder cover not stored", "dir", dir.Ino, "err", err)
+	}
+}
+
+// remember keeps a folder's cover in this node's memory for listings.
+func (s *Server) remember(dir meta.Inode, e coverEntry) {
+	s.covers.mu.Lock()
+	if s.covers.entries == nil || len(s.covers.entries) >= coverCacheMax {
+		s.covers.entries = map[meta.Ino]coverEntry{}
+	}
+	s.covers.entries[dir.Ino] = e
+	s.covers.mu.Unlock()
+}
+
 const coverCacheMax = 1024
 
 // CoverSubdirs is how many subfolders a folder without a cover of its own looks into,
@@ -97,13 +193,8 @@ func (s *Server) cached(dir meta.Inode) (string, bool) {
 	s.covers.mu.Lock()
 	e, ok := s.covers.entries[dir.Ino]
 	s.covers.mu.Unlock()
-	if !ok || len(e.deps) == 0 || e.deps[0] != depOf(dir) {
+	if !ok || len(e.deps) == 0 || e.deps[0] != depOf(dir) || !s.current(e.deps[1:]) {
 		return "", false
-	}
-	for _, d := range e.deps[1:] {
-		if in, ok := s.o.Store.GetInodeAny(d.ino); !ok || depOf(in) != d {
-			return "", false
-		}
 	}
 	return e.name, true
 }
@@ -129,6 +220,10 @@ func (s *Server) coverOf(dir meta.Inode) string {
 	}
 	if name, ok := s.cached(dir); ok {
 		return name
+	}
+	if e, ok := s.storedCover(dir); ok { // another node, or this one before a restart, resolved it (I-256)
+		s.remember(dir, e)
+		return e.name
 	}
 	kids, err := s.o.Store.ReadDir(dir.Ino)
 	if err != nil {
@@ -158,12 +253,9 @@ func (s *Server) coverOf(dir meta.Inode) string {
 			}
 		}
 	}
-	s.covers.mu.Lock()
-	if s.covers.entries == nil || len(s.covers.entries) >= coverCacheMax {
-		s.covers.entries = map[meta.Ino]coverEntry{}
-	}
-	s.covers.entries[dir.Ino] = coverEntry{deps: deps, name: name}
-	s.covers.mu.Unlock()
+	e := coverEntry{deps: deps, name: name}
+	s.remember(dir, e)
+	s.storeCover(dir, e)
 	return name
 }
 

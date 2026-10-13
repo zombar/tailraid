@@ -348,7 +348,13 @@ sweep removes it and the page grabs a new one as the tile comes into view (I-216
   (`cover` is then `<subfolder>/<entry>`). The choice is the same on every node (I-165).
   Finding it reads each candidate's tags, so the folder's tile asks
   `GET /api/thumb?path=<folder>` and the node resolves the cover then and remembers it
-  until the folder or a subfolder it looked into changes; a listing reports `cover`, or
+  until the folder or a subfolder it looked into changes. The choice is stored in the
+  volume beside the thumbnails, as `<ino>-<gen>.cover` under `/.tailraid/thumbs` (the
+  chosen entry, or none, and the version of every folder it read), so the first node to
+  resolve a folder resolves it for all: every other node, and this one after a restart,
+  serves the record with one small read while those folders are unchanged, and resolves
+  and stores it again once one changed; the sweep removes the record of a folder that no
+  longer exists (I-256); a listing reports `cover`, or
   `no_cover` for a folder resolved to none, only when already known and reads no file
   (measured 2026-10-11: a cold listing of 99 album folders took 5.5 s while it resolved
   every cover in line). The page asks for no thumbnail of a folder marked `no_cover`.
@@ -833,6 +839,13 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   for the current versions of the folder and of every subfolder it looked into, and
   reads no file to do so; `GET /api/thumb` of the folder resolves it, serves that
   picture and answers 404 for a folder without one.
+- **I-256** — A folder's resolved cover is stored in the volume as a record beside the
+  thumbnails (the chosen entry or none, and the version of every folder it read); a node
+  without the cover in memory serves the record when those folders are unchanged, reading
+  no track's tags, and otherwise resolves the cover and stores the new record; the
+  thumbnail sweep keeps a record while its folder exists, live or in the trash, and
+  removes it otherwise. Before, the choice lived in each node's memory only, so every
+  node, after every restart, read the tags of every folder's tracks again.
 - **I-197** — One chart package renders the soak report and the Stats page: the same
   series render byte-identical SVG for both; it emits no colour and no inline `style`,
   only classes, and every class it emits is defined in `app.css` and in the report's
@@ -897,6 +910,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
 | I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
 | I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_DirCoverFromSubfolder`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
+| I-256 | `TestWebUI_DirCover_StoredAndShared`, `TestSweepThumbs_CoverRecords` |
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
