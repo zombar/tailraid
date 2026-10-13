@@ -2,6 +2,23 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.7.1 (2026-10-13)
+
+### Changes
+
+- smb: a wrong-case path reaches the existing folders, no case twins (I-233) ([665cb1a](https://github.com/zombar/tailraid/commit/665cb1a))
+- nfs: a listing paged while its folder changes goes on, no BAD_COOKIE (I-232) ([f9334e0](https://github.com/zombar/tailraid/commit/f9334e0))
+- nfs: CREATE EXCLUSIVE with a verifier, per RFC 1813 3.3.8 (I-231) ([95a5cdc](https://github.com/zombar/tailraid/commit/95a5cdc))
+- vfs: a client's file times outlive the flush; out-of-range times clamp (I-230) ([cc5810c](https://github.com/zombar/tailraid/commit/cc5810c))
+- vfs: a created file deleted with no data is purged, not trashed (I-229) ([44b35f3](https://github.com/zombar/tailraid/commit/44b35f3))
+- smb, vfs: answer FSCTL_QUERY_FILE_REGIONS, IOCTL statuses per MS-SMB2 (I-227, I-228) ([0778a42](https://github.com/zombar/tailraid/commit/0778a42))
+- smb: a request trace at log.level debug ([5e12140](https://github.com/zombar/tailraid/commit/5e12140))
+- vfs, soak: a fetch looks in the cache once registered; the harness seal waits for a sample ([9ec874e](https://github.com/zombar/tailraid/commit/9ec874e))
+- soak: round 23.5 keeps the poll that saw the end, faults end through the undo (I-112, I-36) ([961898e](https://github.com/zombar/tailraid/commit/961898e))
+- webui: an upload's temp carries the node ID, not the host name (I-226) ([0eb52e2](https://github.com/zombar/tailraid/commit/0eb52e2))
+- smb, vfs: open-if never truncates, locks follow a rename, exclusive mkdir (I-222, I-224, I-225) ([2ab2872](https://github.com/zombar/tailraid/commit/2ab2872))
+- vfs: a plain flush ends a pending rewrite, a dirty claim never lapses (I-223, I-225) ([946cf65](https://github.com/zombar/tailraid/commit/946cf65))
+
 ## v0.7.0 (2026-10-12)
 
 ### Changes
