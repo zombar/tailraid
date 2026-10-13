@@ -296,6 +296,16 @@ device"), not `EIO`.
   Before, every entry was charged 512 bytes, so a READDIR of short names returned about a
   sixteenth of the entries its count had room for and a READDIRPLUS about a third, and
   `dtpref` was 8 KiB: a folder of thousands of files took many times the round trips.
+- **I-260** — A request that changes something (WRITE, SETATTR, CREATE, MKDIR, SYMLINK,
+  MKNOD, REMOVE, RMDIR, RENAME, LINK, COMMIT) runs at most once per client address, xid,
+  procedure and frame checksum: a retransmission (the client reconnected) whose original
+  is still running waits for it and gets its reply, one whose original finished gets the
+  stored reply, and one whose original ended without a reply runs afresh; at most
+  `DRCEntries` (1,024) replies are kept, none longer than `DRCAge` (2 min); a READ,
+  GETATTR or LOOKUP is never cached. Before, a closed connection's handlers ran on while
+  the retransmission ran again beside them: a REMOVE answered NOENT for the file it had
+  removed, and a WRITE still waiting at a cap could land after the client's next WRITE of
+  the same range.
 
 ## Tests
 
@@ -312,6 +322,7 @@ device"), not `EIO`.
 | I-244 | `TestRead_LengthBoundedByBody`, `TestConn_RPCReplyCodes` |
 | I-245 | `TestConn_RPCReplyCodes`, `TestNFS_FSStatAndUnsupported` |
 | I-248 | `TestNFS_ListingFillsTheClientsCount`, `TestListEntrySizes_MatchTheEncoder` |
+| I-260 | `TestDRC_RetransmissionRunsOnce`, `TestDRC_Bounded_CoversOnlyChanges` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
