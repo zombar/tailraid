@@ -59,6 +59,11 @@ const ICONS: Record<string, string> = {
 
 export type IconKind = "dir" | "file" | "link" | "media" | "image";
 
+/** titleCard stands in for art that does not exist: the title and the line under it (docs/13 §10, I-280). */
+export function titleCard(title: string, sub?: string): HTMLElement {
+  return h("span", { class: "tcard" }, h("span", { class: "ct" }, title), sub ? h("span", { class: "cy" }, sub) : null);
+}
+
 export function icon(kind: IconKind): SVGElement {
   const el = svg("svg", { class: "icon", viewBox: "0 0 16 16" }, svg("path", { d: ICONS[kind] ?? ICONS.file! }));
   if (kind === "image") el.append(svg("circle", { cx: 11, cy: 5.5, r: 1 }));

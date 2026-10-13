@@ -574,10 +574,15 @@ section.hero { position: relative; gap: 0; border: 1px solid var(--line); border
 .seasons button[aria-pressed=true] { color: var(--text); border-color: var(--dim); background: var(--surface); }
 table.episodes { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 14px; }
 table.episodes td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-table.episodes td.no { width: 72px; font: 13px var(--mono); color: var(--dim); }
-table.episodes td.thumb { width: 112px; padding-left: 0; }
-table.episodes td.thumb img { display: block; width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: var(--surface); }
-table.episodes td.thumb .icon { width: 96px; height: 54px; color: var(--dim); background: var(--surface); border-radius: 4px; padding: 16px 36px; }
+table.episodes td.no { width: 96px; font: 13px var(--mono); color: var(--dim); }
+table.episodes td.thumb { width: 92px; padding: 4px 8px 4px 0; }
+table.episodes td.thumb img { display: block; width: 80px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: var(--surface); }
+table.episodes td.thumb .icon { display: block; width: 80px; height: 45px; color: var(--dim); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 13px 31px; }
+.hero .chips { margin-top: 8px; }
+.hero .seasons { margin-top: 12px; }
+.hero-body table.episodes { margin-top: 12px; }
+table.episodes.discs td { padding: 10px 8px; }
+table.episodes.discs td.title a { color: var(--text); }
 table.episodes td.title { overflow: hidden; }
 table.episodes td.title .plot { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
 table.episodes td.dur { width: 64px; font: 13px var(--mono); color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
@@ -590,6 +595,18 @@ table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
   /* the season strip and the episodes run under the poster column: the text column alone is too narrow */
   .hero-body .seasons, .hero-body table.episodes { margin-left: -108px; width: calc(100% + 108px); }
 }
+/* a title card stands in for art that does not exist: a folder of video no browser can
+   frame, a platform, a game without box art (docs/13 §5, §10) */
+.tcard { width: 100%; height: 100%; display: grid; align-content: center; justify-items: center; gap: 4px; padding: 10px; text-align: center; background: var(--surface); color: var(--text); border-top: 3px solid var(--accent); }
+.tcard .ct { font: 600 15px/1.25 var(--sans); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.tcard .cy { font: 12px var(--mono); color: var(--dim); }
+.hero .tcard.hero-poster { align-self: start; width: 160px; height: auto; aspect-ratio: 3 / 4; border-radius: var(--radius); border: 1px solid var(--line); border-top: 3px solid var(--accent); }
+section.lib.roms .posters:not(.games) .poster .art { aspect-ratio: 4 / 3; }
+section.lib.roms .posters:not(.games) .poster .art .tcard .ct { font-size: 20px; }
+.posters.games .poster .art { aspect-ratio: 3 / 4; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips .badge { font-size: 11px; line-height: 18px; }
+@media (max-width: 480px) { .hero .tcard.hero-poster { width: 96px; } .tcard .ct { font-size: 13px; } }
 /* the Library row stacks label, select and note in one column (the other rows put their
    checkbox in a first column and send the note to the second) */
 .menu-row.library { grid-template-columns: 1fr; gap: 6px; }

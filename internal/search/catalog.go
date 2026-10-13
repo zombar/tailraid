@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,9 @@ const (
 	EntEpisode uint8 = 4
 	EntArtist  uint8 = 5
 	EntAlbum   uint8 = 6
+	// docs/18 §8b, segment version 3
+	EntPlatform uint8 = 7
+	EntGame     uint8 = 8
 )
 
 // Entry is one media item of the catalogue (docs/18 §8, I-211). Art is a name in the
@@ -50,6 +54,21 @@ type Entry struct {
 	Fanart    string
 	Thumb     string
 	Banner    string
+	// the name analyser's fields (docs/18 §8a, I-276), segment version 2
+	Date      string // an episode's air date, YYYY-MM-DD
+	Absolute  int    // an anime episode's absolute number
+	Edition   string
+	Quality   []string
+	Languages []string
+	Discs     int
+	// a game's (docs/18 §8b), segment version 3; a platform's game count is Tracks
+	Platform  string // the platform's display name
+	Regions   []string
+	Revision  string
+	Flags     []string
+	Developer string
+	Publisher string
+	Players   string
 }
 
 // --- names
@@ -68,14 +87,6 @@ var (
 	seasonNum = regexp.MustCompile(`^\d{1,2}$`)
 )
 
-// junk is the scene-name vocabulary docs/18 §8 strips: a title ends at the first of
-// these, at a year or at a season or episode number.
-var junk = map[string]bool{
-	"1080p": true, "720p": true, "2160p": true, "480p": true, "4k": true, "x264": true, "x265": true, "h264": true, "h265": true,
-	"hevc": true, "bluray": true, "webrip": true, "web-dl": true, "webdl": true, "hdtv": true, "dvdrip": true, "remux": true,
-	"aac": true, "dts": true, "atmos": true, "proper": true, "repack": true, "10bit": true, "hdr": true, "brrip": true, "web": true,
-}
-
 // CleanName is a file or folder name's title and year (docs/18 §8): `Title (2019)`, or
 // a scene name cut at its first year, season or episode number, or release token.
 func CleanName(name string) (title string, year int) {
@@ -84,9 +95,9 @@ func CleanName(name string) (title string, year int) {
 		y, _ := strconv.Atoi(m[2])
 		return tidy(brackets.ReplaceAllString(m[1], " "), !strings.Contains(m[1], " ")), y
 	}
+	isDotted := dotted(s)
 	s = brackets.ReplaceAllString(s, " ")
-	dotted := !strings.Contains(strings.TrimSpace(s), " ")
-	if dotted {
+	if isDotted {
 		s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
 	} else {
 		s = strings.ReplaceAll(s, "_", " ")
@@ -98,7 +109,7 @@ func CleanName(name string) (title string, year int) {
 	cut := len(toks)
 	for i, t := range toks {
 		lt := strings.ToLower(t)
-		if base, _, ok := strings.Cut(lt, "-"); ok && junk[base] {
+		if base, _, ok := strings.Cut(lt, "-"); ok && cuts(base) {
 			lt = base
 		}
 		if i == 0 {
@@ -108,7 +119,7 @@ func CleanName(name string) (title string, year int) {
 		if i+1 < len(toks) {
 			next = toks[i+1]
 		}
-		if junk[lt] || episodeRe[0].MatchString(lt) || seasonTok.MatchString(lt) ||
+		if cuts(lt) || episodeRe[0].MatchString(lt) || seasonTok.MatchString(lt) ||
 			((lt == "season" || lt == "seasons") && seasonNum.MatchString(next)) ||
 			(yearTok.MatchString(t) && !yearTok.MatchString(next)) {
 			cut = i
@@ -353,11 +364,12 @@ func stem(name string) string { return strings.TrimSuffix(name, path.Ext(name)) 
 // catalogue builds the entries of every library (docs/18 §8): the folders from src,
 // the sidecars through nfo, an album's tags through tags (the newest doc of a track).
 type catalogue struct {
-	src  Source
-	nfo  func(meta.Inode) (NFO, bool)
-	tags func(meta.Ino) (Doc, bool)
-	out  []Entry
-	seen map[meta.Ino]bool
+	src   Source
+	nfo   func(meta.Inode) (NFO, bool)
+	tags  func(meta.Ino) (Doc, bool)
+	games func(meta.Inode) (map[string]GameInfo, bool)
+	out   []Entry
+	seen  map[meta.Ino]bool
 }
 
 // dirIndex is a folder's live children by name, and in name order.
@@ -445,8 +457,8 @@ func applyNFO(e *Entry, n NFO) {
 
 // buildCatalog derives every library's entries, the libraries in kind-then-path order
 // and each folder's children in name order, so every node derives the same list.
-func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool)) []Entry {
-	c := &catalogue{src: src, nfo: nfo, tags: tags, seen: map[meta.Ino]bool{}}
+func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool), games func(meta.Inode) (map[string]GameInfo, bool)) []Entry {
+	c := &catalogue{src: src, nfo: nfo, tags: tags, games: games, seen: map[meta.Ino]bool{}}
 	libs := src.Libraries()
 	// a nested library is its own section: claim every library folder first
 	for _, l := range libs {
@@ -460,6 +472,8 @@ func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool
 			c.shows(l.Ino)
 		case meta.LibraryMusic:
 			c.music(l.Ino)
+		case meta.LibraryRoms:
+			c.roms(l.Ino)
 		case meta.LibraryNone:
 		}
 	}
@@ -488,7 +502,7 @@ func (c *catalogue) movies(lib meta.Ino) {
 			}
 			vs := stem(video.Name)
 			e := Entry{Ino: k.Ino, Lib: lib, Kind: EntMovie, Video: video.Ino, Season: -1}
-			e.Title, e.Year = CleanName(k.Name)
+			filmName(&e, Analyze(k.Name, nil, CtxMovies), Analyze(video.Name, []string{k.Name}, CtxMovies))
 			if n, ok := c.sidecar(md, "movie.nfo", vs+".nfo", k.Name+".nfo"); ok {
 				applyNFO(&e, n)
 			}
@@ -499,7 +513,8 @@ func (c *catalogue) movies(lib meta.Ino) {
 		case k.Type == meta.TFile && IsVideo(k.Name):
 			vs := stem(k.Name)
 			e := Entry{Ino: k.Ino, Lib: lib, Kind: EntMovie, Video: k.Ino, Season: -1}
-			e.Title, e.Year = CleanName(vs)
+			a := Analyze(k.Name, nil, CtxMovies)
+			filmName(&e, a, a)
 			if n, ok := c.sidecar(d, vs+".nfo"); ok {
 				applyNFO(&e, n)
 			}
@@ -511,6 +526,21 @@ func (c *catalogue) movies(lib meta.Ino) {
 	}
 }
 
+// filmName fills a film's name-derived fields from its folder's analysis, the video's
+// filling what the folder's name lacks (docs/18 §8a).
+func filmName(e *Entry, dir, video Name) {
+	e.Title, e.Year = dir.Title, dir.Year
+	if e.Year == 0 {
+		e.Year = video.Year
+	}
+	e.Edition = firstOf(dir.Edition, video.Edition)
+	e.Quality = video.Quality
+	if len(e.Quality) == 0 {
+		e.Quality = dir.Quality
+	}
+	e.Languages = video.Languages
+}
+
 func (c *catalogue) shows(lib meta.Ino) {
 	shows := c.list(lib).kids
 	for i := range shows {
@@ -520,7 +550,8 @@ func (c *catalogue) shows(lib meta.Ino) {
 		}
 		sd := c.list(show.Ino)
 		e := Entry{Ino: show.Ino, Lib: lib, Kind: EntShow, Season: -1}
-		e.Title, e.Year = CleanName(show.Name)
+		sn := Analyze(show.Name, nil, CtxTV)
+		e.Title, e.Year, e.Quality, e.Languages = sn.Title, sn.Year, sn.Quality, sn.Languages
 		if n, ok := c.sidecar(sd, "tvshow.nfo"); ok {
 			applyNFO(&e, n)
 		}
@@ -528,7 +559,7 @@ func (c *catalogue) shows(lib meta.Ino) {
 		e.Fanart = sd.art("fanart")
 		e.Banner = sd.art("banner")
 		c.add(e)
-		c.episodes(lib, show.Ino, sd, e.Title, -1)
+		c.episodes(lib, show.Ino, sd, e.Title, -1, show.Name)
 		for j := range sd.kids {
 			k := &sd.kids[j]
 			n, ok := SeasonOf(k.Name)
@@ -543,7 +574,7 @@ func (c *catalogue) shows(lib meta.Ino) {
 			}
 			s.Poster = firstOf(sd.art(name+"-poster"), nd.art("poster", "folder"))
 			c.add(s)
-			c.episodes(lib, show.Ino, nd, e.Title, n)
+			c.episodes(lib, show.Ino, nd, e.Title, n, k.Name, show.Name)
 		}
 	}
 }
@@ -557,22 +588,35 @@ func twoDigits(n int) string {
 
 // episodes lists the episode files of one folder: the show's own (season from the
 // name) or a season folder's (its number when the name does not say).
-func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, folderSeason int) {
+func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, folderSeason int, dirs ...string) {
 	for i := range d.kids {
 		f := &d.kids[i]
 		if f.Type != meta.TFile || !IsVideo(f.Name) {
 			continue
 		}
 		vs := stem(f.Name)
-		season, ep, to, ok := ParseEpisode(vs)
-		if !ok {
-			continue
+		a := Analyze(f.Name, dirs, CtxTV)
+		if a.Episode == 0 && a.Date == "" && a.Absolute == 0 {
+			continue // not an episode: no number, part, air date or absolute number
 		}
-		if season < 0 {
+		season := a.Season
+		if a.Episode > 0 && season < 0 {
 			season = max(folderSeason, 1)
 		}
-		e := Entry{Ino: f.Ino, Lib: lib, Parent: show, Kind: EntEpisode, Video: f.Ino, Season: season, Episode: ep, EpisodeTo: to}
-		e.Title = EpisodeTitle(vs, showTitle, ep)
+		e := Entry{
+			Ino: f.Ino, Lib: lib, Parent: show, Kind: EntEpisode, Video: f.Ino, Season: season, Episode: a.Episode, EpisodeTo: a.EpisodeTo,
+			Date: a.Date, Absolute: a.Absolute, Quality: a.Quality, Languages: a.Languages,
+		}
+		switch {
+		case a.EpisodeTitle != "":
+			e.Title = a.EpisodeTitle
+		case a.Episode > 0:
+			e.Title = EpisodeTitle(vs, showTitle, a.Episode)
+		case a.Date != "":
+			e.Title = a.Date
+		default:
+			e.Title = "Episode " + strconv.Itoa(a.Absolute)
+		}
 		if n, ok := c.sidecar(d, vs+".nfo"); ok {
 			applyNFO(&e, n)
 			if n.Season >= 0 && n.Episode > 0 {
@@ -602,22 +646,41 @@ func (c *catalogue) music(lib meta.Ino) {
 		}
 		a.Poster = kd.art("artist", "folder")
 		a.Fanart = kd.art("fanart")
-		albums := 0
-		for j := range kd.kids {
-			if al := &kd.kids[j]; al.Type == meta.TDir && !c.seen[al.Ino] && c.album(lib, k.Ino, al, c.list(al.Ino)) {
-				albums++
-			}
-		}
+		albums := c.albums(lib, k.Ino, kd, 2)
 		if albums > 0 || a.Plot != "" {
 			c.add(a)
 		}
 	}
 }
 
-// album adds dir as an album when its audio files outnumber its other files (13 §6).
-func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) bool {
-	var tracks []meta.Inode
-	other := 0
+// albums adds every album in an artist's folder d, walking category and format folders
+// (`1 Studio`, `MP3 CBR Original`) at most depth deep, and reports how many it added.
+func (c *catalogue) albums(lib, artist meta.Ino, d dirIndex, depth int) int {
+	n := 0
+	for j := range d.kids {
+		al := &d.kids[j]
+		if al.Type != meta.TDir || c.seen[al.Ino] {
+			continue
+		}
+		ad := c.list(al.Ino)
+		switch RoleOf(al.Name) { //nolint:exhaustive // a name, season or region folder is a candidate album
+		case RoleExtras, RoleDisc:
+			continue
+		case RoleCategory, RoleFormat:
+			if depth > 0 {
+				n += c.albums(lib, artist, ad, depth-1)
+			}
+			continue
+		}
+		if c.album(lib, artist, al, ad) {
+			n++
+		}
+	}
+	return n
+}
+
+// tracksOf is a folder's audio files and how many other files it holds.
+func tracksOf(d dirIndex) (tracks []meta.Inode, other int) {
 	for i := range d.kids {
 		f := &d.kids[i]
 		switch {
@@ -629,14 +692,45 @@ func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) boo
 			other++
 		}
 	}
-	if len(tracks) == 0 || len(tracks) <= other {
+	return tracks, other
+}
+
+// album adds dir as an album when its audio files outnumber its other files (13 §6), or
+// when it holds no audio but disc or format folders that do (`CD1`, `Disc 2`, `MP3 CBR
+// Original`): one album, a disc per disc folder.
+func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) bool {
+	tracks, other := tracksOf(d)
+	discs, folders := 0, 0
+	if len(tracks) == 0 {
+		for i := range d.kids {
+			k := &d.kids[i]
+			if r := RoleOf(k.Name); k.Type != meta.TDir || r != RoleDisc && r != RoleFormat {
+				continue
+			}
+			if t, o := tracksOf(c.list(k.Ino)); len(t) > o {
+				tracks = append(tracks, t...)
+				if RoleOf(k.Name) == RoleDisc {
+					discs++
+				}
+				folders++
+			}
+		}
+	}
+	if len(tracks) == 0 || folders == 0 && len(tracks) <= other {
 		return false
 	}
-	e := Entry{Ino: dir.Ino, Lib: lib, Parent: parent, Kind: EntAlbum, Title: dir.Name, Tracks: len(tracks), Season: -1}
+	var artist string
+	if p, ok := c.src.GetInode(parent); ok {
+		artist = p.Name
+	}
+	an := Analyze(dir.Name, []string{artist}, CtxMusic)
+	e := Entry{Ino: dir.Ino, Lib: lib, Parent: parent, Kind: EntAlbum, Title: an.Title, Year: an.Year, Edition: an.Edition, Tracks: len(tracks), Discs: max(discs, an.Discs), Season: -1}
 	if doc, ok := c.tags(tracks[0].Ino); ok {
-		e.Title = firstOf(doc.Album, dir.Name)
+		e.Title = firstOf(doc.Album, an.Title)
 		e.Artist = doc.Artist
-		e.Year = doc.Year
+		if doc.Year != 0 {
+			e.Year = doc.Year
+		}
 		if doc.Genre != "" {
 			e.Genres = []string{doc.Genre}
 		}
@@ -673,11 +767,39 @@ func encodeCatalog(es []Entry) []byte {
 				w.str(s)
 			}
 		}
+		w.str(e.Date)
+		w.str(e.Edition)
+		w.int(e.Absolute)
+		w.int(e.Discs)
+		for _, l := range [][]string{e.Quality, e.Languages} {
+			w.int(len(l))
+			for _, s := range l {
+				w.str(s)
+			}
+		}
+		for _, s := range []string{e.Platform, e.Revision, e.Developer, e.Publisher, e.Players} {
+			w.str(s)
+		}
+		for _, l := range [][]string{e.Regions, e.Flags} {
+			w.int(len(l))
+			for _, s := range l {
+				w.str(s)
+			}
+		}
 	}
 	return w.b
 }
 
-func decodeCatalog(b []byte) []Entry {
+func readList(c *cursor, p *[]string) {
+	m := c.int()
+	for j := 0; j < m && c.err == nil; j++ {
+		*p = append(*p, c.str())
+	}
+}
+
+// decodeCatalog reads a catalogue section of segment version v: 1 lacks the name
+// analyser's fields.
+func decodeCatalog(b []byte, v uint8) []Entry {
 	c := &cursor{b: b}
 	n := c.int()
 	if n > len(b) {
@@ -693,11 +815,24 @@ func decodeCatalog(b []byte) []Entry {
 			*p = c.int()
 		}
 		e.Season--
-		for _, p := range []*[]string{&e.Genres, &e.People} {
-			m := c.int()
-			for j := 0; j < m && c.err == nil; j++ {
-				*p = append(*p, c.str())
+		lists := []*[]string{&e.Genres, &e.People}
+		if v >= 2 {
+			for _, p := range lists {
+				readList(c, p)
 			}
+			e.Date, e.Edition = c.str(), c.str()
+			e.Absolute, e.Discs = c.int(), c.int()
+			lists = []*[]string{&e.Quality, &e.Languages}
+		}
+		for _, p := range lists {
+			readList(c, p)
+		}
+		if v >= 3 {
+			for _, p := range []*string{&e.Platform, &e.Revision, &e.Developer, &e.Publisher, &e.Players} {
+				*p = c.str()
+			}
+			readList(c, &e.Regions)
+			readList(c, &e.Flags)
 		}
 		out = append(out, e)
 	}
@@ -705,4 +840,227 @@ func decodeCatalog(b []byte) []Entry {
 		return nil
 	}
 	return out
+}
+
+// --- games (docs/18 §8b)
+
+// roms lists a roms library: each child folder a platform, each game below it, walking
+// region, category and format folders.
+func (c *catalogue) roms(lib meta.Ino) {
+	d := c.list(lib)
+	for i := range d.kids {
+		k := &d.kids[i]
+		if k.Type != meta.TDir || c.seen[k.Ino] || RoleOf(k.Name) == RoleExtras {
+			continue
+		}
+		p := platformOf(k.Name)
+		pd := c.list(k.Ino)
+		var games map[string]GameInfo
+		if gl, ok := pd.file("gamelist.xml"); ok && c.games != nil {
+			games, _ = c.games(gl)
+		}
+		g := &gameWalk{c: c, lib: lib, platform: k.Ino, plat: p, games: games}
+		g.walk(pd, "", nil, 3)
+		g.flush()
+		e := Entry{Ino: k.Ino, Lib: lib, Kind: EntPlatform, Title: p.title, Platform: p.title, Tracks: g.count, Season: -1}
+		e.Poster = pd.art("platform", "poster", "folder", "logo")
+		c.add(e)
+	}
+}
+
+// gameWalk gathers one platform's games: candidates first, then one entry per title and
+// tag set, the discs of one title merged.
+type gameWalk struct {
+	c        *catalogue
+	lib      meta.Ino
+	platform meta.Ino
+	plat     platform
+	games    map[string]GameInfo
+	cands    []gameCand
+	count    int
+}
+
+type gameCand struct {
+	in   meta.Inode // the game's file, or its folder for a disc set
+	file meta.Inode // the file a disc set's folder plays: its cue, m3u or gdi
+	rel  string     // its path below the platform folder
+	dir  dirIndex   // its folder's
+	name Name
+}
+
+// walk visits a folder below the platform: rel is its path below the platform folder,
+// dirs the folders above it nearest first.
+func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
+	for i := range d.kids {
+		k := &d.kids[i]
+		r := path.Join(rel, k.Name)
+		if k.Type == meta.TDir {
+			if g.c.seen[k.Ino] || RoleOf(k.Name) == RoleExtras || depth == 0 {
+				continue
+			}
+			kd := g.c.list(k.Ino)
+			if set, ok := discSet(kd); ok { // a folder of one game's disc images
+				g.cands = append(g.cands, gameCand{in: *k, file: set, rel: r, dir: kd, name: Analyze(set.Name, append([]string{k.Name}, dirs...), CtxRoms)})
+				continue
+			}
+			g.walk(kd, r, append([]string{k.Name}, dirs...), depth-1)
+			continue
+		}
+		if k.Type != meta.TFile || !g.plat.takes(k.Name) || ext(k.Name) == ".bin" && hasCue(d) {
+			continue
+		}
+		n := Analyze(k.Name, dirs, CtxRoms)
+		if slices.Contains(n.Flags, "update") || slices.Contains(n.Flags, "dlc") {
+			continue // part of a game, not one (docs/18 §8b)
+		}
+		g.cands = append(g.cands, gameCand{in: *k, file: *k, rel: r, dir: d, name: n})
+	}
+}
+
+// discSet reports a folder holding a cue, m3u or gdi: one game, played from that file.
+func discSet(d dirIndex) (meta.Inode, bool) {
+	for i := range d.kids {
+		if k := &d.kids[i]; k.Type == meta.TFile && setExts[ext(k.Name)] {
+			return *k, true
+		}
+	}
+	return meta.Inode{}, false
+}
+
+func hasCue(d dirIndex) bool {
+	for i := range d.kids {
+		if k := &d.kids[i]; k.Type == meta.TFile && (ext(k.Name) == ".cue" || ext(k.Name) == ".m3u") {
+			return true
+		}
+	}
+	return false
+}
+
+// discKey is what two discs of one game share: everything the name says but the disc.
+func discKey(rel string, n Name) string {
+	return path.Dir(rel) + "\x00" + Fold(n.Title) + "\x00" + strings.Join(n.Regions, ",") + "\x00" + n.Revision + "\x00" + strings.Join(n.Flags, ",")
+}
+
+// flush adds one entry per candidate, the discs of one title as one game whose entry is
+// its first disc's file.
+func (g *gameWalk) flush() {
+	byKey := map[string]int{}
+	var games []gameCand
+	discs := map[int]int{}
+	for ci := range g.cands {
+		cd := &g.cands[ci]
+		if cd.name.Disc > 0 {
+			if i, ok := byKey[discKey(cd.rel, cd.name)]; ok {
+				discs[i]++
+				continue
+			}
+			byKey[discKey(cd.rel, cd.name)] = len(games)
+			discs[len(games)] = 1
+		}
+		games = append(games, *cd)
+	}
+	for i := range games {
+		cd := &games[i]
+		n := cd.name
+		e := Entry{
+			Ino: cd.in.Ino, Lib: g.lib, Parent: g.platform, Kind: EntGame, Video: cd.file.Ino, Title: n.Title, Season: -1,
+			Platform: g.plat.title, Regions: n.Regions, Languages: n.Languages, Revision: n.Revision, Flags: n.Flags, Discs: discs[i],
+		}
+		if n.Date != "" {
+			e.Year = atoi(n.Date[:4])
+		}
+		dir := path.Dir(cd.rel) // the game's folder below the platform's
+		if cd.in.Type == meta.TDir {
+			dir = cd.rel
+		}
+		if gi, ok := g.games[cd.rel]; ok {
+			e.Title = firstOf(gi.Name, e.Title)
+			e.Plot, e.Developer, e.Publisher, e.Players, e.Rating = gi.Desc, gi.Developer, gi.Publisher, gi.Players, gi.Rating
+			if gi.Year != 0 {
+				e.Year = gi.Year
+			}
+			if gi.Genre != "" {
+				e.Genres = []string{gi.Genre}
+			}
+			e.Poster = g.inPlatform(dir, firstOf(gi.Image, gi.Thumbnail))
+			e.Banner = g.inPlatform(dir, gi.Marquee)
+		}
+		if e.Poster == "" {
+			e.Poster = g.boxArt(*cd)
+		}
+		g.c.add(e)
+		g.count++
+	}
+}
+
+// inPlatform makes a path relative to the platform folder relative to the game's folder
+// dir (also relative to the platform's), when the file exists.
+func (g *gameWalk) inPlatform(dir, p string) string {
+	if p == "" {
+		return ""
+	}
+	parts := append([]string{}, strings.Split(path.Join(g.platformPath(), p), "/")...)
+	if in, err := g.c.src.Resolve(parts); err != nil || in.Type != meta.TFile {
+		return ""
+	}
+	rel := p
+	if dir != "." && dir != "" {
+		rel = strings.Repeat("../", strings.Count(dir, "/")+1) + p
+	}
+	return rel
+}
+
+func (g *gameWalk) platformPath() string {
+	parts, err := g.c.src.PathOf(g.platform)
+	if err != nil {
+		return ""
+	}
+	return path.Join(parts...)
+}
+
+// boxArt is a game's art by name: <stem>.png beside it, images/<stem>* or
+// media/boxart/<stem>.* beside it, else boxart.* or cover.* in a game's folder.
+func (g *gameWalk) boxArt(cd gameCand) string {
+	if cd.in.Type == meta.TDir {
+		return cd.dir.art("boxart", "cover", "folder")
+	}
+	s := stem(cd.in.Name)
+	if a := cd.dir.art(s); a != "" {
+		return a
+	}
+	for _, sub := range []string{"images", "media/boxart", "boxart"} {
+		parts := strings.Split(sub, "/")
+		cur, ok := meta.Inode{}, true
+		dirs := cd.dir
+		for _, p := range parts {
+			cur, ok = dirs.names[strings.ToLower(p)]
+			if !ok || cur.Type != meta.TDir {
+				ok = false
+				break
+			}
+			dirs = g.c.list(cur.Ino)
+		}
+		if !ok {
+			continue
+		}
+		if a := dirs.art(s, s+"-image", s+"-boxart"); a != "" {
+			return sub + "/" + a
+		}
+	}
+	return ""
+}
+
+// RomEntries is a roms library's platforms and games from the tree and the names alone,
+// reading no file: what the Media tab lists live before the next pass fills in a
+// gamelist's fields (docs/13 §10, I-279).
+func RomEntries(src Source, lib meta.Ino) []Entry {
+	c := &catalogue{src: src, seen: map[meta.Ino]bool{lib: true}}
+	c.roms(lib)
+	return c.out
+}
+
+// SameGame reports whether two names are discs of one game: the same title and tags but
+// the disc (docs/18 §8b).
+func SameGame(a, b Name) bool {
+	return a.Disc > 0 && b.Disc > 0 && discKey("", a) == discKey("", b)
 }

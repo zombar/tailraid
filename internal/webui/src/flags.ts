@@ -40,12 +40,12 @@ export function menu(ctx: MenuContext): HTMLElement {
     });
     return lab;
   };
-  // the Library row: a four-way select, the Media tab lists the folder as films, shows
-  // or music (docs/18 §9)
+  // the Library row: a five-way select, the Media tab lists the folder as films, shows,
+  // music or games (docs/18 §9)
   const libraryRow = (current: string, why: string | null) => {
     const select = h("select", { "aria-label": "library kind" }) as HTMLSelectElement;
-    for (const word of ["none", "movies", "tv", "music"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : undefined }, word));
-    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows or music");
+    for (const word of ["none", "movies", "tv", "music", "roms"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : undefined }, word));
+    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows, music or games");
     const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
     if (why) {
       select.disabled = true;

@@ -190,11 +190,80 @@ effective library kind (§9) is set, stored in the segment beside the docs:
   catalogue (the determinism test), and a renamed or moved item changes nothing until a
   name-derived field differs.
 
+### 8a. The name analyser (I-276)
+
+Every name-derived field comes from one function, `search.Analyze(name, dirs)`: a file's
+or folder's name and the names of the folders above it inside the library, nearest first.
+It reads nothing else, so it is the same on every node. Its rules were written against a
+real volume's 9.8k names (films, shows, music, ROMs; the shapes are in the table test
+`internal/search/testdata/names.tsv`), not against an imagined scene:
+
+| Field | Read from |
+|---|---|
+| title, year | `Title (2019)`, `Title [2019]`, a scene name cut at its first release token, season or episode number, language token or year (as above); a leading site (`www.UIndex.org - `), a trailing ` copy`, `[…]` groups (`[YTS.MX]`, `[y2flix.cc]`, `[6.5GB]`) and the release group after the last `-` are dropped |
+| date | an air date `2024.03.14`, `2024-03-14` or `14.03.2024` |
+| season, episode, last episode | `S01E02`, `S01E01E02`, `S01E01-E03`, `1x02`, `Episode 2`; a folder's `Season 2`, `Series 2`, `Specials`, `S02`, `Season.1`; a pack folder's range (`S01e01-10`, `Seasons 1 and 2`) names seasons, not an episode |
+| episode title | the words after the code up to the first release or language token: `Severance - S01E01 - Good News About Hell`, `…2x01.Il.Circolo.Spezzato.ITA.ENG…` |
+| part | `Part 01 of 03, The Overlords`: in a TV library a part is an episode of season 1 and the rest its title |
+| absolute | an anime's ` - 012 ` or `E012` after a `[Group]` with no season |
+| quality | resolution, source, codec and audio tokens (`1080p`, `WEBRip`, `x265`, `DDP5.1`, `HDR`, `10bit`), in name order |
+| languages | `ITA ENG Spa`, `iTA-ENG`, No-Intro `(En,Fr,De)` |
+| edition | Director's Cut, Extended, Unrated, Remastered, Deluxe Edition, Japanese Edition, Live |
+| disc | `CD1`, `CD 2`, `D1`, `Disc 1`, `Disc I`, `DISC TWO`, `(2CD)` as a count, `(Disc 2 of 3)` |
+| track | a leading `01 `, `01. `, `01 - `, `01 -`, `01_-_`, `1-01 ` of an audio file |
+| regions, revision, flags | No-Intro and GoodTools tags: `(USA)`, `(EU - AU)`, `(Europe)`, `(Japan)`, `(Rev 2)`, `(v1.1)`, `[!]`, `(Proto)`, `(Beta)`, `(Hack)`, `[T+Eng]`, Switch `[DLC]`, `[UPD]` and a 16-hex title ID |
+
+A folder also has a **role** that the catalogue uses before its name: *disc* (the names
+above) merges into the album or game above it, numbered; *category* (`Albums`, `Studio
+Albums`, `Singles`, `Compilations`, `1 Studio`, `2 - Compilations`, `Hacks`,
+`Translations`, `Unreleased`, `Games`) and *format* (`MP3 CBR Original`, `[MP3 VBR]`)
+are walked through, a category's word becoming a ROM flag; *region* (`USA`, `Japan`,
+`Europe`, `EU`) is walked through and sets a ROM's region; *extras* (`Subs`, `Subtitles`,
+`Sample`, `Extras`, `Featurettes`) is not looked into. So `YES/1 Studio/1983 90125
+(Remastered and Expanded) @320` is the album *90125* (1983) by YES,
+`Genesis/1974 The Lamb Lies Down On Broadway/D1` is one album with two discs, and
+`Invasion.2021.S01.PROPER.WEBRip/Subs/Invasion.S01E01…` is no episode.
+
+A catalogue entry gains `date, absolute, part, edition, quality, languages, track` and
+`episode_title`; an episode with only a date or an absolute number has season -1 and is
+ordered by it. The catalogue section of a segment carries its own version (2); a reader
+takes version 1 with the old fields, and the leader's next pass rewrites the catalogue
+because its bytes differ.
+
+### 8b. Games (I-278)
+
+Under a `roms` library (§9) each child folder is a **platform**, named from a table of
+EmulationStation short names and common spellings (`n64`/`N64` Nintendo 64,
+`snes`/`sfc`/`SNES` Super Nintendo, `gc`/`gamecube` GameCube, `psx`/`ps1` PlayStation,
+`psp`, `switch`, `gb`, `gbc`, `gba`, `nds`, `3ds`, `wii`, `megadrive`/`genesis`,
+`mastersystem`, `gamegear`, `segacd`, `32x`, `saturn`, `dreamcast`, `ps2`, `pcengine`,
+`atari2600`, `atari7800`, `lynx`, `neogeo`, `arcade`/`mame`/`fbneo`, `msx`, `c64`,
+`amiga`, `dos`; an unknown folder keeps its own name). Below it, region, category and
+format folders are walked through. A **game** is a file whose extension the platform
+takes (N64 `z64 n64 v64 zip 7z`, SNES `sfc smc zip 7z`, GameCube `iso rvz gcz ciso`,
+PlayStation `pbp chd cue bin m3u iso`, PSP `iso cso pbp`, Switch `nsp xci nsz xcz`; the
+table lists each platform), or a folder holding a `cue`, `m3u` or `chd` set; anything else
+(`.apk`, a driver `.zip` under Switch, `Keys-*` folders, `*.keys`, `.txt`) is no game.
+Files of one platform whose analysed names differ only in their disc are one game with
+its discs. A Switch update or DLC (`[UPD]`, `[DLC]`, or a title ID not ending in `000`) is part of a game, not one, and is left out. Region and revision variants of one title are separate entries that the Media
+tab shows as one card. Fields come from the name (§8a: title, regions, languages,
+revision, flags, disc) and, when the platform folder holds one, an EmulationStation
+`gamelist.xml` (`game/path`, `name`, `desc`, `releasedate`, `developer`, `publisher`,
+`genre`, `players`, `rating`, `image`, `thumbnail`, `marquee`), read like an `.nfo` (the
+first `search.max_file` bytes, `encoding/xml`, nothing when it does not parse). Box art is
+`gamelist.xml`'s image, else `<stem>.png|jpg` beside the game, `images/<stem>*`,
+`media/boxart/<stem>.*`, then `boxart.*` or `cover.*` in a game folder; else the Media tab
+draws a title card (13 §5). The ROM file is never read: no header parse, no hash, no
+DAT match. The catalogue section of segment version 3 carries a game's platform, regions, revision, flags, developer, publisher and players; a platform's entry carries its game count.
+
 ## 9. Libraries (I-210)
 
 A library is a folder flag like `protected` and `nsfw` (02 §Apply rules): `Inode.Flags`
 gains a two-bit **library kind** (`FlagLibraryMask = 0b1100`: 0 none, 1 movies, 2 tv,
-3 music), directories only, set by `SetAttr` with `AttrFlags`. It is **codec 6**: an
+3 music), directories only, set by `SetAttr` with `AttrFlags`. Since codec 10 the field is
+three bits (`FlagLibraryMask = 0b11100`) and kind 4 is `roms` (I-277): the values already
+stored keep their bits, and a kind of 4 or more is refused with `ErrCodec` while a live
+member reads codec 9 or older. It is **codec 6**: an
 older binary rejects the unknown bits, so the leader refuses the command with `ErrCodec`
 while any live member reads an older codec (the rule of I-156), which is what keeps every
 FSM identical. The effective kind of a folder is the nearest flagged ancestor's (its own
@@ -207,8 +276,9 @@ folder in kind-then-path order for the Media tab; no new CLI command is needed.
 
 Stemming, fuzzy matching, regular expressions, PDF or Office text, EXIF, content past
 `search.max_file`, a shared query history, online metadata providers (TMDB, TVDB,
-MusicBrainz), subtitles, watched state, transcoding, and a music artist page beyond the
-biography and art.
+MusicBrainz, IGDB, ScreenScraper), subtitles, watched state, transcoding, a music artist
+page beyond the biography and art, launching or emulating a game, reading a ROM's header
+and matching ROMs against DAT files.
 
 ## Invariants
 
@@ -249,6 +319,22 @@ biography and art.
   for the poster and fanart, `<name>-fanart` for the background, `<name>-thumb` then the
   browser-made thumbnail for the frame; every node derives the same entries.
 
+- **I-276** — `Analyze` is a pure function of a name and the folder names above it inside
+  its library: the fields of §8a's table, and the role of a folder; it never panics, and
+  the same input gives the same output on every node; every row of `testdata/names.tsv`
+  (real names) gives its expected fields; the catalogue takes every name-derived field
+  from it, so a disc folder is part of its album, a category or format folder is walked
+  through and an extras folder is never an item.
+- **I-277** — `Inode.Flags` bits 2–4 are the library kind; kind 4 is `roms`, settable at
+  codec 10 only, refused with `ErrCodec` while a live member reads an older codec and,
+  decoded below codec 10, refused as malformed; kinds 0–3 keep their codec 6 encoding.
+- **I-278** — Under a `roms` library the catalogue holds one platform per child folder and
+  one game per file of an extension that platform takes (or per `cue`/`m3u`/`chd` folder),
+  walking region, category and format folders, one game for the discs of one title, and
+  nothing for any other file; `gamelist.xml` fields override name-derived ones and one that
+  does not parse contributes nothing; no ROM file is read; every node derives the same
+  entries.
+
 ## Tests
 
 | Invariant | Tests |
@@ -257,6 +343,9 @@ biography and art.
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
+| I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
+| I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |
+| I-278 | `TestCatalog_Roms_Table`, `TestCatalog_Gamelist_Table`, `FuzzGamelist`, `TestCatalog_SectionVersions` |
 | I-211 | `TestCatalog_CleanName_Table`, `TestCatalog_Episode_Table`, `TestCatalog_NFO_Table`, `FuzzNFODecode`, `TestCatalog_ArtResolutionOrder`, `TestCatalog_LibraryKinds_Structure`, `TestCluster_SearchDeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
 
 Soak phase 21 joins these rows with the PR that lands it (09 §2). The web side's invariants (I-209 markdown,

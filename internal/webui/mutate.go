@@ -277,7 +277,7 @@ func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 		Path      string  `json:"path"`
 		Protected *bool   `json:"protected"`
 		NSFW      *bool   `json:"nsfw"`
-		Library   *string `json:"library"` // none, movies, tv or music (docs/18 §9)
+		Library   *string `json:"library"` // none, movies, tv, music or roms (docs/18 §9)
 	}
 	if !decode(w, r, singleBodyCap, &req) {
 		return
@@ -312,7 +312,7 @@ func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 	if req.Library != nil {
 		k, ok := meta.ParseLibraryKind(*req.Library)
 		if !ok {
-			writeErr(w, http.StatusBadRequest, "flags "+canonical+": library is one of none, movies, tv, music")
+			writeErr(w, http.StatusBadRequest, "flags "+canonical+": library is one of none, movies, tv, music, roms")
 			return
 		}
 		flags = meta.WithLibrary(flags, k)

@@ -2,6 +2,7 @@ package vfs_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -238,5 +239,26 @@ func writeAt(t *testing.T, h billy.File, off int64, b []byte) {
 	}
 	if _, err := h.Write(b); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The roms library kind is codec 10: while a live member reads an older codec the
+// gateway refuses it with ErrCodec before proposing (an older leader would refuse the
+// entry as malformed), the other kinds still set, and roms sets once every member reads
+// codec 10.
+// Invariant: I-277
+func TestFS_SetFlags_RomsWaitsForCodec10(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	must(t, fs.MkdirAll("/roms", 0o755))
+	fs.MinCodec = func() uint8 { return meta.CodecRoms - 1 }
+	if err := fs.SetFlags("/roms", meta.WithLibrary(0, meta.LibraryRoms)); !errors.Is(err, meta.ErrCodec) {
+		t.Fatalf("roms with an old member: %v, want ErrCodec", err)
+	}
+	must(t, fs.SetFlags("/roms", meta.WithLibrary(0, meta.LibraryMusic)))
+	fs.MinCodec = func() uint8 { return meta.CodecRoms }
+	must(t, fs.SetFlags("/roms", meta.WithLibrary(0, meta.LibraryRoms)))
+	if k := f.Inode(f.InodeOf(fs, "/roms")).Library(); k != meta.LibraryRoms {
+		t.Fatalf("kind %s", k)
 	}
 }

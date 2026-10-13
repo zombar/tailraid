@@ -124,3 +124,38 @@ func FuzzSegmentDecode(f *testing.F) {
 		_ = r.Catalog()
 	})
 }
+
+// A catalogue section written before the name analyser (segment version 1) still reads,
+// without the new fields; version 3 round-trips them and a game's.
+// Invariant: I-276, I-278
+func TestCatalog_SectionVersions(t *testing.T) {
+	e := Entry{
+		Ino: 7, Lib: 2, Kind: EntEpisode, Title: "Some Guest", Season: -1, Genres: []string{"Talk"}, People: []string{"Host"},
+		Date: "2024-03-14", Absolute: 12, Edition: "Extended", Quality: []string{"1080p", "WEB"}, Languages: []string{"ITA"}, Discs: 2,
+		Platform: "Super Nintendo", Regions: []string{"USA"}, Revision: "Rev 2", Flags: []string{"proto"}, Developer: "Rare", Publisher: "Nintendo", Players: "1-2",
+	}
+	got := decodeCatalog(encodeCatalog([]Entry{e, e}), 3)
+	if len(got) != 2 || !reflect.DeepEqual(got[1], e) {
+		t.Fatalf("v3 round trip:\n got %+v\nwant %+v", got, e)
+	}
+	// version 1: the same layout up to the lists, nothing after them
+	var w buf
+	w.int(1)
+	w.uvarint(7)
+	w.uvarint(2)
+	w.uvarint(0)
+	w.u8(EntEpisode)
+	w.uvarint(0)
+	for _, s := range []string{"Old", "old", "", "", "", "", "", "", "", "", ""} {
+		w.str(s)
+	}
+	for _, n := range []int{2001, 0, 0, 3, 3, 0} {
+		w.int(n)
+	}
+	w.int(0)
+	w.int(0)
+	old := decodeCatalog(w.b, 1)
+	if len(old) != 1 || old[0].Title != "Old" || old[0].Year != 2001 || old[0].Episode != 3 || old[0].Season != -1 || old[0].Date != "" {
+		t.Fatalf("v1 section: %+v", old)
+	}
+}

@@ -750,7 +750,7 @@ func (a *applier) setAttr(c *SetAttr) error {
 		switch {
 		case in.Type != TDir:
 			return ErrNotDir // flags are a directory's (docs/02 §SetAttr)
-		case c.Flags&^knownFlags != 0:
+		case c.Flags&^knownFlags != 0, !(Inode{Flags: c.Flags}).Library().Known():
 			return ErrBadCommand
 		case a.st.lineage(c.Ino).inTrash:
 			return ErrInTrash

@@ -199,6 +199,25 @@ export interface Entry {
   cover?: string;
   /** a folder resolved to no cover: the page asks for no thumbnail (I-165) */
   no_cover?: boolean;
+  /** a folder under a library no art can come from: its title card's words (docs/13 §10, I-280) */
+  card?: Card;
+}
+
+/** Card is a title card's words: the analysed title and the line under it. */
+export interface Card {
+  title: string;
+  sub?: string;
+}
+
+/** MediaFile is one file of a game: a disc or another dump of the title (docs/13 §10). */
+export interface MediaFile {
+  path: string;
+  name: string;
+  size: number;
+  disc?: number;
+  regions?: string[];
+  revision?: string;
+  flags?: string[];
 }
 
 /** DirInfo describes the listed folder: effective flags, pin, place in the trash. */
@@ -397,7 +416,7 @@ export async function putThumb(path: string, version: number, jpeg: Blob): Promi
 export interface MediaItem {
   ino: number;
   path: string;
-  kind: "movie" | "show" | "season" | "episode" | "album";
+  kind: "movie" | "show" | "season" | "episode" | "album" | "platform" | "game";
   title: string;
   sort_title: string;
   year?: number;
@@ -427,6 +446,25 @@ export interface MediaItem {
   seasons?: { n: number; title: string; poster?: string; episodes: MediaItem[] }[];
   tracks?: string[];
   catalogued: boolean;
+  /** the name analyser's fields (docs/18 §8a) */
+  date?: string;
+  absolute?: number;
+  part?: number;
+  edition?: string;
+  quality?: string[];
+  languages?: string[];
+  discs?: number;
+  /** a platform's or a game's (docs/13 §10) */
+  platform?: string;
+  regions?: string[];
+  revision?: string;
+  flags?: string[];
+  developer?: string;
+  publisher?: string;
+  players?: string;
+  variants?: number;
+  games?: MediaItem[];
+  files?: MediaFile[];
 }
 
 export interface MediaLibrary {

@@ -3,6 +3,7 @@ package vfs
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/zombar/tailraid/internal/meta"
 )
@@ -91,10 +92,16 @@ func (f *FS) PurgeAll() error {
 	}
 }
 
-// SetFlags sets a directory's protected and nsfw flags (docs/01, docs/13 §4).
+// SetFlags sets a directory's protected and nsfw flags and its library kind (docs/01,
+// docs/13 §4). The roms kind is codec 10: until every live member reads it the gateway
+// answers ErrCodec itself, since an older leader would refuse the entry as malformed
+// (I-277).
 func (f *FS) SetFlags(filename string, flags uint8) error {
 	if isSnapshotPath(meta.SplitPath(filename)) {
 		return ErrReadOnly
+	}
+	if (meta.Inode{Flags: flags}).Library() >= meta.LibraryRoms && !f.codecAtLeast(meta.CodecRoms) {
+		return fmt.Errorf("vfs: the roms library kind needs every member at codec %d: %w", meta.CodecRoms, meta.ErrCodec)
 	}
 	in, err := f.resolve(filename)
 	if err != nil {

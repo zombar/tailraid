@@ -416,7 +416,7 @@ func TestFSM_Protected_Table(t *testing.T) {
 	fl := tf.create(RootIno, "file")
 	// flags are a directory's, with known bits only
 	tf.fails(Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: fl, Mask: AttrFlags, Flags: FlagProtected, Now: 1}}, ErrNotDir)
-	tf.fails(Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: p, Mask: AttrFlags, Flags: 1 << 4, Now: 1}}, ErrBadCommand)
+	tf.fails(Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: p, Mask: AttrFlags, Flags: 1 << 5, Now: 1}}, ErrBadCommand)
 	tf.flags(p, FlagProtected|FlagNSFW)
 	if in := tf.inode(p); in.Flags != FlagProtected|FlagNSFW {
 		t.Fatalf("flags: %+v", in)

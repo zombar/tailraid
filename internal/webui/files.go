@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -35,6 +36,37 @@ type Entry struct {
 	Thumb     bool      `json:"thumb,omitempty"`      // GET /api/thumb answers without a PUT: stored, or an image or audio file
 	Cover     string    `json:"cover,omitempty"`      // directories: the audio entry whose picture is the folder's tile (I-165)
 	NoCover   bool      `json:"no_cover,omitempty"`   // directories: resolved to no cover (I-165)
+	Card      *Card     `json:"card,omitempty"`       // directories under a library without a known cover: the title card's words (I-280)
+}
+
+// Card is a title card's words: the analysed title and the line under it, a year or a
+// platform's folder name (docs/13 §10, I-280).
+type Card struct {
+	Title string `json:"title"`
+	Sub   string `json:"sub,omitempty"`
+}
+
+// cardOf is the title card of a folder under a library of kind lib, from its name alone.
+func cardOf(name string, lib meta.LibraryKind, platform bool) *Card {
+	switch lib {
+	case meta.LibraryNone:
+		return nil
+	case meta.LibraryRoms:
+		if platform {
+			if t := search.PlatformTitle(name); t != name {
+				return &Card{Title: t, Sub: name}
+			}
+			return &Card{Title: name}
+		}
+	case meta.LibraryMovies, meta.LibraryTV, meta.LibraryMusic:
+	}
+	ctx := map[meta.LibraryKind]search.Context{meta.LibraryMovies: search.CtxMovies, meta.LibraryTV: search.CtxTV, meta.LibraryMusic: search.CtxMusic, meta.LibraryRoms: search.CtxRoms}[lib]
+	a := search.Analyze(name, nil, ctx)
+	c := &Card{Title: a.Title}
+	if a.Year != 0 {
+		c.Sub = strconv.Itoa(a.Year)
+	}
+	return c
 }
 
 // DirInfo describes the listed folder itself: the effective flags (its own or an
@@ -229,6 +261,17 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 	dir := DirInfo{Cover: cover, NoCover: known && cover == ""}
 	var lib meta.LibraryKind
 	dir.Protected, dir.NSFW, lib = s.effective(t.in)
+	for i := range entries { // a folder whose art may not exist carries its title card for the tile's miss (I-280)
+		e := &entries[i]
+		if e.Type != "dir" || e.Cover != "" || e.DeletedAt != "" {
+			continue
+		}
+		k := lib
+		if own, ok := meta.ParseLibraryKind(e.Library); ok && own != meta.LibraryNone {
+			k = own
+		}
+		e.Card = cardOf(e.Name, k, k == meta.LibraryRoms && t.in.Library() == meta.LibraryRoms)
+	}
 	if lib != meta.LibraryNone {
 		dir.Library = lib.String()
 	}

@@ -19,7 +19,7 @@ import (
 // keeps the bytes and decodes what a query touches.
 const (
 	segMagic   = "TRSI"
-	segVersion = 1
+	segVersion = 3 // 2: the name analyser's fields (docs/18 §8a), 3: a game's (§8b); older versions are still read
 	dictBlock  = 32
 	trailerLen = 4 + 8 + sha256.Size
 	// RebuildAt is the chain length past which a pass merges the chain and its batch
@@ -273,6 +273,7 @@ type Reader struct {
 	post    int
 	cat     int
 	catEnd  int
+	version uint8
 }
 
 // Decode verifies a segment's trailer and parses its layout.
@@ -289,10 +290,11 @@ func Decode(seq uint64, b []byte) (*Reader, error) {
 		return nil, fmt.Errorf("%w: trailer hash", ErrSegment)
 	}
 	c := &cursor{b: b[:n]}
-	if string(c.take(4)) != segMagic || c.u8() != segVersion {
+	magic, version := string(c.take(4)), c.u8()
+	if magic != segMagic || version < 1 || version > segVersion {
 		return nil, fmt.Errorf("%w: header", ErrSegment)
 	}
-	r := &Reader{Seq: seq, b: b[:n], size: len(b)}
+	r := &Reader{Seq: seq, b: b[:n], size: len(b), version: version}
 	nc := c.int()
 	for i := 0; i < nc && c.err == nil; i++ {
 		r.Chain = append(r.Chain, c.uvarint())
@@ -463,7 +465,7 @@ func (r *Reader) Postings(off int) []Posting {
 }
 
 // Catalog decodes the catalogue.
-func (r *Reader) Catalog() []Entry { return decodeCatalog(r.b[r.cat:r.catEnd]) }
+func (r *Reader) Catalog() []Entry { return decodeCatalog(r.b[r.cat:r.catEnd], r.version) }
 
 // catalogBytes is the encoded catalogue, for the no-change comparison.
 func (r *Reader) catalogBytes() []byte { return r.b[r.cat:r.catEnd] }

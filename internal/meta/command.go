@@ -49,6 +49,12 @@ const (
 	// gated by version equality, so a v9 Commit still carries Sums and a v9 Trash writes
 	// Own as a byte (in v8 the version was the flag).
 	commandVersionV9 = 9
+	// commandVersionV10: a SetAttr whose Flags carry the roms library kind (docs/18 §9,
+	// I-277); an older binary rejects the third bit.
+	commandVersionV10 = 10
+	// CodecRoms is the codec every live member must read before a gateway sets the roms
+	// kind: a v10 entry forwarded to an older leader is refused as malformed.
+	CodecRoms = commandVersionV10
 	// CodecRewrite is the codec every live member must read before a gateway sends a
 	// codec-9 field: a v9 entry forwarded to an older leader is refused as malformed,
 	// not with ErrCodec, so the gateway asks the prober's MinCodec first.
@@ -62,7 +68,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 9
+	CodecVersion = 10
 )
 
 // SetAttr mask bits.
@@ -347,6 +353,11 @@ func needsV7(c Command) bool {
 	return false
 }
 
+// needsV10 reports whether c sets the roms library kind, a codec-10 field (I-277).
+func needsV10(c Command) bool {
+	return c.Op == OpSetAttr && c.SetAttr != nil && c.SetAttr.Mask&AttrFlags != 0 && (Inode{Flags: c.SetAttr.Flags}).Library() >= LibraryRoms
+}
+
 // needsV6 reports whether c carries the library kind, a codec-6 field: an older binary
 // rejects the bits, so the leader refuses the entry while such a member is live (I-210).
 func needsV6(c Command) bool {
@@ -424,6 +435,8 @@ func CommandCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV10(c):
+		return commandVersionV10
 	case needsV9(c):
 		return commandVersionV9
 	case needsV8(c):
@@ -448,7 +461,7 @@ func CommandCodec(c Command) uint8 {
 func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
 	v := CommandCodec(c)
-	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6, v == commandVersionV5 || v == commandVersionV9
+	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9
 	v9 := v == commandVersionV9
 	v2 := v == commandVersionV2 || v == commandVersionV7 // a mirror row carries its Host as a disk row does
 	w.u8(v)
@@ -652,7 +665,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && (v < commandVersion || v > commandVersionV9) {
+	if r.err == nil && (v < commandVersion || v > commandVersionV10) {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -679,6 +692,8 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpTrash
 	case commandVersionV9:
 		legal = c.Op == OpCommit || c.Op == OpTrash || c.Op == OpRename
+	case commandVersionV10:
+		legal = c.Op == OpSetAttr
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport
@@ -720,13 +735,16 @@ func DecodeCommand(b []byte) (Command, error) {
 		}
 	case OpSetAttr:
 		c.SetAttr = &SetAttr{Ino: Ino(r.u64()), Mask: r.u8(), Mode: r.u32(), Uid: r.u32(), Gid: r.u32(), Atime: r.i64(), Mtime: r.i64(), Now: r.i64()}
-		if v == commandVersionV4 || v == commandVersionV6 {
+		if v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10 {
 			c.SetAttr.Flags = r.u8()
 			if r.err == nil && c.SetAttr.Mask&AttrFlags == 0 {
 				return c, fmt.Errorf("meta: SetAttr in command version %d without AttrFlags", v)
 			}
 			if r.err == nil && v < commandVersionV6 && c.SetAttr.Flags&FlagLibraryMask != 0 {
 				return c, fmt.Errorf("meta: library bits in command version %d", v) // never written; an older reader would reject them (I-210)
+			}
+			if k := (Inode{Flags: c.SetAttr.Flags}).Library(); r.err == nil && (k >= LibraryRoms) != (v == commandVersionV10) {
+				return c, fmt.Errorf("meta: library kind %d in command version %d", k, v) // roms is version 10 and only it (I-277)
 			}
 		}
 	case OpCommit:

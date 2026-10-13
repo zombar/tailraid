@@ -1,0 +1,169 @@
+# Real names from a volume (films, tv, music, roms; 2026-10-13), the fields Analyze must
+# give (docs/18 §8a, I-276). Columns: name, folders above it nearest first ("|"-separated,
+# "-" for none), expected fields as key=value separated by ";". Only the keys listed are
+# checked; lists are ","-separated. Lines starting with # are comments.
+#
+# --- films: folders and the files inside them
+## lib=movies
+28 Years Later The Bone Temple (2026) [1080p] [WEBRip] [5.1] [YTS.BZ]	-	title=28 Years Later The Bone Temple;year=2026;quality=1080p,WEBRip,5.1
+28.Years.Later.The.Bone.Temple.2026.1080p.WEBRip.x264.AAC5.1-[YTS.BZ].mp4	28 Years Later The Bone Temple (2026) [1080p] [WEBRip] [5.1] [YTS.BZ]	title=28 Years Later The Bone Temple;year=2026;quality=1080p,WEBRip,x264,AAC5.1
+Alien Romulus 2024 1080p BluRay HEVC x265 5.1 BONE copy.mkv	-	title=Alien Romulus;year=2024;quality=1080p,BluRay,HEVC,x265,5.1
+Ash.2025.1080p.WEB-DL.DDP5.1.x265-NeoNoir.mkv	-	title=Ash;year=2025;quality=1080p,WEB-DL,DDP5.1,x265
+Bugonia (2025) [1080p] [WEBRip] [5.1] [YTS.LT]	-	title=Bugonia;year=2025
+Digging.Up.the.Marrow.2014.1080p.BluRay.x264.YIFY.mp4	-	title=Digging Up the Marrow;year=2014
+Digging Up the Marrow (2014) [1080p]	-	title=Digging Up the Marrow;year=2014;quality=1080p
+Predator-Badlands.2025.1080p.10bit.DS4K.iTunes.WEBRip.[Org.DDP5.1-Hindi+DDPA5.1-English].ESub.HEVC-The.PunisheR copy.mkv	-	title=Predator-Badlands;year=2025
+Project Hail Mary [2026] HDTS YG	-	title=Project Hail Mary;year=2026;quality=HDTS
+Project.Hail.Mary.2025.1080p.hdts.h264.Dual YG.mkv	Project Hail Mary [2026] HDTS YG	title=Project Hail Mary;year=2025
+Secret.Sunshine.2007.720p.BluRay.x264.AAC-[YTS.MX].mp4	-	title=Secret Sunshine;year=2007;quality=720p,BluRay,x264,AAC
+The Astronaut 2025 1080p WEB-DL HEVC x265 BONE.mkv	-	title=The Astronaut;year=2025
+Upgrade (2018) [WEBRip] [1080p] [YTS.AM]	-	title=Upgrade;year=2018;quality=WEBRip,1080p
+War.Machine.2026.iTA-ENG.WEBDL.2160p.HEVC.HDR.x265-CYBER copy.mkv	-	title=War Machine;year=2026;langs=ITA,ENG;quality=WEBDL,2160p,HEVC,HDR,x265
+www.UIndex.org    -    Lost River 2015 1080p AMZN WEB-DL DDP5 1 H 264-GPRS	-	title=Lost River;year=2015
+Lost River 2015 1080p AMZN WEB-DL DDP5 1 H 264-GPRS.mkv	-	title=Lost River;year=2015
+Blade.Runner.2049.2017.1080p.BluRay.x264-GROUP	-	title=Blade Runner 2049;year=2017
+2001 A Space Odyssey (1968)	-	title=2001 A Space Odyssey;year=1968
+Dune Part Two 2024 Extended Cut	-	title=Dune Part Two;year=2024;edition=Extended Cut
+Some Film (2010) Director's Cut	-	title=Some Film;year=2010;edition=Director's Cut
+#
+# --- tv: pack folders, season folders, episodes
+## lib=tv
+CHILDHOODS END - Part 1, 2, 3 (Complete 2015 TV Miniseries) - 720p BluRay x264	-	title=CHILDHOODS END;year=2015
+Childhood's END - Part 01 of 03, The Overloads (720p BluRay).mp4	CHILDHOODS END - Part 1, 2, 3 (Complete 2015 TV Miniseries) - 720p BluRay x264	title=Childhood's END;part=1;parts=3;eptitle=The Overloads;quality=720p,BluRay
+Childhood's END - Part 03 of 03, The Children (720p BluRay).mp4	-	part=3;parts=3;eptitle=The Children
+Dark.Matter.2024.Season.1.COMPLETE.1080p.ATVP.WEB-DL.x264.ESubs.[6.5GB].[MP4].[S01.Full]-[y2flix]	-	title=Dark Matter;year=2024;seasons=1
+Dark.Matter.2024.S01E01.1080p.ATVP-[y2flix.cc].mp4	-	title=Dark Matter;year=2024;season=1;episode=1;to=1
+Dark.Matter.2024.S01E09.1080p.ATVP-[y2flix.cc].mp4	-	season=1;episode=9
+Invasion.2021.S01.PROPER.WEBRip.x264-ION10	-	title=Invasion;year=2021;seasons=1
+Invasion.2021.S02.1080p.x265-ELiTE	-	title=Invasion;year=2021;seasons=2
+Invasion.S01E10.PROPER.WEBRip.x264-ION10	Subs|Invasion.2021.S01.PROPER.WEBRip.x264-ION10	title=Invasion;season=1;episode=10
+Pluribus.S01.1080p.x265-ELiTE	-	title=Pluribus;seasons=1
+Pluribus.S01E07.1080p.x265-ELiTE.mkv	Pluribus.S01.1080p.x265-ELiTE	title=Pluribus;season=1;episode=7
+Severance 2022 Seasons 1 and 2 Complete 1080p WEB x264 [i_c]	-	title=Severance;year=2022;seasons=1,2
+Silo 2023 Seasons 1 and 2 Complete 1080p WEB x264 [i_c]	-	title=Silo;year=2023;seasons=1,2
+Severance - S01E01 - Good News About Hell.mkv	Season 1|Severance 2022 Seasons 1 and 2 Complete 1080p WEB x264 [i_c]	title=Severance;season=1;episode=1;eptitle=Good News About Hell
+Severance - S02E01 - Hello, Ms. Cobel.mkv	Season 2	season=2;episode=1;eptitle=Hello, Ms. Cobel
+Silo - S01E02 - Holston’s Pick.mkv	Season 1	title=Silo;season=1;episode=2;eptitle=Holston’s Pick
+Star Trek Starfleet Academy S01e01-10 (1080p Ita Eng Spa h265 10bit SubS) byMe7alh	-	title=Star Trek Starfleet Academy;seasons=1
+Star.Trek.Starfleet.Academy.S01e04.Ita.Eng.Spa.1080p.h265.10bit.SubS-Me7alh.mkv	-	title=Star Trek Starfleet Academy;season=1;episode=4;eptitle=;langs=ITA,ENG,SPA
+Star.Trek.Strange.New.Worlds.S01.ITA.ENG.1080p.AMZN.WEBRip.AAC.x265-Pir8	-	title=Star Trek Strange New Worlds;seasons=1;langs=ITA,ENG
+Star.Trek.Strange.New.Worlds.2x01.Il.Circolo.Spezzato.ITA.ENG.1080p.AMZN.WEBRip.AAC.x265-Pir8.mkv	-	title=Star Trek Strange New Worlds;season=2;episode=1;eptitle=Il Circolo Spezzato;langs=ITA,ENG
+Star.Trek.Strange.New.Worlds.1x06.Portaci.Dove.La.Sofferenza.Non.Arriva.ITA.ENG.1080p.AMZN.WEBRip.AAC.x265-Pir8.mkv	-	season=1;episode=6;eptitle=Portaci Dove La Sofferenza Non Arriva
+Show - S02E01E02 - Pilot.mkv	-	season=2;episode=1;to=2;eptitle=Pilot
+Show S03E05-E06.mkv	-	season=3;episode=5;to=6
+# a daily show and anime (shapes the volume does not hold yet)
+The.Daily.Show.2024.03.14.Some.Guest.1080p.WEB.h264-GROUP.mkv	-	title=The Daily Show;date=2024-03-14;eptitle=Some Guest
+Late Show 14.03.2024.mkv	-	title=Late Show;date=2024-03-14
+[SubsPlease] Sousou no Frieren - 12 (1080p) [ABCD1234].mkv	-	title=Sousou no Frieren;abs=12;group=SubsPlease;quality=1080p
+[Erai-raws] One Piece - 1085 [720p].mkv	-	title=One Piece;abs=1085;group=Erai-raws
+Episode 12.mkv	Season 1	season=1;episode=12
+#
+# --- music: album folders, disc and category folders, tracks
+## lib=music
+1991 - Holidays In Eden	-	title=Holidays In Eden;year=1991
+[2006] Talk [Remixes EP]	-	title=Talk;year=2006
+[2003] Clocks [Japanese Edition EP]	-	title=Clocks;year=2003;edition=Japanese Edition
+(2016) The Pineapple Thief - 8 Years Later [16Bit-44.1kHz]	The Pineapple Thief	title=8 Years Later;year=2016
+(2006) The Pineapple Thief - Little Man  (Remastered) [16Bit-44.1kHz]	The Pineapple Thief	title=Little Man;year=2006;edition=Remastered
+Oasis - 2000 - Standing on the Shoulder of Giants	Oasis	title=Standing on the Shoulder of Giants;year=2000
+Infected Mushroom - 2003 - Converting Vegetarians (2CD)	Infected Mushroom	title=Converting Vegetarians;year=2003;discs=2
+1981_-_Face_Value_(Atlantic_Gold_Standard_82520-2._US)._1993	-	title=Face Value;year=1981
+Strangeways, Here We Come (September 1987)	-	title=Strangeways, Here We Come;year=1987
+2001 The Universal Masters Collection @320	-	title=The Universal Masters Collection;year=2001
+1983 90125 (Remastered and Expanded) @320	1 Studio|YES	title=90125;year=1983;edition=Remastered and Expanded
+1973 Tales From Topographic Oceans (Remastered and Expanded) (2 CD) @320	-	title=Tales From Topographic Oceans;year=1973;discs=2
+1974  The Lamb Lies Down On Broadway	-	title=The Lamb Lies Down On Broadway;year=1974
+[1994] Seal (Japanese Edition)	-	title=Seal;year=1994;edition=Japanese Edition
+Moderat - III [Deluxe Edition] (2016) 320	Moderat	title=III;year=2016;edition=Deluxe Edition
+Give Yourself A Hand (1998)	-	title=Give Yourself A Hand;year=1998
+2012 - Sounds That Can't Be Made  [MP3 VBR]	-	title=Sounds That Can't Be Made;year=2012
+1970 - Kiln House (1990 Reissue)	-	title=Kiln House;year=1970
+Alice In Chains	-	title=Alice In Chains
+Oasis - 1995 - (What's The Story) Morning Glory	Oasis	title=(What's The Story) Morning Glory;year=1995
+1992 - Sap - EP	Alice In Chains	title=Sap;year=1992
+2004_-_Finally.The.First.Farewell.Tour.2CD.(DVDRip).(224kbps)	Phil Collins	title=Finally The First Farewell Tour;year=2004;discs=2
+2006 - The Essential - 2 Disc	Alice In Chains	title=The Essential;year=2006;discs=2
+2005 - Pieces Of A Dream (2CD Deluxe Edition)	Anastacia	title=Pieces Of A Dream;year=2005;edition=Deluxe Edition;discs=2
+1995 - Massive Attack - No Protection	Massive Attack	title=No Protection;year=1995
+A Worm's Life (1996)	Crash Test Dummies	title=A Worm's Life;year=1996
+Duran Duran - 08 - UMF.mp3	Big Thing|Duran Duran	track=8;title=UMF
+Sting - 4 - You Still Touch Me.mp3	Mercury Falling|Sting	track=4;title=You Still Touch Me
+06. There Are Many Dangers - Crash Test Dummies.mp3	God Shuffled His Feet|Crash Test Dummies	track=6;title=There Are Many Dangers
+11._Dont_Let_Him_Steal_Your_Heart_Away_(Demo).mp3	-	track=11;title=Dont Let Him Steal Your Heart Away (Demo)
+06-She's Madonna.mp3	-	track=6;title=She's Madonna
+Mer de Noms	-	title=Mer de Noms
+Ramin.Djawadi.Westworld.Season.1.2016.soundtrack.320-mp3	-	title=Ramin Djawadi Westworld;year=2016
+Once More With Feeling_ Singles 1996-2004	Placebo	title=Once More With Feeling: Singles 1996-2004
+D1	-	role=disc;disc=1
+CD1 Trance Side	-	role=disc;disc=1
+CD 2	-	role=disc;disc=2
+CD10	-	role=disc;disc=10
+cd2	-	role=disc;disc=2
+Disc 1 (Rotten Apples)	-	role=disc;disc=1
+DISC TWO	-	role=disc;disc=2
+Disc I	-	role=disc;disc=1
+1 Studio	-	role=category
+2 - Compilations	-	role=category
+0 - Studio Albums	-	role=category
+Studio Albums	-	role=category
+Albums	-	role=category
+Singles	-	role=category
+1989 - MP3 CBR Original	-	role=format
+Subs	-	role=extras
+Sample	-	role=extras
+Season 1	-	role=season
+Holidays In Eden	-	role=none
+01 -Floaty.mp3	-	track=1;title=Floaty
+05. Rescue Me.mp3	-	track=5;title=Rescue Me
+6 Westward bound.mp3	-	track=6;title=Westward bound
+03_-_Will_You_Still_Be_Waiting_(instrumental).mp3	-	track=3;title=Will You Still Be Waiting (instrumental)
+06  - The Smiths - Bigmouth Strikes Again.mp3	-	track=6;title=The Smiths - Bigmouth Strikes Again
+01 - Trouble (Live @ Rockefeller Music Hall).mp3	-	track=1;title=Trouble (Live @ Rockefeller Music Hall)
+18. House Of The Rising Sun.mp3	-	track=18;title=House Of The Rising Sun
+1-01 Intro.mp3	-	disc=1;track=1;title=Intro
+#
+# --- roms: No-Intro, GoodTools, Redump and Switch scene names
+## lib=roms
+Donkey Kong Country (USA) (Rev 2).zip	USA|SNES	title=Donkey Kong Country;regions=USA;rev=Rev 2
+Batman - Revenge of the Joker (USA) (Proto).zip	USA|SNES	title=Batman - Revenge of the Joker;regions=USA;flags=proto
+Itchy & Scratchy Game, The (USA).zip	USA|SNES	title=The Itchy & Scratchy Game;regions=USA
+Eurit (USA) (Proto) (1995-05-29).zip	USA|SNES	title=Eurit;flags=proto;date=1995-05-29
+R-Type Tactics (EU).iso	PSP	title=R-Type Tactics;regions=EU
+OCTOPATH TRAVELER II [0100A3501946E000][USA][v0].xci	Games|Switch	title=OCTOPATH TRAVELER II;regions=USA;flags=base
+Virtual Pro Wrestling 2 - Oudou Keishou.zip	Translations|N64	title=Virtual Pro Wrestling 2 - Oudou Keishou;flags=translation
+Adventures of Kid Kleets, The (USA) (En,Fr,Es).zip	USA|SNES	title=The Adventures of Kid Kleets;regions=USA;langs=En,Fr,Es
+Donkey Kong Country 2 - Diddy's Kong Quest (USA) (En,Fr) (Rev 1).zip	USA|SNES	title=Donkey Kong Country 2 - Diddy's Kong Quest;regions=USA;langs=En,Fr;rev=Rev 1
+Game Genie (USA) (v2.0) (Unl).zip	USA|SNES	title=Game Genie;regions=USA;rev=v2.0;flags=unl
+Metal Jack (USA) (Proto) (1992-07-30).zip	USA|SNES	title=Metal Jack;regions=USA;flags=proto;date=1992-07-30
+Fireteam Rogue (USA) (Proto 1).zip	USA|SNES	title=Fireteam Rogue;flags=proto
+Super Tennis (USA) (Arcade).zip	USA|SNES	title=Super Tennis;regions=USA
+Tetris Attack (USA) (En,Ja).zip	USA|SNES	langs=En,Ja
+Field Commander (EU - AU).iso	PSP	title=Field Commander;regions=EU,AU
+Tekken 6 (EU).iso	PSP	title=Tekken 6;regions=EU
+Crisis Core - Final Fantasy 7 (EU).iso	PSP	title=Crisis Core - Final Fantasy 7;regions=EU
+Tom Clancy's Splinter Cell - Chaos Theory (Disc 2).iso	Gamecube	title=Tom Clancy's Splinter Cell - Chaos Theory;disc=2
+Mario Kart - Double Dash!! (Bonus Disc).iso	Gamecube	title=Mario Kart - Double Dash!!;flags=bonus
+Baldur's Gate - Dark Alliance.iso	Gamecube	title=Baldur's Gate - Dark Alliance
+Gran Turismo 2 (Arcade Mode).pbp	PS1	title=Gran Turismo 2
+Final Fantasy VII (Europe) (Disc 1).pbp	PS1	title=Final Fantasy VII;regions=Europe;disc=1
+Super Mario 64 (Splitscreen Multiplayer).zip	Hacks|N64	title=Super Mario 64;flags=hack
+Bomberman 64 - Arcade Edition.zip	Translations|N64	title=Bomberman 64 - Arcade Edition;flags=translation
+Bakuretsu Muteki Bangai-O.zip	Japan|N64	title=Bakuretsu Muteki Bangai-O;regions=Japan
+Dinosaur Planet.zip	Unreleased|N64	title=Dinosaur Planet;flags=unreleased
+GoldenEye 007 (All Unlockables).zip	N64	title=GoldenEye 007
+007 - The World Is Not Enough.zip	N64	title=007 - The World Is Not Enough
+Zelda (U) [!].z64	N64	title=Zelda;regions=USA;flags=verified
+Some Game (J) [T+Eng1.0].sfc	SNES	title=Some Game;regions=Japan;flags=translation
+OCTOPATH TRAVELER 0 [01005270232F2000].xci	Games|Switch	title=OCTOPATH TRAVELER 0;titleid=01005270232F2000;flags=base
+[DLC] TLoZ BotW DLC Pack 1.nsp	Games|Switch	title=TLoZ BotW DLC Pack 1;flags=dlc
+Borderlands 3 [01009970122E4000][USA][v0].xci	Games|Switch	title=Borderlands 3;regions=USA;rev=v0;titleid=01009970122E4000;flags=base
+Borderlands 3 [01009970122E4800][USA][v196608].nsp	Games|Switch	title=Borderlands 3;titleid=01009970122E4800;flags=update
+Borderlands 3 [Bounty of Blood DLC][01009970122E5004][USA][v0].nsp	Games|Switch	title=Borderlands 3;titleid=01009970122E5004;flags=dlc
+Disgaea 1 Complete [01004B100AF18000] [v0].nsp	Games|Switch	title=Disgaea 1 Complete;flags=base
+USA	-	role=region
+Japan	-	role=region
+Hacks	-	role=category
+Translations	-	role=category
+Unreleased	-	role=category
+Games	-	role=category
+Keys-22.1.0	-	role=extras

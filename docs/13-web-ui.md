@@ -479,6 +479,26 @@ the names only, so it is the same before and after a pass. A section lists at mo
 every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
 now-playing bar (§6); "Open folder" goes to the file browser.
 
+A **ROMs** library (docs/18 §8b, I-279) lists its platforms as cards (4:3, the platform's
+display name and its folder name, the game count), and `#/media/item/<platform>` its
+games by title, three to four abreast: one card per title, its region, revision and flags
+(`proto`, `hack`, `beta`, `dlc`, in the warn colour) as chips under the name, `+n` for
+the other variants. A game's page shows its box art or a title card, its facts (platform,
+year, developer, publisher, players), its region and language chips, the description of
+its `gamelist.xml` when there is one, and its files (one row per disc or variant, the
+size, the file route as the download). It has no Play and no launch route: launching is
+not built, and the server has no route that runs anything.
+
+**Title cards** (I-280). Where art cannot exist (a platform, a game without box art, a
+film or show folder whose video no browser has framed and no sidecar names a poster),
+the page draws a title card instead of the generic icon: the analysed title (docs/18 §8a)
+on the surface colour, the year or the platform under it in mono, an accent rule on top.
+It is markup, not an image, so it follows the theme; the title comes from the item's
+catalogue entry, or, in the file browser's tiles, from a folder's `card` (`title`, `sub`) in
+`/api/ls`, which the node fills from the name alone for every folder under a library
+whose cover is not known (a folder of video no browser can frame never settles), reading
+no file (I-165); the tile draws it when no art arrives.
+
 ## Design
 
 The look is the brand sheet (`assets/brand-sheet.svg`) applied to an operations page: a
@@ -902,6 +922,14 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   reaches the page; a link keeps only an `http`, `https`, `mailto` or `#` target, a relative
   `.md` link becomes the file route, a relative link to anything else `/files/`, an image
   only a relative volume path; the fragment's bytes are a pure function of the source.
+- **I-279** — Under a `roms` library `/api/media` lists platforms, a platform's games
+  (one per title, variants carried with it) and a game's fields, discs and files, the
+  same on every node; the only routes a game links to are the file route and the file
+  browser; no route launches, emulates or reads a ROM.
+- **I-280** — A tile or a poster whose art does not exist is a title card: the analysed
+  title and year or platform as markup, never an image the node makes or stores; `/api/ls`
+  carries `card` (`title`, `sub`) for a folder under a library without a known cover, from
+  its name alone, and the tile draws it when no art arrives.
 - **I-212** — `/api/media` lists a flagged folder's items from the live FSM with the
   catalogue's metadata where an entry exists and the item's name otherwise, a TV
   library's folders whose names clean to the same title and year as one show with the
@@ -957,6 +985,8 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
+| I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
+| I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
