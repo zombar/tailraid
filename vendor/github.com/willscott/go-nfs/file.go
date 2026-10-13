@@ -253,16 +253,20 @@ func (s *SetFileAttributes) Apply(changer billy.Change, fs billy.Filesystem, fil
 		if errors.Is(err, os.ErrPermission) {
 			return &NFSStatusError{NFSStatusAccess, err}
 		} else if err != nil {
-			return err
+			return &NFSStatusError{NFSStatusIO, err}
 		}
 		if *s.SetSize > math.MaxInt64 {
+			_ = fp.Close()
 			return &NFSStatusError{NFSStatusInval, os.ErrInvalid}
 		}
+		// tailraid: a failed size change is an NFS status (EFBIG, ENOSPC), not an RPC
+		// failure the client reports as an I/O error (I-238)
 		if err := fp.Truncate(int64(*s.SetSize)); err != nil {
-			return err
+			_ = fp.Close()
+			return &NFSStatusError{statusFromWriteError(err), err}
 		}
 		if err := fp.Close(); err != nil {
-			return err
+			return &NFSStatusError{NFSStatusIO, err}
 		}
 	}
 

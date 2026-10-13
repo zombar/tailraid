@@ -78,13 +78,13 @@ func onRename(ctx context.Context, w *response, userHandle Handler) error {
 
 	err = fs.Rename(fromLoc, toLoc)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
+		// tailraid: the RFC's status for the reason (I-238); a target folder with
+		// entries is NFS3ERR_EXIST for RENAME (RFC 1813 §3.3.14), NOTEMPTY being RMDIR's
+		st := namespaceStatus(err)
+		if st == NFSStatusNotEmpty {
+			st = NFSStatusExist
 		}
-		if os.IsPermission(err) {
-			return &NFSStatusError{NFSStatusAccess, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return &NFSStatusError{st, err}
 	}
 
 	if err := userHandle.InvalidateHandle(fs, oldHandle); err != nil {
