@@ -4,7 +4,8 @@
 // fills in the catalogue's metadata; a film without sidecars shows its cleaned name and
 // the browser-made frame. Routes: #/media and #/media/item/<path>.
 
-import { clear, h, svg, titleCard } from "./dom.ts";
+import { clear, h, titleCard } from "./dom.ts";
+import { icon } from "./icons.ts";
 import { fileURL, media, mediaItem, thumbURL, type MediaFile, type MediaItem, type MediaLibrary } from "./api.ts";
 import { lazy } from "./thumbs.ts";
 import { basename, browseHash, bytes, count, dirname, encodePathForHash, fileHash, session } from "./util.ts";
@@ -34,13 +35,7 @@ function cardSub(it: MediaItem): string | undefined {
 }
 
 function glyph(kind: string): SVGElement {
-  const d =
-    kind === "album"
-      ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"
-      : kind === "episode"
-        ? "M4 2.5l9 5.5-9 5.5z"
-        : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
-  return svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d }));
+  return icon(kind === "album" ? "album" : "movie");
 }
 
 function duration(min: number | undefined): string {
@@ -71,25 +66,33 @@ function frameOf(img: HTMLImageElement, it: MediaItem, onMiss: () => void): bool
   return true;
 }
 
-function sub(it: MediaItem): string {
-  if (it.kind === "album") return [it.artist, it.year].filter(Boolean).join(" · ");
-  const parts: string[] = [];
-  if (it.year) parts.push(String(it.year));
-  if (it.kind === "show" && it.children) parts.push(`${it.children} ${it.children === 1 ? "season" : "seasons"}`);
-  if (it.kind === "platform") parts.push(`${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`);
-  if (it.kind === "movie") parts.push(it.runtime ? duration(it.runtime) : it.plot ? "" : "no sidecar");
-  return parts.filter(Boolean).join(" · ");
+/** meta is the card's line under the title: the year (an album's artist) left, a note right. */
+function meta(it: MediaItem): string[] {
+  if (it.kind === "album") return [it.artist ?? "", it.year ? String(it.year) : ""];
+  return [it.year ? String(it.year) : "", it.kind === "movie" && !it.runtime && !it.plot ? "no sidecar" : ""];
 }
+
+/** fact is the chip over the art's corner: a film's runtime, a show's seasons, a platform's games. */
+function fact(it: MediaItem): string {
+  if (it.kind === "movie" && it.runtime) return duration(it.runtime);
+  if (it.kind === "show" && it.children) return `${it.children} ${it.children === 1 ? "season" : "seasons"}`;
+  if (it.kind === "platform") return `${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`;
+  return "";
+}
+
+const metaSpans = (it: MediaItem) => meta(it).map((t) => h("span", null, t));
 
 function posterTile(it: MediaItem): HTMLElement {
   const veiled = it.nsfw && !session.get("tr.revealed", false);
   const box = h("span", { class: "art" });
-  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, veiled ? "nsfw · tap to show" : sub(it));
+  const chip = fact(it) ? h("span", { class: "ov br" }, fact(it)) : null;
+  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, ...(veiled ? [h("span", null, "nsfw · tap to show")] : metaSpans(it)));
   const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), below);
   const missing = () => {
     clear(box);
     // art that does not exist is a title card (I-280); an album keeps its note glyph
     box.append(it.kind === "album" ? glyph(it.kind) : titleCard(it.title, cardSub(it)));
+    if (chip) box.append(chip);
     if (it.kind !== "platform") a.classList.add("missing");
   };
   const src = art(it);
@@ -100,13 +103,14 @@ function posterTile(it: MediaItem): HTMLElement {
     img.addEventListener("error", missing);
     box.append(img);
   } else missing();
+  if (chip && !box.contains(chip)) box.append(chip);
   if (veiled) {
     a.addEventListener("click", (ev) => {
       if (!a.classList.contains("nsfw")) return;
       ev.preventDefault();
       session.set("tr.revealed", true);
       a.classList.remove("nsfw");
-      (a.querySelector(".pyear") as HTMLElement).textContent = sub(it);
+      (a.querySelector(".pyear") as HTMLElement).replaceChildren(...metaSpans(it));
     });
   }
   return a;
@@ -309,7 +313,7 @@ function detail(root: HTMLElement, path: string): void {
         body.append(h("p", { class: "plot dim" }, "No description: add a ", h("code", null, sidecar), it.kind === "show" ? " to the show's folder." : " beside the file."));
       }
       const first = seasons.find((s) => s.n > 0)?.episodes[0] ?? seasons[0]?.episodes[0];
-      const play = h("button", { type: "button" }, it.kind === "show" ? (first ? `▶ Play ${episodeNo(first)}` : "▶ Play") : "▶ Play");
+      const play = h("button", { type: "button" }, icon("play_arrow_fill"), it.kind === "show" && first ? `Play ${episodeNo(first)}` : "Play");
       const target = it.kind === "show" ? first?.path : it.video;
       if (target) play.addEventListener("click", () => (location.hash = fileHash({ path: target })));
       else (play as HTMLButtonElement).disabled = true;

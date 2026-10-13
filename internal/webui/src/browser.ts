@@ -4,7 +4,8 @@
 // in place, the trash banner inside a deleted root, the album view for a folder of
 // music, and the selection bar. Uploads run one at a time through the NFS write path.
 
-import { clear, h, icon, setWidth, titleCard, toast, type IconKind } from "./dom.ts";
+import { clear, h, setWidth, titleCard, toast } from "./dom.ts";
+import { icon, type IconName } from "./icons.ts";
 import { ApiError, del, ls, mkdir, move, rename, trashList, upload, type DirInfo, type Entry, type TrashEntry, type Upload } from "./api.ts";
 import { browseHash, bytes, encodePathForHash, ext, fileHash, join, session, src, when, type Ctx } from "./util.ts";
 import * as snaps from "./snapshots.ts";
@@ -214,7 +215,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
 
   const folderForm = () => {
     const name = h("input", { type: "text", placeholder: "folder name", "aria-label": "folder name", autofocus: true }) as HTMLInputElement;
-    const form = h("form", { class: "inline-form" }, icon("dir"), name, h("button", { type: "submit" }, "Create"), h("button", { type: "button", onClick: () => { formOpen = false; draw(); } }, "Cancel"));
+    const form = h("form", { class: "inline-form" }, icon("folder"), name, h("button", { type: "submit" }, "Create"), h("button", { type: "button", onClick: () => { formOpen = false; draw(); } }, "Cancel"));
     form.addEventListener("submit", (ev) => {
       ev.preventDefault();
       const n = name.value.trim();
@@ -296,18 +297,20 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
           return h("span", { class: cls }, box);
         })();
 
-  const linkOf = (e: Entry): { href: string; kind: IconKind } => {
+  const linkOf = (e: Entry): { href: string; kind: IconName } => {
     const path = pathOf(e);
-    if (e.deleted_at) return e.type === "dir" ? { href: `#/trash/${e.ino}/`, kind: "dir" } : { href: `#/trashfile/${e.ino}/`, kind: iconFor(e.name) };
-    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root, at: ctx.at }), kind: "dir" };
+    if (e.deleted_at) return e.type === "dir" ? { href: `#/trash/${e.ino}/`, kind: "folder" } : { href: `#/trashfile/${e.ino}/`, kind: iconFor(e.name) };
+    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root, at: ctx.at }), kind: "folder" };
     return { href: fileHash({ path, root: ctx.root, at: ctx.at }), kind: iconFor(e.name) };
   };
 
-  const playBtn = (e: Entry) => {
+  const playBtn = (e: Entry, tile = false) => {
     const t: Track = { path: pathOf(e), root: e.deleted_at ? e.ino : source };
     if (e.deleted_at) t.path = "/";
     const now = player.isCurrent(t.path, t.root) && player.playing;
-    return h("button", { type: "button", class: "play", onClick: (ev: Event) => { ev.preventDefault(); ev.stopPropagation(); if (player.isCurrent(t.path, t.root)) player.toggle(); else playFrom(e); } }, now ? "⏸ Playing" : "▶ Play");
+    const b = h("button", { type: "button", class: tile ? "play icon-btn" : "play", onClick: (ev: Event) => { ev.preventDefault(); ev.stopPropagation(); if (player.isCurrent(t.path, t.root)) player.toggle(); else playFrom(e); } });
+    playFace(b, now);
+    return b;
   };
 
   /** playFrom plays the folder's audio in listing order, starting at e. */
@@ -359,7 +362,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     const { href, kind } = linkOf(e);
     let link: HTMLElement;
     if (e.type === "symlink") link = h("span", { class: "linkname" }, icon("link"), e.name + " ", h("span", { class: "target" }, "→ " + (e.target ?? "")));
-    else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("file"), e.name);
+    else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("draft"), e.name);
     else {
       link = h("a", { href }, icon(kind), e.name);
       if (e.protected) link.append(h("span", { class: "badge lock" }, "protected"));
@@ -399,11 +402,14 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       const tp = e.deleted_at ? (e.type === "dir" && e.cover ? "/" + e.cover : "/") : thumbPath;
       lazy(img, e, tp, root, e.type === "dir" ? (e.cover ? "audio" : "dir") : (kindOf as "image" | "video" | "audio"), showIcon);
     } else showIcon();
-    const meta = h("span", { class: "tmeta" });
-    if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
+    // a media card (docs/13 Components): the size on the picture's corner, the kind and the
+    // modification time under the title
+    if (e.type === "file") thumb.append(h("span", { class: "ov br" }, bytes(e.size)));
+    const kindWord = e.type === "dir" ? "folder" : e.type === "symlink" ? "link" : ext(e.name).toLowerCase() || "file";
+    const meta = h("span", { class: "tmeta" }, h("span", null, kindWord), h("span", { title: e.mtime }, when(e.mtime)));
     const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, source) ? "playing" : ""].filter(Boolean).join(" ");
     const a = h("a", { class: cls, href, "data-name": e.name }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta);
-    if (e.type === "file" && isAudioName(e.name) && !e.upload) a.insertBefore(playBtn(e), a.querySelector(".tname"));
+    if (e.type === "file" && isAudioName(e.name) && !e.upload) thumb.append(playBtn(e, true));
     if (thumb.classList.contains("nsfw")) {
       thumb.addEventListener("click", (ev) => {
         if (thumb.classList.contains("revealed")) return;
@@ -424,9 +430,9 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     }
     const chosen = entries.filter((e) => names.includes(e.name) && !e.deleted_at);
     const protectedBy = info.protected ? dir.split("/").filter(Boolean).pop() ?? "/" : chosen.some((e) => e.protected) ? chosen.find((e) => e.protected)!.name : null;
-    const delBtn = h("button", { type: "button", onClick: () => void doDelete(chosen) }, "Delete");
-    const mvBtn = h("button", { type: "button", onClick: () => void doMove(chosen) }, "Move to…");
-    const rnBtn = h("button", { type: "button", onClick: () => { renaming = chosen[0]!.name; formOpen = false; draw(); } }, "Rename");
+    const delBtn = action("delete", "Delete", () => void doDelete(chosen));
+    const mvBtn = action("drive_file_move", "Move to…", () => void doMove(chosen));
+    const rnBtn = action("edit", "Rename", () => { renaming = chosen[0]!.name; formOpen = false; draw(); });
     if (protectedBy || inTrash) {
       delBtn.disabled = mvBtn.disabled = true;
       const why = inTrash ? "restore the folder first" : `protected: unprotect ${protectedBy} to`;
@@ -439,9 +445,9 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     }
     bar.append(h("span", { class: "count" }, `${chosen.length} selected`), delBtn, mvBtn, rnBtn);
     if (chosen.length && chosen.every((e) => e.type === "dir" || isAudioName(e.name))) {
-      bar.append(h("button", { type: "button", onClick: () => void playSelection(chosen, false) }, "Play"), h("button", { type: "button", onClick: () => void playSelection(chosen, true) }, "Add to queue"));
+      bar.append(action("play_arrow_fill", "Play", () => void playSelection(chosen, false)), action("playlist_add", "Add to queue", () => void playSelection(chosen, true)));
     }
-    bar.append(h("span", { class: "spacer" }), h("button", { type: "button", onClick: () => sel.clear() }, "Clear"));
+    bar.append(h("span", { class: "spacer" }), action("close", "Clear", () => sel.clear()));
     return bar;
   };
 
@@ -564,7 +570,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       const mine = here !== "" && el.dataset["name"] === here;
       el.classList.toggle("playing", mine);
       const b = el.querySelector<HTMLButtonElement>("button.play");
-      if (b) b.textContent = mine && player.playing ? "⏸ Playing" : "▶ Play";
+      if (b) playFace(b, mine && player.playing);
     }
   });
   onQueueChange = draw;
@@ -619,12 +625,30 @@ export function crumbsAll(ctx: Ctx, asOf?: string): HTMLElement {
   return el;
 }
 
-function iconFor(name: string, dir = false): IconKind {
-  if (dir) return "dir";
+/** playFace draws a play button's face: an icon button names itself in its label only. */
+function playFace(b: HTMLButtonElement, now: boolean): void {
+  const label = now ? "Playing" : "Play";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  b.replaceChildren(icon(now ? "pause_fill" : "play_arrow_fill"));
+  if (!b.classList.contains("icon-btn")) b.append(h("span", null, label));
+}
+
+/**
+ * action is a selection-bar button: its icon and its label, which hides on a phone and
+ * stays in aria-label and title (a disabled button's title says why instead).
+ */
+function action(name: IconName, label: string, onClick: () => void): HTMLButtonElement {
+  return h("button", { type: "button", "aria-label": label, title: label, onClick }, icon(name), h("span", null, label));
+}
+
+function iconFor(name: string, dir = false): IconName {
+  if (dir) return "folder";
   const k = mediaKind(ext(name));
   if (k === "image") return "image";
-  if (k === "video" || k === "audio") return "media";
-  return "file";
+  if (k === "video") return "movie";
+  if (k === "audio") return "music_note";
+  return "draft";
 }
 
 function compare(a: Entry, b: Entry, s: Sort): number {

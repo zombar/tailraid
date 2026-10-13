@@ -631,3 +631,67 @@ func TestCSS_Parse(t *testing.T) {
 		t.Errorf("parseCSS:\n got %s\nwant %s", got, want)
 	}
 }
+
+// emojiProne are the code points a phone may draw as a colour emoji: the media-control
+// glyphs, ▶ and ◀, the arrows the UI once used for links and modes, and the emoji planes.
+func emojiProne(r rune) bool {
+	switch {
+	case r == 0x2197, r >= 0x23E9 && r <= 0x23FA, r == 0x25B6, r == 0x25C0, r == 0x27F3, r >= 0x2913 && r <= 0x292E, r >= 0x1F300:
+		return true
+	}
+	return false
+}
+
+// Every icon is a Material Symbols path, and no text glyph stands in for one: the
+// TypeScript draws only through icons.ts, and the markup it shares with the lookdev and
+// index.html carries no emoji-prone character.
+// Invariant: I-293
+func TestIcons_MaterialSymbolsOnly(t *testing.T) {
+	src := readAll(t, filepath.Join(srcDir, "icons.ts"))
+	entries := regexp.MustCompile(`(?m)^ {2}(\w+): "([^"]*)",$`).FindAllStringSubmatch(src, -1)
+	if len(entries) < 20 {
+		t.Fatalf("icons.ts: %d entries, want the docs/13 Icons list", len(entries))
+	}
+	pathData := regexp.MustCompile(`^[Mm][0-9MmLlHhVvCcSsQqTtAaZz.,\- ]+$`)
+	for _, e := range entries {
+		if !pathData.MatchString(e[2]) {
+			t.Errorf("icons.ts %s is not one path's data", e[1])
+		}
+	}
+	if !strings.Contains(src, `viewBox: "0 -960 960 960"`) {
+		t.Error(`icons.ts does not draw under the Material viewBox "0 -960 960 960"`)
+	}
+	for _, p := range glob(t, filepath.Join(srcDir, "*.ts")) {
+		ts := readAll(t, p)
+		if filepath.Base(p) != "icons.ts" && strings.Contains(ts, `class: "icon"`) {
+			t.Errorf("%s draws its own icon; use icon() from icons.ts", p)
+		}
+	}
+	markup := append(glob(t, filepath.Join(lookdevDir, "*.html")), staticHTML)
+	files := append(glob(t, filepath.Join(srcDir, "*.ts")), markup...)
+	for _, p := range files {
+		for i, line := range strings.Split(readAll(t, p), "\n") {
+			for _, r := range line {
+				if emojiProne(r) {
+					t.Errorf("%s:%d: %q is drawn as an emoji on some phones; use a Material symbol", p, i+1, r)
+				}
+			}
+		}
+	}
+	for _, m := range regexp.MustCompile(`<svg class="icon[^"]*" viewBox="([^"]*)"`).FindAllStringSubmatch(readAll(t, markup...), -1) {
+		if m[1] != "0 -960 960 960" {
+			t.Errorf("an icon in the markup uses viewBox %q, not Material's", m[1])
+		}
+	}
+}
+
+func TestIcons_EmojiProne_Table(t *testing.T) {
+	for _, c := range []struct {
+		r    rune
+		want bool
+	}{{'▶', true}, {'⏸', true}, {'⏮', true}, {'⟳', true}, {'⤮', true}, {'↗', true}, {'🎵', true}, {'×', false}, {'▴', false}, {'▾', false}, {'·', false}, {'…', false}, {'→', false}} {
+		if got := emojiProne(c.r); got != c.want {
+			t.Errorf("emojiProne(%q) = %v, want %v", c.r, got, c.want)
+		}
+	}
+}

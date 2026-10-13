@@ -288,4 +288,4 @@ defined in exactly one design doc and cited by at least one test via `// Invaria
 | I-290 | [13-web-ui.md](13-web-ui.md) | Every `auto-fill` or `auto-fit` grid clamps its minimum with `min(…, 100%)`. | `TestCSS_AutoFillMinimumsClamp` |
 | I-291 | [13-web-ui.md](13-web-ui.md) | Every z-index is a layer of *Layout* (1, 3, 4, 5). | `TestCSS_ZLayers` |
 | I-292 | [13-web-ui.md](13-web-ui.md) | Every font size in `app.css` is on the scale of *Layout*. | `TestCSS_FontScale` |
-| I-293 | [13-web-ui.md](13-web-ui.md) | Every icon is a Material Symbols Outlined path under the `0 -960 960 960` viewBox, and no emoji-prone glyph (`⏮ ⏭ ⏸ ▶ ⟳ ⤮ ↗` and the emoji planes) appears in the TypeScript, `index.html` or the lookdev. | `TestStub_I_293` |
+| I-293 | [13-web-ui.md](13-web-ui.md) | Every icon is a Material Symbols Outlined path under the `0 -960 960 960` viewBox, and no emoji-prone glyph (`⏮ ⏭ ⏸ ▶ ⟳ ⤮ ↗` and the emoji planes) appears in the TypeScript, `index.html` or the lookdev. | `TestIcons_MaterialSymbolsOnly` |

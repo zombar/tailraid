@@ -2,7 +2,7 @@
 // choice is a per-viewer convenience kept in localStorage; it is applied at module load,
 // before any view renders, and the server never sees it.
 
-import { svg } from "./dom.ts";
+import { icon } from "./icons.ts";
 
 export type Theme = "system" | "light" | "dark";
 
@@ -37,9 +37,9 @@ export function next(t: Theme): Theme {
 }
 
 const GLYPHS: Record<Theme, () => SVGElement> = {
-  system: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("circle", { cx: 8, cy: 8, r: 6 }), svg("path", { d: "M8 2a6 6 0 0 1 0 12z", fill: "currentColor", stroke: "none" })),
-  light: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("circle", { cx: 8, cy: 8, r: 3 }), svg("path", { d: "M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" })),
-  dark: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d: "M13.5 9.8A6 6 0 0 1 6.2 2.5a6 6 0 1 0 7.3 7.3z" })),
+  system: () => icon("contrast"),
+  light: () => icon("light_mode"),
+  dark: () => icon("dark_mode"),
 };
 
 /** wire binds the header's button: its glyph and label follow the choice, a tap cycles. */
