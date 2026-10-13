@@ -64,7 +64,7 @@ export function chunksPerTarget(r: Report): number {
  */
 export function withDisks(nodes: NodeReport[]): NodeReport[] {
   return nodes
-    .filter((n) => n.kind !== "disk" && n.state !== "removed")
+    .filter((n) => n.kind !== "disk" && n.kind !== "mirror" && n.state !== "removed") // a mirror holds snapshots, never slots (docs/16)
     .map((n) => {
       const ds = nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed");
       if (ds.length === 0) return n;

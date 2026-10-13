@@ -1,5 +1,5 @@
-// Dashboard: the volume summary (with the trash), Disks (when a host has added disks),
-// Balance, Integrity and this node's cache card. Re-rendered on every poll.
+// Dashboard: the volume summary (with the trash), Disks (every drive: disks, archive
+// mirrors and S3 buckets), Balance, Integrity and the mirrors. Re-rendered on every poll.
 
 import { clear, h } from "./dom.ts";
 import { bar, barRow, fillTone } from "./chart.ts";
@@ -20,12 +20,11 @@ export function render(root: HTMLElement): () => void {
       return;
     }
     volume(root, r);
-    disks.render(root, r);
+    disks.render(root, r, snaps.last());
     balance.render(root, r);
     integrity.render(root, r, status.history);
     const mirrors = snaps.section(snaps.last(), draw); // docs/13 §7: after Integrity
     if (mirrors) root.append(mirrors);
-    cache(root, r);
   };
   // the catalogue is fetched beside the status, at most every few seconds; a fetch that
   // brings it draws again
@@ -80,29 +79,4 @@ function volume(root: HTMLElement, r: Report): void {
 
 function tile(label: string, value: string, sub: string): HTMLElement {
   return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
-}
-
-/** cache is this node's chunk cache and the folders it keeps (docs/13 §4, I-162). */
-function cache(root: HTMLElement, r: Report): void {
-  const c = r.cache;
-  if (!c) return;
-  const self = r.nodes.find((n) => n.self)?.name ?? r.node;
-  const low = !!r.machine?.disk_total && (r.machine.disk_free ?? 0) * 5 < r.machine.disk_total;
-  const usedFrac = c.size > 0 ? Math.min(1, (c.used - c.pinned_bytes) / c.size) : 0;
-  const card = h(
-    "div",
-    { class: "card cache" + (low ? " warn" : "") },
-    h("div", { class: "name-row" }, h("span", { class: "name" }, self), h("span", { class: "badges" }, h("span", { class: "badge self" }, "self"))),
-    barRow("used", bar(usedFrac, fillTone(usedFrac)), `${bytes(Math.max(0, c.used - c.pinned_bytes))} of ${bytes(c.size)}`),
-    barRow("pinned", bar(c.pinned_bytes > 0 ? 1 : 0, low ? "warn" : ""), `${bytes(c.pinned_bytes)} kept here` + (r.machine?.disk_free ? ` · ${bytes(r.machine.disk_free)} free on the data disk` : "")),
-  );
-  if (c.pins.length) {
-    const pins = h("div", { class: "pins" });
-    for (const p of c.pins) {
-      const frac = p.bytes > 0 ? p.cached_bytes / p.bytes : 1;
-      pins.append(h("div", { class: "pin-row" }, h("span", { class: "n", title: p.path }, p.path), bar(frac), h("span", { class: "v" }, `${bytes(p.cached_bytes)} of ${bytes(p.bytes)}` + (frac < 1 ? " · fetching" : ""))));
-    }
-    card.append(pins);
-  } else card.append(h("div", { class: "small dim" }, "no folder is kept on this device · the folder menu has “Keep on this device”"));
-  root.append(h("section", null, h("h2", null, "Cache"), h("div", { class: "cards" }, card)));
 }

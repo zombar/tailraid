@@ -607,7 +607,7 @@ function chunksPerTarget(r) {
   return Math.max(0, r.volume.chunks - r.volume.tombstoned);
 }
 function withDisks(nodes) {
-  return nodes.filter((n) => n.kind !== "disk" && n.state !== "removed").map((n) => {
+  return nodes.filter((n) => n.kind !== "disk" && n.kind !== "mirror" && n.state !== "removed").map((n) => {
     const ds = nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed");
     if (ds.length === 0) return n;
     const sum = (f) => f(n) + ds.reduce((s, d) => s + f(d), 0);
@@ -675,7 +675,11 @@ function card(n, share, scale) {
 
 // internal/webui/src/disks.ts
 function hosts(nodes) {
-  return nodes.filter((n) => n.kind === "device" && n.state !== "removed").map((n) => ({ node: n, targets: nodes.filter((d) => d.kind === "disk" && d.host === n.idx && d.state !== "removed") }));
+  const of = (kind2, n) => nodes.filter((d) => d.kind === kind2 && d.host === n.idx && d.state !== "removed");
+  return nodes.filter((n) => n.kind === "device" && n.state !== "removed").map((n) => ({ node: n, targets: of("disk", n), mirrors: of("mirror", n) }));
+}
+function buckets(nodes) {
+  return nodes.filter((n) => n.kind === "s3" && n.state !== "removed");
 }
 function off(t) {
   return t.state === "active" && t.capacity === 0;
@@ -683,57 +687,66 @@ function off(t) {
 function plural(n, one) {
   return n === 1 ? `1 ${one}` : `${n} ${one}s`;
 }
-function render2(root, r) {
+function render2(root, r, snaps) {
   if (!r.nodes.some((n2) => n2.kind === "disk")) return;
   const groups = hosts(r.nodes);
-  const targets = groups.flatMap((g) => g.targets);
+  const s3 = buckets(r.nodes);
+  const targets = [...groups.flatMap((g) => g.targets), ...s3];
   const per = chunksPerTarget(r);
   const sh = shares(targets, () => per);
   const v = r.volume;
   const active2 = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
-  const perHost = targets.length / Math.max(1, groups.length);
-  const layout = Number.isInteger(perHost) ? `${plural(groups.length, "host")} \xD7 ${plural(perHost, "target")}` : `${plural(groups.length, "host")}, ${plural(targets.length, "target")}`;
+  const disks = groups.flatMap((g) => g.targets).length;
+  const perHostDisks = disks / Math.max(1, groups.length);
+  let layout = Number.isInteger(perHostDisks) ? `${plural(groups.length, "host")} \xD7 ${plural(perHostDisks, "disk")}` : `${plural(groups.length, "host")}, ${plural(disks, "disk")}`;
+  if (s3.length) layout += ` + ${plural(s3.length, "bucket")}`;
   const sub = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
   const n = v.k + v.m;
   const capPer = Math.ceil(n / Math.max(1, active2.length));
   const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active2.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active2[0]?.node.name ?? "it"}`);
   const scale = Math.max(1, ...targets.map((t) => Math.max(t.slots, sh.get(t.idx)?.expected ?? 0))) * 1.1;
-  const block = h("div", { class: "disks" }, spread(groups, sh), capNote);
-  for (const g of groups) block.append(hostCard(g, sh, scale));
+  const mirrors = new Map((snaps?.mirrors ?? []).map((m) => [m.id, m]));
+  const block = h("div", { class: "disks" }, spread(groups, s3, sh, mirrors), capNote);
+  for (const g of groups) block.append(hostCard(g, sh, scale, mirrors));
+  if (s3.length) block.append(bucketCard(s3, sh, scale));
   root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub)), block));
 }
-function spread(groups, sh) {
-  const devs = groups.flatMap((g) => g.targets.filter((t) => t.state === "active" && !off(t)).map((t) => Math.abs(sh.get(t.idx)?.deviation ?? 0)));
+function spread(groups, s3, sh, mirrors) {
+  const all = [...groups.flatMap((g) => g.targets), ...s3];
+  const devs = all.filter((t) => t.state === "active" && !off(t)).map((t) => Math.abs(sh.get(t.idx)?.deviation ?? 0));
   const worst = Math.max(0, ...devs.filter((d) => !Number.isNaN(d)));
   const lim = worst <= 0.25 ? 0.25 : worst <= 0.5 ? 0.5 : 1;
   const pctLabel = (x) => `${Math.round(x * 100)} %`;
   const plot = h("div", { class: "spread-plot" });
+  const column = (t) => {
+    const share = sh.get(t.idx);
+    if (off(t)) return h("div", { class: "spread-col off", title: `${t.name}: no budget (capacity 0)` });
+    if (t.state !== "active") return h("div", { class: "spread-col drain", title: `${t.name}: draining, ${count(t.slots)} slots to move` });
+    const dev = share?.deviation ?? NaN;
+    const d = Number.isNaN(dev) ? 0 : dev;
+    const cls = !t.live ? "dead" : devTone(dev);
+    const title = `${t.name}: ${Number.isNaN(dev) ? "no expected share" : signedPct(dev) + " of expected"} (${count(t.slots)} of ${count(Math.round(share?.expected ?? 0))} slots)` + (t.live ? "" : ", dead");
+    const col = h("div", { class: "spread-col" + (cls ? " " + cls : ""), title });
+    const fill = h("i", { class: d >= 0 ? "up" : "down" });
+    fill.style.height = (Math.min(Math.abs(d), lim) / lim * 50).toFixed(1) + "%";
+    col.append(fill);
+    return col;
+  };
+  const group = (cols, live, name) => plot.append(h("div", { class: "spread-host" }, h("div", { class: "spread-cols" }, ...cols), h("div", { class: "spread-label" }, h("span", { class: "dot " + (live ? "ok" : "bad") }), name)));
   for (const g of groups) {
-    if (g.targets.length === 0) continue;
-    const cols = h("div", { class: "spread-cols" });
-    for (const t of g.targets) {
-      const share = sh.get(t.idx);
-      if (off(t)) {
-        cols.append(h("div", { class: "spread-col off", title: `${t.name}: no budget (capacity 0)` }));
-        continue;
-      }
-      if (t.state !== "active") {
-        cols.append(h("div", { class: "spread-col drain", title: `${t.name}: draining, ${count(t.slots)} slots to move` }));
-        continue;
-      }
-      const dev = share?.deviation ?? NaN;
-      const d = Number.isNaN(dev) ? 0 : dev;
-      const cls = !t.live ? "dead" : devTone(dev);
-      const title = `${t.name}: ${Number.isNaN(dev) ? "no expected share" : signedPct(dev) + " of expected"} (${count(t.slots)} of ${count(Math.round(share?.expected ?? 0))} slots)` + (t.live ? "" : ", dead");
-      const col = h("div", { class: "spread-col" + (cls ? " " + cls : ""), title });
-      const fill = h("i", { class: d >= 0 ? "up" : "down" });
-      fill.style.height = (Math.min(Math.abs(d), lim) / lim * 50).toFixed(1) + "%";
-      col.append(fill);
-      cols.append(col);
-    }
-    const label = h("div", { class: "spread-label" }, h("span", { class: "dot " + (g.node.live ? "ok" : "bad") }), g.node.name);
-    plot.append(h("div", { class: "spread-host" }, cols, label));
+    if (g.targets.length === 0 && g.mirrors.length === 0) continue;
+    const archive = g.mirrors.map((n) => {
+      const m = mirrors.get(n.idx);
+      const frac = m && m.total > 0 ? Math.min(1, m.used / m.total) : 0;
+      const col = h("div", { class: "spread-col archive" + (m?.online ? "" : " off"), title: `${n.name}: archive mirror, ${Math.round(frac * 100)} % full` + (m && m.total > 0 ? ` (${bytes(m.used)} of ${bytes(m.total)})` : "") + (m?.online ? "" : ", offline") });
+      const level = h("i");
+      level.style.height = (frac * 100).toFixed(1) + "%";
+      col.append(level);
+      return col;
+    });
+    group([...g.targets.map(column), ...archive], g.node.live, g.node.name);
   }
+  if (s3.length) group(s3.map(column), s3.some((b) => b.live), "s3");
   return h(
     "div",
     { class: "spread", role: "img", "aria-label": "slot share of each target against its expected share" },
@@ -741,7 +754,7 @@ function spread(groups, sh) {
     plot
   );
 }
-function hostCard(g, sh, scale) {
+function hostCard(g, sh, scale, mirrors) {
   const n = g.node;
   const badges = h("span", { class: "badges" });
   if (n.leader) badges.append(h("span", { class: "badge strong" }, "leader"));
@@ -750,13 +763,15 @@ function hostCard(g, sh, scale) {
   if (n.state === "draining") badges.append(h("span", { class: "badge warn" }, "draining"));
   const budget = g.targets.reduce((s, t) => s + t.capacity, 0);
   let sum = g.targets.length === 0 ? "no disks" : `${plural(g.targets.length, "disk")} \xB7 ${bytes(budget)}`;
+  if (g.mirrors.length) sum += ` \xB7 ${plural(g.mirrors.length, "mirror")}`;
   if (!n.live) sum += " \xB7 dead " + (n.dead_for ?? "?");
   const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (n.live ? "ok" : "bad") }), h("span", { class: "name" }, n.name), h("span", { class: "host-sum" }, sum), badges);
-  if (g.targets.length === 0) {
+  if (g.targets.length === 0 && g.mirrors.length === 0) {
     return h("div", { class: "host-row diskless" + (n.self ? " self" : "") }, head, h("div", { class: "host-note" }, "gateway only \xB7 no disks"));
   }
   const strip = h("div", { class: "disk-strip" });
   for (const t of g.targets) strip.append(diskRow(t, sh.get(t.idx), scale));
+  for (const m of g.mirrors) strip.append(mirrorRow(m, mirrors.get(m.idx)));
   const card3 = h("div", { class: "host-row" + (n.self ? " self" : "") }, head, strip);
   for (const group of sharedGroups(g.targets)) {
     card3.append(h("div", { class: "host-note" }, h("span", { class: "warn-icon" }), `${listOf(group)} are on one physical disk: they fail together, so data spread across them is not redundant`));
@@ -804,6 +819,27 @@ function diskRow(t, share, scale) {
   if (!Number.isNaN(dev)) vals.append(h("span", null, signedPct(dev)));
   const title = `${t.name}: ${count(t.slots)} slots, expected ${count(Math.round(exp))}; ${bytes(used)} used of ${bytes(t.capacity)}`;
   return h("div", { class: "disk" + (t.live ? "" : " bad"), title }, name, b, vals, usage);
+}
+function mirrorRow(n, m) {
+  const online = !!m?.online;
+  const name = h("div", { class: "disk-name" }, h("span", { class: "dot " + (online ? "ok" : "off") }), h("span", { class: "n" }, n.name));
+  const frac = m && m.total > 0 ? m.used / m.total : 0;
+  const state = online ? "archive \xB7 online" : "archive \xB7 offline" + (m?.last_seen ? ` since ${m.last_seen.slice(0, 10)}` : "");
+  const usage = m && m.total > 0 ? h("div", { class: "disk-val" }, h("span", null, bytes(m.used)), h("span", null, "of " + bytes(m.total))) : h("div", { class: "disk-val" }, online ? "size unknown" : "attach it to read its size");
+  const title = `${n.name}: archive mirror, snapshots only` + (m?.reason ? ` \xB7 ${m.reason}` : "");
+  return h("div", { class: "disk" + (online ? "" : " off"), title }, name, bar(frac), h("div", { class: "disk-val dots" }, h("span", null, state)), usage);
+}
+function bucketCard(s3, sh, scale) {
+  const live = s3.filter((b) => b.live).length;
+  const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (live === s3.length ? "ok" : live ? "warn" : "bad") }), h("span", { class: "name" }, "S3"), h("span", { class: "host-sum" }, `${plural(s3.length, "bucket")} \xB7 ${bytes(s3.reduce((s, b) => s + b.stored_bytes, 0))} stored`));
+  const strip = h("div", { class: "disk-strip" });
+  for (const b of s3) {
+    const row2 = diskRow(b, sh.get(b.idx), scale);
+    const where = b.s3 ? b.s3.prefix ? `${b.s3.bucket}/${b.s3.prefix}` : b.s3.bucket : "";
+    row2.lastElementChild?.replaceWith(h("div", { class: "disk-val" }, h("span", null, bytes(b.stored_bytes) + " stored"), h("span", null, where)));
+    strip.append(row2);
+  }
+  return h("div", { class: "host-row" }, head, strip);
 }
 
 // internal/webui/src/integrity.ts
@@ -1347,12 +1383,11 @@ function render4(root) {
       return;
     }
     volume(root, r);
-    render2(root, r);
+    render2(root, r, last());
     render(root, r);
     render3(root, r, status.history);
     const mirrors = section(last(), draw);
     if (mirrors) root.append(mirrors);
-    cache(root, r);
   };
   let drawn = last();
   const unsub = status.subscribe(() => {
@@ -1403,29 +1438,6 @@ function volume(root, r) {
 }
 function tile3(label, value, sub) {
   return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
-}
-function cache(root, r) {
-  const c = r.cache;
-  if (!c) return;
-  const self = r.nodes.find((n) => n.self)?.name ?? r.node;
-  const low = !!r.machine?.disk_total && (r.machine.disk_free ?? 0) * 5 < r.machine.disk_total;
-  const usedFrac = c.size > 0 ? Math.min(1, (c.used - c.pinned_bytes) / c.size) : 0;
-  const card3 = h(
-    "div",
-    { class: "card cache" + (low ? " warn" : "") },
-    h("div", { class: "name-row" }, h("span", { class: "name" }, self), h("span", { class: "badges" }, h("span", { class: "badge self" }, "self"))),
-    barRow("used", bar(usedFrac, fillTone(usedFrac)), `${bytes(Math.max(0, c.used - c.pinned_bytes))} of ${bytes(c.size)}`),
-    barRow("pinned", bar(c.pinned_bytes > 0 ? 1 : 0, low ? "warn" : ""), `${bytes(c.pinned_bytes)} kept here` + (r.machine?.disk_free ? ` \xB7 ${bytes(r.machine.disk_free)} free on the data disk` : ""))
-  );
-  if (c.pins.length) {
-    const pins = h("div", { class: "pins" });
-    for (const p of c.pins) {
-      const frac = p.bytes > 0 ? p.cached_bytes / p.bytes : 1;
-      pins.append(h("div", { class: "pin-row" }, h("span", { class: "n", title: p.path }, p.path), bar(frac), h("span", { class: "v" }, `${bytes(p.cached_bytes)} of ${bytes(p.bytes)}` + (frac < 1 ? " \xB7 fetching" : ""))));
-    }
-    card3.append(pins);
-  } else card3.append(h("div", { class: "small dim" }, "no folder is kept on this device \xB7 the folder menu has \u201CKeep on this device\u201D"));
-  root.append(h("section", null, h("h2", null, "Cache"), h("div", { class: "cards" }, card3)));
 }
 
 // internal/webui/src/chunks.ts

@@ -270,10 +270,17 @@ movable), gate closed below 5 %`), and the dashboard's integrity panel shows the
 - `node ls` groups disks under their host; `status` and the web UI show per-target used,
   budget, stored shard bytes (`stored_bytes`, 10 §4.1), slots and liveness, and the
   volume's "survives N disks, M hosts".
-- The web UI's **Disks** block (13 §Design) opens with a spread summary (one column per
-  target, grouped by host, above or below its expected share) and then draws each host as a card with one row per
-  target: its slots on one shared scale against the expected-share tick, and its used
-  bytes of budget.
+- The web UI's **Disks** block (13 §Design) lists every drive of the volume. It opens
+  with a spread summary (one column per target, grouped by host, above or below its
+  expected share; the S3 buckets as a group named `s3`; a host's archive mirror, which
+  holds snapshots and never a slot (16), as a column filled from the bottom by how full
+  its disk is, dashed while it is offline) and then draws each host as
+  a card with one row per target (its slots on one shared scale against the
+  expected-share tick, and its used bytes of budget) and one per mirror (its used bytes
+  of the disk, `archive · online` or `archive · offline since <date>`), and the buckets
+  as a card named `S3` with one row per bucket (its slots against its share, its stored
+  bytes and `bucket/prefix`). The Balance block lists the members that hold slots: a
+  mirror is never there.
 - The soak report's **data spread across disks** chart (09 §soak) draws one lane per disk
   over time, coloured by each disk's slot share against its expected share, with a host-cap
   strip underneath.
