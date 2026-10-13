@@ -199,19 +199,29 @@ A slot `i` of chunk `c` is **bad** when any of:
    or a stale shard gets repaired without waiting for the scrub to reach it;
 6. the chunk is **skewed** (14 §7): one host holds more than `ceil((k+m)/D)` of its slots
    while the candidates admit a placement within that cap; the excess slots (highest
-   index first) are bad and move like draining slots;
-7. after the per-chunk pass, a **capacity rebalance** within each host (14 §7, I-172):
-   when a disk sits above its share of its host's slots, another disk of that host below
-   it, and either is more than `RebalanceSkew` off its share, slots move from the one to
-   the other, at most `RebalanceBatch` chunks a pass, by the move sequence below (PUT,
-   `SetPlacement` with `Expect`, fenced DELETE).
+   index first) are bad and move like draining slots, each to its home target when that
+   target can take it (I-296);
+7. after the per-chunk pass, while the **home gate** is open (14 §7, I-295), slots that
+   are away from their home for placement only (a data slot on a non-voter, the wrong disk
+   of a host, a host that is not home since a target joined) move to their home, at most
+   `HomeBatch` chunks a pass and none when the pass before found a bad slot or a pending
+   migration, as readable bad slots (reason `away from home`) through the repair of one
+   chunk below, which sends them home or leaves them where they are. This one
+   rule replaces the separate capacity rebalance within a host of earlier releases
+   (I-172).
 
 A chunk with ≥ 1 bad slot and ≥ k good live slots is **repairable**. Repair of one chunk:
 
 1. `chunk := rd.ReadChunk(hash)` (verifies the hash; needs k good shards).
 2. Determine target `(k', m')`: current policy for case 4, else the chunk's own.
-3. `newPlacement := Place(hash, liveCandidates − goodNodes(kept slots), needed)`, counting
-   the domains of the kept slots against the host cap (I-89). For case 4
+3. `newPlacement`: each refilled slot goes to its home target (14 §7) when that target
+   holds no slot of the chunk and is live, not suspect and has room (I-296); the rest
+   `FillPlacement(hash, liveCandidates − goodNodes(kept slots))`, counting the domains of
+   the kept slots against the host cap (I-89). Slots no one serves are filled before
+   slots whose holder still serves them (draining, skewed, away): their holders stand in
+   while the others are filled, so a lone spare replaces a missing shard first (I-65); an
+   away slot goes home or keeps its holder; a PUT that fails leaves a still-served slot on
+   its holder. For case 4
    every slot is re-placed (under the new keys `hex.k'-m'.idx`, which cannot collide with
    the old files); for cases 1–3 and 5 only the bad slots, keeping good ones in place; slot
    `i` keeps index `i`.
@@ -307,10 +317,9 @@ for those shards); then `NodeSetState{Removed}` is committed and `raft.RemoveSer
 placements stay interpretable.
 
 **`node add` / `join`** → `NodeUpsert{State: Active}`; the node is a candidate for new
-chunks at once. No data moves toward it until the repairer has a reason to (no rebalancing
-in barebones; capacity weighting in `Place` biases new writes). The one exception is the
-host cap: a host joining, or a disk added on another host, makes skewed chunks fixable,
-and §4 case 6 moves their excess slots (14 §7). `node add-disk` is a join of a target.
+chunks at once. Data moves toward it only through home placement (14 §7): the chunks whose home now
+includes the new target, about its weight over the total, become away, cap-breaking ones
+move at once (the host cap, I-296), the rest once the home gate opens (I-295). `node add-disk` is a join of a target.
 
 ## 7. Policy change: automatic, or `volume set-redundancy --k K --m M`
 

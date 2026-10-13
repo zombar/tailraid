@@ -868,6 +868,7 @@ function repair(r) {
   row2("unrepairable", count(s.unrepairable), s.unrepairable > 0 ? "bad" : void 0);
   row2("deferred", count(s.deferred));
   row2("migrated", count(s.migrated));
+  row2("moved home", count(s.homed ?? 0));
   row2("policy stale", count(s.policy_stale));
   row2("scrubbed", count(s.scrubbed));
   row2("scrub bad", count(s.scrub_bad), s.scrub_bad > 0 ? "bad" : void 0);
@@ -875,7 +876,8 @@ function repair(r) {
   row2("errors", count(s.errors), s.errors > 0 ? "bad" : void 0);
   row2("reported bad slots", count(r.repair.reported_bad_slots), r.repair.reported_bad_slots > 0 ? "warn" : void 0);
   const p = r.repair.in_progress;
-  if (!p) return h("div", null, h("h3", null, "Repair \xB7 last scan " + ago(r.repair.last_scan)), kv);
+  const away = home(r.repair.home);
+  if (!p) return h("div", null, h("h3", null, "Repair \xB7 last scan " + ago(r.repair.last_scan)), away, kv);
   const started = new Date(p.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const progress = barRow(
     "scanned",
@@ -883,7 +885,19 @@ function repair(r) {
     `${count(p.scanned)} of ${count(p.total)} \xB7 ${p.in_flight} in flight of ${p.workers} workers \xB7 ${bytes(p.bytes_moved)} moved \xB7 started ${started}`
   );
   const note = h("div", { class: "small dim" }, `the pass under way; the counters below are the last completed pass, ${ago(r.repair.last_scan)}`);
-  return h("div", null, h("h3", null, `Repair \xB7 pass ${p.pass} running`), progress, note, kv);
+  return h("div", null, h("h3", null, `Repair \xB7 pass ${p.pass} running`), progress, note, away, kv);
+}
+function home(st) {
+  if (!st || st.away_slots === 0) return null;
+  const share = st.stored_bytes > 0 ? st.movable_bytes / st.stored_bytes : 0;
+  const pct = (f) => `${(f * 100).toFixed(f < 0.1 ? 1 : 0)} %`;
+  const gate = st.forced ? "gate open (volume rebalance)" : st.open ? "gate open" : st.start > 0 ? "gate closed" : "gate closed (home_start 0)";
+  const of = st.start > 0 ? ` (${pct(share)} of ${pct(st.start)})` : "";
+  return barRow(
+    "away from home",
+    bar(st.open ? 1 : st.start > 0 ? Math.min(share / st.start, 1) : 0),
+    `${count(st.away_slots)} slots \xB7 ${bytes(st.away_bytes)} \xB7 ${bytes(st.movable_bytes)} movable${of} \xB7 ${gate}`
+  );
 }
 
 // internal/webui/src/picker.ts

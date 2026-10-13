@@ -54,6 +54,10 @@ type harnessEnv struct {
 
 	bucket *s3test.Server // the bucket phase 15 registers; nil: Caps.S3 is false
 
+	// the leader's repairer, kept while that node leads so the home gate carries over
+	rep     *repair.Repairer
+	repNode *cluster.Node
+
 	// one browser UI per node, built on WebURL over the node's current handles (a restart
 	// rebuilds them), with that node's pins and their worker (docs/13, phase 16)
 	web  map[int]*httptest.Server
@@ -464,9 +468,21 @@ func (e *harnessEnv) repairer(scrub bool) *repair.Repairer {
 		cfg.ScrubPeriod = time.Nanosecond // a fresh repairer's first pass then scrubs every chunk (I-215)
 	}
 	l := e.c.Leader()
+	if !scrub && e.rep != nil && e.repNode == l.Node {
+		return e.rep // the leader's repairer keeps its home gate across passes (docs/14 §7)
+	}
 	r := repair.New(l.Node.FSM, l.Node, l.Prober, l.Client, l.Reader, e.c.Clk, cfg, nil)
 	r.Events = l.Events
+	if !scrub {
+		e.rep, e.repNode = r, l.Node
+	}
 	return r
+}
+
+func (e *harnessEnv) Rebalance(context.Context) (repair.HomePlan, error) {
+	r := e.repairer(false)
+	r.OpenHome()
+	return r.PlanHome(), nil
 }
 
 func (e *harnessEnv) RepairNow(ctx context.Context) (repair.Stats, error) {

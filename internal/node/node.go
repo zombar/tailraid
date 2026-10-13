@@ -278,6 +278,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if scrubSet {
 		rcfg.ScrubPeriod = scrubPeriod
 	}
+	homeStart, homeSet, err := cfg.RepairHomeStart()
+	if err != nil {
+		return err
+	}
+	if homeSet {
+		rcfg.HomeStart = homeStart
+	}
 	client.SetGrace(rcfg.Grace)
 	prober.SetHoldDowns(rcfg.FillAfter, cluster.EvictAfter)
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
@@ -962,7 +969,7 @@ func (a *adminOps) sweepS3(ctx context.Context, grace time.Duration) {
 
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
-	case "repair_now", "check", "set_policy", "gc_now", "rotate_token", "trash_restore", "trash_purge", "index_now":
+	case "repair_now", "check", "set_policy", "gc_now", "rotate_token", "trash_restore", "trash_purge", "index_now", "rebalance":
 		if !a.node.IsLeader() {
 			if a.node.LeaderRPCAddr() == "" {
 				return nil, cluster.ErrNoLeader
@@ -986,6 +993,11 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.pins.List(), nil
 	case "repair_now":
 		return a.repairer.Scan(ctx)
+	case "rebalance": // docs/14 §7, I-295: open the home gate once, or with DryRun only list the moves
+		if !op.DryRun {
+			a.repairer.OpenHome()
+		}
+		return a.repairer.PlanHome(), nil
 	case "gc_now":
 		return a.gc.RunOnce(ctx)
 	case "index_now": // the leader's pass now (docs/18 §5, a pass op, I-189)

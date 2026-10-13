@@ -233,6 +233,8 @@
     <h3>Repair · pass 3 running</h3>
     <div class="bar-row"><span class="bar-label">scanned</span><div class="bar"><i style="width:12%"></i></div><span class="bar-val">12,345 of 106,452 · 4 in flight of 4 workers · 1.2 GiB moved · started 06:01</span></div>
     <div class="small dim">the pass under way; the counters below are the last completed pass, 2 h ago</div>
+    <!-- home placement (docs/14 §7): shown while anything is away; the bar is the movable share against repair.home_start -->
+    <div class="bar-row"><span class="bar-label">away from home</span><div class="bar"><i style="width:62%"></i></div><span class="bar-val">12,345 slots · 48.2 GiB · 31.0 GiB movable (3.1 % of 5 %) · gate closed</span></div>
     <dl class="kv">
       <div><dt>scanned</dt><dd>106,452</dd></div>
       <div><dt>repaired</dt><dd>98,390</dd></div>
@@ -240,6 +242,7 @@
       <div><dt>unrepairable</dt><dd>0</dd></div>
       <div><dt>deferred</dt><dd>0</dd></div>
       <div><dt>migrated</dt><dd>30,596</dd></div>
+      <div><dt>moved home</dt><dd>0</dd></div>
       <div><dt>policy stale</dt><dd>0</dd></div>
       <div><dt>scrubbed</dt><dd>1,064</dd></div>
       <div><dt>scrub bad</dt><dd>0</dd></div>

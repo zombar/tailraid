@@ -49,6 +49,10 @@ type SlotIssue struct {
 	Readable bool
 }
 
+// ReasonAway marks a slot the repairer moves home for placement only (docs/14 §7): its
+// holder still serves it, and it moves nowhere but home (I-294).
+const ReasonAway = "away from home"
+
 // ChunkHealth is the derived chunk state of docs/11 §2 (I-56).
 type ChunkHealth struct {
 	Tombstoned  bool        // Refs == 0

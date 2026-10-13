@@ -78,6 +78,18 @@ export interface RepairStats {
   scrub_bad: number;
   bytes_moved: number;
   errors: number;
+  homed?: number; // chunks moved home (docs/14 §7)
+}
+
+// The home gate (docs/14 §7): what is away from its home placement and whether it moves.
+export interface HomeStatus {
+  away_slots: number;
+  away_bytes: number;
+  movable_bytes: number;
+  stored_bytes: number;
+  start: number; // repair.home_start, a fraction
+  open: boolean;
+  forced?: boolean;
 }
 
 // The pass under way on the leader (docs/12 §8): absent while the repairer is idle.
@@ -96,6 +108,7 @@ export interface RepairStatus {
   stats: RepairStats;
   reported_bad_slots: number;
   in_progress?: RepairProgress | null;
+  home?: HomeStatus | null;
 }
 
 export interface GatewayReport {

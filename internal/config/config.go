@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -61,6 +62,9 @@ type Config struct {
 		Rate    string `yaml:"rate,omitempty"`    // shard bytes per second repair may move (default 50M; "0": no limit)
 		// how long the background scrub takes to verify the whole volume (default 168h; "0": off; docs/06 §5)
 		ScrubPeriod string `yaml:"scrub_period,omitempty"`
+		// the percentage of the stored bytes that must be movable away from home before
+		// placement-only moves start (default 5; "0": only `volume rebalance`; docs/14 §7)
+		HomeStart string `yaml:"home_start,omitempty"`
 	} `yaml:"repair"`
 	// these sections are written only when set, so a release from before them can still
 	// read a file this build wrote (a rollback after update, I-61)
@@ -273,6 +277,20 @@ func (c Config) RepairScrubPeriod() (d time.Duration, set bool, err error) {
 		return 0, false, fmt.Errorf("config: repair.scrub_period %q: want 0 or a duration of 1h to 8760h", c.Repair.ScrubPeriod)
 	}
 	return d, true, nil
+}
+
+// RepairHomeStart parses repair.home_start (docs/14 §7, I-295), a percentage of 0 to 100
+// with an optional "%", as a fraction: set reports whether the key is present, and 0
+// keeps the home gate closed unless `volume rebalance` opens it.
+func (c Config) RepairHomeStart() (f float64, set bool, err error) {
+	if c.Repair.HomeStart == "" {
+		return 0, false, nil
+	}
+	v, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(c.Repair.HomeStart), "%"), 64)
+	if err != nil || v < 0 || v > 100 || math.IsNaN(v) {
+		return 0, false, fmt.Errorf("config: repair.home_start %q: want a percentage of 0 to 100", c.Repair.HomeStart)
+	}
+	return v / 100, true, nil
 }
 
 // RepairRateBytes parses repair.rate, the shard bytes a second repair may move: set is
@@ -634,6 +652,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: mount.path %q: want an absolute path (~ is expanded)", c.Mount.Path)
 	}
 	if _, _, err := c.RepairScrubPeriod(); err != nil {
+		return err
+	}
+	if _, _, err := c.RepairHomeStart(); err != nil {
 		return err
 	}
 	if _, err := c.TrashRetention(); err != nil {
