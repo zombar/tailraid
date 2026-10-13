@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ type fakeVolume struct {
 	dirs       map[uint64][]Entry
 	chunks     map[meta.Hash][]byte
 	unreadable map[meta.Hash]bool
-	reads      int
+	reads      atomic.Int64     // Chunk runs on the writer's workers
 	onDir      func(ino uint64) // a hook a test runs while the walk is under way
 }
 
@@ -47,7 +48,7 @@ func (v *fakeVolume) Dir(ino uint64) ([]Entry, error) {
 }
 
 func (v *fakeVolume) Chunk(_ context.Context, h meta.Hash) ([]byte, error) {
-	v.reads++
+	v.reads.Add(1)
 	if v.unreadable[h] {
 		return nil, errors.New("fewer than k live slots")
 	}
@@ -230,14 +231,14 @@ func TestMirror_SecondSyncWritesOnlyChanges(t *testing.T) {
 	if first.Files != 9 || first.Dirs != 3 || first.Bytes != 8*3*testCS+2*testCS {
 		t.Fatalf("first manifest %+v", first)
 	}
-	reads := v.reads
+	reads := v.reads.Load()
 	// change one chunk of one file: the second sync writes that object and the two trees
 	// above it (edit/ and the root), nothing else
 	v.put(3, "doc", 20, append(bytes.Repeat([]byte{'x'}, testCS), bytes.Repeat([]byte{'z'}, testCS)...))
 	before := m.Used()
 	second := snap(t, m, v, 2)
-	if v.reads-reads != 1 {
-		t.Fatalf("second sync read %d chunks from the pool, want 1", v.reads-reads)
+	if v.reads.Load()-reads != 1 {
+		t.Fatalf("second sync read %d chunks from the pool, want 1", v.reads.Load()-reads)
 	}
 	if int64(second.NewBytes) != m.Used()-before {
 		t.Fatalf("NewBytes %d, the mirror grew %d", second.NewBytes, m.Used()-before)
