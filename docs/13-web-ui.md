@@ -341,14 +341,25 @@ sweep removes it and the page grabs a new one as the tile comes into view (I-216
 - **Audio** answers its embedded picture (§6), else a `cover.*`/`folder.*` sibling, scaled
   like an image. A folder's own tile uses its first audio entry by name that has a
   thumbnail (`dir.cover`): an embedded picture, or, when the folder holds a `cover.*` or
-  `folder.*` image, its first audio entry outright. A folder with none takes the cover
-  of its first subfolder by name that has one, looking at the audio directly inside at
-  most `CoverSubdirs` (16) subfolders and never deeper, so an album kept as editions or
-  discs (`Fugazi/CBR Original/…`) and an artist's folder of albums both get a tile
-  (`cover` is then `<subfolder>/<entry>`). The choice is the same on every node (I-165).
+  `folder.*` image, its first audio entry outright. Without a track's picture, a folder's
+  own art is an artwork image (`cover.*`, `folder.*`, then `poster.*`: a movie's or a
+  show's poster), else the first other file by name whose thumbnail is stored (a video
+  whose frame the browser grabbed). A folder with no art of its own takes the cover of its
+  first subfolder by name that has one, first wins, looking into at most `CoverSubdirs`
+  (16) subfolders a level and at most `CoverDepth` (3) levels down, so an album kept as
+  editions or discs (`Fugazi/CBR Original/…`), an artist's folder of albums, a Movies
+  folder and a TV folder of shows and seasons all get a tile (`cover` is then the path
+  below the folder, `<subfolder>/…/<entry>`; I-257). The choice is the same on every node
+  (I-165).
   Finding it reads each candidate's tags, so the folder's tile asks
   `GET /api/thumb?path=<folder>` and the node resolves the cover then and remembers it
-  until the folder or a subfolder it looked into changes; a listing reports `cover`, or
+  until the folder or a subfolder it looked into changes. The choice is stored in the
+  volume beside the thumbnails, as `<ino>-<gen>.cover` under `/.tailraid/thumbs` (the
+  chosen entry, or none, and the version of every folder it read), so the first node to
+  resolve a folder resolves it for all: every other node, and this one after a restart,
+  serves the record with one small read while those folders are unchanged, and resolves
+  and stores it again once one changed; the sweep removes the record of a folder that no
+  longer exists (I-256); a listing reports `cover`, or
   `no_cover` for a folder resolved to none, only when already known and reads no file
   (measured 2026-10-11: a cold listing of 99 album folders took 5.5 s while it resolved
   every cover in line). The page asks for no thumbnail of a folder marked `no_cover`.
@@ -826,13 +837,27 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   the file's embedded picture.
 - **I-165** — The thumbnail of an audio file is its embedded picture, else a `cover.*` or
   `folder.*` sibling in that order of names, scaled like an image; a folder's `cover` is
-  its first audio entry by name that has a thumbnail, else `<subfolder>/<entry>` for the
-  first of at most `CoverSubdirs` subfolders by name whose own audio gives one (one
-  level only), the same on every node, and absent when none has one; a listing reports
+  its own art (I-257), else `<subfolder>/<cover>` for the first of at most
+  `CoverSubdirs` subfolders by name whose cover resolves, at most `CoverDepth` levels
+  down, the same on every node, and absent when none has one; a listing reports
   it, or `no_cover` for a folder resolved to none, only once this node has resolved it
   for the current versions of the folder and of every subfolder it looked into, and
   reads no file to do so; `GET /api/thumb` of the folder resolves it, serves that
   picture and answers 404 for a folder without one.
+- **I-257** — A folder's own art is the first audio entry by name that has a thumbnail
+  (I-165), else the first of `cover.*`, `folder.*` and `poster.*` it holds, else the
+  first other file by name whose thumbnail is stored; a folder without its own takes the
+  cover of its first subfolder by name that has one, first wins, looking into at most
+  `CoverSubdirs` subfolders a level, skipping hidden folders, and at most `CoverDepth` (3)
+  levels down. Before, only audio counted and only one level down, so a Movies or TV
+  folder and a Music folder of artists had no tile.
+- **I-256** — A folder's resolved cover is stored in the volume as a record beside the
+  thumbnails (the chosen entry or none, and the version of every folder it read); a node
+  without the cover in memory serves the record when those folders are unchanged, reading
+  no track's tags, and otherwise resolves the cover and stores the new record; the
+  thumbnail sweep keeps a record while its folder exists, live or in the trash, and
+  removes it otherwise. Before, the choice lived in each node's memory only, so every
+  node, after every restart, read the tags of every folder's tracks again.
 - **I-197** — One chart package renders the soak report and the Stats page: the same
   series render byte-identical SVG for both; it emits no colour and no inline `style`,
   only classes, and every class it emits is defined in `app.css` and in the report's
@@ -897,6 +922,8 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-163 | `TestWebUI_Flags_DirsOnly_Effective`, `TestWebUI_Mutations_ProtectedIs403`, `TestSoak_AllPhasesAgainstHarness` |
 | I-164 | `TestWebUI_Tags_Table`, `TestWebUI_Tags_ReadBounded`, `TestSoak_AllPhasesAgainstHarness` |
 | I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_DirCoverFromSubfolder`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
+| I-257 | `TestWebUI_DirCover_SurfacesArtUpward`, `TestWebUI_Ls_DirCoverFromSubfolder` |
+| I-256 | `TestWebUI_DirCover_StoredAndShared`, `TestSweepThumbs_CoverRecords` |
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
