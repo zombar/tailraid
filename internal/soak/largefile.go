@@ -60,7 +60,7 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 	if _, err := r.repairUntilClean(ctx); err != nil {
 		return err
 	}
-	_, orphans0, _, _ := r.Env.Fsck(ctx, gw)
+	fsck0, _ := r.Env.Fsck(ctx, gw)
 	h := sha256.New()
 	var peak struct {
 		heap, flush, plan  uint64
@@ -167,9 +167,23 @@ func phaseLargeFile(ctx context.Context, r *Run) error {
 		}
 	}
 	r.check("I-81", "no temp file left in the run's directory", err == nil && temps == 0, fmt.Sprintf("%d temps among %d entries, %v", temps, len(names), err))
-	ok, orphans1, detail, err := r.Env.Fsck(ctx, gw)
-	r.checkAt("I-44 I-38", "fsck clean and no new orphans after the large file", err == nil && ok && orphans1 <= orphans0,
-		fmt.Sprintf("%s; %d orphans before the phase%v", detail, orphans0, errText(err)), "", "", gw.Name)
+	// a new orphan passes only when its chunk's history explains it: the write path leaves
+	// a few for the sweep (a PUT cut after k acks that landed anyway, an upload whose
+	// commit did not apply, L-190), and other gateways write meanwhile; one nothing
+	// explains is a leak. A list fsck capped compares by count instead.
+	fsck1, err := r.Env.Fsck(ctx, gw)
+	explained, unexplained := judgeNewOrphans(fsck0.Listed, fsck1.Listed, r.chunkHistory(ctx))
+	capped := fsck0.Orphans > len(fsck0.Listed) || fsck1.Orphans > len(fsck1.Listed)
+	clean := len(unexplained) == 0 && (!capped || fsck1.Orphans <= fsck0.Orphans)
+	detail := fmt.Sprintf("%s; %d orphans before the phase; %d new explained, %d not", fsck1.Detail, fsck0.Orphans, len(explained), len(unexplained))
+	if len(unexplained) > 0 {
+		detail += "; unexplained: " + orphanText(unexplained, 8)
+	}
+	if len(explained) > 0 {
+		detail += "; explained: " + orphanText(explained, 8)
+	}
+	r.checkAt("I-44 I-38", "fsck clean and every new orphan explained after the large file", err == nil && fsck1.OK && clean,
+		detail+errText(err), "", "", gw.Name)
 	r.placementChecks(ctx, p, size, rep)
 	return nil
 }

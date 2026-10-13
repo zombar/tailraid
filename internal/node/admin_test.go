@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"path"
 	"testing"
@@ -93,6 +94,24 @@ func TestFsck_CountsOrphanShards(t *testing.T) {
 	rep := raw.(admin.FsckReport)
 	if !rep.OK || len(rep.Violations) != 0 || rep.OrphanShards != 1 {
 		t.Fatalf("fsck with one orphan: %+v", rep)
+	}
+	// it lists the orphan by key, so a caller can look up what left it
+	if want := string(chunk.Key(h, 2, 1, 0)); len(rep.Orphans) != 1 || rep.Orphans[0] != want {
+		t.Fatalf("listed orphans %v, want [%s]", rep.Orphans, want)
+	}
+}
+
+// The listing stops at MaxListedOrphans; the count goes on.
+// Invariant: I-44
+func TestFsckReport_OrphanListBounded(t *testing.T) {
+	for _, n := range []int{0, 1, admin.MaxListedOrphans - 1, admin.MaxListedOrphans, admin.MaxListedOrphans + 1} {
+		var rep admin.FsckReport
+		for i := range n {
+			rep.AddOrphan(fmt.Sprint(i))
+		}
+		if rep.OrphanShards != n || len(rep.Orphans) != min(n, admin.MaxListedOrphans) {
+			t.Fatalf("%d orphans: counted %d, listed %d", n, rep.OrphanShards, len(rep.Orphans))
+		}
 	}
 }
 

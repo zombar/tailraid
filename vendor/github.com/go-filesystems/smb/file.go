@@ -644,7 +644,7 @@ func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []b
 		return reply
 	case <-t.C:
 	}
-	op, interim := c.beginAsync(h, of.id)
+	op, interim := c.beginAsyncOp(h, of.id, true) // the write is in the driver: CANCEL cannot take it back (I-247)
 	if key != nil {
 		signMessage(c.dialect, key, interim)
 	}

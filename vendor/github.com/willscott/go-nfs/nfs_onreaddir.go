@@ -54,7 +54,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 	}
 
 	entities := make([]readDirEntity, 0)
-	maxBytes := uint32(100) // conservative overhead measure
+	maxBytes := uint32(listOverhead) // the reply's own fields; each entry adds its size (I-248)
 
 	started := obj.Cookie == 0
 	if started {
@@ -75,6 +75,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			readDirEntity{Name: []byte("."), Cookie: 0, Next: true, FileID: dotFileID},
 			readDirEntity{Name: []byte(".."), Cookie: 1, Next: true, FileID: dotdotFileID},
 		)
+		maxBytes += entry3Size(".") + entry3Size("..")
 	}
 
 	eof := true
@@ -88,7 +89,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 			continue // removed since the kept listing was made; its cookie stays counted
 		}
 		if started {
-			maxBytes += 512 // TODO: better estimation.
+			maxBytes += entry3Size(c.Name())
 			if maxBytes > obj.Count || len(entities) > maxEntities {
 				eof = false
 				break

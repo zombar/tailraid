@@ -510,6 +510,15 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   connection ends, when its session logs off and when its tree disconnects, exactly as a
   CLOSE would: its delete-on-close removes the file (by inode, I-225), its locks are
   released, and the handle answers nothing after a logoff or a tree disconnect.
+- **I-247** — A CANCEL of a WRITE answered `STATUS_PENDING` takes nothing back: the
+  write is already in the driver, so the CANCEL is answered nothing and the WRITE its real
+  reply with the bytes it wrote (MS-SMB2 3.3.5.16); a lock wait or a change notification
+  is still cancelled with `STATUS_CANCELLED`. In a chain, only a request that failed (an
+  error severity) stops the related requests after it; one that answered a warning, such
+  as `STATUS_BUFFER_OVERFLOW`, is a success with partial output and the chain goes on
+  (MS-SMB2 3.3.5.2.7.2). Before, a cancelled WRITE was answered `STATUS_CANCELLED` while
+  its bytes landed, and a CLOSE chained after an overflowing QUERY_INFO was skipped,
+  leaving the handle open.
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -537,6 +546,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-229 | `TestSMB_ScratchCreate_NotTrashed` |
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
+| I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |
 | I-237 | `TestWildcards` |
