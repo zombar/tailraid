@@ -585,7 +585,7 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 // whose thumbnail is a cover.* sibling counts as having one. A listing marks a folder
 // resolved to none no_cover, and forgets a cover once a subfolder it looked into changes.
 //
-// Invariant: I-165
+// Invariant: I-165, I-257
 func TestWebUI_Ls_DirCoverFromSubfolder(t *testing.T) {
 	u := newUI(t)
 	pic := jpegBytes(16, 16, green)
@@ -607,7 +607,7 @@ func TestWebUI_Ls_DirCoverFromSubfolder(t *testing.T) {
 	}{
 		{"/Fugazi", "2 VBR/a.mp3", 200},
 		{"/Sib", "a.mp3", 200},
-		{"/Deep", "", 404}, // the picture is two levels down
+		{"/Deep", "x/y/a.mp3", 200}, // two levels down: within CoverDepth (I-257)
 		{"/Bare", "", 404},
 	}
 	for _, c := range cases {
