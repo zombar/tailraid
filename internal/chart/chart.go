@@ -105,6 +105,7 @@ var Classes = []string{
 	"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7",
 	string(OK), string(Warn), string(Bad), "chart-bg", "chart-off",
 	"dev-3", "dev-2", "dev-1", "dev0", "dev1", "dev2", "dev3",
+	"pending", "frame", "note",
 }
 
 func seriesClass(s Series, i int) string {
@@ -281,6 +282,35 @@ func legendRows(ss []Series) (rows []int, xs []float64, nrows int) {
 	return rows, xs, nrows
 }
 
+// LegendHeight is the height a line chart's legend adds below the plot for series of
+// these names, so a chart's frame can have the drawn chart's size (docs/17 §3).
+func LegendHeight(names []string) int {
+	ss := make([]Series, len(names))
+	for i, n := range names {
+		ss[i].Name = n
+	}
+	return legendHeight(ss)
+}
+
+// laneRow is the height of one lane of Lanes.
+const laneRow = 16
+
+// LanesHeight is the height of a Lanes chart of n names.
+func LanesHeight(n int) int { return padT + laneRow*n + 24 }
+
+// Frame is a chart not drawn yet (docs/17 §3, I-258): the chart's size, its title, a
+// dashed frame over the plot area and a "loading" note, classes only. The page draws it
+// at once and replaces it with the chart when that arrives, so nothing moves.
+func Frame(title string, h int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg class="chart pending" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s: loading">`, Width, h, html.EscapeString(title))
+	fmt.Fprintf(&b, `<text x="%d" y="18" class="title">%s</text>`, padL, html.EscapeString(title))
+	ph := max(h-56, 1)
+	fmt.Fprintf(&b, `<rect class="frame" x="%d" y="%d" width="%d" height="%d" rx="2"/>`, padL, padT, Width-padL-padR, ph)
+	fmt.Fprintf(&b, `<text x="%d" y="%d" text-anchor="middle" class="note">loading</text></svg>`, padL+(Width-padL-padR)/2, padT+ph/2+4)
+	return b.String()
+}
+
 func legendHeight(ss []Series) int {
 	_, _, n := legendRows(ss)
 	if n == 0 {
@@ -406,8 +436,8 @@ func bandLabel(s string) string {
 
 // Lanes draws one row of status cells per name along the time axis (node liveness).
 func Lanes(title string, maxX float64, names []string, cells map[string][]Cell, ax Axis) string {
-	const rowH = 16
-	h := padT + rowH*len(names) + 24
+	const rowH = laneRow
+	h := LanesHeight(len(names))
 	iw := float64(Width - padL - padR)
 	if maxX == 0 {
 		maxX = 1

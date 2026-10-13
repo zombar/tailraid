@@ -440,6 +440,12 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .chart rect.dev-3 { fill: var(--under3); } .chart rect.dev-2 { fill: var(--under2); } .chart rect.dev-1 { fill: var(--under1); }
 .chart rect.dev0 { fill: var(--even); }
 .chart rect.dev1 { fill: var(--over1); } .chart rect.dev2 { fill: var(--over2); } .chart rect.dev3 { fill: var(--over3); }
+/* a chart still on its way (docs/17 §4): the frame the stream's first line carries, at the
+   chart's own size, so nothing moves when the drawing replaces it */
+.chart.pending .frame { fill: none; stroke: var(--line); stroke-dasharray: 4 4; }
+.chart.pending .note { font: 12px var(--sans); fill: var(--dim); animation: pending 1.6s ease-in-out infinite; }
+.chart.failed .note { fill: var(--bad); animation: none; }
+@keyframes pending { 50% { opacity: .35; } }
 .inline-form.range input[type=datetime-local] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; min-height: 40px; }
 .inline-form.range label { font-size: 13px; color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
 .menu-row.link { grid-template-columns: auto 1fr auto; }

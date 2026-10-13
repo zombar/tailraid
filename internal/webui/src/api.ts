@@ -600,8 +600,66 @@ export interface StatsResponse {
   charts: StatsChart[];
 }
 
-export const getStats = (from: number, to: number | "now", node: string): Promise<StatsResponse> =>
-  call(`/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}`);
+/** a chart before its rows are read: the empty SVG the page draws at once (docs/17 §3) */
+export interface StatsFrame {
+  id: string;
+  title: string;
+  frame: string;
+}
+
+/** the stream's first line: the range, the members and every chart's frame */
+export interface StatsFirst {
+  range: StatsResponse["range"];
+  node: string;
+  nodes: StatsMember[];
+  charts: StatsFrame[];
+}
+
+/** a later line: one chart drawn, empty (no rows in the range), or the error that ended the stream */
+export interface StatsLine {
+  id?: string;
+  svg?: string;
+  caption?: string;
+  empty?: boolean;
+  error?: string;
+}
+
+/**
+ * streamStats reads /api/stats?stream=1 (docs/17 §3, I-258): onFirst gets the frames as
+ * soon as the node writes them, before it reads any row, and onLine each chart as it
+ * arrives. ids limits the charts drawn (a live refresh asks for those on screen).
+ */
+export async function streamStats(
+  from: number,
+  to: number | "now",
+  node: string,
+  ids: string[] | null,
+  onFirst: (f: StatsFirst) => void,
+  onLine: (l: StatsLine) => void,
+): Promise<void> {
+  let url = `/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}&stream=1`;
+  if (ids) url += "&ids=" + encodeURIComponent(ids.join(","));
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok || !r.body) throw await apiError(r);
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let first = true;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buf += dec.decode(value, { stream: true });
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      if (first) {
+        first = false;
+        onFirst(JSON.parse(line) as StatsFirst);
+      } else onLine(JSON.parse(line) as StatsLine);
+    }
+    if (done) return;
+  }
+}
 
 // --- snapshots on mirror disks (docs/13 §3, docs/16) -------------------------------------
 
