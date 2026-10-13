@@ -88,6 +88,12 @@ func wrap(err error) error {
 // a cap delays no other copy on the share (I-217).
 func (a *FS) ConcurrentWrites() bool { return true }
 
+// ConcurrentReads tells the server a READ needs no share lock: vfs.File.ReadAt is safe
+// alongside every other call (the NFS gateway already serves reads concurrently, I-167),
+// so a READ waiting for a cold chunk's shards delays no CREATE, CLOSE or rename on the
+// share (I-254).
+func (a *FS) ConcurrentReads() bool { return true }
+
 // CanDelete is asked when a client marks a handle delete-on-close (docs/15 §8): the
 // delete itself happens at CLOSE, whose reply carries no failure, so a protected entry
 // (I-154) is refused here, where the client reads STATUS_ACCESS_DENIED.

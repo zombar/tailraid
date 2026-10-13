@@ -438,6 +438,8 @@ type conn struct {
 	alone bool
 	// writeSlots bounds the WRITEs running off the read loop (asyncWrites).
 	writeSlots chan struct{}
+	// readSlots bounds the READs running off the read loop (asyncReads).
+	readSlots chan struct{}
 }
 
 func newConn(s *Server, nc net.Conn) *conn {
@@ -450,6 +452,7 @@ func newConn(s *Server, nc net.Conn) *conn {
 		waiting:  map[uint64]*pendingOp{},
 
 		writeSlots: make(chan struct{}, asyncWrites),
+		readSlots:  make(chan struct{}, asyncReads),
 	}
 }
 
