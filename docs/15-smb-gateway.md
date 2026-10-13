@@ -510,6 +510,16 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   connection ends, when its session logs off and when its tree disconnects, exactly as a
   CLOSE would: its delete-on-close removes the file (by inode, I-225), its locks are
   released, and the handle answers nothing after a logoff or a tree disconnect.
+- **I-254** — A READ through a positional handle runs off the connection's read loop:
+  one that finishes within the grace is answered as any other, a slower one
+  `STATUS_PENDING` at once and its data later under the same MessageId and AsyncId, at
+  most `asyncReads` (32) per connection; a CLOSE waits for the handle's READs as for its
+  WRITEs; a CANCEL of a waiting READ is answered `STATUS_CANCELLED`, a read changing
+  nothing. A driver that declares `ConcurrentReads` (the tailraid adapter does) has its
+  READs run under no share lock; any other keeps the share's read lock around them.
+  Before, every READ ran on the read loop under the share's read lock: one cold chunk's
+  network fetch held up every other request on the connection, and with a CREATE, CLOSE
+  or rename waiting for the lock, every new request on the share.
 - **I-247** — A CANCEL of a WRITE answered `STATUS_PENDING` takes nothing back: the
   write is already in the driver, so the CANCEL is answered nothing and the WRITE its real
   reply with the bytes it wrote (MS-SMB2 3.3.5.16); a lock wait or a change notification
@@ -546,6 +556,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-229 | `TestSMB_ScratchCreate_NotTrashed` |
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
+| I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |
 | I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |

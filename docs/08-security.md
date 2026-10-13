@@ -281,6 +281,11 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   `gc` and `check --scrub` wait for it, and the soak's live environment gives a pass
   `PassTimeout` (30 min). Shard calls keep their size-scaled deadline and the 10 s
   header timeout (I-83), so a stalled holder still fails fast.
+- **I-255** — The control transport keeps as many idle connections per host (32) as the
+  shard transport: a burst of control calls to one node (proposals forwarded to the
+  leader by every gateway's flush and repair workers) reuses its connections, and a
+  second burst of the same size dials none. Before, it kept 4, and every call past the
+  fourth dialed a fresh TCP connection and closed it after.
 - **I-94** — A join records the caller's source address and rejects a request that names
   another with 403; a re-join under a known node ID keeps the record only when it presents
   that record's StableID; a join from the Raft address of a known server under a new node
@@ -304,6 +309,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
+| I-255 | `TestClient_ControlBurst_ReusesConnections` |
 | I-189 | `TestClient_PassOpOutlivesHeaderTimeout`, `TestAdminOp_IsPass_Table`, `TestAdmin_PassOpsCarryDeadline` |
 | I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap`, `TestWebUI_BodyCaps_AllMutatingRoutes`, `TestWebUI_Thumb_Put_Boundaries` |
 | I-199 | `TestRPC_Stats_MemberOnly_OwnRows`, `TestWriter_Live_SinceAndCap_Table` |

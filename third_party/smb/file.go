@@ -75,10 +75,10 @@ type openFile struct {
 	resumeKey    [24]byte
 	hasResumeKey bool
 
-	// writes are this handle's WRITEs still running off the read loop
-	// (writeAsync): a CLOSE waits for them, so a handle is never closed under
-	// a write it accepted.
-	writes sync.WaitGroup
+	// inflight are this handle's WRITEs and READs still running off the read
+	// loop (writeAsync, readAsync): a CLOSE waits for them, so a handle is
+	// never closed under a write or a read it accepted.
+	inflight sync.WaitGroup
 
 	// created is whether this handle's CREATE made the file: its delete-on-close is the
 	// creator's own cleanup, which an OwnDeleter may allow where it refuses any other
@@ -385,7 +385,7 @@ func timeOf(ft uint64) time.Time {
 // off or the tree disconnects (MS-SMB2 3.3.7.1, 3.3.5.6, 3.3.5.8, I-240). Without it a
 // copy's guard file outlived a lost connection, full size and made of holes.
 func (c *conn) closeOpen(of *openFile) {
-	of.writes.Wait() // every WRITE this handle accepted is answered first
+	of.inflight.Wait() // every WRITE and READ this handle accepted is answered first
 	if of.f != nil {
 		of.f.Close()
 	}
@@ -458,7 +458,6 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 	if of.dir {
 		return errorResponse(h, statusInvalidDeviceRequest), nil
 	}
-	defer of.share.reading()()
 	if length > maxReadSize {
 		length = maxReadSize
 	}
@@ -470,26 +469,30 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 	if of.share.locks.held(of.p(), uint64(offset), uint64(length), of.id, false) {
 		return errorResponse(h, statusFileLockConflict), nil
 	}
+	if of.f != nil {
+		// Positional, and off the read loop once it takes long (readAsync), so a
+		// READ waiting for its bytes holds up no other request on the connection;
+		// the share lock is held around it unless the driver says its reads are
+		// safe alongside its other calls (ConcurrentReader, I-254).
+		if c.alone {
+			return c.readAsync(h, of, length, offset), nil
+		}
+		defer lockUnlessConcurrentRead(of.share)()
+		return readAt(h, of, length, offset), nil
+	}
+	defer of.share.reading()()
 
+	// No positional read: the whole file, every time. See Opener's
+	// documentation for why a driver that cannot answer a byte range
+	// should not pretend to.
 	buf := make([]byte, length)
 	var n int
-	if of.f != nil {
-		var err error
-		n, err = of.f.ReadAt(buf, offset)
-		if err != nil && !errors.Is(err, io.EOF) {
-			return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
-		}
-	} else {
-		// No positional read: the whole file, every time. See Opener's
-		// documentation for why a driver that cannot answer a byte range
-		// should not pretend to.
-		data, err := of.share.fsys.ReadFile(of.p())
-		if err != nil {
-			return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
-		}
-		if offset < int64(len(data)) {
-			n = copy(buf, data[offset:])
-		}
+	data, err := of.share.fsys.ReadFile(of.p())
+	if err != nil {
+		return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
+	}
+	if offset < int64(len(data)) {
+		n = copy(buf, data[offset:])
 	}
 	if n == 0 {
 		// END_OF_FILE, not a zero-length success: a client that gets zero
@@ -505,6 +508,91 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint32(rb[4:], uint32(n))
 	copy(rb[bodyLen:], buf[:n])
 	return b, nil
+}
+
+// readAt reads length bytes at offset through the handle's positional reader and builds
+// the reply.
+func readAt(h header, of *openFile, length int, offset int64) []byte {
+	buf := make([]byte, length)
+	n, err := of.f.ReadAt(buf, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return errorResponse(h, statusFor(err, statusUnexpectedIoError))
+	}
+	if n == 0 {
+		// END_OF_FILE, not a zero-length success: a client that gets zero
+		// bytes with success reads forever.
+		return errorResponse(h, statusEndOfFile)
+	}
+	const bodyLen = 16
+	b := append(responseTo(h, statusSuccess), make([]byte, bodyLen+n)...)
+	rb := b[headerLen:]
+	binary.LittleEndian.PutUint16(rb[0:], 17)
+	rb[2] = headerLen + bodyLen // data offset, from the start of the message
+	binary.LittleEndian.PutUint32(rb[4:], uint32(n))
+	copy(rb[bodyLen:], buf[:n])
+	return b
+}
+
+// asyncReads bounds the READs one connection runs at once off the read loop, each
+// holding up to maxReadSize; one more waits for a slot.
+const asyncReads = 32
+
+// readAsync runs a READ off the read loop, as writeAsync a WRITE (I-254): one that
+// finishes within writeGrace is answered as any other, a slower one STATUS_PENDING at
+// once and its data when the driver returns, under the same MessageId and AsyncId.
+// Windows reads every file over one connection, and a cold chunk takes a network round
+// trip: before this, one file's READ waiting for its shards was every file's stall. A
+// READ changes nothing, so a CANCEL of it is honoured: STATUS_CANCELLED, and the bytes,
+// when they come, are dropped.
+func (c *conn) readAsync(h header, of *openFile, length int, offset int64) []byte {
+	c.readSlots <- struct{}{}
+	of.inflight.Add(1)
+	done := make(chan []byte, 1)
+	later := make(chan *pendingOp, 1)
+	key := c.replyKey(h)
+	go func() {
+		defer of.inflight.Done()
+		defer func() { <-c.readSlots }()
+		unlock := lockUnlessConcurrentRead(of.share)
+		reply := readAt(h, of, length, offset)
+		unlock()
+		done <- reply
+		if op := <-later; op != nil {
+			c.finishAsyncWith(op, asFinal(reply, op.asyncID), key)
+		}
+	}()
+	t := time.NewTimer(writeGrace)
+	defer t.Stop()
+	select {
+	case reply := <-done:
+		later <- nil
+		return reply
+	case <-t.C:
+	}
+	op, interim := c.beginAsync(h, of.id)
+	if key != nil {
+		signMessage(c.dialect, key, interim)
+	}
+	_ = c.send(interim) // a failed send ends the connection at the next read
+	later <- op
+	return nil
+}
+
+// ConcurrentReader is the optional capability of a filesystem whose positional reads
+// (File.ReadAt) may run alongside any of its other calls: a READ from it then takes no
+// share lock, so one waiting for its bytes delays no CREATE, CLOSE or rename on the share
+// (I-254). A driver without it has every READ hold the share's read lock, as before.
+type ConcurrentReader interface {
+	ConcurrentReads() bool
+}
+
+// lockUnlessConcurrentRead takes the share's read lock for a positional read unless the
+// driver is a ConcurrentReader, and returns its release.
+func lockUnlessConcurrentRead(sh *share) func() {
+	if cr, ok := sh.fsys.(ConcurrentReader); ok && cr.ConcurrentReads() {
+		return func() {}
+	}
+	return sh.reading()
 }
 
 func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
@@ -620,12 +708,12 @@ const (
 // not part of a chain (conn.alone).
 func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []byte {
 	c.writeSlots <- struct{}{}
-	of.writes.Add(1)
+	of.inflight.Add(1)
 	done := make(chan []byte, 1)
 	later := make(chan *pendingOp, 1)
 	key := c.replyKey(h)
 	go func() {
-		defer of.writes.Done()
+		defer of.inflight.Done()
 		defer func() { <-c.writeSlots }()
 		unlock := lockUnlessConcurrent(of.share)
 		reply := writeAt(h, of, data, offset)
