@@ -741,6 +741,24 @@ func (o *Overlay) NoteTimes(ino meta.Ino, atime, mtime int64) {
 	}
 }
 
+// Changed reports a dirty file's times as this gateway sees them (docs/04 §3, I-261):
+// its last write or truncate, as mtime and ctime, or for mtime the time a client set
+// after it (I-230). ok is false when ino has nothing dirty.
+func (o *Overlay) Changed(ino meta.Ino) (wrote time.Time, user int64, hasUser, ok bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return time.Time{}, 0, false, false
+	}
+	defer d.mu.Unlock()
+	if !d.dirty() {
+		return time.Time{}, 0, false, false
+	}
+	if d.times != nil {
+		return d.lastWrite, d.times.mtime, true, true
+	}
+	return d.lastWrite, 0, false, true
+}
+
 // UserTimes returns the times NoteTimes recorded on ino and no write has superseded.
 func (o *Overlay) UserTimes(ino meta.Ino) (atime, mtime int64, ok bool) {
 	d, _ := o.get(ino, 0, false)
