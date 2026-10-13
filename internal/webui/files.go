@@ -36,7 +36,7 @@ type Entry struct {
 	Thumb     bool      `json:"thumb,omitempty"`      // GET /api/thumb answers without a PUT: stored, or an image or audio file
 	Cover     string    `json:"cover,omitempty"`      // directories: the audio entry whose picture is the folder's tile (I-165)
 	NoCover   bool      `json:"no_cover,omitempty"`   // directories: resolved to no cover (I-165)
-	Card      *Card     `json:"card,omitempty"`       // directories under a library without a known cover: the title card's words (I-280)
+	Card      *Card     `json:"card,omitempty"`       // directories under a library: the title card's words, the tile without art or the overlay on its cover (I-280)
 }
 
 // Card is a title card's words: the analysed title and the line under it, a year or a
@@ -261,9 +261,9 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 	dir := DirInfo{Cover: cover, NoCover: known && cover == ""}
 	var lib meta.LibraryKind
 	dir.Protected, dir.NSFW, lib = s.effective(t.in)
-	for i := range entries { // a folder whose art may not exist carries its title card for the tile's miss (I-280)
+	for i := range entries { // a library folder carries its title card: the tile without art, the overlay on its cover (I-280)
 		e := &entries[i]
-		if e.Type != "dir" || e.Cover != "" || e.DeletedAt != "" {
+		if e.Type != "dir" || e.DeletedAt != "" {
 			continue
 		}
 		k := lib

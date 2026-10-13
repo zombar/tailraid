@@ -397,10 +397,14 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     if (canThumb) {
       const img = h("img", { alt: "" }) as HTMLImageElement;
       thumb.append(img);
-      if (thumb.classList.contains("nsfw")) thumb.append(h("span", { class: "veil" }, "nsfw · tap to show"));
       const root = e.deleted_at ? e.ino : source;
       const tp = e.deleted_at ? (e.type === "dir" && e.cover ? "/" + e.cover : "/") : thumbPath;
       lazy(img, e, tp, root, e.type === "dir" ? (e.cover ? "audio" : "dir") : (kindOf as "image" | "video" | "audio"), showIcon);
+      if (e.type === "dir") {
+        // a folder's cover carries its title as a film poster does: the title card's words, else its name
+        const words = e.card ?? { title: e.name };
+        img.addEventListener("load", () => thumb.append(h("span", { class: "tover" }, h("span", { class: "ct" }, words.title), words.sub ? h("span", { class: "cy" }, words.sub) : null)), { once: true });
+      }
     } else showIcon();
     // a media card (docs/13 Components): the size on the picture's corner, the kind and the
     // modification time under the title

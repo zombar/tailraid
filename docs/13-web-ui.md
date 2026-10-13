@@ -376,9 +376,16 @@ sweep removes it and the page grabs a new one as the tile comes into view (I-216
   `no_cover` for a folder resolved to none, only when already known and reads no file
   (measured 2026-10-11: a cold listing of 99 album folders took 5.5 s while it resolved
   every cover in line). The page asks for no thumbnail of a folder marked `no_cover`.
-- The page loads thumbnails lazily (three at a time as tiles scroll into view) and never
-  more than one `PUT` per file per version; a tile under an nsfw folder draws its
-  thumbnail blurred.
+- The page loads thumbnails lazily, in two lanes: the node's thumbnails six at a time
+  as tiles come within 200 px of the viewport, and the browser's own video frames one at
+  a time in a lane of their own, so a slow video never holds up the tiles behind it. A
+  tile that leaves the viewport before its turn waits again, and one a redraw replaced is
+  dropped. No frame is attempted for a container browsers do not decode (`avi`, `wmv`,
+  `mpg`, `mpeg`, `flv`, `vob`, `rm`, `rmvb`, `divx`, `asf`), and one video's frame is
+  given at most 15 s. Never more than one `PUT` per file per version; a tile under an
+  nsfw folder draws its thumbnail blurred. (Measured 2026-10-13 on the real volume: the
+  node answered every folder thumbnail in 2–100 ms; the waits were the page's queue,
+  three slots that a frame grab could hold for 30 s and that tiles scrolled past kept.)
 
 ## 6. Audio
 
@@ -705,8 +712,8 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Rename form | `.inline-form.rename` | the new-folder form with the entry's name pre-filled and selected up to the extension |
 | Deleted row / tile | `tr.deleted`, `.ftile.deleted` | dimmed to `--dim`, a `.badge` "deleted · 27 d" after the name, no dirty marker, links lead into the trash routes |
 | Trash banner | `.banner.deleted` > text + `.actions` (Restore · Delete now) | above a deleted folder's listing and a deleted file's view: "Deleted 3 d ago · gone for good in 27 d"; after a 409 the text becomes "`Day 2` is taken in `Concerts 2024` · restore under another name" and the rename form takes the banner's next line (no nested box), or the picker opens for a parent that is itself deleted |
-| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img` or the icon, `.ov.br` a file's size, `.ov.bl` the playing marker, the play button in the middle) + `.tname` + `.tmeta` (kind left, modified right) | a media card: the picture edge to edge with an 8 px radius, no frame or padding, one line of title (ellipsis), one line of meta; `auto-fill, minmax(min(196px, 100%), 1fr)` with 24 px between rows and 16 px between columns (`minmax(min(140px, 100%), 1fr)`, 16/12 px below 600 px); the thumb is 16:9, cropped to fill; hover lifts it with `--shadow`; `selected` rings it in the accent; `dir`, `dirty` (amber "· syncing" after the meta), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (badges on `--overlay` in the top corner), `playing` (audio) |
-| NSFW veil | `.thumb.nsfw`, `.viewer.nsfw` > `.veil` | `filter: blur(14px) scale(1.1)` inside `overflow: hidden`; the veil reads "nsfw · tap to show"; `.revealed` removes both for the session |
+| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img` or the icon, `.ov.br` a file's size, `.ov.bl` the playing marker, the play button in the middle) + `.tname` + `.tmeta` (kind left, modified right) | a media card: the picture edge to edge with an 8 px radius, no frame or padding, one line of title (ellipsis), one line of meta; `auto-fill, minmax(min(196px, 100%), 1fr)` with 24 px between rows and 16 px between columns (`minmax(min(140px, 100%), 1fr)`, 16/12 px below 600 px); the thumb is 16:9, cropped to fill; hover lifts it with `--shadow`; `selected` rings it in the accent; `dir`, `dirty` (amber "· syncing" after the meta), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (badges on `--overlay` in the top corner), `playing` (audio); a folder's cover carries `.tover`, its title card's words (a library folder's analysed title and year, else its name) centred in sans over the cover dimmed by `--scrim` |
+| NSFW blur | `.thumb.nsfw`, `.viewer.nsfw` (+ an empty `.veil` over the viewer, which takes the tap a video would swallow) | the picture is blurred (`blur(16px)`, scaled 1.1 inside `overflow: hidden`) and nothing more: no text; a tap reveals it, and `.revealed` keeps every nsfw picture clear for the session |
 | Album | `section.album` > `.album-head` (`img.cover`, `h1`, `.artist`, `.meta`) + `table.tracks` (`.no`, `.title`, `.dur`) | the playing row is `tr.playing` with the equaliser glyph in `.no`; "Play all" and "Shuffle" are toolbar buttons |
 | Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, `--nowbar-h` tall (64 px on one row from 840 px, 120 px on two rows below; see *Layout*), hidden until something plays (`hidden`); the transport, the modes and the queue's remove are icon buttons; `expanded` shows the queue panel above it; below 600 px the cover shrinks to 40 px; the selection bar sits above it when both show |
 | Queue | `.queue` > `ol` > `li.qrow` (`.no`, `.title`, `.artist`, `.dur`, remove button) | the current item is `li.playing`; items can be removed; "Clear" empties it |
@@ -728,6 +735,7 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word shows from 1200 px; an icon button below; cycles on tap |
 | As-of menu | `.toolbar details.menu.asof` > `summary` (a dim "as of", then "Now" or the snapshot's name) + `.menu-body` of `.menu-group` (the mirror's name, its online dot) and `label.menu-row` (radio + name (+ `.badge` manual) + `.small.dim` when and kind) + `.menu-foot` | floats over the listing (the folder menu's z-order); newest first per mirror after "Now"; an offline mirror's rows `aria-disabled` with "offline: attach it to browse"; the foot counts snapshots and links the dashboard |
 | Snapshot banner | `.banner.snapshot` > text + `.actions` (Restore folder to… · Back to now) | above a listing or a file view as of a snapshot: "As of `2026-10-12-0900Z` on `pike-m1` · taken 3 h ago · read-only · 11 items · 2.3 GiB"; accent border and tint (information, not a warning) |
+| Details | `details.panel` > `dl.kv.facts` (a `div.full` row for the path) | three columns at the page's width as the Integrity rows, one on a phone; above Versions on a file's page, closed until opened (the choice kept for the session): path, type and MIME, size (the exact bytes in the title), modified, mode, inode and version, chunks with the chunk size and the volume's policy, the folder's flags, and a video's length and resolution or an image's size once the viewer has loaded them |
 | Versions list | `details.panel` > `table.versions` > `tr` (`td.asof`, `td.size`, `td.mtime`, `td.acts`) + `.small.dim` offline line | one row per distinct content, newest first; `td.asof` the snapshot range in mono with the count and mirror under it; the live content `tr.current` with a `.badge.strong` "current" and its holders or "in no snapshot yet"; others View · Revert · Save a copy; the table sizes to its content, the actions never wrap; below 600 px the modified column drops |
 | Mirror card | `.cards` > `.card.mirror` > `.name-row` (dot, name, host, badges) + bar rows (used of the disk; the sync's progress) + `.meta` | `ok` online, `off` dashed offline with "offline 3 d"; `warn` past `stale_after`, under its reserve, or holding an incomplete snapshot (the word says which) |
 | Snapshots table | `section` > `h2` + `.h-sub` (the schedule) + `.snap-head` (Take a snapshot · counts) + `table.snapshots` > `tr` (`td.name` (+ `.badge` manual), `td.mirror`, `td.taken`, `td.holds`, `td.acts` Browse; no delete) | newest first; a syncing row carries `.badge` "syncing 41 %", an incomplete one `.badge.warn` "3 missing"; an offline mirror's actions disabled with the reason; below 600 px mirror, taken and holds drop under the name |
@@ -1068,8 +1076,8 @@ placement gives way to legible text: the dashed line keeps the event's true time
   browser; no route launches, emulates or reads a ROM.
 - **I-280** — A tile or a poster whose art does not exist is a title card: the analysed
   title and year or platform as markup, never an image the node makes or stores; `/api/ls`
-  carries `card` (`title`, `sub`) for a folder under a library without a known cover, from
-  its name alone, and the tile draws it when no art arrives.
+  carries `card` (`title`, `sub`) for every folder under a library, from its name alone;
+  the tile draws it when no art arrives and lays it over the folder's cover when art does.
 - **I-212** — `/api/media` lists a flagged folder's items from the live FSM with the
   catalogue's metadata where an entry exists and the item's name otherwise, a TV
   library's folders whose names clean to the same title and year as one show with the
