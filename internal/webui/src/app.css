@@ -621,7 +621,9 @@ article.md { font: 15px/1.55 var(--sans); max-width: 760px; }
 }
 
 /* ---- the Media tab (docs/13 §10, docs/18 §8): libraries, posters, the hero ------------- */
-section.lib > details > summary { list-style: none; cursor: pointer; margin-bottom: var(--sp-3); }
+section.lib > details > summary { list-style: none; cursor: pointer; }
+/* a fold's children keep the section's 12 px apart (a details element is not a grid) */
+section.lib > details[open] > :not(:last-child) { margin-bottom: var(--sp-3); }
 section.lib > details > summary::-webkit-details-marker { display: none; }
 section.lib h2 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
 section.lib h2 .count { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: auto; }
