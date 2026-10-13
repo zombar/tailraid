@@ -120,7 +120,7 @@ keeps answering by its old path until it is reopened.
 
 | SMB2 command | What the server calls on the adapter |
 |---|---|
-| CREATE (open) | `Stat(path)`; on a miss, the case-insensitive walk of §5; then `OpenFile(path)` for a file, which the adapter answers with a `WritableFile` over `vfs.OpenFile(path, O_RDWR)` |
+| CREATE (open) | `Stat(path)`; on a miss, the case-insensitive walk of §5; the share-access check against this share's opens of the file, `STATUS_SHARING_VIOLATION` on a conflict before anything changes (I-265); then `OpenFile(path)` for a file, which the adapter answers with a `WritableFile` over `vfs.OpenFile(path, O_RDWR)` |
 | CREATE (create) | `FILE_CREATE`: `CreateExcl(path)` (`vfs.OpenFile` with `O_CREATE\|O_EXCL`), or `MkDirExcl(path, 0755)` (`vfs.MkdirExcl`) for a directory; an existing name, seen by this gateway or by the leader, is `STATUS_OBJECT_NAME_COLLISION` (I-222); then `Stat` and `OpenFile` as above |
 | CREATE (open-if) | a missing name: `CreateExcl(path)`; a name another gateway created first opens that file, never truncated; a directory: `MkDir(path, 0755)` |
 | CREATE (overwrite, supersede, overwrite-if) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`): on an existing file the truncate starts a rewrite, so two clients replacing one file leave one whole copy (04 §6, I-223) |
@@ -520,6 +520,17 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   Before, every READ ran on the read loop under the share's read lock: one cold chunk's
   network fetch held up every other request on the connection, and with a CREATE, CLOSE
   or rename waiting for the lock, every new request on the share.
+- **I-265** — A CREATE of an existing file whose data access (read, write, append,
+  execute, delete; generic rights spelled out, MAXIMUM_ALLOWED as all) another open of
+  the file on this share does not share, or whose share access does not admit the data
+  access another such open holds, is refused with `STATUS_SHARING_VIOLATION` before it
+  changes anything (MS-FSA 2.1.5.1.2.1); an open for attributes only never conflicts.
+  The opens compared are this gateway's, of every connection and session; opens through
+  another gateway or NFS are not seen. A rename or delete of a file another open holds
+  therefore needs that open to share delete, as on Windows (Explorer's opens do; a
+  program that holds a document without it makes the rename "file in use"). Before,
+  share access was not read: two programs that each opened a file without sharing both
+  got it, and an overwrite truncated a file another held exclusively.
 - **I-247** — A CANCEL of a WRITE answered `STATUS_PENDING` takes nothing back: the
   write is already in the driver, so the CANCEL is answered nothing and the WRITE its real
   reply with the bytes it wrote (MS-SMB2 3.3.5.16); a lock wait or a change notification
@@ -557,6 +568,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |
+| I-265 | `TestCreate_ShareAccess`, `TestSMB_TwoSessions_RenameMovesOtherHandle`, `TestSoak_MultiUserAgainstHarness` |
 | I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |
