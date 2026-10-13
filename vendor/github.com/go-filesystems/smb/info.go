@@ -343,7 +343,17 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 	if infoType != infoTypeFile {
 		return errorResponse(h, statusNotSupported), nil
 	}
-	defer of.share.changing()()
+	// An end of file changes the one file through its handle, by inode, which a driver
+	// that declares concurrent writes serves beside its other calls: a truncate waiting at
+	// a cap there holds up no CREATE or CLOSE on the share (I-268). A rename and a
+	// delete-on-close change the share's names, and the times are set by path, which a
+	// rename on another connection could move under them: those hold the share's lock.
+	switch class {
+	case fileEndOfFileInformation, fileAllocationInformation:
+		defer fileLock(of)()
+	default:
+		defer of.share.changing()()
+	}
 
 	switch class {
 	case fileDispositionInformation:
@@ -521,4 +531,14 @@ func renameFor(of *openFile, from, to string, replace bool) error {
 		return os.ErrExist
 	}
 	return fsys.Rename(from, to)
+}
+
+// fileLock takes the share's lock for a change of one file unless the driver declares
+// concurrent writes and the change goes through the handle (I-268); the whole-file
+// fallbacks go by name and keep it.
+func fileLock(of *openFile) func() {
+	if of.w != nil {
+		return lockUnlessConcurrent(of.share)
+	}
+	return of.share.changing()
 }

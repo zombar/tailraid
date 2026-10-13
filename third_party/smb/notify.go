@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // CHANGE_NOTIFY is how a file manager keeps its window right: it asks to be
@@ -42,11 +43,15 @@ type change struct {
 	action uint32
 }
 
-// A watcher is one outstanding CHANGE_NOTIFY.
+// A watcher is the watch one open directory handle keeps (MS-FSA 2.1.5.10): made by its
+// first CHANGE_NOTIFY and kept until CLOSE, it collects changes between requests, so one
+// that happens after a notification was answered and before the client asks again is
+// not lost (I-264). Before, it lived only as long as one request.
 type watcher struct {
-	dir    string
-	tree   bool
-	events chan change
+	dir      string
+	tree     bool
+	events   chan change
+	overflow int32 // 1 once a change found the queue full: the next answer is "look again" (atomic)
 }
 
 // watchers is the set of them on one share.
@@ -94,6 +99,7 @@ func (w *watchers) post(c change) {
 		select {
 		case x.events <- c:
 		default:
+			atomic.StoreInt32(&x.overflow, 1)
 		}
 	}
 }
@@ -131,39 +137,79 @@ func (c *conn) changeNotify(h header, body []byte) ([]byte, error) {
 		return errorResponse(h, statusInvalidParameter), nil
 	}
 
-	// Sixteen is enough for a window that is being looked at, and small enough
-	// that a burst overflows quickly and says so instead of queueing megabytes
-	// nobody will read.
-	x := &watcher{dir: of.p(), tree: flags&watchTree != 0, events: make(chan change, 16)}
-	of.share.watchers.add(x)
+	// The watch is the handle's: made by its first CHANGE_NOTIFY, kept until CLOSE. A
+	// queue of 64 holds a window's worth; a burst past it overflows and says so instead of
+	// queueing megabytes nobody will read.
+	x := of.watch
+	if x == nil {
+		x = &watcher{dir: of.p(), tree: flags&watchTree != 0, events: make(chan change, 64)}
+		of.watch = x
+		of.share.watchers.add(x)
+	}
+	// changes kept since the last answer are answered at once
+	select {
+	case first := <-x.events:
+		status, out := notifyBody(x, first, outMax)
+		reply := append(responseTo(h, status), make([]byte, 8+len(out))...)
+		putNotify(reply, out)
+		return reply, nil
+	default:
+	}
+	if atomic.SwapInt32(&x.overflow, 0) == 1 {
+		x.drain()
+		reply := append(responseTo(h, statusNotifyEnumDir), make([]byte, 8)...)
+		putNotify(reply, nil)
+		return reply, nil
+	}
 
 	op, interim := c.beginAsync(h, of.id)
 
 	go func() {
-		defer of.share.watchers.remove(x)
 		select {
 		case <-op.cancel:
-			// The handle closed or the client gave up; whoever ended it has
-			// answered.
+			// The client gave up (answered CANCELLED) or the handle closed (answered
+			// NOTIFY_CLEANUP): whoever ended it has answered.
 			return
 		case first := <-x.events:
-			out, overflowed := encodeChanges(x, first, outMax)
-			status := statusSuccess
-			if overflowed {
-				// NOTIFY_ENUM_DIR means "too much changed, look again". A
-				// list with holes in it would be worse than no list.
-				status, out = statusNotifyEnumDir, nil
-			}
+			status, out := notifyBody(x, first, outMax)
 			reply := asyncResponse(h, status, op.asyncID, 8+len(out))
-			rb := reply[headerLen:]
-			binary.LittleEndian.PutUint16(rb[0:], 9)
-			binary.LittleEndian.PutUint16(rb[2:], headerLen+8)
-			binary.LittleEndian.PutUint32(rb[4:], uint32(len(out)))
-			copy(rb[8:], out)
+			putNotify(reply, out)
 			c.finishAsync(op, reply)
 		}
 	}()
 	return interim, nil
+}
+
+// notifyBody is the status and entries of an answer that starts with first: the changes
+// queued, or NOTIFY_ENUM_DIR ("too much changed, look again") when they overflowed the
+// queue or the client's buffer; a list with holes in it would be worse than no list.
+func notifyBody(x *watcher, first change, outMax int) (uint32, []byte) {
+	out, overflowed := encodeChanges(x, first, outMax)
+	if atomic.SwapInt32(&x.overflow, 0) == 1 || overflowed {
+		x.drain() // the client looks again: what is still queued is in what it will read
+		return statusNotifyEnumDir, nil
+	}
+	return statusSuccess, out
+}
+
+// drain drops the changes queued on the watch.
+func (x *watcher) drain() {
+	for {
+		select {
+		case <-x.events:
+		default:
+			return
+		}
+	}
+}
+
+// putNotify writes a CHANGE_NOTIFY reply's body: its size, the buffer's offset and length.
+func putNotify(reply, out []byte) {
+	rb := reply[headerLen:]
+	binary.LittleEndian.PutUint16(rb[0:], 9)
+	binary.LittleEndian.PutUint16(rb[2:], headerLen+8)
+	binary.LittleEndian.PutUint32(rb[4:], uint32(len(out)))
+	copy(rb[8:], out)
 }
 
 // encodeChanges lays out what happened, starting with the one that woke the

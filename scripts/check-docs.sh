@@ -18,7 +18,7 @@
 # No markdownlint: it is a node tool, and these are the rules that have bitten here.
 export LC_ALL=C
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 README_MAX_LISTS=2 # README.md is prose and tables; the two lists are the release steps and nothing else
 
@@ -30,7 +30,7 @@ files=(README.md CLAUDE.md docs/README.md docs/windows-checklist.md)
 for f in docs/[0-9][0-9]-*.md; do files+=("$f"); done
 
 slug() { # GitHub heading anchor (one per line: anchors_of feeds grep -x)
-  printf '%s\n' "$1" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g'
+  printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g'
 }
 
 anchors_of() { # file → one slug per line

@@ -655,6 +655,25 @@ func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
 	return out, nil
 }
 
+// LookupFold is the name of the entry of folder dir that differs from name only by case
+// (I-267); ok is false where the names are not the FSM's (under /.snapshots), and the
+// caller then lists the folder.
+func (f *FS) LookupFold(dir, name string) (match string, found, ok bool) {
+	parts := meta.SplitPath(dir)
+	if isSnapshotPath(parts) {
+		return "", false, false
+	}
+	in, err := f.resolve(dir)
+	if err != nil {
+		return "", false, true
+	}
+	match, found = f.st.LookupFold(in.Ino, name)
+	if found && in.Ino == meta.RootIno && match == SnapshotDir {
+		return "", false, true // the reserved name never lists (I-185), and never folds
+	}
+	return match, found, true
+}
+
 func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
 	if err := f.mkdirAll(context.Background(), meta.SplitPath(filename), perm); err != nil {
 		return mapErr("mkdir", filename, err)

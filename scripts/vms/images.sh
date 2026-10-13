@@ -33,8 +33,8 @@ build_tart() { # <mac|linux>
 
 build_win() {
   local iso
-  iso=$(ls "$STATE"/iso/*.iso 2>/dev/null | head -1)
-  [ -n "$iso" ] || die "no Windows 11 ARM64 ISO in $STATE/iso/: download it from https://www.microsoft.com/software-download/windows11arm64"
+  for iso in "$STATE"/iso/*.iso; do break; done # the first, or the unmatched pattern
+  [ -e "$iso" ] || die "no Windows 11 ARM64 ISO in $STATE/iso/: download it from https://www.microsoft.com/software-download/windows11arm64"
   mkdir -p "$CACHE" "$BUILD"
   fetch "$VIRTIO_WIN_URL" "$CACHE/virtio-win.iso"
   fetch "$OPENSSH_URL" "$CACHE/OpenSSH-ARM64.msi"
@@ -85,6 +85,7 @@ build_win() {
 case "${1:-build}" in
   build)
     shift || true
+    # shellcheck disable=SC2048,SC2086 # the arguments or OSES, a space-separated list
     for os in ${*:-$OSES}; do
       case "$os" in mac|linux) build_tart "$os" ;; win) build_win ;; *) die "unknown os $os" ;; esac
     done

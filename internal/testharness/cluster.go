@@ -621,14 +621,17 @@ func (c *Cluster) Settle() {
 		}
 		return b.String()
 	}
-	Eventually(c.T, func() bool {
+	// a restarted node replays its whole log before it catches up: on a CI runner under
+	// -race that took more than 10 s once (TestModelCheck_Long, run 38384185513), so the
+	// bound is CatchUp, and the message is built at the timeout, naming who still lags
+	EventuallyWithin(c.T, CatchUp, func() bool {
 		for _, nd := range c.Nodes {
 			if c.isAlive(nd) && inConfig[nd.ID] && nd.Node.Raft.AppliedIndex() < last {
 				return false
 			}
 		}
 		return true
-	}, "followers catch up to "+strconv.FormatUint(last, 10)+":"+lagging())
+	}, func() string { return "followers catch up to " + strconv.FormatUint(last, 10) + ":" + lagging() })
 	for _, nd := range c.Nodes {
 		if c.isAlive(nd) && inConfig[nd.ID] {
 			if err := nd.Node.WaitReady(context.Background(), 5*time.Second); err != nil {
@@ -844,3 +847,6 @@ func (c *Cluster) ReadFile(i int, path string) ([]byte, error) {
 	}
 	return buf[:n], nil
 }
+
+// CatchUp bounds Settle's wait for every follower to apply the leader's log.
+const CatchUp = 30 * time.Second

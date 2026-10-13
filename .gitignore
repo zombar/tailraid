@@ -3,6 +3,8 @@
 /results.jsonl
 /report-single.html
 /results-single.jsonl
+/report-evidence/
+/report-single-evidence/
 *.test
 /.idea/
 .DS_Store

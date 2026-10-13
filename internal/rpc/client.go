@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,10 +67,9 @@ var _ chunk.ShardClient = (*Client)(nil)
 
 // NewClient builds a client; resolve may be nil for a client that only joins or probes.
 func NewClient(clusterID [16]byte, resolve Resolver) *Client {
-	dial := (&net.Dialer{Timeout: 3 * time.Second}).DialContext
 	tr := &http.Transport{
-		DialContext:           dial,
-		MaxIdleConnsPerHost:   32, // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
+		DialContext:           shardDialer().DialContext, // the bulk side keeps little unsent in the kernel (I-263)
+		MaxIdleConnsPerHost:   32,                        // a flush fans out up to k+m PUTs per chunk on Config.Workers chunks at once
 		IdleConnTimeout:       90 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
@@ -83,7 +81,7 @@ func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 	// the control plane keeps as many idle connections per host as the shard plane: a
 	// burst of proposals forwarded to the leader (every gateway's flush and repair
 	// workers) must not dial a fresh connection for every call past the fourth (I-255)
-	ctl := &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 32, IdleConnTimeout: 90 * time.Second}
+	ctl := &http.Transport{DialContext: controlDialer().DialContext, MaxIdleConnsPerHost: 32, IdleConnTimeout: 90 * time.Second}
 	return &Client{http: &http.Client{Transport: tr}, ctl: &http.Client{Transport: ctl}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
 }
 
@@ -282,10 +280,18 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 	// The headers are bounded by the dial and response-header timeouts; the body by
 	// callTimeout of its own announced length, never the MaxPayload allowance (I-171).
 	parent := ctx
-	ctx, cancel := context.WithCancel(ctx)
+	// The request runs on a context of its own: the caller giving up before the headers
+	// aborts it as before, and after them the body loop below decides whether to finish
+	// reading so the connection is kept (I-262).
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	stopEarly := context.AfterFunc(parent, cancel)
 	resp, err := c.do(ctx, http.MethodGet, t.addr, t.prefix+string(key), nil, nil)
+	stopEarly()
 	if err != nil {
+		if parent.Err() != nil {
+			return nil, parent.Err()
+		}
 		c.unreachable(parent, node, err)
 		return nil, err
 	}
@@ -312,12 +318,37 @@ func (c *Client) Get(ctx context.Context, node meta.NodeIdx, key chunk.ShardKey)
 		}
 	}()
 	b := make([]byte, n) // sized by Content-Length: one allocation, no growth copies
-	if _, err := io.ReadFull(resp.Body, b); err != nil {
-		c.unreachable(parent, node, fmt.Errorf("%w: body: %w", errTransport, err))
-		return nil, fmt.Errorf("%w: GET %s body: %w", ErrUnavailable, t.addr, err)
+	for read := int64(0); read < n; {
+		if parent.Err() != nil { // the caller gave up mid-body
+			if rest := n - read; rest <= DrainMax {
+				// read the little that is left, so the connection goes back to the pool
+				// instead of being retired (a new one costs a handshake and a cold window)
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, rest+1)) // to EOF: the pool takes it back only then
+			}
+			return nil, parent.Err()
+		}
+		m, err := resp.Body.Read(b[read:min(read+getStep, n)])
+		read += int64(m)
+		if err != nil && read < n {
+			if parent.Err() != nil {
+				return nil, parent.Err()
+			}
+			c.unreachable(parent, node, fmt.Errorf("%w: body: %w", errTransport, err))
+			return nil, fmt.Errorf("%w: GET %s body: %w", ErrUnavailable, t.addr, err)
+		}
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1)) // see EOF, so the connection is reused
 	return b, nil
 }
+
+// DrainMax is the most a shard GET the caller gave up on still reads, so its connection
+// is kept rather than retired (docs/05 §6, I-262): well under a round trip's worth of
+// bytes on the tailnet, against a new connection's handshake and cold congestion window.
+// getStep is how much a GET reads between looks at whether its caller gave up.
+const (
+	DrainMax = 256 << 10
+	getStep  = 64 << 10
+)
 
 // Delete issues an unfenced local delete for self, and is otherwise DeleteFenced with
 // index 0 (which every node has applied) — callers doing GC use DeleteFenced.

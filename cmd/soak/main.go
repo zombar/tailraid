@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ func run() int {
 	nodes := flag.Int("nodes", 0, "number of nodes in the compose file (default: 4 for multi, 1 for single)")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "workload seed")
 	only := flag.String("phases", "", `comma-separated phase numbers to run ("15", "1,13"); default: all`)
+	evidence := flag.String("evidence", "", "folder for each failing phase's node logs and status (default: beside the report, <out>-evidence)")
 	flag.Parse()
 
 	var p soak.Profile
@@ -71,7 +73,10 @@ func run() int {
 			return 1
 		}
 	}
-	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed} //nolint:gosec // workload
+	if *evidence == "" {
+		*evidence = strings.TrimSuffix(*out, filepath.Ext(*out)) + "-evidence"
+	}
+	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed, EvidenceDir: *evidence} //nolint:gosec // workload
 	if *only != "" {
 		if r.Phases = soak.StandardPhases(strings.Split(*only, ",")...); len(r.Phases) == 0 {
 			fmt.Fprintln(os.Stderr, "no phase numbered", *only)
