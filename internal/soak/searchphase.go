@@ -100,6 +100,8 @@ func phaseSearch(ctx context.Context, r *Run) error {
 	track := join(dir, "music", "Artist", "Album", "01 track.mp3")
 	film := join(dir, "films", "Probe (2001)")
 	show := join(dir, "shows", "Probe Show")
+	snes := join(dir, "roms", "SNES")
+	game := join(snes, "USA", "Probe Game (USA) (Rev 1).zip")
 	m := model{
 		md:    mdBody,
 		other: otherBody,
@@ -109,6 +111,10 @@ func phaseSearch(ctx context.Context, r *Run) error {
 		join(film, "movie.nfo"):                               []byte("<movie><title>Probe</title><year>2001</year><plot>A probe " + word + ".</plot></movie>"),
 		join(film, "poster.jpg"):                              solidJPEG(40, 60, color.RGBA{60, 80, 100, 255}),
 		join(show, "Season 1", "Probe.Show.S01E02.mkv"):       r.randomBytes(2048),
+		game: r.randomBytes(1024),
+		join(snes, "USA", "Probe Game (USA).zip"): r.randomBytes(1024),
+		join(snes, "notes.txt"):                   []byte("not a game"),
+		join(snes, "gamelist.xml"):                []byte("<gameList><game><path>./USA/Probe Game (USA) (Rev 1).zip</path><name>Probe Game</name><desc>A probe " + word + ".</desc></game></gameList>"),
 	}
 	if err := r.writeModel(v, m); err != nil {
 		r.checkAt("I-207", "the phase's files written", false, err.Error(), "", "", gw.Name)
@@ -127,7 +133,7 @@ func phaseSearch(ctx context.Context, r *Run) error {
 	flagged := false
 	if caps.Mutate {
 		ok := true
-		for p, kind := range map[string]string{join(dir, "films"): "movies", join(dir, "shows"): "tv", join(dir, "music"): "music"} {
+		for p, kind := range map[string]string{join(dir, "films"): "movies", join(dir, "shows"): "tv", join(dir, "music"): "music", join(dir, "roms"): "roms"} {
 			code, body, _ := w.postJSON(ctx, "/api/flags", map[string]any{"path": p, "library": kind}, nil)
 			if code != 200 {
 				ok = false
@@ -255,5 +261,25 @@ func phaseSearch(ctx context.Context, r *Run) error {
 		}
 	}
 	r.check("I-212", "every gateway lists the library with the same bytes", sameMedia, fmt.Sprintf("%d gateways", len(clients)))
+
+	// (f) the ROMs: a platform, one card for the title's two dumps, the gamelist's text
+	// after the pass, nothing played (I-278, I-279)
+	var plat webui.MediaItem
+	code, _ = w.getJSON(ctx, "/api/media", url.Values{"item": {snes}}, &plat)
+	platOK := code == 200 && plat.Kind == "platform" && plat.Title == "Super Nintendo" && len(plat.Games) == 1 && plat.Games[0].Title == "Probe Game" && plat.Games[0].Variants == 1
+	r.check("I-278 I-279", "the platform lists one card for the title's two dumps", platOK, fmt.Sprintf("%d %+v", code, plat))
+	var g webui.MediaItem
+	code, _ = w.getJSON(ctx, "/api/media", url.Values{"item": {game}}, &g)
+	gameOK := code == 200 && g.Kind == "game" && g.Revision == "Rev 1" && strings.Contains(g.Plot, word) && len(g.Files) == 2 && g.Video == ""
+	r.check("I-278 I-279", "the game carries its gamelist's text and its files, and nothing to play", gameOK, fmt.Sprintf("%d %+v", code, g))
+	sameRoms := true
+	_, want, _ = w.do(ctx, http.MethodGet, "/api/media", url.Values{"item": {snes}}, nil, "")
+	for i, c := range clients[1:] {
+		if _, got, _ := c.do(ctx, http.MethodGet, "/api/media", url.Values{"item": {snes}}, nil, ""); !bytes.Equal(got, want) {
+			sameRoms = false
+			r.checkAt("I-279", "the same platform answer on "+names[i+1], false, string(got), "", "", names[i+1])
+		}
+	}
+	r.check("I-279", "every gateway lists the platform with the same bytes", sameRoms, fmt.Sprintf("%d gateways", len(clients)))
 	return nil
 }

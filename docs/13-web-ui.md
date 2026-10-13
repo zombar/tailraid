@@ -481,9 +481,10 @@ film or show folder whose video no browser has framed and no sidecar names a pos
 the page draws a title card instead of the generic icon: the analysed title (docs/18 §8a)
 on the surface colour, the year or the platform under it in mono, an accent rule on top.
 It is markup, not an image, so it follows the theme; the title comes from the item's
-catalogue entry, or, in the file browser's tiles, from a folder's `title` and `year` in
-`/api/ls`, which the node fills from the name alone for a folder under a library that is
-known to have no cover (`no_cover`), reading no file (I-165).
+catalogue entry, or, in the file browser's tiles, from a folder's `card` (`title`, `sub`) in
+`/api/ls`, which the node fills from the name alone for every folder under a library
+whose cover is not known (a folder of video no browser can frame never settles), reading
+no file (I-165); the tile draws it when no art arrives.
 
 ## Design
 
@@ -900,8 +901,8 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   browser; no route launches, emulates or reads a ROM.
 - **I-280** — A tile or a poster whose art does not exist is a title card: the analysed
   title and year or platform as markup, never an image the node makes or stores; `/api/ls`
-  carries `title` and `year` only for a folder under a library that is settled `no_cover`,
-  from its name alone.
+  carries `card` (`title`, `sub`) for a folder under a library without a known cover, from
+  its name alone, and the tile draws it when no art arrives.
 - **I-212** — `/api/media` lists a flagged folder's items from the live FSM with the
   catalogue's metadata where an entry exists and the item's name otherwise, a TV
   library's folders whose names clean to the same title and year as one show with the
@@ -956,8 +957,8 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
-| I-279 | `TestStub_I_279` (planned: TestWebUI_Media_Roms_Table, TestWebUI_Media_Item_Game, TestWebUI_Media_NoLaunchRoute, TestWebUI_Media_DeterministicAcrossNodes, TestSoak_AllPhasesAgainstHarness) |
-| I-280 | `TestStub_I_280` (planned: TestWebUI_Ls_TitleCardFields, TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript) |
+| I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
+| I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

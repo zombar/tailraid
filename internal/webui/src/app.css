@@ -601,8 +601,8 @@ table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
 .tcard .ct { font: 600 15px/1.25 var(--sans); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .tcard .cy { font: 12px var(--mono); color: var(--dim); }
 .hero .tcard.hero-poster { align-self: start; width: 160px; height: auto; aspect-ratio: 3 / 4; border-radius: var(--radius); border: 1px solid var(--line); border-top: 3px solid var(--accent); }
-section.lib.roms .poster .art { aspect-ratio: 4 / 3; }
-section.lib.roms .poster .art .tcard .ct { font-size: 20px; }
+section.lib.roms .posters:not(.games) .poster .art { aspect-ratio: 4 / 3; }
+section.lib.roms .posters:not(.games) .poster .art .tcard .ct { font-size: 20px; }
 .posters.games .poster .art { aspect-ratio: 3 / 4; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chips .badge { font-size: 11px; line-height: 18px; }

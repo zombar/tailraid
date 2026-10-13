@@ -4,7 +4,7 @@
 // in place, the trash banner inside a deleted root, the album view for a folder of
 // music, and the selection bar. Uploads run one at a time through the NFS write path.
 
-import { clear, h, icon, setWidth, toast, type IconKind } from "./dom.ts";
+import { clear, h, icon, setWidth, titleCard, toast, type IconKind } from "./dom.ts";
 import { ApiError, del, ls, mkdir, move, rename, trashList, upload, type DirInfo, type Entry, type TrashEntry, type Upload } from "./api.ts";
 import { browseHash, bytes, encodePathForHash, ext, fileHash, join, session, src, when, type Ctx } from "./util.ts";
 import * as snaps from "./snapshots.ts";
@@ -384,7 +384,8 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
     const { href, kind } = linkOf(e);
     const kindOf = mediaKind(ext(e.name));
     const thumb = h("span", { class: "thumb" + (info.nsfw || e.nsfw ? " nsfw" : "") });
-    const showIcon = () => thumb.replaceChildren(icon(kind));
+    // a folder no art can come from shows its title card (docs/13 §10, I-280)
+    const showIcon = () => thumb.replaceChildren(e.type === "dir" && e.card ? titleCard(e.card.title, e.card.sub) : icon(kind));
     const path = pathOf(e);
     // a folder's tile asks for the folder itself: the node resolves its cover (an album's
     // first track with a picture) then, so a listing never reads a file to find one

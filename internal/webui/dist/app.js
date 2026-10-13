@@ -44,6 +44,9 @@ var ICONS = {
   media: "M4 2.5l9 5.5-9 5.5z",
   image: "M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"
 };
+function titleCard(title, sub2) {
+  return h("span", { class: "tcard" }, h("span", { class: "ct" }, title), sub2 ? h("span", { class: "cy" }, sub2) : null);
+}
 function icon(kind2) {
   const el = svg("svg", { class: "icon", viewBox: "0 0 16 16" }, svg("path", { d: ICONS[kind2] ?? ICONS.file }));
   if (kind2 === "image") el.append(svg("circle", { cx: 11, cy: 5.5, r: 1 }));
@@ -3100,7 +3103,7 @@ function render8(root, ctx) {
     const { href, kind: kind2 } = linkOf(e);
     const kindOf = mediaKind(ext(e.name));
     const thumb = h("span", { class: "thumb" + (info.nsfw || e.nsfw ? " nsfw" : "") });
-    const showIcon = () => thumb.replaceChildren(icon(kind2));
+    const showIcon = () => thumb.replaceChildren(e.type === "dir" && e.card ? titleCard(e.card.title, e.card.sub) : icon(kind2));
     const path = pathOf(e);
     const thumbPath = e.type === "dir" && e.cover ? join(path, e.cover) : path;
     const canThumb = e.type === "dir" ? !e.no_cover && (!e.deleted_at || !!e.cover) : e.type === "file" && !e.upload && (kindOf === "image" || kindOf === "video" || kindOf === "audio");
@@ -3728,7 +3731,23 @@ function render10(root, q, params) {
 }
 
 // internal/webui/src/media.ts
-var NOUN = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"] };
+var NOUN = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"], roms: ["platform", "platforms"] };
+var WARN_FLAGS = /* @__PURE__ */ new Set(["proto", "hack", "beta", "demo", "bad", "unl", "pirate", "dlc", "update"]);
+function chips(it, more = false) {
+  const el = h("span", { class: "chips" });
+  for (const r of it.regions ?? []) el.append(h("span", { class: "badge" }, r));
+  if (more) for (const l of it.languages ?? []) el.append(h("span", { class: "badge" }, l));
+  if (it.revision) el.append(h("span", { class: "badge" }, it.revision));
+  for (const f of it.flags ?? []) if (f !== "base") el.append(h("span", { class: "badge" + (WARN_FLAGS.has(f) ? " warn" : "") }, f));
+  if (more && it.discs && it.discs > 1) el.append(h("span", { class: "badge" }, `${it.discs} discs`));
+  if (it.variants) el.append(h("span", { class: "badge" }, `+${it.variants}`));
+  return el;
+}
+function cardSub(it) {
+  if (it.kind === "platform") return basename(it.path) !== it.title ? basename(it.path) : void 0;
+  if (it.kind === "game") return it.platform;
+  return it.year ? String(it.year) : void 0;
+}
 function glyph(kind2) {
   const d = kind2 === "album" ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" : kind2 === "episode" ? "M4 2.5l9 5.5-9 5.5z" : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
   return svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d }));
@@ -3756,17 +3775,19 @@ function sub(it) {
   const parts = [];
   if (it.year) parts.push(String(it.year));
   if (it.kind === "show" && it.children) parts.push(`${it.children} ${it.children === 1 ? "season" : "seasons"}`);
+  if (it.kind === "platform") parts.push(`${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`);
   if (it.kind === "movie") parts.push(it.runtime ? duration2(it.runtime) : it.plot ? "" : "no sidecar");
   return parts.filter(Boolean).join(" \xB7 ");
 }
 function posterTile(it) {
   const veiled = it.nsfw && !session.get("tr.revealed", false);
   const box = h("span", { class: "art" });
-  const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), h("span", { class: "pyear" }, veiled ? "nsfw \xB7 tap to show" : sub(it)));
+  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, veiled ? "nsfw \xB7 tap to show" : sub(it));
+  const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), below);
   const missing = () => {
     clear(box);
-    box.append(glyph(it.kind));
-    a.classList.add("missing");
+    box.append(it.kind === "album" ? glyph(it.kind) : titleCard(it.title, cardSub(it)));
+    if (it.kind !== "platform") a.classList.add("missing");
   };
   const src2 = art(it);
   const frame2 = h("img", { alt: "" });
@@ -3862,7 +3883,7 @@ function overview(root) {
             "section",
             null,
             h("h2", null, "Media"),
-            h("div", { class: "empty" }, "No library yet: open a folder in Files, choose its menu and set ", h("b", null, "Library"), " to movies, tv or music.")
+            h("div", { class: "empty" }, "No library yet: open a folder in Files, choose its menu and set ", h("b", null, "Library"), " to movies, tv, music or roms.")
           )
         );
         return;
@@ -3874,22 +3895,81 @@ function overview(root) {
 }
 function episodeNo(e) {
   const two = (n) => String(n).padStart(2, "0");
+  if (e.part) return `Part ${e.part}`;
+  if (!e.episode && e.date) return e.date;
+  if (!e.episode && e.absolute) return "#" + String(e.absolute).padStart(3, "0");
   return `S${two(e.season ?? 0)}E${two(e.episode ?? 0)}` + (e.episode_to && e.episode_to !== e.episode ? `E${two(e.episode_to)}` : "");
+}
+function platformPage(root, it) {
+  const grid = h("div", { class: "posters games" });
+  for (const g of it.games ?? []) grid.append(posterTile(g));
+  const n = it.games?.length ?? 0;
+  root.append(
+    h(
+      "section",
+      { class: "lib roms" },
+      h("h2", null, it.title, " ", h("span", { class: "badge lib" }, "roms"), h("span", { class: "count" }, `${count(n)} ${n === 1 ? "game" : "games"} \xB7 `, h("a", { href: browseHash({ path: it.path }) }, "open folder"))),
+      grid
+    )
+  );
+}
+function gamePage(root, it) {
+  const section2 = h("section", { class: it.poster ? "hero poster-only" : "hero no-art" });
+  let poster = titleCard(it.title, it.platform);
+  poster.classList.add("hero-poster");
+  if (it.poster) {
+    section2.append(h("img", { class: "backdrop", alt: "", src: fileURL(it.poster) }));
+    const img = h("img", { class: "hero-poster", alt: "", src: fileURL(it.poster) });
+    const card3 = poster;
+    img.addEventListener("error", () => img.replaceWith(card3));
+    poster = img;
+  }
+  const facts = h("div", { class: "facts" });
+  for (const f of [it.platform ?? "", it.year ? String(it.year) : "", it.developer ?? "", it.publisher ?? "", it.players ? `${it.players} ${it.players === "1" ? "player" : "players"}` : "", (it.genres ?? []).join(" \xB7 ").toLowerCase()])
+    if (f) facts.append(h("span", null, f));
+  facts.append(h("span", { class: "dim" }, dirname(it.path)));
+  const body = h("div", null, h("h1", null, it.title), facts, chips(it, true));
+  if (it.plot) body.append(h("p", { class: "plot" }, it.plot));
+  const files = it.files ?? [];
+  const isFolder = files.some((f) => f.path.startsWith(it.path + "/"));
+  const folder2 = isFolder ? it.path : dirname(it.path);
+  body.append(h("div", { class: "actions" }, h("a", { class: "btn", href: browseHash({ path: folder2 }) }, "Open folder")));
+  if (files.length > 0) {
+    const tbody = h("tbody");
+    for (const f of files) tbody.append(fileRow(f, files.length));
+    body.append(h("table", { class: "episodes discs" }, tbody));
+  }
+  section2.append(h("div", { class: "hero-body" }, poster, body));
+  root.append(section2);
+}
+function fileRow(f, n) {
+  const label = f.disc ? `Disc ${f.disc}` : n > 1 ? [...f.regions ?? [], f.revision ?? ""].filter(Boolean).join(" ") || "\u2014" : "File";
+  return h("tr", null, h("td", { class: "no" }, label), h("td", { class: "title" }, h("a", { href: fileURL(f.path, true) }, f.name)), h("td", { class: "dur" }, bytes(f.size)));
 }
 function detail(root, path) {
   mediaItem(path).then(
     (it) => {
+      if (it.kind === "platform") return platformPage(root, it);
+      if (it.kind === "game") return gamePage(root, it);
       const backdrop = it.fanart ? fileURL(it.fanart) : it.poster ? fileURL(it.poster) : "";
       const cls = "hero" + (it.fanart ? "" : it.poster ? " poster-only" : " no-art");
       const section2 = h("section", { class: cls });
       if (backdrop) section2.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
       const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
       const poster = h("img", { class: "hero-poster", alt: "" });
-      const hide = () => poster.style.visibility = "hidden";
+      const hide = () => {
+        if (it.kind === "album") poster.style.visibility = "hidden";
+        else {
+          const card3 = titleCard(it.title, it.year ? String(it.year) : void 0);
+          card3.classList.add("hero-poster");
+          poster.replaceWith(card3);
+        }
+      };
       if (!frameOf(poster, it, hide)) {
         if (posterSrc) poster.src = posterSrc;
         poster.addEventListener("error", hide);
       }
+      const noArt = !posterSrc && !it.video;
       const facts = h("div", { class: "facts" });
       const seasons = it.seasons ?? [];
       const episodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
@@ -3954,6 +4034,7 @@ function detail(root, path) {
         show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
       }
       section2.append(h("div", { class: "hero-body" }, poster, body));
+      if (noArt) hide();
       root.append(section2);
     },
     (e) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e))))

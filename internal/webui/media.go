@@ -62,12 +62,24 @@ type MediaItem struct {
 	EpisodeTo    int       `json:"episode_to,omitempty"`
 	Aired        string    `json:"aired,omitempty"`
 	// the name analyser's fields (docs/18 §8a)
-	Date       string        `json:"date,omitempty"`     // an episode's air date
-	Absolute   int           `json:"absolute,omitempty"` // an anime episode's absolute number
-	Edition    string        `json:"edition,omitempty"`
-	Quality    []string      `json:"quality,omitempty"`
-	Languages  []string      `json:"languages,omitempty"`
-	Discs      int           `json:"discs,omitempty"`
+	Date      string   `json:"date,omitempty"`     // an episode's air date
+	Absolute  int      `json:"absolute,omitempty"` // an anime episode's absolute number
+	Part      int      `json:"part,omitempty"`     // a miniseries' part, numbered as its episode
+	Edition   string   `json:"edition,omitempty"`
+	Quality   []string `json:"quality,omitempty"`
+	Languages []string `json:"languages,omitempty"`
+	Discs     int      `json:"discs,omitempty"`
+	// a platform's or a game's (docs/13 §10, I-279)
+	Platform   string        `json:"platform,omitempty"`
+	Regions    []string      `json:"regions,omitempty"`
+	Revision   string        `json:"revision,omitempty"`
+	Flags      []string      `json:"flags,omitempty"`
+	Developer  string        `json:"developer,omitempty"`
+	Publisher  string        `json:"publisher,omitempty"`
+	Players    string        `json:"players,omitempty"`
+	Variants   int           `json:"variants,omitempty"` // a game card's other dumps of the title
+	Games      []MediaItem   `json:"games,omitempty"`    // a platform's, one per title
+	Files      []MediaFile   `json:"files,omitempty"`    // a game's discs and variants, each downloadable
 	Seasons    []MediaSeason `json:"seasons,omitempty"`
 	Tracks     []string      `json:"tracks,omitempty"` // an album's audio files, by name
 	Catalogued bool          `json:"catalogued"`       // false: named from the tree only, until the next pass
@@ -315,7 +327,7 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 					items = append(items, it)
 				}
 			}
-		case meta.LibraryNone, meta.LibraryRoms: // a roms library lists its platforms from roms-web on (docs/13 §10)
+		case meta.LibraryNone, meta.LibraryRoms: // a roms library's items are its platforms, below
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -335,6 +347,9 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 		}
 		return a.Path < b.Path
 	})
+	if kind == meta.LibraryRoms {
+		items = v.platforms(in.Ino)
+	}
 	lib := MediaLib{Path: canonical, Kind: kind.String(), Count: len(items)}
 	page := []MediaItem{}
 	if offset < len(items) {
@@ -370,6 +385,12 @@ func (s *Server) mediaItem(w http.ResponseWriter, r *http.Request, v mediaView) 
 		it = v.showItem(group, path.Dir(p))
 		it.Seasons = v.seasons(group)
 		it.Children = len(it.Seasons)
+	case lib == meta.LibraryRoms:
+		var ok bool
+		if it, ok = v.romItem(in, p); !ok {
+			writeErr(w, http.StatusNotFound, "media "+p+": not a platform or a game")
+			return
+		}
 	case lib == meta.LibraryMusic && in.Type == meta.TDir:
 		tracks, _ := v.album(in.Ino)
 		it = v.item(in, p, "album")
@@ -489,6 +510,7 @@ func (v mediaView) seasons(group []showDir) []MediaSeason {
 				season = max(folder, 1)
 			}
 			it := v.item(*f, path.Join(dp, f.Name), "episode")
+			it.Part = a.Part
 			if !it.Catalogued {
 				it.Season = season
 				showTitle := search.Analyze(show.Name, nil, search.CtxTV).Title

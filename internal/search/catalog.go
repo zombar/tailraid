@@ -1049,3 +1049,18 @@ func (g *gameWalk) boxArt(cd gameCand) string {
 	}
 	return ""
 }
+
+// RomEntries is a roms library's platforms and games from the tree and the names alone,
+// reading no file: what the Media tab lists live before the next pass fills in a
+// gamelist's fields (docs/13 §10, I-279).
+func RomEntries(src Source, lib meta.Ino) []Entry {
+	c := &catalogue{src: src, seen: map[meta.Ino]bool{lib: true}}
+	c.roms(lib)
+	return c.out
+}
+
+// SameGame reports whether two names are discs of one game: the same title and tags but
+// the disc (docs/18 §8b).
+func SameGame(a, b Name) bool {
+	return a.Disc > 0 && b.Disc > 0 && discKey("", a) == discKey("", b)
+}

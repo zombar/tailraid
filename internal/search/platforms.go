@@ -70,6 +70,10 @@ func platformOf(dir string) platform {
 	return platform{title: strings.TrimSpace(dir), exts: exts}
 }
 
+// PlatformTitle is a platform folder's display name: the table's, else the name itself
+// (docs/18 §8b).
+func PlatformTitle(dir string) string { return platformOf(dir).title }
+
 func (p platform) takes(name string) bool {
 	return slices.Contains(p.exts, ext(name))
 }

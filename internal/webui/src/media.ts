@@ -4,12 +4,34 @@
 // fills in the catalogue's metadata; a film without sidecars shows its cleaned name and
 // the browser-made frame. Routes: #/media and #/media/item/<path>.
 
-import { clear, h, svg } from "./dom.ts";
-import { fileURL, media, mediaItem, thumbURL, type MediaItem, type MediaLibrary } from "./api.ts";
+import { clear, h, svg, titleCard } from "./dom.ts";
+import { fileURL, media, mediaItem, thumbURL, type MediaFile, type MediaItem, type MediaLibrary } from "./api.ts";
 import { lazy } from "./thumbs.ts";
-import { basename, browseHash, count, dirname, encodePathForHash, fileHash, session } from "./util.ts";
+import { basename, browseHash, bytes, count, dirname, encodePathForHash, fileHash, session } from "./util.ts";
 
-const NOUN: Record<string, [string, string]> = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"] };
+const NOUN: Record<string, [string, string]> = { movies: ["film", "films"], tv: ["show", "shows"], music: ["album", "albums"], roms: ["platform", "platforms"] };
+
+/** WARN_FLAGS are a dump's flags drawn in the warn colour (docs/13 §10). */
+const WARN_FLAGS = new Set(["proto", "hack", "beta", "demo", "bad", "unl", "pirate", "dlc", "update"]);
+
+/** chips are a game's region, revision and flag badges, "+n" for its other dumps. */
+function chips(it: { regions?: string[]; revision?: string; flags?: string[]; languages?: string[]; variants?: number; discs?: number }, more = false): HTMLElement {
+  const el = h("span", { class: "chips" });
+  for (const r of it.regions ?? []) el.append(h("span", { class: "badge" }, r));
+  if (more) for (const l of it.languages ?? []) el.append(h("span", { class: "badge" }, l));
+  if (it.revision) el.append(h("span", { class: "badge" }, it.revision));
+  for (const f of it.flags ?? []) if (f !== "base") el.append(h("span", { class: "badge" + (WARN_FLAGS.has(f) ? " warn" : "") }, f));
+  if (more && it.discs && it.discs > 1) el.append(h("span", { class: "badge" }, `${it.discs} discs`));
+  if (it.variants) el.append(h("span", { class: "badge" }, `+${it.variants}`));
+  return el;
+}
+
+/** cardSub is the line under an item's title card: a platform's folder name, a game's platform, else the year. */
+function cardSub(it: MediaItem): string | undefined {
+  if (it.kind === "platform") return basename(it.path) !== it.title ? basename(it.path) : undefined;
+  if (it.kind === "game") return it.platform;
+  return it.year ? String(it.year) : undefined;
+}
 
 function glyph(kind: string): SVGElement {
   const d =
@@ -26,7 +48,7 @@ function duration(min: number | undefined): string {
   return min >= 60 ? `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}` : `${min} min`;
 }
 
-function itemHash(it: MediaItem): string {
+function itemHash(it: MediaItem): string { // a platform's and a game's pages are items like a film's
   return it.kind === "album" ? browseHash({ path: it.path }) : "#/media/item" + encodePathForHash(it.path);
 }
 
@@ -54,6 +76,7 @@ function sub(it: MediaItem): string {
   const parts: string[] = [];
   if (it.year) parts.push(String(it.year));
   if (it.kind === "show" && it.children) parts.push(`${it.children} ${it.children === 1 ? "season" : "seasons"}`);
+  if (it.kind === "platform") parts.push(`${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`);
   if (it.kind === "movie") parts.push(it.runtime ? duration(it.runtime) : it.plot ? "" : "no sidecar");
   return parts.filter(Boolean).join(" · ");
 }
@@ -61,11 +84,13 @@ function sub(it: MediaItem): string {
 function posterTile(it: MediaItem): HTMLElement {
   const veiled = it.nsfw && !session.get("tr.revealed", false);
   const box = h("span", { class: "art" });
-  const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), h("span", { class: "pyear" }, veiled ? "nsfw · tap to show" : sub(it)));
+  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, veiled ? "nsfw · tap to show" : sub(it));
+  const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), below);
   const missing = () => {
     clear(box);
-    box.append(glyph(it.kind));
-    a.classList.add("missing");
+    // art that does not exist is a title card (I-280); an album keeps its note glyph
+    box.append(it.kind === "album" ? glyph(it.kind) : titleCard(it.title, cardSub(it)));
+    if (it.kind !== "platform") a.classList.add("missing");
   };
   const src = art(it);
   const frame = h("img", { alt: "" }) as HTMLImageElement;
@@ -169,7 +194,7 @@ function overview(root: HTMLElement): void {
             "section",
             null,
             h("h2", null, "Media"),
-            h("div", { class: "empty" }, "No library yet: open a folder in Files, choose its menu and set ", h("b", null, "Library"), " to movies, tv or music."),
+            h("div", { class: "empty" }, "No library yet: open a folder in Files, choose its menu and set ", h("b", null, "Library"), " to movies, tv, music or roms."),
           ),
         );
         return;
@@ -182,23 +207,89 @@ function overview(root: HTMLElement): void {
 
 function episodeNo(e: MediaItem): string {
   const two = (n: number) => String(n).padStart(2, "0");
+  if (e.part) return `Part ${e.part}`; // a miniseries (docs/18 §8a)
+  if (!e.episode && e.date) return e.date;
+  if (!e.episode && e.absolute) return "#" + String(e.absolute).padStart(3, "0");
   return `S${two(e.season ?? 0)}E${two(e.episode ?? 0)}` + (e.episode_to && e.episode_to !== e.episode ? `E${two(e.episode_to)}` : "");
+}
+
+/** platformPage lists a platform's games, one card per title (docs/13 §10). */
+function platformPage(root: HTMLElement, it: MediaItem): void {
+  const grid = h("div", { class: "posters games" });
+  for (const g of it.games ?? []) grid.append(posterTile(g));
+  const n = it.games?.length ?? 0;
+  root.append(
+    h(
+      "section",
+      { class: "lib roms" },
+      h("h2", null, it.title, " ", h("span", { class: "badge lib" }, "roms"), h("span", { class: "count" }, `${count(n)} ${n === 1 ? "game" : "games"} · `, h("a", { href: browseHash({ path: it.path }) }, "open folder"))),
+      grid,
+    ),
+  );
+}
+
+/** gamePage is a game: its art or a title card, its facts and chips, its files to download; it has no Play (I-279). */
+function gamePage(root: HTMLElement, it: MediaItem): void {
+  const section = h("section", { class: it.poster ? "hero poster-only" : "hero no-art" });
+  let poster: HTMLElement = titleCard(it.title, it.platform);
+  poster.classList.add("hero-poster");
+  if (it.poster) {
+    section.append(h("img", { class: "backdrop", alt: "", src: fileURL(it.poster) }));
+    const img = h("img", { class: "hero-poster", alt: "", src: fileURL(it.poster) }) as HTMLImageElement;
+    const card = poster;
+    img.addEventListener("error", () => img.replaceWith(card));
+    poster = img;
+  }
+  const facts = h("div", { class: "facts" });
+  for (const f of [it.platform ?? "", it.year ? String(it.year) : "", it.developer ?? "", it.publisher ?? "", it.players ? `${it.players} ${it.players === "1" ? "player" : "players"}` : "", (it.genres ?? []).join(" · ").toLowerCase()])
+    if (f) facts.append(h("span", null, f));
+  facts.append(h("span", { class: "dim" }, dirname(it.path)));
+  const body = h("div", null, h("h1", null, it.title), facts, chips(it, true));
+  if (it.plot) body.append(h("p", { class: "plot" }, it.plot));
+  const files = it.files ?? [];
+  const isFolder = files.some((f) => f.path.startsWith(it.path + "/")); // a disc set's folder
+  const folder = isFolder ? it.path : dirname(it.path);
+  body.append(h("div", { class: "actions" }, h("a", { class: "btn", href: browseHash({ path: folder }) }, "Open folder")));
+  if (files.length > 0) {
+    const tbody = h("tbody");
+    for (const f of files) tbody.append(fileRow(f, files.length));
+    body.append(h("table", { class: "episodes discs" }, tbody));
+  }
+  section.append(h("div", { class: "hero-body" }, poster, body));
+  root.append(section);
+}
+
+/** fileRow is one of a game's files: its disc or its dump's tags, the name as the download. */
+function fileRow(f: MediaFile, n: number): HTMLElement {
+  const label = f.disc ? `Disc ${f.disc}` : n > 1 ? [...(f.regions ?? []), f.revision ?? ""].filter(Boolean).join(" ") || "—" : "File";
+  return h("tr", null, h("td", { class: "no" }, label), h("td", { class: "title" }, h("a", { href: fileURL(f.path, true) }, f.name)), h("td", { class: "dur" }, bytes(f.size)));
 }
 
 function detail(root: HTMLElement, path: string): void {
   mediaItem(path).then(
     (it) => {
+      if (it.kind === "platform") return platformPage(root, it);
+      if (it.kind === "game") return gamePage(root, it);
       const backdrop = it.fanart ? fileURL(it.fanart) : it.poster ? fileURL(it.poster) : "";
       const cls = "hero" + (it.fanart ? "" : it.poster ? " poster-only" : " no-art");
       const section = h("section", { class: cls });
       if (backdrop) section.append(h("img", { class: "backdrop", alt: "", src: backdrop }));
       const posterSrc = it.poster ? fileURL(it.poster) : it.video ? thumbURL(it.video) : it.kind === "album" ? thumbURL(it.path) : "";
       const poster = h("img", { class: "hero-poster", alt: "" }) as HTMLImageElement;
-      const hide = () => (poster.style.visibility = "hidden");
+      // no art and no frame: the title card stands in (docs/13 §10, I-280); an album keeps the gap
+      const hide = () => {
+        if (it.kind === "album") poster.style.visibility = "hidden";
+        else {
+          const card = titleCard(it.title, it.year ? String(it.year) : undefined);
+          card.classList.add("hero-poster");
+          poster.replaceWith(card);
+        }
+      };
       if (!frameOf(poster, it, hide)) {
         if (posterSrc) poster.src = posterSrc;
         poster.addEventListener("error", hide);
       }
+      const noArt = !posterSrc && !it.video;
       const facts = h("div", { class: "facts" });
       const seasons = it.seasons ?? [];
       const episodes = seasons.reduce((n, s) => n + s.episodes.length, 0);
@@ -263,6 +354,7 @@ function detail(root: HTMLElement, path: string): void {
         show(Math.max(0, seasons.findIndex((s) => s.n > 0)));
       }
       section.append(h("div", { class: "hero-body" }, poster, body));
+      if (noArt) hide();
       root.append(section);
     },
     (e: unknown) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e)))),
