@@ -235,7 +235,9 @@ tailraid node keys offsite --access-key 003a…   # on every other device
 
 Give the key to every device, voters above all. A device without it cannot write to the bucket, and a device that leads without it treats the bucket as dead: after `fill_after` it copies the bucket's shards back onto disks, as it would for a disk that went away. Use a key the provider scopes to that one bucket, since it sits on every device.
 
-A bucket holds one shard of every stripe, so it stores 1/k of the volume (half at 2+1, a quarter at 4+2). It is written when you write, probed with a cheap HEAD every 30 s by each device, listed once a day by the leader, and read only while a device holding a needed shard is down. A bucket never votes: it keeps your data safe while a device is away, not the volume writable. For that, pair it with a [diskless voter](#a-cheap-always-on-voter). Details: [docs/10-s3.md](docs/10-s3.md) §4.
+A bucket holds at most one shard of a stripe. It competes with your other non-voter disks for the parity slots, so its share of the volume follows its `--capacity`, and only stripes written after it joins can use it. It is written when you write, probed with a cheap HEAD every 30 s by each device, listed once a day by the leader, and read only while a device holding a needed shard is down. A bucket never votes: it keeps your data safe while a device is away, not the volume writable. For that, pair it with a [diskless voter](#a-cheap-always-on-voter). Details: [docs/10-s3.md](docs/10-s3.md) §4.
+
+Buckets are not an off-site copy of your files. The data shards stay on the voters' disks at home, so at 3+2 even two buckets hold at most two of the three shards a read needs. With your home offline, or lost, nothing reads from them alone. To read while away, keep the folders you need on a cloud VM or the laptop you carry (`tailraid cache pin`). For a full off-site copy, put a snapshot mirror on a disk outside the house ([docs/16](docs/16-snapshots.md)). [docs/10-s3.md](docs/10-s3.md) §4.8 has the table of what each covers and a comparison of providers.
 
 ## Shrink the volume
 
