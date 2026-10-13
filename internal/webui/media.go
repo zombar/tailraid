@@ -448,7 +448,57 @@ func (v mediaView) showItem(group []showDir, libPath string) MediaItem {
 			it.Added = o.Added
 		}
 	}
+	if it.Poster == "" && it.Video == "" {
+		// no poster: the card draws the first regular episode's frame, as a film's its own
+		if p, ok := v.firstEpisode(group); ok {
+			it.Video = p
+			v.video(&it)
+		}
+	}
 	return it
+}
+
+// firstEpisode is the path of a show's first regular episode: the first episode file of
+// its lowest season above the specials (a season folder's, or one directly in a show
+// folder), else of the specials.
+func (v mediaView) firstEpisode(group []showDir) (string, bool) {
+	best, bestS, bestE := "", -1, 0
+	consider := func(p string, season, episode int) {
+		key := func(s int) int { // the specials sort after every regular season
+			if s == 0 {
+				return 1 << 30
+			}
+			return s
+		}
+		if best == "" || key(season) < key(bestS) || season == bestS && episode < bestE {
+			best, bestS, bestE = p, season, episode
+		}
+	}
+	scan := func(dir meta.Ino, dp string, folder int, dirs ...string) {
+		for _, f := range v.liveKids(dir) {
+			if f.Type != meta.TFile || !search.IsVideo(f.Name) {
+				continue
+			}
+			a := search.Analyze(f.Name, dirs, search.CtxTV)
+			if !isEpisode(a) {
+				continue
+			}
+			season := a.Season
+			if season < 0 {
+				season = max(folder, 1)
+			}
+			consider(path.Join(dp, f.Name), season, a.Episode)
+		}
+	}
+	for _, d := range group {
+		scan(d.in.Ino, d.path, -1, d.in.Name)
+		for _, k := range v.liveKids(d.in.Ino) {
+			if n, ok := search.SeasonOf(k.Name); ok && k.Type == meta.TDir {
+				scan(k.Ino, path.Join(d.path, k.Name), n, k.Name, d.in.Name)
+			}
+		}
+	}
+	return best, best != ""
 }
 
 // isEpisode reports a name the catalogue lists as an episode: a number, a part, an air
