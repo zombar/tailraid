@@ -1,0 +1,4 @@
+# shellcheck reads this from the repo root (make shell-check, actionlint).
+# A sourced file is found next to the script that sources it, and followed.
+source-path=SCRIPTDIR
+external-sources=true

@@ -9,6 +9,7 @@ import (
 )
 
 func onFSStat(ctx context.Context, w *response, userHandle Handler) error {
+	w.errorFmt = opAttrErrorFormatter // tailraid: the failure carries obj_attributes (I-266)
 	roothandle, err := xdr.ReadOpaque(w.req.Body)
 	if err != nil {
 		return &NFSStatusError{NFSStatusInval, err}

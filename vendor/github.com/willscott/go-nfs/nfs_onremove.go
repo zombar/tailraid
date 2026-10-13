@@ -19,6 +19,7 @@ func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
+	w.errorFmt = dirWccErrorFormatter(fs, path) // tailraid: REMOVE3resfail and RMDIR3resfail carry the directory's attributes (I-266)
 
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}

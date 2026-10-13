@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -438,6 +439,40 @@ func (e *composeEnv) compose(ctx context.Context, args ...string) error {
 		return fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// composeOut runs docker compose and returns its output.
+func (e *composeEnv) composeOut(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd.Dir = e.dir
+	return cmd.CombinedOutput()
+}
+
+// TakeEvidence saves what a failed check needs to be explained after the rig is gone
+// (I-270): the containers' state, and for every node its last 2,000 log lines with its
+// worker's and its `tailraid status --json`, each in a file of its own under dir. Every
+// file is attempted; the first error is returned.
+func (e *composeEnv) TakeEvidence(ctx context.Context, dir string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	var first error
+	save := func(name string, args ...string) {
+		out, err := e.composeOut(ctx, args...)
+		if werr := os.WriteFile(filepath.Join(dir, name), out, 0o644); werr != nil && first == nil { //nolint:gosec // evidence beside the report
+			first = werr
+		}
+		if err != nil && first == nil {
+			first = fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	save("ps.txt", "ps", "--all")
+	for _, n := range e.nodes {
+		ref := n.ref
+		save(ref.Name+".log", "logs", "--no-color", "--timestamps", "--tail", "2000", ref.Name, workerName(ref))
+		save(ref.Name+"-status.json", "exec", "-T", ref.Name, "tailraid", "status", "--json")
+	}
+	return first
 }
 
 func workerName(ref soak.NodeRef) string { return "w" + strings.TrimPrefix(ref.Name, "n") }

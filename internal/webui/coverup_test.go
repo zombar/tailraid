@@ -30,7 +30,7 @@ func TestWebUI_DirCover_SurfacesArtUpward(t *testing.T) {
 	u.write("/Music/Artist/Album/a.mp3", 0, append(id3v2(map[string]string{"TIT2": "a"}, pic), audio...))
 	u.write("/Own/poster.jpg", 0, jpegBytes(64, 64, blue))
 	u.write("/Own/Sub/cover.jpg", 0, jpegBytes(64, 64, red))
-	u.write("/Too/a/b/c/d/x.mp3", 0, append(id3v2(map[string]string{"TIT2": "x"}, pic), audio...))
+	u.write("/Too/a/b/c/d/e/x.mp3", 0, append(id3v2(map[string]string{"TIT2": "x"}, pic), audio...))
 	u.flush()
 	// the browser stored ep1's frame
 	in := u.statOf("/TV/ShowA/S01/ep1.mkv")
@@ -52,7 +52,7 @@ func TestWebUI_DirCover_SurfacesArtUpward(t *testing.T) {
 		{"/TV", "ShowA/S01/ep1.mkv", 200},           // two levels up
 		{"/Music", "Artist/Album/a.mp3", 200},       // an artist folder of albums
 		{"/Own", "poster.jpg", 200},                 // own art beats a subfolder's
-		{"/Too", "", 404},                           // four levels down: past CoverDepth
+		{"/Too", "", 404},                           // five levels down: past CoverDepth
 	}
 	for _, c := range cases {
 		q := "path=" + url.QueryEscape(c.path)

@@ -613,6 +613,25 @@ func (r *Run) webMedia(ctx context.Context, w *webClient, v Volume, dir string) 
 	l, _, _ = w.ls(ctx, music)
 	root, _, _ := w.ls(ctx, dir)
 	r.check("I-165", "the folder's cover is its first audio entry by name with a picture", l.Dir.Cover == "03 mascara.mp3" && root.entry("music") != nil && root.entry("music").Cover == "03 mascara.mp3", fmt.Sprintf("%q %+v", l.Dir.Cover, root.entry("music")))
+
+	// a folder of photos two levels down surfaces its first photo, and a folder of video
+	// nobody has framed names the video to frame instead of settling on none (I-275)
+	photos, shows := join(dir, "photos"), join(dir, "shows")
+	if err := errors.Join(v.Mkdir(photos), v.Mkdir(join(photos, "trip")), v.WriteAt(join(join(photos, "trip"), "IMG_0001.jpg"), 0, cover),
+		v.Mkdir(shows), v.Mkdir(join(shows, "s1")), v.WriteAt(join(join(shows, "s1"), "e1.mp4"), 0, r.randomBytes(500))); err != nil {
+		r.check("I-275", "cover fixtures written", false, err.Error())
+		return
+	}
+	code, _, _ = w.do(ctx, http.MethodGet, "/api/thumb", url.Values{"path": {photos}}, nil, "")
+	l, _, _ = w.ls(ctx, photos)
+	r.check("I-275", "a folder of photos takes its first photo, two levels up", code == 200 && l.Dir.Cover == "trip/IMG_0001.jpg", fmt.Sprintf("%d %q", code, l.Dir.Cover))
+	code, body, _ = w.do(ctx, http.MethodGet, "/api/thumb", url.Values{"path": {shows}}, nil, "")
+	var miss struct {
+		Grab *webui.Grab `json:"grab"`
+	}
+	_ = json.Unmarshal(body, &miss)
+	l, _, _ = w.ls(ctx, shows)
+	r.check("I-275", "a folder of unframed video names it to grab and is not no_cover", code == 404 && miss.Grab != nil && miss.Grab.Path == "s1/e1.mp4" && !l.Dir.NoCover, fmt.Sprintf("%d %s %+v", code, body, l.Dir))
 }
 
 func (r *Run) webIntegrity(ctx context.Context, w *webClient, gw NodeRef) {
