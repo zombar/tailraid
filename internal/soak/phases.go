@@ -47,6 +47,7 @@ var phases = []phase{
 	{"21 search and media", phaseSearch},
 	{"22 copies under faults", phaseCopies},
 	{"23 many users at once", phaseMultiUser},
+	{"24 secrets", phaseSecrets},
 }
 
 // model is the client's belief about the corpus: path → content.

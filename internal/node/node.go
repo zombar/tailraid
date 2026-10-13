@@ -36,6 +36,7 @@ import (
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/search"
+	"github.com/zombar/tailraid/internal/secrets"
 	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/sysfs"
@@ -341,6 +342,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	ops.secrets = newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk)
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
 	if err != nil {
@@ -402,6 +404,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked,
 		Stats: func(since int64) any { return statsSvc.Live(since) }, Web: webPort(cfg),
+		SecretKey: ops.secrets.Local,
 	})
 	if err != nil {
 		return err
@@ -662,6 +665,7 @@ type adminOps struct {
 	s3Swept   time.Time  // the leader's last S3 sweep (docs/06 §3)
 	mirrors   *mirrorSet // this host's mirrors (docs/16)
 	mirrorPol config.MirrorPolicy
+	secrets   *secrets.Store // the secrets store (docs/19)
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -1002,6 +1006,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.gc.RunOnce(ctx)
 	case "index_now": // the leader's pass now (docs/18 §5, a pass op, I-189)
 		return a.search.Pass(ctx)
+	case "secret_set", "secret_get", "secret_ls", "secret_rm": // this node seals and opens (docs/19 §5)
+		return a.secretOp(ctx, op)
 	case "scrape_plan": // this node's plan for media scrape (docs/18 §11): never forwarded
 		return a.scrapePlan(ctx, op)
 	case "search": // this node's index (docs/18 §6): never forwarded

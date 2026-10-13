@@ -199,6 +199,12 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.snapshotDelete(c.SnapshotDelete)
 	case OpSnapshotImport:
 		return a.snapshotImport(c.SnapshotImport)
+	case OpSecretKeyInit:
+		return Result{}, a.secretKeyInit(c.SecretKeyInit)
+	case OpSecretPut:
+		return Result{}, a.secretPut(c.SecretPut)
+	case OpSecretDelete:
+		return Result{}, a.secretDelete(c.SecretDelete)
 	}
 	return Result{}, ErrBadCommand
 }

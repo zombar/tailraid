@@ -633,3 +633,34 @@ func TestMemberList_MembersOnly_DeviceRows(t *testing.T) {
 		t.Fatalf("a non-member read the member list: %+v", got)
 	}
 }
+
+// GET /v1/secrets/key answers a member with the key this node holds, 404 when it holds
+// none, and nothing to a non-member or to a caller of another cluster (docs/19 §3).
+//
+// Invariant: I-304
+func TestSecretKey_MembersOnly(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	held := true
+	e := newEnvWith(t, func(o *Options) {
+		o.SecretKey = func() ([]byte, bool) { return key, held }
+	})
+	c := e.client()
+	if got, err := c.SecretKey(ctx, e.addr); err != nil || !bytes.Equal(got, key) {
+		t.Fatalf("a member's fetch: %q %v", got, err)
+	}
+	held = false
+	if got, err := c.SecretKey(ctx, e.addr); err == nil {
+		t.Fatalf("a node without the key answered %q", got)
+	}
+	held = true
+	other := NewClient([16]byte{9}, nil)
+	if got, err := other.SecretKey(ctx, e.addr); err == nil {
+		t.Fatalf("another cluster read the key: %q", got)
+	}
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "stranger", "x")
+	e.auth.Purge()
+	if got, err := c.SecretKey(ctx, e.addr); err == nil {
+		t.Fatalf("a non-member read the key: %q", got)
+	}
+}

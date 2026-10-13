@@ -164,7 +164,7 @@ func TestEncodeCommand_V10Gating(t *testing.T) {
 		t.Fatalf("music is version %d, want 6", v)
 	}
 	roms := Command{Op: OpSetAttr, SetAttr: &SetAttr{Ino: 2, Mask: AttrFlags, Flags: WithLibrary(FlagNSFW, LibraryRoms), Now: 1}}
-	if v := CommandCodec(roms); v != commandVersionV10 || CodecRoms != commandVersionV10 || CodecVersion != commandVersionV10 {
+	if v := CommandCodec(roms); v != commandVersionV10 || CodecRoms != commandVersionV10 || CodecVersion < commandVersionV10 {
 		t.Fatalf("roms is version %d, want 10", v)
 	}
 	b := MustEncodeCommand(roms)

@@ -91,16 +91,19 @@ type Options struct {
 	JoinToken    func() string
 	Status       func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
 	Stats        func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
-	Web          uint16                // the browser UI's port for /health (0 when off)
-	BadSlot      func(key chunk.ShardKey, node meta.NodeIdx)
-	Dev          http.Handler           // /dev/* (docs/08): nil unless dev.enabled
-	Blocked      func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
-	Clk          clock.Clock
-	Logger       *slog.Logger
-	MaxShard     int64         // PUT body cap; default 2 MiB
-	Grace        time.Duration // DELETE fence minimum shard age; default 10 min
-	PutSlots     int           // concurrent PUTs; default 16
-	GetSlots     int           // concurrent GETs; default 32
+	// SecretKey is the cluster key this node holds itself, checked against the FSM's key
+	// ID (docs/19 §3, I-304): GET /v1/secrets/key answers a member with it, 404 without.
+	SecretKey func() ([]byte, bool)
+	Web       uint16 // the browser UI's port for /health (0 when off)
+	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
+	Dev       http.Handler           // /dev/* (docs/08): nil unless dev.enabled
+	Blocked   func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
+	Clk       clock.Clock
+	Logger    *slog.Logger
+	MaxShard  int64         // PUT body cap; default 2 MiB
+	Grace     time.Duration // DELETE fence minimum shard age; default 10 min
+	PutSlots  int           // concurrent PUTs; default 16
+	GetSlots  int           // concurrent GETs; default 32
 	// BodyTimeout bounds reading a PUT or apply body and writing a GET body, so a peer
 	// that stalls mid-transfer cannot hold a slot (I-97); default callTimeout(MaxShard).
 	BodyTimeout time.Duration
@@ -225,7 +228,8 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
 	mux.Handle("GET /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.memberList))))
 	mux.Handle("GET /v1/stats", s.clusterCheck(s.member(http.HandlerFunc(s.stats))))
-	mux.Handle("POST /v1/join", http.HandlerFunc(s.join)) // token + claimed identity, not membership
+	mux.Handle("GET /v1/secrets/key", s.clusterCheck(s.member(http.HandlerFunc(s.secretKey)))) // members only (docs/19 §3, I-304)
+	mux.Handle("POST /v1/join", http.HandlerFunc(s.join))                                      // token + claimed identity, not membership
 	if o.Dev != nil {
 		mux.Handle("/dev/", s.clusterCheck(s.member(o.Dev)))
 	}
@@ -765,4 +769,26 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(reply)
+}
+
+// SecretKeyReply is GET /v1/secrets/key's body: the cluster key, to a member only.
+type SecretKeyReply struct {
+	Key []byte `json:"key"`
+}
+
+// secretKey answers a member's fetch of the cluster key (docs/19 §3, I-304); the route's
+// cluster check and member check ran before.
+func (s *Server) secretKey(w http.ResponseWriter, _ *http.Request) {
+	if s.o.SecretKey == nil {
+		writeErr(w, http.StatusNotFound, "no secrets store")
+		return
+	}
+	k, ok := s.o.SecretKey()
+	if !ok {
+		writeErr(w, http.StatusNotFound, "this node holds no cluster key")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(SecretKeyReply{Key: k})
 }

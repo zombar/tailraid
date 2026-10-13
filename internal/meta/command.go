@@ -30,6 +30,10 @@ const (
 	OpSnapshotEnd    Op = 20 // {ID, OK, Root, Files, Bytes, NewBytes, Missing, Now}
 	OpSnapshotDelete Op = 21 // {ID, Done, Now}: the leader's thinning only, never a user (I-183)
 	OpSnapshotImport Op = 22 // {Mirror, After, Name, At, Auto, Root, Files, Bytes, NewBytes, Missing, Now} → Result.SnapID: a rowless manifest (docs/16 §5)
+	// The secrets store (docs/19, codec 11).
+	OpSecretKeyInit Op = 23 // {ID, Now}: the cluster key's ID, only while none is set (I-305)
+	OpSecretPut     Op = 24 // {Secret{Name, KeyID, Nonce, Cipher, By}, Now}: a sealed value (I-306)
+	OpSecretDelete  Op = 25 // {Name, All, Now}: one secret, or every one and the key ID
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
@@ -52,6 +56,12 @@ const (
 	// commandVersionV10: a SetAttr whose Flags carry the roms library kind (docs/18 §9,
 	// I-277); an older binary rejects the third bit.
 	commandVersionV10 = 10
+	// commandVersionV11: the secrets store's ops (docs/19, I-307); an older binary does
+	// not know them.
+	commandVersionV11 = 11
+	// CodecSecrets is the codec every live member must read before a secret op is
+	// proposed (docs/02 §Codec versions).
+	CodecSecrets = commandVersionV11
 	// CodecRoms is the codec every live member must read before a gateway sets the roms
 	// kind: a v10 entry forwarded to an older leader is refused as malformed.
 	CodecRoms = commandVersionV10
@@ -68,7 +78,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 10
+	CodecVersion = 11
 )
 
 // SetAttr mask bits.
@@ -315,6 +325,10 @@ type Command struct {
 	SnapshotEnd    *SnapshotEnd
 	SnapshotDelete *SnapshotDelete
 	SnapshotImport *SnapshotImport
+	// docs/19, codec 11
+	SecretKeyInit *SecretKeyInit
+	SecretPut     *SecretPut
+	SecretDelete  *SecretDelete
 }
 
 // needsV7 reports whether c is a snapshot command or registers a mirror (docs/16): an
@@ -351,6 +365,12 @@ func needsV7(c Command) bool {
 		return c.NodeUpsert != nil && c.NodeUpsert.Node.Kind == KindMirror
 	}
 	return false
+}
+
+// needsV11 reports whether c is a secrets store op (docs/19): an older binary cannot
+// decode the ops, so the leader refuses them while such a member is live (I-307).
+func needsV11(c Command) bool {
+	return c.Op == OpSecretKeyInit || c.Op == OpSecretPut || c.Op == OpSecretDelete
 }
 
 // needsV10 reports whether c sets the roms library kind, a codec-10 field (I-277).
@@ -435,6 +455,8 @@ func CommandCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
+	case needsV11(c):
+		return commandVersionV11
 	case needsV10(c):
 		return commandVersionV10
 	case needsV9(c):
@@ -645,6 +667,19 @@ func encodeCommand(c Command) []byte {
 		w.u64(p.NewBytes)
 		w.u32(p.Missing)
 		w.i64(p.Now)
+	case OpSecretKeyInit:
+		p := mustPayload(c.SecretKeyInit, c.Op)
+		w.b = append(w.b, p.ID[:]...)
+		w.i64(p.Now)
+	case OpSecretPut:
+		p := mustPayload(c.SecretPut, c.Op)
+		writeSecret(w, &p.Secret)
+		w.i64(p.Now)
+	case OpSecretDelete:
+		p := mustPayload(c.SecretDelete, c.Op)
+		w.str(p.Name)
+		w.bool(p.All)
+		w.i64(p.Now)
 	default:
 		panic(fmt.Sprintf("meta: EncodeCommand: unknown op %d", c.Op))
 	}
@@ -665,7 +700,7 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && (v < commandVersion || v > commandVersionV10) {
+	if r.err == nil && (v < commandVersion || v > commandVersionV11) {
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -694,9 +729,12 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpCommit || c.Op == OpTrash || c.Op == OpRename
 	case commandVersionV10:
 		legal = c.Op == OpSetAttr
+	case commandVersionV11:
+		legal = c.Op == OpSecretKeyInit || c.Op == OpSecretPut || c.Op == OpSecretDelete
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
-			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport
+			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
+			c.Op != OpSecretKeyInit && c.Op != OpSecretPut && c.Op != OpSecretDelete
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
@@ -814,6 +852,15 @@ func DecodeCommand(b []byte) (Command, error) {
 			Mirror: NodeIdx(r.u16()), After: SnapID(r.u32()), Name: r.str(), At: r.i64(), Auto: r.bool(), Root: r.hash(),
 			Files: r.u64(), Bytes: r.u64(), NewBytes: r.u64(), Missing: r.u32(), Now: r.i64(),
 		}
+	case OpSecretKeyInit:
+		p := &SecretKeyInit{}
+		copy(p.ID[:], r.take(len(p.ID)))
+		p.Now = r.i64()
+		c.SecretKeyInit = p
+	case OpSecretPut:
+		c.SecretPut = &SecretPut{Secret: readSecret(r), Now: r.i64()}
+	case OpSecretDelete:
+		c.SecretDelete = &SecretDelete{Name: r.str(), All: r.bool(), Now: r.i64()}
 	default:
 		return c, fmt.Errorf("meta: unknown op %d", c.Op)
 	}

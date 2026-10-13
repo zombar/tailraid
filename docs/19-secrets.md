@@ -15,10 +15,10 @@ Secret Service, a 0600 file when the keyring is unavailable, and secret values r
 stdin only. errol keeps its secrets on one host; the replication and the cluster key are
 this doc's.
 
-*Status (2026-10-13): designed; docs and stubs first. I-303..I-309 are stubs in
-`test/invariants/secrets_stubs_test.go`. PR 1 lands `internal/keychain` (I-309); PR 2 the
-store, the key fetch and the CLI (I-303..I-307); PR 3 moves the S3 and TMDB keys in
-(I-308) and rewords I-139 and I-302.*
+*Status (2026-10-13): PR 1 (`internal/keychain`, I-309) and PR 2 (the store in
+`internal/secrets`, ops 23–25 at codec 11, the member key fetch, `secret set|ls|rm`,
+soak phase 24; I-303..I-307) are built. PR 3 moves the S3 and TMDB keys in (I-308, still
+a stub in `test/invariants/secrets_stubs_test.go`) and rewords I-139 and I-302.*
 
 ## 1. The pieces
 
@@ -81,9 +81,10 @@ stays in the node's config (15).
   with a random 12-byte nonce and the name as additional data. A ciphertext copied to
   another name, under another key or altered by one bit does not open.
 - **Commands.** Op 24 `SecretPut{Name, Nonce, Cipher, KeyID, At, By}` and op 25
-  `SecretDelete{Name}` (or every name, which also clears the key ID). Both are log-entry
-  codec 12 and snapshot frame 12; the leader refuses them while a live member reads an
-  older codec (`ErrCodec`, 02 §Codec versions). A put whose key ID is not the FSM's is
+  `SecretDelete{Name}` (or every name, which also clears the key ID). All three are
+  log-entry codec 11 and snapshot frame 11 (codec 12 is sealed S3's, 10 §4.7: a codec
+  promises every lower one, and the store landed first); the leader refuses them while a
+  live member reads an older codec (`ErrCodec`, 02 §Codec versions). A put whose key ID is not the FSM's is
   refused.
 - **Bounds.** A name matches `^[a-z0-9][a-z0-9._/-]{0,127}$` (`tmdb`, `s3/b2`); a value
   is 1 to 16 KiB and holds no newline. At most 256 secrets.
@@ -118,7 +119,20 @@ stays in the node's config (15).
   `<data_dir>/tmdb.key`, which `media key` imports and removes. I-302's "on the device
   that saved it" becomes "in the store".
 
-## 7. Non-goals
+## 7. Soak phase 24
+
+A secret made for the run is set through one node and read back through every node (the
+sealed value replicates, each node opens it with the cluster key and fetches the key
+when its keychain lacks it); every node lists it readable with no value in the reply; a
+replace through another node reads back through the first; a node whose keychain copy
+is wiped and which is restarted fetches the key and reads it (`SecretEnv.ForgetSecretKey`:
+the compose rig removes the fallback file and restarts the container, the harness
+empties the device's in-memory keychain; `tailraid verify` cannot on a live cluster's
+devices and records the check skipped); with the node that set it killed, the others
+read it; a removal through one node reaches every node. The phase removes its secret
+whatever happens and touches no other, so a live cluster's own secrets stay.
+
+## 8. Non-goals
 
 Rotating the cluster key, a `secret get` command, secret files (certificates,
 kubeconfigs), scoping a secret to some members, a page for secrets in the web UI,
@@ -142,7 +156,7 @@ member holds the volume's data and can fetch the key, by design.
   HKDF key of its name, with a random nonce and its name as additional data; a
   ciphertext under another name, another key or with any bit changed does not decrypt;
   no value is ever logged, reported or placed on a command line.
-- **I-307** — Ops 23–25 are codec 12, refused with `ErrCodec` while a live member reads
+- **I-307** — Ops 23–25 are codec 11, refused with `ErrCodec` while a live member reads
   an older codec; a put under a key ID that is not the FSM's, a name off its pattern, an
   empty, oversized or multi-line value, or a 257th secret is refused; `secret ls` lists
   names, times and setters, never values.
@@ -159,10 +173,10 @@ member holds the volume's data and can fetch the key, by design.
 
 | Invariant | Tests |
 |---|---|
-| I-303 | stub `TestStub_I_303` until PR 2 |
-| I-304 | stub `TestStub_I_304` until PR 2 |
-| I-305 | stub `TestStub_I_305` until PR 2 |
-| I-306 | stub `TestStub_I_306` until PR 2 |
-| I-307 | stub `TestStub_I_307` until PR 2 |
+| I-303 | `TestStore_ReplicatedAcrossNodes`, `TestSoak_SecretsAgainstHarness` |
+| I-304 | `TestStore_ReplicatedAcrossNodes`, `TestStore_FetchChecksTheKeyID`, `TestSecretKey_MembersOnly`, `TestSoak_SecretsAgainstHarness` |
+| I-305 | `TestStore_KeyRace`, `TestSecretApply_Table` |
+| I-306 | `TestSeal_Open`, `TestStore_ReplicatedAcrossNodes`, `TestSecretState_Snapshot`, `TestSoak_SecretsAgainstHarness` |
+| I-307 | `TestSecretOps_Codec11`, `TestSecretApply_Table`, `TestSecretState_Snapshot`, `TestStore_Bounds_RemoveAll`, `TestSoak_SecretsAgainstHarness` |
 | I-308 | stub `TestStub_I_308` until PR 3 |
 | I-309 | `TestKeychain_KeyringFirst`, `TestKeychain_FallbackFile_Table`, `TestKeychain_KeyringRecovers`, `TestKeychain_Names_Table` |

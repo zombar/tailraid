@@ -26,6 +26,11 @@ var (
 	// ErrSuperseded refuses a Commit that continues a rewrite another rewrite of the
 	// file started after (docs/04 §6, I-223); the flusher drops the inode's dirty data.
 	ErrSuperseded = errors.New("meta: another rewrite of the file started later")
+	// ErrSecretKey refuses a second cluster key, or a secret sealed under a key that is
+	// not the store's (docs/19, I-305, I-307).
+	ErrSecretKey = errors.New("meta: not the secrets store's cluster key")
+	// ErrSecretFull refuses a secret past MaxSecrets (I-307).
+	ErrSecretFull = errors.New("meta: the secrets store is full")
 )
 
 // ErrUnknownOutcome is returned by a Proposer (never in Result.Err, so it has no wire
@@ -40,6 +45,7 @@ var errByCode = []error{
 	ErrExist, ErrNotExist, ErrNotEmpty, ErrIsDir, ErrNotDir, ErrLoop, ErrConflict,
 	ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand, ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
 	ErrNameTooLong, ErrProtected, ErrInTrash, ErrCodec, ErrSuperseded, // appended; codes are never renumbered
+	ErrSecretKey, ErrSecretFull,
 }
 
 // ErrorCode maps a sentinel error to its wire code. nil is 0; a non-sentinel error is
