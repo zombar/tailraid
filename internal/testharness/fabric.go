@@ -631,7 +631,14 @@ func (f *Fabric) ReadFile(ino meta.Ino) []byte {
 // Eventually polls cond until it holds or the deadline passes, without time.Sleep.
 func Eventually(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
-	deadline := time.After(10 * time.Second)
+	EventuallyWithin(t, 10*time.Second, cond, func() string { return msg })
+}
+
+// EventuallyWithin is Eventually with its own bound and a message built when it gives up,
+// so the message describes the state at the timeout, not at the start of the wait.
+func EventuallyWithin(t *testing.T, bound time.Duration, cond func() bool, msg func() string) {
+	t.Helper()
+	deadline := time.After(bound)
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -640,7 +647,7 @@ func Eventually(t *testing.T, cond func() bool, msg string) {
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("timeout: %s", msg)
+			t.Fatalf("timeout: %s", msg())
 		case <-tick.C:
 		}
 	}
