@@ -257,7 +257,11 @@ func Listen(ctx context.Context, addr string, auth Authorizer) (net.Listener, er
 		return nil, fmt.Errorf("rpc: refusing to bind %q without an authorizer", addr)
 	}
 	var lc net.ListenConfig
-	return lc.Listen(ctx, "tcp", addr)
+	l, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return lowWaterListener{l}, nil // GET replies are the server's bulk side (I-263)
 }
 
 // Serve runs the HTTP server on l until ctx is done.
