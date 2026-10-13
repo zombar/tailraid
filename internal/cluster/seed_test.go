@@ -75,7 +75,7 @@ func TestMembersFromLog_MatchesTable(t *testing.T) {
 	gone := join("bbbb000000000002", "100.64.0.22")
 	must(n.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: gone}))
 
-	got, err := n.MembersFromLog()
+	got, err := n.StartSeed(meta.NewFSM(), nil) // no table restored, no seed file
 	must(err)
 	var want []meta.Node
 	for _, m := range n.FSM.Nodes() {
@@ -91,4 +91,64 @@ func TestMembersFromLog_MatchesTable(t *testing.T) {
 			t.Errorf("member %d: replayed %+v, table %+v", i, got[i], want[i])
 		}
 	}
+}
+
+// A node restarted after members joined, whose seed file and restored table predate the
+// joins, still accepts them: they are in its own log. Before, serve consulted the log
+// only with no seed file and an empty table, and refused the leader forever (soak 23.9
+// on the compose rig, 2026-10-13: n1 restarted a minute after the joins).
+// Invariant: I-281
+func TestStartSeed_NamesMembersJoinedAfterTheSnapshot(t *testing.T) {
+	n := bootstrap(t, t.TempDir())
+	defer n.Close()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	join := func(id, addr string) meta.NodeIdx {
+		resp, err := n.Join(ctx, rpc.JoinRequest{NodeID: id, Name: id[:4], Addr: addr, TSStableID: "ts-" + id[:4], RaftPort: 1, RPCPort: 2})
+		must(err)
+		return resp.NodeIdx
+	}
+	self, _ := n.SelfIdx()
+	must(n.MemberOp(ctx, rpc.MemberOp{Op: "update_addr", NodeIdx: self, Addr: "100.64.0.9"}))
+	gone := join("cccc000000000003", "100.64.0.23")
+	// what a restart restores: the state as of now, and the seed serve wrote from it
+	restored, err := cloneFSM(n.FSM)
+	must(err)
+	file := devices(restored.Nodes())
+	if len(file) != 2 {
+		t.Fatalf("seed file %+v", file)
+	}
+	// after the snapshot, two members join and one leaves; the log holds it all
+	join("aaaa000000000001", "100.64.0.21")
+	join("bbbb000000000002", "100.64.0.22")
+	must(n.MemberOp(ctx, rpc.MemberOp{Op: "remove", NodeIdx: gone}))
+
+	got, err := n.StartSeed(restored, file)
+	must(err)
+	addrs := map[string]bool{}
+	for _, m := range got {
+		addrs[m.Addr] = true
+	}
+	for _, want := range []string{"100.64.0.9", "100.64.0.21", "100.64.0.22"} {
+		if !addrs[want] {
+			t.Errorf("seed %v lacks %s", addrs, want)
+		}
+	}
+	if addrs["100.64.0.23"] {
+		t.Errorf("seed %v keeps the member the log removed", addrs)
+	}
+}
+
+func devices(nodes []meta.Node) []meta.Node {
+	var out []meta.Node
+	for i := range nodes {
+		if m := &nodes[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+			out = append(out, *m)
+		}
+	}
+	return out
 }

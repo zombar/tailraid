@@ -266,6 +266,15 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 - **I-134** — A node whose member table is empty and that has no seed file seeds its
   authorizer from the device members its local Raft log names, replayed through the FSM's
   own apply: exactly the rows with an address that are not `Removed`.
+- **I-281** — `serve` starts its authorizer's seed from the table as of the node's own
+  Raft log (the restored table with the entries past its index replayed on a copy) plus
+  the members of the seed file the log never mentions, writes that seed to the file, and
+  refreshes the file from the table only while the node is healthy. A member that
+  joined after the node's last snapshot, the leader among them, is accepted at once; a
+  member the log removed is not. Before, the log was consulted only with no seed file
+  and an empty table, and the file was refreshed once a minute from whatever table the
+  node had: a node restarted within a minute of a join refused the new leader as "not a
+  member" for good (soak phase 23.9 on the compose rig, 2026-10-13).
 - **I-93** — `update_addr` from an address that is not in the member table is accepted
   only when the caller's WhoIs StableID is that of the member it names, and changes
   nothing but that member's address; every other op from a non-member is rejected with
@@ -306,6 +315,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestSMB_ListenRefusesNonLoopback` |
 | I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake`, `TestMemberSeed_RoundTrip`, `TestCLI_Join_NoFlags` |
 | I-134 | `TestMembersFromLog_MatchesTable` |
+| I-281 | `TestStartSeed_NamesMembersJoinedAfterTheSnapshot` |
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
