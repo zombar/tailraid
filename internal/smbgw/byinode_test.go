@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	smb2 "github.com/cloudsoda/go-smb2"
+
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/testharness"
@@ -15,11 +17,12 @@ import (
 // Two clients on one gateway: one holds the file open while the other renames it and
 // puts a new, longer file under the old name. The first client's handle answers for its
 // own file at the new name (QUERY_INFO size, reads), never for the new one.
-// Invariant: I-224
+// Invariant: I-224, I-265
 func TestSMB_TwoSessions_RenameMovesOtherHandle(t *testing.T) {
 	g := startGateway(t)
 	orig := testharness.Pattern(3000, 4)
-	f1, err := g.sh.Create("a.bin")
+	// held sharing delete, as Explorer holds a file: another session may rename it (I-265)
+	f1, err := g.sh.OpenFileShare("a.bin", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644, smb2.ShareRead|smb2.ShareWrite|smb2.ShareDelete)
 	must(t, err)
 	if _, err := f1.WriteAt(orig, 0); err != nil {
 		t.Fatal(err)

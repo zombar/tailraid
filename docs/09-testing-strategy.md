@@ -487,8 +487,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   deterministic test); (d) two names each replaced at once by two clients through two
   gateways with different payloads larger than a flush (16 chunks and 40 MiB, at most
   half the profile's large file), so each copy commits in several flushes that
-  interleave with the other's, every gateway reading one payload whole, the same one
-  (I-223); (e) a
+  interleave with the other's, every gateway reading one payload whole, the same one,
+  once both writers report nothing dirty, planned or in their WAL (until then each
+  reads its own copy) (I-223); (e) a
   gateway reading a file another gateway is copying, every read the old bytes or the
   new chunk by chunk and never other bytes (I-36), the whole file once the copy has
   ended and `FlushIdle` passed; (f) the folder of SMB and NFS copies renamed through
@@ -616,6 +617,13 @@ components they exercise.
   check of that phase, with the driver's stack or every node's goroutine dump as a dump
   record, and the run continues with the next phase; a phase that records no check and
   does not skip is failed as well.
+- **I-270** — A phase's first failed check saves the rig's evidence, once per phase,
+  into `<evidence>/<phase>/` (the driver's `-evidence`, beside the report by default) and
+  the results name the folder; on the compose rig that is `docker compose ps` and, for
+  every node, its last 2,000 log lines with its worker's and its `tailraid status --json`.
+  Before, `make soak` tore the rig down with its logs, and two failures of 2026-10-13
+  (a restarted gateway serving an empty tree, two orphans in phase 12) stayed
+  unexplained.
 - **I-112** — Every change a phase makes to the cluster (a killed node, a cut, a drained
   or removed member, a filled disk, a policy change) is restored before the phase's result
   is recorded, whether the phase completed, failed, panicked, timed out or was cancelled,
@@ -632,6 +640,7 @@ components they exercise.
 
 | Invariant | Tests |
 |---|---|
+| I-270 | `TestExecute_FailureSavesEvidence` |
 | I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
 | I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores`, `TestPhases_MembershipRestoresAutoMode` |
 | I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |

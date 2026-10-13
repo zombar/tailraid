@@ -336,7 +336,13 @@ func (m *multi) replacedName(ctx context.Context, label, rdir string) error {
 	if err := m.r.Env.Wait(ctx, m.r.Profile.FlushIdle); err != nil {
 		return err
 	}
+	// each writer still reads its own dirty copy until its flushes end, and a third
+	// gateway the half-committed winner: 80 MiB a gateway can outlast FlushIdle (seen on
+	// the compose rig, 2026-10-13)
 	var bad []string
+	if err := m.r.waitFlushed(ctx, []NodeRef{a, b}, 2*time.Minute); err != nil {
+		bad = append(bad, err.Error())
+	}
 	for f := range names {
 		p := fa[f].Path
 		whole := map[string]string{sumOf(fa[f]): a.Name, sumOf(fb[f]): b.Name}
@@ -356,6 +362,34 @@ func (m *multi) replacedName(ctx context.Context, label, rdir string) error {
 	}
 	m.r.check("I-223", label+": every gateway reads one copy whole, the same one", len(bad) == 0, strings.Join(bad, "; "))
 	return nil
+}
+
+// waitFlushed waits, letting time pass, until every node of ns reports nothing dirty,
+// planned or in its WAL, for at most limit; it says what is left after that.
+func (r *Run) waitFlushed(ctx context.Context, ns []NodeRef, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	for {
+		var left []string
+		for _, n := range ns {
+			rep, err := r.Env.Status(ctx, n)
+			switch {
+			case err != nil:
+				left = append(left, n.Name+": "+err.Error())
+			case rep.Gateway != nil && rep.Gateway.DirtyBytes+rep.Gateway.PlanBytes+uint64(max(rep.Gateway.WALBytes, 0)) > 0:
+				g := rep.Gateway
+				left = append(left, fmt.Sprintf("%s: %d dirty, %d planned, %d WAL bytes", n.Name, g.DirtyBytes, g.PlanBytes, g.WALBytes))
+			}
+		}
+		if len(left) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("not flushed after %v: %s", limit, strings.Join(left, "; "))
+		}
+		if err := r.Env.Wait(ctx, time.Second); err != nil {
+			return err
+		}
+	}
 }
 
 // (e) a gateway reading a file another gateway is copying over: every read is, chunk by
