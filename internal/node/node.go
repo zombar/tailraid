@@ -1002,6 +1002,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.gc.RunOnce(ctx)
 	case "index_now": // the leader's pass now (docs/18 §5, a pass op, I-189)
 		return a.search.Pass(ctx)
+	case "scrape_plan": // this node's plan for media scrape (docs/18 §11): never forwarded
+		return a.scrapePlan(ctx, op)
 	case "search": // this node's index (docs/18 §6): never forwarded
 		return a.search.Search(ctx, op.Query, op.Path, op.Limit), nil
 	case "stats_seal": // this node's partial stats hour and any rollup still missing (docs/17 §7)

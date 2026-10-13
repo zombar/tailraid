@@ -184,7 +184,8 @@ type AdminOp struct {
 	Rollup    bool   `json:"rollup,omitempty"`  // stats_seal: also write today's rollups so far (docs/17 §7)
 	DryRun    bool   `json:"dry_run,omitempty"` // rebalance: list the home moves, open nothing (docs/14 §7)
 	// search (docs/18 §6, this node's index): the words, the folder to search under (Path)
-	// and the most hits to return; index_now runs the leader's pass (a pass op, I-189)
+	// and the most hits to return; index_now runs the leader's pass (a pass op, I-189); scrape_plan (docs/18 §11)
+	// lists the items under Path missing a sidecar, at most Limit after Cursor
 	Query string `json:"query,omitempty"`
 	Limit int    `json:"limit,omitempty"`
 }

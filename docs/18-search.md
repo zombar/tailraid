@@ -8,7 +8,7 @@ the leader, into an **index kept inside the volume** under `/.tailraid/index`, s
 node reads the same index as it reads any other file, and a device that joins tomorrow
 has it at once. This reverses the "search" non-goal 13 §9 carried until now.
 
-*Status (2026-10-11): designed; docs, invariants, lookdev and stubs first. I-206..I-212
+*Status: `tailraid media scrape` (§11) is built (2026-10-13). (2026-10-11): designed; docs, invariants, lookdev and stubs first. I-206..I-212
 are stubs in `test/invariants/` until each PR lands its tests: `library-flag` (I-210),
 `search-index` (I-206, I-207, I-211), `search-web` (I-208, I-209), `media-web` (I-212),
 `search-soak` (phase 21).*
@@ -279,7 +279,8 @@ folder in kind-then-path order for the Media tab; no new CLI command is needed.
 Stemming, fuzzy matching, regular expressions, PDF or Office text, EXIF, content past
 `search.max_file`, a shared query history, a node talking to a metadata provider (only
 the CLI's scrape does, §11), providers beyond TMDB, MusicBrainz and the Cover Art Archive
-(TVDB, fanart.tv, IGDB, ScreenScraper), scraping games, replacing a sidecar that exists,
+(TVDB, fanart.tv, IGDB, ScreenScraper), a game's facts and description (a `gamelist.xml`
+is never written), replacing a sidecar that exists,
 a scheduled or automatic scrape, subtitles, watched state, transcoding, a music artist
 page beyond the biography and art, launching or emulating a game, reading a ROM's header
 and matching ROMs against DAT files.
@@ -289,7 +290,8 @@ and matching ROMs against DAT files.
 The catalogue (§8) is only as rich as the sidecars beside the media. `tailraid media
 scrape` fills the gaps: run on any member device, it lists the library items that lack
 a sidecar or art, looks each one up with **TMDB** (films, shows, seasons, episodes) or
-**MusicBrainz and the Cover Art Archive** (album covers), and writes the missing files
+**MusicBrainz and the Cover Art Archive** (album covers) or the **libretro thumbnails**
+(a game's box art, by its No-Intro or Redump name), and writes the missing files
 into the volume under the names §8 already reads. Nothing on the read side changes: the
 next index pass (§5) picks the files up like ones a person or tinyMediaManager wrote.
 
@@ -306,7 +308,7 @@ reason.
 | Command | Does |
 |---|---|
 | `tailraid media key` | reads a TMDB API key (v3 key, or a v4 read token) from `TAILRAID_TMDB_API_KEY` or stdin, checks it with one `GET /3/configuration`, and keeps it in `<data_dir>/tmdb.key`, mode 0600, on this device only (I-302); prints TMDB's attribution |
-| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>` or `--id mbid:<uuid>` for a single item path |
+| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path |
 
 **The plan.** `scrape_plan` answers, for each item under the paths in catalogue order,
 its path, kind, the analysed title and year (§8a), its seasons and episode files with
@@ -322,16 +324,25 @@ thing the catalogue reads, and it is *present* when any name §8 accepts for it 
 | season | poster | `seasonNN-poster.jpg` (`season-specials-poster.jpg`) in the show folder | `poster.*`, `folder.*` in the season folder |
 | episode | nfo · thumb | `<stem>.nfo` · `<stem>-thumb.jpg` | |
 | album | cover | `cover.jpg` | a track's embedded picture, `cover.*`, `folder.*` |
+| game file | boxart | `<stem>.png` beside it | the `gamelist.xml` image, `images/<stem>*`, `media/boxart/<stem>*`, `boxart/<stem>*` (§8b) |
+| game disc set's folder | boxart | `boxart.png` inside it | `cover.*`, `folder.*` |
 
 Images are the provider's own files at a fixed size (TMDB `w780` posters, `w1280`
-backdrops, `w300` stills; the Cover Art Archive's `front-500`), re-encoded never.
+backdrops, `w300` stills; the Cover Art Archive's `front-500`; libretro's `Named_Boxarts`
+PNG), re-encoded never. A game is planned only on a platform whose libretro system the
+platform table names (§8b; not the Switch); its facts and description stay with a
+`gamelist.xml`, which a scrape never writes.
 
 **Matching** (I-301). The query is the analysed title, with the year when the name has
 one. Titles compare after the tokenizer of §3 (NFKC, case-folded, punctuation as
 spaces). A result is a **clear match** when it is the only result whose title or
 original title equals the query's and, when the query has a year, whose year (a film's
 release year, a show's first air year) equals it too; an album's clear match is the only
-release group whose artist and title both equal the tags'. A clear match is used
+release group whose artist and title both equal the tags'. A game's box art is the set's name equal to
+the file's own (a disc set's folder name) with each of ``&*/:`<>?\|`` as `_`, as libretro files
+them; else the only name whose title (before its first tag) equals the game's analysed
+title or the file's own; else the only one of those tagged with one of the game's regions.
+The set's names come from its index page, fetched once per system a run. A clear match is used
 without asking. Otherwise, on a terminal the CLI lists the top five (title, year, the
 first line of the overview) and takes a number, `s` to skip or an id; without a
 terminal the item is skipped and listed in the summary; `--yes` takes the top result.
@@ -356,7 +367,8 @@ many files it wrote for how many items, and the items it skipped and why.
 (+https://github.com/zombar/tailraid)`, JSON bodies read through a 4 MiB limit and
 images through 20 MiB, a 429 retried after its `Retry-After` at most three times. It
 speaks only to `api.themoviedb.org`, `image.tmdb.org`, `musicbrainz.org` and
-`coverartarchive.org`; MusicBrainz is asked at most once a second, as its rules ask;
+`coverartarchive.org` (and the `archive.org` hosts the archive redirects an image to) and
+`thumbnails.libretro.com`, a redirect anywhere else refused; MusicBrainz is asked at most once a second, as its rules ask;
 TMDB with at most four requests in flight. The key goes only to `api.themoviedb.org`
 (as `api_key`, or as a bearer token for a v4 token), never to a node, and never into a
 log line or an error (a request's URL is printed with the key removed). TMDB's terms
@@ -378,12 +390,16 @@ the Cover Art Archive data are CC0 and need none.
   slot's art in the catalogue entry (poster, fanart, thumb, season poster, album cover).
 - **I-301** — A clear match (the only result whose tokenized title or original title,
   and year when the name has one, equal the query's; for an album the only release group
-  whose artist and title equal the tags') is taken without asking; any other result is
+  whose artist and title equal the tags'; for a game the set's name equal to its file's,
+  else the only one of its title, else the only one of those of its regions) is taken
+  without asking; any other result is
   taken only by the user's choice, `--yes` or `--id`, and without a terminal the item is
   skipped and reported; the same answers give the same matches.
 - **I-302** — The TMDB key lives only in `<data_dir>/tmdb.key` (mode 0600) on the device
   that saved it, travels only to `api.themoviedb.org`, and never appears in a log line,
-  an error or a node request; the client speaks only to the four provider hosts, sends
+  an error or a node request; the client speaks only to the provider hosts (TMDB's two,
+  MusicBrainz, the Cover Art Archive and the `archive.org` hosts it redirects to, and
+  `thumbnails.libretro.com`), sends
   its user agent, reads bounded bodies, retries a 429 at most three times after its
   `Retry-After`, and asks MusicBrainz at most once a second.
 - **I-206** — The index is written only by the leader, only under `/.tailraid/index`,
@@ -443,11 +459,11 @@ the Cover Art Archive data are CC0 and need none.
 
 | Invariant | Tests |
 |---|---|
-| I-298 | stub `TestStub_I_298` until the `media-scrape` PR |
-| I-299 | stub `TestStub_I_299` until the `media-scrape` PR |
-| I-300 | stub `TestStub_I_300` until the `media-scrape` PR |
-| I-301 | stub `TestStub_I_301` until the `media-scrape` PR |
-| I-302 | stub `TestStub_I_302` until the `media-scrape` PR |
+| I-298 | `TestNoNodePackageImportsScrape` |
+| I-299 | `TestScrapePlan_Slots`, `TestScrapePlan_SameOnEveryNode`, `TestPlanPage_Sizes_Table`, `TestPlanPage_Under`, `TestRun_WritesMissingSlotsOnly`, `TestWebWriter_ExclusiveCreate` |
+| I-300 | `TestNFO_RoundTrip_Table`, `TestScrapePlan_Slots` |
+| I-301 | `TestClear_Table`, `TestClearAlbum_Table`, `TestClearGame_Table`, `TestRun_UnclearMatch_Table` |
+| I-302 | `TestClient_KeyOnlyToTMDB_UserAgent_Redacted`, `TestClient_ProviderHostsOnly`, `TestClient_429Retries_BoundedBody`, `TestClient_MusicBrainzOncePerSecond`, `TestKey_SavedPrivate_EnvWins` |
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |

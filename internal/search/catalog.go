@@ -370,6 +370,10 @@ type catalogue struct {
 	games func(meta.Inode) (map[string]GameInfo, bool)
 	out   []Entry
 	seen  map[meta.Ino]bool
+	// note, when set, hears of each item the walk adds: the folder its sidecars live in,
+	// the stem a file item's sidecars are named after, whether an .nfo was found and an
+	// album's first track (the scrape's plan, docs/18 §11)
+	note func(e Entry, dir meta.Ino, stem string, nfo bool, track meta.Ino)
 }
 
 // dirIndex is a folder's live children by name, and in name order.
@@ -419,9 +423,16 @@ func (c *catalogue) sidecar(d dirIndex, names ...string) (NFO, bool) {
 	return NFO{}, false
 }
 
-func (c *catalogue) add(e Entry) {
+// noted adds e and, when it was new, tells note about it.
+func (c *catalogue) noted(e Entry, dir meta.Ino, stem string, nfo bool, track meta.Ino) {
+	if c.add(e) && c.note != nil {
+		c.note(c.out[len(c.out)-1], dir, stem, nfo, track)
+	}
+}
+
+func (c *catalogue) add(e Entry) bool {
 	if c.seen[e.Ino] { // a library inside a library is its own section (I-210)
-		return
+		return false
 	}
 	c.seen[e.Ino] = true
 	if e.SortTitle == "" {
@@ -431,6 +442,7 @@ func (c *catalogue) add(e Entry) {
 		e.EpisodeTo = e.Episode
 	}
 	c.out = append(c.out, e)
+	return true
 }
 
 func applyNFO(e *Entry, n NFO) {
@@ -459,7 +471,13 @@ func applyNFO(e *Entry, n NFO) {
 // and each folder's children in name order, so every node derives the same list.
 func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool), games func(meta.Inode) (map[string]GameInfo, bool)) []Entry {
 	c := &catalogue{src: src, nfo: nfo, tags: tags, games: games, seen: map[meta.Ino]bool{}}
-	libs := src.Libraries()
+	c.walk()
+	return c.out
+}
+
+// walk derives every library's entries into c.out.
+func (c *catalogue) walk() {
+	libs := c.src.Libraries()
 	// a nested library is its own section: claim every library folder first
 	for _, l := range libs {
 		c.seen[l.Ino] = true
@@ -477,7 +495,6 @@ func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool
 		case meta.LibraryNone:
 		}
 	}
-	return c.out
 }
 
 func (c *catalogue) movies(lib meta.Ino) {
@@ -503,25 +520,27 @@ func (c *catalogue) movies(lib meta.Ino) {
 			vs := stem(video.Name)
 			e := Entry{Ino: k.Ino, Lib: lib, Kind: EntMovie, Video: video.Ino, Season: -1}
 			filmName(&e, Analyze(k.Name, nil, CtxMovies), Analyze(video.Name, []string{k.Name}, CtxMovies))
+			_, hasNFO := md.file("movie.nfo", vs+".nfo", k.Name+".nfo")
 			if n, ok := c.sidecar(md, "movie.nfo", vs+".nfo", k.Name+".nfo"); ok {
 				applyNFO(&e, n)
 			}
 			e.Poster = md.art("poster", vs+"-poster", "folder")
 			e.Fanart = md.art("fanart", vs+"-fanart")
 			e.Thumb = md.art(vs + "-thumb")
-			c.add(e)
+			c.noted(e, k.Ino, "", hasNFO, 0)
 		case k.Type == meta.TFile && IsVideo(k.Name):
 			vs := stem(k.Name)
 			e := Entry{Ino: k.Ino, Lib: lib, Kind: EntMovie, Video: k.Ino, Season: -1}
 			a := Analyze(k.Name, nil, CtxMovies)
 			filmName(&e, a, a)
+			_, hasNFO := d.file(vs + ".nfo")
 			if n, ok := c.sidecar(d, vs+".nfo"); ok {
 				applyNFO(&e, n)
 			}
 			e.Poster = d.art(vs + "-poster")
 			e.Fanart = d.art(vs + "-fanart")
 			e.Thumb = d.art(vs + "-thumb")
-			c.add(e)
+			c.noted(e, lib, vs, hasNFO, 0)
 		}
 	}
 }
@@ -552,14 +571,15 @@ func (c *catalogue) shows(lib meta.Ino) {
 		e := Entry{Ino: show.Ino, Lib: lib, Kind: EntShow, Season: -1}
 		sn := Analyze(show.Name, nil, CtxTV)
 		e.Title, e.Year, e.Quality, e.Languages = sn.Title, sn.Year, sn.Quality, sn.Languages
+		_, hasNFO := sd.file("tvshow.nfo")
 		if n, ok := c.sidecar(sd, "tvshow.nfo"); ok {
 			applyNFO(&e, n)
 		}
 		e.Poster = sd.art("poster", "folder")
 		e.Fanart = sd.art("fanart")
 		e.Banner = sd.art("banner")
-		c.add(e)
-		c.episodes(lib, show.Ino, sd, e.Title, -1, show.Name)
+		c.noted(e, show.Ino, "", hasNFO, 0)
+		c.episodes(lib, show.Ino, show.Ino, sd, e.Title, -1, show.Name)
 		for j := range sd.kids {
 			k := &sd.kids[j]
 			n, ok := SeasonOf(k.Name)
@@ -573,8 +593,8 @@ func (c *catalogue) shows(lib meta.Ino) {
 				name = "season-specials"
 			}
 			s.Poster = firstOf(sd.art(name+"-poster"), nd.art("poster", "folder"))
-			c.add(s)
-			c.episodes(lib, show.Ino, nd, e.Title, n, k.Name, show.Name)
+			c.noted(s, show.Ino, name, false, 0) // a season's poster is named in the show's folder
+			c.episodes(lib, show.Ino, k.Ino, nd, e.Title, n, k.Name, show.Name)
 		}
 	}
 }
@@ -588,7 +608,7 @@ func twoDigits(n int) string {
 
 // episodes lists the episode files of one folder: the show's own (season from the
 // name) or a season folder's (its number when the name does not say).
-func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, folderSeason int, dirs ...string) {
+func (c *catalogue) episodes(lib, show, dir meta.Ino, d dirIndex, showTitle string, folderSeason int, dirs ...string) {
 	for i := range d.kids {
 		f := &d.kids[i]
 		if f.Type != meta.TFile || !IsVideo(f.Name) {
@@ -617,6 +637,7 @@ func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, f
 		default:
 			e.Title = "Episode " + strconv.Itoa(a.Absolute)
 		}
+		_, hasNFO := d.file(vs + ".nfo")
 		if n, ok := c.sidecar(d, vs+".nfo"); ok {
 			applyNFO(&e, n)
 			if n.Season >= 0 && n.Episode > 0 {
@@ -625,7 +646,7 @@ func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, f
 			}
 		}
 		e.Thumb = d.art(vs + "-thumb")
-		c.add(e)
+		c.noted(e, dir, vs, hasNFO, 0)
 	}
 }
 
@@ -735,11 +756,12 @@ func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) boo
 			e.Genres = []string{doc.Genre}
 		}
 	}
+	_, hasNFO := d.file("album.nfo")
 	if n, ok := c.sidecar(d, "album.nfo"); ok {
 		applyNFO(&e, n)
 	}
 	e.Poster = d.art("cover", "folder")
-	c.add(e)
+	c.noted(e, dir.Ino, "", hasNFO, tracks[0].Ino)
 	return true
 }
 
@@ -860,7 +882,7 @@ func (c *catalogue) roms(lib meta.Ino) {
 			games, _ = c.games(gl)
 		}
 		g := &gameWalk{c: c, lib: lib, platform: k.Ino, plat: p, games: games}
-		g.walk(pd, "", nil, 3)
+		g.walk(pd, k.Ino, "", nil, 3)
 		g.flush()
 		e := Entry{Ino: k.Ino, Lib: lib, Kind: EntPlatform, Title: p.title, Platform: p.title, Tracks: g.count, Season: -1}
 		e.Poster = pd.art("platform", "poster", "folder", "logo")
@@ -885,12 +907,13 @@ type gameCand struct {
 	file meta.Inode // the file a disc set's folder plays: its cue, m3u or gdi
 	rel  string     // its path below the platform folder
 	dir  dirIndex   // its folder's
+	at   meta.Ino   // the folder its art goes in: its own for a disc set, else its parent
 	name Name
 }
 
 // walk visits a folder below the platform: rel is its path below the platform folder,
 // dirs the folders above it nearest first.
-func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
+func (g *gameWalk) walk(d dirIndex, at meta.Ino, rel string, dirs []string, depth int) {
 	for i := range d.kids {
 		k := &d.kids[i]
 		r := path.Join(rel, k.Name)
@@ -900,10 +923,10 @@ func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
 			}
 			kd := g.c.list(k.Ino)
 			if set, ok := discSet(kd); ok { // a folder of one game's disc images
-				g.cands = append(g.cands, gameCand{in: *k, file: set, rel: r, dir: kd, name: Analyze(set.Name, append([]string{k.Name}, dirs...), CtxRoms)})
+				g.cands = append(g.cands, gameCand{in: *k, file: set, rel: r, dir: kd, at: k.Ino, name: Analyze(set.Name, append([]string{k.Name}, dirs...), CtxRoms)})
 				continue
 			}
-			g.walk(kd, r, append([]string{k.Name}, dirs...), depth-1)
+			g.walk(kd, k.Ino, r, append([]string{k.Name}, dirs...), depth-1)
 			continue
 		}
 		if k.Type != meta.TFile || !g.plat.takes(k.Name) || ext(k.Name) == ".bin" && hasCue(d) {
@@ -913,7 +936,7 @@ func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
 		if slices.Contains(n.Flags, "update") || slices.Contains(n.Flags, "dlc") {
 			continue // part of a game, not one (docs/18 §8b)
 		}
-		g.cands = append(g.cands, gameCand{in: *k, file: *k, rel: r, dir: d, name: n})
+		g.cands = append(g.cands, gameCand{in: *k, file: *k, rel: r, dir: d, at: at, name: n})
 	}
 }
 
@@ -988,7 +1011,11 @@ func (g *gameWalk) flush() {
 		if e.Poster == "" {
 			e.Poster = g.boxArt(*cd)
 		}
-		g.c.add(e)
+		key := cd.in.Name // a disc set: its folder's name; a file: its stem
+		if cd.in.Type != meta.TDir {
+			key = stem(cd.in.Name)
+		}
+		g.c.noted(e, cd.at, key, false, 0)
 		g.count++
 	}
 }

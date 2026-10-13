@@ -123,6 +123,16 @@ tailraid search index                          # run the leader's index pass now
 
 Names are answered live from the metadata. Contents and tags are indexed by the leader every 10 minutes (`search.interval`) into `/.tailraid/index`, inside the volume.
 
+### Posters and descriptions for the Media tab
+
+```sh
+tailraid media key                     # once per device: a free TMDB API key, from TAILRAID_TMDB_API_KEY or stdin
+tailraid media scrape --dry-run        # what would be written
+tailraid media scrape /Films           # write the missing .nfo, posters, backdrops, stills, album covers and game box art
+```
+
+The Media tab reads Kodi sidecars. `media scrape` fills in the missing ones from TMDB (films, shows, seasons, episodes), MusicBrainz with the Cover Art Archive (album covers) and the libretro thumbnails (game box art, by the No-Intro name), and never replaces a file that exists. A clear match is used at once; for anything else it shows the top five on a terminal, or skips with `--yes` not given. Only this command talks to the internet, from the device you run it on. This product uses the TMDB API but is not endorsed or certified by TMDB.
+
 ## Snapshots and mirrors
 
 A **mirror** is a disk given to snapshots. It is attached to any device of the cluster, it never holds the live volume, and it may be offline most of the time: a USB drive you plug in on Sundays is a mirror. While a mirror is online its device snapshots the whole volume onto it every hour, and each snapshot after the first copies only what changed. Every mirror is a complete, independent copy of the history it took: two mirrors are two backups, and either one restores everything it holds, with or without the cluster.
@@ -302,7 +312,7 @@ Every command takes `--json`, and `--node <ip>` to talk to another device. `tail
 | Members and disks | `node ls` · `node describe <name>` · `node promote` · `node demote` · `node add-disk <path>` · `node add-s3 <name>` · `node keys <name>` · `node drain` · `node remove` |
 | Volume | `volume describe` · `volume grow <disk> <size>\|auto` · `volume set-redundancy --k --m\|--auto` · `chunk describe <path\|hash>` |
 | Maintenance | `repair` (also runs every minute) · `gc` · `fsck` |
-| Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` |
+| Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` · `media key` · `media scrape [path]` |
 | Snapshots | `mirror add\|ls\|remove` · `mirror ls\|cat\|export <mirror path> …` · `snapshot ls\|create\|restore` · `versions <path> [--revert\|--copy]` |
 | Recovery | `export <dir>` · `recover --voters <id>` · `stats seal` |
 | Releases | `update [--check\|--rollback\|--restart]` · `version` |
