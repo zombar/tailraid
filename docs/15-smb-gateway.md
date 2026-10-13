@@ -520,6 +520,15 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   Before, every READ ran on the read loop under the share's read lock: one cold chunk's
   network fetch held up every other request on the connection, and with a CREATE, CLOSE
   or rename waiting for the lock, every new request on the share.
+- **I-264** — A directory handle's change notification is the handle's (MS-FSA 2.1.5.10):
+  made by its first CHANGE_NOTIFY and kept until CLOSE, it collects the changes made
+  between requests, so the next request is answered at once with any kept since the last
+  answer; a burst past its queue (64) or past the client's buffer is answered
+  `NOTIFY_ENUM_DIR` and the queue emptied. A CLOSE answers whatever still waits on the
+  handle: a CHANGE_NOTIFY with `STATUS_NOTIFY_CLEANUP` (MS-SMB2 3.3.5.10), a byte-range
+  lock wait with `STATUS_CANCELLED`. Before, the watch lived for one request, so a change
+  in the gap before the next was lost and Explorer's window stayed stale through a copy,
+  and a CLOSE left those requests unanswered with their credits.
 - **I-265** — A CREATE of an existing file whose data access (read, write, append,
   execute, delete; generic rights spelled out, MAXIMUM_ALLOWED as all) another open of
   the file on this share does not share, or whose share access does not admit the data
@@ -568,6 +577,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |
+| I-264 | `TestChangeNotify_WatchOutlivesTheRequest`, `TestClose_AnswersWhatWaitsOnTheHandle`, `TestChangeNotify` |
 | I-265 | `TestCreate_ShareAccess`, `TestSMB_TwoSessions_RenameMovesOtherHandle`, `TestSoak_MultiUserAgainstHarness` |
 | I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
