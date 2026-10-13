@@ -3,6 +3,7 @@ package soak
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -50,9 +51,17 @@ func TestExecute_FailureSavesEvidence(t *testing.T) {
 	if !slices.Equal(e.dirs, want) {
 		t.Fatalf("evidence saved to %v, want %v (once per failing phase)", e.dirs, want)
 	}
+	// the results are JSON lines: decode them (a Windows path is escaped in the raw text)
+	var texts []string
+	for line := range strings.Lines(out.String()) {
+		var rec Record
+		if err := json.Unmarshal([]byte(line), &rec); err == nil && rec.Name == "evidence" {
+			texts = append(texts, rec.Text)
+		}
+	}
 	for _, d := range want {
-		if !strings.Contains(out.String(), d) {
-			t.Errorf("the results do not name %s", d)
+		if !slices.ContainsFunc(texts, func(s string) bool { return strings.Contains(s, d) }) {
+			t.Errorf("the results do not name %s: %q", d, texts)
 		}
 	}
 
