@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"syscall"
 )
 
@@ -243,6 +244,34 @@ func statusFromWriteError(err error) NFSStatus {
 	}
 	if errors.Is(err, syscall.EFBIG) {
 		return NFSStatusFBig
+	}
+	return NFSStatusIO
+}
+
+// namespaceStatus is the RFC 1813 status of a failed REMOVE, RMDIR, RENAME or MKDIR
+// (tailraid, I-238): the filesystem's reason, so a client shows "Directory not empty"
+// or "File exists" rather than "Input/output error". A reason with no status of its own
+// stays NFS3ERR_IO, as a stale gateway's refusal does (docs/07, I-39).
+func namespaceStatus(err error) NFSStatus {
+	switch { // ENOTEMPTY first: Go's errno also matches os.ErrExist for it
+	case errors.Is(err, syscall.ENOTEMPTY):
+		return NFSStatusNotEmpty
+	case errors.Is(err, os.ErrNotExist):
+		return NFSStatusNoEnt
+	case errors.Is(err, os.ErrExist):
+		return NFSStatusExist
+	case errors.Is(err, os.ErrPermission):
+		return NFSStatusAccess
+	case errors.Is(err, syscall.EINVAL):
+		return NFSStatusInval
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return NFSStatusNameTooLong
+	case errors.Is(err, syscall.ENOTDIR):
+		return NFSStatusNotDir
+	case errors.Is(err, syscall.EISDIR):
+		return NFSStatusIsDir
+	case errors.Is(err, syscall.ENOSPC):
+		return NFSStatusNoSPC
 	}
 	return NFSStatusIO
 }
