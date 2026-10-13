@@ -538,7 +538,7 @@ the choice in `localStorage` under `theme`, a per-viewer convenience the server 
 sees. The CSP forbids an inline script, so `src/theme.ts` applies the stored value as the
 first statement of the module, before any view renders; a storage read or write that
 throws (a private window, cleared site data) means system. The glyph is a half-filled disc
-for system, a sun for light and a moon for dark, with the word beside it above 480 px;
+for system, a sun for light and a moon for dark, with the word beside it from 1200 px;
 `title` and `aria-label` read "Theme: dark (tap for system)" (I-200). The Stats page's
 charts follow the theme through the chart tokens below (§Charts).
 
@@ -564,17 +564,111 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 
 ### Space and shape
 
-- Spacing steps 4 / 8 / 12 / 16 / 24; `--gutter` 16 px on every width; `main` max 1100 px.
-- Radius 6 px; pills 999 px. Borders are 1 px `--line`. No shadows except the toast.
-- Sections stack in one column with 24 px gaps; inside a section 12 px. Cards and tiles sit
-  in `auto-fill` grids (`minmax(320px, 1fr)` cards, `minmax(140px, 1fr)` stat tiles,
-  `minmax(196px, 1fr)` file tiles, five to a row at full width) so a phone gets one
-  column without a media query.
-  Breakpoints only hide or loosen: 480 px drops the mtime column and the header's node
-  text and lets the file tiles pack two to a row.
-- Touch targets ≥ 40 px (buttons, tabs, file rows 44 px). Focus is a 2 px accent outline.
-- No horizontal page scroll at 360 px: every grid child has `min-width: 0`, names use
-  `overflow-wrap: anywhere`, the file table is `table-layout: fixed`.
+The spacing follows Material 3's rules without its libraries (I-286):
+
+- **One 4 px grid.** The steps are tokens: `--sp-1` 4, `--sp-2` 8, `--sp-3` 12,
+  `--sp-4` 16, `--sp-6` 24, `--sp-8` 32. Every padding, margin, gap and offset is a
+  step or a multiple of 4 px. The exceptions are 1 and 2 px hairlines (borders, a focus
+  offset, the inner step of a dense row), and the end dot of a sparkline, which is
+  centred on the line's last point by half its own size.
+- **The page margin follows the window.** `--gutter` is 16 px on a phone and 24 px from
+  600 px. A container's padding, `--pad`, is 12 px and 16 px at the same widths.
+  `main` is at most `--page` (1100 px) wide, and the selection bar and the toasts line
+  up with its column.
+- **Padding by role:**
+  - Containers (card, host card, stat tile, note, banner, chart card) take `--pad`.
+  - Rows (menu row, disk row, upload, search hit, picker row, queue row) take 8 px
+    vertical and 12 px horizontal.
+  - A text button is 16 px either side, a segment or a dense button 12 px.
+  - An icon button is square, with a 24 px glyph.
+  - The dialog takes 24 px.
+- **Inside a section 12 px, between sections 24 px.** A section's `h2` has no margin of
+  its own: the section's gap is the space under its rule.
+- **Grids.** Cards and tiles sit in `auto-fill` grids whose minimum is clamped to the
+  container, so a phone gets one column without a media query (I-290):
+  - cards: `minmax(min(320px, 100%), 1fr)`
+  - stat tiles: `minmax(min(140px, 100%), 1fr)`
+  - file tiles: `minmax(min(196px, 100%), 1fr)`, five to a row at full width
+  - posters: `minmax(min(140px, 100%), 1fr)`
+- **Shape.** The radius is 6 px; pills are 999 px, and a phone's bottom sheet is 12 px at
+  the top. Borders are 1 px `--line`.
+- **Elevation.** Only floating surfaces cast a shadow: the toast, a menu, the selection
+  bar, the dialog and the hero's poster. They share one token, `--shadow` (Material's
+  level 2; stronger on navy). A dialog's backdrop is `--scrim`.
+- **Ink on a status colour** (the slot cell's glyph) is `--on-status`, and the ground
+  behind a video is `--media-bg`. Both are the same in either theme. No rule outside the
+  token blocks names a colour, so every rule follows the theme (I-283). The two dark
+  blocks, the one under `prefers-color-scheme` and the one under `data-theme`, hold the
+  same values (I-284).
+- **No horizontal page scroll at 320 px.** Every grid child has `min-width: 0`, names use
+  `overflow-wrap: anywhere`, the file table is `table-layout: fixed`, a segmented button
+  scrolls inside itself, and a menu is never wider than the window.
+
+### Layout
+
+**Window classes.** The UI asks the width only through Material's window classes:
+compact (< 600 px), medium (600–839), expanded (840–1199) and large (≥ 1200). The
+queries are `(max-width: 599px)`, `(min-width: 600px)`, `(max-width: 839px)`,
+`(min-width: 840px)`, `(max-width: 1199px)` and `(min-width: 1200px)` (I-287). A class
+only hides, stacks or loosens; the unqueried rules are the widest layout that still
+fits.
+
+**Targets.** The base styles are touch-sized: buttons, tabs, menu and picker rows,
+inputs and summaries are at least 48 px, and file, track and snapshot rows are 48 px
+tall. Under `@media (pointer: fine)` a mouse gets the denser sizes: 40 px controls, 44 px
+file rows, and 32 px for the small buttons in rows (I-288). A control that hover reveals
+(the play button of a row or a tile) is always shown under `@media (hover: none)`
+(I-289).
+
+**Layers.** The z-index takes one of four values (I-291):
+- 1: a control over its tile
+- 3: the bottom bars and the toasts
+- 4: the menus and a phone's bottom sheet
+- 5: the sticky header
+
+**Type.** Font sizes come from the scale of *Type*: 11, 12, 13, 14, 15, 17, 18, 20 and
+22 px, plus 9 and 10 px for chart labels and the warning glyph (I-292).
+
+How each part responds:
+
+| Part | Compact (< 600) | Medium (600–839) | Expanded (≥ 840) |
+|---|---|---|---|
+| Header | row 1: brand, health pill, theme icon; row 2: the tabs spread across the width; row 3: the search | row 1: brand, pill, theme; row 2: tabs and search | one row: brand, tabs, search (160–320 px), pill, theme; the node's name and the theme's word from 1200 |
+| Now-playing bar (`--nowbar-h`) | 120 px, two rows: cover, titles, transport; then seek, repeat and shuffle, queue | 120 px, two rows: cover, titles, transport, modes, queue; then the seek bar | 64 px, one row |
+| Queue | sits on top of the bar (`bottom: var(--nowbar-h)`), the artist column hidden | on top of the bar | on top of the bar |
+| Selection bar | icon buttons (the label in `aria-label` and `title`) | icon and label | icon and label, aligned to `main` |
+| Menus | a bottom sheet over the page and the bars | under the summary, end-aligned after the toolbar's spacer, capped at the window | the same |
+| File table | modified column hidden | all columns | all columns |
+| Disk rows | the figures drop under the bar | one line per target | one line per target |
+| Hero | 96 px poster beside the title and facts; plot, actions, people, seasons and episodes run the full width | 160 px poster column | 160 px poster column |
+| Markdown | 32 px gutter, smaller heading markers | 48 px gutter | 48 px gutter |
+
+`main`'s bottom padding and the offsets of the selection bar and the toasts follow
+`--nowbar-h`, so nothing is measured in the page's script.
+
+### Icons
+
+The icons are **Material Symbols Outlined** (Apache-2.0, from
+`github.com/google/material-design-icons` at a pinned commit; the licence and the list
+are in `third_party/material-symbols/`): weight 400, grade 0, the 24 px optical size,
+`viewBox="0 -960 960 960"`, drawn with `fill: currentColor`. A glyph is 20 px in text and
+rows and 24 px in an icon button (`.icon-btn`). The transport and the playing marker use
+the filled variants, as music players do. No text glyph stands in for an icon: `⏮ ⏭ ⏸ ▶
+⟳ ⤮ ↗` render as colour emoji on iOS (I-293).
+
+| Use | Symbol |
+|---|---|
+| folder, file, link, image | `folder`, `draft`, `link`, `image` |
+| video file, audio file, album, movie or show without art | `movie`, `music_note`, `album`, `movie` |
+| search, theme system/light/dark | `search`, `contrast`, `light_mode`, `dark_mode` |
+| previous, play, pause, next (filled) | `skip_previous`, `play_arrow`, `pause`, `skip_next` |
+| repeat, repeat one, shuffle, queue, playing row | `repeat`, `repeat_one`, `shuffle`, `queue_music`, `equalizer` |
+| remove, open a member's page, next file | `close`, `open_in_new`, `chevron_right` |
+| selection: delete, move, rename, download, restore | `delete`, `drive_file_move`, `edit`, `download`, `restore_from_trash` |
+| disclosure and menu markers (CSS masks) | `chevron_right` turned down when open, `arrow_drop_down` |
+
+The status glyphs stay text: the slot cell's `!` and `×`, the warning disc's `!` and the
+sort marks `▴ ▾`. None of them is drawn as emoji.
 
 ### Components
 
@@ -598,7 +692,7 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±25 % (the repairer's `RebalanceSkew`, docs/14 §7: within it nothing moves), `warn` past 25 %, `bad` past 50 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
 | Diskless host | `.host-row.diskless` + `.host-note` | a host card with no target rows and the note `gateway only · no disks`; its border dimmed |
 | Warning icon | `.warn-icon` | the warnings strip's amber `!` disc at 14 px, inline after a name; the title says why (a target on the same physical disk as others: they fail together) |
-| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; at ≤ 480 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
+| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; below 600 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
 | Slot cell | `.cell` | present (green), `warn` `!` live but absent, `bad` `×` dead, `unplaced` dashed, `unverified` 50 % |
 | Panel | `details.panel` | collapsed by default; summary names the count; a `.loading` row ("loading 64 of 1,946…") while a page is in flight, a "Retry" button in the error row |
 | Empty / error | `.empty`, `.error` | "empty folder"; the error block quotes the server's `error` string and status |
@@ -611,10 +705,10 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Rename form | `.inline-form.rename` | the new-folder form with the entry's name pre-filled and selected up to the extension |
 | Deleted row / tile | `tr.deleted`, `.ftile.deleted` | dimmed to `--dim`, a `.badge` "deleted · 27 d" after the name, no dirty marker, links lead into the trash routes |
 | Trash banner | `.banner.deleted` > text + `.actions` (Restore · Delete now) | above a deleted folder's listing and a deleted file's view: "Deleted 3 d ago · gone for good in 27 d"; after a 409 the text becomes "`Day 2` is taken in `Concerts 2024` · restore under another name" and the rename form takes the banner's next line (no nested box), or the picker opens for a parent that is itself deleted |
-| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img`, or the icon) + `.tname` + `.tmeta` | `auto-fill, minmax(196px, 1fr)` with a 16 px gap: five per row at the page's full width, four as it narrows, two on a phone (`minmax(140px, 1fr)` under 480 px); the thumb is 16:9, letterboxed on `--surface`; `dir`, `selected`, `dirty` (amber "syncing" in `.tmeta`), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (glyph badges in the corner), `playing` (audio) |
+| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img` or the icon, `.ov.br` the duration, else the size or the item count, `.ov.bl` the playing marker, the play button in the middle) + `.tname` + `.tmeta` (kind left, modified right) | a media card: the picture edge to edge with an 8 px radius, no frame or padding, one line of title (ellipsis), one line of meta; `auto-fill, minmax(min(196px, 100%), 1fr)` with 24 px between rows and 16 px between columns (`minmax(min(140px, 100%), 1fr)`, 16/12 px below 600 px); the thumb is 16:9, cropped to fill; hover lifts it with `--shadow`; `selected` rings it in the accent; `dir`, `dirty` (amber "· syncing" after the meta), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (badges on `--overlay` in the top corner), `playing` (audio) |
 | NSFW veil | `.thumb.nsfw`, `.viewer.nsfw` > `.veil` | `filter: blur(14px) scale(1.1)` inside `overflow: hidden`; the veil reads "nsfw · tap to show"; `.revealed` removes both for the session |
 | Album | `section.album` > `.album-head` (`img.cover`, `h1`, `.artist`, `.meta`) + `table.tracks` (`.no`, `.title`, `.dur`) | the playing row is `tr.playing` with the equaliser glyph in `.no`; "Play all" and "Shuffle" are toolbar buttons |
-| Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, 56 px, hidden until something plays (`hidden`); `expanded` shows the queue panel above it; at ≤ 480 px the seek drops under the titles and the cover shrinks to 40 px; the selection bar sits above it when both show |
+| Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, `--nowbar-h` tall (64 px on one row from 840 px, 120 px on two rows below; see *Layout*), hidden until something plays (`hidden`); the transport, the modes and the queue's remove are icon buttons; `expanded` shows the queue panel above it; below 600 px the cover shrinks to 40 px; the selection bar sits above it when both show |
 | Queue | `.queue` > `ol` > `li.qrow` (`.no`, `.title`, `.artist`, `.dur`, remove button) | the current item is `li.playing`; items can be removed; "Clear" empties it |
 | Cache card | `.card.cache` > `.name-row` + bar rows + `.pins` > `.pin-row` | used and pinned of `cache.size`; one row per pin: path, a bar of cached over total, the figures; `warn` when the data disk is under 20 % free |
 | Range picker | `.toolbar .seg` > `button[aria-pressed]` × 7 | 1h · 6h · 24h · 7d · 30d · 1y · custom; the pressed one is the range in the hash; custom opens the range form on the toolbar's next line |
@@ -622,22 +716,22 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
 | Live pill | `.pill.ok` "live" / `.pill` "paused" | at the toolbar's right: live while the range ends now and the tab is visible (a refresh every 5 s), paused for a custom range or a hidden tab; the title says when the last fetch landed |
 | Member menu | `.toolbar details.menu` > `summary` ("Node: pike") + `.menu-body` of `a.menu-row` (`.dot` + name + `.small.dim` state) + `a.menu-link` (↗) | one row per device member with its live dot and state; choosing a row re-renders the node section from this gateway; the ↗ link opens that member's own Stats page at the same range (`http://<tsIP>:<web>/#/stats?…`); a member without a web listener has no link; "all nodes" is the first row |
 | Chart card | `.charts` > `.chart-card` > `svg.chart` + `.small.dim` caption | the soak report's chart drawn in the page's tokens: text in `--text` and `--dim`, grid in `--line`, series in `--c0`…`--c7`, status cells in the status colours, the spread bins in the under/even/over tokens; one chart per row at every width; the caption names the unit, the window and the tier; hover shows the chart's `<title>` tooltips |
-| Search box | `header.top form.search` > `input[type=search]` + `button` | in the header after the tabs; `/` focuses it, Escape clears it, Enter opens `#/search/<q>`; one focus ring around input and button; below 900 px it takes a second header row of its own |
+| Search box | `header.top form.search` > `input[type=search]` + `button` | in the header after the tabs; `/` focuses it, Escape clears it, Enter opens `#/search/<q>`; one focus ring around input and button; below 840 px it shares the tabs' row, and takes a row of its own on a phone |
 | Search results | `section.results` > `.toolbar` (the count, an "in this folder" `label.toggle`) + `ol` > `li.hit` > `a.hname` (mono) + `.hpath` (dim) + `.hwhy` (`.badge` `name`, `tags` or `content`) + `.hsnip` (the snippet with `mark`) | `.empty` "no matches for `…`"; a `.note` "index unavailable: names only" when the node has no index; a `.hsnip.loading` row while a snippet is fetched |
 | Markdown document | `article.md.md-doc` | a 760 px measure with a gutter hairline on the left and faint `##`, `###` markers in the margin before `h3`–`h6` (the file's `#` is the page's `h2`); headings in mono as the UI's; code on `--surface`; tables with `--line` hairlines; `mark` in the accent tint; "Rendered \| Raw" as a `.seg` in the toolbar |
 | Library section | `section.lib` > `details` > `summary` > `h2` (▾/▸, title + `.badge.lib` kind + `.count`) + `.toolbar` (`.seg` title \| year \| added) + `.posters` | one per flagged folder; `movies`, `tv`, `music` set the poster shape; a section folds away on its heading, the choice kept per viewer in `localStorage`, and a folded library is listed only once opened |
-| Poster grid | `.posters` > `a.poster` > `.art` (`img`, or the kind glyph) + `.ptitle` + `.pyear` | `auto-fill, minmax(140px, 1fr)` (120 px under 480 px); `.art` is 2:3 letterboxed on `--surface`, square for music; `nsfw` blurs the art; `missing` shows the kind glyph over the title; loaded lazily like tiles |
+| Poster grid | `.posters` > `a.poster` > `.art` (`img`, or the kind glyph; `.ov.br` the runtime or the season count) + `.ptitle` + `.pyear` (year left, a note right) | the file tile's card: `auto-fill, minmax(min(140px, 100%), 1fr)` (120 px under 600 px), 24/16 px gaps; `.art` is 2:3 cropped to fill on `--surface` with an 8 px radius and no frame, square for music; `nsfw` blurs the art; `missing` shows the title card in a dashed outline; loaded lazily like tiles |
 | Hero | `section.hero` > `img.backdrop` + `.hero-body` (`img.poster`, `h1`, `.facts`, `.plot`, `.actions`, `.people`) | the fanart as a full-width background 32 vh tall, `object-fit: cover`, darkened to 55 % and faded into `--bg` with a gradient so the ink stays legible in both themes; the poster overlaps its bottom edge; `.facts` year · runtime · rating · genres · mpaa in `--dim`; `.plot` sans 15/1.55 on a 65-ch measure; `.actions` "Play" and "Open folder" buttons; `.people` director and up to six actors as text chips; `.hero.no-art` is a plain `--surface` band, `.hero.poster-only` uses the poster's blurred copy at low opacity |
 | Season strip | `.seasons` > `button[aria-pressed]` per season | the selected season's episodes follow; "Specials" last |
 | Episode list | `table.episodes` > `tr` > `.no` (`SnnEnn` mono) + `.thumb` (16:9 at 96 px) + `.title` + `.dur` + `.plot.small.dim` (clamped to two lines) | a row opens the player; `playing` on the one in the bar |
 | Library badge | `.badge.lib` | the mono word `movies`, `tv` or `music` after the breadcrumb's last segment (effective) and in rows and tiles (own) |
 | Library menu row | `.toolbar details.menu` > `label.menu-row.library` > `select` | "Library" with none · movies · tv · music; disabled with the reason on the root, in the trash and while a member reads a codec older than 6 |
-| Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word hides below 480 px; cycles on tap |
+| Theme switch | `header.top button.theme` > `svg.icon` + `span` | system (half disc) · light (sun) · dark (moon); the word shows from 1200 px; an icon button below; cycles on tap |
 | As-of menu | `.toolbar details.menu.asof` > `summary` (a dim "as of", then "Now" or the snapshot's name) + `.menu-body` of `.menu-group` (the mirror's name, its online dot) and `label.menu-row` (radio + name (+ `.badge` manual) + `.small.dim` when and kind) + `.menu-foot` | floats over the listing (the folder menu's z-order); newest first per mirror after "Now"; an offline mirror's rows `aria-disabled` with "offline: attach it to browse"; the foot counts snapshots and links the dashboard |
 | Snapshot banner | `.banner.snapshot` > text + `.actions` (Restore folder to… · Back to now) | above a listing or a file view as of a snapshot: "As of `2026-10-12-0900Z` on `pike-m1` · taken 3 h ago · read-only · 11 items · 2.3 GiB"; accent border and tint (information, not a warning) |
-| Versions list | `details.panel` > `table.versions` > `tr` (`td.asof`, `td.size`, `td.mtime`, `td.acts`) + `.small.dim` offline line | one row per distinct content, newest first; `td.asof` the snapshot range in mono with the count and mirror under it; the live content `tr.current` with a `.badge.strong` "current" and its holders or "in no snapshot yet"; others View · Revert · Save a copy; the table sizes to its content, the actions never wrap; at ≤ 480 px the modified column drops |
+| Versions list | `details.panel` > `table.versions` > `tr` (`td.asof`, `td.size`, `td.mtime`, `td.acts`) + `.small.dim` offline line | one row per distinct content, newest first; `td.asof` the snapshot range in mono with the count and mirror under it; the live content `tr.current` with a `.badge.strong` "current" and its holders or "in no snapshot yet"; others View · Revert · Save a copy; the table sizes to its content, the actions never wrap; below 600 px the modified column drops |
 | Mirror card | `.cards` > `.card.mirror` > `.name-row` (dot, name, host, badges) + bar rows (used of the disk; the sync's progress) + `.meta` | `ok` online, `off` dashed offline with "offline 3 d"; `warn` past `stale_after`, under its reserve, or holding an incomplete snapshot (the word says which) |
-| Snapshots table | `section` > `h2` + `.h-sub` (the schedule) + `.snap-head` (Take a snapshot · counts) + `table.snapshots` > `tr` (`td.name` (+ `.badge` manual), `td.mirror`, `td.taken`, `td.holds`, `td.acts` Browse; no delete) | newest first; a syncing row carries `.badge` "syncing 41 %", an incomplete one `.badge.warn` "3 missing"; an offline mirror's actions disabled with the reason; at ≤ 480 px mirror, taken and holds drop under the name |
+| Snapshots table | `section` > `h2` + `.h-sub` (the schedule) + `.snap-head` (Take a snapshot · counts) + `table.snapshots` > `tr` (`td.name` (+ `.badge` manual), `td.mirror`, `td.taken`, `td.holds`, `td.acts` Browse; no delete) | newest first; a syncing row carries `.badge` "syncing 41 %", an incomplete one `.badge.warn` "3 missing"; an offline mirror's actions disabled with the reason; below 600 px mirror, taken and holds drop under the name |
 
 ### Copy
 
@@ -760,9 +854,42 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 24. No page offers to delete a snapshot; lower `keep.hourly` on the leader and watch the mirror's used
     space fall as the next tick thins it; on a machine with no cluster, `tailraid mirror ls <path>` and
     `mirror export` read the disk.
+25. Resize sweep: every page (dashboard, files in list and tiles with a selection, an
+    album with the bar playing and the queue open, Media, a hero, Stats, a markdown file)
+    at 320, 360, 599, 600, 839, 840, 1100 and 1440 px, in light and dark. No horizontal
+    scroll; the header, the bar and the selection bar take the layout of the Layout
+    table; an open menu stays inside the window (a bottom sheet on a phone).
+26. On an iPhone: the transport, the play buttons and the playing row show Material
+    icons, never colour emoji; a row's and a tile's Play shows without hover; every
+    control is easy to hit.
 
 ## Invariants
 
+- **I-283** — No rule of `app.css` outside its token blocks names a colour (hex, a colour
+  function or a colour keyword); a token block sets only custom properties and
+  `color-scheme`. The one literal is the hero's alpha mask.
+- **I-284** — The dark token block under `prefers-color-scheme: dark` and the one under
+  `data-theme="dark"` set the same tokens to the same values; every colour token of the
+  light block has a dark value unless it is listed as the same in both (`--ok`, `--warn`,
+  `--bad`, `--on-status`, `--media-bg`, `--scrim`, `--overlay`).
+- **I-285** — Every `var(--x)` in `app.css`, the lookdev and the TypeScript names a defined
+  custom property, and every custom property `app.css` defines is used.
+- **I-286** — Every padding, margin, gap and offset in `app.css` and the lookdev's own
+  styles is 0, a 1–2 px hairline or a multiple of 4 px, except the listed geometry; the
+  spacing tokens are 4 px steps.
+- **I-287** — Every width query in `app.css` and the lookdev is one of the window classes
+  of *Layout*.
+- **I-288** — A control's `min-height` under 48 px appears only inside
+  `@media (pointer: fine)`.
+- **I-289** — Every selector hidden with `visibility: hidden` until hover is made visible
+  under `@media (hover: none)`.
+- **I-290** — Every `auto-fill` or `auto-fit` grid clamps its minimum with
+  `min(…, 100%)`.
+- **I-291** — Every z-index is a layer of *Layout* (1, 3, 4, 5).
+- **I-292** — Every font size in `app.css` is on the scale of *Layout*.
+- **I-293** — Every icon is a Material Symbols Outlined path under the `0 -960 960 960`
+  viewBox, and no emoji-prone glyph (`⏮ ⏭ ⏸ ▶ ⟳ ⤮ ↗` and the emoji planes) appears in the
+  TypeScript, `index.html` or the lookdev.
 - **I-68** — Every request to the web listener is authorized from the TCP source address
   alone, before any request body is read: the source is a cluster member whose WhoIs
   StableID matches its member record (I-18), or a tailnet device whose WhoIs login name
@@ -988,5 +1115,16 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
+| I-283 | `TestCSS_ColoursOnlyInTokens`, `TestCSS_HasColour_Table` |
+| I-284 | `TestCSS_ThemesDefineTheSameTokens` |
+| I-285 | `TestCSS_VarsDefinedAndUsed` |
+| I-286 | `TestCSS_SpacingOnGrid`, `TestCSS_OnGrid_Table` |
+| I-287 | `TestCSS_BreakpointsAreWindowClasses` |
+| I-288 | `TestCSS_DenseTargetsOnlyForFinePointers`, `TestCSS_Interactive_Table` (manual check 26) |
+| I-289 | `TestCSS_HoverRevealHasTouchFallback` |
+| I-290 | `TestCSS_AutoFillMinimumsClamp` (manual check 25) |
+| I-291 | `TestCSS_ZLayers` |
+| I-292 | `TestCSS_FontScale` |
+| I-293 | stub `TestStub_I_293` until the TypeScript lands its icons (manual check 26) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.
