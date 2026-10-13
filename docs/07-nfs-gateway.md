@@ -290,6 +290,12 @@ device"), not `EIO`.
   were shifted by one (a missing procedure went out as PROG_MISMATCH without its range),
   versions were never checked, a denial carried a reject_stat of 5 in little-endian, and
   LINK decoded SYMLINK's arguments.
+- **I-248** — A READDIR or READDIRPLUS reply holds as many entries as the client's
+  count (READDIR) or dircount and maxcount (READDIRPLUS) admit by the entries' real XDR
+  sizes, never a byte more, and FSINFO prefers 1 MiB listings (`dtpref`, as `rtpref`).
+  Before, every entry was charged 512 bytes, so a READDIR of short names returned about a
+  sixteenth of the entries its count had room for and a READDIRPLUS about a third, and
+  `dtpref` was 8 KiB: a folder of thousands of files took many times the round trips.
 
 ## Tests
 
@@ -305,6 +311,7 @@ device"), not `EIO`.
 | I-242 | `TestNFS_ExistReply_CarriesParentAttributes` |
 | I-244 | `TestRead_LengthBoundedByBody`, `TestConn_RPCReplyCodes` |
 | I-245 | `TestConn_RPCReplyCodes`, `TestNFS_FSStatAndUnsupported` |
+| I-248 | `TestNFS_ListingFillsTheClientsCount`, `TestListEntrySizes_MatchTheEncoder` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
