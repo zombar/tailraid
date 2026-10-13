@@ -183,3 +183,32 @@ func TestStatic_StatsShellAndTheme(t *testing.T) {
 		}
 	}
 }
+
+// The Stats page streams its charts (docs/17 §4): it asks with stream=1, draws the first
+// line's frames before the first chart line, replaces a frame with its chart, marks the
+// frames still waiting failed with the reason, and refreshes with ids= the charts on
+// screen and those that had no rows.
+// Invariant: I-259
+func TestStatic_StatsStreamsFramesFirst(t *testing.T) {
+	bundle, err := os.ReadFile("dist/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`&stream=1`, `&ids=`, `getReader()`, `classList.add("failed")`, `getBoundingClientRect()`, `"not drawn: "`} {
+		if !strings.Contains(string(bundle), want) {
+			t.Errorf("app.js lacks %s", want)
+		}
+	}
+	src, err := os.ReadFile("src/stats.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	first, line := strings.Index(s, "if (!refresh) frames(f.charts)"), strings.Index(s, "if (!disposed) fill(l)")
+	if first < 0 || line < 0 || first > line {
+		t.Error("stats.ts does not draw the frames on the first line before it fills charts from the later ones")
+	}
+	if !strings.Contains(s, "refresh ? onScreen() : null") {
+		t.Error("stats.ts does not refresh with the charts on screen")
+	}
+}

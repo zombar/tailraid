@@ -161,8 +161,11 @@ Two routes carry the series out:
      `viewBox`, its title, a dashed `frame` rect and a `note` saying "loading");
    - then the rows are read and merged once, as in steps 1–3, and each chart is rendered
      and written as its own line `{"id","svg","caption"}` in the order of the first line;
-   - a chart that cannot be drawn is a line `{"id","error"}`, and a failure before any
-     chart a last line `{"error"}`; the reply's status is 200 once the first line went out.
+   - a chart the range has no rows for is a line `{"id","empty":true}` (the page drops its
+     frame, and asks for it again on the next refresh, so one that gets rows appears in its
+     place); a failure to read the rows is a last line `{"error"}`, and the page then marks
+     every frame still waiting failed with that reason; the reply's status is 200 once the
+     first line went out.
    `ids=<id,…>` limits the charts rendered to those named (the first line still lists
    every chart), so a live refresh redraws only what is on screen.
 
@@ -306,8 +309,10 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 - **I-258** — With `stream=1`, `/api/stats` writes and flushes its first line (the range,
   the members and every chart's id, title and empty frame) before reading any row or
   asking any member, then one line per chart in that order, each the chart I-196 renders
-  for the same range, or that chart's error; `ids=` limits the charts rendered, never the
-  first line; the frame of a chart has the chart's own `viewBox`.
+  for the same range or, when the range has no rows for it, `empty`; a failure to read the
+  rows is a last line carrying the error; `ids=` limits the charts rendered, never the
+  first line; a chart's frame has its chart's own `viewBox` (the disk spread's estimated as
+  one disk a member).
 - **I-259** — The Stats page draws every frame of the first line before any chart arrives,
   replaces each frame with its chart as its line arrives, keeps a failed chart's frame
   with its reason, and on a live refresh asks only for the charts at least partly on
@@ -321,8 +326,8 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 | I-192 | `TestRowCodec_RoundTrip`, `TestRowCodec_Empty_And_Garbage`, `FuzzRowCodec`, `TestSegmentName_RoundTrip_Table`, `TestWriter_SealsAtBoundary_NamesPartialHours`, `TestWriter_SpillAndRecover`, `TestService_Run_SealsAtHour`, `TestService_Seal_RollupAndPrune`, `TestStats_SealVisibleFromSecondGateway`, `TestAdminOp_StatsSeal`, `TestCLI_StatsSeal`, `TestSoak_AllPhasesAgainstHarness` (phase 20), `TestPhaseStats_SkipsWithoutSampler` |
 | I-193 | `TestTier_PeriodOf`, `TestRollup_DeterministicAcrossNodes`, `TestRollup_Rules`, `TestWriter_RollupDay_MonthRebuild_CatchUp`, `TestService_Seal_RollupAndPrune`, `TestSoak_AllPhasesAgainstHarness` (phase 20) |
 | I-194 | `TestSegment_Expired_Table`, `TestWriter_Retain_AnyWriter_Table`, `TestStats_Retention_RemovedMemberSegment`, `TestConfig_StatsKeys_Table`, `TestService_Seal_RollupAndPrune`, `TestSoak_AllPhasesAgainstHarness` (phase 20) |
-| I-258 | stub in `test/invariants/stats_stubs_test.go` until PR stats-stream |
-| I-259 | stub in `test/invariants/stats_stubs_test.go` until PR stats-stream |
+| I-258 | `TestChart_Frame`, `TestCatalogue_MatchesCharts`, `TestWebUI_Stats_Stream_FramesFirst` |
+| I-259 | `TestStatic_StatsStreamsFramesFirst` |
 | I-196 | `TestStatsQuery_TierChoice_Table`, `TestStatsQuery_NameWindowAndRowFilter`, `TestStatsQuery_CacheBound_Table`, `TestStatsQuery_FanOut_TimeoutIsGap_BackOff`, `TestStatsQuery_Dedup_TermRule_Seeded`, `TestStatsQuery_Downsample_Points_Table`, `TestStatsQuery_Charts`, `TestWebUI_Stats_Route`, `TestStats_SealVisibleFromSecondGateway` (the cache-less reader) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (09 §2).
