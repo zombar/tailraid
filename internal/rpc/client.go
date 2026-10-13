@@ -106,8 +106,14 @@ func (c *Client) WrapTransport(wrap func(http.RoundTripper) http.RoundTripper) {
 	c.ctl.Transport = wrap(c.ctl.Transport)
 }
 
-// shardPrefix opens every shard path (shardTarget.prefix); other paths are the control plane.
-const shardPrefix = "/v1/disks/"
+// shardPrefix opens every shard path (shardTarget.prefix) and mirrorPrefix every mirror
+// object or tree path; both go on the transport whose response headers are bounded, so a
+// silent host fails the call within ResponseHeaderTimeout. Other paths are the control
+// plane.
+const (
+	shardPrefix  = "/v1/disks/"
+	mirrorPrefix = "/v1/mirrors/"
+)
 
 // bound gives a call without a deadline one of callTimeout(n); the caller cancels it once
 // the reply, body included, has been consumed.
@@ -138,8 +144,8 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 		req.ContentLength = int64(len(body))
 	}
 	hc := c.ctl
-	if strings.HasPrefix(path, shardPrefix) {
-		hc = c.http
+	if strings.HasPrefix(path, shardPrefix) || strings.HasPrefix(path, mirrorPrefix) {
+		hc = c.http // a shard or a mirror's object or tree: response headers bounded (I-83, I-241)
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

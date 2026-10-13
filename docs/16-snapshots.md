@@ -268,6 +268,9 @@ when the chunk is still there** (the chunk table holds it with `k` live slots: t
 reads it as any chunk, cache and readahead included) and otherwise from the mirror's
 object, fetched from its host over the node RPC (`GET /v1/mirrors/{id}/objects/{hash}`,
 `/trees/{hash}`, authorized as the shard routes are, 08) and verified against its hash.
+These calls go on the shard transport, whose response headers are bounded, so a mirror
+host that went silent fails a read within that bound (I-241); on the control transport,
+which has none (I-189), a `/.snapshots` read had waited for TCP to give up, minutes.
 Every mutation under `/.snapshots` is `EROFS`. An offline mirror's directory still lists
 its snapshots (the catalogue), and reading inside one fails with `EIO`; the browser says
 why.
@@ -363,6 +366,10 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   chunk once, and writes the same snapshot as one chunk at a time would: every object
   durable before any tree naming it, every tree before its parent, the manifest last,
   an unreadable chunk in `missing`.
+- **I-241** — A mirror's object or tree is fetched from its host on the node RPC
+  transport whose response headers are bounded (`ResponseHeaderTimeout`), never on the
+  control transport, so a read under `/.snapshots` from a host that stopped answering
+  fails within that bound.
 - **I-243** — What a sync cut short stored stays on the mirror for the next sync, which
   reads only the chunks the mirror lacks: the host sweeps a mirror only to complete a
   deletion, never while a sync writes to it, and reports a `Deleting` row done only once
@@ -377,8 +384,9 @@ stub in `test/invariants/` meanwhile.
 |---|---|
 | I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
 | I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
-| I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |
 | I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
+| I-241 | `TestClient_MirrorGet_OnBoundedTransport` |
+| I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestModelCheck_Long` |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`, `TestWebUI_Snapshots_ListTake_NoDeleteRoute` |
 | I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

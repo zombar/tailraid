@@ -125,7 +125,7 @@ func (c *Client) mirrorGet(ctx context.Context, idx meta.NodeIdx, kind string, h
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	path := "/v1/mirrors/" + strconv.Itoa(int(idx)) + "/" + kind + "/" + hex.EncodeToString(h[:])
+	path := mirrorPrefix + strconv.Itoa(int(idx)) + "/" + kind + "/" + hex.EncodeToString(h[:])
 	resp, err := c.do(ctx, http.MethodGet, addr, path, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)

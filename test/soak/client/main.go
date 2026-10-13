@@ -400,7 +400,11 @@ func mkdirAll(t *nfsc.Target, p string) error {
 		cur = path.Join(cur, part)
 		if _, _, err := t.Lookup(cur); err != nil {
 			if _, err := t.Mkdir(cur, 0o755); err != nil {
-				return fmt.Errorf("mkdir %s: %w", cur, err)
+				// as mkdir -p: a folder another client made meanwhile (NFS3ERR_EXIST, now
+				// decided across gateways, I-238) is the folder this one wanted
+				if fi, _, lerr := t.Lookup(cur, false); !errors.Is(err, os.ErrExist) || lerr != nil || !fi.IsDir() {
+					return fmt.Errorf("mkdir %s: %w", cur, err)
+				}
 			}
 		}
 	}
