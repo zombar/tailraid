@@ -520,6 +520,14 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   Before, every READ ran on the read loop under the share's read lock: one cold chunk's
   network fetch held up every other request on the connection, and with a CREATE, CLOSE
   or rename waiting for the lock, every new request on the share.
+- **I-268** — A SET_INFO of a file's end of file or allocation through a positional
+  handle, and a FLUSH, take no share lock on a driver that declares concurrent writes
+  (the tailraid adapter does), as a WRITE (I-217) and a READ (I-254) do: a truncate
+  waiting at a cap holds up no CREATE, CLOSE or rename on the share. A rename, a
+  delete-on-close and the times (set by path, which a rename could move under them) hold
+  it, and so does every one of them on a driver that promises nothing. Before, every
+  SET_INFO and FLUSH held the share's lock throughout, so one truncate waiting at a cap
+  (up to `CapWait`, 10 minutes) stalled every connection's opens and closes.
 - **I-247** — A CANCEL of a WRITE answered `STATUS_PENDING` takes nothing back: the
   write is already in the driver, so the CANCEL is answered nothing and the WRITE its real
   reply with the bytes it wrote (MS-SMB2 3.3.5.16); a lock wait or a change notification
@@ -557,6 +565,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |
+| I-268 | `TestSetInfo_EndOfFile_TakesNoShareLockOnAConcurrentDriver` |
 | I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |

@@ -776,7 +776,7 @@ func asFinal(reply []byte, asyncID uint64) []byte {
 func (c *conn) flush(h header, body []byte) ([]byte, error) {
 	if len(body) >= 24 {
 		if of := c.fileByID(body[8:]); of != nil && of.w != nil {
-			defer of.share.changing()()
+			defer fileLock(of)() // a concurrent driver's Sync takes no share lock (I-268)
 			if err := of.w.Sync(); err != nil {
 				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 			}
