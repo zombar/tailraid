@@ -1,11 +1,14 @@
-// Thumbnails for the tile view (docs/13 §5): loaded lazily as tiles scroll into view,
-// three at a time; a video without a stored thumbnail has a frame chosen by the browser
-// and PUT once per file, version and recipe.
+// Thumbnails for the tile view (docs/13 §5): loaded lazily as tiles come near the viewport,
+// in two lanes. Thumbnails the node serves load FAST at a time; a video without a stored
+// thumbnail has a frame chosen by the browser, one GRABS at a time in a lane of its own, so
+// a slow or undecodable video never holds up the tiles behind it. A tile that leaves the
+// viewport before its turn waits again, and one a redraw removed is dropped.
 
 import { fileURL, putThumb, thumbURL, type Entry, type Src } from "./api.ts";
-import { join, session } from "./util.ts";
+import { ext, join, session } from "./util.ts";
 
-const CONCURRENT = 3;
+const FAST = 6;
+const GRABS = 1;
 const WIDTH = 320;
 /** RECIPE is the frame choice below; the node keys a grabbed frame by it (webui.FrameRecipe, I-216). */
 const RECIPE = 2;
@@ -15,14 +18,49 @@ const POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
 const MIN_LUMA = 28;
 const MIN_SPREAD = 14;
 const PROBE = 64;
+/** FRAME_TIMEOUT bounds one video's frame choice. */
+const FRAME_TIMEOUT = 15_000;
+/** NO_FRAME are containers a browser does not decode: no frame is attempted, the tile keeps its icon. */
+const NO_FRAME = new Set(["avi", "wmv", "mpg", "mpeg", "flv", "vob", "rm", "rmvb", "divx", "asf"]);
+
+/** A lane runs at most `max` jobs at once, in the order they were queued. */
+class Lane {
+  private queue: (() => Promise<void>)[] = [];
+  private active = 0;
+  constructor(private readonly max: number) {}
+  push(job: () => Promise<void>): void {
+    this.queue.push(job);
+    this.pump();
+  }
+  /** take removes a job that has not started. */
+  take(job: () => Promise<void>): void {
+    const i = this.queue.indexOf(job);
+    if (i >= 0) this.queue.splice(i, 1);
+  }
+  private pump(): void {
+    while (this.active < this.max && this.queue.length) {
+      const job = this.queue.shift()!;
+      this.active++;
+      void job()
+        .catch(() => undefined)
+        .finally(() => {
+          this.active--;
+          this.pump();
+        });
+    }
+  }
+}
+
+const fast = new Lane(FAST);
+const grabs = new Lane(GRABS);
 
 interface Pending {
   img: HTMLImageElement;
-  load: () => Promise<void>;
+  job: () => Promise<void>;
+  queued: boolean;
 }
 
-const queue: Pending[] = [];
-let active = 0;
+const pending = new Map<HTMLImageElement, Pending>();
 
 const observer =
   typeof IntersectionObserver === "undefined"
@@ -30,79 +68,76 @@ const observer =
     : new IntersectionObserver(
         (entries) => {
           for (const e of entries) {
-            if (!e.isIntersecting) continue;
-            observer?.unobserve(e.target);
-            const p = waiting.get(e.target as HTMLImageElement);
-            if (p) {
-              waiting.delete(e.target as HTMLImageElement);
-              queue.push(p);
+            const p = pending.get(e.target as HTMLImageElement);
+            if (!p) continue;
+            if (e.isIntersecting && !p.queued) {
+              p.queued = true;
+              fast.push(p.job);
+            } else if (!e.isIntersecting && p.queued) {
+              p.queued = false; // scrolled away before its turn: it waits again
+              fast.take(p.job);
             }
           }
-          pump();
         },
         { rootMargin: "200px" },
       );
-const waiting = new Map<HTMLImageElement, Pending>();
-
-function pump(): void {
-  while (active < CONCURRENT && queue.length) {
-    const p = queue.shift()!;
-    active++;
-    void p.load().finally(() => {
-      active--;
-      pump();
-    });
-  }
-}
 
 /** Thumbable is what a thumbnail needs of a file: a listing entry, or a media item's video (docs/13 §10). */
 export type Thumbable = Pick<Entry, "ino" | "version" | "thumb">;
 
 /** lazy schedules img to show the thumbnail of path once it is near the viewport; onMiss replaces it with the generic icon. A "dir" is a folder whose cover is not known yet. */
 export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Src, kind: "image" | "video" | "audio" | "dir", onMiss: () => void): void {
-  const load = () =>
+  const show = (src: string) =>
     new Promise<void>((resolve) => {
-      const done = () => resolve();
-      const show = (src: string) => {
-        img.onload = done;
-        img.onerror = () => {
-          onMiss();
-          done();
-        };
-        img.src = src;
+      img.onload = () => resolve();
+      img.onerror = () => {
+        onMiss();
+        resolve();
       };
-      if (kind === "dir" && root === undefined) {
-        void folder(path)
-          .then((src) => {
-            if (!src) return (onMiss(), done());
-            img.addEventListener("load", () => URL.revokeObjectURL(src), { once: true });
-            show(src);
-          })
-          .catch(() => {
-            onMiss();
-            done();
-          });
-        return;
-      }
-      const tag = kind === "video" ? `${e.version}.f${RECIPE}` : undefined; // a cached frame of another recipe is not reused
-      if (e.thumb || kind !== "video" || root !== undefined) {
-        show(thumbURL(path, root, tag));
-        return;
-      }
-      void grab(path, e)
-        .then((ok) => (ok ? show(thumbURL(path, undefined, tag)) : (onMiss(), done())))
-        .catch(() => {
-          onMiss();
-          done();
-        });
+      img.src = src;
     });
-  const p: Pending = { img, load };
+  const miss = () => {
+    if (img.isConnected) onMiss();
+  };
+  const tag = kind === "video" ? `${e.version}.f${RECIPE}` : undefined; // a cached frame of another recipe is not reused
+  const job = async (): Promise<void> => {
+    pending.delete(img);
+    observer?.unobserve(img);
+    if (!img.isConnected) return; // a redraw replaced the tile
+    if (kind === "dir" && root === undefined) {
+      const r = await folder(path);
+      if (r.src) {
+        img.addEventListener("load", () => URL.revokeObjectURL(r.src!), { once: true });
+        return show(r.src);
+      }
+      if (!r.grab) return miss();
+      const g = r.grab;
+      // the folder's art is a video nobody framed: frame it in the grab lane, then ask again
+      grabs.push(async () => {
+        if (!img.isConnected) return;
+        if (!(await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false }))) return miss();
+        const again = await folder(path);
+        if (again.src) {
+          img.addEventListener("load", () => URL.revokeObjectURL(again.src!), { once: true });
+          await show(again.src);
+        } else miss();
+      });
+      return;
+    }
+    if (e.thumb || kind !== "video" || root !== undefined) return show(thumbURL(path, root, tag));
+    grabs.push(async () => {
+      if (!img.isConnected) return;
+      if (await grab(path, e)) await show(thumbURL(path, undefined, tag));
+      else miss();
+    });
+  };
+  const p: Pending = { img, job, queued: false };
   if (observer) {
-    waiting.set(img, p);
+    pending.set(img, p);
     observer.observe(img);
   } else {
-    queue.push(p);
-    pump();
+    p.queued = true;
+    fast.push(job);
   }
 }
 
@@ -113,21 +148,18 @@ interface Grab {
   version: number;
 }
 
-/** folder fetches a folder's tile as an object URL. A folder whose art would be a video nobody framed yet answers 404 naming it: the page frames that video, which settles the folder, and asks once more (docs/13 §5, I-275). */
-async function folder(path: string): Promise<string | null> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetch(thumbURL(path));
-    if (r.ok) return URL.createObjectURL(await r.blob());
-    if (r.status !== 404 || attempt > 0) return null;
-    const miss = (await r.json().catch(() => ({}))) as { grab?: Grab };
-    const g = miss.grab;
-    if (!g || !(await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false }))) return null;
-  }
-  return null;
+/** folder fetches a folder's tile as an object URL. A folder whose art would be a video nobody framed yet answers 404 naming it: the caller frames that video in the grab lane, which settles the folder, and asks once more (docs/13 §5, I-275). */
+async function folder(path: string): Promise<{ src?: string; grab?: Grab }> {
+  const r = await fetch(thumbURL(path));
+  if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
+  if (r.status !== 404) return {};
+  const miss = (await r.json().catch(() => ({}))) as { grab?: Grab };
+  return { grab: miss.grab };
 }
 
 /** grab chooses a frame of the video and stores it; one attempt per file, version and recipe per session. */
 async function grab(path: string, e: Thumbable): Promise<boolean> {
+  if (NO_FRAME.has(ext(path))) return false; // the browser cannot decode it
   const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
   if (session.get(key, false)) return false;
   session.set(key, true);
@@ -146,7 +178,7 @@ async function frame(src: string): Promise<Blob | null> {
   v.crossOrigin = "anonymous";
   let timer = 0;
   const expired = new Promise<null>((resolve) => {
-    timer = window.setTimeout(() => resolve(null), 30_000);
+    timer = window.setTimeout(() => resolve(null), FRAME_TIMEOUT);
   });
   const choose = async (): Promise<Blob | null> => {
     v.src = src;

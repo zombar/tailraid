@@ -138,8 +138,8 @@ func TestWebUI_Ls_TitleCardFields(t *testing.T) {
 	u.write("/tv/Covered/cover.jpg", 0, jpegBytes(16, 16, green))
 	u.flush()
 	u.get("/api/thumb?path=/tv/Covered")
-	if c := u.lsOf("path=/tv").entry("Covered").Card; c != nil {
-		t.Fatalf("a folder with a cover has a card: %+v", c)
+	if c := u.lsOf("path=/tv").entry("Covered").Card; c == nil || c.Title != "Covered" {
+		t.Fatalf("a folder with a cover carries its card for the overlay: %+v", c)
 	}
 	roms := u.lsOf("path=/roms")
 	if c := roms.entry("N64").Card; c == nil || *c != (webui.Card{Title: "Nintendo 64", Sub: "N64"}) {

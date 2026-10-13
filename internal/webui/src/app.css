@@ -189,6 +189,10 @@ section { display: grid; gap: var(--sp-3); align-content: start; }
 .spark-dot.bad { background: var(--bad); }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); gap: var(--sp-2) var(--sp-4); font-size: 13px; }
 .kv div { display: flex; justify-content: space-between; gap: var(--sp-2); border-bottom: 1px solid var(--line); padding: var(--sp-1) 0; }
+.kv div.full { grid-column: 1 / -1; }
+/* a file's details: three columns at the page's width, as the Integrity rows, one on a phone */
+.kv.facts { grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); column-gap: var(--sp-8); }
+.kv div.full dd { text-align: right; overflow-wrap: anywhere; }
 .kv dt { color: var(--dim); }
 .kv dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .kv dd.warn { color: var(--warn); }
@@ -420,6 +424,11 @@ dialog.picker::backdrop { background: var(--scrim); }
 .ftile.selected .thumb::after { content: ""; position: absolute; inset: 0; background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .ftile .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ftile .thumb .icon { width: 32px; height: 32px; }
+/* a folder's cover carries its title the way a film poster does: the title card's words
+   (a library folder's analysed title and year, else its name) centred over a dimmed cover */
+.tover { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: var(--sp-1); padding: var(--sp-3); text-align: center; background: var(--scrim); color: var(--on-status); }
+.tover .ct { font: 600 15px/1.25 var(--sans); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.tover .cy { font: 12px var(--mono); opacity: .8; }
 .ftile .tname { font: 500 14px/20px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ftile:hover .tname { color: var(--accent); }
 .ftile .tmeta, .poster .pyear { font: 12px/18px var(--mono); color: var(--dim); display: flex; justify-content: space-between; gap: var(--sp-2); min-width: 0; }
@@ -441,10 +450,12 @@ dialog.picker::backdrop { background: var(--scrim); }
 @media (pointer: fine) { .ftile .play { width: 40px; min-height: 40px; } }
 /* a device that cannot hover shows what hover would reveal */
 @media (hover: none) { table.files td.name .play, .ftile .play { visibility: visible; } }
-.thumb.nsfw img, .viewer.nsfw > :not(.veil) { filter: blur(14px) scale(1.1); }
-.thumb.nsfw, .viewer.nsfw { position: relative; }
-.veil { position: absolute; inset: 0; display: grid; place-items: center; font: 600 12px var(--mono); color: var(--text); background: color-mix(in srgb, var(--bg) 35%, transparent); cursor: pointer; }
-.revealed img, .viewer.revealed > :not(.veil) { filter: none; }
+/* nsfw: the picture is blurred, nothing more; a tap reveals it for the session. The viewer's
+   veil is an empty layer that takes the tap a video would otherwise swallow. */
+.thumb.nsfw > :not(.ov):not(.play), .viewer.nsfw > :not(.veil) { filter: blur(16px); transform: scale(1.1); }
+.thumb.nsfw, .viewer.nsfw { position: relative; cursor: pointer; }
+.veil { position: absolute; inset: 0; cursor: pointer; }
+.revealed > :not(.ov):not(.play), .viewer.revealed > :not(.veil) { filter: none; transform: none; }
 .revealed .veil { display: none; }
 
 /* ---- album view and the now-playing bar (docs/13 §6) --------------------------------- */

@@ -86,7 +86,7 @@ function posterTile(it: MediaItem): HTMLElement {
   const veiled = it.nsfw && !session.get("tr.revealed", false);
   const box = h("span", { class: "art" });
   const chip = fact(it) ? h("span", { class: "ov br" }, fact(it)) : null;
-  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, ...(veiled ? [h("span", null, "nsfw · tap to show")] : metaSpans(it)));
+  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, ...metaSpans(it));
   const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), below);
   const missing = () => {
     clear(box);
@@ -110,7 +110,6 @@ function posterTile(it: MediaItem): HTMLElement {
       ev.preventDefault();
       session.set("tr.revealed", true);
       a.classList.remove("nsfw");
-      (a.querySelector(".pyear") as HTMLElement).replaceChildren(...metaSpans(it));
     });
   }
   return a;

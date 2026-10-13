@@ -695,15 +695,15 @@ function render2(root, r, snaps) {
   const per = chunksPerTarget(r);
   const sh = shares(targets, () => per);
   const v = r.volume;
-  const active2 = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
+  const active = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
   const disks = groups.flatMap((g) => g.targets).length;
   const perHostDisks = disks / Math.max(1, groups.length);
   let layout = Number.isInteger(perHostDisks) ? `${plural(groups.length, "host")} \xD7 ${plural(perHostDisks, "disk")}` : `${plural(groups.length, "host")}, ${plural(disks, "disk")}`;
   if (s3.length) layout += ` + ${plural(s3.length, "bucket")}`;
   const sub = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
   const n = v.k + v.m;
-  const capPer = Math.ceil(n / Math.max(1, active2.length));
-  const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active2.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active2[0]?.node.name ?? "it"}`);
+  const capPer = Math.ceil(n / Math.max(1, active.length));
+  const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active[0]?.node.name ?? "it"}`);
   const scale = Math.max(1, ...targets.map((t) => Math.max(t.slots, sh.get(t.idx)?.expected ?? 0))) * 1.1;
   const mirrors = new Map((snaps?.mirrors ?? []).map((m) => [m.id, m]));
   const block = h("div", { class: "disks" }, spread(groups, s3, sh, mirrors), capNote);
@@ -1058,7 +1058,7 @@ function offlineFor(m) {
 }
 function asofMenu(ctx, view3, current) {
   const body = h("div", { class: "menu-body", role: "radiogroup", "aria-label": "as of" });
-  const details = h("details", { class: "menu asof" }, h("summary", null, current ? current.name : "Now"), body);
+  const details2 = h("details", { class: "menu asof" }, h("summary", null, current ? current.name : "Now"), body);
   const go = (at) => {
     const next2 = { path: ctx.path, root: ctx.root };
     if (at !== void 0) next2.at = at;
@@ -1101,10 +1101,10 @@ function asofMenu(ctx, view3, current) {
       body.append(h("div", { class: "menu-foot small dim" }, "snapshots: " + errText(e)));
     }
   };
-  details.addEventListener("toggle", () => {
-    if (details.open) void fill();
+  details2.addEventListener("toggle", () => {
+    if (details2.open) void fill();
   });
-  return details;
+  return details2;
 }
 function banner(ctx, ref, summary, folder3, back) {
   const name = ref?.name ?? (ctx.at !== void 0 ? `#${ctx.at}` : "");
@@ -1958,10 +1958,10 @@ var Player = class {
     );
     const list = h("ol");
     const summary = h("span", { class: "small dim" });
-    const queue3 = h("div", { class: "queue", hidden: true }, h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), h("button", { type: "button", onClick: () => this.clear() }, "Clear")), list);
-    document.body.append(bar2, queue3);
+    const queue2 = h("div", { class: "queue", hidden: true }, h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), h("button", { type: "button", onClick: () => this.clear() }, "Clear")), list);
+    document.body.append(bar2, queue2);
     this.bar = bar2;
-    this.queueEl = queue3;
+    this.queueEl = queue2;
     this.els = { cover, title, sub, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
   }
   notify() {
@@ -2140,6 +2140,7 @@ function render6(root, ctx) {
   let entry;
   let trashRoot;
   let nsfw = false;
+  let folder3 = { protected: false, pinned: false };
   let keyHandler = null;
   if (kind2 === "video") player.pause();
   const draw = () => {
@@ -2221,7 +2222,7 @@ function render6(root, ctx) {
       viewer.append(h("div", { class: "placeholder" }, info || name, h("a", { class: "btn", href: fileURL(path, true, src(ctx)) }, "Download")));
     }
     if (nsfw) {
-      viewer.append(h("span", { class: "veil" }, "nsfw \xB7 tap to show"));
+      viewer.append(h("span", { class: "veil" }));
       viewer.addEventListener("click", () => {
         viewer.classList.add("revealed");
         session.set("tr.revealed", true);
@@ -2239,6 +2240,7 @@ function render6(root, ctx) {
         )
       );
     }
+    if (entry) section2.append(details(path, entry, kind2, KINDS[ext(name)]?.[1] ?? "", folder3, nsfw, viewer));
     if (!inTrash && !asOf) {
       versionsPanel2 ??= versionsPanel(path, () => void reload());
       section2.append(versionsPanel2);
@@ -2281,6 +2283,7 @@ function render6(root, ctx) {
       siblings = r.entries.filter((e) => e.type === "file" && !e.upload && !e.deleted_at);
       entry = siblings.find((e) => e.name === name);
       nsfw = r.dir.nsfw || !!entry?.nsfw;
+      folder3 = { protected: r.dir.protected, pinned: r.dir.pinned };
       snap = r.dir.snapshot;
       draw();
     },
@@ -2359,6 +2362,47 @@ function sameGroup(a, b) {
 function encodeForHash(path) {
   return path.split("/").map(encodeURIComponent).join("/");
 }
+var DETAILS_KEY = "tr.details";
+function details(path, e, kind2, mime, f, nsfw, viewer) {
+  const dl = h("dl", { class: "kv facts" });
+  const row2 = (k, v2, title, full = false) => dl.append(h("div", full ? { class: "full" } : null, h("dt", null, k), h("dd", title ? { title } : null, v2)));
+  row2("path", path, void 0, true);
+  row2("type", mime ? `${kind2} \xB7 ${mime}` : kind2);
+  row2("size", bytes(e.size), `${e.size.toLocaleString()} bytes`);
+  row2("modified", date2(e.mtime), e.mtime);
+  row2("mode", "0" + (e.mode & 511).toString(8));
+  row2("inode", `${e.ino.toLocaleString()} \xB7 v${e.version}`);
+  const v = status.current?.volume;
+  if (v) row2("chunks", `${Math.ceil(e.size / v.chunk_size).toLocaleString()} \xB7 ${bytes(v.chunk_size)} \xB7 ${v.k}+${v.m}`);
+  const flags = [f.protected ? "protected" : "", nsfw ? "nsfw" : "", f.pinned ? "kept here" : ""].filter(Boolean);
+  if (flags.length) row2("folder", flags.join(" \xB7 "));
+  const vid = viewer.querySelector("video");
+  if (vid) {
+    const add = () => {
+      if (Number.isFinite(vid.duration)) row2("length", mmss(vid.duration));
+      if (vid.videoWidth) row2("resolution", `${vid.videoWidth} \xD7 ${vid.videoHeight}`);
+    };
+    if (vid.readyState >= HTMLMediaElement.HAVE_METADATA) add();
+    else vid.addEventListener("loadedmetadata", add, { once: true });
+  }
+  const img = viewer.querySelector("img");
+  if (img) {
+    const add = () => row2("resolution", `${img.naturalWidth} \xD7 ${img.naturalHeight}`);
+    if (img.complete && img.naturalWidth) add();
+    else img.addEventListener("load", add, { once: true });
+  }
+  const panel2 = h("details", { class: "panel" }, h("summary", null, "Details"), h("div", { class: "body" }, dl));
+  panel2.open = session.get(DETAILS_KEY, false);
+  panel2.addEventListener("toggle", () => session.set(DETAILS_KEY, panel2.open));
+  return panel2;
+}
+function date2(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 // internal/webui/src/select.ts
 var Selection = class {
@@ -2420,94 +2464,123 @@ var Selection = class {
 };
 
 // internal/webui/src/thumbs.ts
-var CONCURRENT = 3;
+var FAST = 6;
+var GRABS = 1;
 var WIDTH = 320;
 var RECIPE = 2;
 var POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
 var MIN_LUMA = 28;
 var MIN_SPREAD = 14;
 var PROBE = 64;
-var queue = [];
-var active = 0;
+var FRAME_TIMEOUT = 15e3;
+var NO_FRAME = /* @__PURE__ */ new Set(["avi", "wmv", "mpg", "mpeg", "flv", "vob", "rm", "rmvb", "divx", "asf"]);
+var Lane = class {
+  constructor(max) {
+    this.max = max;
+  }
+  max;
+  queue = [];
+  active = 0;
+  push(job) {
+    this.queue.push(job);
+    this.pump();
+  }
+  /** take removes a job that has not started. */
+  take(job) {
+    const i = this.queue.indexOf(job);
+    if (i >= 0) this.queue.splice(i, 1);
+  }
+  pump() {
+    while (this.active < this.max && this.queue.length) {
+      const job = this.queue.shift();
+      this.active++;
+      void job().catch(() => void 0).finally(() => {
+        this.active--;
+        this.pump();
+      });
+    }
+  }
+};
+var fast = new Lane(FAST);
+var grabs = new Lane(GRABS);
+var pending2 = /* @__PURE__ */ new Map();
 var observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
   (entries) => {
     for (const e of entries) {
-      if (!e.isIntersecting) continue;
-      observer?.unobserve(e.target);
-      const p = waiting.get(e.target);
-      if (p) {
-        waiting.delete(e.target);
-        queue.push(p);
+      const p = pending2.get(e.target);
+      if (!p) continue;
+      if (e.isIntersecting && !p.queued) {
+        p.queued = true;
+        fast.push(p.job);
+      } else if (!e.isIntersecting && p.queued) {
+        p.queued = false;
+        fast.take(p.job);
       }
     }
-    pump();
   },
   { rootMargin: "200px" }
 );
-var waiting = /* @__PURE__ */ new Map();
-function pump() {
-  while (active < CONCURRENT && queue.length) {
-    const p = queue.shift();
-    active++;
-    void p.load().finally(() => {
-      active--;
-      pump();
-    });
-  }
-}
 function lazy(img, e, path, root, kind2, onMiss) {
-  const load = () => new Promise((resolve) => {
-    const done = () => resolve();
-    const show = (src2) => {
-      img.onload = done;
-      img.onerror = () => {
-        onMiss();
-        done();
-      };
-      img.src = src2;
+  const show = (src2) => new Promise((resolve) => {
+    img.onload = () => resolve();
+    img.onerror = () => {
+      onMiss();
+      resolve();
     };
+    img.src = src2;
+  });
+  const miss = () => {
+    if (img.isConnected) onMiss();
+  };
+  const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
+  const job = async () => {
+    pending2.delete(img);
+    observer?.unobserve(img);
+    if (!img.isConnected) return;
     if (kind2 === "dir" && root === void 0) {
-      void folder(path).then((src2) => {
-        if (!src2) return onMiss(), done();
-        img.addEventListener("load", () => URL.revokeObjectURL(src2), { once: true });
-        show(src2);
-      }).catch(() => {
-        onMiss();
-        done();
+      const r = await folder(path);
+      if (r.src) {
+        img.addEventListener("load", () => URL.revokeObjectURL(r.src), { once: true });
+        return show(r.src);
+      }
+      if (!r.grab) return miss();
+      const g = r.grab;
+      grabs.push(async () => {
+        if (!img.isConnected) return;
+        if (!await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return miss();
+        const again = await folder(path);
+        if (again.src) {
+          img.addEventListener("load", () => URL.revokeObjectURL(again.src), { once: true });
+          await show(again.src);
+        } else miss();
       });
       return;
     }
-    const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
-    if (e.thumb || kind2 !== "video" || root !== void 0) {
-      show(thumbURL(path, root, tag));
-      return;
-    }
-    void grab(path, e).then((ok) => ok ? show(thumbURL(path, void 0, tag)) : (onMiss(), done())).catch(() => {
-      onMiss();
-      done();
+    if (e.thumb || kind2 !== "video" || root !== void 0) return show(thumbURL(path, root, tag));
+    grabs.push(async () => {
+      if (!img.isConnected) return;
+      if (await grab(path, e)) await show(thumbURL(path, void 0, tag));
+      else miss();
     });
-  });
-  const p = { img, load };
+  };
+  const p = { img, job, queued: false };
   if (observer) {
-    waiting.set(img, p);
+    pending2.set(img, p);
     observer.observe(img);
   } else {
-    queue.push(p);
-    pump();
+    p.queued = true;
+    fast.push(job);
   }
 }
 async function folder(path) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetch(thumbURL(path));
-    if (r.ok) return URL.createObjectURL(await r.blob());
-    if (r.status !== 404 || attempt > 0) return null;
-    const miss = await r.json().catch(() => ({}));
-    const g = miss.grab;
-    if (!g || !await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return null;
-  }
-  return null;
+  const r = await fetch(thumbURL(path));
+  if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
+  if (r.status !== 404) return {};
+  const miss = await r.json().catch(() => ({}));
+  return { grab: miss.grab };
 }
 async function grab(path, e) {
+  if (NO_FRAME.has(ext(path))) return false;
   const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
   if (session.get(key, false)) return false;
   session.set(key, true);
@@ -2524,7 +2597,7 @@ async function frame(src2) {
   v.crossOrigin = "anonymous";
   let timer = 0;
   const expired = new Promise((resolve) => {
-    timer = window.setTimeout(() => resolve(null), 3e4);
+    timer = window.setTimeout(() => resolve(null), FRAME_TIMEOUT);
   });
   const choose = async () => {
     v.src = src2;
@@ -2620,7 +2693,7 @@ function luma(c) {
 // internal/webui/src/flags.ts
 function menu(ctx) {
   const body = h("div", { class: "menu-body" });
-  const details = h("details", { class: "menu" }, h("summary", null, "Folder"), body);
+  const details2 = h("details", { class: "menu" }, h("summary", null, "Folder"), body);
   const isRoot = ctx.path === "/";
   const row2 = (label, note, checked, disabled, onToggle) => {
     const box = h("input", { type: "checkbox" });
@@ -2696,10 +2769,10 @@ function menu(ctx) {
       libraryRow(own?.library ?? "", why ?? (ctx.dir.library && !own?.library ? `inside a ${ctx.dir.library} library: this folder is listed as part of it` : null))
     );
   };
-  details.addEventListener("toggle", () => {
-    if (details.open) void fill();
+  details2.addEventListener("toggle", () => {
+    if (details2.open) void fill();
   });
-  return details;
+  return details2;
 }
 
 // internal/webui/src/album.ts
@@ -2760,8 +2833,8 @@ function render7(ctx, cover, entries) {
     drawRow(i);
   });
   describe();
-  let active2 = 0;
-  const pending2 = [];
+  let active = 0;
+  const pending3 = [];
   const probe = async (i) => {
     const t = tracks[i];
     try {
@@ -2781,13 +2854,13 @@ function render7(ctx, cover, entries) {
     drawRow(i);
     describe();
   };
-  const pump2 = () => {
-    while (active2 < PROBES && pending2.length) {
-      const i = pending2.shift();
-      active2++;
+  const pump = () => {
+    while (active < PROBES && pending3.length) {
+      const i = pending3.shift();
+      active++;
       void probe(i).finally(() => {
-        active2--;
-        pump2();
+        active--;
+        pump();
       });
     }
   };
@@ -2797,16 +2870,16 @@ function render7(ctx, cover, entries) {
         for (const x of es) {
           if (!x.isIntersecting) continue;
           io.unobserve(x.target);
-          pending2.push(rows.indexOf(x.target));
+          pending3.push(rows.indexOf(x.target));
         }
-        pump2();
+        pump();
       },
       { rootMargin: "300px" }
     );
     for (const tr of rows) io.observe(tr);
   } else {
-    rows.forEach((_, i) => pending2.push(i));
-    pump2();
+    rows.forEach((_, i) => pending3.push(i));
+    pump();
   }
   return {
     el,
@@ -2841,12 +2914,12 @@ function duration(src2) {
 }
 
 // internal/webui/src/browser.ts
-var queue2 = [];
+var queue = [];
 var running = false;
 var onQueueChange = null;
 var onJobDone = null;
 function enqueue(dir, files) {
-  for (const f of Array.from(files)) queue2.push({ dir, file: f, sent: 0, state: "queued" });
+  for (const f of Array.from(files)) queue.push({ dir, file: f, sent: 0, state: "queued" });
   onQueueChange?.();
   void runQueue();
 }
@@ -2854,7 +2927,7 @@ async function runQueue() {
   if (running) return;
   running = true;
   for (; ; ) {
-    const job = queue2.find((j) => j.state === "queued");
+    const job = queue.find((j) => j.state === "queued");
     if (!job) break;
     job.state = "uploading";
     onQueueChange?.();
@@ -2990,7 +3063,7 @@ function render8(root, ctx) {
     }
     toolbar.append(h("span", { class: "spacer" }), h("span", { class: "small dim" }, `${live().length} ${live().length === 1 ? "item" : "items"} \xB7 ${bytes(total)}` + (deleted ? ` \xB7 ${deleted} deleted` : "")));
     section2.append(toolbar);
-    const shown = queue2.filter((j) => j.state !== "done");
+    const shown = queue.filter((j) => j.state !== "done");
     if (shown.length) {
       const list = h("div", { class: "uploads" });
       for (const j of shown) list.append(jobRow(j));
@@ -3193,10 +3266,13 @@ function render8(root, ctx) {
     if (canThumb) {
       const img = h("img", { alt: "" });
       thumb.append(img);
-      if (thumb.classList.contains("nsfw")) thumb.append(h("span", { class: "veil" }, "nsfw \xB7 tap to show"));
       const root2 = e.deleted_at ? e.ino : source;
       const tp = e.deleted_at ? e.type === "dir" && e.cover ? "/" + e.cover : "/" : thumbPath;
       lazy(img, e, tp, root2, e.type === "dir" ? e.cover ? "audio" : "dir" : kindOf, showIcon);
+      if (e.type === "dir") {
+        const words = e.card ?? { title: e.name };
+        img.addEventListener("load", () => thumb.append(h("span", { class: "tover" }, h("span", { class: "ct" }, words.title), words.sub ? h("span", { class: "cy" }, words.sub) : null)), { once: true });
+      }
     } else showIcon();
     if (e.type === "file") thumb.append(h("span", { class: "ov br" }, bytes(e.size)));
     const kindWord = e.type === "dir" ? "folder" : e.type === "symlink" ? "link" : ext(e.name).toLowerCase() || "file";
@@ -3765,11 +3841,11 @@ function render10(root, q, params) {
     bar2.append(h("label", { class: "toggle" }, toggle, " in ", h("code", null, scope), " only"));
   }
   section2.append(bar2);
-  const queue3 = [];
+  const queue2 = [];
   let running2 = 0;
-  const pump2 = () => {
-    while (running2 < SNIP_AT_ONCE && queue3.length > 0) {
-      const [el, hit] = queue3.shift();
+  const pump = () => {
+    while (running2 < SNIP_AT_ONCE && queue2.length > 0) {
+      const [el, hit] = queue2.shift();
       running2++;
       snippet(hit, abort.signal).then(
         (parts) => {
@@ -3780,23 +3856,23 @@ function render10(root, q, params) {
         () => el.remove()
       ).finally(() => {
         running2--;
-        pump2();
+        pump();
       });
     }
   };
-  const pending2 = /* @__PURE__ */ new Map();
+  const pending3 = /* @__PURE__ */ new Map();
   const seen = new IntersectionObserver((entries) => {
     for (const e of entries) {
-      const hit = pending2.get(e.target);
+      const hit = pending3.get(e.target);
       if (!e.isIntersecting || !hit) continue;
-      pending2.delete(e.target);
+      pending3.delete(e.target);
       seen.unobserve(e.target);
-      queue3.push([e.target, hit]);
+      queue2.push([e.target, hit]);
     }
-    pump2();
+    pump();
   });
   const want = (el, hit) => {
-    pending2.set(el, hit);
+    pending3.set(el, hit);
     seen.observe(el);
   };
   search(q, under).then(
@@ -3879,7 +3955,7 @@ function posterTile(it) {
   const veiled = it.nsfw && !session.get("tr.revealed", false);
   const box = h("span", { class: "art" });
   const chip = fact(it) ? h("span", { class: "ov br" }, fact(it)) : null;
-  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, ...veiled ? [h("span", null, "nsfw \xB7 tap to show")] : metaSpans(it));
+  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, ...metaSpans(it));
   const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), below);
   const missing = () => {
     clear(box);
@@ -3902,7 +3978,6 @@ function posterTile(it) {
       ev.preventDefault();
       session.set("tr.revealed", true);
       a.classList.remove("nsfw");
-      a.querySelector(".pyear").replaceChildren(...metaSpans(it));
     });
   }
   return a;

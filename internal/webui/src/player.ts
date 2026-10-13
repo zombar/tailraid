@@ -54,6 +54,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
   let entry: Entry | undefined;
   let trashRoot: TrashEntry | undefined;
   let nsfw = false;
+  let folder: { protected: boolean; pinned: boolean } = { protected: false, pinned: false };
   let keyHandler: ((ev: KeyboardEvent) => void) | null = null;
 
   if (kind === "video") audio.pause(); // a video page pauses the music (docs/13 §6)
@@ -138,7 +139,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       viewer.append(h("div", { class: "placeholder" }, info || name, h("a", { class: "btn", href: fileURL(path, true, src(ctx)) }, "Download")));
     }
     if (nsfw) {
-      viewer.append(h("span", { class: "veil" }, "nsfw · tap to show"));
+      viewer.append(h("span", { class: "veil" })); // takes the tap a video would swallow
       viewer.addEventListener("click", () => {
         viewer.classList.add("revealed");
         session.set("tr.revealed", true);
@@ -158,6 +159,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       );
     }
 
+    if (entry) section.append(details(path, entry, kind, KINDS[ext(name)]?.[1] ?? "", folder, nsfw, viewer));
     if (!inTrash && !asOf) {
       versionsPanel ??= snaps.versionsPanel(path, () => void reload());
       section.append(versionsPanel);
@@ -202,6 +204,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       siblings = r.entries.filter((e) => e.type === "file" && !e.upload && !e.deleted_at);
       entry = siblings.find((e) => e.name === name);
       nsfw = r.dir.nsfw || !!entry?.nsfw;
+      folder = { protected: r.dir.protected, pinned: r.dir.pinned };
       snap = r.dir.snapshot;
       draw();
     },
@@ -285,4 +288,57 @@ function sameGroup(a: Kind, b: Kind): boolean {
 
 function encodeForHash(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
+}
+
+// detailsOpen keeps the Details panel open across files for the session.
+const DETAILS_KEY = "tr.details";
+
+/**
+ * details is the file's attributes (docs/13 Components): its path, type, size, times,
+ * mode, inode and version, chunks and the volume's policy, its folder's flags, and a
+ * video's length and size or an image's size once the viewer knows them.
+ */
+function details(path: string, e: Entry, kind: string, mime: string, f: { protected: boolean; pinned: boolean }, nsfw: boolean, viewer: HTMLElement): HTMLElement {
+  const dl = h("dl", { class: "kv facts" });
+  const row = (k: string, v: string, title?: string, full = false) =>
+    dl.append(h("div", full ? { class: "full" } : null, h("dt", null, k), h("dd", title ? { title } : null, v)));
+  row("path", path, undefined, true);
+  row("type", mime ? `${kind} · ${mime}` : kind);
+  row("size", bytes(e.size), `${e.size.toLocaleString()} bytes`);
+  row("modified", date(e.mtime), e.mtime);
+  row("mode", "0" + (e.mode & 0o777).toString(8));
+  row("inode", `${e.ino.toLocaleString()} · v${e.version}`);
+  const v = status.current?.volume;
+  if (v) row("chunks", `${Math.ceil(e.size / v.chunk_size).toLocaleString()} · ${bytes(v.chunk_size)} · ${v.k}+${v.m}`);
+  const flags = [f.protected ? "protected" : "", nsfw ? "nsfw" : "", f.pinned ? "kept here" : ""].filter(Boolean);
+  if (flags.length) row("folder", flags.join(" · "));
+  // the viewer learns a video's length and size, an image's size, after it loads
+  const vid = viewer.querySelector("video");
+  if (vid) {
+    const add = () => {
+      if (Number.isFinite(vid.duration)) row("length", mmss(vid.duration));
+      if (vid.videoWidth) row("resolution", `${vid.videoWidth} × ${vid.videoHeight}`);
+    };
+    if (vid.readyState >= HTMLMediaElement.HAVE_METADATA) add();
+    else vid.addEventListener("loadedmetadata", add, { once: true });
+  }
+  const img = viewer.querySelector("img");
+  if (img) {
+    const add = () => row("resolution", `${img.naturalWidth} × ${img.naturalHeight}`);
+    if (img.complete && img.naturalWidth) add();
+    else img.addEventListener("load", add, { once: true });
+  }
+  const panel = h("details", { class: "panel" }, h("summary", null, "Details"), h("div", { class: "body" }, dl)) as HTMLDetailsElement;
+  panel.open = session.get(DETAILS_KEY, false);
+  panel.addEventListener("toggle", () => session.set(DETAILS_KEY, panel.open));
+  return panel;
+}
+
+/** date is a full local time, YYYY-MM-DD HH:MM. */
+function date(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
