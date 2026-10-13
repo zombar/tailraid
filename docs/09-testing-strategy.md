@@ -616,6 +616,13 @@ components they exercise.
   check of that phase, with the driver's stack or every node's goroutine dump as a dump
   record, and the run continues with the next phase; a phase that records no check and
   does not skip is failed as well.
+- **I-270** — A phase's first failed check saves the rig's evidence, once per phase,
+  into `<evidence>/<phase>/` (the driver's `-evidence`, beside the report by default) and
+  the results name the folder; on the compose rig that is `docker compose ps` and, for
+  every node, its last 2,000 log lines with its worker's and its `tailraid status --json`.
+  Before, `make soak` tore the rig down with its logs, and two failures of 2026-10-13
+  (a restarted gateway serving an empty tree, two orphans in phase 12) stayed
+  unexplained.
 - **I-112** — Every change a phase makes to the cluster (a killed node, a cut, a drained
   or removed member, a filled disk, a policy change) is restored before the phase's result
   is recorded, whether the phase completed, failed, panicked, timed out or was cancelled,
@@ -632,6 +639,7 @@ components they exercise.
 
 | Invariant | Tests |
 |---|---|
+| I-270 | `TestExecute_FailureSavesEvidence` |
 | I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
 | I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores`, `TestPhases_MembershipRestoresAutoMode` |
 | I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
