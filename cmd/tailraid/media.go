@@ -94,10 +94,6 @@ command contacts a provider: no node ever does (docs/18 §11).
 			if err != nil {
 				return err
 			}
-			key, err := scrape.LoadKey(cfg.Node.DataDir)
-			if err != nil {
-				return err
-			}
 			o.Only = map[string]bool{}
 			for _, g := range only {
 				switch g {
@@ -106,6 +102,19 @@ command contacts a provider: no node ever does (docs/18 §11).
 				default:
 					return fmt.Errorf("--only %q: want movies, tv, episodes, music or games", g)
 				}
+			}
+			// without a TMDB key the keyless groups still run: album covers and game box art
+			key, err := scrape.LoadKey(cfg.Node.DataDir)
+			switch {
+			case errors.Is(err, scrape.ErrNoKey):
+				only, dropped, werr := scrape.WithoutKey(o.Only)
+				if werr != nil {
+					return werr
+				}
+				o.Only = only
+				fmt.Fprintf(cmd.ErrOrStderr(), "no TMDB key: skipping %s (run `tailraid media key` to add them)\n", strings.Join(dropped, ", "))
+			case err != nil:
+				return err
 			}
 			if len(args) == 0 {
 				args = []string{"/"}
