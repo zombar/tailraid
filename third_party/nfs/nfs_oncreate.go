@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-billy/v5"
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 const (

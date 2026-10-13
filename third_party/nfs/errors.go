@@ -92,7 +92,7 @@ func (a *AuthError) Error() string {
 // MarshalBinary sends the specific auth status
 func (a *AuthError) MarshalBinary() (data []byte, err error) {
 	var resp [4]byte
-	binary.LittleEndian.PutUint32(resp[:], uint32(a.AuthStat))
+	binary.BigEndian.PutUint32(resp[:], uint32(a.AuthStat)) // XDR is big-endian (I-245)
 	return resp[:], nil
 }
 
@@ -114,10 +114,54 @@ func (r *RPCMismatchError) Error() string {
 // MarshalBinary sends the specific rpc mismatch range
 func (r *RPCMismatchError) MarshalBinary() (data []byte, err error) {
 	var resp [8]byte
-	binary.LittleEndian.PutUint32(resp[0:4], uint32(r.Low))
-	binary.LittleEndian.PutUint32(resp[4:8], uint32(r.High))
+	binary.BigEndian.PutUint32(resp[0:4], r.Low) // XDR is big-endian (I-245)
+	binary.BigEndian.PutUint32(resp[4:8], r.High)
 	return resp[:], nil
 }
+
+// ProgMismatchError answers a call of a program version this server does not speak
+// (tailraid, I-245): PROG_MISMATCH with the versions it does.
+type ProgMismatchError struct {
+	Low  uint32
+	High uint32
+}
+
+// Code for ProgMismatchError is ResponseCodeProgMismatch.
+func (r *ProgMismatchError) Code() ResponseCode { return ResponseCodeProgMismatch }
+
+func (r *ProgMismatchError) Error() string {
+	return fmt.Sprintf("program version mismatch: this server speaks %d to %d", r.Low, r.High)
+}
+
+// MarshalBinary is the mismatch_info range.
+func (r *ProgMismatchError) MarshalBinary() ([]byte, error) {
+	var resp [8]byte
+	binary.BigEndian.PutUint32(resp[0:4], r.Low)
+	binary.BigEndian.PutUint32(resp[4:8], r.High)
+	return resp[:], nil
+}
+
+// ProgUnavailableError answers a call of a program this server does not export (I-245).
+type ProgUnavailableError struct{}
+
+// Code for ProgUnavailableError is ResponseCodeProgUnavailable.
+func (r *ProgUnavailableError) Code() ResponseCode { return ResponseCodeProgUnavailable }
+
+func (r *ProgUnavailableError) Error() string { return "program unavailable" }
+
+// MarshalBinary - this error has no associated body
+func (r *ProgUnavailableError) MarshalBinary() ([]byte, error) { return nil, nil }
+
+// GarbageArgsError answers a call whose arguments do not decode (I-245).
+type GarbageArgsError struct{}
+
+// Code for GarbageArgsError is ResponseCodeGarbageArgs.
+func (r *GarbageArgsError) Code() ResponseCode { return ResponseCodeGarbageArgs }
+
+func (r *GarbageArgsError) Error() string { return "arguments do not decode" }
+
+// MarshalBinary - this error has no associated body
+func (r *GarbageArgsError) MarshalBinary() ([]byte, error) { return nil, nil }
 
 // ResponseCodeProcUnavailableError is an RPCError
 type ResponseCodeProcUnavailableError struct {

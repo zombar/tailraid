@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/go-git/go-billy/v5"
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 // onCommit - note this is a no-op, as we always push writes to the backing store.

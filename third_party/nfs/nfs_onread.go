@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 type nfsReadArgs struct {

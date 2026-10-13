@@ -473,7 +473,7 @@ func TestNFS_ReadDirPlusLargeDirectory(t *testing.T) {
 	}
 }
 
-// Invariant: I-50
+// Invariant: I-50, I-245
 func TestNFS_FSStatAndUnsupported(t *testing.T) {
 	g := startGateway(t)
 	info, err := g.tgt.FSInfo()
@@ -502,8 +502,8 @@ func TestNFS_FSStatAndUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, _ := xdr.ReadUint32(res)
-	if status == 0 {
-		t.Fatal("LINK succeeded")
+	if status != 10004 { // NFS3ERR_NOTSUPP, decoded as LINK3args (I-245)
+		t.Fatalf("LINK: status %d, want NFS3ERR_NOTSUPP", status)
 	}
 	// Serve refuses non-loopback listeners
 	if _, err := nfsgw.Listen(t.Context(), "0.0.0.0:0"); err == nil {
