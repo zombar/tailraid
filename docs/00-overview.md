@@ -225,6 +225,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [16-snapshots](16-snapshots.md) | Snapshots on mirror disks: mirrors, the self-describing differential format, the sync and its GC hold, the schedule and thinning, the catalogue and reconciliation, reading, versions and restore, disaster recovery. I-179..I-181, I-183, I-186 (I-182 in 06; I-184 in 01; I-185 in 07; I-187 in 13; I-188 in 12) |
 | [17-stats](17-stats.md) | Time series kept in the volume: the sampler and its rows, gzip segments per node and hour, daily and monthly rollups, retention, the live-edge RPC and the Stats page's query, the storage budget. I-191..I-194, I-196 |
 | [18-search](18-search.md) | Search and the index kept in the volume: what is indexed, segments and the leader's pass, queries, the media catalogue from sidecars and tags, the library folder flag |
+| [19-secrets](19-secrets.md) | One encrypted secrets store: ciphertexts in the FSM, the cluster key in each device's OS keychain and fetched from a member, the keychain layer, `secret set\|ls\|rm`, the S3 and TMDB keys moved in. I-303..I-309 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged
