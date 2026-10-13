@@ -541,7 +541,8 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		haveFirst bool
 		// prevStatus is what the previous request in this chain answered. A
 		// RELATED request that follows a failure must not be carried out:
-		// see below, and read the rename it cost.
+		// see below, and read the rename it cost. A warning (severity 2, such
+		// as BUFFER_OVERFLOW) is not a failure (MS-SMB2 3.3.5.2.7.2, I-247).
 		prevStatus = statusSuccess
 	)
 	for {
@@ -583,7 +584,7 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		//
 		// The status is the previous one, not an invented one: the client sees
 		// the same reason twice and knows the chain did not happen.
-		if h.flags&flagRelatedOps != 0 && prevStatus != statusSuccess {
+		if h.flags&flagRelatedOps != 0 && isError(prevStatus) {
 			c.trace("chained after failure", "session", h.sessionID, "msg", h.messageID, "command", h.command, "status", fmt.Sprintf("%#x", prevStatus))
 			reply := errorResponse(h, prevStatus)
 			var key []byte

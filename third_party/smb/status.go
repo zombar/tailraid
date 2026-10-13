@@ -50,3 +50,7 @@ const (
 	statusNotifyCleanup        uint32 = 0x0000010C
 	statusNotifyEnumDir        uint32 = 0x0000010D
 )
+
+// isError reports whether an NTSTATUS has error severity (the top two bits 11): a
+// success (00), information (01) or warning (10) status is not a failure (I-247).
+func isError(status uint32) bool { return status>>30 == 3 }
