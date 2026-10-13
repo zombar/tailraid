@@ -339,9 +339,10 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   one disk by moving its marker and restarting its host: reads stay exact, the disk is
   dead while its host is live, repair re-places its slots within the cap after
   `fill_after`; restore it: live again, its stale shards swept after grace; then, in auto
-  mode, add a disk to the gateway host (`volume rebalance` opens the home gate and the
-  passes move slots onto it until `movable_bytes` and `disk_skew` are 0, a further pass
-  moves nothing and the corpus is exact), drain it and remove it, the policy following the
+  mode, add a disk to the gateway host (the policy migration lands every chunk at home,
+  `volume rebalance` opens the gate for what is left and the passes move it onto the disk
+  until `movable_bytes` and `disk_skew` are 0, a further pass moves nothing and the corpus
+  is exact), drain it and remove it, the policy following the
   member table after each step with the corpus exact (the previous pin restored after);
   I-86, I-87, I-89, I-90, I-172, I-294, I-295, L-192, L-193, L-194, L-211); 14 diskless host (a host with no disks is live, flagged
   `diskless` with no budget and holds no slot; a corpus written through it is fully placed

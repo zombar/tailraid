@@ -4,7 +4,7 @@
 import { h } from "./dom.ts";
 import { bar, barRow, fillTone, sparkline } from "./chart.ts";
 import { ago, bytes, count } from "./fmt.ts";
-import type { Report } from "./api.ts";
+import type { HomeStatus, Report } from "./api.ts";
 import type { Sample } from "./status.ts";
 
 // docs/00 durability contract: the gateway's dirty-byte and WAL caps.
@@ -72,6 +72,7 @@ function repair(r: Report): HTMLElement {
   row("unrepairable", count(s.unrepairable), s.unrepairable > 0 ? "bad" : undefined);
   row("deferred", count(s.deferred));
   row("migrated", count(s.migrated));
+  row("moved home", count(s.homed ?? 0));
   row("policy stale", count(s.policy_stale));
   row("scrubbed", count(s.scrubbed));
   row("scrub bad", count(s.scrub_bad), s.scrub_bad > 0 ? "bad" : undefined);
@@ -80,7 +81,8 @@ function repair(r: Report): HTMLElement {
   row("reported bad slots", count(r.repair.reported_bad_slots), r.repair.reported_bad_slots > 0 ? "warn" : undefined);
   // the pass under way (docs/12 §8) above the last completed pass's counters
   const p = r.repair.in_progress;
-  if (!p) return h("div", null, h("h3", null, "Repair · last scan " + ago(r.repair.last_scan)), kv);
+  const away = home(r.repair.home);
+  if (!p) return h("div", null, h("h3", null, "Repair · last scan " + ago(r.repair.last_scan)), away, kv);
   const started = new Date(p.started).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const progress = barRow(
     "scanned",
@@ -88,5 +90,20 @@ function repair(r: Report): HTMLElement {
     `${count(p.scanned)} of ${count(p.total)} · ${p.in_flight} in flight of ${p.workers} workers · ${bytes(p.bytes_moved)} moved · started ${started}`,
   );
   const note = h("div", { class: "small dim" }, `the pass under way; the counters below are the last completed pass, ${ago(r.repair.last_scan)}`);
-  return h("div", null, h("h3", null, `Repair · pass ${p.pass} running`), progress, note, kv);
+  return h("div", null, h("h3", null, `Repair · pass ${p.pass} running`), progress, note, away, kv);
+}
+
+// home is the "away from home" row (docs/14 §7): shown while anything is away, the bar the
+// movable share against repair.home_start.
+function home(st: HomeStatus | null | undefined): HTMLElement | null {
+  if (!st || st.away_slots === 0) return null;
+  const share = st.stored_bytes > 0 ? st.movable_bytes / st.stored_bytes : 0;
+  const pct = (f: number) => `${(f * 100).toFixed(f < 0.1 ? 1 : 0)} %`;
+  const gate = st.forced ? "gate open (volume rebalance)" : st.open ? "gate open" : st.start > 0 ? "gate closed" : "gate closed (home_start 0)";
+  const of = st.start > 0 ? ` (${pct(share)} of ${pct(st.start)})` : "";
+  return barRow(
+    "away from home",
+    bar(st.open ? 1 : st.start > 0 ? Math.min(share / st.start, 1) : 0),
+    `${count(st.away_slots)} slots · ${bytes(st.away_bytes)} · ${bytes(st.movable_bytes)} movable${of} · ${gate}`,
+  );
 }

@@ -212,6 +212,40 @@ func TestConfig_ScrubPeriod(t *testing.T) {
 	}
 }
 
+// repair.home_start is a percentage of 0 to 100, "%" optional: {unset, 0, 5, 5%, 100,
+// 100.000001, −1, junk}, and Validate refuses what the parser refuses.
+// Invariant: I-295
+func TestConfig_HomeStart(t *testing.T) {
+	for _, c := range []struct {
+		in       string
+		f        float64
+		set, bad bool
+	}{
+		{"", 0, false, false},
+		{"0", 0, true, false},
+		{"5", 0.05, true, false},
+		{"5%", 0.05, true, false},
+		{"100", 1, true, false},
+		{"100.000001", 0, false, true},
+		{"-1", 0, false, true},
+		{"NaN", 0, false, true},
+		{"five", 0, false, true},
+	} {
+		var cfg Config
+		cfg.Repair.HomeStart = c.in
+		f, set, err := cfg.RepairHomeStart()
+		if (err != nil) != c.bad || f != c.f || set != c.set {
+			t.Fatalf("repair.home_start %q: got %v set %v, %v; want %v set %v bad %v", c.in, f, set, err, c.f, c.set, c.bad)
+		}
+		full := Default()
+		full.Node.DataDir = t.TempDir()
+		full.Repair.HomeStart = c.in
+		if err := full.Validate(); (err != nil) != c.bad {
+			t.Fatalf("Validate with repair.home_start %q: %v, want bad %v", c.in, err, c.bad)
+		}
+	}
+}
+
 // A file this build writes names repair.workers and repair.rate only when they are set:
 // a release from before the keys reads it strictly and must still start after a
 // rollback (I-61); set, they round-trip.
@@ -228,7 +262,7 @@ func TestConfig_NewRepairKeysWrittenOnlyWhenSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"workers", "rate", "scrub_period", "stats", "every", "keep", "cache"} {
+	for _, key := range []string{"workers", "rate", "scrub_period", "home_start", "stats", "every", "keep", "cache"} {
 		if strings.Contains(string(b), key+":") {
 			t.Fatalf("an unset %s was written:\n%s", key, b)
 		}

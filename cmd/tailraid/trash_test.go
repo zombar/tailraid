@@ -51,3 +51,39 @@ func TestCLI_Trash_LsRestorePurge(t *testing.T) {
 		t.Fatalf("trash restore x: %v", err)
 	}
 }
+
+// `volume rebalance --dry-run` reaches the leader's rebalance op and moves nothing: on a
+// one-disk volume every slot is home, so it prints the counts, no flow and the dry-run
+// line, and the gate stays closed; without the flag the op answers "nothing to move".
+//
+// Invariant: I-295
+func TestCLI_VolumeRebalance_DryRun(t *testing.T) {
+	path, cfg := devHome(t)
+	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	sctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- node.Serve(sctx, cfg, slog.Default(), "test") }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("serve: %v", err)
+		}
+	}()
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
+	probe := rpc.NewClient([16]byte{}, nil)
+	testharness.Eventually(t, func() bool { h, err := probe.Health(context.Background(), addr); return err == nil && h.Ready }, "the node never served")
+
+	out, err := run(t, "volume", "rebalance", "--dry-run", "--config", path)
+	if err != nil || !strings.Contains(out, "0 slots away") || !strings.Contains(out, "dry run: nothing moves") || strings.Contains(out, "→") {
+		t.Fatalf("volume rebalance --dry-run: %q %v", out, err)
+	}
+	out, err = run(t, "volume", "rebalance", "--dry-run", "--json", "--config", path)
+	if err != nil || !strings.Contains(out, `"open": false`) {
+		t.Fatalf("volume rebalance --dry-run --json: %q %v", out, err)
+	}
+	if out, err := run(t, "volume", "rebalance", "--config", path); err != nil || !strings.Contains(out, "nothing to move") {
+		t.Fatalf("volume rebalance: %q %v", out, err)
+	}
+}

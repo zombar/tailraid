@@ -206,14 +206,15 @@ A slot is **away** when its target is not in its home for its class: a data slot
 < k) when its target is not one of the home's data targets, a parity slot when its target
 is not one of the home's parity targets. An away slot is **movable** when a home target of
 its class holds no slot of the chunk and is live, not suspect and has room for the shard;
-it then moves there, keeping its index (shard `i` stays shard `i`; slots are never
-swapped). When the only free home target of a class holds a slot of the other class, that
-slot moves first and the waiting one the next pass, so a chunk is home within two passes of
-its targets being live. Slots on an S3 node are never moved and an S3 node is never the
+it then moves there, keeping its index (shard `i` stays shard `i`). Every away slot of a
+chunk moves in one `SetPlacement`, so a home target that held a slot of the other class is
+freed and taken in the same step, and the host cap is checked against the placement the
+step commits, never against a half-moved one: a chunk is home after one move once its
+targets are live. Slots on an S3 node are never moved and an S3 node is never the
 destination of a move (egress, and only the leader's daily sweep deletes in a bucket,
 I-138), though S3 rows count in the home as they do for writes. A chunk whose `(k,m)`
-differs from the volume's is not judged (the migration re-places every slot, 06 §7), nor is
-a tombstone. Every move is the repair move sequence: read, PUT to the home target,
+differs from the volume's is not judged (the migration re-places every slot, and lands it
+at home, 06 §7), nor is a tombstone. Every move is the repair move sequence: read, PUT to the home target,
 `SetPlacement` with `Expect`, then the fenced DELETE, so the chunk never has fewer readable
 slots than before (I-65) and never two slots on one target (I-9).
 
@@ -241,7 +242,7 @@ Away slots are of two kinds, and keep the urgency each had before the fold:
     stays open until a pass finds none left or the home candidate set changes (the gate
     then re-evaluates against the new homes);
   - while open, each pass moves the placement-only slots of at most `HomeBatch` (64)
-    chunks, after the per-chunk work and only when that work found no bad slot, at
+    chunks, and none when the pass before found a bad slot or a pending migration, at
     background priority and under `repair.rate` and `repair.workers` (06 §4);
   - `repair.home_start: 0` closes it for good; `tailraid volume rebalance` opens it once
     whatever the threshold, until the movable bytes reach 0 (`--dry-run` lists the bytes
@@ -387,8 +388,8 @@ as `<host>/m<n>`.
 - **I-295** — Placement-only moves run only while the gate is open: it opens when the
   movable placement-only bytes reach `repair.home_start` of the stored bytes (or once by
   `volume rebalance`), closes when a pass finds none movable, and re-evaluates when the
-  home candidate set changes; an open pass moves at most `HomeBatch` chunks, after the
-  per-chunk work and only when that work found no bad slot, at background priority and
+  home candidate set changes; an open pass moves at most `HomeBatch` chunks, none when
+  the pass before found a bad slot or a pending migration, at background priority and
   under `repair.rate`; `repair.home_start: 0` never opens it on its own, and `volume
   rebalance --dry-run` moves nothing.
 - **I-296** — Every slot the repairer refills (missing, on a dead, draining or removed
@@ -416,7 +417,7 @@ as `<host>/m<n>`.
 | I-132 | `TestPrintNodes_HidesRemoved` |
 | I-146 | `TestDiskSet_UnwritableDiskClosed` |
 | I-147 | `TestSvc_RefreshUnit_NamesNewDiskAndRestarts` |
-| I-172 | `TestRebalanceMoves_Table`, `TestRepair_Rebalance_MovesWithinHost` (planned: TestHomeMoves_Table, TestRepair_Home_AddDiskFillsWithinHost) |
-| I-294 | (planned: TestHome_NNodeDeterminism, TestHome_EqualsWritePlacement, TestHomeMoves_Table, TestHomeMoves_Idempotent) |
-| I-295 | (planned: TestRepair_Home_Gate_Table, TestCLI_VolumeRebalance_DryRun, TestCluster_DegradedWrite_DataSlotsComeHome) |
-| I-296 | `TestChunkState_DomainSkew` (planned: TestRepair_RefillGoesHome_Table, TestRepair_DomainSkew_HomeDeadFillsUnderCap) |
+| I-172 | `TestHomeMoves_Table`, `TestRepair_Home_AddDiskFillsWithinHost` |
+| I-294 | `TestHome_EqualsWritePlacement`, `TestHome_NNodeDeterminism`, `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestCluster_DegradedWrite_DataSlotsComeHome` |
+| I-295 | `TestRepair_Home_Gate_Table`, `TestRepair_Home_AddDiskFillsWithinHost`, `TestCluster_DegradedWrite_DataSlotsComeHome`, `TestCLI_VolumeRebalance_DryRun`, `TestConfig_HomeStart` |
+| I-296 | `TestChunkState_DomainSkew`, `TestFillHome_RefillsFromHome`, `TestRepair_RefillGoesHome_Table`, `TestRepair_DomainSkew_HomeDeadFillsUnderCap` |
