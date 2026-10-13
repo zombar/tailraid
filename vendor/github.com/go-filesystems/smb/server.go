@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -36,6 +37,9 @@ type Server struct {
 	lns    []net.Listener
 	conns  map[*conn]struct{}
 	closed bool
+	// log, when set, receives a Debug line per CREATE, SET_INFO and CLOSE: the request
+	// trace that shows what a client did to a file. See SetLogger.
+	log *slog.Logger
 }
 
 type share struct {
@@ -137,6 +141,18 @@ func New() *Server {
 	// one per connection would look like an attack.
 	rand.Read(s.guid[:])
 	return s
+}
+
+// SetLogger sets where the server's request trace goes: one Debug line per CREATE,
+// SET_INFO and CLOSE, with the handle, the disposition and the delete-on-close state, so
+// a client's sequence can be read back from the log. nil (the default) traces nothing.
+func (s *Server) SetLogger(l *slog.Logger) { s.log = l }
+
+// trace writes one line of the request trace.
+func (c *conn) trace(msg string, args ...any) {
+	if l := c.srv.log; l != nil {
+		l.Debug("smb: "+msg, args...)
+	}
 }
 
 // SetName sets the NetBIOS-style name the server calls itself in the NTLM
@@ -248,6 +264,19 @@ func (s *share) unregister(of *openFile) {
 	delete(s.handles, of)
 }
 
+// openHandles counts the share's open handles of the file ino, every connection's.
+func (s *share) openHandles(ino uint64) int {
+	s.hmu.Lock()
+	defer s.hmu.Unlock()
+	n := 0
+	for of := range s.handles {
+		if of.ino == ino {
+			n++
+		}
+	}
+	return n
+}
+
 // moveHandles follows a rename of from to to in every open handle of the share: the
 // file itself and, for a directory, everything under it (I-224).
 func (s *share) moveHandles(from, to string) {
@@ -255,14 +284,22 @@ func (s *share) moveHandles(from, to string) {
 	defer s.hmu.Unlock()
 	for of := range s.handles {
 		of.pmu.Lock()
-		switch {
-		case of.path == from:
-			of.path = to
-		case strings.HasPrefix(of.path, from+"/"):
-			of.path = to + of.path[len(from):]
-		}
+		of.path = movedPath(of.path, from, to)
 		of.pmu.Unlock()
 	}
+	s.locks.move(from, to) // a byte-range lock is the file's, and goes with it
+}
+
+// movedPath is p after a rename of from to to: the file itself and, for a directory,
+// everything under it.
+func movedPath(p, from, to string) string {
+	switch {
+	case p == from:
+		return to
+	case strings.HasPrefix(p, from+"/"):
+		return to + p[len(from):]
+	}
+	return p
 }
 
 // reading takes the share's lock for a command that only reads, and returns
@@ -552,6 +589,7 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		// The status is the previous one, not an invented one: the client sees
 		// the same reason twice and knows the chain did not happen.
 		if h.flags&flagRelatedOps != 0 && prevStatus != statusSuccess {
+			c.trace("chained after failure", "session", h.sessionID, "msg", h.messageID, "command", h.command, "status", fmt.Sprintf("%#x", prevStatus))
 			reply := errorResponse(h, prevStatus)
 			var key []byte
 			if h.flags&flagSigned != 0 {
@@ -573,6 +611,7 @@ func (c *conn) dispatchChain(msg []byte) ([]byte, error) {
 		sess := c.sessions[binary.LittleEndian.Uint64(one[offSessionID:])]
 		if h.flags&flagSigned != 0 {
 			if sess == nil || !verifyMessage(c.dialect, sess.signingKey, one) {
+				c.trace("bad signature", "session", h.sessionID, "msg", h.messageID, "command", h.command)
 				return c.finish(out, errorResponse(h, statusAccessDenied), sess, h), nil
 			}
 		}
@@ -686,6 +725,7 @@ func (c *conn) dispatch(msg []byte) ([]byte, error) {
 	}
 	body := msg[headerLen:]
 	if c.dialect != 0 && h.command != cmdNegotiate && creditChargeTooLow(h, body) {
+		c.trace("credit charge too low", "session", h.sessionID, "msg", h.messageID, "command", h.command)
 		return errorResponse(h, statusInvalidParameter), nil
 	}
 	switch h.command {
@@ -704,25 +744,25 @@ func (c *conn) dispatch(msg []byte) ([]byte, error) {
 	case cmdEcho:
 		return simpleResponse(h, statusSuccess, 4), nil
 	case cmdCreate:
-		return c.create(h, body, msg)
+		return c.traceCreate(h, body, msg)
 	case cmdClose:
-		return c.closeFile(h, body)
+		return c.traceClose(h, body)
 	case cmdRead:
-		return c.read(h, body)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.read(h, body) })
 	case cmdWrite:
-		return c.write(h, body, msg)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.write(h, body, msg) })
 	case cmdFlush:
-		return c.flush(h, body)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.flush(h, body) })
 	case cmdQueryDirectory:
-		return c.queryDirectory(h, body, msg)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.queryDirectory(h, body, msg) })
 	case cmdQueryInfo:
-		return c.queryInfo(h, body)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.queryInfo(h, body) })
 	case cmdSetInfo:
-		return c.setInfo(h, body, msg)
+		return c.traceSetInfo(h, body, msg)
 	case cmdIoctl:
-		return c.ioctl(h, body, msg)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.ioctl(h, body, msg) })
 	case cmdLock:
-		return c.lock(h, body)
+		return c.traceOther(h, body, msg, func() ([]byte, error) { return c.lock(h, body) })
 	case cmdCancel:
 		return c.cancel(h)
 	case cmdChangeNotify:

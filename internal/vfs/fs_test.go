@@ -845,3 +845,60 @@ func TestVFS_ExclCreate_UnknownOutcome_OwnFileOpens(t *testing.T) {
 		t.Fatalf("open of another client's file after an unknown outcome: err=%v, want EEXIST", err)
 	}
 }
+
+// An exclusive mkdir makes the directory only when the name is free: a directory or file
+// another client made first is EEXIST, also when that mkdir reaches this gateway only as
+// the refusal; a mkdir that applied but whose answer was lost is this gateway's own.
+// Regression: I-222, I-95
+func TestVFS_MkdirExcl(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	must(t, fs.MkdirExcl("/p/mine", 0o755)) // missing parents are made
+	if st, err := fs.Stat("/p/mine"); err != nil || !st.IsDir() {
+		t.Fatalf("the directory was not made: %v", err)
+	}
+	if err := fs.MkdirExcl("/p/mine", 0o755); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("a second exclusive mkdir: err=%v, want EEXIST", err)
+	}
+	theirs := f.Clk.Now().UnixNano()
+	f.Clk.Advance(time.Second)
+	parent := f.InodeOf(fs, "/p")
+	f.ForestallNext(meta.OpMkdir, func() { // another gateway's, applied first
+		f.MustApply(meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{Parent: parent, Name: "theirs", Mode: 0o755, Now: theirs}})
+	})
+	if err := fs.MkdirExcl("/p/theirs", 0o755); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("a directory another client made first: err=%v, want EEXIST", err)
+	}
+	f.ProposeUnknown(1)
+	must(t, fs.MkdirExcl("/p/lost-answer", 0o755))
+	f.Clk.Advance(time.Second) // this gateway asks after the other's mkdir applied
+	f.ForestallNext(meta.OpMkdir, func() {
+		f.MustApply(meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{Parent: parent, Name: "theirs2", Mode: 0o755, Now: theirs}})
+	})
+	f.ProposeUnknown(1)
+	if err := fs.MkdirExcl("/p/theirs2", 0o755); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("another client's directory after an unknown outcome: err=%v, want EEXIST", err)
+	}
+}
+
+// RemoveIno takes a directory as it takes a file: the one the handle opened, or nothing
+// when another directory now holds the name.
+// Regression: I-225
+func TestVFS_RemoveIno_Directory(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	must(t, fs.MkdirAll("/d", 0o755))
+	mine := f.InodeOf(fs, "/d")
+	must(t, fs.Rename("/d", "/moved"))
+	must(t, fs.MkdirAll("/d", 0o755))
+	if err := fs.RemoveIno("/d", mine, false); !errors.Is(err, os.ErrNotExist) { // another directory's name now
+		t.Fatalf("RemoveIno of a name another directory holds: err=%v, want ENOENT", err)
+	}
+	if _, err := fs.Stat("/d"); err != nil {
+		t.Fatalf("the directory now under the name went: %v", err)
+	}
+	must(t, fs.RemoveIno("/moved", mine, false))
+	if _, err := fs.Stat("/moved"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the directory the handle opened survived: %v", err)
+	}
+}

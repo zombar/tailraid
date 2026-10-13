@@ -507,7 +507,12 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `RaceEnv`, run by the compose worker's `/smbraces` and by the harness against one
   SMB gateway per node; the SMB side uses `third_party/smb2client`, the
   in-tree copy of `cloudsoda/go-smb2` with the two calls upstream lacks (mark an open
-  handle delete-on-close, rename without replace). The compose rig gives four nodes two disks each, one
+  handle delete-on-close, rename without replace). Phases 22 and 23 need copy jobs, which
+  only the compose rig and the harness run: `tailraid verify` on a live cluster records
+  both as skipped. A round that faults the cluster registers the fault's end with the
+  phase's undo, so a phase cut short still brings the leader back or heals the partition
+  (I-112); a copy job the worker reported ended is forgotten, so the poll that saw the end
+  keeps its results, and the harness's jobs behave the same. The compose rig gives four nodes two disks each, one
   derived and one pinned, plus a fifth diskless voter (4 × 2 targets and a gateway-only
   host; phase 14 writes through it), an `s3` service, rclone's S3 server with
   signature checking on, as phase 15's bucket, a mirror directory on n2 for phase 19,

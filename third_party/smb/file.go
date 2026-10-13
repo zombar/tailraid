@@ -154,6 +154,9 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	st, statErr := sh.fsys.Stat(p)
 	exists := statErr == nil
 	action := actionOpened
+	if !exists && parentMissing(sh.fsys, p) {
+		return errorResponse(h, statusObjectPathNotFound), nil // never made on the way (I-233)
+	}
 
 	switch {
 	case exists && (disposition == dispCreate):
@@ -163,20 +166,29 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	case !exists && (disposition == dispCreate || disposition == dispOpenIf ||
 		disposition == dispOverwriteIf || disposition == dispSupersede):
 		x, excl := sh.fsys.(ExclusiveCreator)
-		if options&optDirectoryFile != 0 {
-			if err := sh.fsys.MkDir(p, 0o755); err != nil {
-				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
-			}
-		} else if excl && disposition == dispCreate {
+		xd, exclDir := sh.fsys.(ExclusiveDirCreator)
+		action = actionCreated
+		var err error
+		switch {
+		case options&optDirectoryFile != 0 && exclDir && disposition == dispCreate:
+			err = xd.MkDirExcl(p, 0o755)
+		case options&optDirectoryFile != 0:
+			err = sh.fsys.MkDir(p, 0o755)
+		case excl && (disposition == dispCreate || disposition == dispOpenIf):
 			// another server over the same volume may have made the name since Stat
-			// looked: the backend decides, and a name taken there is a collision
-			if err := x.CreateExcl(p, 0o644); err != nil {
-				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
+			// looked: the backend decides. A name taken there is a collision for
+			// FILE_CREATE, and for FILE_OPEN_IF the other server's file, opened and
+			// never truncated
+			err = x.CreateExcl(p, 0o644)
+			if disposition == dispOpenIf && errors.Is(err, os.ErrExist) {
+				err, action = nil, actionOpened
 			}
-		} else if err := sh.fsys.WriteFile(p, nil, 0o644); err != nil {
+		default:
+			err = sh.fsys.WriteFile(p, nil, 0o644)
+		}
+		if err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
-		action = actionCreated
 		if st, statErr = sh.fsys.Stat(p); statErr != nil {
 			return errorResponse(h, statusFor(statErr, statusObjectNameNotFound)), nil
 		}
@@ -299,12 +311,19 @@ type ExclusiveCreator interface {
 	CreateExcl(path string, perm os.FileMode) error
 }
 
+// ExclusiveDirCreator is ExclusiveCreator for a directory: MkDirExcl makes it only when
+// the name is free, as the backend decides, so FILE_CREATE of a directory another server
+// made first is a collision too.
+type ExclusiveDirCreator interface {
+	MkDirExcl(path string, perm os.FileMode) error
+}
+
 // InodeDeleter is the optional capability of a filesystem that deletes by identity:
-// DeleteFileIno removes the file at path only when it is still the inode ino, and does
-// nothing otherwise, decided where the names live (a shared volume, where another
-// server may have renamed the file away and made a new one under the name). own is as
+// DeleteFileIno removes the file or directory at path only when it is still the inode
+// ino, and does nothing otherwise, decided where the names live (a shared volume, where
+// another server may have renamed it away and made a new one under the name). own is as
 // for OwnDeleter: the handle that created the file is deleting it. A delete-on-close
-// of a file uses it (I-225).
+// uses it (I-225).
 type InodeDeleter interface {
 	DeleteFileIno(path string, ino uint64, own bool) error
 }
@@ -374,10 +393,12 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 		of.f.Close()
 	}
 	delete(c.files, of.id)
-	of.share.unregister(of)
 	of.share.locks.releaseAll(of.id)
 	c.cancelForFile(of.id)
 	defer of.share.changing()() // the file may go with the handle
+	// a rename holds the share's lock while it moves the handles: this one leaves the
+	// list only under it, so its path below is the file's, never a name it had (I-225)
+	of.share.unregister(of)
 	// The listing this handle was paging through goes with it. It holds a Stat
 	// for every entry in the directory, and a client that opens and closes
 	// directories all day -- which is what a file manager does -- would
@@ -389,7 +410,7 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 		p := of.p()
 		d, byIno := of.share.fsys.(InodeDeleter)
 		switch {
-		case byIno && !of.dir && of.ino != 0:
+		case byIno && of.ino != 0:
 			d.DeleteFileIno(p, of.ino, of.created) // the backend decides, atomically
 		case !sameFile(of.share.fsys, p, of.ino):
 			// someone else's file now: left alone
@@ -601,6 +622,7 @@ func (c *conn) writeAsync(h header, of *openFile, data []byte, offset int64) []b
 		unlock := lockUnlessConcurrent(of.share)
 		reply := writeAt(h, of, data, offset)
 		unlock()
+		c.trace("write_done", "session", h.sessionID, "msg", h.messageID, "path", of.p(), "ino", of.ino, "len", len(data), "off", offset, "status", fmt.Sprintf("%#x", replyStatus(reply)))
 		done <- reply
 		if op := <-later; op != nil {
 			c.finishAsyncWith(op, asFinal(reply, op.asyncID), key)

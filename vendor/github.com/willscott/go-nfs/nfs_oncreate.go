@@ -3,8 +3,10 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/willscott/go-nfs-client/nfs/xdr"
@@ -28,6 +30,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 	var attrs *SetFileAttributes
+	var verf [8]byte
 	if how == createModeUnchecked || how == createModeGuarded {
 		sattr, err := ReadSetFileAttributes(w.req.Body)
 		if err != nil {
@@ -35,14 +38,12 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		}
 		attrs = sattr
 	} else if how == createModeExclusive {
-		// read createverf3
-		var verf [8]byte
+		// tailraid: EXCLUSIVE as RFC 1813 §3.3.8 has it (I-231). The verifier is kept in
+		// the new file's times, as other servers keep it, so a retransmission finds its
+		// own file; the client sets the real attributes with a SETATTR afterwards.
 		if err := xdr.Read(w.req.Body, &verf); err != nil {
 			return &NFSStatusError{NFSStatusInval, err}
 		}
-		Log.Errorf("failing create to indicate lack of support for 'exclusive' mode.")
-		// TODO: support 'exclusive' mode.
-		return &NFSStatusError{NFSStatusNotSupp, os.ErrPermission}
 	} else {
 		// invalid
 		return &NFSStatusError{NFSStatusNotSupp, os.ErrInvalid}
@@ -69,6 +70,12 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		if how == createModeGuarded {
 			return &NFSStatusError{NFSStatusExist, os.ErrPermission}
 		}
+		if how == createModeExclusive {
+			if !holdsVerifier(s, verf) {
+				return &NFSStatusError{NFSStatusExist, os.ErrExist}
+			}
+			return createReply(w, userHandle, fs, path, newFile, newFilePath)
+		}
 	} else {
 		if s, err := fs.Stat(fs.Join(path...)); err != nil {
 			return &NFSStatusError{NFSStatusAccess, err}
@@ -78,12 +85,16 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 	}
 
 	var file billy.File
-	if how == createModeGuarded {
-		// tailraid: GUARDED is exclusive. The Stat above saw this server's view only;
-		// another server over the same volume may have made the name since, and the
-		// filesystem's O_EXCL decides (docs/07, I-222).
+	if how == createModeGuarded || how == createModeExclusive {
+		// tailraid: GUARDED and EXCLUSIVE are exclusive. The Stat above saw this server's
+		// view only; another server over the same volume may have made the name since,
+		// and the filesystem's O_EXCL decides (docs/07, I-222). An EXCLUSIVE retransmission
+		// whose first attempt another server answered finds its own verifier.
 		file, err = fs.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, os.ErrExist) {
+			if s, serr := fs.Stat(newFilePath); how == createModeExclusive && serr == nil && holdsVerifier(s, verf) {
+				return createReply(w, userHandle, fs, path, newFile, newFilePath)
+			}
 			return &NFSStatusError{NFSStatusExist, err}
 		}
 	} else {
@@ -98,13 +109,36 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusAccess, err}
 	}
 
-	fp := userHandle.ToHandle(fs, newFile)
 	changer := userHandle.Change(fs)
-	if err := attrs.Apply(changer, fs, newFilePath); err != nil {
+	if how == createModeExclusive {
+		t := verifierTime(verf)
+		if changer == nil {
+			return &NFSStatusError{NFSStatusNotSupp, os.ErrPermission}
+		}
+		if err := changer.Chtimes(newFilePath, t, t); err != nil {
+			return &NFSStatusError{NFSStatusIO, err}
+		}
+	} else if err := attrs.Apply(changer, fs, newFilePath); err != nil {
 		Log.Errorf("Error applying attributes: %v\n", err)
 		return &NFSStatusError{NFSStatusIO, err}
 	}
+	return createReply(w, userHandle, fs, path, newFile, newFilePath)
+}
 
+// verifierTime is the time an EXCLUSIVE create keeps its createverf3 in (I-231).
+func verifierTime(verf [8]byte) time.Time {
+	return time.Unix(0, int64(binary.BigEndian.Uint64(verf[:]))) //nolint:gosec // the verifier's bits, as they are
+}
+
+// holdsVerifier reports whether an existing file is the one an EXCLUSIVE create with
+// verf made: its modification time still carries the verifier.
+func holdsVerifier(s os.FileInfo, verf [8]byte) bool {
+	return !s.IsDir() && s.ModTime().Equal(verifierTime(verf))
+}
+
+// createReply answers a CREATE with the new file's handle and attributes.
+func createReply(w *response, userHandle Handler, fs billy.Filesystem, path, newFile []string, newFilePath string) error {
+	fp := userHandle.ToHandle(fs, newFile)
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
@@ -117,7 +151,7 @@ func onCreate(ctx context.Context, w *response, userHandle Handler) error {
 	if err := xdr.Write(writer, fp); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, []string{file.Name()})); err != nil {
+	if err := WritePostOpAttrs(writer, tryStat(fs, newFile)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 

@@ -106,6 +106,10 @@ type dirtyFile struct {
 	counted   uint64 // this entry's share of Overlay.total (fresh + plan bytes)
 	lastErr   error  // the last flush attempt's failure, nil after a success (I-79)
 	lastWrite time.Time
+	// times are the access and modification times a client set while the file was dirty
+	// and after its last write, re-applied after each flush's Commit, which stamps its own
+	// (I-230); a later write or truncate clears them, being newer
+	times *userTimes
 	// Group commit (docs/04 §2.1, I-168): a record's in-memory effect waits in pending
 	// until its fsync succeeded and is applied in log order; gate holds new appends while
 	// a snapshot, compaction or eviction waits for pending to drain.
@@ -248,8 +252,11 @@ type rewriteClaim struct {
 }
 
 // touchRewrite is every WRITE's look at ino's claim: a lapsed one is forgotten, so this
-// WRITE and the ones after it are plain; a live one is refreshed.
+// WRITE and the ones after it are plain; a live one is refreshed. A claim whose copy is
+// still dirty never lapses: the rest of it lands as the same rewrite, however long its
+// flushes retried.
 func (o *Overlay) touchRewrite(ino meta.Ino) {
+	dirty := o.dirty(ino)
 	o.rmu.Lock()
 	defer o.rmu.Unlock()
 	c, ok := o.rewrites[ino]
@@ -257,7 +264,7 @@ func (o *Overlay) touchRewrite(ino meta.Ino) {
 		return
 	}
 	now := o.clk.Now()
-	if now.Sub(c.at) > RewriteHold {
+	if now.Sub(c.at) > RewriteHold && !dirty {
 		delete(o.rewrites, ino)
 		return
 	}
@@ -299,17 +306,49 @@ func (o *Overlay) SetRewrite(ino meta.Ino, id uint64) {
 	}
 }
 
-// PruneRewrites forgets every claim that has lapsed; the flusher's loop calls it so the
-// table holds only the inodes written within RewriteHold.
-func (o *Overlay) PruneRewrites() {
+// ForgetPendingRewrite drops ino's claim if its start is still pending: a flush committed
+// the copy's first bytes as a plain write (the gate was closed, or the leader refused the
+// rewrite), so no later flush may start one, which would truncate what that flush
+// committed. A truncate to 0 still in the overlay starts a fresh one (I-223).
+func (o *Overlay) ForgetPendingRewrite(ino meta.Ino) {
 	o.rmu.Lock()
 	defer o.rmu.Unlock()
+	if c, ok := o.rewrites[ino]; ok && c.id == 0 {
+		delete(o.rewrites, ino)
+	}
+}
+
+// PruneRewrites forgets every claim that has lapsed and whose copy has landed; the
+// flusher's loop calls it so the table holds only the inodes written within RewriteHold
+// or still dirty.
+func (o *Overlay) PruneRewrites() {
 	now := o.clk.Now()
+	o.rmu.Lock()
+	var lapsed []meta.Ino
 	for ino, c := range o.rewrites {
 		if now.Sub(c.at) > RewriteHold {
-			delete(o.rewrites, ino)
+			lapsed = append(lapsed, ino)
 		}
 	}
+	o.rmu.Unlock()
+	for _, ino := range lapsed {
+		if o.dirty(ino) {
+			continue
+		}
+		o.rmu.Lock()
+		if c, ok := o.rewrites[ino]; ok && now.Sub(c.at) > RewriteHold { // a WRITE since refreshed it
+			delete(o.rewrites, ino)
+		}
+		o.rmu.Unlock()
+	}
+}
+
+// dirty reports whether ino has dirty data or a flush in flight.
+func (o *Overlay) dirty(ino meta.Ino) bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	_, ok := o.files[ino]
+	return ok
 }
 
 // OpenOverlay opens dir, replaying every `<ino>.wal` into dirty state (restart with a
@@ -623,6 +662,7 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
 		d.ext.insert(extent{off: off, n: n, walOff: walOff})
 		d.size = max(d.size, off+n)
 		d.lastWrite = o.clk.Now()
+		d.times = nil
 		o.recount(d)
 	}})
 	d.mu.Unlock()
@@ -662,6 +702,7 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 			d.planTrunc = true
 		}
 		d.lastWrite = o.clk.Now()
+		d.times = nil
 		o.recount(d)
 	}})
 	d.mu.Unlock()
@@ -681,6 +722,53 @@ func (o *Overlay) Size(ino meta.Ino, committed uint64) (uint64, bool) {
 	}
 	defer d.mu.Unlock()
 	return d.effSize(committed), true
+}
+
+// userTimes are a client's access and modification times, in nanoseconds (meta.SetAttr).
+type userTimes struct{ atime, mtime int64 }
+
+// NoteTimes records the times a client set on ino, when it has dirty data: the flusher
+// sets them again after it commits that data (I-230). A file with nothing dirty needs
+// nothing: no Commit follows to stamp over them.
+func (o *Overlay) NoteTimes(ino meta.Ino, atime, mtime int64) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return
+	}
+	defer d.mu.Unlock()
+	if d.dirty() {
+		d.times = &userTimes{atime: atime, mtime: mtime}
+	}
+}
+
+// UserTimes returns the times NoteTimes recorded on ino and no write has superseded.
+func (o *Overlay) UserTimes(ino meta.Ino) (atime, mtime int64, ok bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return 0, 0, false
+	}
+	defer d.mu.Unlock()
+	if d.times == nil {
+		return 0, 0, false
+	}
+	return d.times.atime, d.times.mtime, true
+}
+
+// DataEnd reports what the overlay holds of an inode's data: the end of its last dirty
+// byte (a plan's below the lowest truncate since it was captured, fresh ones whole) and
+// the offset below which committed bytes still show. ok is false when the inode has no
+// dirty state, and then the committed inode is all there is.
+func (o *Overlay) DataEnd(ino meta.Ino) (dirtyEnd, baseLim uint64, ok bool) {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return 0, 0, false
+	}
+	defer d.mu.Unlock()
+	end := d.ext.maxEnd()
+	if d.plan != nil {
+		end = max(end, min(d.plan.Extents.maxEnd(), d.planMin))
+	}
+	return end, baseLimit(d.sizeSet, d.minSize), true
 }
 
 // Read fills p from the overlay view of an inode whose committed size is committed:

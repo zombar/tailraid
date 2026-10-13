@@ -75,6 +75,9 @@ type RaceEnv interface {
 	HoldDeleteOnClose(ctx context.Context, node NodeRef, path string) (release func(context.Context) error, err error)
 }
 
+// smbRaces is how many races SMBRaces reports when its sessions open (smbclient.Races).
+const smbRaces = 3
+
 // CopyJob is copies under way; Poll reports whether all have ended and, then, how.
 type CopyJob interface {
 	Poll(ctx context.Context) (done bool, results []CopyResult, err error)
@@ -155,10 +158,14 @@ func phaseCopies(ctx context.Context, r *Run) error {
 			if err := r.Env.Kill(ctx, l); err != nil {
 				return "", nil, err
 			}
+			start := func(c context.Context) error { return r.Env.Start(c, l) }
 			if err := r.Env.Wait(ctx, 3*time.Second); err != nil {
-				return "", nil, err
+				return "", start, err // brought back by the undo
 			}
-			return "killed " + l.Name, nil, r.Env.Start(ctx, l)
+			if err := start(ctx); err != nil {
+				return "", start, err
+			}
+			return "killed " + l.Name, nil, nil
 		}},
 		{"a minority partition", func(ctx context.Context, copiers []NodeRef) (string, func(context.Context) error, error) {
 			l := r.leaderRef(ctx)
@@ -230,6 +237,8 @@ func phaseCopies(ctx context.Context, r *Run) error {
 			return copiers[0].Name + " updated once idle", func(context.Context) error { return <-done }, nil
 		}},
 	}
+	u := r.undoer(ctx) // a fault still in force when the phase ends early is ended (I-112)
+	defer u.run()
 	var seed uint64 = 0x22
 	for i, rd := range rounds {
 		if ctx.Err() != nil {
@@ -265,6 +274,10 @@ func phaseCopies(ctx context.Context, r *Run) error {
 			jobs = append(jobs, job)
 		}
 		what, undo, ferr := rd.fault(ctx, copiers)
+		step := fmt.Sprintf("end 22.%d %s", i+1, rd.name)
+		if undo != nil {
+			u.add(step, undo)
+		}
 		if ferr != nil {
 			r.check("", fmt.Sprintf("22.%d %s: the fault ran", i+1, rd.name), false, ferr.Error())
 		} else {
@@ -289,6 +302,7 @@ func phaseCopies(ctx context.Context, r *Run) error {
 		}
 		r.checkCopies(ctx, fmt.Sprintf("22.%d %s", i+1, rd.name), copiers, want)
 		if undo != nil {
+			u.done(step)
 			if err := undo(ctx); err != nil {
 				return fmt.Errorf("round %q: end the fault: %w", rd.name, err)
 			}

@@ -139,7 +139,11 @@ chain may be protected (`ErrProtected`). Removes the child entry and the inode. 
 to `Tombs`. Any handle to the inode now fails `FromHandle` (I-3, I-17). The gateways
 propose `Unlink` only for the ephemeral names of 06 §1 (upload temps, `._*`,
 `.DS_Store`) and while a member is too old for `Trash` (12 §6); every other delete is a
-`Trash`.
+`Trash`. One `Trash` is followed at once by a `Purge` of its inode: an SMB handle's
+own delete of a file that holds no data, every byte reading as zero (docs/15 §3, I-229).
+That is Windows' copy engine creating, sizing and dropping each destination in a first
+pass over a batch; such a file has nothing to restore, and in the trash it would be one
+empty entry per file copied.
 
 **Rmdir.** Child must be `TDir` (`ErrNotDir`) with empty `Children` (`ErrNotEmpty`), not
 protected and under no protected directory. Removes it; parent `Nlink--`. Like `Unlink`,

@@ -259,3 +259,23 @@ func TestVFS_Remove_FallsBackWhileCodecOld(t *testing.T) {
 		t.Fatalf("after the fallback: %+v", f.FSM.Stats())
 	}
 }
+
+// A delete-on-close the leader refuses only for its codec-9 Expect (it sees an older
+// member than this gateway does) still goes to the trash: the plain trash is proposed
+// again, never a hard unlink.
+// Regression: I-225
+func TestVFS_RemoveIno_ExpectRefused_StillTrashes(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	writeFile(t, fs, "/d/a", []byte("keep me in the trash"))
+	ino := f.InodeOf(fs, "/d/a")
+	must(t, f.Flusher().FlushAll(ctx))
+	f.SetLeaderCodec(meta.CodecRewrite - 1)
+	must(t, fs.RemoveIno("/d/a", ino, false))
+	if _, err := fs.Stat("/d/a"); err == nil {
+		t.Fatal("the file is still there")
+	}
+	if tr := f.FSM.Trash(); len(tr) != 1 {
+		t.Fatalf("the delete skipped the trash: %d entries", len(tr))
+	}
+}

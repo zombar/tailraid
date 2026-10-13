@@ -51,7 +51,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 
-	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
+	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, continuing(obj.Cookie, obj.CookieVerif))
 	if err != nil {
 		return err
 	}
@@ -88,9 +88,14 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 	maxEntities := userHandle.HandleLimit() / 2
 	fb := 0
 	fss := 0
+	pruner, _ := userHandle.(ListingPruner)
+	dirPath := fs.Join(p...)
 	for i, c := range contents {
 		// cookie equates to index within contents + 2 (for '.' and '..')
 		cookie := uint64(i + 2)
+		if started && pruner != nil && pruner.Gone(dirPath, c) {
+			continue // removed since the kept listing was made; its cookie stays counted
+		}
 		fb++
 		if started {
 			fss++

@@ -35,6 +35,7 @@ const (
 	statusFileIsADirectory     uint32 = 0xC00000BA
 	statusDirectoryNotEmpty    uint32 = 0xC0000101
 	statusNotSupported         uint32 = 0xC00000BB
+	statusBufferTooSmall       uint32 = 0xC0000023
 	statusUserSessionDeleted   uint32 = 0xC0000203
 	statusNetworkNameDeleted   uint32 = 0xC00000C9
 	statusInvalidDeviceRequest uint32 = 0xC0000010

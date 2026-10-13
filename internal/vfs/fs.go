@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -452,10 +453,17 @@ func (f *FS) Remove(filename string) error { return f.remove(filename, false, 0)
 // and nothing otherwise (ErrNotExist): a client may have renamed the file away and made
 // a new one under the name. Once every live member reads codec 9 the leader decides it
 // (Trash.Expect); before, this gateway's lookup does. own is RemoveOwn's (I-225).
+//
+// An own delete of a file that holds no data (I-229), Windows' copy engine's first pass
+// over a batch, leaves nothing in the trash: the inode is purged once the name is gone.
 func (f *FS) RemoveIno(filename string, ino meta.Ino, own bool) error {
+	scratch := own && ino != 0 && f.unwritten(ino)
 	err := f.remove(filename, own, ino)
 	if own && errors.Is(err, syscall.EOPNOTSUPP) {
-		return f.remove(filename, false, ino)
+		err = f.remove(filename, false, ino)
+	}
+	if err == nil && scratch {
+		f.purgeScratch(ino)
 	}
 	return err
 }
@@ -470,6 +478,53 @@ func (f *FS) RemoveOwn(filename string) error {
 		return f.remove(filename, false, 0)
 	}
 	return err
+}
+
+// validData is ino's valid data length and size (File.ValidData, I-227). The overlay is
+// read first, then the inode: a flush moves dirty bytes into the inode before it clears
+// them here, so whatever commits in between shows in one of the two.
+func (f *FS) validData(ino meta.Ino) (valid, size uint64, err error) {
+	dirtyEnd, limit, dirty := f.ov.DataEnd(ino)
+	in, ok := f.st.GetInodeAny(ino) // an open file in the trash still reads and flushes (I-155)
+	if !ok {
+		return 0, 0, meta.ErrNotExist
+	}
+	end := uint64(0)
+	cs := uint64(f.st.Volume().ChunkSize)
+	for i, h := range slices.Backward(in.Chunks) {
+		if h != meta.HashZero {
+			end = min(in.Size, uint64(i+1)*cs) //nolint:gosec // i is an index
+			break
+		}
+	}
+	size = in.Size
+	if dirty {
+		end = max(min(end, limit), dirtyEnd)
+		if s, ok := f.ov.Size(ino, in.Size); ok {
+			size = s
+		}
+	}
+	return min(end, size), size, nil
+}
+
+// unwritten reports whether ino holds no data: every byte of it reads as zero (I-229).
+func (f *FS) unwritten(ino meta.Ino) bool {
+	v, _, err := f.validData(ino)
+	return err == nil && v == 0
+}
+
+// purgeScratch removes for good a file an SMB handle created and deleted without
+// writing a byte into it (I-229): it went to the trash as any delete does, and holds
+// nothing to restore. It is checked again first: a byte that landed since is kept in
+// the trash. A protected folder keeps it in the trash too (Purge obeys the flag).
+func (f *FS) purgeScratch(ino meta.Ino) {
+	if !f.unwritten(ino) {
+		return
+	}
+	if err := f.Purge(ino); err != nil {
+		return // left in the trash, where the retention purge takes it
+	}
+	f.ov.Drop(ino)
 }
 
 func (f *FS) remove(filename string, own bool, expect meta.Ino) error {
@@ -495,6 +550,13 @@ func (f *FS) remove(filename string, own bool, expect meta.Ino) error {
 		trash.Expect = expect // the leader decides; this gateway may not have seen a rename yet
 	}
 	_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: trash})
+	if trash.Expect != 0 && errors.Is(err, meta.ErrCodec) {
+		// the leader sees a member older than codec 9 (a rolling upgrade): the lookup
+		// above decided, and the delete still goes to the trash, not a hard unlink
+		plain := *trash
+		plain.Expect = 0
+		_, err = f.propose(ctx, meta.Command{Op: meta.OpTrash, Trash: &plain})
+	}
 	if expect != 0 && errors.Is(err, meta.ErrConflict) {
 		return mapErr("remove", filename, meta.ErrNotExist) // the name is another file's now
 	}
@@ -585,6 +647,42 @@ func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
 		return mapErr("mkdir", filename, err)
 	}
 	return nil
+}
+
+// MkdirExcl makes the directory filename only when the name is free, as the leader
+// decides: a name another client took first is os.ErrExist whether or not this gateway
+// has applied that create yet, as an exclusive file create is (I-222). Missing parents
+// are made. SMB's FILE_CREATE of a directory is this.
+func (f *FS) MkdirExcl(filename string, perm os.FileMode) error {
+	ctx := context.Background()
+	parts := meta.SplitPath(filename)
+	if isSnapshotPath(parts) {
+		return mapErr("mkdir", filename, ErrReadOnly)
+	}
+	dp, name := parentOf(parts)
+	if name == "" {
+		return mapErr("mkdir", filename, meta.ErrExist) // the root
+	}
+	if err := f.mkdirAll(ctx, dp, 0o755); err != nil {
+		return mapErr("mkdir", filename, err)
+	}
+	parent, err := f.st.Resolve(dp)
+	if err != nil {
+		return mapErr("mkdir", filename, err)
+	}
+	asked := f.now()
+	_, err = f.propose(ctx, meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{
+		Parent: parent.Ino, Name: name, Mode: uint32(perm.Perm()), Uid: f.uid, Gid: f.gid, Now: asked,
+	}})
+	if errors.Is(err, meta.ErrExist) && errors.Is(err, meta.ErrUnknownOutcome) {
+		// our own first attempt may have landed (I-95): an empty directory made in the window
+		if in, ok := f.st.Lookup(parent.Ino, name); ok && in.Type == meta.TDir && in.Ctime >= asked && in.Ctime <= f.now() {
+			if ents, _ := f.st.ReadDir(in.Ino); len(ents) == 0 {
+				return nil
+			}
+		}
+	}
+	return mapErr("mkdir", filename, err)
 }
 
 func (f *FS) mkdirAll(ctx context.Context, parts []string, perm os.FileMode) error {
@@ -703,6 +801,33 @@ func (f *FS) Lchown(name string, uid, gid int) error {
 
 func (f *FS) Chown(name string, uid, gid int) error { return f.Lchown(name, uid, gid) }
 
+// Chtimes sets a client's times. One set while the file has unflushed writes is noted in
+// the overlay, so the flush that commits those writes keeps it (I-230). A time outside
+// what the volume represents (nanoseconds since 1970 in an int64: 1677–2262) is held at
+// the nearest end rather than wrapped.
 func (f *FS) Chtimes(name string, atime, mtime time.Time) error {
-	return f.setAttr(name, meta.SetAttr{Mask: meta.AttrAtime | meta.AttrMtime, Atime: atime.UnixNano(), Mtime: mtime.UnixNano()})
+	sa := meta.SetAttr{Mask: meta.AttrAtime | meta.AttrMtime, Atime: clampNano(atime), Mtime: clampNano(mtime)}
+	if err := f.setAttr(name, sa); err != nil {
+		return err
+	}
+	if in, err := f.resolve(name); err == nil {
+		f.ov.NoteTimes(in.Ino, sa.Atime, sa.Mtime)
+	}
+	return nil
+}
+
+var (
+	earliestTime = time.Unix(0, math.MinInt64)
+	latestTime   = time.Unix(0, math.MaxInt64)
+)
+
+// clampNano is t in nanoseconds since 1970, held within an int64.
+func clampNano(t time.Time) int64 {
+	switch {
+	case t.Before(earliestTime):
+		return math.MinInt64
+	case t.After(latestTime):
+		return math.MaxInt64
+	}
+	return t.UnixNano()
 }

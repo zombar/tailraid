@@ -184,6 +184,29 @@ func (f *File) Truncate(size int64) error {
 	return nil
 }
 
+// ValidData is the file's valid data length and its size, as NTFS keeps them and SMB's
+// FSCTL_QUERY_FILE_REGIONS reports them (docs/15 §3, I-227): every byte at or past valid
+// reads as zero, and valid is never short of a byte that reads otherwise. It is the end
+// of the last committed chunk that is not a hole, held below a truncate the overlay still
+// carries, or the end of the last dirty byte, whichever is larger, capped at the size. A
+// chunk written as zeros is a hole once flushed, so valid may fall short of a write of
+// zeros; a committed chunk counts whole, so it may pass the end of a write by less than a
+// chunk of zeros. A snapshot file reports its size.
+func (f *File) ValidData() (valid, size int64, err error) {
+	if err := f.checkOpen("query"); err != nil {
+		return 0, 0, err
+	}
+	if f.snap != nil {
+		sz := int64(f.snap.e.Size) //nolint:gosec // a file size fits an int64
+		return sz, sz, nil
+	}
+	v, sz, err := f.fs.validData(f.ino)
+	if err != nil {
+		return 0, 0, mapErr("query", f.name, err)
+	}
+	return int64(v), int64(sz), nil //nolint:gosec // file sizes fit an int64
+}
+
 // Close only marks the handle: durability is the WAL fsync that already happened in Write.
 func (f *File) Close() error {
 	if f.closed {

@@ -278,9 +278,9 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 		// a writer's O_TRUNC open, or a truncate to 0 replayed or set since, starts a
 		// rewrite; a later plan carries its id (docs/04 §6, I-223)
 		start, id := f.ov.Rewrite(ino)
-		if !start && id == 0 && plan.SizeSet && plan.MinSize == 0 {
+		if !start && plan.SizeSet && plan.MinSize == 0 { // a new copy, even over this gateway's last
 			f.ov.MarkRewrite(ino)
-			start = true
+			start, id = true, 0
 		}
 		if start {
 			plan.SizeSet, plan.MinSize = true, 0
@@ -314,7 +314,23 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 		return err
 	}
 	f.ov.NoteFlush(ino, nil) // before CommitFlushed, which may evict the entry
+	f.restoreTimes(ctx, ino)
 	return f.ov.CommitFlushed(plan, newSize)
+}
+
+// restoreTimes sets again the times a client set on ino after its last write, which the
+// Commit just stamped over with its own (I-230): a copy's source times, set as its last
+// step, outlive the flush. A failure leaves the flush's time and is logged; the data is
+// committed either way.
+func (f *Flusher) restoreTimes(ctx context.Context, ino meta.Ino) {
+	atime, mtime, ok := f.ov.UserTimes(ino)
+	if !ok {
+		return
+	}
+	sa := &meta.SetAttr{Ino: ino, Mask: meta.AttrAtime | meta.AttrMtime, Atime: atime, Mtime: mtime, Now: f.clk.Now().UnixNano()}
+	if _, _, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetAttr, SetAttr: sa}); err != nil && f.log != nil {
+		f.log.Warn("a client's file times were not set again after the flush", "ino", ino, "err", err)
+	}
 }
 
 // carriesSums reports whether a Commit records any chunk's shard sums (a codec-5 command).
@@ -392,6 +408,8 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 		case res.Err == nil:
 			if cmd.RewriteStart {
 				f.ov.SetRewrite(plan.Ino, res.Version) // the id later Commits carry (I-223)
+			} else {
+				f.ov.ForgetPendingRewrite(plan.Ino) // committed plain: nothing left to start
 			}
 			if f.Hooks.AfterRaftCommit != nil {
 				f.Hooks.AfterRaftCommit()

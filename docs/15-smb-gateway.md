@@ -49,7 +49,8 @@ upstream, each with a test in the copy:
   basic forwards the access and write times a client sets to `MetadataSetter.Chtimes`
   (0, −1 and −2 mean "leave it", per MS-FSCC 2.4.7); without the capability the server
   keeps reporting the time of the reply. Explorer therefore shows the FSM's modification
-  times and `robocopy /COPY:DAT` preserves them.
+  times and `robocopy /COPY:DAT` preserves them, through the flush that commits the
+  copied data (04 §6, I-230).
 - `file.go`, `status.go`: a READ the backend fails (here: a chunk with too few shards,
   `EIO`) answers `STATUS_UNEXPECTED_IO_ERROR`, not `STATUS_END_OF_FILE`, which upstream
   used as the fallback for every read error. A client takes END_OF_FILE for a shorter
@@ -105,23 +106,28 @@ Adapter: `internal/smbgw` implements that contract over `*vfs.FS` and `*vfs.File
 
 ## 3. What the server does on the backend (verified against v0.7.0)
 
-Every command holds the share's lock for its whole duration: reads share it, anything that
-changes the volume holds it exclusively. Two clients (macOS opens two connections for one
+Every command but a WRITE holds the share's lock for its whole duration: reads share it,
+anything that changes the volume holds it exclusively (a WRITE needs none: the vfs locks
+per inode, I-217). Two clients (macOS opens two connections for one
 mount) therefore never interleave inside one command on one gateway; between gateways
 the FSM decides (an exclusive create, I-222; two rewrites of one file, I-223). The share
-also keeps its open handles by inode, so what one handle does to a file (a rename, a
-delete-on-close) is judged by the file, not by the name it had when opened (I-224,
-I-225).
+also keeps a list of its open handles, each with the inode it opened: a rename moves
+every handle (and every byte-range lock) on the renamed path or under it to the new one,
+and a delete-on-close removes the handle's inode or nothing, so what one handle does to a
+file is judged by the file, not by the name it had when opened (I-224, I-225). A rename
+made on another gateway, over NFS or in the browser moves no handle here: such a handle
+keeps answering by its old path until it is reopened.
 
 | SMB2 command | What the server calls on the adapter |
 |---|---|
 | CREATE (open) | `Stat(path)`; on a miss, the case-insensitive walk of §5; then `OpenFile(path)` for a file, which the adapter answers with a `WritableFile` over `vfs.OpenFile(path, O_RDWR)` |
-| CREATE (create) | `FILE_CREATE`: `CreateExcl(path)` (`vfs.OpenFile` with `O_CREATE\|O_EXCL`), or `MkDir(path, 0755)` for a directory; an existing name, seen by this gateway or by the leader, is `STATUS_OBJECT_NAME_COLLISION` (I-222); then `Stat` and `OpenFile` as above |
-| CREATE (overwrite, supersede, open-if, overwrite-if) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`): on an existing file the truncate starts a rewrite, so two clients replacing one file leave one whole copy (04 §6, I-223) |
+| CREATE (create) | `FILE_CREATE`: `CreateExcl(path)` (`vfs.OpenFile` with `O_CREATE\|O_EXCL`), or `MkDirExcl(path, 0755)` (`vfs.MkdirExcl`) for a directory; an existing name, seen by this gateway or by the leader, is `STATUS_OBJECT_NAME_COLLISION` (I-222); then `Stat` and `OpenFile` as above |
+| CREATE (open-if) | a missing name: `CreateExcl(path)`; a name another gateway created first opens that file, never truncated; a directory: `MkDir(path, 0755)` |
+| CREATE (overwrite, supersede, overwrite-if) | `WriteFile(path, nil, 0644)` (`vfs.OpenFile` with `O_CREATE\|O_TRUNC`): on an existing file the truncate starts a rewrite, so two clients replacing one file leave one whole copy (04 §6, I-223) |
 | READ | `File.ReadAt(buf, offset)`; a short read at the end is `STATUS_END_OF_FILE`, which is how a listing of bytes ends |
 | WRITE | `WritableFile.WriteAt(data, offset)` then `Sync()`; the reply is sent only after both return. `WriteAt` is `vfs.File.WriteAt`, durable in the WAL when it returns (I-7), so `Sync` is a no-op |
 | FLUSH | `Sync()`, success |
-| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFile` or `DeleteDir` of the handle's current path with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
+| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFileIno(path, ino)` (`vfs.RemoveIno`) of the handle's current path, for a file or a directory, with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
 | SET_INFO end-of-file, allocation | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
 | SET_INFO rename | `Rename(old, new)` when `ReplaceIfExists` is set; without it `RenameNoReplace(old, new)` (the FSM's `NoReplace`, docs/02), so an existing `new`, created on this gateway or another, is `STATUS_OBJECT_NAME_COLLISION` and nothing moves (I-224). Every open handle of the file on the share follows the new path, not only the renaming one |
 | SET_INFO disposition | marks the handle delete-on-close (SMB2 has no delete command) |
@@ -130,6 +136,47 @@ I-225).
 | QUERY_INFO filesystem size | the share's `WithCapacityFunc`, which the adapter answers with `meta.Usage(volume, nodes, stats)`: the same total and free bytes as NFS `FSSTAT` and `tailraid status` |
 | QUERY_DIRECTORY | `ListDir(dir)` then `Stat` of every entry, kept server-side per handle and paged with `STATUS_NO_MORE_FILES` at the end; "." and ".." are added by the server; entries are sorted case-insensitively so paging is stable |
 | SYMLINK, READLINK | Windows creates reparse points through ioctl, which the server does not implement; the adapter's `Symlink`/`ReadLink` are reachable from macOS and Linux clients only |
+| IOCTL `FSCTL_QUERY_FILE_REGIONS` | `File.ValidDataLength()` of the handle's file (`vfs.File.ValidDataLength`), answered as MS-FSA computes the regions from a valid data length (I-227) |
+| IOCTL, any other | `FSCTL_VALIDATE_NEGOTIATE_INFO`, `FSCTL_PIPE_TRANSCEIVE` and server-side copy (`FSCTL_SRV_REQUEST_RESUME_KEY`, `FSCTL_SRV_COPYCHUNK[_WRITE]`) are answered; every other request gets the status MS-SMB2 §3.3.5.15 names for it (I-228) |
+
+**IOCTLs.** Windows' copy engine (Windows 11 24H2 Explorer, drag and drop or paste of
+many files) probes each destination before writing it: it creates the file, sets its
+end-of-file to the source's size, marks the handle delete-on-close as a guard against a
+copy that dies halfway, and asks `FSCTL_QUERY_FILE_REGIONS` for the file's valid data. A
+refusal, with either `STATUS_NOT_SUPPORTED` or `STATUS_INVALID_DEVICE_REQUEST`, fails
+that attempt: the engine closes the handle, the guard deletes the file, and it retries
+the file later or not at all. Until 2026-10-12 the server refused the FSCTL, and a large
+Explorer copy put every file it created in the trash while its dialog counted on. The
+answer is the one MS-FSA gives: the regions before the file's valid data length (VDL)
+carry the asked usage, the rest up to the end of file usage 0. Here the VDL is the end of
+the last byte written: the end of the last committed chunk that is not a hole, held
+below a truncate still in the overlay, or the end of the last unflushed write, whichever
+is larger, and never past the size. Everything at or past it reads as zeros, which is
+what a VDL promises; a chunk written as zeros counts as a hole (the flusher stores it as
+one, 04 §4), so the VDL may fall short of a write of zeros but never short of a byte
+that reads otherwise. A file Explorer has just created and sized has a VDL of 0, as on
+NTFS. Any other FSCTL the server does not implement is `STATUS_INVALID_DEVICE_REQUEST`
+("allowed but not supported on this file system"), an IOCTL that is not an FSCTL is
+`STATUS_NOT_SUPPORTED`, and an input buffer that is misaligned or outside the message is
+`STATUS_INVALID_PARAMETER` (I-228).
+
+**Explorer's first pass.** For a batch of files the copy engine runs two passes. The
+first creates each destination, sets its end-of-file to the source's size, marks it
+delete-on-close, asks `FSCTL_QUERY_FILE_REGIONS` and closes it without a write, so the
+file goes again; the progress bar counts this pass. Only when it reaches the end does the
+bar reset and the second pass create and write every file. Each first-pass file costs a
+`Create` and a `Trash` here, a Raft round trip each, so a batch of thousands spends
+minutes before a byte moves; a copy cancelled then has copied nothing. Such a file never
+held data, so its delete leaves nothing in the trash: the gateway purges the inode once
+the name is gone (I-229). Until 2026-10-12 each one stayed in the trash, about 22,000
+empty entries after a few large drags.
+
+**Request trace.** At `log.level: debug` the server logs one line per CREATE, SET_INFO,
+CLOSE, READ, WRITE (and the final status of a WRITE answered later), FLUSH, QUERY_INFO,
+QUERY_DIRECTORY, IOCTL and LOCK, with the session, the handle, the file's path and
+inode, the request's parameters and the status answered, plus a refused signature, a
+credit charge too low and a chained request after a failure. It is how the probe above
+was found; it is verbose, so leave the level at `info` otherwise.
 
 Paths arrive with backslashes relative to the share root; the server turns them into
 `/sub/file` and refuses a name that climbs out of the root or names an alternate data
@@ -180,6 +227,18 @@ Windows client opening either name by its exact spelling gets that file, and a l
 third spelling (`A.TXT`) gets `A.txt`. Explorer probes names such as `desktop.ini` in
 every folder it shows, so a folder of many entries costs one listing per probe; a
 directory listing itself is one `ListDir` and one `Stat` per entry from the FSM (no I/O).
+
+A path that is partly new resolves its existing folders the same way and keeps the new
+part as the client spelled it: a create of `photos\new.jpg` with `Photos` there makes
+`/Photos/new.jpg`. A folder on the way that does not exist is
+`STATUS_OBJECT_PATH_NOT_FOUND` (MS-FSA 2.1.5.1), never made: the vfs's `OpenFile` and
+`Rename` make missing parents for NFS and the browser, and the server checks first. A
+rename's destination folder resolves the same way; a destination leaf that names another
+file only by case is that file, so a rename without `ReplaceIfExists` collides with it and
+one with it replaces it, never leaving two names that differ by case; a destination that
+differs only by case from the file itself renames it. Until 2026-10-12 any partly new path
+was taken as typed, and a wrong-case parent became a second folder beside the first
+(I-233).
 
 ## 6. Configuration, password and the Windows mount
 
@@ -404,6 +463,39 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   name the delete is skipped and logged (I-218), so a file created at the old name by
   another session or gateway survives and a protected folder never loses a file through
   another file's own cleanup.
+- **I-227** — `FSCTL_QUERY_FILE_REGIONS` on a file is answered as [MS-FSA's FSCTL_QUERY_FILE_REGIONS](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/acadee02-c40d-4f73-92d0-0f10e866e11f)
+  computes it from the file's valid data length V and end of file E: with no input the
+  range is [0, MAXLONGLONG) with usage `FILE_REGION_USAGE_VALID_CACHED_DATA`; an input
+  shorter than `FILE_REGION_INPUT` (24 bytes) or an output buffer shorter than
+  `FILE_REGION_OUTPUT` with one region (40 bytes) is `STATUS_BUFFER_TOO_SMALL`; a length
+  ≤ 0, an offset plus length past 63 bits, a usage without the cached-data flag or a
+  directory handle is `STATUS_INVALID_PARAMETER`; an offset past E, or at E with E > 0,
+  is success with no output; otherwise the regions are [offset, min(V, end)) with the
+  asked usage when offset < V, then [max(offset, V), min(E, end)) with usage 0, the
+  second answered `STATUS_BUFFER_OVERFLOW` with the total count when it does not fit. V
+  never exceeds E and is never below the end of a byte that reads as anything but zero:
+  a file created and sized without a write has V = 0, a write at offset o of n bytes
+  makes V ≥ o + n until a truncate below it, before and after its flush; a file whose
+  handle cannot report V has the FSCTL refused with `STATUS_INVALID_DEVICE_REQUEST`.
+- **I-229** — A delete-on-close by the handle whose CREATE made the file, of a file that
+  holds no data (its valid data length is 0: no committed chunk but holes and no dirty
+  byte, so every byte reads as zero), removes the name and then purges the inode, so the
+  trash does not grow; a file into which any byte other than zero was written, at any
+  offset, before or after its flush, goes to the trash as every other delete (I-220), and
+  a protected folder keeps it in the trash. The name is free again for the second pass.
+- **I-228** — An IOCTL whose Flags are not `SMB2_0_IOCTL_IS_FSCTL` is
+  `STATUS_NOT_SUPPORTED`; an FSCTL the server does not implement is
+  `STATUS_INVALID_DEVICE_REQUEST`; a request with a non-zero InputCount whose InputOffset
+  is inside the fixed header, not a multiple of 8, or whose input runs past the message is
+  `STATUS_INVALID_PARAMETER`; an answer never carries more output than
+  MaxOutputResponse, and an answer cut to fit carries the bytes that fit with
+  `STATUS_BUFFER_OVERFLOW` ([MS-SMB2 §3.3.5.15](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/c348a671-7750-49f8-9e61-cc59fa1a5701)).
+- **I-233** — A CREATE or a rename's destination spelled with existing folders in another
+  case than theirs lands in those folders and never makes a folder or file that differs
+  from an existing one only by case; a folder on the way that does not exist is
+  `STATUS_OBJECT_PATH_NOT_FOUND` and nothing is made; a rename onto another file's name in
+  another case collides without `ReplaceIfExists` and replaces that file with it; a rename
+  that changes only the case of the file's own name renames it.
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -426,3 +518,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-225 | `TestFSM_Trash_Expect_Mismatch`, `TestEncodeCommand_RewriteIsCodec9`, `TestDeleteOnClose_RenamedAway_NewFileSurvives`, `TestSMB_OwnCleanup_ByInode_UnderProtection`, `TestSoak_MultiUserAgainstHarness` |
 | I-217 | `TestSMB_ConcurrentCopies_EveryByteLands`, `TestSMB_WriteWaitingAtCap_DoesNotStallOtherFiles`, `TestWrite_Async_InterimThenFinal`, `TestClose_WaitsForItsWrites`, `TestSeveralClientsOneShare` |
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |
+| I-227 | `TestQueryFileRegions_FSA`, `TestVFS_ValidDataLength`, `TestSMB_QueryFileRegions_ExplorerProbe` |
+| I-228 | `TestIoctl_Statuses` |
+| I-229 | `TestSMB_ScratchCreate_NotTrashed` |
+| I-233 | `TestSMB_CaseFold_NoTwins` |

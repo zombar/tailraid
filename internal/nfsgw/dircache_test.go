@@ -13,7 +13,7 @@ import (
 // while the directory is unchanged and the kept listing comes back for it; any change to
 // the directory (an entry added) invalidates it, so go-nfs lists again and the stale
 // cookie is refused (I-47).
-// Invariant: I-47
+// Invariant: I-47, I-232
 func TestHandler_DirListingReusedAcrossPages(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	h := New(f.FS(), f.FSM)
@@ -43,10 +43,11 @@ func TestHandler_DirListingReusedAcrossPages(t *testing.T) {
 	if h.DataForVerifier("/d", v+1) != nil {
 		t.Fatal("unknown verifier answered")
 	}
-	// the directory changes: the kept listing is gone and the verifier differs
+	// the directory changes: a listing being paged goes on through the kept one (I-232),
+	// and a fresh listing gets another verifier
 	f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: dir, Name: "z", Type: meta.TFile, Mode: 0o644, Now: 3}})
-	if h.DataForVerifier("/d", v) != nil {
-		t.Fatal("stale listing served after a create")
+	if kept := h.DataForVerifier("/d", v); len(kept) != 3 {
+		t.Fatalf("kept listing after a create: %d entries, want the 3 it was made with", len(kept))
 	}
 	if v2 := h.VerifierFor("/d", list()); v2 == v {
 		t.Fatal("verifier unchanged after a create")

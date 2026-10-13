@@ -86,6 +86,16 @@ func (t *lockTable) release(l byteLock) bool {
 	return false
 }
 
+// move follows a rename of from to to (share.moveHandles): the ranges held on the file
+// stay on it at its new name, and whatever takes the old name is free of them.
+func (t *lockTable) move(from, to string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for i := range t.locks {
+		t.locks[i].path = movedPath(t.locks[i].path, from, to)
+	}
+}
+
 // releaseAll drops everything a handle held. It runs when the handle closes AND
 // when the connection drops: a client that crashes holding a lock must not
 // keep the file reserved for the life of the server.
