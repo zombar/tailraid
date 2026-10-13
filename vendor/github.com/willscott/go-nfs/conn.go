@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"sync"
@@ -96,7 +97,11 @@ func (c *conn) serve(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			if err := c.handle(connCtx, w); err != nil {
+			handle := c.handle
+			if cached[w.req.Header.Prog][w.req.Header.Proc] {
+				handle = c.handleOnce // a retransmission runs once (I-260)
+			}
+			if err := handle(connCtx, w); err != nil {
 				Log.Errorf("error handling req: %v", err)
 				// failure to handle at a level needing to close the connection.
 				c.Close()
@@ -218,7 +223,9 @@ func (c *conn) err(ctx context.Context, w *response, err error) error {
 type request struct {
 	xid uint32
 	rpc.Header
-	Body io.Reader
+	Body   io.Reader
+	client string // the peer's address without its port (the duplicate request cache's key)
+	sum    uint64 // FNV-1a of the whole frame
 }
 
 func (r *request) String() string {
@@ -352,11 +359,13 @@ func (c *conn) readRequest(_ context.Context, reader *bufio.Reader) (w *response
 		return nil, ErrInputInvalid
 	}
 
-	req := request{
-		xid,
-		rpc.Header{},
-		r,
+	sum := fnv.New64a()
+	_, _ = sum.Write(frame)
+	client := c.RemoteAddr().String()
+	if host, _, err := net.SplitHostPort(client); err == nil {
+		client = host
 	}
+	req := request{xid: xid, Header: rpc.Header{}, Body: r, client: client, sum: sum.Sum64()}
 	if err = xdr.Read(r, &req.Header); err != nil {
 		return nil, err
 	}

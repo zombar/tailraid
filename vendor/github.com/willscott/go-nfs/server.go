@@ -14,6 +14,7 @@ type Server struct {
 	Handler
 	ID [8]byte
 	context.Context
+	drc drc // tailraid: the duplicate request cache (I-260)
 }
 
 // RegisterMessageHandler registers a handler for a specific

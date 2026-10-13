@@ -366,6 +366,17 @@ func (f *FS) info(in meta.Inode) *fileInfo {
 		if sz, ok := f.ov.Size(in.Ino, in.Size); ok {
 			fi.size = sz
 			fi.dirty = true
+			// the times of its last write here, as its size: the flush stamps its own
+			// later, and until then a client must see the file changed (I-261)
+			if wrote, user, hasUser, ok := f.ov.Changed(in.Ino); ok {
+				w := wrote.UnixNano()
+				fi.in.Ctime = max(in.Ctime, w)
+				if hasUser {
+					fi.in.Mtime = user // a client's own time after its last write (I-230)
+				} else {
+					fi.in.Mtime = max(in.Mtime, w)
+				}
+			}
 		} else {
 			fi.size = in.Size
 		}

@@ -157,7 +157,13 @@ func TestRead_Async_InterimThenFinal_NoShareLock(t *testing.T) {
 // Invariant: I-254
 func TestRead_SerialDriver_KeepsTheShareLock(t *testing.T) {
 	c, of, gr, client := readConn(t, false)
-	go func() { _ = readReply(t, client); _ = readReply(t, client) }()
+	go func() { // drain the interim and the final reply; the test may end before the last one
+		for {
+			if _, err := readFrame(client); err != nil {
+				return
+			}
+		}
+	}()
 	dispatchWithin(t, c, readRequest(of, 9, 0, 4))
 	<-gr.entered
 	locked := make(chan struct{})
