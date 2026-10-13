@@ -2,6 +2,31 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.8.0 (2026-10-13)
+
+### Changes
+
+- media scrape: game box art from the libretro thumbnails ([0551020](https://github.com/zombar/tailraid/commit/0551020))
+- media scrape: fill missing sidecars and art from TMDB and MusicBrainz ([b6224ad](https://github.com/zombar/tailraid/commit/b6224ad))
+- webui: every drive in Disks (mirrors, S3 buckets); no Cache section ([79ad3dd](https://github.com/zombar/tailraid/commit/79ad3dd))
+- repair: home placement folds domain skew and the capacity rebalance (I-294..I-296) ([81ca2d1](https://github.com/zombar/tailraid/commit/81ca2d1))
+- chart: event labels in a lane under the time axis, legible over exact ([cfc5656](https://github.com/zombar/tailraid/commit/cfc5656))
+- webui: Material Symbols in the TypeScript, media-card tiles and posters ([643d134](https://github.com/zombar/tailraid/commit/643d134))
+- webui: space a library fold's toolbar from its posters ([96e8e91](https://github.com/zombar/tailraid/commit/96e8e91))
+- webui: Material spacing, window classes, media cards and tested CSS (docs) ([c904fba](https://github.com/zombar/tailraid/commit/c904fba))
+- cluster: a restarting node asks the members it knows for late joiners (I-282) ([f1907e1](https://github.com/zombar/tailraid/commit/f1907e1))
+- webui: ROMs in the Media tab, browse only, and title cards (I-279, I-280) ([d8faefe](https://github.com/zombar/tailraid/commit/d8faefe))
+- search: platforms and games under a roms library (I-278) ([101fb84](https://github.com/zombar/tailraid/commit/101fb84))
+- meta: the roms library kind, a third library bit at codec 10 (I-277) ([de54904](https://github.com/zombar/tailraid/commit/de54904))
+- search: a media name analyser built from a real volume's names (I-276) ([31018c6](https://github.com/zombar/tailraid/commit/31018c6))
+- lookdev: tighter media rows, true 3:4 title cards, spacing under the actions ([fc203c5](https://github.com/zombar/tailraid/commit/fc203c5))
+
+### Documentation
+
+- docs: tailraid media scrape, sidecars from TMDB and MusicBrainz (docs/18 §11) ([bf04857](https://github.com/zombar/tailraid/commit/bf04857))
+- docs: home placement folds domain skew and the capacity rebalance (I-294..I-296) ([8f2ff36](https://github.com/zombar/tailraid/commit/8f2ff36))
+- docs: media names, the ROMs library and title cards (I-276..I-280), lookdev first ([858f412](https://github.com/zombar/tailraid/commit/858f412))
+
 ## v0.7.4 (2026-10-13)
 
 ### Changes
