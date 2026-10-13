@@ -23,27 +23,42 @@ func trashCmd() *cobra.Command {
 	return c
 }
 
+// trashPageBytes is the JSON a `trash ls` page may carry: well within the 4 MiB the RPC
+// client reads of an admin reply.
+const trashPageBytes = 1 << 20
+
 func trashLsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ls [path]",
 		Short: "List the deleted entries, every one or those under a folder",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			op := rpc.AdminOp{Op: "trash_ls"}
+			op := rpc.AdminOp{Op: "trash_ls", PageBytes: trashPageBytes}
 			if len(args) == 1 {
 				op.Path = args[0]
 			}
-			raw, err := adminCall(cmd, op)
-			if err != nil {
-				return err
+			// a page at a time: one reply of a large trash outgrew what a client reads
+			// (I-234); a node that does not page answers everything with no "next"
+			var all []admin.TrashEntry
+			for {
+				raw, err := adminCall(cmd, op)
+				if err != nil {
+					return err
+				}
+				var rep struct {
+					Entries []admin.TrashEntry `json:"entries"`
+					Next    string             `json:"next"`
+				}
+				if err := json.Unmarshal(raw, &rep); err != nil {
+					return err
+				}
+				all = append(all, rep.Entries...)
+				if rep.Next == "" || rep.Next == op.Cursor {
+					break
+				}
+				op.Cursor = rep.Next
 			}
-			var rep struct {
-				Entries []admin.TrashEntry `json:"entries"`
-			}
-			if err := json.Unmarshal(raw, &rep); err != nil {
-				return err
-			}
-			return printTrash(cmd.OutOrStdout(), rep.Entries)
+			return printTrash(cmd.OutOrStdout(), all)
 		},
 	}
 	addNodeFlags(c)
