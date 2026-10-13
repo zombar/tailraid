@@ -133,7 +133,7 @@ check_set L "$TMP/ldefs" "$TMP/lcites" "lifecycle cells"
 unconditional="$(git ls-files -co --exclude-standard -- '*_test.go' ':!vendor' ':!test/invariants' | xargs grep -nE '^	(t|tb)\.Skipf?\(' || true)"
 if [ -n "$unconditional" ]; then
   echo "ERROR: unconditional t.Skip outside test/invariants:"
-  echo "$unconditional" | sed 's/^/  /'
+  printf '%s\n' "$unconditional" | sed 's/^/  /'
   fail=1
 fi
 
@@ -145,6 +145,7 @@ git ls-files -co --exclude-standard -- '*_test.go' ':!vendor' | xargs grep -hoE 
 missing_names=""
 for f in docs/[0-9][0-9]-*.md; do
   case "$f" in docs/10-*) continue;; esac
+  # shellcheck disable=SC2016 # the backticks are literal: test names quoted in the docs
   for n in $(grep -ohE '`(Test|Fuzz)[A-Z_][A-Za-z0-9_]*`' "$f" | tr -d '`' | sort -u); do
     if ! grep -qx "$n" "$TMP/realnames"; then missing_names="$missing_names $n($f)"; fi
   done
@@ -157,6 +158,7 @@ fi
 
 tests_for() { # num cites
   local t
+  # shellcheck disable=SC2016 # awk's $1/$2 and the literal backticks are not shell expansions
   t="$(awk -F'\t' -v n="$1" '$1==n {print $2}' "$2" | sort -u | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')"
   [ -n "$t" ] && printf '%s' "$t" || printf '—'
 }

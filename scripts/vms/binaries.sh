@@ -27,6 +27,7 @@ for os in ${1:-$OSES}; do
       ;;
     win)
       # a running service keeps the exe open: stop it before the copy
+      # shellcheck disable=SC2016 # PowerShell, expanded in the guest
       vm_ssh win 'if (Get-Service tailraid -ErrorAction SilentlyContinue) { tailraid stop 2>$null | Out-Null }; New-Item -ItemType Directory -Force C:\tailraid | Out-Null' || true
       vm_scp win "$out/tailraid_windows_arm64.exe" "C:/tailraid/tailraid.exe"
       ;;
