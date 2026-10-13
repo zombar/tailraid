@@ -6,6 +6,7 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- media scrape: run the keyless groups without a TMDB key ([356f5d0](https://github.com/zombar/tailraid/commit/356f5d0))
 - media scrape: game box art from the libretro thumbnails ([0551020](https://github.com/zombar/tailraid/commit/0551020))
 - media scrape: fill missing sidecars and art from TMDB and MusicBrainz ([b6224ad](https://github.com/zombar/tailraid/commit/b6224ad))
 - webui: every drive in Disks (mirrors, S3 buckets); no Cache section ([79ad3dd](https://github.com/zombar/tailraid/commit/79ad3dd))
