@@ -437,7 +437,8 @@ User management and per-user access control, mutating admin operations from the 
 loopback, transcoding, saved playlists, a queue shared between tabs or devices,
 server-side video decoding, adding or removing a mirror, a diff between two versions or
 two snapshots, the Windows Previous Versions tab (docs/15 §8), online metadata
-providers for the Media tab (docs/18 §10). Search was a non-goal until docs/18.
+providers for the Media tab (docs/18 §10), casting to a TV (researched in §11, not
+built). Search was a non-goal until docs/18.
 
 ## 10. The Media tab (I-212)
 
@@ -465,6 +466,46 @@ the names only, so it is the same before and after a pass. A section lists at mo
 `MediaPage` (500) items a page from `offset`, sorted by `sort_title` then path, the same on
 every node. An item is listed only while its structure says so: a film folder with a video in it, a show folder, an album folder by the rule of §6; an episode file without `SnnEnn`, `nnxnn` or `Episode nn` in its name is not an episode, and one named only by its show and number is titled "Episode N". Below 480 px the season strip and the episode list run under the poster column. "Play" opens the file route for a film or an episode and hands an album to the
 now-playing bar (§6); "Open folder" goes to the file browser.
+
+## 11. Casting to a TV (not built)
+
+This section records research, not a promise: nothing below is built, and it carries no
+invariants until the work starts.
+
+**Why it fails today.** AirPlay video from Safari and the Remote Playback API in Chrome on
+Android do not stream from the phone. They hand the media element's URL to the receiver,
+and the TV fetches the file itself. Three things refuse that fetch: the browser UI listens
+only on the node's Tailscale address (§2), so a TV on the home LAN cannot reach it; a TV
+that could is not the same user, so `authz` answers 403; and the page's
+`media-src 'self'` would block any other origin anyway. What works now: screen mirroring
+from the phone or laptop, and the Cast menu of desktop Chrome, which streams from the
+browser. Both re-encode what is on the screen.
+
+**A possible direction.** A node on the TV's LAN serves short-lived signed cast links over
+plain HTTP. A Raspberry Pi suits it: it joins as a diskless host (docs/14 §9), reads the
+volume over the tailnet like any gateway and serves the TV over the LAN. Any always-on
+node already on that LAN does the same.
+
+- A listener, off by default (`listen.cast`, with `cast.advertise` for the URL handed to
+  TVs and `cast.ttl`, 12 h by default), serves only `GET` and `HEAD`
+  `/cast/<token>/<name>`, through the same `http.ServeContent` path as `/files` (Range,
+  ETag, content type), with no identity or Host check; anything else is 404.
+- A token is the file's inode, generation, version (or snapshot), and expiry, under an
+  HMAC with a key kept in the cast node's data directory. A rewrite answers 410, a
+  trashed file is refused, and deleting the key revokes every token.
+- The browser asks its own gateway for a link (`POST /api/cast`, the full rules of §2 and
+  the `X-Tailraid-UI` header); the gateway mints it, or asks a cast node listed in
+  `/health` over a member route. The page's `media-src` adds the advertised cast origins.
+- The video viewer and the now-playing bar get a Cast/AirPlay button. It swaps the
+  element's source to the cast link, keeps the position, and opens the picker
+  (`video.remote.prompt()`, else `webkitShowPlaybackTargetPicker()`). While a remote
+  session is connected, the bar plays through one element instead of swapping two (§6),
+  since the route belongs to an element.
+
+The tailnet stays the perimeter for everything but the cast links, which cross the LAN
+in clear and are readable by anyone holding one until it expires. Transcoding stays a
+non-goal (§9): an Apple TV will not play Matroska, a Chromecast plays MP4, WebM and some
+Matroska.
 
 ## Design
 
