@@ -1,10 +1,12 @@
 package nfs
 
 import (
+	"bytes"
 	"encoding"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/go-git/go-billy/v5"
 	"os"
 	"syscall"
 )
@@ -221,6 +223,21 @@ func errFormatterWithBody(body []byte) func(err error) RPCError {
 			return rErr
 		}
 		return &ResponseCodeSystemError{}
+	}
+}
+
+// dirWccErrorFormatter is the error formatter of a CREATE or MKDIR once its directory is
+// known (tailraid, I-242): the refusal's dir_wcc carries the directory's attributes after
+// the call (RFC 1813 MKDIR3resfail, CREATE3resfail), so a client whose cache says a name
+// is free that another server has just taken sees the directory changed and looks again,
+// rather than answering "File exists" and then "No such file".
+func dirWccErrorFormatter(fs billy.Filesystem, dir []string) func(err error) RPCError {
+	return func(err error) RPCError {
+		var b bytes.Buffer
+		if werr := WriteWcc(&b, nil, tryStat(fs, dir)); werr != nil {
+			return wccDataErrorFormatter(err)
+		}
+		return errFormatterWithBody(b.Bytes())(err)
 	}
 }
 

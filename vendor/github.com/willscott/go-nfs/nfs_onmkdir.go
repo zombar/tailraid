@@ -30,6 +30,7 @@ func onMkdir(ctx context.Context, w *response, userHandle Handler) error {
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
+	w.errorFmt = dirWccErrorFormatter(fs, path) // tailraid: a refusal carries the parent's attributes (I-242)
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
 	}

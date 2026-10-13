@@ -481,7 +481,7 @@ func TestMirror_ExportAndCat_NoCluster(t *testing.T) {
 	}
 }
 
-// Invariant: I-183
+// Invariant: I-183, I-243
 func TestMirror_DeleteReconciles_MarkAndSweep(t *testing.T) {
 	m, _ := newMirror(t, sysfs.OS{})
 	v := newVolume()

@@ -402,6 +402,11 @@ func Plan(rows []Row, mans []Manifest) (remove []uint32, imported []Manifest) {
 // returns the IDs it removed (whose rows the host now ends with SnapshotDelete{Done}) and
 // the manifests to import. Rows marked Deleting whose manifest is already gone are
 // returned as removed too, so a crash between the sweep and the proposal is harmless.
+//
+// It sweeps only for a deletion, and not while a sync writes to the mirror (I-243): what
+// a sync cut short by a restart stored stays for the retry, which skips it, and a sweep
+// during the retry would take what the retry has not reached yet. A deletion waits for
+// the sync; until it has swept, its row is not reported removed.
 func (m *Mirror) Reconcile(rows []Row) (removed []uint32, imported []Manifest, freed int64, err error) {
 	mans, err := m.Manifests()
 	if err != nil {
@@ -413,13 +418,23 @@ func (m *Mirror) Reconcile(rows []Row) (removed []uint32, imported []Manifest, f
 			return nil, nil, 0, err
 		}
 	}
-	if _, freed, err = m.Sweep(); err != nil {
-		return nil, nil, 0, err
-	}
 	for _, r := range rows {
 		if r.Deleting {
 			removed = append(removed, r.ID)
 		}
 	}
+	if len(removed) == 0 || m.writing() {
+		return nil, imported, 0, nil
+	}
+	if _, freed, err = m.Sweep(); err != nil {
+		return nil, nil, 0, err
+	}
 	return removed, imported, freed, nil
+}
+
+// writing reports whether a sync is writing to m.
+func (m *Mirror) writing() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.active) > 0
 }
