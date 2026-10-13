@@ -225,33 +225,10 @@ func (s *Server) coverOf(dir meta.Inode) string {
 		s.remember(dir, e)
 		return e.name
 	}
-	kids, err := s.o.Store.ReadDir(dir.Ino)
-	if err != nil {
-		return ""
-	}
-	deps := []coverDep{depOf(dir)}
-	name := s.directCover(kids)
-	if name == "" {
-		n := 0
-		for i := range kids {
-			k := &kids[i]
-			if k.Type != meta.TDir {
-				continue
-			}
-			if n == CoverSubdirs {
-				break
-			}
-			n++
-			sub, err := s.o.Store.ReadDir(k.Ino)
-			if err != nil {
-				continue
-			}
-			deps = append(deps, depOf(*k))
-			if c := s.directCover(sub); c != "" {
-				name = k.Name + "/" + c
-				break
-			}
-		}
+	var deps []coverDep
+	name := s.coverIn(dir, CoverDepth, &deps)
+	if len(deps) == 0 {
+		return "" // the folder could not be listed
 	}
 	e := coverEntry{deps: deps, name: name}
 	s.remember(dir, e)
@@ -259,9 +236,45 @@ func (s *Server) coverOf(dir meta.Inode) string {
 	return name
 }
 
-// directCover is the first audio entry of kids by name that has a thumbnail: any, when
-// they hold a cover.* or folder.* image (every track's thumbnail is then that image),
-// else the first with an embedded picture.
+// CoverDepth is how many folder levels below itself a folder without art of its own
+// looks for some (docs/13 §5, I-257): Music/Artist/Album and TV/Show/Season take two,
+// a library folder above those three.
+const CoverDepth = 3
+
+// coverIn is dir's cover looking at most levels folders down, first wins: its own art,
+// else "<sub>/<cover>" for the first of at most CoverSubdirs subfolders by name whose own
+// cover resolves. Every folder it lists is appended to deps, dir first.
+func (s *Server) coverIn(dir meta.Inode, levels int, deps *[]coverDep) string {
+	kids, err := s.o.Store.ReadDir(dir.Ino)
+	if err != nil {
+		return ""
+	}
+	*deps = append(*deps, depOf(dir))
+	if name := s.directCover(kids); name != "" || levels == 0 {
+		return name
+	}
+	n := 0
+	for i := range kids {
+		k := &kids[i]
+		if k.Type != meta.TDir || strings.HasPrefix(k.Name, ".") || IsOSMetadata(k.Name) {
+			continue
+		}
+		if n == CoverSubdirs {
+			break
+		}
+		n++
+		if c := s.coverIn(*k, levels-1, deps); c != "" {
+			return k.Name + "/" + c
+		}
+	}
+	return ""
+}
+
+// directCover is a folder's own art among kids (I-165, I-257): the first audio entry by
+// name that has a thumbnail (any, when they hold a cover.* or folder.* image, since every
+// track's thumbnail is then that image; else the first with an embedded picture), else
+// an artwork image (cover.*, folder.*, poster.*, in that order), else the first other
+// file by name whose thumbnail is stored (a video whose frame the browser grabbed).
 func (s *Server) directCover(kids []meta.Inode) string {
 	first, sibling := "", false
 	for i := range kids {
@@ -276,15 +289,27 @@ func (s *Server) directCover(kids []meta.Inode) string {
 			sibling = true
 		}
 	}
-	if first == "" {
-		return ""
-	}
-	if sibling {
+	if first != "" && sibling {
 		return first
+	}
+	if first != "" {
+		for i := range kids {
+			k := &kids[i]
+			if k.Type == meta.TFile && isAudio(k.Name) && !IsOSMetadata(k.Name) && s.hasPicture(*k) {
+				return k.Name
+			}
+		}
+	}
+	for _, art := range artNames {
+		for i := range kids {
+			if k := &kids[i]; k.Type == meta.TFile && k.Name == art {
+				return art
+			}
+		}
 	}
 	for i := range kids {
 		k := &kids[i]
-		if k.Type == meta.TFile && isAudio(k.Name) && !IsOSMetadata(k.Name) && s.hasPicture(*k) {
+		if k.Type == meta.TFile && !isAudio(k.Name) && !isImage(k.Name) && !IsOSMetadata(k.Name) && s.hasThumb(*k) {
 			return k.Name
 		}
 	}
@@ -295,6 +320,10 @@ func (s *Server) directCover(kids []meta.Inode) string {
 var coverNames = []string{"cover.jpg", "cover.jpeg", "cover.png", "cover.webp", "folder.jpg", "folder.jpeg", "folder.png", "folder.webp"}
 
 func isCoverImage(name string) bool { return slices.Contains(coverNames, name) }
+
+// artNames are the images that are a folder's own art when no track gives one, in order
+// (I-257): an album's cover, a show's or a movie's poster.
+var artNames = append(slices.Clone(coverNames), "poster.jpg", "poster.jpeg", "poster.png", "poster.webp")
 
 // hasPicture reports whether the audio file in carries an embedded picture.
 func (s *Server) hasPicture(in meta.Inode) bool {
