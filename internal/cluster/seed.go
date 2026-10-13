@@ -1,9 +1,11 @@
 package cluster
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -58,24 +60,22 @@ func ForgetMemberSeed(dataDir string) error {
 	return nil
 }
 
-// MembersFromLog replays the command entries this node's Raft log already holds into a
-// scratch FSM and returns the device members of its table. A follower whose table has
-// not arrived and that has no seed file (it joined before the seed existed, or the file
-// was lost) would otherwise refuse the leader's connection forever and never receive the
-// table. The entries in its log were sent by the leader the join accepted, so the
-// members they name are ones that leader vouched for, as the seed's are (I-134). Entries
-// already compacted into a snapshot are skipped: the FSM was restored from it at open.
-func (n *Node) MembersFromLog() ([]meta.Node, error) {
-	first, err := n.logs.FirstIndex()
-	if err != nil {
-		return nil, fmt.Errorf("cluster: first index: %w", err)
-	}
+// StartSeed is the member seed serve's authorizer starts with, before the leader has
+// connected (I-92, I-281): the table as of this node's own log, which is the restored
+// table with the entries past its index replayed on a copy, plus the members of the seed
+// file the log does not mention at all (the join target, a seed from before the log). A
+// row the log removed stays out. The restored table alone predates every join since its
+// snapshot, and the leader may be one of those joiners.
+func (n *Node) StartSeed(restored *meta.FSM, file []meta.Node) ([]meta.Node, error) {
 	last, err := n.logs.LastIndex()
 	if err != nil {
 		return nil, fmt.Errorf("cluster: last index: %w", err)
 	}
-	scratch := meta.NewFSM()
-	for idx := max(first, 1); idx <= last; idx++ {
+	asOf, err := cloneFSM(restored)
+	if err != nil {
+		return nil, err
+	}
+	for idx := asOf.Applied() + 1; idx <= last; idx++ {
 		var l raft.Log
 		if err := n.logs.GetLog(idx, &l); err != nil {
 			if errors.Is(err, raft.ErrLogNotFound) {
@@ -84,15 +84,44 @@ func (n *Node) MembersFromLog() ([]meta.Node, error) {
 			return nil, fmt.Errorf("cluster: read log %d: %w", idx, err)
 		}
 		if l.Type == raft.LogCommand {
-			scratch.Apply(&l)
+			asOf.Apply(&l)
 		}
 	}
+	known := map[string]bool{}
 	var out []meta.Node
-	nodes := scratch.Nodes()
+	nodes := asOf.Nodes()
 	for i := range nodes {
-		if m := &nodes[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+		m := &nodes[i]
+		known[m.ID] = true
+		if m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
 			out = append(out, *m)
 		}
+	}
+	for i := range file {
+		if !known[file[i].ID] {
+			out = append(out, file[i])
+		}
+	}
+	return out, nil
+}
+
+// cloneFSM copies f's state into a fresh FSM (no hooks), through the snapshot encoding.
+func cloneFSM(f *meta.FSM) (*meta.FSM, error) {
+	snap, err := f.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	st, ok := snap.(interface{ State() *meta.State })
+	if !ok {
+		return nil, errors.New("cluster: FSM snapshot without state")
+	}
+	var buf bytes.Buffer
+	if err := meta.EncodeState(&buf, st.State()); err != nil {
+		return nil, err
+	}
+	out := meta.NewFSM()
+	if err := out.Restore(io.NopCloser(&buf)); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

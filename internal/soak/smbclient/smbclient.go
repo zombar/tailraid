@@ -212,7 +212,9 @@ func raceHandleFollows(s1, s2 *smb2.Share, dir string) soak.RaceResult {
 		r.Detail = err.Error()
 		return r
 	}
-	h1, err := s1.OpenFile(c, os.O_RDONLY, 0)
+	// held as Explorer holds a file, sharing delete: a rename by another open is allowed
+	// (without it the rename is a sharing violation, as on Windows, I-265)
+	h1, err := s1.OpenFileShare(c, os.O_RDONLY, 0, smb2.ShareRead|smb2.ShareWrite|smb2.ShareDelete)
 	if err != nil {
 		r.Detail = err.Error()
 		return r

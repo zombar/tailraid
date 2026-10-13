@@ -133,22 +133,19 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	auth.SetMembers(node.FSM.NodeByAddr)
 	// Raft restores a follower's table from a snapshot only: a node restarted before its
 	// first snapshot (every fresh joiner) has an empty table until the leader connects,
-	// and the leader is accepted only by that table. The seed the join persisted, kept
-	// current from the table while serve runs, stands in until then (I-92).
-	if seed, err := cluster.LoadMemberSeed(cfg.Node.DataDir); err != nil {
-		log.Warn("member seed unreadable; the leader is accepted once the table arrives", "err", err)
-	} else if len(seed) > 0 {
-		auth.SetSeed(seed)
-	} else if len(node.FSM.Nodes()) == 0 {
-		// no table and no seed (a join from before the seed existed, or a lost file): the
-		// member entries already in this node's own log name the leader (I-134)
-		if members, err := node.MembersFromLog(); err != nil {
-			log.Warn("members not readable from the local log", "err", err)
-		} else if len(members) > 0 {
-			auth.SetSeed(members)
-			log.Info("no member seed: accepting the members named by the local log", "members", len(members))
-		}
+	// and the leader is accepted only by that table. The table as of this node's own
+	// log, plus the seed the join persisted and serve keeps current, stands in until then:
+	// the leader may have joined after the snapshot (I-92, I-134, I-281).
+	fileSeed, err := cluster.LoadMemberSeed(cfg.Node.DataDir)
+	if err != nil {
+		log.Warn("member seed unreadable; the local log names the members", "err", err)
 	}
+	startSeed, err := node.StartSeed(node.FSM, fileSeed)
+	if err != nil {
+		log.Warn("members not readable from the local log; the seed file stands in", "err", err)
+		startSeed = fileSeed
+	}
+	auth.SetSeed(startSeed)
 	// A node whose snapshot holds its own row and the volume serves at once, leader or
 	// not: stale gateways, ready=false, ready once a leader connects (I-135). Waiting for
 	// a leader here would exit after the bound and leave the service manager restarting
@@ -170,7 +167,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// needs is snapshotted once this one is ready (and again at a clean shutdown); the
 	// legacy check runs again then, on the state the log brought
 	go onReady(ctx, node, log, fatal)
-	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, node.FSM.Nodes()); err != nil {
+	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, startSeed); err != nil { // the table may not have caught up yet (I-281)
 		log.Warn("member seed not written", "err", err)
 	}
 	selfIdx, ok := node.SelfIdx()
@@ -789,8 +786,13 @@ func (a *adminOps) leaderApplied() (uint64, bool) {
 
 // maintenance runs GC (leader) every GCInterval and the local sweep hourly.
 // refreshSeed rewrites <data_dir>/members.seed when the device members changed, so the
-// next start accepts the leader before the log arrives (I-92).
+// next start accepts the leader before the log arrives (I-92). Only a healthy node's
+// table is current: one the leader cannot reach would narrow the seed to what it
+// restored (I-281).
 func (a *adminOps) refreshSeed() {
+	if !a.healthy() {
+		return
+	}
 	nodes := a.node.FSM.Nodes()
 	var key strings.Builder
 	for i := range nodes {

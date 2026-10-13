@@ -121,7 +121,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
-| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none, on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
+| `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,live,tier,step},"node","nodes":[{name,addr,live,self,web?}],"charts":[{id,title,svg,caption}]}`: the charts of docs/17 §4 over `[from, to)` (Unix seconds; `to=now` or absent for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; `nodes` carries each device member's tailnet IP, liveness and web port for the member menu's links; a missing or malformed `from`, `from ≥ to` or a range longer than `stats.keep.coarse` → 400; no query wired (`listen.web` on a node without the sampler) → 503; `Cache-Control: no-store` |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
 | `GET /api/trash` | – | `{"entries":[{…entry, path, restorable}]}`: every deleted root, newest first, `path` its original place, `restorable` false while that place is itself deleted |
@@ -135,7 +135,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `POST /api/restore` `{"ino","to"?,"name"?}` | required | 200 `{"path"}`; `to` and `name` default to the original place; a taken name → 409 `{"error","taken":true}`; an original parent that is itself deleted → 409 `{"error","in_trash":true}` (the page then asks for a destination); not a deleted root → 404 |
 | `POST /api/purge` `{"ino"}` or `{"all":true}` | required | 204; permanent: the entry's references are dropped and GC reclaims its chunks after grace (docs/06); `all` proposes purges until the trash is empty |
 | `POST /api/flags` `{"path","protected"?,"nsfw"?,"library"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409); `library` is one of `none`, `movies`, `tv`, `music` and needs every member on codec 6 (docs/18 §9, 503 `Retry-After: 30` otherwise) |
-| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}` |
+| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}`, for a folder whose art waits for a video's frame with `"grab":{path,ino,version}`, the video to frame, its path below the folder (I-275) |
 | `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser chose from a video (§5), stored as `<ino>-<gen>-<version>.f2.jpg`: 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
@@ -343,14 +343,27 @@ sweep removes it and the page grabs a new one as the tile comes into view (I-216
   thumbnail (`dir.cover`): an embedded picture, or, when the folder holds a `cover.*` or
   `folder.*` image, its first audio entry outright. Without a track's picture, a folder's
   own art is an artwork image (`cover.*`, `folder.*`, then `poster.*`: a movie's or a
-  show's poster), else the first other file by name whose thumbnail is stored (a video
-  whose frame the browser grabbed). A folder with no art of its own takes the cover of its
-  first subfolder by name that has one, first wins, looking into at most `CoverSubdirs`
-  (16) subfolders a level and at most `CoverDepth` (3) levels down, so an album kept as
-  editions or discs (`Fugazi/CBR Original/…`), an artist's folder of albums, a Movies
-  folder and a TV folder of shows and seasons all get a tile (`cover` is then the path
-  below the folder, `<subfolder>/…/<entry>`; I-257). The choice is the same on every node
+  show's poster), else its first other image by name that is not a tracker's advert
+  (`www.YTS.MX.jpg`, `YTS.BZ - Official site.jpg`: a name with `www.`, `YTS`, `YIFY`,
+  `RARBG`, `EZTV`, `torrent` or `official site`), so a folder of photos has a tile, else
+  the first other file by name whose thumbnail is stored (a video whose frame the browser
+  grabbed). A folder with no art of its own takes the cover of its first subfolder by name
+  that has one, first wins, looking into at most `CoverSubdirs` (16) subfolders a level,
+  never into `Subs`, `Subtitles`, `Sample` or `Samples`, and at most `CoverDepth` (4)
+  levels down, so an album kept as editions or discs (`Fugazi/CBR Original/…`,
+  `Artist/1 Studio/1983 90125/CD1`), an artist's folder of albums, a Movies folder and a
+  TV folder of shows and seasons all get a tile (`cover` is then the path below the
+  folder, `<subfolder>/…/<entry>`; I-257, I-275). The choice is the same on every node
   (I-165).
+  A folder whose only media is video nobody has framed yet is not settled: its `GET
+  /api/thumb` answers 404 naming the first such video it saw (`grab`, with its path below
+  the folder, inode and version; an mp4, m4v, webm or mov before an mkv or avi, which a
+  browser may not decode), its listing does not say `no_cover`, and its tile frames that
+  video as a video's own tile would (once per file, version and recipe) and asks again.
+  The resolved none waits for at most eight such videos: once any of them has a frame,
+  every node resolves the folder again. A track whose tags were read counts like a folder
+  it read, so a track whose bytes land after its create (a copy through a mount creates
+  the names first) is read again once they do (I-275).
   Finding it reads each candidate's tags, so the folder's tile asks
   `GET /api/thumb?path=<folder>` and the node resolves the cover then and remembers it
   until the folder or a subfolder it looked into changes. The choice is stored in the
@@ -868,9 +881,23 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   (I-165), else the first of `cover.*`, `folder.*` and `poster.*` it holds, else the
   first other file by name whose thumbnail is stored; a folder without its own takes the
   cover of its first subfolder by name that has one, first wins, looking into at most
-  `CoverSubdirs` subfolders a level, skipping hidden folders, and at most `CoverDepth` (3)
-  levels down. Before, only audio counted and only one level down, so a Movies or TV
-  folder and a Music folder of artists had no tile.
+  `CoverSubdirs` subfolders a level, skipping hidden folders, and at most `CoverDepth`
+  levels down (4 since I-275). Before, only audio counted and only one level down, so a
+  Movies or TV folder and a Music folder of artists had no tile.
+- **I-275** — A folder's own art includes its first image by name that is not a tracker's
+  advert; `Subs`, `Subtitles`, `Sample` and `Samples` folders are not looked into;
+  `CoverDepth` is 4. A folder resolved to none while a video below it had no frame is not
+  settled: `GET /api/thumb` answers 404 with `grab` naming one such video (path below the
+  folder, inode, version; mp4, m4v, webm and mov first), the listing does not report
+  `no_cover`, the tile frames that video and asks again, and once any of the at most eight
+  videos the none waits for has a stored frame every node resolves the folder again, from
+  memory or from its record. A track whose tags were read is a dependency like a folder,
+  so its bytes written after the resolve make it resolve again. A none record written
+  before it (no `v`, so no waits) is resolved again; a stored choice of a file is still
+  served. Before, only `cover.*`, `folder.*` and `poster.*` images counted, depth stopped
+  at three, and a none was stored for every node with only folder versions as its
+  dependencies, so a frame stored later or a track's bytes written after its create never
+  cleared it: 12 of 14 TV shows of a real volume stayed `no_cover`.
 - **I-256** — A folder's resolved cover is stored in the volume as a record beside the
   thumbnails (the chosen entry or none, and the version of every folder it read); a node
   without the cover in memory serves the record when those folders are unchanged, reading
@@ -952,6 +979,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-165 | `TestWebUI_Thumb_AudioCoverFallbackOrder`, `TestWebUI_Ls_DirCoverDeterministic`, `TestWebUI_Ls_DirCoverFromSubfolder`, `TestWebUI_Ls_ReadsNoFile`, `TestSoak_AllPhasesAgainstHarness` |
 | I-257 | `TestWebUI_DirCover_SurfacesArtUpward`, `TestWebUI_Ls_DirCoverFromSubfolder` |
 | I-256 | `TestWebUI_DirCover_StoredAndShared`, `TestSweepThumbs_CoverRecords` |
+| I-275 | `TestWebUI_DirCover_PhotosAndAdverts`, `TestWebUI_DirCover_NoneClears`, `TestWebUI_DirCover_LegacyNoneResolvedAgain` |
 | I-197 | `TestChart_ReportGolden_ByteIdenticalAfterMove`, `TestChart_NoInlineStyle_NoColour`, `TestChart_ClassesDefinedInAppCSS`, `TestReport_DefinesChartClasses`, `TestChart_EscapesHostileNames`, `TestChart_Points_Table`, `TestChart_LegendWrap_Table`, `TestChart_DropsNaNInf`, `TestChart_Spread_DeadAndDraining`, `TestChart_ClockAxis`, `TestChart_TruncateMarkerLabel`, `TestExpectedShares_WaterFill`, `TestChart_LookdevDataSetMatchesStatsPage` |
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |

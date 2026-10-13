@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -174,10 +175,13 @@ type Run struct {
 	thumbs     int          // thumbnail round trips of phase 16 (under mu)
 	thumbMax   time.Duration
 	Out        io.Writer // results.jsonl (may be nil)
-	Rng        *rand.Rand
-	Seed       int64    // the Rng's seed, for the report
-	Flags      []string // run flags worth recording ("destructive", "restarts")
-	Root       string   // volume directory for this run, e.g. /_soak/20261008T1200
+	// EvidenceDir, when set and the Env is an EvidenceTaker, receives the rig's evidence at
+	// a phase's first failed check, in a folder per phase (I-270).
+	EvidenceDir string
+	Rng         *rand.Rand
+	Seed        int64    // the Rng's seed, for the report
+	Flags       []string // run flags worth recording ("destructive", "restarts")
+	Root        string   // volume directory for this run, e.g. /_soak/20261008T1200
 
 	mu        sync.Mutex
 	records   []Record
@@ -190,6 +194,7 @@ type Run struct {
 	nodes     []NodeRef
 	hostOf    map[int]int // disk target → its host (docs/14), learned from status
 	failed    int
+	evidenced map[string]bool // phases whose evidence was saved (I-270), under mu
 	started   time.Time
 	stopSamp  chan struct{}
 	sampDone  chan struct{}
@@ -313,6 +318,9 @@ func (r *Run) emit(rec Record) {
 		_, _ = r.Out.Write(append(b, '\n'))
 	}
 	r.mu.Unlock()
+	if rec.Kind == "check" && rec.OK != nil && !*rec.OK {
+		r.saveEvidence(rec.Phase)
+	}
 	if r.Log != nil {
 		switch rec.Kind {
 		case "check":
@@ -1039,4 +1047,57 @@ func removeTree(v Volume, p string) {
 		}
 	}
 	_ = v.Remove(p)
+}
+
+// EvidenceTaker is the optional capability of an Env that can save what a failure needs to
+// be explained (the compose rig: each node's recent log and status) into dir.
+type EvidenceTaker interface {
+	TakeEvidence(ctx context.Context, dir string) error
+}
+
+// EvidenceTimeout bounds the saving of one phase's evidence.
+const EvidenceTimeout = time.Minute
+
+// saveEvidence saves the rig's evidence for phase once, at its first failed check, and
+// names the folder in the results (I-270): the rig is torn down after the run, and its logs
+// with it.
+func (r *Run) saveEvidence(phase string) {
+	et, ok := r.Env.(EvidenceTaker)
+	if !ok || r.EvidenceDir == "" {
+		return
+	}
+	r.mu.Lock()
+	if r.evidenced == nil {
+		r.evidenced = map[string]bool{}
+	}
+	if r.evidenced[phase] {
+		r.mu.Unlock()
+		return
+	}
+	r.evidenced[phase] = true
+	r.mu.Unlock()
+	dir := filepath.Join(r.EvidenceDir, slug(phase))
+	ctx, cancel := context.WithTimeout(context.Background(), EvidenceTimeout)
+	defer cancel()
+	text := "saved to " + dir
+	if err := et.TakeEvidence(ctx, dir); err != nil {
+		text = "not all saved to " + dir + ": " + err.Error()
+	}
+	r.emit(Record{Kind: "event", Phase: phase, Name: "evidence", Text: text})
+}
+
+// slug is a phase's name as a folder name: lower case, runs of other characters as one '-'.
+func slug(s string) string {
+	var b strings.Builder
+	dash := false
+	for _, c := range strings.ToLower(s) {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+			b.WriteRune(c)
+			dash = false
+		} else if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.TrimSuffix(b.String(), "-")
 }

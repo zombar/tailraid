@@ -73,7 +73,7 @@ func (c *conn) serve(ctx context.Context) {
 	defer cancel()
 	defer c.Close()
 	c.writeSerializer = make(chan []byte, 1)
-	go c.serializeWrites(connCtx)
+	go c.serializeWrites(connCtx, cancel)
 
 	bio := bufio.NewReader(c.Conn)
 	slots := make(chan struct{}, InFlight)
@@ -117,9 +117,16 @@ func (c *conn) serve(ctx context.Context) {
 	}
 }
 
-func (c *conn) serializeWrites(ctx context.Context) {
-	// todo: maybe don't need the extra buffer
+// serializeWrites writes the replies one after another. A reply the socket refuses ends
+// the connection (tailraid, I-269): the socket is closed, so the reader stops, and the
+// context cancelled, so every handler waiting to hand over its reply stops too. Before,
+// the writer returned alone and those handlers waited for it for good.
+func (c *conn) serializeWrites(ctx context.Context, cancel context.CancelFunc) {
 	writer := bufio.NewWriter(c.Conn)
+	fail := func() {
+		_ = c.Close()
+		cancel()
+	}
 	var fragmentBuf [4]byte
 	var fragmentInt uint32
 	for {
@@ -134,18 +141,16 @@ func (c *conn) serializeWrites(ctx context.Context) {
 			fragmentInt = uint32(len(msg))
 			fragmentInt |= (1 << 31)
 			binary.BigEndian.PutUint32(fragmentBuf[:], fragmentInt)
-			n, err := writer.Write(fragmentBuf[:])
-			if n < 4 || err != nil {
+			if _, err := writer.Write(fragmentBuf[:]); err != nil {
+				fail()
 				return
 			}
-			n, err = writer.Write(msg)
-			if err != nil {
+			if _, err := writer.Write(msg); err != nil { // a short write comes with its error
+				fail()
 				return
 			}
-			if n < len(msg) {
-				panic("todo: ensure writes complete fully.")
-			}
-			if err = writer.Flush(); err != nil {
+			if err := writer.Flush(); err != nil {
+				fail()
 				return
 			}
 		}
