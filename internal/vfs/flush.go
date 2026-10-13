@@ -314,7 +314,23 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 		return err
 	}
 	f.ov.NoteFlush(ino, nil) // before CommitFlushed, which may evict the entry
+	f.restoreTimes(ctx, ino)
 	return f.ov.CommitFlushed(plan, newSize)
+}
+
+// restoreTimes sets again the times a client set on ino after its last write, which the
+// Commit just stamped over with its own (I-230): a copy's source times, set as its last
+// step, outlive the flush. A failure leaves the flush's time and is logged; the data is
+// committed either way.
+func (f *Flusher) restoreTimes(ctx context.Context, ino meta.Ino) {
+	atime, mtime, ok := f.ov.UserTimes(ino)
+	if !ok {
+		return
+	}
+	sa := &meta.SetAttr{Ino: ino, Mask: meta.AttrAtime | meta.AttrMtime, Atime: atime, Mtime: mtime, Now: f.clk.Now().UnixNano()}
+	if _, _, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetAttr, SetAttr: sa}); err != nil && f.log != nil {
+		f.log.Warn("a client's file times were not set again after the flush", "ino", ino, "err", err)
+	}
 }
 
 // carriesSums reports whether a Commit records any chunk's shard sums (a codec-5 command).

@@ -37,7 +37,7 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 | READ | `Open(path)` → `file.ReadAt(buf, offset)` → `file.Close()` |
 | SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()`; a size past `MaxFileSize` (I-64) fails with `EFBIG` |
 | SETATTR mode/uid/gid/times | `Handler.Change(fs)` → `Chmod`/`Lchown`/`Chtimes`; if `Change` returns nil every such call fails with NFS3ERR_NOTSUPP |
-| CREATE | `UNCHECKED`: `fs.Create(path)` → `Close()` (then SETATTR for mode); on an existing file that is the truncate a rewrite starts with (04 §6, I-223). `GUARDED`: `fs.OpenFile(path, O_RDWR\|O_CREATE\|O_EXCL)`, `EEXIST` → `NFS3ERR_EXIST` whether this gateway or the leader saw the name first (I-222). `EXCLUSIVE` (a verifier): `NFS3ERR_NOTSUPP`, on which the Linux client retries `GUARDED` |
+| CREATE | `UNCHECKED`: `fs.Create(path)` → `Close()` (then SETATTR for mode); on an existing file that is the truncate a rewrite starts with (04 §6, I-223). `GUARDED`: `fs.OpenFile(path, O_RDWR\|O_CREATE\|O_EXCL)`, `EEXIST` → `NFS3ERR_EXIST` whether this gateway or the leader saw the name first (I-222). `EXCLUSIVE` (a verifier, RFC 1813 §3.3.8, I-231): the same exclusive create, the verifier kept in the new file's times; a name that holds a file is `NFS3ERR_EXIST` unless its mtime still carries the request's verifier (a retransmission), which answers the file. Until 2026-10-12 it answered `NFS3ERR_NOTSUPP`, on which Linux retried `GUARDED` but macOS retried `UNCHECKED`, truncating a file another device had made |
 | MKDIR / RMDIR / REMOVE / RENAME | `MkdirAll`, `Remove`, `Remove`, `Rename` |
 | LOOKUP / GETATTR / READDIR(PLUS) | `Lstat`, `ReadDir`; fileid from `FileInfo.Sys()` when it returns `*file.FileInfo{Fileid, Nlink, UID, GID}` (go-nfs's own type), otherwise an FNV hash of the path |
 | LINK | optional `UnixChange.Link`; not implemented → NFS3ERR_NOTSUPP |
@@ -116,10 +116,15 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **READDIR / READDIRPLUS**: go-nfs pages with cookies over the `[]os.FileInfo` returned by
   `ReadDir`, which the FSM returns sorted by name. The handler implements go-nfs's
   `CachingHandler` verifier hooks only: the cookie verifier is a hash of the directory
-  inode's identity and `Version` (bumped by every name-table change), and the listing is kept (64 most recent)
-  so the following pages reuse it instead of listing and sorting the directory again; a
-  change to the directory changes the verifier, so a stale cookie gets
-  `NFS3ERR_BAD_COOKIE` (I-47, `TestNFS_ReadDirPlus_RemoveBetweenPages`). Directories of
+  inode's identity and `Version` (bumped by every name-table change), and the listing is kept (the 64 most recently used)
+  so the following pages reuse it instead of listing and sorting the directory again. A
+  listing continued after its directory changed goes on through the kept listing, a
+  consistent snapshot, every surviving entry once and an entry removed meanwhile left out
+  (go-nfs's `ListingPruner` hook, which keeps every cookie's place); a new listing
+  (cookie 0) lists afresh whatever verifier it carries. Only a listing evicted from the
+  cache gets `NFS3ERR_BAD_COOKIE` (I-47, I-232). Until 2026-10-12 any change got it, and
+  macOS ends a listing there (Linux after one retry), so a folder changing under a Finder
+  copy, an `ls` or an rsync showed truncated. Directories of
   10k+ entries are tested (`TestNFS_ReadDirPlusLargeDirectory`).
 - **Attribute caching**: the gateway sets no special attribute TTL; clients use their
   defaults (`actimeo` 3–60 s). Another device's writes become visible on this device within
@@ -207,6 +212,15 @@ device"), not `EIO`.
 - Cross-device visibility is eventually consistent within the client's attribute cache
   window; the FSM itself is linearizable through Raft.
 - **atime and ctime on the wire are the mtime.** go-nfs fills every reply's `atime`, `mtime` and `ctime` from the billy `ModTime()`; a client-supplied atime is stored in the FSM (and seen by every gateway through `tailraid` itself) but GETATTR reports it as the mtime. No consumer of this volume is known to depend on atime.
+- **`UNCHECKED` on an existing file truncates it.** RFC 1813 §3.3.8 has an `UNCHECKED`
+  CREATE of an existing name apply only the attributes it carries. Neither the macOS nor
+  the Linux client puts a size in them: an `O_TRUNC` open of a file the client knows
+  sends its own `SETATTR` size 0. So the server's truncate matters only when the client
+  believed the name free and another device created it meanwhile, and there a copy's
+  `O_TRUNC` is the common case and truncating is the safer answer (the copy's bytes
+  replace the other device's, never mix with them); an `O_CREAT` without `O_TRUNC` (a
+  shell's `>>`) in that window loses the other device's bytes. Kept deliberately; an
+  `O_EXCL` create no longer reaches it (I-231).
 - **Name length.** go-nfs refuses a name longer than 255 bytes with `NFS3ERR_NAMETOOLONG` before it reaches the volume; the FSM enforces the same limit (I-66) for every other proposer. A path longer than 4096 bytes is refused the same way at CREATE, MKDIR, SYMLINK and RENAME (I-115, docs/01); depth alone is not limited, each LOOKUP resolves one component.
 
 ## Invariants
@@ -243,6 +257,17 @@ device"), not `EIO`.
   handle is 24 bytes with its own magic and is `STALE` once the row is gone or deleting
   or the mirror offline; and `.snapshots` cannot be created, renamed onto or removed at
   the root.
+- **I-231** — CREATE `EXCLUSIVE` of a free name creates the file exclusively across
+  gateways (as `GUARDED`, I-222) and keeps the request's verifier in its mtime; the same
+  request again, before the client's SETATTR replaces the times, answers that file; a
+  name holding a file whose mtime is not the verifier, or a directory, is
+  `NFS3ERR_EXIST` and the file is untouched.
+- **I-232** — A READDIR or READDIRPLUS continued with the verifier of a listing still
+  kept (the 64 most recently used) answers from that listing even after its directory
+  changed: every entry of it that still names the same inode is listed exactly once
+  across the pages, an entry removed or replaced meanwhile is left out, and no page
+  answers `NFS3ERR_BAD_COOKIE`; a listing started with cookie 0 lists the directory
+  afresh whatever verifier it carries.
 
 ## Tests
 
@@ -254,5 +279,7 @@ device"), not `EIO`.
 | I-46 | `TestNFS_SetattrOwnerAndTimes`, `TestNFS_SetattrSizeTruncates`, `TestVFS_SymlinkAndChange` |
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
+| I-231 | `TestNFS_CreateExclusive_Verifier` |
+| I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
 | I-185 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_SnapshotsDir_HiddenResolvesLists`, `TestVFS_SnapshotRead_PoolThenMirror`, `TestVFS_SnapshotOfflineMirror_EIO`, `TestVFS_SnapshotMutation_IsROFS`, `TestVFS_SnapshotHandle_StaleTable`, `TestHandle_Snapshot_RoundTrip`, `FuzzDecodeHandle`, `TestNFS_Snapshots_OverTheWire`, `TestSMB_SnapshotsDir_ReadOnly`, `TestMirrorRPC_ObjectsAndTrees`, `TestMirrorSource_LocalDetachedRemote`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` |

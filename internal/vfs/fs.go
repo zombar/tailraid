@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -800,6 +801,33 @@ func (f *FS) Lchown(name string, uid, gid int) error {
 
 func (f *FS) Chown(name string, uid, gid int) error { return f.Lchown(name, uid, gid) }
 
+// Chtimes sets a client's times. One set while the file has unflushed writes is noted in
+// the overlay, so the flush that commits those writes keeps it (I-230). A time outside
+// what the volume represents (nanoseconds since 1970 in an int64: 1677–2262) is held at
+// the nearest end rather than wrapped.
 func (f *FS) Chtimes(name string, atime, mtime time.Time) error {
-	return f.setAttr(name, meta.SetAttr{Mask: meta.AttrAtime | meta.AttrMtime, Atime: atime.UnixNano(), Mtime: mtime.UnixNano()})
+	sa := meta.SetAttr{Mask: meta.AttrAtime | meta.AttrMtime, Atime: clampNano(atime), Mtime: clampNano(mtime)}
+	if err := f.setAttr(name, sa); err != nil {
+		return err
+	}
+	if in, err := f.resolve(name); err == nil {
+		f.ov.NoteTimes(in.Ino, sa.Atime, sa.Mtime)
+	}
+	return nil
+}
+
+var (
+	earliestTime = time.Unix(0, math.MinInt64)
+	latestTime   = time.Unix(0, math.MaxInt64)
+)
+
+// clampNano is t in nanoseconds since 1970, held within an int64.
+func clampNano(t time.Time) int64 {
+	switch {
+	case t.Before(earliestTime):
+		return math.MinInt64
+	case t.After(latestTime):
+		return math.MaxInt64
+	}
+	return t.UnixNano()
 }

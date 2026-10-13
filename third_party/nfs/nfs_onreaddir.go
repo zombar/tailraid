@@ -45,7 +45,7 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
 
-	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, obj.CookieVerif)
+	contents, verifier, err := getDirListingWithVerifier(userHandle, obj.Handle, continuing(obj.Cookie, obj.CookieVerif))
 	if err != nil {
 		return err
 	}
@@ -79,9 +79,14 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 
 	eof := true
 	maxEntities := userHandle.HandleLimit() / 2
+	pruner, _ := userHandle.(ListingPruner)
+	dirPath := fs.Join(p...)
 	for i, c := range contents {
 		// cookie equates to index within contents + 2 (for '.' and '..')
 		cookie := uint64(i + 2)
+		if started && pruner != nil && pruner.Gone(dirPath, c) {
+			continue // removed since the kept listing was made; its cookie stays counted
+		}
 		if started {
 			maxBytes += 512 // TODO: better estimation.
 			if maxBytes > obj.Count || len(entities) > maxEntities {
@@ -135,6 +140,17 @@ func onReadDir(ctx context.Context, w *response, userHandle Handler) error {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 	return nil
+}
+
+// continuing is the verifier a READDIR(PLUS) continues a listing with: none for cookie 0,
+// which starts a listing afresh whatever verifier the client sends (tailraid: a kept
+// listing answers its verifier after the directory changed, I-232, and must not stand in
+// for a new listing).
+func continuing(cookie, verifier uint64) uint64 {
+	if cookie == 0 {
+		return 0
+	}
+	return verifier
 }
 
 func getDirListingWithVerifier(userHandle Handler, fsHandle []byte, verifier uint64) ([]fs.FileInfo, uint64, error) {

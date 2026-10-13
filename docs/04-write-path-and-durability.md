@@ -372,6 +372,18 @@ reader's lock, where the cancel decides). `status` counts them as `readahead_can
 - **Issuing gateway:** read-your-writes immediately after the WRITE reply, from the overlay
   (WAL extents over base, with base bytes at or beyond `minSize` reading as zero).
   `GETATTR` size comes from the overlay while dirty.
+- **A client's times outlive the flush** (I-230). A Commit stamps the inode's mtime and
+  ctime with its own time, as the data's change. A copy, though, writes a file and then
+  sets the source's times as its last step (`cp -p`, `rsync -a`, robocopy, Explorer's
+  SET_INFO basic), seconds before the flush commits that data. The times a client sets
+  while the file has unflushed writes, after its last write, are noted in the overlay and
+  set again by the flusher with a `SetAttr` right after every Commit of that file; a
+  later write or truncate clears them, being newer than they are. Until 2026-10-12 every
+  copied file showed the flush's time, so robocopy and rsync copied everything again on
+  their next run. Times set on another gateway than the one holding the dirty data are
+  not noted there: that Commit still stamps over them. A time outside what the inode
+  holds (nanoseconds since 1970 in an int64, 1677–2262) is held at the nearest end, not
+  wrapped (a FILETIME of 1601 had read back as 2185).
 - **Other gateways:** see the previous committed version until their FSM applies the Commit
   (milliseconds after Raft commit). They never see a torn mixture of old and new chunks,
   because the chunk list is replaced atomically by one Commit.
@@ -562,6 +574,11 @@ the WAL cap.
   one after it) cancels the inode's in-flight prefetches no READ has joined, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
   cancelled; a READ that joined a prefetch which then failed fetches the chunk itself
   and returns only its own result.
+- **I-230** — Times a client sets on a file (`Chtimes`: SMB SET_INFO basic, NFS SETATTR)
+  after its last write and while that write is unflushed are the file's times after the
+  flush; a write or truncate after them makes the
+  flush's time win; a time before 1677-09-21 or after 2262-04-11 reads back as that
+  bound, never as another date.
 - **I-219** — A Commit the leader refuses with `ErrCodec` (its view of the members' codec
   is older than the gateway's, as during a rolling upgrade) is built again without
   `Sums` and proposed again within the same flush attempt, so the codec gate never fails
@@ -594,4 +611,5 @@ the WAL cap.
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |
 | I-83 | `TestFlusher_StragglerPut_CancelledAfterReplace`, `TestClient_PutTimeout_Table`, `TestNode_SlotBudget_Table`, `TestChunkRPC_PutCancelled_NoShardLeft` |
 | I-98 | `TestReader_HedgesStalledHolder` |
+| I-230 | `TestVFS_UserTimes_SurviveFlush`, `TestSMB_CopyTimes_SurviveFlush` |
 | I-101 | `TestWAL_FsyncFailureReopens`, `TestWAL_CompactReopenFailureClosesLog` |

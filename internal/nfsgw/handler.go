@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
+	nfsfile "github.com/willscott/go-nfs/file"
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -155,17 +156,40 @@ func (h *Handler) VerifierFor(path string, contents []iofs.FileInfo) uint64 {
 	return v
 }
 
-// DataForVerifier returns the kept listing while the directory is unchanged, else nil
-// (go-nfs then lists again and answers NFS3ERR_BAD_COOKIE for the stale cookie, I-47).
+// DataForVerifier returns the listing a verifier names for as long as it is kept, whether
+// or not the directory changed since: a client paging a listing goes on through the
+// listing it started, every entry of it once (I-232). macOS ends a listing at
+// NFS3ERR_BAD_COOKIE and Linux after one retry, so refusing a cookie because the folder
+// changed showed a truncated folder. A new listing (cookie 0) is listed afresh. Only a
+// listing evicted from the cache is nil, and go-nfs then answers NFS3ERR_BAD_COOKIE (I-47).
 func (h *Handler) DataForVerifier(path string, verifier uint64) []iofs.FileInfo {
 	key, contents, ok := h.dirs.get(verifier)
 	if !ok {
 		return nil
 	}
-	if now, ok := h.dirKeyOf(path); !ok || now != key {
-		return nil
+	if now, ok := h.dirKeyOf(path); !ok || now.Ino != key.Ino || now.Gen != key.Gen || now.Tree != key.Tree {
+		return nil // another directory now holds the path
 	}
 	return contents
+}
+
+// Gone reports whether a kept listing's entry left its directory since: its name now
+// resolves to nothing or to another inode (I-232). A snapshot's directories never change.
+func (h *Handler) Gone(dir string, entry iofs.FileInfo) bool {
+	parts := meta.SplitPath(dir)
+	if len(parts) > 0 && parts[0] == vfs.SnapshotDir {
+		return false
+	}
+	d, err := h.st.Resolve(parts)
+	if err != nil {
+		return true
+	}
+	in, ok := h.st.Lookup(d.Ino, entry.Name())
+	if !ok {
+		return true
+	}
+	fi, ok := entry.Sys().(*nfsfile.FileInfo)
+	return ok && fi.Fileid != uint64(in.Ino)
 }
 
 // dirKeyOf is what a directory's listing depends on: its inode's identity and Version,
@@ -220,8 +244,8 @@ func (k dirKey) verifier(path string) uint64 {
 	return v
 }
 
-// dirCache holds the most recent listings (a client pages one or a few directories at a
-// time; 64 is generous).
+// dirCache holds the most recently used listings (a client pages one or a few
+// directories at a time; 64 is generous).
 type dirCache struct {
 	mu      sync.Mutex
 	entries map[uint64]dirEntry
@@ -251,10 +275,20 @@ func (c *dirCache) put(v uint64, key dirKey, contents []iofs.FileInfo) {
 	c.entries[v] = dirEntry{key, contents}
 }
 
+// get returns the listing v names and marks it the most recently used, so a listing a
+// client is paging through outlives listings of other directories made meanwhile.
 func (c *dirCache) get(v uint64) (dirKey, []iofs.FileInfo, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[v]
+	if ok {
+		for i, o := range c.order {
+			if o == v {
+				c.order = append(append(c.order[:i:i], c.order[i+1:]...), v)
+				break
+			}
+		}
+	}
 	return e.key, e.contents, ok
 }
 

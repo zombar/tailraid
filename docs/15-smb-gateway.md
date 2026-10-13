@@ -49,7 +49,8 @@ upstream, each with a test in the copy:
   basic forwards the access and write times a client sets to `MetadataSetter.Chtimes`
   (0, −1 and −2 mean "leave it", per MS-FSCC 2.4.7); without the capability the server
   keeps reporting the time of the reply. Explorer therefore shows the FSM's modification
-  times and `robocopy /COPY:DAT` preserves them.
+  times and `robocopy /COPY:DAT` preserves them, through the flush that commits the
+  copied data (04 §6, I-230).
 - `file.go`, `status.go`: a READ the backend fails (here: a chunk with too few shards,
   `EIO`) answers `STATUS_UNEXPECTED_IO_ERROR`, not `STATUS_END_OF_FILE`, which upstream
   used as the fallback for every read error. A client takes END_OF_FILE for a shorter
@@ -226,6 +227,18 @@ Windows client opening either name by its exact spelling gets that file, and a l
 third spelling (`A.TXT`) gets `A.txt`. Explorer probes names such as `desktop.ini` in
 every folder it shows, so a folder of many entries costs one listing per probe; a
 directory listing itself is one `ListDir` and one `Stat` per entry from the FSM (no I/O).
+
+A path that is partly new resolves its existing folders the same way and keeps the new
+part as the client spelled it: a create of `photos\new.jpg` with `Photos` there makes
+`/Photos/new.jpg`. A folder on the way that does not exist is
+`STATUS_OBJECT_PATH_NOT_FOUND` (MS-FSA 2.1.5.1), never made: the vfs's `OpenFile` and
+`Rename` make missing parents for NFS and the browser, and the server checks first. A
+rename's destination folder resolves the same way; a destination leaf that names another
+file only by case is that file, so a rename without `ReplaceIfExists` collides with it and
+one with it replaces it, never leaving two names that differ by case; a destination that
+differs only by case from the file itself renames it. Until 2026-10-12 any partly new path
+was taken as typed, and a wrong-case parent became a second folder beside the first
+(I-233).
 
 ## 6. Configuration, password and the Windows mount
 
@@ -477,6 +490,12 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   `STATUS_INVALID_PARAMETER`; an answer never carries more output than
   MaxOutputResponse, and an answer cut to fit carries the bytes that fit with
   `STATUS_BUFFER_OVERFLOW` ([MS-SMB2 §3.3.5.15](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/c348a671-7750-49f8-9e61-cc59fa1a5701)).
+- **I-233** — A CREATE or a rename's destination spelled with existing folders in another
+  case than theirs lands in those folders and never makes a folder or file that differs
+  from an existing one only by case; a folder on the way that does not exist is
+  `STATUS_OBJECT_PATH_NOT_FOUND` and nothing is made; a rename onto another file's name in
+  another case collides without `ReplaceIfExists` and replaces that file with it; a rename
+  that changes only the case of the file's own name renames it.
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -502,3 +521,4 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-227 | `TestQueryFileRegions_FSA`, `TestVFS_ValidDataLength`, `TestSMB_QueryFileRegions_ExplorerProbe` |
 | I-228 | `TestIoctl_Statuses` |
 | I-229 | `TestSMB_ScratchCreate_NotTrashed` |
+| I-233 | `TestSMB_CaseFold_NoTwins` |
