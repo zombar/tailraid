@@ -31,6 +31,7 @@ const (
 	OnlyTV       = "tv"
 	OnlyEpisodes = "episodes"
 	OnlyMusic    = "music"
+	OnlyGames    = "games"
 )
 
 // Options are a run's flags.
@@ -40,7 +41,7 @@ type Options struct {
 	Region string
 	Yes    bool   // take the top result of an unclear search
 	DryRun bool   // write nothing, print what would be written
-	ID     string // the id of the one film, show or album the paths name (tmdb:<n> or mbid:<uuid>)
+	ID     string // the id of the one film, show, album or game the paths name (tmdb:<n>, mbid:<uuid> or libretro:<name>)
 	Out    io.Writer
 }
 
@@ -66,6 +67,7 @@ type runner struct {
 	// a show's match and its seasons, by the show's inode
 	shows   map[uint64]string
 	seasons map[string]Season
+	boxarts map[string][]string // a libretro system's names, fetched once a run
 }
 
 func (o Options) wants(group string) bool { return len(o.Only) == 0 || o.Only[group] }
@@ -76,16 +78,16 @@ func Run(ctx context.Context, c *Client, items []search.ScrapeItem, w Writer, ch
 	if o.Out == nil {
 		o.Out = io.Discard
 	}
-	r := &runner{c: c, w: w, ch: ch, o: o, shows: map[uint64]string{}, seasons: map[string]Season{}}
+	r := &runner{c: c, w: w, ch: ch, o: o, shows: map[uint64]string{}, seasons: map[string]Season{}, boxarts: map[string][]string{}}
 	if o.ID != "" {
 		roots := 0
 		for i := range items {
-			if it := &items[i]; it.Kind == search.ScrapeMovie || it.Kind == search.ScrapeShow || it.Kind == search.ScrapeAlbum {
+			if it := &items[i]; it.Kind == search.ScrapeMovie || it.Kind == search.ScrapeShow || it.Kind == search.ScrapeAlbum || it.Kind == search.ScrapeGame {
 				roots++
 			}
 		}
 		if roots != 1 {
-			return r.sum, fmt.Errorf("scrape: --id names one item, the paths hold %d films, shows or albums", roots)
+			return r.sum, fmt.Errorf("scrape: --id names one item, the paths hold %d films, shows, albums or games", roots)
 		}
 	}
 	for i := range items {
@@ -114,6 +116,10 @@ func Run(ctx context.Context, c *Client, items []search.ScrapeItem, w Writer, ch
 		case search.ScrapeAlbum:
 			if o.wants(OnlyMusic) {
 				err = r.album(ctx, it)
+			}
+		case search.ScrapeGame:
+			if o.wants(OnlyGames) {
+				err = r.game(ctx, it)
 			}
 		}
 		if errors.Is(err, ErrKey) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -283,6 +289,24 @@ func (r *runner) album(ctx context.Context, it search.ScrapeItem) error {
 		return nil
 	}
 	return r.write(ctx, it, map[string]func() ([]byte, error){"cover": r.image(ctx, r.c.CoverURL(id))})
+}
+
+func (r *runner) game(ctx context.Context, it search.ScrapeItem) error {
+	names, ok := r.boxarts[it.System]
+	if !ok {
+		var err error
+		if names, err = r.c.Boxarts(ctx, it.System); err != nil {
+			return err
+		}
+		r.boxarts[it.System] = names
+	}
+	cs, idx, isClear := ClearGame(it.Key, it.Title, it.Regions, names)
+	name, why := r.pick(it, "libretro", cs, func() (int, bool) { return idx, isClear })
+	if name == "" {
+		r.skip(it, why)
+		return nil
+	}
+	return r.write(ctx, it, map[string]func() ([]byte, error){"boxart": r.image(ctx, r.c.BoxartURL(it.System, name))})
 }
 
 // errNoImage is a provider with no image for a slot: the slot stays missing.

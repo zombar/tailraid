@@ -80,7 +80,8 @@ func mediaScrapeCmd() *cobra.Command {
 		Short: "Write the missing .nfo sidecars, posters, backdrops, stills and covers of the libraries",
 		Long: `scrape lists the library items under the paths (every library when none is given) that
 lack a sidecar or art, looks each one up with TMDB (films, shows, seasons, episodes) or
-MusicBrainz and the Cover Art Archive (album covers), and writes only what is missing,
+MusicBrainz and the Cover Art Archive (album covers) or the libretro thumbnails (box art
+of a game, by its No-Intro name), and writes only what is missing,
 under the names the Media tab reads. Nothing that exists is replaced, renamed or
 deleted. A clear match (title and year agree) is used at once; any other is listed for
 you to choose on a terminal, skipped without one, or taken with --yes. Only this
@@ -100,10 +101,10 @@ command contacts a provider: no node ever does (docs/18 §11).
 			o.Only = map[string]bool{}
 			for _, g := range only {
 				switch g {
-				case scrape.OnlyMovies, scrape.OnlyTV, scrape.OnlyEpisodes, scrape.OnlyMusic:
+				case scrape.OnlyMovies, scrape.OnlyTV, scrape.OnlyEpisodes, scrape.OnlyMusic, scrape.OnlyGames:
 					o.Only[g] = true
 				default:
-					return fmt.Errorf("--only %q: want movies, tv, episodes or music", g)
+					return fmt.Errorf("--only %q: want movies, tv, episodes, music or games", g)
 				}
 			}
 			if len(args) == 0 {
@@ -156,12 +157,12 @@ command contacts a provider: no node ever does (docs/18 §11).
 			return nil
 		},
 	}
-	c.Flags().StringSliceVar(&only, "only", nil, "only these groups: movies, tv, episodes, music (default all)")
+	c.Flags().StringSliceVar(&only, "only", nil, "only these groups: movies, tv, episodes, music, games (default all)")
 	c.Flags().StringVar(&o.Lang, "lang", "en-US", "the TMDB language")
 	c.Flags().StringVar(&o.Region, "region", "US", "the certification country")
 	c.Flags().BoolVar(&o.Yes, "yes", false, "take the top result when a search has no clear match")
 	c.Flags().BoolVar(&o.DryRun, "dry-run", false, "print what would be written, write nothing")
-	c.Flags().StringVar(&o.ID, "id", "", "the provider id of the one item the path names: tmdb:<n> or mbid:<uuid>")
+	c.Flags().StringVar(&o.ID, "id", "", "the provider id of the one item the path names: tmdb:<n>, mbid:<uuid> or libretro:<name>")
 	addNodeFlags(c)
 	return c
 }

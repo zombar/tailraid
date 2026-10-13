@@ -882,7 +882,7 @@ func (c *catalogue) roms(lib meta.Ino) {
 			games, _ = c.games(gl)
 		}
 		g := &gameWalk{c: c, lib: lib, platform: k.Ino, plat: p, games: games}
-		g.walk(pd, "", nil, 3)
+		g.walk(pd, k.Ino, "", nil, 3)
 		g.flush()
 		e := Entry{Ino: k.Ino, Lib: lib, Kind: EntPlatform, Title: p.title, Platform: p.title, Tracks: g.count, Season: -1}
 		e.Poster = pd.art("platform", "poster", "folder", "logo")
@@ -907,12 +907,13 @@ type gameCand struct {
 	file meta.Inode // the file a disc set's folder plays: its cue, m3u or gdi
 	rel  string     // its path below the platform folder
 	dir  dirIndex   // its folder's
+	at   meta.Ino   // the folder its art goes in: its own for a disc set, else its parent
 	name Name
 }
 
 // walk visits a folder below the platform: rel is its path below the platform folder,
 // dirs the folders above it nearest first.
-func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
+func (g *gameWalk) walk(d dirIndex, at meta.Ino, rel string, dirs []string, depth int) {
 	for i := range d.kids {
 		k := &d.kids[i]
 		r := path.Join(rel, k.Name)
@@ -922,10 +923,10 @@ func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
 			}
 			kd := g.c.list(k.Ino)
 			if set, ok := discSet(kd); ok { // a folder of one game's disc images
-				g.cands = append(g.cands, gameCand{in: *k, file: set, rel: r, dir: kd, name: Analyze(set.Name, append([]string{k.Name}, dirs...), CtxRoms)})
+				g.cands = append(g.cands, gameCand{in: *k, file: set, rel: r, dir: kd, at: k.Ino, name: Analyze(set.Name, append([]string{k.Name}, dirs...), CtxRoms)})
 				continue
 			}
-			g.walk(kd, r, append([]string{k.Name}, dirs...), depth-1)
+			g.walk(kd, k.Ino, r, append([]string{k.Name}, dirs...), depth-1)
 			continue
 		}
 		if k.Type != meta.TFile || !g.plat.takes(k.Name) || ext(k.Name) == ".bin" && hasCue(d) {
@@ -935,7 +936,7 @@ func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
 		if slices.Contains(n.Flags, "update") || slices.Contains(n.Flags, "dlc") {
 			continue // part of a game, not one (docs/18 §8b)
 		}
-		g.cands = append(g.cands, gameCand{in: *k, file: *k, rel: r, dir: d, name: n})
+		g.cands = append(g.cands, gameCand{in: *k, file: *k, rel: r, dir: d, at: at, name: n})
 	}
 }
 
@@ -1010,7 +1011,11 @@ func (g *gameWalk) flush() {
 		if e.Poster == "" {
 			e.Poster = g.boxArt(*cd)
 		}
-		g.c.add(e)
+		key := cd.in.Name // a disc set: its folder's name; a file: its stem
+		if cd.in.Type != meta.TDir {
+			key = stem(cd.in.Name)
+		}
+		g.c.noted(e, cd.at, key, false, 0)
 		g.count++
 	}
 }

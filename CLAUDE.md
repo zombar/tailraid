@@ -139,7 +139,7 @@ drain|remove|add-disk` (docs/14: disks are targets named `<host>/<n>`) · `check
 describe|grow <disk> <size>|auto|set-redundancy` · `chunk describe <hash>`
 (lifecycle state, placement, refs, history; prints "(event ring disabled)" without `dev.enabled`) · `verify` (live soak + HTML report) · `update [--check|--rollback|--restart|--allow-downgrade]` · `export <dir>` (the metadata export, `snapshot <dir>` until docs/16's PR 2), `recover --voters` (docs/12 §9) · `mirror add <path> [--adopt]|ls|remove <name>|ls|cat|export <path>…`, `snapshot ls|create [name]|restore <mirror>/<name> <path>` (no removal: only the schedule thins), `versions <path> [--revert|--copy <mirror>/<name>]` (docs/16, docs/12 §11)
 · `node add-s3 <name>|keys <name>` (docs/10 §4.1; the secret key from `TAILRAID_S3_SECRET_KEY` or stdin) · `stats seal [--rollup]` (docs/17 §7: write the partial stats hour, roll up and, on the leader, prune now)
-· `media key|scrape [path…] [--only movies,tv,episodes,music] [--yes] [--dry-run] [--id tmdb:<n>|mbid:<uuid>]` (docs/18 §11: missing sidecars and art from TMDB and MusicBrainz, CLI only, I-298..I-302)
+· `media key|scrape [path…] [--only movies,tv,episodes,music,games] [--yes] [--dry-run] [--id tmdb:<n>|mbid:<uuid>]` (docs/18 §11: missing sidecars and art from TMDB, MusicBrainz and the libretro thumbnails, CLI only, I-298..I-302)
 · deferred with the S3 gateway: `bucket ls|describe|create|rm`, `s3 keys`
 · `mount`, `umount`, `install`, `uninstall`, `start`, `stop`, `logs` · `version`.
 

@@ -128,10 +128,10 @@ Names are answered live from the metadata. Contents and tags are indexed by the 
 ```sh
 tailraid media key                     # once per device: a free TMDB API key, from TAILRAID_TMDB_API_KEY or stdin
 tailraid media scrape --dry-run        # what would be written
-tailraid media scrape /Films           # write the missing .nfo, posters, backdrops, stills and album covers
+tailraid media scrape /Films           # write the missing .nfo, posters, backdrops, stills, album covers and game box art
 ```
 
-The Media tab reads Kodi sidecars. `media scrape` fills in the missing ones from TMDB (films, shows, seasons, episodes) and MusicBrainz with the Cover Art Archive (album covers), and never replaces a file that exists. A clear match is used at once; for anything else it shows the top five on a terminal, or skips with `--yes` not given. Only this command talks to the internet, from the device you run it on. This product uses the TMDB API but is not endorsed or certified by TMDB.
+The Media tab reads Kodi sidecars. `media scrape` fills in the missing ones from TMDB (films, shows, seasons, episodes), MusicBrainz with the Cover Art Archive (album covers) and the libretro thumbnails (game box art, by the No-Intro name), and never replaces a file that exists. A clear match is used at once; for anything else it shows the top five on a terminal, or skips with `--yes` not given. Only this command talks to the internet, from the device you run it on. This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 ## Snapshots and mirrors
 

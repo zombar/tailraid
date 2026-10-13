@@ -25,6 +25,7 @@ const (
 	ScrapeSeason  = "season"
 	ScrapeEpisode = "episode"
 	ScrapeAlbum   = "album"
+	ScrapeGame    = "game"
 )
 
 // ScrapeItem is one item of the plan. Dir is the volume path of the folder its files go
@@ -40,7 +41,12 @@ type ScrapeItem struct {
 	Season  int    `json:"season"` // -1: none
 	Episode int    `json:"episode,omitempty"`
 	Artist  string `json:"artist,omitempty"`
-	Missing []Slot `json:"missing,omitempty"`
+	// a game's: the name its box art is looked up by (the file's stem, a disc set's
+	// folder name), its platform's libretro system and its regions
+	Key     string   `json:"key,omitempty"`
+	System  string   `json:"system,omitempty"`
+	Regions []string `json:"regions,omitempty"`
+	Missing []Slot   `json:"missing,omitempty"`
 
 	DirIno meta.Ino `json:"-"` // the folder Dir names
 	Track  meta.Ino `json:"-"` // an album's first track: a picture in it is a cover
@@ -98,18 +104,27 @@ func planItem(e Entry, dir meta.Ino, stem string, hasNFO bool, track meta.Ino) S
 		if e.Poster == "" {
 			miss("cover", "cover.jpg")
 		}
+	case EntGame:
+		it.Kind, it.Key, it.System, it.Regions = ScrapeGame, stem, Libretro(e.Platform), e.Regions
+		if e.Poster != "" || it.System == "" {
+			return it // has art, or a platform the thumbnail set does not cover
+		}
+		if dir == e.Ino { // a disc set's folder: its art is boxart.* inside it
+			miss("boxart", "boxart.png")
+		} else {
+			miss("boxart", stem+".png")
+		}
 	}
 	return it
 }
 
 // scrapePlan walks the libraries and returns the plan in catalogue order.
-func scrapePlan(src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool)) []ScrapeItem {
+func scrapePlan(src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool), games func(meta.Inode) (map[string]GameInfo, bool)) []ScrapeItem {
 	var all []ScrapeItem
 	c := &catalogue{
-		src: src, nfo: nfo, tags: tags, seen: map[meta.Ino]bool{},
-		games: func(meta.Inode) (map[string]GameInfo, bool) { return nil, false }, // games are not scraped
+		src: src, nfo: nfo, tags: tags, games: games, seen: map[meta.Ino]bool{},
 		note: func(e Entry, dir meta.Ino, stem string, hasNFO bool, track meta.Ino) {
-			if e.Kind == EntMovie || e.Kind == EntShow || e.Kind == EntSeason || e.Kind == EntEpisode || e.Kind == EntAlbum {
+			if e.Kind == EntMovie || e.Kind == EntShow || e.Kind == EntSeason || e.Kind == EntEpisode || e.Kind == EntAlbum || e.Kind == EntGame {
 				all = append(all, planItem(e, dir, stem, hasNFO, track))
 			}
 		},
@@ -144,5 +159,6 @@ func (s *Service) ScrapePlan(ctx context.Context) []ScrapeItem {
 		return Doc{}, false
 	}
 	cfg := s.Cfg
-	return scrapePlan(s.Src, func(in meta.Inode) (NFO, bool) { return s.readNFO(ctx, in, cfg) }, tags)
+	return scrapePlan(s.Src, func(in meta.Inode) (NFO, bool) { return s.readNFO(ctx, in, cfg) }, tags,
+		func(in meta.Inode) (map[string]GameInfo, bool) { return s.readGamelist(ctx, in, cfg) }) // art a gamelist names is present
 }

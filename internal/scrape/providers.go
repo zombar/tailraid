@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -337,4 +338,27 @@ func (c *Client) SearchAlbum(ctx context.Context, artist, title string) ([]Candi
 // CoverURL is the Cover Art Archive's 500 px front image of a release group.
 func (c *Client) CoverURL(mbid string) string {
 	return c.CAA + "/release-group/" + url.PathEscape(mbid) + "/front-500"
+}
+
+var boxartHref = regexp.MustCompile(`href="([^"/?][^"]*)\.png"`)
+
+// Boxarts lists the box art names (without .png) of a libretro thumbnail system, from
+// the set's index page.
+func (c *Client) Boxarts(ctx context.Context, system string) ([]string, error) {
+	b, err := c.get(ctx, c.Libretro+"/"+url.PathEscape(system)+"/Named_Boxarts/", MaxListing)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, m := range boxartHref.FindAllSubmatch(b, -1) {
+		if n, err := url.PathUnescape(string(m[1])); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
+// BoxartURL is a libretro box art's image.
+func (c *Client) BoxartURL(system, name string) string {
+	return c.Libretro + "/" + url.PathEscape(system) + "/Named_Boxarts/" + url.PathEscape(name) + ".png"
 }

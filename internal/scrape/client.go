@@ -22,12 +22,13 @@ import (
 
 // The provider hosts the client speaks to; the Cover Art Archive answers with a redirect
 // to archive.org, whose hosts are allowed as the archive's own.
-var defaultHosts = []string{"api.themoviedb.org", "image.tmdb.org", "musicbrainz.org", "coverartarchive.org", "archive.org", ".archive.org"}
+var defaultHosts = []string{"api.themoviedb.org", "image.tmdb.org", "musicbrainz.org", "coverartarchive.org", "archive.org", ".archive.org", "thumbnails.libretro.com"}
 
 // Bounds of a response body and of the retries (I-302).
 const (
 	MaxJSON    = 4 << 20
 	MaxImage   = 20 << 20
+	MaxListing = 16 << 20 // a libretro system's box art index (~1 MiB today)
 	MaxRetries = 3
 	MBInterval = time.Second // MusicBrainz asks for at most one request a second
 	Timeout    = 30 * time.Second
@@ -47,15 +48,16 @@ var (
 // Client asks the providers. Its zero value is not usable: New sets the defaults; tests
 // point the base URLs and Hosts at their own servers.
 type Client struct {
-	HTTP   *http.Client
-	Clock  clock.Clock
-	TMDB   string // https://api.themoviedb.org
-	Images string // https://image.tmdb.org
-	MB     string // https://musicbrainz.org
-	CAA    string // https://coverartarchive.org
-	Hosts  []string
-	Key    string // a TMDB v3 key, or a v4 read token (a JWT, sent as a bearer token)
-	UA     string
+	HTTP     *http.Client
+	Clock    clock.Clock
+	TMDB     string // https://api.themoviedb.org
+	Images   string // https://image.tmdb.org
+	MB       string // https://musicbrainz.org
+	CAA      string // https://coverartarchive.org
+	Libretro string // https://thumbnails.libretro.com
+	Hosts    []string
+	Key      string // a TMDB v3 key, or a v4 read token (a JWT, sent as a bearer token)
+	UA       string
 
 	mu     sync.Mutex
 	mbNext time.Time // MusicBrainz's next allowed request
@@ -65,7 +67,7 @@ type Client struct {
 func New(key, version string) *Client {
 	c := &Client{
 		Clock: clock.Real(), TMDB: "https://api.themoviedb.org", Images: "https://image.tmdb.org",
-		MB: "https://musicbrainz.org", CAA: "https://coverartarchive.org", Hosts: defaultHosts, Key: key,
+		MB: "https://musicbrainz.org", CAA: "https://coverartarchive.org", Libretro: "https://thumbnails.libretro.com", Hosts: defaultHosts, Key: key,
 		UA: "tailraid/" + version + " (+https://github.com/zombar/tailraid)",
 	}
 	c.HTTP = &http.Client{Timeout: Timeout, CheckRedirect: c.checkRedirect}

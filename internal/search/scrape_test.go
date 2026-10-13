@@ -49,6 +49,21 @@ func scrapeEnv(t *testing.T) *env {
 	e.mkdir("/music/Deftones/White Pony")
 	e.write("/music/Deftones/White Pony/01 - Feiticeira.mp3", id3(0, "TIT2", "Feiticeira"))
 	e.write("/music/Deftones/White Pony/cover.jpg", img)
+	// games: a bare one, one with art beside it, one whose gamelist names an image, a disc
+	// set's folder, and one on a platform the thumbnail set does not cover
+	e.library("/roms", meta.LibraryRoms)
+	e.mkdir("/roms/snes")
+	e.write("/roms/snes/Super Mario World (USA).sfc", video)
+	e.write("/roms/snes/Zelda (USA).sfc", video)
+	e.write("/roms/snes/Zelda (USA).png", img)
+	e.write("/roms/snes/F-Zero (USA).sfc", video)
+	e.mkdir("/roms/snes/images")
+	e.write("/roms/snes/images/fzero.jpg", img)
+	e.write("/roms/snes/gamelist.xml", []byte(`<gameList><game><path>./F-Zero (USA).sfc</path><name>F-Zero</name><image>./images/fzero.jpg</image></game></gameList>`))
+	e.mkdir("/roms/psx/Final Fantasy VII (USA)")
+	e.write("/roms/psx/Final Fantasy VII (USA)/Final Fantasy VII (USA).cue", []byte("FILE x"))
+	e.mkdir("/roms/switch")
+	e.write("/roms/switch/Some Game.nsp", video)
 	return e
 }
 
@@ -85,6 +100,8 @@ func TestScrapePlan_Slots(t *testing.T) {
 		"season /tv/The Expanse: poster=season01-poster.jpg",
 		"episode /tv/The Expanse/Season 01: nfo=The.Expanse.S01E01.nfo thumb=The.Expanse.S01E01-thumb.jpg",
 		"album /music/Deftones/Around the Fur: cover=cover.jpg",
+		"game /roms/snes: boxart=Super Mario World (USA).png",
+		"game /roms/psx/Final Fantasy VII (USA): boxart=boxart.png",
 	}
 	got := planOf(t, e, e.svc)
 	sort.Strings(got)
@@ -148,5 +165,14 @@ func TestScrapePlan_ItemFields(t *testing.T) {
 	}
 	if al := byKind[ScrapeAlbum]; al.Track == 0 || al.Title != "Around the Fur" {
 		t.Errorf("album: %+v", al)
+	}
+	var g ScrapeItem
+	for i := range plan {
+		if plan[i].Kind == ScrapeGame && plan[i].Key == "Super Mario World (USA)" {
+			g = plan[i]
+		}
+	}
+	if g.Key != "Super Mario World (USA)" || g.System != "Nintendo - Super Nintendo Entertainment System" || len(g.Regions) != 1 || g.Regions[0] != "USA" {
+		t.Errorf("game: %+v", g)
 	}
 }

@@ -44,3 +44,67 @@ func ClearAlbum(artist, title string, cs []Candidate) (int, bool) {
 	}
 	return found, found >= 0
 }
+
+// libretroName is a game's name as the thumbnail set files it: the characters
+// &*/:`<>?\| become _ (RetroArch's thumbnail rule).
+func libretroName(s string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune("&*/:`<>?\\|", r) {
+			return '_'
+		}
+		return r
+	}, s)
+}
+
+// baseTitle is a No-Intro name's title: what comes before its first tag.
+func baseTitle(s string) string {
+	if i := strings.IndexAny(s, "(["); i > 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// ClearGame matches a game against a system's box art names (I-301): the name its file
+// already has; else the only name of the same title (the analysed title or the file's
+// own); else the only one of those tagged with one of the game's regions. cs are the
+// same-title names, best first, for the chooser when nothing is clear.
+func ClearGame(key, title string, regions, names []string) (cs []Candidate, idx int, ok bool) {
+	exact := libretroName(key)
+	t, k := norm(title), norm(baseTitle(key))
+	var same []string
+	for _, n := range names {
+		if n == exact {
+			return []Candidate{{ID: n, Title: n}}, 0, true
+		}
+		if b := norm(baseTitle(n)); b != "" && (b == t || b == k) {
+			same = append(same, n)
+		}
+	}
+	tagged := func(n string) bool {
+		for _, r := range regions {
+			if strings.Contains(n, "("+r) || strings.Contains(n, ", "+r) {
+				return true
+			}
+		}
+		return false
+	}
+	var regional []Candidate
+	for _, n := range same {
+		if tagged(n) {
+			regional = append(regional, Candidate{ID: n, Title: n})
+		}
+	}
+	for _, n := range same {
+		if !tagged(n) {
+			cs = append(cs, Candidate{ID: n, Title: n})
+		}
+	}
+	cs = append(regional, cs...)
+	switch {
+	case len(same) == 1:
+		return cs, 0, true
+	case len(regional) == 1:
+		return cs, 0, true
+	}
+	return cs, -1, false
+}

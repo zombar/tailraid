@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -122,6 +123,17 @@ func newProvider(t *testing.T) (*provider, *Client) {
 		http.Redirect(w, r, "/archive/"+r.PathValue("id")+".jpg", http.StatusTemporaryRedirect)
 	})
 	mux.HandleFunc("/archive/{img}", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "cover:"+r.PathValue("img")) })
+	// the libretro thumbnail set: an Apache index of a system's box art, and the images
+	mux.HandleFunc("/libretro/{system}/Named_Boxarts/{$}", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `<html><body><table><tr><td><a href="?C=N;O=D">Name</a></td></tr><tr><td><a href="/Sony%20-%20PlayStation/">Parent Directory</a></td></tr>`)
+		for _, n := range []string{"Final Fantasy VII (USA) (Disc 1)", "Final Fantasy VII (Europe) (Disc 1)", "Super Mario World (USA)", "Mega Man X (USA)", "Mega Man X (Japan)", "Q_bert (USA)"} {
+			fmt.Fprintf(w, `<tr><td><a href="%s.png">%s.png</a></td></tr>`, url.PathEscape(n), n)
+		}
+		fmt.Fprint(w, `</table></body></html>`)
+	})
+	mux.HandleFunc("/libretro/{system}/Named_Boxarts/{img}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "boxart:"+r.PathValue("system")+"/"+r.PathValue("img"))
+	})
 	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
 		p.reqs = append(p.reqs, r)
@@ -137,7 +149,7 @@ func newProvider(t *testing.T) (*provider, *Client) {
 	c := New("k3y-secret", "test")
 	c.Clock = p.clk
 	base := strings.Replace(p.URL, "127.0.0.1", "localhost", 1)
-	c.TMDB, c.Images, c.MB, c.CAA = base, base, base, base
+	c.TMDB, c.Images, c.MB, c.CAA, c.Libretro = base, base, base, base, base+"/libretro"
 	c.Hosts = []string{"localhost"}
 	return p, c
 }
@@ -184,6 +196,37 @@ func TestClearAlbum_Table(t *testing.T) {
 	} {
 		if i, _ := ClearAlbum(tc.artist, tc.title, cs); i != tc.want {
 			t.Errorf("ClearAlbum(%q, %q) = %d, want %d", tc.artist, tc.title, i, tc.want)
+		}
+	}
+}
+
+// A game's box art is its own name when the set has it, else the only name of its title,
+// else the only one of those tagged with one of its regions.
+// Invariant: I-301
+func TestClearGame_Table(t *testing.T) {
+	names := []string{"Super Mario World (USA)", "Super Mario World (Europe) (Rev 1)", "Mega Man X (USA)", "Mega Man X (Japan)", "Mega Man X (USA) (Rev 1)", "Q_bert (USA)", "Zoda (World)"}
+	for _, tc := range []struct {
+		key, title string
+		regions    []string
+		want       string // "" none clear
+		cands      int
+	}{
+		{"Super Mario World (USA)", "Super Mario World", []string{"USA"}, "Super Mario World (USA)", 1},
+		{"SMW", "Super Mario World", []string{"Europe"}, "Super Mario World (Europe) (Rev 1)", 2},
+		{"Q*bert (USA)", "Q*bert", []string{"USA"}, "Q_bert (USA)", 1},
+		{"Zoda", "Zoda", nil, "Zoda (World)", 1},
+		{"megaman x", "Mega Man X", []string{"Japan"}, "Mega Man X (Japan)", 3},
+		{"megaman x", "Mega Man X", []string{"USA"}, "", 3},
+		{"megaman x", "Mega Man X", nil, "", 3},
+		{"Unknown (USA)", "Unknown", []string{"USA"}, "", 0},
+	} {
+		cs, i, ok := ClearGame(tc.key, tc.title, tc.regions, names)
+		got := ""
+		if ok {
+			got = cs[i].ID
+		}
+		if got != tc.want || len(cs) != tc.cands {
+			t.Errorf("%q: %q with %d candidates, want %q with %d", tc.key, got, len(cs), tc.want, tc.cands)
 		}
 	}
 }
@@ -295,8 +338,8 @@ func TestClient_ProviderHostsOnly(t *testing.T) {
 	if b, err := c.Image(ctx, c.CoverURL("rg-1")); err != nil || string(b) != "cover:rg-1.jpg" {
 		t.Errorf("the archive's redirect: %q %v", b, err)
 	}
-	if !reflect.DeepEqual(New("", "v").Hosts, []string{"api.themoviedb.org", "image.tmdb.org", "musicbrainz.org", "coverartarchive.org", "archive.org", ".archive.org"}) {
-		t.Error("the default hosts are not the four providers and the archive")
+	if !reflect.DeepEqual(New("", "v").Hosts, []string{"api.themoviedb.org", "image.tmdb.org", "musicbrainz.org", "coverartarchive.org", "archive.org", ".archive.org", "thumbnails.libretro.com"}) {
+		t.Error("the default hosts are not the providers, the archive and the thumbnail set")
 	}
 }
 
@@ -411,6 +454,14 @@ func plan() []search.ScrapeItem {
 			Kind: search.ScrapeAlbum, Ino: 30, Dir: "/music/Deftones/Around the Fur", Title: "Around the Fur", Artist: "Deftones", Season: -1,
 			Missing: []search.Slot{{Slot: "cover", Name: "cover.jpg"}},
 		},
+		{
+			Kind: search.ScrapeGame, Ino: 40, Dir: "/roms/snes", Title: "Super Mario World", Key: "Super Mario World (USA)", System: "Nintendo - Super Nintendo Entertainment System",
+			Regions: []string{"USA"}, Season: -1, Missing: []search.Slot{{Slot: "boxart", Name: "Super Mario World (USA).png"}},
+		},
+		{
+			Kind: search.ScrapeGame, Ino: 41, Dir: "/roms/psx/Final Fantasy VII (USA)", Title: "Final Fantasy VII", Key: "Final Fantasy VII (USA)", System: "Sony - PlayStation",
+			Regions: []string{"USA"}, Season: -1, Missing: []search.Slot{{Slot: "boxart", Name: "boxart.png"}},
+		},
 	}
 }
 
@@ -432,6 +483,8 @@ func TestRun_WritesMissingSlotsOnly(t *testing.T) {
 		"/tv/The Expanse/Season 01/The.Expanse.S01E01.nfo":       "<episodedetails>",
 		"/tv/The Expanse/Season 01/The.Expanse.S01E01-thumb.jpg": "image:w300/e1.jpg",
 		"/music/Deftones/Around the Fur/cover.jpg":               "cover:rg-1.jpg",
+		"/roms/snes/Super Mario World (USA).png":                 "boxart:Nintendo - Super Nintendo Entertainment System/Super Mario World (USA).png",
+		"/roms/psx/Final Fantasy VII (USA)/boxart.png":           "boxart:Sony - PlayStation/Final Fantasy VII (USA) (Disc 1).png",
 	}
 	if len(w.files) != len(want) {
 		t.Errorf("wrote %d files, want %d: %v", len(w.files), len(want), keys(w.files))
