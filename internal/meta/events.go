@@ -24,6 +24,7 @@ const (
 	EvRepaired     EventKind = "repaired"       // every slot restored
 	EvPartial      EventKind = "partial_repair" // some slots restored, still degraded
 	EvMigrated     EventKind = "migrated"       // re-encoded to the volume policy
+	EvHomed        EventKind = "homed"          // E-130: away slots moved to their home (docs/14 §7)
 	EvUnrepairable EventKind = "unrepairable"   // < k live good slots
 	EvScrubOK      EventKind = "scrub_ok"       // L-140
 	EvScrubBad     EventKind = "scrub_bad"      // a scrub found a corrupt shard

@@ -104,7 +104,10 @@ func (e *fakeEnv) RepairNow(ctx context.Context) (repair.Stats, error) {
 	}
 	return repair.Stats{}, nil
 }
-func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error)  { return repair.Stats{}, nil }
+func (e *fakeEnv) Scrub(context.Context) (repair.Stats, error) { return repair.Stats{}, nil }
+func (e *fakeEnv) Rebalance(context.Context) (repair.HomePlan, error) {
+	return repair.HomePlan{}, nil
+}
 func (e *fakeEnv) GCNow(context.Context) (repair.Result, error) { return repair.Result{}, nil }
 func (e *fakeEnv) IndexNow(context.Context) (search.PassResult, error) {
 	return search.PassResult{}, nil

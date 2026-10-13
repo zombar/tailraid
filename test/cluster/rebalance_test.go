@@ -22,14 +22,15 @@ func slotsOn(c *testharness.Cluster, i int, path string, s meta.NodeIdx) int {
 	return n
 }
 
-// A large disk added to a host whose small disk holds every slot: repair passes move
-// slots to the new disk, at most RebalanceBatch a pass, until the small disk is within
-// the skew of its share; every chunk reads exact throughout, no slot leaves the host,
-// no chunk gets two slots on one target, and a host with one disk is never a source or
-// a destination across hosts.
-// Invariant: I-172, I-65, I-9
+// A large disk added to a host whose small disk holds every slot: the slots whose home is
+// the new disk become away, the gate opens at the end of the pass that finds them (none
+// move in it), and the following passes move them home, at most HomeBatch a pass, until
+// every chunk is home; every chunk reads exact throughout, no slot leaves its host (host
+// 1's disk is far larger but alone on its host), no chunk gets two slots on one target,
+// and a further pass moves nothing.
+// Invariant: I-172, I-294, I-295, I-65, I-9
 // Lifecycle: L-211
-func TestRepair_Rebalance_MovesWithinHost(t *testing.T) {
+func TestRepair_Home_AddDiskFillsWithinHost(t *testing.T) {
 	c := testharness.NewCluster(t, 2, 1, 1) // two slots per chunk, one per host
 	defer c.Close()
 	small := c.Nodes[0].Target()
@@ -41,26 +42,30 @@ func TestRepair_Rebalance_MovesWithinHost(t *testing.T) {
 	if n := slotsOn(c, 0, "/f", small); n != chunks {
 		t.Fatalf("setup: %d of %d chunks on host 0's small disk", n, chunks)
 	}
-	// host 1's disk is far larger than host 0's, but it is alone on its host: nothing
-	// moves between hosts for capacity
 	cfg := repairCfg()
-	cfg.RebalanceBatch = 4
-	st, err := newRepairer(c, c.Leader(), cfg).Scan(ctx)
+	cfg.HomeBatch = 4
+	r := newRepairer(c, c.Leader(), cfg)
+	st, err := r.Scan(ctx)
 	must(t, err)
-	if st.Rebalanced != 0 {
-		t.Fatalf("moved %d slots across hosts", st.Rebalanced)
+	if st.Homed != 0 || st.AwaySlots != 0 || r.Home().Open {
+		t.Fatalf("every chunk is home before the disk joins: %+v, gate %+v", st, r.Home())
 	}
 
 	large := c.AddDiskCap(0, 10<<30)
+	st, err = r.Scan(ctx)
+	must(t, err)
+	if st.Homed != 0 || st.MovableBytes == 0 || !r.Home().Open {
+		t.Fatalf("the pass that finds the away slots opens the gate and moves none: %+v, gate %+v", st, r.Home())
+	}
 	passes := 0
 	for ; passes < 10; passes++ {
-		st, err = newRepairer(c, c.Leader(), cfg).Scan(ctx)
+		st, err = r.Scan(ctx)
 		must(t, err)
-		if st.Rebalanced == 0 {
+		if st.Homed == 0 {
 			break
 		}
-		if st.Rebalanced > cfg.RebalanceBatch {
-			t.Fatalf("pass %d moved %d slots, the batch is %d", passes, st.Rebalanced, cfg.RebalanceBatch)
+		if st.Homed > cfg.HomeBatch {
+			t.Fatalf("pass %d moved %d chunks, the batch is %d", passes, st.Homed, cfg.HomeBatch)
 		}
 		got, err := c.ReadFileCold(1, "/f")
 		if err != nil || !bytes.Equal(got, data) {
@@ -75,21 +80,20 @@ func TestRepair_Rebalance_MovesWithinHost(t *testing.T) {
 			}
 		}
 	}
-	// shares within host 0: 20 × 1/11 ≈ 1.8 on the small disk, the rest on the large one
-	if n := slotsOn(c, 0, "/f", small); n > 2 {
-		t.Fatalf("small disk still holds %d slots after %d passes", n, passes)
+	if st.AwaySlots != 0 || st.MovableBytes != 0 || r.Home().Open {
+		t.Fatalf("after %d passes: %+v, gate %+v", passes, st, r.Home())
 	}
-	if n := slotsOn(c, 0, "/f", large); n < chunks-2 {
-		t.Fatalf("large disk holds %d slots after %d passes", n, passes)
+	// home is weighted by capacity: the large disk (10×) holds most of the host's slots
+	if s, l := slotsOn(c, 0, "/f", small), slotsOn(c, 0, "/f", large); s+l != chunks || l < chunks/2 {
+		t.Fatalf("small disk %d slots, large %d after %d passes", s, l, passes)
 	}
-	if passes < 4 {
-		t.Fatalf("%d passes moved 18 slots with a batch of 4", passes)
+	if passes < 2 {
+		t.Fatalf("%d passes moved the slots with a batch of 4", passes)
 	}
-	// a further pass finds nothing to do
-	st, err = newRepairer(c, c.Leader(), cfg).Scan(ctx)
+	st, err = r.Scan(ctx)
 	must(t, err)
-	if st.Rebalanced != 0 {
-		t.Fatalf("a balanced host moved %d slots", st.Rebalanced)
+	if st.Homed != 0 {
+		t.Fatalf("a converged volume moved %d chunks", st.Homed)
 	}
 	got, err := c.ReadFileCold(1, "/f")
 	if err != nil || !bytes.Equal(got, data) {

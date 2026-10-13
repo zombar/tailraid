@@ -26,6 +26,7 @@ import (
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/node"
+	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/svc"
 )
@@ -164,6 +165,11 @@ func printStatus(w io.Writer, r admin.Report) {
 		p := r.Repair.InProgress
 		fmt.Fprintf(w, "repair  pass %d running: %d/%d scanned, %d in flight of %d workers, %s moved, started %s\n",
 			p.Pass, p.Scanned, p.Total, p.InFlight, p.Workers, bytesStr(uint64(max(p.BytesMoved, 0))), p.Started.Local().Format("15:04:05"))
+	}
+	if r.Repair != nil {
+		if l := homeLine(r.Repair.Home); l != "" {
+			fmt.Fprintln(w, l)
+		}
 	}
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
@@ -607,7 +613,7 @@ New data spreads over the new space straight away; existing data stays where it 
 		},
 	}
 	grow.Flags().Bool("no-restart", false, "write the config only; the budget applies at the next restart")
-	c.AddCommand(describe, grow, setRedundancyCmd())
+	c.AddCommand(describe, grow, setRedundancyCmd(), rebalanceCmd())
 	return c
 }
 
@@ -798,6 +804,78 @@ func fsckCmd() *cobra.Command {
 	}
 	addNodeFlags(c)
 	return c
+}
+
+// rebalanceCmd opens the leader's home gate once, or lists what it would move (docs/14 §7,
+// docs/12, I-295).
+func rebalanceCmd() *cobra.Command {
+	var dry bool
+	c := &cobra.Command{
+		Use:   "rebalance",
+		Short: "Move slots that are away from their home placement now, a batch each repair pass; --dry-run lists them",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "rebalance", DryRun: dry})
+			if err != nil {
+				return err
+			}
+			if j, _ := cmd.Flags().GetBool("json"); j {
+				return printRaw(cmd.OutOrStdout(), raw)
+			}
+			var p repair.HomePlan
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return err
+			}
+			printHomePlan(cmd.OutOrStdout(), p, dry)
+			return nil
+		},
+	}
+	addNodeFlags(c)
+	c.Flags().BoolVar(&dry, "dry-run", false, "list the moves without opening the gate")
+	return c
+}
+
+func printHomePlan(w io.Writer, p repair.HomePlan, dry bool) {
+	fmt.Fprintf(w, "home    %d slots away (%s), %d movable now (%s) of %s stored\n", p.AwaySlots, bytesStr(uint64(max(p.AwayBytes, 0))),
+		p.MovableSlots, bytesStr(uint64(max(p.MovableBytes, 0))), bytesStr(uint64(max(p.StoredBytes, 0))))
+	for _, f := range p.Flows {
+		fmt.Fprintf(w, "        %s → %s  %d slots, %s\n", nodeName(f.FromName, f.From), nodeName(f.ToName, f.To), f.Slots, bytesStr(uint64(max(f.Bytes, 0))))
+	}
+	if stuck := p.AwaySlots - p.MovableSlots; stuck > 0 {
+		fmt.Fprintf(w, "        %d away slots wait for a home that is offline or full\n", stuck)
+	}
+	switch {
+	case dry:
+		fmt.Fprintln(w, "dry run: nothing moves")
+	case p.MovableSlots == 0:
+		fmt.Fprintln(w, "nothing to move")
+	default:
+		fmt.Fprintln(w, "the home gate is open: the next repair passes move these home, a batch each pass (watch `tailraid status`)")
+	}
+}
+
+func nodeName(name string, idx meta.NodeIdx) string {
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("#%d", idx)
+}
+
+// homeLine is status's one line on home placement (docs/14 §7), empty when nothing is away.
+func homeLine(h *repair.HomeStatus) string {
+	if h == nil || h.AwaySlots == 0 {
+		return ""
+	}
+	gate := fmt.Sprintf("gate closed below %.3g %%", h.Start*100)
+	switch {
+	case h.Forced:
+		gate = "gate open (volume rebalance)"
+	case h.Open:
+		gate = "gate open"
+	case h.Start == 0:
+		gate = "gate closed (repair.home_start 0)"
+	}
+	return fmt.Sprintf("home    %d slots away (%s, %s movable), %s", h.AwaySlots, bytesStr(uint64(max(h.AwayBytes, 0))), bytesStr(uint64(max(h.MovableBytes, 0))), gate)
 }
 
 func setRedundancyCmd() *cobra.Command {

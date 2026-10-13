@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"slices"
 	"sort"
 	"time"
 
@@ -17,7 +18,7 @@ type VolumeHealth struct {
 	Unreadable     int                     // chunks with fewer than k readable slots right now
 	StalePolicy    int                     // chunks awaiting migration to the current (k, m)
 	DomainSkew     int                     // chunks above the host cap that repair will move (docs/14 §7)
-	DiskSkew       int                     // slots the capacity rebalance would move between disks of one host (docs/14 §7, I-172)
+	DiskSkew       int                     // slots away from home whose home is another disk of their host (docs/14 §7, I-172)
 	DegradedHashes map[meta.Hash]bool      // degraded, repair-pending or unreadable
 	Slots          map[meta.NodeIdx]int    // placement slots per node
 	Missing        map[meta.NodeIdx]int    // slots per node whose node is not live
@@ -34,7 +35,7 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 	}
 	v := VolumeHealth{DegradedHashes: map[meta.Hash]bool{}, Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}, Bytes: map[meta.NodeIdx]uint64{}}
 	in := meta.HealthInput{Nodes: nodes, Live: live, FillAfter: fillAfter}
-	chunks := 0
+	hv := meta.NewHomeView(all)
 	st.ForEachChunk(func(c meta.Chunk) bool {
 		if c.Refs == 0 {
 			return true
@@ -68,13 +69,33 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 		if h.Skewed {
 			v.DomainSkew++
 		}
-		chunks++
+		if !h.RepairPending() && !h.PolicyStale {
+			v.DiskSkew += diskSkew(hv, c)
+		}
 		return true
 	})
-	for _, mv := range meta.RebalanceMoves(all, v.Slots, chunks, meta.DefaultRebalanceSkew, live.IsLive) {
-		v.DiskSkew += mv.N
-	}
 	return v
+}
+
+// diskSkew counts c's away slots whose home is a free target on the slot's own host: what
+// home placement moves between the disks of one host (docs/14 §7, I-172).
+func diskSkew(hv *meta.HomeView, c meta.Chunk) int {
+	k := int(c.K)
+	home := hv.Home(c.Hash, k, int(c.M))
+	n := 0
+	for _, i := range hv.Away(c.Placement, k, home) {
+		lo, hi := 0, min(k, len(home))
+		if i >= k {
+			lo, hi = hi, len(home)
+		}
+		for _, t := range home[lo:hi] {
+			if t != 0 && hv.Domain(t) == hv.Domain(c.Placement[i]) && !slices.Contains(c.Placement, t) {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 // CheckReport is the `check` reply.
