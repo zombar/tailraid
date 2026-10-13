@@ -1,0 +1,247 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/zombar/tailraid/bench/rpctransports
+cpu: Apple M2 Max
+BenchmarkPutFanout/lan/h1-12         	      20	  14099012 ns/op	       274.4 MiB/s	       108.3 chunk-p50-ms	       114.3 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/h1-12         	      20	  14065023 ns/op	       274.5 MiB/s	       108.3 chunk-p50-ms	       114.0 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/h2-12         	      20	  14130027 ns/op	       273.4 MiB/s	       113.3 chunk-p50-ms	       127.8 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/h2-12         	      20	  14130067 ns/op	       273.6 MiB/s	       114.0 chunk-p50-ms	       120.7 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/grpc-12       	      20	  14076790 ns/op	       272.8 MiB/s	       114.6 chunk-p50-ms	       123.8 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/grpc-12       	      20	  14058219 ns/op	       272.3 MiB/s	       114.2 chunk-p50-ms	       121.5 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/grpc-tuned-12 	      20	  14087746 ns/op	       273.3 MiB/s	       115.0 chunk-p50-ms	       122.4 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/grpc-tuned-12 	      20	  14234531 ns/op	       271.6 MiB/s	       114.5 chunk-p50-ms	       115.7 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/grpc-stream-12         	      20	  14047656 ns/op	       275.0 MiB/s	       113.2 chunk-p50-ms	       121.2 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/grpc-stream-12         	      20	  14051025 ns/op	       275.1 MiB/s	       112.9 chunk-p50-ms	       121.2 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/mux-12                 	      20	  14060169 ns/op	       276.0 MiB/s	       111.6 chunk-p50-ms	       115.3 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/mux-12                 	      20	  14047606 ns/op	       276.1 MiB/s	       111.6 chunk-p50-ms	       115.1 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/mux-4MiB-12            	      20	  15251133 ns/op	       254.6 MiB/s	       120.3 chunk-p50-ms	       146.8 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/mux-4MiB-12            	      20	  15476869 ns/op	       251.8 MiB/s	       122.9 chunk-p50-ms	       152.3 chunk-p99-ms	         0 conns/op
+2026/10/13 11:03:10 connection doesn't allow setting of receive buffer size. Not a *net.UDPConn?. See https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes for details.
+BenchmarkPutFanout/lan/quic-12                	      20	  20910777 ns/op	       185.2 MiB/s	       173.3 chunk-p50-ms	       180.6 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lan/quic-12                	      20	  21106452 ns/op	       184.5 MiB/s	       170.8 chunk-p50-ms	       172.8 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/h1-12              	      20	  56817835 ns/op	        67.82 MiB/s	       430.0 chunk-p50-ms	       463.5 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/h1-12              	      20	  56807612 ns/op	        67.79 MiB/s	       436.6 chunk-p50-ms	       463.5 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/h2-12              	      20	  57243598 ns/op	        66.51 MiB/s	       455.1 chunk-p50-ms	       472.3 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/h2-12              	      20	  57229348 ns/op	        66.82 MiB/s	       468.3 chunk-p50-ms	       472.2 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/grpc-12            	      20	  57490502 ns/op	        65.26 MiB/s	       466.3 chunk-p50-ms	       492.5 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/grpc-12            	      20	  57049492 ns/op	        65.36 MiB/s	       465.3 chunk-p50-ms	       491.2 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/grpc-tuned-12      	      20	  57371171 ns/op	        66.61 MiB/s	       465.3 chunk-p50-ms	       504.7 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/grpc-tuned-12      	      20	  57485065 ns/op	        66.74 MiB/s	       464.2 chunk-p50-ms	       505.1 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/grpc-stream-12     	      20	  57319396 ns/op	        65.36 MiB/s	       464.0 chunk-p50-ms	       497.1 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/grpc-stream-12     	      20	  57015927 ns/op	        65.57 MiB/s	       463.7 chunk-p50-ms	       490.2 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/mux-12             	      20	  57400123 ns/op	        67.43 MiB/s	       449.6 chunk-p50-ms	       480.3 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/mux-12             	      20	  57438185 ns/op	        67.29 MiB/s	       448.0 chunk-p50-ms	       476.3 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/mux-4MiB-12        	      20	  76282360 ns/op	        50.84 MiB/s	       609.4 chunk-p50-ms	       627.9 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/mux-4MiB-12        	      20	  75740127 ns/op	        51.42 MiB/s	       595.3 chunk-p50-ms	       615.3 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/quic-12            	      20	  58855446 ns/op	        64.71 MiB/s	       474.0 chunk-p50-ms	       476.0 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/tailnet/quic-12            	      20	  59044598 ns/op	        64.60 MiB/s	       473.8 chunk-p50-ms	       474.2 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/h1-12                	      20	  65150731 ns/op	        54.84 MiB/s	       465.8 chunk-p50-ms	       697.5 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/h1-12                	      20	  60202985 ns/op	        56.79 MiB/s	       460.7 chunk-p50-ms	       607.6 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/h2-12                	      20	 134498729 ns/op	        30.39 MiB/s	      1082 chunk-p50-ms	      1359 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/h2-12                	      20	 140187175 ns/op	        28.67 MiB/s	      1024 chunk-p50-ms	      1604 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/grpc-12              	      20	 122039675 ns/op	        29.44 MiB/s	       978.1 chunk-p50-ms	      1101 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/grpc-12              	      20	 116993469 ns/op	        36.23 MiB/s	       812.2 chunk-p50-ms	      1185 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/grpc-tuned-12        	      20	 132833212 ns/op	        30.16 MiB/s	      1164 chunk-p50-ms	      1176 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/grpc-tuned-12        	      20	 115769231 ns/op	        31.50 MiB/s	       823.5 chunk-p50-ms	       998.8 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/grpc-stream-12       	      20	 110289102 ns/op	        32.59 MiB/s	       803.8 chunk-p50-ms	      1025 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/grpc-stream-12       	      20	 128695377 ns/op	        27.43 MiB/s	       981.6 chunk-p50-ms	      1153 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/mux-12               	      20	 135245006 ns/op	        26.31 MiB/s	       848.7 chunk-p50-ms	      1388 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/mux-12               	      20	 150137158 ns/op	        28.54 MiB/s	       943.0 chunk-p50-ms	      1199 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/mux-4MiB-12          	      20	 217931662 ns/op	        19.86 MiB/s	      1548 chunk-p50-ms	      1834 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/mux-4MiB-12          	      20	 154203073 ns/op	        23.58 MiB/s	      1085 chunk-p50-ms	      1457 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/quic-12              	      20	 579527415 ns/op	         7.018 MiB/s	      4629 chunk-p50-ms	      4966 chunk-p99-ms	         0 conns/op
+BenchmarkPutFanout/lossy/quic-12              	      20	 584906535 ns/op	         6.940 MiB/s	      4668 chunk-p50-ms	      4982 chunk-p99-ms	         0 conns/op
+BenchmarkHedgedGet/lan/h1-12                  	      20	  14045942 ns/op	         1.000 conns/op	       104.1 read-p50-ms	       113.0 read-p99-ms
+BenchmarkHedgedGet/lan/h1-12                  	      20	  14040106 ns/op	         1.000 conns/op	       103.3 read-p50-ms	       112.7 read-p99-ms
+BenchmarkHedgedGet/lan/h2-12                  	      20	  14049925 ns/op	         0 conns/op	       112.7 read-p50-ms	       120.1 read-p99-ms
+BenchmarkHedgedGet/lan/h2-12                  	      20	  14097881 ns/op	         0 conns/op	       112.8 read-p50-ms	       113.6 read-p99-ms
+BenchmarkHedgedGet/lan/grpc-12                	      20	  14096498 ns/op	         0 conns/op	       113.5 read-p50-ms	       121.8 read-p99-ms
+BenchmarkHedgedGet/lan/grpc-12                	      20	  14139650 ns/op	         0 conns/op	       116.8 read-p50-ms	       120.9 read-p99-ms
+BenchmarkHedgedGet/lan/grpc-tuned-12          	      20	  14062721 ns/op	         0 conns/op	       114.0 read-p50-ms	       120.8 read-p99-ms
+BenchmarkHedgedGet/lan/grpc-tuned-12          	      20	  14060288 ns/op	         0 conns/op	       113.6 read-p50-ms	       120.3 read-p99-ms
+BenchmarkHedgedGet/lan/grpc-stream-12         	      20	  14052150 ns/op	         0 conns/op	       112.8 read-p50-ms	       119.0 read-p99-ms
+BenchmarkHedgedGet/lan/grpc-stream-12         	      20	  14056119 ns/op	         0 conns/op	       113.1 read-p50-ms	       122.3 read-p99-ms
+BenchmarkHedgedGet/lan/mux-12                 	      20	  14047735 ns/op	         0 conns/op	       111.4 read-p50-ms	       117.7 read-p99-ms
+BenchmarkHedgedGet/lan/mux-12                 	      20	  14041490 ns/op	         0 conns/op	       110.8 read-p50-ms	       116.7 read-p99-ms
+BenchmarkHedgedGet/lan/mux-4MiB-12            	      20	  14050906 ns/op	         0 conns/op	       112.8 read-p50-ms	       120.4 read-p99-ms
+BenchmarkHedgedGet/lan/mux-4MiB-12            	      20	  14069183 ns/op	         0 conns/op	       112.2 read-p50-ms	       120.3 read-p99-ms
+BenchmarkHedgedGet/lan/quic-12                	      20	  19651748 ns/op	         0 conns/op	       163.6 read-p50-ms	       165.3 read-p99-ms
+BenchmarkHedgedGet/lan/quic-12                	      20	  21583135 ns/op	         0 conns/op	       181.8 read-p50-ms	       189.5 read-p99-ms
+BenchmarkHedgedGet/tailnet/h1-12              	      20	  56817131 ns/op	         1.000 conns/op	       443.4 read-p50-ms	       464.4 read-p99-ms
+BenchmarkHedgedGet/tailnet/h1-12              	      20	  56799894 ns/op	         1.000 conns/op	       443.5 read-p50-ms	       463.8 read-p99-ms
+BenchmarkHedgedGet/tailnet/h2-12              	      20	  58126044 ns/op	         0 conns/op	       463.5 read-p50-ms	       463.6 read-p99-ms
+BenchmarkHedgedGet/tailnet/h2-12              	      20	  57177638 ns/op	         0 conns/op	       463.3 read-p50-ms	       489.3 read-p99-ms
+BenchmarkHedgedGet/tailnet/grpc-12            	      20	  57504552 ns/op	         0 conns/op	       464.1 read-p50-ms	       501.1 read-p99-ms
+BenchmarkHedgedGet/tailnet/grpc-12            	      20	  57367767 ns/op	         0 conns/op	       464.0 read-p50-ms	       498.7 read-p99-ms
+BenchmarkHedgedGet/tailnet/grpc-tuned-12      	      20	  57185521 ns/op	         0 conns/op	       463.9 read-p50-ms	       483.8 read-p99-ms
+BenchmarkHedgedGet/tailnet/grpc-tuned-12      	      20	  57410033 ns/op	         0 conns/op	       464.8 read-p50-ms	       499.1 read-p99-ms
+BenchmarkHedgedGet/tailnet/grpc-stream-12     	      20	  56804358 ns/op	         0 conns/op	       463.7 read-p50-ms	       494.9 read-p99-ms
+BenchmarkHedgedGet/tailnet/grpc-stream-12     	      20	  56812692 ns/op	         0 conns/op	       463.5 read-p50-ms	       491.2 read-p99-ms
+BenchmarkHedgedGet/tailnet/mux-12             	      20	  57411644 ns/op	         0 conns/op	       448.4 read-p50-ms	       508.6 read-p99-ms
+BenchmarkHedgedGet/tailnet/mux-12             	      20	  56810692 ns/op	         0 conns/op	       465.6 read-p50-ms	       498.7 read-p99-ms
+BenchmarkHedgedGet/tailnet/mux-4MiB-12        	      20	  56789746 ns/op	         0 conns/op	       464.2 read-p50-ms	       480.7 read-p99-ms
+BenchmarkHedgedGet/tailnet/mux-4MiB-12        	      20	  56788040 ns/op	         0 conns/op	       462.5 read-p50-ms	       484.5 read-p99-ms
+BenchmarkHedgedGet/tailnet/quic-12            	      20	  58877665 ns/op	         0 conns/op	       473.8 read-p50-ms	       474.2 read-p99-ms
+BenchmarkHedgedGet/tailnet/quic-12            	      20	  58865388 ns/op	         0 conns/op	       473.5 read-p50-ms	       474.2 read-p99-ms
+BenchmarkHedgedGet/lossy/h1-12                	      20	  65201708 ns/op	         1.000 conns/op	       430.4 read-p50-ms	       752.6 read-p99-ms
+BenchmarkHedgedGet/lossy/h1-12                	      20	  57497158 ns/op	         1.000 conns/op	       457.8 read-p50-ms	       614.0 read-p99-ms
+BenchmarkHedgedGet/lossy/h2-12                	      20	 119509438 ns/op	         0 conns/op	       997.7 read-p50-ms	      1151 read-p99-ms
+BenchmarkHedgedGet/lossy/h2-12                	      20	 126686679 ns/op	         0 conns/op	       988.0 read-p50-ms	      1345 read-p99-ms
+BenchmarkHedgedGet/lossy/grpc-12              	      20	  99410362 ns/op	         0 conns/op	       657.3 read-p50-ms	      1001 read-p99-ms
+BenchmarkHedgedGet/lossy/grpc-12              	      20	 130870617 ns/op	         0 conns/op	      1070 read-p50-ms	      1189 read-p99-ms
+BenchmarkHedgedGet/lossy/grpc-tuned-12        	      20	 125201710 ns/op	         0 conns/op	      1008 read-p50-ms	      1152 read-p99-ms
+BenchmarkHedgedGet/lossy/grpc-tuned-12        	      20	 108235765 ns/op	         0 conns/op	       826.0 read-p50-ms	      1149 read-p99-ms
+BenchmarkHedgedGet/lossy/grpc-stream-12       	      20	  83598090 ns/op	         0 conns/op	       479.2 read-p50-ms	       798.7 read-p99-ms
+BenchmarkHedgedGet/lossy/grpc-stream-12       	      20	 117689417 ns/op	         0 conns/op	       814.4 read-p50-ms	      1155 read-p99-ms
+BenchmarkHedgedGet/lossy/mux-12               	      20	 112701669 ns/op	         0 conns/op	       817.0 read-p50-ms	      1035 read-p99-ms
+BenchmarkHedgedGet/lossy/mux-12               	      20	 135135077 ns/op	         0 conns/op	       990.0 read-p50-ms	      1537 read-p99-ms
+BenchmarkHedgedGet/lossy/mux-4MiB-12          	      20	 121113300 ns/op	         0 conns/op	       957.7 read-p50-ms	      1153 read-p99-ms
+BenchmarkHedgedGet/lossy/mux-4MiB-12          	      20	  87069862 ns/op	         0 conns/op	       642.3 read-p50-ms	       818.1 read-p99-ms
+BenchmarkHedgedGet/lossy/quic-12              	      20	 546394906 ns/op	         0 conns/op	      4107 read-p50-ms	      4500 read-p99-ms
+BenchmarkHedgedGet/lossy/quic-12              	      20	 517170112 ns/op	         0 conns/op	      4082 read-p50-ms	      4299 read-p99-ms
+BenchmarkReadaheadSeek/lan/h1-12              	      20	  55402256 ns/op	         2.550 conns/op	       112.0 op-p50-ms	       118.7 op-p99-ms
+BenchmarkReadaheadSeek/lan/h1-12              	      20	  56437902 ns/op	         2.750 conns/op	       112.0 op-p50-ms	       129.9 op-p99-ms
+BenchmarkReadaheadSeek/lan/h2-12              	      20	  56053269 ns/op	         0 conns/op	       112.0 op-p50-ms	       113.3 op-p99-ms
+BenchmarkReadaheadSeek/lan/h2-12              	      20	  56131588 ns/op	         0 conns/op	       112.0 op-p50-ms	       114.2 op-p99-ms
+BenchmarkReadaheadSeek/lan/grpc-12            	      20	  56118848 ns/op	         0 conns/op	       111.7 op-p50-ms	       115.1 op-p99-ms
+BenchmarkReadaheadSeek/lan/grpc-12            	      20	  56132854 ns/op	         0 conns/op	       112.2 op-p50-ms	       120.8 op-p99-ms
+BenchmarkReadaheadSeek/lan/grpc-tuned-12      	      20	  55669912 ns/op	         0 conns/op	       111.9 op-p50-ms	       116.3 op-p99-ms
+BenchmarkReadaheadSeek/lan/grpc-tuned-12      	      20	  56101717 ns/op	         0 conns/op	       111.9 op-p50-ms	       117.2 op-p99-ms
+BenchmarkReadaheadSeek/lan/grpc-stream-12     	      20	  56075575 ns/op	         0 conns/op	       111.6 op-p50-ms	       118.4 op-p99-ms
+BenchmarkReadaheadSeek/lan/grpc-stream-12     	      20	  56043735 ns/op	         0 conns/op	       112.1 op-p50-ms	       115.3 op-p99-ms
+BenchmarkReadaheadSeek/lan/mux-12             	      20	  56142656 ns/op	         0 conns/op	       111.1 op-p50-ms	       122.2 op-p99-ms
+BenchmarkReadaheadSeek/lan/mux-12             	      20	  56117129 ns/op	         0 conns/op	       112.1 op-p50-ms	       118.8 op-p99-ms
+BenchmarkReadaheadSeek/lan/mux-4MiB-12        	      20	  56093154 ns/op	         0 conns/op	       111.7 op-p50-ms	       115.5 op-p99-ms
+BenchmarkReadaheadSeek/lan/mux-4MiB-12        	      20	  56367010 ns/op	         0 conns/op	       112.0 op-p50-ms	       118.9 op-p99-ms
+BenchmarkReadaheadSeek/lan/quic-12            	      20	  57428358 ns/op	         0 conns/op	       114.7 op-p50-ms	       115.4 op-p99-ms
+BenchmarkReadaheadSeek/lan/quic-12            	      20	  57433375 ns/op	         0 conns/op	       114.8 op-p50-ms	       116.1 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/h1-12          	      20	 228693533 ns/op	         2.450 conns/op	       455.3 op-p50-ms	       499.9 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/h1-12          	      20	 226067690 ns/op	         2.000 conns/op	       448.0 op-p50-ms	       499.8 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/h2-12          	      20	 226307088 ns/op	         0 conns/op	       448.2 op-p50-ms	       463.6 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/h2-12          	      20	 225278567 ns/op	         0 conns/op	       448.1 op-p50-ms	       460.5 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/grpc-12        	      20	 224917208 ns/op	         0 conns/op	       447.8 op-p50-ms	       466.1 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/grpc-12        	      20	 224968990 ns/op	         0 conns/op	       449.9 op-p50-ms	       458.2 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/grpc-tuned-12  	      20	 225791819 ns/op	         0 conns/op	       448.7 op-p50-ms	       485.1 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/grpc-tuned-12  	      20	 224175290 ns/op	         0 conns/op	       447.7 op-p50-ms	       481.3 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/grpc-stream-12 	      20	 225668569 ns/op	         0 conns/op	       449.9 op-p50-ms	       464.6 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/grpc-stream-12 	      20	 224973050 ns/op	         0 conns/op	       449.9 op-p50-ms	       465.4 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/mux-12         	      20	 221443204 ns/op	         0 conns/op	       450.3 op-p50-ms	       522.8 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/mux-12         	      20	 220556835 ns/op	         0 conns/op	       446.6 op-p50-ms	       530.9 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/mux-4MiB-12    	      20	 224619654 ns/op	         0 conns/op	       448.3 op-p50-ms	       457.9 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/mux-4MiB-12    	      20	 224522069 ns/op	         0 conns/op	       446.9 op-p50-ms	       471.5 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/quic-12        	      20	 231852010 ns/op	         0 conns/op	       459.0 op-p50-ms	       473.1 op-p99-ms
+BenchmarkReadaheadSeek/tailnet/quic-12        	      20	 231149835 ns/op	         0 conns/op	       459.2 op-p50-ms	       474.1 op-p99-ms
+BenchmarkReadaheadSeek/lossy/h1-12            	      20	 222312738 ns/op	         1.800 conns/op	       449.3 op-p50-ms	       664.2 op-p99-ms
+BenchmarkReadaheadSeek/lossy/h1-12            	      20	 223342894 ns/op	         2.000 conns/op	       430.2 op-p50-ms	       594.9 op-p99-ms
+BenchmarkReadaheadSeek/lossy/h2-12            	      20	 391519108 ns/op	         0 conns/op	       793.6 op-p50-ms	      1288 op-p99-ms
+BenchmarkReadaheadSeek/lossy/h2-12            	      20	 364516904 ns/op	         0 conns/op	       783.5 op-p50-ms	      1125 op-p99-ms
+BenchmarkReadaheadSeek/lossy/grpc-12          	      20	 386440908 ns/op	         0 conns/op	       784.1 op-p50-ms	      1125 op-p99-ms
+BenchmarkReadaheadSeek/lossy/grpc-12          	      20	 361636615 ns/op	         0 conns/op	       628.0 op-p50-ms	      1128 op-p99-ms
+BenchmarkReadaheadSeek/lossy/grpc-tuned-12    	      20	 388396917 ns/op	         0 conns/op	       781.5 op-p50-ms	       976.4 op-p99-ms
+BenchmarkReadaheadSeek/lossy/grpc-tuned-12    	      20	 308393479 ns/op	         0 conns/op	       619.7 op-p50-ms	       793.4 op-p99-ms
+BenchmarkReadaheadSeek/lossy/grpc-stream-12   	      20	 320092288 ns/op	         0 conns/op	       621.1 op-p50-ms	       814.1 op-p99-ms
+BenchmarkReadaheadSeek/lossy/grpc-stream-12   	      20	 354140160 ns/op	         0 conns/op	       772.4 op-p50-ms	       963.4 op-p99-ms
+BenchmarkReadaheadSeek/lossy/mux-12           	      20	 371922956 ns/op	         0 conns/op	       788.1 op-p50-ms	      1004 op-p99-ms
+BenchmarkReadaheadSeek/lossy/mux-12           	      20	 377615758 ns/op	         0 conns/op	       741.5 op-p50-ms	       979.7 op-p99-ms
+BenchmarkReadaheadSeek/lossy/mux-4MiB-12      	      20	 378511479 ns/op	         0 conns/op	       778.1 op-p50-ms	      1326 op-p99-ms
+BenchmarkReadaheadSeek/lossy/mux-4MiB-12      	      20	 388413290 ns/op	         0 conns/op	       789.5 op-p50-ms	      1136 op-p99-ms
+BenchmarkReadaheadSeek/lossy/quic-12          	      20	2233237669 ns/op	         0 conns/op	      4520 op-p50-ms	      5190 op-p99-ms
+BenchmarkReadaheadSeek/lossy/quic-12          	      20	2122171169 ns/op	         0 conns/op	      4304 op-p50-ms	      4909 op-p99-ms
+BenchmarkControlBurst/lan/h1-12               	      20	    967950 ns/op	         0.7888 call-p50-ms	         0.9500 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/h1-12               	      20	    959283 ns/op	         0.7719 call-p50-ms	         0.9323 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/h2-12               	      20	   1554829 ns/op	         1.090 call-p50-ms	         1.560 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/h2-12               	      20	   1523812 ns/op	         1.100 call-p50-ms	         1.530 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/grpc-12             	      20	   1049333 ns/op	         0.9661 call-p50-ms	         1.094 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/grpc-12             	      20	   1030988 ns/op	         0.9408 call-p50-ms	         1.122 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/grpc-tuned-12       	      20	   1032900 ns/op	         0.9529 call-p50-ms	         1.120 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/grpc-tuned-12       	      20	   1074200 ns/op	         1.006 call-p50-ms	         1.156 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/grpc-stream-12      	      20	   1031908 ns/op	         0.9443 call-p50-ms	         1.123 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/grpc-stream-12      	      20	   1040579 ns/op	         0.9605 call-p50-ms	         1.134 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/mux-12              	      20	   2074073 ns/op	         1.584 call-p50-ms	         2.406 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/mux-12              	      20	   1834681 ns/op	         1.394 call-p50-ms	         1.986 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/mux-4MiB-12         	      20	   1766650 ns/op	         1.378 call-p50-ms	         1.840 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/mux-4MiB-12         	      20	   1782023 ns/op	         1.353 call-p50-ms	         1.839 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/quic-12             	      20	    861535 ns/op	         0.7634 call-p50-ms	         0.8872 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lan/quic-12             	      20	    834873 ns/op	         0.7238 call-p50-ms	         0.8727 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/h1-12           	      20	  17090396 ns/op	        17.08 call-p50-ms	        17.37 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/h1-12           	      20	  17090912 ns/op	        17.09 call-p50-ms	        17.29 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/h2-12           	      20	  16969323 ns/op	        16.93 call-p50-ms	        17.22 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/h2-12           	      20	  16959298 ns/op	        16.89 call-p50-ms	        17.20 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/grpc-12         	      20	  16880410 ns/op	        16.95 call-p50-ms	        17.26 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/grpc-12         	      20	  16886208 ns/op	        16.95 call-p50-ms	        17.67 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/grpc-tuned-12   	      20	  17729702 ns/op	        17.43 call-p50-ms	        21.41 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/grpc-tuned-12   	      20	  19617538 ns/op	        19.29 call-p50-ms	        22.17 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/grpc-stream-12  	      20	  19079600 ns/op	        18.07 call-p50-ms	        25.22 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/grpc-stream-12  	      20	  19756760 ns/op	        18.93 call-p50-ms	        24.02 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/mux-12          	      20	  20116421 ns/op	        18.35 call-p50-ms	        34.82 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/mux-12          	      20	  18199294 ns/op	        16.93 call-p50-ms	        25.42 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/mux-4MiB-12     	      20	  16797152 ns/op	        16.39 call-p50-ms	        17.28 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/mux-4MiB-12     	      20	  18729115 ns/op	        17.76 call-p50-ms	        22.64 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/quic-12         	      20	  18787727 ns/op	        18.54 call-p50-ms	        24.81 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/tailnet/quic-12         	      20	  18955392 ns/op	        17.22 call-p50-ms	        30.83 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/h1-12             	      20	  20882381 ns/op	        17.37 call-p50-ms	        20.44 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/h1-12             	      20	  20166577 ns/op	        17.17 call-p50-ms	        22.53 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/h2-12             	      20	  29288000 ns/op	        17.14 call-p50-ms	        32.54 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/h2-12             	      20	  30380177 ns/op	        16.95 call-p50-ms	        32.68 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/grpc-12           	      20	  17591688 ns/op	        16.64 call-p50-ms	        31.97 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/grpc-12           	      20	  16812729 ns/op	        16.95 call-p50-ms	        17.39 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/grpc-tuned-12     	      20	  18164379 ns/op	        17.34 call-p50-ms	        32.71 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/grpc-tuned-12     	      20	  18107260 ns/op	        17.26 call-p50-ms	        32.41 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/grpc-stream-12    	      20	  16830090 ns/op	        16.90 call-p50-ms	        17.48 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/grpc-stream-12    	      20	  16850819 ns/op	        16.93 call-p50-ms	        17.34 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/mux-12            	      20	  26332827 ns/op	        17.08 call-p50-ms	        47.94 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/mux-12            	      20	  48693179 ns/op	        31.29 call-p50-ms	       218.1 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/mux-4MiB-12       	      20	  46041335 ns/op	        16.82 call-p50-ms	       231.1 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/mux-4MiB-12       	      20	  44530829 ns/op	        16.68 call-p50-ms	       217.4 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/quic-12           	      20	  17275827 ns/op	        16.51 call-p50-ms	        17.19 call-p99-ms	         0 conns/op
+BenchmarkControlBurst/lossy/quic-12           	      20	  16353333 ns/op	        16.32 call-p50-ms	        17.11 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/h1-12      	      20	  26985967 ns/op	        27.52 call-p50-ms	        33.06 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/h1-12      	      20	  27907325 ns/op	        33.96 call-p50-ms	        34.03 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/h2-12      	      20	  11761019 ns/op	        12.22 call-p50-ms	        12.83 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/h2-12      	      20	  11269892 ns/op	        12.75 call-p50-ms	        12.87 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/grpc-12    	      20	  10389538 ns/op	        11.74 call-p50-ms	        12.46 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/grpc-12    	      20	   9815998 ns/op	        11.88 call-p50-ms	        12.24 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/grpc-tuned-12         	      20	  11524875 ns/op	        11.84 call-p50-ms	        11.91 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/grpc-tuned-12         	      20	  11505110 ns/op	        11.71 call-p50-ms	        11.97 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/grpc-stream-12        	      20	  10309894 ns/op	        11.83 call-p50-ms	        12.23 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/grpc-stream-12        	      20	  10395179 ns/op	        11.89 call-p50-ms	        12.53 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/mux-12                	      20	   5165033 ns/op	         5.205 call-p50-ms	         7.573 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/mux-12                	      20	   5548260 ns/op	         5.501 call-p50-ms	         7.222 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/mux-4MiB-12           	      20	  12620227 ns/op	        12.83 call-p50-ms	        13.76 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/mux-4MiB-12           	      20	  12557002 ns/op	        12.74 call-p50-ms	        13.75 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/quic-12               	      20	   5720131 ns/op	         6.705 call-p50-ms	         7.481 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lan/quic-12               	      20	   5742646 ns/op	         6.709 call-p50-ms	         7.899 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/h1-12             	      20	 107573735 ns/op	       103.4 call-p50-ms	       139.8 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/h1-12             	      20	 107387377 ns/op	       103.3 call-p50-ms	       125.1 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/h2-12             	      20	  54957402 ns/op	        57.48 call-p50-ms	        60.46 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/h2-12             	      20	  55136227 ns/op	        57.46 call-p50-ms	        61.73 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/grpc-12           	      20	  45130950 ns/op	        53.77 call-p50-ms	        56.24 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/grpc-12           	      20	  47859406 ns/op	        53.71 call-p50-ms	        60.87 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/grpc-tuned-12     	      20	  52887354 ns/op	        53.70 call-p50-ms	        54.59 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/grpc-tuned-12     	      20	  52938575 ns/op	        53.62 call-p50-ms	        53.90 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/grpc-stream-12    	      20	  49044329 ns/op	        53.74 call-p50-ms	        56.61 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/grpc-stream-12    	      20	  47674946 ns/op	        53.75 call-p50-ms	        60.35 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/mux-12            	      20	  22011531 ns/op	        20.66 call-p50-ms	        38.71 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/mux-12            	      20	  22850700 ns/op	        20.65 call-p50-ms	        35.00 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/mux-4MiB-12       	      20	  55786496 ns/op	        56.99 call-p50-ms	        61.52 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/mux-4MiB-12       	      20	  56022625 ns/op	        57.27 call-p50-ms	        61.30 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/quic-12           	      20	  28598856 ns/op	        33.18 call-p50-ms	        33.28 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/tailnet/quic-12           	      20	  28764083 ns/op	        33.21 call-p50-ms	        33.29 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/h1-12               	      20	  96612144 ns/op	       104.8 call-p50-ms	       127.8 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/h1-12               	      20	  89534527 ns/op	        95.64 call-p50-ms	       142.3 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/h2-12               	      20	  60638183 ns/op	        57.47 call-p50-ms	       232.6 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/h2-12               	      20	  98060744 ns/op	        63.21 call-p50-ms	       233.1 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/grpc-12             	      20	  77041577 ns/op	        55.00 call-p50-ms	       247.0 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/grpc-12             	      20	  76715240 ns/op	        53.65 call-p50-ms	       233.9 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/grpc-tuned-12       	      20	  69906498 ns/op	        53.63 call-p50-ms	       233.5 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/grpc-tuned-12       	      20	  88904717 ns/op	        53.79 call-p50-ms	       252.6 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/grpc-stream-12      	      20	  75324377 ns/op	        50.82 call-p50-ms	       223.7 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/grpc-stream-12      	      20	  90663131 ns/op	        56.79 call-p50-ms	       246.9 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/mux-12              	      20	  63896256 ns/op	        31.14 call-p50-ms	       221.2 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/mux-12              	      20	  47060104 ns/op	        29.15 call-p50-ms	       227.9 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/mux-4MiB-12         	      20	  91615208 ns/op	        60.52 call-p50-ms	       235.0 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/mux-4MiB-12         	      20	  85321608 ns/op	        66.79 call-p50-ms	       241.3 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/quic-12             	      20	  19991354 ns/op	        16.43 call-p50-ms	        53.45 call-p99-ms	         0 conns/op
+BenchmarkMixedRepairAndControl/lossy/quic-12             	      20	  17209579 ns/op	        16.40 call-p50-ms	        23.60 call-p99-ms	         0 conns/op
+PASS
+ok  	github.com/zombar/tailraid/bench/rpctransports	886.285s
