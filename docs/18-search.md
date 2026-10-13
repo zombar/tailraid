@@ -245,7 +245,7 @@ PlayStation `pbp chd cue bin m3u iso`, PSP `iso cso pbp`, Switch `nsp xci nsz xc
 table lists each platform), or a folder holding a `cue`, `m3u` or `chd` set; anything else
 (`.apk`, a driver `.zip` under Switch, `Keys-*` folders, `*.keys`, `.txt`) is no game.
 Files of one platform whose analysed names differ only in their disc are one game with
-its discs. Region and revision variants of one title are separate entries that the Media
+its discs. A Switch update or DLC (`[UPD]`, `[DLC]`, or a title ID not ending in `000`) is part of a game, not one, and is left out. Region and revision variants of one title are separate entries that the Media
 tab shows as one card. Fields come from the name (§8a: title, regions, languages,
 revision, flags, disc) and, when the platform folder holds one, an EmulationStation
 `gamelist.xml` (`game/path`, `name`, `desc`, `releasedate`, `developer`, `publisher`,
@@ -254,7 +254,7 @@ first `search.max_file` bytes, `encoding/xml`, nothing when it does not parse). 
 `gamelist.xml`'s image, else `<stem>.png|jpg` beside the game, `images/<stem>*`,
 `media/boxart/<stem>.*`, then `boxart.*` or `cover.*` in a game folder; else the Media tab
 draws a title card (13 §5). The ROM file is never read: no header parse, no hash, no
-DAT match.
+DAT match. The catalogue section of segment version 3 carries a game's platform, regions, revision, flags, developer, publisher and players; a platform's entry carries its game count.
 
 ## 9. Libraries (I-210)
 
@@ -345,7 +345,7 @@ and matching ROMs against DAT files.
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |
-| I-278 | `TestStub_I_278` (planned: TestCatalog_Roms_Table, TestCatalog_Gamelist_Table, FuzzGamelist, TestCluster_SearchDeterministicAcrossNodes) |
+| I-278 | `TestCatalog_Roms_Table`, `TestCatalog_Gamelist_Table`, `FuzzGamelist`, `TestCatalog_SectionVersions` |
 | I-211 | `TestCatalog_CleanName_Table`, `TestCatalog_Episode_Table`, `TestCatalog_NFO_Table`, `FuzzNFODecode`, `TestCatalog_ArtResolutionOrder`, `TestCatalog_LibraryKinds_Structure`, `TestCluster_SearchDeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
 
 Soak phase 21 joins these rows with the PR that lands it (09 §2). The web side's invariants (I-209 markdown,

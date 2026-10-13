@@ -82,8 +82,15 @@ type Service struct {
 	names    *nameList
 	namesAt  time.Time
 	nfo      map[meta.Ino]nfoMemo // the leader's sidecar reads, by content
+	games    map[meta.Ino]gamesMemo
 	status   Status
 	inFlight bool
+}
+
+type gamesMemo struct {
+	hash  [32]byte
+	games map[string]GameInfo
+	ok    bool
 }
 
 type nfoMemo struct {
@@ -272,7 +279,8 @@ func (s *Service) runPass(ctx context.Context) (PassResult, error) {
 		}
 		return Doc{}, false
 	}
-	cat := buildCatalog(ctx, s.Src, func(in meta.Inode) (NFO, bool) { return s.readNFO(ctx, in, cfg) }, tags)
+	cat := buildCatalog(ctx, s.Src, func(in meta.Inode) (NFO, bool) { return s.readNFO(ctx, in, cfg) }, tags,
+		func(in meta.Inode) (map[string]GameInfo, bool) { return s.readGamelist(ctx, in, cfg) })
 	catBytes := encodeCatalog(cat)
 	if len(batch.docs) == 0 && len(x.Segs) > 0 && bytes.Equal(catBytes, x.Segs[0].catalogBytes()) {
 		return res, nil // nothing changed: nothing is written (I-206)
@@ -409,6 +417,30 @@ func (s *Service) readNFO(ctx context.Context, in meta.Inode, cfg Config) (NFO, 
 	s.nfo[in.Ino] = nfoMemo{hash: h, n: n, ok: ok}
 	s.mu.Unlock()
 	return n, ok
+}
+
+// readGamelist reads a platform's gamelist.xml once per content, as readNFO a sidecar
+// (docs/18 §8b).
+func (s *Service) readGamelist(ctx context.Context, in meta.Inode, cfg Config) (map[string]GameInfo, bool) {
+	h := ChunksHash(in)
+	s.mu.Lock()
+	if m, ok := s.games[in.Ino]; ok && m.hash == h {
+		s.mu.Unlock()
+		return m.games, m.ok
+	}
+	s.mu.Unlock()
+	b, err := s.Vol.ReadPrefix(ctx, in, cfg.MaxFile)
+	if err != nil {
+		return nil, false
+	}
+	g, ok := DecodeGamelist(b)
+	s.mu.Lock()
+	if s.games == nil {
+		s.games = map[meta.Ino]gamesMemo{}
+	}
+	s.games[in.Ino] = gamesMemo{hash: h, games: g, ok: ok}
+	s.mu.Unlock()
+	return g, ok
 }
 
 // merge writes one segment from the chain, newest first: each inode's newest doc while

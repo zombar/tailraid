@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,9 @@ const (
 	EntEpisode uint8 = 4
 	EntArtist  uint8 = 5
 	EntAlbum   uint8 = 6
+	// docs/18 §8b, segment version 3
+	EntPlatform uint8 = 7
+	EntGame     uint8 = 8
 )
 
 // Entry is one media item of the catalogue (docs/18 §8, I-211). Art is a name in the
@@ -57,6 +61,14 @@ type Entry struct {
 	Quality   []string
 	Languages []string
 	Discs     int
+	// a game's (docs/18 §8b), segment version 3; a platform's game count is Tracks
+	Platform  string // the platform's display name
+	Regions   []string
+	Revision  string
+	Flags     []string
+	Developer string
+	Publisher string
+	Players   string
 }
 
 // --- names
@@ -352,11 +364,12 @@ func stem(name string) string { return strings.TrimSuffix(name, path.Ext(name)) 
 // catalogue builds the entries of every library (docs/18 §8): the folders from src,
 // the sidecars through nfo, an album's tags through tags (the newest doc of a track).
 type catalogue struct {
-	src  Source
-	nfo  func(meta.Inode) (NFO, bool)
-	tags func(meta.Ino) (Doc, bool)
-	out  []Entry
-	seen map[meta.Ino]bool
+	src   Source
+	nfo   func(meta.Inode) (NFO, bool)
+	tags  func(meta.Ino) (Doc, bool)
+	games func(meta.Inode) (map[string]GameInfo, bool)
+	out   []Entry
+	seen  map[meta.Ino]bool
 }
 
 // dirIndex is a folder's live children by name, and in name order.
@@ -444,8 +457,8 @@ func applyNFO(e *Entry, n NFO) {
 
 // buildCatalog derives every library's entries, the libraries in kind-then-path order
 // and each folder's children in name order, so every node derives the same list.
-func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool)) []Entry {
-	c := &catalogue{src: src, nfo: nfo, tags: tags, seen: map[meta.Ino]bool{}}
+func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool), games func(meta.Inode) (map[string]GameInfo, bool)) []Entry {
+	c := &catalogue{src: src, nfo: nfo, tags: tags, games: games, seen: map[meta.Ino]bool{}}
 	libs := src.Libraries()
 	// a nested library is its own section: claim every library folder first
 	for _, l := range libs {
@@ -459,7 +472,9 @@ func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool
 			c.shows(l.Ino)
 		case meta.LibraryMusic:
 			c.music(l.Ino)
-		case meta.LibraryNone, meta.LibraryRoms: // games come with roms-catalog (docs/18 §8b)
+		case meta.LibraryRoms:
+			c.roms(l.Ino)
+		case meta.LibraryNone:
 		}
 	}
 	return c.out
@@ -762,6 +777,15 @@ func encodeCatalog(es []Entry) []byte {
 				w.str(s)
 			}
 		}
+		for _, s := range []string{e.Platform, e.Revision, e.Developer, e.Publisher, e.Players} {
+			w.str(s)
+		}
+		for _, l := range [][]string{e.Regions, e.Flags} {
+			w.int(len(l))
+			for _, s := range l {
+				w.str(s)
+			}
+		}
 	}
 	return w.b
 }
@@ -803,10 +827,225 @@ func decodeCatalog(b []byte, v uint8) []Entry {
 		for _, p := range lists {
 			readList(c, p)
 		}
+		if v >= 3 {
+			for _, p := range []*string{&e.Platform, &e.Revision, &e.Developer, &e.Publisher, &e.Players} {
+				*p = c.str()
+			}
+			readList(c, &e.Regions)
+			readList(c, &e.Flags)
+		}
 		out = append(out, e)
 	}
 	if c.err != nil {
 		return nil
 	}
 	return out
+}
+
+// --- games (docs/18 §8b)
+
+// roms lists a roms library: each child folder a platform, each game below it, walking
+// region, category and format folders.
+func (c *catalogue) roms(lib meta.Ino) {
+	d := c.list(lib)
+	for i := range d.kids {
+		k := &d.kids[i]
+		if k.Type != meta.TDir || c.seen[k.Ino] || RoleOf(k.Name) == RoleExtras {
+			continue
+		}
+		p := platformOf(k.Name)
+		pd := c.list(k.Ino)
+		var games map[string]GameInfo
+		if gl, ok := pd.file("gamelist.xml"); ok && c.games != nil {
+			games, _ = c.games(gl)
+		}
+		g := &gameWalk{c: c, lib: lib, platform: k.Ino, plat: p, games: games}
+		g.walk(pd, "", nil, 3)
+		g.flush()
+		e := Entry{Ino: k.Ino, Lib: lib, Kind: EntPlatform, Title: p.title, Platform: p.title, Tracks: g.count, Season: -1}
+		e.Poster = pd.art("platform", "poster", "folder", "logo")
+		c.add(e)
+	}
+}
+
+// gameWalk gathers one platform's games: candidates first, then one entry per title and
+// tag set, the discs of one title merged.
+type gameWalk struct {
+	c        *catalogue
+	lib      meta.Ino
+	platform meta.Ino
+	plat     platform
+	games    map[string]GameInfo
+	cands    []gameCand
+	count    int
+}
+
+type gameCand struct {
+	in   meta.Inode // the game's file, or its folder for a disc set
+	file meta.Inode // the file a disc set's folder plays: its cue, m3u or gdi
+	rel  string     // its path below the platform folder
+	dir  dirIndex   // its folder's
+	name Name
+}
+
+// walk visits a folder below the platform: rel is its path below the platform folder,
+// dirs the folders above it nearest first.
+func (g *gameWalk) walk(d dirIndex, rel string, dirs []string, depth int) {
+	for i := range d.kids {
+		k := &d.kids[i]
+		r := path.Join(rel, k.Name)
+		if k.Type == meta.TDir {
+			if g.c.seen[k.Ino] || RoleOf(k.Name) == RoleExtras || depth == 0 {
+				continue
+			}
+			kd := g.c.list(k.Ino)
+			if set, ok := discSet(kd); ok { // a folder of one game's disc images
+				g.cands = append(g.cands, gameCand{in: *k, file: set, rel: r, dir: kd, name: Analyze(set.Name, append([]string{k.Name}, dirs...), CtxRoms)})
+				continue
+			}
+			g.walk(kd, r, append([]string{k.Name}, dirs...), depth-1)
+			continue
+		}
+		if k.Type != meta.TFile || !g.plat.takes(k.Name) || ext(k.Name) == ".bin" && hasCue(d) {
+			continue
+		}
+		n := Analyze(k.Name, dirs, CtxRoms)
+		if slices.Contains(n.Flags, "update") || slices.Contains(n.Flags, "dlc") {
+			continue // part of a game, not one (docs/18 §8b)
+		}
+		g.cands = append(g.cands, gameCand{in: *k, file: *k, rel: r, dir: d, name: n})
+	}
+}
+
+// discSet reports a folder holding a cue, m3u or gdi: one game, played from that file.
+func discSet(d dirIndex) (meta.Inode, bool) {
+	for i := range d.kids {
+		if k := &d.kids[i]; k.Type == meta.TFile && setExts[ext(k.Name)] {
+			return *k, true
+		}
+	}
+	return meta.Inode{}, false
+}
+
+func hasCue(d dirIndex) bool {
+	for i := range d.kids {
+		if k := &d.kids[i]; k.Type == meta.TFile && (ext(k.Name) == ".cue" || ext(k.Name) == ".m3u") {
+			return true
+		}
+	}
+	return false
+}
+
+// discKey is what two discs of one game share: everything the name says but the disc.
+func discKey(rel string, n Name) string {
+	return path.Dir(rel) + "\x00" + Fold(n.Title) + "\x00" + strings.Join(n.Regions, ",") + "\x00" + n.Revision + "\x00" + strings.Join(n.Flags, ",")
+}
+
+// flush adds one entry per candidate, the discs of one title as one game whose entry is
+// its first disc's file.
+func (g *gameWalk) flush() {
+	byKey := map[string]int{}
+	var games []gameCand
+	discs := map[int]int{}
+	for ci := range g.cands {
+		cd := &g.cands[ci]
+		if cd.name.Disc > 0 {
+			if i, ok := byKey[discKey(cd.rel, cd.name)]; ok {
+				discs[i]++
+				continue
+			}
+			byKey[discKey(cd.rel, cd.name)] = len(games)
+			discs[len(games)] = 1
+		}
+		games = append(games, *cd)
+	}
+	for i := range games {
+		cd := &games[i]
+		n := cd.name
+		e := Entry{
+			Ino: cd.in.Ino, Lib: g.lib, Parent: g.platform, Kind: EntGame, Video: cd.file.Ino, Title: n.Title, Season: -1,
+			Platform: g.plat.title, Regions: n.Regions, Languages: n.Languages, Revision: n.Revision, Flags: n.Flags, Discs: discs[i],
+		}
+		if n.Date != "" {
+			e.Year = atoi(n.Date[:4])
+		}
+		dir := path.Dir(cd.rel) // the game's folder below the platform's
+		if cd.in.Type == meta.TDir {
+			dir = cd.rel
+		}
+		if gi, ok := g.games[cd.rel]; ok {
+			e.Title = firstOf(gi.Name, e.Title)
+			e.Plot, e.Developer, e.Publisher, e.Players, e.Rating = gi.Desc, gi.Developer, gi.Publisher, gi.Players, gi.Rating
+			if gi.Year != 0 {
+				e.Year = gi.Year
+			}
+			if gi.Genre != "" {
+				e.Genres = []string{gi.Genre}
+			}
+			e.Poster = g.inPlatform(dir, firstOf(gi.Image, gi.Thumbnail))
+			e.Banner = g.inPlatform(dir, gi.Marquee)
+		}
+		if e.Poster == "" {
+			e.Poster = g.boxArt(*cd)
+		}
+		g.c.add(e)
+		g.count++
+	}
+}
+
+// inPlatform makes a path relative to the platform folder relative to the game's folder
+// dir (also relative to the platform's), when the file exists.
+func (g *gameWalk) inPlatform(dir, p string) string {
+	if p == "" {
+		return ""
+	}
+	parts := append([]string{}, strings.Split(path.Join(g.platformPath(), p), "/")...)
+	if in, err := g.c.src.Resolve(parts); err != nil || in.Type != meta.TFile {
+		return ""
+	}
+	rel := p
+	if dir != "." && dir != "" {
+		rel = strings.Repeat("../", strings.Count(dir, "/")+1) + p
+	}
+	return rel
+}
+
+func (g *gameWalk) platformPath() string {
+	parts, err := g.c.src.PathOf(g.platform)
+	if err != nil {
+		return ""
+	}
+	return path.Join(parts...)
+}
+
+// boxArt is a game's art by name: <stem>.png beside it, images/<stem>* or
+// media/boxart/<stem>.* beside it, else boxart.* or cover.* in a game's folder.
+func (g *gameWalk) boxArt(cd gameCand) string {
+	if cd.in.Type == meta.TDir {
+		return cd.dir.art("boxart", "cover", "folder")
+	}
+	s := stem(cd.in.Name)
+	if a := cd.dir.art(s); a != "" {
+		return a
+	}
+	for _, sub := range []string{"images", "media/boxart", "boxart"} {
+		parts := strings.Split(sub, "/")
+		cur, ok := meta.Inode{}, true
+		dirs := cd.dir
+		for _, p := range parts {
+			cur, ok = dirs.names[strings.ToLower(p)]
+			if !ok || cur.Type != meta.TDir {
+				ok = false
+				break
+			}
+			dirs = g.c.list(cur.Ino)
+		}
+		if !ok {
+			continue
+		}
+		if a := dirs.art(s, s+"-image", s+"-boxart"); a != "" {
+			return sub + "/" + a
+		}
+	}
+	return ""
 }
