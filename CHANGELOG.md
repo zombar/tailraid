@@ -6,6 +6,8 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- rpc: a cancelled GET drains a short rest; bulk sockets keep little unsent (I-262, I-263) ([9a7b35f](https://github.com/zombar/tailraid/commit/9a7b35f))
+- testharness: Settle's catch-up waits 30 s and names the laggard at the timeout ([9b431e1](https://github.com/zombar/tailraid/commit/9b431e1))
 - vfs: a dirty file reports its write time, as it reports its size (I-261) ([d3e02ea](https://github.com/zombar/tailraid/commit/d3e02ea))
 - bench: compare HTTP/1.1, h2c, gRPC, yamux and QUIC for the node RPC; report ([25551c2](https://github.com/zombar/tailraid/commit/25551c2))
 - nfs: a duplicate request cache, so a retransmission runs once (I-260) ([bdfb936](https://github.com/zombar/tailraid/commit/bdfb936))
