@@ -21,9 +21,11 @@ are stubs in `test/invariants/` until each PR lands its tests: `library-flag` (I
 - **Audio tags**: title, artist, album and genre from a track's first chunk.
 - **The media catalogue**: one entry per film, show, season, episode or album under a
   folder flagged as a library (§9), from Kodi/Jellyfin sidecars (`.nfo`, `poster.*`,
-  `fanart.*`), embedded tags and the names themselves. No metadata is fetched from the
+  `fanart.*`), embedded tags and the names themselves. No node fetches metadata from the
   internet: a node never talks to a provider, and an item without sidecars shows its
-  cleaned name and the browser-made thumbnail (13 §5).
+  cleaned name and the browser-made thumbnail (13 §5). Sidecars come from the user's
+  own tools or from `tailraid media scrape` (§11), a CLI run that asks TMDB and
+  MusicBrainz from the user's device and writes the missing sidecars into the volume.
 - Everything is written by the leader only, as immutable files, and read by any node.
 
 ## 2. What is indexed (I-207)
@@ -275,13 +277,115 @@ folder in kind-then-path order for the Media tab; no new CLI command is needed.
 ## 10. Non-goals
 
 Stemming, fuzzy matching, regular expressions, PDF or Office text, EXIF, content past
-`search.max_file`, a shared query history, online metadata providers (TMDB, TVDB,
-MusicBrainz, IGDB, ScreenScraper), subtitles, watched state, transcoding, a music artist
+`search.max_file`, a shared query history, a node talking to a metadata provider (only
+the CLI's scrape does, §11), providers beyond TMDB, MusicBrainz and the Cover Art Archive
+(TVDB, fanart.tv, IGDB, ScreenScraper), scraping games, replacing a sidecar that exists,
+a scheduled or automatic scrape, subtitles, watched state, transcoding, a music artist
 page beyond the biography and art, launching or emulating a game, reading a ROM's header
 and matching ROMs against DAT files.
 
+## 11. Scraping sidecars: `tailraid media scrape` (I-298..I-302)
+
+The catalogue (§8) is only as rich as the sidecars beside the media. `tailraid media
+scrape` fills the gaps: run on any member device, it lists the library items that lack
+a sidecar or art, looks each one up with **TMDB** (films, shows, seasons, episodes) or
+**MusicBrainz and the Cover Art Archive** (album covers), and writes the missing files
+into the volume under the names §8 already reads. Nothing on the read side changes: the
+next index pass (§5) picks the files up like ones a person or tinyMediaManager wrote.
+
+**Where it runs.** Only the CLI process talks to a provider, from the device the user
+runs it on; no node ever does (I-298), so the volume works offline and a node's
+network surface stays the tailnet. The CLI asks its local node for the plan (the admin
+op `scrape_plan`, paged), and writes each file through that node's web listener
+(`PUT /files/<path>` with `If-None-Match: *`, the browser's exclusive upload of 13 §4,
+I-226), so the device needs no mount; a node without `listen.web` is refused with that
+reason.
+
+**Commands.**
+
+| Command | Does |
+|---|---|
+| `tailraid media key` | reads a TMDB API key (v3 key, or a v4 read token) from `TAILRAID_TMDB_API_KEY` or stdin, checks it with one `GET /3/configuration`, and keeps it in `<data_dir>/tmdb.key`, mode 0600, on this device only (I-302); prints TMDB's attribution |
+| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>` or `--id mbid:<uuid>` for a single item path |
+
+**The plan.** `scrape_plan` answers, for each item under the paths in catalogue order,
+its path, kind, the analysed title and year (§8a), its seasons and episode files with
+their numbers, an album's artist and title from its first track's tags and whether a
+track carries a picture, and which of its **slots** already hold a file. A slot is one
+thing the catalogue reads, and it is *present* when any name §8 accepts for it exists:
+
+| Item | Slot | Written as (when missing) | Also counts as present |
+|---|---|---|---|
+| film folder | nfo · poster · fanart | `movie.nfo` · `poster.jpg` · `fanart.jpg` | `<video>.nfo`, `<folder>.nfo` · `<video>-poster.*`, `folder.*` · `<video>-fanart.*` |
+| film file in the library | nfo · poster · fanart | `<stem>.nfo` · `<stem>-poster.jpg` · `<stem>-fanart.jpg` | |
+| show | nfo · poster · fanart | `tvshow.nfo` · `poster.jpg` · `fanart.jpg` | `folder.*` |
+| season | poster | `seasonNN-poster.jpg` (`season-specials-poster.jpg`) in the show folder | `poster.*`, `folder.*` in the season folder |
+| episode | nfo · thumb | `<stem>.nfo` · `<stem>-thumb.jpg` | |
+| album | cover | `cover.jpg` | a track's embedded picture, `cover.*`, `folder.*` |
+
+Images are the provider's own files at a fixed size (TMDB `w780` posters, `w1280`
+backdrops, `w300` stills; the Cover Art Archive's `front-500`), re-encoded never.
+
+**Matching** (I-301). The query is the analysed title, with the year when the name has
+one. Titles compare after the tokenizer of §3 (NFKC, case-folded, punctuation as
+spaces). A result is a **clear match** when it is the only result whose title or
+original title equals the query's and, when the query has a year, whose year (a film's
+release year, a show's first air year) equals it too; an album's clear match is the only
+release group whose artist and title both equal the tags'. A clear match is used
+without asking. Otherwise, on a terminal the CLI lists the top five (title, year, the
+first line of the overview) and takes a number, `s` to skip or an id; without a
+terminal the item is skipped and listed in the summary; `--yes` takes the top result.
+`--id` names the item's id outright. A show's match carries its seasons and episodes
+(one request per season), matched by number; an episode TMDB does not list is skipped.
+
+**What is written** (I-299, I-300). Only missing slots, and only as new files: each
+`PUT` is an exclusive create, so a file that appeared since the plan (another scrape, a
+person) answers 412 and is counted as present; a scrape never replaces, renames or
+deletes anything, so it runs the same inside a protected folder (13 §4: creating is
+allowed there). An `.nfo` is Kodi XML (`movie`, `tvshow` or `episodedetails`) carrying
+`title`, `originaltitle`, `year`, `premiered` or `aired`, `plot`, `runtime`, `genre`,
+`ratings/rating` (`name="themoviedb"`, `default="true"`), `mpaa` (the `--region`
+certification), `director`, up to ten `actor/name`, `season` and `episode`, `status`,
+and `uniqueid type="tmdb" default="true"`, so §8's reader takes back every field the
+catalogue keeps. `--dry-run` prints the matches and the files it would write and writes
+nothing. A run ends by asking the leader for an index pass (`index_now`) and prints how
+many files it wrote for how many items, and the items it skipped and why.
+
+**Network** (I-302). The client is the update client's shape (12 §5): one
+`http.Client` with a 30 s timeout, `User-Agent: tailraid/<version>
+(+https://github.com/zombar/tailraid)`, JSON bodies read through a 4 MiB limit and
+images through 20 MiB, a 429 retried after its `Retry-After` at most three times. It
+speaks only to `api.themoviedb.org`, `image.tmdb.org`, `musicbrainz.org` and
+`coverartarchive.org`; MusicBrainz is asked at most once a second, as its rules ask;
+TMDB with at most four requests in flight. The key goes only to `api.themoviedb.org`
+(as `api_key`, or as a bearer token for a v4 token), never to a node, and never into a
+log line or an error (a request's URL is printed with the key removed). TMDB's terms
+ask for attribution: `media key`, `media scrape --help` and the README say "This
+product uses the TMDB API but is not endorsed or certified by TMDB." MusicBrainz and
+the Cover Art Archive data are CC0 and need none.
+
 ## Invariants
 
+- **I-298** — No node contacts a metadata provider: only the CLI's `media key` and
+  `media scrape` do, from the device they run on; no package a node runs imports the
+  scrape client.
+- **I-299** — A scrape writes a slot only when no name §11 accepts for it exists, only as
+  an exclusive create (`If-None-Match: *`; a 412 counts as present), and never replaces,
+  renames or deletes a file; `--dry-run` writes nothing.
+- **I-300** — What a scrape writes, the catalogue reads back: each written `.nfo` decodes
+  (§8) to the provider's title, original title, year, plot, runtime, genres, rating,
+  certification, people, season, episode and air date, and each written image is the
+  slot's art in the catalogue entry (poster, fanart, thumb, season poster, album cover).
+- **I-301** — A clear match (the only result whose tokenized title or original title,
+  and year when the name has one, equal the query's; for an album the only release group
+  whose artist and title equal the tags') is taken without asking; any other result is
+  taken only by the user's choice, `--yes` or `--id`, and without a terminal the item is
+  skipped and reported; the same answers give the same matches.
+- **I-302** — The TMDB key lives only in `<data_dir>/tmdb.key` (mode 0600) on the device
+  that saved it, travels only to `api.themoviedb.org`, and never appears in a log line,
+  an error or a node request; the client speaks only to the four provider hosts, sends
+  its user agent, reads bounded bodies, retries a 429 at most three times after its
+  `Retry-After`, and asks MusicBrainz at most once a second.
 - **I-206** — The index is written only by the leader, only under `/.tailraid/index`,
   only as immutable segments `<seq>.seg` created with `O_EXCL` (a losing create abandons
   the pass), each written to a temp sibling, flushed and renamed, carrying its chain and a
@@ -339,6 +443,11 @@ and matching ROMs against DAT files.
 
 | Invariant | Tests |
 |---|---|
+| I-298 | stub `TestStub_I_298` until the `media-scrape` PR |
+| I-299 | stub `TestStub_I_299` until the `media-scrape` PR |
+| I-300 | stub `TestStub_I_300` until the `media-scrape` PR |
+| I-301 | stub `TestStub_I_301` until the `media-scrape` PR |
+| I-302 | stub `TestStub_I_302` until the `media-scrape` PR |
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
