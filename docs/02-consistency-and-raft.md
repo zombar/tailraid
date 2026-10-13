@@ -357,6 +357,11 @@ the browser's exclusive publish `Rename.NoReplace` only while the prober's `MinC
 replacing copy commits as plain writes (04 §6), a delete-on-close checks the inode
 itself and a no-replace rename looks the name up first, on this gateway only, so two
 exclusive uploads through two gateways can then both succeed (I-223..I-226).
+Codec 10 is the library kind `roms` (docs/18 §9, I-277): a `SetAttr` whose flags carry
+a library kind of 4 or more. It is gated both ways, as codec 9 is: the web gateway sends
+it only while `MinCodec` is 10 (`meta.CodecRoms`, else 503 with the codec message), and
+the leader refuses it with `ErrCodec` while a live member reads codec 9 or older; the
+snapshot frame is unchanged, since the flags byte has been stored whole since frame 4.
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
