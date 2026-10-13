@@ -375,7 +375,7 @@ state to patch.
   in flight end.
 - **I-175** — A shard request marked background holds at most half of a node's PUT and,
   separately, GET slots (never fewer than one); a client-path request never waits behind
-  a background one for the other half; a background request is queued, never refused,
+  a background one for the other half; a background request is queued, refused only as busy once it has waited `SlotWait` (I-246),
   and the mark changes no reply; every request a repair pass makes carries the mark and
   no gateway read or flush does.
 - **I-157** — A delete reclaims nothing: only `Purge`, `Unlink` of an ephemeral name
