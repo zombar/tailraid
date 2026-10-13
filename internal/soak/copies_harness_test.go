@@ -120,6 +120,15 @@ func (e *harnessEnv) smbAddr(n soak.NodeRef) (string, error) {
 	return l.Addr().String(), nil
 }
 
+// stopSMB ends node n's SMB gateway and its connections, as the process's exit does; the
+// next dial starts one on the node's new vfs. Callers hold e.mu.
+func (e *harnessEnv) stopSMB(n soak.NodeRef) {
+	if s := e.smb[int(n.Idx)]; s != nil {
+		s.stop()
+		delete(e.smb, int(n.Idx))
+	}
+}
+
 // StartCopies copies over SMB (the node's gateway, one connection per CopySpec.Conn) or
 // straight on the node's vfs (one handle per file, as the NFS gateway holds it).
 func (e *harnessEnv) StartCopies(ctx context.Context, n soak.NodeRef, proto string, files []soak.CopySpec) (soak.CopyJob, error) {
@@ -199,12 +208,16 @@ func (e *harnessEnv) RestartGraceful(ctx context.Context, n soak.NodeRef) error 
 
 // RestartIdle is update's wait (I-221) on the harness: time passes until the node's
 // overlay has held nothing dirty and its clients have written nothing for three steps
-// in a row, then the graceful restart.
+// in a row and for idleWall of the wall clock, then the graceful restart. The clients
+// run on the wall clock: three steps of the fake one can pass before a copy has
+// written its first byte.
 func (e *harnessEnv) RestartIdle(ctx context.Context, n soak.NodeRef) error {
+	const idleWall = 2 * time.Second
 	deadline := time.Now().Add(2 * time.Minute)
 	var last uint64
 	quiet := 0
-	for quiet < 3 {
+	var since time.Time // the wall time the current quiet run began
+	for quiet < 3 || time.Since(since) < idleWall {
 		if time.Now().After(deadline) {
 			return errors.New("the gateway never went idle")
 		}
@@ -217,6 +230,9 @@ func (e *harnessEnv) RestartIdle(ctx context.Context, n soak.NodeRef) error {
 		dirty := len(nd.Ov.Dirty())
 		e.mu.RUnlock()
 		if dirty == 0 && written == last {
+			if quiet == 0 {
+				since = time.Now()
+			}
 			quiet++
 		} else {
 			quiet = 0
@@ -295,5 +311,34 @@ func TestSoak_MultiUserAgainstHarness(t *testing.T) {
 	}
 	if len(ph.Checks) < 20 {
 		t.Errorf("%d checks, want at least two per round", len(ph.Checks))
+	}
+}
+
+// A restart drops the node's SMB connections, as a stopped process does: a client
+// writing through one hears an error instead of writing into the old node's overlay,
+// which no flusher drains (phase 22.6 lost four acknowledged copies so on CI).
+// Regression: TestSoak_CopiesUnderFaultsAgainstHarness 22.6, run 38407158867
+func TestHarnessEnv_RestartDropsSMBConnections(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	env := &harnessEnv{t: t, c: c}
+	n := soak.NodeRef{Idx: c.Nodes[1].Idx(), Name: "n1", RPC: c.Nodes[1].RPCAddr()}
+	sh, end, err := env.smbDial(n)(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end()
+	f, err := sh.OpenFile("restart.bin", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("before"), 4096); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.Restart(t.Context(), []soak.NodeRef{n}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("after"), 8192); err == nil {
+		t.Fatal("a write through a connection of the node before its restart succeeded")
 	}
 }

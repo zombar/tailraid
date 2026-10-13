@@ -3,7 +3,7 @@
 // and PUT once per file, version and recipe.
 
 import { fileURL, putThumb, thumbURL, type Entry, type Src } from "./api.ts";
-import { session } from "./util.ts";
+import { join, session } from "./util.ts";
 
 const CONCURRENT = 3;
 const WIDTH = 320;
@@ -58,8 +58,8 @@ function pump(): void {
 /** Thumbable is what a thumbnail needs of a file: a listing entry, or a media item's video (docs/13 §10). */
 export type Thumbable = Pick<Entry, "ino" | "version" | "thumb">;
 
-/** lazy schedules img to show the thumbnail of path once it is near the viewport; onMiss replaces it with the generic icon. */
-export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Src, kind: "image" | "video" | "audio", onMiss: () => void): void {
+/** lazy schedules img to show the thumbnail of path once it is near the viewport; onMiss replaces it with the generic icon. A "dir" is a folder whose cover is not known yet. */
+export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Src, kind: "image" | "video" | "audio" | "dir", onMiss: () => void): void {
   const load = () =>
     new Promise<void>((resolve) => {
       const done = () => resolve();
@@ -71,6 +71,19 @@ export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Sr
         };
         img.src = src;
       };
+      if (kind === "dir" && root === undefined) {
+        void folder(path)
+          .then((src) => {
+            if (!src) return (onMiss(), done());
+            img.addEventListener("load", () => URL.revokeObjectURL(src), { once: true });
+            show(src);
+          })
+          .catch(() => {
+            onMiss();
+            done();
+          });
+        return;
+      }
       const tag = kind === "video" ? `${e.version}.f${RECIPE}` : undefined; // a cached frame of another recipe is not reused
       if (e.thumb || kind !== "video" || root !== undefined) {
         show(thumbURL(path, root, tag));
@@ -91,6 +104,26 @@ export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Sr
     queue.push(p);
     pump();
   }
+}
+
+/** Grab is the video a folder without art names for the page to frame (webui.Grab). */
+interface Grab {
+  path: string;
+  ino: number;
+  version: number;
+}
+
+/** folder fetches a folder's tile as an object URL. A folder whose art would be a video nobody framed yet answers 404 naming it: the page frames that video, which settles the folder, and asks once more (docs/13 §5, I-275). */
+async function folder(path: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(thumbURL(path));
+    if (r.ok) return URL.createObjectURL(await r.blob());
+    if (r.status !== 404 || attempt > 0) return null;
+    const miss = (await r.json().catch(() => ({}))) as { grab?: Grab };
+    const g = miss.grab;
+    if (!g || !(await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false }))) return null;
+  }
+  return null;
 }
 
 /** grab chooses a frame of the video and stores it; one attempt per file, version and recipe per session. */

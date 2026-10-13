@@ -1029,6 +1029,7 @@ func TestCancellingAWait(t *testing.T) {
 
 // A file manager asks to be told when a directory changes instead of asking
 // again every second. The answer comes when something happens.
+// Invariant: I-264
 func TestChangeNotify(t *testing.T) {
 	fs := &tinyFS{body: []byte("hello")}
 	c, dir := opened(t, fs, "/", false)
@@ -1099,8 +1100,20 @@ func TestChangeNotify(t *testing.T) {
 		t.Errorf("an overflowing notification answered %#x, want NOTIFY_ENUM_DIR", final.status)
 	}
 
+	// Changes made after that answer are kept for the next request (I-264) and answered
+	// at once; ask until one is left waiting.
+	for i := 0; ; i++ {
+		body := make([]byte, 32)
+		binary.LittleEndian.PutUint32(body[4:], 4096)
+		copy(body[8:], dir.id[:])
+		if st := statusOf(t, mustDispatch(t, c, cmdChangeNotify, body)); st == statusPending {
+			break
+		}
+		if i == 8 {
+			t.Fatal("the watch kept answering at once")
+		}
+	}
 	// Closing the handle ends the watch rather than leaving a goroutine on it.
-	h = watch(0, 4096)
 	closeBody := make([]byte, 24)
 	copy(closeBody[8:], dir.id[:])
 	if st := statusOf(t, mustDispatch(t, c, cmdClose, closeBody)); st != statusSuccess {

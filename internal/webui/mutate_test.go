@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 
 func (u *ui) statOf(path string) webui.Entry {
 	u.t.Helper()
-	code, _, body := u.get("/api/stat?path=" + path)
+	code, _, body := u.get("/api/stat?path=" + url.QueryEscape(path))
 	if code != 200 {
 		u.t.Fatalf("stat %s: %d %s", path, code, body)
 	}
