@@ -5,13 +5,13 @@ import "testing"
 // POST /api/flags sets a folder's library kind by word and refuses the rest; ls and stat
 // carry the entry's own kind and the folder's effective kind, the nearest flagged
 // ancestor's; a file, the root and a bad word are 400.
-// Invariant: I-210
+// Invariant: I-210, I-277
 func TestWebUI_Flags_Library_Table(t *testing.T) {
 	u := newUI(t)
 	u.write("/films/arrival/movie.mkv", 0, []byte("x"))
 	u.write("/films/old/stalker/movie.mkv", 0, []byte("y"))
 	u.flush()
-	for _, word := range []string{"movies", "tv", "music", "none"} {
+	for _, word := range []string{"movies", "tv", "music", "roms", "none"} {
 		code, e := u.setFlags("/films", `"library":"`+word+`"`)
 		want := word
 		if word == "none" {

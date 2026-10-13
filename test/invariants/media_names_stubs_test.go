@@ -6,9 +6,6 @@ import "testing"
 // §9, docs/13 §5, §10), designed and not built. Each is replaced by the real test named
 // in that doc's Tests table when the code lands.
 
-// Invariant: I-277
-func TestStub_I_277(t *testing.T) { t.Skip("stub: the roms library kind; see docs/18-search.md §9") }
-
 // Invariant: I-278
 func TestStub_I_278(t *testing.T) { t.Skip("stub: the ROM catalogue; see docs/18-search.md §8b") }
 

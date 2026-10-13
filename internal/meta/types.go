@@ -71,14 +71,15 @@ type Inode struct {
 }
 
 // Directory flags (docs/01). FlagProtected is enforced by the FSM (I-154); FlagNSFW is
-// carried for the browser UI; the two bits under FlagLibraryMask hold the folder's
-// library kind (docs/18 §9, I-210), a codec-6 field.
+// carried for the browser UI; the bits under FlagLibraryMask hold the folder's library
+// kind (docs/18 §9): two bits at codec 6 (I-210), three since codec 10, whose kind 4 is
+// roms (I-277).
 const (
 	FlagProtected uint8 = 1 << 0
 	FlagNSFW      uint8 = 1 << 1
 
 	FlagLibraryShift       = 2
-	FlagLibraryMask  uint8 = 0b11 << FlagLibraryShift
+	FlagLibraryMask  uint8 = 0b111 << FlagLibraryShift
 
 	knownFlags = FlagProtected | FlagNSFW | FlagLibraryMask
 )
@@ -91,9 +92,13 @@ const (
 	LibraryMovies
 	LibraryTV
 	LibraryMusic
+	LibraryRoms // codec 10 (I-277)
 )
 
-var libraryWords = [...]string{"none", "movies", "tv", "music"}
+var libraryWords = [...]string{"none", "movies", "tv", "music", "roms"}
+
+// Known reports whether k is a kind this binary knows: kinds 5 to 7 are malformed.
+func (k LibraryKind) Known() bool { return int(k) < len(libraryWords) }
 
 func (k LibraryKind) String() string {
 	if int(k) < len(libraryWords) {
@@ -102,7 +107,7 @@ func (k LibraryKind) String() string {
 	return "none"
 }
 
-// ParseLibraryKind reads the word of a kind: exactly one of none, movies, tv, music.
+// ParseLibraryKind reads the word of a kind: exactly one of none, movies, tv, music, roms.
 func ParseLibraryKind(s string) (LibraryKind, bool) {
 	for i, w := range libraryWords {
 		if s == w {

@@ -233,7 +233,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1 to 9 and snapshots version 9 (02 §Codec versions;
+Log entries carry codec version 1 to 10 and snapshots version 9 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows

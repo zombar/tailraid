@@ -459,7 +459,7 @@ func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool
 			c.shows(l.Ino)
 		case meta.LibraryMusic:
 			c.music(l.Ino)
-		case meta.LibraryNone:
+		case meta.LibraryNone, meta.LibraryRoms: // games come with roms-catalog (docs/18 §8b)
 		}
 	}
 	return c.out

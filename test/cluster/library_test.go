@@ -47,3 +47,41 @@ func TestCluster_Codec6RefusedWhileMemberOld(t *testing.T) {
 		}
 	}
 }
+
+// The roms kind is codec 10: the leader refuses it with ErrCodec while a live member
+// reads codec 9, the other kinds still set, and it lands on every node once every member
+// is current.
+// Invariant: I-277
+func TestCluster_Codec10RefusedWhileMemberOld(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	c.WriteFile(0, "/roms/a.zip", testharness.Pattern(100, 1))
+	c.Settle()
+	leader := c.Leader()
+	roms, err := leader.Node.FSM.Resolve([]string{"roms"})
+	must(t, err)
+	now := c.Clk.Now().UnixNano()
+	set := func(k meta.LibraryKind) meta.Result {
+		res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpSetAttr, SetAttr: &meta.SetAttr{Ino: roms.Ino, Mask: meta.AttrFlags, Flags: meta.WithLibrary(0, k), Now: now}})
+		must(t, err)
+		return res
+	}
+	leader.Node.MinCodec = func() uint8 { return meta.CodecRewrite } // one member still reads codec 9
+	defer func() { leader.Node.MinCodec = nil }()
+	if res := set(meta.LibraryRoms); !errors.Is(res.Err, meta.ErrCodec) {
+		t.Fatalf("roms with an old member: %v, want ErrCodec", res.Err)
+	}
+	if res := set(meta.LibraryMusic); res.Err != nil {
+		t.Fatalf("music with an old member: %v", res.Err)
+	}
+	leader.Node.MinCodec = func() uint8 { return meta.CodecVersion }
+	if res := set(meta.LibraryRoms); res.Err != nil {
+		t.Fatalf("roms after the update: %v", res.Err)
+	}
+	c.Settle()
+	for i := range c.Nodes {
+		if k := c.Nodes[i].Node.FSM.EffectiveLibrary(roms.Ino); k != meta.LibraryRoms {
+			t.Fatalf("n%d kind %s", i, k)
+		}
+	}
+}

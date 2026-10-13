@@ -2562,8 +2562,8 @@ function menu(ctx) {
   };
   const libraryRow = (current, why) => {
     const select = h("select", { "aria-label": "library kind" });
-    for (const word of ["none", "movies", "tv", "music"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : void 0 }, word));
-    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows or music");
+    for (const word of ["none", "movies", "tv", "music", "roms"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : void 0 }, word));
+    const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows, music or games");
     const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
     if (why) {
       select.disabled = true;

@@ -315,7 +315,7 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 					items = append(items, it)
 				}
 			}
-		case meta.LibraryNone:
+		case meta.LibraryNone, meta.LibraryRoms: // a roms library lists its platforms from roms-web on (docs/13 §10)
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
