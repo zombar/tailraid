@@ -20,6 +20,9 @@ const (
 	// holds at most half of a node's PUT and GET slots (docs/06 §4, I-175).
 	HeaderPriority     = "X-Tailraid-Priority"
 	PriorityBackground = "background"
+	// HeaderBusy marks a 503 a shard request got because every slot stayed taken for
+	// SlotWait (docs/05 §6, I-246).
+	HeaderBusy = "X-Tailraid-Busy"
 )
 
 // Errors the client returns.
@@ -33,6 +36,10 @@ var (
 	ErrTooLarge     = errors.New("rpc: body too large")
 	ErrBadRequest   = errors.New("rpc: bad request")
 	ErrUnavailable  = errors.New("rpc: node unavailable")
+	// ErrBusy is a shard request a node refused because its slots stayed taken (I-246);
+	// it comes wrapped in ErrUnavailable, so a reader or flusher moves to another slot,
+	// and it never marks the node suspect.
+	ErrBusy = errors.New("rpc: node busy")
 	// ErrApplyFailed is a 500 from POST /v1/apply: the leader handed the command to Raft and
 	// then failed (leadership lost, timeout); the outcome is unknown (docs/02 §forwarding).
 	ErrApplyFailed = errors.New("rpc: apply failed on the leader after dispatch")

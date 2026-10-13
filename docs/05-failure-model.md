@@ -198,6 +198,13 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
   the straggler grace, is excluded from `Live()` (with its disks) until the first probe
   that succeeds after the mark; an HTTP-status reply or a request the gateway itself
   cancelled never marks a node, and a mark never affects the hold-downs or repair.
+- **I-246** — A shard GET or PUT (and a mirror GET) queues for its slots at most
+  `SlotWait` (3 s, well inside the caller's 10 s header timeout) and is then answered
+  `503` with `X-Tailraid-Busy`, which the caller sees as `ErrBusy` wrapped in
+  `ErrUnavailable` (never `ErrNoLeader`) and answers by moving to another slot; a busy
+  reply is an HTTP status, so it never marks the node suspect (I-170). Before, a request
+  queued until the caller's own deadline fired at the transport level, and a node that
+  was only busy was marked suspect and routed around.
 
 ## Tests
 
@@ -208,4 +215,5 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
 | I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale`, `TestStaleness_Table` |
 | I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO`, `TestReader_ReadRange_ChunkHashMismatch_LateReadersEIO_EventRecorded` |
 | I-202 | `TestPhaseHotPath_ConformingGatewayPasses`, `TestReader_ReadRange_ServedFromDataShardBeforeDecode`, `TestReader_ReadRange_StraddlesTwoDataShards`, `TestReader_ReadRange_CorruptDataShard_WaitsForDecode`, `TestReader_ReadRange_DeadDataHolder_WaitsForDecode`, `TestReader_ReadRange_NoSums_WholeChunk`, `TestReader_ReadRange_HolesAndShortChunk_Table`, `TestReader_ReadRange_ChunkHashMismatch_LateReadersEIO_EventRecorded`, `TestReader_FlusherBaseRead_NeverEarly`, `FuzzReadRange`, `TestCluster_EarlyServe_HolderKilledMidRead_StillExact`, `TestCluster_EarlyRange_SameBytesEveryGateway` |
+| I-246 | `TestServer_BusySlots_AnswerBusy_NotSuspect` |
 | I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |

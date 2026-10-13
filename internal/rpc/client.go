@@ -168,6 +168,9 @@ func errFromStatus(resp *http.Response) error {
 	case http.StatusMisdirectedRequest:
 		return fmt.Errorf("%w (leader %s)", ErrNotLeader, resp.Header.Get(HeaderLeader))
 	case http.StatusServiceUnavailable:
+		if resp.Header.Get(HeaderBusy) != "" { // slots full, not a leader question (I-246)
+			return fmt.Errorf("%w: %w: %s", ErrUnavailable, ErrBusy, msg)
+		}
 		return fmt.Errorf("%w: %s", ErrNoLeader, msg)
 	case http.StatusPreconditionFailed:
 		return fmt.Errorf("%w: %s", ErrFenced, msg)

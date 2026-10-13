@@ -1060,12 +1060,12 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			_ = t.store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
 				h, kk, mm, idx, err := chunk.ParseKey(k)
 				if err != nil {
-					rep.OrphanShards++ // a file in the shard tree that is not a shard: junk the sweep will not touch
-					return nil         //nolint:nilerr // counted above; the walk goes on
+					rep.AddOrphan(string(k)) // a file in the shard tree that is not a shard: junk the sweep will not touch
+					return nil               //nolint:nilerr // counted above; the walk goes on
 				}
 				c, ok := a.node.FSM.GetChunk(h)
 				if !ok || c.K != kk || c.M != mm || idx >= len(c.Placement) || c.Placement[idx] != t.idx {
-					rep.OrphanShards++
+					rep.AddOrphan(string(k))
 				}
 				return nil
 			})

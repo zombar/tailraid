@@ -40,18 +40,11 @@ func (s *Server) mirrorGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "mirror "+r.PathValue("idx")+" is not open on this host")
 		return
 	}
-	if background(r) {
-		if !acquire(r.Context(), s.bgGetSem) {
-			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
-			return
-		}
-		defer func() { <-s.bgGetSem }()
-	}
-	if !acquire(r.Context(), s.getSem) {
-		writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+	release, ok := s.take(w, r, slots(r, s.bgGetSem, s.getSem)...)
+	if !ok {
 		return
 	}
-	defer func() { <-s.getSem }()
+	defer release()
 	var body []byte
 	if kind == "objects" {
 		body, err = m.Object(h)

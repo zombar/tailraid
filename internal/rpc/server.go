@@ -26,16 +26,6 @@ import (
 )
 
 // ShardStore is what the shard endpoints need from chunk.Store.
-// acquire takes a slot of sem unless ctx ends first (a caller that gave up must not hold
-// a queue position).
-func acquire(ctx context.Context, sem chan struct{}) bool {
-	select {
-	case sem <- struct{}{}:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
 
 type ShardStore interface {
 	Get(k chunk.ShardKey) ([]byte, error) // the verified payload (the self path of Client.Get)
@@ -149,6 +139,50 @@ func backgroundSlots(slots int) int { return max(1, slots/2) }
 
 // background reports whether r carries the background priority.
 func background(r *http.Request) bool { return r.Header.Get(HeaderPriority) == PriorityBackground }
+
+// SlotWait is the longest a shard request queues for its slots before the node answers
+// 503 busy (docs/05 §6, I-246): well inside the caller's ResponseHeaderTimeout (10 s), so
+// a node that is only busy is never taken for one that stopped answering.
+const SlotWait = 3 * time.Second
+
+// take takes one slot of each sem in order, waiting at most SlotWait in all. It answers
+// the request itself when it cannot: 503 busy at SlotWait, 503 when the caller gave up
+// (a caller that gave up must not hold a queue position). release frees what it took.
+func (s *Server) take(w http.ResponseWriter, r *http.Request, sems ...chan struct{}) (release func(), ok bool) {
+	var held []chan struct{}
+	release = func() {
+		for _, sem := range held {
+			<-sem
+		}
+	}
+	t := s.o.Clk.NewTimer(SlotWait)
+	defer t.Stop()
+	for _, sem := range sems {
+		select {
+		case sem <- struct{}{}:
+			held = append(held, sem)
+		case <-t.C():
+			release()
+			w.Header().Set(HeaderBusy, "1")
+			writeErr(w, http.StatusServiceUnavailable, "busy: every slot stayed taken")
+			return nil, false
+		case <-r.Context().Done():
+			release()
+			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+			return nil, false
+		}
+	}
+	return release, true
+}
+
+// slots are the semaphores a shard request of r takes: the background share first when
+// r is background work (I-175), then the ordinary slots.
+func slots(r *http.Request, bg, all chan struct{}) []chan struct{} {
+	if background(r) {
+		return []chan struct{}{bg, all}
+	}
+	return []chan struct{}{all}
+}
 
 // NewServer validates options and builds the handler.
 func NewServer(o Options) (*Server, error) {
@@ -365,18 +399,11 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
-		if background(r) {
-			if !acquire(r.Context(), s.bgGetSem) {
-				writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
-				return
-			}
-			defer func() { <-s.bgGetSem }()
-		}
-		if !acquire(r.Context(), s.getSem) {
-			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+		release, ok := s.take(w, r, slots(r, s.bgGetSem, s.getSem)...)
+		if !ok {
 			return
 		}
-		defer func() { <-s.getSem }()
+		defer release()
 		rc, size, err := store.Open(key)
 		switch {
 		case errors.Is(err, chunk.ErrNotFound):
@@ -395,18 +422,11 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
 	case http.MethodPut:
-		if background(r) {
-			if !acquire(r.Context(), s.bgPutSem) {
-				writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
-				return
-			}
-			defer func() { <-s.bgPutSem }()
-		}
-		if !acquire(r.Context(), s.putSem) {
-			writeErr(w, http.StatusServiceUnavailable, "cancelled while queued")
+		release, ok := s.take(w, r, slots(r, s.bgPutSem, s.putSem)...)
+		if !ok {
 			return
 		}
-		defer func() { <-s.putSem }()
+		defer release()
 		if r.ContentLength > s.o.MaxShard {
 			writeErr(w, http.StatusRequestEntityTooLarge, "shard too large")
 			return
