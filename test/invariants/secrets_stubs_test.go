@@ -2,7 +2,7 @@ package invariants
 
 import "testing"
 
-// Stubs for the secrets store (docs/19): PR 1 lands I-309, PR 2 I-303..I-307, PR 3 I-308.
+// Stubs for the secrets store (docs/19): PR 2 lands I-303..I-307, PR 3 I-308 (PR 1 landed I-309).
 
 // Invariant: I-303
 func TestStub_I_303(t *testing.T) {
@@ -32,9 +32,4 @@ func TestStub_I_307(t *testing.T) {
 // Invariant: I-308
 func TestStub_I_308(t *testing.T) {
 	t.Skip("stub: S3 and TMDB keys move into the store (docs/19)")
-}
-
-// Invariant: I-309
-func TestStub_I_309(t *testing.T) {
-	t.Skip("stub: the keychain layer (docs/19)")
 }

@@ -16,6 +16,9 @@ github.com/cloudsoda/go-smb2/internal/utf16le
 # github.com/cloudsoda/sddl v0.0.0-20250224235906-926454e91efc
 ## explicit; go 1.22
 github.com/cloudsoda/sddl
+# github.com/danieljoos/wincred v1.2.3
+## explicit; go 1.18
+github.com/danieljoos/wincred
 # github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 ## explicit; go 1.20
 github.com/dhowden/tag
@@ -53,6 +56,9 @@ github.com/goccy/go-yaml/parser
 github.com/goccy/go-yaml/printer
 github.com/goccy/go-yaml/scanner
 github.com/goccy/go-yaml/token
+# github.com/godbus/dbus/v5 v5.2.2
+## explicit; go 1.20
+github.com/godbus/dbus/v5
 # github.com/hashicorp/go-hclog v1.6.3
 ## explicit; go 1.13
 github.com/hashicorp/go-hclog
@@ -172,6 +178,11 @@ github.com/willscott/go-nfs-client/nfs
 github.com/willscott/go-nfs-client/nfs/rpc
 github.com/willscott/go-nfs-client/nfs/util
 github.com/willscott/go-nfs-client/nfs/xdr
+# github.com/zalando/go-keyring v0.2.8
+## explicit; go 1.18
+github.com/zalando/go-keyring
+github.com/zalando/go-keyring/internal/shellescape
+github.com/zalando/go-keyring/secret_service
 # go.etcd.io/bbolt v1.5.0
 ## explicit; go 1.25.0
 go.etcd.io/bbolt

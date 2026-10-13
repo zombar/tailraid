@@ -42,6 +42,9 @@ stays in the node's config (15).
   back to a file `<data_dir>/keys/<account>.key`, mode 0600 under a 0700 dir; a keyring
   error never fails `init`, `join` or `serve`. `Source` says where a value is: `keyring`
   or the file's path.
+- **Bounded.** Each keyring call gets `keychain.Timeout` (5 s): a locked Keychain can wait
+  on a prompt nobody sees and a missing Secret Service can stall on D-Bus; past it the call
+  counts as a failure and the file is used.
 - **Account names are checked** (`^[a-z0-9][a-z0-9._-]{0,127}$`), so an account is never
   a path.
 - macOS reaches the Keychain through `/usr/bin/security` (go-keyring's own shell-out), so
@@ -162,4 +165,4 @@ member holds the volume's data and can fetch the key, by design.
 | I-306 | stub `TestStub_I_306` until PR 2 |
 | I-307 | stub `TestStub_I_307` until PR 2 |
 | I-308 | stub `TestStub_I_308` until PR 3 |
-| I-309 | stub `TestStub_I_309` until PR 1 |
+| I-309 | `TestKeychain_KeyringFirst`, `TestKeychain_FallbackFile_Table`, `TestKeychain_KeyringRecovers`, `TestKeychain_Names_Table` |
