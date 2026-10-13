@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,10 @@ import (
 )
 
 func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
+
+// unixModes is an OS with permission bits; Windows guards the file by its user profile's
+// ACL instead, and reports every file 0666 (docs/19 §2: "0600 where the OS has modes").
+var unixModes = runtime.GOOS != "windows"
 
 // fakeRing is a keyring that holds values, fails every call, or blocks each call until
 // released.
@@ -138,10 +143,10 @@ func TestKeychain_FallbackFile_Table(t *testing.T) {
 			t.Fatalf("%s: set %q %v %v", tc.name, src, kerr, err)
 		}
 		fi, err := os.Stat(s.file("tmdb"))
-		if err != nil || fi.Mode().Perm() != 0o600 {
+		if err != nil || unixModes && fi.Mode().Perm() != 0o600 {
 			t.Errorf("%s: file %v %v", tc.name, fi, err)
 		}
-		if di, err := os.Stat(s.Dir); err != nil || di.Mode().Perm() != 0o700 {
+		if di, err := os.Stat(s.Dir); err != nil || unixModes && di.Mode().Perm() != 0o700 {
 			t.Errorf("%s: dir %v %v", tc.name, di, err)
 		}
 		if v, src, err := s.Get("tmdb"); v != "abc123" || src != s.file("tmdb") || err != nil {

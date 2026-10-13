@@ -647,7 +647,7 @@ func emojiProne(r rune) bool {
 // index.html carries no emoji-prone character.
 // Invariant: I-293
 func TestIcons_MaterialSymbolsOnly(t *testing.T) {
-	src := readAll(t, filepath.Join(srcDir, "icons.ts"))
+	src := strings.ReplaceAll(readAll(t, filepath.Join(srcDir, "icons.ts")), "\r\n", "\n") // a Windows checkout ends lines with CRLF
 	entries := regexp.MustCompile(`(?m)^ {2}(\w+): "([^"]*)",$`).FindAllStringSubmatch(src, -1)
 	if len(entries) < 20 {
 		t.Fatalf("icons.ts: %d entries, want the docs/13 Icons list", len(entries))

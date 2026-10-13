@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -431,7 +432,7 @@ func TestKey_SavedPrivate_EnvWins(t *testing.T) {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(filepath.Join(dir, KeyFile))
-	if err != nil || fi.Mode().Perm() != 0o600 {
+	if err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 { // Windows has no permission bits
 		t.Fatalf("key file: %v %v", fi, err)
 	}
 	if k, err := LoadKey(dir); k != "abc" || err != nil {
