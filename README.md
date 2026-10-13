@@ -38,7 +38,7 @@ tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into
 | **One binary** | The same static executable is the daemon, the gateways and the CLI. Signed releases, `tailraid update` with rollback, and a service installer for launchd, systemd and Windows. |
 
 > [!IMPORTANT]
-> Every device needs Tailscale (headscale works). Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
+> Every device needs Tailscale (headscale works). Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it. Casting a video to a TV isn't supported yet: AirPlay and Chromecast make the TV fetch the file itself, and the browser UI only answers you on the tailnet. A possible direction is short-lived signed cast links served on the LAN by a node there, such as a Raspberry Pi ([docs/13 §11](docs/13-web-ui.md#11-casting-to-a-tv-not-built)); until then, use screen mirroring or Chrome's Cast on a desktop.
 
 ## Install
 
