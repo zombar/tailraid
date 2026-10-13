@@ -255,7 +255,21 @@ func (fs *Share) Open(name string) (*File, error) {
 	return fs.OpenFile(name, os.O_RDONLY, 0)
 }
 
+// The share access an open lets others have (tailraid: for OpenFileShare).
+const (
+	ShareRead   = smb2.FILE_SHARE_READ
+	ShareWrite  = smb2.FILE_SHARE_WRITE
+	ShareDelete = smb2.FILE_SHARE_DELETE
+)
+
+// OpenFile opens name sharing read and write with other opens, as upstream does.
 func (fs *Share) OpenFile(name string, flag int, perm os.FileMode) (*File, error) {
+	return fs.OpenFileShare(name, flag, perm, ShareRead|ShareWrite)
+}
+
+// OpenFileShare is OpenFile with the share access given (tailraid): ShareDelete lets
+// another open rename or delete the file meanwhile, as Explorer's opens do.
+func (fs *Share) OpenFileShare(name string, flag int, perm os.FileMode, sharemode uint32) (*File, error) {
 	name = normPath(name)
 
 	if err := validatePath("open", name, false); err != nil {
@@ -278,8 +292,6 @@ func (fs *Share) OpenFile(name string, flag int, perm os.FileMode) (*File, error
 		access &^= smb2.GENERIC_WRITE
 		access |= smb2.FILE_APPEND_DATA
 	}
-
-	sharemode := uint32(smb2.FILE_SHARE_READ | smb2.FILE_SHARE_WRITE)
 
 	var createmode uint32
 	switch {
@@ -440,7 +452,7 @@ func (fs *Share) remove(name string) error {
 		SmbCreateFlags:       0,
 		DesiredAccess:        smb2.DELETE,
 		FileAttributes:       0,
-		ShareAccess:          smb2.FILE_SHARE_DELETE,
+		ShareAccess:          smb2.FILE_SHARE_READ | smb2.FILE_SHARE_WRITE | smb2.FILE_SHARE_DELETE, // as Windows' own clients open a file to delete or rename it (tailraid)
 		CreateDisposition:    smb2.FILE_OPEN,
 		CreateOptions:        smb2.FILE_OPEN_REPARSE_POINT,
 		Mapping:              fs.mapping,
@@ -482,7 +494,7 @@ func (fs *Share) Rename(oldpath, newpath string) error {
 		SmbCreateFlags:       0,
 		DesiredAccess:        smb2.DELETE,
 		FileAttributes:       smb2.FILE_ATTRIBUTE_NORMAL,
-		ShareAccess:          smb2.FILE_SHARE_DELETE,
+		ShareAccess:          smb2.FILE_SHARE_READ | smb2.FILE_SHARE_WRITE | smb2.FILE_SHARE_DELETE, // as Windows' own clients open a file to delete or rename it (tailraid)
 		CreateDisposition:    smb2.FILE_OPEN,
 		CreateOptions:        smb2.FILE_OPEN_REPARSE_POINT,
 		Mapping:              fs.mapping,
