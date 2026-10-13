@@ -474,17 +474,12 @@ func (c *conn) serve() {
 	// A client that hangs up mid-transfer still holds driver handles; they are
 	// the driver's memory, not ours, and nothing else will close them.
 	defer func() {
+		// Every open the client left is closed as its CLOSE would have: the driver's
+		// handle, its locks, a wait on it, and a delete-on-close (I-240). A client that
+		// crashes holding a lock must not keep the file reserved for the life of the
+		// server, and a copy's guard file must not outlive the connection.
 		for _, of := range c.files {
-			of.writes.Wait() // a WRITE still running holds the driver's handle
-			if of.f != nil {
-				of.f.Close()
-			}
-			// A client that crashes holding a lock must not keep the file
-			// reserved for the life of the server, and an operation waiting
-			// on a handle nobody has open will never complete on its own.
-			of.share.unregister(of)
-			of.share.locks.releaseAll(of.id)
-			c.cancelForFile(of.id)
+			c.closeOpen(of)
 		}
 	}()
 	for {
@@ -734,11 +729,21 @@ func (c *conn) dispatch(msg []byte) ([]byte, error) {
 	case cmdSessionSetup:
 		return c.sessionSetup(h, body)
 	case cmdLogoff:
+		for _, of := range c.files { // the session's opens close with it (3.3.5.6, I-240)
+			if of.session == h.sessionID {
+				c.closeOpen(of)
+			}
+		}
 		delete(c.sessions, h.sessionID)
 		return simpleResponse(h, statusSuccess, 4), nil
 	case cmdTreeConnect:
 		return c.treeConnect(h, body, msg)
 	case cmdTreeDisconnect:
+		for _, of := range c.files { // the tree's opens close with it (3.3.5.8, I-240)
+			if binary.LittleEndian.Uint64(of.id[8:]) == uint64(h.treeID) && of.session == h.sessionID {
+				c.closeOpen(of)
+			}
+		}
 		delete(c.trees, h.treeID)
 		return simpleResponse(h, statusSuccess, 4), nil
 	case cmdEcho:

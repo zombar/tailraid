@@ -380,14 +380,11 @@ func timeOf(ft uint64) time.Time {
 	return time.Unix(int64(ft/10_000_000)-epochDelta, int64(ft%10_000_000)*100)
 }
 
-func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
-	if len(body) < 24 {
-		return nil, fmt.Errorf("smb: CLOSE body of %d bytes is too short", len(body))
-	}
-	of := c.fileByID(body[8:])
-	if of == nil {
-		return errorResponse(h, statusFileClosed), nil
-	}
+// closeOpen closes one open as CLOSE does, delete-on-close included: for a CLOSE, and
+// for every open its client leaves behind when the connection drops, the session logs
+// off or the tree disconnects (MS-SMB2 3.3.7.1, 3.3.5.6, 3.3.5.8, I-240). Without it a
+// copy's guard file outlived a lost connection, full size and made of holes.
+func (c *conn) closeOpen(of *openFile) {
 	of.writes.Wait() // every WRITE this handle accepted is answered first
 	if of.f != nil {
 		of.f.Close()
@@ -425,6 +422,17 @@ func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
 		}
 		of.share.notify(p, actionRemoved)
 	}
+}
+
+func (c *conn) closeFile(h header, body []byte) ([]byte, error) {
+	if len(body) < 24 {
+		return nil, fmt.Errorf("smb: CLOSE body of %d bytes is too short", len(body))
+	}
+	of := c.fileByID(body[8:])
+	if of == nil {
+		return errorResponse(h, statusFileClosed), nil
+	}
+	c.closeOpen(of)
 
 	b := append(responseTo(h, statusSuccess), make([]byte, 60)...)
 	rb := b[headerLen:]

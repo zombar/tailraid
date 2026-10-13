@@ -127,7 +127,7 @@ keeps answering by its old path until it is reopened.
 | READ | `File.ReadAt(buf, offset)`; a short read at the end is `STATUS_END_OF_FILE`, which is how a listing of bytes ends |
 | WRITE | `WritableFile.WriteAt(data, offset)` then `Sync()`; the reply is sent only after both return. `WriteAt` is `vfs.File.WriteAt`, durable in the WAL when it returns (I-7), so `Sync` is a no-op |
 | FLUSH | `Sync()`, success |
-| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFileIno(path, ino)` (`vfs.RemoveIno`) of the handle's current path, for a file or a directory, with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225) |
+| CLOSE | `File.Close()`; with delete-on-close set, `DeleteFileIno(path, ino)` (`vfs.RemoveIno`) of the handle's current path, for a file or a directory, with the handle's inode as `Expect`: nothing is removed when another file holds that name (I-225). An open its client leaves without a CLOSE is closed the same way, delete-on-close included, when the connection drops, its session logs off or its tree disconnects (MS-SMB2 3.3.7.1, 3.3.5.6, 3.3.5.8, I-240); until 2026-10-13 those only released the driver's handle, so a copy's guard file outlived a lost connection full size and made of holes |
 | SET_INFO end-of-file | `WritableFile.Truncate(size)` (`vfs.File.Truncate`); past `MaxFileSize` the vfs answers `EFBIG`, which is `STATUS_DISK_FULL` on the wire |
 | SET_INFO allocation | a reservation, not an end of file (MS-FSA 2.1.5.15.1, I-235): one at or above the file's size changes nothing, one below it is `Truncate(size)`. It had been the end of file, so a program that preallocated and wrote less left zeros at the end |
 | SET_INFO rename | `Rename(old, new)` when `ReplaceIfExists` is set; without it `RenameNoReplace(old, new)` (the FSM's `NoReplace`, docs/02), so an existing `new`, created on this gateway or another, is `STATUS_OBJECT_NAME_COLLISION` and nothing moves (I-224). Every open handle of the file on the share follows the new path, not only the renaming one |
@@ -506,6 +506,10 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   wildcards do, without case: `*` and `*.*` every name, `*` any run, `?` one character,
   `<` any run up to and including the name's last dot, `>` one character or none at a
   dot or the end, `"` a dot or nothing at the end, every other character itself.
+- **I-240** — An open whose client never sends its CLOSE is closed when the client's
+  connection ends, when its session logs off and when its tree disconnects, exactly as a
+  CLOSE would: its delete-on-close removes the file (by inode, I-225), its locks are
+  released, and the handle answers nothing after a logoff or a tree disconnect.
 - **I-218** — Every failure the SMB gateway answers for a write, an end-of-file change, a
   create, a delete (a refusal by a protected folder included) or a rename is logged at
   Warn with the operation, the path and the error, at most one line a minute per kind of
@@ -532,6 +536,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-228 | `TestIoctl_Statuses` |
 | I-229 | `TestSMB_ScratchCreate_NotTrashed` |
 | I-233 | `TestSMB_CaseFold_NoTwins` |
+| I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |
 | I-237 | `TestWildcards` |
