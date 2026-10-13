@@ -2,6 +2,26 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.7.3 (2026-10-13)
+
+### Changes
+
+- vfs: a dirty file reports its write time, as it reports its size (I-261) ([d3e02ea](https://github.com/zombar/tailraid/commit/d3e02ea))
+- bench: compare HTTP/1.1, h2c, gRPC, yamux and QUIC for the node RPC; report ([25551c2](https://github.com/zombar/tailraid/commit/25551c2))
+- nfs: a duplicate request cache, so a retransmission runs once (I-260) ([bdfb936](https://github.com/zombar/tailraid/commit/bdfb936))
+- rpc: benchmark HTTP/1.1 against cleartext HTTP/2 for the node RPC; report ([4ea8a80](https://github.com/zombar/tailraid/commit/4ea8a80))
+- webui: the Stats page draws its frames at once and streams the charts in (I-258, I-259) ([67075a8](https://github.com/zombar/tailraid/commit/67075a8))
+- webui: album, show and movie art surfaces to parent folders, first wins (I-257) ([0f7b68d](https://github.com/zombar/tailraid/commit/0f7b68d))
+- webui: a folder's cover is stored in the volume and shared by every node (I-256) ([a8ebfd6](https://github.com/zombar/tailraid/commit/a8ebfd6))
+- rpc: the control transport keeps 32 idle connections per host (I-255) ([db132ad](https://github.com/zombar/tailraid/commit/db132ad))
+- smb: READs off the read loop and, for a concurrent driver, outside the share lock (I-254) ([71c2379](https://github.com/zombar/tailraid/commit/71c2379))
+
+### Documentation
+
+- docs: the Stats page streams its charts in (I-258, I-259), lookdev first ([cf80f6c](https://github.com/zombar/tailraid/commit/cf80f6c))
+- docs: sealed S3 nodes renumbered to I-249..I-253 ([fd9920d](https://github.com/zombar/tailraid/commit/fd9920d))
+- docs: sealed S3 nodes, client-side encryption of bucket objects (I-246..I-250) ([59e252b](https://github.com/zombar/tailraid/commit/59e252b))
+
 ## v0.7.2 (2026-10-13)
 
 ### Changes
