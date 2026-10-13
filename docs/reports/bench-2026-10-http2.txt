@@ -1,0 +1,114 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/zombar/tailraid/internal/rpc
+cpu: Apple M2 Max
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h1-12         	      40	  14035876 ns/op	       485.1 MiB/s	       112.0 chunk-p50-ms	       114.1 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h1-12         	      40	  14023960 ns/op	       485.9 MiB/s	       112.0 chunk-p50-ms	       113.1 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h1-12         	      40	  14023324 ns/op	       485.7 MiB/s	       112.0 chunk-p50-ms	       113.1 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h2-12         	      40	  14078825 ns/op	       483.6 MiB/s	       113.7 chunk-p50-ms	       122.6 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h2-12         	      40	  14055886 ns/op	       485.0 MiB/s	       113.6 chunk-p50-ms	       129.9 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h2-12         	      40	  14059928 ns/op	       484.9 MiB/s	       114.0 chunk-p50-ms	       130.9 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h2-4MiB-12    	      40	  14065705 ns/op	       484.7 MiB/s	       111.9 chunk-p50-ms	       114.2 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h2-4MiB-12    	      40	  14055720 ns/op	       484.7 MiB/s	       111.7 chunk-p50-ms	       113.8 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/lan/h2-4MiB-12    	      40	  14048848 ns/op	       485.2 MiB/s	       111.9 chunk-p50-ms	       113.8 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h1-12     	      40	  56412761 ns/op	       120.2 MiB/s	       448.1 chunk-p50-ms	       463.5 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h1-12     	      40	  56570312 ns/op	       119.8 MiB/s	       448.0 chunk-p50-ms	       470.0 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h1-12     	      40	  56441241 ns/op	       120.1 MiB/s	       448.0 chunk-p50-ms	       465.0 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h2-12     	      40	  56522704 ns/op	       119.3 MiB/s	       463.8 chunk-p50-ms	       496.8 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h2-12     	      40	  56451678 ns/op	       119.5 MiB/s	       463.9 chunk-p50-ms	       484.3 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h2-12     	      40	  56503023 ns/op	       119.3 MiB/s	       459.8 chunk-p50-ms	       496.7 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h2-4MiB-12         	      40	  56554919 ns/op	       118.9 MiB/s	       448.0 chunk-p50-ms	       467.8 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h2-4MiB-12         	      40	  56438338 ns/op	       119.4 MiB/s	       447.8 chunk-p50-ms	       467.4 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/five-hosts/tailnet/h2-4MiB-12         	      40	  56450881 ns/op	       119.5 MiB/s	       447.8 chunk-p50-ms	       472.0 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h1-12                    	      40	  70024611 ns/op	        97.49 MiB/s	       559.9 chunk-p50-ms	       560.2 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h1-12                    	      40	  70023376 ns/op	        97.49 MiB/s	       560.0 chunk-p50-ms	       560.1 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h1-12                    	      40	  70024130 ns/op	        97.49 MiB/s	       560.0 chunk-p50-ms	       560.7 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h2-12                    	      40	  70087747 ns/op	        97.41 MiB/s	       560.4 chunk-p50-ms	       620.1 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h2-12                    	      40	  70101396 ns/op	        97.39 MiB/s	       555.9 chunk-p50-ms	       620.7 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h2-12                    	      40	  73022525 ns/op	        93.20 MiB/s	       555.0 chunk-p50-ms	       991.2 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h2-4MiB-12               	      40	  70034939 ns/op	        97.47 MiB/s	       562.1 chunk-p50-ms	       805.7 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h2-4MiB-12               	      40	  70043685 ns/op	        97.43 MiB/s	       555.9 chunk-p50-ms	       841.3 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/lan/h2-4MiB-12               	      40	  70125608 ns/op	        97.23 MiB/s	       586.5 chunk-p50-ms	       836.7 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h1-12                	      40	 280431952 ns/op	        24.31 MiB/s	      2240 chunk-p50-ms	      2254 chunk-p99-ms	         0.9000 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h1-12                	      40	 280423032 ns/op	        24.32 MiB/s	      2240 chunk-p50-ms	      2255 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h1-12                	      40	 280407774 ns/op	        24.32 MiB/s	      2240 chunk-p50-ms	      2255 chunk-p99-ms	         0.8750 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h2-12                	      40	 280506149 ns/op	        24.28 MiB/s	      2206 chunk-p50-ms	      3408 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h2-12                	      40	 280682781 ns/op	        24.27 MiB/s	      2247 chunk-p50-ms	      2420 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h2-12                	      40	 280715523 ns/op	        24.27 MiB/s	      2237 chunk-p50-ms	      2401 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h2-4MiB-12           	      40	 280438072 ns/op	        24.29 MiB/s	      2227 chunk-p50-ms	      3343 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h2-4MiB-12           	      40	 280421446 ns/op	        24.29 MiB/s	      2360 chunk-p50-ms	      3171 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_PutFanout/one-host/tailnet/h2-4MiB-12           	      40	 280420814 ns/op	        24.29 MiB/s	      2241 chunk-p50-ms	      3414 chunk-p99-ms	         0 conns/op
+BenchmarkRPCTransport_HedgedGet/lan/h1-12                             	      40	  14030099 ns/op	       291.5 MiB/s	         1.525 conns/op	       112.0 read-p50-ms	       113.1 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h1-12                             	      40	  14036343 ns/op	       291.3 MiB/s	         1.525 conns/op	       112.0 read-p50-ms	       113.5 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h1-12                             	      40	  14025253 ns/op	       291.6 MiB/s	         1.525 conns/op	       112.0 read-p50-ms	       112.9 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h2-12                             	      40	  14027280 ns/op	       291.5 MiB/s	         0 conns/op	       112.0 read-p50-ms	       113.0 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h2-12                             	      40	  14028442 ns/op	       291.6 MiB/s	         0 conns/op	       112.0 read-p50-ms	       112.8 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h2-12                             	      40	  14028230 ns/op	       291.6 MiB/s	         0 conns/op	       112.0 read-p50-ms	       112.9 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h2-4MiB-12                        	      40	  14025890 ns/op	       291.6 MiB/s	         0 conns/op	       111.7 read-p50-ms	       113.2 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h2-4MiB-12                        	      40	  14022485 ns/op	       291.6 MiB/s	         0 conns/op	       112.0 read-p50-ms	       112.8 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/lan/h2-4MiB-12                        	      40	  14026946 ns/op	       291.6 MiB/s	         0 conns/op	       112.0 read-p50-ms	       113.1 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h1-12                         	      40	  56392864 ns/op	        72.16 MiB/s	         1.525 conns/op	       448.0 read-p50-ms	       463.5 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h1-12                         	      40	  56392299 ns/op	        72.17 MiB/s	         1.525 conns/op	       448.0 read-p50-ms	       463.5 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h1-12                         	      40	  56392521 ns/op	        72.16 MiB/s	         1.525 conns/op	       448.0 read-p50-ms	       463.6 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h2-12                         	      40	  56741779 ns/op	        71.72 MiB/s	         0 conns/op	       448.2 read-p50-ms	       463.5 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h2-12                         	      40	  56718853 ns/op	        71.73 MiB/s	         0 conns/op	       448.1 read-p50-ms	       463.8 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h2-12                         	      40	  56759483 ns/op	        71.71 MiB/s	         0 conns/op	       448.2 read-p50-ms	       463.5 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h2-4MiB-12                    	      40	  56402854 ns/op	        72.14 MiB/s	         0 conns/op	       448.1 read-p50-ms	       463.3 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h2-4MiB-12                    	      40	  56759871 ns/op	        71.70 MiB/s	         0 conns/op	       448.1 read-p50-ms	       463.4 read-p99-ms
+BenchmarkRPCTransport_HedgedGet/tailnet/h2-4MiB-12                    	      40	  56681197 ns/op	        71.80 MiB/s	         0 conns/op	       448.1 read-p50-ms	       463.4 read-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h1-12                         	      40	  56021856 ns/op	         3.025 conns/op	       112.0 op-p50-ms	       148.1 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h1-12                         	      40	  56287505 ns/op	         3.025 conns/op	       112.0 op-p50-ms	       139.2 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h1-12                         	      40	  55223333 ns/op	         3.025 conns/op	       112.0 op-p50-ms	       136.4 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h2-12                         	      40	  56016494 ns/op	         0 conns/op	       112.0 op-p50-ms	       112.9 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h2-12                         	      40	  55688932 ns/op	         0 conns/op	       112.0 op-p50-ms	       114.6 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h2-12                         	      40	  55854367 ns/op	         0 conns/op	       112.0 op-p50-ms	       123.8 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h2-4MiB-12                    	      40	  55563638 ns/op	         0 conns/op	       111.8 op-p50-ms	       115.0 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h2-4MiB-12                    	      40	  55924089 ns/op	         0 conns/op	       111.9 op-p50-ms	       113.5 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/lan/h2-4MiB-12                    	      40	  54612864 ns/op	         0 conns/op	       111.3 op-p50-ms	       114.1 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h1-12                     	      40	 224951116 ns/op	         3.025 conns/op	       447.0 op-p50-ms	       553.7 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h1-12                     	      40	 224522967 ns/op	         3.025 conns/op	       455.7 op-p50-ms	       533.0 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h1-12                     	      40	 224106873 ns/op	         3.025 conns/op	       448.0 op-p50-ms	       526.7 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h2-12                     	      40	 224410360 ns/op	         0 conns/op	       448.2 op-p50-ms	       463.5 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h2-12                     	      40	 224565140 ns/op	         0 conns/op	       448.1 op-p50-ms	       463.5 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h2-12                     	      40	 224784964 ns/op	         0 conns/op	       448.1 op-p50-ms	       463.6 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h2-4MiB-12                	      40	 224677190 ns/op	         0 conns/op	       448.1 op-p50-ms	       460.3 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h2-4MiB-12                	      40	 224449111 ns/op	         0 conns/op	       448.1 op-p50-ms	       463.5 op-p99-ms
+BenchmarkRPCTransport_ReadaheadSeek/tailnet/h2-4MiB-12                	      40	 224348035 ns/op	         0 conns/op	       448.0 op-p50-ms	       463.5 op-p99-ms
+BenchmarkRPCTransport_ControlBurst/lan/h1-12                          	      40	   1010514 ns/op	         0.9568 burst-p50-ms	         1.468 burst-p99-ms	         0.7936 call-p50-ms	         1.237 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h1-12                          	      40	    901908 ns/op	         0.8767 burst-p50-ms	         1.184 burst-p99-ms	         0.7446 call-p50-ms	         1.056 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h1-12                          	      40	    914158 ns/op	         0.8858 burst-p50-ms	         1.218 burst-p99-ms	         0.7505 call-p50-ms	         1.053 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h2-12                          	      40	   1364569 ns/op	         1.319 burst-p50-ms	         2.123 burst-p99-ms	         0.9589 call-p50-ms	         1.764 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h2-12                          	      40	   1328692 ns/op	         1.308 burst-p50-ms	         1.967 burst-p99-ms	         0.9391 call-p50-ms	         1.639 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h2-12                          	      40	   1346174 ns/op	         1.275 burst-p50-ms	         1.990 burst-p99-ms	         0.9614 call-p50-ms	         1.764 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h2-4MiB-12                     	      40	   1360524 ns/op	         1.339 burst-p50-ms	         1.990 burst-p99-ms	         0.9698 call-p50-ms	         1.783 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h2-4MiB-12                     	      40	   1295250 ns/op	         1.243 burst-p50-ms	         1.726 burst-p99-ms	         0.9718 call-p50-ms	         1.647 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/lan/h2-4MiB-12                     	      40	   1362490 ns/op	         1.323 burst-p50-ms	         1.936 burst-p99-ms	         0.9612 call-p50-ms	         1.711 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h1-12                      	      40	  17710015 ns/op	        17.65 burst-p50-ms	        20.10 burst-p99-ms	        17.26 call-p50-ms	        18.62 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h1-12                      	      40	  18363538 ns/op	        17.79 burst-p50-ms	        23.33 burst-p99-ms	        17.37 call-p50-ms	        22.17 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h1-12                      	      40	  17201617 ns/op	        17.22 burst-p50-ms	        18.80 burst-p99-ms	        16.91 call-p50-ms	        18.22 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h2-12                      	      40	  17337052 ns/op	        17.26 burst-p50-ms	        18.63 burst-p99-ms	        17.02 call-p50-ms	        18.39 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h2-12                      	      40	  18573323 ns/op	        17.27 burst-p50-ms	        27.22 burst-p99-ms	        16.83 call-p50-ms	        25.99 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h2-12                      	      40	  18176902 ns/op	        17.30 burst-p50-ms	        24.91 burst-p99-ms	        16.90 call-p50-ms	        24.57 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h2-4MiB-12                 	      40	  16895680 ns/op	        16.85 burst-p50-ms	        19.70 burst-p99-ms	        16.59 call-p50-ms	        19.55 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h2-4MiB-12                 	      40	  18320367 ns/op	        17.65 burst-p50-ms	        31.07 burst-p99-ms	        17.13 call-p50-ms	        30.81 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_ControlBurst/tailnet/h2-4MiB-12                 	      40	  19428166 ns/op	        17.73 burst-p50-ms	        37.92 burst-p99-ms	        17.25 call-p50-ms	        37.20 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h1-12                 	      40	  44793127 ns/op	        42.14 call-p50-ms	        55.56 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h1-12                 	      40	  46004843 ns/op	        42.91 call-p50-ms	        55.95 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h1-12                 	      40	  46270529 ns/op	        43.64 call-p50-ms	        56.06 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h2-12                 	      40	  43738984 ns/op	        42.34 call-p50-ms	        55.71 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h2-12                 	      40	  43396177 ns/op	        42.26 call-p50-ms	        55.71 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h2-12                 	      40	  43061130 ns/op	        42.31 call-p50-ms	        55.69 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h2-4MiB-12            	      40	  44779393 ns/op	        42.58 call-p50-ms	        55.46 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h2-4MiB-12            	      40	  43029695 ns/op	        42.05 call-p50-ms	        55.69 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/lan/h2-4MiB-12            	      40	  43024074 ns/op	        42.06 call-p50-ms	        55.72 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h1-12             	      40	 180436297 ns/op	       168.0 call-p50-ms	       223.0 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h1-12             	      40	 186131964 ns/op	       172.8 call-p50-ms	       222.8 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h1-12             	      40	 176354677 ns/op	       168.1 call-p50-ms	       217.8 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h2-12             	      40	 179509390 ns/op	       169.2 call-p50-ms	       222.9 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h2-12             	      40	 172429586 ns/op	       168.1 call-p50-ms	       222.9 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h2-12             	      40	 180900957 ns/op	       168.1 call-p50-ms	       231.1 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h2-4MiB-12        	      40	 182238765 ns/op	       169.3 call-p50-ms	       223.0 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h2-4MiB-12        	      40	 174424181 ns/op	       168.1 call-p50-ms	       224.5 call-p99-ms	         0 conns/op
+BenchmarkRPCTransport_MixedRepairAndControl/tailnet/h2-4MiB-12        	      40	 179416200 ns/op	       168.2 call-p50-ms	       223.0 call-p99-ms	         0 conns/op
+PASS
+ok  	github.com/zombar/tailraid/internal/rpc	392.571s
