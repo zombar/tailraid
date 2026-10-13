@@ -283,12 +283,12 @@ func phaseIntegrity(ctx context.Context, r *Run) error {
 		r.checkAt("I-12 I-36 L-51", "corpus identical via "+gw.Name, bad == 0, fmt.Sprintf("%d of %d files differ: %s", bad, len(m), first), first, "", gw.Name)
 	}
 	for _, n := range r.nodes {
-		ok, _, detail, err := r.Env.Fsck(ctx, n)
+		res, err := r.Env.Fsck(ctx, n)
 		if err != nil {
 			r.checkAt("I-44", "fsck on "+n.Name, false, err.Error(), "", "", n.Name)
 			continue
 		}
-		r.checkAt("I-44", "fsck on "+n.Name, ok, detail, "", "", n.Name)
+		r.checkAt("I-44", "fsck on "+n.Name, res.OK, res.Detail, "", "", n.Name)
 	}
 	r.checkFSMAgreement(ctx, "I-4", "FSM hashes agree")
 	reps, err := r.chunksOf(ctx, join(r.Root, "corpus", "big.bin"))
@@ -1009,8 +1009,8 @@ func phaseDedupGC(ctx context.Context, r *Run) error {
 		return err
 	}
 	r.check("L-77 L-134", "stored bytes shrink after gc", rep.Volume.StoredBytes < stored1, fmt.Sprintf("%d -> %d", stored1, rep.Volume.StoredBytes))
-	ok, _, detail, err := r.Env.Fsck(ctx, r.nodes[0])
-	r.check("I-27 I-44", "fsck clean after gc", err == nil && ok, detail+fmt.Sprint(err))
+	fsck, err := r.Env.Fsck(ctx, r.nodes[0])
+	r.check("I-27 I-44", "fsck clean after gc", err == nil && fsck.OK, fsck.Detail+fmt.Sprint(err))
 	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-13 I-41", "corpus exact after gc", bad == 0, first, first, "", gw.Name)
 	return nil

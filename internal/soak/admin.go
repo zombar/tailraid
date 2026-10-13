@@ -220,17 +220,17 @@ func (a *Admin) Remove(ctx context.Context, n NodeRef) error {
 	return a.leaderCall(ctx, "/v1/members", body, nil)
 }
 
-func (a *Admin) Fsck(ctx context.Context, n NodeRef) (bool, int, string, error) {
+func (a *Admin) Fsck(ctx context.Context, n NodeRef) (FsckResult, error) {
 	var rep admin.FsckReport
 	if err := a.nodeOp(ctx, n, rpc.AdminOp{Op: "fsck"}, &rep); err != nil {
-		return false, 0, "", err
+		return FsckResult{}, err
 	}
 	var text strings.Builder
 	fmt.Fprintf(&text, "%d violations, %d orphan shards", len(rep.Violations), rep.OrphanShards)
 	for _, v := range rep.Violations {
 		text.WriteString("; " + v)
 	}
-	return rep.OK, rep.OrphanShards, text.String(), nil
+	return FsckResult{OK: rep.OK, Orphans: rep.OrphanShards, Listed: rep.Orphans, Detail: text.String()}, nil
 }
 
 func (a *Admin) Chunks(ctx context.Context, n NodeRef, path string) ([]admin.ChunkReport, error) {

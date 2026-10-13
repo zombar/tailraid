@@ -138,8 +138,8 @@ func (e *fakeEnv) Remove(ctx context.Context, n NodeRef) error {
 	return nil
 }
 
-func (e *fakeEnv) Fsck(context.Context, NodeRef) (bool, int, string, error) {
-	return true, 0, "", nil
+func (e *fakeEnv) Fsck(context.Context, NodeRef) (FsckResult, error) {
+	return FsckResult{OK: true}, nil
 }
 
 func (e *fakeEnv) Chunks(context.Context, NodeRef, string) ([]admin.ChunkReport, error) {

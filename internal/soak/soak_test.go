@@ -522,35 +522,35 @@ func (e *harnessEnv) SetState(ctx context.Context, n soak.NodeRef, st meta.NodeS
 	return err
 }
 
-func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (bool, int, string, error) {
+func (e *harnessEnv) Fsck(_ context.Context, n soak.NodeRef) (soak.FsckResult, error) {
 	nd := e.node(n)
 	if !e.c.Alive(nd.I) {
-		return false, 0, "", errors.New("node is down")
+		return soak.FsckResult{}, errors.New("node is down")
 	}
 	snap, err := nd.Node.FSM.Snapshot()
 	if err != nil {
-		return false, 0, "", err
+		return soak.FsckResult{}, err
 	}
 	st := snap.(interface{ State() *meta.State }).State()
 	v := meta.CheckInvariants(st)
-	// orphans as the node's fsck counts them: shards on its disk the chunk table does not
-	// place there (a diskless node has none, docs/14 §9)
-	orphans := 0
+	// orphans as the node's fsck counts and lists them: shards on its disk the chunk table
+	// does not place there (a diskless node has none, docs/14 §9)
+	var rep admin.FsckReport
 	if nd.Store != nil {
 		_ = nd.Store.Walk(func(k chunk.ShardKey, _ int64, _ time.Time) error {
 			h, _, _, idx, err := chunk.ParseKey(k)
 			if err != nil {
-				orphans++
+				rep.AddOrphan(string(k))
 				return nil
 			}
 			c, ok := st.Chunks[h]
 			if !ok || idx >= len(c.Placement) || c.Placement[idx] != nd.Target() {
-				orphans++
+				rep.AddOrphan(string(k))
 			}
 			return nil
 		})
 	}
-	return len(v) == 0, orphans, strings.Join(v, "; "), nil
+	return soak.FsckResult{OK: len(v) == 0, Orphans: rep.OrphanShards, Listed: rep.Orphans, Detail: strings.Join(v, "; ")}, nil
 }
 
 func (e *harnessEnv) Chunks(ctx context.Context, n soak.NodeRef, path string) ([]admin.ChunkReport, error) {
