@@ -55,6 +55,7 @@ Endpoints and who may call them:
 | `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `update_addr` per step 6 |
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |
+| `GET /v1/members` | members | the device rows, for a restarting node's seed (I-282) |
 | `GET /v1/stats?since=` | members | this node's unsealed stats rows newer than `since`, at most 720, never another member's (docs/17 §3, I-199) |
 | `/dev/*` | members, only with `dev.enabled` | |
 | web UI (`<tsIP>:20482`): `GET /`, `/assets/*`, `/api/*`, `GET`/`HEAD /files/*` | members, or any tailnet device logged in as this node's user | docs/13 §2; no cluster header |
@@ -275,6 +276,13 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   and an empty table, and the file was refreshed once a minute from whatever table the
   node had: a node restarted within a minute of a join refused the new leader as "not a
   member" for good (soak phase 23.9 on the compose rig, 2026-10-13).
+- **I-282** — Until a leader connects, `serve` asks the members its seed names, every
+  `SeedFetchEvery` (10 s), for their device rows over the member route `GET /v1/members`,
+  and adds every row it does not hold to the authorizer's seed and the seed file; a row it
+  holds keeps its own record. A member that joined while this node was down, and so is in
+  neither its log nor its seed, is accepted once one member it knows answers, the leader
+  among them. The route answers members only, so the list never leaves the cluster; a row
+  only ever widens the seed, and the leader's table replaces it once it arrives.
 - **I-93** — `update_addr` from an address that is not in the member table is accepted
   only when the caller's WhoIs StableID is that of the member it names, and changes
   nothing but that member's address; every other op from a non-member is rejected with
@@ -316,6 +324,7 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake`, `TestMemberSeed_RoundTrip`, `TestCLI_Join_NoFlags` |
 | I-134 | `TestMembersFromLog_MatchesTable` |
 | I-281 | `TestStartSeed_NamesMembersJoinedAfterTheSnapshot` |
+| I-282 | `TestMemberList_MembersOnly_DeviceRows`, `TestSeedFetch_AddsMembersAPeerKnows` |
 | I-93 | `TestMembers_UpdateAddrFromUnknownAddress` |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
