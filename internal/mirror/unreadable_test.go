@@ -28,9 +28,9 @@ func TestMirror_UnreadableChunk_Incomplete_RetriedNext(t *testing.T) {
 	complete(t, m)
 	// the holders are back: the next sync to this mirror fetches it, nothing else
 	v.unreadable = map[meta.Hash]bool{}
-	reads := v.reads
+	reads := v.reads.Load()
 	second := snap(t, m, v, 2)
-	if len(second.Missing) != 0 || !m.HasObject(h) || v.reads-reads != 1 {
-		t.Fatalf("second manifest %+v, %d reads", second, v.reads-reads)
+	if len(second.Missing) != 0 || !m.HasObject(h) || v.reads.Load()-reads != 1 {
+		t.Fatalf("second manifest %+v, %d reads", second, v.reads.Load()-reads)
 	}
 }

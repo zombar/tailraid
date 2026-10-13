@@ -24,6 +24,18 @@ type Source interface {
 	Chunk(ctx context.Context, h meta.Hash) ([]byte, error)
 }
 
+// SyncWorkers is how many chunks a snapshot sync reads and writes at once (docs/16 §3,
+// I-239): each costs a round trip to the hosts holding its shards and a durable write to
+// the mirror disk, and one at a time a sync moved some 6 MB/s. mirrors.rate still caps
+// the bytes a second across them.
+const SyncWorkers = 8
+
+// pendingTree is a tree the walk encoded, written once every object is durable.
+type pendingTree struct {
+	h   meta.Hash
+	enc []byte
+}
+
 // Writer is one snapshot being written. Everything it references is marked for a sweep
 // that runs meanwhile, so the sweep never takes what the coming manifest will name.
 type Writer struct {
@@ -32,8 +44,13 @@ type Writer struct {
 	mu   sync.Mutex
 	refs map[meta.Hash]struct{} // objects and trees this snapshot names so far
 
-	files, dirs, bytes, newBytes uint64
+	files, dirs, bytes, newBytes uint64 // newBytes under mu: the workers add to it
 	missing                      map[meta.Hash]struct{}
+	pending                      map[meta.Hash]chan struct{} // chunks a worker is reading and writing, closed when done
+	slots                        chan struct{}               // SyncWorkers tokens
+	err                          error                       // the first object write that failed, under mu
+	objects                      sync.WaitGroup              // object reads and writes in flight
+	trees                        []pendingTree               // trees the mirror lacks, children before parents
 
 	chunkSize   uint64
 	read, added atomic.Uint64 // progress: file bytes walked, bytes written (Progress)
@@ -87,7 +104,10 @@ func TotalBytes(src Source, root uint64) (uint64, error) {
 // cannot read is listed in Missing and the rest is written. man's ID, Name, Index, At,
 // Auto, ClusterID and ChunkSize are kept; the rest is filled in.
 func (m *Mirror) WriteSnapshot(ctx context.Context, src Source, root uint64, man Manifest) (Manifest, error) {
-	w := &Writer{m: m, src: src, refs: map[meta.Hash]struct{}{}, missing: map[meta.Hash]struct{}{}, chunkSize: uint64(man.ChunkSize)}
+	w := &Writer{
+		m: m, src: src, refs: map[meta.Hash]struct{}{}, missing: map[meta.Hash]struct{}{},
+		pending: map[meta.Hash]chan struct{}{}, slots: make(chan struct{}, SyncWorkers), chunkSize: uint64(man.ChunkSize),
+	}
 	m.mu.Lock()
 	m.active[w] = struct{}{}
 	m.mu.Unlock()
@@ -97,8 +117,30 @@ func (m *Mirror) WriteSnapshot(ctx context.Context, src Source, root uint64, man
 		m.mu.Unlock()
 	}()
 	h, err := w.dir(ctx, root, 0)
+	w.objects.Wait()
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		w.mu.Lock()
+		err = w.err
+		w.mu.Unlock()
+	}
 	if err != nil {
 		return Manifest{}, err
+	}
+	// every object is durable: the trees go now, children before their parents, and the
+	// manifest after them (I-180)
+	for _, t := range w.trees {
+		if w.m.HasTree(t.h) {
+			continue
+		}
+		n, err := w.m.put("trees", t.h, t.enc, w.m.trees)
+		if err != nil {
+			return Manifest{}, err
+		}
+		w.newBytes += uint64(n)
+		w.added.Add(uint64(n))
 	}
 	man.Root, man.Files, man.Dirs, man.Bytes, man.NewBytes = HexHash(h), w.files, w.dirs, w.bytes, w.newBytes
 	man.Missing = nil
@@ -131,6 +173,8 @@ func (w *Writer) dir(ctx context.Context, ino uint64, depth int) (meta.Hash, err
 	if err != nil {
 		return meta.Hash{}, fmt.Errorf("mirror: list directory %d: %w", ino, err)
 	}
+	// the directory's objects go to the workers and the walk goes on; its tree's hash
+	// needs only the entries, and the tree itself is written after every object (I-180)
 	for i := range ents {
 		e := &ents[i]
 		switch e.Type {
@@ -155,15 +199,12 @@ func (w *Writer) dir(ctx context.Context, ino uint64, depth int) (meta.Hash, err
 	if w.m.HasTree(h) {
 		return h, nil
 	}
-	n, err := w.m.put("trees", h, enc, w.m.trees)
-	if err != nil {
-		return meta.Hash{}, err
-	}
-	w.newBytes += uint64(n)
-	w.added.Add(uint64(n))
+	w.trees = append(w.trees, pendingTree{h: h, enc: enc})
 	return h, nil
 }
 
+// file hands e's chunks the mirror lacks to the workers, at most SyncWorkers at once
+// (I-239). A chunk another file of this sync is already on is not read twice.
 func (w *Writer) file(ctx context.Context, e *Entry) error {
 	w.files++
 	w.bytes += e.Size
@@ -174,34 +215,67 @@ func (w *Writer) file(ctx context.Context, e *Entry) error {
 			step = min(left, w.chunkSize)
 		}
 		left -= step
-		w.read.Add(step)
 		if h == meta.HashZero {
+			w.read.Add(step)
 			continue
 		}
 		w.ref(h)
 		if w.m.HasObject(h) {
+			w.read.Add(step)
 			continue
 		}
-		if _, gone := w.missing[h]; gone {
+		w.mu.Lock()
+		_, gone := w.missing[h]
+		done, busy := w.pending[h]
+		if !gone && !busy {
+			done = make(chan struct{})
+			w.pending[h] = done
+		}
+		w.mu.Unlock()
+		if gone || busy {
+			w.read.Add(step)
 			continue
 		}
-		data, err := w.src.Chunk(ctx, h)
-		if ctx.Err() != nil {
+		select {
+		case w.slots <- struct{}{}:
+		case <-ctx.Done():
+			close(done)
 			return ctx.Err()
 		}
-		if err != nil || sha256.Sum256(data) != h {
-			w.missing[h] = struct{}{} // unreadable now; the next sync tries again (L-215)
-			continue
-		}
-		n, err := w.m.PutObject(h, data)
-		if err != nil {
-			return err
-		}
-		w.newBytes += uint64(n)
-		w.added.Add(uint64(n))
+		w.objects.Go(func() {
+			defer func() { <-w.slots }()
+			defer close(done)
+			w.object(ctx, h)
+			w.read.Add(step) // progress counts a chunk once it is handled, not when the walk passes it
+		})
 	}
 	w.read.Add(left) // a file with no chunk list (size 0, or all holes past the list)
 	return nil
+}
+
+// object reads chunk h, verifies it and writes it to the mirror, or records it missing.
+func (w *Writer) object(ctx context.Context, h meta.Hash) {
+	data, err := w.src.Chunk(ctx, h)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil || sha256.Sum256(data) != h {
+		w.mu.Lock()
+		w.missing[h] = struct{}{} // unreadable now; the next sync tries again (L-215)
+		w.mu.Unlock()
+		return
+	}
+	n, err := w.m.PutObject(h, data)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err != nil {
+		if w.err == nil {
+			w.err = err
+		}
+		return
+	}
+	w.newBytes += uint64(n)
+	w.added.Add(uint64(n))
 }
 
 // marks collects every object and tree a manifest reaches, plus every reference of a

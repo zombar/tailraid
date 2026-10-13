@@ -133,8 +133,12 @@ the recovery path when the cluster itself is gone.
    does not hold (an in-memory set of the mirror's object hashes, loaded when the mirror is
    opened and kept current), it reads the chunk through the ordinary reader, which
    verifies it against its hash, marked background (06 §4, I-175) and metered by
-   `mirrors.rate`, and writes the object. It then writes every tree the mirror lacks,
-   children first, and the manifest last.
+   `mirrors.rate`, and writes the object. `SyncWorkers` (8) chunks are read and written at
+   once, the walk handing each to a worker and going on, and a chunk two files share is
+   read once (I-239): a chunk costs a round trip to the hosts holding its shards and a
+   durable write to the mirror disk, and one at a time a sync moved some 6 MB/s (a 50 GiB
+   snapshot took over an hour, 2026-10-13). Once every object is durable it writes every
+   tree the mirror lacks, children first, and the manifest last.
 4. A chunk the reader cannot decode (fewer than `k` live slots) is not a failure: its hash
    stays in the tree, it goes into the manifest's `missing` list and the row ends
    `incomplete`; the next sync to that mirror tries it again, since it still lacks the
@@ -302,8 +306,8 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
 
 ## 8. Bounds and gaps
 
-- One sync per mirror at a time; any number of mirrors sync at once, each at
-  `mirrors.rate`.
+- One sync per mirror at a time, reading `SyncWorkers` (8) chunks at once; any number of
+  mirrors sync at once, each at `mirrors.rate` (50 MiB/s by default, `0` unmetered).
 - A snapshot name is 1 to 64 bytes, no `/`, not `.` or `..`, unique per mirror; an
   automatic name is the UTC minute. `SnapID` is a `uint32`, never reused.
 - A file's version list reads one tree path per snapshot: for 62 snapshots of a path ten
@@ -349,6 +353,10 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   and uploading every other from the mirror after verifying it; a revert flushes or drops
   the file's dirty bytes first; a tree restore descends an existing directory, skips an
   existing file and reports every entry; nothing on a mirror changes.
+- **I-239** — A sync reads and writes up to `SyncWorkers` chunks at once, each distinct
+  chunk once, and writes the same snapshot as one chunk at a time would: every object
+  durable before any tree naming it, every tree before its parent, the manifest last,
+  an unreadable chunk in `missing`.
 
 ## Tests
 
@@ -359,6 +367,7 @@ stub in `test/invariants/` meanwhile.
 |---|---|
 | I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
 | I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
+| I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestModelCheck_Long` |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`, `TestWebUI_Snapshots_ListTake_NoDeleteRoute` |
 | I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

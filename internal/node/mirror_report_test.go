@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // A host's /health lists each registered mirror it has open with the sync under way: the
@@ -30,16 +33,26 @@ func TestMirrorSet_HealthCarriesSyncProgress(t *testing.T) {
 	r.write(meta.RootIno, "b", bytes.Repeat([]byte{9}, tcs/2))
 	var mid []rpc.MirrorHealth
 	read := r.s.read
-	calls := 0
+	// the sync's workers read at once (I-239): the fourth and last chunk's read waits
+	// until the others are counted, and the health taken then is mid-sync
+	var calls atomic.Int32
+	var midMu sync.Mutex
 	r.s.read = func(ctx context.Context, h meta.Hash) ([]byte, error) {
-		calls++
-		if calls == 2 {
+		if calls.Add(1) == 4 {
+			testharness.Eventually(t, func() bool {
+				h := r.s.health()
+				return len(h) == 1 && h[0].Syncing != nil && h[0].Syncing.Read > 0
+			}, "the first chunks were never counted")
+			midMu.Lock()
 			mid = r.s.health()
+			midMu.Unlock()
 		}
 		return read(ctx, h)
 	}
 	r.s.tick(context.Background())
 	r.drain()
+	midMu.Lock()
+	defer midMu.Unlock()
 
 	if len(mid) != 1 || mid[0].Syncing == nil {
 		t.Fatalf("health during the sync = %+v, want the sync listed", mid)
