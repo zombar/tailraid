@@ -102,6 +102,11 @@ func (f *FS) CanDelete(p string) error {
 	if f.st.Protected(in.Ino) {
 		return f.refused(&f.warnDelete, "delete", p, os.ErrPermission)
 	}
+	if in.Type == meta.TDir {
+		if ents, err := f.st.ReadDir(in.Ino); err == nil && len(ents) > 0 {
+			return smb.ErrDirectoryNotEmpty // the client's answer, not a failure to log (I-236)
+		}
+	}
 	return nil
 }
 

@@ -169,11 +169,72 @@ func (c *conn) listDir(of *openFile, pattern string) ([]dirEntry, uint32) {
 	return out, statusSuccess
 }
 
-// matchSMB compares a name against the wildcards SMB uses. It is caseless,
-// because the protocol is: a client that asked for "*.TXT" expects "a.txt".
+// matchSMB reports whether name is in the expression pattern, as MS-FSA 2.1.4.4 has it
+// (I-237), without case because the protocol is: "*" matches any run of characters, "?"
+// one, DOS_STAR ("<") any run up to and including the name's final dot, DOS_QM (">")
+// one character or none at a dot or the end, DOS_DOT (a quotation mark) a dot or nothing
+// at the end; every other character is itself, brackets and backslashes included.
+// Windows' FindFirstFile turns "*.txt" into "<.txt" and "a?c" into "a>c". path.Match had
+// read "[" as a class and the DOS wildcards as literals.
 func matchSMB(pattern, name string) bool {
-	ok, err := path.Match(strings.ToUpper(pattern), strings.ToUpper(name))
-	return err == nil && ok
+	if pattern == "*" || pattern == "*.*" {
+		return true
+	}
+	p := []rune(strings.ToUpper(pattern))
+	n := []rune(strings.ToUpper(name))
+	if len(p) == 0 || len(n) == 0 {
+		return len(p) == len(n)
+	}
+	lastDot := -1
+	for i, r := range n {
+		if r == '.' {
+			lastDot = i
+		}
+	}
+	memo := map[[2]int]bool{}
+	var match func(pi, ni int) bool
+	match = func(pi, ni int) bool {
+		key := [2]int{pi, ni}
+		if v, ok := memo[key]; ok {
+			return v
+		}
+		ok := false
+		switch {
+		case pi == len(p):
+			ok = ni == len(n)
+		case p[pi] == '*':
+			for k := ni; k <= len(n) && !ok; k++ {
+				ok = match(pi+1, k)
+			}
+		case p[pi] == '<': // up to and including the final dot, never past it
+			end := len(n)
+			if lastDot >= ni {
+				end = lastDot + 1
+			}
+			for k := ni; k <= end && !ok; k++ {
+				ok = match(pi+1, k)
+			}
+		case p[pi] == '>':
+			if ni == len(n) || n[ni] == '.' {
+				ok = match(pi+1, ni) // none at a dot or the end
+			} else {
+				ok = match(pi+1, ni+1)
+			}
+		case p[pi] == '"':
+			switch {
+			case ni == len(n):
+				ok = match(pi+1, ni)
+			case n[ni] == '.':
+				ok = match(pi+1, ni+1)
+			}
+		case ni == len(n):
+		case p[pi] == '?' || p[pi] == n[ni]:
+			ok = match(pi+1, ni+1)
+		}
+		memo[key] = ok
+		return ok
+	}
+	return match(0, 0)
 }
 
 // encodeDirEntry lays out one entry in the class the client asked for. A class

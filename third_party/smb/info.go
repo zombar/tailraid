@@ -392,6 +392,18 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 			return errorResponse(h, statusInvalidParameter), nil
 		}
 		size := int64(binary.LittleEndian.Uint64(in))
+		if class == fileAllocationInformation {
+			// an allocation reserves space and is not the end of file: one above the
+			// file's size leaves the file as it is, one below cuts it there (MS-FSA
+			// 2.1.5.15.1, I-235); as an end of file it padded preallocated files with zeros
+			cur, err := c.sizeOf(of)
+			if err != nil {
+				return errorResponse(h, statusFor(err, statusNotSupported)), nil
+			}
+			if size >= cur {
+				break
+			}
+		}
 		if err := c.truncate(of, size); err != nil {
 			return errorResponse(h, statusFor(err, statusNotSupported)), nil
 		}
@@ -456,6 +468,19 @@ func (c *conn) setTimes(of *openFile, in []byte) error {
 }
 
 // truncate resizes a file through whichever capability the driver has.
+// sizeOf is the handle's file size now: its writable file's own when it has one (which
+// sees this gateway's unflushed writes), else the driver's Stat.
+func (c *conn) sizeOf(of *openFile) (int64, error) {
+	if of.w != nil {
+		return of.w.Size(), nil
+	}
+	st, err := of.share.fsys.Stat(of.p())
+	if err != nil {
+		return 0, err
+	}
+	return int64(sizeOf(st)), nil //nolint:gosec // a file size fits an int64
+}
+
 func (c *conn) truncate(of *openFile, size int64) error {
 	if of.w != nil {
 		return of.w.Truncate(size)
