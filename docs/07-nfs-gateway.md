@@ -306,6 +306,11 @@ device"), not `EIO`.
   the retransmission ran again beside them: a REMOVE answered NOENT for the file it had
   removed, and a WRITE still waiting at a cap could land after the client's next WRITE of
   the same range.
+- **I-269** — A reply the socket refuses ends its connection: the socket is closed and
+  the connection's context cancelled, so the reader and every handler waiting to hand
+  over its reply stop. Before, the reply writer returned alone, the handlers blocked on
+  it for good, and the reader went on accepting requests until every one of the
+  `InFlight` slots was held: the connection hung with nothing to close it.
 
 ## Tests
 
@@ -323,6 +328,7 @@ device"), not `EIO`.
 | I-245 | `TestConn_RPCReplyCodes`, `TestNFS_FSStatAndUnsupported` |
 | I-248 | `TestNFS_ListingFillsTheClientsCount`, `TestListEntrySizes_MatchTheEncoder` |
 | I-260 | `TestDRC_RetransmissionRunsOnce`, `TestDRC_Bounded_CoversOnlyChanges` |
+| I-269 | `TestConn_WriteFailure_ClosesTheConnection` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
