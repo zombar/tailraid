@@ -225,6 +225,12 @@ func (a *FS) ListDir(path string) ([]filesystem.DirEntry, error) {
 	return out, nil
 }
 
+// FoldName answers the server's caseless lookup from the folder's names alone, where
+// ListDir would build an entry for every file in it (I-267).
+func (a *FS) FoldName(dir, want string) (match string, found, ok bool) {
+	return a.fs.LookupFold(dir, want)
+}
+
 // ReadFile is the whole-file fallback the server uses only when OpenFile fails.
 func (a *FS) ReadFile(path string) ([]byte, error) {
 	f, err := a.fs.Open(path)
