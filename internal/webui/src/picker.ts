@@ -1,7 +1,8 @@
 // The folder picker (docs/13 §Design "Folder picker"): a dialog that browses live folders
 // and resolves with the chosen path, or null.
 
-import { h, icon } from "./dom.ts";
+import { h } from "./dom.ts";
+import { icon } from "./icons.ts";
 import { ls } from "./api.ts";
 import { basename, dirname } from "./util.ts";
 
@@ -57,14 +58,14 @@ export function pick(opts: PickOptions): Promise<string | null> {
       confirm.disabled = reason !== null;
       confirm.title = reason ?? "";
       list.replaceChildren();
-      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("dir"), ".."));
+      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("folder"), ".."));
       try {
         const r = await ls(cur);
         for (const e of r.entries) {
           if (e.type !== "dir" || e.deleted_at) continue;
           const path = cur === "/" ? "/" + e.name : cur + "/" + e.name;
           const why = opts.disabled(path);
-          const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("dir"), e.name);
+          const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("folder"), e.name);
           if (!why) li.addEventListener("click", () => go(path));
           list.append(li);
         }

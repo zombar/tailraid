@@ -4,6 +4,7 @@
 // deleted file; the nsfw veil; the chunk integrity panel.
 
 import { clear, h, toast } from "./dom.ts";
+import { icon } from "./icons.ts";
 import { fileURL, ls, stat, tags, text, thumbURL, trashList, type Entry, type SnapRef, type TrashEntry } from "./api.ts";
 import { basename, browseHash, bytes, dirname, ext, fileHash, join, mmss, session, src, when, type Ctx } from "./util.ts";
 import * as snaps from "./snapshots.ts";
@@ -150,8 +151,8 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
         h(
           "div",
           { class: "controls" },
-          h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, "◀ Previous"),
-          h("button", { type: "button", disabled: !next, onClick: () => go(next) }, "Next ▶"),
+          h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, icon("chevron_left"), "Previous"),
+          h("button", { type: "button", disabled: !next, onClick: () => go(next) }, "Next", icon("chevron_right")),
           h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next ? ` · next: ${next.name}` : "")),
         ),
       );
@@ -256,7 +257,7 @@ function audioCard(ctx: Ctx, name: string, entry: Entry | undefined, group: Entr
   const dirPath = dirname(ctx.path);
   const tracks = group.filter((e) => mediaKind(ext(e.name)) === "audio").map((e) => ({ path: join(dirPath, e.name), root: src(ctx) }));
   const index = Math.max(0, tracks.findIndex((t) => t.path === ctx.path));
-  const play = h("button", { type: "button", onClick: () => (tracks.length ? audio.play(tracks, index) : audio.playNow({ path: ctx.path, root: src(ctx) })) }, audio.isCurrent(ctx.path, src(ctx)) && audio.playing ? "⏸ Playing" : "▶ Play");
+  const play = h("button", { type: "button", onClick: () => (tracks.length ? audio.play(tracks, index) : audio.playNow({ path: ctx.path, root: src(ctx) })) }, ...(audio.isCurrent(ctx.path, src(ctx)) && audio.playing ? [icon("pause_fill"), "Playing"] : [icon("play_arrow_fill"), "Play"]));
   const queueBtn = h("button", { type: "button", onClick: () => audio.enqueue([{ path: ctx.path, root: src(ctx) }]) }, "Add to queue");
   const head = h("div", { class: "album-head" }, img, h("div", null, title, artist, meta, h("div", { class: "controls" }, play, queueBtn)));
   tags(ctx.path, src(ctx)).then(

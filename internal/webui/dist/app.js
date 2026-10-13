@@ -37,23 +37,46 @@ function toast(msg, cls) {
   box.append(el);
   setTimeout(() => el.remove(), 6e3);
 }
-var ICONS = {
-  dir: "M1.5 4.5h4.5l1.5 1.5h7v7.5h-13z",
-  file: "M4 1.5h5.5l3 3v10h-8.5z M9.5 1.5v3h3",
-  link: "M6.5 9.5a2.5 2.5 0 0 0 3.5 0l2.5-2.5a2.5 2.5 0 0 0-3.5-3.5L8 4.5 M9.5 6.5a2.5 2.5 0 0 0-3.5 0L3.5 9a2.5 2.5 0 0 0 3.5 3.5L8 11.5",
-  media: "M4 2.5l9 5.5-9 5.5z",
-  image: "M1.5 2.5h13v11h-13z M1.5 11l4-4 3 3 2.5-2.5 3.5 3.5"
-};
-function titleCard(title, sub2) {
-  return h("span", { class: "tcard" }, h("span", { class: "ct" }, title), sub2 ? h("span", { class: "cy" }, sub2) : null);
-}
-function icon(kind2) {
-  const el = svg("svg", { class: "icon", viewBox: "0 0 16 16" }, svg("path", { d: ICONS[kind2] ?? ICONS.file }));
-  if (kind2 === "image") el.append(svg("circle", { cx: 11, cy: 5.5, r: 1 }));
-  return el;
+function titleCard(title, sub) {
+  return h("span", { class: "tcard" }, h("span", { class: "ct" }, title), sub ? h("span", { class: "cy" }, sub) : null);
 }
 function setWidth(el, frac) {
   el.style.width = (Math.max(0, Math.min(1, frac)) * 100).toFixed(2) + "%";
+}
+
+// internal/webui/src/icons.ts
+var PATHS = {
+  folder: "M160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H447l-80-80H160v480Zm0 0v-480 480Z",
+  draft: "M240-80q-33 0-56.5-23.5T160-160v-640q0-33 23.5-56.5T240-880h320l240 240v480q0 33-23.5 56.5T720-80H240Zm280-520v-200H240v640h480v-440H520ZM240-800v200-200 640-640Z",
+  link: "M440-280H280q-83 0-141.5-58.5T80-480q0-83 58.5-141.5T280-680h160v80H280q-50 0-85 35t-35 85q0 50 35 85t85 35h160v80ZM320-440v-80h320v80H320Zm200 160v-80h160q50 0 85-35t35-85q0-50-35-85t-85-35H520v-80h160q83 0 141.5 58.5T880-480q0 83-58.5 141.5T680-280H520Z",
+  image: "M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h560q33 0 56.5 23.5T840-760v560q0 33-23.5 56.5T760-120H200Zm0-80h560v-560H200v560Zm40-80h480L570-480 450-320l-90-120-120 160Zm-40 80v-560 560Z",
+  movie: "m160-800 80 160h120l-80-160h80l80 160h120l-80-160h80l80 160h120l-80-160h120q33 0 56.5 23.5T880-720v480q0 33-23.5 56.5T800-160H160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800Zm0 240v320h640v-320H160Zm0 0v320-320Z",
+  music_note: "M400-120q-66 0-113-47t-47-113q0-66 47-113t113-47q23 0 42.5 5.5T480-418v-422h240v160H560v400q0 66-47 113t-113 47Z",
+  album: "M480-300q75 0 127.5-52.5T660-480q0-75-52.5-127.5T480-660q-75 0-127.5 52.5T300-480q0 75 52.5 127.5T480-300Zm0-140q-17 0-28.5-11.5T440-480q0-17 11.5-28.5T480-520q17 0 28.5 11.5T520-480q0 17-11.5 28.5T480-440Zm0 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z",
+  search: "M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z",
+  contrast: "M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm40-83q119-15 199.5-104.5T800-480q0-123-80.5-212.5T520-797v634Z",
+  light_mode: "M480-360q50 0 85-35t35-85q0-50-35-85t-85-35q-50 0-85 35t-35 85q0 50 35 85t85 35Zm0 80q-83 0-141.5-58.5T280-480q0-83 58.5-141.5T480-680q83 0 141.5 58.5T680-480q0 83-58.5 141.5T480-280ZM200-440H40v-80h160v80Zm720 0H760v-80h160v80ZM440-760v-160h80v160h-80Zm0 720v-160h80v160h-80ZM256-650l-101-97 57-59 96 100-52 56Zm492 496-97-101 53-55 101 97-57 59Zm-98-550 97-101 59 57-100 96-56-52ZM154-212l101-97 55 53-97 101-59-57Zm326-268Z",
+  dark_mode: "M480-120q-150 0-255-105T120-480q0-150 105-255t255-105q14 0 27.5 1t26.5 3q-41 29-65.5 75.5T444-660q0 90 63 153t153 63q55 0 101-24.5t75-65.5q2 13 3 26.5t1 27.5q0 150-105 255T480-120Zm0-80q88 0 158-48.5T740-375q-20 5-40 8t-40 3q-123 0-209.5-86.5T364-660q0-20 3-40t8-40q-78 32-126.5 102T200-480q0 116 82 198t198 82Zm-10-270Z",
+  skip_previous_fill: "M220-240v-480h80v480h-80Zm520 0L380-480l360-240v480Z",
+  play_arrow_fill: "M320-200v-560l440 280-440 280Z",
+  pause_fill: "M560-200v-560h160v560H560Zm-320 0v-560h160v560H240Z",
+  skip_next_fill: "M660-240v-480h80v480h-80Zm-440 0v-480l360 240-360 240Z",
+  repeat: "M280-80 120-240l160-160 56 58-62 62h406v-160h80v240H274l62 62-56 58Zm-80-440v-240h486l-62-62 56-58 160 160-160 160-56-58 62-62H280v160h-80Z",
+  repeat_one: "M460-360v-180h-60v-60h120v240h-60ZM280-80 120-240l160-160 56 58-62 62h406v-160h80v240H274l62 62-56 58Zm-80-440v-240h486l-62-62 56-58 160 160-160 160-56-58 62-62H280v160h-80Z",
+  shuffle: "M560-160v-80h104L537-367l57-57 126 126v-102h80v240H560Zm-344 0-56-56 504-504H560v-80h240v240h-80v-104L216-160Zm151-377L160-744l56-56 207 207-56 56Z",
+  queue_music: "M640-160q-50 0-85-35t-35-85q0-50 35-85t85-35q11 0 21 1.5t19 6.5v-328h200v80H760v360q0 50-35 85t-85 35ZM120-320v-80h320v80H120Zm0-160v-80h480v80H120Zm0-160v-80h480v80H120Z",
+  equalizer: "M160-160v-320h160v320H160Zm240 0v-640h160v640H400Zm240 0v-440h160v440H640Z",
+  close: "m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z",
+  open_in_new: "M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h280v80H200v560h560v-280h80v280q0 33-23.5 56.5T760-120H200Zm188-212-56-56 372-372H560v-80h280v280h-80v-144L388-332Z",
+  chevron_left: "M560-240 320-480l240-240 56 56-184 184 184 184-56 56Z",
+  chevron_right: "M504-480 320-664l56-56 240 240-240 240-56-56 184-184Z",
+  delete: "M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z",
+  drive_file_move: "m488-400-65 65 56 56 161-161-161-161-56 56 65 65H320v80h168ZM160-160q-33 0-56.5-23.5T80-240v-480q0-33 23.5-56.5T160-800h240l80 80h320q33 0 56.5 23.5T880-640v400q0 33-23.5 56.5T800-160H160Zm0-80h640v-400H447l-80-80H160v480Zm0 0v-480 480Z",
+  edit: "M200-200h57l391-391-57-57-391 391v57Zm-80 80v-170l528-527q12-11 26.5-17t30.5-6q16 0 31 6t26 18l55 56q12 11 17.5 26t5.5 30q0 16-5.5 30.5T817-647L290-120H120Zm640-584-56-56 56 56Zm-141 85-28-29 57 57-29-28Z",
+  playlist_add: "M120-320v-80h280v80H120Zm0-160v-80h440v80H120Zm0-160v-80h440v80H120Zm520 480v-160H480v-80h160v-160h80v160h160v80H720v160h-80Z"
+};
+function icon(name) {
+  return svg("svg", { class: "icon", viewBox: "0 -960 960 960", "aria-hidden": "true" }, svg("path", { d: PATHS[name] }));
 }
 
 // internal/webui/src/theme.ts
@@ -80,9 +103,9 @@ function next(t) {
   return NEXT[t];
 }
 var GLYPHS = {
-  system: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("circle", { cx: 8, cy: 8, r: 6 }), svg("path", { d: "M8 2a6 6 0 0 1 0 12z", fill: "currentColor", stroke: "none" })),
-  light: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("circle", { cx: 8, cy: 8, r: 3 }), svg("path", { d: "M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" })),
-  dark: () => svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d: "M13.5 9.8A6 6 0 0 1 6.2 2.5a6 6 0 1 0 7.3 7.3z" }))
+  system: () => icon("contrast"),
+  light: () => icon("light_mode"),
+  dark: () => icon("dark_mode")
 };
 function wire(button) {
   const draw = (t) => {
@@ -639,15 +662,15 @@ function card(n, share, scale) {
     }
     slots = barRow("slots", bar(n.slots / scale, tone, share.expected / scale), val);
   }
-  const meta = h("div", { class: "meta" }, h("span", null, "rtt " + (n.rtt ?? "\u2014")));
+  const meta2 = h("div", { class: "meta" }, h("span", null, "rtt " + (n.rtt ?? "\u2014")));
   if (n.s3) {
-    meta.append(h("span", null, n.s3.prefix ? `${n.s3.bucket}/${n.s3.prefix}` : n.s3.bucket));
-    if (n.s3.region) meta.append(h("span", null, n.s3.region));
+    meta2.append(h("span", null, n.s3.prefix ? `${n.s3.bucket}/${n.s3.prefix}` : n.s3.bucket));
+    if (n.s3.region) meta2.append(h("span", null, n.s3.region));
   } else {
-    meta.append(h("span", null, n.version || "?"), h("span", null, "applied " + count(n.applied)), h("span", null, `${n.addr}:${n.rpc_port}`));
+    meta2.append(h("span", null, n.version || "?"), h("span", null, "applied " + count(n.applied)), h("span", null, `${n.addr}:${n.rpc_port}`));
   }
-  meta.append(h("span", null, "joined " + shortDate(n.joined_at)));
-  return h("div", { class: "card node" + (n.self ? " self" : "") }, name, capacity, slots, meta);
+  meta2.append(h("span", null, "joined " + shortDate(n.joined_at)));
+  return h("div", { class: "card node" + (n.self ? " self" : "") }, name, capacity, slots, meta2);
 }
 
 // internal/webui/src/disks.ts
@@ -670,14 +693,14 @@ function render2(root, r) {
   const active2 = groups.filter((g) => g.targets.some((t) => t.state === "active" && t.capacity > 0));
   const perHost = targets.length / Math.max(1, groups.length);
   const layout = Number.isInteger(perHost) ? `${plural(groups.length, "host")} \xD7 ${plural(perHost, "target")}` : `${plural(groups.length, "host")}, ${plural(targets.length, "target")}`;
-  const sub2 = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
+  const sub = `survives ${plural(v.tolerates_disks, "disk")}, ${plural(v.tolerates_hosts, "host")} \xB7 ${v.auto ? "auto" : "manual"} ${v.k}+${v.m} \xB7 ${layout}`;
   const n = v.k + v.m;
   const capPer = Math.ceil(n / Math.max(1, active2.length));
   const capNote = v.domain_skew > 0 ? h("div", { class: "cap-note warn" }, `${count(v.domain_skew)} chunks above the host cap (${capPer} of ${n} slots per host) \xB7 repair is moving them`) : h("div", { class: "cap-note" }, active2.length > 1 ? `no chunk above the host cap (${capPer} of ${n} slots per host)` : `one host: every slot is on ${active2[0]?.node.name ?? "it"}`);
   const scale = Math.max(1, ...targets.map((t) => Math.max(t.slots, sh.get(t.idx)?.expected ?? 0))) * 1.1;
   const block = h("div", { class: "disks" }, spread(groups, sh), capNote);
   for (const g of groups) block.append(hostCard(g, sh, scale));
-  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub2)), block));
+  root.append(h("section", null, h("h2", null, "Disks", h("span", { class: "h-sub" }, sub)), block));
 }
 function spread(groups, sh) {
   const devs = groups.flatMap((g) => g.targets.filter((t) => t.state === "active" && !off(t)).map((t) => Math.abs(sh.get(t.idx)?.deviation ?? 0)));
@@ -820,12 +843,12 @@ function render3(root, r, history) {
   }
   root.append(section2);
 }
-function tile(label, value, sub2, tone) {
+function tile(label, value, sub, tone) {
   const zero = value === 0;
   const lab = h("div", { class: "label" });
   if (!zero) lab.append(h("span", { class: "dot " + tone }));
   lab.append(label);
-  return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub2));
+  return h("div", { class: "tile" + (zero ? " zero" : " " + tone) }, lab, h("div", { class: "value" }, count(value)), h("div", { class: "sub" }, sub));
 }
 function repair(r) {
   if (!r.repair) {
@@ -914,14 +937,14 @@ function pick(opts) {
       confirm.disabled = reason !== null;
       confirm.title = reason ?? "";
       list.replaceChildren();
-      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("dir"), ".."));
+      if (cur !== "/") list.append(h("li", { onClick: () => go(dirname(cur)) }, icon("folder"), ".."));
       try {
         const r = await ls(cur);
         for (const e of r.entries) {
           if (e.type !== "dir" || e.deleted_at) continue;
           const path = cur === "/" ? "/" + e.name : cur + "/" + e.name;
           const why = opts.disabled(path);
-          const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("dir"), e.name);
+          const li = h("li", why ? { "aria-disabled": "true", title: why } : null, icon("folder"), e.name);
           if (!why) li.addEventListener("click", () => go(path));
           list.append(li);
         }
@@ -1203,17 +1226,17 @@ function card2(m, c) {
     const frac = s.total > 0 ? s.read / s.total : 0;
     el.append(barRow("syncing", bar(frac), `${s.snapshot} \xB7 ${Math.floor(frac * 100)} % read \xB7 ${bytes(s.bytes_new)} new`));
   }
-  const meta = h("div", { class: "meta" });
+  const meta2 = h("div", { class: "meta" });
   const newest = mine[0];
   const first = mine[mine.length - 1];
-  if (newest) meta.append(h("span", null, "newest " + when(newest.at)));
-  if (first && first !== newest) meta.append(h("span", null, "first " + shortDate(first.at)));
-  if (!newest) meta.append(h("span", null, m.syncing ? "the first snapshot copies the whole volume" : "no snapshot yet"));
+  if (newest) meta2.append(h("span", null, "newest " + when(newest.at)));
+  if (first && first !== newest) meta2.append(h("span", null, "first " + shortDate(first.at)));
+  if (!newest) meta2.append(h("span", null, m.syncing ? "the first snapshot copies the whole volume" : "no snapshot yet"));
   const incomplete = mine.filter((s) => s.state === "incomplete");
-  if (incomplete.length) meta.append(h("span", null, `${incomplete.length} incomplete: ${incomplete.reduce((n, s) => n + s.missing, 0)} chunks unreadable`));
-  if (!m.online) meta.append(h("span", null, m.reason ? `${m.reason} \xB7 attach it to sync and browse` : "attach it to sync and browse"));
-  if (m.path) meta.append(h("span", null, m.path));
-  el.append(meta);
+  if (incomplete.length) meta2.append(h("span", null, `${incomplete.length} incomplete: ${incomplete.reduce((n, s) => n + s.missing, 0)} chunks unreadable`));
+  if (!m.online) meta2.append(h("span", null, m.reason ? `${m.reason} \xB7 attach it to sync and browse` : "attach it to sync and browse"));
+  if (m.path) meta2.append(h("span", null, m.path));
+  el.append(meta2);
   return el;
 }
 function schedule(c) {
@@ -1347,10 +1370,10 @@ function volume(root, r) {
   if (st) tiles.append(st);
   const s = r.search;
   if (s && (s.docs > 0 || s.pending > 0 || s.index)) {
-    let sub2 = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
-    if (s.pending > 0) sub2 += ` \xB7 ${count(s.pending)} pending`;
-    if (s.capped) sub2 += " \xB7 capped: contents no longer indexed";
-    tiles.append(tile3("Index", count(s.docs), sub2));
+    let sub = s.index ? "index unavailable on this node" : `${bytes(s.bytes)} in ${count(s.segments)} ${s.segments === 1 ? "segment" : "segments"}`;
+    if (s.pending > 0) sub += ` \xB7 ${count(s.pending)} pending`;
+    if (s.capped) sub += " \xB7 capped: contents no longer indexed";
+    tiles.append(tile3("Index", count(s.docs), sub));
   }
   const scale = Math.max(1, v.logical_bytes, v.stored_bytes);
   const used = Math.max(0, v.usable_capacity - v.free);
@@ -1364,8 +1387,8 @@ function volume(root, r) {
   );
   root.append(h("section", null, h("h2", null, "Volume"), tiles, compare2));
 }
-function tile3(label, value, sub2) {
-  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub2));
+function tile3(label, value, sub) {
+  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), h("div", { class: "sub" }, sub));
 }
 function cache(root, r) {
   const c = r.cache;
@@ -1882,24 +1905,26 @@ var Player = class {
     const cover = h("img", { class: "cover", alt: "" });
     cover.addEventListener("error", () => cover.removeAttribute("src"));
     const title = h("div", { class: "title" });
-    const sub2 = h("div", { class: "sub" });
-    const prev = h("button", { type: "button", "aria-label": "previous", onClick: () => this.prev() }, "\u23EE");
-    const playBtn = h("button", { type: "button", "aria-label": "play", onClick: () => this.toggle() }, "\u25B6");
-    const next2 = h("button", { type: "button", "aria-label": "next", onClick: () => this.next() }, "\u23ED");
+    const sub = h("div", { class: "sub" });
+    const prev = iconBtn("skip_previous_fill", "previous", () => this.prev());
+    const playBtn = iconBtn("play_arrow_fill", "play", () => this.toggle());
+    const next2 = iconBtn("skip_next_fill", "next", () => this.next());
     const seek = h("input", { type: "range", min: 0, max: 0, value: 0, "aria-label": "seek" });
     seek.addEventListener("input", () => this.seek(Number(seek.value)));
     const time = h("span", { class: "time" }, "0:00 / \u2014");
-    const repeat = h("button", { type: "button", "aria-pressed": "false", "aria-label": "repeat", onClick: () => this.cycleRepeat() }, "\u27F3");
-    const shuffle = h("button", { type: "button", "aria-pressed": "false", "aria-label": "shuffle", onClick: () => this.toggleShuffle() }, "\u292E");
+    const repeat = iconBtn("repeat", "repeat", () => this.cycleRepeat());
+    repeat.setAttribute("aria-pressed", "false");
+    const shuffle = iconBtn("shuffle", "shuffle", () => this.toggleShuffle());
+    shuffle.setAttribute("aria-pressed", "false");
     const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => {
       this.bar?.classList.toggle("expanded");
       this.notify();
-    } }, "Queue");
+    } }, icon("queue_music"), h("span", null, "Queue"));
     const bar2 = h(
       "aside",
       { class: "nowbar", hidden: true },
       cover,
-      h("div", { class: "titles" }, title, sub2),
+      h("div", { class: "titles" }, title, sub),
       h("div", { class: "transport" }, prev, playBtn, next2),
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),
@@ -1911,7 +1936,7 @@ var Player = class {
     document.body.append(bar2, queue3);
     this.bar = bar2;
     this.queueEl = queue3;
-    this.els = { cover, title, sub: sub2, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
+    this.els = { cover, title, sub, playBtn, seek, time, repeat, shuffle, queueBtn, list, summary };
   }
   notify() {
     this.drawBar();
@@ -1932,15 +1957,13 @@ var Player = class {
     }
     e.title.textContent = c.title ?? basename(c.path);
     e.sub.textContent = [c.artist, c.album].filter(Boolean).join(" \u2014 ") || ext(c.path);
-    e.playBtn.textContent = this.playing ? "\u23F8" : "\u25B6";
-    e.playBtn.setAttribute("aria-label", this.playing ? "pause" : "play");
+    face(e.playBtn, this.playing ? "pause_fill" : "play_arrow_fill", this.playing ? "pause" : "play");
     e.repeat.setAttribute("aria-pressed", this.repeat === "off" ? "false" : "true");
-    e.repeat.setAttribute("aria-label", this.repeat === "one" ? "repeat one" : this.repeat === "all" ? "repeat all" : "repeat");
-    e.repeat.textContent = this.repeat === "one" ? "\u27F31" : "\u27F3";
+    face(e.repeat, this.repeat === "one" ? "repeat_one" : "repeat", this.repeat === "one" ? "repeat one" : this.repeat === "all" ? "repeat all" : "repeat");
     e.shuffle.setAttribute("aria-pressed", this.shuffle ? "true" : "false");
     const expanded = this.bar.classList.contains("expanded");
     e.queueBtn.setAttribute("aria-pressed", expanded ? "true" : "false");
-    e.queueBtn.textContent = `Queue \xB7 ${this.queue.length}`;
+    e.queueBtn.lastElementChild.textContent = `Queue \xB7 ${this.queue.length}`;
     e.time.textContent = `${mmss(this.a.currentTime)} / ${mmss(this.a.duration || c.dur)}`;
     e.summary.textContent = `${this.queue.length} in the queue` + (this.repeat !== "off" ? ` \xB7 repeat ${this.repeat}` : "") + (this.shuffle ? " \xB7 shuffle" : "");
     if (expanded) this.drawQueue();
@@ -1954,11 +1977,11 @@ var Player = class {
       const li = h(
         "li",
         { class: "qrow" + (playing ? " playing" : "") },
-        h("span", { class: "no" }, playing ? "\u25B6" : String(n + 1)),
+        h("span", { class: "no" }, playing ? icon("equalizer") : String(n + 1)),
         h("span", { class: "title", onClick: () => this.load(qi, true) }, t.title ?? basename(t.path)),
         h("span", { class: "artist" }, t.artist ?? ""),
         h("span", { class: "dur" }, mmss(t.dur)),
-        h("button", { type: "button", "aria-label": "remove", onClick: () => this.remove(qi) }, "\xD7")
+        iconBtn("close", "remove", () => this.remove(qi))
       );
       list.append(li);
     });
@@ -1967,6 +1990,16 @@ var Player = class {
 var player = new Player();
 function isAudioName(name) {
   return ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(ext(name));
+}
+function iconBtn(name, label, onClick) {
+  const b = h("button", { type: "button", class: "icon-btn", onClick });
+  face(b, name, label);
+  return b;
+}
+function face(b, name, label) {
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  b.replaceChildren(icon(name));
 }
 
 // internal/webui/src/markdown.ts
@@ -2174,8 +2207,8 @@ function render6(root, ctx) {
         h(
           "div",
           { class: "controls" },
-          h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, "\u25C0 Previous"),
-          h("button", { type: "button", disabled: !next2, onClick: () => go(next2) }, "Next \u25B6"),
+          h("button", { type: "button", disabled: !prev, onClick: () => go(prev) }, icon("chevron_left"), "Previous"),
+          h("button", { type: "button", disabled: !next2, onClick: () => go(next2) }, "Next", icon("chevron_right")),
           h("span", { class: "track" }, `${label} ${index + 1} of ${group.length}` + (next2 ? ` \xB7 next: ${next2.name}` : ""))
         )
       );
@@ -2269,13 +2302,13 @@ function audioCard(ctx, name, entry, group) {
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, name.replace(/\.[^.]+$/, ""));
   const artist = h("div", { class: "artist" });
-  const meta = h("div", { class: "meta" });
+  const meta2 = h("div", { class: "meta" });
   const dirPath = dirname(ctx.path);
   const tracks = group.filter((e) => mediaKind(ext(e.name)) === "audio").map((e) => ({ path: join(dirPath, e.name), root: src(ctx) }));
   const index = Math.max(0, tracks.findIndex((t) => t.path === ctx.path));
-  const play = h("button", { type: "button", onClick: () => tracks.length ? player.play(tracks, index) : player.playNow({ path: ctx.path, root: src(ctx) }) }, player.isCurrent(ctx.path, src(ctx)) && player.playing ? "\u23F8 Playing" : "\u25B6 Play");
+  const play = h("button", { type: "button", onClick: () => tracks.length ? player.play(tracks, index) : player.playNow({ path: ctx.path, root: src(ctx) }) }, ...player.isCurrent(ctx.path, src(ctx)) && player.playing ? [icon("pause_fill"), "Playing"] : [icon("play_arrow_fill"), "Play"]);
   const queueBtn = h("button", { type: "button", onClick: () => player.enqueue([{ path: ctx.path, root: src(ctx) }]) }, "Add to queue");
-  const head = h("div", { class: "album-head" }, img, h("div", null, title, artist, meta, h("div", { class: "controls" }, play, queueBtn)));
+  const head = h("div", { class: "album-head" }, img, h("div", null, title, artist, meta2, h("div", { class: "controls" }, play, queueBtn)));
   tags(ctx.path, src(ctx)).then(
     (g) => {
       if (g.title) title.textContent = g.title;
@@ -2287,7 +2320,7 @@ function audioCard(ctx, name, entry, group) {
       if (entry) parts.push(ext(name), bytes(entry.size));
       const c = player.current();
       if (c && c.path === ctx.path && c.dur) parts.push(mmss(c.dur));
-      meta.replaceChildren(...parts.map((p) => h("span", null, p)));
+      meta2.replaceChildren(...parts.map((p) => h("span", null, p)));
     },
     () => void 0
   );
@@ -2658,8 +2691,8 @@ function render7(ctx, cover, entries) {
   img.addEventListener("error", () => img.removeAttribute("src"));
   const title = h("h1", null, basename(ctx.path) || "/");
   const artist = h("div", { class: "artist" });
-  const meta = h("div", { class: "meta" });
-  const head = h("div", { class: "album-head" }, img, h("div", null, title, artist, meta));
+  const meta2 = h("div", { class: "meta" });
+  const head = h("div", { class: "album-head" }, img, h("div", null, title, artist, meta2));
   const body = h("tbody");
   const table = h("table", { class: "tracks" }, body);
   const el = h("section", { class: "album" }, head, table);
@@ -2678,7 +2711,7 @@ function render7(ctx, cover, entries) {
     if (durs.size === audio.length && audio.length) parts.push(mmss(Array.from(durs.values()).reduce((s, d) => s + d, 0)));
     const exts = Array.from(new Set(audio.map((e) => ext(e.name))));
     if (exts.length) parts.push(exts.join(", "));
-    meta.replaceChildren(...parts.map((p) => h("span", null, p)));
+    meta2.replaceChildren(...parts.map((p) => h("span", null, p)));
   };
   const drawRow = (i) => {
     const e = audio[i];
@@ -2691,7 +2724,7 @@ function render7(ctx, cover, entries) {
     tr.className = playing ? "playing" : "";
     const titleCell = h("td", { class: "title" }, g?.title || stem);
     if (g?.title && g.title !== stem) titleCell.append(" ", h("span", { class: "small dim" }, e.name));
-    tr.replaceChildren(h("td", { class: "no" }, playing ? "\u25B6" : String(no)), titleCell, h("td", { class: "dur" }, mmss(durs.get(i))));
+    tr.replaceChildren(h("td", { class: "no" }, playing ? icon("equalizer") : String(no)), titleCell, h("td", { class: "dur" }, mmss(durs.get(i))));
   };
   audio.forEach((_, i) => {
     const tr = h("tr");
@@ -2958,7 +2991,7 @@ function render8(root, ctx) {
   };
   const folderForm = () => {
     const name = h("input", { type: "text", placeholder: "folder name", "aria-label": "folder name", autofocus: true });
-    const form = h("form", { class: "inline-form" }, icon("dir"), name, h("button", { type: "submit" }, "Create"), h("button", { type: "button", onClick: () => {
+    const form = h("form", { class: "inline-form" }, icon("folder"), name, h("button", { type: "submit" }, "Create"), h("button", { type: "button", onClick: () => {
       formOpen = false;
       draw();
     } }, "Cancel"));
@@ -3042,20 +3075,22 @@ function render8(root, ctx) {
   })();
   const linkOf = (e) => {
     const path = pathOf(e);
-    if (e.deleted_at) return e.type === "dir" ? { href: `#/trash/${e.ino}/`, kind: "dir" } : { href: `#/trashfile/${e.ino}/`, kind: iconFor(e.name) };
-    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root, at: ctx.at }), kind: "dir" };
+    if (e.deleted_at) return e.type === "dir" ? { href: `#/trash/${e.ino}/`, kind: "folder" } : { href: `#/trashfile/${e.ino}/`, kind: iconFor(e.name) };
+    if (e.type === "dir") return { href: browseHash({ path, root: ctx.root, at: ctx.at }), kind: "folder" };
     return { href: fileHash({ path, root: ctx.root, at: ctx.at }), kind: iconFor(e.name) };
   };
-  const playBtn = (e) => {
+  const playBtn = (e, tile5 = false) => {
     const t = { path: pathOf(e), root: e.deleted_at ? e.ino : source };
     if (e.deleted_at) t.path = "/";
     const now = player.isCurrent(t.path, t.root) && player.playing;
-    return h("button", { type: "button", class: "play", onClick: (ev) => {
+    const b = h("button", { type: "button", class: tile5 ? "play icon-btn" : "play", onClick: (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       if (player.isCurrent(t.path, t.root)) player.toggle();
       else playFrom(e);
-    } }, now ? "\u23F8 Playing" : "\u25B6 Play");
+    } });
+    playFace(b, now);
+    return b;
   };
   const playFrom = (e) => {
     const tracks = sorted(entries).filter((x) => !x.deleted_at && x.type === "file" && isAudioName(x.name)).map((x) => ({ path: pathOf(x), root: source }));
@@ -3102,7 +3137,7 @@ function render8(root, ctx) {
     const { href, kind: kind2 } = linkOf(e);
     let link;
     if (e.type === "symlink") link = h("span", { class: "linkname" }, icon("link"), e.name + " ", h("span", { class: "target" }, "\u2192 " + (e.target ?? "")));
-    else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("file"), e.name);
+    else if (e.upload) link = h("span", { class: "dim", title: "an upload in progress, or one that was not resumed" }, icon("draft"), e.name);
     else {
       link = h("a", { href }, icon(kind2), e.name);
       if (e.protected) link.append(h("span", { class: "badge lock" }, "protected"));
@@ -3137,11 +3172,12 @@ function render8(root, ctx) {
       const tp = e.deleted_at ? e.type === "dir" && e.cover ? "/" + e.cover : "/" : thumbPath;
       lazy(img, e, tp, root2, e.type === "dir" ? e.cover ? "audio" : "dir" : kindOf, showIcon);
     } else showIcon();
-    const meta = h("span", { class: "tmeta" });
-    if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
+    if (e.type === "file") thumb.append(h("span", { class: "ov br" }, bytes(e.size)));
+    const kindWord = e.type === "dir" ? "folder" : e.type === "symlink" ? "link" : ext(e.name).toLowerCase() || "file";
+    const meta2 = h("span", { class: "tmeta" }, h("span", null, kindWord), h("span", { title: e.mtime }, when(e.mtime)));
     const cls = ["ftile", e.type === "dir" ? "dir" : "", sel.has(e.name) ? "selected" : "", e.dirty ? "dirty" : "", e.deleted_at ? "deleted" : "", e.type === "file" && player.isCurrent(path, source) ? "playing" : ""].filter(Boolean).join(" ");
-    const a = h("a", { class: cls, href, "data-name": e.name }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta);
-    if (e.type === "file" && isAudioName(e.name) && !e.upload) a.insertBefore(playBtn(e), a.querySelector(".tname"));
+    const a = h("a", { class: cls, href, "data-name": e.name }, selectBox(e, "sel"), badges(e), thumb, h("span", { class: "tname", title: e.name }, e.name), meta2);
+    if (e.type === "file" && isAudioName(e.name) && !e.upload) thumb.append(playBtn(e, true));
     if (thumb.classList.contains("nsfw")) {
       thumb.addEventListener("click", (ev) => {
         if (thumb.classList.contains("revealed")) return;
@@ -3161,13 +3197,13 @@ function render8(root, ctx) {
     }
     const chosen = entries.filter((e) => names.includes(e.name) && !e.deleted_at);
     const protectedBy = info.protected ? dir.split("/").filter(Boolean).pop() ?? "/" : chosen.some((e) => e.protected) ? chosen.find((e) => e.protected).name : null;
-    const delBtn = h("button", { type: "button", onClick: () => void doDelete(chosen) }, "Delete");
-    const mvBtn = h("button", { type: "button", onClick: () => void doMove(chosen) }, "Move to\u2026");
-    const rnBtn = h("button", { type: "button", onClick: () => {
+    const delBtn = action("delete", "Delete", () => void doDelete(chosen));
+    const mvBtn = action("drive_file_move", "Move to\u2026", () => void doMove(chosen));
+    const rnBtn = action("edit", "Rename", () => {
       renaming = chosen[0].name;
       formOpen = false;
       draw();
-    } }, "Rename");
+    });
     if (protectedBy || inTrash) {
       delBtn.disabled = mvBtn.disabled = true;
       const why = inTrash ? "restore the folder first" : `protected: unprotect ${protectedBy} to`;
@@ -3180,9 +3216,9 @@ function render8(root, ctx) {
     }
     bar2.append(h("span", { class: "count" }, `${chosen.length} selected`), delBtn, mvBtn, rnBtn);
     if (chosen.length && chosen.every((e) => e.type === "dir" || isAudioName(e.name))) {
-      bar2.append(h("button", { type: "button", onClick: () => void playSelection(chosen, false) }, "Play"), h("button", { type: "button", onClick: () => void playSelection(chosen, true) }, "Add to queue"));
+      bar2.append(action("play_arrow_fill", "Play", () => void playSelection(chosen, false)), action("playlist_add", "Add to queue", () => void playSelection(chosen, true)));
     }
-    bar2.append(h("span", { class: "spacer" }), h("button", { type: "button", onClick: () => sel.clear() }, "Clear"));
+    bar2.append(h("span", { class: "spacer" }), action("close", "Clear", () => sel.clear()));
     return bar2;
   };
   const playSelection = async (chosen, append2) => {
@@ -3296,7 +3332,7 @@ function render8(root, ctx) {
       const mine = here !== "" && el.dataset["name"] === here;
       el.classList.toggle("playing", mine);
       const b = el.querySelector("button.play");
-      if (b) b.textContent = mine && player.playing ? "\u23F8 Playing" : "\u25B6 Play";
+      if (b) playFace(b, mine && player.playing);
     }
   });
   onQueueChange = draw;
@@ -3346,12 +3382,23 @@ function crumbsAll(ctx, asOf) {
   if (asOf) el.append(h("span", { class: "badge" }, "as of " + asOf));
   return el;
 }
+function playFace(b, now) {
+  const label = now ? "Playing" : "Play";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  b.replaceChildren(icon(now ? "pause_fill" : "play_arrow_fill"));
+  if (!b.classList.contains("icon-btn")) b.append(h("span", null, label));
+}
+function action(name, label, onClick) {
+  return h("button", { type: "button", "aria-label": label, title: label, onClick }, icon(name), h("span", null, label));
+}
 function iconFor(name, dir = false) {
-  if (dir) return "dir";
+  if (dir) return "folder";
   const k = mediaKind(ext(name));
   if (k === "image") return "image";
-  if (k === "video" || k === "audio") return "media";
-  return "file";
+  if (k === "video") return "movie";
+  if (k === "audio") return "music_note";
+  return "draft";
 }
 function compare(a, b, s) {
   const da = a.type === "dir" ? 0 : 1;
@@ -3445,12 +3492,12 @@ function render9(root, query) {
   const charts = h("div", { class: "charts" });
   const head = h("section", null, h("h2", null, "Stats", h("span", { class: "h-sub" }, "")), toolbar, form);
   root.append(head, charts);
-  const sub2 = head.querySelector(".h-sub");
+  const sub = head.querySelector(".h-sub");
   const drawMembers = (nodes, current) => {
     clear(body);
     const row2 = (name, label, dot, note, m) => {
       const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
-      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name }, "\u2197"));
+      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name, "aria-label": "open on " + m.name }, icon("open_in_new")));
       body.append(el);
     };
     row2("all", "all nodes", "off", "one series per member");
@@ -3467,7 +3514,7 @@ function render9(root, query) {
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
     drawMembers(f.nodes, nodeName);
     const span = f.range.to - f.range.from;
-    sub2.textContent = `${f.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (f.range.live ? " \xB7 refreshes every 5 s while live" : "");
+    sub.textContent = `${f.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (f.range.live ? " \xB7 refreshes every 5 s while live" : "");
   };
   const frames = (list) => {
     cards.clear();
@@ -3684,8 +3731,8 @@ function render10(root, q, params) {
   const section2 = h("section", { class: "results" });
   root.append(section2);
   const scope = under || folder2;
-  const sub2 = h("span", { class: "h-sub" }, "searching\u2026");
-  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub2), h("span", { class: "spacer" }));
+  const sub = h("span", { class: "h-sub" }, "searching\u2026");
+  const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub), h("span", { class: "spacer" }));
   if (scope !== "/") {
     const toggle = h("input", { type: "checkbox", checked: under !== "" });
     toggle.addEventListener("change", () => location.replace(searchHash(q, toggle.checked ? scope : "")));
@@ -3729,8 +3776,8 @@ function render10(root, q, params) {
   search(q, under).then(
     (res) => {
       if (abort.signal.aborted) return;
-      clear(sub2);
-      sub2.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
+      clear(sub);
+      sub.append(`${res.hits.length} ${res.hits.length === 1 ? "hit" : "hits"} for `, h("code", null, q));
       if (res.index) section2.append(h("div", { class: "note" }, "index unavailable on this node: names only until the leader's next pass"));
       if (res.hits.length === 0) {
         const empty = h("div", { class: "empty" }, "no matches for ", h("code", null, q));
@@ -3743,7 +3790,7 @@ function render10(root, q, params) {
       section2.append(ol);
     },
     (e) => {
-      if (!abort.signal.aborted) sub2.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
+      if (!abort.signal.aborted) sub.textContent = "search failed: " + (e instanceof Error ? e.message : String(e));
     }
   );
   return () => {
@@ -3771,8 +3818,7 @@ function cardSub(it) {
   return it.year ? String(it.year) : void 0;
 }
 function glyph(kind2) {
-  const d = kind2 === "album" ? "M6 12.5V3.5l7-1.5v9 M2 12.5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M9 11a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" : kind2 === "episode" ? "M4 2.5l9 5.5-9 5.5z" : "M1.5 3.5h13v9h-13z M4 3.5v9 M12 3.5v9 M1.5 6h2.5 M1.5 10h2.5 M12 6h2.5 M12 10h2.5";
-  return svg("svg", { class: "icon", viewBox: "0 0 16 16", "aria-hidden": "true" }, svg("path", { d }));
+  return icon(kind2 === "album" ? "album" : "movie");
 }
 function duration2(min) {
   if (!min) return "";
@@ -3792,23 +3838,27 @@ function frameOf(img, it, onMiss) {
   lazy(img, { ino: it.video_ino, version: it.video_version ?? 0, thumb: it.video_thumb }, it.video, void 0, "video", onMiss);
   return true;
 }
-function sub(it) {
-  if (it.kind === "album") return [it.artist, it.year].filter(Boolean).join(" \xB7 ");
-  const parts = [];
-  if (it.year) parts.push(String(it.year));
-  if (it.kind === "show" && it.children) parts.push(`${it.children} ${it.children === 1 ? "season" : "seasons"}`);
-  if (it.kind === "platform") parts.push(`${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`);
-  if (it.kind === "movie") parts.push(it.runtime ? duration2(it.runtime) : it.plot ? "" : "no sidecar");
-  return parts.filter(Boolean).join(" \xB7 ");
+function meta(it) {
+  if (it.kind === "album") return [it.artist ?? "", it.year ? String(it.year) : ""];
+  return [it.year ? String(it.year) : "", it.kind === "movie" && !it.runtime && !it.plot ? "no sidecar" : ""];
 }
+function fact(it) {
+  if (it.kind === "movie" && it.runtime) return duration2(it.runtime);
+  if (it.kind === "show" && it.children) return `${it.children} ${it.children === 1 ? "season" : "seasons"}`;
+  if (it.kind === "platform") return `${it.children ?? 0} ${it.children === 1 ? "game" : "games"}`;
+  return "";
+}
+var metaSpans = (it) => meta(it).map((t) => h("span", null, t));
 function posterTile(it) {
   const veiled = it.nsfw && !session.get("tr.revealed", false);
   const box = h("span", { class: "art" });
-  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, veiled ? "nsfw \xB7 tap to show" : sub(it));
+  const chip = fact(it) ? h("span", { class: "ov br" }, fact(it)) : null;
+  const below = it.kind === "game" && !veiled ? chips(it) : h("span", { class: "pyear" }, ...veiled ? [h("span", null, "nsfw \xB7 tap to show")] : metaSpans(it));
   const a = h("a", { class: "poster" + (veiled ? " nsfw" : ""), href: itemHash(it) }, box, h("span", { class: "ptitle", title: it.title }, it.title), below);
   const missing = () => {
     clear(box);
     box.append(it.kind === "album" ? glyph(it.kind) : titleCard(it.title, cardSub(it)));
+    if (chip) box.append(chip);
     if (it.kind !== "platform") a.classList.add("missing");
   };
   const src2 = art(it);
@@ -3819,13 +3869,14 @@ function posterTile(it) {
     img.addEventListener("error", missing);
     box.append(img);
   } else missing();
+  if (chip && !box.contains(chip)) box.append(chip);
   if (veiled) {
     a.addEventListener("click", (ev) => {
       if (!a.classList.contains("nsfw")) return;
       ev.preventDefault();
       session.set("tr.revealed", true);
       a.classList.remove("nsfw");
-      a.querySelector(".pyear").textContent = sub(it);
+      a.querySelector(".pyear").replaceChildren(...metaSpans(it));
     });
   }
   return a;
@@ -4011,7 +4062,7 @@ function detail(root, path) {
         body.append(h("p", { class: "plot dim" }, "No description: add a ", h("code", null, sidecar), it.kind === "show" ? " to the show's folder." : " beside the file."));
       }
       const first = seasons.find((s) => s.n > 0)?.episodes[0] ?? seasons[0]?.episodes[0];
-      const play = h("button", { type: "button" }, it.kind === "show" ? first ? `\u25B6 Play ${episodeNo(first)}` : "\u25B6 Play" : "\u25B6 Play");
+      const play = h("button", { type: "button" }, icon("play_arrow_fill"), it.kind === "show" && first ? `Play ${episodeNo(first)}` : "Play");
       const target = it.kind === "show" ? first?.path : it.video;
       if (target) play.addEventListener("click", () => location.hash = fileHash({ path: target }));
       else play.disabled = true;

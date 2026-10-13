@@ -705,7 +705,7 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Rename form | `.inline-form.rename` | the new-folder form with the entry's name pre-filled and selected up to the extension |
 | Deleted row / tile | `tr.deleted`, `.ftile.deleted` | dimmed to `--dim`, a `.badge` "deleted · 27 d" after the name, no dirty marker, links lead into the trash routes |
 | Trash banner | `.banner.deleted` > text + `.actions` (Restore · Delete now) | above a deleted folder's listing and a deleted file's view: "Deleted 3 d ago · gone for good in 27 d"; after a 409 the text becomes "`Day 2` is taken in `Concerts 2024` · restore under another name" and the rename form takes the banner's next line (no nested box), or the picker opens for a parent that is itself deleted |
-| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img` or the icon, `.ov.br` the duration, else the size or the item count, `.ov.bl` the playing marker, the play button in the middle) + `.tname` + `.tmeta` (kind left, modified right) | a media card: the picture edge to edge with an 8 px radius, no frame or padding, one line of title (ellipsis), one line of meta; `auto-fill, minmax(min(196px, 100%), 1fr)` with 24 px between rows and 16 px between columns (`minmax(min(140px, 100%), 1fr)`, 16/12 px below 600 px); the thumb is 16:9, cropped to fill; hover lifts it with `--shadow`; `selected` rings it in the accent; `dir`, `dirty` (amber "· syncing" after the meta), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (badges on `--overlay` in the top corner), `playing` (audio) |
+| File tile | `.ftiles` > `a.ftile` > `.thumb` (`img` or the icon, `.ov.br` a file's size, `.ov.bl` the playing marker, the play button in the middle) + `.tname` + `.tmeta` (kind left, modified right) | a media card: the picture edge to edge with an 8 px radius, no frame or padding, one line of title (ellipsis), one line of meta; `auto-fill, minmax(min(196px, 100%), 1fr)` with 24 px between rows and 16 px between columns (`minmax(min(140px, 100%), 1fr)`, 16/12 px below 600 px); the thumb is 16:9, cropped to fill; hover lifts it with `--shadow`; `selected` rings it in the accent; `dir`, `dirty` (amber "· syncing" after the meta), `deleted`, `nsfw` (blurred thumb), `protected` and `pinned` (badges on `--overlay` in the top corner), `playing` (audio) |
 | NSFW veil | `.thumb.nsfw`, `.viewer.nsfw` > `.veil` | `filter: blur(14px) scale(1.1)` inside `overflow: hidden`; the veil reads "nsfw · tap to show"; `.revealed` removes both for the session |
 | Album | `section.album` > `.album-head` (`img.cover`, `h1`, `.artist`, `.meta`) + `table.tracks` (`.no`, `.title`, `.dur`) | the playing row is `tr.playing` with the equaliser glyph in `.no`; "Play all" and "Shuffle" are toolbar buttons |
 | Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, `--nowbar-h` tall (64 px on one row from 840 px, 120 px on two rows below; see *Layout*), hidden until something plays (`hidden`); the transport, the modes and the queue's remove are icon buttons; `expanded` shows the queue panel above it; below 600 px the cover shrinks to 40 px; the selection bar sits above it when both show |
@@ -759,7 +759,7 @@ caption says what it is and over what window. Every bar has a text value; nothin
 colour-alone. No dual axes, no stacked bars, no pie.
 
 **The Stats page adds the soak report's charts** (docs/09 §6, `internal/chart`): lines
-over a shared time axis with dashed event markers, liveness lanes, the disk-spread lanes
+over a shared time axis with dashed event markers (their labels in a lane under the axis, below), liveness lanes, the disk-spread lanes
 with their seven deviation bins and the hatched `dead` pattern, and bars. They keep the
 report's information (every series, band, marker, bin and tooltip) and take this page's
 look: the package emits no colour at all, only classes (`title`, `tick`, `grid`, `marker`,
@@ -772,6 +772,15 @@ chart per row at every width. The rules above stand around them: a series hue is
 status, every lane and cell has a `<title>` with its value, the caption says what the chart
 is, its unit and its window; the one thing the page asks of the drawing that the report
 does not is a clock time axis in place of seconds since the run started (I-197).
+
+**Event labels** (I-297). A marker is a dashed line over the plot; its label never
+covers the plot. The labels sit in a lane of three rows under the time axis, in 10 px
+text, always reserved so a chart is as tall with events as without (the Stats page draws
+its frame at `chart.LineHeight` before the events arrive). A label starts at its marker,
+or slides right by at most 64 units (of the chart's 760) to clear the label before it in
+its row, with a thin leader from the axis to it. A label that fits in no row joins the one
+before it as "repair pass end +4", and its tooltip names every event it carries. Exact
+placement gives way to legible text: the dashed line keeps the event's true time.
 
 ## Manual checks (real tailnet, before a release)
 
@@ -865,6 +874,11 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 
 ## Invariants
 
+- **I-297** — A line chart draws no event label over its plot: the labels sit in a
+  three-row lane under the time axis, reserved whatever the events; in the lane no two
+  overlap or leave the chart, a label starts at most 64 units right of its marker (or
+  is pulled back over it at the right edge), and every event is named once, as a label
+  or in the tooltip of the "+N" label before it.
 - **I-283** — No rule of `app.css` outside its token blocks names a colour (hex, a colour
   function or a colour keyword); a token block sets only custom properties and
   `color-scheme`. The one literal is the hero's alpha mask.
@@ -1115,6 +1129,7 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
+| I-297 | `TestChart_MarkLabels_Lane_Table`, `TestChart_Line_MarkLabelsBelowAxis_HeightFixed` |
 | I-283 | `TestCSS_ColoursOnlyInTokens`, `TestCSS_HasColour_Table` |
 | I-284 | `TestCSS_ThemesDefineTheSameTokens` |
 | I-285 | `TestCSS_VarsDefinedAndUsed` |
@@ -1125,6 +1140,6 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 | I-290 | `TestCSS_AutoFillMinimumsClamp` (manual check 25) |
 | I-291 | `TestCSS_ZLayers` |
 | I-292 | `TestCSS_FontScale` |
-| I-293 | stub `TestStub_I_293` until the TypeScript lands its icons (manual check 26) |
+| I-293 | `TestIcons_MaterialSymbolsOnly`, `TestIcons_EmojiProne_Table` (manual check 26) |
 
 `TestWebUI_Ls_Stat`, `TestWebUI_Ls_MarksUploads` and `TestWebUI_Chunks` cover the listing and paging shapes of §3.

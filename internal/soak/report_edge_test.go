@@ -104,8 +104,8 @@ func TestCharts_NaNEmptySingle(t *testing.T) {
 			t.Fatalf("chart contains %s", bad)
 		}
 	}
-	// the full label stays in the marker's tooltip; the drawn text is cut
-	if strings.Count(svg, long) != 1 || !strings.Contains(svg, `class="marklabel"`) || !strings.Contains(svg, "…</text>") {
+	// the full label stays in the marker's and the label's tooltips; the drawn text is cut
+	if strings.Count(svg, long) != 2 || !strings.Contains(svg, `class="marklabel"`) || !strings.Contains(svg, "…</text>") {
 		t.Fatal("the long marker label was not truncated in the drawn text")
 	}
 	if !strings.Contains(svg, "<svg") || !strings.Contains(svg, "<path") {

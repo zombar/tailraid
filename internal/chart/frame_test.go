@@ -38,7 +38,7 @@ func TestChart_Frame(t *testing.T) {
 	}
 	// the drawn chart of the same title and height has the same viewBox
 	line := Line("Chunks", "chunks", []Series{{Name: "live chunks", Points: [][2]float64{{0, 1}, {1, 2}}}}, nil, nil, Axis{})
-	h := Height + LegendHeight([]string{"live chunks"})
+	h := LineHeight([]string{"live chunks"})
 	if !strings.Contains(line, `viewBox="0 0 760 `+strconv.Itoa(h)+`"`) || !strings.Contains(Frame("Chunks", h), `viewBox="0 0 760 `+strconv.Itoa(h)+`"`) {
 		t.Errorf("a line chart and its frame differ in height (want %d)", h)
 	}

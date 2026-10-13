@@ -1,6 +1,7 @@
 package chart
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"regexp"
@@ -210,7 +211,7 @@ func TestChart_LegendWrap_Table(t *testing.T) {
 		if m == nil {
 			t.Fatalf("%d series: no viewBox", tc.n)
 		}
-		want := Height
+		want := Height + markLane
 		if tc.rows > 0 {
 			want += 6 + tc.rows*legendRow
 		}
@@ -309,5 +310,93 @@ func TestChart_AxisSpan(t *testing.T) {
 	pinned := Line("t", "y", ss, nil, nil, Axis{Span: 600})
 	if !strings.Contains(pinned, `>600s</text>`) || !strings.Contains(pinned, `>500s</text>`) {
 		t.Error("with a span the axis ends at the span")
+	}
+}
+
+// The event labels sit in the lane under the time axis, never over the plot: in the lane
+// no two overlap or leave the chart, a label stays within markShift of its marker (or is
+// pulled back over it at the right edge), and every event is named once, as a label or in
+// a "+N" label's tooltip. The cases include the Stats page's dense burst (a leader change
+// and five repair passes within a few pixels) that once drew its labels over each other.
+// Invariant: I-297
+func TestChart_MarkLabels_Lane_Table(t *testing.T) {
+	burst := func(n int, x0, step float64) ([]float64, []Marker) {
+		var xs []float64
+		var ms []Marker
+		for i := range n {
+			xs = append(xs, x0+float64(i)*step)
+			ms = append(ms, Marker{Label: []string{"repair pass start", "repair pass end", "leader honker (term 12)"}[i%3]})
+		}
+		return xs, ms
+	}
+	cases := map[string]func() ([]float64, []Marker){
+		"none":       func() ([]float64, []Marker) { return nil, nil },
+		"one":        func() ([]float64, []Marker) { return burst(1, 300, 0) },
+		"spread":     func() ([]float64, []Marker) { return burst(4, 100, 150) },
+		"same x":     func() ([]float64, []Marker) { return burst(12, 300, 0) },
+		"dense":      func() ([]float64, []Marker) { return burst(12, 200, 3) },
+		"right edge": func() ([]float64, []Marker) { return burst(5, Width-padR-2, 1) },
+		"left edge":  func() ([]float64, []Marker) { return burst(3, padL, 0) },
+		"long label": func() ([]float64, []Marker) {
+			return []float64{300, 302}, []Marker{{Label: strings.Repeat("w", 90)}, {Label: "x"}}
+		},
+	}
+	for name, mk := range cases {
+		xs, ms := mk()
+		ls := placeMarks(xs, ms)
+		named := 0
+		for i, l := range ls {
+			named += len(l.all)
+			w := float64(len([]rune(truncate(l.all[0], markerLabelMax))))*markChar + markPlus
+			if l.lx < 0 || l.lx+w > float64(Width-padR)+0.01 {
+				t.Errorf("%s: label %q at %.1f..%.1f leaves the chart", name, l.all[0], l.lx, l.lx+w)
+			}
+			if l.lx-l.x > markShift+0.01 {
+				t.Errorf("%s: label %q slid %.1f from its marker", name, l.all[0], l.lx-l.x)
+			}
+			if l.row < 0 || l.row >= markRows {
+				t.Errorf("%s: row %d", name, l.row)
+			}
+			for _, o := range ls[:i] {
+				ow := float64(len([]rune(truncate(o.all[0], markerLabelMax))))*markChar + markPlus
+				if o.row == l.row && l.lx < o.lx+ow && o.lx < l.lx+w {
+					t.Errorf("%s: %q and %q overlap in row %d", name, o.all[0], l.all[0], l.row)
+				}
+			}
+		}
+		if named != len(ms) {
+			t.Errorf("%s: %d events named, want %d", name, named, len(ms))
+		}
+	}
+}
+
+// A line chart is as tall with events as without (the Stats page draws its frame at
+// LineHeight before the events are known), and its labels are drawn below the time axis,
+// unrotated.
+// Invariant: I-297
+func TestChart_Line_MarkLabelsBelowAxis_HeightFixed(t *testing.T) {
+	ss := []Series{{Name: "a", Points: [][2]float64{{0, 1}, {10, 2}}}}
+	var marks []Marker
+	for i := range 9 {
+		marks = append(marks, Marker{X: 4 + float64(i)*0.05, Label: "repair pass end"})
+	}
+	want := fmt.Sprintf(`viewBox="0 0 %d %d"`, Width, LineHeight([]string{"a"}))
+	for _, m := range [][]Marker{nil, marks} {
+		svg := Line("t", "y", ss, m, nil, Axis{})
+		if !strings.Contains(svg, want) {
+			t.Errorf("%d marks: want %s in %.120s", len(m), want, svg)
+		}
+		if strings.Contains(svg, `class="marklabel" transform="rotate`) {
+			t.Error("an event label is rotated")
+		}
+		for _, y := range regexp.MustCompile(`<text x="[\d.]+" y="(\d+)" class="marklabel"><title>`).FindAllStringSubmatch(svg, -1) {
+			if v, _ := strconv.Atoi(y[1]); v <= Height-padB+16 {
+				t.Errorf("an event label at y=%d sits over the plot or the ticks", v)
+			}
+		}
+	}
+	svg := Line("t", "y", ss, marks, nil, Axis{})
+	if !strings.Contains(svg, " +") || !strings.Contains(svg, "repair pass end\nrepair pass end") {
+		t.Error("nine events within a few pixels: want a +N label whose tooltip names them")
 	}
 }
