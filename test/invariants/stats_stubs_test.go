@@ -13,3 +13,13 @@ import "testing"
 func TestStub_I_195(t *testing.T) {
 	t.Skip("stub: /.tailraid is ephemeral once the trash lands (docs/02, docs/06)")
 }
+
+// Invariant: I-258
+func TestStub_I_258(t *testing.T) {
+	t.Skip("stub: /api/stats?stream=1 writes the frames first, then a line per chart (docs/17 §3)")
+}
+
+// Invariant: I-259
+func TestStub_I_259(t *testing.T) {
+	t.Skip("stub: the Stats page draws the frames first and refreshes only the charts on screen (docs/17 §4)")
+}

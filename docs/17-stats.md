@@ -150,6 +150,22 @@ Two routes carry the series out:
   4. answers `{"range":{"from","to","tier","step"},"nodes":[…],"charts":[{"id","title","svg"}]}`
      (I-196).
 
+   With `stream=1` (what the page asks for; measured 2026-10-13 on the real cluster: the
+   whole reply was 0.6 MB for an hour and 1.9 MB for a day, 0.4–2.3 s before the page
+   showed anything) the same reply comes as NDJSON, one JSON object a line, flushed as
+   each is ready (I-258):
+   - the **first line** is `{"range","nodes","charts":[{"id","title","frame"}]}`, written
+     before any row is read or any member asked: the tier follows from the range and the
+     configuration, the chart list from the node selection, and each `frame` is the
+     chart's empty SVG from `internal/chart` (`class="chart pending"`, the chart's own
+     `viewBox`, its title, a dashed `frame` rect and a `note` saying "loading");
+   - then the rows are read and merged once, as in steps 1–3, and each chart is rendered
+     and written as its own line `{"id","svg","caption"}` in the order of the first line;
+   - a chart that cannot be drawn is a line `{"id","error"}`, and a failure before any
+     chart a last line `{"error"}`; the reply's status is 200 once the first line went out.
+   `ids=<id,…>` limits the charts rendered to those named (the first line still lists
+   every chart), so a live refresh redraws only what is on screen.
+
 No CLI reads the series: the rule stays `status --json` for the photograph and the page
 for the film. The one command is `tailraid stats seal` (§7).
 
@@ -166,6 +182,15 @@ axis: the report prints seconds since the run started, the page prints clock tim
 (`HH:MM` within a day, `MM-DD HH:MM` beyond), an option of the shared helpers. Markers come
 from the cluster rows: a leader change (`term`), a device going dead or live, a repair
 pass starting and ending.
+
+The page asks for the stream (§3): it draws every chart's frame from the first line at
+once, each at the size its chart will have, and replaces a frame with its chart as that
+chart's line arrives, so the page is laid out before any row is read and nothing moves
+as the charts come in; the range pill says `loading` until the last line, and a chart
+that could not be drawn keeps its frame with the reason (`class="chart pending failed"`,
+the note in the bad colour). A live refresh, every 5 s, streams again with `ids=` the
+charts at least partly on screen, and leaves the others as they were drawn (I-259). The
+lookdev's first Stats section shows the page part-way in.
 
 The page itself, its range picker, refresh rule, member dropdown and theme switch, is
 13 §1 and 13 §Design (I-198, I-200). Its sections and charts:
@@ -278,6 +303,15 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
   zero or a carried-forward value, and is not asked again for 30 s; node rows are
   deduplicated by `(node, t)` and cluster rows keep the highest term per `t`; the parsed
   cache never exceeds `stats.cache` and the stats reader fills no chunk cache.
+- **I-258** — With `stream=1`, `/api/stats` writes and flushes its first line (the range,
+  the members and every chart's id, title and empty frame) before reading any row or
+  asking any member, then one line per chart in that order, each the chart I-196 renders
+  for the same range, or that chart's error; `ids=` limits the charts rendered, never the
+  first line; the frame of a chart has the chart's own `viewBox`.
+- **I-259** — The Stats page draws every frame of the first line before any chart arrives,
+  replaces each frame with its chart as its line arrives, keeps a failed chart's frame
+  with its reason, and on a live refresh asks only for the charts at least partly on
+  screen.
 
 ## Tests
 
@@ -287,6 +321,8 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 | I-192 | `TestRowCodec_RoundTrip`, `TestRowCodec_Empty_And_Garbage`, `FuzzRowCodec`, `TestSegmentName_RoundTrip_Table`, `TestWriter_SealsAtBoundary_NamesPartialHours`, `TestWriter_SpillAndRecover`, `TestService_Run_SealsAtHour`, `TestService_Seal_RollupAndPrune`, `TestStats_SealVisibleFromSecondGateway`, `TestAdminOp_StatsSeal`, `TestCLI_StatsSeal`, `TestSoak_AllPhasesAgainstHarness` (phase 20), `TestPhaseStats_SkipsWithoutSampler` |
 | I-193 | `TestTier_PeriodOf`, `TestRollup_DeterministicAcrossNodes`, `TestRollup_Rules`, `TestWriter_RollupDay_MonthRebuild_CatchUp`, `TestService_Seal_RollupAndPrune`, `TestSoak_AllPhasesAgainstHarness` (phase 20) |
 | I-194 | `TestSegment_Expired_Table`, `TestWriter_Retain_AnyWriter_Table`, `TestStats_Retention_RemovedMemberSegment`, `TestConfig_StatsKeys_Table`, `TestService_Seal_RollupAndPrune`, `TestSoak_AllPhasesAgainstHarness` (phase 20) |
+| I-258 | stub in `test/invariants/stats_stubs_test.go` until PR stats-stream |
+| I-259 | stub in `test/invariants/stats_stubs_test.go` until PR stats-stream |
 | I-196 | `TestStatsQuery_TierChoice_Table`, `TestStatsQuery_NameWindowAndRowFilter`, `TestStatsQuery_CacheBound_Table`, `TestStatsQuery_FanOut_TimeoutIsGap_BackOff`, `TestStatsQuery_Dedup_TermRule_Seeded`, `TestStatsQuery_Downsample_Points_Table`, `TestStatsQuery_Charts`, `TestWebUI_Stats_Route`, `TestStats_SealVisibleFromSecondGateway` (the cache-less reader) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (09 §2).

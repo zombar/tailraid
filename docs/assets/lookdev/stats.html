@@ -56,6 +56,34 @@
     <form class="inline-form range"><label>from <input type="datetime-local" value="2026-10-11T08:00" aria-label="from"></label><label>to <input type="datetime-local" value="2026-10-11T14:00" aria-label="to"></label><button type="submit">Apply</button><button type="button">Cancel</button></form>
   </section>
 
+  <!-- docs/17 §4: the page as it opens. The stream's first line carries every chart's frame,
+       drawn at once at the chart's own size; each chart's drawing replaces its frame as it
+       arrives, in order, so nothing moves (the drawn charts are the sections below). The pill
+       says "loading" until the last one is in. A chart that could not be drawn keeps its
+       frame with the reason in red. -->
+  <section>
+    <h2>Stats<span class="h-sub">the last 6 h · 1-min rows · streaming in</span></h2>
+    <div class="toolbar">
+      <span class="seg" role="group" aria-label="range"><button type="button" aria-pressed="false">1h</button><button type="button" aria-pressed="true">6h</button><button type="button" aria-pressed="false">24h</button></span>
+      <span class="spacer"></span>
+      <span class="pill" title="1 of 18 charts in">loading</span>
+    </div>
+    <div class="charts">
+      <div class="chart-card">
+        <svg class="chart pending" viewBox="0 0 760 242" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Chunks: loading"><text x="56" y="18" class="title">Chunks</text><rect class="frame" x="56" y="28" width="688" height="186" rx="2"/><text x="400" y="125" text-anchor="middle" class="note">loading</text></svg>
+        <div class="small dim">loading</div>
+      </div>
+      <div class="chart-card">
+        <svg class="chart pending" viewBox="0 0 760 242" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Repair backlog: loading"><text x="56" y="18" class="title">Repair backlog</text><rect class="frame" x="56" y="28" width="688" height="186" rx="2"/><text x="400" y="125" text-anchor="middle" class="note">loading</text></svg>
+        <div class="small dim">loading</div>
+      </div>
+      <div class="chart-card">
+        <svg class="chart pending failed" viewBox="0 0 760 242" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Repair bytes moved: not drawn: lumen did not answer within 2 s"><text x="56" y="18" class="title">Repair bytes moved</text><rect class="frame" x="56" y="28" width="688" height="186" rx="2"/><text x="400" y="125" text-anchor="middle" class="note">not drawn: lumen did not answer within 2 s</text></svg>
+        <div class="small dim">not drawn: lumen did not answer within 2 s</div>
+      </div>
+    </div>
+  </section>
+
   <section>
     <h2>Volume</h2>
     <div class="charts">
