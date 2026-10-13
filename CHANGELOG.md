@@ -2,6 +2,36 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.7.4 (2026-10-13)
+
+### Changes
+
+- soak: 23.4 judges the replaced file once both writers have flushed ([7c67f49](https://github.com/zombar/tailraid/commit/7c67f49))
+- cluster: a restarted node accepts members that joined after its snapshot (I-281) ([f5a9a9f](https://github.com/zombar/tailraid/commit/f5a9a9f))
+- smb: change notification belongs to the handle; CLOSE answers what waits (I-264) ([cb8d7a1](https://github.com/zombar/tailraid/commit/cb8d7a1))
+- soak: the harness drops a node's SMB connections when it stops the node ([2f56486](https://github.com/zombar/tailraid/commit/2f56486))
+- rpc: TestClient_CancelledGet_DrainsAShortRest no longer races or hangs ([bd049c9](https://github.com/zombar/tailraid/commit/bd049c9))
+- soak: the evidence test decodes the results (Windows paths are escaped) ([ec1bb03](https://github.com/zombar/tailraid/commit/ec1bb03))
+- vendor: refresh after the conflict resolution's gofmt ([53d5a50](https://github.com/zombar/tailraid/commit/53d5a50))
+- vendor: refresh after merging the stack's base ([76719a8](https://github.com/zombar/tailraid/commit/76719a8))
+- vendor: refresh after merging the stack's base ([6817c14](https://github.com/zombar/tailraid/commit/6817c14))
+- vendor: refresh after merging the stack's base ([51e158c](https://github.com/zombar/tailraid/commit/51e158c))
+- vendor: refresh after merging the stack's base ([bf49cf7](https://github.com/zombar/tailraid/commit/bf49cf7))
+- vendor: refresh after merging the stack's base ([44bef6e](https://github.com/zombar/tailraid/commit/44bef6e))
+- soak: a failing phase saves each node's log and status before the rig goes (I-270) ([394f8cf](https://github.com/zombar/tailraid/commit/394f8cf))
+- webui: folder covers from photos, and a none that waits for a frame clears (I-275) ([c6e4656](https://github.com/zombar/tailraid/commit/c6e4656))
+- nfs: a reply the socket refuses closes the connection (I-269) ([65fba9d](https://github.com/zombar/tailraid/commit/65fba9d))
+- smb: change notification belongs to the handle; CLOSE answers what waits (I-264) ([b65877b](https://github.com/zombar/tailraid/commit/b65877b))
+- smb: an end-of-file change and a FLUSH take no share lock on a concurrent driver (I-268) ([9108baa](https://github.com/zombar/tailraid/commit/9108baa))
+- smb: a caseless lookup asks the backend instead of listing the folder (I-267) ([e3f9e78](https://github.com/zombar/tailraid/commit/e3f9e78))
+- nfs: every refusal carries its RFC 1813 failure body (I-266) ([b7a25ee](https://github.com/zombar/tailraid/commit/b7a25ee))
+- smb: share access is enforced across a share's opens (I-265) ([363b1c2](https://github.com/zombar/tailraid/commit/363b1c2))
+- smb: change notification belongs to the handle; CLOSE answers what waits (I-264) ([ed407e6](https://github.com/zombar/tailraid/commit/ed407e6))
+
+### Tooling
+
+- ci: test only what changed, Linux-only pull requests, shellcheck ([e738f92](https://github.com/zombar/tailraid/commit/e738f92))
+
 ## v0.7.3 (2026-10-13)
 
 ### Changes
