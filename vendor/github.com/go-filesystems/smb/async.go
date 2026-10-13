@@ -32,6 +32,9 @@ type pendingOp struct {
 	asyncID   uint64
 	file      [16]byte // the handle it belongs to, so closing that handle ends it
 	key       []byte   // signs the final reply: its own session's, not the last one's
+	// committed marks an operation a CANCEL cannot take back (a WRITE already in the
+	// driver): the CANCEL gets no reply and the operation its real one (I-247).
+	committed bool
 	cancel    chan struct{}
 	once      sync.Once
 }
@@ -42,6 +45,12 @@ func (p *pendingOp) stop() { p.once.Do(func() { close(p.cancel) }) }
 
 // beginAsync registers an operation and returns the interim reply to send.
 func (c *conn) beginAsync(h header, file [16]byte) (*pendingOp, []byte) {
+	return c.beginAsyncOp(h, file, false)
+}
+
+// beginAsyncOp is beginAsync for an operation a CANCEL may (committed false) or may not
+// take back.
+func (c *conn) beginAsyncOp(h header, file [16]byte, committed bool) (*pendingOp, []byte) {
 	c.mu.Lock()
 	c.nextAsync++
 	op := &pendingOp{
@@ -50,6 +59,7 @@ func (c *conn) beginAsync(h header, file [16]byte) (*pendingOp, []byte) {
 		asyncID:   c.nextAsync,
 		file:      file,
 		key:       c.replyKey(h),
+		committed: committed,
 		cancel:    make(chan struct{}),
 	}
 	c.waiting[op.asyncID] = op
@@ -126,6 +136,13 @@ func (c *conn) cancel(h header) ([]byte, error) {
 			break
 		}
 	}
+	if found != nil && found.committed {
+		// A WRITE already in the driver cannot be taken back: its bytes land. It
+		// goes on and is answered with what it did, and the CANCEL is answered
+		// nothing (MS-SMB2 3.3.5.16, I-247). Answering CANCELLED here told the
+		// client a range was unwritten that was written.
+		found = nil
+	}
 	if found != nil {
 		delete(c.waiting, found.asyncID)
 	}
@@ -134,8 +151,9 @@ func (c *conn) cancel(h header) ([]byte, error) {
 
 	if found == nil {
 		// Nothing to cancel: the operation finished on its own between the
-		// client deciding and the message arriving. Saying nothing is right --
-		// the answer it wanted has already been sent.
+		// client deciding and the message arriving, or cannot be cancelled.
+		// Saying nothing is right -- the answer it wanted is sent by the
+		// operation itself.
 		return nil, nil
 	}
 	found.stop()

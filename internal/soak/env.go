@@ -77,7 +77,7 @@ type Env interface {
 	Remove(ctx context.Context, node NodeRef) error
 	// Fsck runs the node's local check: ok is "no violation"; orphans counts the shards
 	// the chunk table does not place on that node (swept after grace, not a violation).
-	Fsck(ctx context.Context, node NodeRef) (ok bool, orphans int, detail string, err error)
+	Fsck(ctx context.Context, node NodeRef) (FsckResult, error)
 	Chunks(ctx context.Context, node NodeRef, path string) ([]admin.ChunkReport, error)
 	FSMHash(ctx context.Context, node NodeRef) (applied uint64, hash string, err error)
 	// Goroutines is the node's goroutine dump (/dev/goroutines), taken after a failed
@@ -135,4 +135,13 @@ type Env interface {
 	AddMirror(ctx context.Context) (name string, host NodeRef, err error)
 	SetMirrorOnline(ctx context.Context, name string, online bool) error
 	SnapshotOp(ctx context.Context, node NodeRef, op rpc.AdminOp) (json.RawMessage, error)
+}
+
+// FsckResult is a node's fsck: whether the metadata invariants hold, the orphan shards on
+// its disks (counted, and listed up to admin.MaxListedOrphans) and a line for a check.
+type FsckResult struct {
+	OK      bool
+	Orphans int
+	Listed  []string
+	Detail  string
 }

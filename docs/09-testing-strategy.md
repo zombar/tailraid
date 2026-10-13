@@ -322,9 +322,14 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   never holds it: every write acknowledged with no `EIO` while the client outruns the
   flusher, the WAL never past its cap plus one record, flush buffers within the I-78
   formula and the process heap flat, the content hash exact, and afterwards an empty
-  `staging/`, no temp file, a clean `fsck` and no new orphan (the phase first runs
-  repair passes until one finds nothing to do, so a policy migration a previous phase's
-  restore started does not leave moved chunks' old shards under it); then where the file's
+  `staging/`, no temp file, a clean `fsck` and every new orphan explained (the phase
+  first runs repair passes until one finds nothing to do, so a policy migration a
+  previous phase's restore started does not leave moved chunks' old shards under it; the
+  write path may still leave a few for the sweep, L-190, so each orphan fsck lists after
+  the phase and not before passes only when its chunk's history on some node records a
+  PUT that failed or was cut, an upload whose commit did not apply, a repair move or a GC
+  collection, and the check names every orphan nothing explains; until 2026-10-13 it
+  demanded none at all and failed on two such shards); then where the file's
   chunks landed: every chunk fully placed, its data slots on voters, data slots spread
   among the voters in proportion to capacity within the statistical margin, and a
   per-node figure of its data and parity slots against each node's capacity share;

@@ -353,8 +353,9 @@ ceil(Size/CS)` for every file; every parent chain reaches root or a deleted root
 directory's `Nlink` equal to 2 plus its live subdirectories, `TrashInodes` and
 `TrashBytes` equal to a recount; placement distinctness. It also counts the
 orphan shards on that node (files the chunk table does not place there, plus anything in
-the shard tree that is not a shard); orphans are informational, the sweep removes them
-after grace. Data is verified by `check --scrub` (§5), not by fsck, and there is no
+the shard tree that is not a shard) and lists the first 1,000 by key (`orphans` in the JSON
+reply), so a caller can look up each one's chunk history; orphans are informational, the
+sweep removes them after grace. Data is verified by `check --scrub` (§5), not by fsck, and there is no
 `--fix`: the FSM keeps refcounts exact (I-27), so any finding is a bug to report, not
 state to patch.
 
@@ -375,7 +376,7 @@ state to patch.
   in flight end.
 - **I-175** — A shard request marked background holds at most half of a node's PUT and,
   separately, GET slots (never fewer than one); a client-path request never waits behind
-  a background one for the other half; a background request is queued, never refused,
+  a background one for the other half; a background request is queued, refused only as busy once it has waited `SlotWait` (I-246),
   and the mark changes no reply; every request a repair pass makes carries the mark and
   no gateway read or flush does.
 - **I-157** — A delete reclaims nothing: only `Purge`, `Unlink` of an ephemeral name

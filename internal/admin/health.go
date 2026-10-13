@@ -93,7 +93,21 @@ type CheckReport struct {
 type FsckReport struct {
 	Violations   []string `json:"violations"`
 	OrphanShards int      `json:"orphan_shards_on_this_node"`
-	OK           bool     `json:"ok"`
+	// Orphans lists the first MaxListedOrphans of them by key, so a caller can look up
+	// what left each one (the soak's phase 12 does, docs/09 §6).
+	Orphans []string `json:"orphans,omitempty"`
+	OK      bool     `json:"ok"`
+}
+
+// MaxListedOrphans bounds FsckReport.Orphans.
+const MaxListedOrphans = 1000
+
+// AddOrphan counts an orphan shard and lists its key while the list has room.
+func (r *FsckReport) AddOrphan(key string) {
+	r.OrphanShards++
+	if len(r.Orphans) < MaxListedOrphans {
+		r.Orphans = append(r.Orphans, key)
+	}
 }
 
 // Check builds the `check` reply from the shared derivation plus the scan the caller ran
