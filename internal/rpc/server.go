@@ -223,6 +223,7 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
 	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
+	mux.Handle("GET /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.memberList))))
 	mux.Handle("GET /v1/stats", s.clusterCheck(s.member(http.HandlerFunc(s.stats))))
 	mux.Handle("POST /v1/join", http.HandlerFunc(s.join)) // token + claimed identity, not membership
 	if o.Dev != nil {
@@ -718,6 +719,20 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// memberList answers the device rows of this node's table that a seed may hold: with an
+// address and not removed (docs/08, I-282).
+func (s *Server) memberList(w http.ResponseWriter, _ *http.Request) {
+	nodes := s.o.Members()
+	out := []meta.Node{}
+	for i := range nodes {
+		if m := &nodes[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
+			out = append(out, *m)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {

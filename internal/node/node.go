@@ -146,6 +146,21 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		startSeed = fileSeed
 	}
 	auth.SetSeed(startSeed)
+	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, startSeed); err != nil { // the table may not have caught up yet (I-281)
+		log.Warn("member seed not written", "err", err)
+	}
+	// a member that joined while this node was down is in neither; the members it knows
+	// name it until a leader connects (I-282)
+	go seedFetch{
+		clk: clock.Real(), self: id, ask: rpc.NewClient(clusterID, node.RPCAddrOf).MemberList, ready: node.Ready,
+		set: func(seed []meta.Node) {
+			auth.SetSeed(seed)
+			if err := cluster.WriteMemberSeed(cfg.Node.DataDir, seed); err != nil {
+				log.Warn("member seed not written", "err", err)
+			}
+			log.Info("member seed widened by a member's table", "members", len(seed))
+		},
+	}.run(ctx, startSeed)
 	// A node whose snapshot holds its own row and the volume serves at once, leader or
 	// not: stale gateways, ready=false, ready once a leader connects (I-135). Waiting for
 	// a leader here would exit after the bound and leave the service manager restarting
@@ -167,9 +182,6 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// needs is snapshotted once this one is ready (and again at a clean shutdown); the
 	// legacy check runs again then, on the state the log brought
 	go onReady(ctx, node, log, fatal)
-	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, startSeed); err != nil { // the table may not have caught up yet (I-281)
-		log.Warn("member seed not written", "err", err)
-	}
 	selfIdx, ok := node.SelfIdx()
 	if !ok {
 		return errors.New("this node is not in the cluster node table")

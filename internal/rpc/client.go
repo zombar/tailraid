@@ -513,6 +513,20 @@ func (c *Client) Members(ctx context.Context, addr string, op MemberOp) error {
 	return c.postJSON(ctx, addr, "/v1/members", op, nil, http.StatusOK)
 }
 
+// MemberList asks a member for the device rows of its table (GET /v1/members): a node
+// restarted while a member joined learns it there before a leader connects (I-282).
+func (c *Client) MemberList(ctx context.Context, addr string) ([]meta.Node, error) {
+	body, err := c.Call(ctx, addr, http.MethodGet, "/v1/members", nil)
+	if err != nil {
+		return nil, err
+	}
+	var members []meta.Node
+	if err := json.Unmarshal(body, &members); err != nil {
+		return nil, fmt.Errorf("%w: bad member list: %v", ErrBadRequest, err) //nolint:errorlint // transport
+	}
+	return members, nil
+}
+
 // Health probes a node.
 func (c *Client) Health(ctx context.Context, addr string) (Health, error) {
 	ctx, cancel := bound(ctx, 0)

@@ -603,3 +603,33 @@ func TestRPC_Stats_MemberOnly_OwnRows(t *testing.T) {
 		t.Fatalf("health without a web UI: %d %v", h.Web, err)
 	}
 }
+
+// GET /v1/members answers a member the device rows of this node's table, without disks,
+// removed rows or rows without an address, and refuses a non-member: a restarting node
+// widens its seed with it (docs/08, I-282).
+//
+// Invariant: I-282
+func TestMemberList_MembersOnly_DeviceRows(t *testing.T) {
+	e := newEnvWith(t, func(o *Options) {
+		o.Members = func() []meta.Node {
+			return []meta.Node{
+				{Idx: 1, ID: "a", Kind: meta.KindDevice, Addr: "100.64.0.11", TSStableID: "ts-a", RPCPort: 20481},
+				{Idx: 2, ID: "a/1", Kind: meta.KindDisk, Host: 1},
+				{Idx: 3, ID: "late", Kind: meta.KindDevice, Addr: "100.64.0.31", TSStableID: "ts-late", RPCPort: 20481},
+				{Idx: 4, ID: "gone", Kind: meta.KindDevice, Addr: "100.64.0.9", State: meta.Removed},
+				{Idx: 5, ID: "noaddr", Kind: meta.KindDevice},
+			}
+		}
+	})
+	c := e.client()
+	got, err := c.MemberList(ctx, e.addr)
+	if err != nil || len(got) != 2 || got[0].ID != "a" || got[1].ID != "late" || got[1].TSStableID != "ts-late" {
+		t.Fatalf("member list: %+v %v", got, err)
+	}
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "stranger", "x")
+	e.auth.Purge()
+	if got, err := c.MemberList(ctx, e.addr); err == nil {
+		t.Fatalf("a non-member read the member list: %+v", got)
+	}
+}
