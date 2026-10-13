@@ -3,6 +3,7 @@
 // track count and total length, then the tracks in track order.
 
 import { h } from "./dom.ts";
+import { icon } from "./icons.ts";
 import { tags, thumbURL, fileURL, type Entry, type Tags } from "./api.ts";
 import { basename, ext, join, mmss, src, type Ctx } from "./util.ts";
 import { isAudioName, player, type Track } from "./audio.ts";
@@ -67,7 +68,7 @@ export function render(ctx: Ctx, cover: string | null | undefined, entries: Entr
     tr.className = playing ? "playing" : "";
     const titleCell = h("td", { class: "title" }, g?.title || stem);
     if (g?.title && g.title !== stem) titleCell.append(" ", h("span", { class: "small dim" }, e.name));
-    tr.replaceChildren(h("td", { class: "no" }, playing ? "▶" : String(no)), titleCell, h("td", { class: "dur" }, mmss(durs.get(i))));
+    tr.replaceChildren(h("td", { class: "no" }, playing ? icon("equalizer") : String(no)), titleCell, h("td", { class: "dur" }, mmss(durs.get(i))));
   };
 
   audio.forEach((_, i) => {

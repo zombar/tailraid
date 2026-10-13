@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"html"
 	"math"
+	"sort"
 	"strings"
 	"time"
 )
@@ -24,7 +25,7 @@ type Series struct {
 	Points [][2]float64
 }
 
-// Marker is a vertical event line with a rotated label.
+// Marker is a vertical event line; its label sits in the lane under the time axis.
 type Marker struct {
 	X     float64
 	Label string
@@ -132,8 +133,77 @@ func fmtNum(v float64) string {
 	}
 }
 
-// markerLabelMax bounds a rotated event label so it stays inside the chart.
+// markerLabelMax bounds an event label; the tooltip carries it whole.
 const markerLabelMax = 40
+
+// The event labels' lane under a line chart's time axis (docs/13 Charts, I-297): three
+// rows, always reserved, so a chart is as tall with events as without and the Stats
+// page's frame (LineHeight) is the chart's size. A label starts at its marker or slides
+// right by at most markShift to clear the label before it in its row; one that fits in no
+// row joins the label before it as "+N", every event named in that label's tooltip.
+const (
+	markRows  = 3
+	markRow   = 13
+	markLane  = markRows*markRow + 8
+	markChar  = 5.6  // a 10 px sans character's mean advance
+	markGap   = 8.0  // between two labels in a row
+	markShift = 64.0 // the furthest a label leaves its marker
+	markPlus  = 20.0 // room kept for a " +N"
+)
+
+// LineHeight is the height of a line chart of series with these names: the plot, the
+// event lane and the legend.
+func LineHeight(names []string) int { return Height + markLane + LegendHeight(names) }
+
+func markBaseline(row int) int { return Height + 4 + (row+1)*markRow }
+
+// markLabel is one label in the lane: the marker's x, where the label starts, its row and
+// the events it names (the first is its text).
+type markLabel struct {
+	x, lx float64
+	row   int
+	all   []string
+}
+
+// placeMarks lays the labels out in marker order (by x, then input order): each takes the
+// row that needs the least slide, ties to the upper row; xs are the markers' chart x.
+func placeMarks(xs []float64, marks []Marker) []markLabel {
+	idx := make([]int, len(marks))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return xs[idx[a]] < xs[idx[b]] })
+	var ends [markRows]float64
+	for r := range ends {
+		ends[r] = math.Inf(-1)
+	}
+	var out []markLabel
+	for _, i := range idx {
+		x, label := xs[i], marks[i].Label
+		w := float64(len([]rune(truncate(label, markerLabelMax))))*markChar + markPlus
+		best, bestLx := -1, 0.0
+		for r := range ends {
+			lx := math.Max(x, ends[r]+markGap)
+			lx = math.Min(lx, float64(Width-padR)-w) // the right edge pulls a label back over its marker
+			if lx < ends[r]+markGap || lx-x > markShift {
+				continue
+			}
+			if best < 0 || lx-x < bestLx-x {
+				best, bestLx = r, lx
+			}
+		}
+		if best < 0 && len(out) > 0 {
+			out[len(out)-1].all = append(out[len(out)-1].all, label)
+			continue
+		}
+		if best < 0 { // the first label of a chart narrower than its text: row 0, at the left
+			best, bestLx = 0, math.Max(float64(padL), math.Min(x, float64(Width-padR)-w))
+		}
+		ends[best] = bestLx + w //nolint:gosec // best is a row the loop above chose, or 0
+		out = append(out, markLabel{x: x, lx: bestLx, row: best, all: []string{label}})
+	}
+	return out
+}
 
 // truncate cuts s to n runes with an ellipsis.
 func truncate(s string, n int) string {
@@ -205,7 +275,7 @@ func Line(title, yLabel string, ss []Series, marks []Marker, bands []Band, ax Ax
 	sx := func(x float64) float64 { return float64(padL) + x/maxX*iw }
 	sy := func(y float64) float64 { return float64(padT) + ih - y/maxY*ih }
 	var b strings.Builder
-	open(&b, title, Height+legendHeight(ss))
+	open(&b, title, Height+markLane+legendHeight(ss))
 	// phase bands, alternating shades, labelled at the top
 	for i, bd := range bands {
 		x0, x1 := sx(bd.X0), sx(math.Max(bd.X1, bd.X0))
@@ -223,12 +293,23 @@ func Line(title, yLabel string, ss []Series, marks []Marker, bands []Band, ax Ax
 	}
 	xTicks(&b, Height-padB+16, maxX, ax)
 	fmt.Fprintf(&b, `<text x="12" y="%.1f" class="tick" transform="rotate(-90 12 %.1f)" text-anchor="middle">%s</text>`, float64(padT)+ih/2, float64(padT)+ih/2, html.EscapeString(yLabel))
-	// markers: labels alternate between three heights so neighbours stay readable
-	for i, m := range marks {
+	// markers: the dashed line over the plot, the label in the lane under the time axis
+	for _, m := range marks {
 		x := sx(m.X)
-		y := Height - padB - 4 - (i%3)*40
-		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"><title>%s</title></line><text x="%.1f" y="%d" class="marklabel" transform="rotate(-90 %.1f %d)">%s</text>`,
-			x, padT, x, Height-padB, html.EscapeString(m.Label), x+3, y, x+3, y, html.EscapeString(truncate(m.Label, markerLabelMax)))
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"><title>%s</title></line>`, x, padT, x, Height-padB, html.EscapeString(m.Label))
+	}
+	xs := make([]float64, len(marks))
+	for i, m := range marks {
+		xs[i] = sx(m.X)
+	}
+	for _, l := range placeMarks(xs, marks) {
+		y := markBaseline(l.row)
+		text := truncate(l.all[0], markerLabelMax)
+		if len(l.all) > 1 {
+			text += fmt.Sprintf(" +%d", len(l.all)-1)
+		}
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" class="marker"/><text x="%.1f" y="%d" class="marklabel"><title>%s</title>%s</text>`,
+			l.x, Height-padB+20, l.lx, y-10, l.lx, y, html.EscapeString(strings.Join(l.all, "\n")), html.EscapeString(text))
 	}
 	// series
 	for i, s := range ss {
@@ -247,7 +328,7 @@ func Line(title, yLabel string, ss []Series, marks []Marker, bands []Band, ax Ax
 		}
 		fmt.Fprintf(&b, `<path d="%s" fill="none" class="%s" stroke-width="1.8"/>`, strings.TrimSpace(d.String()), cls)
 	}
-	legend(&b, ss)
+	legend(&b, ss, Height+markLane)
 	b.WriteString("</svg>")
 	return b.String()
 }
@@ -319,10 +400,11 @@ func legendHeight(ss []Series) int {
 	return 6 + n*legendRow
 }
 
-func legend(b *strings.Builder, ss []Series) {
+// legend draws the series' names in rows from top, under the plot (and a line chart's event lane).
+func legend(b *strings.Builder, ss []Series, top int) {
 	rows, xs, _ := legendRows(ss)
 	for i, s := range ss {
-		y := Height + 6 + rows[i]*legendRow
+		y := top + 6 + rows[i]*legendRow
 		fmt.Fprintf(b, `<rect x="%.1f" y="%d" width="%d" height="%d" class="%s"/><text x="%.1f" y="%d" class="tick">%s</text>`,
 			xs[i], y, legendGlyph, legendGlyph, seriesClass(s, i), xs[i]+legendGlyph+6, y+legendGlyph-1, html.EscapeString(s.Name))
 	}
@@ -366,7 +448,7 @@ func Bars(title string, labels []string, ss []Series) string {
 		}
 		fmt.Fprintf(&b, `<text x="%.1f" y="%d" class="tick" text-anchor="middle">%s</text>`, gx+gw*0.4, Height-padB+16, html.EscapeString(label))
 	}
-	legend(&b, ss)
+	legend(&b, ss, Height)
 	b.WriteString("</svg>")
 	return b.String()
 }

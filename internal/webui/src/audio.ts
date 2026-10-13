@@ -4,6 +4,7 @@
 // in sessionStorage so a reload resumes where it was.
 
 import { h } from "./dom.ts";
+import { icon, type IconName } from "./icons.ts";
 import { fileURL, tags, thumbURL, type Src } from "./api.ts";
 import { basename, ext, mmss, session } from "./util.ts";
 
@@ -380,15 +381,17 @@ class Player {
     cover.addEventListener("error", () => cover.removeAttribute("src"));
     const title = h("div", { class: "title" });
     const sub = h("div", { class: "sub" });
-    const prev = h("button", { type: "button", "aria-label": "previous", onClick: () => this.prev() }, "⏮");
-    const playBtn = h("button", { type: "button", "aria-label": "play", onClick: () => this.toggle() }, "▶");
-    const next = h("button", { type: "button", "aria-label": "next", onClick: () => this.next() }, "⏭");
+    const prev = iconBtn("skip_previous_fill", "previous", () => this.prev());
+    const playBtn = iconBtn("play_arrow_fill", "play", () => this.toggle());
+    const next = iconBtn("skip_next_fill", "next", () => this.next());
     const seek = h("input", { type: "range", min: 0, max: 0, value: 0, "aria-label": "seek" }) as HTMLInputElement;
     seek.addEventListener("input", () => this.seek(Number(seek.value)));
     const time = h("span", { class: "time" }, "0:00 / —");
-    const repeat = h("button", { type: "button", "aria-pressed": "false", "aria-label": "repeat", onClick: () => this.cycleRepeat() }, "⟳");
-    const shuffle = h("button", { type: "button", "aria-pressed": "false", "aria-label": "shuffle", onClick: () => this.toggleShuffle() }, "⤮");
-    const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => { this.bar?.classList.toggle("expanded"); this.notify(); } }, "Queue");
+    const repeat = iconBtn("repeat", "repeat", () => this.cycleRepeat());
+    repeat.setAttribute("aria-pressed", "false");
+    const shuffle = iconBtn("shuffle", "shuffle", () => this.toggleShuffle());
+    shuffle.setAttribute("aria-pressed", "false");
+    const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => { this.bar?.classList.toggle("expanded"); this.notify(); } }, icon("queue_music"), h("span", null, "Queue"));
     const bar = h(
       "aside",
       { class: "nowbar", hidden: true },
@@ -428,15 +431,13 @@ class Player {
     }
     e.title!.textContent = c.title ?? basename(c.path);
     e.sub!.textContent = [c.artist, c.album].filter(Boolean).join(" — ") || ext(c.path);
-    e.playBtn!.textContent = this.playing ? "⏸" : "▶";
-    e.playBtn!.setAttribute("aria-label", this.playing ? "pause" : "play");
+    face(e.playBtn!, this.playing ? "pause_fill" : "play_arrow_fill", this.playing ? "pause" : "play");
     e.repeat!.setAttribute("aria-pressed", this.repeat === "off" ? "false" : "true");
-    e.repeat!.setAttribute("aria-label", this.repeat === "one" ? "repeat one" : this.repeat === "all" ? "repeat all" : "repeat");
-    e.repeat!.textContent = this.repeat === "one" ? "⟳1" : "⟳";
+    face(e.repeat!, this.repeat === "one" ? "repeat_one" : "repeat", this.repeat === "one" ? "repeat one" : this.repeat === "all" ? "repeat all" : "repeat");
     e.shuffle!.setAttribute("aria-pressed", this.shuffle ? "true" : "false");
     const expanded = this.bar.classList.contains("expanded");
     e.queueBtn!.setAttribute("aria-pressed", expanded ? "true" : "false");
-    e.queueBtn!.textContent = `Queue · ${this.queue.length}`;
+    e.queueBtn!.lastElementChild!.textContent = `Queue · ${this.queue.length}`;
     e.time!.textContent = `${mmss(this.a.currentTime)} / ${mmss(this.a.duration || c.dur)}`;
     e.summary!.textContent = `${this.queue.length} in the queue` + (this.repeat !== "off" ? ` · repeat ${this.repeat}` : "") + (this.shuffle ? " · shuffle" : "");
     if (expanded) this.drawQueue();
@@ -451,11 +452,11 @@ class Player {
       const li = h(
         "li",
         { class: "qrow" + (playing ? " playing" : "") },
-        h("span", { class: "no" }, playing ? "▶" : String(n + 1)),
+        h("span", { class: "no" }, playing ? icon("equalizer") : String(n + 1)),
         h("span", { class: "title", onClick: () => this.load(qi, true) }, t.title ?? basename(t.path)),
         h("span", { class: "artist" }, t.artist ?? ""),
         h("span", { class: "dur" }, mmss(t.dur)),
-        h("button", { type: "button", "aria-label": "remove", onClick: () => this.remove(qi) }, "×"),
+        iconBtn("close", "remove", () => this.remove(qi)),
       );
       list.append(li);
     });
@@ -467,4 +468,18 @@ export const player = new Player();
 /** isAudioName reports a file the player handles. */
 export function isAudioName(name: string): boolean {
   return ["mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac"].includes(ext(name));
+}
+
+/** iconBtn is a square button carrying one Material symbol; label names it for a screen reader and in its tooltip. */
+function iconBtn(name: IconName, label: string, onClick: () => void): HTMLButtonElement {
+  const b = h("button", { type: "button", class: "icon-btn", onClick });
+  face(b, name, label);
+  return b;
+}
+
+/** face redraws an icon button's symbol and its name. */
+function face(b: HTMLElement, name: IconName, label: string): void {
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  b.replaceChildren(icon(name));
 }

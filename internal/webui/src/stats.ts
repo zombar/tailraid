@@ -3,6 +3,7 @@
 // refresh while the range ends now (I-198).
 
 import { clear, h } from "./dom.ts";
+import { icon } from "./icons.ts";
 import { streamStats, type StatsFirst, type StatsFrame, type StatsLine, type StatsMember } from "./api.ts";
 
 const RANGES: [string, number][] = [
@@ -108,7 +109,7 @@ export function render(root: HTMLElement, query: string): () => void {
     clear(body);
     const row = (name: string, label: string, dot: string, note: string, m?: StatsMember) => {
       const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
-      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name }, "↗"));
+      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name, "aria-label": "open on " + m.name }, icon("open_in_new")));
       body.append(el);
     };
     row("all", "all nodes", "off", "one series per member");

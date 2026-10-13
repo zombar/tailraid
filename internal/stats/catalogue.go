@@ -19,7 +19,7 @@ type Frame struct {
 func Catalogue(node string, members []string) []Frame {
 	var out []Frame
 	line := func(id, title string, names ...string) {
-		out = append(out, Frame{ID: id, Title: title, Frame: chart.Frame(title, chart.Height+chart.LegendHeight(names))})
+		out = append(out, Frame{ID: id, Title: title, Frame: chart.Frame(title, chart.LineHeight(names))})
 	}
 	line("stored", "Stored vs logical bytes (dedup)", "stored bytes", "logical bytes")
 	line("chunks", "Chunks", "live chunks")
