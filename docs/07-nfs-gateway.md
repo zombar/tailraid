@@ -274,6 +274,11 @@ device"), not `EIO`.
   between this gateway's lookup and its mkdir), and a SETATTR size past the largest file
   `NFS3ERR_FBIG`, each as an NFS status; a stale gateway's refusals keep their statuses
   (I-39); a rename of a file onto its own name leaves its bytes, flushed or not.
+- **I-242** — A CREATE or MKDIR refused once its directory resolved (`NFS3ERR_EXIST`
+  above all) carries the directory's attributes after the call in its `dir_wcc` (RFC 1813
+  CREATE3resfail, MKDIR3resfail), so a client that thought the name free sees the
+  directory changed and looks it up again; a `mkdir -p` then finds the folder another
+  gateway made a moment before, rather than failing on "File exists".
 - **I-244** — A length a request names (an opaque, a string, an array) is believed only
   as far as the request frame holds the bytes: a longer one fails to decode without
   allocating it. Before, a 44-byte GETATTR whose handle claimed 4 GiB allocated 4 GiB.
@@ -297,6 +302,7 @@ device"), not `EIO`.
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
 | I-231 | `TestNFS_CreateExclusive_Verifier` |
+| I-242 | `TestNFS_ExistReply_CarriesParentAttributes` |
 | I-244 | `TestRead_LengthBoundedByBody`, `TestConn_RPCReplyCodes` |
 | I-245 | `TestConn_RPCReplyCodes`, `TestNFS_FSStatAndUnsupported` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |

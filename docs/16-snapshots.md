@@ -149,7 +149,11 @@ the recovery path when the cluster itself is gone.
    filled, the host restarted and lost its clone, the leader ended a stale sync) the row is
    removed. A failed sync writes no manifest; the objects and trees it already wrote stay
    and make the next attempt shorter, which is how a first sync of a large volume that
-   cannot finish in one go still converges.
+   cannot finish in one go still converges. The host's tick begins that attempt a minute
+   later when the schedule is due (a lost automatic sync leaves its last snapshot as old
+   as before), and the walk skips every object the mirror holds, so its progress climbs
+   quickly to where the cut sync stopped and goes on from there (I-243). A manual
+   snapshot cut short is not taken again; `snapshot create` takes it anew, as fast.
 
 A sync never changes the volume. Its cost to the pool is reads (at background priority and
 `mirrors.rate`) and the hold.
@@ -229,9 +233,11 @@ schedule. `SnapshotDelete{ID, Done: false}`, proposed by the host's tick only, m
 complete or incomplete row `Deleting`: it disappears from every listing at once. The
 mirror's host, whenever the mirror is online, removes the manifest of every `Deleting`
 row of its mirror, then runs a mark-and-sweep that removes every tree and object no
-remaining manifest reaches (a syncing row's trees and objects are marked from the
-worker's own set, so the sweep never races a sync), and then proposes
-`SnapshotDelete{ID, Done: true}`, which removes the row. An offline mirror keeps its
+remaining manifest reaches, and then proposes `SnapshotDelete{ID, Done: true}`, which
+removes the row. The sweep runs only for such a deletion, and waits while a sync writes to
+the mirror (I-243): what a cut sync left is no manifest's, and a sweep at the next tick
+would take what its retry is about to skip (until 2026-10-13 every tick swept, so a
+restart mid-sync threw the copied part away and the retry began from nothing). An offline mirror keeps its
 `Deleting` rows until it returns.
 
 A manifest on the disk with **no** row at all is never lost: it is a snapshot the
@@ -364,6 +370,10 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   transport whose response headers are bounded (`ResponseHeaderTimeout`), never on the
   control transport, so a read under `/.snapshots` from a host that stopped answering
   fails within that bound.
+- **I-243** — What a sync cut short stored stays on the mirror for the next sync, which
+  reads only the chunks the mirror lacks: the host sweeps a mirror only to complete a
+  deletion, never while a sync writes to it, and reports a `Deleting` row done only once
+  it has swept.
 
 ## Tests
 
@@ -376,6 +386,7 @@ stub in `test/invariants/` meanwhile.
 | I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
 | I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | I-241 | `TestClient_MirrorGet_OnBoundedTransport` |
+| I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestModelCheck_Long` |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`, `TestWebUI_Snapshots_ListTake_NoDeleteRoute` |
 | I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |
