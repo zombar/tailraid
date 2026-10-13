@@ -235,6 +235,31 @@ func (f *FSM) Lookup(parent Ino, name string) (Inode, bool) {
 	return copyInode(f.st.Inodes[ino]), true
 }
 
+// LookupFold is the name of parent's entry that differs from name only by case, the
+// first by sorted name when several do (docs/15 §5, I-267): one pass over the folder's
+// names under the read lock, nothing copied, so a caseless lookup costs no listing.
+func (f *FSM) LookupFold(parent Ino, name string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	p, ok := f.st.Inodes[parent]
+	if !ok || p.Type != TDir {
+		return "", false
+	}
+	if _, ok := p.Children[name]; ok {
+		return name, true
+	}
+	best := ""
+	for n := range p.Children {
+		if strings.EqualFold(n, name) && (best == "" || n < best) {
+			best = n
+		}
+	}
+	return best, best != ""
+}
+
 // Resolve walks path from the root. An empty path is the root.
 func (f *FSM) Resolve(path []string) (Inode, error) {
 	f.mu.RLock()

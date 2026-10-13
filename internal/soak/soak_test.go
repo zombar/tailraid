@@ -582,6 +582,7 @@ func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.stopStats(e.node(n).I)
+	e.stopSMB(n)
 	e.c.Kill(e.node(n).I)
 	e.c.Clk.Advance(cluster.LiveThreshold + time.Second)
 	e.c.Probe()
@@ -606,6 +607,7 @@ func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 	defer e.mu.Unlock()
 	for _, n := range nodes {
 		e.stopStats(e.node(n).I)
+		e.stopSMB(n)
 		e.c.Kill(e.node(n).I)
 	}
 	for _, n := range nodes {

@@ -198,6 +198,19 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
   the straggler grace, is excluded from `Live()` (with its disks) until the first probe
   that succeeds after the mark; an HTTP-status reply or a request the gateway itself
   cancelled never marks a node, and a mark never affects the hold-downs or repair.
+- **I-262** — A shard GET whose caller gives up after the reply's headers arrived reads
+  the rest and keeps its connection when at most `DrainMax` (256 KiB) is left as it
+  notices, between reads of 64 KiB; with more left it closes the connection, as a GET
+  cancelled before its headers does. Before, every cancelled GET closed its connection,
+  so a hedged read or a readahead a seek cut short cost a handshake and a cold congestion
+  window on the next request to that host (docs/reports/rpc-transports-2026-10.md).
+- **I-263** — Where the platform has `TCP_NOTSENT_LOWAT` (Linux, macOS), the bulk sockets of
+  the node RPC (the shard client's connections and every connection the RPC listener
+  accepts) keep at most `NotSentLowWater` (128 KiB) unsent in the kernel; the control
+  transport's keep the kernel's default. A control call to a host then waits behind far
+  less queued shard data; data in flight is not limited. The transport study's rig models
+  the link in user space and cannot show the effect; it is to be measured on the real
+  tailnet.
 - **I-246** — A shard GET or PUT (and a mirror GET) queues for its slots at most
   `SlotWait` (3 s, well inside the caller's 10 s header timeout) and is then answered
   `503` with `X-Tailraid-Busy`, which the caller sees as `ErrBusy` wrapped in
@@ -215,5 +228,7 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
 | I-39 | `TestCluster_IsolatedGateway_ReturnsEROFS_ReadsStillServed`, `TestNFS_ReadOnly_WireStatuses`, `TestVFS_ProposeFails_RetriesUntilStale`, `TestStaleness_Table` |
 | I-40 | `TestCluster_KillMNodes_AllDataReadable_KillMPlusOne_EIO`, `TestCluster_Policy1Plus0_WriteRestartRead_CorruptIsEIO`, `TestReader_CorruptShard_DecodesFromOthers_AndReports`, `TestReader_DecodedHashMismatch_EIO`, `TestReader_FewerThanKLive_EIO`, `TestReader_ReadRange_ChunkHashMismatch_LateReadersEIO_EventRecorded` |
 | I-202 | `TestPhaseHotPath_ConformingGatewayPasses`, `TestReader_ReadRange_ServedFromDataShardBeforeDecode`, `TestReader_ReadRange_StraddlesTwoDataShards`, `TestReader_ReadRange_CorruptDataShard_WaitsForDecode`, `TestReader_ReadRange_DeadDataHolder_WaitsForDecode`, `TestReader_ReadRange_NoSums_WholeChunk`, `TestReader_ReadRange_HolesAndShortChunk_Table`, `TestReader_ReadRange_ChunkHashMismatch_LateReadersEIO_EventRecorded`, `TestReader_FlusherBaseRead_NeverEarly`, `FuzzReadRange`, `TestCluster_EarlyServe_HolderKilledMidRead_StillExact`, `TestCluster_EarlyRange_SameBytesEveryGateway` |
+| I-262 | `TestClient_CancelledGet_DrainsAShortRest` |
+| I-263 | `TestNotSentLowWater_OnTheBulkSockets` |
 | I-246 | `TestServer_BusySlots_AnswerBusy_NotSuspect` |
 | I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |

@@ -108,7 +108,8 @@ if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
     cli tailraid init --k "${K:-2}" --m "${M:-1}" --chunk "${CHUNK:-1M}" --token "$TOKEN"
   else
     until curl -fsS "http://$LEADER:20481/health" >/dev/null 2>&1; do say "waiting for $LEADER"; sleep 1; done
-    until cli tailraid join "$LEADER" "$TOKEN" $( [ "${VOTER:-true}" = true ] && echo --voter ); do say "join retry"; sleep 2; done
+    voter=; [ "${VOTER:-true}" = true ] && voter=--voter
+    until cli tailraid join "$LEADER" "$TOKEN" ${voter:+"$voter"}; do say "join retry"; sleep 2; done
   fi
   if [ -n "${DISKS:-}" ]; then
     diskcfg > "$TAILRAID_HOME/disks.saved.yaml"
