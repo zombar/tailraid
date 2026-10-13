@@ -33,7 +33,8 @@ S3 features beyond the implemented subset (versioning, ACLs, policies, lifecycle
 SSE, object lock, presigned POST); web UI beyond the dashboard and file browser of docs/13
 (no user management, no mutating admin operations from the browser); metrics stack (a
 `status` JSON instead);
-encryption at rest (WireGuard covers transit, and a mirror disk is plaintext); quotas;
+encryption at rest beyond sealed S3 nodes (docs/10 §4.7: WireGuard covers transit,
+devices rely on the OS's full-disk encryption, and a mirror disk is plaintext); quotas;
 history in the live pool (the trash keeps deletes for a while; snapshots live on mirror
 disks, docs/16, with no per-save history, no writable clone, no snapshot of one folder,
 no diff and not the Windows Previous Versions tab);

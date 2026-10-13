@@ -354,6 +354,16 @@ func SweepThumbs(ctx context.Context, fs Remover, st *meta.Store) (int, error) {
 		if k.Type != meta.TFile || IsUploadTemp(k.Name) {
 			continue
 		}
+		if dino, gen, ok := parseCoverKey(k.Name); ok { // a folder's cover record (I-256)
+			if in, found := st.GetInodeAny(dino); found && in.Type == meta.TDir && in.Gen == gen {
+				continue // its folder exists, live or in the trash
+			}
+			if err := fs.Remove(path.Join(ThumbDir, k.Name)); err != nil {
+				return removed, err
+			}
+			removed++
+			continue
+		}
 		ino, _, _, ok := parseThumbKey(k.Name)
 		if !ok {
 			continue // not a thumbnail of ours: left alone
