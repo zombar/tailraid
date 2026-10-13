@@ -72,6 +72,34 @@ type runner struct {
 
 func (o Options) wants(group string) bool { return len(o.Only) == 0 || o.Only[group] }
 
+// keyless are the groups whose providers need no key: MusicBrainz with the Cover Art
+// Archive, and the libretro thumbnails.
+var keyless = map[string]bool{OnlyMusic: true, OnlyGames: true}
+
+// WithoutKey narrows only (empty: every group) to the groups a run can do with no TMDB
+// key, and names the ones it dropped; an only that names nothing but TMDB groups is an
+// error, ErrNoKey.
+func WithoutKey(only map[string]bool) (map[string]bool, []string, error) {
+	if len(only) == 0 {
+		return map[string]bool{OnlyMusic: true, OnlyGames: true}, []string{OnlyMovies, OnlyTV, OnlyEpisodes}, nil
+	}
+	out := map[string]bool{}
+	var dropped []string
+	for _, g := range []string{OnlyMovies, OnlyTV, OnlyEpisodes, OnlyMusic, OnlyGames} {
+		switch {
+		case !only[g]:
+		case keyless[g]:
+			out[g] = true
+		default:
+			dropped = append(dropped, g)
+		}
+	}
+	if len(out) == 0 {
+		return nil, dropped, ErrNoKey
+	}
+	return out, dropped, nil
+}
+
 // Run scrapes the plan's items (docs/18 §11): each film, show and album matched (I-301),
 // then each missing slot written with its provider's data, exclusively (I-299).
 func Run(ctx context.Context, c *Client, items []search.ScrapeItem, w Writer, ch Chooser, o Options) (Summary, error) {
