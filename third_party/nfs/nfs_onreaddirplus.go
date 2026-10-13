@@ -61,7 +61,7 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 
 	entities := make([]readDirPlusEntity, 0)
 	dirBytes := uint32(0)
-	maxBytes := uint32(100) // conservative overhead measure
+	maxBytes := uint32(listOverhead) // the reply's own fields; each entry adds its size (I-248)
 
 	started := obj.Cookie == 0
 	if started {
@@ -82,6 +82,8 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 			readDirPlusEntity{Name: []byte("."), Cookie: 0, Next: true, FileID: dotFileID, Attributes: da},
 			readDirPlusEntity{Name: []byte(".."), Cookie: 1, Next: true, FileID: dotdotFileID},
 		)
+		dirBytes += dirInfoSize(".") + dirInfoSize("..")
+		maxBytes += entryPlus3Size(".", da != nil, -1) + entryPlus3Size("..", false, -1)
 	}
 
 	eof := true
@@ -99,15 +101,15 @@ func onReadDirPlus(ctx context.Context, w *response, userHandle Handler) error {
 		fb++
 		if started {
 			fss++
-			dirBytes += uint32(len(c.Name()) + 20)
-			maxBytes += 512 // TODO: better estimation.
+			filePath := joinPath(p, c.Name())
+			handle := userHandle.ToHandle(fs, filePath)
+			dirBytes += dirInfoSize(c.Name())
+			maxBytes += entryPlus3Size(c.Name(), true, len(handle))
 			if dirBytes > obj.DirCount || maxBytes > obj.MaxCount || len(entities) > maxEntities {
 				eof = false
 				break
 			}
 
-			filePath := joinPath(p, c.Name())
-			handle := userHandle.ToHandle(fs, filePath)
 			attrs := ToFileAttribute(c, path.Join(filePath...))
 			entities = append(entities, readDirPlusEntity{
 				FileID:     attrs.Fileid,

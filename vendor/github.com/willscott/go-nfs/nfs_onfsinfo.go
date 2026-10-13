@@ -59,7 +59,7 @@ func onFSInfo(ctx context.Context, w *response, userHandle Handler) error {
 		Wtmax:       1 << 20,
 		Wtpref:      1 << 20,
 		Wtmult:      4096,
-		Dtpref:      8192,
+		Dtpref:      1 << 20, // tailraid: as rtpref; Linux sizes its listings by it (I-248)
 		Maxfilesize: 1 << 62, // wild guess. this seems big.
 		TimeDelta:   1,       // nanosecond precision.
 		Properties:  0,
