@@ -427,6 +427,13 @@ export interface MediaItem {
   seasons?: { n: number; title: string; poster?: string; episodes: MediaItem[] }[];
   tracks?: string[];
   catalogued: boolean;
+  /** the name analyser's fields (docs/18 §8a) */
+  date?: string;
+  absolute?: number;
+  edition?: string;
+  quality?: string[];
+  languages?: string[];
+  discs?: number;
 }
 
 export interface MediaLibrary {

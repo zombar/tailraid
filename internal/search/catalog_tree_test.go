@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -151,4 +152,103 @@ func keys(m map[string]Entry) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A music library kept the way a real one is: albums under category folders (`1 Studio`,
+// `Studio Albums`), an album of disc folders (`D1`, `CD 2`), an album kept as a format
+// edition (`MP3 CBR Original`); every album is listed under its artist with the name
+// analyser's title, year and edition, and no disc, category or format folder is an
+// album. Before, the album rule took `D1` for the album and missed the albums under
+// `1 Studio`.
+// Invariant: I-276
+func TestCatalog_MusicRoles_Table(t *testing.T) {
+	e := newEnv(t)
+	e.library("/music", meta.LibraryMusic)
+	for _, f := range []string{
+		"/music/YES/1 Studio/1983 90125 (Remastered and Expanded) @320/01 Owner.mp3",
+		"/music/YES/1 Studio/1983 90125 (Remastered and Expanded) @320/02 Hold On.mp3",
+		"/music/Genesis/1974 The Lamb Lies Down On Broadway/D1/01 The Lamb.mp3",
+		"/music/Genesis/1974 The Lamb Lies Down On Broadway/D2/01 The Waiting Room.mp3",
+		"/music/Marillion/1989 - Seasons End/1989 - MP3 CBR Original/01 The King of Sunset Town.mp3",
+		"/music/Simply Red/Studio Albums/[1995] Life/01 Fairground.mp3",
+		"/music/Oasis/Oasis - 1995 - (What's The Story) Morning Glory/01 Hello.mp3",
+	} {
+		e.write(f, []byte("a"))
+	}
+	e.pass()
+	cat := e.catalog()
+	type want struct {
+		title          string
+		year, discs    int
+		edition, under string
+	}
+	for p, w := range map[string]want{
+		"/music/YES/1 Studio/1983 90125 (Remastered and Expanded) @320": {"90125", 1983, 0, "Remastered and Expanded", "/music/YES"},
+		"/music/Genesis/1974 The Lamb Lies Down On Broadway":            {"The Lamb Lies Down On Broadway", 1974, 2, "", "/music/Genesis"},
+		"/music/Marillion/1989 - Seasons End":                           {"Seasons End", 1989, 0, "", "/music/Marillion"},
+		"/music/Simply Red/Studio Albums/[1995] Life":                   {"Life", 1995, 0, "", "/music/Simply Red"},
+		"/music/Oasis/Oasis - 1995 - (What's The Story) Morning Glory":  {"(What's The Story) Morning Glory", 1995, 0, "", "/music/Oasis"},
+	} {
+		got, ok := cat[p]
+		if !ok || got.Kind != EntAlbum {
+			t.Errorf("%s: not an album (%v): %v", p, ok, keys(cat))
+			continue
+		}
+		if g := (want{got.Title, got.Year, got.Discs, got.Edition, ""}); g.title != w.title || g.year != w.year || g.discs != w.discs || g.edition != w.edition || got.Parent != e.ino(w.under) {
+			t.Errorf("%s:\n got %+v parent %d\nwant %+v parent %d", p, g, got.Parent, w, e.ino(w.under))
+		}
+	}
+	for _, p := range []string{"/music/Genesis/1974 The Lamb Lies Down On Broadway/D1", "/music/YES/1 Studio", "/music/Simply Red/Studio Albums", "/music/Marillion/1989 - Seasons End/1989 - MP3 CBR Original"} {
+		if _, ok := cat[p]; ok {
+			t.Errorf("%s is an entry", p)
+		}
+	}
+}
+
+// Shows and films read through the name analyser: a pack folder's title, episode titles
+// after the code, a miniseries' parts, a daily show's air dates, an anime's absolute
+// numbers; Subs folders hold no episodes.
+// Invariant: I-276
+func TestCatalog_ExtrasNotItems(t *testing.T) {
+	e := newEnv(t)
+	e.library("/tv", meta.LibraryTV)
+	e.write("/tv/Severance 2022 Seasons 1 and 2 Complete 1080p WEB x264 [i_c]/Season 1/Severance - S01E01 - Good News About Hell.mkv", []byte("v"))
+	e.write("/tv/Invasion.2021.S01.PROPER.WEBRip.x264-ION10/Invasion.S01E01.WEBRip.x264-ION10.mkv", []byte("v"))
+	e.write("/tv/Invasion.2021.S01.PROPER.WEBRip.x264-ION10/Subs/Invasion.S01E01.WEBRip.x264-ION10/English.srt", []byte("1"))
+	e.write("/tv/CHILDHOODS END - Part 1, 2, 3 (Complete 2015 TV Miniseries) - 720p BluRay x264/Childhood's END - Part 02 of 03, The Deceivers (720p BluRay).mp4", []byte("v"))
+	e.write("/tv/The Daily Show/The.Daily.Show.2024.03.14.Some.Guest.1080p.WEB.h264-GROUP.mkv", []byte("v"))
+	e.write("/tv/Frieren/[SubsPlease] Sousou no Frieren - 12 (1080p) [ABCD1234].mkv", []byte("v"))
+	e.library("/films", meta.LibraryMovies)
+	e.write("/films/Upgrade (2018) [WEBRip] [1080p] [YTS.AM]/Upgrade.2018.1080p.WEBRip.x264-[YTS.AM].mp4", []byte("v"))
+	e.pass()
+	cat := e.catalog()
+	sev := "/tv/Severance 2022 Seasons 1 and 2 Complete 1080p WEB x264 [i_c]"
+	ce := "/tv/CHILDHOODS END - Part 1, 2, 3 (Complete 2015 TV Miniseries) - 720p BluRay x264"
+	for p, w := range map[string]Entry{
+		sev: {Kind: EntShow, Title: "Severance", Year: 2022},
+		sev + "/Season 1/Severance - S01E01 - Good News About Hell.mkv": {Kind: EntEpisode, Title: "Good News About Hell", Season: 1, Episode: 1},
+		"/tv/Invasion.2021.S01.PROPER.WEBRip.x264-ION10":                {Kind: EntShow, Title: "Invasion", Year: 2021},
+		ce: {Kind: EntShow, Title: "CHILDHOODS END", Year: 2015},
+		ce + "/Childhood's END - Part 02 of 03, The Deceivers (720p BluRay).mp4":           {Kind: EntEpisode, Title: "The Deceivers", Season: 1, Episode: 2},
+		"/tv/The Daily Show/The.Daily.Show.2024.03.14.Some.Guest.1080p.WEB.h264-GROUP.mkv": {Kind: EntEpisode, Title: "Some Guest", Season: -1, Date: "2024-03-14"},
+		"/tv/Frieren/[SubsPlease] Sousou no Frieren - 12 (1080p) [ABCD1234].mkv":           {Kind: EntEpisode, Title: "Episode 12", Season: -1, Absolute: 12},
+		"/films/Upgrade (2018) [WEBRip] [1080p] [YTS.AM]":                                  {Kind: EntMovie, Title: "Upgrade", Year: 2018},
+	} {
+		got, ok := cat[p]
+		if !ok {
+			t.Errorf("%s: missing", p)
+			continue
+		}
+		if got.Kind != w.Kind || got.Title != w.Title || got.Year != w.Year || got.Season != w.Season && w.Kind == EntEpisode || got.Episode != w.Episode || got.Date != w.Date || got.Absolute != w.Absolute {
+			t.Errorf("%s:\n got %+v\nwant %+v", p, got, w)
+		}
+	}
+	if q := cat["/films/Upgrade (2018) [WEBRip] [1080p] [YTS.AM]"].Quality; !reflect.DeepEqual(q, []string{"1080p", "WEBRip", "x264"}) {
+		t.Errorf("film quality %v", q)
+	}
+	for p := range cat {
+		if strings.Contains(p, "/Subs/") || strings.HasSuffix(p, "/Subs") {
+			t.Errorf("%s from a Subs folder is an entry", p)
+		}
+	}
 }

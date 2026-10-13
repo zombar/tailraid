@@ -48,22 +48,29 @@ type MediaItem struct {
 	Video     string   `json:"video,omitempty"` // the file a film or an episode plays
 	// the video's inode and version and whether its frame is stored: the page grabs and
 	// PUTs a missing frame as the file browser does (docs/13 §5, §10)
-	VideoIno     meta.Ino      `json:"video_ino,omitempty"`
-	VideoVersion uint64        `json:"video_version,omitempty"`
-	VideoThumb   bool          `json:"video_thumb,omitempty"`
-	Size         uint64        `json:"size,omitempty"`
-	Added        time.Time     `json:"added"`
-	NSFW         bool          `json:"nsfw"`
-	Children     int           `json:"children,omitempty"` // a show's seasons, an album's tracks
-	Plot         string        `json:"plot,omitempty"`
-	People       []string      `json:"people,omitempty"`
-	Season       int           `json:"season,omitempty"`
-	Episode      int           `json:"episode,omitempty"`
-	EpisodeTo    int           `json:"episode_to,omitempty"`
-	Aired        string        `json:"aired,omitempty"`
-	Seasons      []MediaSeason `json:"seasons,omitempty"`
-	Tracks       []string      `json:"tracks,omitempty"` // an album's audio files, by name
-	Catalogued   bool          `json:"catalogued"`       // false: named from the tree only, until the next pass
+	VideoIno     meta.Ino  `json:"video_ino,omitempty"`
+	VideoVersion uint64    `json:"video_version,omitempty"`
+	VideoThumb   bool      `json:"video_thumb,omitempty"`
+	Size         uint64    `json:"size,omitempty"`
+	Added        time.Time `json:"added"`
+	NSFW         bool      `json:"nsfw"`
+	Children     int       `json:"children,omitempty"` // a show's seasons, an album's tracks
+	Plot         string    `json:"plot,omitempty"`
+	People       []string  `json:"people,omitempty"`
+	Season       int       `json:"season,omitempty"`
+	Episode      int       `json:"episode,omitempty"`
+	EpisodeTo    int       `json:"episode_to,omitempty"`
+	Aired        string    `json:"aired,omitempty"`
+	// the name analyser's fields (docs/18 §8a)
+	Date       string        `json:"date,omitempty"`     // an episode's air date
+	Absolute   int           `json:"absolute,omitempty"` // an anime episode's absolute number
+	Edition    string        `json:"edition,omitempty"`
+	Quality    []string      `json:"quality,omitempty"`
+	Languages  []string      `json:"languages,omitempty"`
+	Discs      int           `json:"discs,omitempty"`
+	Seasons    []MediaSeason `json:"seasons,omitempty"`
+	Tracks     []string      `json:"tracks,omitempty"` // an album's audio files, by name
+	Catalogued bool          `json:"catalogued"`       // false: named from the tree only, until the next pass
 }
 
 // MediaSeason is one season of a show and its episodes.
@@ -134,13 +141,11 @@ func art(dir, name string) string {
 func (v mediaView) item(in meta.Inode, p, kind string) MediaItem {
 	it := MediaItem{Ino: in.Ino, Path: p, Kind: kind, Added: time.Unix(0, in.Mtime).UTC(), Size: in.Size}
 	_, it.NSFW, _ = v.s.effective(in)
-	name := in.Name
-	if in.Type == meta.TFile {
-		name = strings.TrimSuffix(name, path.Ext(name))
-	}
-	it.Title, it.Year = search.CleanName(name)
-	if kind == "album" || kind == "season" {
-		it.Title, it.Year = in.Name, 0
+	switch kind {
+	case "season":
+		it.Title = in.Name
+	default:
+		v.named(&it, in.Name, kind)
 	}
 	dir := p
 	if in.Type == meta.TFile {
@@ -152,6 +157,7 @@ func (v mediaView) item(in meta.Inode, p, kind string) MediaItem {
 		it.Title, it.SortTitle, it.Year, it.Genres, it.Rating, it.Runtime = e.Title, e.SortTitle, e.Year, e.Genres, e.Rating, e.Runtime
 		it.MPAA, it.Plot, it.People, it.Aired, it.Artist = e.MPAA, e.Plot, e.People, e.Aired, e.Artist
 		it.Season, it.Episode, it.EpisodeTo = max(e.Season, 0), e.Episode, e.EpisodeTo
+		it.Date, it.Absolute, it.Edition, it.Quality, it.Languages, it.Discs = e.Date, e.Absolute, e.Edition, e.Quality, e.Languages, e.Discs
 		it.Poster, it.Fanart, it.Thumb = art(dir, e.Poster), art(dir, e.Fanart), art(dir, e.Thumb)
 		if e.Video != 0 && e.Video != in.Ino {
 			if vp := v.path(e.Video); vp != "" {
@@ -164,6 +170,29 @@ func (v mediaView) item(in meta.Inode, p, kind string) MediaItem {
 	}
 	v.video(&it)
 	return it
+}
+
+// ctxOf is the analyser's context for an item kind.
+func ctxOf(kind string) search.Context {
+	switch kind {
+	case "movie":
+		return search.CtxMovies
+	case "show", "episode":
+		return search.CtxTV
+	case "album":
+		return search.CtxMusic
+	}
+	return search.CtxAny
+}
+
+// named fills an item's fields from its name alone (docs/18 §8a): what it shows until
+// the next pass catalogues it.
+func (v mediaView) named(it *MediaItem, name, kind string) {
+	a := search.Analyze(name, nil, ctxOf(kind))
+	it.Title, it.Year, it.Edition, it.Quality, it.Languages, it.Discs = a.Title, a.Year, a.Edition, a.Quality, a.Languages, a.Discs
+	if kind == "episode" {
+		it.Season, it.Episode, it.EpisodeTo, it.Date, it.Absolute = max(a.Season, 0), a.Episode, a.EpisodeTo, a.Date, a.Absolute
+	}
 }
 
 // video fills the video's inode, version and stored-frame flag from it.Video.
@@ -401,6 +430,10 @@ func (v mediaView) showItem(group []showDir, libPath string) MediaItem {
 	return it
 }
 
+// isEpisode reports a name the catalogue lists as an episode: a number, a part, an air
+// date or an absolute number (docs/18 §8a).
+func isEpisode(a search.Name) bool { return a.Episode > 0 || a.Date != "" || a.Absolute > 0 }
+
 // seasonNumbers is the set of seasons the folders hold, from names alone: season
 // folders and the episode files directly in a show folder.
 func (v mediaView) seasonNumbers(group []showDir) map[int]bool {
@@ -416,8 +449,8 @@ func (v mediaView) seasonNumbers(group []showDir) map[int]bool {
 			if !search.IsVideo(k.Name) {
 				continue
 			}
-			if season, _, _, ok := search.ParseEpisode(strings.TrimSuffix(k.Name, path.Ext(k.Name))); ok {
-				out[max(season, 1)] = true
+			if a := search.Analyze(k.Name, []string{d.in.Name}, search.CtxTV); isEpisode(a) {
+				out[max(a.Season, 1)] = true
 			}
 		}
 	}
@@ -442,26 +475,36 @@ func (v mediaView) seasons(group []showDir) []MediaSeason {
 		by[n] = s
 		return s
 	}
-	episodes := func(dir meta.Ino, dp string, folder int) {
+	episodes := func(dir meta.Ino, dp string, folder int, dirs ...string) {
 		for _, f := range v.liveKids(dir) {
 			if f.Type != meta.TFile || !search.IsVideo(f.Name) {
 				continue
 			}
-			season, ep, to, ok := search.ParseEpisode(strings.TrimSuffix(f.Name, path.Ext(f.Name)))
-			if !ok {
+			a := search.Analyze(f.Name, dirs, search.CtxTV)
+			if !isEpisode(a) {
 				continue
 			}
+			season := a.Season
 			if season < 0 {
 				season = max(folder, 1)
 			}
 			it := v.item(*f, path.Join(dp, f.Name), "episode")
 			if !it.Catalogued {
-				it.Season, it.Episode, it.EpisodeTo = season, ep, to
-				showTitle, _ := search.CleanName(show.Name)
+				it.Season = season
+				showTitle := search.Analyze(show.Name, nil, search.CtxTV).Title
 				if e, ok := v.cat[show.Ino]; ok {
 					showTitle = e.Title
 				}
-				it.Title = search.EpisodeTitle(strings.TrimSuffix(f.Name, path.Ext(f.Name)), showTitle, ep)
+				switch {
+				case a.EpisodeTitle != "":
+					it.Title = a.EpisodeTitle
+				case a.Episode > 0:
+					it.Title = search.EpisodeTitle(strings.TrimSuffix(f.Name, path.Ext(f.Name)), showTitle, a.Episode)
+				case a.Date != "":
+					it.Title = a.Date
+				default:
+					it.Title = "Episode " + strconv.Itoa(a.Absolute)
+				}
 				it.SortTitle = search.SortTitle(it.Title)
 			}
 			s := get(it.Season)
@@ -470,7 +513,7 @@ func (v mediaView) seasons(group []showDir) []MediaSeason {
 	}
 	for _, d := range group {
 		p := d.path
-		episodes(d.in.Ino, p, -1)
+		episodes(d.in.Ino, p, -1, d.in.Name)
 		for _, k := range v.liveKids(d.in.Ino) {
 			n, ok := search.SeasonOf(k.Name)
 			if k.Type != meta.TDir || !ok {
@@ -486,7 +529,7 @@ func (v mediaView) seasons(group []showDir) []MediaSeason {
 					s.Poster = path.Join(p, k.Name, e.Poster)
 				}
 			}
-			episodes(k.Ino, path.Join(p, k.Name), n)
+			episodes(k.Ino, path.Join(p, k.Name), n, k.Name, d.in.Name)
 		}
 	}
 	out := make([]MediaSeason, 0, len(by))
@@ -495,6 +538,12 @@ func (v mediaView) seasons(group []showDir) []MediaSeason {
 			a, b := &s.Episodes[i], &s.Episodes[j]
 			if a.Episode != b.Episode {
 				return a.Episode < b.Episode
+			}
+			if a.Date != b.Date {
+				return a.Date < b.Date
+			}
+			if a.Absolute != b.Absolute {
+				return a.Absolute < b.Absolute
 			}
 			return a.Path < b.Path
 		})

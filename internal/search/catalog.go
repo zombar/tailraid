@@ -50,6 +50,13 @@ type Entry struct {
 	Fanart    string
 	Thumb     string
 	Banner    string
+	// the name analyser's fields (docs/18 §8a, I-276), segment version 2
+	Date      string // an episode's air date, YYYY-MM-DD
+	Absolute  int    // an anime episode's absolute number
+	Edition   string
+	Quality   []string
+	Languages []string
+	Discs     int
 }
 
 // --- names
@@ -68,14 +75,6 @@ var (
 	seasonNum = regexp.MustCompile(`^\d{1,2}$`)
 )
 
-// junk is the scene-name vocabulary docs/18 §8 strips: a title ends at the first of
-// these, at a year or at a season or episode number.
-var junk = map[string]bool{
-	"1080p": true, "720p": true, "2160p": true, "480p": true, "4k": true, "x264": true, "x265": true, "h264": true, "h265": true,
-	"hevc": true, "bluray": true, "webrip": true, "web-dl": true, "webdl": true, "hdtv": true, "dvdrip": true, "remux": true,
-	"aac": true, "dts": true, "atmos": true, "proper": true, "repack": true, "10bit": true, "hdr": true, "brrip": true, "web": true,
-}
-
 // CleanName is a file or folder name's title and year (docs/18 §8): `Title (2019)`, or
 // a scene name cut at its first year, season or episode number, or release token.
 func CleanName(name string) (title string, year int) {
@@ -84,9 +83,9 @@ func CleanName(name string) (title string, year int) {
 		y, _ := strconv.Atoi(m[2])
 		return tidy(brackets.ReplaceAllString(m[1], " "), !strings.Contains(m[1], " ")), y
 	}
+	isDotted := dotted(s)
 	s = brackets.ReplaceAllString(s, " ")
-	dotted := !strings.Contains(strings.TrimSpace(s), " ")
-	if dotted {
+	if isDotted {
 		s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
 	} else {
 		s = strings.ReplaceAll(s, "_", " ")
@@ -98,7 +97,7 @@ func CleanName(name string) (title string, year int) {
 	cut := len(toks)
 	for i, t := range toks {
 		lt := strings.ToLower(t)
-		if base, _, ok := strings.Cut(lt, "-"); ok && junk[base] {
+		if base, _, ok := strings.Cut(lt, "-"); ok && cuts(base) {
 			lt = base
 		}
 		if i == 0 {
@@ -108,7 +107,7 @@ func CleanName(name string) (title string, year int) {
 		if i+1 < len(toks) {
 			next = toks[i+1]
 		}
-		if junk[lt] || episodeRe[0].MatchString(lt) || seasonTok.MatchString(lt) ||
+		if cuts(lt) || episodeRe[0].MatchString(lt) || seasonTok.MatchString(lt) ||
 			((lt == "season" || lt == "seasons") && seasonNum.MatchString(next)) ||
 			(yearTok.MatchString(t) && !yearTok.MatchString(next)) {
 			cut = i
@@ -488,7 +487,7 @@ func (c *catalogue) movies(lib meta.Ino) {
 			}
 			vs := stem(video.Name)
 			e := Entry{Ino: k.Ino, Lib: lib, Kind: EntMovie, Video: video.Ino, Season: -1}
-			e.Title, e.Year = CleanName(k.Name)
+			filmName(&e, Analyze(k.Name, nil, CtxMovies), Analyze(video.Name, []string{k.Name}, CtxMovies))
 			if n, ok := c.sidecar(md, "movie.nfo", vs+".nfo", k.Name+".nfo"); ok {
 				applyNFO(&e, n)
 			}
@@ -499,7 +498,8 @@ func (c *catalogue) movies(lib meta.Ino) {
 		case k.Type == meta.TFile && IsVideo(k.Name):
 			vs := stem(k.Name)
 			e := Entry{Ino: k.Ino, Lib: lib, Kind: EntMovie, Video: k.Ino, Season: -1}
-			e.Title, e.Year = CleanName(vs)
+			a := Analyze(k.Name, nil, CtxMovies)
+			filmName(&e, a, a)
 			if n, ok := c.sidecar(d, vs+".nfo"); ok {
 				applyNFO(&e, n)
 			}
@@ -511,6 +511,21 @@ func (c *catalogue) movies(lib meta.Ino) {
 	}
 }
 
+// filmName fills a film's name-derived fields from its folder's analysis, the video's
+// filling what the folder's name lacks (docs/18 §8a).
+func filmName(e *Entry, dir, video Name) {
+	e.Title, e.Year = dir.Title, dir.Year
+	if e.Year == 0 {
+		e.Year = video.Year
+	}
+	e.Edition = firstOf(dir.Edition, video.Edition)
+	e.Quality = video.Quality
+	if len(e.Quality) == 0 {
+		e.Quality = dir.Quality
+	}
+	e.Languages = video.Languages
+}
+
 func (c *catalogue) shows(lib meta.Ino) {
 	shows := c.list(lib).kids
 	for i := range shows {
@@ -520,7 +535,8 @@ func (c *catalogue) shows(lib meta.Ino) {
 		}
 		sd := c.list(show.Ino)
 		e := Entry{Ino: show.Ino, Lib: lib, Kind: EntShow, Season: -1}
-		e.Title, e.Year = CleanName(show.Name)
+		sn := Analyze(show.Name, nil, CtxTV)
+		e.Title, e.Year, e.Quality, e.Languages = sn.Title, sn.Year, sn.Quality, sn.Languages
 		if n, ok := c.sidecar(sd, "tvshow.nfo"); ok {
 			applyNFO(&e, n)
 		}
@@ -528,7 +544,7 @@ func (c *catalogue) shows(lib meta.Ino) {
 		e.Fanart = sd.art("fanart")
 		e.Banner = sd.art("banner")
 		c.add(e)
-		c.episodes(lib, show.Ino, sd, e.Title, -1)
+		c.episodes(lib, show.Ino, sd, e.Title, -1, show.Name)
 		for j := range sd.kids {
 			k := &sd.kids[j]
 			n, ok := SeasonOf(k.Name)
@@ -543,7 +559,7 @@ func (c *catalogue) shows(lib meta.Ino) {
 			}
 			s.Poster = firstOf(sd.art(name+"-poster"), nd.art("poster", "folder"))
 			c.add(s)
-			c.episodes(lib, show.Ino, nd, e.Title, n)
+			c.episodes(lib, show.Ino, nd, e.Title, n, k.Name, show.Name)
 		}
 	}
 }
@@ -557,22 +573,35 @@ func twoDigits(n int) string {
 
 // episodes lists the episode files of one folder: the show's own (season from the
 // name) or a season folder's (its number when the name does not say).
-func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, folderSeason int) {
+func (c *catalogue) episodes(lib, show meta.Ino, d dirIndex, showTitle string, folderSeason int, dirs ...string) {
 	for i := range d.kids {
 		f := &d.kids[i]
 		if f.Type != meta.TFile || !IsVideo(f.Name) {
 			continue
 		}
 		vs := stem(f.Name)
-		season, ep, to, ok := ParseEpisode(vs)
-		if !ok {
-			continue
+		a := Analyze(f.Name, dirs, CtxTV)
+		if a.Episode == 0 && a.Date == "" && a.Absolute == 0 {
+			continue // not an episode: no number, part, air date or absolute number
 		}
-		if season < 0 {
+		season := a.Season
+		if a.Episode > 0 && season < 0 {
 			season = max(folderSeason, 1)
 		}
-		e := Entry{Ino: f.Ino, Lib: lib, Parent: show, Kind: EntEpisode, Video: f.Ino, Season: season, Episode: ep, EpisodeTo: to}
-		e.Title = EpisodeTitle(vs, showTitle, ep)
+		e := Entry{
+			Ino: f.Ino, Lib: lib, Parent: show, Kind: EntEpisode, Video: f.Ino, Season: season, Episode: a.Episode, EpisodeTo: a.EpisodeTo,
+			Date: a.Date, Absolute: a.Absolute, Quality: a.Quality, Languages: a.Languages,
+		}
+		switch {
+		case a.EpisodeTitle != "":
+			e.Title = a.EpisodeTitle
+		case a.Episode > 0:
+			e.Title = EpisodeTitle(vs, showTitle, a.Episode)
+		case a.Date != "":
+			e.Title = a.Date
+		default:
+			e.Title = "Episode " + strconv.Itoa(a.Absolute)
+		}
 		if n, ok := c.sidecar(d, vs+".nfo"); ok {
 			applyNFO(&e, n)
 			if n.Season >= 0 && n.Episode > 0 {
@@ -602,22 +631,41 @@ func (c *catalogue) music(lib meta.Ino) {
 		}
 		a.Poster = kd.art("artist", "folder")
 		a.Fanart = kd.art("fanart")
-		albums := 0
-		for j := range kd.kids {
-			if al := &kd.kids[j]; al.Type == meta.TDir && !c.seen[al.Ino] && c.album(lib, k.Ino, al, c.list(al.Ino)) {
-				albums++
-			}
-		}
+		albums := c.albums(lib, k.Ino, kd, 2)
 		if albums > 0 || a.Plot != "" {
 			c.add(a)
 		}
 	}
 }
 
-// album adds dir as an album when its audio files outnumber its other files (13 §6).
-func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) bool {
-	var tracks []meta.Inode
-	other := 0
+// albums adds every album in an artist's folder d, walking category and format folders
+// (`1 Studio`, `MP3 CBR Original`) at most depth deep, and reports how many it added.
+func (c *catalogue) albums(lib, artist meta.Ino, d dirIndex, depth int) int {
+	n := 0
+	for j := range d.kids {
+		al := &d.kids[j]
+		if al.Type != meta.TDir || c.seen[al.Ino] {
+			continue
+		}
+		ad := c.list(al.Ino)
+		switch RoleOf(al.Name) { //nolint:exhaustive // a name, season or region folder is a candidate album
+		case RoleExtras, RoleDisc:
+			continue
+		case RoleCategory, RoleFormat:
+			if depth > 0 {
+				n += c.albums(lib, artist, ad, depth-1)
+			}
+			continue
+		}
+		if c.album(lib, artist, al, ad) {
+			n++
+		}
+	}
+	return n
+}
+
+// tracksOf is a folder's audio files and how many other files it holds.
+func tracksOf(d dirIndex) (tracks []meta.Inode, other int) {
 	for i := range d.kids {
 		f := &d.kids[i]
 		switch {
@@ -629,14 +677,45 @@ func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) boo
 			other++
 		}
 	}
-	if len(tracks) == 0 || len(tracks) <= other {
+	return tracks, other
+}
+
+// album adds dir as an album when its audio files outnumber its other files (13 §6), or
+// when it holds no audio but disc or format folders that do (`CD1`, `Disc 2`, `MP3 CBR
+// Original`): one album, a disc per disc folder.
+func (c *catalogue) album(lib, parent meta.Ino, dir *meta.Inode, d dirIndex) bool {
+	tracks, other := tracksOf(d)
+	discs, folders := 0, 0
+	if len(tracks) == 0 {
+		for i := range d.kids {
+			k := &d.kids[i]
+			if r := RoleOf(k.Name); k.Type != meta.TDir || r != RoleDisc && r != RoleFormat {
+				continue
+			}
+			if t, o := tracksOf(c.list(k.Ino)); len(t) > o {
+				tracks = append(tracks, t...)
+				if RoleOf(k.Name) == RoleDisc {
+					discs++
+				}
+				folders++
+			}
+		}
+	}
+	if len(tracks) == 0 || folders == 0 && len(tracks) <= other {
 		return false
 	}
-	e := Entry{Ino: dir.Ino, Lib: lib, Parent: parent, Kind: EntAlbum, Title: dir.Name, Tracks: len(tracks), Season: -1}
+	var artist string
+	if p, ok := c.src.GetInode(parent); ok {
+		artist = p.Name
+	}
+	an := Analyze(dir.Name, []string{artist}, CtxMusic)
+	e := Entry{Ino: dir.Ino, Lib: lib, Parent: parent, Kind: EntAlbum, Title: an.Title, Year: an.Year, Edition: an.Edition, Tracks: len(tracks), Discs: max(discs, an.Discs), Season: -1}
 	if doc, ok := c.tags(tracks[0].Ino); ok {
-		e.Title = firstOf(doc.Album, dir.Name)
+		e.Title = firstOf(doc.Album, an.Title)
 		e.Artist = doc.Artist
-		e.Year = doc.Year
+		if doc.Year != 0 {
+			e.Year = doc.Year
+		}
 		if doc.Genre != "" {
 			e.Genres = []string{doc.Genre}
 		}
@@ -673,11 +752,30 @@ func encodeCatalog(es []Entry) []byte {
 				w.str(s)
 			}
 		}
+		w.str(e.Date)
+		w.str(e.Edition)
+		w.int(e.Absolute)
+		w.int(e.Discs)
+		for _, l := range [][]string{e.Quality, e.Languages} {
+			w.int(len(l))
+			for _, s := range l {
+				w.str(s)
+			}
+		}
 	}
 	return w.b
 }
 
-func decodeCatalog(b []byte) []Entry {
+func readList(c *cursor, p *[]string) {
+	m := c.int()
+	for j := 0; j < m && c.err == nil; j++ {
+		*p = append(*p, c.str())
+	}
+}
+
+// decodeCatalog reads a catalogue section of segment version v: 1 lacks the name
+// analyser's fields.
+func decodeCatalog(b []byte, v uint8) []Entry {
 	c := &cursor{b: b}
 	n := c.int()
 	if n > len(b) {
@@ -693,11 +791,17 @@ func decodeCatalog(b []byte) []Entry {
 			*p = c.int()
 		}
 		e.Season--
-		for _, p := range []*[]string{&e.Genres, &e.People} {
-			m := c.int()
-			for j := 0; j < m && c.err == nil; j++ {
-				*p = append(*p, c.str())
+		lists := []*[]string{&e.Genres, &e.People}
+		if v >= 2 {
+			for _, p := range lists {
+				readList(c, p)
 			}
+			e.Date, e.Edition = c.str(), c.str()
+			e.Absolute, e.Discs = c.int(), c.int()
+			lists = []*[]string{&e.Quality, &e.Languages}
+		}
+		for _, p := range lists {
+			readList(c, p)
 		}
 		out = append(out, e)
 	}
