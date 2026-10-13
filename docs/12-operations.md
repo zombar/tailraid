@@ -429,7 +429,10 @@ hour is refused by `Validate`; like `repair.workers`, the key is written to the 
 only when set, so a release from before the trash still reads the file after a
 rollback, I-61). The CLI has the same three verbs for a terminal:
 `tailraid trash ls [path]` lists the deleted roots (every one, or those under a folder)
-with inode, original path, size and age; `tailraid trash restore <ino> [--to dir] [--as
+with inode, original path, size and age, fetched a page of at most 1 MiB at a time with
+the last entry's place in the trash's order as the cursor (I-234: one reply of a trash of
+some 20,000 entries had outgrown the 4 MiB the RPC client reads of an admin reply, and the
+listing failed with "unexpected EOF"); `tailraid trash restore <ino> [--to dir] [--as
 name]` puts one back; `tailraid trash purge --ino <n> | --older-than <d> | --all` reclaims,
 `--older-than 0` taking everything. `status` reports `volume.trash_inodes` and
 `volume.trash_bytes`, which the dashboard shows under Volume and the soak report charts.
@@ -597,6 +600,14 @@ volume's bytes in the clear: keep the disk where the data may be.
   mirror whose newest snapshot is older than `2 × every`, an incomplete snapshot and a
   mirror under its reserve; and `Validate` refuses the `mirrors` keys out of bounds.
 
+- **I-234** — `trash_ls` with a page budget answers the deleted roots after its cursor in
+  the trash's order (deletion time, newest first, then inode), as many as fit in the
+  budget's bytes of JSON and at least one, with the next page's cursor or none after the
+  last; paging from the first page to the last lists every root that was in the trash
+  when the listing began and is still there exactly once, in that order, whatever is
+  deleted or purged between pages; a malformed cursor is an error; `trash_ls` without a
+  budget answers every root in one reply.
+
 ## Tests
 
 | ID | Tests |
@@ -621,5 +632,6 @@ volume's bytes in the clear: keep the disk where the data may be.
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
 | I-221 | `TestWaitIdle_Table`, `TestWaitIdle_StatusUnreadable_ReturnsAtOnce` |
+| I-234 | `TestTrashPage_EveryEntryOnceWithinBudget` |
 | I-214 | `TestReporter_IdleRequestWaitsForFreshBuild`, `TestReporter_FreshWaitsForNewBuild`, `TestStatus_FreshQuery`, `TestFetchStatus_AsksFresh` |
 | I-188 | `TestConfig_Mirrors`, `TestAdminOps_NoSnapshotDelete`, `TestAdminOps_RestoreAndVersions`, `TestCLI_SplitSnapshotRef`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`, `TestCLI_MirrorAdd_MarkRehomeAdopt`, `TestCLI_MirrorRemove_LeavesDisk`, `TestCLI_Export`, `TestMirror_AdoptKeepsIDRewritesCluster`, `TestCheck_MirrorWarnings`, `TestMirror_OnlineFollowsMarkerAndHost`, `TestMirrorSet_HealthCarriesSyncProgress`, `TestReport_MirrorFields`; planned: `TestSoak_AllPhasesAgainstHarness` |

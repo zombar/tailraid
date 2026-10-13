@@ -168,6 +168,11 @@ type AdminOp struct {
 	To        string `json:"to,omitempty"`
 	As        string `json:"as,omitempty"`
 	OlderThan string `json:"older_than,omitempty"`
+	// trash_ls a page at a time (I-234): at most PageBytes of entries after Cursor ("" the
+	// first page); the reply's "next" is the following page's cursor. PageBytes 0 lists
+	// every entry in one reply, as a CLI before paging asks.
+	Cursor    string `json:"cursor,omitempty"`
+	PageBytes int    `json:"page_bytes,omitempty"`
 	All       bool   `json:"all,omitempty"`
 	Rollup    bool   `json:"rollup,omitempty"` // stats_seal: also write today's rollups so far (docs/17 §7)
 	// search (docs/18 §6, this node's index): the words, the folder to search under (Path)
