@@ -19,12 +19,12 @@ if [ "$FIRST" != --live ] && [ "$FIRST" != --voters ]; then
   export FIRST RESULTS
 fi
 others=$(for os in $OSES; do [ "$os" = "$FIRST" ] || printf '%s ' "$os"; done)
-NONVOTER=$(echo $others | awk '{ print $NF }') # the last joiner joins without --voter
+NONVOTER=$(echo "$others" | awk '{ print $NF }') # the last joiner joins without --voter
 TOKEN=vmtoken
 failed=""
 # what `status` must show once every guest is in: n devices and n disks live, and the
 # automatic policy for n disks on n hosts (docs/14 §6: 2+1 for three, 1+1 for two)
-N=$(echo $OSES | wc -w | tr -d ' ')
+N=$(echo "$OSES" | wc -w | tr -d ' ')
 case "$N" in 3) EXPECT="3/3 3/3 policy 2+1 auto=true" ;; 2) EXPECT="2/2 2/2 policy 1+1 auto=true" ;; *) die "OSES needs two or three guests" ;; esac
 
 step() { # <name> <function>: runs it, records the result, remembers a failure
@@ -38,7 +38,7 @@ step() { # <name> <function>: runs it, records the result, remembers a failure
 }
 
 # ---- guest helpers (OS differences live here) ------------------------------------------
-guest_home() { case "$1" in mac) echo "/Users/admin" ;; linux) echo "/home/admin" ;; win) echo 'C:\tailraid' ;; esac; }
+guest_home() { case "$1" in mac) echo "/Users/admin" ;; linux) echo "/home/admin" ;; win) printf '%s\n' 'C:\tailraid' ;; esac; }
 mount_path() { case "$1" in win) echo "T:" ;; *) echo "$(guest_home "$1")/TailRAID" ;; esac; }
 # tr <os> <args...>: a tailraid command in the guest
 tr_() { vm_ssh "$1" "tailraid ${*:2}" | tr -d '\r'; }
@@ -92,7 +92,9 @@ mount_() { # <os>: mount, and on Windows only check that the mapping works (it i
     # the SMB redirector remembers a path it failed to reach (the slate step's umount
     # ran against no server) for a few seconds: error 53 right after the service came up
     # is retried
-    win) vm_ssh win 'for ($i = 0; $i -lt 6; $i++) { tailraid mount; if (Test-Path T:\) { break }; Start-Sleep -Seconds 5 }; if (-not (Test-Path T:\)) { throw "T: not mapped" }; Get-ChildItem T:\ | Out-Null; tailraid umount' | tr -d '\r' ;;
+    win)
+      # shellcheck disable=SC2016 # PowerShell, expanded in the guest
+      vm_ssh win 'for ($i = 0; $i -lt 6; $i++) { tailraid mount; if (Test-Path T:\) { break }; Start-Sleep -Seconds 5 }; if (-not (Test-Path T:\)) { throw "T: not mapped" }; Get-ChildItem T:\ | Out-Null; tailraid umount' | tr -d '\r' ;;
     *) tr_ "$1" mount && vm_ssh "$1" "ls $(mount_path "$1") >/dev/null" ;;
   esac
 }
@@ -199,6 +201,7 @@ s7_data() {
   # read-modify-write at a non-zero offset across gateways: the second guest rewrites
   # 64 KiB of the first's file at 1 MiB + 7 and the third (the first again, with two
   # guests) reads it back
+  # shellcheck disable=SC2086 # OSES is a space-separated list
   set -- $OSES
   local a=$1 b=$2 c=${3:-$1}
   read -r _ h < <(data "$b" overwrite "$RUN_ID" "$a.bin")
@@ -335,6 +338,7 @@ s9_disk_and_recover() {
   live_nodes "$FIRST"
   # a one-voter cluster whose other two nodes still run: every file whose shards survive
   # reads exactly (every file here: 2+1 over three disks)
+  # shellcheck disable=SC2086 # OSES is a space-separated list
   set -- $OSES
   local a=$1
   [ "$FIRST" = "$a" ] && a=$2
@@ -358,7 +362,9 @@ s10_teardown() {
   collect_logs
   for os in $OSES; do
     case "$os" in
-      win) vm_ssh win 'tailraid umount 2>$null | Out-Null; tailraid uninstall; tailraid reset --yes --discard-dirty' | tr -d '\r' || true ;;
+      win)
+        # shellcheck disable=SC2016 # PowerShell, expanded in the guest
+        vm_ssh win 'tailraid umount 2>$null | Out-Null; tailraid uninstall; tailraid reset --yes --discard-dirty' | tr -d '\r' || true ;;
       *) vm_ssh "$os" "tailraid umount >/dev/null 2>&1; tailraid uninstall; tailraid reset --yes --discard-dirty" || true ;;
     esac
   done

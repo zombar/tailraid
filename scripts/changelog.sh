@@ -27,7 +27,7 @@ section() { # section TITLE RANGE DATE
       ci:*|tests:*|test:*|Tidy*|tidy:*) tooling+=("$entry") ;;
       *) changes+=("$entry") ;;
     esac
-  done < <(git log --no-merges --format='%h%x09%s' $range)
+  done < <(git log --no-merges --format='%h%x09%s' "$range")
   if [ ${#changes[@]} -eq 0 ] && [ ${#tooling[@]} -eq 0 ] && [ ${#docs[@]} -eq 0 ]; then
     if [ "$title" = Unreleased ]; then
       return
@@ -69,7 +69,6 @@ case "${1:-gen}" in
       fi
       prev=""
       for t in $tags; do
-        d=$(git log -1 --format=%cs "$t")
         if [ -n "$prev" ]; then
           section "$prev" "${t}..${prev}" "$(git log -1 --format=%cs "$prev")"
         fi

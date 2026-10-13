@@ -56,11 +56,17 @@ make lint-cross   golangci-lint under GOOS=linux, darwin and windows (the per-OS
 make web-typecheck typescript-go over internal/webui    make spell       misspell over docs, TS, CSS, lookdev
 make docs-check   scripts/check-docs.sh (links, anchors, I-n/L-n mentions, fences, README lists)
 make actionlint / yaml-check / yamlfmt / shell-check    workflow, YAML and shell files
+make lint-go      golangci-lint + deadcode (the Go half of lint; shell-check downloads a pinned shellcheck)
 make hooks        install the lefthook hooks (pre-commit = check, pre-push = vuln, commit-msg = scope)
 make release      6 static binaries + sha256sums
 make test-mount   real NFS mount (sudo -E)              make soak        docker-compose soak → report.html
 make web          esbuild → internal/webui/dist/app.js  make web-check   fails when dist is stale (part of check)
 ```
+
+CI (`.github/workflows/ci.yml`) asks `scripts/ci-changes.sh` what a run must test: a
+prose-only change (the release changelog, docs Markdown) skips lint-go, vuln and the tests;
+a pull request tests on Linux alone unless it touches per-OS code or has the `full-ci`
+label; a tag whose parent passed on main goes straight to the release.
 
 Runtime dependencies are vendored (`vendor/`, refreshed by `make tidy`, checked by
 `make vendor-check`); builds use `-mod=vendor`. Dev tools are pinned in `tools.mod`, so the
