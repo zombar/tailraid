@@ -396,7 +396,7 @@ export function render(root: HTMLElement, ctx: Ctx): () => void {
       if (thumb.classList.contains("nsfw")) thumb.append(h("span", { class: "veil" }, "nsfw · tap to show"));
       const root = e.deleted_at ? e.ino : source;
       const tp = e.deleted_at ? (e.type === "dir" && e.cover ? "/" + e.cover : "/") : thumbPath;
-      lazy(img, e, tp, root, e.type === "dir" ? "audio" : (kindOf as "image" | "video" | "audio"), showIcon);
+      lazy(img, e, tp, root, e.type === "dir" ? (e.cover ? "audio" : "dir") : (kindOf as "image" | "video" | "audio"), showIcon);
     } else showIcon();
     const meta = h("span", { class: "tmeta" });
     if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
