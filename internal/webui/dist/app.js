@@ -1030,13 +1030,13 @@ function asofMenu(ctx, view3, current) {
   });
   return details;
 }
-function banner(ctx, ref, summary, folder2, back) {
+function banner(ctx, ref, summary, folder3, back) {
   const name = ref?.name ?? (ctx.at !== void 0 ? `#${ctx.at}` : "");
   const text2 = h("span", null, "As of ", h("span", { class: "mono" }, name));
   if (ref) text2.append(" on ", h("span", { class: "mono" }, ref.mirror), ` \xB7 taken ${ago(ref.at)}`);
   text2.append(" \xB7 read-only" + (summary ? " \xB7 " + summary : ""));
   const actions = h("span", { class: "actions" });
-  if (folder2 && ref) actions.append(h("button", { type: "button", onClick: () => void restoreFolder(ctx, ref) }, "Restore folder to\u2026"));
+  if (folder3 && ref) actions.append(h("button", { type: "button", onClick: () => void restoreFolder(ctx, ref) }, "Restore folder to\u2026"));
   actions.append(h("button", { type: "button", onClick: () => location.hash = back }, "Back to now"));
   return h("div", { class: "banner snapshot" }, text2, actions);
 }
@@ -2404,6 +2404,17 @@ function lazy(img, e, path, root, kind2, onMiss) {
       };
       img.src = src2;
     };
+    if (kind2 === "dir" && root === void 0) {
+      void folder(path).then((src2) => {
+        if (!src2) return onMiss(), done();
+        img.addEventListener("load", () => URL.revokeObjectURL(src2), { once: true });
+        show(src2);
+      }).catch(() => {
+        onMiss();
+        done();
+      });
+      return;
+    }
     const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
     if (e.thumb || kind2 !== "video" || root !== void 0) {
       show(thumbURL(path, root, tag));
@@ -2422,6 +2433,17 @@ function lazy(img, e, path, root, kind2, onMiss) {
     queue.push(p);
     pump();
   }
+}
+async function folder(path) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(thumbURL(path));
+    if (r.ok) return URL.createObjectURL(await r.blob());
+    if (r.status !== 404 || attempt > 0) return null;
+    const miss = await r.json().catch(() => ({}));
+    const g = miss.grab;
+    if (!g || !await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return null;
+  }
+  return null;
 }
 async function grab(path, e) {
   const key = `tr.vthumb:${e.ino}.${e.version}.f${RECIPE}`;
@@ -3110,7 +3132,7 @@ function render8(root, ctx) {
       if (thumb.classList.contains("nsfw")) thumb.append(h("span", { class: "veil" }, "nsfw \xB7 tap to show"));
       const root2 = e.deleted_at ? e.ino : source;
       const tp = e.deleted_at ? e.type === "dir" && e.cover ? "/" + e.cover : "/" : thumbPath;
-      lazy(img, e, tp, root2, e.type === "dir" ? "audio" : kindOf, showIcon);
+      lazy(img, e, tp, root2, e.type === "dir" ? e.cover ? "audio" : "dir" : kindOf, showIcon);
     } else showIcon();
     const meta = h("span", { class: "tmeta" });
     if (e.type === "file") meta.append(h("span", null, bytes(e.size)));
@@ -3565,9 +3587,9 @@ function render9(root, query) {
 }
 
 // internal/webui/src/search.ts
-var folder = "/";
+var folder2 = "/";
 function setFolder(p) {
-  folder = p || "/";
+  folder2 = p || "/";
 }
 function searchHash(q, under) {
   return "#/search/" + encodeURIComponent(q) + (under ? "?under=" + encodeURIComponent(under) : "");
@@ -3658,7 +3680,7 @@ function render10(root, q, params) {
   const abort = new AbortController();
   const section2 = h("section", { class: "results" });
   root.append(section2);
-  const scope = under || folder;
+  const scope = under || folder2;
   const sub2 = h("span", { class: "h-sub" }, "searching\u2026");
   const bar2 = h("div", { class: "toolbar" }, h("h2", null, "Search", sub2), h("span", { class: "spacer" }));
   if (scope !== "/") {
@@ -3913,8 +3935,8 @@ function detail(root, path) {
       const target = it.kind === "show" ? first?.path : it.video;
       if (target) play.addEventListener("click", () => location.hash = fileHash({ path: target }));
       else play.disabled = true;
-      const folder2 = it.video === it.path ? dirname(it.path) : it.path;
-      body.append(h("div", { class: "actions" }, play, h("a", { class: "btn", href: browseHash({ path: folder2 }) }, "Open folder")));
+      const folder3 = it.video === it.path ? dirname(it.path) : it.path;
+      body.append(h("div", { class: "actions" }, play, h("a", { class: "btn", href: browseHash({ path: folder3 }) }, "Open folder")));
       if (it.people?.length) {
         const people = h("div", { class: "people" });
         it.people.forEach((p, i) => people.append(h("span", { class: "person" }, i === 0 && it.kind === "movie" && it.people.length > 1 ? `${p} \xB7 director` : p)));

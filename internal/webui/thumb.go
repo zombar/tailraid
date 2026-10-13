@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +84,37 @@ func (s *Server) hasThumb(in meta.Inode) bool {
 	return err == nil
 }
 
+// Grab is the video a folder's tile asks the browser to frame (docs/13 §5, I-275): the
+// folder has no art yet, and this video's frame would be it. Path is below the folder.
+type Grab struct {
+	Path    string `json:"path"`
+	Ino     uint64 `json:"ino"`
+	Version uint64 `json:"version"`
+}
+
+// thumbMiss is a folder's 404: no art, and the video to frame when one waits.
+type thumbMiss struct {
+	Error string `json:"error"`
+	Grab  *Grab  `json:"grab,omitempty"`
+}
+
+// grabOf is the first video e waits for, below dir, or nil.
+func (s *Server) grabOf(dir meta.Inode, e coverEntry) *Grab {
+	if len(e.wait) == 0 {
+		return nil
+	}
+	in, ok := s.o.Store.GetInodeAny(e.wait[0])
+	if !ok {
+		return nil
+	}
+	parts, err := s.o.Store.PathOf(in.Ino)
+	dparts, derr := s.o.Store.PathOf(dir.Ino)
+	if err != nil || derr != nil || len(parts) <= len(dparts) || !slices.Equal(parts[:len(dparts)], dparts) {
+		return nil
+	}
+	return &Grab{Path: path.Join(parts[len(dparts):]...), Ino: uint64(in.Ino), Version: in.Version}
+}
+
 // thumbGet serves a file's thumbnail: stored, else made now for an image or an audio
 // file with a picture; 404 for a video without one, or anything else.
 func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
@@ -96,12 +128,12 @@ func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.in.Type == meta.TDir { // a folder's tile is its cover track's picture, resolved here and remembered (I-165)
-		name := s.coverOf(t.in)
-		if name == "" {
-			writeErr(w, http.StatusNotFound, "no thumbnail")
+		e := s.coverOf(t.in)
+		if e.name == "" {
+			writeJSON(w, http.StatusNotFound, thumbMiss{Error: "no thumbnail", Grab: s.grabOf(t.in, e)})
 			return
 		}
-		if t, err = s.resolveTarget(r, path.Join(r.URL.Query().Get("path"), name)); err != nil {
+		if t, err = s.resolveTarget(r, path.Join(r.URL.Query().Get("path"), e.name)); err != nil {
 			s.fail(w, err)
 			return
 		}
