@@ -3,7 +3,7 @@
 // refresh while the range ends now (I-198).
 
 import { clear, h } from "./dom.ts";
-import { getStats, type StatsMember, type StatsResponse } from "./api.ts";
+import { streamStats, type StatsFirst, type StatsFrame, type StatsLine, type StatsMember } from "./api.ts";
 
 const RANGES: [string, number][] = [
   ["1h", 3600],
@@ -59,7 +59,7 @@ export function render(root: HTMLElement, query: string): () => void {
   const state = parse(query);
   let timer: number | undefined;
   let disposed = false;
-  let last: StatsResponse | null = null;
+  let last: StatsFirst | null = null;
   let lastAt = 0;
 
   const go = (next: Partial<State>) => {
@@ -115,23 +115,88 @@ export function render(root: HTMLElement, query: string): () => void {
     for (const m of nodes) row(m.name, m.name, m.live ? "ok" : "bad", (m.self ? "this device · " : "") + (m.live ? "live" : "dead") + (m.web ? "" : " · no web listener"), m);
   };
 
-  const draw = (r: StatsResponse) => {
-    last = r;
+  // the cards by chart id, the catalogue's order and titles, and the charts the last
+  // stream found no rows for (asked again on every refresh, so one that gets rows appears)
+  const cards = new Map<string, HTMLElement>();
+  let order: string[] = [];
+  const titles = new Map<string, string>();
+  const empty = new Set<string>();
+
+  const header = (f: StatsFirst) => {
+    last = f;
     lastAt = Date.now();
-    const nodeName = state.node === "" ? r.node : state.node;
+    const nodeName = state.node === "" ? f.node : state.node;
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
-    drawMembers(r.nodes, nodeName);
-    const span = r.range.to - r.range.from;
-    sub.textContent = `${r.range.tier} rows · ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " · refreshes every 5 s while live" : "");
+    drawMembers(f.nodes, nodeName);
+    const span = f.range.to - f.range.from;
+    sub.textContent = `${f.range.tier} rows · ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (f.range.live ? " · refreshes every 5 s while live" : "");
+  };
+
+  // frames draws every chart's frame at once, at its chart's size (docs/17 §4, I-259)
+  const frames = (list: StatsFrame[]) => {
+    cards.clear();
+    empty.clear();
+    titles.clear();
+    order = list.map((fr) => fr.id);
     clear(charts);
-    if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
-    for (const c of r.charts) {
+    for (const fr of list) {
+      titles.set(fr.id, fr.title);
       const card = h("div", { class: "chart-card" });
-      card.innerHTML = c.svg; // the node renders the SVG and escapes every name in it (I-197)
-      card.append(h("div", { class: "small dim" }, c.caption + " · " + c.title));
+      card.innerHTML = fr.frame; // the node renders the SVG and escapes every name in it (I-197)
+      card.append(h("div", { class: "small dim" }, "loading"));
+      cards.set(fr.id, card);
       charts.append(card);
     }
-    setPill(r.range.live ? "live" : "paused");
+  };
+
+  // fill replaces a frame with its chart as its line arrives
+  const fill = (l: StatsLine) => {
+    if (!l.id) {
+      if (l.error) fail(l.error);
+      return;
+    }
+    let card = cards.get(l.id);
+    if (l.empty) {
+      card?.remove();
+      cards.delete(l.id);
+      empty.add(l.id);
+      return;
+    }
+    if (!l.svg) return;
+    if (!card) {
+      // a chart that had no rows before: in its place among the others
+      charts.querySelector(":scope > .empty")?.remove();
+      card = h("div", { class: "chart-card" });
+      const next = order.slice(order.indexOf(l.id) + 1).find((id) => cards.has(id));
+      charts.insertBefore(card, next ? (cards.get(next) as HTMLElement) : null);
+      cards.set(l.id, card);
+    }
+    empty.delete(l.id);
+    card.innerHTML = l.svg;
+    card.append(h("div", { class: "small dim" }, (l.caption ?? "") + " · " + (titles.get(l.id) ?? l.id)));
+  };
+
+  // fail keeps every frame still waiting, with the reason in the bad colour
+  const fail = (reason: string) => {
+    for (const card of cards.values()) {
+      const svg = card.querySelector("svg.chart.pending");
+      if (!svg) continue;
+      svg.classList.add("failed");
+      const note = svg.querySelector(".note");
+      if (note) note.textContent = "not drawn: " + reason;
+      const cap = card.querySelector("div.small");
+      if (cap) cap.textContent = reason;
+    }
+  };
+
+  // onScreen is the charts at least partly in the viewport, and those with no rows yet
+  const onScreen = (): string[] => {
+    const ids: string[] = [];
+    for (const [id, card] of cards) {
+      const r = card.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < window.innerHeight) ids.push(id);
+    }
+    return [...ids, ...empty];
   };
 
   const setPill = (mode: "live" | "paused" | "error", err?: string) => {
@@ -142,13 +207,35 @@ export function render(root: HTMLElement, query: string): () => void {
 
   const fetchOnce = async () => {
     const b = bounds(state, Date.now());
+    const refresh = last !== null && cards.size + empty.size > 0;
+    if (!refresh) {
+      pill.className = "pill";
+      pill.textContent = "loading";
+    }
     try {
-      const r = await getStats(b.from, b.to, state.node);
-      if (!disposed) draw(r);
+      await streamStats(
+        b.from,
+        b.to,
+        state.node,
+        refresh ? onScreen() : null,
+        (f) => {
+          if (disposed) return;
+          header(f);
+          if (!refresh) frames(f.charts);
+        },
+        (l) => {
+          if (!disposed) fill(l);
+        },
+      );
+      if (disposed) return;
+      if (cards.size === 0) charts.replaceChildren(h("div", { class: "empty" }, "no rows in this range yet"));
+      setPill(last?.range.live ? "live" : "paused");
     } catch (e) {
       if (disposed) return;
-      setPill("error", e instanceof Error ? e.message : String(e));
-      if (!last) charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + (e instanceof Error ? e.message : String(e))));
+      const msg = e instanceof Error ? e.message : String(e);
+      setPill("error", msg);
+      if (cards.size > 0) fail(msg);
+      else charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + msg));
     }
   };
   const loop = async () => {

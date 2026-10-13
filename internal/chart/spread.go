@@ -99,6 +99,22 @@ func ExpectedShares(ts []Target, chunks int) []float64 {
 	return out
 }
 
+// The spread's lane height and the gap between hosts.
+const spreadRow, spreadGap = 14, 6
+
+// SpreadHeight is the height of a Spread chart whose lanes are targets on these hosts, in
+// lane order (a host's targets together).
+func SpreadHeight(hosts []string) int {
+	y := padT
+	for i, h := range hosts {
+		if i > 0 && h != hosts[i-1] {
+			y += spreadGap
+		}
+		y += spreadRow
+	}
+	return y + 6 + spreadRow + 64
+}
+
 // Spread draws the lanes. xs are the samples' x positions; maxX the span.
 func Spread(maxX float64, xs []float64, samples []SpreadSample, ax Axis) string {
 	// lanes from the last sample that has targets, grouped by host
@@ -112,7 +128,7 @@ func Spread(maxX float64, xs []float64, samples []SpreadSample, ax Axis) string 
 	if len(lanes) == 0 {
 		return ""
 	}
-	const rowH, gap = 14, 6
+	const rowH, gap = spreadRow, spreadGap
 	iw := float64(Width - padL - padR)
 	if maxX == 0 {
 		maxX = 1
@@ -129,7 +145,7 @@ func Spread(maxX float64, xs []float64, samples []SpreadSample, ax Axis) string 
 		y += rowH
 	}
 	capY := y + 6
-	h := capY + rowH + 64
+	h := capY + rowH + 64 // SpreadHeight
 	var b strings.Builder
 	title := "Data spread across disks — each target's slot share against its expected share"
 	fmt.Fprintf(&b, `<svg class="chart" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="%s">`, Width, h, html.EscapeString(title))

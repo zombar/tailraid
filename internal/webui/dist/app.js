@@ -270,7 +270,30 @@ function upload(path, file, onProgress, onNote) {
     }
   };
 }
-var getStats = (from, to, node) => call(`/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}`);
+async function streamStats(from, to, node, ids, onFirst, onLine) {
+  let url = `/api/stats?from=${from}&to=${to}&node=${encodeURIComponent(node)}&stream=1`;
+  if (ids) url += "&ids=" + encodeURIComponent(ids.join(","));
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok || !r.body) throw await apiError(r);
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let first = true;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (value) buf += dec.decode(value, { stream: true });
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      if (first) {
+        first = false;
+        onFirst(JSON.parse(line));
+      } else onLine(JSON.parse(line));
+    }
+    if (done) return;
+  }
+}
 var snapshots = () => call("/api/snapshots");
 var takeSnapshot = (opts = {}) => post("/api/snapshot", opts);
 var versions = (path) => call("/api/versions?path=" + encodeURIComponent(path));
@@ -3408,23 +3431,76 @@ function render9(root, query) {
     row2("all", "all nodes", "off", "one series per member");
     for (const m of nodes) row2(m.name, m.name, m.live ? "ok" : "bad", (m.self ? "this device \xB7 " : "") + (m.live ? "live" : "dead") + (m.web ? "" : " \xB7 no web listener"), m);
   };
-  const draw = (r) => {
-    last2 = r;
+  const cards = /* @__PURE__ */ new Map();
+  let order = [];
+  const titles = /* @__PURE__ */ new Map();
+  const empty = /* @__PURE__ */ new Set();
+  const header = (f) => {
+    last2 = f;
     lastAt = Date.now();
-    const nodeName = state.node === "" ? r.node : state.node;
+    const nodeName = state.node === "" ? f.node : state.node;
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
-    drawMembers(r.nodes, nodeName);
-    const span = r.range.to - r.range.from;
-    sub2.textContent = `${r.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (r.range.live ? " \xB7 refreshes every 5 s while live" : "");
+    drawMembers(f.nodes, nodeName);
+    const span = f.range.to - f.range.from;
+    sub2.textContent = `${f.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (f.range.live ? " \xB7 refreshes every 5 s while live" : "");
+  };
+  const frames = (list) => {
+    cards.clear();
+    empty.clear();
+    titles.clear();
+    order = list.map((fr) => fr.id);
     clear(charts);
-    if (r.charts.length === 0) charts.append(h("div", { class: "empty" }, "no rows in this range yet"));
-    for (const c of r.charts) {
+    for (const fr of list) {
+      titles.set(fr.id, fr.title);
       const card3 = h("div", { class: "chart-card" });
-      card3.innerHTML = c.svg;
-      card3.append(h("div", { class: "small dim" }, c.caption + " \xB7 " + c.title));
+      card3.innerHTML = fr.frame;
+      card3.append(h("div", { class: "small dim" }, "loading"));
+      cards.set(fr.id, card3);
       charts.append(card3);
     }
-    setPill(r.range.live ? "live" : "paused");
+  };
+  const fill = (l) => {
+    if (!l.id) {
+      if (l.error) fail(l.error);
+      return;
+    }
+    let card3 = cards.get(l.id);
+    if (l.empty) {
+      card3?.remove();
+      cards.delete(l.id);
+      empty.add(l.id);
+      return;
+    }
+    if (!l.svg) return;
+    if (!card3) {
+      charts.querySelector(":scope > .empty")?.remove();
+      card3 = h("div", { class: "chart-card" });
+      const next2 = order.slice(order.indexOf(l.id) + 1).find((id) => cards.has(id));
+      charts.insertBefore(card3, next2 ? cards.get(next2) : null);
+      cards.set(l.id, card3);
+    }
+    empty.delete(l.id);
+    card3.innerHTML = l.svg;
+    card3.append(h("div", { class: "small dim" }, (l.caption ?? "") + " \xB7 " + (titles.get(l.id) ?? l.id)));
+  };
+  const fail = (reason) => {
+    for (const card3 of cards.values()) {
+      const svg2 = card3.querySelector("svg.chart.pending");
+      if (!svg2) continue;
+      svg2.classList.add("failed");
+      const note = svg2.querySelector(".note");
+      if (note) note.textContent = "not drawn: " + reason;
+      const cap = card3.querySelector("div.small");
+      if (cap) cap.textContent = reason;
+    }
+  };
+  const onScreen = () => {
+    const ids = [];
+    for (const [id, card3] of cards) {
+      const r = card3.getBoundingClientRect();
+      if (r.bottom > 0 && r.top < window.innerHeight) ids.push(id);
+    }
+    return [...ids, ...empty];
   };
   const setPill = (mode, err) => {
     pill2.className = "pill" + (mode === "live" ? " ok" : mode === "error" ? " bad" : "");
@@ -3433,13 +3509,35 @@ function render9(root, query) {
   };
   const fetchOnce = async () => {
     const b = bounds(state, Date.now());
+    const refresh = last2 !== null && cards.size + empty.size > 0;
+    if (!refresh) {
+      pill2.className = "pill";
+      pill2.textContent = "loading";
+    }
     try {
-      const r = await getStats(b.from, b.to, state.node);
-      if (!disposed) draw(r);
+      await streamStats(
+        b.from,
+        b.to,
+        state.node,
+        refresh ? onScreen() : null,
+        (f) => {
+          if (disposed) return;
+          header(f);
+          if (!refresh) frames(f.charts);
+        },
+        (l) => {
+          if (!disposed) fill(l);
+        }
+      );
+      if (disposed) return;
+      if (cards.size === 0) charts.replaceChildren(h("div", { class: "empty" }, "no rows in this range yet"));
+      setPill(last2?.range.live ? "live" : "paused");
     } catch (e) {
       if (disposed) return;
-      setPill("error", e instanceof Error ? e.message : String(e));
-      if (!last2) charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + (e instanceof Error ? e.message : String(e))));
+      const msg = e instanceof Error ? e.message : String(e);
+      setPill("error", msg);
+      if (cards.size > 0) fail(msg);
+      else charts.replaceChildren(h("div", { class: "error" }, "Could not load the stats: " + msg));
     }
   };
   const loop = async () => {
