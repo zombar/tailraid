@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -227,6 +228,36 @@ func TestClearGame_Table(t *testing.T) {
 		}
 		if got != tc.want || len(cs) != tc.cands {
 			t.Errorf("%q: %q with %d candidates, want %q with %d", tc.key, got, len(cs), tc.want, tc.cands)
+		}
+	}
+}
+
+// Without a TMDB key a run keeps the keyless groups: every group asked narrows to music
+// and games, and asking only for TMDB's is ErrNoKey.
+func TestWithoutKey_Table(t *testing.T) {
+	for _, tc := range []struct {
+		only    []string
+		want    []string
+		dropped int
+		err     bool
+	}{
+		{nil, []string{OnlyGames, OnlyMusic}, 3, false},
+		{[]string{OnlyMovies, OnlyGames}, []string{OnlyGames}, 1, false},
+		{[]string{OnlyMusic}, []string{OnlyMusic}, 0, false},
+		{[]string{OnlyMovies, OnlyTV}, nil, 2, true},
+	} {
+		in := map[string]bool{}
+		for _, g := range tc.only {
+			in[g] = true
+		}
+		got, dropped, err := WithoutKey(in)
+		var names []string
+		for g := range got {
+			names = append(names, g)
+		}
+		sort.Strings(names)
+		if (err != nil) != tc.err || !reflect.DeepEqual(names, tc.want) || len(dropped) != tc.dropped || tc.err && !errors.Is(err, ErrNoKey) {
+			t.Errorf("%v: %v dropped %v err %v", tc.only, names, dropped, err)
 		}
 	}
 }

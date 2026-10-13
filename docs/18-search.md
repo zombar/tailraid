@@ -308,7 +308,7 @@ reason.
 | Command | Does |
 |---|---|
 | `tailraid media key` | reads a TMDB API key (v3 key, or a v4 read token) from `TAILRAID_TMDB_API_KEY` or stdin, checks it with one `GET /3/configuration`, and keeps it in `<data_dir>/tmdb.key`, mode 0600, on this device only (I-302); prints TMDB's attribution |
-| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path |
+| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path; with no TMDB key it does the keyless groups (`music`, `games`) and says it skipped the rest |
 
 **The plan.** `scrape_plan` answers, for each item under the paths in catalogue order,
 its path, kind, the analysed title and year (§8a), its seasons and episode files with
