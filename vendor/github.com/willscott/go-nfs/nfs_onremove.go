@@ -31,13 +31,7 @@ func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 	fullPath := fs.Join(path...)
 	dirInfo, err := fs.Stat(fullPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		if os.IsPermission(err) {
-			return &NFSStatusError{NFSStatusAccess, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return &NFSStatusError{namespaceStatus(err), err} // tailraid: the RFC's status for the reason (I-238)
 	}
 	if !dirInfo.IsDir() {
 		return &NFSStatusError{NFSStatusNotDir, nil}
@@ -49,13 +43,7 @@ func onRemove(ctx context.Context, w *response, userHandle Handler) error {
 
 	err = fs.Remove(toDelete)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &NFSStatusError{NFSStatusNoEnt, err}
-		}
-		if os.IsPermission(err) {
-			return &NFSStatusError{NFSStatusAccess, err}
-		}
-		return &NFSStatusError{NFSStatusIO, err}
+		return &NFSStatusError{namespaceStatus(err), err} // tailraid: the RFC's status for the reason (I-238)
 	}
 
 	if err := userHandle.InvalidateHandle(fs, toDeleteHandle); err != nil {

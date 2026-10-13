@@ -35,10 +35,10 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 | WRITE (every RPC, ≤ wsize, typically 64 KiB–1 MiB) | `Stat(path)` → `OpenFile(path, O_RDWR, 0)` → `file.Seek(offset, 0)` → `file.Write(data)` → `file.Close()`; replies **FILE_SYNC** unconditionally; a write past `MaxFileSize` (I-64) fails with `EFBIG` → `NFS3ERR_FBIG` |
 | COMMIT | no-op; never touches billy |
 | READ | `Open(path)` → `file.ReadAt(buf, offset)` → `file.Close()` |
-| SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()`; a size past `MaxFileSize` (I-64) fails with `EFBIG` |
+| SETATTR size | `OpenFile(path, O_WRONLY\|O_EXCL, 0)` → `file.Truncate(size)` → `file.Close()`; a size past `MaxFileSize` (I-64) fails with `EFBIG`, answered `NFS3ERR_FBIG` (`ENOSPC` `NFS3ERR_NOSPC`) as an NFS status, where go-nfs had passed the error up as an RPC failure (I-238) |
 | SETATTR mode/uid/gid/times | `Handler.Change(fs)` → `Chmod`/`Lchown`/`Chtimes`; if `Change` returns nil every such call fails with NFS3ERR_NOTSUPP |
 | CREATE | `UNCHECKED`: `fs.Create(path)` → `Close()` (then SETATTR for mode); on an existing file that is the truncate a rewrite starts with (04 §6, I-223). `GUARDED`: `fs.OpenFile(path, O_RDWR\|O_CREATE\|O_EXCL)`, `EEXIST` → `NFS3ERR_EXIST` whether this gateway or the leader saw the name first (I-222). `EXCLUSIVE` (a verifier, RFC 1813 §3.3.8, I-231): the same exclusive create, the verifier kept in the new file's times; a name that holds a file is `NFS3ERR_EXIST` unless its mtime still carries the request's verifier (a retransmission), which answers the file. Until 2026-10-12 it answered `NFS3ERR_NOTSUPP`, on which Linux retried `GUARDED` but macOS retried `UNCHECKED`, truncating a file another device had made |
-| MKDIR / RMDIR / REMOVE / RENAME | `MkdirAll`, `Remove`, `Remove`, `Rename` |
+| MKDIR / RMDIR / REMOVE / RENAME | `MkdirExcl` (exclusive across gateways, as CREATE `GUARDED`; a name holding a file or a folder is `NFS3ERR_EXIST`), `Remove`, `Remove`, `Rename`; a failure answers the RFC 1813 status of its reason (I-238): a folder with entries `NFS3ERR_NOTEMPTY` for RMDIR and `NFS3ERR_EXIST` as a RENAME target (§3.3.14), a folder moved under itself `NFS3ERR_INVAL`, a name too long `NFS3ERR_NAMETOOLONG`, where all but "not found" and "permission" had been `NFS3ERR_IO`; a rename onto its own name changes nothing and keeps an ephemeral file's unflushed bytes |
 | LOOKUP / GETATTR / READDIR(PLUS) | `Lstat`, `ReadDir`; fileid from `FileInfo.Sys()` when it returns `*file.FileInfo{Fileid, Nlink, UID, GID}` (go-nfs's own type), otherwise an FNV hash of the path |
 | LINK | optional `UnixChange.Link`; not implemented → NFS3ERR_NOTSUPP |
 | SYMLINK / READLINK | `Symlink`, `Readlink` (billy `Symlink` capability) |
@@ -268,6 +268,12 @@ device"), not `EIO`.
   across the pages, an entry removed or replaced meanwhile is left out, and no page
   answers `NFS3ERR_BAD_COOKIE`; a listing started with cookie 0 lists the directory
   afresh whatever verifier it carries.
+- **I-238** — RMDIR of a folder with an entry answers `NFS3ERR_NOTEMPTY`, a RENAME onto
+  such a folder `NFS3ERR_EXIST`, a folder renamed under itself `NFS3ERR_INVAL`, MKDIR of
+  a name that holds a file or a folder `NFS3ERR_EXIST` (also when another gateway made it
+  between this gateway's lookup and its mkdir), and a SETATTR size past the largest file
+  `NFS3ERR_FBIG`, each as an NFS status; a stale gateway's refusals keep their statuses
+  (I-39); a rename of a file onto its own name leaves its bytes, flushed or not.
 
 ## Tests
 
@@ -280,6 +286,7 @@ device"), not `EIO`.
 | I-47 | `TestNFS_ReadDirPlusLargeDirectory`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
 | I-231 | `TestNFS_CreateExclusive_Verifier` |
+| I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
 | I-185 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_SnapshotsDir_HiddenResolvesLists`, `TestVFS_SnapshotRead_PoolThenMirror`, `TestVFS_SnapshotOfflineMirror_EIO`, `TestVFS_SnapshotMutation_IsROFS`, `TestVFS_SnapshotHandle_StaleTable`, `TestHandle_Snapshot_RoundTrip`, `FuzzDecodeHandle`, `TestNFS_Snapshots_OverTheWire`, `TestSMB_SnapshotsDir_ReadOnly`, `TestMirrorRPC_ObjectsAndTrees`, `TestMirrorSource_LocalDetachedRemote`, `TestMember_AddMirror_RetryKeepsRowAndResolvesToHost`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` |

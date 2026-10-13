@@ -415,7 +415,9 @@ func (f *FS) rename(oldpath, newpath string, noReplace bool) error {
 	// trash entry, L-203); an ephemeral one is unlinked and loses it (L-208)
 	var replaced meta.Ino
 	if dst, ok := f.st.Lookup(newDir.Ino, nn); ok && dst.Type != meta.TDir && hardDelete(np, nn) {
-		replaced = dst.Ino
+		if src, ok := f.st.Lookup(oldDir.Ino, on); !ok || src.Ino != dst.Ino {
+			replaced = dst.Ino // a rename onto itself replaces nothing (I-238)
+		}
 	}
 	if dst, ok := f.st.Lookup(newDir.Ino, nn); noReplace && ok && (oldDir.Ino != newDir.Ino || on != nn) {
 		if src, ok := f.st.Lookup(oldDir.Ino, on); !ok || src.Ino != dst.Ino {
