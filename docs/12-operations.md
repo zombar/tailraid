@@ -360,9 +360,20 @@ backlog is visible as progress rather than read as a stall. `repair.workers` (1.
 default 4) and `repair.rate` (a size a second, `0` for no limit, default 50M) in the config
 set the fan-out and the byte rate, and `repair.scrub_period` (a duration of 1h to 8760h,
 `0` for no background scrub, default 168h, a week) how long the background scrub takes to verify the
-whole volume once (06 §5, I-215); `serve` refuses a value outside those bounds. All three
-are written to the file only when set, so a release from before them, which reads the
+whole volume once (06 §5, I-215), and `repair.home_start` (a percentage of 0 to 100,
+default 5, `0` for never on its own) the share of the stored bytes that must be movable
+away from home before placement-only moves start (14 §7, I-295); `serve` refuses a value
+outside those bounds. All four are written to the file only when set, so a release from before them, which reads the
 file strictly, still starts after a rollback (I-61).
+
+**Home placement.** `tailraid volume rebalance [--dry-run]` asks the leader (`/v1/admin`
+op `rebalance`) to open the home gate once (14 §7, I-295): the following repair passes
+move every placement-only away slot whose home can take it, at most `HomeBatch` chunks a
+pass, until none is movable, whatever `repair.home_start` says. `--dry-run` moves nothing
+and prints, from the leader's last pass, the movable bytes each target would send and
+receive and the away slots whose home cannot take them now (dead, suspect or full). Status
+carries `repair.home` (`away_slots`, `away_bytes`, `movable_bytes`, `open`); `tailraid
+status` prints it as one line when anything is away.
 
 **The report is built off the request path (I-205).** `admin.Build` walks every chunk
 (`ScanHealth`): 0.26 s at 44k chunks on a laptop, seconds at a million, and every open
