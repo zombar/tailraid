@@ -165,6 +165,7 @@ github.com/spf13/pflag
 ## explicit; go 1.27.1
 github.com/willscott/go-nfs
 github.com/willscott/go-nfs/file
+github.com/willscott/go-nfs/xdr
 # github.com/willscott/go-nfs-client v0.0.0-20251022144359-801f10d98886
 ## explicit; go 1.19
 github.com/willscott/go-nfs-client/nfs

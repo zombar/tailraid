@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 // PathNameMax is the maximum length for a file name

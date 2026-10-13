@@ -6,24 +6,22 @@ import (
 	"os"
 
 	"github.com/go-git/go-billy/v5"
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
-// Backing billy.FS doesn't support hard links
+// onLink answers LINK (RFC 1813 §3.3.15). tailraid: upstream decoded SYMLINK's arguments
+// and wrote a CREATE-style reply; LINK3args is the file's handle and the new name's
+// diropargs3, and both LINK3resok and LINK3resfail are the file's post_op_attr and the
+// directory's wcc_data (I-245). A backing filesystem without UnixChange (tailraid's: hard
+// links are out of scope) answers NFS3ERR_NOTSUPP.
 func onLink(ctx context.Context, w *response, userHandle Handler) error {
-	w.errorFmt = wccDataErrorFormatter
+	w.errorFmt = linkErrorFormatter(nil, nil, nil)
+	file, err := xdr.ReadOpaque(w.req.Body)
+	if err != nil {
+		return &NFSStatusError{NFSStatusInval, err}
+	}
 	obj := DirOpArg{}
-	err := xdr.Read(w.req.Body, &obj)
-	if err != nil {
-		return &NFSStatusError{NFSStatusInval, err}
-	}
-	attrs, err := ReadSetFileAttributes(w.req.Body)
-	if err != nil {
-		return &NFSStatusError{NFSStatusInval, err}
-	}
-
-	target, err := xdr.ReadOpaque(w.req.Body)
-	if err != nil {
+	if err := xdr.Read(w.req.Body, &obj); err != nil {
 		return &NFSStatusError{NFSStatusInval, err}
 	}
 
@@ -31,64 +29,57 @@ func onLink(ctx context.Context, w *response, userHandle Handler) error {
 	if err != nil {
 		return &NFSStatusError{NFSStatusStale, err}
 	}
+	_, fpath, err := userHandle.FromHandle(file) // one export: the same filesystem
+	if err != nil {
+		return &NFSStatusError{NFSStatusStale, err}
+	}
+	w.errorFmt = linkErrorFormatter(fs, path, fpath)
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		return &NFSStatusError{NFSStatusROFS, os.ErrPermission}
 	}
-
 	if len(string(obj.Filename)) > PathNameMax {
 		return &NFSStatusError{NFSStatusNameTooLong, os.ErrInvalid}
 	}
-
+	cos, ok := userHandle.Change(fs).(UnixChange)
+	if !ok {
+		return &NFSStatusError{NFSStatusNotSupp, os.ErrInvalid}
+	}
 	newFilePath := fs.Join(append(path, string(obj.Filename))...)
-	if _, err := fs.Stat(newFilePath); err == nil {
+	if _, err := fs.Lstat(newFilePath); err == nil {
 		return &NFSStatusError{NFSStatusExist, os.ErrExist}
 	}
-	if s, err := fs.Stat(fs.Join(path...)); err != nil {
+	if err := cos.Link(fs.Join(fpath...), newFilePath); err != nil {
 		return &NFSStatusError{NFSStatusAccess, err}
-	} else if !s.IsDir() {
-		return &NFSStatusError{NFSStatusNotDir, nil}
-	}
-
-	fp := userHandle.ToHandle(fs, append(path, string(obj.Filename)))
-	changer := userHandle.Change(fs)
-	if changer == nil {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
-	cos, ok := changer.(UnixChange)
-	if !ok {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
-
-	err = cos.Link(string(target), newFilePath)
-	if err != nil {
-		return &NFSStatusError{NFSStatusAccess, err}
-	}
-	if err := attrs.Apply(changer, fs, newFilePath); err != nil {
-		return &NFSStatusError{NFSStatusIO, err}
 	}
 
 	writer := bytes.NewBuffer([]byte{})
 	if err := xdr.Write(writer, uint32(NFSStatusOk)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-
-	// "handle follows"
-	if err := xdr.Write(writer, uint32(1)); err != nil {
+	if err := WritePostOpAttrs(writer, tryStat(fs, fpath)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-	if err := xdr.Write(writer, fp); err != nil {
-		return &NFSStatusError{NFSStatusServerFault, err}
-	}
-	if err := WritePostOpAttrs(writer, tryStat(fs, append(path, string(obj.Filename)))); err != nil {
-		return &NFSStatusError{NFSStatusServerFault, err}
-	}
-
 	if err := WriteWcc(writer, nil, tryStat(fs, path)); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
-
 	if err := w.Write(writer.Bytes()); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}
 	}
 	return nil
+}
+
+// linkErrorFormatter is LINK3resfail: the file's attributes and the directory's wcc_data,
+// empty until the handles resolved.
+func linkErrorFormatter(fs billy.Filesystem, dir, file []string) func(err error) RPCError {
+	return func(err error) RPCError {
+		var b bytes.Buffer
+		var fattr, dattr *FileAttribute
+		if fs != nil {
+			fattr, dattr = tryStat(fs, file), tryStat(fs, dir)
+		}
+		if WritePostOpAttrs(&b, fattr) != nil || WriteWcc(&b, nil, dattr) != nil {
+			return wccDataErrorFormatter(err)
+		}
+		return errFormatterWithBody(b.Bytes())(err)
+	}
 }

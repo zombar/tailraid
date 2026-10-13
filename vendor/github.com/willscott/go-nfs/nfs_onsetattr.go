@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/go-git/go-billy/v5"
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 func onSetAttr(ctx context.Context, w *response, userHandle Handler) error {

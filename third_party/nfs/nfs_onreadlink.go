@@ -5,7 +5,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 func onReadLink(ctx context.Context, w *response, userHandle Handler) error {

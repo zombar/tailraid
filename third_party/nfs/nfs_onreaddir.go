@@ -11,7 +11,7 @@ import (
 	"path"
 	"sort"
 
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 type readDirArgs struct {

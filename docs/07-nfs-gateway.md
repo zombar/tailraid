@@ -279,6 +279,17 @@ device"), not `EIO`.
   CREATE3resfail, MKDIR3resfail), so a client that thought the name free sees the
   directory changed and looks it up again; a `mkdir -p` then finds the folder another
   gateway made a moment before, rather than failing on "File exists".
+- **I-244** — A length a request names (an opaque, a string, an array) is believed only
+  as far as the request frame holds the bytes: a longer one fails to decode without
+  allocating it. Before, a 44-byte GETATTR whose handle claimed 4 GiB allocated 4 GiB.
+- **I-245** — Every RPC reply carries the RFC 5531 code, big-endian: PROG_UNAVAIL for an
+  unknown program, PROG_MISMATCH with the range for a version other than NFS 3 or MOUNT 3,
+  PROC_UNAVAIL for an unknown procedure, GARBAGE_ARGS for arguments that do not decode, and
+  MSG_DENIED RPC_MISMATCH 2..2 for an RPC version other than 2. LINK decodes LINK3args
+  and answers NFS3ERR_NOTSUPP (hard links are out of scope). Before, the accept_stat values
+  were shifted by one (a missing procedure went out as PROG_MISMATCH without its range),
+  versions were never checked, a denial carried a reject_stat of 5 in little-endian, and
+  LINK decoded SYMLINK's arguments.
 
 ## Tests
 
@@ -292,6 +303,8 @@ device"), not `EIO`.
 | I-100 | `TestServe_ClosesConnectionsOnShutdown` |
 | I-231 | `TestNFS_CreateExclusive_Verifier` |
 | I-242 | `TestNFS_ExistReply_CarriesParentAttributes` |
+| I-244 | `TestRead_LengthBoundedByBody`, `TestConn_RPCReplyCodes` |
+| I-245 | `TestConn_RPCReplyCodes`, `TestNFS_FSStatAndUnsupported` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
