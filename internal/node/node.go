@@ -428,7 +428,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
 			Snapshots: webSnapshots{ops: ops, flush: fl.FlushAll},
-			Node:      cfg.Node.Name, // an upload's temp is this node's own (I-226)
+			Node:      id, // an upload's temp is this node's own (I-226); names need not be unique
 		})
 		if err != nil {
 			return err

@@ -201,8 +201,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   a conditional GET can therefore never 304 stale bytes.
 - **Uploads** are atomic and resumable, and the vfs is their only state. The body streams
   through `OpenFile(O_WRONLY|O_CREATE)`, `Seek` and `Write` on a hidden sibling
-  `.<name>.<node>.tailraid-upload` in the target's directory (the gateway's node name in
-  it, so uploads of one name through two gateways never share a temp, I-226), the path an NFS WRITE takes: each
+  `.<name>.<node>.tailraid-upload` in the target's directory (the gateway's node ID in
+  it, unique where host names need not be, so uploads of one name through two gateways never share a temp, I-226), the path an NFS WRITE takes: each
   chunk-sized read is one fsynced WAL record, the flusher commits chunks on the idle timer
   or the thresholds (a WRITE at a cap waits inside the vfs, docs/04 §3), and the bytes are
   readable through the vfs at once. Only when every byte announced by `Content-Length` (or
@@ -739,7 +739,10 @@ does not is a clock time axis in place of seconds since the run started (I-197).
   upload of a name with 409, and the publish is one `Rename`, so the name ends up holding
   exactly one upload's bytes, the last to publish; with `If-None-Match: *` the publish is
   a `Rename` with `NoReplace` (codec 9, docs/02), so of two exclusive uploads through two
-  gateways one gets 2xx and the other 412, and its temp is removed.
+  gateways one gets 2xx and the other 412, and its temp is removed; `<node>` is the
+  gateway's node ID, since two devices may share a host name; while a member reads a
+  codec before 9 the gateway looks the name up itself, which only covers uploads through
+  that gateway.
 - **I-81** — A web upload becomes visible under its name only when every byte announced by
   `Content-Length` or the `Content-Range` total has arrived: the bytes stream into
   `.<name>.tailraid-upload` beside the target and one `Rename` publishes them; a
