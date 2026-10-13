@@ -84,6 +84,7 @@ type openFile struct {
 	// CHANGE_NOTIFY until CLOSE (I-264); only the read loop touches the field.
 	watch *watcher
 
+
 	// access and shareAccess are what the CREATE asked: the data access it holds and what it
 	// lets other opens do (I-265)
 	access, shareAccess uint32
