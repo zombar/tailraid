@@ -256,6 +256,9 @@ h2 .h-sub { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: v
 .spread-col.dead > i { background: var(--bad); opacity: .5; }
 .spread-col.drain { background: color-mix(in srgb, var(--warn) 12%, var(--bg)); }
 .spread-col.off { background: transparent; outline: 1.5px dashed var(--line); outline-offset: -1.5px; }
+/* an archive mirror's column: no share and no midline, a level of how full the disk is */
+.spread-col.archive::before { display: none; }
+.spread-col.archive > i { bottom: 0; border-radius: 2px 2px 0 0; }
 .spread-label { font: 12px var(--mono); color: var(--dim); display: flex; align-items: center; gap: var(--sp-1); height: 96px; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- file browser -------------------------------------------------------------- */
@@ -502,12 +505,6 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
   .queue li.qrow { grid-template-columns: 36px minmax(0, 1fr) 56px auto; }
   .queue li.qrow .artist { display: none; }
 }
-
-/* ---- dashboard: the Cache card (docs/13 §4) ------------------------------------------- */
-.card.cache .pins { display: grid; gap: var(--sp-2); }
-.card.cache .pin-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(64px, 1fr) auto; gap: var(--sp-2); align-items: center; font: 12px var(--mono); }
-.card.cache .pin-row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card.cache .pin-row .v { color: var(--dim); white-space: nowrap; }
 
 /* ---- stats page (docs/13 §1, docs/17): the soak report's charts in the page's tokens --- */
 /* the chart package emits classes only (series s0–s7, status, the spread bins, bands, text
