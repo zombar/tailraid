@@ -189,43 +189,98 @@ counts, so draining one of two targets moves the volume to `1+0` and migrates ev
 off it). A pinned policy (`set-redundancy --k --m`, or `init --k --m`) is never changed;
 `set-redundancy --auto` hands it back to the rule.
 
-## 7. Domain skew
+## 7. Home placement and skew
 
-A chunk is **skewed** when one host holds more than `ceil((k+m)/D)` of its slots although
-the current candidates admit a placement within the cap. Skew arises from chunks written
-while the cluster had one host, or before a disk was added on another host, or while hosts
-were draining. `meta.ChunkState` reports it as `DomainSkew` with the excess slots (the
-highest slot indices on the over-cap host) as bad; the repairer moves them like draining
-slots (06 §4 case 6): read, PUT to a host under the cap, `SetPlacement`, then the fenced
-DELETE, so a chunk never has fewer than `k` readable slots (I-32, I-65). Skew that no
-placement can fix (too few hosts or targets) is not reported and does not count as
-degraded. `status` counts skewed chunks as `domain_skew`.
+Every chunk has a **home**: `Home(h, nodes, k, m) = PlaceKM(h, HomeCandidates(nodes), k,
+m)`, where `HomeCandidates` is `Candidates` with every Active target counted live. The home
+depends on the hash and the membership (which targets are Active, their hosts, voter bits
+and capacities) and on nothing else: never on liveness, suspect marks or fullness. A chunk
+written while every target was up lands at its home already; a chunk written or repaired
+while a target was dead, suspect (05 §6) or full, while a host was missing, or before a
+disk or host joined, lands wherever `FillPlacement` found room among the live targets, and
+stays there until the repairer moves it. **One rule decides where a slot belongs**: the
+domain skew of earlier releases (the host cap) and the capacity rebalance within a host
+(I-172) are both cases of it, and nothing else moves a good slot.
 
-**Capacity rebalance within a host.** Each disk's expected share of its host's slots is
-its capacity share over the host's active disks, no disk expecting more than one slot per
-chunk (what the web UI's Disks block draws as the tick). When a disk sits above its share
-and another live disk of the same host below it, and either is more than `RebalanceSkew`
-(25 %) off its share, every repair pass moves slots from the disk furthest above to the
-one furthest below, as many as the excess and the room allow, at most `RebalanceBatch`
-(64) chunks a pass, under the repair rate limit, by the same sequence as a skew move: PUT the shard to
-the emptier disk, `SetPlacement` with `Expect`, then the fenced DELETE, so the chunk never
-has fewer readable slots than before (I-65) and never two slots on one target (I-9). The
-move stays within the host, so it changes no failure domain and crosses no network (the
-host's own disks), and it keeps the host cap. Slots never move between hosts for capacity:
-a disk emptier than its share on a host whose other disks are within theirs receives new
-writes and repairs only (06 §6). `status` counts the slots a pass would move as
-`disk_skew`; after `node add-disk` of a large disk it falls to 0 over the following passes
-and the Disks block's deviations shrink with it (I-172).
+A slot is **away** when its target is not in its home for its class: a data slot (index
+< k) when its target is not one of the home's data targets, a parity slot when its target
+is not one of the home's parity targets. An away slot is **movable** when a home target of
+its class holds no slot of the chunk and is live, not suspect and has room for the shard;
+it then moves there, keeping its index (shard `i` stays shard `i`). Every away slot of a
+chunk moves in one `SetPlacement`, so a home target that held a slot of the other class is
+freed and taken in the same step, and the host cap is checked against the placement the
+step commits, never against a half-moved one: a chunk is home after one move once its
+targets are live. Slots on an S3 node are never moved and an S3 node is never the
+destination of a move (egress, and only the leader's daily sweep deletes in a bucket,
+I-138), though S3 rows count in the home as they do for writes. A chunk whose `(k,m)`
+differs from the volume's is not judged (the migration re-places every slot, and lands it
+at home, 06 §7), nor is a tombstone. Every move is the repair move sequence: read, PUT to the home target,
+`SetPlacement` with `Expect`, then the fenced DELETE, so the chunk never has fewer readable
+slots than before (I-65) and never two slots on one target (I-9).
+
+Away slots are of two kinds, and keep the urgency each had before the fold:
+
+- **Cap-breaking** (domain skew): a host holds more than `ceil((k+m)/D)` of the chunk's
+  slots although the live candidates admit a placement within the cap. The chunk survives
+  fewer hosts than the policy promises, so `meta.ChunkState` reports it as `DomainSkew` with
+  the excess slots (the highest indices on the over-cap host) as bad, the repairer moves
+  them like draining slots (06 §4 case 6) without any gate, and `status` counts such chunks
+  as `domain_skew`. Each excess slot goes to its home target when that target is movable,
+  otherwise to whatever `FillPlacement` finds under the cap: restoring the host tolerance
+  outranks reaching home, and a later pass brings it home. Every other refill (a missing
+  slot, a dead or draining target) aims at home the same way (I-296), so repair does not
+  itself create away slots that the gate must undo. Skew no placement can
+  fix (too few hosts or live targets) is not reported and does not count as degraded
+  (L-194).
+- **Placement-only**: every other away slot. The chunk has the tolerance the policy
+  promises; it sits on a non-voter where a voter is home for a data slot, on the wrong disk
+  of a host, or on a host that is not its home since a host or disk joined. These move only
+  through the **gate** (I-295), so liveness churn never moves data and a small residue of
+  ad hoc slots does not keep the pool busy:
+  - the leader's repair pass counts the movable bytes of placement-only slots; when they
+    reach `repair.home_start` (default 5 %) of the stored bytes, the gate opens, and it
+    stays open until a pass finds none left or the home candidate set changes (the gate
+    then re-evaluates against the new homes);
+  - while open, each pass moves the placement-only slots of at most `HomeBatch` (64)
+    chunks, and none when the pass before found a bad slot or a pending migration, at
+    background priority and under `repair.rate` and `repair.workers` (06 §4);
+  - `repair.home_start: 0` closes it for good; `tailraid volume rebalance` opens it once
+    whatever the threshold, until the movable bytes reach 0 (`--dry-run` lists the bytes
+    each target would send and receive and moves nothing);
+  - an away slot whose home target is dead, suspect or full stays where it is (L-220): it
+    is counted as away but not movable, and moves once that target can take it.
+
+Since the home is weighted rendezvous by capacity, a host whose slots are home holds each
+of its disks' capacity share of them (what the web UI's Disks block draws as the tick), so
+capacity within a host follows from home placement and needs no rule of its own. After
+`node add-disk` or a joined host, the fraction of slots whose home moved is about the new
+target's weight over the total, the least any placement keyed by capacity can move, and
+the gate moves them over the following passes. A budget re-proposed past I-74's hysteresis
+changes the homes of a few percent of one disk's slots, which count toward the gate like
+any other placement-only slots.
+
+`status` carries `domain_skew` (chunks with cap-breaking slots), `disk_skew` (placement-only
+away slots whose home is another disk of the same host, what the Disks block summarises),
+and `repair.home{away_slots, away_bytes, movable_bytes, open}` for the whole volume;
+`tailraid status` prints it as one line (`home  12,345 slots away (48.2 GiB, 31.0 GiB
+movable), gate closed below 5 %`), and the dashboard's integrity panel shows the same line.
 
 ## 8. What the user sees
 
 - `node ls` groups disks under their host; `status` and the web UI show per-target used,
   budget, stored shard bytes (`stored_bytes`, 10 §4.1), slots and liveness, and the
   volume's "survives N disks, M hosts".
-- The web UI's **Disks** block (13 §Design) opens with a spread summary (one column per
-  target, grouped by host, above or below its expected share) and then draws each host as a card with one row per
-  target: its slots on one shared scale against the expected-share tick, and its used
-  bytes of budget.
+- The web UI's **Disks** block (13 §Design) lists every drive of the volume. It opens
+  with a spread summary (one column per target, grouped by host, above or below its
+  expected share; the S3 buckets as a group named `s3`; a host's archive mirror, which
+  holds snapshots and never a slot (16), as a column filled from the bottom by how full
+  its disk is, dashed while it is offline) and then draws each host as
+  a card with one row per target (its slots on one shared scale against the
+  expected-share tick, and its used bytes of budget) and one per mirror (its used bytes
+  of the disk, `archive · online` or `archive · offline since <date>`), and the buckets
+  as a card named `S3` with one row per bucket (its slots against its share, its stored
+  bytes and `bucket/prefix`). The Balance block lists the members that hold slots: a
+  mirror is never there.
 - The soak report's **data spread across disks** chart (09 §soak) draws one lane per disk
   over time, coloured by each disk's slot share against its expected share, with a host-cap
   strip underneath.
@@ -324,14 +379,32 @@ as `<host>/m<n>`.
 - **I-147** — On Linux with the systemd unit installed, `node add-disk` rewrites the unit
   from the saved config, so `ReadWritePaths` names the new disk, and restarts the service
   before asking the node to open it.
-- **I-172** — When a disk sits above its capacity share of its host's slots, another live
-  disk of that host below it, and either is more than `RebalanceSkew` off its share, the
-  repairer moves slots from the one furthest above to the one furthest below, as many as
-  the excess and the room allow, at most `RebalanceBatch` per pass and under the repair
-  rate limit, by the repair move sequence (the old shard is deleted only after the new
-  placement applied, I-65), never two slots of a chunk on one target (I-9), never across
-  hosts, never above the host cap; a host whose disks are all within `RebalanceSkew` of
-  their shares, or with one disk, has nothing moved.
+- **I-172** — Capacity within a host follows from home placement (§7): when every slot of
+  a host is home, each of its Active disks holds its capacity share of the host's slots
+  within the spread of weighted rendezvous, and after `node add-disk` the gate moves the
+  slots whose home is the new disk onto it, never two slots of a chunk on one target (I-9),
+  never above the host cap, the old shard deleted only after the new placement applied
+  (I-65). No other rule moves slots between the disks of a host.
+- **I-294** — `Home(h, nodes, k, m)` is a pure function of the hash and the Active
+  membership (targets, hosts, voter bits, capacities), the same on every node, and equal to
+  the placement a write gets when every Active target is live; `HomeMoves` sends an away
+  slot only to a home target of its class that holds no slot of the chunk and is live, not
+  suspect and has room, keeps the slot's index, never moves a slot on or onto an S3 node,
+  and returns nothing for a chunk whose slots are home, so a second pass after convergence
+  moves nothing and liveness alone never changes a home.
+- **I-295** — Placement-only moves run only while the gate is open: it opens when the
+  movable placement-only bytes reach `repair.home_start` of the stored bytes (or once by
+  `volume rebalance`), closes when a pass finds none movable, and re-evaluates when the
+  home candidate set changes; an open pass moves at most `HomeBatch` chunks, none when
+  the pass before found a bad slot or a pending migration, at background priority and
+  under `repair.rate`; `repair.home_start: 0` never opens it on its own, and `volume
+  rebalance --dry-run` moves nothing.
+- **I-296** — Every slot the repairer refills (missing, on a dead, draining or removed
+  target, reported, absent, or cap-breaking) goes to its home target when that target is
+  movable, and otherwise to a target `FillPlacement` finds among the live candidates under
+  the cap; cap-breaking slots move without the gate, so restoring the host tolerance never
+  waits on a dead, suspect or full home, and a refill never makes a chunk away that had a
+  movable home.
 
 ## Tests
 
@@ -351,4 +424,7 @@ as `<host>/m<n>`.
 | I-132 | `TestPrintNodes_HidesRemoved` |
 | I-146 | `TestDiskSet_UnwritableDiskClosed` |
 | I-147 | `TestSvc_RefreshUnit_NamesNewDiskAndRestarts` |
-| I-172 | `TestRebalanceMoves_Table`, `TestRepair_Rebalance_MovesWithinHost` |
+| I-172 | `TestHomeMoves_Table`, `TestRepair_Home_AddDiskFillsWithinHost` |
+| I-294 | `TestHome_EqualsWritePlacement`, `TestHome_NNodeDeterminism`, `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestCluster_DegradedWrite_DataSlotsComeHome` |
+| I-295 | `TestRepair_Home_Gate_Table`, `TestRepair_Home_AddDiskFillsWithinHost`, `TestCluster_DegradedWrite_DataSlotsComeHome`, `TestCLI_VolumeRebalance_DryRun`, `TestConfig_HomeStart` |
+| I-296 | `TestChunkState_DomainSkew`, `TestFillHome_RefillsFromHome`, `TestRepair_RefillGoesHome_Table`, `TestRepair_DomainSkew_HomeDeadFillsUnderCap` |

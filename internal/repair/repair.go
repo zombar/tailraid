@@ -54,12 +54,13 @@ type Config struct {
 	ScanInterval time.Duration
 	ReportTTL    time.Duration // reported bad slots expire after this
 	Retention    time.Duration // the trash's retention (docs/06 §2, trash.retention); 0 = never purged on its own
-	// Capacity rebalance within a host (docs/14 §7, I-172): a disk more than
-	// RebalanceSkew (a fraction) above its share of its host's slots has slots moved to
-	// a disk of the same host below its share, at most RebalanceBatch chunks per pass
-	// (0 disables it).
-	RebalanceSkew  float64
-	RebalanceBatch int
+	// Home placement (docs/14 §7, I-295): slots away from their home for placement only
+	// move while the gate is open. It opens at the end of a pass whose movable bytes
+	// reach HomeStart (a fraction) of the stored bytes, or by OpenHome, and closes when a
+	// pass finds none movable; an open pass moves at most HomeBatch chunks. HomeStart 0
+	// never opens it on its own.
+	HomeStart float64
+	HomeBatch int
 	// Workers is how many chunks a pass repairs at once (docs/06 §4, I-174): each chunk's
 	// steps stay in sequence, chunks overlap; at most MaxWorkers, below 1 means 1.
 	Workers int
@@ -75,6 +76,14 @@ const DefaultScrubPeriod = 7 * 24 * time.Hour
 // DefaultRetention is how long a deleted entry waits in the trash (docs/12 §10).
 const DefaultRetention = 30 * 24 * time.Hour
 
+// DefaultHomeStart is the share of the stored bytes that must be movable away from home
+// before placement-only moves start on their own (`repair.home_start`, docs/14 §7).
+const DefaultHomeStart = 0.05
+
+// fullHold is how long a target that answered ErrFull to a repair PUT is not a home
+// destination: the flusher's hold-down for the same answer (docs/14 §7).
+const fullHold = 10 * time.Minute
+
 // MaxWorkers bounds Config.Workers (`repair.workers`).
 const MaxWorkers = 64
 
@@ -83,7 +92,7 @@ func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubPeriod: DefaultScrubPeriod, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
-		RebalanceSkew: meta.DefaultRebalanceSkew, RebalanceBatch: 64, Workers: 4, SumsBatch: 256,
+		HomeStart: DefaultHomeStart, HomeBatch: 64, Workers: 4, SumsBatch: 256,
 	}
 }
 
@@ -109,14 +118,35 @@ type Stats struct {
 	Migrated     int   `json:"migrated"`     // moved to the current (k,m)
 	PolicyStale  int   `json:"policy_stale"` // still on an older (k,m) after the pass
 	Scrubbed     int   `json:"scrubbed"`
-	ScrubBad     int   `json:"scrub_bad"`  // slots found corrupt by scrub
-	Rebalanced   int   `json:"rebalanced"` // slots moved between disks of one host (docs/14 §7)
+	ScrubBad     int   `json:"scrub_bad"` // slots found corrupt by scrub
+	Homed        int   `json:"homed"`     // chunks whose away slots moved home (docs/14 §7)
 	BytesMoved   int64 `json:"bytes_moved"`
 	Errors       int   `json:"errors"`
 	// the data-shard sums backfill (docs/06 §4, I-201): chunks whose sums this pass
 	// recorded, and chunks still without them after it
 	SumsRecorded int `json:"sums_recorded"`
 	SumsPending  int `json:"sums_pending"`
+	// home placement (docs/14 §7): the referenced chunks' shard bytes, and the slots of
+	// healthy chunks away from their home, their bytes and the bytes a move could take
+	// home now; the gate compares MovableBytes with HomeStart × StoredBytes (I-295)
+	StoredBytes  int64 `json:"stored_bytes"`
+	AwaySlots    int   `json:"away_slots"`
+	AwayBytes    int64 `json:"away_bytes"`
+	MovableBytes int64 `json:"movable_bytes"`
+	HomeOpen     bool  `json:"home_open"` // the gate after this pass: the next one moves placement-only slots
+	badChunks    int   // chunks with a bad slot or a pending migration: home moves wait for a pass without
+}
+
+// HomeStatus is the home gate as `status` reports it (`repair.home`, docs/12): the last
+// completed pass's counts and whether placement-only moves run.
+type HomeStatus struct {
+	AwaySlots    int     `json:"away_slots"`
+	AwayBytes    int64   `json:"away_bytes"`
+	MovableBytes int64   `json:"movable_bytes"`
+	StoredBytes  int64   `json:"stored_bytes"`
+	Start        float64 `json:"start"` // repair.home_start
+	Open         bool    `json:"open"`
+	Forced       bool    `json:"forced,omitempty"` // opened by `volume rebalance`
 }
 
 // add sums o into s: a pass's statistics are the sum over its chunks, whatever the overlap.
@@ -130,7 +160,12 @@ func (s *Stats) add(o Stats) {
 	s.PolicyStale += o.PolicyStale
 	s.Scrubbed += o.Scrubbed
 	s.ScrubBad += o.ScrubBad
-	s.Rebalanced += o.Rebalanced
+	s.Homed += o.Homed
+	s.StoredBytes += o.StoredBytes
+	s.AwaySlots += o.AwaySlots
+	s.AwayBytes += o.AwayBytes
+	s.MovableBytes += o.MovableBytes
+	s.badChunks += o.badChunks
 	s.BytesMoved += o.BytesMoved
 	s.Errors += o.Errors
 	s.SumsRecorded += o.SumsRecorded
@@ -145,6 +180,7 @@ type Repairer struct {
 	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
 	warnRepair, warnPut logx.Limiter
 	sumsLeft            atomic.Int64 // the pass's remaining sums backfills (SumsBatch, I-201)
+	homeLeft            atomic.Int64 // the pass's remaining home moves (HomeBatch, I-295)
 	st                  *meta.Store
 	prop                meta.Proposer
 	live                Liveness
@@ -167,6 +203,12 @@ type Repairer struct {
 	pass     int
 	progress Progress // the pass under way, while running
 	running  bool
+	// the home gate (docs/14 §7, I-295)
+	home       *meta.HomeView             // the previous pass's view: a change re-evaluates the gate
+	homeOpen   bool                       // placement-only moves run
+	homeForced bool                       // opened by OpenHome: stays open until nothing is movable
+	homeIdle   bool                       // the previous pass found no bad slot and no migration
+	full       map[meta.NodeIdx]time.Time // targets that answered ErrFull, not a destination until then
 }
 
 // New wires a repairer. log may be nil.
@@ -177,7 +219,127 @@ func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd Ch
 	return &Repairer{
 		st: st, prop: prop, live: live, shards: shards, rd: rd, clk: clk, cfg: cfg, log: log, codecs: &ec.Pool{},
 		limit: NewLimiter(cfg.RateBytes, clk), s3scrub: newBudget(cfg.S3ScrubBytes, 24*time.Hour, clk), reported: map[chunk.ShardKey]time.Time{},
+		full: map[meta.NodeIdx]time.Time{},
 	}
+}
+
+// OpenHome opens the home gate whatever HomeStart says (`volume rebalance`, I-295): the
+// following passes move placement-only away slots until a pass finds none movable.
+func (r *Repairer) OpenHome() {
+	r.mu.Lock()
+	r.homeOpen, r.homeForced = true, true
+	r.mu.Unlock()
+}
+
+// Home returns the gate and the last completed pass's counts.
+func (r *Repairer) Home() HomeStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return HomeStatus{
+		AwaySlots: r.last.AwaySlots, AwayBytes: r.last.AwayBytes, MovableBytes: r.last.MovableBytes, StoredBytes: r.last.StoredBytes,
+		Start: r.cfg.HomeStart, Open: r.homeOpen, Forced: r.homeForced,
+	}
+}
+
+// HomeFlow is the shard bytes home moves would take from one target to another.
+type HomeFlow struct {
+	From     meta.NodeIdx `json:"from"`
+	FromName string       `json:"from_name"`
+	To       meta.NodeIdx `json:"to"`
+	ToName   string       `json:"to_name"`
+	Slots    int          `json:"slots"`
+	Bytes    int64        `json:"bytes"`
+}
+
+// HomePlan is `volume rebalance --dry-run` (docs/12): the moves home placement would make
+// now, per pair of targets, and the away slots whose home cannot take them (L-220).
+type HomePlan struct {
+	Flows        []HomeFlow `json:"flows"`
+	AwaySlots    int        `json:"away_slots"`
+	AwayBytes    int64      `json:"away_bytes"`
+	MovableSlots int        `json:"movable_slots"`
+	MovableBytes int64      `json:"movable_bytes"`
+	StoredBytes  int64      `json:"stored_bytes"`
+	Gate         HomeStatus `json:"gate"`
+}
+
+// PlanHome walks the chunk table and lists what home moves would do now, moving nothing.
+// Chunks awaiting a migration are left out: the migration places them (docs/14 §7).
+func (r *Repairer) PlanHome() HomePlan {
+	all := r.st.Nodes()
+	vol := r.st.Volume()
+	names := map[meta.NodeIdx]string{}
+	for i := range all {
+		names[all[i].Idx] = all[i].Name
+	}
+	hv := meta.NewHomeView(all)
+	type pair struct{ from, to meta.NodeIdx }
+	flows := map[pair]*HomeFlow{}
+	p := HomePlan{Gate: r.Home()}
+	r.st.ForEachChunk(func(c meta.Chunk) bool {
+		if c.Refs == 0 {
+			return true
+		}
+		shard := int64(ec.ShardLen(int(c.Size), int(c.K)))
+		for _, n := range c.Placement {
+			if n != 0 {
+				p.StoredBytes += shard
+			}
+		}
+		if k, m := meta.TargetPolicy(c, vol); k != c.K || m != c.M {
+			return true
+		}
+		away := hv.Away(c.Placement, int(c.K), hv.Home(c.Hash, int(c.K), int(c.M)))
+		p.AwaySlots += len(away)
+		p.AwayBytes += int64(len(away)) * shard
+		for _, mv := range hv.Moves(c, r.dest) {
+			f := flows[pair{mv.From, mv.To}]
+			if f == nil {
+				f = &HomeFlow{From: mv.From, FromName: names[mv.From], To: mv.To, ToName: names[mv.To]}
+				flows[pair{mv.From, mv.To}] = f
+			}
+			f.Slots++
+			f.Bytes += shard
+			p.MovableSlots++
+			p.MovableBytes += shard
+		}
+		return true
+	})
+	for _, f := range flows {
+		p.Flows = append(p.Flows, *f)
+	}
+	sort.Slice(p.Flows, func(i, j int) bool {
+		if p.Flows[i].Bytes != p.Flows[j].Bytes {
+			return p.Flows[i].Bytes > p.Flows[j].Bytes
+		}
+		if p.Flows[i].From != p.Flows[j].From {
+			return p.Flows[i].From < p.Flows[j].From
+		}
+		return p.Flows[i].To < p.Flows[j].To
+	})
+	return p
+}
+
+// dest reports whether n can take a shard moved or refilled home: live (not suspect)
+// and not holding back an ErrFull answer.
+func (r *Repairer) dest(n meta.NodeIdx) bool {
+	if !r.live.IsLive(n) {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	until, ok := r.full[n]
+	if ok && r.clk.Now().After(until) {
+		delete(r.full, n)
+		return true
+	}
+	return !ok
+}
+
+func (r *Repairer) markFull(n meta.NodeIdx) {
+	r.mu.Lock()
+	r.full[n] = r.clk.Now().Add(fullHold)
+	r.mu.Unlock()
 }
 
 // ReportBad records a reader's bad-slot report (docs/06 §4 case 5); bounded and expiring.
@@ -286,6 +448,7 @@ func (r *Repairer) Scrub(ctx context.Context) (Stats, error) { return r.scan(ctx
 func (r *Repairer) LostLeadership() {
 	r.mu.Lock()
 	r.prevScan = time.Time{}
+	r.homeOpen, r.homeForced, r.home = false, false, nil // a new leader judges the gate afresh
 	r.mu.Unlock()
 }
 
@@ -367,14 +530,18 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	}
 	r.sumsLeft.Store(int64(batch))
 	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
-	slots := map[meta.NodeIdx]int{} // per target, for the capacity rebalance (docs/14 §7)
-	for i := range work {
-		for _, s := range work[i].Placement {
-			if s != 0 {
-				slots[s]++
-			}
-		}
+	hv := meta.NewHomeView(all)
+	r.mu.Lock()
+	if r.home != nil && !r.home.Same(hv) && !r.homeForced {
+		r.homeOpen = false // the homes changed: the end of this pass re-evaluates the gate (I-295)
 	}
+	r.home = hv
+	homeBatch := 0
+	if r.homeOpen && r.homeIdle {
+		homeBatch = r.cfg.HomeBatch
+	}
+	r.mu.Unlock()
+	r.homeLeft.Store(int64(homeBatch))
 
 	workers := max(1, r.cfg.Workers)
 	r.mu.Lock()
@@ -412,7 +579,7 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 			r.mu.Lock()
 			r.progress.InFlight++
 			r.mu.Unlock()
-			one := r.scanOne(ctx, c, vol, nodes, reportedKeys[c.Hash], scrub(c.Hash))
+			one := r.scanOne(ctx, c, vol, nodes, hv, reportedKeys[c.Hash], scrub(c.Hash))
 			r.mu.Lock()
 			r.progress.InFlight--
 			r.progress.Scanned++
@@ -428,17 +595,31 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 		return st, ctx.Err()
 	}
 	st.SumsPending = max(noSums-st.SumsRecorded, 0)
-	st.Rebalanced, st.BytesMoved = r.rebalance(ctx, &st, all, slots, len(work))
 	r.mu.Lock()
 	r.last, r.lastAt = st, r.clk.Now()
+	r.homeIdle = st.badChunks == 0
+	switch {
+	case st.MovableBytes == 0:
+		r.homeOpen, r.homeForced = false, false
+	case !r.homeOpen && r.cfg.HomeStart > 0 && float64(st.MovableBytes) >= r.cfg.HomeStart*float64(st.StoredBytes):
+		r.homeOpen = true
+	}
+	st.HomeOpen = r.homeOpen
+	r.last.HomeOpen = r.homeOpen
 	r.mu.Unlock()
 	return st, nil
 }
 
 // scanOne classifies one chunk and repairs, migrates or scrubs it (docs/06 §4 cases
 // 1–6), returning what it did as that chunk's share of the pass statistics.
-func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, reportedIdx map[int]bool, scrubDue bool) (st Stats) {
+func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, hv *meta.HomeView, reportedIdx map[int]bool, scrubDue bool) (st Stats) {
 	st.Scanned++
+	shard := int64(ec.ShardLen(int(c.Size), int(c.K)))
+	for _, n := range c.Placement {
+		if n != 0 {
+			st.StoredBytes += shard
+		}
+	}
 	// re-verify reported slots with a HEAD; a present shard is not bad (docs/06 §4 case 5)
 	reported := map[int]bool{}
 	for idx := range reportedIdx {
@@ -455,6 +636,9 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 	}
 	bad, kept, migrate, readable := r.classify(c, vol, nodes, reported)
 	if len(bad) == 0 && !migrate {
+		if r.homeOne(ctx, c, vol, hv, shard, &st) {
+			return st
+		}
 		if c.Sums == nil && r.sumsLeft.Add(-1) >= 0 { // a healthy chunk without sums: record them (I-201)
 			if err := r.backfillSums(ctx, c); err != nil {
 				st.Errors++
@@ -489,12 +673,13 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 	if migrate {
 		st.PolicyStale++
 	}
+	st.badChunks++
 	if readable < int(c.K) {
 		st.Unrepairable++
 		r.Events.Record(c.Hash, meta.EvUnrepairable, fmt.Sprintf("%d readable slots < k=%d", readable, c.K))
 		return st
 	}
-	outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol)
+	outcome, err := r.repairOne(ctx, c, bad, kept, migrate, vol, hv)
 	if err != nil {
 		st.Errors++
 		r.warnRepair.Warn(r.log, "repair failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
@@ -551,92 +736,40 @@ func (r *Repairer) backfillSums(ctx context.Context, c meta.Chunk) error {
 	return res.Err
 }
 
-// rebalance evens out each host's disks by capacity (docs/14 §7, I-172): for every
-// move meta.RebalanceMoves lists, chunks holding a slot on the fuller disk and none on
-// the emptier one get that slot moved there, at most RebalanceBatch per pass. It returns
-// the slots moved and the bytes total including st.BytesMoved.
-func (r *Repairer) rebalance(ctx context.Context, st *Stats, nodes []meta.Node, slots map[meta.NodeIdx]int, chunks int) (int, int64) {
-	moved, total := 0, st.BytesMoved
-	if r.cfg.RebalanceBatch <= 0 {
-		return 0, total
+// homeOne counts c's away slots and, while the gate lets this pass move one more chunk,
+// moves the movable ones home through repairOne (docs/14 §7, I-294, I-295). It reports
+// whether it tried; a chunk it did not try goes on to the backfill and the scrub.
+func (r *Repairer) homeOne(ctx context.Context, c meta.Chunk, vol meta.Volume, hv *meta.HomeView, shard int64, st *Stats) bool {
+	home := hv.Home(c.Hash, int(c.K), int(c.M))
+	away := hv.Away(c.Placement, int(c.K), home)
+	if len(away) == 0 {
+		return false
 	}
-	for _, mv := range meta.RebalanceMoves(nodes, slots, chunks, r.cfg.RebalanceSkew, r.live.IsLive) {
-		n := min(mv.N, r.cfg.RebalanceBatch-moved)
-		if n <= 0 {
-			break
-		}
-		var cands []meta.Chunk
-		r.st.ForEachChunk(func(c meta.Chunk) bool {
-			if c.Refs == 0 || slices.Contains(c.Placement, mv.To) || !slices.Contains(c.Placement, mv.From) {
-				return true
-			}
-			cands = append(cands, c)
-			return len(cands) < n
-		})
-		for _, c := range cands {
-			if ctx.Err() != nil {
-				return moved, total
-			}
-			b, err := r.moveSlot(ctx, c, slices.Index(c.Placement, mv.From), mv.To)
-			total += b
-			if err != nil {
-				st.Errors++
-				r.warnRepair.Warn(r.log, "rebalance failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
-				continue
-			}
-			moved++
-			r.Events.Record(c.Hash, meta.EvRepaired, fmt.Sprintf("rebalance: slot moved %d -> %d within host %d", mv.From, mv.To, mv.Host))
-		}
+	st.AwaySlots += len(away)
+	st.AwayBytes += int64(len(away)) * shard
+	movable := hv.Movable(c, r.dest)
+	st.MovableBytes += int64(len(movable)) * shard
+	if len(movable) == 0 || r.homeLeft.Add(-1) < 0 {
+		return false
 	}
-	return moved, total
-}
-
-// moveSlot re-places one slot of c onto `to`: PUT the shard there, commit the placement
-// (Expect fences a concurrent change, I-102), then the fenced DELETE of the old shard,
-// so the chunk never has fewer readable slots than before (I-65). Returns the bytes put.
-func (r *Repairer) moveSlot(ctx context.Context, c meta.Chunk, slot int, to meta.NodeIdx) (int64, error) {
-	if slot < 0 {
-		return 0, errors.New("slot not in the placement")
+	issues := make([]meta.SlotIssue, 0, len(away))
+	kept := slices.Clone(c.Placement)
+	for _, i := range away {
+		issues = append(issues, meta.SlotIssue{Idx: i, Reason: meta.ReasonAway, Readable: true})
+		kept[i] = 0
 	}
-	data, err := r.rd.ReadChunk(ctx, c.Hash)
+	out, err := r.repairOne(ctx, c, issues, kept, false, vol, hv)
+	st.BytesMoved += out.bytes
 	if err != nil {
-		return 0, fmt.Errorf("read: %w", err)
+		st.Errors++
+		r.warnRepair.Warn(r.log, "home move failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
+		return true
 	}
-	codec, err := r.codecs.Get(c.K, c.M)
-	if err != nil {
-		return 0, err
+	if out.changed {
+		st.Homed++
+		r.Events.Record(c.Hash, meta.EvHomed, fmt.Sprintf("slots %v moved home", movable))
 	}
-	shards, err := codec.Encode(data)
-	if err != nil {
-		return 0, err
-	}
-	key := chunk.Key(c.Hash, c.K, c.M, slot)
-	r.limit.Wait(ctx, int64(len(shards[slot])))
-	if err := r.shards.Put(ctx, to, key, shards[slot]); err != nil {
-		return 0, fmt.Errorf("put: %w", err)
-	}
-	moved := int64(len(shards[slot]))
-	newPlace := slices.Clone(c.Placement)
-	newPlace[slot] = to
-	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: c.K, M: c.M, Placement: newPlace, Expect: c.Placement}})
-	if err == nil {
-		err = res.Err
-	}
-	if errors.Is(err, meta.ErrConflict) {
-		return moved, nil // re-placed meanwhile: the next pass plans afresh; the shard is an orphan the sweep clears
-	}
-	if err != nil {
-		return moved, fmt.Errorf("set placement: %w", err)
-	}
-	if err := r.st.WaitApplied(ctx, index); err != nil {
-		return moved, err
-	}
-	if old := c.Placement[slot]; r.live.IsLive(old) {
-		if err := r.shards.DeleteFenced(ctx, old, key, index); err != nil {
-			r.log.Debug("stale shard delete refused", "node", old, "slot", slot, "err", err)
-		}
-	}
-	return moved, nil
+	return true
 }
 
 type outcome struct {
@@ -647,7 +780,7 @@ type outcome struct {
 
 // repairOne re-places the bad slots (or every slot for a migration), commits the new
 // placement and only then deletes superseded shards (docs/06 §4 steps 1–6).
-func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotIssue, kept []meta.NodeIdx, migrate bool, vol meta.Volume) (outcome, error) {
+func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotIssue, kept []meta.NodeIdx, migrate bool, vol meta.Volume, hv *meta.HomeView) (outcome, error) {
 	data, err := r.rd.ReadChunk(ctx, c.Hash)
 	if err != nil {
 		return outcome{}, fmt.Errorf("read: %w", err)
@@ -666,18 +799,54 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	}
 	total := int(k) + int(m)
 	newPlace := make([]meta.NodeIdx, total)
-	var held []meta.NodeIdx
 	if !migrate {
 		copy(newPlace, kept)
-		for _, n := range kept {
+	}
+	// Every emptied slot goes home first (I-296), and a slot no one serves before one whose
+	// holder still serves it (draining, skewed, away): while the readable ones are filled,
+	// their holders stand in for them, so a lone spare replaces the missing shard (I-65).
+	home := hv.Home(c.Hash, int(k), int(m))
+	live := meta.LiveSet(r.live.Live())
+	nodes := r.st.Nodes()
+	fill := func() {
+		hv.FillHome(newPlace, int(k), home, r.dest)
+		var held []meta.NodeIdx
+		for _, n := range newPlace {
 			if n != 0 {
 				held = append(held, n)
 			}
 		}
+		meta.FillPlacement(c.Hash, newPlace, meta.ExcludeIdx(meta.Candidates(nodes, func(n meta.NodeIdx) bool { return live[n] }), held), int(k), meta.DomainsOf(nodes))
 	}
-	live := meta.LiveSet(r.live.Live())
-	nodes := r.st.Nodes()
-	meta.FillPlacement(c.Hash, newPlace, meta.ExcludeIdx(meta.Candidates(nodes, func(n meta.NodeIdx) bool { return live[n] }), held), int(k), meta.DomainsOf(nodes))
+	var standIn []int
+	if !migrate {
+		for _, b := range bad {
+			if b.Readable && newPlace[b.Idx] == 0 {
+				newPlace[b.Idx] = c.Placement[b.Idx]
+				standIn = append(standIn, b.Idx)
+			}
+		}
+	}
+	fill()
+	away := map[int]bool{}
+	for _, i := range standIn {
+		newPlace[i] = 0
+	}
+	for _, b := range bad {
+		if b.Reason == meta.ReasonAway {
+			away[b.Idx] = true
+		}
+	}
+	if len(away) > 0 {
+		// an away slot goes home or nowhere, and never onto a bucket (I-294, L-220)
+		hv.FillHome(newPlace, int(k), home, func(n meta.NodeIdx) bool { return !hv.S3(n) && r.dest(n) })
+		for i := range away {
+			if newPlace[i] == 0 {
+				newPlace[i] = c.Placement[i]
+			}
+		}
+	}
+	fill()
 	// A slot whose shard is still served (live draining holder) keeps its node until a
 	// replacement is placed: a repair never lowers the readable slot count (I-65, L-184).
 	// unchanged marks slots that need no PUT: kept ones and retained ones.
@@ -685,9 +854,14 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	for i := range unchanged {
 		unchanged[i] = !migrate && i < len(kept) && kept[i] != 0
 	}
+	readableBad := map[int]bool{}
 	if !migrate {
 		for _, b := range bad {
-			if b.Readable && newPlace[b.Idx] == 0 {
+			if !b.Readable {
+				continue
+			}
+			readableBad[b.Idx] = true
+			if newPlace[b.Idx] == 0 || newPlace[b.Idx] == c.Placement[b.Idx] {
 				newPlace[b.Idx] = c.Placement[b.Idx]
 				unchanged[b.Idx] = true
 			}
@@ -706,7 +880,14 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 		r.limit.Wait(ctx, int64(len(shards[i])))
 		if err := r.shards.Put(ctx, n, chunk.Key(c.Hash, k, m, i), shards[i]); err != nil {
 			r.warnPut.Warn(r.log, "repair put failed", "node", n, "slot", i, "err", err)
+			if errors.Is(err, chunk.ErrFull) {
+				r.markFull(n)
+			}
 			newPlace[i] = 0
+			if readableBad[i] { // its holder still serves it: keep it rather than lose a readable slot (I-65)
+				newPlace[i], unchanged[i] = c.Placement[i], true
+				acked++
+			}
 			continue
 		}
 		moved += int64(len(shards[i]))

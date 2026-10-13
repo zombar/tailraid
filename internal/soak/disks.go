@@ -337,14 +337,22 @@ func (r *Run) diskLifecycleChecks(ctx context.Context) error {
 	if added.Idx == 0 {
 		return nil
 	}
-	// the host's other disks are now far above their shares: repair passes move slots
-	// to the new disk until every disk of the host is within the skew (docs/14 §7)
+	// the passes above already moved what the disk changed (a policy migration lands at
+	// home, I-296, and the gate opens past repair.home_start); `volume rebalance` opens it
+	// for whatever is left below the threshold, and the passes take that home (docs/14 §7)
+	if _, err := r.Env.Rebalance(ctx); err != nil {
+		r.check("I-295", "volume rebalance accepted", false, err.Error())
+		return nil
+	}
 	rep, err = r.repairUntilClean(ctx)
 	if err != nil {
 		return err
 	}
-	r.checkAt("I-172", "repair moved slots onto the added disk", hostSlotsOf(rep, added.Name) > 0 && rep.Volume.DiskSkew == 0,
-		fmt.Sprintf("%d slots on %s, disk skew %d after the passes", hostSlotsOf(rep, added.Name), added.Name, rep.Volume.DiskSkew), "", "", added.Name)
+	r.checkAt("I-172 I-295", "repair moved the added disk's slots home", hostSlotsOf(rep, added.Name) > 0 && rep.Volume.DiskSkew == 0 && r.lastRepair.MovableBytes == 0,
+		fmt.Sprintf("%d slots on %s, disk skew %d, %d bytes movable after the passes", hostSlotsOf(rep, added.Name), added.Name, rep.Volume.DiskSkew, r.lastRepair.MovableBytes), "", "", added.Name)
+	if st, err := r.repairNow(ctx); err == nil {
+		r.check("I-294 L-211", "a further pass moves nothing", st.Homed == 0, fmt.Sprintf("%d chunks moved", st.Homed))
+	}
 	bad, first := r.verifyModel(v, m)
 	r.checkAt("I-12 I-65", "corpus exact after the rebalance", bad == 0, first, first, "", gw.Name)
 	if err := r.Env.SetState(ctx, added, meta.Draining); err != nil {

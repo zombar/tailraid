@@ -38,7 +38,7 @@
   </section>
 
   <section>
-    <h2>Disks<span class="h-sub">survives 2 disks, 1 host · auto 6+2 · 5 hosts, 12 targets</span></h2>
+    <h2>Disks<span class="h-sub">survives 2 disks, 1 host · auto 6+2 · 5 hosts, 12 disks + 1 bucket</span></h2>
     <div class="disks">
       <div class="spread" role="img" aria-label="slot share of each target against its expected share">
         <div class="spread-axis"><span>+25 %</span><span>expected</span><span>−25 %</span></div>
@@ -48,6 +48,7 @@
               <div class="spread-col" title="atlas/1: +0.8 % of expected (15,020 of 14,900 slots)"><i class="up" style="height:1.6%"></i></div>
               <div class="spread-col" title="atlas/2: +0.3 % of expected (61,210 of 61,031 slots)"><i class="up" style="height:0.6%"></i></div>
               <div class="spread-col" title="atlas/3: −1.0 % of expected (60,390 of 61,031 slots)"><i class="down" style="height:2.1%"></i></div>
+              <div class="spread-col archive off" title="atlas/m1: archive mirror, 61 % full (1.2 TiB of 2.0 TiB), offline"><i style="height:61%"></i></div>
             </div>
             <div class="spread-label"><span class="dot ok"></span>atlas</div>
           </div>
@@ -56,6 +57,7 @@
               <div class="spread-col" title="pike/1: +3.2 % of expected (15,380 of 14,900 slots)"><i class="up" style="height:6.4%"></i></div>
               <div class="spread-col" title="pike/2: +1.1 % of expected (30,840 of 30,515 slots)"><i class="up" style="height:2.1%"></i></div>
               <div class="spread-col" title="pike/3: −1.9 % of expected (29,950 of 30,515 slots)"><i class="down" style="height:3.7%"></i></div>
+              <div class="spread-col archive" title="pike/m1: archive mirror, 34 % full (1.4 TiB of 4.0 TiB)"><i style="height:34%"></i></div>
             </div>
             <div class="spread-label"><span class="dot ok"></span>pike</div>
           </div>
@@ -75,11 +77,17 @@
             </div>
             <div class="spread-label"><span class="dot ok"></span>nomad</div>
           </div>
+          <div class="spread-host">
+            <div class="spread-cols">
+              <div class="spread-col" title="b2: +1.2 % of expected (14,970 of 14,792 slots)"><i class="up" style="height:2.4%"></i></div>
+            </div>
+            <div class="spread-label"><span class="dot ok"></span>s3</div>
+          </div>
         </div>
       </div>
       <div class="cap-note">no chunk above the host cap (2 of 8 slots per host)</div>
       <div class="host-row">
-        <div class="name-row"><span class="dot ok"></span><span class="name">atlas</span><span class="host-sum">3 disks · 4.5 TiB</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span></span></div>
+        <div class="name-row"><span class="dot ok"></span><span class="name">atlas</span><span class="host-sum">3 disks · 4.5 TiB · 1 mirror</span><span class="badges"><span class="badge strong">leader</span><span class="badge strong">voter</span></span></div>
         <div class="disk-strip">
           <div class="disk" title="atlas/1: 15,020 slots, expected 14,900; 95.0 GiB used of 500.0 GiB">
             <div class="disk-name"><span class="dot ok"></span><span class="n">atlas/1</span><span class="warn-icon" title="on the same physical disk as atlas/3: they fail together"></span></div>
@@ -99,11 +107,17 @@
             <div class="disk-val dots"><span>60,390 slots</span><span>exp 61,031</span><span>−1.1 %</span></div>
             <div class="disk-val"><span>402.0 GiB</span><span>of 2.0 TiB</span></div>
           </div>
+          <div class="disk off" title="atlas/m1: archive mirror, snapshots only · not attached">
+            <div class="disk-name"><span class="dot off"></span><span class="n">atlas/m1</span></div>
+            <div class="bar"><i style="width:61%"></i></div>
+            <div class="disk-val dots"><span>archive · offline since 2026-10-09</span></div>
+            <div class="disk-val"><span>1.2 TiB</span><span>of 2.0 TiB</span></div>
+          </div>
         </div>
         <div class="host-note"><span class="warn-icon"></span>atlas/1 and atlas/3 are on one physical disk: they fail together, so data spread across them is not redundant</div>
       </div>
       <div class="host-row self">
-        <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">3 disks · 2.5 TiB</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
+        <div class="name-row"><span class="dot ok"></span><span class="name">pike</span><span class="host-sum">3 disks · 2.5 TiB · 1 mirror</span><span class="badges"><span class="badge strong">voter</span><span class="badge self">self</span></span></div>
         <div class="disk-strip">
           <div class="disk" title="pike/1: 15,380 slots, expected 14,900; 98.0 GiB used of 500.0 GiB">
             <div class="disk-name"><span class="dot ok"></span><span class="n">pike/1</span></div>
@@ -122,6 +136,12 @@
             <div class="bar"><i style="width:44%"></i><b class="tick" style="left:45%"></b></div>
             <div class="disk-val dots"><span>29,950 slots</span><span>exp 30,515</span><span>−1.9 %</span></div>
             <div class="disk-val"><span>199.0 GiB</span><span>of 1.0 TiB</span></div>
+          </div>
+          <div class="disk" title="pike/m1: archive mirror, snapshots only">
+            <div class="disk-name"><span class="dot ok"></span><span class="n">pike/m1</span></div>
+            <div class="bar"><i style="width:34%"></i></div>
+            <div class="disk-val dots"><span>archive · online</span></div>
+            <div class="disk-val"><span>1.4 TiB</span><span>of 4.0 TiB</span></div>
           </div>
         </div>
         <div class="host-note"><span class="warn-icon"></span>pike/2 and pike/3 are on one physical disk: they fail together, so data spread across them is not redundant</div>
@@ -175,6 +195,17 @@
       <div class="host-row diskless">
         <div class="name-row"><span class="dot ok"></span><span class="name">fern</span><span class="host-sum">no disks</span><span class="badges"><span class="badge">non-voter</span></span></div>
         <div class="host-note">gateway only · no disks</div>
+      </div>
+      <div class="host-row">
+        <div class="name-row"><span class="dot ok"></span><span class="name">S3</span><span class="host-sum">1 bucket · 98.3 GiB stored</span></div>
+        <div class="disk-strip">
+          <div class="disk" title="b2: 14,970 slots, expected 14,792">
+            <div class="disk-name"><span class="dot ok"></span><span class="n">b2</span></div>
+            <div class="bar"><i style="width:22%"></i><b class="tick" style="left:22%"></b></div>
+            <div class="disk-val dots"><span>14,970 slots</span><span>exp 14,792</span><span>+1.2 %</span></div>
+            <div class="disk-val"><span>98.3 GiB stored</span><span>tailraid-volume/vol1</span></div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -233,6 +264,8 @@
     <h3>Repair · pass 3 running</h3>
     <div class="bar-row"><span class="bar-label">scanned</span><div class="bar"><i style="width:12%"></i></div><span class="bar-val">12,345 of 106,452 · 4 in flight of 4 workers · 1.2 GiB moved · started 06:01</span></div>
     <div class="small dim">the pass under way; the counters below are the last completed pass, 2 h ago</div>
+    <!-- home placement (docs/14 §7): shown while anything is away; the bar is the movable share against repair.home_start -->
+    <div class="bar-row"><span class="bar-label">away from home</span><div class="bar"><i style="width:62%"></i></div><span class="bar-val">12,345 slots · 48.2 GiB · 31.0 GiB movable (3.1 % of 5 %) · gate closed</span></div>
     <dl class="kv">
       <div><dt>scanned</dt><dd>106,452</dd></div>
       <div><dt>repaired</dt><dd>98,390</dd></div>
@@ -240,6 +273,7 @@
       <div><dt>unrepairable</dt><dd>0</dd></div>
       <div><dt>deferred</dt><dd>0</dd></div>
       <div><dt>migrated</dt><dd>30,596</dd></div>
+      <div><dt>moved home</dt><dd>0</dd></div>
       <div><dt>policy stale</dt><dd>0</dd></div>
       <div><dt>scrubbed</dt><dd>1,064</dd></div>
       <div><dt>scrub bad</dt><dd>0</dd></div>
@@ -288,20 +322,6 @@
     <div class="small dim">a snapshot copies only what changed since the last one on its mirror; "added" is what it wrote</div>
   </section>
 
-  <section>
-    <h2>Cache<span class="h-sub">this device's chunk cache and the folders kept on it</span></h2>
-    <div class="cards">
-      <div class="card cache">
-        <div class="name-row"><span class="name">pike</span><span class="badges"><span class="badge self">self</span></span></div>
-        <div class="bar-row"><span class="bar-label">used</span><div class="bar"><i style="width:38%"></i></div><span class="bar-val">388.0 MiB of 1.0 GiB</span></div>
-        <div class="bar-row"><span class="bar-label">pinned</span><div class="bar"><i style="width:100%"></i></div><span class="bar-val">2.4 GiB kept here · 1.2 TiB free on the data disk</span></div>
-        <div class="pins">
-          <div class="pin-row"><span class="n">/media/Concerts 2024</span><div class="bar"><i style="width:100%"></i></div><span class="v">2.2 GiB of 2.2 GiB</span></div>
-          <div class="pin-row"><span class="n">/Music/Deftones</span><div class="bar"><i style="width:41%"></i></div><span class="v">212.4 MiB of 518.0 MiB · fetching</span></div>
-        </div>
-      </div>
-    </div>
-  </section>
 
 </main>
 <div id="toasts" aria-live="polite"></div>

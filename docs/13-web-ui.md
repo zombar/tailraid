@@ -55,8 +55,8 @@ operation stays in the CLI.
   and takes snapshots. Taking and restoring a snapshot are the
   user's file operations; no page removes a snapshot (only the schedule's thinning does, docs/16 §4), and adding or removing a mirror stays in the CLI.
 - **Local cache**: "Keep on this device" pins a folder so the node serving the page keeps
-  every chunk under it in its local chunk cache (docs/01 §Local chunk cache); the
-  dashboard's Cache card shows what is pinned and how much of it has arrived.
+  every chunk under it in its local chunk cache (docs/01 §Local chunk cache); `tailraid
+  cache ls` shows what is pinned and how much of it has arrived.
 - **Media**: audio, video and images play in the browser's own elements; the node serves
   files as stored, with no transcoding. Audio gets more (§6): a folder of tracks renders
   as an album with its cover and tags, playback continues in a bar at the bottom while
@@ -280,8 +280,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   today), remembered in `sessionStorage`.
 - **Pins** are local state of the node serving the page (`<data_dir>/pins.json`, never in
   Raft): a pinned folder's chunks are prefetched into the node's chunk cache and kept out
-  of its eviction, renames keep the pin (it is stored by inode), and `/api/pins` and the
-  Cache card report how much of each pin has arrived (docs/01 §Local chunk cache, I-162).
+  of its eviction, renames keep the pin (it is stored by inode), and `/api/pins` and
+  `tailraid cache ls` report how much of each pin has arrived (docs/01 §Local chunk cache, I-162).
   A pin is "Keep on this device" in the folder menu, for the device whose URL is open.
 - **Snapshots and versions** (docs/16). The toolbar's *as-of* menu lists the snapshots by
   mirror, newest first, "Now" at the top; an offline mirror's snapshots are listed greyed
@@ -689,10 +689,10 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Upload row | `.upload` | queued (dim), uploading (bar), done `ok`, failed `bad` with the server's message |
 | Inline form | `.inline-form` | the new-folder input; Enter submits, Escape cancels |
 | Toast | `.toast` | `ok` / `bad`, bottom right, 6 s, click to dismiss, `aria-live="polite"` |
-| Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±25 % (the repairer's `RebalanceSkew`, docs/14 §7: within it nothing moves), `warn` past 25 %, `bad` past 50 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
+| Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±25 % (the spread weighted rendezvous leaves at home; docs/14 §7: moves follow home placement, not this band), `warn` past 25 %, `bad` past 50 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
 | Diskless host | `.host-row.diskless` + `.host-note` | a host card with no target rows and the note `gateway only · no disks`; its border dimmed |
 | Warning icon | `.warn-icon` | the warnings strip's amber `!` disc at 14 px, inline after a name; the title says why (a target on the same physical disk as others: they fail together) |
-| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; below 600 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card |
+| Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; below 600 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card; a host's archive mirror (16) is a row after its disks: used of the disk, `archive · online`, or `off` (dashed) with `archive · offline since <date>`, and no tick, since it holds no slot; the S3 buckets are a card of their own named `S3`, a row per bucket with its slots against its share and its stored bytes and `bucket/prefix` in place of used of budget |
 | Slot cell | `.cell` | present (green), `warn` `!` live but absent, `bad` `×` dead, `unplaced` dashed, `unverified` 50 % |
 | Panel | `details.panel` | collapsed by default; summary names the count; a `.loading` row ("loading 64 of 1,946…") while a page is in flight, a "Retry" button in the error row |
 | Empty / error | `.empty`, `.error` | "empty folder"; the error block quotes the server's `error` string and status |
@@ -710,7 +710,6 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Album | `section.album` > `.album-head` (`img.cover`, `h1`, `.artist`, `.meta`) + `table.tracks` (`.no`, `.title`, `.dur`) | the playing row is `tr.playing` with the equaliser glyph in `.no`; "Play all" and "Shuffle" are toolbar buttons |
 | Now-playing bar | `aside.nowbar` > `.cover` + `.titles` (`.title`, `.sub`) + `.transport` + `.seek` (`input[type=range]` + `.time`) + `.modes` (repeat, shuffle with `aria-pressed`) + `.queue-btn` | fixed bottom, `--nowbar-h` tall (64 px on one row from 840 px, 120 px on two rows below; see *Layout*), hidden until something plays (`hidden`); the transport, the modes and the queue's remove are icon buttons; `expanded` shows the queue panel above it; below 600 px the cover shrinks to 40 px; the selection bar sits above it when both show |
 | Queue | `.queue` > `ol` > `li.qrow` (`.no`, `.title`, `.artist`, `.dur`, remove button) | the current item is `li.playing`; items can be removed; "Clear" empties it |
-| Cache card | `.card.cache` > `.name-row` + bar rows + `.pins` > `.pin-row` | used and pinned of `cache.size`; one row per pin: path, a bar of cached over total, the figures; `warn` when the data disk is under 20 % free |
 | Range picker | `.toolbar .seg` > `button[aria-pressed]` × 7 | 1h · 6h · 24h · 7d · 30d · 1y · custom; the pressed one is the range in the hash; custom opens the range form on the toolbar's next line |
 | Range form | `.inline-form.range` > two `input[type=datetime-local]` + Apply + Cancel | a custom `from` and `to`; Enter applies, Escape closes; an empty or inverted range disables Apply |
 | Live pill | `.pill.ok` "live" / `.pill` "paused" | at the toolbar's right: live while the range ends now and the tab is visible (a refresh every 5 s), paused for a custom range or a hidden tab; the title says when the last fetch landed |
@@ -824,7 +823,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
     artist and cover and its buttons skip tracks; the next track starts without a gap in
     Safari on iOS and Chrome on Android; browsing the dashboard while playing keeps the
     bar; a reload resumes at the same position; seek on a 1 GB flac.
-14. Pin a folder on the laptop, wait for the Cache card to show it complete, stop every
+14. Pin a folder on the laptop, wait for `tailraid cache ls` to show it complete, stop every
     other node, and play a file from it.
 15. Stats on the phone at 360 px: every chart fits the width with no horizontal scroll,
     the range picker's seven buttons wrap, a 24 h and a 30 d range draw within two

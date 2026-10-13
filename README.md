@@ -208,7 +208,7 @@ tailraid mirror export /Volumes/Archive/tailraid 2026-10-12-0900Z ~/rescue      
 | Add an S3 bucket off-site | `tailraid node add-s3 <name> …` on one device, `tailraid node keys <name> …` on the others |
 | Grow a device or disk in place | [Growing in place](#growing-in-place) |
 
-`tailraid volume describe` shows the volume's raw, usable and free capacity. New data spreads over new space straight away; existing data stays where it is, except that a new disk on a device takes over its share of that device's slots.
+`tailraid volume describe` shows the volume's raw, usable and free capacity. New data spreads over new space straight away. Existing data moves only when enough of it sits away from where placement would put it today (5 % of the stored bytes by default, `repair.home_start`), and then a little each repair pass at background priority. `tailraid volume rebalance --dry-run` shows what would move, and `tailraid volume rebalance` starts it now.
 
 ### Adding a disk
 
