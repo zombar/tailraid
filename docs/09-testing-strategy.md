@@ -487,8 +487,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   deterministic test); (d) two names each replaced at once by two clients through two
   gateways with different payloads larger than a flush (16 chunks and 40 MiB, at most
   half the profile's large file), so each copy commits in several flushes that
-  interleave with the other's, every gateway reading one payload whole, the same one
-  (I-223); (e) a
+  interleave with the other's, every gateway reading one payload whole, the same one,
+  once both writers report nothing dirty, planned or in their WAL (until then each
+  reads its own copy) (I-223); (e) a
   gateway reading a file another gateway is copying, every read the old bytes or the
   new chunk by chunk and never other bytes (I-36), the whole file once the copy has
   ended and `FlushIdle` passed; (f) the folder of SMB and NFS copies renamed through
