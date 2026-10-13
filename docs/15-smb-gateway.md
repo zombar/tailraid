@@ -520,6 +520,15 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   Before, every READ ran on the read loop under the share's read lock: one cold chunk's
   network fetch held up every other request on the connection, and with a CREATE, CLOSE
   or rename waiting for the lock, every new request on the share.
+- **I-264** — A directory handle's change notification is the handle's (MS-FSA 2.1.5.10):
+  made by its first CHANGE_NOTIFY and kept until CLOSE, it collects the changes made
+  between requests, so the next request is answered at once with any kept since the last
+  answer; a burst past its queue (64) or past the client's buffer is answered
+  `NOTIFY_ENUM_DIR` and the queue emptied. A CLOSE answers whatever still waits on the
+  handle: a CHANGE_NOTIFY with `STATUS_NOTIFY_CLEANUP` (MS-SMB2 3.3.5.10), a byte-range
+  lock wait with `STATUS_CANCELLED`. Before, the watch lived for one request, so a change
+  in the gap before the next was lost and Explorer's window stayed stale through a copy,
+  and a CLOSE left those requests unanswered with their credits.
 - **I-247** — A CANCEL of a WRITE answered `STATUS_PENDING` takes nothing back: the
   write is already in the driver, so the CANCEL is answered nothing and the WRITE its real
   reply with the bytes it wrote (MS-SMB2 3.3.5.16); a lock wait or a change notification
@@ -557,6 +566,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |
+| I-264 | `TestChangeNotify_WatchOutlivesTheRequest`, `TestClose_AnswersWhatWaitsOnTheHandle`, `TestChangeNotify` |
 | I-247 | `TestCancel_AsyncWrite_CompletesNotCancelled`, `TestChain_GoesOnAfterAWarning` |
 | I-235 | `TestSetInfo_Allocation_NotEndOfFile` |
 | I-236 | `TestSMB_DeleteNonEmptyFolder_NotEmpty` |

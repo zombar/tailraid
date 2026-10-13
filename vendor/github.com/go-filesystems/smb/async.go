@@ -185,5 +185,18 @@ func (c *conn) cancelForFile(id [16]byte) {
 	c.mu.Unlock()
 	for _, op := range ended {
 		op.stop()
+		// what waits on a handle that closes is answered, never left outstanding with
+		// its credits (MS-SMB2 3.3.5.10, I-264): a change notification is cleaned up,
+		// anything else (a byte-range lock wait) is cancelled
+		status := statusCancelled
+		if op.command == cmdChangeNotify {
+			status = statusNotifyCleanup
+		}
+		reply := asyncResponse(header{command: op.command, messageID: op.messageID}, status, op.asyncID, 9)
+		binary.LittleEndian.PutUint16(reply[headerLen:], 9)
+		if op.key != nil {
+			signMessage(c.dialect, op.key, reply)
+		}
+		_ = c.send(reply) // a dropped connection has nobody to tell
 	}
 }

@@ -80,6 +80,10 @@ type openFile struct {
 	// never closed under a write or a read it accepted.
 	inflight sync.WaitGroup
 
+	// watch is the change notification this directory handle keeps from its first
+	// CHANGE_NOTIFY until CLOSE (I-264); only the read loop touches the field.
+	watch *watcher
+
 	// created is whether this handle's CREATE made the file: its delete-on-close is the
 	// creator's own cleanup, which an OwnDeleter may allow where it refuses any other
 	// delete (a failed copy removing what it wrote).
@@ -391,6 +395,10 @@ func (c *conn) closeOpen(of *openFile) {
 	}
 	delete(c.files, of.id)
 	of.share.locks.releaseAll(of.id)
+	if of.watch != nil {
+		of.share.watchers.remove(of.watch)
+		of.watch = nil
+	}
 	c.cancelForFile(of.id)
 	defer of.share.changing()() // the file may go with the handle
 	// a rename holds the share's lock while it moves the handles: this one leaves the
