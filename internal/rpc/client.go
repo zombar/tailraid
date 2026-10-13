@@ -80,7 +80,10 @@ func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 	// dead peer either way (I-83). The control plane has no header timeout: an admin op
 	// that runs a pass is answered when the pass is done, and the dial timeout plus the
 	// caller's context bound a dead peer (I-189).
-	ctl := &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second}
+	// the control plane keeps as many idle connections per host as the shard plane: a
+	// burst of proposals forwarded to the leader (every gateway's flush and repair
+	// workers) must not dial a fresh connection for every call past the fourth (I-255)
+	ctl := &http.Transport{DialContext: dial, MaxIdleConnsPerHost: 32, IdleConnTimeout: 90 * time.Second}
 	return &Client{http: &http.Client{Transport: tr}, ctl: &http.Client{Transport: ctl}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
 }
 
