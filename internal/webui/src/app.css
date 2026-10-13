@@ -520,7 +520,7 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .chart .tick { font: 11px var(--sans); fill: var(--dim); }
 .chart .grid { stroke: var(--line); }
 .chart .marker { stroke: var(--dim); stroke-dasharray: 3 3; }
-.chart .marklabel { font: 9px var(--sans); fill: var(--dim); }
+.chart .marklabel { font: 10px var(--sans); fill: var(--dim); }
 .chart rect.band0 { fill: var(--surface); }
 .chart rect.band1 { fill: var(--line); }
 .chart path.s0 { stroke: var(--c0); } .chart rect.s0, .chart circle.s0 { fill: var(--c0); }
