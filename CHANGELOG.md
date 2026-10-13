@@ -2,6 +2,24 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.7.2 (2026-10-13)
+
+### Changes
+
+- nfs: listings filled by real entry sizes, dtpref 1 MiB (I-248) ([ceef273](https://github.com/zombar/tailraid/commit/ceef273))
+- smb: a CANCEL never takes back a WRITE; a warning does not stop a chain (I-247) ([53b8521](https://github.com/zombar/tailraid/commit/53b8521))
+- soak: phase 12 explains each new orphan instead of demanding none ([772de8d](https://github.com/zombar/tailraid/commit/772de8d))
+- rpc: a full node answers busy after SlotWait instead of looking dead (I-246) ([d090c5e](https://github.com/zombar/tailraid/commit/d090c5e))
+- nfs: bounded XDR lengths, RFC 5531 reply codes, version checks, LINK args (I-244, I-245) ([9fa1efe](https://github.com/zombar/tailraid/commit/9fa1efe))
+- mirror: a sync cut by a restart resumes; the sweep runs only for a deletion (I-243) ([47969df](https://github.com/zombar/tailraid/commit/47969df))
+- nfs, soak: an EXIST refusal carries the parent's attributes; the soak's mkdir is mkdir -p (I-242) ([924ba60](https://github.com/zombar/tailraid/commit/924ba60))
+- rpc: a mirror's objects and trees travel on the bounded transport (I-241) ([bced835](https://github.com/zombar/tailraid/commit/bced835))
+- smb: an open left by a dropped connection, a logoff or a tree disconnect is closed, delete-on-close included (I-240) ([7b42bb4](https://github.com/zombar/tailraid/commit/7b42bb4))
+- mirror: a snapshot sync reads and writes 8 chunks at once (I-239) ([b3e4124](https://github.com/zombar/tailraid/commit/b3e4124))
+- nfs, vfs: RFC 1813 statuses for namespace errors, exclusive MKDIR, self-rename keeps data (I-238) ([e79eb16](https://github.com/zombar/tailraid/commit/e79eb16))
+- smb: allocation is not end of file, non-empty folder delete, MS-FSA wildcards (I-235..I-237) ([870d1d7](https://github.com/zombar/tailraid/commit/870d1d7))
+- admin, cli: trash ls pages its reply (I-234) ([d9b7ade](https://github.com/zombar/tailraid/commit/d9b7ade))
+
 ## v0.7.1 (2026-10-13)
 
 ### Changes
