@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+    types: [opened, synchronize, reopened, labeled] # labeled: the full-ci label widens the test matrix
   schedule:
     - cron: "17 3 * * *" # nightly: long tests + soak
 
@@ -12,9 +13,37 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its older run; main and tag runs always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Actions are pinned to the commit behind a release tag (the tag is in the comment), so a
 # moved tag cannot change what runs here. Bump by editing both.
 jobs:
+  # What this run must test (scripts/ci-changes.sh): a change of prose alone (the changelog
+  # of a release, docs) runs only checks and docs; a pull request tests on Linux alone
+  # unless it touches per-OS code or carries the full-ci label; a tag whose parent passed
+  # on main skips straight to the release.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # the tag gate reads the parent's run
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      oses: ${{ steps.diff.outputs.oses }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {fetch-depth: 0}
+      - id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: scripts/ci-changes.sh "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA" "$BASE" >> "$GITHUB_OUTPUT"
+
   checks:
     name: tidy + vendor + gofmt
     runs-on: ubuntu-latest
@@ -27,19 +56,35 @@ jobs:
       - run: make vendor-check
       - run: make fmt-check
 
-  lint:
-    name: golangci-lint + invariants + dead code
+  # The half of make lint that reads prose, workflows and scripts: it runs on every change.
+  docs:
+    name: invariants + docs + spelling + workflows + shell
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version-file: go.mod, cache: true}
-      - run: make lint web-check
-      # The per-OS files (*_windows.go, *_darwin.go) only type-check under their GOOS.
-      - run: make lint-cross
+      - run: scripts/check-invariants.sh --check
+      - run: make docs-check spell actionlint yaml-check shell-check
+
+  lint:
+    name: golangci-lint + dead code
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: {go-version-file: go.mod, cache: true}
+      - run: make lint-go web-check
+      # The per-OS files (*_windows.go, *_darwin.go) only type-check under their GOOS;
+      # lint-go has linted GOOS=linux already.
+      - run: make lint-cross LINT_CROSS_OS="darwin windows"
 
   vuln:
     name: govulncheck
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,21 +94,43 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.oses) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with: {go-version-file: go.mod, cache: true}
-      - run: go test -short -race -cover ./...
+        with: {go-version-file: go.mod, cache: false}
+      # setup-go's own cache is keyed on go.sum alone, so it is saved once and goes stale.
+      # This one is saved by every main run and restored by every run after it: packages
+      # main built are not rebuilt, and go test's result cache skips a package whose
+      # inputs (sources, files and env vars it read) did not change.
+      - id: gocache
+        run: echo "dir=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
         shell: bash
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+      - run: go test -short -race ./...
+        shell: bash
+      - run: go test -C third_party/nfs -short -race ./... && go test -C third_party/smb -short -race ./...
+        shell: bash
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gocache.outputs.dir }}
+          key: go-race-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   long:
     name: long (model checker, durability, oracle)
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: changes
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -74,7 +141,8 @@ jobs:
 
   mount:
     name: real NFS mount (${{ matrix.os }})
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: changes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -109,8 +177,9 @@ jobs:
 
   release:
     name: release binaries
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [checks, lint, vuln, test]
+    # A skipped need (a tag whose parent passed on main) is no failure; a failed one is.
+    if: startsWith(github.ref, 'refs/tags/v') && !failure() && !cancelled()
+    needs: [changes, checks, docs, lint, vuln, test]
     permissions:
       contents: write # release uploads
     runs-on: ubuntu-latest

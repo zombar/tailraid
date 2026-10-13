@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/meta"
@@ -59,6 +61,9 @@ func TestClient_CancelledGet_DrainsAShortRest(t *testing.T) {
 			}
 			srv.Start()
 			defer srv.Close()
+			// runs before srv.Close, which waits for the handler: a failing test never hangs
+			releaseRest := sync.OnceFunc(func() { close(release) })
+			defer releaseRest()
 			addr := strings.TrimPrefix(srv.URL, "http://")
 			c := NewClient([16]byte{1}, func(meta.NodeIdx) (string, bool, bool) { return addr, false, true })
 			c.SetDisks(disk0, nil)
@@ -68,14 +73,15 @@ func TestClient_CancelledGet_DrainsAShortRest(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			got := make(chan error, 1)
 			go func() { _, err := c.Get(ctx, 1, chunk.ShardKey("k")); got <- err }()
-			// the headers are in: give up, then let the rest come
+			// the headers are in (a GET that already completed had them too): give up, then
+			// let the rest come
 			select {
 			case <-headers:
-			case err := <-got:
-				t.Fatalf("the GET ended before its headers: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("no headers within 10 s")
 			}
 			cancel()
-			close(release)
+			releaseRest()
 			// a short rest may arrive within the read under way: the GET then completes,
 			// which keeps the connection as well
 			if err := <-got; !errors.Is(err, context.Canceled) && (!tc.reused || err != nil) {

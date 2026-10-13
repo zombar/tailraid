@@ -21,6 +21,8 @@ YAMLFMT := $(TOOL) github.com/google/yamlfmt/cmd/yamlfmt
 # lefthook is built to a stable path: the hook scripts it installs embed the path of the
 # binary that installed them, and a `go run` binary lives in a temp dir that vanishes.
 LEFTHOOK_BIN := dist/tools/lefthook
+# shellcheck, downloaded at a pinned version (see shell-check)
+SHELLCHECK_BIN := dist/tools/shellcheck
 PKGS := ./...
 BIN := tailraid
 # Prose and markup the spell check and the docs script cover.
@@ -33,7 +35,7 @@ SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh script
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
 .PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
-        release tag check invariants tidy vendor-check deadcode lint-cross clean help web web-check web-typecheck \
+        release tag check invariants tidy vendor-check deadcode lint-go lint-cross clean help web web-check web-typecheck \
         spell docs-check actionlint yaml-check yamlfmt shell-check hooks \
         vms-setup vms-images vms-images-clean vms-up vms-round vms-rounds vms-down vms-destroy
 
@@ -154,10 +156,14 @@ web-typecheck:
 	$(TSGO) -p internal/webui/tsconfig.json --noEmit
 
 ## lint: golangci-lint + invariant/lifecycle citations + dead code + docs, YAML, workflow and shell checks
-lint:
-	$(GOLANGCI) run $(PKGS)
+lint: lint-go
 	scripts/check-invariants.sh --check
-	$(MAKE) --no-print-directory deadcode docs-check spell actionlint yaml-check shell-check
+	$(MAKE) --no-print-directory docs-check spell actionlint yaml-check shell-check
+
+## lint-go: the Go half of lint: golangci-lint and dead code (CI runs the rest on every change)
+lint-go:
+	$(GOLANGCI) run $(PKGS)
+	$(MAKE) --no-print-directory deadcode
 
 ## spell: misspell over docs, README, TypeScript, CSS and the lookdev HTML
 spell:
@@ -167,9 +173,9 @@ spell:
 docs-check:
 	scripts/check-docs.sh
 
-## actionlint: the GitHub workflow files
-actionlint:
-	$(ACTIONLINT) .github/workflows/*.yml
+## actionlint: the GitHub workflow files, with shellcheck over their run: steps
+actionlint: $(SHELLCHECK_BIN)
+	PATH="$(CURDIR)/$(dir $(SHELLCHECK_BIN)):$$PATH" $(ACTIONLINT) .github/workflows/*.yml
 
 ## yaml-check: YAML files are yamlfmt-clean (make yamlfmt rewrites them)
 yaml-check:
@@ -178,9 +184,29 @@ yaml-check:
 yamlfmt:
 	$(YAMLFMT) $(YAML)
 
-## shell-check: shell scripts parse (bash -n; shellcheck is optional and not required)
-shell-check:
+## shell-check: shell scripts parse (bash -n) and are shellcheck-clean
+shell-check: $(SHELLCHECK_BIN)
 	@for f in $(SHELL_SCRIPTS); do bash -n "$$f" || exit 1; done
+	$(SHELLCHECK_BIN) -x $(SHELL_SCRIPTS)
+
+# shellcheck is Haskell, so it cannot live in tools.mod: the pinned release for the host
+# is downloaded once and checked against its sha256 here (bump the version and all four
+# sums together; `gh release view -R koalaman/shellcheck --json assets` lists them).
+SHELLCHECK_VERSION := v0.11.0
+SHELLCHECK_SUM_darwin_aarch64 := 339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f
+SHELLCHECK_SUM_darwin_x86_64 := c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51
+SHELLCHECK_SUM_linux_aarch64 := 68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc
+SHELLCHECK_SUM_linux_x86_64 := b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+SHELLCHECK_HOST := $(shell uname -s | tr A-Z a-z)_$(shell uname -m | sed 's/arm64/aarch64/; s/amd64/x86_64/')
+$(SHELLCHECK_BIN):
+	@set -euo pipefail; host=$(SHELLCHECK_HOST); sum=$(SHELLCHECK_SUM_$(SHELLCHECK_HOST)); \
+	  test -n "$$sum" || { echo "shellcheck: no pinned release for $$host"; exit 1; }; \
+	  tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	  tgz=shellcheck-$(SHELLCHECK_VERSION).$${host/_/.}.tar.gz; \
+	  curl -fsSL -o "$$tmp/$$tgz" https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/$$tgz; \
+	  got=$$( (command -v sha256sum >/dev/null && sha256sum "$$tmp/$$tgz" || shasum -a 256 "$$tmp/$$tgz") | cut -d' ' -f1); \
+	  test "$$got" = "$$sum" || { echo "shellcheck: $$tgz has sha256 $$got, want $$sum"; exit 1; }; \
+	  tar -xzf "$$tmp/$$tgz" -C "$$tmp"; mkdir -p $(@D); mv "$$tmp/shellcheck-$(SHELLCHECK_VERSION)/shellcheck" $@
 
 ## hooks: install the lefthook git hooks for this clone (pre-commit, pre-push, commit-msg)
 $(LEFTHOOK_BIN): tools.mod tools.sum
@@ -194,10 +220,9 @@ hooks: $(LEFTHOOK_BIN)
 GOLANGCI_BIN := dist/tools/golangci-lint
 $(GOLANGCI_BIN): tools.mod tools.sum
 	GOOS=$$(go env GOHOSTOS) GOARCH=$$(go env GOHOSTARCH) go build -mod=readonly -modfile=tools.mod -o $@ github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+LINT_CROSS_OS ?= linux darwin windows
 lint-cross: $(GOLANGCI_BIN)
-	GOOS=linux $(GOLANGCI_BIN) run $(PKGS)
-	GOOS=darwin $(GOLANGCI_BIN) run $(PKGS)
-	GOOS=windows $(GOLANGCI_BIN) run $(PKGS)
+	@set -e; for os in $(LINT_CROSS_OS); do echo "GOOS=$$os golangci-lint"; GOOS=$$os $(GOLANGCI_BIN) run $(PKGS); done
 
 ## deadcode: nothing unreachable from the binaries and tests, no unused parameters
 deadcode:

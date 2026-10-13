@@ -80,6 +80,14 @@ type openFile struct {
 	// never closed under a write or a read it accepted.
 	inflight sync.WaitGroup
 
+	// watch is the change notification this directory handle keeps from its first
+	// CHANGE_NOTIFY until CLOSE (I-264); only the read loop touches the field.
+	watch *watcher
+
+	// access and shareAccess are what the CREATE asked: the data access it holds and what it
+	// lets other opens do (I-265)
+	access, shareAccess uint32
+
 	// created is whether this handle's CREATE made the file: its delete-on-close is the
 	// creator's own cleanup, which an OwnDeleter may allow where it refuses any other
 	// delete (a failed copy removing what it wrote).
@@ -123,6 +131,8 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	if len(body) < 56 {
 		return nil, fmt.Errorf("smb: CREATE body of %d bytes is too short", len(body))
 	}
+	access := dataAccess(binary.LittleEndian.Uint32(body[24:]))
+	shareAccess := binary.LittleEndian.Uint32(body[32:])
 	disposition := binary.LittleEndian.Uint32(body[36:])
 	options := binary.LittleEndian.Uint32(body[40:])
 	nameOff := int(binary.LittleEndian.Uint16(body[44:]))
@@ -156,6 +166,11 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	action := actionOpened
 	if !exists && parentMissing(sh.fsys, p) {
 		return errorResponse(h, statusObjectPathNotFound), nil // never made on the way (I-233)
+	}
+
+	// an open that conflicts with one held is refused before it changes anything (I-265)
+	if exists && st != nil && sh.sharingViolation(st.Inode(), access, shareAccess) {
+		return errorResponse(h, statusSharingViolation), nil
 	}
 
 	switch {
@@ -226,7 +241,7 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
 	}
-	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID, created: created}
+	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID, created: created, access: access, shareAccess: shareAccess}
 	if st != nil {
 		of.ino = st.Inode()
 	}
@@ -391,6 +406,10 @@ func (c *conn) closeOpen(of *openFile) {
 	}
 	delete(c.files, of.id)
 	of.share.locks.releaseAll(of.id)
+	if of.watch != nil {
+		of.share.watchers.remove(of.watch)
+		of.watch = nil
+	}
 	c.cancelForFile(of.id)
 	defer of.share.changing()() // the file may go with the handle
 	// a rename holds the share's lock while it moves the handles: this one leaves the
@@ -776,7 +795,7 @@ func asFinal(reply []byte, asyncID uint64) []byte {
 func (c *conn) flush(h header, body []byte) ([]byte, error) {
 	if len(body) >= 24 {
 		if of := c.fileByID(body[8:]); of != nil && of.w != nil {
-			defer of.share.changing()()
+			defer fileLock(of)() // a concurrent driver's Sync takes no share lock (I-268)
 			if err := of.w.Sync(); err != nil {
 				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 			}
