@@ -100,6 +100,16 @@ func (s *Server) handlerFor(prog uint32, proc uint32) HandleFunc {
 	return nil
 }
 
+// knows reports whether any procedure of prog is registered (tailraid, I-245).
+func (s *Server) knows(prog uint32) bool {
+	for k := range registeredHandlers {
+		if k.protocol == prog {
+			return true
+		}
+	}
+	return false
+}
+
 // Serve is a singleton listener paralleling http.Serve
 func Serve(l net.Listener, handler Handler) error {
 	srv := &Server{Handler: handler}

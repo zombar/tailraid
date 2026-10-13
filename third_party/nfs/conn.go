@@ -13,7 +13,7 @@ import (
 
 	xdr2 "github.com/rasky/go-xdr/xdr2"
 	"github.com/willscott/go-nfs-client/nfs/rpc"
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 var (
@@ -26,16 +26,25 @@ var (
 // ResponseCode is a combination of accept_stat and reject_stat.
 type ResponseCode uint32
 
-// ResponseCode Codes
+// ResponseCode Codes: an accepted reply's accept_stat (RFC 5531 §9), or, from 1<<16 up, a
+// denied reply's reject_stat plus 1<<16 (tailraid, I-245: the values were shifted by one).
 const (
-	ResponseCodeSuccess ResponseCode = iota
-	ResponseCodeProgUnavailable
-	ResponseCodeProcUnavailable
-	ResponseCodeGarbageArgs
-	ResponseCodeSystemErr
-	ResponseCodeRPCMismatch
-	ResponseCodeAuthError
+	ResponseCodeSuccess         ResponseCode = 0
+	ResponseCodeProgUnavailable ResponseCode = 1
+	ResponseCodeProgMismatch    ResponseCode = 2
+	ResponseCodeProcUnavailable ResponseCode = 3
+	ResponseCodeGarbageArgs     ResponseCode = 4
+	ResponseCodeSystemErr       ResponseCode = 5
+	ResponseCodeRPCMismatch     ResponseCode = denied + 0
+	ResponseCodeAuthError       ResponseCode = denied + 1
 )
+
+// denied marks the codes of a MSG_DENIED reply.
+const denied = 1 << 16
+
+// versions are the program versions this server speaks; a call of another gets
+// PROG_MISMATCH with the range (tailraid, I-245).
+var versions = map[uint32]uint32{nfsServiceID: 3, mountServiceID: 3}
 
 // tailraid: requests on one connection are served concurrently (docs/07, I-167).
 //
@@ -141,13 +150,25 @@ func (c *conn) serializeWrites(ctx context.Context) {
 // Handle a request. errors from this method indicate a failure to read or
 // write on the network stream, and trigger a disconnection of the connection.
 func (c *conn) handle(ctx context.Context, w *response) error {
-	handler := c.Server.handlerFor(w.req.Header.Prog, w.req.Header.Proc)
-	if handler == nil {
-		Log.Errorf("No handler for %d.%d", w.req.Header.Prog, w.req.Header.Proc)
+	h := w.req.Header
+	var refuse RPCError
+	handler := c.Server.handlerFor(h.Prog, h.Proc)
+	switch v, known := versions[h.Prog]; {
+	case h.Rpcvers != 2:
+		refuse = &RPCMismatchError{Low: 2, High: 2}
+	case known && h.Vers != v:
+		refuse = &ProgMismatchError{Low: v, High: v}
+	case handler == nil && !c.Server.knows(h.Prog):
+		refuse = &ProgUnavailableError{}
+	case handler == nil:
+		refuse = &ResponseCodeProcUnavailableError{}
+	}
+	if refuse != nil {
+		Log.Errorf("Refusing %d.%d.%d (RPC %d): %v", h.Prog, h.Vers, h.Proc, h.Rpcvers, refuse)
 		if err := w.drain(ctx); err != nil {
 			return err
 		}
-		return c.err(ctx, w, &ResponseCodeProcUnavailableError{})
+		return c.err(ctx, w, refuse)
 	}
 	appError := handler(ctx, w, c.Server.Handler)
 	if drainErr := w.drain(ctx); drainErr != nil {
@@ -183,6 +204,9 @@ func (c *conn) err(ctx context.Context, w *response, err error) error {
 	}
 
 	rpcErr := w.errorFmt(err)
+	if errors.Is(err, xdr.ErrGarbage) { // arguments that do not decode (I-244, I-245)
+		rpcErr = &GarbageArgsError{}
+	}
 	if writeErr := w.writeHeader(rpcErr.Code()); writeErr != nil {
 		return writeErr
 	}
@@ -237,24 +261,18 @@ func (w *response) writeHeader(code ResponseCode) error {
 		return err
 	}
 
-	status := rpc.MsgAccepted
-	if code == ResponseCodeAuthError || code == ResponseCodeRPCMismatch {
-		status = rpc.MsgDenied
-	}
-
-	err := xdr.Write(w.writer, &status)
-	if err != nil {
-		return err
-	}
-
-	if status == rpc.MsgAccepted {
-		// Write opaque_auth header.
-		err = xdr.Write(w.writer, &rpc.AuthNull)
-		if err != nil {
+	if code >= denied { // MSG_DENIED: reject_stat, no verifier
+		if err := xdr.Write(w.writer, rpc.MsgDenied); err != nil {
 			return err
 		}
+		return xdr.Write(w.writer, uint32(code-denied))
 	}
-
+	if err := xdr.Write(w.writer, rpc.MsgAccepted); err != nil {
+		return err
+	}
+	if err := xdr.Write(w.writer, &rpc.AuthNull); err != nil { // the verifier
+		return err
+	}
 	return xdr.Write(w.writer, &code)
 }
 
@@ -301,7 +319,7 @@ func (w *response) finish(ctx context.Context) error {
 func (c *conn) readRequest(_ context.Context, reader *bufio.Reader) (w *response, err error) {
 	fragment, err := xdr.ReadUint32(reader)
 	if err != nil {
-		if xdrErr, ok := err.(*xdr2.UnmarshalError); ok {
+		if xdrErr := (*xdr2.UnmarshalError)(nil); errors.As(err, &xdrErr) {
 			if xdrErr.Err == io.EOF {
 				return nil, io.EOF
 			}

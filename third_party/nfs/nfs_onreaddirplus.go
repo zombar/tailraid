@@ -5,7 +5,7 @@ import (
 	"context"
 	"path"
 
-	"github.com/willscott/go-nfs-client/nfs/xdr"
+	"github.com/willscott/go-nfs/xdr"
 )
 
 type readDirPlusArgs struct {
