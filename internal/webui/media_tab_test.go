@@ -383,3 +383,40 @@ func TestWebUI_Media_ShowSplitAcrossFolders(t *testing.T) {
 		pass()
 	}
 }
+
+// A show without a poster carries its first regular episode's video, as a film carries its
+// own, so its card draws that episode's frame: the lowest season above the specials, its
+// first episode; a show with a poster carries none (docs/13 §10).
+// Invariant: I-212
+func TestWebUI_Media_ShowStill(t *testing.T) {
+	u, pass := mediaUI(t)
+	u.write("/shows/Dark/Specials/Dark.S00E01.mkv", 0, []byte("v"))
+	u.write("/shows/Dark/Season 2/Dark.S02E01.mkv", 0, []byte("v"))
+	u.write("/shows/Dark/Season 1/Dark.S01E02.mkv", 0, []byte("v"))
+	u.write("/shows/Dark/Season 1/Dark.S01E01.mkv", 0, []byte("v"))
+	u.write("/shows/Loose/Loose.S03E04.mkv", 0, []byte("v"))
+	u.write("/shows/Lit/poster.jpg", 0, []byte{0xff, 0xd8})
+	u.write("/shows/Lit/Lit.S01E01.mkv", 0, []byte("v"))
+	u.flush()
+	if code, _ := u.setFlags("/shows", `"library":"tv"`); code != 200 {
+		t.Fatal("flag /shows")
+	}
+	pass() // a poster is known once the pass catalogues it; until then the still stands in
+	var l mediaLib
+	u.mediaJSON("lib=/shows", &l)
+	want := map[string]string{"Dark": "/shows/Dark/Season 1/Dark.S01E01.mkv", "Loose": "/shows/Loose/Loose.S03E04.mkv", "Lit": ""}
+	for _, it := range l.Items {
+		w, ok := want[it.Title]
+		if !ok {
+			t.Fatalf("unexpected show %q", it.Title)
+		}
+		if it.Video != w || w != "" && uint64(it.VideoIno) != u.statOf(w).Ino {
+			t.Errorf("%s: video %q ino %d, want %q", it.Title, it.Video, it.VideoIno, w)
+		}
+	}
+	var dark webui.MediaItem
+	u.mediaJSON("item=/shows/Dark", &dark)
+	if dark.Video != want["Dark"] {
+		t.Errorf("item: video %q", dark.Video)
+	}
+}
