@@ -159,7 +159,7 @@ it does not reach. §11 maps each control to its mechanism here.
   at codec 14 (`meta.CodecUsers`, snapshot frame 14, ops 28–32: `Invite`, `User`,
   `Group`, `Grant`, `Session`; docs/02 §Codec versions). `CommandCodec` answers 14 when either is
   set. The FSM refuses the user-facing operations (`Create`, `Mkdir`, `Unlink`, `Rmdir`,
-  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit` of a `RewriteStart`)
+  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit`)
   with `ErrAccess` (a new wire code, the list is append-only) unless `Access(actor,
   target) ≥` the role the operation needs on every inode it touches: a `Rename` and a
   `Restore` name two parents (the one an entry leaves, the one it lands in), both
@@ -175,6 +175,7 @@ it does not reach. §11 maps each control to its mechanism here.
   | Writer | Operation |
   |---|---|
   | the trash sweep | `Purge` of an entry past `trash.retention` |
+  | the flusher, for data written before the first user existed | `Commit` of any inode (its bytes alone change) |
   | the thumbnail writer, and the browser's `PUT /api/thumb` after the handler has checked `Read` on the source file | `Create`, `Commit` under `/.tailraid/thumbs` |
   | the stats sampler, the search indexer and catalogue, the audit writer | `Create`, `Commit`, `Unlink` under `/.tailraid/stats`, `/.tailraid/index`, `/.tailraid/audit` |
   | the scrape | nothing: it runs as the admin who started it and writes sidecars under their actor |
@@ -182,9 +183,13 @@ it does not reach. §11 maps each control to its mechanism here.
   A web upload's temp file is created under the user's actor beside its target (docs/13
   §4) and published under it; nothing of a user's lands as `System`.
 - **The flusher's `Commit`** carries the actor who wrote: the WAL record gains the actor
-  per inode, so a flush after a gateway restart still names them. A grant revoked between
-  the write and the flush still lands: the write was authorised when it was accepted, and
-  the WAL promised it (docs/04).
+  per inode, so a flush after a gateway restart still names them, and the FSM checks
+  every `Commit` for `Write` on its inode. A grant revoked, or a user disabled, between
+  the write and the flush ends that data: the FSM refuses the `Commit`, the gateway drops
+  the inode's dirty bytes, retries nothing and answers `EACCES` to the flush that asked,
+  and `status` counts it in `gateway.commits_refused`. Data written before the first user
+  existed carries no actor and commits as `System`, which a `Commit` may be anywhere: it
+  changes only its inode's bytes, and nobody held a role when it was written.
 - **When it is on.** Enforcement is active only while the user table is non-empty and the
   prober's `MinCodec` is 14 or more; before either, a cluster behaves exactly as it did
   before this document, which is how every codec feature gates (docs/02). The moment the
@@ -452,14 +457,16 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   for every user.
 - **I-349** — `Command` carries `Actor` and `System` at codec 14; while the user table is
   non-empty and `MinCodec ≥ 14` the FSM refuses `Create`, `Mkdir`, `Unlink`, `Rmdir`,
-  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge` and a rewrite's `Commit` with
+  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge` and every `Commit` with
   `ErrAccess` unless the actor's effective role covers the operation on every inode it
   touches (both parents of a rename or a restore; the root, for the whole-trash sweep,
   which only `System` and admins hold), and refuses a
-  `System` command outside the System table (the retention sweep's `Purge`, the writers
-  under `/.tailraid`); the flusher's `Commit` carries the actor the WAL recorded for the
-  write; before the first user, or while a member reads codec 13, a cluster behaves as
-  before, and a 13-reader refuses a codec-14 entry.
+  `System` command outside the System table (the retention sweep's `Purge`, a `Commit`
+  anywhere, the writers under `/.tailraid`); the flusher's `Commit` carries the actor
+  the WAL recorded for the write, and a `Commit` the FSM refuses drops that inode's
+  dirty data at the gateway, which answers `EACCES` and retries nothing; before the
+  first user, or while a member reads codec 13, a cluster behaves as before, and a
+  13-reader refuses a codec-14 entry.
 - **I-350** — A device maps `uid:<n>` and `smb:<account>` to users in
   `<data_dir>/bindings.json` (0600), changed only by signed operations on that node (a
   user for their own credential, an admin for any); `user create` and `user key add`
@@ -535,7 +542,7 @@ stub in `test/invariants/` meanwhile.
 | I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
 | I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
 | I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths`, `TestAccess_SnapshotRestoreByRole` |
-| I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
+| I-349 | `TestFSM_ActorEnforced_Table`, `TestFlusher_RefusedCommitDropsDirtyData`, `TestFlusher_PreUsersDirtyDataCommitsAsSystem`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
 | I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
 | I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
 | I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied` |

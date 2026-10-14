@@ -416,7 +416,10 @@ func (a *applier) authorize(c Command) error {
 		return ErrAccess
 	}
 	if c.System {
-		if c.Op == OpPurge {
+		if c.Op == OpPurge || c.Op == OpCommit {
+			// the retention sweep, and the node's own data: a Commit changes only its
+			// inode's bytes, and the node's writers (the stats, audit, thumbnail and index
+			// files, and dirty data from before the first user) hold no role (docs/21 §4)
 			return nil
 		}
 		for _, t := range targets {
@@ -503,7 +506,7 @@ func (a *applier) targets(c Command) (ts []opTarget, user bool) {
 			return []opTarget{{ino: parentOf(c.Purge.Ino), need: RoleAdmin}}, true
 		}
 	case OpCommit:
-		if c.Commit != nil && c.Commit.RewriteStart {
+		if c.Commit != nil {
 			return []opTarget{write(c.Commit.Ino, "")}, true
 		}
 	}

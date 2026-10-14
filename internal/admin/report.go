@@ -153,6 +153,9 @@ type GatewayReport struct {
 	// rewrites this gateway dropped because another client's rewrite of the same file
 	// started later (docs/04 §6, I-223)
 	RewritesSuperseded uint64 `json:"rewrites_superseded"`
+	// flushes dropped because the FSM refused the writer's Commit: a grant revoked or a
+	// user disabled between the write and the flush (docs/21 §4)
+	CommitsRefused uint64 `json:"commits_refused"`
 	// every byte clients read and wrote through this gateway's files, cumulative
 	// (docs/17 §1, I-191)
 	BytesRead    uint64 `json:"bytes_read"`
@@ -196,6 +199,7 @@ func GatewayFromDirty(infos []vfs.DirtyInfo) *GatewayReport {
 func (g *GatewayReport) WithFlusher(fl *vfs.Flusher, ov *vfs.Overlay) *GatewayReport {
 	g.FlushBytes, g.FlushPeak = fl.Buffers()
 	g.RewritesSuperseded = fl.RewritesSuperseded()
+	g.CommitsRefused = fl.CommitsRefused()
 	g.FlushCap = fl.BufferCap()
 	g.WALCap = uint64(max(ov.WALCap(), 0))
 	return g
