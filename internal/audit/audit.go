@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path"
 	"slices"
 	"sort"
@@ -142,25 +143,34 @@ func ParseName(name string) (time.Time, bool) {
 	return t, true
 }
 
-// Writer is one node's log: the open hour's records are kept in memory and its segment
-// rewritten whole on Flush; refusals fold per actor and kind within RefusalWindow; the
-// last activity of every user is kept in SeenFile.
+// Writer is one node's log: records go into an in-memory inbox, the open hour's records
+// are kept in memory and its segment rewritten whole on Flush; refusals fold per actor
+// and kind within RefusalWindow; the last activity of every user is kept in SeenFile.
+//
+// Record and Refuse take mu alone and never the volume (I-333): the leader's apply hook
+// calls Record on raft's FSM goroutine, and a write into the volume is proposals that
+// goroutine must apply, so a Record that waited for a flush would stop the leader.
+// Flush does every read and write of the volume outside mu.
 type Writer struct {
 	Vol  stats.Volume
 	Node string
 	Clk  clock.Clock
 	Log  *slog.Logger
 
-	warn     logx.Limiter // one line a minute about a segment the volume refused (I-124)
-	mu       sync.Mutex
-	hour     time.Time // the open segment's hour (zero: none)
-	recs     []Record  // the open segment's records
-	dirty    bool      // records not yet written
+	warn logx.Limiter // one line a minute about a segment the volume refused (I-124)
+
+	mu       sync.Mutex // the recording paths' state, held for no I/O
+	inbox    []Record   // recorded, not yet placed in a segment
 	refusals map[refusalKey]*Record
 	hits     []int64 // refusal times of the last hour, for status
 	seen     map[string]int64
-	seenOK   bool // seen holds what the volume had before this run
 	seenDirt bool
+
+	flushMu sync.Mutex // one flush at a time; the open segment below is the flusher's alone
+	hour    time.Time  // the open segment's hour (zero: none)
+	recs    []Record   // the open segment's records
+	dirty   bool       // records not yet written
+	seenOK  bool       // seen holds what the volume had before this run
 }
 
 type refusalKey struct{ actor, kind string }
@@ -181,11 +191,22 @@ func (w *Writer) log() *slog.Logger {
 
 func (w *Writer) dir() string { return path.Join(Root, w.Node) }
 
-// Record adds a record; At, Node and Result default to now, this node and ok.
+// Record adds a record to the inbox; At, Node and Result default to now, this node and
+// ok. It returns at once: the next Flush places it in its hour's segment.
 func (w *Writer) Record(rec Record) {
+	rec = w.fill(rec)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.addLocked(w.fill(rec))
+	w.inbox = append(w.inbox, rec)
+	if rec.Actor != "" {
+		if w.seen == nil {
+			w.seen = map[string]int64{}
+		}
+		if rec.At > w.seen[rec.Actor] {
+			w.seen[rec.Actor] = rec.At
+			w.seenDirt = true
+		}
+	}
 }
 
 func (w *Writer) fill(rec Record) Record {
@@ -201,32 +222,24 @@ func (w *Writer) fill(rec Record) Record {
 	return rec
 }
 
-// addLocked places a record in its hour, writing the hour that ended first.
-func (w *Writer) addLocked(rec Record) {
+// place puts a record in its hour's segment, writing the hour that ended first; the
+// flusher's alone, under flushMu.
+func (w *Writer) place(ctx context.Context, rec *Record) {
 	at := time.Unix(0, rec.At).UTC().Truncate(time.Hour)
 	if w.hour.IsZero() || !at.Equal(w.hour) {
 		if !w.hour.IsZero() && w.dirty {
-			_ = w.writeLocked(context.Background())
+			_ = w.write(ctx)
 		}
 		w.hour, w.dirty = at, false
-		w.recs = w.existing(at) // after a restart the hour's earlier records stay in the chain
+		w.recs = w.existing(ctx, at) // after a restart the hour's earlier records stay in the chain
 	}
-	w.recs = append(w.recs, rec)
+	w.recs = append(w.recs, *rec)
 	w.dirty = true
-	if rec.Actor != "" {
-		if w.seen == nil {
-			w.seen = map[string]int64{}
-		}
-		if rec.At > w.seen[rec.Actor] {
-			w.seen[rec.Actor] = rec.At
-			w.seenDirt = true
-		}
-	}
 }
 
 // existing reads the hour's segment as written so far, if any.
-func (w *Writer) existing(hour time.Time) []Record {
-	data, err := w.Vol.ReadFile(context.Background(), path.Join(w.dir(), SegmentName(hour)))
+func (w *Writer) existing(ctx context.Context, hour time.Time) []Record {
+	data, err := w.Vol.ReadFile(ctx, path.Join(w.dir(), SegmentName(hour)))
 	if err != nil {
 		return nil
 	}
@@ -273,33 +286,43 @@ func (w *Writer) trimHits(now time.Time) {
 	w.hits = w.hits[i:]
 }
 
-// Flush turns the refusal windows that closed into records, writes the open segment
-// when it changed and the seen file when it changed; force closes every window (a seal
-// at shutdown).
+// Flush turns the refusal windows that closed into records, places the inbox, writes
+// the open segment when it changed and the seen file when it changed; force closes
+// every window (a seal at shutdown). The volume is touched with mu released, so a
+// Record made meanwhile waits for nothing and lands in the next flush (I-333).
 func (w *Writer) Flush(ctx context.Context, force bool) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
 	now := w.now()
+	w.mu.Lock()
 	w.trimHits(now)
 	for k, r := range w.refusals {
 		if force || now.Sub(time.Unix(0, r.At)) >= RefusalWindow {
-			w.addLocked(*r)
+			w.inbox = append(w.inbox, *r)
 			delete(w.refusals, k)
 		}
 	}
+	pending := w.inbox
+	w.inbox = nil
+	seenDirt := w.seenDirt
+	w.mu.Unlock()
+	for i := range pending {
+		w.place(ctx, &pending[i])
+	}
 	var err error
 	if w.dirty {
-		err = w.writeLocked(ctx)
+		err = w.write(ctx)
 	}
-	if w.seenDirt {
-		if serr := w.writeSeenLocked(ctx); serr != nil && err == nil {
+	if seenDirt {
+		if serr := w.writeSeen(ctx); serr != nil && err == nil {
 			err = serr
 		}
 	}
 	return err
 }
 
-func (w *Writer) writeLocked(ctx context.Context) error {
+// write rewrites the open segment; a refused write keeps its records for the next flush.
+func (w *Writer) write(ctx context.Context) error {
 	var buf bytes.Buffer
 	if err := Encode(&buf, w.recs); err != nil {
 		return err
@@ -313,28 +336,40 @@ func (w *Writer) writeLocked(ctx context.Context) error {
 	return nil
 }
 
-func (w *Writer) writeSeenLocked(ctx context.Context) error {
-	if !w.seenOK { // merge what the volume holds from before a restart
+// writeSeen writes the seen file from a copy of the map; the first write merges what
+// the volume held from before a restart; a refused write leaves the map dirty.
+func (w *Writer) writeSeen(ctx context.Context) error {
+	if !w.seenOK {
+		var old map[string]int64
 		if data, err := w.Vol.ReadFile(ctx, path.Join(w.dir(), SeenFile)); err == nil {
-			var old map[string]int64
-			if json.Unmarshal(data, &old) == nil {
-				for u, at := range old {
-					if at > w.seen[u] {
-						w.seen[u] = at
-					}
-				}
+			_ = json.Unmarshal(data, &old)
+		}
+		w.mu.Lock()
+		if w.seen == nil {
+			w.seen = map[string]int64{}
+		}
+		for u, at := range old {
+			if at > w.seen[u] {
+				w.seen[u] = at
 			}
 		}
+		w.mu.Unlock()
 		w.seenOK = true
 	}
-	data, err := json.Marshal(w.seen)
+	w.mu.Lock()
+	snap := maps.Clone(w.seen)
+	w.seenDirt = false
+	w.mu.Unlock()
+	data, err := json.Marshal(snap)
 	if err != nil {
 		return err
 	}
 	if err := w.Vol.WriteFile(ctx, path.Join(w.dir(), SeenFile), data); err != nil {
+		w.mu.Lock()
+		w.seenDirt = true
+		w.mu.Unlock()
 		return err
 	}
-	w.seenDirt = false
 	return nil
 }
 
