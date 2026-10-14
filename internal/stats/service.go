@@ -24,6 +24,7 @@ type Sources struct {
 	Members  func() []meta.Node
 	Live     func(meta.NodeIdx) int
 	Moved    func() (int64, bool) // the running pass's bytes moved
+	Mesh     func() *MeshSample   // the paths and the relayed bytes; nil without a mesh (I-332)
 }
 
 // ScanEvery bounds the leader's chunk walk for the cluster rows.
@@ -68,6 +69,9 @@ func (s *Service) Sample() {
 	}
 	if s.Src.Process != nil {
 		cur.Process = s.Src.Process()
+	}
+	if s.Src.Mesh != nil {
+		cur.Mesh = s.Src.Mesh()
 	}
 	s.Writer.Add(NodeRow(s.Name, s.prev, cur))
 	s.prev = cur

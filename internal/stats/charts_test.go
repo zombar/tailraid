@@ -111,3 +111,68 @@ func TestStatsQuery_Charts(t *testing.T) {
 		t.Error("no rows: charts drawn")
 	}
 }
+
+// The node section draws the paths lanes and the round-trip line from exactly the
+// path.<peer> and rtt.<peer> keys: one lane and one series per peer with a key for one
+// node, one lane per ordered pair and one series per member (its mean) with "all",
+// never a lane for a peer without a key, and nothing on a device without a mesh; the
+// mesh network chart carries the relayed series.
+// Invariant: I-332
+func TestStatsQuery_MeshCharts(t *testing.T) {
+	from := utc(2026, 10, 11, 8, 0)
+	to := from.Add(time.Hour)
+	var rows []Row
+	for s := 0; s < 3600; s += 60 {
+		at := from.Add(time.Duration(s) * time.Second).Unix()
+		pathB := 3.0
+		if s >= 1800 {
+			pathB = 0
+		}
+		rows = append(rows,
+			Row{T: at, N: "a", M: map[string]float64{"path.b": pathB, "rtt.b": 4, "path.c": 1, "rtt.c": 60, "mesh_rx": 1, "relayed": 2 << 20}},
+			Row{T: at, N: "b", M: map[string]float64{"path.a": 3, "rtt.a": 4}},
+			Row{T: at, N: "c", M: map[string]float64{"cpu": 0.1}}) // no mesh
+	}
+	byID := func(node string) map[string]Chart {
+		out := map[string]Chart{}
+		for _, c := range Charts(rows, from, to, node) {
+			out[c.ID] = c
+		}
+		return out
+	}
+	a := byID("a")
+	if !strings.Contains(a["paths"].SVG, ">b</text>") || !strings.Contains(a["paths"].SVG, ">c</text>") || strings.Contains(a["paths"].SVG, ">a</text>") {
+		t.Errorf("a's lanes: %s", a["paths"].Title)
+	}
+	if n := strings.Count(a["paths"].SVG, `class="chart-bad"`); n == 0 || strings.Count(a["paths"].SVG, `class="chart-ok"`) == 0 || strings.Count(a["paths"].SVG, `class="chart-off"`) == 0 {
+		t.Errorf("a's lanes miss a class: bad %d", n)
+	}
+	if !strings.Contains(a["rtt"].SVG, ">b</text>") || !strings.Contains(a["rtt"].SVG, ">c</text>") || a["rtt"].Title != "Mesh round trip from a" {
+		t.Errorf("a's round trips: %q", a["rtt"].Title)
+	}
+	if !strings.Contains(a["tailnet"].SVG, "relayed MiB/s") {
+		t.Error("the mesh network chart lacks the relayed series")
+	}
+	c := byID("c")
+	if _, ok := c["paths"]; ok {
+		t.Error("a device without a mesh drew paths")
+	}
+	if _, ok := c["rtt"]; ok {
+		t.Error("a device without a mesh drew round trips")
+	}
+	all := byID("all")
+	for _, lane := range []string{"a → b", "a → c", "b → a"} {
+		if !strings.Contains(all["paths"].SVG, ">"+lane+"</text>") {
+			t.Errorf("every pair: lane %q missing", lane)
+		}
+	}
+	if strings.Contains(all["paths"].SVG, ">c → ") {
+		t.Error("a lane for a device without keys")
+	}
+	if !strings.Contains(all["rtt"].SVG, ">a</text>") || !strings.Contains(all["rtt"].SVG, ">b</text>") || strings.Contains(all["rtt"].SVG, ">c</text>") {
+		t.Error("every member: one series per member with round trips")
+	}
+	if all["paths"].Title != "Mesh paths (every pair)" || all["rtt"].Title != "Mesh round trip (mean per member)" {
+		t.Errorf("titles %q %q", all["paths"].Title, all["rtt"].Title)
+	}
+}

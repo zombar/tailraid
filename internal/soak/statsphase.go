@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/cluster"
@@ -151,6 +152,43 @@ func phaseStats(ctx context.Context, r *Run) error {
 	}
 	r.check("I-196", "the page's charts render for a 6 h range", ids["stored"] && ids["liveness"] && ids["cpu"] && liveNodes > 0,
 		fmt.Sprintf("%d charts from %d rows, %d live edges", len(charts), len(all), liveNodes))
+	// (g) the mesh's history (I-332): every live device's newest row carries a path to
+	// each peer of its status.mesh and a round trip to each live one; the two charts draw
+	if r.Env.Caps().Mesh {
+		missing := []string{}
+		for _, n := range devices {
+			if !r.alive(ctx, n) {
+				continue
+			}
+			rep, err := r.Env.Status(ctx, n)
+			if err != nil || rep.Mesh == nil {
+				continue
+			}
+			rows, err := r.Env.StatsLive(ctx, n, 0)
+			if err != nil || len(rows) == 0 {
+				missing = append(missing, n.Name+": no live edge")
+				continue
+			}
+			last := rows[len(rows)-1].M
+			live := map[string]bool{}
+			for i := range rep.Nodes {
+				live[rep.Nodes[i].Name] = rep.Nodes[i].Live
+			}
+			for i := range rep.Mesh.Peers {
+				p := &rep.Mesh.Peers[i]
+				if _, ok := last["path."+p.Name]; !ok {
+					missing = append(missing, n.Name+": path."+p.Name)
+				}
+				if _, ok := last["rtt."+p.Name]; !ok && live[p.Name] {
+					missing = append(missing, n.Name+": rtt."+p.Name)
+				}
+			}
+		}
+		r.check("I-332", "every node's rows carry a path and a round trip to each peer", len(missing) == 0, strings.Join(missing, ", "))
+		r.check("I-332", "the paths lanes and the round-trip line draw", ids["paths"] && ids["rtt"], fmt.Sprintf("paths %v, rtt %v", ids["paths"], ids["rtt"]))
+	} else {
+		r.checkSkipped("I-332", "the mesh's history on the Stats page", "needs a mesh")
+	}
 	// (e) a killed member leaves a gap: no live edge, marked dead by the leader
 	if r.Env.Caps().Kill && len(devices) >= 3 {
 		var victim NodeRef

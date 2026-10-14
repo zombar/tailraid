@@ -512,6 +512,22 @@ func phaseMeshPaths(ctx context.Context, r *Run) error {
 		return ok1 && ok2 && !abLive && !baLive
 	})
 	r.check("I-323", "each side of the cut marks the other dead", dead, "after "+deadTook.Round(time.Second).String())
+	if r.Env.Caps().Stats { // the rows of the Stats page say so too (docs/17 §7 (g), I-332)
+		pathOf := func(from, to NodeRef) (float64, bool) {
+			rows, err := r.Env.StatsLive(ctx, from, 0)
+			if err != nil || len(rows) == 0 {
+				return 0, false
+			}
+			v, ok := rows[len(rows)-1].M["path."+to.Name]
+			return v, ok
+		}
+		rowsTook, rowsNone := r.pollUntil(ctx, 60*time.Second, func() bool {
+			ab, ok1 := pathOf(a, b)
+			ba, ok2 := pathOf(b, a)
+			return ok1 && ok2 && ab == 0 && ba == 0
+		})
+		r.check("I-332", "the cut pair's rows read none on both sides", rowsNone, "after "+rowsTook.Round(time.Second).String())
+	}
 	if vc, ok := r.Env.Volume(c); ok {
 		path := join(r.Root, "mesh", "through-the-cut.bin")
 		data := r.randomBytes(r.Profile.ChunkSize + 77)
