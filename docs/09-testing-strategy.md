@@ -348,7 +348,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   `diskless` with no budget and holds no slot; a corpus written through it is fully placed
   with no slot on it and reads exact through it and through another gateway; skipped on a
   rig where every host has a disk; I-118); 15 s3 bucket (the rig's bucket registered with
-  `node add-s3` and every other node given its key with `node keys`, live on every gateway
+  `node add-s3` and its key in the secrets store (docs/19 §6), live on every gateway
   within the S3 probe interval, a second registration of it refused; a corpus written
   while it is a target lands on it in the disk layout and framing and reads exact through
   every gateway; with the host of another slot killed, a chunk that needs the bucket

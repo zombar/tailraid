@@ -307,7 +307,7 @@ reason.
 
 | Command | Does |
 |---|---|
-| `tailraid media key` | reads a TMDB API key (v3 key, or a v4 read token) from `TAILRAID_TMDB_API_KEY` or stdin, checks it with one `GET /3/configuration`, and keeps it in `<data_dir>/tmdb.key`, mode 0600, on this device only (I-302); prints TMDB's attribution |
+| `tailraid media key` | reads a TMDB API key (v3 key, or a v4 read token) from `TAILRAID_TMDB_API_KEY` or stdin, checks it with one `GET /3/configuration`, and stores it as the secret `tmdb` through this device's node (docs/19 §6; `<data_dir>/tmdb.key`, mode 0600, while a member's codec is older than 11) (I-302); prints TMDB's attribution |
 | `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path; with no TMDB key it does the keyless groups (`music`, `games`) and says it skipped the rest |
 
 **The plan.** `scrape_plan` answers, for each item under the paths in catalogue order,
@@ -395,9 +395,10 @@ the Cover Art Archive data are CC0 and need none.
   without asking; any other result is
   taken only by the user's choice, `--yes` or `--id`, and without a terminal the item is
   skipped and reported; the same answers give the same matches.
-- **I-302** — The TMDB key lives only in `<data_dir>/tmdb.key` (mode 0600) on the device
-  that saved it, travels only to `api.themoviedb.org`, and never appears in a log line,
-  an error or a node request; the client speaks only to the provider hosts (TMDB's two,
+- **I-302** — The TMDB key lives in the secrets store as `tmdb` (sealed, docs/19), or in
+  a device's `<data_dir>/tmdb.key` (mode 0600) until imported, travels in plaintext only
+  to `api.themoviedb.org` and from a node to its own CLI, and never appears in a log line,
+  an error or a request between nodes; the client speaks only to the provider hosts (TMDB's two,
   MusicBrainz, the Cover Art Archive and the `archive.org` hosts it redirects to, and
   `thumbnails.libretro.com`), sends
   its user agent, reads bounded bodies, retries a 429 at most three times after its

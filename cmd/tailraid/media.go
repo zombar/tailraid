@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,10 +36,11 @@ func mediaCmd() *cobra.Command {
 func mediaKeyCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "key",
-		Short: "Save a TMDB API key on this device (from " + scrape.KeyEnv + " or stdin)",
+		Short: "Store a TMDB API key for every device (from " + scrape.KeyEnv + " or stdin)",
 		Long: `key reads a TMDB API key (a v3 key or a v4 read token, free with a TMDB account) from
-` + scrape.KeyEnv + ` or stdin, checks it with TMDB and keeps it in <data_dir>/` + scrape.KeyFile + `,
-mode 0600, on this device only.
+` + scrape.KeyEnv + ` or stdin, checks it with TMDB and stores it as the secret "` + scrape.SecretName + `" in
+the cluster's encrypted secrets store, so every device's scrape finds it (docs/19). While a
+member runs an older version it is kept in <data_dir>/` + scrape.KeyFile + ` (mode 0600) instead.
 
 ` + scrape.Attribution,
 		Args: cobra.NoArgs,
@@ -62,10 +64,19 @@ mode 0600, on this device only.
 			if err := scrape.New(key, version).CheckKey(cmd.Context()); err != nil {
 				return fmt.Errorf("check the key with TMDB (nothing was saved): %w", err)
 			}
-			if err := scrape.SaveKey(cfg.Node.DataDir, key); err != nil {
-				return err
+			stored, err := storeSecret(cmd, scrape.SecretName, key)
+			switch {
+			case err != nil:
+				return fmt.Errorf("store the key (is this device's node running?): %w", err)
+			case stored:
+				_ = os.Remove(filepath.Join(cfg.Node.DataDir, scrape.KeyFile)) // an older key the store now replaces
+				fmt.Fprintf(cmd.OutOrStdout(), "stored the TMDB key in the cluster's secrets store\n%s\n", scrape.Attribution)
+			default:
+				if err := scrape.SaveKey(cfg.Node.DataDir, key); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "saved the TMDB key on this device (a member runs an older version)\n%s\n", scrape.Attribution)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "saved the TMDB key on this device\n%s\n", scrape.Attribution)
 			return nil
 		},
 	}
@@ -104,7 +115,7 @@ command contacts a provider: no node ever does (docs/18 §11).
 				}
 			}
 			// without a TMDB key the keyless groups still run: album covers and game box art
-			key, err := scrape.LoadKey(cfg.Node.DataDir)
+			key, err := scrape.LoadKey(cfg.Node.DataDir, func() (string, error) { return storedSecret(cmd, scrape.SecretName) })
 			switch {
 			case errors.Is(err, scrape.ErrNoKey):
 				only, dropped, werr := scrape.WithoutKey(o.Only)

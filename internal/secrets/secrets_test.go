@@ -290,3 +290,74 @@ func TestStore_Bounds_RemoveAll(t *testing.T) {
 		t.Errorf("the other node: %q %v", v, err)
 	}
 }
+
+// Opened is what a hot path reads (a bucket's credentials): the secrets under a prefix
+// this node opens now, never fetching the key, and following every replace and removal.
+// Invariant: I-308
+func TestStore_Opened(t *testing.T) {
+	ctx := context.Background()
+	c := newCluster(t, 2)
+	for name, v := range map[string]string{"s3/a": "1", "s3/b": "2", "tmdb": "3"} {
+		if err := c.stores[0].Set(ctx, name, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetched := false
+	c.stores[1].Fetch = func(context.Context) ([]byte, error) { fetched = true; return nil, ErrNoKey }
+	if got := c.stores[1].Opened("s3/"); len(got) != 0 || fetched {
+		t.Fatalf("a node without the key opened %v (fetched %v)", got, fetched)
+	}
+	c.stores[1].Fetch = c.fetcher(1)
+	if _, err := c.stores[1].Key(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.stores[1].Opened("s3/"); len(got) != 2 || got["s3/a"] != "1" || got["s3/b"] != "2" {
+		t.Fatalf("opened %v", got)
+	}
+	if err := c.stores[0].Set(ctx, "s3/a", "1b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.stores[0].Remove(ctx, "s3/b", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.stores[1].Opened("s3/"); len(got) != 1 || got["s3/a"] != "1b" {
+		t.Fatalf("after a replace and a removal: %v", got)
+	}
+}
+
+// An import stores only the names the store lacks, never one it holds; it is done only
+// when every name is in the store and opens here, so a name off the pattern keeps its
+// file; a store whose key this node cannot get imports nothing.
+// Invariant: I-308
+func TestStore_Import(t *testing.T) {
+	ctx := context.Background()
+	c := newCluster(t, 2)
+	if err := c.stores[0].Set(ctx, "tmdb", "newer"); err != nil {
+		t.Fatal(err)
+	}
+	s := c.stores[1]
+	done, err := s.Import(ctx, map[string]string{"tmdb": "older", "s3/x": "v", "S3/Bad": "v"})
+	if err != nil || done {
+		t.Fatalf("with a name off the pattern: done %v, %v", done, err)
+	}
+	if v, _ := s.Get(ctx, "tmdb"); v != "newer" {
+		t.Errorf("the import replaced the store's value: %q", v)
+	}
+	if v, _ := c.stores[0].Get(ctx, "s3/x"); v != "v" {
+		t.Errorf("s3/x: %q", v)
+	}
+	if done, err := s.Import(ctx, map[string]string{"tmdb": "older", "s3/x": "v"}); err != nil || !done {
+		t.Fatalf("every name stored: done %v, %v", done, err)
+	}
+	// a third node that cannot reach the key imports nothing
+	lone := newCluster(t, 1)
+	if err := lone.stores[0].Set(ctx, "tmdb", "v"); err != nil {
+		t.Fatal(err)
+	}
+	lone.keys[0].vals = map[string]string{}
+	lone.stores[0].key = nil
+	before := len(lone.fsms[0].Secrets())
+	if done, err := lone.stores[0].Import(ctx, map[string]string{"s3/y": "v"}); !errors.Is(err, ErrNoKey) || done || len(lone.fsms[0].Secrets()) != before {
+		t.Fatalf("without the key: done %v, %v, %d secrets", done, err, len(lone.fsms[0].Secrets()))
+	}
+}

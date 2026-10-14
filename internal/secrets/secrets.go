@@ -16,6 +16,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 
@@ -25,6 +27,14 @@ import (
 
 // KeySize is the cluster key's length.
 const KeySize = 32
+
+// TMDBName is the TMDB key's name in the store, and TMDBLegacyFile the file in a data dir
+// it lived in before the store (docs/19 §6, I-308). They are here, not in the scrape
+// client, so a node imports them without the client (I-298).
+const (
+	TMDBName       = "tmdb"
+	TMDBLegacyFile = "tmdb.key"
+)
 
 var (
 	// ErrNoKey is a store whose key no reachable member holds (docs/19 §3: lost
@@ -65,8 +75,16 @@ type Store struct {
 	Self  func() meta.NodeIdx
 	Now   func() int64
 
-	mu  sync.Mutex
-	key []byte // the cluster key, once read and checked
+	mu     sync.Mutex
+	key    []byte            // the cluster key, once read and checked
+	opened map[string]opened // Opened's values by name
+}
+
+// opened is a value Opened decrypted, kept while its secret is unchanged.
+type opened struct {
+	nonce [meta.SecretNonceSize]byte
+	id    meta.KeyID
+	value string
 }
 
 // IDOf is the key's ID: the first 8 bytes of HMAC-SHA256(key, "tailraid key id").
@@ -293,6 +311,70 @@ func (s *Store) Remove(ctx context.Context, name string, all bool) error {
 		s.mu.Unlock()
 	}
 	return err
+}
+
+// Opened is every secret under prefix this node opens now, by name. It never fetches the
+// key, so a hot path (a bucket's credentials on every shard request) never waits on a
+// member, and opens a secret again only when it changed (I-308).
+func (s *Store) Opened(prefix string) map[string]string {
+	out := map[string]string{}
+	k, ok := s.Local()
+	if !ok {
+		return out
+	}
+	cluster := s.State.Meta().ClusterID
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := map[string]opened{}
+	for name, o := range s.opened {
+		if !strings.HasPrefix(name, prefix) {
+			next[name] = o // another prefix's: kept as it was
+		}
+	}
+	for _, sec := range s.State.Secrets() {
+		if !strings.HasPrefix(sec.Name, prefix) {
+			continue
+		}
+		if o, ok := s.opened[sec.Name]; ok && o.nonce == sec.Nonce && o.id == sec.KeyID {
+			next[sec.Name], out[sec.Name] = o, o.value
+			continue
+		}
+		full, ok := s.State.Secret(sec.Name)
+		if !ok {
+			continue
+		}
+		v, err := Open(k, cluster, full)
+		if err != nil {
+			continue
+		}
+		next[sec.Name] = opened{nonce: full.Nonce, id: full.KeyID, value: string(v)}
+		out[sec.Name] = string(v)
+	}
+	s.opened = next
+	return out
+}
+
+// Import stores each entry whose name the store lacks, never replacing one it holds (a
+// file's value may be older than the store's), and reports whether every name is now in
+// the store and opens here: only then may the file the entries came from go (I-308).
+func (s *Store) Import(ctx context.Context, entries map[string]string) (bool, error) {
+	done := true
+	for _, name := range slices.Sorted(maps.Keys(entries)) {
+		if !meta.SecretName.MatchString(name) {
+			done = false // stays in its file
+			continue
+		}
+		if _, ok := s.State.Secret(name); ok {
+			if _, err := s.Get(ctx, name); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if err := s.Set(ctx, name, entries[name]); err != nil {
+			return false, err
+		}
+	}
+	return done, nil
 }
 
 // keychainOK is the compile-time check that keychain.Store satisfies Keychain.

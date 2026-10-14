@@ -86,8 +86,9 @@ func (e *LiveEnv) AddS3(context.Context, string) error {
 }
 
 // Bucket is the cluster's own S3 node as this device reaches it: the first Active S3 row
-// of the status whose key is in this device's s3nodes.yaml (docs/10 §4.1). The key never
-// leaves the device; the driver runs on it.
+// of the status, with its key from the secrets store through this device's node, else
+// from this device's s3nodes.yaml (docs/10 §4.1, docs/19 §6). The driver runs on the
+// device, so the key travels no further than from its own node.
 func (e *LiveEnv) Bucket(ctx context.Context) (*s3.Bucket, error) {
 	rep, err := e.SeedStatus(ctx)
 	if err != nil {
@@ -103,6 +104,13 @@ func (e *LiveEnv) Bucket(ctx context.Context) (*s3.Bucket, error) {
 			continue
 		}
 		creds, ok := keys[n.Name]
+		if name, valid := cluster.S3SecretName(n.Name); valid {
+			if v, err := e.SecretGet(ctx, NodeRef{Name: "self", RPC: e.SelfAddr}, name); err == nil {
+				if c, err := cluster.DecodeS3Secret(v); err == nil {
+					creds, ok = c, true
+				}
+			}
+		}
 		if !ok {
 			return nil, fmt.Errorf("this device holds no key for S3 node %s", n.Name)
 		}

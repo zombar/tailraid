@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -130,5 +131,55 @@ func TestS3Keys_FileModeAndRoundTrip(t *testing.T) {
 	}
 	if _, err := LoadS3Keys(dir); err == nil {
 		t.Fatal("a broken file loaded")
+	}
+}
+
+// An S3 node's credentials are one line of JSON under s3/<name>; a name off the secret
+// pattern has no secret name, and a value that is not whole credentials is refused.
+// Invariant: I-308
+func TestS3Secret_RoundTrip(t *testing.T) {
+	c := s3.Credentials{AccessKey: "AK1", SecretKey: "s3cr3t/with: \"quotes\""}
+	v, err := EncodeS3Secret(c)
+	if err != nil || strings.ContainsAny(v, "\r\n") {
+		t.Fatalf("encode: %q %v", v, err)
+	}
+	if got, err := DecodeS3Secret(v); err != nil || got != c {
+		t.Fatalf("decode: %+v %v", got, err)
+	}
+	for _, bad := range []string{"", "{}", `{"access_key":"a"}`, `{"secret_key":"s"}`, "not json"} {
+		if _, err := DecodeS3Secret(bad); err == nil {
+			t.Errorf("decoded %q", bad)
+		}
+	}
+	for name, ok := range map[string]bool{"offsite": true, "b2.eu-1": true, "Offsite": false, "with space": false, "": false} {
+		if got, valid := S3SecretName(name); valid != ok || ok && got != "s3/"+name {
+			t.Errorf("S3SecretName(%q) = %q %v", name, got, valid)
+		}
+	}
+}
+
+// A node serves a bucket with the store's credentials first and its file's only for a
+// name the store cannot serve; an unreadable value is no credentials, not a fallback
+// blocker.
+// Invariant: I-308
+func TestS3Keys_StoreFirst(t *testing.T) {
+	stored, _ := EncodeS3Secret(s3.Credentials{AccessKey: "AK", SecretKey: "store"})
+	file := map[string]s3.Credentials{
+		"offsite": {AccessKey: "AK", SecretKey: "file"},
+		"legacy":  {AccessKey: "AK", SecretKey: "only-file"},
+		"broken":  {AccessKey: "AK", SecretKey: "file-broken"},
+	}
+	got := MergeS3Keys(map[string]string{"s3/offsite": stored, "s3/broken": "garbage", "s3/new": stored}, file)
+	want := map[string]string{"offsite": "store", "legacy": "only-file", "broken": "file-broken", "new": "store"}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for name, sk := range want {
+		if got[name].SecretKey != sk {
+			t.Errorf("%s: %+v, want secret %q", name, got[name], sk)
+		}
+	}
+	if file["offsite"].SecretKey != "file" {
+		t.Error("the merge changed the file's map")
 	}
 }

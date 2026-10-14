@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -20,9 +19,11 @@ import (
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
-// `node add-s3` checks the bucket, registers it once and keeps the key on this device
-// only; `node keys` saves a key only after the bucket accepts it (docs/10 §4.1).
-// Invariant: I-137, I-139
+// `node add-s3` checks the bucket, registers it once and stores the key in the secrets
+// store, never in a file, a report or in plaintext in the FSM; the node serves the bucket
+// from the store; `node keys` stores a key only after the bucket accepts it (docs/10
+// §4.1, docs/19 §6).
+// Invariant: I-137, I-139, I-308
 func TestCLI_AddS3_AndKeys(t *testing.T) {
 	path, cfg := devHome(t)
 	cfg.Node.Disks = []config.Disk{{Path: filepath.Join(filepath.Dir(path), "d1"), Capacity: "1G"}}
@@ -68,12 +69,15 @@ func TestCLI_AddS3_AndKeys(t *testing.T) {
 	if out, err := add("second", s3test.Name, s3test.SecretKey); err == nil {
 		t.Fatalf("second row for one bucket: %s", out)
 	}
-	keys, err := cluster.LoadS3Keys(cfg.Node.DataDir)
-	if err != nil || len(keys) != 1 || keys["offsite"].SecretKey != s3test.SecretKey {
-		t.Fatalf("keys %v %v", keys, err)
+	if !strings.Contains(out, "secrets store") {
+		t.Fatalf("add-s3 did not store the key: %s", out)
 	}
-	if st, err := os.Stat(filepath.Join(cfg.Node.DataDir, cluster.S3KeysFile)); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
-		t.Fatalf("keys file: %v %v", st, err)
+	if _, err := os.Stat(filepath.Join(cfg.Node.DataDir, cluster.S3KeysFile)); err == nil {
+		t.Fatal("add-s3 wrote the old keys file")
+	}
+	ls, err := run(t, "secret", "ls", "--json", "--config", path)
+	if err != nil || !strings.Contains(ls, `"s3/offsite"`) || strings.Contains(ls, s3test.SecretKey) {
+		t.Fatalf("secret ls: %v\n%s", err, ls)
 	}
 	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
 	if err != nil {
@@ -107,7 +111,7 @@ func TestCLI_AddS3_AndKeys(t *testing.T) {
 	}
 	t.Setenv(SecretKeyEnv, "")
 	root := []string{"node", "keys", "offsite", "--access-key", s3test.AccessKey, "--config", path}
-	if out, err := runStdin(t, s3test.SecretKey+"\n", root...); err != nil || !strings.Contains(out, "saved the key of offsite") {
+	if out, err := runStdin(t, s3test.SecretKey+"\n", root...); err != nil || !strings.Contains(out, "stored the key of offsite") {
 		t.Fatalf("keys from stdin: %v\n%s", err, out)
 	}
 }

@@ -67,8 +67,24 @@ func checkBucket(ctx context.Context, b *s3.Bucket) error {
 	return nil
 }
 
+// storeS3Key keeps an S3 node's credentials in the secrets store, else (a member on an
+// older codec, a name off the secret pattern) in this device's file, and reports which
+// (docs/19 §6).
+func storeS3Key(cmd *cobra.Command, dataDir, name string, c s3.Credentials) (bool, error) {
+	if n, ok := cluster.S3SecretName(name); ok {
+		v, err := cluster.EncodeS3Secret(c)
+		if err != nil {
+			return false, err
+		}
+		if stored, err := storeSecret(cmd, n, v); stored || err != nil {
+			return stored, err
+		}
+	}
+	return false, cluster.SaveS3Key(dataDir, name, c)
+}
+
 // addS3Cmd is `node add-s3 <name>`: check the bucket with this device's key, register it
-// through the leader, then keep the key on this device (docs/10 §4.1).
+// through the leader, then store the key (docs/10 §4.1, docs/19 §6).
 func addS3Cmd() *cobra.Command {
 	var t s3.Target
 	var capacity, access string
@@ -109,11 +125,16 @@ func addS3Cmd() *cobra.Command {
 			if err := c.Members(cmd.Context(), leaderOr(rep, addr), op); err != nil {
 				return fmt.Errorf("register %s: %w", name, err)
 			}
-			if err := cluster.SaveS3Key(cfg.Node.DataDir, name, creds); err != nil {
-				return fmt.Errorf("registered %s, but its key was not saved on this device (run `tailraid node keys %s`): %w", name, name, err)
+			stored, err := storeS3Key(cmd, cfg.Node.DataDir, name, creds)
+			if err != nil {
+				return fmt.Errorf("registered %s, but its key was not stored (run `tailraid node keys %s`): %w", name, name, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "added S3 node %s: bucket %s at %s (weight %s)\n", name, b.Key(""), t.Endpoint, bytesStr(size))
-			fmt.Fprintf(cmd.OutOrStdout(), "give every other device that writes the key: tailraid node keys %s --access-key %s\n", name, access)
+			if stored {
+				fmt.Fprintln(cmd.OutOrStdout(), "its key is in the cluster's secrets store: every device uses it")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "its key is on this device only (a member runs an older version, or the name is not lower-case); give every other device that writes the key: tailraid node keys %s --access-key %s\n", name, access)
+			}
 			return nil
 		},
 	}
@@ -128,13 +149,13 @@ func addS3Cmd() *cobra.Command {
 	return c
 }
 
-// keysCmd is `node keys <name>`: keep an S3 node's key on this device, after checking it
-// against the bucket (docs/10 §4.1).
+// keysCmd is `node keys <name>`: store an S3 node's key (a rotated one, or one kept on a
+// device before the store), after checking it against the bucket (docs/10 §4.1).
 func keysCmd() *cobra.Command {
 	var access string
 	c := &cobra.Command{
 		Use:   "keys <s3-node> --access-key KEY",
-		Short: "Give this device the key of an S3 node (the secret key comes from " + SecretKeyEnv + " or stdin)",
+		Short: "Store the key of an S3 node for every device (the secret key comes from " + SecretKeyEnv + " or stdin)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, _, err := loadConfig(cmd)
@@ -163,10 +184,15 @@ func keysCmd() *cobra.Command {
 			if err := b.Probe(cmd.Context()); err != nil {
 				return fmt.Errorf("the key does not open bucket %s at %s (nothing was saved): %w", n.S3.Bucket, n.S3.Endpoint, err)
 			}
-			if err := cluster.SaveS3Key(cfg.Node.DataDir, n.Name, creds); err != nil {
+			stored, err := storeS3Key(cmd, cfg.Node.DataDir, n.Name, creds)
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "saved the key of %s; the running node uses it from its next probe\n", n.Name)
+			if stored {
+				fmt.Fprintf(cmd.OutOrStdout(), "stored the key of %s in the cluster's secrets store; every node uses it from its next probe\n", n.Name)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "saved the key of %s on this device only; the running node uses it from its next probe\n", n.Name)
+			}
 			return nil
 		},
 	}
