@@ -178,6 +178,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	disks.refresh(node.FSM.Nodes())
 
 	client := rpc.NewClient(clusterID, node.RPCAddrOf)
+	client.SetLocalIP(nw.IP()) // every call leaves from the mesh address (I-317)
 	client.SetDisks(node.DiskOf, disks.local)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
@@ -1505,6 +1506,7 @@ func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, v
 	}()
 	nw.auth.SetMembers(n.FSM.NodeByAddr)
 	client := rpc.NewClient(cid, nil)
+	client.SetLocalIP(nw.IP())
 	var resp rpc.JoinResponse
 	for range 5 {
 		resp, err = client.Join(ctx, target, req)

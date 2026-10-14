@@ -51,9 +51,17 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 			return nil, "", cfg, err
 		}
 	}
+	// the CLI dials from its node's mesh address too (I-317): with the node down the
+	// address is gone and the dial fails at once, which is the answer
+	var localIP netip.Addr
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		localIP, _ = netip.ParseAddr(host)
+	}
 	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
 	if err != nil {
-		h, herr := rpc.NewClient([16]byte{}, nil).Health(cmd.Context(), addr)
+		probe := rpc.NewClient([16]byte{}, nil)
+		probe.SetLocalIP(localIP)
+		h, herr := probe.Health(cmd.Context(), addr)
 		raw, derr := hex.DecodeString(h.ClusterID)
 		if herr != nil || derr != nil || len(raw) != 16 {
 			return nil, "", cfg, fmt.Errorf("this node is not initialised: %w", err)
@@ -66,7 +74,9 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 			addr = net.JoinHostPort(addr, strconv.Itoa(cfg.Listen.RPC))
 		}
 	}
-	return rpc.NewClient(cid, nil), addr, cfg, nil
+	c := rpc.NewClient(cid, nil)
+	c.SetLocalIP(localIP)
+	return c, addr, cfg, nil
 }
 
 func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Client, string, error) {

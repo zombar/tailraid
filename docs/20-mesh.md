@@ -42,7 +42,10 @@ kernel module: the kernel's TUN driver is the only kernel part, and it ships wit
 OS tailraid supports) on a real TUN interface, so the mesh addresses are ordinary
 addresses of the host: Raft, the node RPC and the browser UI bind them exactly as they
 bound the Tailscale address, the CLI dials its own node at that address, and the
-compose rig's worker reaches its node the same way.
+compose rig's worker reaches its node the same way. Every connection a node or the CLI
+opens leaves from the mesh address too: a dial made while the interface is absent (the
+two seconds of a restart) fails at once instead of leaving by another interface with a
+source no member admits, which a client's connection pool would otherwise keep reusing.
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
@@ -413,7 +416,8 @@ round-trip table.
   a snapshot, an export, a report, a log line, an error or any request; the public key
   is the device's member row's `Key`.
 - **I-317** — Raft, the node RPC and the browser UI bind only the device's mesh address
-  (and the loopback listeners of I-50); the device's WireGuard peers are exactly the
+  (and the loopback listeners of I-50), and every connection the node or the CLI opens
+  to a member leaves from it; the device's WireGuard peers are exactly the
   device rows with a key that are not `Removed`, the pending rows and, until the table
   has arrived, the seed rows, each with `AllowedIPs` of its address alone; a packet from
   any other key is dropped by the tunnel, a packet the OS hands the tunnel for the
