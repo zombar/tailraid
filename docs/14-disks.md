@@ -73,7 +73,9 @@ disks under their host.
 
 A disk leaves the way a node does: `node drain <host>/<n>` moves its slots off (in auto mode
 the policy follows, §6), then `node remove <host>/<n>` takes it out of the node table, which
-is refused while it still holds a slot (I-42). Its directory and marker are left as they are.
+is refused while it still holds a slot (I-42). Its directory and marker are left as they are:
+added back on the same path, the disk takes a new row under its marker's ID and the host
+opens it under that row, the removed row standing for its history (I-90).
 
 A path that sits on the same filesystem as another target is accepted with a warning: the
 two share one budget (§3) and one failure.

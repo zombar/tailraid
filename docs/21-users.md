@@ -56,7 +56,9 @@ it does not reach. §11 maps each control to its mechanism here.
   (admins) prints the code; `tailraid user create <name> <code>` on the person's device
   is the one unauthenticated mutating request, since the person has no key yet: the
   receiving node checks the code's hash against its replica first, rate-limited to one
-  attempt per second per source address as the join is (I-48), and proposes only a match;
+  attempt per second per source address after a refused code, as the join is (I-48; an
+  accepted code throttles nothing, so a scripted setup creates its people in a row), and
+  proposes only a match;
   the FSM consumes the invite in the same apply as the user's creation, so two devices
   presenting one code are serialised by the log and exactly one succeeds (as `O_EXCL` is,
   I-222). A guessed code never reaches the log.
@@ -409,7 +411,8 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
 - **I-343** — An invite is the SHA-256 of a 10-character base32 code with a name, a kind
   (user or key), an admin flag, its minter and a 24-hour expiry the leader's tick
   enforces; `user create` and `user key add` are accepted only with a code whose hash the
-  receiving node's replica holds, one attempt per second per source address, and the FSM
+  receiving node's replica holds, one attempt per second per source address after a
+  refused code, and the FSM
   consumes the invite in the same apply as the row it creates, so of two devices
   presenting one code exactly one succeeds and an expired or used code leaves no row;
   `init` and `user bootstrap` mint an admin invite and never a key.

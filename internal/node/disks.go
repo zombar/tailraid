@@ -117,16 +117,24 @@ func checkDisk(path string, clusterID [16]byte, hostID string, host meta.NodeIdx
 	if m.HostID != hostID {
 		return meta.Node{}, "disk_id belongs to another host"
 	}
+	// a disk removed and added back keeps its marker, so a removed row and the new active
+	// one share its ID (docs/14 §2): the active row is the disk's, a removed one only
+	// says so when no active row exists
+	removed := false
 	for i := range nodes {
 		if n := nodes[i]; n.Kind == meta.KindDisk && n.ID == m.DiskID {
-			switch {
-			case n.Host != host:
+			if n.State == meta.Removed {
+				removed = true
+				continue
+			}
+			if n.Host != host {
 				return meta.Node{}, "disk is registered under another host"
-			case n.State == meta.Removed:
-				return meta.Node{}, "disk was removed from the cluster"
 			}
 			return n, ""
 		}
+	}
+	if removed {
+		return meta.Node{}, "disk was removed from the cluster"
 	}
 	return meta.Node{}, "disk not registered (run `tailraid node add-disk`)"
 }

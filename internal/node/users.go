@@ -21,7 +21,9 @@ import (
 // the FSM before an admin op runs (I-345), the user, group, grant and binding ops, the
 // invite pre-check and its rate limit (I-343), and the leader's expiry of invites.
 
-// inviteAttempts is how often one source may present a code: once a second (I-343).
+// inviteAttempts is how soon one source may present a code again after a refusal: a
+// second, as the join's throttle (docs/08); an accepted code throttles nothing, so a
+// scripted setup creates its people in a row (I-343).
 const inviteAttempts = time.Second
 
 // authorize applies the needs table (docs/21 §2, I-345) once the cluster has users: an
@@ -122,14 +124,21 @@ type inviteLimiter struct {
 	last map[netip.Addr]time.Time
 }
 
+// allow reports whether src may present a code now: not within inviteAttempts of its
+// last refusal.
 func (l *inviteLimiter) allow(src netip.Addr, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t, ok := l.last[src]
+	return !ok || now.Sub(t) >= inviteAttempts
+}
+
+// refused records a code src presented that was not accepted.
+func (l *inviteLimiter) refused(src netip.Addr, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.last == nil {
 		l.last = map[netip.Addr]time.Time{}
-	}
-	if t, ok := l.last[src]; ok && now.Sub(t) < inviteAttempts {
-		return false
 	}
 	l.last[src] = now
 	for s, t := range l.last { // bounded: a source silent for a minute is forgotten
@@ -137,7 +146,6 @@ func (l *inviteLimiter) allow(src netip.Addr, now time.Time) bool {
 			delete(l.last, s)
 		}
 	}
-	return true
 }
 
 // UserRow is one row of `user ls`.
@@ -215,7 +223,7 @@ func (a *adminOps) userOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.mintInvite(ctx, 0, true, meta.Invite{Name: op.User, Kind: meta.InviteUser, Admin: true}, now)
 	case "user_create", "user_key_add":
 		if !a.invites.allow(op.Source, now) {
-			return nil, fmt.Errorf("%w: one attempt a second", rpc.ErrRateLimited)
+			return nil, fmt.Errorf("%w: one code a second after a refused one", rpc.ErrRateLimited)
 		}
 		inv, ok := st.Invite(meta.HashCode(op.Code))
 		kind := meta.InviteUser
@@ -223,6 +231,7 @@ func (a *adminOps) userOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			kind = meta.InviteKey
 		}
 		if !ok || inv.Kind != kind || now.UnixNano() >= inv.ExpiresAt || (kind == meta.InviteUser && inv.Name != op.User) {
+			a.invites.refused(op.Source, now)
 			return nil, meta.ErrInvite // checked on the replica first: a guess never reaches the log (I-343)
 		}
 		var key [32]byte

@@ -238,3 +238,34 @@ func TestDiskSet_UnwritableDiskClosed(t *testing.T) {
 		t.Fatalf("writable again but still closed: %+v", h)
 	}
 }
+
+// A disk removed from the cluster and added back on the same path keeps its marker, so
+// two rows carry its ID: the removed one and the new active one. The host opens it under
+// the active row; only a disk whose every row is removed stays closed as removed
+// (docs/14 §2). Found by soak phase 13 on a rig that kept a previous run's rows: the
+// re-added disk never opened and stayed down for the rest of the run.
+// Invariant: I-90
+func TestDiskSet_ReaddedAfterRemoval(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "disk")
+	id, err := PrepareDisk(p, testCluster, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Node.Disks = []config.Disk{{Path: p}}
+	d := newDiskSet(cfg, testCluster, "h1", 1, slog.New(slog.DiscardHandler))
+	host := meta.Node{Idx: 1, ID: "h1", Kind: meta.KindDevice, State: meta.Active}
+	removed := meta.Node{Idx: 14, ID: id, Name: "h1/3", Kind: meta.KindDisk, Host: 1, State: meta.Removed}
+	d.refresh([]meta.Node{host, removed})
+	if st := d.state(p); st != "disk was removed from the cluster" {
+		t.Fatalf("with its only row removed: %q", st)
+	}
+	again := meta.Node{Idx: 16, ID: id, Name: "h1/3", Kind: meta.KindDisk, Host: 1, State: meta.Active}
+	d.refresh([]meta.Node{host, removed, again})
+	if st := d.state(p); st != "open" {
+		t.Fatalf("added back after a removal: %q, want open", st)
+	}
+	if open := d.open(); len(open) != 1 || open[0].idx != 16 {
+		t.Fatalf("the re-added disk opened as %+v, want row 16", open)
+	}
+}
