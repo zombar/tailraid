@@ -5,29 +5,17 @@ import "testing"
 // Stubs for the mesh (docs/20), designed and not built. Each is replaced by the real test
 // named in that doc's Tests table when its PR lands.
 
-// Invariant: I-316
-func TestStub_I_316(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §2") }
-
 // Invariant: I-317
 func TestStub_I_317(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §3") }
 
 // Invariant: I-318
 func TestStub_I_318(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §3") }
 
-// Invariant: I-319
-func TestStub_I_319(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §4") }
-
-// Invariant: I-320
-func TestStub_I_320(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §3") }
-
 // Invariant: I-321
 func TestStub_I_321(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §4") }
 
 // Invariant: I-322
 func TestStub_I_322(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §5") }
-
-// Invariant: I-323
-func TestStub_I_323(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §5") }
 
 // Invariant: I-324
 func TestStub_I_324(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §9") }

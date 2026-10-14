@@ -15,8 +15,10 @@ the device's public key, its mesh address and its endpoint candidates), the iden
 a caller is the key that sealed its packet, and a relay is any member both sides can
 reach, forwarding sealed datagrams it cannot read.
 
-*Status (2026-10-14): designed; the PRs follow the order in `CLAUDE.md`. Every invariant
-below is a stub in `test/invariants/mesh_stubs_test.go` until its PR lands. The release
+*Status (2026-10-14): designed; the PRs follow the order in `CLAUDE.md`. PR 1 built
+`internal/mesh` (the keys, the join code, the introduce, the Bind with its fan-out, the
+device and its peers, the path monitor, the interface tables and the NAT simulator of the
+tests); what each later PR wires is a stub in `test/invariants/mesh_stubs_test.go`. The release
 that carries the mesh starts a new cluster: there is no migration from a Tailscale
 cluster, by decision (the volume was being re-created anyway).*
 
@@ -50,8 +52,8 @@ the per-packet cost stays off the CPU.
 WireGuard packet (message types 1–4) and tailraid's three control frames, told apart by
 the first byte: `0x10` the introduce (§4), `0x11` a relayed packet (§6), `0x12` a path
 probe (§6). The socket is wireguard-go's own `conn.Bind` (`StdNetBind`) wrapped, so its
-batching (`sendmmsg`/`recvmmsg`) and UDP GSO/GRO on Linux stay; its buffers are set to
-7 MiB.
+batching (`sendmmsg`/`recvmmsg`) and UDP GSO/GRO on Linux stay; its buffer sizes are the
+OS's defaults until the bench of PR 5 says they should not be.
 
 **The storage traffic on top is unchanged.** HTTP/1.1 for the node RPC and plain TCP
 for Raft, as docs/00 and the transport study (`docs/reports/rpc-transports-2026-10.md`)
@@ -428,18 +430,18 @@ round-trip table.
 
 | Invariant | Tests |
 |---|---|
-| I-316 | stub `TestStub_I_316` |
-| I-317 | stub `TestStub_I_317` |
+| I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
+| I-317 | `TestMesh_PeersExchangePackets`; stub `TestStub_I_317` for the node's listeners and peer set |
 | I-318 | stub `TestStub_I_318` |
-| I-319 | stub `TestStub_I_319` |
-| I-320 | stub `TestStub_I_320` |
-| I-321 | stub `TestStub_I_321` |
-| I-322 | stub `TestStub_I_322` |
-| I-323 | stub `TestStub_I_323` |
-| I-324 | stub `TestStub_I_324` |
-| I-325 | stub `TestStub_I_325` |
+| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd` |
+| I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds` |
+| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`; stub `TestStub_I_321` for the join itself |
+| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`; stub `TestStub_I_322` for the publishing |
+| I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
+| I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`; stub `TestStub_I_324` for the service units |
+| I-325 | `TestClassify_Table`; stub `TestStub_I_325` for `status` |
 | I-326 | stub `TestStub_I_326` |
 | I-327 | stub `TestStub_I_327` |
-| I-328 | stub `TestStub_I_328` |
+| I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need); stub `TestStub_I_328` |
 | I-329 | stub `TestStub_I_329` |
 | I-330 | stub `TestStub_I_330` |
