@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/scrape"
 	"github.com/zombar/tailraid/internal/search"
+	"github.com/zombar/tailraid/internal/secrets"
 	"github.com/zombar/tailraid/internal/webui"
 )
 
@@ -29,57 +29,7 @@ func mediaCmd() *cobra.Command {
 		Use:   "media",
 		Short: "Media library tools: fill missing sidecars and art from TMDB and MusicBrainz (docs/18 §11)",
 	}
-	c.AddCommand(mediaKeyCmd(), mediaScrapeCmd())
-	return c
-}
-
-func mediaKeyCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "key",
-		Short: "Store a TMDB API key for every device (from " + scrape.KeyEnv + " or stdin)",
-		Long: `key reads a TMDB API key (a v3 key or a v4 read token, free with a TMDB account) from
-` + scrape.KeyEnv + ` or stdin, checks it with TMDB and stores it as the secret "` + scrape.SecretName + `" in
-the cluster's encrypted secrets store, so every device's scrape finds it (docs/19). While a
-member runs an older version it is kept in <data_dir>/` + scrape.KeyFile + ` (mode 0600) instead.
-
-` + scrape.Attribution,
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, _, err := loadConfig(cmd)
-			if err != nil {
-				return err
-			}
-			key := strings.TrimSpace(os.Getenv(scrape.KeyEnv))
-			if key == "" {
-				fmt.Fprint(cmd.ErrOrStderr(), "TMDB API key: ")
-				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-				if err != nil && line == "" {
-					return fmt.Errorf("no key (set %s or type it on stdin): %w", scrape.KeyEnv, err)
-				}
-				key = strings.TrimSpace(line)
-			}
-			if key == "" {
-				return fmt.Errorf("empty key (set %s or type it on stdin)", scrape.KeyEnv)
-			}
-			if err := scrape.New(key, version).CheckKey(cmd.Context()); err != nil {
-				return fmt.Errorf("check the key with TMDB (nothing was saved): %w", err)
-			}
-			stored, err := storeSecret(cmd, scrape.SecretName, key)
-			switch {
-			case err != nil:
-				return fmt.Errorf("store the key (is this device's node running?): %w", err)
-			case stored:
-				_ = os.Remove(filepath.Join(cfg.Node.DataDir, scrape.KeyFile)) // an older key the store now replaces
-				fmt.Fprintf(cmd.OutOrStdout(), "stored the TMDB key in the cluster's secrets store\n%s\n", scrape.Attribution)
-			default:
-				if err := scrape.SaveKey(cfg.Node.DataDir, key); err != nil {
-					return err
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "saved the TMDB key on this device (a member runs an older version)\n%s\n", scrape.Attribution)
-			}
-			return nil
-		},
-	}
+	c.AddCommand(mediaScrapeCmd())
 	return c
 }
 
@@ -101,10 +51,6 @@ command contacts a provider: no node ever does (docs/18 §11).
 ` + scrape.Attribution,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			cfg, _, err := loadConfig(cmd)
-			if err != nil {
-				return err
-			}
 			o.Only = map[string]bool{}
 			for _, g := range only {
 				switch g {
@@ -114,18 +60,24 @@ command contacts a provider: no node ever does (docs/18 §11).
 					return fmt.Errorf("--only %q: want movies, tv, episodes, music or games", g)
 				}
 			}
-			// without a TMDB key the keyless groups still run: album covers and game box art
-			key, err := scrape.LoadKey(cfg.Node.DataDir, func() (string, error) { return storedSecret(cmd, scrape.SecretName) })
+			// the TMDB key is the secret "tmdb" (docs/19 §6), checked with TMDB when a group
+			// needs it; without one the keyless groups still run: album covers and game box art
+			key, err := storedSecret(cmd, secrets.TMDBName)
+			if err != nil {
+				return fmt.Errorf("the TMDB key from the secrets store (is this device's node running?): %w", err)
+			}
 			switch {
-			case errors.Is(err, scrape.ErrNoKey):
+			case key == "":
 				only, dropped, werr := scrape.WithoutKey(o.Only)
 				if werr != nil {
 					return werr
 				}
 				o.Only = only
-				fmt.Fprintf(cmd.ErrOrStderr(), "no TMDB key: skipping %s (run `tailraid media key` to add them)\n", strings.Join(dropped, ", "))
-			case err != nil:
-				return err
+				fmt.Fprintf(cmd.ErrOrStderr(), "no TMDB key: skipping %s (`tailraid secret set tmdb` adds one)\n", strings.Join(dropped, ", "))
+			case scrape.NeedsKey(o.Only):
+				if err := scrape.New(key, version).CheckKey(ctx); err != nil {
+					return fmt.Errorf("the TMDB key in the secrets store: %w", err)
+				}
 			}
 			if len(args) == 0 {
 				args = []string{"/"}

@@ -104,11 +104,12 @@ func (e *LiveEnv) Bucket(ctx context.Context) (*s3.Bucket, error) {
 			continue
 		}
 		creds, ok := keys[n.Name]
-		if name, valid := cluster.S3SecretName(n.Name); valid {
-			if v, err := e.SecretGet(ctx, NodeRef{Name: "self", RPC: e.SelfAddr}, name); err == nil {
-				if c, err := cluster.DecodeS3Secret(v); err == nil {
-					creds, ok = c, true
-				}
+		if access, secret, valid := cluster.S3SecretNames(n.Name); valid {
+			self := NodeRef{Name: "self", RPC: e.SelfAddr}
+			a, errA := e.SecretGet(ctx, self, access)
+			s, errS := e.SecretGet(ctx, self, secret)
+			if errA == nil && errS == nil && a != "" && s != "" {
+				creds, ok = s3.Credentials{AccessKey: a, SecretKey: s}, true
 			}
 		}
 		if !ok {

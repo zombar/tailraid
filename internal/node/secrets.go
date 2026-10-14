@@ -89,12 +89,8 @@ func migrateLegacy(ctx context.Context, store *secrets.Store, dataDir string) (b
 	} else if len(keys) > 0 {
 		entries := map[string]string{}
 		for name, c := range keys {
-			v, err := cluster.EncodeS3Secret(c)
-			if err != nil {
-				return false, err
-			}
-			n, _ := cluster.S3SecretName(name) // off the pattern: Import leaves it, and the file
-			entries[n] = v
+			access, secret, _ := cluster.S3SecretNames(name) // off the pattern: Import leaves them, and the file
+			entries[access], entries[secret] = c.AccessKey, c.SecretKey
 		}
 		files[cluster.S3KeysFile] = entries
 	}

@@ -19,12 +19,12 @@ import (
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
-// `node add-s3` checks the bucket, registers it once and stores the key in the secrets
-// store, never in a file, a report or in plaintext in the FSM; the node serves the bucket
-// from the store; `node keys` stores a key only after the bucket accepts it (docs/10
-// §4.1, docs/19 §6).
+// `node add-s3` takes the bucket's credentials from the secrets store (set first with
+// `secret set`, the one way in), refuses a bucket they do not open before anything is
+// registered, registers it once, and writes no file; the node serves the bucket from the
+// store; no reply or report carries the secret (docs/10 §4.1, docs/19 §6).
 // Invariant: I-137, I-139, I-308
-func TestCLI_AddS3_AndKeys(t *testing.T) {
+func TestCLI_AddS3(t *testing.T) {
 	path, cfg := devHome(t)
 	cfg.Node.Disks = []config.Disk{{Path: filepath.Join(filepath.Dir(path), "d1"), Capacity: "1G"}}
 	if err := config.Save(path, cfg); err != nil {
@@ -46,37 +46,48 @@ func TestCLI_AddS3_AndKeys(t *testing.T) {
 	waitReady(ctx, t, addr, "node never became ready")
 	srv := s3test.New()
 	defer srv.Close()
-	add := func(name, bucket, secret string) (string, error) {
-		t.Setenv(SecretKeyEnv, secret)
+	add := func(name, bucket string) (string, error) {
 		return run(t, "node", "add-s3", name, "--endpoint", srv.URL, "--bucket", bucket, "--prefix", "c1", "--path-style",
-			"--capacity", "1T", "--access-key", s3test.AccessKey, "--config", path)
+			"--capacity", "1T", "--config", path)
 	}
-	// a key the bucket refuses registers nothing and saves nothing
-	if out, err := add("offsite", s3test.Name, "wrong"); err == nil || !strings.Contains(err.Error(), "nothing was registered") {
+	set := func(name, value string) {
+		t.Helper()
+		if out, err := runStdin(t, value+"\n", "secret", "set", name, "--config", path); err != nil {
+			t.Fatalf("secret set %s: %v\n%s", name, err, out)
+		}
+	}
+	// no credentials in the store: refused, naming the two secrets to set
+	if out, err := add("offsite", s3test.Name); err == nil || !strings.Contains(err.Error(), "secret set s3/offsite/access_key") {
+		t.Fatalf("without credentials: %v\n%s", err, out)
+	}
+	if out, err := add("Offsite", s3test.Name); err == nil || !strings.Contains(err.Error(), "lower-case") {
+		t.Fatalf("a name off the secret pattern: %v\n%s", err, out)
+	}
+	// credentials the bucket refuses register nothing
+	set("s3/offsite/access_key", s3test.AccessKey)
+	set("s3/offsite/secret_key", "wrong")
+	if out, err := add("offsite", s3test.Name); err == nil || !strings.Contains(err.Error(), "nothing was registered") {
 		t.Fatalf("wrong secret: %v\n%s", err, out)
 	}
-	if _, err := os.Stat(filepath.Join(cfg.Node.DataDir, cluster.S3KeysFile)); err == nil {
-		t.Fatal("a refused add saved a key")
-	}
-	out, err := add("offsite", s3test.Name, s3test.SecretKey)
+	set("s3/offsite/secret_key", s3test.SecretKey)
+	out, err := add("offsite", s3test.Name)
 	if err != nil || !strings.Contains(out, "added S3 node offsite") {
 		t.Fatalf("add-s3: %v\n%s", err, out)
 	}
 	if keys := srv.Keys(); len(keys) != 0 {
 		t.Fatalf("the bucket check left %v", keys)
 	}
-	// the same bucket again, under any name or prefix, is refused by the leader
-	if out, err := add("second", s3test.Name, s3test.SecretKey); err == nil {
-		t.Fatalf("second row for one bucket: %s", out)
-	}
-	if !strings.Contains(out, "secrets store") {
-		t.Fatalf("add-s3 did not store the key: %s", out)
-	}
 	if _, err := os.Stat(filepath.Join(cfg.Node.DataDir, cluster.S3KeysFile)); err == nil {
 		t.Fatal("add-s3 wrote the old keys file")
 	}
+	// the same bucket again, under any name or prefix, is refused by the leader
+	set("s3/second/access_key", s3test.AccessKey)
+	set("s3/second/secret_key", s3test.SecretKey)
+	if out, err := add("second", s3test.Name); err == nil {
+		t.Fatalf("second row for one bucket: %s", out)
+	}
 	ls, err := run(t, "secret", "ls", "--json", "--config", path)
-	if err != nil || !strings.Contains(ls, `"s3/offsite"`) || strings.Contains(ls, s3test.SecretKey) {
+	if err != nil || !strings.Contains(ls, `"s3/offsite/secret_key"`) || strings.Contains(ls, s3test.SecretKey) {
 		t.Fatalf("secret ls: %v\n%s", err, ls)
 	}
 	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
@@ -103,15 +114,5 @@ func TestCLI_AddS3_AndKeys(t *testing.T) {
 	}
 	if strings.Contains(string(raw), s3test.SecretKey) || !strings.Contains(string(raw), srv.URL) {
 		t.Fatalf("status names the secret, or not the endpoint: %s", raw)
-	}
-	// node keys: refused for a wrong secret, saved for the right one
-	t.Setenv(SecretKeyEnv, "wrong")
-	if out, err := run(t, "node", "keys", "offsite", "--access-key", s3test.AccessKey, "--config", path); err == nil {
-		t.Fatalf("keys with a wrong secret: %s", out)
-	}
-	t.Setenv(SecretKeyEnv, "")
-	root := []string{"node", "keys", "offsite", "--access-key", s3test.AccessKey, "--config", path}
-	if out, err := runStdin(t, s3test.SecretKey+"\n", root...); err != nil || !strings.Contains(out, "stored the key of offsite") {
-		t.Fatalf("keys from stdin: %v\n%s", err, out)
 	}
 }

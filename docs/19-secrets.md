@@ -18,7 +18,8 @@ this doc's.
 *Status (2026-10-14): built in three PRs: `internal/keychain` (I-309); the store in
 `internal/secrets`, ops 23–25 at codec 11, the member key fetch, `secret set|ls|rm` and
 soak phase 24 (I-303..I-307); and the S3 and TMDB keys moved in, with the import of the
-old files (I-308, I-139 and I-302 reworded).*
+old files (I-308, I-139 and I-302 reworded). `secret set` is the one way in: `node keys`
+and `media key` are gone, and each consumer checks its key when it uses it.*
 
 ## 1. The pieces
 
@@ -75,7 +76,7 @@ stays in the node's config (15).
 - **Lost everywhere.** If no device holds the key, the store cannot be read: `secret ls`
   lists every name as `unreadable`, and `secret rm --all` removes every secret and clears
   the key ID, so the next `secret set` makes a new key. Each secret is then entered again
-  (`node add-s3`'s key, `media key`). Rotating the key is a non-goal of this version.
+  with `secret set`. Rotating the key is a non-goal of this version.
 
 ## 4. The store (I-306, I-307)
 
@@ -96,41 +97,49 @@ stays in the node's config (15).
   a flag, and sends it to its local node in an admin op over the tailnet; that node
   encrypts it and proposes the put. The leader and the log only ever see ciphertext.
 - **Reading.** A node decrypts a secret only for its own use (an S3 bucket's
-  credentials) or for the admin op `secret_get` that a consumer in the CLI calls (the
-  scrape's TMDB key). There is no `tailraid secret get`: no command prints a value.
+  credentials) or for the admin op `secret_get` that a consumer in the CLI calls (`node
+  add-s3` for the bucket's credentials, the scrape for its TMDB key). There is no
+  `tailraid secret get`: no command prints a value.
+- **One way in.** `secret set` is the only command that stores a secret. A consumer
+  checks its key when it uses it, as a service normally does: `node add-s3` refuses a
+  bucket its credentials do not open, the scrape asks TMDB once before a keyed run and a
+  node's probe reports a bucket its credentials do not open as dead.
 
 ## 5. Commands
 
 | Command | Does |
 |---|---|
-| `tailraid secret set <name>` | reads the value from stdin and stores it, replacing any value of that name; makes the cluster key first if the cluster has none |
+| `tailraid secret set <name>` | reads the value from stdin and stores it, replacing any value of that name; makes the cluster key first if the cluster has none; the one way in, for `s3/<node>/access_key`, `s3/<node>/secret_key`, `tmdb` and any other |
 | `tailraid secret ls` | each name, when it was set and by which node, and whether this node can open it; never a value |
 | `tailraid secret rm <name>` | removes one; `--all` removes every secret and the key ID |
 
 ## 6. What moves in (I-308)
 
-- **S3 node credentials** become the secret `s3/<node name>`, one line of JSON
-  (`{"access_key":…,"secret_key":…}`). `node add-s3` and `node keys` check the bucket as
-  before, then store the secret through their node, so every member holds the
-  credentials at once and every voter can judge the bucket when it leads (I-148). Each
-  node serves a bucket with the store's credentials, and with its own file's only for a
-  name the store lacks or this node cannot open. I-139 is reworded: the credentials are
-  in the store, sealed, and never in plaintext in the FSM, a report, a log line or a
-  request but the CLI's admin op to its own node.
-- **The TMDB key** becomes the secret `tmdb`. `media key` checks it with TMDB and stores
-  it through its node. The scrape takes `TAILRAID_TMDB_API_KEY` when set (a one-off
-  override), else asks its node (`secret_get tmdb`), else reads the old
-  `<data_dir>/tmdb.key`. I-302's "on the device that saved it" becomes "in the store".
+- **S3 node credentials** are the secrets `s3/<node name>/access_key` and
+  `s3/<node name>/secret_key`, set with `secret set` before `node add-s3 <name>`, which
+  reads them through its node, checks the bucket with them as before and only then
+  registers it; a rotated key is a new `secret set` of the two. A node name is one the
+  secret pattern takes (lower-case letters, digits and `. _ -`). Every member holds the
+  credentials at once, so every voter can judge the bucket when it leads (I-148). Each
+  node serves a bucket with the store's pair, and with its own file's only for a name the
+  store lacks or this node cannot open. I-139 is reworded: the credentials are in the
+  store, sealed, and never in plaintext in the FSM, a report, a log line or a request but
+  the CLI's admin op to its own node.
+- **The TMDB key** is the secret `tmdb`, set with `secret set tmdb`. The scrape asks its
+  node for it (`secret_get tmdb`), checks it with TMDB once before a run that needs it
+  (movies, tv or episodes), and without one runs the keyless groups. There is no
+  `media key` and no environment override. I-302's "on the device that saved it"
+  becomes "in the store".
 - **The old files are imported.** A node that finds `<data_dir>/s3nodes.yaml` or
   `<data_dir>/tmdb.key` tries once a minute while either exists: it
   fetches the cluster key if its keychain lacks it, stores each entry whose name the
   store lacks (a name the store holds is never overwritten from a file: the store's value
   may be newer), and removes the file once every name in it is in the store and opens on
   this node. A name off the secret pattern (an S3 node named `Offsite`) stays in the
-  file, and so does the file.
+  file, and so does the file. Nothing writes either file any more.
 - **Upgrades.** While a member reads a codec older than 11 the leader refuses every put:
-  the import keeps trying, the files keep serving, and `node add-s3`, `node keys` and
-  `media key` write the file as before and say so.
+  `secret set` says so, the import keeps trying and the files keep serving. Upgrade every
+  member first.
 
 ## 7. Soak phase 24
 
@@ -173,12 +182,13 @@ member holds the volume's data and can fetch the key, by design.
   an older codec; a put under a key ID that is not the FSM's, a name off its pattern, an
   empty, oversized or multi-line value, or a 257th secret is refused; `secret ls` lists
   names, times and setters, never values.
-- **I-308** — S3 credentials and the TMDB key are stored as the secrets `s3/<node>`
-  and `tmdb`, and read from the store before any file (only `TAILRAID_TMDB_API_KEY`
-  overrides it, for the scrape); an entry of a legacy `s3nodes.yaml` or `tmdb.key` is
-  imported only into a name the store lacks, and the file is removed only once every name
-  in it is in the store and opens on that node; until then it serves the names the store
-  cannot.
+- **I-308** — `secret set` is the only command that stores a secret; S3 credentials
+  are the secrets `s3/<node>/access_key` and `s3/<node>/secret_key` and the TMDB key is
+  `tmdb`, read from the store before any file by `node add-s3`, every node's bucket
+  client and the scrape, each of which checks its key when it uses it; an entry of a
+  legacy `s3nodes.yaml` or `tmdb.key` is imported only into a name the store lacks, and
+  the file is removed only once every name in it is in the store and opens on that node;
+  until then it serves the names the store cannot, and nothing writes it.
 - **I-309** — The keychain layer stores, reads and removes an account through the OS
   keyring, and through `<data_dir>/keys/<account>.key` (0600, dir 0700) when the keyring
   fails; a keyring failure never fails the caller; an account off its pattern is refused;
@@ -193,5 +203,5 @@ member holds the volume's data and can fetch the key, by design.
 | I-305 | `TestStore_KeyRace`, `TestSecretApply_Table` |
 | I-306 | `TestSeal_Open`, `TestStore_ReplicatedAcrossNodes`, `TestSecretState_Snapshot`, `TestSoak_SecretsAgainstHarness` |
 | I-307 | `TestSecretOps_Codec11`, `TestSecretApply_Table`, `TestSecretState_Snapshot`, `TestStore_Bounds_RemoveAll`, `TestSoak_SecretsAgainstHarness` |
-| I-308 | `TestStore_Opened`, `TestStore_Import`, `TestFetchKey_OnTick`, `TestS3Keys_StoreFirst`, `TestS3Secret_RoundTrip`, `TestMigrateLegacy`, `TestCLI_AddS3_AndKeys`, `TestTMDBKey_Order` |
+| I-308 | `TestStore_Opened`, `TestStore_Import`, `TestFetchKey_OnTick`, `TestS3Keys_StoreFirst`, `TestS3SecretNames`, `TestMigrateLegacy`, `TestCLI_AddS3`, `TestNeedsKey_Table` |
 | I-309 | `TestKeychain_KeyringFirst`, `TestKeychain_FallbackFile_Table`, `TestKeychain_KeyringRecovers`, `TestKeychain_Names_Table` |

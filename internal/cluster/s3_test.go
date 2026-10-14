@@ -4,8 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -88,43 +86,24 @@ func TestMember_AddS3_Refusals(t *testing.T) {
 	}
 }
 
-// The credentials file is private to the device and keeps every other node's keys when
-// one is written (docs/10 §4.1).
+// The legacy credentials file of a device still loads (until its import removes it,
+// docs/19 §6): a missing file is no keys, a broken one is an error.
 // Invariant: I-139
-func TestS3Keys_FileModeAndRoundTrip(t *testing.T) {
+func TestS3Keys_LegacyFile(t *testing.T) {
 	dir := t.TempDir()
 	if keys, err := LoadS3Keys(dir); err != nil || len(keys) != 0 {
 		t.Fatalf("no file: %v %v", keys, err)
 	}
-	a := s3.Credentials{AccessKey: "AK1", SecretKey: "s3cr3t/with: yaml"}
-	b := s3.Credentials{AccessKey: "AK2", SecretKey: "other"}
-	if err := SaveS3Key(dir, "offsite", a); err != nil {
-		t.Fatal(err)
-	}
-	if err := SaveS3Key(dir, "second", b); err != nil {
-		t.Fatal(err)
-	}
-	if err := SaveS3Key(dir, "offsite", s3.Credentials{AccessKey: "AK1", SecretKey: "rotated"}); err != nil {
+	yaml := "offsite:\n  access_key: AK1\n  secret_key: \"s3cr3t/with: yaml\"\nsecond:\n  access_key: AK2\n  secret_key: other\n"
+	if err := os.WriteFile(filepath.Join(dir, S3KeysFile), []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := LoadS3Keys(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 2 || keys["second"] != b || keys["offsite"].SecretKey != "rotated" {
+	if len(keys) != 2 || keys["second"] != (s3.Credentials{AccessKey: "AK2", SecretKey: "other"}) || keys["offsite"].SecretKey != "s3cr3t/with: yaml" {
 		t.Fatalf("keys %+v", keys)
-	}
-	if runtime.GOOS != "windows" {
-		st, err := os.Stat(filepath.Join(dir, S3KeysFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if st.Mode().Perm() != 0o600 {
-			t.Fatalf("mode %v, want 0600", st.Mode().Perm())
-		}
-	}
-	if err := SaveS3Key(dir, "", a); err == nil {
-		t.Fatal("a key without a name was saved")
 	}
 	if err := os.WriteFile(filepath.Join(dir, S3KeysFile), []byte("offsite: [unclosed"), 0o600); err != nil {
 		t.Fatal(err)
@@ -134,42 +113,52 @@ func TestS3Keys_FileModeAndRoundTrip(t *testing.T) {
 	}
 }
 
-// An S3 node's credentials are one line of JSON under s3/<name>; a name off the secret
-// pattern has no secret name, and a value that is not whole credentials is refused.
+// An S3 node's credentials are the secrets s3/<name>/access_key and s3/<name>/secret_key;
+// a name off the secret pattern or with a slash has none; the opened secrets pair into
+// credentials by node, and a node with one of the two, an empty one or an unknown field
+// has none.
 // Invariant: I-308
-func TestS3Secret_RoundTrip(t *testing.T) {
-	c := s3.Credentials{AccessKey: "AK1", SecretKey: "s3cr3t/with: \"quotes\""}
-	v, err := EncodeS3Secret(c)
-	if err != nil || strings.ContainsAny(v, "\r\n") {
-		t.Fatalf("encode: %q %v", v, err)
-	}
-	if got, err := DecodeS3Secret(v); err != nil || got != c {
-		t.Fatalf("decode: %+v %v", got, err)
-	}
-	for _, bad := range []string{"", "{}", `{"access_key":"a"}`, `{"secret_key":"s"}`, "not json"} {
-		if _, err := DecodeS3Secret(bad); err == nil {
-			t.Errorf("decoded %q", bad)
+func TestS3SecretNames(t *testing.T) {
+	for name, ok := range map[string]bool{"offsite": true, "b2.eu-1": true, "Offsite": false, "with space": false, "": false, "a/b": false} {
+		access, secret, valid := S3SecretNames(name)
+		if valid != ok || ok && (access != "s3/"+name+"/access_key" || secret != "s3/"+name+"/secret_key") {
+			t.Errorf("S3SecretNames(%q) = %q %q %v", name, access, secret, valid)
 		}
 	}
-	for name, ok := range map[string]bool{"offsite": true, "b2.eu-1": true, "Offsite": false, "with space": false, "": false} {
-		if got, valid := S3SecretName(name); valid != ok || ok && got != "s3/"+name {
-			t.Errorf("S3SecretName(%q) = %q %v", name, got, valid)
+	got := S3KeysFromSecrets(map[string]string{
+		"s3/offsite/access_key": "AK", "s3/offsite/secret_key": "SK",
+		"s3/half/access_key":  "AK2",
+		"s3/empty/access_key": "AK3", "s3/empty/secret_key": "",
+		"s3/odd/access_key": "AK4", "s3/odd/secret_key": "SK4", "s3/odd/seal_key": "ignored",
+		"s3/deep/er/access_key": "AK5", "s3/deep/er/secret_key": "SK5",
+		"tmdb": "k", "s3": "x", "s3/": "y",
+	})
+	want := map[string]s3.Credentials{"offsite": {AccessKey: "AK", SecretKey: "SK"}, "odd": {AccessKey: "AK4", SecretKey: "SK4"}, "deep/er": {AccessKey: "AK5", SecretKey: "SK5"}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v", got)
+	}
+	for node, c := range want {
+		if got[node] != c {
+			t.Errorf("%s: %+v, want %+v", node, got[node], c)
 		}
 	}
 }
 
 // A node serves a bucket with the store's credentials first and its file's only for a
-// name the store cannot serve; an unreadable value is no credentials, not a fallback
-// blocker.
+// name the store cannot serve; a half pair in the store is no credentials, not a
+// fallback blocker.
 // Invariant: I-308
 func TestS3Keys_StoreFirst(t *testing.T) {
-	stored, _ := EncodeS3Secret(s3.Credentials{AccessKey: "AK", SecretKey: "store"})
 	file := map[string]s3.Credentials{
 		"offsite": {AccessKey: "AK", SecretKey: "file"},
 		"legacy":  {AccessKey: "AK", SecretKey: "only-file"},
 		"broken":  {AccessKey: "AK", SecretKey: "file-broken"},
 	}
-	got := MergeS3Keys(map[string]string{"s3/offsite": stored, "s3/broken": "garbage", "s3/new": stored}, file)
+	got := MergeS3Keys(map[string]string{
+		"s3/offsite/access_key": "AK", "s3/offsite/secret_key": "store",
+		"s3/broken/secret_key": "half",
+		"s3/new/access_key":    "AK", "s3/new/secret_key": "store",
+	}, file)
 	want := map[string]string{"offsite": "store", "legacy": "only-file", "broken": "file-broken", "new": "store"}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)

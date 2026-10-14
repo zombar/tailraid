@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,45 +25,52 @@ const S3KeysFile = "s3nodes.yaml"
 // S3SecretPrefix begins the secrets store's names of S3 node credentials (docs/19 §6).
 const S3SecretPrefix = "s3/"
 
-// S3SecretName is the store's name for S3 node name's credentials, and false for a node
-// name off the secret pattern (its credentials stay in the file).
-func S3SecretName(name string) (string, bool) {
-	n := S3SecretPrefix + name
-	return n, name != "" && meta.SecretName.MatchString(n)
+// S3SecretNames are the store's names of S3 node name's credentials,
+// `s3/<name>/access_key` and `s3/<name>/secret_key` (docs/19 §6), and false for a node
+// name off the secret pattern or holding a slash (its credentials stay in the file).
+func S3SecretNames(name string) (access, secret string, ok bool) {
+	access, secret = S3SecretPrefix+name+"/access_key", S3SecretPrefix+name+"/secret_key"
+	return access, secret, name != "" && !strings.Contains(name, "/") && meta.SecretName.MatchString(secret)
 }
 
-// EncodeS3Secret is credentials as a secret's value: one line of JSON.
-func EncodeS3Secret(c s3.Credentials) (string, error) {
-	b, err := json.Marshal(c) //nolint:gosec // G117: the value is sealed by the store (I-306), never written in the clear
-	return string(b), err
-}
-
-// DecodeS3Secret reads a secret's value back; anything but both keys is refused.
-func DecodeS3Secret(v string) (s3.Credentials, error) {
-	var c s3.Credentials
-	if err := json.Unmarshal([]byte(v), &c); err != nil {
-		return c, fmt.Errorf("cluster: an S3 secret: %w", err)
+// S3KeysFromSecrets pairs the opened secrets under s3/ into credentials by node name; a
+// node with only one of its two names has none.
+func S3KeysFromSecrets(opened map[string]string) map[string]s3.Credentials {
+	out := map[string]s3.Credentials{}
+	for name, v := range opened {
+		rest, ok := strings.CutPrefix(name, S3SecretPrefix)
+		i := strings.LastIndex(rest, "/")
+		if !ok || i <= 0 || v == "" {
+			continue
+		}
+		node, field := rest[:i], rest[i+1:]
+		c := out[node]
+		switch field {
+		case "access_key":
+			c.AccessKey = v
+		case "secret_key":
+			c.SecretKey = v
+		default:
+			continue
+		}
+		out[node] = c
 	}
-	if c.AccessKey == "" || c.SecretKey == "" {
-		return c, errors.New("cluster: an S3 secret needs an access key and a secret key")
+	for node, c := range out {
+		if c.AccessKey == "" || c.SecretKey == "" {
+			delete(out, node)
+		}
 	}
-	return c, nil
+	return out
 }
 
-// MergeS3Keys is the credentials a node serves its buckets with: each S3 secret it opened
-// (by store name), over its file's for the names the store cannot serve (I-308).
+// MergeS3Keys is the credentials a node serves its buckets with: the store's pairs over
+// its file's for the names the store cannot serve (I-308).
 func MergeS3Keys(opened map[string]string, file map[string]s3.Credentials) map[string]s3.Credentials {
 	out := maps.Clone(file)
 	if out == nil {
 		out = map[string]s3.Credentials{}
 	}
-	for name, v := range opened {
-		c, err := DecodeS3Secret(v)
-		if err != nil {
-			continue
-		}
-		out[strings.TrimPrefix(name, S3SecretPrefix)] = c
-	}
+	maps.Copy(out, S3KeysFromSecrets(opened))
 	return out
 }
 
@@ -82,27 +88,6 @@ func LoadS3Keys(dataDir string) (map[string]s3.Credentials, error) {
 		return nil, fmt.Errorf("cluster: %s: %w", S3KeysFile, err)
 	}
 	return keys, nil
-}
-
-// SaveS3Key sets the credentials of one S3 node, keeping the others, in a file only this
-// user can read, replaced atomically.
-func SaveS3Key(dataDir, name string, c s3.Credentials) error {
-	if name == "" || c.AccessKey == "" || c.SecretKey == "" {
-		return errors.New("cluster: an S3 key needs a node name, an access key and a secret key")
-	}
-	keys, err := LoadS3Keys(dataDir)
-	if err != nil {
-		return err
-	}
-	keys[name] = c
-	b, err := yaml.Marshal(keys)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return err
-	}
-	return writeFileSync(filepath.Join(dataDir, S3KeysFile), b)
 }
 
 // S3Buckets holds a client for each S3 row this device has credentials for, rebuilt when
@@ -153,7 +138,7 @@ func (s *S3Buckets) Bucket(idx meta.NodeIdx) (*s3.Bucket, bool) {
 }
 
 // KeysFromFile serves the credentials file of dataDir, read again whenever its size or
-// modification time changes (a `node keys` on a running device takes effect at the next
+// modification time changes (a file restored by hand takes effect at the next
 // lookup). A file that does not parse keeps the last good keys and is reported to warn
 // once per change.
 func KeysFromFile(dataDir string, warn func(error)) func() map[string]s3.Credentials {

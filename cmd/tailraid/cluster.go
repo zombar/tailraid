@@ -400,7 +400,7 @@ func nodeCmd() *cobra.Command {
 		return nil
 	})
 	remove.Flags().Bool("force", false, "remove even if the node still holds shard slots")
-	c.AddCommand(ls, describe, promote, demote, drain, activate, remove, addDiskCmd(), addS3Cmd(), keysCmd())
+	c.AddCommand(ls, describe, promote, demote, drain, activate, remove, addDiskCmd(), addS3Cmd())
 	return c
 }
 

@@ -3,8 +3,12 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -64,6 +68,18 @@ func oneNodeStore(t *testing.T) (*secrets.Store, func(error)) {
 	return s, func(err error) { refuse = err }
 }
 
+// writeS3Keys writes a legacy s3nodes.yaml as devices kept it before the store.
+func writeS3Keys(t *testing.T, dir string, keys map[string]s3.Credentials) {
+	t.Helper()
+	var b strings.Builder
+	for _, name := range slices.Sorted(maps.Keys(keys)) {
+		fmt.Fprintf(&b, "%s:\n  access_key: %s\n  secret_key: %s\n", name, keys[name].AccessKey, keys[name].SecretKey)
+	}
+	if err := os.WriteFile(filepath.Join(dir, cluster.S3KeysFile), []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The old files move into the store: each entry the store lacks is stored, a name it
 // holds keeps the store's value, and a file goes only once every name in it is stored
 // and opens; a store that refuses (a member on an older codec) leaves both files serving.
@@ -73,15 +89,13 @@ func TestMigrateLegacy(t *testing.T) {
 	dir := t.TempDir()
 	s, refuse := oneNodeStore(t)
 	newer := s3.Credentials{AccessKey: "AK", SecretKey: "rotated"}
-	v, _ := cluster.EncodeS3Secret(newer)
-	if err := s.Set(ctx, "s3/offsite", v); err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range map[string]s3.Credentials{"offsite": {AccessKey: "AK", SecretKey: "old"}, "second": {AccessKey: "AK2", SecretKey: "two"}, "Upper": {AccessKey: "AK3", SecretKey: "three"}} {
-		if err := cluster.SaveS3Key(dir, name, c); err != nil {
+	access, secret, _ := cluster.S3SecretNames("offsite")
+	for name, v := range map[string]string{access: newer.AccessKey, secret: newer.SecretKey} {
+		if err := s.Set(ctx, name, v); err != nil {
 			t.Fatal(err)
 		}
 	}
+	writeS3Keys(t, dir, map[string]s3.Credentials{"offsite": {AccessKey: "AK", SecretKey: "old"}, "second": {AccessKey: "AK2", SecretKey: "two"}, "Upper": {AccessKey: "AK3", SecretKey: "three"}})
 	if err := os.WriteFile(filepath.Join(dir, secrets.TMDBLegacyFile), []byte("tmdb-key\n"), 0o600); err != nil { // as `media key` wrote it before the store
 		t.Fatal(err)
 	}
@@ -106,12 +120,7 @@ func TestMigrateLegacy(t *testing.T) {
 		t.Errorf("stored credentials: %+v", keys)
 	}
 	// the operator renames the odd entry away: the next pass removes the file
-	if err := os.Remove(filepath.Join(dir, cluster.S3KeysFile)); err != nil {
-		t.Fatal(err)
-	}
-	if err := cluster.SaveS3Key(dir, "second", s3.Credentials{AccessKey: "AK2", SecretKey: "two"}); err != nil {
-		t.Fatal(err)
-	}
+	writeS3Keys(t, dir, map[string]s3.Credentials{"second": {AccessKey: "AK2", SecretKey: "two"}})
 	if done, err := migrateLegacy(ctx, s, dir); !done || err != nil || exists(cluster.S3KeysFile) {
 		t.Fatalf("every name stored: done %v, %v, file %v", done, err, exists(cluster.S3KeysFile))
 	}

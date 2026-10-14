@@ -38,7 +38,7 @@ var (
 	// ErrNotFound is a provider's 404.
 	ErrNotFound = errors.New("scrape: not found")
 	// ErrKey is TMDB refusing the key (401).
-	ErrKey = errors.New("scrape: TMDB refused the key (run tailraid media key)")
+	ErrKey = errors.New("scrape: TMDB refused the key (tailraid secret set tmdb)")
 	// ErrHost is a request or a redirect to a host that is not a provider's.
 	ErrHost = errors.New("scrape: not a provider host")
 	// ErrTooLarge is a body past its bound.

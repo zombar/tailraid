@@ -307,8 +307,7 @@ reason.
 
 | Command | Does |
 |---|---|
-| `tailraid media key` | reads a TMDB API key (v3 key, or a v4 read token) from `TAILRAID_TMDB_API_KEY` or stdin, checks it with one `GET /3/configuration`, and stores it as the secret `tmdb` through this device's node (docs/19 §6; `<data_dir>/tmdb.key`, mode 0600, while a member's codec is older than 11) (I-302); prints TMDB's attribution |
-| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path; with no TMDB key it does the keyless groups (`music`, `games`) and says it skipped the rest |
+| `tailraid media scrape [path…]` | every library folder when no path is given, else the items under the paths; `--only movies,tv,episodes,music,games` (all by default), `--lang` (TMDB language, default `en-US`), `--region` (certification country, default `US`), `--yes`, `--dry-run`, `--id tmdb:<n>`, `--id mbid:<uuid>` or `--id libretro:<name>` for a single item path; its TMDB key (a v3 key, or a v4 read token) is the secret `tmdb` (`tailraid secret set tmdb`, docs/19 §6), checked with one `GET /3/configuration` before a run that needs it; with no key it does the keyless groups (`music`, `games`) and says it skipped the rest |
 
 **The plan.** `scrape_plan` answers, for each item under the paths in catalogue order,
 its path, kind, the analysed title and year (§8a), its seasons and episode files with
@@ -372,14 +371,14 @@ speaks only to `api.themoviedb.org`, `image.tmdb.org`, `musicbrainz.org` and
 TMDB with at most four requests in flight. The key goes only to `api.themoviedb.org`
 (as `api_key`, or as a bearer token for a v4 token), never to a node, and never into a
 log line or an error (a request's URL is printed with the key removed). TMDB's terms
-ask for attribution: `media key`, `media scrape --help` and the README say "This
+ask for attribution: `media scrape --help` and the README say "This
 product uses the TMDB API but is not endorsed or certified by TMDB." MusicBrainz and
 the Cover Art Archive data are CC0 and need none.
 
 ## Invariants
 
-- **I-298** — No node contacts a metadata provider: only the CLI's `media key` and
-  `media scrape` do, from the device they run on; no package a node runs imports the
+- **I-298** — No node contacts a metadata provider: only the CLI's `media scrape`
+  does, from the device it runs on; no package a node runs imports the
   scrape client.
 - **I-299** — A scrape writes a slot only when no name §11 accepts for it exists, only as
   an exclusive create (`If-None-Match: *`; a 412 counts as present), and never replaces,
@@ -395,9 +394,10 @@ the Cover Art Archive data are CC0 and need none.
   without asking; any other result is
   taken only by the user's choice, `--yes` or `--id`, and without a terminal the item is
   skipped and reported; the same answers give the same matches.
-- **I-302** — The TMDB key lives in the secrets store as `tmdb` (sealed, docs/19), or in
-  a device's `<data_dir>/tmdb.key` (mode 0600) until imported, travels in plaintext only
-  to `api.themoviedb.org` and from a node to its own CLI, and never appears in a log line,
+- **I-302** — The TMDB key lives in the secrets store as `tmdb` (sealed, docs/19, set
+  only by `secret set`), or in a device's `<data_dir>/tmdb.key` (mode 0600) until
+  imported, travels in plaintext only to `api.themoviedb.org` and from a node to its own
+  CLI, and never appears in a log line,
   an error or a request between nodes; the client speaks only to the provider hosts (TMDB's two,
   MusicBrainz, the Cover Art Archive and the `archive.org` hosts it redirects to, and
   `thumbnails.libretro.com`), sends
@@ -464,7 +464,7 @@ the Cover Art Archive data are CC0 and need none.
 | I-299 | `TestScrapePlan_Slots`, `TestScrapePlan_SameOnEveryNode`, `TestPlanPage_Sizes_Table`, `TestPlanPage_Under`, `TestRun_WritesMissingSlotsOnly`, `TestWebWriter_ExclusiveCreate` |
 | I-300 | `TestNFO_RoundTrip_Table`, `TestScrapePlan_Slots` |
 | I-301 | `TestClear_Table`, `TestClearAlbum_Table`, `TestClearGame_Table`, `TestRun_UnclearMatch_Table` |
-| I-302 | `TestClient_KeyOnlyToTMDB_UserAgent_Redacted`, `TestClient_ProviderHostsOnly`, `TestClient_429Retries_BoundedBody`, `TestClient_MusicBrainzOncePerSecond`, `TestKey_SavedPrivate_EnvWins` |
+| I-302 | `TestClient_KeyOnlyToTMDB_UserAgent_Redacted`, `TestClient_ProviderHostsOnly`, `TestClient_429Retries_BoundedBody`, `TestClient_MusicBrainzOncePerSecond` |
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
