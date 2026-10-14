@@ -514,6 +514,13 @@ the WAL cap.
 - **I-11** — A shard file visible under its final name has content matching its header hash; temp files are never served.
 - **I-34** — The issuing gateway returns its own acknowledged bytes on any subsequent READ (read-your-writes), before and after flush.
 - **I-35** — A flush never drops dirty extents or a truncation point, save on `ErrSuperseded` (I-223): on `ErrConflict`, `ErrUnknownChunk` or PUT failure the same plan (extents, `minSize`, `sizeSet`) is retried against the newer base with `NewSize` recomputed so that no other gateway's committed bytes are cut off except by an explicit truncate; extents are removed only after `WaitApplied` of the Commit that carries them.
+- **I-312** — A retry of a flush (after a failed or unknown Commit, a conflict rebase, or
+  a backoff) never re-uploads a chunk it placed within `ReuseFor` (half the orphan grace,
+  5 min by default): it HEADs the chunk's slots and PUTs only the missing ones, keeping the
+  placement's original age, so the sweep cannot take a reused shard; past `ReuseFor` the
+  retry PUTs again (L-58). A flush that keeps failing on a slow link therefore costs a
+  Commit per attempt, not the file (on the real cluster each retry of a 44 MB flush had
+  re-PUT 73 MB and saturated the gateway's uplink, which failed the next Commit).
 - **I-36** — Other gateways observe either the previous committed chunk list or the new one, never a mixture.
 - **I-223** — Two rewrites of one file leave one of them whole: a writer's `O_TRUNC`
   open, or a plan truncating to 0, makes the inode's next flush a truncate to 0 that
@@ -622,6 +629,7 @@ the WAL cap.
 | I-201 | `TestFSM_Commit_SumsPureFunctionOfChunk`, `TestFSM_SetShardSums_Table`, `TestFSM_SetPlacement_PolicyChangeClearsSums`, `TestFlusher_CommitCarriesSumsOnlyAtCodec5`, `TestRepair_BackfillSums_Bounded`, `TestCluster_V5CommitWithoutSumsWhileMemberOld`, `TestCodec_ReadsVersion4Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V5Gating`, `FuzzDecodeCommand` |
 | I-219 | `TestFlusher_CommitRefusedForCodec_CommitsWithoutSums`, `TestRepair_BackfillSums_WaitsForCodec5` |
 | I-310 | `TestReader_Readahead_FinishedPrefetchNotRetained` |
+| I-312 | `TestFlusher_SoonRetry_ReusesPlacedShards`, `TestFlusher_LateRetry_RePutsBeforeCommit` |
 | I-203 | `TestReader_Readahead_DepthByBytes_Table`, `TestReader_Readahead_PrefetchIsBackgroundPriority`, `TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch`, `TestReader_Readahead_JoinedPrefetchSurvivesCancel`, `TestFile_ReadAt_PrefetchStartsAfterTheRead`, `TestReader_Readahead_ReadInSameChunkKeepsPrefetches`, `TestReader_JoinedPrefetchFailure_ReadFetchesItself` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip`, `TestReader_Readahead_SameChunkReadRetriesSkippedCandidates` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenClusterFull`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |

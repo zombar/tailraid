@@ -237,7 +237,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return err
 	}
-	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, vfs.DefaultConfig(), log)
+	flcfg := vfs.DefaultConfig()
+	if grace, _, err := cfg.RepairDurations(); err == nil {
+		flcfg.ReuseFor = grace / 2 // a reused shard stays well inside the sweep's grace (I-312)
+	}
+	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, flcfg, log)
 	fl.Events = ring
 	fl.Suspect = prober.Suspect // a PUT that outlasts the straggler grace (I-169)
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())

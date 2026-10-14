@@ -33,6 +33,10 @@ type Config struct {
 	ChunkWorkers   int           // chunks assembled, encoded and uploaded at once, flusher-wide (docs/04 §9)
 	RetryMin       time.Duration
 	RetryMax       time.Duration
+	// ReuseFor is how long after its PUT a chunk's shards are reused by a retry of the
+	// flush that placed them: half the orphan sweep's grace, so a reused shard is never
+	// near the age at which the sweep may take it (I-312, L-58).
+	ReuseFor time.Duration
 }
 
 // DefaultConfig returns the documented defaults.
@@ -40,7 +44,7 @@ func DefaultConfig() Config {
 	return Config{
 		IdleFlush: 2 * time.Second, FileDirtyHi: 32 << 20, TotalDirtyHi: 256 << 20,
 		PutDeadline: 10 * time.Second, StragglerMin: 2 * time.Second, ProposeTimeout: 5 * time.Second, ShutdownFlush: 30 * time.Second,
-		Workers: 4, ChunkWorkers: 8, RetryMin: time.Second, RetryMax: 60 * time.Second,
+		Workers: 4, ChunkWorkers: 8, RetryMin: time.Second, RetryMax: 60 * time.Second, ReuseFor: 5 * time.Minute,
 	}
 }
 
@@ -88,7 +92,53 @@ type Flusher struct {
 
 	mu      sync.Mutex
 	backoff map[meta.Ino]backoffState
+	placed  map[meta.Hash]placedChunk  // chunks uploaded and not yet committed, for a retry (I-312)
 	full    map[meta.NodeIdx]time.Time // nodes that answered ErrFull, excluded for a while
+}
+
+// placedChunk is a chunk this flusher uploaded that no Commit has registered yet.
+type placedChunk struct {
+	k, m  uint8
+	place []meta.NodeIdx
+	sums  []meta.Hash
+	at    time.Time // when its PUTs were acked
+}
+
+// placedCap bounds the placed table; past it the table is cleared, costing at worst one
+// re-upload per chunk. An entry is a placement and k sums, a few hundred bytes.
+const placedCap = 1 << 16
+
+// rememberPlaced records w's placement for a retry of its flush; at is when its oldest
+// shard was PUT.
+func (f *Flusher) rememberPlaced(w *chunkWork, at time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.placed) >= placedCap {
+		clear(f.placed)
+	}
+	f.placed[w.hash] = placedChunk{k: w.k, m: w.m, place: slices.Clone(w.place), sums: slices.Clone(w.sums), at: at}
+}
+
+// recentPlaced is the placement of h this flusher uploaded within ReuseFor; an older
+// entry is dropped, so its retry PUTs again and refreshes the shards' mtime (L-58).
+func (f *Flusher) recentPlaced(h meta.Hash) (placedChunk, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.placed[h]
+	if ok && f.clk.Now().Sub(p.at) >= f.cfg.ReuseFor {
+		delete(f.placed, h)
+		return placedChunk{}, false
+	}
+	return p, ok
+}
+
+// forgetPlaced drops committed chunks: the chunk table holds them now.
+func (f *Flusher) forgetPlaced(works []*chunkWork) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, w := range works {
+		delete(f.placed, w.hash)
+	}
 }
 
 type backoffState struct {
@@ -106,7 +156,7 @@ func NewFlusher(ov *Overlay, st *meta.Store, prop meta.Proposer, peers meta.Peer
 	return &Flusher{
 		ov: ov, st: st, prop: prop, peers: peers, shards: shards, rd: rd, clk: clk, cfg: cfg,
 		log: log, codecs: &ec.Pool{}, sem: make(chan struct{}, max(1, cfg.ChunkWorkers)),
-		backoff: map[meta.Ino]backoffState{}, full: map[meta.NodeIdx]time.Time{},
+		backoff: map[meta.Ino]backoffState{}, placed: map[meta.Hash]placedChunk{}, full: map[meta.NodeIdx]time.Time{},
 	}
 }
 
@@ -422,6 +472,7 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 					f.Events.Record(w.hash, meta.EvCommitted, fmt.Sprintf("ino %d idx %d index %d", plan.Ino, w.idx, index))
 				}
 			}
+			f.forgetPlaced(works)
 			return cmd.NewSize, nil
 		case errors.Is(res.Err, meta.ErrConflict):
 			f.log.Info("commit conflict, rebasing", "ino", plan.Ino)
@@ -611,12 +662,36 @@ func (f *Flusher) resolve(ctx context.Context, w *chunkWork, data []byte, forceU
 			return f.fillSlots(ctx, w, data, c, keep)
 		}
 	}
+	if !forceUpload {
+		if p, ok := f.recentPlaced(w.hash); ok {
+			// a retry of a flush that placed this chunk moments ago: the shards are young
+			// and on their holders; HEAD them and PUT only what is missing (I-312)
+			keep, present := f.presentSlots(ctx, meta.Chunk{Hash: w.hash, K: p.k, M: p.m, Placement: p.place})
+			w.k, w.m = p.k, p.m
+			if present == int(p.k)+int(p.m) {
+				w.place, w.sums, w.uploaded = keep, slices.Clone(p.sums), true
+				f.Events.Record(w.hash, meta.EvUploaded, fmt.Sprintf("%d+%d reused placement %v", w.k, w.m, keep))
+				return nil
+			}
+			if present >= int(p.k) {
+				if err := f.upload(ctx, w, data, keep); err != nil {
+					return err
+				}
+				f.rememberPlaced(w, p.at) // the kept shards are as old as before
+				return nil
+			}
+		}
+	}
 	vol := f.st.Volume()
 	w.k, w.m = vol.K, vol.M
 	if meta.IsSmallChunk(uint32(len(data)), vol.ChunkSize) {
 		w.k = 1 // replication for small chunks (docs/03)
 	}
-	return f.upload(ctx, w, data, nil)
+	if err := f.upload(ctx, w, data, nil); err != nil {
+		return err
+	}
+	f.rememberPlaced(w, f.clk.Now())
+	return nil
 }
 
 // presentSlots returns c's placement with every slot that is not both on a live node and
