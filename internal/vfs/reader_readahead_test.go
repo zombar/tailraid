@@ -104,8 +104,9 @@ func TestReader_Readahead_SequentialFillsCache(t *testing.T) {
 	}
 }
 
-// A READ that does not follow the inode's previous READ prefetches nothing: random
-// access must not fill the cache with chunks nobody asked for.
+// A READ outside the window of the inode's streams (more than ReadAhead chunks from
+// each frontier) prefetches nothing: random access must not fill the cache with chunks
+// nobody asked for.
 // Invariant: I-166
 func TestReader_Readahead_RandomReadDoesNotPrefetch(t *testing.T) {
 	f := testharness.NewFabric(t, 4, 2, 1)
@@ -114,7 +115,7 @@ func TestReader_Readahead_RandomReadDoesNotPrefetch(t *testing.T) {
 	in := f.Inode(writeAndFlush(t, f, "a", data))
 	rd := f.Reader()
 	drained(t, rd)
-	for _, idx := range []int{6, 2, 9} {
+	for _, idx := range []int{6, 1, 12} {
 		got := readChunk(t, rd, in, idx)
 		if !bytes.Equal(got, data[idx*cs:(idx+1)*cs]) {
 			t.Fatalf("chunk %d differs", idx)

@@ -365,11 +365,19 @@ nothing about the client's read (found by CI: phase 12 read EIO through another 
 
 Readahead follows two **streams** per inode, because a player reads a video from its
 start while it asks for the file's tail (an MP4's index often sits there): a READ that
-continues either stream (the chunk of the stream's last READ or the one after) stays in
-the sequence, and with one stream these two requests cancelled each other's prefetches
-at every switch, so readahead never ran. A READ that continues neither (a seek) starts a
-stream in the empty slot or in place of the stream read least recently, and cancels that
-stream's prefetches still in flight that no READ has joined: their slots free at once and
+continues either stream stays in the sequence, and with one stream these two requests
+cancelled each other's prefetches at every switch, so readahead never ran. A stream's
+**frontier** is the furthest chunk a READ of it reached, and a READ continues it from
+`ReadAhead` chunks before the frontier to `ReadAhead` after, because a client's
+concurrent READs are served out of order: an NFS client keeps up to `InFlight` READs in
+flight (07), and through the macOS mount a READ of the chunk after the frontier landed
+before the last READ of the frontier's chunk, so a rule of "the frontier's chunk or the
+next" took every late READ for a seek and cut the prefetches (the three-VM rig served 36
+of 64 chunks from readahead with 14 cancelled). Readahead continues from the frontier,
+so a late READ prefetches nothing the stream has passed. A READ that continues neither
+stream (a seek) starts a stream in the empty slot or in place of the stream read least
+recently, and cancels that stream's prefetches still in flight that no READ has joined:
+their slots free at once and
 nothing the client moved away from is fetched or cached; a joined prefetch is never
 cancelled (`joined` is set under the reader's lock, where the cancel decides). `status`
 counts them as `readahead_cancelled`. The first seek after a single stream takes the
@@ -601,8 +609,10 @@ the WAL cap.
   stream's depth is `ReadaheadDepth(ChunkSize)` = `min(ReadAhead, ReadAheadBytes /
   ChunkSize)`, at least one chunk; a prefetch starts only after the READ that triggered
   it has been served; its shard GETs carry the background mark (I-175); an inode has two
-  streams, and a READ that continues neither (lands outside the chunk of each stream's
-  last READ and the one after it) replaces the stream read least recently (or takes an
+  streams, each with a frontier (the furthest chunk its READs reached), a READ within
+  `ReadAhead` chunks of a frontier on either side continues that stream from its
+  frontier (a client's concurrent READs are served out of order), and a READ that
+  continues neither replaces the stream read least recently (or takes an
   empty slot) and cancels that stream's in-flight prefetches no READ has joined, never the
   other stream's, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
   cancelled; a READ that joined a prefetch which then failed fetches the chunk itself
