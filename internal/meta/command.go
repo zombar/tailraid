@@ -34,6 +34,13 @@ const (
 	OpSecretKeyInit Op = 23 // {ID, Now}: the cluster key's ID, only while none is set (I-305)
 	OpSecretPut     Op = 24 // {Secret{Name, KeyID, Nonce, Cipher, By}, Now}: a sealed value (I-306)
 	OpSecretDelete  Op = 25 // {Name, All, Now}: one secret, or every one and the key ID
+	// 26 and 27 are unused (the mesh of 0.9.x, withdrawn).
+	// Users, groups and permissions (docs/21, codec 14).
+	OpInvite  Op = 28 // {Delete, Bootstrap, Invite, Now}: an invite minted or removed (I-343)
+	OpUser    Op = 29 // {Action, Name, Code, Key, Label, KeyID, Target, Now}: a user from an invite, a key added or removed, a state change (I-342)
+	OpGroup   Op = 30 // {Action, Name, Group, User, Now} (I-346)
+	OpGrant   Op = 31 // {Ino, Subject, Role, Now}: a grant set, or cleared with RoleNone (I-347)
+	OpSession Op = 32 // {Delete, All, Hash, User, Key, ExpiresAt, Now}: a browser session of the volume (I-354)
 )
 
 // commandVersion is the codec version of a log entry. Version 2 is written only for a
@@ -56,6 +63,15 @@ const (
 	// commandVersionV10: a SetAttr whose Flags carry the roms library kind (docs/18 §9,
 	// I-277); an older binary rejects the third bit.
 	commandVersionV10 = 10
+	// commandVersionV14: users, groups and permissions (docs/21, I-349); 12 is sealed S3's
+	// (docs/10 §4.7) and 13 is unused (the mesh of 0.9.x, withdrawn). A codec-14 entry
+	// is a header (the actor and the System flag) around a lower-version entry, so every
+	// op can carry its actor without a second layout; the users ops 28–32 and a secret
+	// with its user are written at inner version 14. An older binary refuses the entry.
+	commandVersionV14 = 14
+	// CodecUsers is the codec every live member must read before a command carries an
+	// actor or a users op is proposed; enforcement itself waits for the first user.
+	CodecUsers = commandVersionV14
 	// commandVersionV11: the secrets store's ops (docs/19, I-307); an older binary does
 	// not know them.
 	commandVersionV11 = 11
@@ -78,7 +94,7 @@ const (
 	// CodecVersion is the newest log entry and snapshot format this binary writes. A
 	// node refuses to join a cluster whose leader reports a newer one (docs/12 §6,
 	// I-105): it could not decode what the leader writes.
-	CodecVersion = 11
+	CodecVersion = 14
 )
 
 // SetAttr mask bits.
@@ -299,9 +315,13 @@ type GCVictim struct {
 	Placement []NodeIdx
 }
 
-// Command is one Raft log entry: Op plus exactly one non-nil payload.
+// Command is one Raft log entry: Op plus exactly one non-nil payload. Actor is the user
+// the command acts for (docs/21 §4; 0 is nobody, or the node itself with System); both
+// are codec 14 and the FSM checks them once users exist (I-349).
 type Command struct {
 	Op            Op
+	Actor         UserIdx
+	System        bool
 	SetVolume     *SetVolume
 	MetaSet       *MetaSet
 	NodeUpsert    *NodeUpsert
@@ -329,6 +349,27 @@ type Command struct {
 	SecretKeyInit *SecretKeyInit
 	SecretPut     *SecretPut
 	SecretDelete  *SecretDelete
+	// docs/21, codec 14
+	InviteOp  *InviteOp
+	UserOp    *UserOp
+	GroupOp   *GroupOp
+	GrantOp   *GrantOp
+	SessionOp *SessionOp
+}
+
+// needsV14 reports whether c is a users op, carries an actor or the System flag, or is a
+// secret put that records its user (docs/21): every one needs the codec-14 header.
+func needsV14(c Command) bool {
+	return isUsersOp(c.Op) || c.Actor != 0 || c.System || (c.Op == OpSecretPut && c.SecretPut != nil && c.SecretPut.Secret.ByUser != 0)
+}
+
+// innerCodec is the version the body inside a codec-14 header is written in: 14 for the
+// users ops and a secret with its user, the command's own base codec otherwise.
+func innerCodec(c Command) uint8 {
+	if isUsersOp(c.Op) || (c.Op == OpSecretPut && c.SecretPut != nil && c.SecretPut.Secret.ByUser != 0) {
+		return commandVersionV14
+	}
+	return baseCodec(c)
 }
 
 // needsV7 reports whether c is a snapshot command or registers a mirror (docs/16): an
@@ -451,6 +492,14 @@ func MustEncodeCommand(c Command) []byte {
 // its fields (docs/02 §Codec versions). A leader refuses a command whose version a live
 // member cannot read (docs/12 §6, I-156).
 func CommandCodec(c Command) uint8 {
+	if needsV14(c) {
+		return commandVersionV14
+	}
+	return baseCodec(c)
+}
+
+// baseCodec is the codec of c's own body, the header of codec 14 aside.
+func baseCodec(c Command) uint8 {
 	v2 := c.Op == OpNodeUpsert && c.NodeUpsert != nil && (c.NodeUpsert.Node.Kind == KindDisk || c.NodeUpsert.Node.Host != 0)
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
@@ -482,7 +531,19 @@ func CommandCodec(c Command) uint8 {
 
 func encodeCommand(c Command) []byte {
 	w := &writer{b: make([]byte, 0, 64)}
-	v := CommandCodec(c)
+	if needsV14(c) {
+		w.u8(commandVersionV14)
+		w.u16(uint16(c.Actor))
+		w.bool(c.System)
+		encodeBody(w, c, innerCodec(c))
+		return w.b
+	}
+	encodeBody(w, c, baseCodec(c))
+	return w.b
+}
+
+// encodeBody writes the version byte, the op and the payload in version v.
+func encodeBody(w *writer, c Command, v uint8) {
 	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9
 	v9 := v == commandVersionV9
 	v2 := v == commandVersionV2 || v == commandVersionV7 // a mirror row carries its Host as a disk row does
@@ -673,17 +734,18 @@ func encodeCommand(c Command) []byte {
 		w.i64(p.Now)
 	case OpSecretPut:
 		p := mustPayload(c.SecretPut, c.Op)
-		writeSecret(w, &p.Secret)
+		writeSecret(w, &p.Secret, v == commandVersionV14)
 		w.i64(p.Now)
 	case OpSecretDelete:
 		p := mustPayload(c.SecretDelete, c.Op)
 		w.str(p.Name)
 		w.bool(p.All)
 		w.i64(p.Now)
+	case OpInvite, OpUser, OpGroup, OpGrant, OpSession:
+		writeUsersPayload(w, c)
 	default:
 		panic(fmt.Sprintf("meta: EncodeCommand: unknown op %d", c.Op))
 	}
-	return w.b
 }
 
 func mustPayload[T any](p *T, op Op) *T {
@@ -700,7 +762,15 @@ func DecodeCommand(b []byte) (Command, error) {
 	r := &reader{b: b}
 	var c Command
 	v := r.u8()
-	if r.err == nil && (v < commandVersion || v > commandVersionV11) {
+	wrapped := r.err == nil && v == commandVersionV14
+	if wrapped {
+		// the codec-14 header: the actor and the System flag, then the body in its own
+		// version (docs/21 §4)
+		c.Actor = UserIdx(r.u16())
+		c.System = r.bool()
+		v = r.u8()
+	}
+	if r.err == nil && (v < commandVersion || v > commandVersionV14 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -731,13 +801,19 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSetAttr
 	case commandVersionV11:
 		legal = c.Op == OpSecretKeyInit || c.Op == OpSecretPut || c.Op == OpSecretDelete
+	case commandVersionV14:
+		legal = isUsersOp(c.Op) || c.Op == OpSecretPut
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
-			c.Op != OpSecretKeyInit && c.Op != OpSecretPut && c.Op != OpSecretDelete
+			c.Op != OpSecretKeyInit && c.Op != OpSecretPut && c.Op != OpSecretDelete &&
+			!isUsersOp(c.Op)
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
+	}
+	if wrapped && v != commandVersionV14 && c.Actor == 0 && !c.System {
+		return c, fmt.Errorf("meta: codec 14 header without an actor") // canonical bytes (I-22)
 	}
 	switch c.Op {
 	case OpSetVolume:
@@ -858,9 +934,14 @@ func DecodeCommand(b []byte) (Command, error) {
 		p.Now = r.i64()
 		c.SecretKeyInit = p
 	case OpSecretPut:
-		c.SecretPut = &SecretPut{Secret: readSecret(r), Now: r.i64()}
+		c.SecretPut = &SecretPut{Secret: readSecret(r, v == commandVersionV14), Now: r.i64()}
+		if r.err == nil && (v == commandVersionV14) != (c.SecretPut.Secret.ByUser != 0) {
+			return c, fmt.Errorf("meta: a secret's user is written in command version 14 and only it") // canonical bytes (I-22)
+		}
 	case OpSecretDelete:
 		c.SecretDelete = &SecretDelete{Name: r.str(), All: r.bool(), Now: r.i64()}
+	case OpInvite, OpUser, OpGroup, OpGrant, OpSession:
+		readUsersPayload(r, &c)
 	default:
 		return c, fmt.Errorf("meta: unknown op %d", c.Op)
 	}

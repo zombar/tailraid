@@ -10,9 +10,11 @@ to a folder with a role; every mutating operation is signed by a user's key and 
 the browser signs a person in from a link their own CLI mints. Nothing here has a
 password.
 
-*Status (2026-10-14): designed, docs and lookdev only; the plan is
+*Status (2026-10-14): designed; the plan is
 `~/.claude/plans/let-s-get-a-plan-concurrent-flame.md`. The first PR, the files-on-disk
-posture of docs/08 (I-340, I-341), is built. The rest lands in six PRs after the mesh
+posture of docs/08 (I-340, I-341), is built, and so is `users-meta` (§1, §3, §4, the
+FSM halves of §6 and §7: the rows, ops 28–32, codec 14 and frame 14, `meta.Access`, the
+checks in apply). The rest lands after the mesh
 (docs/20) and 1.0.0: `users-meta` (§1, §3, §4), `users-auth` (§2, §7, the CLI),
 `users-gateways` (§5), `users-web` (§6, with the session op of `users-meta`), `users-audit` (§8), `users-soak` (§10). The
 invariants I-342..I-359 are stubs in `test/invariants/users_stubs_test.go` until then.*
@@ -494,21 +496,21 @@ stub in `test/invariants/` meanwhile.
 
 | Invariant | Tests |
 |---|---|
-| I-342 | TestUsers_Apply_Table, TestUsers_Bounds_Table, TestUsers_RemovedNameReinvited, TestUsers_NoPrivateKeyInState |
-| I-343 | TestInvite_ConsumedOnce, TestInvite_ExpiredAndUsedRefused, TestInvite_RateLimitedPerSource, TestCLI_Init_PrintsAdminInvite, TestCLI_UserBootstrap |
+| I-342 | `TestUsers_Apply_Table`, `TestUsers_Bounds_Table`, `TestUsers_RemovedNameReinvited`, `TestUsers_NoPrivateKeyInState` |
+| I-343 | `TestInvite_ConsumedOnce`, `TestInvite_ExpiredAndUsedRefused`, `TestUsers_Apply_Table`; planned (users-auth): TestInvite_RateLimitedPerSource, TestCLI_Init_PrintsAdminInvite, TestCLI_UserBootstrap |
 | I-344 | TestSig_Vectors, TestSig_SkewAndReplay_Table, TestSig_TargetNodeBound, TestSig_FailureLockout, TestRPC_MutatingOpsNeedSignature |
 | I-345 | TestAdminOp_Needs_Exhaustive, TestAdminOp_PathResolvesBeforeCheck |
-| I-346 | TestGroups_Builtin, TestGroups_LastAdminLockout |
-| I-347 | TestAccess_Table, TestAccess_NNodeDeterminism |
-| I-348 | TestAccess_Roles_Table, TestAccess_ListingFilter, TestAccess_TrashAndSnapshotPaths, TestAccess_TailraidTreeExcluded |
-| I-349 | TestFSM_ActorEnforced_Table, TestFSM_SystemTable, TestFSM_EnforcementOffBeforeUsers, TestCodec14_OlderReaderRefuses, TestModelCheck_Long |
+| I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
+| I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
+| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`; planned (users-gateways): TestAccess_ListingFilter, TestAccess_SnapshotPaths |
+| I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`; planned (users-gateways, once the mounts carry actors): the users steps of TestModelCheck_Long |
 | I-350 | TestBindings_File, TestBindings_OwnUidNeverSudo, TestNFS_UnboundIsNobody |
 | I-351 | TestNFS_AuthSysActor, TestNFS_DRCKeyedOnCred, TestNFS_ModeFromRole |
 | I-352 | TestSMB_TreeConnectActor, TestSMB_UnboundDenied |
 | I-353 | TestVFS_As_StampsActor, TestVFS_As_ReadCheck, TestWAL_RecordsActor, FuzzWAL |
-| I-354 | TestWebUI_Login_CodeOnce, TestWebUI_Session_Lifecycle_Table, TestWebUI_SessionOnEveryNode, TestWebUI_HandoffBetweenNodes, TestWebUI_MemberAddressAlone_Refused, TestWebUI_RevokedAtNextRequest |
+| I-354 | `TestSessions_Apply` (the FSM's rows); planned (users-web): TestWebUI_Login_CodeOnce, TestWebUI_Session_Lifecycle_Table, TestWebUI_SessionOnEveryNode, TestWebUI_HandoffBetweenNodes, TestWebUI_MemberAddressAlone_Refused, TestWebUI_RevokedAtNextRequest |
 | I-355 | TestWebUI_RoutesFilterByRole, TestWebUI_ThumbPut_SystemAfterRead |
-| I-356 | TestSecrets_PersonalNamespace, TestSecrets_GetOwnerOnly, TestSecrets_SystemNeverPrinted, TestSecrets_ConsumersInProcess |
+| I-356 | `TestSecrets_PersonalNamespace` (the FSM's owner rule); planned (users-auth): TestSecrets_GetOwnerOnly, TestSecrets_SystemNeverPrinted, TestSecrets_ConsumersInProcess |
 | I-357 | TestAudit_OneRecordPerOp, TestAudit_RefusalRateLimit, TestAudit_LeaderOnly |
 | I-358 | TestAudit_ChainHash, TestAudit_Retention_Table, TestAudit_Ls_Filters, TestStatus_Users, TestCheck_DormantWarning |
 | I-359 | TestConfig_Validate_Table |

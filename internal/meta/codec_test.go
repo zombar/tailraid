@@ -13,7 +13,7 @@ func TestCodec_StateRoundTrip(t *testing.T) {
 	if err := EncodeState(&buf, s); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x0b")) {
+	if !bytes.HasPrefix(buf.Bytes(), []byte("TRM1\x0e")) {
 		t.Fatalf("bad header %x", buf.Bytes()[:5])
 	}
 	got, err := DecodeState(bytes.NewReader(buf.Bytes()))
