@@ -2,6 +2,7 @@
 package admin
 
 import (
+	"encoding/base64"
 	"fmt"
 	"runtime"
 	"sort"
@@ -239,6 +240,7 @@ type Report struct {
 	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	Mesh                *MeshReport    `json:"mesh,omitempty"`    // this node's device and its paths (docs/20 §10, I-325)
+	Pending             []PendingRow   `json:"pending,omitempty"` // devices introduced and not yet joined (docs/20 §4)
 	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
 	Mirrors             []MirrorReport `json:"mirrors,omitempty"` // this host's mirrors (docs/16, docs/12 §11)
 	GeneratedAt         time.Time      `json:"generated_at"`
@@ -338,6 +340,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		rep.Nodes = append(rep.Nodes, r)
 	}
 	sort.Slice(rep.Nodes, func(i, j int) bool { return rep.Nodes[i].Idx < rep.Nodes[j].Idx })
+	for _, pd := range st.Pending() {
+		rep.Pending = append(rep.Pending, PendingRow{Key: base64.StdEncoding.EncodeToString(pd.Key[:]), Addr: pd.Addr, At: time.Unix(0, pd.At)})
+	}
 	var used uint64
 	rep.Volume.UsableCapacity, used, rep.Volume.Free = meta.Usage(vol, nodes, stats)
 	if used > 0 {
@@ -506,6 +511,14 @@ func liveSnapshots(rows []meta.Snapshot) int {
 		}
 	}
 	return n
+}
+
+// PendingRow is a device the leader allocated an address to on its introduce, waiting for
+// its join (docs/20 §4); the row expires on the leader's tick.
+type PendingRow struct {
+	Key  string    `json:"key"` // the device's public key, base64
+	Addr string    `json:"addr"`
+	At   time.Time `json:"at"` // when it was introduced
 }
 
 // MeshReport is this node's device as `status` shows it (docs/20 §10, I-325).

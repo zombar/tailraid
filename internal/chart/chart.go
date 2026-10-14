@@ -46,6 +46,7 @@ const (
 	OK   Status = "chart-ok"
 	Warn Status = "chart-warn"
 	Bad  Status = "chart-bad"
+	Off  Status = "chart-off" // grey: a cell that is neither good nor bad (a relayed path)
 )
 
 // Cell is one coloured cell of a lane or a strip at x.

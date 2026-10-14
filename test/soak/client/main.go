@@ -24,7 +24,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -47,14 +50,15 @@ import (
 
 func main() {
 	if len(os.Args) != 5 || os.Args[1] != "worker" {
-		fmt.Fprintln(os.Stderr, "usage: soak-client worker <listen> <nfs gateway host:port> <node rpc host:port>")
+		fmt.Fprintln(os.Stderr, "usage: soak-client worker <listen> <nfs gateway host:port> <mesh interface>")
 		os.Exit(2)
 	}
 	// same log format as the nodes (TAILRAID_LOG_FORMAT / TAILRAID_LOG_LEVEL)
 	logger := config.Default().Logger().With("src", "soak-worker")
 	slog.SetDefault(logger)
-	w := &worker{nfsAddr: os.Args[3], rpcAddr: os.Args[4]}
+	w := &worker{nfsAddr: os.Args[3], ifname: os.Args[4]}
 	w.setupChain()
+	go w.serveWebProxy(logger)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", w.ready)
 	mux.HandleFunc("POST /fs", w.fs)
@@ -70,7 +74,7 @@ func main() {
 		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_ = pprof.Lookup("goroutine").WriteTo(rw, 2)
 	})
-	logger.Info("soak worker listening", "addr", os.Args[2], "nfs", w.nfsAddr, "rpc", w.rpcAddr)
+	logger.Info("soak worker listening", "addr", os.Args[2], "nfs", w.nfsAddr, "mesh interface", w.ifname)
 	srv := &http.Server{Addr: os.Args[2], Handler: mux, ReadHeaderTimeout: 5 * time.Second, ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}
 	if err := srv.ListenAndServe(); err != nil {
 		logger.Error("worker stopped", "err", err)
@@ -79,7 +83,8 @@ func main() {
 }
 
 type worker struct {
-	nfsAddr, rpcAddr string
+	nfsAddr string
+	ifname  string // the node's mesh interface (docs/20 §1): its address carries the RPC and the browser UI
 
 	mu     sync.Mutex
 	tgt    *nfsc.Target
@@ -424,14 +429,78 @@ type rpcResp struct {
 	Error string `json:"error,omitempty"`
 }
 
+// meshAddr is the node's mesh address, read from its interface each time: the worker
+// shares the node's network namespace, and the address exists only once the node has
+// joined (a joiner gets it from the introduce, docs/20 §4).
+func (w *worker) meshAddr() (string, error) {
+	ifc, err := net.InterfaceByName(w.ifname)
+	if err != nil {
+		return "", fmt.Errorf("mesh interface %s: %w", w.ifname, err)
+	}
+	addrs, err := ifc.Addrs()
+	if err != nil {
+		return "", err
+	}
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil {
+			return ipn.IP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("mesh interface %s has no IPv4 address yet", w.ifname)
+}
+
+// rpcAddr is the node's RPC on its mesh address.
+func (w *worker) rpcAddr() (string, error) {
+	addr, err := w.meshAddr()
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(addr, rpcPort), nil
+}
+
+// The node's ports on its mesh address, and the worker's proxy of the browser UI: the
+// compose files publish webProxyAddr, since a published port reaches the container's
+// network address and not its mesh address.
+const (
+	rpcPort      = "20481"
+	webPort      = "20482"
+	webProxyAddr = "0.0.0.0:20496"
+)
+
+// serveWebProxy serves the node's browser UI (docs/13) on webProxyAddr, resolving the mesh
+// address per request and naming it in the Host header, which the UI's check expects
+// (I-127); the paths are passed through unchanged (api.ts uses absolute /api/ paths).
+func (w *worker) serveWebProxy(logger *slog.Logger) {
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			addr, err := w.meshAddr()
+			if err != nil {
+				addr = "127.0.0.1" // refused by nothing listening: a 502 to the driver
+			}
+			target := &url.URL{Scheme: "http", Host: net.JoinHostPort(addr, webPort)}
+			r.SetURL(target)
+			r.Out.Host = target.Host
+		},
+		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+	}
+	srv := &http.Server{Addr: webProxyAddr, Handler: proxy, ReadHeaderTimeout: 5 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
+		logger.Error("web proxy stopped", "err", err)
+	}
+}
+
 func (w *worker) rpcClient(ctx context.Context) (*rpc.Client, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.client != nil {
 		return w.client, nil
 	}
+	addr, err := w.rpcAddr()
+	if err != nil {
+		return nil, err
+	}
 	probe := rpc.NewClient([16]byte{}, nil)
-	h, err := probe.Health(ctx, w.rpcAddr)
+	h, err := probe.Health(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -455,9 +524,13 @@ func (w *worker) rpc(rw http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	c, err := w.rpcClient(ctx)
+	addr := ""
+	if err == nil {
+		addr, err = w.rpcAddr()
+	}
 	if err != nil {
 		resp.Error = err.Error()
-	} else if body, err := c.Call(ctx, w.rpcAddr, req.Method, req.Path, req.Body); err != nil {
+	} else if body, err := c.Call(ctx, addr, req.Method, req.Path, req.Body); err != nil {
 		resp.Error = err.Error()
 	} else {
 		resp.Body = body
@@ -501,9 +574,12 @@ func (w *worker) setupChain() {
 	}
 }
 
+// partition drops every packet to and from the addresses given; with udp set, only UDP
+// (the mesh's transport, docs/20 §5: the tunnel dies, the TCP rules stay untouched).
 func (w *worker) partition(rw http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IPs []string `json:"ips"`
+		UDP bool     `json:"udp"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&req); err != nil {
 		http.Error(rw, err.Error(), http.StatusBadRequest)
@@ -513,8 +589,12 @@ func (w *worker) partition(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	proto := []string{}
+	if req.UDP {
+		proto = []string{"-p", "udp"}
+	}
 	for _, ip := range req.IPs {
-		for _, rule := range [][]string{{"-A", "SOAK", "-s", ip, "-j", "DROP"}, {"-A", "SOAK", "-d", ip, "-j", "DROP"}} {
+		for _, rule := range [][]string{append(append([]string{"-A", "SOAK"}, proto...), "-s", ip, "-j", "DROP"), append(append([]string{"-A", "SOAK"}, proto...), "-d", ip, "-j", "DROP")} {
 			if err := iptables(rule...); err != nil {
 				http.Error(rw, err.Error(), http.StatusInternalServerError)
 				return

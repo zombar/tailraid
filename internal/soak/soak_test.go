@@ -766,10 +766,11 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	seed, rng := testseed.New(t)
 	// phases 22 and 23 need the gateways' retry-until-stale (production's) and run in
 	// tests of their own on such a cluster; this one's gateways fail fast for the other
-	// fault phases
+	// fault phases. Phases 25 and 26 need the mesh, which the harness never opens
+	// (TestSoak_MeshPhasesSkipWithoutMesh).
 	var all []string
 	for _, ph := range soak.StandardPhases() {
-		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" {
+		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" && num != "25" && num != "26" {
 			all = append(all, num)
 		}
 	}

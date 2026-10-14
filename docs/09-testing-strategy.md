@@ -606,7 +606,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
   bytes, overlay WAL depth, slots per node, network throughput, latency histograms, the
-  FSM-hash strip, the trash and the pinned cache over time, the snapshot count and each mirror's used bytes over time with a bar per snapshot of what it added to its mirror and the phase's round-trip table (drawn only when a snapshot was taken; the lookdev is `assets/lookdev/soak-snapshots.html`), and the data spread across disks (one lane per
+  FSM-hash strip, the trash and the pinned cache over time, the snapshot count and each mirror's used bytes over time with a bar per snapshot of what it added to its mirror and the phase's round-trip table (drawn only when a snapshot was taken; the lookdev is `assets/lookdev/soak-snapshots.html`), the mesh's figures (a lane per ordered pair with its path class over the run, each device's mesh traffic, the paths table and the join round-trip table, drawn only on a run whose samples carry paths; the lookdev is `assets/lookdev/soak-mesh.html`), and the data spread across disks (one lane per
   target grouped by host, each sample coloured by the target's slot share against its
   expected share, dead hatched, with a host-cap strip underneath that is green while no
   chunk exceeds the cap and amber while `domain_skew > 0`).

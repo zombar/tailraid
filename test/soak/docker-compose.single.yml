@@ -1,14 +1,15 @@
 # One tailraid node with four added disks (docs/14): the single-machine volume, where
 # redundancy is across disks only. Same images and entry script as docker-compose.yml;
 # run with `go run ./cmd/soak -topology single` (make soak-single). Phases that need
-# more than one host (parity, consensus, partition) report themselves skipped.
+# more than one host (parity, consensus, partition, the mesh phases) report themselves
+# skipped.
 services:
   n1:
     build: .
     cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
     environment:
-      IDENTITIES: "172.30.0.11=n1"
-      TOKEN: compose-token
+      TOKEN: soakcomposetoken
       TAILRAID_LOG_LEVEL: info
       TAILRAID_LOG_FORMAT: json
       K: "2"
@@ -18,23 +19,22 @@ services:
       FILL_AFTER: 20s
       DISKS: /disks/d1=8G /disks/d2=8G /disks/d3=8G /disks/d4=8G
       ROLE: init
-      SELF_IP: 172.30.0.11
       NODE_NAME: n1
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://$$SELF_IP:20481/health"]
+      test: ["CMD-SHELL", "curl -fsS \"http://$$(sed -n 's/.*\"addr\":\"\\([^\"]*\\)\".*/\\1/p' $$TAILRAID_HOME/mesh.json):20481/health\""]
       interval: 2s
       timeout: 2s
       retries: 30
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
-    ports: ["127.0.0.1:20501:20495", "127.0.0.1:20521:20482"]
-    volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-d3:/disks/d3', 'n1-d4:/disks/d4', 'n1-spare:/disks/spare']
+    ports: ["127.0.0.1:20501:20495", "127.0.0.1:20521:20496"]
+    volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-d3:/disks/d3', 'n1-d4:/disks/d4', 'n1-spare:/disks/spare', 'codes:/codes']
 
   w1:
     build: {context: ., dockerfile: Dockerfile.client}
     cap_add: [NET_ADMIN]
     environment: {TAILRAID_LOG_LEVEL: info, TAILRAID_LOG_FORMAT: json, SMB_PASSWORD: soak-copies} # the nodes' smb.password (entry.sh), phase 22
     network_mode: "service:n1"
-    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.11:20481"]
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "tailraid0"]
     depends_on: [n1]
 
 networks:
@@ -49,3 +49,4 @@ volumes:
   n1-d3: {}
   n1-d4: {}
   n1-spare: {}
+  codes: {}

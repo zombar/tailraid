@@ -111,9 +111,14 @@ type Sample struct {
 	SearchPending int                        `json:"search_pending"`        // candidates the leader's last pass left
 	Snapshots     int                        `json:"snapshots"`             // catalogue rows on every mirror (docs/16 §5)
 	MirrorUsed    map[string]int64           `json:"mirror_used,omitempty"` // bytes on each mirror of phase 19's host, by row name
-	HeapInuse     uint64                     `json:"heap_inuse"`            // the sampled node's process (docs/12 §8)
-	Sys           uint64                     `json:"sys"`
-	Goroutines    int                        `json:"goroutines"`
+	// the mesh (docs/20 §10): every device's path class to every other, "a>b" → lan, wan,
+	// relay or none, and each device's rx and tx counters; taken every fifth round on a
+	// mesh environment
+	Paths      map[string]string    `json:"paths,omitempty"`
+	MeshBytes  map[string][2]uint64 `json:"mesh_bytes,omitempty"`
+	HeapInuse  uint64               `json:"heap_inuse"` // the sampled node's process (docs/12 §8)
+	Sys        uint64               `json:"sys"`
+	Goroutines int                  `json:"goroutines"`
 	// the sampled node's machine vitals (docs/12 §8); rates are between this node's
 	// consecutive samples, zero when the OS does not expose the counter
 	CPUPct       float64 `json:"cpu_pct"`     // the process, percent of one CPU
@@ -578,6 +583,9 @@ func (r *Run) sample(ctx context.Context, round int) {
 	if round%5 == 0 {
 		if agree, _, ok := r.fsmAgreement(ctx); ok {
 			s.FSMAgree = &agree
+		}
+		if r.Env.Caps().Mesh {
+			s.Paths, s.MeshBytes = r.meshSample(ctx)
 		}
 	}
 	r.emit(Record{Kind: "sample", S: &s, Node: node})

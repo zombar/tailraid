@@ -44,7 +44,9 @@ type reportData struct {
 	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
 	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
 	RoundTrip  string
-	PeakSkew   int // most chunks above the host cap in any sample
+	MeshPairs  []pairView // phase 26's paths table (docs/20), empty off a mesh
+	MeshJoin   *joinView  // phase 25's round trip, nil when no late device joined
+	PeakSkew   int        // most chunks above the host cap in any sample
 	Generated  string
 	Throughput string
 	Mark       template.HTML // the logo mark, inline
@@ -197,6 +199,9 @@ func buildReport(s Summary) reportData {
 	snapCharts, snaps, roundTrip := snapshotFigures(s)
 	d.Charts = append(d.Charts, snapCharts...)
 	d.Snapshots, d.RoundTrip = snaps, roundTrip
+	meshCharts, pairs, join := meshFigures(s)
+	d.Charts = append(d.Charts, meshCharts...)
+	d.MeshPairs, d.MeshJoin = pairs, join
 	var spread []*Sample
 	for i := range s.Records {
 		if s.Records[i].Kind == "sample" && s.Records[i].S != nil {
@@ -531,6 +536,14 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <table><tr><th>Snapshot</th><th>Mirror</th><th>Taken</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Added</th><th>State</th><th>Read</th></tr>
 {{range .Snapshots}}<tr><td>{{.Name}}</td><td>{{.Mirror}}</td><td>{{.Taken}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Added}}</td><td>{{.State}}</td><td>{{.Read}}</td></tr>{{end}}
 {{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
+{{if .MeshPairs}}<h2>Mesh paths</h2>
+<p class="meta">phase 26 (docs/20 §5): every ordered pair as the first node sees the second, at the start of the phase; the lanes chart above has the class over the whole run</p>
+<table><tr><th>From</th><th>To</th><th>Class</th><th>Endpoint</th><th>Handshake</th></tr>
+{{range .MeshPairs}}<tr><td>{{.From}}</td><td>{{.To}}</td><td>{{.Class}}</td><td>{{.Endpoint}}</td><td>{{.Handshake}}</td></tr>{{end}}</table>{{end}}
+{{if .MeshJoin}}<h2>Join round trip</h2>
+<p class="meta">phase 25 (docs/20 §4): the late device {{.MeshJoin.Late}}, from the moment it was started, with the members that listed its pending row</p>
+<table><tr><th>Pending row seen</th><th>Joined and ready</th><th>Handshake with every member</th><th>Log caught up</th><th>Pending row on</th></tr>
+<tr><td class="num">{{.MeshJoin.Pending}}</td><td class="num">{{.MeshJoin.Join}}</td><td class="num">{{.MeshJoin.Handshake}}</td><td class="num">{{.MeshJoin.Log}}</td><td>{{.MeshJoin.PendingOn}}</td></tr></table>{{end}}
 {{if .Disks}}<h2>Disks</h2>
 <p class="meta">every placement target as of the last sample that held data, grouped by host (docs/14); expected is the capacity share capped at one slot per chunk; most chunks above the host cap in any sample: {{.PeakSkew}}</p>
 <table><tr><th>Host</th><th>Target</th><th class="num">Budget</th><th class="num">Slots</th><th class="num">Expected</th><th class="num">Δ</th><th>State</th></tr>

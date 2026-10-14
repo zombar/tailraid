@@ -1,13 +1,14 @@
 #!/bin/sh
 # Node entrypoint for the compose cluster. Env:
-#   ROLE=init|join   SELF_IP, NODE_NAME, LEADER (ip for join), TOKEN, K, M, VOTER
+#   ROLE=init|join|tryjoin   NODE_NAME, TOKEN (16 base32 characters), K, M, VOTER
+#   CODE_FILE (join and tryjoin: the file holding the join code; /codes/join by default,
+#   written by the init node from its own output)
 #   DISKS (space-separated disks, docs/14, each `path` or `path=capacity`; empty for a
 #   diskless host, docs/14 §9)
 #   MIRRORS (space-separated mirror paths, docs/16: listed under node.mirrors on every
 #   start, registered by `tailraid mirror add` from the driver), MIRRORS_EVERY
-#   DRIVER_IP (the address the driver's published-port connections arrive from, the
-#   compose bridge's gateway by default: the fake tailnet knows it as a device of the
-#   nodes' own user, so phase 16 reaches the browser UI under the same-user rule)
+# A file $TAILRAID_HOME/rejoin holding a code makes the next start reset the node's Raft
+# state and identity and join again by that code (phase 25).
 set -eu
 mkdir -p "$TAILRAID_HOME"
 # one log format for the whole container stream: shell messages and CLI output become
@@ -21,32 +22,7 @@ jsonlog() {
   done
 }
 say() { printf '%s\n' "$*" | jsonlog; }
-# per-node fake tailscale: this container is "self", the others are peers (docs/09 §soak).
-# The peers matter: join accepts an address only when the status lists it (or it is in
-# Tailscale's ranges, which 172.30/16 is not) and resolves a device name through them.
-cat > "$TAILRAID_HOME/ts.json" <<EOF
-{
-  "status": {
-    "BackendState": "Running",
-    "TailscaleIPs": ["$SELF_IP"],
-    "MagicDNSSuffix": "compose.invalid",
-    "Self": {"ID": "ts-$NODE_NAME", "HostName": "$NODE_NAME", "DNSName": "$NODE_NAME.compose.invalid.", "TailscaleIPs": ["$SELF_IP"], "Online": true},
-    "Peer": {
-$(echo "$IDENTITIES" | tr ',' '\n' | while IFS='=' read -r ip id; do
-    [ "$id" = "$NODE_NAME" ] && continue
-    printf '      "ts-%s": {"ID": "ts-%s", "HostName": "%s", "DNSName": "%s.compose.invalid.", "TailscaleIPs": ["%s"], "Online": true},\n' "$id" "$id" "$id" "$id" "$ip"
-  done | sed '$ s/,$//')
-    }
-  },
-  "whois": {
-$(echo "$IDENTITIES" | tr ',' '\n' | while IFS='=' read -r ip id; do
-    printf '    "%s": {"Node": {"StableID": "%s", "Name": "%s.compose.invalid.", "Addresses": ["%s/32"], "Hostinfo": {"Hostname": "%s", "OS": "linux"}}, "UserProfile": {"LoginName": "soak@compose.invalid"}},\n' "$ip" "ts-$id" "$id" "$ip" "$id"
-  done)
-    "${DRIVER_IP:-172.30.0.1}": {"Node": {"StableID": "ts-driver", "Name": "driver.compose.invalid.", "Addresses": ["${DRIVER_IP:-172.30.0.1}/32"], "Hostinfo": {"Hostname": "driver", "OS": "darwin"}}, "UserProfile": {"LoginName": "soak@compose.invalid"}}
-  }
-}
-EOF
-cat > "$TAILRAID_HOME/config.yaml" <<EOF
+cat > "$TAILRAID_HOME/config.yaml" <<EOF2
 node:
   name: $NODE_NAME
   data_dir: $TAILRAID_HOME/data
@@ -67,8 +43,7 @@ stats:
   every: ${STATS_EVERY:-5s}
 dev:
   enabled: true
-  tailscale_fake: $TAILRAID_HOME/ts.json
-EOF
+EOF2
 # init and join both register the disks the config lists (docs/14 §2, §9): a derived
 # budget for a bare path, a pinned one for `path=capacity`
 diskcfg() {
@@ -101,15 +76,40 @@ if [ -n "${MIRRORS:-}" ]; then
   sed -i "/^  voter:/r $TAILRAID_HOME/mirrors.yaml" "$TAILRAID_HOME/config.yaml"
   printf 'mirrors:\n  every: %s\n' "${MIRRORS_EVERY:-1m}" >> "$TAILRAID_HOME/config.yaml"
 fi
+# CLI output goes through jsonlog without losing the exit status (no pipefail in ash)
+cli() { "$@" > "$TAILRAID_HOME/cli.log" 2>&1; st=$?; jsonlog < "$TAILRAID_HOME/cli.log"; return $st; }
+code_file=${CODE_FILE:-/codes/join}
+wait_code() { # the code another container writes
+  until [ -s "$code_file" ]; do say "waiting for the join code in $code_file"; sleep 1; done
+}
+voter=; [ "${VOTER:-true}" = true ] && voter=--voter
+if [ "$ROLE" = tryjoin ]; then
+  # one join attempt by a throwaway device: its output and exit status are the result
+  wait_code
+  cli tailraid join "$(cat "$code_file")"
+  exit $?
+fi
+if [ -f "$TAILRAID_HOME/rejoin" ]; then
+  # a reset device joining again under its key (docs/20 §4, phase 25)
+  code=$(cat "$TAILRAID_HOME/rejoin"); rm -f "$TAILRAID_HOME/rejoin"
+  cli tailraid reset --yes --discard-dirty
+  if [ -n "${DISKS:-}" ]; then
+    diskcfg > "$TAILRAID_HOME/disks.yaml"
+    sed -i "/^  voter:/r $TAILRAID_HOME/disks.yaml" "$TAILRAID_HOME/config.yaml"
+  fi
+  until cli tailraid join "$code" ${voter:+"$voter"}; do say "join retry"; sleep 2; done
+fi
 if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then
-  # CLI output goes through jsonlog without losing the exit status (no pipefail in ash)
-  cli() { "$@" > "$TAILRAID_HOME/cli.log" 2>&1; st=$?; jsonlog < "$TAILRAID_HOME/cli.log"; return $st; }
   if [ "$ROLE" = init ]; then
     cli tailraid init --k "${K:-2}" --m "${M:-1}" --chunk "${CHUNK:-1M}" --token "$TOKEN"
+    # init prints the join code: the joiners read it from the shared volume
+    mkdir -p "$(dirname "$code_file")"
+    sed -n 's/^join from another device: tailraid join //p' "$TAILRAID_HOME/cli.log" > "$code_file.tmp"
+    [ -s "$code_file.tmp" ] || { say "init printed no join code"; exit 1; }
+    mv "$code_file.tmp" "$code_file"
   else
-    until curl -fsS "http://$LEADER:20481/health" >/dev/null 2>&1; do say "waiting for $LEADER"; sleep 1; done
-    voter=; [ "${VOTER:-true}" = true ] && voter=--voter
-    until cli tailraid join "$LEADER" "$TOKEN" ${voter:+"$voter"}; do say "join retry"; sleep 2; done
+    wait_code
+    until cli tailraid join "$(cat "$code_file")" ${voter:+"$voter"}; do say "join retry"; sleep 2; done
   fi
   if [ -n "${DISKS:-}" ]; then
     diskcfg > "$TAILRAID_HOME/disks.saved.yaml"

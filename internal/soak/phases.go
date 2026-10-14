@@ -48,6 +48,8 @@ var phases = []phase{
 	{"22 copies under faults", phaseCopies},
 	{"23 many users at once", phaseMultiUser},
 	{"24 secrets", phaseSecrets},
+	{"25 mesh join", phaseMeshJoin},
+	{"26 mesh paths", phaseMeshPaths},
 }
 
 // model is the client's belief about the corpus: path → content.

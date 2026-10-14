@@ -83,7 +83,7 @@ test-mount:
 soak: soak-binary
 	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
-	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose down -v >/dev/null; exit $$status
+	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose --profile late down -v >/dev/null; exit $$status
 
 ## soak-binary: static linux binaries for the compose images (arch follows the Docker engine)
 soak-binary:
@@ -100,7 +100,7 @@ soak-single: soak-binary
 soak-full: soak-binary
 	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile full --out report.html --results results.jsonl; \
-	status=$$?; cd test/soak && docker compose down -v >/dev/null; exit $$status
+	status=$$?; cd test/soak && docker compose --profile late down -v >/dev/null; exit $$status
 
 ## vms-setup: install the three-VM rig's host tooling (Tart, Packer, QEMU, socket_vmnet; docs/vms.md)
 vms-setup:
