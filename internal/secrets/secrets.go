@@ -71,6 +71,9 @@ type Store struct {
 	mu     sync.Mutex
 	key    []byte            // the cluster key, once read and checked
 	opened map[string]opened // Opened's values by name
+	// making serializes EnsureKey's make on this node, so the leader's tick and a
+	// secret set at once propose one key and the second takes the first's (I-305)
+	making sync.Mutex
 }
 
 // opened is a value Opened decrypted, kept while its secret is unchanged.
@@ -141,39 +144,29 @@ func (s *Store) Key(ctx context.Context) ([]byte, error) {
 	if want == (meta.KeyID{}) {
 		return nil, ErrNoKey
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.key != nil && IDOf(s.key) == want {
-		return s.key, nil
-	}
-	acct := account(s.State.Meta().ClusterID)
-	if v, _, err := s.Keys.Get(acct); err == nil {
-		if k, err := base64.StdEncoding.DecodeString(v); err == nil && len(k) == KeySize && IDOf(k) == want {
-			s.key = k
-			return k, nil
-		}
+	if k, ok := s.held(want); ok {
+		return k, nil
 	}
 	if s.Fetch == nil {
 		return nil, ErrNoKey
 	}
+	// outside the lock: the member asked may be this node (the leader asking the
+	// leader), whose answer takes it
 	k, err := s.Fetch(ctx)
 	if err != nil || len(k) != KeySize || IDOf(k) != want {
 		return nil, ErrNoKey
 	}
-	if _, _, err := s.Keys.Set(acct, base64.StdEncoding.EncodeToString(k)); err != nil {
+	if _, _, err := s.Keys.Set(account(s.State.Meta().ClusterID), base64.StdEncoding.EncodeToString(k)); err != nil {
 		return nil, fmt.Errorf("secrets: keep the fetched key: %w", err)
 	}
+	s.mu.Lock()
 	s.key = k
+	s.mu.Unlock()
 	return k, nil
 }
 
-// Local is the key this node holds itself, for a member that asks (GET /v1/secrets/key):
-// never fetched, and only when its ID is the FSM's (I-304).
-func (s *Store) Local() ([]byte, bool) {
-	want := s.State.SecretKeyID()
-	if want == (meta.KeyID{}) {
-		return nil, false
-	}
+// held is the key of ID want this node holds, in memory or in its keychain.
+func (s *Store) held(want meta.KeyID) ([]byte, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.key != nil && IDOf(s.key) == want {
@@ -191,11 +184,23 @@ func (s *Store) Local() ([]byte, bool) {
 	return k, true
 }
 
+// Local is the key this node holds itself, for a member that asks (GET /v1/secrets/key):
+// never fetched, and only when its ID is the FSM's (I-304).
+func (s *Store) Local() ([]byte, bool) {
+	want := s.State.SecretKeyID()
+	if want == (meta.KeyID{}) {
+		return nil, false
+	}
+	return s.held(want)
+}
+
 // EnsureKey is the store's key, made now when the cluster has none: kept in the keychain
 // first, then its ID proposed; a node that loses the race fetches the winner's (I-305).
 // The leader runs it on its tick, so a cluster has its key from its first minute; a
 // `secret set` runs it too.
 func (s *Store) EnsureKey(ctx context.Context) ([]byte, error) {
+	s.making.Lock()
+	defer s.making.Unlock()
 	if s.State.SecretKeyID() != (meta.KeyID{}) {
 		return s.Key(ctx)
 	}

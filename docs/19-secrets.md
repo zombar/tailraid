@@ -61,8 +61,11 @@ stays in the node's config (15).
   has none (the node that ran `tailraid init` leads first, so a cluster has its key from
   its first minute): it keeps the key in its keychain and proposes its ID (op 23,
   `SecretKeyInit`, set only while `Meta.SecretKeyID` is empty). A `secret set` on a
-  cluster still without one makes it the same way. Of two nodes racing, one proposal
-  wins; the loser drops its key and fetches the winner's.
+  cluster still without one makes it the same way. A node makes at most one key at a
+  time (its tick and a `secret set` at once propose one, the second taking the first's),
+  and a fetch runs outside the store's lock, since the member asked may be the asker
+  itself. Of two nodes racing, one proposal wins; the loser drops its key and fetches the
+  winner's.
 - **Fetched on demand.** A node that needs the key and has none (a fresh `join`, a device
   after the upgrade, a reinstall) asks the members in turn, the leader first, with
   `GET /v1/secrets/key`: a member route (the WhoIs member check, I-18) that answers only

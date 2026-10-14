@@ -39,7 +39,7 @@ func newSecrets(node *cluster.Node, prober *cluster.Prober, client *rpc.Client, 
 	}
 	s.Fetch = func(ctx context.Context) ([]byte, error) {
 		addrs := []string{}
-		if l := node.LeaderRPCAddr(); l != "" {
+		if l := node.LeaderRPCAddr(); l != "" && !node.IsLeader() { // the leader never asks itself
 			addrs = append(addrs, l)
 		}
 		nodes := node.FSM.Nodes()
