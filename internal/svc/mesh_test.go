@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -34,8 +35,9 @@ func TestSvc_MeshPrivileges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pl.Files[0].Path != "/stage/app.tailraid.serve.plist" {
-		t.Errorf("plist staged at %s", pl.Files[0].Path)
+	staged := filepath.Join(p.Stage, "app.tailraid.serve.plist") // the host's separators: the plan is built on any OS
+	if pl.Files[0].Path != staged {
+		t.Errorf("plist staged at %s, want %s", pl.Files[0].Path, staged)
 	}
 	cmds := make([]string, 0, len(pl.Commands))
 	for _, c := range pl.Commands {
@@ -43,7 +45,7 @@ func TestSvc_MeshPrivileges(t *testing.T) {
 	}
 	for _, want := range []string{
 		"sudo launchctl bootout system " + LaunchDaemonPath,
-		"sudo install -m 644 -o root -g wheel /stage/app.tailraid.serve.plist " + LaunchDaemonPath,
+		"sudo install -m 644 -o root -g wheel " + staged + " " + LaunchDaemonPath,
 		"sudo launchctl bootstrap system " + LaunchDaemonPath,
 		"sudo launchctl kickstart -k system/app.tailraid.serve",
 	} {

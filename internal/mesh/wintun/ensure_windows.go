@@ -3,7 +3,6 @@
 package wintun
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -30,4 +29,4 @@ func EnsureDLL(dir string) (written bool, err error) {
 }
 
 // embedded reports the dll's size, for the tests.
-func embedded() int { return bytes.Count(dll, nil) - 1 }
+func embedded() int { return len(dll) }
