@@ -511,6 +511,13 @@ func (f *FSM) Traverses(user UserIdx, ino Ino) bool {
 	return Traverses(f.st, user, ino)
 }
 
+// IsAdmin, under the FSM's read lock: an active member of admins.
+func (f *FSM) IsAdmin(user UserIdx) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.st.isAdmin(user)
+}
+
 // Enforcing, under the FSM's read lock.
 func (f *FSM) Enforcing() bool {
 	f.mu.RLock()

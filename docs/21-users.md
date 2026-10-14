@@ -14,7 +14,9 @@ password.
 `~/.claude/plans/let-s-get-a-plan-concurrent-flame.md`. The first PR, the files-on-disk
 posture of docs/08 (I-340, I-341), is built, and so is `users-meta` (§1, §3, §4, the
 FSM halves of §6 and §7: the rows, ops 28–32, codec 14 and frame 14, `meta.Access`, the
-checks in apply). The rest lands after the mesh
+checks in apply) and `users-auth` (§2, the CLI of §9, the bindings file of §5, the
+personal secrets of §7: `internal/users`, the signed admin and member ops, the needs
+table, `init`'s admin invite and `user bootstrap`). The rest lands after the mesh
 (docs/20) and 1.0.0: `users-meta` (§1, §3, §4), `users-auth` (§2, §7, the CLI),
 `users-gateways` (§5), `users-web` (§6, with the session op of `users-meta`), `users-audit` (§8), `users-soak` (§10). The
 invariants I-342..I-359 are stubs in `test/invariants/users_stubs_test.go` until then.*
@@ -74,8 +76,10 @@ it does not reach. §11 maps each control to its mechanism here.
 
 ## 2. Signed requests (I-344, I-345)
 
-- **Every mutating admin operation** (`POST /v1/admin` ops that change anything, and the
-  new `/v1/users` route) carries a `Tailraid-Sig` header in the shape of RFC 9421 HTTP
+- **Every mutating admin operation** (`POST /v1/admin` and `POST /v1/members` ops that
+  change anything; `user create`, `user key add` and `user bootstrap` are the admin ops
+  that need none, the code or the bootstrap token being their credential) carries a
+  `Tailraid-Sig` header in the shape of RFC 9421 HTTP
   Message Signatures: `user=<name> key=<8-byte key ID> ts=<unix seconds> nonce=<16
   random bytes, hex> sig=<Ed25519 over cluster ID ‖ target node ID ‖ method ‖ path ‖
   SHA-256(body) ‖ ts ‖ nonce>`. The target node ID is in the signed bytes because the
@@ -268,11 +272,12 @@ it does not reach. §11 maps each control to its mechanism here.
 - **Reading.** `tailraid secret get <name>` prints the caller's own personal secret: a
   signed user operation the node answers for the owner only, admins included (an admin
   reads their own, never another user's), and every read is an audit record (§8). A
-  system value never crosses to a CLI: there is no `secret get --system`, admins `ls
-  --system` (name, set at, by which user), and the two consumers that fetched a system
-  value through the CLI (`node add-s3`, `media scrape`) open it inside the node, where
-  `add_s3` checks the bucket and the scrape asks TMDB with the value in process. The
-  admin route's `secret_get` answers personal names for their owner and nothing else.
+  system value is never printed: there is no `secret get --system`, and admins `ls
+  --system` (name, set at, by which user). The two consumers of a system value, `node
+  add-s3` and `media scrape`, run as an admin: their signed `secret_get` is answered for
+  an admin only, the value is used in the CLI's process (the bucket check, the TMDB call)
+  and never written out, and the read is an audit record. The admin route's `secret_get`
+  answers a personal name to its owner and a system name to an admin, and nothing else.
 - **Rows.** `Secret.By NodeIdx` keeps its meaning for rows written before codec 14;
   `ByUser UserIdx` is added at frame 14. Bounds: 256 system secrets and 64 per user. The
   cluster key, the per-name HKDF and AES-256-GCM, the key fetch and soak phase 24 are
@@ -399,8 +404,8 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   consumes the invite in the same apply as the row it creates, so of two devices
   presenting one code exactly one succeeds and an expired or used code leaves no row;
   `init` and `user bootstrap` mint an admin invite and never a key.
-- **I-344** — Every mutating admin operation and every `/v1/users` request carries a
-  `Tailraid-Sig` header signed over the cluster ID, the target node ID, the method, the
+- **I-344** — Every mutating admin and member operation carries a `Tailraid-Sig`
+  header signed over the cluster ID, the target node ID, the method, the
   path, the body's SHA-256, a timestamp and a 16-byte nonce; the node applies nothing
   unless it is the named target, the user is Active, the key is the user's, the
   timestamp is within `users.clock_skew` of its clock, the nonce is unseen on this node
@@ -468,11 +473,12 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   only after `Read` on the source file.
 - **I-356** — `secret set <name>` writes `user/<caller>/<name>` and `--system` the
   unprefixed space for admins only; the FSM refuses a personal put by another actor and a
-  personal delete by anyone but the owner or an admin; `secret get` answers a personal
-  name to its owner only and is recorded in the audit log; no command and no admin
-  response carries a system value, and `node add-s3` and the scrape open theirs in
-  process; a secret records the user who set it; at most 256 system secrets and 64 per
-  user.
+  personal delete by anyone but the owner or an admin; `secret_get` answers a personal
+  name to its owner only and a system name to an admin only, each read recorded in the
+  audit log; no command prints a system value (`node add-s3` and the scrape use theirs
+  in process); `secret ls` lists the caller's own names and `--system` the system names
+  to an admin; a secret records the user who set it; at most 256 system secrets and 64
+  per user.
 - **I-357** — Every applied op 28–32 (a session's end included), secret put, delete and personal read, operation
   that needed `admins`, session mint and sign-in, key addition and removal, and every
   refusal (one record per actor per minute with a count) is an audit record with its
@@ -497,20 +503,20 @@ stub in `test/invariants/` meanwhile.
 | Invariant | Tests |
 |---|---|
 | I-342 | `TestUsers_Apply_Table`, `TestUsers_Bounds_Table`, `TestUsers_RemovedNameReinvited`, `TestUsers_NoPrivateKeyInState` |
-| I-343 | `TestInvite_ConsumedOnce`, `TestInvite_ExpiredAndUsedRefused`, `TestUsers_Apply_Table`; planned (users-auth): TestInvite_RateLimitedPerSource, TestCLI_Init_PrintsAdminInvite, TestCLI_UserBootstrap |
-| I-344 | TestSig_Vectors, TestSig_SkewAndReplay_Table, TestSig_TargetNodeBound, TestSig_FailureLockout, TestRPC_MutatingOpsNeedSignature |
-| I-345 | TestAdminOp_Needs_Exhaustive, TestAdminOp_PathResolvesBeforeCheck |
+| I-343 | `TestInvite_ConsumedOnce`, `TestInvite_ExpiredAndUsedRefused`, `TestUsers_Apply_Table`, `TestInvite_RateLimitedPerSource`, `TestCLI_Init_PrintsAdminInvite`, `TestCLI_UserBootstrap`, `TestCLI_UsersFlow`, `TestIdentity_Keychain` |
+| I-344 | `TestSig_Vectors`, `TestSig_SkewAndReplay_Table`, `TestSig_TargetNodeBound`, `TestSig_FailureLockout`, `TestRPC_MutatingOpsNeedSignature`, `TestCLI_UsersFlow` |
+| I-345 | `TestAdminOp_Needs_Exhaustive`, `TestAdminOp_Needs_Refinements`, `TestAdminOp_PathResolvesBeforeCheck`, `TestRPC_MutatingOpsNeedSignature` |
 | I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
 | I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
 | I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`; planned (users-gateways): TestAccess_ListingFilter, TestAccess_SnapshotPaths |
 | I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`; planned (users-gateways, once the mounts carry actors): the users steps of TestModelCheck_Long |
-| I-350 | TestBindings_File, TestBindings_OwnUidNeverSudo, TestNFS_UnboundIsNobody |
+| I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`; planned (users-gateways): TestNFS_UnboundIsNobody |
 | I-351 | TestNFS_AuthSysActor, TestNFS_DRCKeyedOnCred, TestNFS_ModeFromRole |
 | I-352 | TestSMB_TreeConnectActor, TestSMB_UnboundDenied |
 | I-353 | TestVFS_As_StampsActor, TestVFS_As_ReadCheck, TestWAL_RecordsActor, FuzzWAL |
 | I-354 | `TestSessions_Apply` (the FSM's rows); planned (users-web): TestWebUI_Login_CodeOnce, TestWebUI_Session_Lifecycle_Table, TestWebUI_SessionOnEveryNode, TestWebUI_HandoffBetweenNodes, TestWebUI_MemberAddressAlone_Refused, TestWebUI_RevokedAtNextRequest |
 | I-355 | TestWebUI_RoutesFilterByRole, TestWebUI_ThumbPut_SystemAfterRead |
-| I-356 | `TestSecrets_PersonalNamespace` (the FSM's owner rule); planned (users-auth): TestSecrets_GetOwnerOnly, TestSecrets_SystemNeverPrinted, TestSecrets_ConsumersInProcess |
+| I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
 | I-357 | TestAudit_OneRecordPerOp, TestAudit_RefusalRateLimit, TestAudit_LeaderOnly |
 | I-358 | TestAudit_ChainHash, TestAudit_Retention_Table, TestAudit_Ls_Filters, TestStatus_Users, TestCheck_DormantWarning |
-| I-359 | TestConfig_Validate_Table |
+| I-359 | `TestConfig_Validate_Table` |

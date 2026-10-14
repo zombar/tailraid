@@ -19,6 +19,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/s3"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 // Resolver maps a node index to its RPC address; self reports whether it is this node.
@@ -38,6 +39,9 @@ type Client struct {
 	localDisk func(id string) ShardStore
 	s3Of      func(meta.NodeIdx) (*s3.Bucket, bool) // S3 targets (docs/10 §4.2)
 	clk       clock.Clock                           // the GET body deadline's timer (I-171)
+	// Sign, when set, signs a mutating request for the user running the CLI (docs/21 §2):
+	// the Tailraid-Sig header for a request to addr, or "" to send none.
+	Sign func(addr, method, path string, body []byte) (string, error)
 	// OnUnreachable, when set, is called with the node of a shard RPC that failed at the
 	// transport level (dial, header timeout, the call's own deadline), never for an HTTP
 	// status reply or a request the caller cancelled (docs/05 §6, I-170). Must not block.
@@ -155,6 +159,16 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
+	if c.Sign != nil && (path == "/v1/admin" || path == "/v1/members") {
+		// the user's signature on a mutating request (docs/21 §2, I-344)
+		h, err := c.Sign(addr, method, path, body)
+		if err != nil {
+			return nil, err
+		}
+		if h != "" {
+			req.Header.Set(users.Header, h)
+		}
+	}
 	if chunk.IsBackground(ctx) {
 		req.Header.Set(HeaderPriority, PriorityBackground) // the repairer's work yields slots (I-175)
 	}
@@ -205,6 +219,8 @@ func errFromStatus(resp *http.Response) error {
 		return chunk.ErrCorrupt
 	case http.StatusBadRequest:
 		return fmt.Errorf("%w: %s", ErrBadRequest, msg)
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%w: %s", ErrUnauthorized, msg)
 	case http.StatusInternalServerError:
 		return fmt.Errorf("%w: %s", ErrApplyFailed, msg)
 	}
@@ -581,6 +597,9 @@ func (c *Client) Health(ctx context.Context, addr string) (Health, error) {
 func (c *Client) ReportBadSlot(ctx context.Context, addr string, key chunk.ShardKey, node meta.NodeIdx) error {
 	return c.postJSON(ctx, addr, "/v1/bad-slot", BadSlot{Key: string(key), Node: node}, nil, http.StatusAccepted)
 }
+
+// ClusterID is the cluster the client speaks for, as hex.
+func (c *Client) ClusterID() string { return c.clusID }
 
 // Admin sends a maintenance operation and returns the raw JSON reply.
 // Call sends an arbitrary member request (status, admin, /dev/*) and returns the body of a

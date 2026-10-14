@@ -76,6 +76,7 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 	}
 	c := rpc.NewClient(cid, nil)
 	c.SetLocalIP(localIP)
+	c.Sign = userSigner(cmd.Context(), cid) // the person's signature on mutating requests (docs/21 §2)
 	return c, addr, cfg, nil
 }
 

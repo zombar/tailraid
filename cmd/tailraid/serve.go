@@ -23,6 +23,7 @@ import (
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/svc"
 	"github.com/zombar/tailraid/internal/update"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
@@ -36,6 +37,8 @@ func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
 	}
 	return c, path, nil
 }
+
+var adminName string // init --admin (docs/21 §1)
 
 func initCmd() *cobra.Command {
 	var k, m int
@@ -98,6 +101,30 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// the first admin's invite (docs/21 §1, I-343): init runs as root on macOS and
+			// has no keychain to put a key in, so it mints a code and the person creates
+			// their identity as themselves
+			if adminName == "" {
+				adminName = users.DefaultName(osUserName())
+			}
+			if !meta.UserName.MatchString(adminName) {
+				return fmt.Errorf("--admin %q: a user name is %s", adminName, meta.UserName)
+			}
+			inviteCode, err := users.NewCode()
+			if err != nil {
+				return err
+			}
+			now := time.Now()
+			res, index, err := n.Propose(cmd.Context(), meta.Command{Op: meta.OpInvite, InviteOp: &meta.InviteOp{Bootstrap: true, Invite: meta.Invite{Hash: meta.HashCode(inviteCode), Name: adminName, Kind: meta.InviteUser, Admin: true, ExpiresAt: now.Add(meta.InviteTTL).UnixNano()}, Now: now.UnixNano()}})
+			if err == nil {
+				err = res.Err
+			}
+			if err == nil {
+				err = n.FSM.WaitApplied(cmd.Context(), index)
+			}
+			if err != nil {
+				return fmt.Errorf("the admin invite: %w", err)
+			}
 			if err := node.Snapshot(cmd.Context(), n); err != nil { // the first serve restores the table from it (I-135)
 				return fmt.Errorf("snapshot after init: %w", err)
 			}
@@ -114,6 +141,7 @@ func initCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s\n",
 				cfg.Node.DataDir, id, ident.Addr, k, m, mode, chunkSize, path, code)
+			fmt.Fprintf(cmd.OutOrStdout(), "admin invite (24 h), once serve runs, as yourself (not sudo): tailraid user create %s %s\n", adminName, inviteCode)
 			printDisks(cmd.OutOrStdout(), cfg, disks)
 			return nil
 		},
@@ -126,6 +154,7 @@ func initCmd() *cobra.Command {
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	c.Flags().StringVar(&tokenFlag, "token", "", "join token (default: random; set for automation)")
 	c.Flags().StringVar(&subnet, "subnet", "", "the cluster's mesh /24 (default: derived from the cluster ID, docs/20 §3)")
+	c.Flags().StringVar(&adminName, "admin", "", "the first admin's name (default: yours; docs/21 §1)")
 	return c
 }
 

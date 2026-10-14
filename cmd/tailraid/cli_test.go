@@ -100,7 +100,7 @@ func runStdin(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
 	root := &cobra.Command{Use: "tailraid", SilenceUsage: true, SilenceErrors: true}
 	root.PersistentFlags().String("config", "", "")
-	root.AddCommand(initCmd(), joinCmd(), statusCmd(), nodeCmd(), volumeCmd(), dashboardCmd(), trashCmd(), cacheCmd(), statsCmd(), searchCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), exportCmd(), secretCmd(), mediaCmd())
+	root.AddCommand(initCmd(), joinCmd(), statusCmd(), nodeCmd(), volumeCmd(), dashboardCmd(), trashCmd(), cacheCmd(), statsCmd(), searchCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), exportCmd(), secretCmd(), mediaCmd(), userCmd(), groupCmd(), grantCmd(), revokeCmd(), accessCmd())
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
