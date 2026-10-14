@@ -245,6 +245,13 @@ func (m *Mesh) pinDirect(peer Key, to netip.AddrPort) {
 		m.log.Warn("mesh: pin probed endpoint", "err", err)
 		return
 	}
+	// a keepalive on the new path at once: the peer, still sending through the relay,
+	// learns this device's direct address from it and moves too; without it the peer's
+	// next relayed packet would roam this device back to the relay before anything had
+	// gone direct, and the pin would be lost every probe interval
+	if p := m.dev.LookupPeer(device.NoisePublicKey(peer)); p != nil {
+		p.SendKeepalive()
+	}
 	m.log.Info("mesh: moved to a direct path", "peer", peer.String(), "endpoint", to.String())
 }
 

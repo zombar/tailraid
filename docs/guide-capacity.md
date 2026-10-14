@@ -99,4 +99,4 @@ tailraid join <code> --voter    # on the VM; nothing under disks: in its config;
 tailraid install
 ```
 
-Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes. With its public address in `mesh.endpoint` the VM is also the device every other one can always reach, and the relay for pairs that cannot reach each other once that lands.
+Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes. With its public address in `mesh.endpoint` the VM is also the device every other one can always reach, and the relay for pairs that cannot reach each other directly.

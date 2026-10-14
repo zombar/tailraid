@@ -35,7 +35,7 @@ tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into
 | **One binary** | The same static executable is the daemon, the gateways and the CLI. Signed releases, `tailraid update` with rollback, and a service installer for launchd, systemd and Windows. |
 
 > [!IMPORTANT]
-> Every pair of devices needs a direct path (a LAN, IPv6, a port forward or the router's own port mapping, or the always-on cloud voter's public address) until the relay through a member lands ([docs/20](docs/20-mesh.md) §6). On macOS the service runs as root and `init`, `join`, `install` and `reset` need `sudo`; on Linux `join` does. Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
+> Two devices that cannot reach each other directly (both behind strict NATs) talk through a member both can reach, so give one always-on device a public address (`mesh.endpoint`) or a mapped port; a direct path (a LAN, IPv6, a port forward or the router's own port mapping) is the fast one ([docs/20](docs/20-mesh.md) §5–§7). On macOS the service runs as root and `init`, `join`, `install` and `reset` need `sudo`; on Linux `join` does. Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
 
 ## Install
 
