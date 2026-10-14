@@ -3,6 +3,7 @@ package admin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,9 @@ func TestEncryption_ParseManageBDE_Table(t *testing.T) {
 // not on a block device is unknown, and the longest mount point wins.
 // Invariant: I-341
 func TestEncryption_Linux_Table(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("a Linux function over a Linux mountinfo fixture: slash paths and /dev symlinks")
+	}
 	root := t.TempDir()
 	sys := filepath.Join(root, "block")
 	dev := filepath.Join(root, "dev")
