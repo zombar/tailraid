@@ -581,6 +581,11 @@ the WAL cap.
   one after it) cancels the inode's in-flight prefetches no READ has joined, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
   cancelled; a READ that joined a prefetch which then failed fetches the chunk itself
   and returns only its own result.
+- **I-310** — A finished prefetch is held by the chunk cache alone: the readahead table
+  drops a prefetch the moment it completes, joined or not, so the bytes a gateway keeps
+  for readahead are bounded by the prefetches in flight (`ReadAhead`) and the cache's
+  memory tier, never by how many files' heads were read (on the real cluster, the web UI
+  reading thousands of file heads had kept 6.7 GB of decoded chunks alive on one node).
 - **I-261** — While a file has unflushed writes on a gateway, that gateway reports its
   mtime and ctime as the time of its last write or truncate there (the mtime a client set
   after it, when one did), never earlier than the committed times, as it reports the
@@ -616,6 +621,7 @@ the WAL cap.
 | I-168 | `TestWAL_GroupCommit_OneFsyncCoversConcurrentAppends`, `TestWAL_GroupCommit_FailedFsyncFailsEveryWaiter`, `TestWAL_GroupCommit_LateAppendWaitsForNextFsync`, `TestOverlay_PendingWrite_NotVisibleUntilFsynced`, `TestOverlay_FailedGroupFsync_DropsEveryPendingWrite`, `TestOverlay_CommitFlushed_WaitsForPendingAppend`, `TestOverlay_WriteDoesNotHoldInodeLockDuringFsync`, `TestOverlay_TruncateDuringPendingAppend_MatchesReplay` |
 | I-201 | `TestFSM_Commit_SumsPureFunctionOfChunk`, `TestFSM_SetShardSums_Table`, `TestFSM_SetPlacement_PolicyChangeClearsSums`, `TestFlusher_CommitCarriesSumsOnlyAtCodec5`, `TestRepair_BackfillSums_Bounded`, `TestCluster_V5CommitWithoutSumsWhileMemberOld`, `TestCodec_ReadsVersion4Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V5Gating`, `FuzzDecodeCommand` |
 | I-219 | `TestFlusher_CommitRefusedForCodec_CommitsWithoutSums`, `TestRepair_BackfillSums_WaitsForCodec5` |
+| I-310 | `TestReader_Readahead_FinishedPrefetchNotRetained` |
 | I-203 | `TestReader_Readahead_DepthByBytes_Table`, `TestReader_Readahead_PrefetchIsBackgroundPriority`, `TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch`, `TestReader_Readahead_JoinedPrefetchSurvivesCancel`, `TestFile_ReadAt_PrefetchStartsAfterTheRead`, `TestReader_Readahead_ReadInSameChunkKeepsPrefetches`, `TestReader_JoinedPrefetchFailure_ReadFetchesItself` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip`, `TestReader_Readahead_SameChunkReadRetriesSkippedCandidates` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenClusterFull`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |

@@ -135,6 +135,7 @@ type fetchCall struct {
 	data     []byte
 	err      error
 	prefetch bool               // started by readahead, not by a READ
+	ino      meta.Ino           // a prefetch's inode: its entry in Reader.pf, dropped when it finishes (I-310)
 	joined   bool               // a READ waited on this prefetch (under Reader.mu; counted once, not again on the cache hit)
 	cancel   context.CancelFunc // a prefetch's context: cut when its client seeks away unjoined (I-203)
 
@@ -318,9 +319,9 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 			continue
 		}
 		pctx, cancel := context.WithCancel(chunk.Background(r.stop))
-		call := &fetchCall{done: make(chan struct{}), prefetch: true, cancel: cancel}
+		call := &fetchCall{done: make(chan struct{}), prefetch: true, ino: in.Ino, cancel: cancel}
 		r.inflight[h] = call
-		r.pf[in.Ino] = append(r.pruneLocked(r.pf[in.Ino]), call)
+		r.pf[in.Ino] = append(r.pf[in.Ino], call)
 		r.bg.Add(1) // under mu while not closed: never concurrent with Close's Wait
 		r.mu.Unlock()
 		r.prefetching.Add(1)
@@ -360,17 +361,19 @@ func (r *Reader) cancelUnjoinedLocked(ino meta.Ino) {
 	delete(r.pf, ino)
 }
 
-// pruneLocked drops the finished calls from an inode's prefetch list.
-func (r *Reader) pruneLocked(calls []*fetchCall) []*fetchCall {
-	live := calls[:0]
-	for _, call := range calls {
-		select {
-		case <-call.done:
-		default:
-			live = append(live, call)
-		}
+// forgetPrefetchLocked drops a finished prefetch from its inode's list: the cache holds
+// its chunk from here on, and a list entry would keep the decoded chunk and its shards
+// alive until the inode is read again (I-310). The caller holds r.mu.
+func (r *Reader) forgetPrefetchLocked(call *fetchCall) {
+	calls := r.pf[call.ino]
+	if i := slices.Index(calls, call); i >= 0 {
+		calls = slices.Delete(calls, i, i+1)
 	}
-	return live
+	if len(calls) == 0 {
+		delete(r.pf, call.ino)
+		return
+	}
+	r.pf[call.ino] = calls
 }
 
 // run performs the fetch registered as call and settles every waiter. A caller looks in
@@ -385,6 +388,9 @@ func (r *Reader) run(ctx context.Context, h meta.Hash, call *fetchCall) ([]byte,
 	call.finish()
 	r.mu.Lock()
 	delete(r.inflight, h)
+	if call.prefetch {
+		r.forgetPrefetchLocked(call)
+	}
 	if call.prefetch && call.err == nil && !call.joined {
 		if len(r.prefetched) >= hintCap {
 			clear(r.prefetched)
