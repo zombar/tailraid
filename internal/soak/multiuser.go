@@ -424,11 +424,8 @@ func (m *multi) readWhileWritten(ctx context.Context, label, rdir string) error 
 	var perr error
 	done := false
 	for range 200 {
-		// the worker forgets a job once it has reported it ended: the poll that sees the
-		// end keeps its results
-		if done, results, perr = job.Poll(ctx); done || perr != nil {
-			break
-		}
+		// a read first, then the poll: a copy that ends within the first interval (a fast
+		// rig) has still been read once while it ran, since the job had started
 		got, err := m.r.volume(b).ReadAll(p)
 		if err == nil {
 			reads++
@@ -442,6 +439,11 @@ func (m *multi) readWhileWritten(ctx context.Context, label, rdir string) error 
 					break
 				}
 			}
+		}
+		// the worker forgets a job once it has reported it ended: the poll that sees the
+		// end keeps its results
+		if done, results, perr = job.Poll(ctx); done || perr != nil {
+			break
 		}
 		if err := m.r.Env.Wait(ctx, 100*time.Millisecond); err != nil {
 			return err
