@@ -14,7 +14,7 @@ password.
 `~/.claude/plans/let-s-get-a-plan-concurrent-flame.md`. The first PR, the files-on-disk
 posture of docs/08 (I-340, I-341), is built. The rest lands in six PRs after the mesh
 (docs/20) and 1.0.0: `users-meta` (§1, §3, §4), `users-auth` (§2, §7, the CLI),
-`users-gateways` (§5), `users-web` (§6), `users-audit` (§8), `users-soak` (§10). The
+`users-gateways` (§5), `users-web` (§6, with the session op of `users-meta`), `users-audit` (§8), `users-soak` (§10). The
 invariants I-342..I-359 are stubs in `test/invariants/users_stubs_test.go` until then.*
 
 **What the standards ask for, and what this is.** ISO/IEC 27001 certifies an
@@ -146,8 +146,8 @@ it does not reach. §11 maps each control to its mechanism here.
 ## 4. Enforcement in the FSM (I-349)
 
 - **Every command carries its actor.** `Command` gains `Actor UserIdx` and `System bool`
-  at codec 14 (`meta.CodecUsers`, snapshot frame 14, ops 28–31: `Invite`, `User`,
-  `Group`, `Grant`; docs/02 §Codec versions). `CommandCodec` answers 14 when either is
+  at codec 14 (`meta.CodecUsers`, snapshot frame 14, ops 28–32: `Invite`, `User`,
+  `Group`, `Grant`, `Session`; docs/02 §Codec versions). `CommandCodec` answers 14 when either is
   set. The FSM refuses the user-facing operations (`Create`, `Mkdir`, `Unlink`, `Rmdir`,
   `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit` of a `RewriteStart`)
   with `ErrAccess` (a new wire code, the list is append-only) unless `Access(actor,
@@ -225,16 +225,26 @@ it does not reach. §11 maps each control to its mechanism here.
 
 ## 6. Signing in to the browser (I-354, I-355)
 
-- **No password here either.** `tailraid web login [--node <name>]`, a signed user
-  operation, mints a one-time code on that node (five minutes, single use) and prints
-  `http://<mesh IP>:20482/login?code=…`. Opening it sets a session cookie (`HttpOnly`,
-  `SameSite=Strict`, 32 random bytes) bound to the user and the key ID that minted it,
-  kept in the node's memory only (a restart means signing in again), absolute lifetime
-  `users.session` (168 h). `tailraid web logout [--all]` drops a user's sessions on the
-  node asked. There is no apply hook for revocation: every request re-reads the user's
-  row from the replica, so a disabled user or a removed key is refused at its next request
-  on every node without any plumbing. Sessions are per node; a cluster-wide session table
-  is in §12.
+- **A person signs in to the volume, not to a node.** `tailraid web login`, a signed user
+  operation, proposes a session row `Session{Hash, User, Key, ExpiresAt, By}` (op 32:
+  the SHA-256 of 32 random bytes, the user, the key ID that minted it, `users.session`
+  (168 h) from now; at most 16 open sessions per user, the oldest replaced) and prints
+  `http://<this device's mesh IP>:20482/login?code=…`, a one-time code good for five
+  minutes that carries the session token to the browser; `--node <name>` only chooses
+  which member's address the link points at (a phone that reaches one address and not
+  another). Opening the link sets a cookie (`HttpOnly`, `SameSite=Strict`) holding the
+  token on that origin, and every node validates a token against its replica: the
+  session is cluster-wide, survives any node's restart, and `tailraid web logout
+  [--all]` removes the row, which ends it everywhere. Revocation needs no hook: a
+  request re-reads the session's user row, so a disabled user or a removed key is refused
+  at its next request on every node.
+- **Across nodes.** A browser cookie belongs to one origin and each node's page is its
+  own origin (`<its address>:20482`), so a link from one node's page to another's (the
+  member menu of the Stats page, docs/17; the dashboard's Mesh section, docs/20 §10)
+  carries a hand-off: the page asks its node for a one-time code minted from the
+  session (`GET /api/handoff?to=…`, five minutes, single use) and the target's `/login`
+  sets its own cookie for the same session and continues to the page asked for. A person
+  signs in once, on any node, and follows links between nodes without signing in again.
 - **The sign-in page** (`/login` and `/assets/*` are the only routes without a session;
   a member device's address alone no longer admits a browser, docs/13 §2 and I-68) shows
   the one command to run and nothing else; the header gains the account chip (the name,
@@ -268,7 +278,7 @@ it does not reach. §11 maps each control to its mechanism here.
 
 ## 8. The audit log (I-357, I-358)
 
-- **Records.** Every applied op 28–31, every secret put, delete and personal read, every
+- **Records.** Every applied op 28–32, every secret put, delete and personal read, every
   operation that needed `admins`, every session mint and sign-in, every key added or
   removed, and every refusal (`401`, `403`, `ErrAccess`, `NFS3ERR_ACCES`,
   `STATUS_ACCESS_DENIED`; refusals rate-limited to one record per actor per minute with a
@@ -306,7 +316,7 @@ tailraid revoke <path> <user|@group>
 tailraid access ls [path]                        # the access review
 tailraid secret set <name> [--system] | get <name> | ls [--system] | rm <name> [--system] | rm --all
 tailraid audit ls [--since d] [--user u] [--kind k]
-tailraid web login [--node n] | logout [--all]
+tailraid web login [--node n] | logout [--all]   # a session of the volume; --node picks the address the link points at
 ```
 
 Config (I-359): `users.clock_skew` (5m; 1m..1h), `users.session` (168h; 1h..720h),
@@ -332,9 +342,10 @@ refused outside its bounds by `Validate` (I-126).
   still reach their system values in process; the personal secret removed at the end,
   whatever happened.
 - **31 audit and sessions.** Every operation of phases 28–30 has one record with its
-  actor; refusals are counted and rate-limited; `web login` on a node signs the harness's
-  browser in, a page lists only the user's folders, `logout` ends the session, a removed
-  key ends it at the next request; the chain hash of a segment verifies; retention drops a
+  actor; refusals are counted and rate-limited; `web login` on one node signs the
+  harness's browser in, the same session is honoured by every other node's page through
+  the hand-off, a page lists only the user's folders, `logout` on any node ends the
+  session everywhere, a removed key ends it at the next request; the chain hash of a segment verifies; retention drops a
   segment older than `audit.retention` on a fake clock.
 
 The report gains a Users section: the round-trip table of the invite, the grant matrix
@@ -364,8 +375,8 @@ organisation's ISMS, its policies and its reviews are the operator's, not the pr
 ## 12. Non-goals
 
 Deny entries and ACL ordering; role hierarchies and separation-of-duty constraints beyond
-the `admins`/everyone split; quotas; user-signed Raft commands (§4); cluster-wide browser
-sessions; passkeys and WebAuthn (a later sign-in method the session layer would carry);
+the `admins`/everyone split; quotas; user-signed Raft commands (§4); one cookie for every
+node (each node's page is its own origin, §6); passkeys and WebAuthn (a later sign-in method the session layer would carry);
 a second factor; LDAP or OIDC federation; enforcing POSIX modes (they stay stored, docs/07);
 per-user S3 gateway keys (the gateway is deferred, docs/10); client peers that are not
 nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and nonce
@@ -440,12 +451,16 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   and list without `Read` on the local replica, filters listings as I-348 says, and keeps
   the actor on each open file for its `Commit`; a `vfs.FS` with no actor is the `System`
   writer and reaches `/.tailraid` only.
-- **I-354** — `web login` mints on the node asked a one-time code that expires in five
-  minutes; opening its URL sets an `HttpOnly`, `SameSite=Strict` cookie bound to the user
-  and the minting key, kept in memory, valid `users.session`; `/login` and `/assets/*`
-  are the only routes without a session and a member's address alone admits nothing;
-  every request re-reads the user's row, so a disabled user or a removed key is refused at
-  its next request; `web logout` drops the user's sessions on that node.
+- **I-354** — `web login` proposes a session row (the token's SHA-256, the user, the
+  minting key, an expiry `users.session` away; at most 16 per user) and prints a
+  one-time five-minute code that carries the token; opening the link on any node's
+  `/login` sets an `HttpOnly`, `SameSite=Strict` cookie for that origin, every node
+  validates a token against its replica, and a link between two nodes' pages carries a
+  one-time hand-off code that signs the second origin into the same session; `/login` and
+  `/assets/*` are the only routes without a session and a member's address alone admits
+  nothing; every request re-reads the session's user row, so a disabled user, a removed
+  key or a removed session is refused at its next request on every node; `web logout`
+  removes the row, `--all` every row of the user.
 - **I-355** — Every web route answers only what the session's user holds `Read` on and
   every mutation carries the user as its actor; `PUT /api/thumb` is proposed as `System`
   only after `Read` on the source file.
@@ -456,7 +471,7 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   response carries a system value, and `node add-s3` and the scrape open theirs in
   process; a secret records the user who set it; at most 256 system secrets and 64 per
   user.
-- **I-357** — Every applied op 28–31, secret put, delete and personal read, operation
+- **I-357** — Every applied op 28–32 (a session's end included), secret put, delete and personal read, operation
   that needed `admins`, session mint and sign-in, key addition and removal, and every
   refusal (one record per actor per minute with a count) is an audit record with its
   time, log index, node, actor, key, kind, target, result and detail; applied operations
@@ -491,7 +506,7 @@ stub in `test/invariants/` meanwhile.
 | I-351 | TestNFS_AuthSysActor, TestNFS_DRCKeyedOnCred, TestNFS_ModeFromRole |
 | I-352 | TestSMB_TreeConnectActor, TestSMB_UnboundDenied |
 | I-353 | TestVFS_As_StampsActor, TestVFS_As_ReadCheck, TestWAL_RecordsActor, FuzzWAL |
-| I-354 | TestWebUI_Login_CodeOnce, TestWebUI_Session_Lifecycle_Table, TestWebUI_MemberAddressAlone_Refused, TestWebUI_RevokedAtNextRequest |
+| I-354 | TestWebUI_Login_CodeOnce, TestWebUI_Session_Lifecycle_Table, TestWebUI_SessionOnEveryNode, TestWebUI_HandoffBetweenNodes, TestWebUI_MemberAddressAlone_Refused, TestWebUI_RevokedAtNextRequest |
 | I-355 | TestWebUI_RoutesFilterByRole, TestWebUI_ThumbPut_SystemAfterRead |
 | I-356 | TestSecrets_PersonalNamespace, TestSecrets_GetOwnerOnly, TestSecrets_SystemNeverPrinted, TestSecrets_ConsumersInProcess |
 | I-357 | TestAudit_OneRecordPerOp, TestAudit_RefusalRateLimit, TestAudit_LeaderOnly |

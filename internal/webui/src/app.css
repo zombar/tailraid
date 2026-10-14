@@ -573,8 +573,8 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .account .signout:hover { color: var(--text); background: var(--surface); }
 /* the sign-in page: one card, one command */
 .signin { display: grid; justify-items: center; align-content: start; padding-top: var(--sp-8); }
-.signin-card { max-width: 520px; width: 100%; }
-.signin-cmd { font: 14px/1.5 var(--mono); margin: 0; padding: var(--sp-3) var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); user-select: all; overflow-x: auto; }
+.signin-card { max-width: 520px; width: 100%; min-width: 0; }
+.signin-cmd { font: 14px/1.5 var(--mono); margin: 0; padding: var(--sp-3) var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); user-select: all; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1199px) { .theme { width: 48px; padding: 0; } }
 @media (max-width: 1199px) { @media (pointer: fine) { .theme { width: 40px; } } }
 .menu-row .dot { grid-row: 1 / span 2; }
