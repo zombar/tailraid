@@ -313,7 +313,9 @@ OS, the CLI and the rigs).
   `AmbientCapabilities=CAP_NET_ADMIN` and `CapabilityBoundingSet=CAP_NET_ADMIN`
   (`NoNewPrivileges` keeps ambient capabilities; `/dev/net/tun` is reachable, since the
   unit sets no `PrivateDevices`); `After=network-online.target` alone, no tailscaled. A
-  `join` run by hand needs the capability too, so it runs under `sudo` and gives what it
+  `join` run by hand needs the capability too, so it runs under `sudo`, writes into the
+  invoking user's config home (`SUDO_USER`'s `~/.config/tailraid`, the one the user's
+  unit names: root's own home only when nothing says who invoked it) and gives what it
   wrote back to `SUDO_UID:SUDO_GID`; `init` needs no TUN.
 - **macOS.** A utun needs root, so `serve` runs as a LaunchDaemon
   (`/Library/LaunchDaemons/app.tailraid.serve.plist`, the `system` domain: it starts at
@@ -449,7 +451,8 @@ round-trip table.
   `system` domain with its home under `/Library/Application Support/tailraid`; the
   Windows service runs with `wintun.dll` beside the exe, written by `install` and by
   `update` when absent or different, and one inbound firewall rule for the UDP port,
-  both removed by `uninstall`; `init` creates no interface.
+  both removed by `uninstall`; a `join` under sudo on Linux writes into the invoking
+  user's config home, the one that user's unit names; `init` creates no interface.
 - **I-325** — `status` reports, for every device member, its path class, endpoint,
   handshake age and bytes each way, and the device's own address, interface, port and
   port-mapping state; `node ls` shows the path; the vitals' network counters are the

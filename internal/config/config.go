@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -459,26 +460,45 @@ func errBadDuration(err error) error {
 
 // Home returns the per-OS configuration directory, or $TAILRAID_HOME.
 func Home() string {
-	if h := os.Getenv("TAILRAID_HOME"); h != "" {
+	home, _ := os.UserHomeDir()
+	return homeFor(runtime.GOOS, os.Geteuid(), home, os.Getenv, func(name string) (string, error) {
+		u, err := user.Lookup(name)
+		if err != nil {
+			return "", err
+		}
+		return u.HomeDir, nil
+	})
+}
+
+// homeFor is Home as a function of its inputs: the OS, the effective uid, the process's
+// home directory, the environment and a lookup of a user's home. On macOS root's home
+// is the system one (the daemon's, docs/20 §9); on Linux a command run under sudo (a
+// `join`, which needs CAP_NET_ADMIN) keeps the invoking user's home, since the user's
+// unit names it and the user owns the data: root's own home only without `SUDO_USER`.
+func homeFor(goos string, euid int, home string, env func(string) string, lookupHome func(string) (string, error)) string {
+	if h := env("TAILRAID_HOME"); h != "" {
 		return h
 	}
-	switch runtime.GOOS {
+	switch goos {
 	case "darwin":
-		if os.Geteuid() == 0 { // the root daemon's home (docs/20 §9)
+		if euid == 0 { // the root daemon's home (docs/20 §9)
 			return "/Library/Application Support/tailraid"
 		}
-		home, _ := os.UserHomeDir()
 		return filepath.Join(home, "Library", "Application Support", "tailraid")
 	case "windows":
-		if pd := os.Getenv("ProgramData"); pd != "" {
+		if pd := env("ProgramData"); pd != "" {
 			return filepath.Join(pd, "tailraid")
 		}
 		return `C:\ProgramData\tailraid`
 	default:
-		if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		if x := env("XDG_CONFIG_HOME"); x != "" {
 			return filepath.Join(x, "tailraid")
 		}
-		home, _ := os.UserHomeDir()
+		if su := env("SUDO_USER"); euid == 0 && su != "" && su != "root" {
+			if h, err := lookupHome(su); err == nil && h != "" {
+				home = h
+			}
+		}
 		return filepath.Join(home, ".config", "tailraid")
 	}
 }

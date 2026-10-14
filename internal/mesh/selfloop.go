@@ -22,7 +22,7 @@ func (s *selfLoop) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	kept := 0
 	for i := range n {
 		if isFor(bufs[i][offset:offset+sizes[i]], s.addr) {
-			_, _ = s.Device.Write([][]byte{bufs[i][:offset+sizes[i]]}, offset) // back to the kernel
+			_, _ = s.Write([][]byte{bufs[i][:offset+sizes[i]]}, offset) // back to the kernel
 			continue
 		}
 		if kept != i {

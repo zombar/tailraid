@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -382,5 +383,43 @@ func TestConfig_CacheKeyWrittenOnlyWhenSet(t *testing.T) {
 	got, err := Load(p)
 	if err != nil || got.Cache.Size != "2GiB" {
 		t.Fatalf("a set cache.size did not round-trip: %+v %v", got.Cache, err)
+	}
+}
+
+// The config home under sudo on Linux is the invoking user's, where the user's unit
+// looks and the user owns the data; root's own home only when nothing says who invoked
+// it; TAILRAID_HOME and XDG_CONFIG_HOME still win; macOS root is the system home and an
+// unprivileged user's is their own.
+// Invariant: I-324
+func TestHome_SudoKeepsTheInvokingUsers(t *testing.T) {
+	envOf := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	lookup := func(name string) (string, error) {
+		if name == "gurgeh" {
+			return "/home/gurgeh", nil
+		}
+		return "", errors.New("no such user")
+	}
+	for _, tc := range []struct {
+		name string
+		goos string
+		euid int
+		home string
+		env  map[string]string
+		want string
+	}{
+		{"linux user", "linux", 1000, "/home/gurgeh", nil, "/home/gurgeh/.config/tailraid"},
+		{"linux sudo join", "linux", 0, "/root", map[string]string{"SUDO_USER": "gurgeh", "SUDO_UID": "1000"}, "/home/gurgeh/.config/tailraid"},
+		{"linux real root", "linux", 0, "/root", nil, "/root/.config/tailraid"},
+		{"linux sudo as root", "linux", 0, "/root", map[string]string{"SUDO_USER": "root"}, "/root/.config/tailraid"},
+		{"linux sudo unknown user", "linux", 0, "/root", map[string]string{"SUDO_USER": "nobody-here"}, "/root/.config/tailraid"},
+		{"linux xdg wins", "linux", 0, "/root", map[string]string{"SUDO_USER": "gurgeh", "XDG_CONFIG_HOME": "/x"}, "/x/tailraid"},
+		{"explicit home wins", "linux", 0, "/root", map[string]string{"SUDO_USER": "gurgeh", "TAILRAID_HOME": "/t"}, "/t"},
+		{"darwin root is the system", "darwin", 0, "/var/root", map[string]string{"SUDO_USER": "gurgeh"}, "/Library/Application Support/tailraid"},
+		{"darwin user", "darwin", 501, "/Users/gurgeh", nil, "/Users/gurgeh/Library/Application Support/tailraid"},
+		{"windows", "windows", 0, `C:\Users\g`, map[string]string{"ProgramData": `C:\ProgramData`}, `C:\ProgramData` + string(filepath.Separator) + "tailraid"},
+	} {
+		if got := homeFor(tc.goos, tc.euid, tc.home, envOf(tc.env), lookup); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
