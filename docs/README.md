@@ -1,4 +1,17 @@
-# tailraid design documents
+# tailraid documentation
+
+The guides are for running a cluster; the design documents below them are for
+understanding and changing it.
+
+| Guide | Contents |
+|---|---|
+| [guide-using.md](guide-using.md) | The browser UI, the trash, folder flags, pinned folders, search, posters for the Media tab |
+| [guide-snapshots.md](guide-snapshots.md) | Mirrors, the snapshot schedule, browse, restore and revert, reading a mirror without the cluster |
+| [guide-capacity.md](guide-capacity.md) | Devices, disks and S3 buckets, draining, the redundancy policy, voters |
+| [guide-operating.md](guide-operating.md) | Secrets, the command reference, configuration, backup and recovery, upgrading, verifying a download, `tailraid verify` |
+| [guide-contributing.md](guide-contributing.md) | The Docker soak, the three-VM rig, releasing |
+
+## Design documents
 
 Read in order. Each design doc ends with numbered invariants (`I-N`) and the tests that
 prove them; `invariants.md` is generated from those sections by `scripts/check-invariants.sh`.
