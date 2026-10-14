@@ -98,12 +98,22 @@ read, in this order:
    authorizer; the tunnel already vouches for the source's key) → allowed; anything else
    → 403, logged at warn with the source.
 
+3. With users (docs/21 §6, built after 1.0): a session cookie. `tailraid web login
+   [--node <name>]` mints a one-time code on that node and prints
+   `http://<mesh IP>:20482/login?code=…`; opening it sets an `HttpOnly`,
+   `SameSite=Strict` cookie bound to the user and the key that minted it, valid
+   `users.session` (168 h), kept in the node's memory. A request without a session gets
+   the sign-in page (`/login`; `/assets/*` is the only other route without one), whatever
+   its source: a member's address alone admits nothing. Every request re-reads the user's
+   row, so a disabled user or a removed key is refused at its next request; `web logout
+   [--all]` drops the sessions on that node. The session's user is the actor of every
+   request: listings show what they hold `Read` on, mutations carry them into the FSM
+   (I-354, I-355). Until the users PRs land the UI is for members, step 2 alone.
+
 Under Tailscale a third step admitted a device of the same tailnet user (the phone), by
 its WhoIs login name; the mesh has no users, and a device that is not a node is a later
 feature (docs/20 §11: client peers, a row with a key and an address and nothing else,
-configured on the phone from a QR code; users and groups on those rows after 1.0, which
-is why `Allow` answers with a principal rather than a row). Until then the UI is for
-members.
+configured on the phone from a QR code).
 
 The listener also answers only to its own name: a request whose `Host` is not the
 listener's `<mesh addr>:port` is a `421` before
@@ -118,6 +128,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 |---|---|---|
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
+| `GET /login?code=` | – | with a valid one-time code: sets the session cookie and redirects to `/`; without one, or with a used or expired code: the sign-in page, `text/html`, the one command to run and, after a bad code, one line saying so (docs/21 §6, I-354); the only route besides `/assets/*` that needs no session |
+| `POST /api/logout` | required | drops this session; 204 |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
 | `GET /api/mesh` | – | `{"svg"}`: the Mesh section's picture (§7, docs/20 §10), `chart.Mesh` over `status.mesh` and `status.nodes` of this node's status (I-331); 404 on a device without a mesh; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
@@ -468,6 +480,11 @@ package's, so it follows the theme (§Charts).
 
 ## 8. Build and assets
 
+The lookdev pages are `dashboard.html`, `disks.html`, `files.html`, `audio.html`,
+`player.html`, `search.html`, `markdown.html`, `media.html` (and their `-phone` variants),
+`stats.html`, `snapshots.html`, `signin.html` (docs/21 §6) and `components.html`; the
+soak report's are `soak-*.html`.
+
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
 `tools.mod`, no node or npm anywhere) and writes `internal/webui/dist/app.js`, which is
 committed and embedded. `make web-check` rebuilds into a temporary directory and fails when
@@ -477,7 +494,8 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 
 ## 9. Non-goals
 
-User management and per-user access control, mutating admin operations from the browser
+User management (users, groups and grants are the CLI's, docs/21 §9; the browser shows
+what the signed-in user may see), mutating admin operations from the browser
 (repair, GC, membership, policy), HTTPS of its own (the mesh encrypts), serving on
 loopback, transcoding, saved playlists, a queue shared between tabs or devices,
 server-side video decoding, adding or removing a mirror, a diff between two versions or
@@ -829,6 +847,11 @@ placement gives way to legible text: the dashed line keeps the event's true time
 
 ## Manual checks (real cluster, before a release)
 
+0. Sign-in (docs/21 §6, once built): a plain visit shows `/login` with the command; `tailraid
+   web login` prints a link that signs the browser in and the header shows the account
+   chip with the name; a second open of the same link is refused with the one line; a
+   folder the user holds nothing on is absent from the listing; `web logout` returns the
+   next request to `/login`; the lookdev `signin.html` matches in light and dark.
 1. Desktop Chrome, Safari and Firefox: the dashboard in light and dark (toggle the OS
    theme live); the pill through stopping a node (degraded), killing the leader (stale,
    then no leader) and stopping the daemon (unreachable).
@@ -956,8 +979,10 @@ placement gives way to legible text: the dashed line keeps the event's true time
   viewBox, and no emoji-prone glyph (`⏮ ⏭ ⏸ ▶ ⟳ ⤮ ↗` and the emoji planes) appears in the
   TypeScript, `index.html` or the lookdev.
 - **I-68** — Every request to the web listener is authorized from the TCP source address
-  alone, before any request body is read: the source is an active cluster member's mesh
-  address (I-18, I-318) and nothing else is admitted; every refusal is 403. (Under
+  before any request body is read: the source is an active cluster member's mesh
+  address (I-18, I-318) and nothing else is admitted; every refusal is 403. Once users
+  exist (docs/21, I-354) a session cookie is required on top of it and a member's address
+  alone reaches the sign-in page only. (Under
   Tailscale a device of the same tailnet user was admitted by its WhoIs login name, an
   empty or tagged login never matching, and a WhoIs failure was 503.)
 - **I-69** — `GET /files/<path>`, with or without a `Range`, returns exactly the bytes a READ

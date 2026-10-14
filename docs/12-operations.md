@@ -251,7 +251,10 @@ through an update never writes an entry half of it cannot read (I-156).
 ## 7. Day one: `tailraid init`
 
 `tailraid init` takes no required options: the node is named after the host and the
-volume starts at `1+0` in automatic redundancy mode (03), growing as disks join.
+volume starts at `1+0` in automatic redundancy mode (03), growing as disks join. It also
+prints an admin invite code beside the join code; the person who will administer the
+volume runs `tailraid user create <name> <code>`, unprivileged, on the same device (§12,
+docs/21 §1).
 `tailraid join <code>` is the same for a second device: `<code>` is the join code
 `init` printed, or the one `tailraid token` prints on any member (docs/20 §4: the
 cluster ID, the token, that member's key and its endpoints); on macOS and Linux it runs
@@ -519,6 +522,58 @@ schedule's thinning and the free-space reserve take automatic ones, and a manual
 is permanent, so take one deliberately; a mirror full of manual snapshots stops syncing
 until it has another disk beside it or is copied to a larger one. And the mirror is the
 volume's bytes in the clear: keep the disk where the data may be.
+
+## 12. Users, groups and permissions
+
+Everything in docs/21 is managed from the command line; the browser signs a person in
+and shows what they may see. A user has no password: a key in their own keychain, one per
+device, and an admin's one-time invite is how they get the first one.
+
+```
+tailraid user invite <name> [--admin]            # admins: a one-time code, 24 h
+tailraid user create <name> <code>               # on the person's own device: key → their keychain, row registered, uid bound
+tailraid user ls [<name>] | whoami               # ls <name>: keys, groups, grants
+tailraid user key invite [<name>]                # oneself (or admins): a code for another device
+tailraid user key add <code>                     # on the new device
+tailraid user key rm <name> <key-id>
+tailraid user disable|enable|rm <name>           # rm keeps the row as Removed
+tailraid user bind [--uid n | --smb account] <name> | unbind …   # this device's bindings
+tailraid user bootstrap                          # root on a voter, unsigned: an admin invite (first admin, lockout)
+tailraid group create|rm <group> | add|remove <group> <user> | ls
+tailraid grant <path> <user|@group> read|write|admin
+tailraid revoke <path> <user|@group>
+tailraid access ls [path]                        # the access review: every grant, subject, role, by, at
+tailraid secret set <name> [--system] | get <name> | ls [--system] | rm <name> [--system] | rm --all
+tailraid audit ls [--since d] [--user u] [--kind k]
+tailraid web login [--node n] | logout [--all]
+```
+
+Every verb but `user create`, `user key add` and `user bootstrap` is a signed request
+(docs/21 §2): the CLI signs with the key of the OS user running it, and the table in
+docs/21 §2 says which verbs need a user, `Admin` on the path or membership of `admins`.
+Read-only verbs (`status`, `check`, every `ls`) stay as they are.
+
+**The order on an existing cluster.** Enforcement starts with the first user: until then
+the volume behaves as before, and the moment a user exists every unbound uid and SMB
+account on every device is nobody. So: `user bootstrap` on a voter (or the invite `init`
+printed), `user create` on that device, then on every other device an invite and a
+`user create` or `user key add` for whoever uses it; `check` warns "device has no
+bindings" on each device until it has one (I-349, I-350). Grants come last; a user who
+holds nothing sees an empty root.
+
+```yaml
+users:
+  clock_skew: 5m       # 1m..1h: how far a signed request's timestamp may be from the node's clock
+  session: 168h        # 1h..720h: a browser session's absolute lifetime
+  dormant_after: 2160h # 24h..8760h: check warns for a user silent this long
+audit:
+  retention: 8760h     # 168h..87600h: the leader drops older audit segments
+```
+
+`status --json` carries `users{count, sessions, refused_1h}`; `check` warns for a
+dormant user, a device with no bindings and a binding to a user that no longer exists.
+The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls` only
+(docs/21 §8).
 
 ## Invariants
 

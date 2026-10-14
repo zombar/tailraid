@@ -136,7 +136,7 @@ Two routes carry the series out:
   at most 720 rows (far under the client's 4 MiB body cap), its cluster rows included while
   it leads. It never carries another member's rows or any credential (I-199).
 - **`GET /api/stats?from=<unix>&to=<unix|now>&node=<name|all>`** on the web listener (13 §3), a
-  read route behind the Host check and the same-user rule, no CSRF header. The handler:
+  read route behind the Host check and the member rule, no CSRF header. The handler:
   1. picks the finest tier whose retention covers `from` (`10s` within `keep.raw`, else
      `1m`, else `10m`), lists the tier's directories and reads the files named within an
      hour of the range through a **second `vfs.Reader` with no cache**, which disables

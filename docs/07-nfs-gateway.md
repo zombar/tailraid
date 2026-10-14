@@ -82,6 +82,9 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **Mount**: a single export `/`. Any dirpath the client sends is accepted. Auth flavor
   `AuthFlavorNull`; the
   listener is bound to `127.0.0.1` so the OS, not NFS, is the security boundary (`docs/08`).
+  With users (docs/21 §5, after 1.0) the flavor is `AuthFlavorUnix`: the AUTH_SYS uid of
+  every call is mapped through the device's bindings to the actor, an unbound uid is
+  nobody, and the duplicate request cache is keyed on the credential too (I-350, I-351).
 - **Handles are 16 bytes**: `magic u32 | gen u32 | ino u64`, big-endian. `ToHandle` resolves
   the path in the FSM and encodes (ino, gen). `FromHandle` looks up `Inodes[ino]`; if the
   inode is missing or `gen` differs it returns `&nfs.NFSStatusError{NFSStatusStale}`. The
@@ -207,8 +210,11 @@ device"), not `EIO`.
 - No hard links, no `mknod`, no file locks across devices, no xattrs, no ACLs.
 - `rename` of a directory into its own subtree → EINVAL (`ErrLoop`).
 - `mtime` resolution is nanoseconds in the FSM but clients may truncate to microseconds.
-- Permissions are stored and returned but not enforced by the gateway: the loopback
-  listener trusts the local OS, which already enforces access to the mount point.
+- Permissions (mode bits and owner) are stored and returned but never consulted: access
+  is the grants of docs/21 once users exist, and the mode bits the client sees are then
+  the stored mode masked to the effective role (0500 for read, 0700 above, I-351); until
+  then the loopback listener trusts the local OS, which already enforces access to the
+  mount point.
 - Cross-device visibility is eventually consistent within the client's attribute cache
   window; the FSM itself is linearizable through Raft.
 - **atime and ctime on the wire are the mtime.** go-nfs fills every reply's `atime`, `mtime` and `ctime` from the billy `ModTime()`; a client-supplied atime is stored in the FSM (and seen by every gateway through `tailraid` itself) but GETATTR reports it as the mtime. No consumer of this volume is known to depend on atime.

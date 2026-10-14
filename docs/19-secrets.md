@@ -108,7 +108,10 @@ stays in the node's config (15).
 - **Reading.** A node decrypts a secret only for its own use (an S3 bucket's
   credentials) or for the admin op `secret_get` that a consumer in the CLI calls (`node
   add-s3` for the bucket's credentials, the scrape for its TMDB key). There is no
-  `tailraid secret get`: no command prints a value.
+  `tailraid secret get`: no command prints a value. With users (docs/21 §7, after 1.0)
+  the store gains a personal name space, `user/<name>/…`, whose values `secret get`
+  prints to their owner only; a system value still crosses to no CLI, and the two
+  consumers open theirs inside the node (I-356).
 - **One way in.** `secret set` is the only command that stores a secret. A consumer
   checks its key when it uses it, as a service normally does: `node add-s3` refuses a
   bucket its credentials do not open, the scrape asks TMDB once before a keyed run and a
@@ -121,6 +124,10 @@ stays in the node's config (15).
 | `tailraid secret set <name>` | reads the value from stdin and stores it, replacing any value of that name; makes the cluster key first if the cluster has none; the one way in, for `s3/<node>/access_key`, `s3/<node>/secret_key`, `tmdb` and any other |
 | `tailraid secret ls` | each name, when it was set and by which node, and whether this node can open it; never a value |
 | `tailraid secret rm <name>` | removes one; `--all` removes every secret and the key ID |
+
+With users (docs/21 §7): `secret set <name>` writes the caller's own `user/<name>/…`,
+`--system` (admins) the names above, `secret get <name>` prints one's own, and `secret
+ls --system` lists the system names with the user who set each.
 
 ## 6. What moves in (I-308)
 
@@ -159,8 +166,8 @@ whatever happens and touches no other, so a live cluster's own secrets stay.
 
 ## 8. Non-goals
 
-Rotating the cluster key, a `secret get` command, secret files (certificates,
-kubeconfigs), scoping a secret to some members, a page for secrets in the web UI,
+Rotating the cluster key, a `secret get` of a system value (a personal one is docs/21
+§7), secret files (certificates, kubeconfigs), scoping a secret to some members, a page for secrets in the web UI,
 redaction of logs beyond never logging a value (errol's redactor answers a different
 threat: a model reading process output), and protecting a secret from a member: every
 member holds the volume's data and can fetch the key, by design.
