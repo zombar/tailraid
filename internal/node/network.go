@@ -183,7 +183,7 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		_ = tunDev.Close()
 		return err
 	}
-	o := mesh.Options{Port: nw.port, Log: nw.log, Clock: clk, ClusterID: clusterID, RelayRate: rate}
+	o := mesh.Options{Port: nw.port, Log: nw.log, Clock: clk, ClusterID: clusterID, RelayRate: rate, Addr: nw.addr.Addr()}
 	if intro != nil {
 		o.Introducer, o.TokenKey = intro, intro.tokenKey(clusterID)
 	}

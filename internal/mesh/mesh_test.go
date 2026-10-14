@@ -40,12 +40,16 @@ func newNode(t *testing.T, idx uint32, o Options) *node {
 		o.Keepalive = NoKeepalive // the tests send every handshake themselves
 	}
 	o.ClusterID = testCluster
+	addr := netip.AddrFrom4([4]byte{100, 100, 0, byte(idx)})
+	if !o.Addr.IsValid() {
+		o.Addr = addr
+	}
 	ct := tuntest.NewChannelTUN()
 	m, err := New(ct.TUN(), key, o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &node{t: t, m: m, tun: ct, addr: netip.AddrFrom4([4]byte{100, 100, 0, byte(idx)}), idx: idx, clk: clk}
+	n := &node{t: t, m: m, tun: ct, addr: addr, idx: idx, clk: clk}
 	t.Cleanup(m.Close)
 	return n
 }
@@ -442,5 +446,56 @@ func TestMesh_CandidatesArrivingLaterFanOut(t *testing.T) {
 	}
 	if st := statusOf(t, a, b.m.Key()); st.Fanout || st.Endpoint != b.loopback() {
 		t.Fatalf("a did not pin b: %+v", st)
+	}
+}
+
+// A packet the OS hands the tunnel for the device's own address goes back to the OS
+// (macOS routes a host's traffic to its own utun address into the tunnel, where no peer
+// claims it); a device built without its address loops nothing, so the test shows the
+// loop is what delivers it.
+// Invariant: I-317
+func TestMesh_SelfAddressedPacketLoopsBack(t *testing.T) {
+	a := newNode(t, 1, Options{})
+	pkt := tuntest.Ping(a.addr, a.addr)
+	select {
+	case a.tun.Outbound <- pkt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the device did not read the TUN")
+	}
+	select {
+	case got := <-a.tun.Inbound:
+		if len(got) != len(pkt) {
+			t.Fatalf("looped %d bytes, sent %d", len(got), len(pkt))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the packet for the device's own address never came back")
+	}
+	// a peer's packet is not looped: it leaves for the peer as before
+	b := newNode(t, 2, Options{})
+	if err := a.m.SetPeers([]Peer{b.peer(b.loopback())}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.m.SetPeers([]Peer{a.peer(a.loopback())}); err != nil {
+		t.Fatal(err)
+	}
+	if !ping(t, a, b, 10*time.Second) {
+		t.Fatal("no packet to the peer")
+	}
+	select {
+	case got := <-a.tun.Inbound:
+		t.Fatalf("a peer's packet came back to the sender: %d bytes", len(got))
+	case <-time.After(300 * time.Millisecond):
+	}
+	// without an address the tunnel drops the packet: nothing claims it
+	c := newNode(t, 3, Options{Addr: netip.AddrFrom4([4]byte{0, 0, 0, 1})}) // a loop for another address, none for its own
+	select {
+	case c.tun.Outbound <- tuntest.Ping(c.addr, c.addr):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the device did not read the TUN")
+	}
+	select {
+	case got := <-c.tun.Inbound:
+		t.Fatalf("a device looping another address returned its own: %d bytes", len(got))
+	case <-time.After(300 * time.Millisecond):
 	}
 }

@@ -51,6 +51,13 @@ compose rig's worker reaches its node the same way.
 | Privilege | `CAP_NET_ADMIN` (the unit grants it, §9) | root (the service is a LaunchDaemon, §9) | LocalSystem (the service already is) |
 | The dll | — | — | `wintun.dll` beside the exe, written by `install` and `update` (§9) |
 
+A packet the OS hands the tunnel for the device's own address goes straight back to the
+kernel: macOS routes a host's traffic to its own utun address into the tunnel (the
+point-to-point route's destination is the address itself), where WireGuard has no peer
+for it, and a node could not reach its own listeners (the CLI's `status`, the browser,
+the mount); Linux delivers such packets locally and never hands them over. Tailscale
+loops them in userspace the same way.
+
 The command sequences are lifted from tunnelmesh's `internal/tun/device.go` and live
 in `internal/mesh/ifconfig_<os>.go` as command tables that `Apply` runs, tested like the
 mount helpers of docs/07: the table is checked, the commands are not run in CI.
@@ -403,7 +410,8 @@ round-trip table.
   (and the loopback listeners of I-50); the device's WireGuard peers are exactly the
   device rows with a key that are not `Removed`, the pending rows and, until the table
   has arrived, the seed rows, each with `AllowedIPs` of its address alone; a packet from
-  any other key is dropped by the tunnel, and a membership change reconfigures the peers
+  any other key is dropped by the tunnel, a packet the OS hands the tunnel for the
+  device's own address is handed back to the kernel, and a membership change reconfigures the peers
   before the authorizer sees it, so a removed member's next packet dies at the tunnel.
 - **I-318** — A request is admitted when its source address is that of an active device
   row (from the table, or the seed until the table arrives) and nothing else is checked;

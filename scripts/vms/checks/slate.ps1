@@ -36,6 +36,8 @@ log:
   level: info
 dev:
   enabled: true
+mesh:
+  portmap: false
 "@ | Set-Content -Encoding ascii "$cfgdir\config.yaml"
-if ($Endpoint -ne '') { Add-Content -Encoding ascii "$cfgdir\config.yaml" "mesh:`n  endpoint: $Endpoint" }
+if ($Endpoint -ne '') { Add-Content -Encoding ascii "$cfgdir\config.yaml" "  endpoint: $Endpoint" }
 Write-Output "config: $cfgdir\config.yaml"

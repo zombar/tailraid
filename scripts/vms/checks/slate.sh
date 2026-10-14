@@ -55,6 +55,8 @@ log:
   level: info
 dev:
   enabled: true
+mesh:
+  portmap: false  # the guests sit on the host's LAN: no mapping on the real router
 EOF
 }
 if [ "$os" = mac ]; then

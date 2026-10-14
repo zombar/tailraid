@@ -30,14 +30,20 @@ service managers and the kernel mount clients are real.
 the mesh needs none: the guests find each other through the join code and the member
 table.)
 
-The Tart guests sit on the host's vmnet NAT (macOS gives each vmnet consumer its own
-/24; with Docker Desktop running the Tart network is `192.168.65.0/24` and the host is
-`.1`). The Windows guest runs behind QEMU's user-mode NAT: it reaches the host and,
-through it, the Tart guests; its SSH is forwarded to `127.0.0.1:2222` and the mesh's UDP
-port 20483 from every host address to the guest's, and its config names
-`<Tart gateway>:20483` as `mesh.endpoint` (`checks/slate.ps1`), so the join code it
-prints carries a reachable endpoint and a Windows-first round works. So the two Tart
-guests reach each other on one subnet (a `lan` path, docs/20 §5), while the Windows
+The Tart guests are bridged onto the host's LAN interface (`VMS_BRIDGE`, `en0` by
+default) and take addresses from the LAN's DHCP, found by ARP (`tart ip --resolver arp`,
+after one ping sweep of the /24 when the host's table does not hold the guest yet: the
+macOS guest announces itself, the Ubuntu guest never does).
+They were on the host's vmnet NAT before 2026-10-14; macOS hands each vmnet consumer a
+/24 of its own (`192.168.64.0/24` to the first, `.65` to the next), and a host route for
+one of those subnets (a static route to the LAN router, a VPN's) sends every packet for
+the guests out the wrong interface, which stranded a build with ARP answering and
+nothing above it. The Windows guest runs behind QEMU's user-mode NAT: it reaches the
+host and, through it, the LAN; its SSH is forwarded to `127.0.0.1:2222` and the mesh's
+UDP port 20483 from every host address to the guest's, and its config names `<host LAN
+address>:20483` as `mesh.endpoint` (`checks/slate.ps1`), so the join code it prints
+carries a reachable endpoint and a Windows-first round works. So the two Tart guests
+reach each other on the LAN (a `lan` path, docs/20 §5), while the Windows
 guest is reached through the host's forward and, from its own side, on the reflexive
 endpoint the others learn from its introduce and its probes: the rig exercises a NAT for
 real.
@@ -135,9 +141,9 @@ tag`, and §5 is updated in the same pull request.
 
 - *`tart run` exits at once on the macOS guest*: the host's login keychain is locked
   (no desktop session). Log in on the Mac's console.
-- *The guests sit behind another subnet than last time*: the Tart vmnet subnet moved
-  (Docker Desktop started or stopped between runs). Nothing to do: the join code carries
-  the current endpoints and a round starts from `reset`.
+- *The guests have other addresses than last time*: the LAN's DHCP gave them new ones.
+  Nothing to do: the join code carries the current endpoints and a round starts from
+  `reset`. A host without `en0` as its LAN interface runs the rig with `VMS_BRIDGE=<if>`.
 - *`status` shows the Windows guest `none` from a Tart guest*: the host's forward of UDP
   20483 to the guest is what the others dial (`mesh.endpoint` in its config, written by
   the slate step from the Tart gateway address); a Tart subnet that moved since the
