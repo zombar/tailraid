@@ -297,6 +297,18 @@ tailraid install
 
 Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes.
 
+## Secrets
+
+The volume needs a few credentials: an S3 bucket's key and the TMDB key. They live in one encrypted store inside the cluster state, so you enter each once, on any device, and every device has it. `node add-s3`, `node keys` and `media key` put theirs in after checking them with the provider; `secret set <name>` takes any other. A value comes from stdin only, never from a flag, and no command prints one back. The key that opens the store sits in each device's keychain (the macOS Keychain, the Windows Credential Manager, the Linux Secret Service, or a 0600 file under the data directory where there is none), and a device that joins fetches it from another member over the tailnet. Devices that kept a key in `s3nodes.yaml` or `tmdb.key` before the store import it and remove the file.
+
+```sh
+tailraid secret ls                     # s3/offsite and tmdb: when, by which device, readable here
+tailraid secret set tmdb < key.txt     # what `media key` stores, without the check against TMDB
+tailraid secret rm --all               # if every device lost the key: start over, then enter each again
+```
+
+Details: [docs/19-secrets.md](docs/19-secrets.md).
+
 ## Command reference
 
 Every command takes `--json`, and `--node <ip>` to talk to another device. `tailraid <command> --help` has the details.
@@ -310,6 +322,7 @@ Every command takes `--json`, and `--node <ip>` to talk to another device. `tail
 | Maintenance | `repair` (also runs every minute) · `gc` · `fsck` |
 | Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` · `media key` · `media scrape [path]` |
 | Snapshots | `mirror add\|ls\|remove` · `mirror ls\|cat\|export <mirror path> …` · `snapshot ls\|create\|restore` · `versions <path> [--revert\|--copy]` |
+| Secrets | `secret set <name>` · `secret ls` · `secret rm <name>\|--all` |
 | Recovery | `export <dir>` · `recover --voters <id>` · `stats seal` |
 | Releases | `update [--check\|--rollback\|--restart]` · `version` |
 
