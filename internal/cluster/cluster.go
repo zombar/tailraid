@@ -107,6 +107,7 @@ type Node struct {
 	MinCodec func() uint8
 
 	logs        raft.LogStore
+	snaps       raft.SnapshotStore
 	closer      io.Closer // the on-disk store; nil for injected stores
 	trans       raft.Transport
 	log         *slog.Logger
@@ -423,7 +424,7 @@ func start(o Options, st *stores, trans raft.Transport) (*Node, error) {
 	if addrFor == nil {
 		addrFor = raftAddrOf
 	}
-	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, closer: st.closer, trans: trans, log: log, raftAddrFor: addrFor}, nil
+	return &Node{ID: o.NodeID, Raft: r, FSM: fsm, logs: st.logs, snaps: st.snaps, closer: st.closer, trans: trans, log: log, raftAddrFor: addrFor}, nil
 }
 
 // closeTransport releases a transport's listener (raft.NetworkTransport implements Close).
