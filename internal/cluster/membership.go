@@ -70,11 +70,11 @@ func raftAddrOf(nd meta.Node) raft.ServerAddress { return raft.ServerAddress(nd.
 
 // replaceStaleServer removes a Raft server that holds the joiner's address under
 // another node ID (a device that was reset), after checking that the server's member row
-// names the joiner's tailnet device; a different device at a known address is refused
-// (I-94). It returns that row's index so the join re-keys the row to the new ID instead
-// of retiring it: the device's disks and their shards stay registered under it. Nothing
-// to replace returns 0.
-func (n *Node) replaceStaleServer(req rpc.JoinRequest, addr raft.ServerAddress) (meta.NodeIdx, error) {
+// names the joiner's device (its mesh key, docs/20 §4; its tailnet device before); a
+// different device at a known address is refused (I-94). It returns that row's index so
+// the join re-keys the row to the new ID instead of retiring it: the device's disks and
+// their shards stay registered under it. Nothing to replace returns 0.
+func (n *Node) replaceStaleServer(req rpc.JoinRequest, key meta.MeshKey, addr raft.ServerAddress) (meta.NodeIdx, error) {
 	cfg := n.Raft.GetConfiguration()
 	if err := cfg.Error(); err != nil {
 		return 0, raftErr("read configuration", err)
@@ -85,7 +85,10 @@ func (n *Node) replaceStaleServer(req rpc.JoinRequest, addr raft.ServerAddress) 
 			continue
 		}
 		if old, known := n.FSM.NodeByID(string(s.ID)); known {
-			if old.TSStableID != "" && old.TSStableID != req.TSStableID {
+			switch {
+			case !key.IsZero() && !old.Key.IsZero() && old.Key != key:
+				return 0, fmt.Errorf("%w: address %s belongs to node %s, another device", ErrBadMemberOp, req.Addr, old.ID)
+			case key.IsZero() && old.TSStableID != "" && old.TSStableID != req.TSStableID:
 				return 0, fmt.Errorf("%w: address %s belongs to node %s of tailnet node %s, not %s", ErrBadMemberOp, req.Addr, old.ID, old.TSStableID, req.TSStableID)
 			}
 			idx = old.Idx
@@ -108,7 +111,7 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		}
 		return rpc.JoinResponse{}, ErrNotLeader
 	}
-	if len(req.NodeID) != 16 || req.Addr == "" || req.RaftPort == 0 || req.RPCPort == 0 {
+	if len(req.NodeID) != 16 || req.RaftPort == 0 || req.RPCPort == 0 || (req.Addr == "" && req.Key == "") {
 		return rpc.JoinResponse{}, fmt.Errorf("%w: node_id, addr and ports are required", ErrBadMemberOp)
 	}
 	nd := meta.Node{
@@ -116,6 +119,27 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Version: req.Version, JoinedAt: time.Now().UnixNano(), // no budget: a device stores nothing (docs/14 §9)
 	}
 	var err error
+	// on the mesh (docs/20 §4) the address is the one the introduce gave the key: a
+	// pending row, or the active row the key already holds (a re-join after reset)
+	var key meta.MeshKey
+	if req.Key != "" {
+		if key, err = ParseMeshKey(req.Key); err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		nd.Key, nd.MeshPort = key, req.MeshPort
+		if req.SeenFrom != "" {
+			nd.Endpoints = []string{req.SeenFrom}
+		}
+		switch {
+		case func() bool { row, ok := n.FSM.NodeByKey(key); nd.Addr = row.Addr; return ok }():
+		case func() bool { p, ok := n.FSM.PendingByKey(key); nd.Addr = p.Addr; return ok }():
+		default:
+			return rpc.JoinResponse{}, ErrNoIntroduce
+		}
+		if req.Addr != "" && req.Addr != nd.Addr {
+			return rpc.JoinResponse{}, fmt.Errorf("%w: the key's address is %s, not %s", ErrBadMemberOp, nd.Addr, req.Addr)
+		}
+	}
 	// re-join of a known node keeps its index; a removed record refuses the ID, and so
 	// does a different tailnet identity (I-94): node IDs are public (/health), the
 	// StableID is what WhoIs vouched for
@@ -126,7 +150,12 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 				err = fmt.Errorf("%w: node %s was removed; reset it before joining again", ErrBadMemberOp, req.NodeID)
 				return false
 			}
-			if cur.TSStableID != "" && cur.TSStableID != req.TSStableID {
+			switch {
+			case !key.IsZero() && !cur.Key.IsZero() && cur.Key != key:
+				nd.Idx = 0
+				err = fmt.Errorf("%w: node %s belongs to another device", ErrBadMemberOp, req.NodeID)
+				return false
+			case key.IsZero() && cur.TSStableID != "" && cur.TSStableID != req.TSStableID:
 				nd.Idx = 0
 				err = fmt.Errorf("%w: node %s belongs to tailnet node %s, not %s", ErrBadMemberOp, req.NodeID, cur.TSStableID, req.TSStableID)
 				return false
@@ -142,11 +171,16 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	// the old server would make the configuration refuse the address, so it is removed
 	// and the old row re-keyed to the new ID (its disks stay its disks), provided the
 	// caller is the same tailnet device the row named (I-94)
-	if idx, err := n.replaceStaleServer(req, n.raftAddrFor(nd)); err != nil {
+	if idx, err := n.replaceStaleServer(req, key, n.raftAddrFor(nd)); err != nil {
 		return rpc.JoinResponse{}, err
 	} else if idx != 0 && nd.Idx == 0 {
 		nd.Idx = idx
 	}
+	// the Raft server first, the row second: the row's entry is then the newest, and
+	// the joiner's first snapshot, which Raft refuses until the FSM has passed the
+	// configuration entry, follows the row's apply (node.snapshotAfterJoin); on the
+	// mesh the joiner holds the bootstrap as a peer before this call, so the leader's
+	// first dial is accepted when the bootstrap leads and retried otherwise
 	var fut raft.IndexFuture
 	if req.Voter {
 		fut = n.Raft.AddVoter(raft.ServerID(req.NodeID), n.raftAddrFor(nd), 0, 10*time.Second)
@@ -184,8 +218,8 @@ func (n *Node) SlotsHeldBy(idx meta.NodeIdx) int {
 	return count
 }
 
-// MemberOp implements remove, update_addr, set_version, set_voter, set_capacity,
-// set_state, add_disk and add_s3 on the leader.
+// MemberOp implements remove, update_addr, update_endpoints, set_version, set_voter,
+// set_capacity, set_state, add_disk and add_s3 on the leader.
 func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 	n.memberMu.Lock()
 	defer n.memberMu.Unlock()
@@ -310,6 +344,14 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 			return fmt.Errorf("%w: set_version needs version", ErrBadMemberOp)
 		}
 		nd.Version = op.Version
+		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
+	case "update_endpoints":
+		// a device's candidates (docs/20 §5, I-322): the RPC server admits the op for
+		// the caller's own row only; the FSM bounds the list
+		if nd.Kind != meta.KindDevice {
+			return fmt.Errorf("%w: update_endpoints names a device", ErrBadMemberOp)
+		}
+		nd.Endpoints = op.Endpoints
 		return propose(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	case "update_addr":
 		if op.Addr == "" {

@@ -82,9 +82,9 @@ decoded.
    introduce that is never followed by a join leaves nothing behind (I-319).
 2. **`POST /v1/join`** through the tunnel, from the pending address, with the joiner's
    name, ports, suffrage request, capacity and the UDP source the member saw. The leader
-   turns the pending row into the member row (same index, key and address), adds the
-   server to the Raft configuration (voter or non-voter) and proposes the row before the
-   add, so every node holds the peer before the leader dials it. A re-join under a known
+   adds the server to the Raft configuration (voter or non-voter) and proposes the row,
+   which turns the pending row into the member row (same index, key and address). A
+   re-join under a known
    node ID keeps its index only when it comes from that row's address, which only the
    row's key can use; a re-join from a device that was `reset` presents the same key,
    so the leader answers the row's existing address and the join re-keys the row to the

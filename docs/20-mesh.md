@@ -18,7 +18,11 @@ reach, forwarding sealed datagrams it cannot read.
 *Status (2026-10-14): designed; the PRs follow the order in `CLAUDE.md`. PR 1 built
 `internal/mesh` (the keys, the join code, the introduce, the Bind with its fan-out, the
 device and its peers, the path monitor, the interface tables and the NAT simulator of the
-tests); what each later PR wires is a stub in `test/invariants/mesh_stubs_test.go`. The release
+tests); PR 2 the identity in the FSM and the RPC (`Node.Key`, `Endpoints` and `MeshPort`,
+`Meta.MeshSubnet`, the pending rows with ops 26–27 at codec 13, `cluster.Node.Introduce`,
+the join from a pending row, `update_endpoints`,
+the pending expiry, `rpc.TableAuthorizer` and `/health`'s `seen_from`); what each later PR
+wires is a stub in `test/invariants/mesh_stubs_test.go`. The release
 that carries the mesh starts a new cluster: there is no migration from a Tailscale
 cluster, by decision (the volume was being re-created anyway).*
 
@@ -150,11 +154,15 @@ succeeds, as before), and calls `POST /v1/join` through the tunnel from its pend
 address with its name, ports, suffrage request, capacity and `seen_from`, the UDP source
 the bootstrap saw its introduce from (its first reflexive endpoint, §5). No token in
 the request: the introduce consumed it, and the pending row is the proof. The leader
-turns the pending row into the member row (same `Idx`, `Key` and `Addr`; op 27 removes
-the pending entry), proposes the `NodeUpsert` *before* `AddVoter`/`AddNonvoter` so every
-node has the peer before the leader dials it, and answers the member rows; the joiner
-seeds its authorizer and peer table from them, writes `members.seed`, registers its
-disks, waits for the log and snapshots, as docs/02 §Membership says (I-321).
+adds the Raft server and proposes the row, in that order as before (the row's entry is
+then the newest in the log, which is what lets the joiner's first snapshot follow its
+apply); the row's upsert turns the pending row into the member row (same `Idx`, `Key`
+and `Addr`) and removes the pending entry; the response carries the member rows, and the
+joiner seeds its authorizer and peer table from them, writes `members.seed`, registers
+its disks, waits for the log and snapshots, as docs/02 §Membership says (I-321). The
+joiner holds the bootstrap as a peer before the call, so the leader's first dial is
+accepted when the bootstrap leads; otherwise Raft's retry covers the seconds until the
+response names the leader.
 
 **A re-join after `reset`** is an introduce with the device's existing key: the leader
 finds the active row by key and answers its address, and the `/v1/join` from that
@@ -377,8 +385,8 @@ round-trip table.
   changes.
 - **I-321** — `tailraid join <code>` with no other argument joins the network and the
   cluster: the joiner's listeners open on the address the introduce gave before
-  `/v1/join`, the leader proposes the `NodeUpsert` before the Raft add, and the joiner's
-  first handshake with every member follows within 10 s; a re-join after `reset`
+  `/v1/join`, the join completes the key's pending row into its member row, and the
+  joiner's first handshake with every member follows within 10 s; a re-join after `reset`
   presents the same key, keeps the row's index, address and disks and replaces the
   stale Raft server; a code whose cluster ID is not the cluster's is refused at once.
 - **I-322** — A device's endpoint candidates are its non-loopback, non-link-local
@@ -432,15 +440,15 @@ round-trip table.
 |---|---|
 | I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
 | I-317 | `TestMesh_PeersExchangePackets`; stub `TestStub_I_317` for the node's listeners and peer set |
-| I-318 | stub `TestStub_I_318` |
-| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd` |
-| I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds` |
-| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`; stub `TestStub_I_321` for the join itself |
-| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`; stub `TestStub_I_322` for the publishing |
+| I-318 | `TestTableAuthorizer_Table`; stub `TestStub_I_318` for the node's listeners |
+| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
+| I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
+| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`; stub `TestStub_I_321` for `tailraid join` itself |
+| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`; stub `TestStub_I_322` for the publishing |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`; stub `TestStub_I_324` for the service units |
 | I-325 | `TestClassify_Table`; stub `TestStub_I_325` for `status` |
-| I-326 | stub `TestStub_I_326` |
+| I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`; `serve`'s refusal of keyless rows comes with the node |
 | I-327 | stub `TestStub_I_327` |
 | I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need); stub `TestStub_I_328` |
 | I-329 | stub `TestStub_I_329` |

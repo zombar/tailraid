@@ -25,7 +25,7 @@ func TestSecretOps_Codec11(t *testing.T) {
 		{Op: OpSecretDelete, SecretDelete: &SecretDelete{Name: "tmdb", Now: 7}},
 		{Op: OpSecretDelete, SecretDelete: &SecretDelete{All: true, Now: 8}},
 	} {
-		if v := CommandCodec(c); v != commandVersionV11 || CodecSecrets != commandVersionV11 || CodecVersion != commandVersionV11 {
+		if v := CommandCodec(c); v != commandVersionV11 || CodecSecrets != commandVersionV11 || CodecVersion < commandVersionV11 {
 			t.Fatalf("op %d: version %d", c.Op, v)
 		}
 		b := MustEncodeCommand(c)

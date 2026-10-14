@@ -59,12 +59,18 @@ func (a *WhoIsAuthorizer) SetMembers(fn func(addr string) (meta.Node, bool)) {
 func (a *WhoIsAuthorizer) SetSeed(members []meta.Node) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.seed = map[string]meta.Node{}
+	a.seed = seedOf(members)
+}
+
+// seedOf is the join seed: the device rows with an address that are not removed.
+func seedOf(members []meta.Node) map[string]meta.Node {
+	seed := map[string]meta.Node{}
 	for i := range members {
 		if m := &members[i]; m.Kind == meta.KindDevice && m.State != meta.Removed && m.Addr != "" {
-			a.seed[m.Addr] = *m
+			seed[m.Addr] = *m
 		}
 	}
+	return seed
 }
 
 // member is the record at addr: the table first, then the join seed.
@@ -238,3 +244,73 @@ func (a AllowAll) Identify(context.Context, netip.Addr) (string, error) {
 func (a AllowAll) User(context.Context, netip.Addr) (string, string, error) {
 	return a.Node.TSStableID, "", nil
 }
+
+// TableAuthorizer authorizes by the member table alone (docs/08 §Node RPC authorization,
+// docs/20 §3, I-318): on the mesh a packet from an address was sealed by the key that
+// owns it, so the row at the source address is the whole check. A pending row (a join
+// in progress) is admitted to /health and /v1/join only. As the WhoIs authorizer before
+// it, it exists before the FSM does: SetMembers binds the table, SetSeed the members a
+// join response named for the window in which a joiner's own table is still empty.
+type TableAuthorizer struct {
+	Member  func(addr string) (meta.Node, bool) // the active device row at addr (meta.FSM.NodeByAddr)
+	Pending func(addr string) bool              // a pending row at addr (meta.FSM.PendingByAddr)
+
+	mu   sync.Mutex
+	seed map[string]meta.Node
+}
+
+// SetMembers binds the member table after construction.
+func (a *TableAuthorizer) SetMembers(fn func(addr string) (meta.Node, bool)) {
+	a.mu.Lock()
+	a.Member = fn
+	a.mu.Unlock()
+}
+
+// SetPending binds the pending rows after construction.
+func (a *TableAuthorizer) SetPending(fn func(addr string) bool) {
+	a.mu.Lock()
+	a.Pending = fn
+	a.mu.Unlock()
+}
+
+// SetSeed records the device members a join response listed (docs/08 §Join).
+func (a *TableAuthorizer) SetSeed(members []meta.Node) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.seed = seedOf(members)
+}
+
+// Allow returns the active member at src: the table first, then the seed.
+func (a *TableAuthorizer) Allow(_ context.Context, src netip.Addr) (meta.Node, error) {
+	addr := src.Unmap().String()
+	a.mu.Lock()
+	lookup := a.Member
+	seeded, inSeed := a.seed[addr]
+	a.mu.Unlock()
+	if lookup != nil {
+		if m, ok := lookup(addr); ok && m.State != meta.Removed {
+			return m, nil
+		}
+	}
+	if inSeed {
+		return seeded, nil
+	}
+	return meta.Node{}, fmt.Errorf("%w: %s is not a member", ErrForbidden, addr)
+}
+
+// IsPending reports whether a join is in progress at src (docs/20 §4).
+func (a *TableAuthorizer) IsPending(src netip.Addr) bool {
+	a.mu.Lock()
+	pending := a.Pending
+	a.mu.Unlock()
+	return pending != nil && pending(src.Unmap().String())
+}
+
+// Identify has no answer on the mesh: identity is the key behind the address, which
+// the tunnel vouched for, so no route needs a name for it.
+func (a *TableAuthorizer) Identify(context.Context, netip.Addr) (string, error) {
+	return "", fmt.Errorf("%w: no identities on the mesh", ErrForbidden)
+}
+
+// Purge has nothing to drop: there is no cache (I-318).
+func (a *TableAuthorizer) Purge() {}

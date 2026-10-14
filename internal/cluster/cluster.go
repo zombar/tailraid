@@ -67,6 +67,8 @@ type Options struct {
 	// RaftAddrFor maps a member record to its Raft address; nil uses the record's
 	// host:port. The test harness maps records to in-memory transport addresses.
 	RaftAddrFor func(meta.Node) raft.ServerAddress
+	// MeshSubnet is the cluster subnet Bootstrap records (docs/20 §3); "" records none.
+	MeshSubnet string
 }
 
 // RaftTiming is the set of Raft timeouts a caller may override.
@@ -336,7 +338,7 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 		self.Kind = meta.KindDevice
 	}
 	cmds := []meta.Command{
-		{Op: meta.OpMetaSet, MetaSet: &meta.MetaSet{ClusterID: cid, JoinToken: joinToken, CreatedAt: time.Now().UnixNano()}},
+		{Op: meta.OpMetaSet, MetaSet: &meta.MetaSet{ClusterID: cid, JoinToken: joinToken, CreatedAt: time.Now().UnixNano(), MeshSubnet: o.MeshSubnet}},
 		{Op: meta.OpSetVolume, SetVolume: &vol},
 	}
 	if auto { // automatic redundancy (docs/03): the leader grows the policy as devices join

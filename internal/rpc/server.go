@@ -94,16 +94,19 @@ type Options struct {
 	// SecretKey is the cluster key this node holds itself, checked against the FSM's key
 	// ID (docs/19 §3, I-304): GET /v1/secrets/key answers a member with it, 404 without.
 	SecretKey func() ([]byte, bool)
-	Web       uint16 // the browser UI's port for /health (0 when off)
-	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
-	Dev       http.Handler           // /dev/* (docs/08): nil unless dev.enabled
-	Blocked   func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
-	Clk       clock.Clock
-	Logger    *slog.Logger
-	MaxShard  int64         // PUT body cap; default 2 MiB
-	Grace     time.Duration // DELETE fence minimum shard age; default 10 min
-	PutSlots  int           // concurrent PUTs; default 16
-	GetSlots  int           // concurrent GETs; default 32
+	// SeenFrom is the UDP endpoint this node's mesh device sees for a caller's address
+	// (docs/20 §5): /health carries it as the caller's reflexive candidate; nil: none.
+	SeenFrom func(src netip.Addr) string
+	Web      uint16 // the browser UI's port for /health (0 when off)
+	BadSlot  func(key chunk.ShardKey, node meta.NodeIdx)
+	Dev      http.Handler           // /dev/* (docs/08): nil unless dev.enabled
+	Blocked  func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
+	Clk      clock.Clock
+	Logger   *slog.Logger
+	MaxShard int64         // PUT body cap; default 2 MiB
+	Grace    time.Duration // DELETE fence minimum shard age; default 10 min
+	PutSlots int           // concurrent PUTs; default 16
+	GetSlots int           // concurrent GETs; default 32
 	// BodyTimeout bounds reading a PUT or apply body and writing a GET body, so a peer
 	// that stalls mid-transfer cannot hold a slot (I-97); default callTimeout(MaxShard).
 	BodyTimeout time.Duration
@@ -354,10 +357,15 @@ func (s *Server) member(next http.Handler) http.Handler {
 
 // --- handlers ---------------------------------------------------------------------
 
-func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	h := Health{
 		NodeID: s.o.NodeID, ClusterID: s.clusID, Version: s.o.Version, Applied: s.o.Applier.AppliedIndex(), Codec: meta.CodecVersion, Ready: s.o.Applier.Ready(),
 		Leader: s.o.Applier.IsLeader(), Web: s.o.Web,
+	}
+	if s.o.SeenFrom != nil {
+		if src, ok := SourceAddr(r); ok {
+			h.SeenFrom = s.o.SeenFrom(src)
+		}
 	}
 	if s.o.DiskHealth != nil {
 		h.Disks = s.o.DiskHealth()
@@ -645,7 +653,7 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "unparseable source address")
 		return
 	}
-	_, authErr := s.o.Auth.Allow(r.Context(), src)
+	caller, authErr := s.o.Auth.Allow(r.Context(), src)
 	if authErr != nil && errors.Is(authErr, ErrUnavailable) {
 		writeErr(w, http.StatusServiceUnavailable, authErr.Error())
 		return
@@ -653,6 +661,10 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 	var op MemberOp
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad member op")
+		return
+	}
+	if authErr == nil && op.Op == "update_endpoints" && caller.Idx != op.NodeIdx {
+		writeErr(w, http.StatusForbidden, "update_endpoints: a member publishes its own candidates only") // docs/20 §5, I-322
 		return
 	}
 	if authErr != nil {

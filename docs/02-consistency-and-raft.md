@@ -497,10 +497,9 @@ inside the code, answered with an address once the leader has proposed a *pendin
 (`PendingAdd{Key, Addr, At}`, op 26; `PendingDelete`, op 27, when the join lands or
 10 min pass). Then `POST /v1/join` through the tunnel from that address with `{node_id,
 name, key, ports, voter, version, seen_from}`; the receiver requires a pending row at the
-source address, then forwards to the leader, which turns the pending row into the member
-row (same `Idx`, `Key` and `Addr`), proposes `NodeUpsert` *before* it calls
-`raft.AddNonvoter` or `AddVoter`, so every node holds the peer before the leader dials
-it. A voter just added and not
+source address, then forwards to the leader, which calls `raft.AddNonvoter` or
+`AddVoter` and proposes `NodeUpsert`, which turns the pending row into the member row
+(same `Idx`, `Key` and `Addr`). A voter just added and not
 yet caught up can cost the leader its lease while that proposal is in flight; the
 outcome is then unknown (I-95) and the reply is `503`, which the joiner retries under
 the same node ID: a re-join keeps the row and index whichever way the proposal went
