@@ -94,7 +94,7 @@ func OpenCache(fsys sysfs.FS, root string, maxBytes int64, clk clock.Clock, opts
 	for _, o := range opts {
 		o(c)
 	}
-	if err := fsys.MkdirAll(c.dir(), 0o755); err != nil {
+	if err := privateTree(fsys, c.dir()); err != nil {
 		return nil, err
 	}
 	type ent struct {
@@ -384,7 +384,7 @@ func (c *Cache) write(h [32]byte, data []byte, done chan struct{}) {
 
 // writeFile writes data to p through a temp beside it and reports whether p now exists.
 func (c *Cache) writeFile(p string, data []byte) bool {
-	if err := c.fsys.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if err := c.fsys.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return false
 	}
 	f, err := c.fsys.CreateTemp(filepath.Dir(p), ".tmp-*")

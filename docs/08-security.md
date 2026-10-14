@@ -210,7 +210,43 @@ prints a warning line for every node that has them enabled.
 | Node ID | `<data_dir>/node_id` | — (not a secret) |
 
 Shards are stored in plaintext on each node's disk. Encryption at rest is a non-goal
-(see below); users who need it put the data directory on an encrypted volume.
+(see below); the section after next says what is done instead.
+
+## Files on disk
+
+What a node writes to its own disks is readable by nobody but the daemon's user, and the
+daemon tells the operator when the disk under it is not encrypted.
+
+- **Modes.** A shard is written through a temp file (0600) and renamed into place; the
+  shard store, its quarantine and each prefix directory, the chunk cache and its
+  directories, a mirror's tree and the WAL directory are created 0700, and the store and
+  the cache tighten their own directories to 0700 at open (a tree created by an older
+  release was 0755: another user of the device could list shard names, never read them).
+  The config file and the keychain fallback are 0600 in 0700 directories. The config home
+  that holds `mesh.json` stays readable on purpose (docs/20 §3: the CLI of an unprivileged
+  user reads it beside a root daemon), which is why no umask is set (I-340).
+- **Ownership and width.** `serve` warns at start, and `status` and `check` on that
+  device carry the same lines, when the config file, the data directory, a disk or a
+  mirror is wider than its mode above or owned by another user than the daemon (the
+  `chmod` or `chown` is named in the line). Windows has no mode bits worth reading, so it
+  reports nothing (I-126, I-341).
+- **Full-disk encryption.** Root, and whoever holds the disk, read every shard: a data
+  shard is a contiguous slice of its chunk. The at-rest control is the OS's full-disk
+  encryption, so each device probes the filesystem under its data directory, each disk
+  and each mirror once an hour, and `status --json` carries the answer in
+  `machine.paths[].encrypted` as `on`, `off` or `unknown`: macOS asks `diskutil info`
+  (`FileVault: Yes` or `Encrypted: Yes`), Linux follows the mount's source device
+  through the device-mapper `slaves` chain to a `CRYPT-` uuid (dm-crypt under LVM
+  counts, a plain block device is `off`, and ZFS, FUSE, network and memory filesystems
+  are `unknown`), Windows asks `manage-bde -status` for the drive (`Protection On`;
+  without the right to ask, `unknown`). `status` and `check` on that device warn for
+  every path whose answer is `off`, never for `unknown` (I-341).
+- **Tampering** is detected, not prevented: the receiver's SHA-256 in the shard header
+  (`PutVerified`), the chunk hash on every read and the scrub turn an edited shard into a
+  bad slot and a repair (docs/06). Prevention against root is not a software property:
+  root holds the cluster key and the mesh key too. Encrypting the shards under the
+  cluster key (as sealed S3 nodes do per object, docs/10 §4.7) would cover a lost disk
+  without full-disk encryption; it is recorded as a later plan, not built.
 
 ## Threats and mitigations
 
@@ -235,13 +271,17 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | Cross-site page drives an upload through a logged-in browser | `X-Tailraid-UI` header required before the body is read; no CORS (I-71) |
 | A stored HTML or SVG file scripts against the API when opened from `/files/` | `Content-Security-Policy: sandbox` and `nosniff` on every `/files/` response (I-71) |
 | A device's private key is read from its disk | the keychain where the OS has one; the file fallback is 0600 under a 0700 directory; a stolen key is the device, `node remove` it and rotate the token |
+| Another user of the device reads shards, the cache or the WAL | 0600 files in 0700 directories, tightened at open (I-340); `status` warns when a path is wider or owned by someone else (I-341) |
+| A lost or discarded disk is read | the OS's full-disk encryption; every device probes it hourly and `status` and `check` warn while it is off (I-341); an edited shard is detected by its header sum and the chunk hash, never served |
 
 ## Non-goals (explicit)
 
 - Defending against an attacker who controls a **member device**. Such an attacker can
   read all data and corrupt metadata; Raft and hashing detect accidents, not malice from
   an authorized member.
-- Encryption at rest. This includes mirrors (docs/16): a mirror disk holds every byte of
+- Encryption at rest (§Files on disk: modes, ownership and the full-disk-encryption
+  check are what is done instead; encrypting shards under the cluster key is a recorded
+  later plan). This includes mirrors (docs/16): a mirror disk holds every byte of
   every snapshot it captured in the clear and is readable with no cluster and no
   network (`tailraid mirror export`), by design, so a USB mirror is as sensitive as the
   volume itself. The node RPC routes that serve a mirror's trees and objects
@@ -329,6 +369,17 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   `/v1/status`); it answers at most 720 of this node's own unsealed rows, newer than
   `since` and oldest first, and never another member's rows or any credential; `/health`
   carries the node's web port and nothing else that is new.
+- **I-340** — Every directory a node creates for shards, quarantine, the chunk cache, a
+  mirror or the WAL is created 0700 and every shard, cache and WAL file 0600; the shard
+  store and the cache tighten their own directories to 0700 when they open, and the
+  process sets no umask (the config home stays readable by the CLI's user).
+- **I-341** — `serve` at start, and `status` and `check` on that device, warn once per
+  path when the config file, the data directory, a disk or a mirror is wider than 0600 or
+  0700 or owned by another user than the daemon, naming the `chmod` or `chown`, and when
+  the filesystem under the data directory, a disk or a mirror reports full-disk
+  encryption `off`; `status --json` carries each path's `encrypted` as `on`, `off` or
+  `unknown`, a probe that cannot answer reports `unknown` and warns nothing, and a path
+  is probed at most once an hour.
 
 ## Tests
 
@@ -348,3 +399,5 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 | I-189 | `TestClient_PassOpOutlivesHeaderTimeout`, `TestAdminOp_IsPass_Table`, `TestAdmin_PassOpsCarryDeadline` |
 | I-116 | `TestRPC_BodyCaps_Table`, `TestDev_FaultBodyCap`, `TestWebUI_MkdirBodyCap`, `TestWebUI_BodyCaps_AllMutatingRoutes`, `TestWebUI_Thumb_Put_Boundaries` |
 | I-199 | `TestRPC_Stats_MemberOnly_OwnRows`, `TestWriter_Live_SinceAndCap_Table` |
+| I-340 | `TestStore_DirsPrivate`, `TestCache_DirsPrivate` |
+| I-341 | `TestConfig_Warnings_PathsTable`, `TestOwnedBy`, `TestEncryption_ParseDiskutil_Table`, `TestEncryption_ParseManageBDE_Table`, `TestEncryption_Linux_Table`, `TestPaths_ProbeOncePerHour`, `TestPathWarnings_Table`, `TestStatus_CarriesPathsAndWarnings` |

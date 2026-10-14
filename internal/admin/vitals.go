@@ -29,6 +29,9 @@ type MachineReport struct {
 	NetTx        uint64  `json:"net_tx_bytes,omitempty"`
 	MeshRx       uint64  `json:"mesh_rx_bytes,omitempty"` // the interface that holds the tailnet address
 	MeshTx       uint64  `json:"mesh_tx_bytes,omitempty"`
+	// Paths are the device's data directory, disks and mirrors with the full-disk
+	// encryption under each (docs/08 §Files on disk, I-341); filled by the node, hourly.
+	Paths []PathReport `json:"paths,omitempty"`
 }
 
 // Vitals measures the node: dataDir names the disk, meshIP the address whose interface

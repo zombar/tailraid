@@ -279,7 +279,8 @@ shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an un
 `log.level` or `log.format`, a relative `mount.path`, the `mirrors` keys outside the bounds of §11, a `trash.retention` that is neither
 `0` nor at least an hour, and a `cache.size` under 64 MiB (§10); `serve` warns at start
 when the config file or the data directory is readable by other users of the machine
-(I-126).
+(I-126); the same check covers each disk and mirror and the owner of every path, and
+`status` and `check` on the device repeat the lines (I-341, docs/08 §Files on disk).
 
 ## 8. What `status` reports about the process
 
@@ -312,6 +313,12 @@ every disk. Every field is a real measurement or absent: a value the OS does not
 is omitted from the JSON, never reported as zero (I-85). The sampler turns the cumulative
 counters into rates between its ticks, and the report draws CPU, memory, memory pressure
 and disk charts for the sampled node, with peaks in the totals table.
+
+**Files on disk.** `machine.paths` lists the data directory, each disk and each mirror
+of the device (`kind`, `path`) with `encrypted`: `on`, `off` or `unknown`, the OS's
+full-disk encryption under that path as docs/08 §Files on disk probes it, at most once an
+hour. A path at `off` is a warning line in `status` and `check` on that device; `unknown`
+is shown and never warned about (I-341).
 
 **Network.** `machine` also carries four cumulative byte counters: `net_rx_bytes` and
 `net_tx_bytes` summed over every interface but loopback, and `mesh_rx_bytes` and
