@@ -415,19 +415,14 @@ func (a *FS) Rename(oldPath, newPath string) error {
 // OpenFile is the positional handle the server prefers: every READ and WRITE goes through
 // it rather than the whole-file calls.
 func (a *FS) OpenFile(path string) (filesystem.File, error) {
-	f, err := a.view().OpenFile(path, os.O_RDWR, 0)
-	if errors.Is(err, vfs.ErrReadOnly) {
-		f, err = a.view().OpenFile(path, os.O_RDONLY, 0) // a snapshot reads; its writes are refused (I-185)
-	}
+	// a CREATE asks the adapter for no access of its own: the handle writes when the
+	// account holds Write and reads otherwise, and a WRITE on a read-only handle is
+	// STATUS_ACCESS_DENIED (docs/21 §5, I-352)
+	vf, writable, err := a.view().OpenBest(path)
 	if err != nil {
 		return nil, wrap(err)
 	}
-	vf, ok := f.(*vfs.File)
-	if !ok {
-		_ = f.Close()
-		return nil, fmt.Errorf("smbgw: %s: not a vfs file", path)
-	}
-	return &file{f: vf, a: a, path: path}, nil
+	return &file{f: vf, a: a, path: path, readOnly: !writable}, nil
 }
 
 func (a *FS) Truncate(path string, size int64) error {
@@ -457,9 +452,10 @@ func (a *FS) Chtimes(path string, atime, mtime time.Time) error {
 // file is a filesystem.WritableFile over a vfs handle. WriteAt is durable in the WAL when
 // it returns (I-7), which is why Sync has nothing left to do.
 type file struct {
-	f    *vfs.File
-	a    *FS
-	path string
+	f        *vfs.File
+	a        *FS
+	path     string
+	readOnly bool // the account holds Read alone: every WRITE and SET_INFO size is refused
 }
 
 func (f *file) ReadAt(p []byte, off int64) (int, error) {
@@ -471,11 +467,17 @@ func (f *file) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *file) WriteAt(p []byte, off int64) (int, error) {
+	if f.readOnly {
+		return 0, f.a.refused(&f.a.warnWrite, "write", f.path, wrap(syscall.EACCES))
+	}
 	n, err := f.f.WriteAt(p, off)
 	return n, f.a.refused(&f.a.warnWrite, "write", f.path, wrap(err))
 }
 
 func (f *file) Truncate(size int64) error {
+	if f.readOnly {
+		return f.a.refused(&f.a.warnWrite, "truncate", f.path, wrap(syscall.EACCES))
+	}
 	if size < 0 {
 		return syscall.EINVAL
 	}

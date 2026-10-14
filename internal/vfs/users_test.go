@@ -454,3 +454,54 @@ func TestFlusher_PreUsersDirtyDataCommitsAsSystem(t *testing.T) {
 		t.Fatalf("the rewrite: %q %v", got, err)
 	}
 }
+
+// A view tells an actor nothing about an entry they may not read: an O_EXCL create, an
+// open of a directory and of a symlink answer EACCES before EEXIST, EISDIR or ELOOP, a
+// readlink needs Read, and a name folds only for an actor who would see it listed.
+// Invariant: I-353
+func TestVFS_As_RoleBeforeExistence(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	base := f.FS()
+	kim, lee := f.Users()
+	kimFS, leeFS := base.As(kim), base.As(lee)
+	mkdirAs(t, kimFS, "/d/sub")
+	if err := writeAs(t, kimFS, "/d/f", []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if err := kimFS.Symlink("f", "/d/link"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"excl create", func() error { _, err := leeFS.OpenFile("/d/f", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644); return err }()},
+		{"open a directory", func() error { _, err := leeFS.OpenFile("/d/sub", os.O_RDONLY, 0); return err }()},
+		{"open a symlink", func() error { _, err := leeFS.OpenFile("/d/link", os.O_RDONLY, 0); return err }()},
+		{"readlink", func() error { _, err := leeFS.Readlink("/d/link"); return err }()},
+	} {
+		if !errors.Is(tc.err, syscall.EACCES) {
+			t.Errorf("%s without Read: %v, want EACCES", tc.name, tc.err)
+		}
+	}
+	if match, found, ok := leeFS.LookupFold("/d", "F"); found || !ok || match != "" {
+		t.Errorf("a name folds for an actor who may not see it: %q %v %v", match, found, ok)
+	}
+	if match, found, _ := kimFS.LookupFold("/d", "F"); !found || match != "f" {
+		t.Errorf("the admin's fold: %q %v", match, found)
+	}
+	f.Grant(kim, "/d", lee, meta.RoleRead)
+	if target, err := leeFS.Readlink("/d/link"); err != nil || target != "f" {
+		t.Errorf("readlink with Read: %q %v", target, err)
+	}
+	if _, err := leeFS.OpenFile("/d/f", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644); !errors.Is(err, os.ErrExist) {
+		t.Errorf("excl create with Read: %v, want EEXIST", err)
+	}
+	read, write, err := leeFS.Role("/d/f")
+	if err != nil || !read || write {
+		t.Errorf("role under Read: %v %v %v", read, write, err)
+	}
+	if _, _, err := leeFS.Role("/other-nothing"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("role of a missing path: %v", err)
+	}
+}
