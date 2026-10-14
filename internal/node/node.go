@@ -182,9 +182,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
 	store := newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk) // docs/19
-	// S3 nodes: the buckets whose credentials the store or this device's file holds (docs/10 §4.1, docs/19 §6)
-	s3file := cluster.KeysFromFile(cfg.Node.DataDir, func(err error) { log.Warn("s3 credentials file unreadable; keeping the last good keys", "err", err) })
-	client.SetS3(cluster.NewS3Buckets(node, s3Keys(store, s3file), nil).Bucket)
+	// S3 nodes: the buckets whose credentials the store holds (docs/10 §4.1, docs/19 §6)
+	client.SetS3(cluster.NewS3Buckets(node, s3Keys(store), nil).Bucket)
 	prober.SelfHealth = func() rpc.Health {
 		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Dev: cfg.Dev.Enabled, Web: webPort(cfg), Disks: disks.health()}
 	}
@@ -615,10 +614,7 @@ type adminOps struct {
 	mirrors   *mirrorSet // this host's mirrors (docs/16)
 	mirrorPol config.MirrorPolicy
 	secrets   *secrets.Store // the secrets store (docs/19)
-	// the import of the old key files (docs/19 §6): finished, and the last reason it was not
-	legacyDone bool
-	legacyWhy  string
-	keyWhy     string // the last reason the cluster key could not be fetched
+	keyWhy    string         // the last reason the cluster key could not be fetched
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -846,7 +842,6 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 			a.rebudget(ctx) // derived budgets past the hysteresis, pinned ones whenever they differ
 			a.refreshSeed()
 			a.keepKey(ctx)
-			a.importLegacy(ctx)
 			if a.mirrors != nil && a.healthy() {
 				a.mirrors.tick(ctx) // this host's mirrors: schedule, thinning, reconcile (docs/16 §4, §5)
 				if a.node.IsLeader() {
