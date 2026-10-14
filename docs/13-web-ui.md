@@ -19,7 +19,9 @@ operation stays in the CLI.
   across targets: each host a card with one row per disk, each row's slots against its
   expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
   no added disk show one cell, their own store; the block is drawn whenever any host has
-  more than one target.
+  more than one target. A **Mesh** section after Balance draws this device's view of the
+  mesh (docs/20): itself at the centre, every device member on a ring, one edge per member
+  in the class of the path to it, and every other node a link to its own page (§7).
 - **Stats**: a third tab, `#/stats`, draws the soak report's charts (docs/09 §6) over the
   history every node keeps inside the volume (docs/17): stored against logical bytes,
   chunks, the repair backlog and the bytes a pass moves, liveness lanes, the data spread
@@ -435,6 +437,23 @@ state, what it added to the mirror, and Browse, disabled
 with the reason for an offline mirror's rows; there is no Delete). The section's heading carries the schedule
 (`hourly 24 · daily 30 · weekly 8 · monthly 12 · next in 23 m`).
 
+The dashboard's **Mesh** section (docs/20 §10, after tunnelmesh's node map, re-done as a
+still picture) sits after Balance: one static SVG from `chart.Mesh` with this device at
+the centre and every device member on a ring around it, in the order of the member
+table. One edge runs from the centre to each member, in the class of this device's path
+to it (`lan`, `wan`, `relay`, `none`); a relayed path is drawn to the member it goes
+through and on from there to the peer, so the picture shows who carries it. Under each
+member sit its name, its mesh address, the endpoint the path is pinned to and how long
+since it was last heard from; a member with no path shows `none` and when it was last
+seen; a dead member is dimmed. Every other node is a link to that node's own dashboard
+(`http://<addr>:<web>/`, the target the Stats page's member menu uses), so a click
+switches to that node's view of the mesh; a member with no web listener is plain text.
+The heading's sub-line carries the device's address, interface, port and the gateway
+mapping of docs/20 §7 (`portmap pcp 203.0.113.9:20483`, or `none`). The section is drawn
+only on a device with a mesh (`status.mesh` present), and the edges are exactly the
+peers of `status.mesh` (I-331); the chart is redrawn on every poll like the rest of the
+page, and its classes are the chart package's, so it follows the theme (§Charts).
+
 ## 8. Build and assets
 
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
@@ -691,6 +710,7 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Inline form | `.inline-form` | the new-folder input; Enter submits, Escape cancels |
 | Toast | `.toast` | `ok` / `bad`, bottom right, 6 s, click to dismiss, `aria-live="polite"` |
 | Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±25 % (the spread weighted rendezvous leaves at home; docs/14 §7: moves follow home placement, not this band), `warn` past 25 %, `bad` past 50 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
+| Mesh chart | `svg.chart.mesh` > `g.mesh-node` (+ `self`, `off`) of `circle` + `text` (+ `a.mesh-link`), `line.mesh-edge` (+ `lan` `wan` `relay` `none`) | the Mesh section's picture (docs/20): this device at the centre in the accent, members on a ring, edges in the path's class: `lan` green, `wan` ink, `relay` amber dashed through the relay, `none` red dotted; `off` dims a dead member; the label under a node is its name in ink and its facts in `--dim` mono at 10 px; a linked node's name is the accent and the whole node is the link |
 | Diskless host | `.host-row.diskless` + `.host-note` | a host card with no target rows and the note `gateway only · no disks`; its border dimmed |
 | Warning icon | `.warn-icon` | the warnings strip's amber `!` disc at 14 px, inline after a name; the title says why (a target on the same physical disk as others: they fail together) |
 | Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; below 600 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card; a host's archive mirror (16) is a row after its disks: used of the disk, `archive · online`, or `off` (dashed) with `archive · offline since <date>`, and no tick, since it holds no slot; the S3 buckets are a card of their own named `S3`, a row per bucket with its slots against its share and its stored bytes and `bucket/prefix` in place of used of budget |
@@ -773,6 +793,15 @@ chart per row at every width. The rules above stand around them: a series hue is
 status, every lane and cell has a `<title>` with its value, the caption says what the chart
 is, its unit and its window; the one thing the page asks of the drawing that the report
 does not is a clock time axis in place of seconds since the run started (I-197).
+
+**The mesh chart** (docs/20 §10, I-331) is the one picture that is not over a time axis:
+`chart.Mesh` lays this device at the centre of a 760 × 360 frame and the members evenly
+on a ring of radius 120 from the top clockwise, draws each edge from the centre, and a
+relayed edge as two segments through the relay's position, and emits only classes
+(`mesh-edge lan|wan|relay|none`, `mesh-node`, `self`, `off`, `mesh-link`), which `app.css`
+maps to the tokens above; every node has a `<title>` with its facts, so the picture reads
+without hover too. A ring of more than twelve members keeps every edge and shortens the
+labels to the name alone (the facts stay in the title).
 
 **Event labels** (I-297). A marker is a dashed line over the plot; its label never
 covers the plot. The labels sit in a lane of three rows under the time axis, in 10 px
@@ -872,6 +901,11 @@ placement gives way to legible text: the dashed line keeps the event's true time
 26. On an iPhone: the transport, the play buttons and the playing row show Material
     icons, never colour emoji; a row's and a tile's Play shows without hover; every
     control is easy to hit.
+27. The Mesh section on a device of the real cluster: every member on the ring, each
+    edge's class as `tailraid status` reports it, a relayed member drawn through its
+    relay, a dead member dimmed; clicking a member opens that member's dashboard and its
+    picture is drawn from its own view; in light and dark; at 360 px the ring still fits
+    with the labels readable.
 
 ## Invariants
 
@@ -1089,6 +1123,10 @@ placement gives way to legible text: the dashed line keeps the event's true time
   document (absent for system), keeps the choice in the browser's `localStorage` only and
   applies it before the first view renders; a storage failure means system; the server
   never sees the choice.
+- **I-331** — The dashboard's Mesh section draws this device at the centre and exactly the
+  peers of `status.mesh` on a ring, one edge per peer in the class `status.mesh` reports
+  (a relayed one through its relay), every other node a link to that node's own dashboard
+  by its address and web port, a dead member dimmed; a device without a mesh draws none.
 - **I-187** — The web UI lists every snapshot of every mirror with its state, online or
   not, reads as of a snapshot on an online mirror with `at=` and refuses a mutation given
   `at` with 400, lists a file's distinct contents across the online mirrors with the
@@ -1132,6 +1170,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
+| I-331 | stub `TestStub_I_331` (the chart's edges from a status, the links, the dimming; manual check 27 for the picture) |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |

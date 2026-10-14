@@ -544,6 +544,23 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .chart rect.chart-bad { fill: var(--bad); }
 .chart rect.chart-bg { fill: var(--bg); }
 .chart rect.chart-off { fill: var(--line); }
+/* the dashboard's mesh chart (docs/13 §7, docs/20 §10, I-331): this device at the centre,
+   members on a ring, edges in the path's class; the package emits classes only */
+.chart.mesh .mesh-edge { stroke-width: 2; }
+.chart.mesh .mesh-edge.lan { stroke: var(--ok); }
+.chart.mesh .mesh-edge.wan { stroke: var(--text); }
+.chart.mesh .mesh-edge.relay { stroke: var(--warn); stroke-dasharray: 6 4; }
+.chart.mesh .mesh-edge.none { stroke: var(--bad); stroke-dasharray: 2 4; }
+.chart.mesh .mesh-node circle { fill: var(--surface); stroke: var(--dim); stroke-width: 2; }
+.chart.mesh .mesh-node.self circle { fill: var(--accent); stroke: var(--accent); }
+.chart.mesh .mesh-node.self .mesh-name { fill: var(--bg); }
+.chart.mesh .mesh-node.self .mesh-facts { fill: var(--dim); }
+.chart.mesh .mesh-name { font: 600 12px var(--sans); fill: var(--text); }
+.chart.mesh .mesh-link .mesh-name { fill: var(--accent); }
+.chart.mesh .mesh-link:hover circle, .chart.mesh .mesh-link:focus-visible circle { stroke: var(--accent); }
+.chart.mesh .mesh-facts { font: 10px var(--mono); fill: var(--dim); }
+.chart.mesh .mesh-node.off { opacity: 0.55; }
+.chart.mesh .mesh-node.off circle { stroke-dasharray: 3 3; }
 .chart rect.dev-3 { fill: var(--under3); } .chart rect.dev-2 { fill: var(--under2); } .chart rect.dev-1 { fill: var(--under1); }
 .chart rect.dev0 { fill: var(--even); }
 .chart rect.dev1 { fill: var(--over1); } .chart rect.dev2 { fill: var(--over2); } .chart rect.dev3 { fill: var(--over3); }

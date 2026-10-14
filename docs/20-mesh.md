@@ -328,7 +328,9 @@ within a retry (docs/12 §5 unchanged).
 port-mapping state, and for every device member its path class, endpoint, handshake age, how long since it was last heard from
 and bytes each way; `node ls` gains a `PATH` column; the machine vitals' network
 counters (docs/12 §8) are the mesh interface's, `mesh_rx_bytes` and `mesh_tx_bytes`
-(I-325).
+(I-325). The dashboard draws the same block as a picture, the Mesh section of docs/13
+§7: this device at the centre, the members on a ring, the edges in their path classes,
+each member a link to its own dashboard (I-331).
 
 | Key | Default | Meaning |
 |---|---|---|
