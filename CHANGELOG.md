@@ -2,6 +2,13 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.8.3 (2026-10-14)
+
+### Changes
+
+- secrets: no carry-over of the old key files; the volume is re-created with the store ([b565d5c](https://github.com/zombar/tailraid/commit/b565d5c))
+- secrets: `secret set` is the one way in; `node keys` and `media key` go (I-308) ([8f48be3](https://github.com/zombar/tailraid/commit/8f48be3))
+
 ## v0.8.2 (2026-10-14)
 
 ### Changes

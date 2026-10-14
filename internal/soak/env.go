@@ -108,7 +108,7 @@ type Env interface {
 	AddDisk(ctx context.Context, host NodeRef) error
 
 	// S3 nodes (docs/10 §4): AddS3 registers the environment's bucket as S3 node name
-	// (`node add-s3` on one node, `node keys` on the others); Bucket is that bucket as
+	// (its credentials set with `secret set`, then `node add-s3` on one node); Bucket is that bucket as
 	// the driver reaches it, under the prefix the nodes use, for looking behind the
 	// cluster's back. A live cluster offers only Bucket, for the S3 node it already has.
 	AddS3(ctx context.Context, name string) error
