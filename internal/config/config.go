@@ -47,11 +47,12 @@ type Config struct {
 		Password string `yaml:"password"` // the share's password; init and join generate one when listen.smb is set (docs/15 §6)
 	} `yaml:"smb"`
 	Mesh struct {
-		Port      int    `yaml:"port"`                // the device's UDP port (docs/20 §1)
-		Endpoint  string `yaml:"endpoint,omitempty"`  // a public host:port the operator knows reaches this device
-		Subnet    string `yaml:"subnet,omitempty"`    // init only: the cluster's /24 (default: derived from the cluster ID)
-		Address   string `yaml:"address,omitempty"`   // this device's address with the subnet's bits, written by init and join; survives reset
-		Interface string `yaml:"interface,omitempty"` // the interface name on Linux and Windows (default tailraid0 / tailraid); macOS picks a utun
+		Port      int    `yaml:"port"`                 // the device's UDP port (docs/20 §1)
+		Endpoint  string `yaml:"endpoint,omitempty"`   // a public host:port the operator knows reaches this device
+		Subnet    string `yaml:"subnet,omitempty"`     // init only: the cluster's /24 (default: derived from the cluster ID)
+		Address   string `yaml:"address,omitempty"`    // this device's address with the subnet's bits, written by init and join; survives reset
+		Interface string `yaml:"interface,omitempty"`  // the interface name on Linux and Windows (default tailraid0 / tailraid); macOS picks a utun
+		RelayRate string `yaml:"relay_rate,omitempty"` // bytes per second this device forwards for others (default 20M; "0": no limit; docs/20 §6)
 	} `yaml:"mesh"`
 	Log struct {
 		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
@@ -71,6 +72,10 @@ type Config struct {
 		// the percentage of the stored bytes that must be movable away from home before
 		// placement-only moves start (default 5; "0": only `volume rebalance`; docs/14 §7)
 		HomeStart string `yaml:"home_start,omitempty"`
+		// background work on relayed paths (docs/20 §8): avoid (the default) defers a move,
+		// fill or scrub read whose only source or target is relayed unless the slot is bad;
+		// allow runs it
+		Relay string `yaml:"relay,omitempty"`
 	} `yaml:"repair"`
 	// these sections are written only when set, so a release from before them can still
 	// read a file this build wrote (a rollback after update, I-61)
@@ -313,6 +318,30 @@ func (c Config) RepairRateBytes() (n int64, set bool, err error) {
 		return 0, false, fmt.Errorf("config: repair.rate %q: bad size", c.Repair.Rate)
 	}
 	return int64(u), true, nil //nolint:gosec // bounded above
+}
+
+// MeshRelayRateBytes parses mesh.relay_rate: what this device forwards for others per
+// second (docs/20 §6); the mesh's default when unset, 0 for "0".
+func (c Config) MeshRelayRateBytes() (int64, error) {
+	if c.Mesh.RelayRate == "" {
+		return 0, nil
+	}
+	u, err := ParseBytes(c.Mesh.RelayRate)
+	if err != nil || u > 1<<62 {
+		return 0, fmt.Errorf("config: mesh.relay_rate %q: bad size", c.Mesh.RelayRate)
+	}
+	return int64(u), nil //nolint:gosec // bounded above
+}
+
+// RepairAvoidRelay reports repair.relay: true unless it is "allow" (docs/20 §8).
+func (c Config) RepairAvoidRelay() (bool, error) {
+	switch c.Repair.Relay {
+	case "", "avoid":
+		return true, nil
+	case "allow":
+		return false, nil
+	}
+	return false, fmt.Errorf("config: repair.relay %q: want avoid or allow", c.Repair.Relay)
 }
 
 // StatsEvery parses stats.every, the sample interval of docs/17 §1: 10 s when unset,
@@ -912,6 +941,12 @@ func (l *LogFile) Close() error {
 // validateMesh checks the mesh keys (docs/20 §10): a UDP port, an endpoint of the form
 // host:port, a subnet that is an IPv4 /24, an address with its subnet's bits.
 func (c *Config) validateMesh() error {
+	if _, err := c.MeshRelayRateBytes(); err != nil {
+		return err
+	}
+	if _, err := c.RepairAvoidRelay(); err != nil {
+		return err
+	}
 	if p := c.Mesh.Port; p < 1 || p > 65535 {
 		return fmt.Errorf("config: mesh.port %d: want a UDP port", p)
 	}

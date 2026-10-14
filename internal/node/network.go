@@ -171,7 +171,12 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		return err
 	}
 	nw.ifname = ifname
-	o := mesh.Options{Port: nw.port, Log: nw.log, Clock: clk, ClusterID: clusterID}
+	rate, err := cfg.MeshRelayRateBytes()
+	if err != nil {
+		_ = tunDev.Close()
+		return err
+	}
+	o := mesh.Options{Port: nw.port, Log: nw.log, Clock: clk, ClusterID: clusterID, RelayRate: rate}
 	if intro != nil {
 		o.Introducer, o.TokenKey = intro, intro.tokenKey(clusterID)
 	}
@@ -424,6 +429,28 @@ func (nw *network) report(node *cluster.Node, cfg config.Config, now time.Time) 
 			byKey[mesh.Key(row.Key)] = row
 		}
 	}
+	// a relayed path names the member it goes through: the peer whose pinned endpoint is
+	// the relay's address
+	viaName := map[netip.AddrPort]string{}
+	for i := range peers {
+		if p := &peers[i]; !p.Relay && p.Endpoint.IsValid() {
+			if row, ok := byKey[p.Key]; ok {
+				viaName[p.Endpoint] = row.Name
+			}
+		}
+	}
+	nameOf := func(k mesh.Key) string {
+		if row, ok := byKey[k]; ok {
+			return row.Name
+		}
+		return k.String()
+	}
+	for from, n := range nw.mesh.Relayed() {
+		if rep.Relayed == nil {
+			rep.Relayed = map[string]uint64{}
+		}
+		rep.Relayed[nameOf(from[0])+">"+nameOf(from[1])] = n
+	}
 	for i := range peers {
 		p := &peers[i]
 		mp := admin.MeshPeer{Key: p.Key.String(), Class: p.Class.String(), Rx: p.Rx, Tx: p.Tx}
@@ -432,6 +459,12 @@ func (nw *network) report(node *cluster.Node, cfg config.Config, now time.Time) 
 		}
 		if p.Endpoint.IsValid() {
 			mp.Endpoint = p.Endpoint.String()
+		}
+		if p.Relay {
+			mp.Via = viaName[p.Endpoint]
+			if mp.Via == "" {
+				mp.Via = p.Endpoint.String()
+			}
 		}
 		if !p.LastHandshake.IsZero() {
 			mp.HandshakeAge = now.Sub(p.LastHandshake).Round(time.Second).String()

@@ -501,6 +501,7 @@ func (s selfLiveness) IsLive(idx meta.NodeIdx) bool {
 }
 
 func (selfLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
+func (selfLiveness) Class(meta.NodeIdx) meta.PathClass  { return meta.PathLAN }
 
 // liveSnapshots counts the catalogue rows a user sees: every state but Deleting.
 func liveSnapshots(rows []meta.Snapshot) int {
@@ -533,6 +534,8 @@ type MeshReport struct {
 	RxBytes   uint64     `json:"rx_bytes,omitempty"`
 	TxBytes   uint64     `json:"tx_bytes,omitempty"`
 	Peers     []MeshPeer `json:"peers,omitempty"`
+	// Relayed is what this device forwarded for others, bytes by "from>to" (docs/20 §6, I-328)
+	Relayed map[string]uint64 `json:"relayed_bytes,omitempty"`
 }
 
 // MeshPeer is one peer of the device.
@@ -542,6 +545,7 @@ type MeshPeer struct {
 	Key          string       `json:"key"`
 	Class        string       `json:"class"` // lan, wan, relay or none
 	Endpoint     string       `json:"endpoint,omitempty"`
+	Via          string       `json:"via,omitempty"` // a relayed path: the member it goes through (docs/20 §6)
 	HandshakeAge string       `json:"handshake_age,omitempty"`
 	SeenAge      string       `json:"seen_age,omitempty"` // since the last packet or handshake from it: the path monitor's sign of life
 	Rx           uint64       `json:"rx_bytes,omitempty"`

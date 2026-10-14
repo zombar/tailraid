@@ -78,9 +78,9 @@ func peersOf(rep admin.Report) map[string]admin.MeshPeer {
 	if rep.Mesh == nil {
 		return out
 	}
-	for _, p := range rep.Mesh.Peers {
-		if p.Name != "" {
-			out[p.Name] = p
+	for i := range rep.Mesh.Peers {
+		if p := &rep.Mesh.Peers[i]; p.Name != "" {
+			out[p.Name] = *p
 		}
 	}
 	return out
@@ -115,8 +115,9 @@ func (r *Run) meshSample(ctx context.Context) (paths map[string]string, counters
 			continue
 		}
 		counters[n.Name] = [2]uint64{rep.Mesh.RxBytes, rep.Mesh.TxBytes}
-		for name, p := range peersOf(rep) {
-			paths[n.Name+">"+name] = p.Class
+		peers := peersOf(rep)
+		for name := range peers {
+			paths[n.Name+">"+name] = peers[name].Class
 		}
 	}
 	return paths, counters
@@ -341,8 +342,8 @@ func phaseMeshJoin(ctx context.Context, r *Run) error {
 			if rep.Mesh == nil {
 				continue
 			}
-			for _, p := range rep.Mesh.Peers {
-				if p.Key == lateKey || p.Name == late.Name {
+			for i := range rep.Mesh.Peers {
+				if p := &rep.Mesh.Peers[i]; p.Key == lateKey || p.Name == late.Name {
 					return false
 				}
 			}

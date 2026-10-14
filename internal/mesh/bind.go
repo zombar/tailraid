@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 )
@@ -22,6 +23,7 @@ import (
 type Bind struct {
 	inner conn.Bind
 	log   *slog.Logger
+	relay *relayState
 
 	mu      sync.Mutex
 	cands   map[uint32][]conn.Endpoint
@@ -39,8 +41,8 @@ const fanoutPrefix = "fanout:"
 
 var errNoCandidate = errors.New("mesh: no candidate endpoint for the peer")
 
-func newBind(inner conn.Bind, log *slog.Logger) *Bind {
-	return &Bind{inner: inner, log: log, cands: map[uint32][]conn.Endpoint{}}
+func newBind(inner conn.Bind, log *slog.Logger, relay *relayState) *Bind {
+	return &Bind{inner: inner, log: log, relay: relay, cands: map[uint32][]conn.Endpoint{}}
 }
 
 // fanout is the endpoint of a peer without a session: every candidate at once (I-323).
@@ -91,16 +93,136 @@ func (b *Bind) wrap(fn conn.ReceiveFunc) conn.ReceiveFunc {
 				continue
 			}
 			b.rx.Add(uint64(sizes[i])) //nolint:gosec // a size
-			if t := packets[i][0]; t == frameIntroduce || t == frameRelay || t == frameProbe {
+			switch packets[i][0] {
+			case frameIntroduce:
 				frame := make([]byte, sizes[i])
 				copy(frame, packets[i][:sizes[i]])
 				sizes[i] = 0
 				b.frame(frame, eps[i])
+			case frameRelay:
+				// for this device: the WireGuard packet goes in from the relay endpoint, so
+				// the peer's replies go back the same way; for another: forwarded (I-328)
+				if payload, ep, ok := b.relayIn(packets[i][:sizes[i]], eps[i]); ok {
+					sizes[i] = copy(packets[i], payload)
+					eps[i] = ep
+				} else {
+					sizes[i] = 0
+				}
+			case frameProbe:
+				b.probeIn(packets[i][:sizes[i]], eps[i])
+				sizes[i] = 0
 			}
 		}
 		return n, err
 	}
 }
+
+// relayIn handles a relay frame: for this device it returns the WireGuard packet and the
+// relay endpoint it came through; for another it forwards the frame, when this device
+// holds direct sessions with both ends, the MAC verifies and the rate allows, and
+// returns nothing (I-328).
+func (b *Bind) relayIn(frame []byte, from conn.Endpoint) ([]byte, conn.Endpoint, bool) {
+	r := b.relay
+	if r == nil {
+		return nil, nil, false
+	}
+	r.mu.Lock()
+	key, self := r.key, r.self
+	r.mu.Unlock()
+	hdr, payload, ok := decodeRelay(key, frame, r.clk.Now())
+	if !ok || len(frame) > MaxRelayFrame {
+		return nil, nil, false
+	}
+	src, err := netip.ParseAddrPort(from.DstToString())
+	if err != nil {
+		return nil, nil, false
+	}
+	if hdr.to == self {
+		return payload, &relayEP{via: src, peer: hdr.from}, true
+	}
+	r.mu.Lock()
+	_, fromOK := r.forward[hdr.from]
+	to, toOK := r.forward[hdr.to]
+	limit := r.limit
+	r.mu.Unlock()
+	if !fromOK || !toOK || !limit.take(int64(len(frame))) {
+		return nil, nil, false
+	}
+	if err := b.inner.Send([][]byte{frame}, to); err != nil {
+		b.log.Debug("relay forward", "to", to.DstToString(), "err", err)
+		return nil, nil, false
+	}
+	b.tx.Add(uint64(len(frame)))
+	r.mu.Lock()
+	r.relayed[[2]Key{hdr.from, hdr.to}] += uint64(len(frame))
+	r.mu.Unlock()
+	return nil, nil, false
+}
+
+// probeIn answers a path probe: one carrying this device's own key is an echo from a
+// candidate this device probed, which the monitor then pins; any other verified probe
+// is sent back as it came (I-329).
+func (b *Bind) probeIn(frame []byte, from conn.Endpoint) {
+	r := b.relay
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	key, self := r.key, r.self
+	r.mu.Unlock()
+	k, ok := decodeProbe(key, frame, r.clk.Now())
+	if !ok {
+		return
+	}
+	src, err := netip.ParseAddrPort(from.DstToString())
+	if err != nil {
+		return
+	}
+	if k != self {
+		echo := make([]byte, len(frame))
+		copy(echo, frame)
+		if err := b.SendControl(echo, src); err != nil {
+			b.log.Debug("probe echo", "to", src.String(), "err", err)
+		}
+		return
+	}
+	r.mu.Lock()
+	w, waiting := r.probes[src]
+	if waiting {
+		delete(r.probes, src)
+	}
+	onProbe := r.onProbe
+	r.mu.Unlock()
+	if waiting && !r.clk.Now().After(w.until) && onProbe != nil {
+		onProbe(w.peer, src)
+	}
+}
+
+// Probe sends a path probe to a candidate of a peer and remembers it for the echo.
+func (b *Bind) Probe(cand netip.AddrPort, peer Key) error {
+	r := b.relay
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	key, self := r.key, r.self
+	if len(key) == 0 {
+		r.mu.Unlock()
+		return nil
+	}
+	now := r.clk.Now()
+	r.probes[cand] = probeWait{peer: peer, until: now.Add(probeWindow)}
+	for c, w := range r.probes { // the ones never answered
+		if now.After(w.until) {
+			delete(r.probes, c)
+		}
+	}
+	r.mu.Unlock()
+	return b.SendControl(encodeProbe(key, self, now.Unix()), cand)
+}
+
+// probeWindow is how long a probe's echo is awaited.
+const probeWindow = 10 * time.Second
 
 // frame dispatches one control frame off the receive path.
 func (b *Bind) frame(frame []byte, from conn.Endpoint) {
@@ -190,16 +312,12 @@ func (b *Bind) Port() uint16 {
 	return b.port
 }
 
-// Send writes the packets to the endpoint: every candidate for a fan-out, else as is.
+// Send writes the packets to the endpoint: every candidate for a fan-out, through the
+// member for a relay endpoint, else as is.
 func (b *Bind) Send(bufs [][]byte, ep conn.Endpoint) error {
-	var n uint64
-	for _, buf := range bufs {
-		n += uint64(len(buf))
-	}
 	f, ok := ep.(*fanout)
 	if !ok {
-		b.tx.Add(n)
-		return b.inner.Send(bufs, ep)
+		return b.sendTo(bufs, ep)
 	}
 	b.mu.Lock()
 	cands := b.cands[f.idx]
@@ -210,14 +328,13 @@ func (b *Bind) Send(bufs [][]byte, ep conn.Endpoint) error {
 	var firstErr error
 	sent := false
 	for _, c := range cands {
-		if err := b.inner.Send(bufs, c); err != nil {
+		if err := b.sendTo(bufs, c); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
 		sent = true
-		b.tx.Add(n)
 	}
 	if !sent {
 		return firstErr
@@ -225,8 +342,49 @@ func (b *Bind) Send(bufs [][]byte, ep conn.Endpoint) error {
 	return nil
 }
 
-// ParseEndpoint reads `fanout:<idx>` or an address.
+// sendTo sends to one endpoint: a relay endpoint wraps each packet in a relay frame to
+// the member (I-328), which needs the relay key; anything else goes as is.
+func (b *Bind) sendTo(bufs [][]byte, ep conn.Endpoint) error {
+	var n uint64
+	for _, buf := range bufs {
+		n += uint64(len(buf))
+	}
+	rep, isRelay := ep.(*relayEP)
+	if !isRelay {
+		b.tx.Add(n)
+		return b.inner.Send(bufs, ep)
+	}
+	r := b.relay
+	if r == nil {
+		return errNoRelayKey
+	}
+	r.mu.Lock()
+	key, self := r.key, r.self
+	r.mu.Unlock()
+	if len(key) == 0 {
+		return errNoRelayKey
+	}
+	via, err := b.inner.ParseEndpoint(rep.via.String())
+	if err != nil {
+		return err
+	}
+	now := r.clk.Now().Unix()
+	frames := make([][]byte, 0, len(bufs))
+	for _, buf := range bufs {
+		frames = append(frames, encodeRelay(key, self, rep.peer, now, buf))
+		n += relayHeaderLen
+	}
+	b.tx.Add(n)
+	return b.inner.Send(frames, via)
+}
+
+var errNoRelayKey = errors.New("mesh: no cluster key yet: direct paths only")
+
+// ParseEndpoint reads `fanout:<idx>`, `relay:<via>/<key>` or an address.
 func (b *Bind) ParseEndpoint(s string) (conn.Endpoint, error) {
+	if rep, ok := parseRelayEndpoint(s); ok {
+		return rep, nil
+	}
 	if idx, ok := strings.CutPrefix(s, fanoutPrefix); ok {
 		n, err := strconv.ParseUint(idx, 10, 32)
 		if err != nil {
@@ -237,7 +395,7 @@ func (b *Bind) ParseEndpoint(s string) (conn.Endpoint, error) {
 	return b.inner.ParseEndpoint(s)
 }
 
-// SetCandidates replaces a peer's candidates (docs/20 §5, I-322).
+// SetCandidates replaces a peer's candidates (docs/20 §5, I-322) with direct ones.
 func (b *Bind) SetCandidates(idx uint32, cands []netip.AddrPort) error {
 	eps := make([]conn.Endpoint, 0, len(cands))
 	for _, c := range cands {
@@ -247,13 +405,40 @@ func (b *Bind) SetCandidates(idx uint32, cands []netip.AddrPort) error {
 		}
 		eps = append(eps, ep)
 	}
+	b.setCandidateEndpoints(idx, eps)
+	return nil
+}
+
+// setCandidateEndpoints replaces a peer's candidates with endpoints of any kind: direct
+// ones and relay ones through members (docs/20 §6).
+func (b *Bind) setCandidateEndpoints(idx uint32, eps []conn.Endpoint) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if len(eps) == 0 {
 		delete(b.cands, idx)
-		return nil
+		return
 	}
 	b.cands[idx] = eps
+}
+
+// setForward replaces the relay role's table: the peers this device holds a direct
+// session with, by their pinned endpoints (I-328).
+func (b *Bind) setForward(table map[Key]netip.AddrPort) error {
+	r := b.relay
+	if r == nil {
+		return nil
+	}
+	eps := make(map[Key]conn.Endpoint, len(table))
+	for k, ap := range table {
+		ep, err := b.inner.ParseEndpoint(ap.String())
+		if err != nil {
+			return err
+		}
+		eps[k] = ep
+	}
+	r.mu.Lock()
+	r.forward = eps
+	r.mu.Unlock()
 	return nil
 }
 

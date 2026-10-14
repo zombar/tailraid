@@ -183,6 +183,17 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	prober := cluster.NewProber(node, client, clk)
 	prober.PathOf = nw.pathOf(node)                                                           // the class of the path to each device, for ranking (docs/20 §8)
 	store := newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk) // docs/19
+	if nw.mesh != nil {
+		// relay frames and probes are authenticated under the cluster key (docs/20 §6):
+		// the device asks for it on every use, so a key fetched later is picked up
+		nw.mesh.SetClusterKey(func() []byte {
+			k, ok := store.Local()
+			if !ok {
+				return nil
+			}
+			return k
+		})
+	}
 	// S3 nodes: the buckets whose credentials the store holds (docs/10 §4.1, docs/19 §6)
 	client.SetS3(cluster.NewS3Buckets(node, s3Keys(store), nil).Bucket)
 	prober.SelfHealth = func() rpc.Health {
@@ -230,6 +241,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	if rcfg.Retention, err = cfg.TrashRetention(); err != nil {
+		return err
+	}
+	if rcfg.AvoidRelay, err = cfg.RepairAvoidRelay(); err != nil {
 		return err
 	}
 	if rcfg.S3ScrubBytes, err = cfg.S3ScrubBytes(); err != nil {

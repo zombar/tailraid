@@ -224,8 +224,6 @@ today).
 
 ## 6. The relay and the path probe
 
-*Lands as its own PR after direct connectivity.*
-
 **Relay.** For each live member M with a direct path, a peer gets the candidate
 `via M`, tried once its direct candidates have failed for 10 s. A packet sent `via M`
 goes to M's pinned endpoint as `0x11 ‖ sender key ‖ HMAC ‖ WireGuard packet`; M checks
@@ -469,6 +467,6 @@ round-trip table.
 | I-325 | `TestClassify_Table`, `TestLocalAddr_MeshFileThenConfig`; stub `TestStub_I_325` for `status` on a real interface |
 | I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`, `TestKeylessCheck` |
 | I-327 | `TestProber_RankByClass_Determinism`, `TestReader_HedgeSkipsRelayedHolders_Table`, `TestFlusher_StragglerGrace_PerClass` |
-| I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need); stub `TestStub_I_328` |
-| I-329 | stub `TestStub_I_329` |
+| I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need), `TestNAT_SymmetricToSymmetric_ThroughARelay`, `TestRelay_Codecs_Table`, `TestBind_RelayForwardRules`, `TestRelay_LeavesForADirectPath` |
+| I-329 | `TestRelay_Codecs_Table`, `TestBind_RelayForwardRules`, `TestRelay_LeavesForADirectPath`, `TestProbeTargets_Table`, `TestRepair_RelayedPathsDeferred`, `TestReader_Readahead_RelayedHolderOneChunk` |
 | I-330 | stub `TestStub_I_330` |

@@ -149,8 +149,15 @@ func (b natBind) Send(bufs [][]byte, ep conn.Endpoint) error {
 // natted is a node behind a simulated NAT.
 func natted(t *testing.T, idx uint32, symmetric bool) (*node, *natSim) {
 	t.Helper()
+	return nattedWith(t, idx, symmetric, Options{})
+}
+
+// nattedWith is natted with options of its own (the cluster key for the relay tests).
+func nattedWith(t *testing.T, idx uint32, symmetric bool, o Options) (*node, *natSim) {
+	t.Helper()
 	sim := newNAT(t, symmetric)
-	return newNode(t, idx, Options{Inner: natBind{sim}}), sim
+	o.Inner = natBind{sim}
+	return newNode(t, idx, o), sim
 }
 
 // Invariant: I-323

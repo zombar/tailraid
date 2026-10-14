@@ -336,10 +336,19 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 		return
 	}
 	depth := uint64(ReadaheadDepth(cs))
+	var live map[meta.NodeIdx]bool // the live set, read once per call and only when a second chunk is weighed
 	for j := idx + 1; j <= idx+depth && j < uint64(len(in.Chunks)); j++ {
 		h := in.Chunks[j]
 		if h == meta.HashZero || r.cache.Has(h) {
 			continue
+		}
+		if j > idx+1 {
+			if live == nil {
+				live = meta.LiveSet(r.peers.Live())
+			}
+			if r.relayedHolders(h, live) {
+				break // readahead to a relayed holder fetches at most one chunk (docs/20 §8, I-329)
+			}
 		}
 		select {
 		case r.slots <- struct{}{}:
@@ -353,7 +362,9 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 			<-r.slots
 			return
 		}
-		if _, running := r.inflight[h]; running {
+		// a prefetch that finished between the check above and this lock has left the
+		// in-flight table and landed in the cache: fetching it again would count twice
+		if _, running := r.inflight[h]; running || r.cache.Has(h) {
 			r.mu.Unlock()
 			<-r.slots
 			continue
@@ -672,6 +683,22 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 		return nil, fmt.Errorf("%w: decode chunk %x: %w", ErrIO, c.Hash[:8], err)
 	}
 	return data, nil
+}
+
+// relayedHolders reports a chunk whose fetch would use a relayed holder: fewer than k
+// of its live holders are on a direct path.
+func (r *Reader) relayedHolders(h meta.Hash, live map[meta.NodeIdx]bool) bool {
+	c, ok := r.st.GetChunk(h)
+	if !ok {
+		return false
+	}
+	direct := 0
+	for _, n := range c.Placement {
+		if n != 0 && live[n] && r.peers.Class(n) != meta.PathRelay {
+			direct++
+		}
+	}
+	return direct < int(c.K)
 }
 
 // localTargets is this host and its own disks: shards there cost no network.

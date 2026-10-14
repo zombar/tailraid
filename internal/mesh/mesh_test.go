@@ -412,8 +412,9 @@ func TestMesh_KeepaliveIsOnByDefault(t *testing.T) {
 }
 
 // A peer whose row arrived before its endpoints (a joiner publishes them from its first
-// tick) is sent nothing until they come, and fans out the moment they do: the device
-// does not wait for the dead-path window to notice a peer it never had an endpoint for.
+// tick) is sent nothing until they come, and fans out at the monitor's next tick once
+// they do: the device does not wait for the dead-path window to notice a peer it never
+// had an endpoint for.
 // Invariant: I-322, I-323
 func TestMesh_CandidatesArrivingLaterFanOut(t *testing.T) {
 	a := newNode(t, 1, Options{})
@@ -428,6 +429,9 @@ func TestMesh_CandidatesArrivingLaterFanOut(t *testing.T) {
 		t.Fatalf("a peer without candidates has an endpoint: %+v", st)
 	}
 	if err := a.m.SetPeers([]Peer{b.peer(b.loopback())}); err != nil { // the endpoints published
+		t.Fatal(err)
+	}
+	if err := a.m.Tick(); err != nil { // the monitor sees a peer with candidates and no endpoint
 		t.Fatal(err)
 	}
 	if st := statusOf(t, a, b.m.Key()); !st.Fanout {
