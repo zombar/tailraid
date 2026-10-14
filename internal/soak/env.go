@@ -55,6 +55,9 @@ type Caps struct {
 	// Mesh: the nodes run on the mesh of docs/20 with a real device each, and the
 	// environment is a MeshEnv (phases 25 and 26; a live cluster observes its paths only).
 	Mesh bool
+	// Self names the device running verify on a live cluster, which Kill refuses (its
+	// mount is the run's only volume) and whose path to a killed node stays; "" on a rig.
+	Self string
 }
 
 // Env is one target cluster (docs/09 §6).

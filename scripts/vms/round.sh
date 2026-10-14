@@ -321,6 +321,9 @@ s8_verify() {
   while read -r p; do
     case "$p" in '"phase":"4 parity"'|'"phase":"13 disks"'|'"phase":"14 diskless host"'|'"phase":"15 s3 bucket"') ;;
       '"phase":"6 consensus"') echo "consensus skipped: the verifier was the leader" ;;
+      # a live cluster has no mirror before step 9 (19), no copy jobs (22, 23) and no
+      # mesh of its own to join, cut or map (25-27): observed only, as docs/20 §10 says
+      '"phase":"19 snapshots"'|'"phase":"22 copies under faults"'|'"phase":"23 many users at once"'|'"phase":"25 mesh join"'|'"phase":"26 mesh paths"'|'"phase":"27 mesh nat"') ;;
       *) echo "unexpected skip: $p"; rc=1 ;;
     esac
   done < "$OUT/skipped-$FIRST.txt"

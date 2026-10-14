@@ -38,7 +38,13 @@ func NewLiveEnv(client *rpc.Client, selfAddr, mountPath, clusterID, dataDir stri
 func (e *LiveEnv) Name() string { return "live cluster " + e.ClusterID }
 
 func (e *LiveEnv) Caps() Caps {
-	return Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts, S3: e.DataDir != "", Stats: true}
+	c := Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts, S3: e.DataDir != "", Stats: true}
+	for _, n := range e.all {
+		if n.RPC == e.SelfAddr {
+			c.Self = n.Name
+		}
+	}
+	return c
 }
 
 // Nodes lists the members from this device's status; the local node comes first so its

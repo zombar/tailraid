@@ -176,7 +176,14 @@ func phaseStats(ctx context.Context, r *Run) error {
 			// newest cluster row written after the kill is the one judged, within the window
 			_ = r.Env.Wait(ctx, cluster.LiveThreshold+2*r.Profile.SampleEvery)
 			_, err := r.Env.StatsLive(ctx, victim, 0)
-			r.checkAt("I-196", "a dead member has no live edge", err != nil, fmt.Sprintf("err %v", err), "", "", victim.Name)
+			if err == nil && r.Env.Caps().Self != "" && r.alive(ctx, victim) {
+				// a live cluster's kill holds the victim off every member but the device
+				// running verify, whose path stays for the lift: the victim still answers
+				// it, so the rows the leader writes (below) are the judge here
+				r.checkSkipped("I-196", "a dead member has no live edge", "the device running verify keeps its path to a killed node (docs/09 §6)")
+			} else {
+				r.checkAt("I-196", "a dead member has no live edge", err != nil, fmt.Sprintf("err %v", err), "", "", victim.Name)
+			}
 			deadline := time.Now().Add(attrCacheWindow)
 			var last *stats.Row
 			var by string
