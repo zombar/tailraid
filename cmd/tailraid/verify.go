@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,7 +15,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/soak"
 )
 
@@ -35,7 +36,11 @@ the partial report.`,
 			if err != nil {
 				return err
 			}
-			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+			var localIP netip.Addr
+			if host, _, herr := net.SplitHostPort(addr); herr == nil {
+				localIP, _ = netip.ParseAddr(host)
+			}
+			cid, err := clusterIDOf(ctx, cfg, addr, localIP) // root's data directory on macOS (docs/20 §9)
 			if err != nil {
 				return err
 			}

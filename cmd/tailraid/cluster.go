@@ -57,16 +57,9 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		localIP, _ = netip.ParseAddr(host)
 	}
-	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+	cid, err := clusterIDOf(cmd.Context(), cfg, addr, localIP)
 	if err != nil {
-		probe := rpc.NewClient([16]byte{}, nil)
-		probe.SetLocalIP(localIP)
-		h, herr := probe.Health(cmd.Context(), addr)
-		raw, derr := hex.DecodeString(h.ClusterID)
-		if herr != nil || derr != nil || len(raw) != 16 {
-			return nil, "", cfg, fmt.Errorf("this node is not initialised: %w", err)
-		}
-		copy(cid[:], raw)
+		return nil, "", cfg, err
 	}
 	if override, _ := cmd.Flags().GetString("node"); override != "" {
 		addr = override
@@ -78,6 +71,37 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 	c.SetLocalIP(localIP)
 	c.Sign = userSigner(cmd.Context(), cid) // the person's signature on mutating requests (docs/21 §2)
 	return c, addr, cfg, nil
+}
+
+// clusterIDOf is the cluster the local node belongs to: the identity file when this
+// user may read it, else the node's own answer over /health (a user's CLI beside the
+// root daemon of macOS, docs/20 §9: status, node add-disk, mirror add and verify run
+// unprivileged there, and the data directory is root's).
+func clusterIDOf(ctx context.Context, cfg config.Config, addr string, localIP netip.Addr) ([16]byte, error) {
+	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+	if err == nil {
+		return cid, nil
+	}
+	probe := rpc.NewClient([16]byte{}, nil)
+	probe.SetLocalIP(localIP)
+	h, herr := probe.Health(ctx, addr)
+	raw, derr := hex.DecodeString(h.ClusterID)
+	if herr != nil || derr != nil || len(raw) != 16 {
+		return [16]byte{}, fmt.Errorf("this node is not initialised: %w", err)
+	}
+	copy(cid[:], raw)
+	return cid, nil
+}
+
+// clusterIDFrom is the cluster of a status report, for commands that already hold one.
+func clusterIDFrom(rep admin.Report) ([16]byte, error) {
+	var cid [16]byte
+	raw, err := hex.DecodeString(rep.ClusterID)
+	if err != nil || len(raw) != 16 {
+		return cid, fmt.Errorf("status carries no cluster id (%q)", rep.ClusterID)
+	}
+	copy(cid[:], raw)
+	return cid, nil
 }
 
 func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Client, string, error) {
@@ -517,7 +541,7 @@ func addDiskCmd() *cobra.Command {
 					n++
 				}
 			}
-			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+			cid, err := clusterIDFrom(rep) // never the data directory: root's on macOS (docs/20 §9)
 			if err != nil {
 				return err
 			}

@@ -326,7 +326,9 @@ OS, the CLI and the rigs).
   boot, not at login) and `config.Home()` as root is `/Library/Application
   Support/tailraid`, with the log at `/Library/Logs/tailraid/serve.log`. `init`, `join`,
   `install`, `start`, `stop`, `update --restart`, `export`, `recover` and `reset` run
-  under `sudo`; `status`, `dashboard`, `trash`, `cache`, `search` and the browser do not
+  under `sudo`; `status`, `dashboard`, `trash`, `cache`, `search`, `node add-disk`,
+  `mirror add`, `verify` and the browser do not (they take the cluster ID from the node's
+  status or `/health`, never from the data directory, which is root's)
   (the CLI finds the node through `mesh.json` in the system home and the cluster ID
   through `/health`). `install` records `mount.owner` from `SUDO_UID` and `SUDO_GID`, so
   the user's NFS mount shows their ownership. (A
