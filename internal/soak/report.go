@@ -501,6 +501,7 @@ th{background:#f6f6f6} .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font
 path.s0{stroke:#2563eb}rect.s0,circle.s0{fill:#2563eb}path.s1{stroke:#dc2626}rect.s1,circle.s1{fill:#dc2626}path.s2{stroke:#16a34a}rect.s2,circle.s2{fill:#16a34a}path.s3{stroke:#d97706}rect.s3,circle.s3{fill:#d97706}
 path.s4{stroke:#7c3aed}rect.s4,circle.s4{fill:#7c3aed}path.s5{stroke:#0891b2}rect.s5,circle.s5{fill:#0891b2}path.s6{stroke:#be185d}rect.s6,circle.s6{fill:#be185d}path.s7{stroke:#4d7c0f}rect.s7,circle.s7{fill:#4d7c0f}
 .dev-3{fill:#1d4ed8}.dev-2{fill:#7895e4}.dev-1{fill:#c3cdee}.dev0{fill:#e5e7eb}.dev1{fill:#e3c3e6}.dev2{fill:#c272c9}.dev3{fill:#a21caf}
+.mesh{display:block}.mesh-edge{stroke-width:2}.lan{stroke:#16a34a}.wan{stroke:#0f172a}.relay{stroke:#d97706;stroke-dasharray:6 4}.none{stroke:#dc2626;stroke-dasharray:2 4}.mesh-node{fill:#fff;stroke:#64748b;stroke-width:2}.self{fill:#2563eb;stroke:#2563eb}.off{opacity:.55}.mesh-link{stroke:#2563eb}.mesh-name{font:600 12px sans-serif;fill:#0f172a;stroke:none}
 details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-align:right} .cov span{display:inline-block;margin:2px 6px 2px 0;padding:1px 6px;border-radius:4px;background:#eef2f7;font-size:12px} .cov .bad{background:#fee2e2} .dump{font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto;max-height:480px;background:#f8fafc;padding:8px;border:1px solid #eee}
 </style></head><body>
 <h1>{{.Mark}}<span>tail<span style="color:#2563eb">raid</span> soak report</span></h1>

@@ -19,6 +19,3 @@ func TestStub_I_322(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md 
 
 // Invariant: I-325
 func TestStub_I_325(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §10") }
-
-// Invariant: I-331
-func TestStub_I_331(t *testing.T) { t.Skip("stub: the dashboard's mesh chart; see docs/13 §7") }

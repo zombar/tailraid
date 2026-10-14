@@ -108,6 +108,7 @@ var Classes = []string{
 	string(OK), string(Warn), string(Bad), "chart-bg", "chart-off",
 	"dev-3", "dev-2", "dev-1", "dev0", "dev1", "dev2", "dev3",
 	"pending", "frame", "note",
+	"mesh", "mesh-edge", "lan", "wan", "relay", "none", "mesh-node", "self", "off", "mesh-link", "mesh-name",
 }
 
 func seriesClass(s Series, i int) string {

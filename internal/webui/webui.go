@@ -118,6 +118,7 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("GET /assets/{file}", s.asset)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/stats", s.stats)
+	mux.HandleFunc("GET /api/mesh", s.mesh)
 	mux.HandleFunc("GET /api/ls", s.ls)
 	mux.HandleFunc("GET /api/stat", s.stat)
 	mux.HandleFunc("GET /api/trash", s.trash)

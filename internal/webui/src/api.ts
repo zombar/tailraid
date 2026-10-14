@@ -46,6 +46,7 @@ export interface NodeReport {
   dead_for?: string;
   lost?: boolean;
   rtt?: string;
+  web?: number; // the member's browser UI port, absent when off (docs/13 §1)
   free: number; // from the probe; a bucket's is 0, never a measurement (docs/10 §4.1)
   capacity: number;
   stored_bytes: number; // shard bytes of the slots the placement table gives it (I-178)
@@ -138,6 +139,32 @@ export interface CacheReport {
   pins: PinEntry[];
 }
 
+/** MeshPeer is this device's path to one member (docs/20 §10, status.mesh.peers). */
+export interface MeshPeer {
+  idx: number;
+  name?: string;
+  class: "lan" | "wan" | "relay" | "none" | string;
+  endpoint?: string;
+  via?: string;
+  handshake_age?: string;
+  seen_age?: string;
+}
+
+/** PortMapStatus is the gateway mapping of the mesh port (docs/20 §7). */
+export interface PortMapStatus {
+  protocol: string;
+  external?: string;
+}
+
+/** MeshReport is `status.mesh`: this device and its paths (docs/20 §10). */
+export interface MeshReport {
+  addr: string;
+  interface?: string;
+  port: number;
+  peers?: MeshPeer[];
+  portmap?: PortMapStatus | null;
+}
+
 export interface Report {
   node: string;
   cluster_id: string;
@@ -155,6 +182,7 @@ export interface Report {
   cache?: CacheReport | null;
   web_url?: string;
   search?: SearchStatus | null;
+  mesh?: MeshReport | null;
   generated_at: string;
 }
 
@@ -504,6 +532,14 @@ export function search(q: string, under: string): Promise<SearchResult> {
 }
 
 /** rendered fetches a markdown file as the node's HTML fragment (docs/13 §4, I-209). */
+/** meshPicture is the Mesh section's SVG from GET /api/mesh, "" on a device without a mesh (docs/13 §7). */
+export async function meshPicture(): Promise<string> {
+  const r = await fetch("/api/mesh");
+  if (r.status === 404) return "";
+  if (!r.ok) throw await apiError(r);
+  return ((await r.json()) as { svg: string }).svg;
+}
+
 export async function rendered(path: string, root?: Src): Promise<string> {
   const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
   if (!r.ok) throw await apiError(r);

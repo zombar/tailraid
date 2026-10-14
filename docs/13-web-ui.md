@@ -117,6 +117,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
+| `GET /api/mesh` | – | `{"svg"}`: the Mesh section's picture (§7, docs/20 §10), `chart.Mesh` over `status.mesh` and `status.nodes` of this node's status (I-331); 404 on a device without a mesh; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,live,tier,step},"node","nodes":[{name,addr,live,self,web?}],"charts":[{id,title,svg,caption}]}`: the charts of docs/17 §4 over `[from, to)` (Unix seconds; `to=now` or absent for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; `nodes` carries each device member's tailnet IP, liveness and web port for the member menu's links; a missing or malformed `from`, `from ≥ to` or a range longer than `stats.keep.coarse` → 400; no query wired (`listen.web` on a node without the sampler) → 503; `Cache-Control: no-store` |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
@@ -458,8 +459,10 @@ switches to that node's view of the mesh; a member with no web listener is plain
 The heading's sub-line carries the device's address, interface, port and the gateway
 mapping of docs/20 §7 (`portmap pcp 203.0.113.9:20483`, or `none`). The section is drawn
 only on a device with a mesh (`status.mesh` present), and the edges are exactly the
-peers of `status.mesh` (I-331); the chart is redrawn on every poll like the rest of the
-page, and its classes are the chart package's, so it follows the theme (§Charts).
+peers of `status.mesh` (I-331); the picture comes from `GET /api/mesh` (§3), fetched
+beside every status poll, the table is built from the status itself, and both are
+redrawn on every poll like the rest of the page; the picture's classes are the chart
+package's, so it follows the theme (§Charts).
 
 ## 8. Build and assets
 
@@ -803,9 +806,9 @@ does not is a clock time axis in place of seconds since the run started (I-197).
 
 **The mesh chart** (docs/20 §10, I-331) is the one picture that is not over a time axis:
 `chart.Mesh` lays this device at the centre of a 760 × 250 frame and the members evenly
-on an ellipse of 300 by 90 around it, clockwise from the top and offset by half a step
-so no member sits straight above or below the centre (four members read as a flattened
-X, the shape the section is sized for), draws each edge from the centre, and a relayed
+on an ellipse of 300 by 90 around it, clockwise from the top with the first member half
+a step before it, so no member sits straight above or below the centre (four members
+read as a flattened X, the shape the section is sized for), draws each edge from the centre, and a relayed
 edge as two segments through the relay's position, labels each node with its name alone
 beside it on the outer side and this device under its dot (the facts are the table's, §7) and emits only classes (`mesh-edge
 lan|wan|relay|none`, `mesh-node`, `self`, `off`, `mesh-link`, `mesh-name`), which
@@ -1184,7 +1187,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
-| I-331 | stub `TestStub_I_331` (the chart's edges from a status, the links, the dimming; manual check 27 for the picture) |
+| I-331 | `TestChart_Mesh_EdgesNodesAndLinks`, `TestChart_Mesh_ManyAndHostile`, `TestChart_LookdevMeshMatchesDashboard` (the lookdev is the package's rendering), `TestMesh_FromStatus` (the edges, links and dimming from a status); manual check 27 for the picture on the real cluster |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
