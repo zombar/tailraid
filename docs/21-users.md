@@ -138,7 +138,11 @@ it does not reach. §11 maps each control to its mechanism here.
   up and stat the ancestors of any inode they hold a role on, and a listing of a
   directory where they hold no role shows exactly the children under which they hold one.
   A trash entry evaluates on its original parent; `/.snapshots/<mirror>/<name>/…` evaluates
-  the live grants of the same inode (an inode no longer in the volume: admins only).
+  the live grants of the same inode (an inode no longer in the volume: admins only), a
+  snapshot directory lists what the user may reach as a live one does, a revert needs
+  Read on the snapshot entry and `Admin` on the live file, and a restore from a snapshot
+  needs `Admin` on the folder it lands in and copies the entries the user may read,
+  reporting the rest as refused.
 - **`/.tailraid/`** (thumbnails, stats, the search index, the audit log) is outside the
   grant walk for every user, admins included: only `System` commands write under it (§4)
   and only the node's own code reads it; the API reaches a thumbnail, a chart, a hit or a
@@ -446,7 +450,7 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   subtree, revert and restore into it, and pins; a rename across subtrees needs `Write`
   on both; a user may look up and stat the ancestors of any inode they hold a role on,
   and a listing of a directory where they hold none shows exactly the children under
-  which they hold one; a trash entry evaluates on its original parent, a snapshot path on
+  which they hold one, a snapshot directory likewise; a revert needs Read on the snapshot entry and `Admin` on the live file, a restore from a snapshot `Admin` where it lands and copies only what the user may read; a trash entry evaluates on its original parent, a snapshot path on
   the live inode (admins only once it is gone); `/.tailraid/` is outside the grant walk
   for every user.
 - **I-349** — `Command` carries `Actor` and `System` at codec 14; while the user table is
@@ -533,14 +537,14 @@ stub in `test/invariants/` meanwhile.
 | I-345 | `TestAdminOp_Needs_Exhaustive`, `TestAdminOp_Needs_Refinements`, `TestAdminOp_PathResolvesBeforeCheck`, `TestRPC_MutatingOpsNeedSignature` |
 | I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
 | I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
-| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths` |
+| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths`, `TestAccess_SnapshotRestoreByRole` |
 | I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
 | I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
 | I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
 | I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied` |
 | I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
 | I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
-| I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
+| I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_AdminRoutes_ByRole`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
 | I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |
 | I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |

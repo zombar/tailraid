@@ -80,18 +80,21 @@ func (f *Flusher) CommitChunks(ctx context.Context, actor meta.UserIdx, ino meta
 	return 0, errRebaseLimit
 }
 
-// snapEntry resolves src, a path under /.snapshots inside a snapshot, to its mirror and
-// entry.
-func (f *FS) snapEntry(ctx context.Context, src string) (meta.NodeIdx, mirror.Entry, error) {
+// snapEntry resolves src, a path under /.snapshots inside a snapshot, to its node, with
+// the actor's right to read it checked (I-348).
+func (f *FS) snapEntry(ctx context.Context, src string) (snapNode, error) {
 	parts := meta.SplitPath(src)
 	if !isSnapshotPath(parts) || len(parts) < 3 {
-		return 0, mirror.Entry{}, mapErr("restore", src, meta.ErrNotExist)
+		return snapNode{}, mapErr("restore", src, meta.ErrNotExist)
 	}
 	n, err := f.snapLookup(ctx, parts)
 	if err != nil {
-		return 0, mirror.Entry{}, snapErr("restore", src, err)
+		return snapNode{}, snapErr("restore", src, err)
 	}
-	return n.row.Idx, n.e, nil
+	if err := f.checkSnap(&n); err != nil {
+		return snapNode{}, mapErr("restore", src, f.refuse("read", src))
+	}
+	return n, nil
 }
 
 // writeEntry makes the live file at ino hold entry e's bytes from mirror m.
@@ -109,13 +112,14 @@ func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mi
 
 // RevertFile makes the live file at dst hold the bytes of the snapshot file src (a
 // /.snapshots path), keeping the file's inode, name and attributes (docs/16 §6, I-186);
-// uploaded counts the chunks copied back from the mirror.
+// uploaded counts the chunks copied back from the mirror. The actor reads the snapshot
+// entry and holds Admin on the live file (docs/21 §3, I-348).
 func (f *FS) RevertFile(ctx context.Context, src, dst string) (uploaded int, err error) {
-	m, e, err := f.snapEntry(ctx, src)
+	n, err := f.snapEntry(ctx, src)
 	if err != nil {
 		return 0, err
 	}
-	if e.Type != mirror.TypeFile {
+	if n.e.Type != mirror.TypeFile {
 		return 0, mapErr("revert", src, meta.ErrIsDir)
 	}
 	if isSnapshotPath(meta.SplitPath(dst)) {
@@ -128,7 +132,10 @@ func (f *FS) RevertFile(ctx context.Context, src, dst string) (uploaded int, err
 	if in.Type != meta.TFile {
 		return 0, mapErr("revert", dst, meta.ErrIsDir)
 	}
-	uploaded, err = f.writeEntry(ctx, in.Ino, m, &e)
+	if err := f.checkAdmin(in.Ino, dst); err != nil {
+		return 0, mapErr("revert", dst, err)
+	}
+	uploaded, err = f.writeEntry(ctx, in.Ino, n.row.Idx, &n.e)
 	return uploaded, mapErr("revert", dst, err)
 }
 
@@ -140,16 +147,18 @@ type RestoreReport struct {
 	Links    int      `json:"links"`
 	Uploaded int      `json:"uploaded"`
 	Skipped  []string `json:"skipped,omitempty"`
+	Refused  []string `json:"refused,omitempty"` // entries the actor may not read (I-348)
 }
 
 // RestoreSnapshot copies the snapshot entry src (a /.snapshots path: a file, a symlink or a
 // directory) to dst in the live volume. A file or symlink must not exist at dst; a
 // directory is merged: an existing directory is descended, an existing file or symlink is
 // skipped and reported, and .snapshots and .tailraid are never created at the root
-// (docs/16 §6, I-186).
+// (docs/16 §6, I-186). The actor holds Admin on the directory dst lands in, and the copy
+// holds the entries the actor may read, the rest listed as refused (docs/21 §3, I-348).
 func (f *FS) RestoreSnapshot(ctx context.Context, src, dst string) (RestoreReport, error) {
 	var rep RestoreReport
-	m, e, err := f.snapEntry(ctx, src)
+	n, err := f.snapEntry(ctx, src)
 	if err != nil {
 		return rep, err
 	}
@@ -157,16 +166,38 @@ func (f *FS) RestoreSnapshot(ctx context.Context, src, dst string) (RestoreRepor
 	if isSnapshotPath(dparts) || (len(dparts) > 0 && dparts[0] == meta.ReservedDir) {
 		return rep, mapErr("restore", dst, ErrReadOnly)
 	}
-	if e.Type != mirror.TypeDir {
+	// Admin where the copy lands: the nearest existing ancestor, since the folders below
+	// it are made by the restore (the root, for a merge into it)
+	into, err := f.nearest(dparts[:max(len(dparts)-1, 0)])
+	if err != nil {
+		return rep, mapErr("restore", dst, err)
+	}
+	if err := f.checkAdmin(into.Ino, dst); err != nil {
+		return rep, mapErr("restore", dst, err)
+	}
+	if n.e.Type != mirror.TypeDir {
 		if _, err := f.resolve(dst); err == nil {
 			return rep, mapErr("restore", dst, meta.ErrExist)
 		}
 	}
-	err = f.restoreEntry(ctx, m, &e, dparts, &rep)
+	err = f.restoreEntry(ctx, &n, dparts, &rep)
 	return rep, err
 }
 
-func (f *FS) restoreEntry(ctx context.Context, m meta.NodeIdx, e *mirror.Entry, dst []string, rep *RestoreReport) error {
+// nearest is the deepest existing ancestor of parts (the root at least).
+func (f *FS) nearest(parts []string) (meta.Inode, error) {
+	for i := len(parts); ; i-- {
+		in, err := f.st.Resolve(parts[:i])
+		if err == nil || i == 0 {
+			return in, err
+		}
+	}
+}
+
+// restoreEntry copies the snapshot node n to dst; a child the actor may not read is
+// listed as refused and left out.
+func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *RestoreReport) error {
+	m, e := n.row.Idx, &n.e
 	name := "/" + path.Join(dst...)
 	if len(dst) == 1 && (dst[0] == SnapshotDir || dst[0] == meta.ReservedDir) {
 		rep.Skipped = append(rep.Skipped, name)
@@ -191,7 +222,12 @@ func (f *FS) restoreEntry(ctx context.Context, m meta.NodeIdx, e *mirror.Entry, 
 			return snapErr("restore", name, err)
 		}
 		for i := range t.Entries {
-			if err := f.restoreEntry(ctx, m, &t.Entries[i], append(slices.Clip(dst), t.Entries[i].Name), rep); err != nil {
+			child := snapChild(n, &t.Entries[i])
+			if f.checkSnap(&child) != nil {
+				rep.Refused = append(rep.Refused, path.Join(name, t.Entries[i].Name))
+				continue
+			}
+			if err := f.restoreEntry(ctx, &child, append(slices.Clip(dst), t.Entries[i].Name), rep); err != nil {
 				return err
 			}
 		}
@@ -218,12 +254,12 @@ func (f *FS) restoreEntry(ctx context.Context, m meta.NodeIdx, e *mirror.Entry, 
 	}
 	ino := fh.(*File).ino
 	_ = fh.Close()
-	n, err := f.writeEntry(ctx, ino, m, e)
+	up, err := f.writeEntry(ctx, ino, m, e)
 	if err != nil {
 		return mapErr("restore", name, err)
 	}
 	rep.Files++
-	rep.Uploaded += n
+	rep.Uploaded += up
 	return nil
 }
 
