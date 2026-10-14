@@ -258,7 +258,7 @@ func TestAHandleOrShareThatIsNotThere(t *testing.T) {
 	}
 
 	// With a tree, but a handle nobody opened.
-	c.trees[0] = &treeConn{sh: &share{name: "disk", fsys: nothingFS{}}}
+	c.trees[0] = &treeConn{sh: &share{name: "disk", fsys: nothingFS{}}, fsys: nothingFS{}}
 	for _, tc := range []struct {
 		cmd  command
 		size int

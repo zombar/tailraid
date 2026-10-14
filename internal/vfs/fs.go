@@ -29,6 +29,16 @@ import (
 // metadata mutation is a Raft proposal followed by WaitApplied, so a gateway is
 // linearizable with itself; reads come from the local FSM copy with the overlay on top.
 type FS struct {
+	*fsCore
+	// actor is the user every proposal and read of this view acts for (docs/21 §5,
+	// I-353): a view from As. The base filesystem New returns has none and is the
+	// node's own writer (System), which reaches the reserved tree only once users exist.
+	actor  meta.UserIdx
+	system bool
+}
+
+// fsCore is what every view of one filesystem shares.
+type fsCore struct {
 	st    *meta.Store
 	prop  meta.Proposer
 	ov    *Overlay
@@ -52,12 +62,62 @@ type FS struct {
 // codecAtLeast reports whether every live member reads codec v (no view: yes).
 func (f *FS) codecAtLeast(v uint8) bool { return f.MinCodec == nil || f.MinCodec() >= v }
 
-// New wires a filesystem. uid/gid are stamped on created inodes.
+// New wires a filesystem. uid/gid are stamped on created inodes. The filesystem New
+// returns is the node's own (System) writer; a gateway serves a person through As.
 func New(st *meta.Store, prop meta.Proposer, ov *Overlay, rd *Reader, clk clock.Clock, uid, gid uint32) *FS {
-	return &FS{
+	return &FS{fsCore: &fsCore{
 		st: st, prop: prop, ov: ov, rd: rd, clk: clk, uid: uid, gid: gid,
 		snaps: snapState{trees: map[meta.Hash]mirror.Tree{}, index: map[meta.SnapID]map[snapKey][]string{}},
+	}, system: true}
+}
+
+// As is the view of the filesystem for one user (docs/21 §5, I-353): every proposal
+// carries the actor, every open, stat and listing is checked against the actor's role
+// on the local replica (once the cluster has users), listings of a folder the actor
+// holds no role on show only what they may reach, and the mode bits a client sees
+// follow the role. Actor 0 is nobody: everything is refused once users exist.
+func (f *FS) As(actor meta.UserIdx) *FS { return &FS{fsCore: f.fsCore, actor: actor} }
+
+// Actor is the user this view acts for (0 for the node's own writer and for nobody).
+func (f *FS) Actor() meta.UserIdx { return f.actor }
+
+// System reports whether this is the node's own writer.
+func (f *FS) System() bool { return f.system }
+
+// enforced reports whether this view checks roles: the cluster has users and the view
+// is a person's (the node's own writer is checked by the FSM alone, I-349).
+func (f *FS) enforced() bool { return !f.system && f.st.Enforcing() }
+
+// role is the actor's effective role at ino.
+func (f *FS) role(ino meta.Ino) meta.Role { return f.st.Access(f.actor, ino) }
+
+// checkRead refuses a read of ino's contents without Read (I-353).
+func (f *FS) checkRead(ino meta.Ino) error {
+	if f.enforced() && f.role(ino) < meta.RoleRead {
+		return syscall.EACCES
 	}
+	return nil
+}
+
+// checkStat refuses a look-up of ino without Read, unless it is on the way to something
+// the actor holds a role on (I-348).
+func (f *FS) checkStat(ino meta.Ino) error {
+	if ino == meta.RootIno {
+		return nil // the root is every mount's entry: stat-able by anyone, listed by role (I-350)
+	}
+	if f.enforced() && f.role(ino) < meta.RoleRead && !f.st.Traverses(f.actor, ino) {
+		return syscall.EACCES
+	}
+	return nil
+}
+
+// checkWrite refuses a write to ino's contents without Write (I-353); the FSM decides
+// every metadata change itself (I-349).
+func (f *FS) checkWrite(ino meta.Ino) error {
+	if f.enforced() && f.role(ino) < meta.RoleWrite {
+		return syscall.EACCES
+	}
+	return nil
 }
 
 // SetHealth gives the filesystem the gateway's health view: while stale reports false a
@@ -153,6 +213,8 @@ func mapErr(op, name string, err error) error {
 		e = syscall.ENAMETOOLONG
 	case errors.Is(err, meta.ErrProtected):
 		e = syscall.EPERM // os.ErrPermission on the wire: NFS3ERR_ACCES, STATUS_ACCESS_DENIED (I-154)
+	case errors.Is(err, meta.ErrAccess):
+		e = syscall.EACCES // the actor's role does not cover it (docs/21 §4, I-349)
 	case errors.Is(err, meta.ErrInTrash):
 		e = os.ErrNotExist // the share never sees the trash (I-155)
 	case errors.Is(err, meta.ErrCodec):
@@ -187,6 +249,16 @@ func mapErr(op, name string, err error) error {
 func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error) {
 	delay := proposeRetryMin
 	afterUnknown := false
+	if f.st.Enforcing() && f.codecAtLeast(meta.CodecUsers) {
+		// the actor on every proposal once the cluster has users (docs/21 §4, §5): before
+		// the first user the wire carries what it did, and a 13-reader refuses nothing
+		cmd.Actor, cmd.System = f.actor, f.system
+	}
+	if f.st.Enforcing() && f.codecAtLeast(meta.CodecUsers) {
+		// the actor on every proposal once the cluster has users (docs/21 §4, §5): before
+		// the first user the wire carries what it did, and a 13-reader refuses nothing
+		cmd.Actor, cmd.System = f.actor, f.system
+	}
 	for {
 		res, index, err := f.prop.Propose(ctx, cmd)
 		if err == nil {
@@ -296,6 +368,13 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 			// so a handle here would only swallow writes (flush ignores non-files)
 			return nil, mapErr("open", filename, syscall.ELOOP)
 		}
+		need := f.checkRead
+		if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
+			need = f.checkWrite
+		}
+		if aerr := need(in.Ino); aerr != nil {
+			return nil, mapErr("open", filename, aerr)
+		}
 	case errors.Is(err, meta.ErrNotExist) && flag&os.O_CREATE != 0:
 		dirParts, base := parentOf(parts)
 		if err := f.mkdirAll(ctx, dirParts, 0o755); err != nil {
@@ -333,7 +412,7 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 	if flag&os.O_TRUNC != 0 && flag&(os.O_WRONLY|os.O_RDWR) != 0 {
 		// nothing to cut on an empty, clean file: no WAL record, no commit (I-1)
 		if _, dirty := f.ov.Size(in.Ino, in.Size); dirty || in.Size != 0 {
-			if err := f.ov.Truncate(in.Ino, in.Size, 0); err != nil {
+			if err := f.ov.TruncateAs(in.Ino, in.Size, 0, f.actor); err != nil {
 				return nil, mapErr("open", filename, err)
 			}
 		}
@@ -355,6 +434,9 @@ func (f *FS) Stat(filename string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, mapErr("stat", filename, err)
 	}
+	if err := f.checkStat(in.Ino); err != nil {
+		return nil, mapErr("stat", filename, err)
+	}
 	return f.info(in), nil
 }
 
@@ -362,6 +444,15 @@ func (f *FS) Lstat(filename string) (os.FileInfo, error) { return f.Stat(filenam
 
 func (f *FS) info(in meta.Inode) *fileInfo {
 	fi := &fileInfo{in: in}
+	if f.enforced() {
+		// the mode bits a client sees follow the role (docs/21 §5, I-351): read-only
+		// below Write, owner-only always; the stored mode is kept, never consulted
+		mask := uint32(0o500)
+		if f.role(in.Ino) >= meta.RoleWrite {
+			mask = 0o700
+		}
+		fi.in.Mode = in.Mode&^0o777 | in.Mode&mask
+	}
 	if in.Type == meta.TFile {
 		if sz, ok := f.ov.Size(in.Ino, in.Size); ok {
 			fi.size = sz
@@ -645,10 +736,25 @@ func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
 	if err != nil {
 		return nil, mapErr("readdir", p, err)
 	}
+	// a folder the actor holds no role on lists only what is on the way to something
+	// they hold one on (docs/21 §3, I-348); nothing, when there is nothing
+	filter := false
+	if f.enforced() && f.role(in.Ino) < meta.RoleRead {
+		if !f.st.Traverses(f.actor, in.Ino) {
+			if in.Ino == meta.RootIno {
+				return []os.FileInfo{}, nil // nobody, or a user who holds nothing: an empty root (I-350)
+			}
+			return nil, mapErr("readdir", p, syscall.EACCES)
+		}
+		filter = true
+	}
 	out := make([]os.FileInfo, 0, len(ents))
 	for i := range ents {
 		if in.Ino == meta.RootIno && ents[i].Name == SnapshotDir {
 			continue // the reserved name: /.snapshots resolves to the snapshots, never lists (I-185)
+		}
+		if filter && !f.st.Traverses(f.actor, ents[i].Ino) {
+			continue
 		}
 		out = append(out, f.info(ents[i]))
 	}

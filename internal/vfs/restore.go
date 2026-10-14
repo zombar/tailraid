@@ -21,7 +21,7 @@ import (
 // chunk the pool holds with k readable slots is committed by its hash with no upload
 // (L-217); any other is read through fetch, checked against its hash and filled or
 // uploaded as a flush would (L-216). It returns how many chunks it uploaded or filled.
-func (f *Flusher) CommitChunks(ctx context.Context, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error)) (uploaded int, err error) {
+func (f *Flusher) CommitChunks(ctx context.Context, actor meta.UserIdx, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error)) (uploaded int, err error) {
 	force, noSums := false, false
 	for range 16 {
 		base, ok := f.st.GetInode(ino)
@@ -58,7 +58,7 @@ func (f *Flusher) CommitChunks(ctx context.Context, ino meta.Ino, size uint64, h
 		// a truncate to zero, then the chunks: buildCommit's truncate case sizes it to size
 		cmd := f.buildCommit(&FlushPlan{Ino: ino, Size: size, SizeSet: true}, base, works, false, noSums)
 		pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
-		res, index, perr := f.prop.Propose(pctx, meta.Command{Op: meta.OpCommit, Commit: cmd})
+		res, index, perr := f.prop.Propose(pctx, f.actorCommand(actor, meta.Command{Op: meta.OpCommit, Commit: cmd}))
 		cancel()
 		switch {
 		case perr != nil:
@@ -102,7 +102,7 @@ func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mi
 	if err := f.fl.FlushInode(ctx, ino); err != nil { // the file's dirty bytes land first (I-186)
 		return 0, err
 	}
-	return f.fl.CommitChunks(ctx, ino, e.Size, e.Chunks, func(ctx context.Context, h meta.Hash) ([]byte, error) {
+	return f.fl.CommitChunks(ctx, f.actor, ino, e.Size, e.Chunks, func(ctx context.Context, h meta.Hash) ([]byte, error) {
 		return f.snapChunk(ctx, m, h)
 	})
 }

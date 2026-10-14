@@ -315,10 +315,33 @@ func (f *FS) snapInfoOf(n *snapNode) *snapInfo {
 	return fi
 }
 
+// checkSnap applies the live grants to a snapshot entry (docs/21 §3, I-348): the
+// directories above the entries are navigation; an entry is read with Read on the
+// inode it was captured from, and by admins alone once that inode is gone.
+func (f *FS) checkSnap(n *snapNode) error {
+	if !f.enforced() || n.depth <= 2 || (len(n.rel) == 0 && n.e.Type == mirror.TypeDir) {
+		return nil
+	}
+	ino := meta.Ino(n.e.Ino)
+	if _, ok := f.st.GetInodeAny(ino); !ok {
+		if f.st.IsAdmin(f.actor) {
+			return nil
+		}
+		return syscall.EACCES
+	}
+	if f.role(ino) < meta.RoleRead {
+		return syscall.EACCES
+	}
+	return nil
+}
+
 func (f *FS) snapStat(name string, parts []string) (os.FileInfo, error) {
 	n, err := f.snapLookup(context.Background(), parts)
 	if err != nil {
 		return nil, snapErr("stat", name, err)
+	}
+	if err := f.checkSnap(&n); err != nil {
+		return nil, mapErr("stat", name, err)
 	}
 	return f.snapInfoOf(&n), nil
 }
@@ -328,6 +351,9 @@ func (f *FS) snapReadDir(name string, parts []string) ([]os.FileInfo, error) {
 	n, err := f.snapLookup(ctx, parts)
 	if err != nil {
 		return nil, snapErr("readdir", name, err)
+	}
+	if err := f.checkSnap(&n); err != nil {
+		return nil, mapErr("readdir", name, err)
 	}
 	var out []os.FileInfo
 	switch n.depth {
@@ -364,6 +390,9 @@ func (f *FS) snapOpen(name string, parts []string, flag int) (*File, error) {
 	if err != nil {
 		return nil, snapErr("open", name, err)
 	}
+	if err := f.checkSnap(&n); err != nil {
+		return nil, mapErr("open", name, err)
+	}
 	switch {
 	case n.depth < 3 || n.e.Type == mirror.TypeDir:
 		return nil, mapErr("open", name, meta.ErrIsDir)
@@ -377,6 +406,9 @@ func (f *FS) snapReadlink(name string, parts []string) (string, error) {
 	n, err := f.snapLookup(context.Background(), parts)
 	if err != nil {
 		return "", snapErr("readlink", name, err)
+	}
+	if err := f.checkSnap(&n); err != nil {
+		return "", mapErr("readlink", name, err)
 	}
 	if n.depth < 3 || n.e.Type != mirror.TypeSymlink {
 		return "", mapErr("readlink", name, syscall.EINVAL)

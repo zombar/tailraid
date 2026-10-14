@@ -508,12 +508,12 @@ stub in `test/invariants/` meanwhile.
 | I-345 | `TestAdminOp_Needs_Exhaustive`, `TestAdminOp_Needs_Refinements`, `TestAdminOp_PathResolvesBeforeCheck`, `TestRPC_MutatingOpsNeedSignature` |
 | I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
 | I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
-| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`; planned (users-gateways): TestAccess_ListingFilter, TestAccess_SnapshotPaths |
-| I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`; planned (users-gateways, once the mounts carry actors): the users steps of TestModelCheck_Long |
-| I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`; planned (users-gateways): TestNFS_UnboundIsNobody |
-| I-351 | TestNFS_AuthSysActor, TestNFS_DRCKeyedOnCred, TestNFS_ModeFromRole |
-| I-352 | TestSMB_TreeConnectActor, TestSMB_UnboundDenied |
-| I-353 | TestVFS_As_StampsActor, TestVFS_As_ReadCheck, TestWAL_RecordsActor, FuzzWAL |
+| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths` |
+| I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
+| I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
+| I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
+| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied` |
+| I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
 | I-354 | `TestSessions_Apply` (the FSM's rows); planned (users-web): TestWebUI_Login_CodeOnce, TestWebUI_Session_Lifecycle_Table, TestWebUI_SessionOnEveryNode, TestWebUI_HandoffBetweenNodes, TestWebUI_MemberAddressAlone_Refused, TestWebUI_RevokedAtNextRequest |
 | I-355 | TestWebUI_RoutesFilterByRole, TestWebUI_ThumbPut_SystemAfterRead |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |

@@ -3,6 +3,7 @@ package nfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 
 	"github.com/go-git/go-billy/v5"
@@ -72,6 +73,11 @@ func onLookup(ctx context.Context, w *response, userHandle Handler) error {
 
 	reqPath := append(p, string(obj.Filename))
 	if _, err = fs.Lstat(fs.Join(reqPath...)); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			// a name the caller may not look at (docs/21 §5): refused as such, so a
+			// client never takes it for absent and creates beside it
+			return &NFSStatusError{NFSStatusAccess, err}
+		}
 		return &NFSStatusError{NFSStatusNoEnt, os.ErrNotExist}
 	}
 

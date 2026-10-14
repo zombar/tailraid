@@ -52,14 +52,30 @@ func startGateway(t *testing.T) *gateway { return startGatewayWith(t, nil) }
 // startGatewayWith runs prep on the fabric (overlay options, faults) before the
 // filesystem is built.
 func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
+	return startGatewayBound(t, prep, nil)
+}
+
+// startGatewayBound is startGatewayWith on a gateway with the device's bindings (nil:
+// none, every session is served the node's filesystem); the accounts in the map that
+// are not the mount account are added with the same password.
+func startGatewayBound(t *testing.T, prep func(*testharness.Fabric), bind map[string]string) *gateway {
 	t.Helper()
 	f := testharness.NewFabric(t, 3, 2, 1)
 	if prep != nil {
 		prep(f)
 	}
 	fs := f.FS()
-	srv, err := smbgw.NewServer(fs, f.FSM, password)
+	var b smbgw.Bindings
+	if bind != nil {
+		b = bindMap(bind)
+	}
+	srv, err := smbgw.NewServerWith(fs, f.FSM, password, b)
 	must(t, err)
+	for cred := range bind {
+		if account, ok := strings.CutPrefix(cred, "smb:"); ok && account != smbgw.User {
+			srv.AddUser(account, password)
+		}
+	}
 	l, err := smbgw.Listen(t.Context(), "127.0.0.1:0")
 	must(t, err)
 	sctx, cancel := context.WithCancel(ctx)
@@ -72,6 +88,21 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	must(t, err)
 	t.Cleanup(func() { _ = g.sh.Umount(); _ = sess.Logoff() })
 	return g
+}
+
+// bindMap is a device's bindings for a test: credential to user name.
+type bindMap map[string]string
+
+func (b bindMap) Lookup(cred string) (string, bool) { u, ok := b[cred]; return u, ok }
+
+// mountAs mounts the share as account with the test password.
+func (g *gateway) mountAs(account string) *smb2.Share {
+	g.t.Helper()
+	sess := dial(g.t, g.addr, account, password)
+	sh, err := sess.Mount(smbgw.ShareName)
+	must(g.t, err)
+	g.t.Cleanup(func() { _ = sh.Umount(); _ = sess.Logoff() })
+	return sh
 }
 
 func dial(t *testing.T, addr, user, pw string) *smb2.Session {

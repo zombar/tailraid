@@ -223,6 +223,14 @@ func (c credential) key() []byte {
 	return md4sum(utf16le(c.password))
 }
 
+// UserFilesystem is a filesystem that serves each account its own view (tailraid,
+// docs/21 §5): the share asks it at every tree connect, and the handles opened on that
+// tree use the answer. A filesystem that does not implement it serves every account
+// alike.
+type UserFilesystem interface {
+	ForUser(account string) filesystem.Filesystem
+}
+
 // Share exports a filesystem under a name. The name is what appears after the
 // host in \\host\name, and SMB compares it without case.
 func (s *Server) Share(name string, fsys filesystem.Filesystem, opts ...ShareOption) error {

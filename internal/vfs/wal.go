@@ -17,6 +17,7 @@ const (
 	recWrite    uint8 = 1 // off = file offset, data = bytes
 	recTruncate uint8 = 2 // off = new size, no data
 	recBase     uint8 = 3 // off = committed size the following records apply to, no data
+	recActor    uint8 = 4 // off = the user whose writes follow (docs/21 §4, I-353), no data; a reader from before ignores it
 )
 
 // Record layout: crc32c(u32 LE, over everything after it) | type u8 | off u64 LE | len u32 LE | data.

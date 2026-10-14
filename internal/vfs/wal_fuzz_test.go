@@ -11,9 +11,10 @@ import (
 
 // Replay of any byte string never panics, yields only records whose data length matches
 // their header and whose bytes lie inside the file, cuts the file back to the end of the
-// last intact record, and a second replay returns the same records.
+// last intact record, and a second replay returns the same records; a record's actor
+// survives the replay as its other fields do.
 //
-// Invariant: I-37
+// Invariant: I-37, I-353
 func FuzzWALReplay(f *testing.F) {
 	dir := f.TempDir()
 	w, err := openWAL(sysfs.OS{}, filepath.Join(dir, "seed.wal"))

@@ -384,6 +384,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		rep.Machine.Paths = paths.Report()
 		rep.Warnings = append(rep.Warnings, cfg.Warnings(cfg.Path)...)
 		rep.Warnings = append(rep.Warnings, admin.PathWarnings(rep.Machine.Paths)...)
+		if node.FSM.Enforcing() && len(bindings.List()) == 0 {
+			rep.Warnings = append(rep.Warnings, "this device has no user bound to its mount: every file access is refused until `tailraid user create` or `user bind` runs here (docs/21 §5)")
+		}
 		rep.Mesh = nw.report(node, cfg, clk.Now())
 		for i := range rep.Nodes { // the path to each device member, for node ls (docs/20 §10)
 			if row, ok := node.FSM.Node(rep.Nodes[i].Idx); ok && row.Kind == meta.KindDevice && row.Idx != selfIdx && nw.mesh != nil {
@@ -502,7 +505,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		nfsgw.UseLogger(log) // one log stream, one format (the library logs client noise)
 	}
 	if cfg.Listen.SMB != "" {
-		if smbSrv, err = smbgw.NewServer(fs, node.FSM, cfg.SMB.Password); err != nil {
+		if smbSrv, err = smbgw.NewServerWith(fs, node.FSM, cfg.SMB.Password, bindings); err != nil { // each account its user's view (docs/21 §5)
 			closeOpen()
 			return err
 		}
@@ -572,7 +575,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	gateways := 0
 	if nl != nil {
 		gateways++
-		go func() { gw <- nfsgw.Serve(sctx, nl, nfsgw.New(fs, node.FSM)) }()
+		go func() { gw <- nfsgw.Serve(sctx, nl, nfsgw.NewWith(fs, node.FSM, bindings)) }() // each uid its user's view (docs/21 §5)
 	}
 	if sl != nil {
 		gateways++

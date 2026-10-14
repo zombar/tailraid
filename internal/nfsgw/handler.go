@@ -26,20 +26,35 @@ import (
 // values encoded by meta.EncodeHandle, so they survive restarts, renames and other
 // gateways (I-16) and can never resolve to a different file (I-17).
 type Handler struct {
-	dirs dirCache // listings reused across the pages of one READDIR(PLUS)
-	fs   *vfs.FS
-	st   *meta.Store
+	dirs  *dirCache // listings reused across the pages of one READDIR(PLUS); shared by every request's handler
+	fs    *vfs.FS   // the view this handler serves: the node's filesystem, or a user's (WithCredential)
+	st    *meta.Store
+	bind  Bindings // the device's credentials to users (docs/21 §5); nil: every caller is served fs
+	views *views
 }
 
-// New wires a handler.
-func New(fs *vfs.FS, st *meta.Store) *Handler { return &Handler{fs: fs, st: st} }
+// New wires a handler that serves fs to every caller.
+func New(fs *vfs.FS, st *meta.Store) *Handler {
+	return &Handler{dirs: &dirCache{}, fs: fs, st: st, views: &views{base: fs}}
+}
 
-var _ nfs.Handler = (*Handler)(nil)
+// NewWith is New with the device's bindings: once the cluster has users, each call is
+// served the view of the user its AUTH_SYS uid is bound to (I-350, I-351).
+func NewWith(fs *vfs.FS, st *meta.Store, bind Bindings) *Handler {
+	h := New(fs, st)
+	h.bind = bind
+	return h
+}
 
-// Mount exports a single root for any dirpath; the loopback listener is the security
-// boundary (docs/08).
+var (
+	_ nfs.Handler           = (*Handler)(nil)
+	_ nfs.CredentialHandler = (*Handler)(nil)
+)
+
+// Mount exports a single root for any dirpath; AUTH_SYS names the caller (docs/21 §5),
+// and the loopback listener is the boundary against anyone else (docs/08).
 func (h *Handler) Mount(_ context.Context, _ net.Conn, _ nfs.MountRequest) (nfs.MountStatus, billy.Filesystem, []nfs.AuthFlavor) {
-	return nfs.MountStatusOk, h.fs, []nfs.AuthFlavor{nfs.AuthFlavorNull}
+	return nfs.MountStatusOk, h.fs, []nfs.AuthFlavor{nfs.AuthFlavorUnix}
 }
 
 // Change is never nil: chmod, chown and utimes are supported.
@@ -167,7 +182,7 @@ func (h *Handler) DataForVerifier(path string, verifier uint64) []iofs.FileInfo 
 	if !ok {
 		return nil
 	}
-	if now, ok := h.dirKeyOf(path); !ok || now.Ino != key.Ino || now.Gen != key.Gen || now.Tree != key.Tree {
+	if now, ok := h.dirKeyOf(path); !ok || now.Ino != key.Ino || now.Gen != key.Gen || now.Tree != key.Tree || now.Actor != key.Actor {
 		return nil // another directory now holds the path
 	}
 	return contents
@@ -207,7 +222,7 @@ func (h *Handler) dirKeyOf(path string) (dirKey, bool) {
 	if err != nil {
 		return dirKey{}, false
 	}
-	return dirKey{Ino: in.Ino, Gen: in.Gen, Version: in.Version}, true
+	return dirKey{Ino: in.Ino, Gen: in.Gen, Version: in.Version, Actor: h.fs.Actor()}, true
 }
 
 // hashListing is the verifier for a path that no longer resolves (go-nfs's own scheme).
@@ -225,16 +240,18 @@ type dirKey struct {
 	Ino     meta.Ino
 	Gen     uint32
 	Version uint64
-	Tree    meta.Hash // a snapshot's directory: its tree
+	Tree    meta.Hash    // a snapshot's directory: its tree
+	Actor   meta.UserIdx // the reader: a filtered listing is theirs alone (docs/21 §3)
 }
 
 func (k dirKey) verifier(path string) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(path))
-	var b [20]byte
+	var b [22]byte
 	binary.LittleEndian.PutUint64(b[:8], uint64(k.Ino))
 	binary.LittleEndian.PutUint32(b[8:12], k.Gen)
-	binary.LittleEndian.PutUint64(b[12:], k.Version)
+	binary.LittleEndian.PutUint64(b[12:20], k.Version)
+	binary.LittleEndian.PutUint16(b[20:], uint16(k.Actor))
 	_, _ = h.Write(b[:])
 	_, _ = h.Write(k.Tree[:])
 	v := h.Sum64()

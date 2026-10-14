@@ -40,6 +40,7 @@ type gateway struct {
 	fs  *vfs.FS
 	tgt *nfsc.Target
 	cl  *rpc.Client
+	fh  []byte // the root handle MOUNT answered
 }
 
 // startGateway serves a fabric over NFS on a random loopback port and mounts it through
@@ -49,6 +50,12 @@ func startGateway(t *testing.T) *gateway { return startGatewayWith(t, nil) }
 // startGatewayWith runs prep on the fabric (overlay options, faults) before the
 // filesystem is built.
 func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
+	return startGatewayBound(t, prep, nil)
+}
+
+// startGatewayBound is startGatewayWith on a gateway with the device's bindings (nil:
+// none, every caller is served the node's filesystem).
+func startGatewayBound(t *testing.T, prep func(*testharness.Fabric), bind nfsgw.Bindings) *gateway {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		// go-nfs-client binds explicit local ports that fall inside Windows' reserved
@@ -61,7 +68,7 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 		prep(f)
 	}
 	fs := f.FS()
-	h := nfsgw.New(fs, f.FSM)
+	h := nfsgw.NewWith(fs, f.FSM, bind)
 	l, err := nfsgw.Listen(t.Context(), "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +109,17 @@ func startGatewayWith(t *testing.T, prep func(*testharness.Fabric)) *gateway {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &gateway{t: t, f: f, fs: fs, tgt: tgt, cl: cl}
+	return &gateway{t: t, f: f, fs: fs, tgt: tgt, cl: cl, fh: fh}
+}
+
+// targetAs is a second client of the same mount whose calls carry AUTH_SYS uid.
+func (g *gateway) targetAs(uid uint32) *nfsc.Target {
+	g.t.Helper()
+	tgt, err := nfsc.NewTargetWithClient(g.cl, rpc.NewAuthUnix("test", uid, 20).Auth(), g.fh, "/", 0)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return tgt
 }
 
 // writeAt performs the WRITE sequence a kernel client would: open, seek, write.

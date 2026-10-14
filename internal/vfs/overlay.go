@@ -87,6 +87,9 @@ type FlushPlan struct {
 
 	rewriteStart bool   // this flush starts a rewrite (docs/04 §6, I-223)
 	rewrite      uint64 // the rewrite this flush continues; 0 for a plain write
+	// Actor is the user whose writes the plan carries (docs/21 §4): the Commit acts for
+	// them; 0 before users, or for the node's own writer.
+	Actor meta.UserIdx
 }
 
 // dirtyFile is the per-inode overlay state. All fields are guarded by mu.
@@ -94,11 +97,12 @@ type dirtyFile struct {
 	mu        sync.Mutex
 	ino       meta.Ino
 	wal       *WAL
-	known     bool   // initialised (from a caller or a WAL base record)
-	size      uint64 // overlay size: extents' end, or the truncate point and later extents; see effSize
-	minSize   uint64 // the truncation point (valid only with sizeSet)
-	sizeSet   bool   // truncate since the last successful flush
-	dead      bool   // evicted from the map; a waiter must look the inode up again
+	actor     meta.UserIdx // the last writer (docs/21 §4), from the WAL's actor record
+	known     bool         // initialised (from a caller or a WAL base record)
+	size      uint64       // overlay size: extents' end, or the truncate point and later extents; see effSize
+	minSize   uint64       // the truncation point (valid only with sizeSet)
+	sizeSet   bool         // truncate since the last successful flush
+	dead      bool         // evicted from the map; a waiter must look the inode up again
 	ext       extents
 	plan      *FlushPlan
 	planMin   uint64 // lowest size since the plan was captured
@@ -417,6 +421,8 @@ func (o *Overlay) replay(ino meta.Ino, path string) error {
 			d.ext.truncate(off)
 			d.size = off
 			d.setTrunc(off)
+		case recActor:
+			d.actor = meta.UserIdx(off) //nolint:gosec // written by noteActor from a UserIdx
 		}
 		return nil
 	})
@@ -596,7 +602,14 @@ func (o *Overlay) evict(d *dirtyFile) error {
 // At the inode's WAL cap or the gateway's dirty cap it waits for the flusher to free
 // room, up to CapWait, and fails only when the wait expires or, at once, when the inode's
 // last flush attempt failed because the cluster is full (I-79, L-188, L-189, L-219).
+// Write is WriteAs for the node's own writer.
 func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
+	return o.WriteAs(ino, baseSize, off, p, 0)
+}
+
+// WriteAs records a write of actor (docs/21 §4): the flush's Commit acts for the last
+// writer.
+func (o *Overlay) WriteAs(ino meta.Ino, baseSize, off uint64, p []byte, actor meta.UserIdx) error {
 	if len(p) == 0 {
 		return nil
 	}
@@ -609,7 +622,7 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 		// the channel is taken before the attempt so a flush that frees room between
 		// the refused attempt and the wait is not a lost wakeup
 		progress := o.progressCh()
-		err := o.tryWrite(ino, baseSize, off, p)
+		err := o.tryWrite(ino, baseSize, off, p, actor)
 		if err == nil || (!errors.Is(err, ErrWALFull) && !errors.Is(err, ErrDirtyFull)) {
 			return err
 		}
@@ -630,7 +643,7 @@ func (o *Overlay) Write(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	}
 }
 
-func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
+func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte, actor meta.UserIdx) error {
 	if o.TotalDirty() >= o.maxDirty {
 		return ErrDirtyFull // L-23: nothing is accepted until flushes drain the overlay
 	}
@@ -640,7 +653,7 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
 	}
 	if !d.waitGate() {
 		d.mu.Unlock()
-		return o.tryWrite(ino, baseSize, off, p) // evicted while waiting: a fresh entry
+		return o.tryWrite(ino, baseSize, off, p, actor) // evicted while waiting: a fresh entry
 	}
 	if d.wal.Size() >= o.walCap {
 		// The flusher flushes this inode in full at the cap (L-186); until that drains
@@ -648,6 +661,10 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
 		// a trigger the run loop can observe, not a size the WAL can never reach.
 		d.mu.Unlock()
 		return ErrWALFull
+	}
+	if err := d.noteActor(actor); err != nil {
+		d.mu.Unlock()
+		return err
 	}
 	// the record goes to the log under the lock; its fsync is waited for without it, so
 	// the WRITEs that arrive meanwhile share that fsync (group commit, I-168); the extent
@@ -675,6 +692,11 @@ func (o *Overlay) tryWrite(ino meta.Ino, baseSize, off uint64, p []byte) error {
 
 // Truncate sets the overlay size and records the truncation point (review #2).
 func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
+	return o.TruncateAs(ino, baseSize, size, 0)
+}
+
+// TruncateAs is Truncate for actor (docs/21 §4).
+func (o *Overlay) TruncateAs(ino meta.Ino, baseSize, size uint64, actor meta.UserIdx) error {
 	if size > meta.MaxFileSize(o.chunkSize) {
 		return ErrFileTooLarge
 	}
@@ -684,7 +706,11 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 	}
 	if !d.waitGate() {
 		d.mu.Unlock()
-		return o.Truncate(ino, baseSize, size)
+		return o.TruncateAs(ino, baseSize, size, actor)
+	}
+	if err := d.noteActor(actor); err != nil {
+		d.mu.Unlock()
+		return err
 	}
 	// a truncate is a record like a write: its effect is applied in log order once its
 	// fsync covers it, so it never reorders against a write in flight (I-168)
@@ -711,6 +737,30 @@ func (o *Overlay) Truncate(ino meta.Ino, baseSize, size uint64) error {
 	d.settle()
 	d.mu.Unlock()
 	return err
+}
+
+// noteActor records a change of writer in the log (docs/21 §4, I-353): the record is
+// written under the lock before the write it precedes and the Commit acts for the last
+// writer. Called with d.mu held.
+func (d *dirtyFile) noteActor(actor meta.UserIdx) error {
+	if actor == d.actor {
+		return nil
+	}
+	if _, _, err := d.wal.write(recActor, uint64(actor), nil); err != nil {
+		return err
+	}
+	d.actor = actor
+	return nil
+}
+
+// Actor is the last writer of a dirty inode (0 for none, or the node itself).
+func (o *Overlay) Actor(ino meta.Ino) meta.UserIdx {
+	d, _ := o.get(ino, 0, false)
+	if d == nil {
+		return 0
+	}
+	defer d.mu.Unlock()
+	return d.actor
 }
 
 // Size returns the client-visible size of a dirty inode given its committed size, or
@@ -928,7 +978,7 @@ func (o *Overlay) SnapshotForFlush(ino meta.Ino) (*FlushPlan, bool) {
 	if d.plan != nil || (len(d.ext) == 0 && !d.sizeSet) {
 		return nil, false
 	}
-	p := &FlushPlan{Ino: ino, Size: d.size, MinSize: d.minSize, SizeSet: d.sizeSet, Extents: d.ext.clone()}
+	p := &FlushPlan{Ino: ino, Size: d.size, MinSize: d.minSize, SizeSet: d.sizeSet, Extents: d.ext.clone(), Actor: d.actor}
 	d.plan = p
 	d.ext = nil
 	d.planMin = d.size
@@ -1032,6 +1082,9 @@ func (o *Overlay) CommitFlushed(plan *FlushPlan, committedSize uint64) error {
 	// while the plan was outstanding (L-180), then the live extents' data (last, so the
 	// record offsets below line up).
 	recs := []walRec{{typ: recBase, off: committedSize}}
+	if d.actor != 0 {
+		recs = append(recs, walRec{typ: recActor, off: uint64(d.actor)})
+	}
 	if d.sizeSet {
 		recs = append(recs, walRec{typ: recTruncate, off: d.minSize})
 		if d.size > d.minSize {
