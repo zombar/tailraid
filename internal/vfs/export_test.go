@@ -41,3 +41,13 @@ func (r *Reader) PrefetchHeld() int {
 	}
 	return n
 }
+
+// FetchWaiters is the READs waiting on h's client fetch, or -1 when none runs (I-314).
+func (r *Reader) FetchWaiters(h meta.Hash) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if call, ok := r.inflight[h]; ok {
+		return call.waiters
+	}
+	return -1
+}

@@ -1,8 +1,10 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"path"
@@ -399,7 +401,49 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("download") == "1" {
 		h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": in.Name}))
 	}
-	http.ServeContent(w, r, in.Name, time.Time{}, f)
+	http.ServeContent(w, r, in.Name, time.Time{}, withContext(r.Context(), f))
+}
+
+// readSeeker is what ServeContent reads a file through.
+type readSeeker interface {
+	Read([]byte) (int, error)
+	Seek(int64, int) (int64, error)
+}
+
+// ctxReader reads a file at its offset through a read bound to one request's context,
+// so a client that goes away (a player that seeked or closed) cuts the chunk fetch it
+// alone waited on (I-314).
+type ctxReader struct {
+	f    readSeeker
+	read func(p []byte, off int64) (int, error)
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	off, err := c.f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	n, err := c.read(p, off)
+	if n > 0 {
+		if _, serr := c.f.Seek(int64(n), io.SeekCurrent); serr != nil && err == nil {
+			err = serr
+		}
+	}
+	return n, err
+}
+
+func (c ctxReader) Seek(off int64, whence int) (int64, error) { return c.f.Seek(off, whence) }
+
+// withContext binds f's reads to ctx when the file can read under a context (a volume
+// file; a snapshot's or the trash's reads too through the same File), else returns f.
+func withContext(ctx context.Context, f readSeeker) readSeeker {
+	rc, ok := f.(interface {
+		ReadAtContext(context.Context, []byte, int64) (int, error)
+	})
+	if !ok {
+		return f
+	}
+	return ctxReader{f: f, read: func(p []byte, off int64) (int, error) { return rc.ReadAtContext(ctx, p, off) }}
 }
 
 // contentType is the type by extension, with overrides for what Go's table lacks or gets

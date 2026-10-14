@@ -361,11 +361,28 @@ client's own GET first; a client READ that joins a prefetch in flight keeps that
 is documented to queue behind foreground traffic for that one chunk. If that prefetch fails,
 the READ fetches the chunk itself at foreground priority instead of returning the
 prefetch's error: a holder may refuse or time out a background GET under load, which says
-nothing about the client's read (found by CI: phase 12 read EIO through another gateway). And a READ of the
-inode that leaves the sequence (a seek) cancels the inode's prefetches still in flight
-that no READ has joined: their slots free at once and nothing the client moved away from
-is fetched or cached; a joined prefetch is never cancelled (`joined` is set under the
-reader's lock, where the cancel decides). `status` counts them as `readahead_cancelled`.
+nothing about the client's read (found by CI: phase 12 read EIO through another gateway).
+
+Readahead follows two **streams** per inode, because a player reads a video from its
+start while it asks for the file's tail (an MP4's index often sits there): a READ that
+continues either stream (the chunk of the stream's last READ or the one after) stays in
+the sequence, and with one stream these two requests cancelled each other's prefetches
+at every switch, so readahead never ran. A READ that continues neither (a seek) starts a
+stream in the empty slot or in place of the stream read least recently, and cancels that
+stream's prefetches still in flight that no READ has joined: their slots free at once and
+nothing the client moved away from is fetched or cached; a joined prefetch is never
+cancelled (`joined` is set under the reader's lock, where the cancel decides). `status`
+counts them as `readahead_cancelled`. The first seek after a single stream takes the
+empty slot and cancels nothing, which is the price of keeping a tail request harmless.
+
+A client's own fetch stops when nobody wants it (I-314): the web UI reads a file under
+the request's context (`vfs.File.ReadAtContext`), and when the browser abandons a
+request (a seek or a closed player) the READ returns and, if no other READ waits on its
+chunk fetch, the fetch is cut, so the chunk nobody wants stops taking the link from the
+one the player asks for next. A READ that was served leaving never cuts the fetch (it
+goes on to cache the chunk for the READs after it), and a whole-chunk reader (`ReadChunk`:
+flusher, repair, pins) that joined a fetch keeps it going. NFS and SMB READs have no
+request context and read through `ReadAt`.
 
 ## 6. Visibility
 
@@ -583,11 +600,18 @@ the WAL cap.
 - **I-203** — Readahead reaches `ReadAheadBytes` (8 MiB) ahead of a sequential client: a
   stream's depth is `ReadaheadDepth(ChunkSize)` = `min(ReadAhead, ReadAheadBytes /
   ChunkSize)`, at least one chunk; a prefetch starts only after the READ that triggered
-  it has been served; its shard GETs carry the background mark (I-175); and a READ of
-  the inode that leaves the sequence (lands outside the chunk of the previous READ and the
-  one after it) cancels the inode's in-flight prefetches no READ has joined, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
+  it has been served; its shard GETs carry the background mark (I-175); an inode has two
+  streams, and a READ that continues neither (lands outside the chunk of each stream's
+  last READ and the one after it) replaces the stream read least recently (or takes an
+  empty slot) and cancels that stream's in-flight prefetches no READ has joined, never the
+  other stream's, counted in `status` as `readahead_cancelled`, while a joined prefetch is never
   cancelled; a READ that joined a prefetch which then failed fetches the chunk itself
   and returns only its own result.
+- **I-314** — A client READ whose context ends (the web UI's request abandoned by the
+  browser) returns at once, and the chunk fetch it waited on is cut when no other READ
+  waits on it: an abandoned fetch caches nothing; a fetch another READ or a whole-chunk
+  reader still waits on goes on and serves it; a served READ never cuts its fetch; a
+  prefetch is cut only by I-203.
 - **I-310** — A finished prefetch is held by the chunk cache alone: the readahead table
   drops a prefetch the moment it completes, joined or not, so the bytes a gateway keeps
   for readahead are bounded by the prefetches in flight (`ReadAhead`) and the cache's
@@ -630,7 +654,8 @@ the WAL cap.
 | I-219 | `TestFlusher_CommitRefusedForCodec_CommitsWithoutSums`, `TestRepair_BackfillSums_WaitsForCodec5` |
 | I-310 | `TestReader_Readahead_FinishedPrefetchNotRetained` |
 | I-312 | `TestFlusher_SoonRetry_ReusesPlacedShards`, `TestFlusher_LateRetry_RePutsBeforeCommit` |
-| I-203 | `TestReader_Readahead_DepthByBytes_Table`, `TestReader_Readahead_PrefetchIsBackgroundPriority`, `TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch`, `TestReader_Readahead_JoinedPrefetchSurvivesCancel`, `TestFile_ReadAt_PrefetchStartsAfterTheRead`, `TestReader_Readahead_ReadInSameChunkKeepsPrefetches`, `TestReader_JoinedPrefetchFailure_ReadFetchesItself` |
+| I-314 | `TestReader_AbandonedReadCutsItsFetch`, `TestWithContext_ReadsUnderTheRequestContext` |
+| I-203 | `TestReader_Readahead_TwoStreamsKeepTheirPrefetches`, `TestReader_Readahead_DepthByBytes_Table`, `TestReader_Readahead_PrefetchIsBackgroundPriority`, `TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch`, `TestReader_Readahead_JoinedPrefetchSurvivesCancel`, `TestFile_ReadAt_PrefetchStartsAfterTheRead`, `TestReader_Readahead_ReadInSameChunkKeepsPrefetches`, `TestReader_JoinedPrefetchFailure_ReadFetchesItself` |
 | I-166 | `TestReader_Readahead_SequentialFillsCache`, `TestReader_Readahead_RandomReadDoesNotPrefetch`, `TestReader_Readahead_BoundedInFlight`, `TestReader_Readahead_ForegroundJoinsPrefetch`, `TestReader_Readahead_SkipsHashZeroAndCached`, `TestReader_Readahead_FailureIsInvisible`, `TestPhaseHotPath_ConformingGatewayPasses`, `TestPhaseHotPath_NonConformingGatewayFails`, `TestPhaseHotPath_OneGatewayUnmovedCountersSkip`, `TestReader_Readahead_SameChunkReadRetriesSkippedCandidates` |
 | I-79 | `TestFlusher_FullCluster_ErrorWrapsErrFull`, `TestOverlay_WALCap_WaitsForFlush`, `TestOverlay_WALCap_FailsAfterCapWait`, `TestOverlay_WALCap_FailsFastWhenClusterFull`, `TestNFS_WriteAtCap_WaitsThenSucceeds`, `TestNFS_WriteWhenFull_IsNOSPC`, `TestVFS_ClusterFull_ENOSPC` |
 | I-80 | `TestFlusher_BatchCommit_ResidualStaysDirty`, `TestOverlay_TotalDirty_CountsPlanBytes`, `TestOverlay_TotalDirty_FollowsAbortAndDrop`, `TestWAL_Compact_StreamsThroughBoundedBuffer`, `TestWAL_Compact_SyncDirFails_LogStillUsable`, `TestOverlay_CommitFlushed_PostRenameError_OffsetsValid` |

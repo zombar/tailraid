@@ -38,7 +38,8 @@ type Reader struct {
 
 	mu         sync.Mutex
 	inflight   map[meta.Hash]*fetchCall  // one fetch per hash at a time; readahead shares it
-	last       map[meta.Ino]uint64       // the chunk index of each inode's previous READ (readahead)
+	last       map[meta.Ino]streams      // each inode's read streams (readahead, I-203)
+	tick       uint64                    // orders stream use: the least recent is replaced
 	prefetched map[meta.Hash]struct{}    // chunks a prefetch cached that no READ has consumed yet
 	pf         map[meta.Ino][]*fetchCall // the prefetches each inode's sequential READs started (I-203)
 	lat        latencyRing               // recent shard GET times: the hedge delay is their p95
@@ -75,6 +76,39 @@ func ReadaheadDepth(chunkSize uint32) int {
 		return ReadAhead
 	}
 	return max(1, min(ReadAhead, ReadAheadBytes/int(chunkSize)))
+}
+
+// streams are the read streams of one inode readahead follows at once: a player reads a
+// file from its start while asking for its tail (an MP4's index), and neither may cancel
+// the other's prefetches (I-203).
+type streams [2]cursor
+
+// cursor is one stream: the chunk of its last READ and when that READ came.
+type cursor struct {
+	idx  uint64
+	used uint64 // Reader.tick at the last READ; 0 = no stream
+}
+
+// follow places a READ of chunk idx on a stream: the one it continues (the chunk of the
+// stream's last READ or the one after), else the slot of no stream or of the stream
+// read least recently, which the READ replaces. It reports the slot, whether the READ
+// continues a stream, and whether it replaced one.
+func (st *streams) follow(idx, tick uint64) (slot int, sequential, replaced bool) {
+	for i, c := range st {
+		if c.used != 0 && (idx == c.idx || idx == c.idx+1) {
+			st[i] = cursor{idx: idx, used: tick}
+			return i, true, false
+		}
+	}
+	slot = 0
+	for i, c := range st {
+		if c.used < st[slot].used {
+			slot = i
+		}
+	}
+	replaced = st[slot].used != 0
+	st[slot] = cursor{idx: idx, used: tick}
+	return slot, false, replaced
 }
 
 // hintCap bounds the per-inode and per-hash bookkeeping of readahead: past it the maps
@@ -136,8 +170,10 @@ type fetchCall struct {
 	err      error
 	prefetch bool               // started by readahead, not by a READ
 	ino      meta.Ino           // a prefetch's inode: its entry in Reader.pf, dropped when it finishes (I-310)
+	stream   int                // a prefetch's stream of that inode: a seek away from it cancels it (I-203)
 	joined   bool               // a READ waited on this prefetch (under Reader.mu; counted once, not again on the cache hit)
-	cancel   context.CancelFunc // a prefetch's context: cut when its client seeks away unjoined (I-203)
+	cancel   context.CancelFunc // the fetch's context: a prefetch's is cut when its client seeks away unjoined (I-203), a READ's when every READ waiting on it was abandoned (I-314)
+	waiters  int                // READs waiting on a client fetch (under Reader.mu)
 
 	// A data shard that arrived and hashed to the chunk's recorded sum is published
 	// here, so a reader waiting for a range inside it copies its bytes before the chunk
@@ -221,7 +257,7 @@ func NewReader(st *meta.Store, peers meta.Peers, shards chunk.ShardClient, cache
 	stop, halt := context.WithCancel(context.Background())
 	return &Reader{
 		st: st, peers: peers, shards: shards, cache: cache, codecs: codecs, log: slog.Default(),
-		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]uint64{}, prefetched: map[meta.Hash]struct{}{},
+		inflight: map[meta.Hash]*fetchCall{}, last: map[meta.Ino]streams{}, prefetched: map[meta.Hash]struct{}{},
 		pf:    map[meta.Ino][]*fetchCall{},
 		slots: make(chan struct{}, ReadAhead),
 		stop:  stop, halt: halt,
@@ -278,19 +314,23 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 	cs := r.st.Volume().ChunkSize
 	idx := uint64(off) / uint64(cs)
 	r.mu.Lock()
-	prev, seen := r.last[in.Ino]
-	if len(r.last) >= hintCap {
+	if _, seen := r.last[in.Ino]; !seen && len(r.last) >= hintCap {
 		clear(r.last)
 		clear(r.pf)
 	}
-	r.last[in.Ino] = idx
+	st := r.last[in.Ino]
+	r.tick++
 	// another READ in the same chunk stays in the sequence: it cancels nothing and retries
 	// the candidates a busy slot made the chunk's first READ skip (an early-served READ
-	// returns while its chunk's fetch still holds a slot)
-	sequential := idx == 0 || (seen && (idx == prev || idx == prev+1))
-	if !sequential {
-		r.cancelUnjoinedLocked(in.Ino)
+	// returns while its chunk's fetch still holds a slot); a READ that continues neither
+	// stream starts one in place of the stream read least recently, whose prefetches no
+	// READ joined are cut, and a file's first chunk always starts a stream that prefetches
+	stream, sequential, replaced := st.follow(idx, r.tick)
+	r.last[in.Ino] = st
+	if replaced {
+		r.cancelUnjoinedLocked(in.Ino, stream)
 	}
+	sequential = sequential || idx == 0
 	r.mu.Unlock()
 	if !sequential {
 		return
@@ -319,7 +359,7 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 			continue
 		}
 		pctx, cancel := context.WithCancel(chunk.Background(r.stop))
-		call := &fetchCall{done: make(chan struct{}), prefetch: true, ino: in.Ino, cancel: cancel}
+		call := &fetchCall{done: make(chan struct{}), prefetch: true, ino: in.Ino, stream: stream, cancel: cancel}
 		r.inflight[h] = call
 		r.pf[in.Ino] = append(r.pf[in.Ino], call)
 		r.bg.Add(1) // under mu while not closed: never concurrent with Close's Wait
@@ -346,8 +386,13 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 // cancelUnjoinedLocked cuts the inode's prefetches still in flight that no READ has
 // joined: the client moved elsewhere, so their bytes would only take a holder's slot
 // and the link from the chunk it wants now. The caller holds r.mu.
-func (r *Reader) cancelUnjoinedLocked(ino meta.Ino) {
+func (r *Reader) cancelUnjoinedLocked(ino meta.Ino, stream int) {
+	var keep []*fetchCall
 	for _, call := range r.pf[ino] {
+		if call.stream != stream {
+			keep = append(keep, call)
+			continue
+		}
 		select {
 		case <-call.done:
 			continue
@@ -358,7 +403,11 @@ func (r *Reader) cancelUnjoinedLocked(ino meta.Ino) {
 			r.raCancelled.Add(1)
 		}
 	}
-	delete(r.pf, ino)
+	if len(keep) == 0 {
+		delete(r.pf, ino)
+		return
+	}
+	r.pf[ino] = keep
 }
 
 // forgetPrefetchLocked drops a finished prefetch from its inode's list: the cache holds
@@ -441,12 +490,14 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 			call.joined = true
 			r.raJoined.Add(1)
 		}
+		call.waitersAdd(running) // a whole-chunk reader keeps a READ's fetch going (I-314)
 		r.mu.Unlock()
 		if !running {
 			return r.run(ctx, h, call)
 		}
 		select {
 		case <-call.done:
+			r.leave(call, false)
 			if call.err != nil && (errors.Is(call.err, context.Canceled) || call.prefetch) {
 				// the leader gave up for its own reasons, or a prefetch failed at background
 				// priority, which says nothing about a client's read (I-203, I-175): fetch
@@ -455,6 +506,7 @@ func (r *Reader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, error) {
 			}
 			return call.data, call.err
 		case <-ctx.Done():
+			r.leave(call, true)
 			return nil, ctx.Err()
 		}
 	}
@@ -706,6 +758,8 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 	k := int(c.K)
 	lo, hi := inChunk, min(inChunk+uint64(len(dst)), uint64(c.Size))
 	call := r.joinOrStart(ctx, h)
+	abandoned := false
+	defer func() { r.leave(call, abandoned) }()
 	if len(c.Sums) == k && lo < hi {
 		s := uint64(ec.ShardLen(int(c.Size), k)) // data shard j holds chunk bytes [j·s, (j+1)·s)
 		j0, j1 := int(lo/s), int((hi-1)/s)
@@ -715,6 +769,7 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 			case <-call.slot(k, j):
 			case <-call.done: // settled between the fetch's finish and the reader's arrival
 			case <-ctx.Done():
+				abandoned = true
 				return ctx.Err()
 			}
 			have = call.shard(j) != nil
@@ -732,6 +787,7 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 	select {
 	case <-call.done:
 	case <-ctx.Done():
+		abandoned = true
 		return ctx.Err()
 	}
 	if call.err != nil {
@@ -749,14 +805,37 @@ func (r *Reader) readRange(ctx context.Context, h meta.Hash, inChunk uint64, dst
 	return nil
 }
 
+// waitersAdd counts one more READ waiting on a running call.
+func (c *fetchCall) waitersAdd(running bool) {
+	if running {
+		c.waiters++
+	}
+}
+
+// leave ends a READ's wait on call. An abandoned READ (its context ended) that was the
+// last one waiting cuts a client fetch: nobody wants its chunk any more, and it would
+// only take the link from the one the client asks for next (I-314). A prefetch is cut
+// only by a seek (I-203), and a READ that was served never cuts: the fetch goes on to
+// cache the chunk for the READs after it.
+func (r *Reader) leave(call *fetchCall, abandoned bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	call.waiters--
+	if abandoned && call.waiters <= 0 && !call.prefetch && call.cancel != nil {
+		call.cancel()
+	}
+}
+
 // joinOrStart returns the in-flight fetch of h, joining a prefetch, or registers one and
 // runs it on its own goroutine so the caller can wait for a single shard of it. The fetch
 // outlives the caller's context: its result is the cache's.
 func (r *Reader) joinOrStart(ctx context.Context, h meta.Hash) *fetchCall {
+	fctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	r.mu.Lock()
 	call, running := r.inflight[h]
+	call.waitersAdd(running)
 	if !running {
-		call = &fetchCall{done: make(chan struct{})}
+		call = &fetchCall{done: make(chan struct{}), cancel: cancel, waiters: 1}
 		r.inflight[h] = call
 		if !r.closed {
 			r.bg.Add(1) // under mu while not closed: never concurrent with Close's Wait
@@ -768,9 +847,9 @@ func (r *Reader) joinOrStart(ctx context.Context, h meta.Hash) *fetchCall {
 	closed := r.closed
 	r.mu.Unlock()
 	if running {
+		cancel() // unused: the running fetch has its own
 		return call
 	}
-	fctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	unhook := context.AfterFunc(r.stop, cancel) // Close cuts it
 	fetch := func() {
 		defer func() { unhook(); cancel() }()
