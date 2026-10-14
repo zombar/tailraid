@@ -1,10 +1,11 @@
+# built binaries: `make build` writes dist/, a bare `go build ./cmd/<name>` writes ./<name>
 /dist/
-/report.html
-/results.jsonl
-/report-single.html
-/results-single.jsonl
-/report-evidence/
-/report-single-evidence/
+/tailraid
+/tailraid-sign
+# soak runs: the default, single-host and NAT rigs' reports, rows and evidence
+/report*.html
+/results*.jsonl
+/report*-evidence/
 *.test
 /.idea/
 .DS_Store
