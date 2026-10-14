@@ -287,14 +287,24 @@ func AdminOpNames() []string {
 	return out
 }
 
-// Needs is what a member op asks of its caller (docs/21 §2): a member's own ops need
-// nothing beyond membership, every other needs admins.
+// Needs is what a member op asks of its caller (docs/21 §2): the ops a member runs on
+// its own row (its candidates, the version it serves; the server admits them for the
+// caller's row alone) need nothing beyond membership, every other needs admins.
 func (op MemberOp) Needs() Need {
-	switch op.Op {
-	case "update_endpoints", "update_addr", "set_version":
+	if op.SelfOnly() {
 		return NeedNone
 	}
 	return NeedAdmins
+}
+
+// SelfOnly reports a member op that names the caller's own row and no other (docs/20
+// §5, I-322): the server refuses it for any other row.
+func (op MemberOp) SelfOnly() bool {
+	switch op.Op {
+	case "update_endpoints", "set_version":
+		return true
+	}
+	return false
 }
 
 // IsPass reports an op the leader answers only once a pass over the volume is done

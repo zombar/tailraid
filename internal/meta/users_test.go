@@ -559,8 +559,9 @@ func TestAccess_NNodeDeterminism(t *testing.T) {
 }
 
 // Which role each namespace command needs: create, mkdir, unlink, rmdir, trash, rename
-// within and across subtrees, SetAttr, restore and a rewrite's Commit need Write; purge
-// needs Admin; nobody and a Read grant are refused.
+// within and across subtrees, SetAttr, restore (on the entry's own parent and on its
+// destination) and a rewrite's Commit need Write; purge needs Admin, and the whole-trash
+// sweep is System's or an admin's; nobody and a Read grant are refused.
 // Invariant: I-348, I-349
 func TestAccess_Roles_Table(t *testing.T) {
 	u := newUsers(t)
@@ -612,13 +613,16 @@ func TestAccess_Roles_Table(t *testing.T) {
 		{"setattr under write", Command{Op: OpSetAttr, Actor: u.lee, SetAttr: &SetAttr{Ino: dWr, Mask: AttrMode, Mode: 0o700, Now: u.now}}, ErrAccess}, // dWr was rmdir'd above: gone
 		{"setattr on write root", Command{Op: OpSetAttr, Actor: u.lee, SetAttr: &SetAttr{Ino: wr, Mask: AttrMode, Mode: 0o700, Now: u.now}}, nil},
 		{"restore under read", Command{Op: OpRestore, Actor: u.lee, Restore: &Restore{Ino: tRd, Now: u.now}}, ErrAccess},
+		{"restore a read entry into write", Command{Op: OpRestore, Actor: u.lee, Restore: &Restore{Ino: tRd, NewParent: wr, NewName: "taken", Now: u.now}}, ErrAccess}, // the entry's own parent needs Write too
+		{"restore a write entry into read", Command{Op: OpRestore, Actor: u.lee, Restore: &Restore{Ino: tWr, NewParent: rd, NewName: "moved", Now: u.now}}, ErrAccess},
+		{"restore an unknown entry", Command{Op: OpRestore, Actor: u.lee, Restore: &Restore{Ino: 999_999, NewParent: wr, Now: u.now}}, ErrAccess}, // the check runs before the lookup
 		{"restore under write", Command{Op: OpRestore, Actor: u.lee, Restore: &Restore{Ino: tWr, Now: u.now}}, nil},
 		{"purge under write", Command{Op: OpPurge, Actor: u.lee, Purge: &Purge{Ino: tWr, Now: u.now}}, ErrAccess}, // the check runs before the lookup: a user without Admin learns nothing about the entry
 		{"purge under admin", Command{Op: OpPurge, Actor: u.lee, Purge: &Purge{Ino: tAd, Now: u.now}}, nil},
 		{"rewrite under read", Command{Op: OpCommit, Actor: u.lee, Commit: &Commit{Ino: fRd, HasTruncate: true, RewriteStart: true, Now: u.now}}, ErrAccess},
 		{"rewrite under write", Command{Op: OpCommit, Actor: u.lee, Commit: &Commit{Ino: fWr, HasTruncate: true, RewriteStart: true, Now: u.now}}, nil},
-		{"the sweep by a user", Command{Op: OpPurge, Actor: u.kim, Purge: &Purge{Before: u.now + 1, Now: u.now}}, nil}, // an admin holds Admin everywhere; the empty target list passes
-		{"the sweep by a plain user", Command{Op: OpPurge, Actor: u.lee, Purge: &Purge{Before: u.now + 1, Now: u.now}}, nil},
+		{"the sweep by a user", Command{Op: OpPurge, Actor: u.kim, Purge: &Purge{Before: u.now + 1, Now: u.now}}, nil},             // an admin holds Admin everywhere; the empty target list passes
+		{"the sweep by a plain user", Command{Op: OpPurge, Actor: u.lee, Purge: &Purge{Before: u.now + 1, Now: u.now}}, ErrAccess}, // the whole trash is the admins' (docs/21 §2)
 	} {
 		if err := u.apply(t, tc.c).Err; !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)

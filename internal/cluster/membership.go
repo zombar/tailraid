@@ -378,6 +378,10 @@ func (n *Node) MemberOp(ctx context.Context, op rpc.MemberOp) error {
 		if op.Addr == "" {
 			return fmt.Errorf("%w: update_addr needs addr", ErrBadMemberOp)
 		}
+		if !nd.Key.IsZero() {
+			// on the mesh the address is the key's for the life of the row (docs/20 §3)
+			return fmt.Errorf("%w: node %d (%s) is on the mesh; its address is its key's and never changes", ErrBadMemberOp, op.NodeIdx, nd.Name)
+		}
 		nd.Addr = op.Addr
 		var fut raft.IndexFuture
 		if nd.Voter {

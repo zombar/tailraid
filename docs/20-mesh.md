@@ -115,7 +115,8 @@ device while the mesh is up, which is what the override is for.
 reused), `init`'s node taking .1; `status` warns at 200. `Node.Addr` is the mesh address
 and never changes for the life of the row: the exception that let a non-member source
 change an address (under Tailscale, an IP change) and the address watch in `serve` are
-gone; `update_addr` stays a leader-side member op nothing in the node calls. Inner
+gone; `update_addr` is an admins' member op the leader refuses for any row that carries
+a key (it serves the keyless test rigs alone). Inner
 traffic is IPv4; the outer socket is dual-stack and a
 global IPv6 address is an endpoint candidate (§5), often the best path there is.
 
@@ -449,7 +450,7 @@ round-trip table.
 - **I-322** — A device's endpoint candidates are its non-loopback, non-link-local
   interface addresses with its mesh port, `mesh.endpoint`, the reflexive addresses it
   learned from `seen_from` (its introduce, every `/health` reply, which reports a
-  direct path's source only) and a mapped port, deduplicated and at most 8; `update_endpoints` is accepted for the caller's own row
+  direct path's source only) and a mapped port, deduplicated and at most 8; `update_endpoints` (as `set_version`, the other unsigned member op) is accepted for the caller's own row
   only, and published at most once a minute and only when the set changed.
 - **I-323** — A peer without a session is sent to every candidate at once and pinned to
   the source of the first authenticated packet; data is never fanned out; a peer not
@@ -504,7 +505,7 @@ round-trip table.
 |---|---|
 | I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
 | I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
-| I-318 | `TestTableAuthorizer_Table`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly` |
+| I-318 | `TestTableAuthorizer_Table`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh` |
 | I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |

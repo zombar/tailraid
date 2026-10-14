@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/base64"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -33,6 +34,35 @@ func bootstrapMesh(t *testing.T, dir string) *Node {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// A mesh device's address is its key's: update_addr is refused for a row with a key, and
+// the row and the Raft configuration are left as they were (docs/20 §3).
+//
+// Invariant: I-318
+func TestMemberOp_UpdateAddrRefusedOnMesh(t *testing.T) {
+	n := bootstrapMesh(t, t.TempDir())
+	defer n.Close()
+	self, _ := n.SelfIdx()
+	before, _ := n.FSM.Node(self)
+	servers := func() []raft.Server {
+		f := n.Raft.GetConfiguration()
+		if err := f.Error(); err != nil {
+			t.Fatal(err)
+		}
+		return f.Configuration().Servers
+	}
+	cfg := servers()
+	err := n.MemberOp(ctx, rpc.MemberOp{Op: "update_addr", NodeIdx: self, Addr: "100.70.3.9"})
+	if !errors.Is(err, ErrBadMemberOp) {
+		t.Fatalf("update_addr on a keyed row: %v, want ErrBadMemberOp", err)
+	}
+	if after, _ := n.FSM.Node(self); after.Addr != before.Addr || after.Addr != "100.70.3.1" {
+		t.Fatalf("the row's address changed: %q", after.Addr)
+	}
+	if got := servers(); !reflect.DeepEqual(got, cfg) {
+		t.Fatalf("raft configuration changed:\n%+v\n%+v", cfg, got)
+	}
 }
 
 // An introduce gives a key an address as a pending row, the same key the same address,

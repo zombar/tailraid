@@ -55,7 +55,7 @@ Endpoints and who may call them:
 |---|---|---|
 | `GET /health` | members and pending joiners | unauthenticated, no secrets in the body; it names the node's web port (`web`, 0 when off) so a dashboard can link a member's own pages (docs/13 §1) and the UDP source it sees for the caller (`seen_from`, 20 §5) |
 | `GET/HEAD/PUT/DELETE /v1/disks/{id}/shards/{key}` | members | `DELETE` additionally needs `X-Tailraid-Log-Index` and passes the fence of `docs/06` or gets `412`; `X-Tailraid-Priority: background` (the repairer's requests) holds at most half the node's slots (06 §4, I-175) |
-| `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `introduce` is proposed by the member that verified the datagram, `update_endpoints` only for the caller's own row (20 §5, I-322) |
+| `POST /v1/apply`, `POST /v1/members`, `POST /v1/bad-slot` | members | `introduce` is proposed by the member that verified the datagram, `update_endpoints` and `set_version`, the unsigned member ops, only for the caller's own row (20 §5, I-322); `update_addr` needs admins and is refused for a keyed row (20 §3) |
 | `POST /v1/join` | a pending joiner | step 2's pending rule; no token in the request, the introduce consumed it (20 §4) |
 | `GET /v1/status` | members | |
 | `GET /v1/members` | members | the device rows, for a restarting node's seed (I-282) |
