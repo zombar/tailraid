@@ -16,8 +16,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"sync"
 
@@ -28,13 +26,8 @@ import (
 // KeySize is the cluster key's length.
 const KeySize = 32
 
-// TMDBName is the TMDB key's name in the store, and TMDBLegacyFile the file in a data dir
-// it lived in before the store (docs/19 §6, I-308). They are here, not in the scrape
-// client, so a node imports them without the client (I-298).
-const (
-	TMDBName       = "tmdb"
-	TMDBLegacyFile = "tmdb.key"
-)
+// TMDBName is the TMDB key's name in the store (docs/19 §6, I-308).
+const TMDBName = "tmdb"
 
 var (
 	// ErrNoKey is a store whose key no reachable member holds (docs/19 §3: lost
@@ -352,29 +345,6 @@ func (s *Store) Opened(prefix string) map[string]string {
 	}
 	s.opened = next
 	return out
-}
-
-// Import stores each entry whose name the store lacks, never replacing one it holds (a
-// file's value may be older than the store's), and reports whether every name is now in
-// the store and opens here: only then may the file the entries came from go (I-308).
-func (s *Store) Import(ctx context.Context, entries map[string]string) (bool, error) {
-	done := true
-	for _, name := range slices.Sorted(maps.Keys(entries)) {
-		if !meta.SecretName.MatchString(name) {
-			done = false // stays in its file
-			continue
-		}
-		if _, ok := s.State.Secret(name); ok {
-			if _, err := s.Get(ctx, name); err != nil {
-				return false, err
-			}
-			continue
-		}
-		if err := s.Set(ctx, name, entries[name]); err != nil {
-			return false, err
-		}
-	}
-	return done, nil
 }
 
 // keychainOK is the compile-time check that keychain.Store satisfies Keychain.

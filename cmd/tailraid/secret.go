@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/secrets"
 )
@@ -127,21 +126,6 @@ func readSecret(cmd *cobra.Command) (string, error) {
 		return v, nil
 	}
 	return "", errors.New("no value on stdin (pipe it in, or run at a terminal to type it)")
-}
-
-// storeSecret stores value under name through this device's node. It reports false, and
-// no error, when the store cannot take it yet (a member on a codec older than the
-// store's, or a name off the pattern), so the caller keeps the value in its old file
-// (docs/19 §6).
-func storeSecret(cmd *cobra.Command, name, value string) (bool, error) {
-	if !meta.SecretName.MatchString(name) {
-		return false, nil
-	}
-	_, err := localCall(cmd, rpc.AdminOp{Op: "secret_set", Name: name, Value: value})
-	if err != nil && strings.Contains(err.Error(), meta.ErrCodec.Error()) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 // storedSecret is the value of name through this device's node, "" when the store has none.

@@ -86,15 +86,11 @@ func (e *LiveEnv) AddS3(context.Context, string) error {
 }
 
 // Bucket is the cluster's own S3 node as this device reaches it: the first Active S3 row
-// of the status, with its key from the secrets store through this device's node, else
-// from this device's s3nodes.yaml (docs/10 §4.1, docs/19 §6). The driver runs on the
-// device, so the key travels no further than from its own node.
+// of the status, with its credentials from the secrets store through this device's node
+// (docs/10 §4.1, docs/19 §6). The driver runs on the device, so the key travels no
+// further than from its own node.
 func (e *LiveEnv) Bucket(ctx context.Context) (*s3.Bucket, error) {
 	rep, err := e.SeedStatus(ctx)
-	if err != nil {
-		return nil, err
-	}
-	keys, err := cluster.LoadS3Keys(e.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -103,17 +99,17 @@ func (e *LiveEnv) Bucket(ctx context.Context) (*s3.Bucket, error) {
 		if n.Kind != "s3" || n.State != "active" || n.S3 == nil {
 			continue
 		}
-		creds, ok := keys[n.Name]
-		if name, valid := cluster.S3SecretName(n.Name); valid {
-			if v, err := e.SecretGet(ctx, NodeRef{Name: "self", RPC: e.SelfAddr}, name); err == nil {
-				if c, err := cluster.DecodeS3Secret(v); err == nil {
-					creds, ok = c, true
-				}
-			}
+		access, secret, valid := cluster.S3SecretNames(n.Name)
+		if !valid {
+			return nil, fmt.Errorf("S3 node %s has no secret names", n.Name)
 		}
-		if !ok {
-			return nil, fmt.Errorf("this device holds no key for S3 node %s", n.Name)
+		self := NodeRef{Name: "self", RPC: e.SelfAddr}
+		a, errA := e.SecretGet(ctx, self, access)
+		s, errS := e.SecretGet(ctx, self, secret)
+		if err := errors.Join(errA, errS); err != nil || a == "" || s == "" {
+			return nil, fmt.Errorf("this device cannot read the credentials of S3 node %s from the store: %w", n.Name, err)
 		}
+		creds := s3.Credentials{AccessKey: a, SecretKey: s}
 		return s3.New(s3.Target{Endpoint: n.S3.Endpoint, Bucket: n.S3.Bucket, Prefix: n.S3.Prefix, Region: n.S3.Region, PathStyle: n.S3.PathStyle}, creds, nil)
 	}
 	return nil, errors.New("the cluster has no S3 node")
