@@ -316,8 +316,10 @@ func (f *FS) snapInfoOf(n *snapNode) *snapInfo {
 }
 
 // checkSnap applies the live grants to a snapshot entry (docs/21 §3, I-348): the
-// directories above the entries are navigation; an entry is read with Read on the
-// inode it was captured from, and by admins alone once that inode is gone.
+// directories above the entries and a snapshot's root are navigation; an entry is read
+// with Read on the inode it was captured from, a directory entry is also looked up and
+// stat-ed on the way to something the actor holds a role on (as a live one is), and an
+// entry whose inode is gone from the volume is the admins' alone.
 func (f *FS) checkSnap(n *snapNode) error {
 	if !f.enforced() || n.depth <= 2 || (len(n.rel) == 0 && n.e.Type == mirror.TypeDir) {
 		return nil
@@ -329,10 +331,18 @@ func (f *FS) checkSnap(n *snapNode) error {
 		}
 		return syscall.EACCES
 	}
-	if f.role(ino) < meta.RoleRead {
-		return syscall.EACCES
+	if f.role(ino) >= meta.RoleRead {
+		return nil
 	}
-	return nil
+	if n.e.Type == mirror.TypeDir && f.st.Traverses(f.actor, ino) {
+		return nil
+	}
+	return syscall.EACCES
+}
+
+// snapChild is the node of entry e under directory n, for the checks.
+func snapChild(n *snapNode, e *mirror.Entry) snapNode {
+	return snapNode{depth: n.depth + 1, row: n.row, sn: n.sn, e: *e, rel: append(slices.Clip(n.rel), e.Name)}
 }
 
 func (f *FS) snapStat(name string, parts []string) (os.FileInfo, error) {
@@ -374,9 +384,12 @@ func (f *FS) snapReadDir(name string, parts []string) ([]os.FileInfo, error) {
 		if err != nil {
 			return nil, snapErr("readdir", name, err)
 		}
-		out = make([]os.FileInfo, len(t.Entries))
+		// a listing shows what the actor may reach, as a live listing does (I-348)
+		out = make([]os.FileInfo, 0, len(t.Entries))
 		for i := range t.Entries {
-			out[i] = entryInfo(&t.Entries[i])
+			if child := snapChild(&n, &t.Entries[i]); f.checkSnap(&child) == nil {
+				out = append(out, entryInfo(&t.Entries[i]))
+			}
 		}
 	}
 	return out, nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -304,5 +305,52 @@ func TestAccess_SnapshotPaths(t *testing.T) {
 	}
 	if _, err := kimFS.Stat(snap + "/docs/a.bin"); err != nil {
 		t.Fatalf("after the purge, the admin: %v", err)
+	}
+}
+
+// A snapshot directory lists what the actor may reach, as a live one does; a revert needs
+// Read on the snapshot entry and Admin on the live file; a restore from a snapshot needs
+// Admin on the directory it lands in and copies the entries the actor may read, listing
+// the rest as refused (docs/21 §3).
+// Invariant: I-348
+func TestAccess_SnapshotRestoreByRole(t *testing.T) {
+	r := newSnapRig(t).withFlusher()
+	kim, lee := r.f.Users()
+	kimFS, leeFS := r.fs.As(kim), r.fs.As(lee)
+	const snap = "/.snapshots/host-m1/s1"
+	if fis, err := leeFS.ReadDir(snap); err != nil || len(fis) != 0 {
+		t.Fatalf("the snapshot root with no role: %v %v", names(fis), err)
+	}
+	if _, err := leeFS.RevertFile(ctx, snap+"/docs/a.bin", "/docs/a.bin"); !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("revert of an entry lee may not read: %v", err)
+	}
+	mkdirAs(t, kimFS, "/mine")
+	r.f.Grant(kim, "/docs", lee, meta.RoleRead)
+	r.f.Grant(kim, "/mine", lee, meta.RoleWrite)
+	if fis, err := leeFS.ReadDir(snap); err != nil || !slices.Equal(names(fis), []string{"docs"}) {
+		t.Fatalf("the snapshot root with Read on /docs: %v %v", names(fis), err)
+	}
+	if _, err := leeFS.RevertFile(ctx, snap+"/docs/a.bin", "/docs/a.bin"); !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("revert with Read on the live file: %v, want EACCES", err)
+	}
+	if _, err := leeFS.RestoreSnapshot(ctx, snap+"/docs", "/mine/docs"); !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("restore into a folder with Write: %v, want EACCES", err)
+	}
+	if _, err := r.fs.As(lee).Stat("/mine/docs"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused restore left %v", err)
+	}
+	r.f.Grant(kim, "/mine", lee, meta.RoleAdmin)
+	rep, err := leeFS.RestoreSnapshot(ctx, snap, "/mine/all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Dirs != 2 || rep.Files != 1 || rep.Links != 1 || !slices.Equal(rep.Refused, []string{"/mine/all/empty"}) {
+		t.Fatalf("restore of the whole snapshot by lee: %+v", rep)
+	}
+	if got := r.content(t, "/mine/all/docs/a.bin"); !bytes.Equal(got, r.old) {
+		t.Fatal("the restored copy does not hold the snapshot's bytes")
+	}
+	if _, err := kimFS.RevertFile(ctx, snap+"/docs/a.bin", "/docs/a.bin"); err != nil {
+		t.Fatalf("the admin's revert: %v", err)
 	}
 }

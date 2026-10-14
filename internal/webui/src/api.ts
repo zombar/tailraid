@@ -838,6 +838,7 @@ export interface TreeRestore {
   links: number;
   skipped: string[];
   skipped_count: number;
+  refused_count: number;
   uploaded: number;
 }
 

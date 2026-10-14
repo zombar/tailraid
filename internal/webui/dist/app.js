@@ -1302,7 +1302,7 @@ async function restoreFolder(ctx, ref) {
   try {
     const r = await restoreTree(ref.id, ctx.path, { to });
     const made = r.files + r.dirs + r.links;
-    toast(`restored ${made} ${made === 1 ? "entry" : "entries"} to ${r.path}` + (r.skipped_count ? ` \xB7 ${r.skipped_count} existing left alone` : "") + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${ref.mirror}` : ""), "ok");
+    toast(`restored ${made} ${made === 1 ? "entry" : "entries"} to ${r.path}` + (r.skipped_count ? ` \xB7 ${r.skipped_count} existing left alone` : "") + (r.refused_count ? ` \xB7 ${r.refused_count} not yours to read` : "") + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${ref.mirror}` : ""), "ok");
     location.hash = browseHash({ path: r.path });
   } catch (e) {
     toast("restore: " + errText(e), "bad");

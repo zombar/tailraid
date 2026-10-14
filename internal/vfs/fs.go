@@ -132,6 +132,15 @@ func (f *FS) checkWrite(ino meta.Ino, name string) error {
 	return nil
 }
 
+// checkAdmin refuses an operation on ino without Admin: a revert or a restore from a
+// snapshot into the live tree (docs/21 §3, I-348).
+func (f *FS) checkAdmin(ino meta.Ino, name string) error {
+	if f.enforced() && f.role(ino) < meta.RoleAdmin {
+		return f.refuse("admin", name)
+	}
+	return nil
+}
+
 // SetHealth gives the filesystem the gateway's health view: while stale reports false a
 // failed proposal (no leader, leader lost) is retried, because the leader is usually back
 // within seconds; once stale (no leader contact for 30 s, docs/02) the mutation fails

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"syscall"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
@@ -257,6 +258,10 @@ func (s *Server) purge(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch {
 	case req.All:
+		if !s.isAdmin(r) { // the whole trash is the admins' (docs/21 §2)
+			s.fail(w, fmt.Errorf("purge: %w", syscall.EACCES))
+			return
+		}
 		err = s.fs(r).PurgeAll()
 	case req.Ino != 0:
 		err = s.fs(r).Purge(meta.Ino(req.Ino))
