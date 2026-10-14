@@ -14,7 +14,7 @@ import (
 // On a stopped node, Recover rewrites the voter set to the one given and the node opens
 // again with every entry it had; it refuses a running node, an uninitialised directory
 // and a voter list without this node. ExportSnapshot writes a decodable state file and
-// its metadata.
+// its metadata, from a fresh snapshot or, when nothing was applied since, the newest one.
 //
 // Invariant: I-129
 func TestRecover_RewritesVotersOffline(t *testing.T) {
@@ -45,6 +45,42 @@ func TestRecover_RewritesVotersOffline(t *testing.T) {
 	}
 	if mj, err := os.ReadFile(filepath.Join(out, "meta.json")); err != nil || len(mj) == 0 || m.Index == 0 {
 		t.Fatalf("meta.json: %v (index %d)", err, m.Index)
+	}
+	// a reopened node applied nothing since its start: Raft has nothing new to snapshot
+	// (the VM rounds ran export on a restarted follower), and the export is the newest
+	// snapshot the store holds
+	if err := n.Close(); err != nil {
+		t.Fatal(err)
+	}
+	n, err = Open(opts(t, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, m2, err := n.ExportSnapshot(filepath.Join(dir, "export"))
+	if err != nil {
+		t.Fatalf("export after a reopen: %v", err)
+	}
+	if m2.Index < m.Index {
+		t.Fatalf("export after a reopen: index %d, before %d", m2.Index, m.Index)
+	}
+	f, err = os.Open(filepath.Join(again, "state.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err = meta.DecodeState(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatalf("decode the exported state after a reopen: %v", err)
+	}
+	if _, ok := st.Inodes[meta.RootIno].Children["kept"]; !ok {
+		t.Fatal("the export after a reopen lacks the file")
+	}
+	// the fallback alone: the newest snapshot of the store, and an error with none
+	if out2, m3, err := exportNewest(n.snaps, filepath.Join(dir, "export2")); err != nil || m3.Index != m2.Index || out2 == "" {
+		t.Fatalf("exportNewest: %s %+v %v", out2, m3, err)
+	}
+	if _, _, err := exportNewest(raft.NewInmemSnapshotStore(), filepath.Join(dir, "export3")); !errors.Is(err, ErrNoSnapshot) {
+		t.Fatalf("exportNewest with no snapshot: %v", err)
 	}
 	// a running node holds the stores: Recover is refused
 	o := opts(t, dir)
