@@ -262,7 +262,7 @@ func (e *harnessEnv) WebClient() *http.Client { return nil }
 const bucketPrefix = "soak"
 
 // AddS3 registers the env's bucket as S3 node name with every node holding the key, as
-// `node add-s3` and `node keys` do (docs/10 §4.1).
+// the secrets store does for `node add-s3` (docs/10 §4.1, docs/19 §6).
 func (e *harnessEnv) AddS3(ctx context.Context, name string) error {
 	if e.bucket == nil {
 		return errors.New("harness: no bucket")

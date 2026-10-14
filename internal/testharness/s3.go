@@ -13,7 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/s3/s3test"
 )
 
-// nodeS3Keys is one node's S3 credentials by node name: its s3nodes.yaml.
+// nodeS3Keys is one node's S3 credentials by node name: what its secrets store opens.
 type nodeS3Keys struct {
 	mu   sync.Mutex
 	keys map[string]s3.Credentials
