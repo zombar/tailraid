@@ -27,7 +27,7 @@ errs="$TMP/errs"; : > "$errs"
 err() { echo "docs: $*" >> "$errs"; }
 
 files=(README.md CLAUDE.md docs/README.md docs/windows-checklist.md)
-for f in docs/[0-9][0-9]-*.md; do files+=("$f"); done
+for f in docs/[0-9][0-9]-*.md docs/guide-*.md; do files+=("$f"); done
 
 slug() { # GitHub heading anchor (one per line: anchors_of feeds grep -x)
   printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g'
