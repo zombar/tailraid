@@ -210,13 +210,15 @@ has arrived from it for 75 s (three keepalives; a handshake alone is no sign of 
 WireGuard renews one only every two minutes), so a peer that moved, slept or lost its
 mapping is found again within a tick (I-323).
 
-**What fan-out cannot do**, until §6: two devices both behind symmetric NATs (each
-mapping is per destination, so a reflexive address learned from one member is wrong for
-another), or one behind a firewall that drops unsolicited UDP. Such a pair is dead to
-each other exactly as a pair without a tailnet path was: Raft tolerates it while a
-majority sees the leader, and shard traffic between the two fails until a path exists.
-Until the relay lands, every pair needs a direct path: a LAN, IPv6, a port forward, a
-mapped port (§7), or the always-on cloud voter's `mesh.endpoint`. README says so.
+**What fan-out cannot do**: two devices both behind symmetric NATs (each mapping is per
+destination, so a reflexive address learned from one member is wrong for another), or
+one behind a firewall that drops unsolicited UDP. Such a pair reaches each other through
+a member both can reach (§6), at that member's cost; a pair with no member in common
+is dead to each other exactly as a pair without a tailnet path was: Raft tolerates it
+while a majority sees the leader, and shard traffic between the two fails until a path
+exists. A direct path (a LAN, IPv6, a port forward, a mapped port, §7, or the always-on
+cloud voter's `mesh.endpoint`) is the fast one, and the always-on voter's public
+address is what makes every pair at least relayed.
 
 **Path class.** `mesh.Path(idx)` reports `{Class, RTT, Since}` for every peer: `lan`
 (the pinned endpoint is on one of this host's own subnets), `wan` (any other direct
@@ -249,7 +251,10 @@ direct path, to the bootstrap.
 the candidate's key ‖ unix seconds ‖ HMAC` to its better-class candidates every 60 s;
 the device the probe names answers with the same frame, any other member drops it, and
 a candidate whose answer comes back naming that device becomes the endpoint (so a
-candidate that is really another member, or a relay, pins nothing). A laptop that comes
+candidate that is really another member, or a relay, pins nothing), and the device sends
+a keepalive on it at once, so the peer, still sending through the relay, learns the
+direct address and moves too; without that the peer's next relayed packet would roam
+the device back to the relay before anything had gone direct. A laptop that comes
 home moves from the public path to the LAN within a minute and without a restart
 (I-329).
 
@@ -365,7 +370,10 @@ by a code printed on a non-bootstrap node, a rotated token, a re-join after rese
 removal), 26 `mesh paths` (every pair direct; a UDP cut and its recovery; a restart; the
 relay round) and 27 `mesh nat` on a rig of its own, `test/soak/docker-compose.nat.yml`,
 with two router containers (one cone, one symmetric) and the fake NAT-PMP/PCP responder
-(hole punching, the relay where it is forced, the mapping). The report gains a paths
+(hole punching, the relay where it is forced, the mapping); the cone router hairpins a
+flow its mapping lets in to its own inner address, since the Docker bridge drops a new
+flow from an address off its subnet, so the cone side sees the mapped-in peer at its
+router. The report gains a paths
 table, a lanes chart of each pair's path over the run, the mesh counters and the join
 round-trip table.
 
@@ -454,8 +462,9 @@ round-trip table.
   through a member both reach.
 - **I-329** — A device pinned on a `wan` or `relay` path probes its better-class
   candidates every 60 s with an authenticated frame naming the candidate's device, which
-  that device alone answers, and moves to a LAN candidate that answers within two probe
-  intervals; the repairer and the scrub defer background work
+  that device alone answers, moves to a candidate that answers within two probe
+  intervals and sends a keepalive on it at once, so the pin holds against a peer still
+  sending through the relay; the repairer and the scrub defer background work
   whose only source or target is relayed unless the slot is bad, and readahead to a
   relayed holder fetches at most one chunk.
 - **I-330** — With `mesh.portmap` on, a device behind a gateway that answers PCP or
