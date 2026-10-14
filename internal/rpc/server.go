@@ -818,6 +818,9 @@ type Signed struct {
 	Verify    func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, meta.UserKeyID, error)
 	Enforcing func() bool
 	IsAdmin   func(meta.UserIdx) bool
+	// Refused, when set, hears every request refused for want of a valid signature: the
+	// user the header named ("" without one), the source and the path (docs/21 §8).
+	Refused func(user string, src netip.Addr, path string)
 }
 
 func (s *Server) enforcing() bool { return s.o.Signed != nil && s.o.Signed.Enforcing() }
@@ -830,15 +833,27 @@ func (s *Server) actor(r *http.Request, need Need, body []byte) (meta.UserIdx, m
 		return 0, meta.UserKeyID{}, nil
 	}
 	hdr := r.Header.Get(users.Header)
+	src, _ := SourceAddr(r)
 	if hdr == "" {
+		s.refusedSig("", src, r.URL.Path)
 		return 0, meta.UserKeyID{}, ErrUnauthorized
 	}
-	src, _ := SourceAddr(r)
 	actor, key, err := s.o.Signed.Verify(hdr, src, r.Method, r.URL.Path, body)
 	if err != nil {
+		name := ""
+		if sig, perr := users.Parse(hdr); perr == nil {
+			name = sig.User
+		}
+		s.refusedSig(name, src, r.URL.Path)
 		return 0, meta.UserKeyID{}, ErrUnauthorized
 	}
 	return actor, key, nil
+}
+
+func (s *Server) refusedSig(user string, src netip.Addr, path string) {
+	if s.o.Signed != nil && s.o.Signed.Refused != nil {
+		s.o.Signed.Refused(user, src, path)
+	}
 }
 
 // SecretKeyReply is GET /v1/secrets/key's body: the cluster key, to a member only.

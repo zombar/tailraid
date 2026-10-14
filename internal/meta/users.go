@@ -1033,6 +1033,19 @@ func (f *FSM) Groups() []Group {
 	return out
 }
 
+// Group is the group at idx, members included.
+func (f *FSM) Group(idx GroupIdx) (Group, bool) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	g := f.st.Groups[idx]
+	if g == nil {
+		return Group{}, false
+	}
+	cp := *g
+	cp.Members = slices.Clone(g.Members)
+	return cp, true
+}
+
 // GroupByName is the group of that name.
 func (f *FSM) GroupByName(name string) (Group, bool) {
 	f.mu.RLock()

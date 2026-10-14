@@ -210,6 +210,9 @@ type AdminOp struct {
 	Label      string `json:"label,omitempty"`
 	Credential string `json:"credential,omitempty"`
 	Admin      bool   `json:"admin,omitempty"`
+	// audit_ls (docs/21 §8): records since a time (RFC 3339) of a kind, at most Limit
+	Since string `json:"since,omitempty"`
+	Kind  string `json:"kind,omitempty"`
 	// Actor and Source are set by the receiving node, from the request's signature and
 	// its connection, never from the body (docs/21 §2, I-344).
 	Actor   meta.UserIdx   `json:"-"`
@@ -240,7 +243,7 @@ var adminNeeds = map[string]Need{
 	"access_ls": NeedNone, "user_ls": NeedNone, "group_ls": NeedNone, "user_create": NeedNone, "user_key_add": NeedNone, "user_bootstrap": NeedNone,
 	"secret_set": NeedUser, "secret_get": NeedUser, "secret_ls": NeedUser, "secret_rm": NeedUser,
 	"user_whoami": NeedUser, "user_key_invite": NeedUser, "user_key_rm": NeedUser, "user_bind": NeedUser, "user_unbind": NeedUser,
-	"web_login": NeedUser, "web_logout": NeedUser,
+	"web_login": NeedUser, "web_logout": NeedUser, "audit_ls": NeedUser,
 	"trash_restore": NeedWriteOn,
 	"trash_purge":   NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn,
 	"versions_revert": NeedAdminOn, "versions_copy": NeedAdminOn, "grant": NeedAdminOn, "revoke": NeedAdminOn,

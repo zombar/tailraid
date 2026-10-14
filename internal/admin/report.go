@@ -215,6 +215,14 @@ func processReport() *ProcessReport {
 }
 
 // Report is the whole `status` document.
+// UsersReport is status.users (docs/12 §12): the counts of users and open sessions in
+// the volume, and the refusals this node saw in the last hour.
+type UsersReport struct {
+	Count     int `json:"count"`
+	Sessions  int `json:"sessions"`
+	Refused1h int `json:"refused_1h"`
+}
+
 type Report struct {
 	Node        string         `json:"node"`
 	ClusterID   string         `json:"cluster_id"`
@@ -239,6 +247,7 @@ type Report struct {
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
 	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
 	Mirrors             []MirrorReport `json:"mirrors,omitempty"` // this host's mirrors (docs/16, docs/12 §11)
+	Users               *UsersReport   `json:"users,omitempty"`   // users, sessions and this node's refusals (docs/21 §8, I-358)
 	GeneratedAt         time.Time      `json:"generated_at"`
 	WalkMS              int64          `json:"walk_ms"` // how long this report's chunk walk took (docs/12 §8, I-205)
 }

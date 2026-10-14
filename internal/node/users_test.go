@@ -58,7 +58,7 @@ func caseLabels(t *testing.T, file string, funcs ...string) []string {
 // Invariant: I-345
 func TestAdminOp_Needs_Exhaustive(t *testing.T) {
 	handled := map[string]bool{}
-	for _, l := range caseLabels(t, "node.go", "AdminOp") {
+	for _, l := range caseLabels(t, "node.go", "dispatch") {
 		handled[l] = true
 	}
 	for _, l := range caseLabels(t, "users.go", "userOp") {

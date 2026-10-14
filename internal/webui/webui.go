@@ -82,6 +82,15 @@ type Options struct {
 	// POST /api/logout.
 	CodeKey func() ([]byte, bool)
 	Logout  func(ctx context.Context, actor meta.UserIdx, hash [32]byte) error
+	// Audit, when set, hears a sign-in and every request refused for want of a session
+	// or a role (docs/21 §8): the user ("" without a session) and the route.
+	Audit AuditHook
+}
+
+// AuditHook is what the audit log hears from the web UI.
+type AuditHook interface {
+	SignedIn(user string)
+	Refused(user, kind, route, detail string)
 }
 
 // Hosts builds Options.Hosts for a listener address and a MagicDNS name ("" to skip).
@@ -259,6 +268,9 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	}
 	if code == http.StatusInternalServerError {
 		s.o.Logger.Error("web ui", "err", err)
+	}
+	if code == http.StatusForbidden && s.o.Audit != nil && errors.Is(err, syscall.EACCES) {
+		s.o.Audit.Refused(s.userOf(w), "web", "", err.Error()) // a role the session's user does not hold (docs/21 §8)
 	}
 	if errors.Is(err, vfs.ErrMirrorOffline) { // the page says why and offers the way back (docs/13 §3)
 		writeJSON(w, code, map[string]any{"error": err.Error(), "offline": true})

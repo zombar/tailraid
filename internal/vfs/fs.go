@@ -57,6 +57,18 @@ type fsCore struct {
 	// view): a codec-9 field (Trash.Expect, Rename.NoReplace) is sent only once it is
 	// 9, since an older leader refuses the entry as malformed (docs/02 §Codec versions).
 	MinCodec func() uint8
+
+	// Refused, when set, hears every operation a view refused for want of a role (the
+	// audit log, docs/21 §8): the actor, the operation and the path.
+	Refused func(actor meta.UserIdx, op, path string)
+}
+
+// refuse is EACCES, told to Refused.
+func (f *FS) refuse(op, name string) error {
+	if f.Refused != nil {
+		f.Refused(f.actor, op, name)
+	}
+	return syscall.EACCES
 }
 
 // codecAtLeast reports whether every live member reads codec v (no view: yes).
@@ -92,30 +104,30 @@ func (f *FS) enforced() bool { return !f.system && f.st.Enforcing() }
 func (f *FS) role(ino meta.Ino) meta.Role { return f.st.Access(f.actor, ino) }
 
 // checkRead refuses a read of ino's contents without Read (I-353).
-func (f *FS) checkRead(ino meta.Ino) error {
+func (f *FS) checkRead(ino meta.Ino, name string) error {
 	if f.enforced() && f.role(ino) < meta.RoleRead {
-		return syscall.EACCES
+		return f.refuse("read", name)
 	}
 	return nil
 }
 
 // checkStat refuses a look-up of ino without Read, unless it is on the way to something
 // the actor holds a role on (I-348).
-func (f *FS) checkStat(ino meta.Ino) error {
+func (f *FS) checkStat(ino meta.Ino, name string) error {
 	if ino == meta.RootIno {
 		return nil // the root is every mount's entry: stat-able by anyone, listed by role (I-350)
 	}
 	if f.enforced() && f.role(ino) < meta.RoleRead && !f.st.Traverses(f.actor, ino) {
-		return syscall.EACCES
+		return f.refuse("stat", name)
 	}
 	return nil
 }
 
 // checkWrite refuses a write to ino's contents without Write (I-353); the FSM decides
 // every metadata change itself (I-349).
-func (f *FS) checkWrite(ino meta.Ino) error {
+func (f *FS) checkWrite(ino meta.Ino, name string) error {
 	if f.enforced() && f.role(ino) < meta.RoleWrite {
-		return syscall.EACCES
+		return f.refuse("write", name)
 	}
 	return nil
 }
@@ -254,11 +266,6 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 		// the first user the wire carries what it did, and a 13-reader refuses nothing
 		cmd.Actor, cmd.System = f.actor, f.system
 	}
-	if f.st.Enforcing() && f.codecAtLeast(meta.CodecUsers) {
-		// the actor on every proposal once the cluster has users (docs/21 §4, §5): before
-		// the first user the wire carries what it did, and a 13-reader refuses nothing
-		cmd.Actor, cmd.System = f.actor, f.system
-	}
 	for {
 		res, index, err := f.prop.Propose(ctx, cmd)
 		if err == nil {
@@ -272,6 +279,9 @@ func (f *FS) propose(ctx context.Context, cmd meta.Command) (meta.Result, error)
 				}
 				if afterUnknown && (errors.Is(res.Err, meta.ErrExist) || errors.Is(res.Err, meta.ErrNotExist)) {
 					return res, fmt.Errorf("%w (%w)", res.Err, meta.ErrUnknownOutcome)
+				}
+				if errors.Is(res.Err, meta.ErrAccess) && f.Refused != nil {
+					f.Refused(f.actor, fmt.Sprintf("op %d", cmd.Op), "")
 				}
 				return res, res.Err
 			}
@@ -372,7 +382,7 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 		if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
 			need = f.checkWrite
 		}
-		if aerr := need(in.Ino); aerr != nil {
+		if aerr := need(in.Ino, filename); aerr != nil {
 			return nil, mapErr("open", filename, aerr)
 		}
 	case errors.Is(err, meta.ErrNotExist) && flag&os.O_CREATE != 0:
@@ -434,7 +444,7 @@ func (f *FS) Stat(filename string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, mapErr("stat", filename, err)
 	}
-	if err := f.checkStat(in.Ino); err != nil {
+	if err := f.checkStat(in.Ino, filename); err != nil {
 		return nil, mapErr("stat", filename, err)
 	}
 	return f.info(in), nil
@@ -744,7 +754,7 @@ func (f *FS) ReadDir(p string) ([]os.FileInfo, error) {
 			if in.Ino == meta.RootIno {
 				return []os.FileInfo{}, nil // nobody, or a user who holds nothing: an empty root (I-350)
 			}
-			return nil, mapErr("readdir", p, syscall.EACCES)
+			return nil, mapErr("readdir", p, f.refuse("list", p))
 		}
 		filter = true
 	}

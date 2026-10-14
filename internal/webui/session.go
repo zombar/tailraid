@@ -55,6 +55,8 @@ func (s *Server) withSession(next http.Handler) http.Handler {
 			s.noSession(w, r)
 			return
 		}
+		w.Header().Set(userNote, se.user.Name)
+		defer w.Header().Del(userNote)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxSession, se)))
 	})
 }
@@ -95,12 +97,27 @@ func (s *Server) sessionOf(r *http.Request) (session, bool) {
 // noSession answers a request without one: an API or file request is 401, a page goes
 // to the sign-in page with the way back.
 func (s *Server) noSession(w http.ResponseWriter, r *http.Request) {
+	if s.o.Audit != nil {
+		s.o.Audit.Refused("", "web", r.URL.Path, "no session")
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/files/") {
 		writeErr(w, http.StatusUnauthorized, "sign in: run `tailraid web login` and open the link it prints")
 		return
 	}
 	http.Redirect(w, r, "/login?to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
 }
+
+// userOf is the user a handler answered for: fail has the writer alone, so the
+// session middleware notes the user on it (never sent: the header is private to the
+// response's building and dropped before the write).
+func (s *Server) userOf(w http.ResponseWriter) string {
+	u := w.Header().Get(userNote)
+	w.Header().Del(userNote)
+	return u
+}
+
+// userNote is the writer header the session middleware notes the user on.
+const userNote = "X-Tailraid-Session-User"
 
 // sessionIn is the request's session, if the cluster has users.
 func sessionIn(r *http.Request) (session, bool) {
@@ -168,6 +185,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !ok || row.ExpiresAt <= now.UnixNano() {
 		s.signinPage(w, true)
 		return
+	}
+	if s.o.Audit != nil {
+		if u, ok := s.o.Store.User(row.User); ok {
+			s.o.Audit.SignedIn(u.Name)
+		}
 	}
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // no Secure: the page is plain HTTP inside the mesh (docs/13 §2), which is the transport boundary
 		Name: SessionCookie, Value: users.TokenText(tok), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,

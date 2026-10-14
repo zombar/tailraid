@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/raft"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/audit"
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
@@ -359,6 +360,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	ops := &adminOps{cfg: cfg, paths: paths, bindings: bindings, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
 	ops.sessionLife = usersPol.Session
+	auditW := &audit.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Node: cfg.Node.Name, Clk: clk, Log: log}
+	ops.audit, ops.auditKeep, ops.dormant = auditW, usersPol.AuditRetention, usersPol.DormantAfter
+	fs.Refused = func(actor meta.UserIdx, op, path string) { // a gateway's refusal (docs/21 §8)
+		auditW.Refuse(ops.userName(actor), "", audit.KindMount, path, op)
+	}
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
 	if err != nil {
@@ -374,6 +380,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	node.FSM.SetSnapshotHook(mirrors.onBegin)
 	defer node.FSM.SetSnapshotHook(nil)
+	node.FSM.SetApplyHook(ops.audited) // the leader records every applied users and secrets op (I-357)
+	defer node.FSM.SetApplyHook(nil)
 	ops.mirrors, ops.mirrorPol = mirrors, mpol
 	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, online: prober.MirrorOnline}) // /.snapshots (docs/16 §6)
 	selfHealth := prober.SelfHealth
@@ -400,6 +408,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		rep.Warnings = append(rep.Warnings, admin.PathWarnings(rep.Machine.Paths)...)
 		if node.FSM.Enforcing() && len(bindings.List()) == 0 {
 			rep.Warnings = append(rep.Warnings, "this device has no user bound to its mount: every file access is refused until `tailraid user create` or `user bind` runs here (docs/21 §5)")
+		}
+		if node.FSM.Enforcing() {
+			rep.Users = &admin.UsersReport{Count: len(node.FSM.Users()), Sessions: len(node.FSM.Sessions()), Refused1h: auditW.RefusedLastHour()}
 		}
 		if w := admin.LowDiskWarning(rep.Machine); w != "" {
 			rep.Warnings = append(rep.Warnings, w)
@@ -431,6 +442,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Signed: &rpc.Signed{ // the users layer's signature check (docs/21 §2, I-344)
 			Verify:    verifier.Verify,
 			Enforcing: node.FSM.Enforcing, IsAdmin: node.FSM.IsAdmin,
+			Refused: func(user string, src netip.Addr, path string) {
+				auditW.Refuse(user, "", audit.KindRPC, path, "from "+src.String())
+			},
 		},
 	})
 	if err != nil {
@@ -475,6 +489,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
 			Snapshots: webSnapshots{ops: ops, flush: fl.FlushAll},
 			CodeKey:   store.Local, // the key sign-in codes are minted under (docs/21 §6)
+			Audit:     webAudit{auditW},
 			Logout: func(ctx context.Context, actor meta.UserIdx, hash [32]byte) error {
 				return ops.propose(ctx, meta.Command{Op: meta.OpSession, Actor: actor, SessionOp: &meta.SessionOp{Delete: true, Hash: hash, Now: clk.Now().UnixNano()}})
 			},
@@ -583,6 +598,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}()
 	go func() { pinned.Run(bg); done <- struct{}{} }()
 	go func() { statsSvc.Run(bg); done <- struct{}{} }()
+	go func() { ops.auditLoop(bg); done <- struct{}{} }()
 	go func() { ops.searchLoop(bg, sset.Interval); done <- struct{}{} }()
 	if web != nil {
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()
@@ -609,6 +625,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		<-gw
 	}
 	ops.sealStats() // the partial hour, before the flusher drains and the leader hands over (I-192)
+	ops.sealAudit()
 	cancelBg()
 	for range loops {
 		<-done
@@ -699,6 +716,9 @@ type adminOps struct {
 	mirrors   *mirrorSet // this host's mirrors (docs/16)
 	mirrorPol config.MirrorPolicy
 	secrets   *secrets.Store // the secrets store (docs/19)
+	audit     *audit.Writer  // this node's audit log (docs/21 §8); nil in tests without one
+	auditKeep time.Duration  // audit.retention
+	dormant   time.Duration  // users.dormant_after
 	// webAddr is this node's browser UI listener ("" off) and sessionLife users.session:
 	// `web login` links to the page and mints a session that long (docs/21 §6)
 	webAddr     string
@@ -1016,8 +1036,16 @@ func (a *adminOps) sweepS3(ctx context.Context, grace time.Duration) {
 
 func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	if err := a.authorize(op); err != nil { // the needs table (docs/21 §2, I-345)
+		a.auditOp(op, err)
 		return nil, err
 	}
+	out, err := a.dispatch(ctx, op)
+	a.auditOp(op, err)
+	return out, err
+}
+
+// dispatch runs an authorized admin op.
+func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 	switch op.Op {
 	case "repair_now", "check", "set_policy", "gc_now", "rotate_token", "trash_restore", "trash_purge", "index_now", "rebalance":
 		if !a.node.IsLeader() {
@@ -1056,7 +1084,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.secretOp(ctx, op)
 	case "user_invite", "user_key_invite", "user_bootstrap", "user_create", "user_key_add", "user_key_rm",
 		"user_disable", "user_enable", "user_rm", "user_ls", "user_whoami", "user_bind", "user_unbind",
-		"group_create", "group_rm", "group_add", "group_remove", "group_ls", "grant", "revoke", "access_ls", "web_login", "web_logout": // docs/21 §9
+		"group_create", "group_rm", "group_add", "group_remove", "group_ls", "grant", "revoke", "access_ls", "web_login", "web_logout", "audit_ls": // docs/21 §9
 		return a.userOp(ctx, op)
 	case "scrape_plan": // this node's plan for media scrape (docs/18 §11): never forwarded
 		return a.scrapePlan(ctx, op)
@@ -1132,6 +1160,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		rep := admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files)
 		_, rep.Warnings = a.mirrors.report(a.clk.Now(), a.node.FSM.Snapshots())
+		rep.Warnings = append(rep.Warnings, a.userWarnings(ctx)...)        // dormant users, bindings to no one (docs/21 §8, I-358)
 		rep.Warnings = append(rep.Warnings, a.cfg.Warnings(a.cfg.Path)...) // this device's files on disk (docs/08, I-341)
 		rep.Warnings = append(rep.Warnings, admin.PathWarnings(a.paths.Report())...)
 		return rep, nil

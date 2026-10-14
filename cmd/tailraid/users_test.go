@@ -248,3 +248,40 @@ func TestCLI_WebLogin(t *testing.T) {
 		t.Fatalf("after the logout: %d", st)
 	}
 }
+
+// `status --json` carries users: the count of users and open sessions and this node's
+// refusals of the last hour, once the cluster has users; `check` reports no dormant
+// user on a fresh volume; `audit ls` answers on a node whose segments cannot land.
+// Invariant: I-358
+func TestStatus_Users(t *testing.T) {
+	t.Setenv("TAILRAID_HOME", t.TempDir())
+	path, cfg := devHome(t)
+	out, err := run(t, "init", "--config", path, "--token", testToken, "--admin", "kim")
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	_, code := inviteFrom(t, out)
+	serveInBackground(t, cfg)
+	if out, err := run(t, "status", "--json", "--config", path); err != nil || strings.Contains(out, `"users"`) {
+		t.Fatalf("status before users carries a users report: %v\n%s", err, out)
+	}
+	if out, err := run(t, "user", "create", "kim", code, "--config", path); err != nil {
+		t.Fatalf("user create: %v\n%s", err, out)
+	}
+	if out, err := run(t, "web", "login", "--config", path); err != nil {
+		t.Fatalf("web login: %v\n%s", err, out)
+	}
+	out, err = run(t, "status", "--json", "--config", path)
+	flat := strings.Join(strings.Fields(out), "")
+	if err != nil || !strings.Contains(flat, `"users":{"count":1,"sessions":1,"refused_1h":0}`) {
+		t.Fatalf("status users: %v\n%s", err, out)
+	}
+	// the test node is diskless: its audit segments cannot land in the volume (the
+	// writer keeps them and warns), so `audit ls` answers from what it could read
+	if out, err := run(t, "audit", "ls", "--config", path); err != nil || !strings.Contains(out, "no records") {
+		t.Fatalf("audit ls on a diskless node: %v\n%s", err, out)
+	}
+	if out, err := run(t, "check", "--config", path); err != nil || strings.Contains(out, "dormant") {
+		t.Fatalf("check: %v\n%s", err, out)
+	}
+}
