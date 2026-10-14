@@ -344,13 +344,21 @@ func (nw *network) seenFrom(node *cluster.Node) func(netip.Addr) string {
 		if err != nil {
 			return ""
 		}
-		for i := range peers {
-			if peers[i].Key == mesh.Key(row.Key) && peers[i].Endpoint.IsValid() {
-				return peers[i].Endpoint.String()
-			}
-		}
-		return ""
+		return directEndpoint(peers, mesh.Key(row.Key))
 	}
+}
+
+// directEndpoint is the UDP source this device sees a peer's packets from, when the path
+// to it is direct: a relayed peer's endpoint is the relay's, and a fanning-out one has
+// none, so a caller on either learns no candidate from this member (I-322).
+func directEndpoint(peers []mesh.PeerStatus, key mesh.Key) string {
+	for i := range peers {
+		p := &peers[i]
+		if p.Key == key && p.Endpoint.IsValid() && !p.Relay && !p.Fanout {
+			return p.Endpoint.String()
+		}
+	}
+	return ""
 }
 
 // writeMeshFile records where the CLI finds this node.

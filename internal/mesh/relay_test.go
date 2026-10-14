@@ -47,16 +47,24 @@ func TestRelay_Codecs_Table(t *testing.T) {
 		{"no payload", key, short, now},
 		{"too old", key, good, now.Add(RelaySkew + time.Second)},
 		{"from the future", key, good, now.Add(-RelaySkew - time.Second)},
-		{"a probe", key, encodeProbe(key, from, now.Unix()), now},
+		{"a probe", key, encodeProbe(key, from, to, now.Unix()), now},
 	}
 	for _, c := range cases {
 		if _, _, ok := decodeRelay(c.key, c.frame, c.at); ok {
 			t.Errorf("%s: accepted", c.name)
 		}
 	}
-	probe := encodeProbe(key, from, now.Unix())
-	if k, ok := decodeProbe(key, probe, now); !ok || k != from || len(probe) != probeLen {
-		t.Fatalf("probe decode: %s %v (len %d)", k, ok, len(probe))
+	probe := encodeProbe(key, from, to, now.Unix())
+	if f, t2, ok := decodeProbe(key, probe, now); !ok || f != from || t2 != to || len(probe) != probeLen {
+		t.Fatalf("probe decode: %s %s %v (len %d)", f, t2, ok, len(probe))
+	}
+	retargeted := bytes.Clone(probe)
+	retargeted[40] ^= 1 // the probed device's key is under the MAC
+	if _, _, ok := decodeProbe(key, retargeted, now); ok {
+		t.Error("a probe with its target changed was accepted")
+	}
+	if _, _, ok := decodeProbe(key, good, now); ok {
+		t.Error("a relay frame decoded as a probe")
 	}
 	for _, c := range []struct {
 		name  string
@@ -69,7 +77,7 @@ func TestRelay_Codecs_Table(t *testing.T) {
 		{"too old", key, probe, now.Add(RelaySkew + time.Second)},
 		{"a relay frame", key, good, now},
 	} {
-		if _, ok := decodeProbe(c.key, c.frame, c.at); ok {
+		if _, _, ok := decodeProbe(c.key, c.frame, c.at); ok {
 			t.Errorf("probe %s: accepted", c.name)
 		}
 	}
@@ -178,9 +186,14 @@ func TestBind_RelayForwardRules(t *testing.T) {
 	if !ok || string(payload) != "to me" || !isRelay || rep.via != aEP || rep.peer != a {
 		t.Fatalf("a frame for this device: %q %+v %v", payload, ep, ok)
 	}
-	// a probe from a peer is echoed as it came; this device's own echo pins the probed
-	// candidate, and an echo nobody waits for does nothing
-	probe := encodeProbe(rs.key, a, clk.Now().Unix())
+	// a probe from a peer for this device is echoed as it came, one for another device is
+	// dropped; this device's own echo pins the probed candidate, and an echo nobody waits
+	// for does nothing
+	bind.probeIn(encodeProbe(rs.key, a, b, clk.Now().Unix()), from)
+	if inner.count() != 2 {
+		t.Fatalf("a probe for another device was answered: %d sends", inner.count())
+	}
+	probe := encodeProbe(rs.key, a, self, clk.Now().Unix())
 	bind.probeIn(probe, from)
 	if inner.count() != 3 || !bytes.Equal(inner.sent[2].buf, probe) || inner.sent[2].to != aEP.String() {
 		t.Fatalf("probe echo: %d sends", inner.count())
@@ -192,7 +205,8 @@ func TestBind_RelayForwardRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	echo := inner.sent[3].buf
-	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: netip.MustParseAddrPort("10.0.0.6:6")}) // from elsewhere: no match
+	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: netip.MustParseAddrPort("10.0.0.6:6")})          // from elsewhere: no match
+	bind.probeIn(encodeProbe(rs.key, self, a, clk.Now().Unix()), &conn.StdNetEndpoint{AddrPort: cand}) // names another device: no match
 	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: cand})
 	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: cand}) // once
 	if len(pinned) != 1 || pinned[0] != b.String()+"@"+cand.String() {
@@ -379,3 +393,57 @@ func TestProbeTargets_Table(t *testing.T) {
 func newFakeClock() *clock.Fake { return clock.NewFake(time.Now()) }
 
 func discardLog() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+// A probe is answered only by the device it names: one that lands on another member
+// gets silence, so a candidate that is really another member (a relay's address a
+// member mistook for the caller's) pins nothing, and an echo pins only the device the
+// probe was for.
+// Invariant: I-329
+func TestBind_ProbeAnsweredByItsTargetOnly(t *testing.T) {
+	a := newNode(t, 1, Options{ClusterKey: clusterKey})
+	b := newNode(t, 2, Options{ClusterKey: clusterKey})
+	c := newNode(t, 3, Options{ClusterKey: clusterKey})
+	for _, n := range []*node{a, b, c} {
+		others := []Peer{}
+		for _, o := range []*node{a, b, c} {
+			if o != n {
+				others = append(others, o.peer(o.loopback()))
+			}
+		}
+		if err := n.m.SetPeers(others); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range [][2]*node{{a, b}, {a, c}} {
+		if !ping(t, p[0], p[1], 10*time.Second) {
+			t.Fatalf("no direct path %d→%d", p[0].idx, p[1].idx)
+		}
+	}
+	var pinned []string
+	var mu sync.Mutex
+	a.m.relay.mu.Lock()
+	a.m.relay.onProbe = func(peer Key, from netip.AddrPort) {
+		mu.Lock()
+		pinned = append(pinned, peer.String()+"@"+from.String())
+		mu.Unlock()
+	}
+	a.m.relay.mu.Unlock()
+	// a probes c's socket as if it were b's: c is not b, so c answers nothing
+	if err := a.m.bind.Probe(c.loopback(), b.m.Key()); err != nil {
+		t.Fatal(err)
+	}
+	// a probes c's socket for c: c answers and a pins c there
+	if err := a.m.bind.Probe(c.loopback(), c.m.Key()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "c's echo", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(pinned) > 0
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(pinned) != 1 || pinned[0] != c.m.Key().String()+"@"+c.loopback().String() {
+		t.Fatalf("pinned %v, want c alone at its socket", pinned)
+	}
+}

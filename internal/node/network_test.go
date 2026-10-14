@@ -150,3 +150,27 @@ func TestLocalAddr_MeshFileThenConfig(t *testing.T) {
 		t.Fatalf("the fake: %q %v", got, err)
 	}
 }
+
+// A member reports a caller's source only for a direct path: a relayed peer's endpoint
+// is the relay's and a fanning-out peer has none, so neither becomes a candidate the
+// caller publishes as its own.
+// Invariant: I-322
+func TestSeenFrom_DirectOnly_Table(t *testing.T) {
+	k := mesh.Key{1}
+	ep := netip.MustParseAddrPort("203.0.113.9:20483")
+	for _, tc := range []struct {
+		name  string
+		peers []mesh.PeerStatus
+		want  string
+	}{
+		{"direct", []mesh.PeerStatus{{Key: k, Endpoint: ep}}, ep.String()},
+		{"relayed", []mesh.PeerStatus{{Key: k, Endpoint: ep, Relay: true}}, ""},
+		{"fanning out", []mesh.PeerStatus{{Key: k, Fanout: true}}, ""},
+		{"no endpoint", []mesh.PeerStatus{{Key: k}}, ""},
+		{"another peer", []mesh.PeerStatus{{Key: mesh.Key{2}, Endpoint: ep}}, ""},
+	} {
+		if got := directEndpoint(tc.peers, k); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

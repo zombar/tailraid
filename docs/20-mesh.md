@@ -192,7 +192,9 @@ non-link-local interface address of the device with its mesh port; `mesh.endpoin
 public `host:port` the operator knows (a port forward, the cloud voter's own address);
 the reflexive addresses it has learned (the `seen_from` of its introduce, and the
 `seen_from` every `/health` reply carries: the UDP source the responder's device
-currently sees for the caller); and, with §7, the port a router mapped. A node publishes
+currently sees for the caller, on a direct path only; a caller it reaches through a
+relay or is still fanning out to gets none, since the relay's address is not the
+caller's); and, with §7, the port a router mapped. A node publishes
 its candidates with the member op `update_endpoints`, for its own row only, at most once
 a minute and only when they changed (I-322).
 
@@ -243,9 +245,11 @@ cannot be forged. A device that has not fetched the cluster key yet (a fresh joi
 before its first fetch) uses direct paths only; the fetch itself runs over its first
 direct path, to the bootstrap.
 
-**The path probe.** A device pinned on a `wan` or `relay` path sends `0x12 ‖ key ‖ unix
-seconds ‖ HMAC` to its better-class candidates every 60 s; a candidate that answers
-(the same frame back, from the candidate) becomes the endpoint. A laptop that comes
+**The path probe.** A device pinned on a `wan` or `relay` path sends `0x12 ‖ its key ‖
+the candidate's key ‖ unix seconds ‖ HMAC` to its better-class candidates every 60 s;
+the device the probe names answers with the same frame, any other member drops it, and
+a candidate whose answer comes back naming that device becomes the endpoint (so a
+candidate that is really another member, or a relay, pins nothing). A laptop that comes
 home moves from the public path to the LAN within a minute and without a restart
 (I-329).
 
@@ -408,8 +412,8 @@ round-trip table.
   stale Raft server; a code whose cluster ID is not the cluster's is refused at once.
 - **I-322** — A device's endpoint candidates are its non-loopback, non-link-local
   interface addresses with its mesh port, `mesh.endpoint`, the reflexive addresses it
-  learned from `seen_from` (its introduce, every `/health` reply) and a mapped port,
-  deduplicated and at most 8; `update_endpoints` is accepted for the caller's own row
+  learned from `seen_from` (its introduce, every `/health` reply, which reports a
+  direct path's source only) and a mapped port, deduplicated and at most 8; `update_endpoints` is accepted for the caller's own row
   only, and published at most once a minute and only when the set changed.
 - **I-323** — A peer without a session is sent to every candidate at once and pinned to
   the source of the first authenticated packet; data is never fanned out; a peer not
@@ -441,8 +445,9 @@ round-trip table.
   path within 30 s of one answering; two devices behind symmetric NATs reach each other
   through a member both reach.
 - **I-329** — A device pinned on a `wan` or `relay` path probes its better-class
-  candidates every 60 s with an authenticated frame and moves to a LAN candidate that
-  answers within two probe intervals; the repairer and the scrub defer background work
+  candidates every 60 s with an authenticated frame naming the candidate's device, which
+  that device alone answers, and moves to a LAN candidate that answers within two probe
+  intervals; the repairer and the scrub defer background work
   whose only source or target is relayed unless the slot is bad, and readahead to a
   relayed holder fetches at most one chunk.
 - **I-330** — With `mesh.portmap` on, a device behind a gateway that answers PCP or
