@@ -395,9 +395,8 @@ the Cover Art Archive data are CC0 and need none.
   taken only by the user's choice, `--yes` or `--id`, and without a terminal the item is
   skipped and reported; the same answers give the same matches.
 - **I-302** — The TMDB key lives in the secrets store as `tmdb` (sealed, docs/19, set
-  only by `secret set`), or in a device's `<data_dir>/tmdb.key` (mode 0600) until
-  imported, travels in plaintext only to `api.themoviedb.org` and from a node to its own
-  CLI, and never appears in a log line,
+  only by `secret set`) and in no file, travels in plaintext only to
+  `api.themoviedb.org` and from a node to its own CLI, and never appears in a log line,
   an error or a request between nodes; the client speaks only to the provider hosts (TMDB's two,
   MusicBrainz, the Cover Art Archive and the `archive.org` hosts it redirects to, and
   `thumbnails.libretro.com`), sends

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,9 +75,6 @@ func TestCLI_AddS3(t *testing.T) {
 	}
 	if keys := srv.Keys(); len(keys) != 0 {
 		t.Fatalf("the bucket check left %v", keys)
-	}
-	if _, err := os.Stat(filepath.Join(cfg.Node.DataDir, cluster.S3KeysFile)); err == nil {
-		t.Fatal("add-s3 wrote the old keys file")
 	}
 	// the same bucket again, under any name or prefix, is refused by the leader
 	set("s3/second/access_key", s3test.AccessKey)

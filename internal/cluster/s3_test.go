@@ -2,8 +2,6 @@ package cluster
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -86,33 +84,6 @@ func TestMember_AddS3_Refusals(t *testing.T) {
 	}
 }
 
-// The legacy credentials file of a device still loads (until its import removes it,
-// docs/19 §6): a missing file is no keys, a broken one is an error.
-// Invariant: I-139
-func TestS3Keys_LegacyFile(t *testing.T) {
-	dir := t.TempDir()
-	if keys, err := LoadS3Keys(dir); err != nil || len(keys) != 0 {
-		t.Fatalf("no file: %v %v", keys, err)
-	}
-	yaml := "offsite:\n  access_key: AK1\n  secret_key: \"s3cr3t/with: yaml\"\nsecond:\n  access_key: AK2\n  secret_key: other\n"
-	if err := os.WriteFile(filepath.Join(dir, S3KeysFile), []byte(yaml), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	keys, err := LoadS3Keys(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(keys) != 2 || keys["second"] != (s3.Credentials{AccessKey: "AK2", SecretKey: "other"}) || keys["offsite"].SecretKey != "s3cr3t/with: yaml" {
-		t.Fatalf("keys %+v", keys)
-	}
-	if err := os.WriteFile(filepath.Join(dir, S3KeysFile), []byte("offsite: [unclosed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadS3Keys(dir); err == nil {
-		t.Fatal("a broken file loaded")
-	}
-}
-
 // An S3 node's credentials are the secrets s3/<name>/access_key and s3/<name>/secret_key;
 // a name off the secret pattern or with a slash has none; the opened secrets pair into
 // credentials by node, and a node with one of the two, an empty one or an unknown field
@@ -141,34 +112,5 @@ func TestS3SecretNames(t *testing.T) {
 		if got[node] != c {
 			t.Errorf("%s: %+v, want %+v", node, got[node], c)
 		}
-	}
-}
-
-// A node serves a bucket with the store's credentials first and its file's only for a
-// name the store cannot serve; a half pair in the store is no credentials, not a
-// fallback blocker.
-// Invariant: I-308
-func TestS3Keys_StoreFirst(t *testing.T) {
-	file := map[string]s3.Credentials{
-		"offsite": {AccessKey: "AK", SecretKey: "file"},
-		"legacy":  {AccessKey: "AK", SecretKey: "only-file"},
-		"broken":  {AccessKey: "AK", SecretKey: "file-broken"},
-	}
-	got := MergeS3Keys(map[string]string{
-		"s3/offsite/access_key": "AK", "s3/offsite/secret_key": "store",
-		"s3/broken/secret_key": "half",
-		"s3/new/access_key":    "AK", "s3/new/secret_key": "store",
-	}, file)
-	want := map[string]string{"offsite": "store", "legacy": "only-file", "broken": "file-broken", "new": "store"}
-	if len(got) != len(want) {
-		t.Fatalf("got %+v", got)
-	}
-	for name, sk := range want {
-		if got[name].SecretKey != sk {
-			t.Errorf("%s: %+v, want secret %q", name, got[name], sk)
-		}
-	}
-	if file["offsite"].SecretKey != "file" {
-		t.Error("the merge changed the file's map")
 	}
 }
