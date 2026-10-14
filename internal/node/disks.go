@@ -17,6 +17,7 @@ import (
 	"github.com/zombar/tailraid/internal/chunk"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/mesh"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/sysfs"
@@ -128,7 +129,7 @@ func checkDisk(path string, clusterID [16]byte, hostID string, host meta.NodeIdx
 			return n, ""
 		}
 	}
-	return meta.Node{}, "disk not registered (run `tailraid node add-disk`)"
+	return meta.Node{}, reasonUnregistered
 }
 
 // localDisk is one configured disk of this host: open (store set) or closed (reason).
@@ -160,6 +161,28 @@ func newDiskSet(cfg config.Config, clusterID [16]byte, hostID string, host meta.
 		d.disks = append(d.disks, &localDisk{cfg: c, reason: "not opened yet"})
 	}
 	return d
+}
+
+// reasonUnregistered is a configured disk whose marker is this host's and this cluster's
+// with no row in the table: a join cut before its registration (docs/14 §2). serve
+// registers it on its next tick.
+const reasonUnregistered = "disk not registered yet (serve registers it)"
+
+// unregistered lists the config indices of the closed disks whose only fault is a
+// missing row.
+func (d *diskSet) unregistered() []int {
+	if d == nil {
+		return nil
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var out []int
+	for i, ld := range d.disks {
+		if ld.store == nil && ld.reason == reasonUnregistered {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // refresh opens every closed disk whose marker now checks out. A nil set has no disks.
@@ -235,14 +258,25 @@ func DiskBudget(d config.Disk) (uint64, error) {
 // DiskName is the n-th (from 1) added disk of host: "<host>/<n>".
 func DiskName(host string, n int) string { return fmt.Sprintf("%s/%d", host, n) }
 
+// HostIdent is what a disk marker names as its host (docs/14 §2): the device's mesh key,
+// which a reset keeps (docs/20 §2), so a device that joined again under a new node ID
+// still owns its disks; the node ID where there is no device (the fake).
+func HostIdent(key mesh.Key, nodeID string) string {
+	if key.IsZero() {
+		return nodeID
+	}
+	return key.String()
+}
+
 // RegisterDisks marks and registers every disk listed in the config, on a node that has
-// just bootstrapped the cluster (init takes the config's disks, docs/14 §2).
-func RegisterDisks(ctx context.Context, n *cluster.Node, cfg config.Config, clusterID [16]byte) ([]meta.Node, error) {
+// just bootstrapped the cluster (init takes the config's disks, docs/14 §2); host is
+// hostIdent of the device.
+func RegisterDisks(ctx context.Context, n *cluster.Node, cfg config.Config, clusterID [16]byte, host string) ([]meta.Node, error) {
 	self, ok := n.SelfIdx()
 	if !ok {
 		return nil, errors.New("node: this node is not in its own node table")
 	}
-	return registerDisks(cfg, clusterID, n.ID, self, func(disk meta.Node) error {
+	return registerDisks(cfg, clusterID, host, self, func(disk meta.Node) error {
 		res, _, err := n.Propose(ctx, meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: disk}})
 		if err == nil {
 			err = res.Err

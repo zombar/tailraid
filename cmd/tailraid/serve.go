@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/mesh"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/node"
@@ -40,7 +40,7 @@ func loadConfig(cmd *cobra.Command) (config.Config, string, error) {
 
 func initCmd() *cobra.Command {
 	var k, m int
-	var chunkSize, name, tokenFlag string
+	var chunkSize, name, tokenFlag, subnet string
 	c := &cobra.Command{
 		Use:   "init",
 		Short: "Bootstrap a new cluster on this node",
@@ -68,22 +68,23 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, ident, err := node.Tailnet(cmd.Context(), cfg)
+			token := tokenFlag
+			if token == "" {
+				token = mesh.NewToken()
+			} else if !mesh.ValidToken(token) {
+				return fmt.Errorf("bad --token %q: want %d base32 characters (a-z, 2-7)", token, mesh.TokenLen)
+			}
+			// the cluster ID first: the subnet and the first address follow it (docs/20 §3)
+			ident, opts, self, err := node.PrepareInit(cfg, path, subnet, cfg.Mesh.Port)
 			if err != nil {
 				return err
 			}
-			token := tokenFlag
-			if token == "" {
-				token = meta.NewJoinToken()
-			}
+			opts.DataDir, opts.NodeID = cfg.Node.DataDir, id
+			self.Name, self.Voter, self.Version, self.JoinedAt = cfg.Node.Name, true, version, time.Now().UnixNano()
+			self.RaftPort, self.RPCPort = uint16(cfg.Listen.Raft), uint16(cfg.Listen.RPC)
 			// --k/--m pin a manual policy (test rigs); otherwise the leader grows it as disks join (docs/03)
 			auto := !cmd.Flags().Changed("k") && !cmd.Flags().Changed("m")
-			raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
-			n, err := cluster.Bootstrap(cmd.Context(), cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, RaftAddr: raftAddr},
-				meta.Node{ // no budget: a device stores nothing, its disks do (docs/14 §9)
-					Name: cfg.Node.Name, Kind: meta.KindDevice, TSStableID: ident.StableID, Addr: ident.IP.String(), Voter: true,
-					RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Version: version, JoinedAt: time.Now().UnixNano(),
-				},
+			n, err := cluster.Bootstrap(cmd.Context(), opts, self, // no budget: a device stores nothing, its disks do (docs/14 §9)
 				meta.SetVolume{ChunkSize: uint32(cs), K: uint8(k), M: uint8(m), Now: time.Now().UnixNano()}, auto, token)
 			if err != nil {
 				return err
@@ -94,19 +95,26 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid)
+			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid, node.HostIdent(ident.Key, n.ID))
 			if err != nil {
 				return err
 			}
 			if err := node.Snapshot(cmd.Context(), n); err != nil { // the first serve restores the table from it (I-135)
 				return fmt.Errorf("snapshot after init: %w", err)
 			}
+			if err := giveBack(cfg.Node.DataDir, filepath.Dir(path)); err != nil { // an init under sudo (docs/20 §9)
+				return err
+			}
 			mode := "manual"
 			if auto {
 				mode = "auto, grows as disks join"
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s %s\n",
-				cfg.Node.DataDir, id, ident.IP, k, m, mode, chunkSize, path, ident.IP, token)
+			code, err := mesh.JoinCode{ClusterID: opts.ClusterID, Token: token, Key: ident.Key, Host: ident.Host, Port: ident.Port, RPCPort: uint16(cfg.Listen.RPC), Endpoints: self.Endpoints}.Encode()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "initialised cluster in %s (node %s at %s, policy %d+%d (%s), chunk %s)\nconfig: %s\njoin from another device: tailraid join %s\n",
+				cfg.Node.DataDir, id, ident.Addr, k, m, mode, chunkSize, path, code)
 			printDisks(cmd.OutOrStdout(), cfg, disks)
 			return nil
 		},
@@ -118,6 +126,7 @@ func initCmd() *cobra.Command {
 	c.Flags().StringVar(&chunkSize, "chunk", "4M", "chunk size (fixed for the volume's life)")
 	c.Flags().StringVar(&name, "name", "", "node name (default: hostname)")
 	c.Flags().StringVar(&tokenFlag, "token", "", "join token (default: random; set for automation)")
+	c.Flags().StringVar(&subnet, "subnet", "", "the cluster's mesh /24 (default: derived from the cluster ID, docs/20 §3)")
 	return c
 }
 

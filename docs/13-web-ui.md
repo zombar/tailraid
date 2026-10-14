@@ -1,9 +1,9 @@
 # 13 — Web UI: dashboard and file browser
 
 The web UI is another gateway next to the NFS and SMB gateways (docs/07, docs/15): one `http.Handler` over
-the same vfs and FSM, on its own tailnet listener `<tsIP>:20482`. It shows the cluster the
+the same vfs and FSM, on its own mesh listener `<mesh addr>:20482`. It shows the cluster the
 way `tailraid status --json` reports it (data balance across nodes, chunk integrity, the
-repairer's state) and lets a browser on any of the user's tailnet devices browse the volume,
+repairer's state) and lets a browser on any member device browse the volume,
 stream media, upload files, make folders, rename, move and delete, restore what was deleted
 (the trash of docs/02 §Apply rules), flag folders and keep a folder cached on the device
 serving the page. It is read-only for cluster administration: every mutating admin
@@ -19,18 +19,22 @@ operation stays in the CLI.
   across targets: each host a card with one row per disk, each row's slots against its
   expected share, and the volume's "survives N disks, M hosts" (docs/14 §8). Hosts with
   no added disk show one cell, their own store; the block is drawn whenever any host has
-  more than one target.
+  more than one target. A **Mesh** section after Balance draws this device's view of the
+  mesh (docs/20): itself at the centre, every device member on a ring, one edge per member
+  in the class of the path to it, and every other node a link to its own page (§7).
 - **Stats**: a third tab, `#/stats`, draws the soak report's charts (docs/09 §6) over the
   history every node keeps inside the volume (docs/17): stored against logical bytes,
   chunks, the repair backlog and the bytes a pass moves, liveness lanes, the data spread
   across disks and the slots per node for the cluster, then one member's client
-  throughput, tailnet and total network rates, CPU, memory, pressure, data disk, disk
-  throughput, WAL depth, process memory and readahead. A range picker in the Grafana
+  throughput, mesh and total network rates (the mesh one with the bytes it relayed), the
+  class of its path to each peer as lanes and the round trip to each as a line (docs/17
+  §4, I-332), CPU, memory, pressure, data disk, disk throughput, WAL depth, process
+  memory and readahead. A range picker in the Grafana
   style (1h, 6h, 24h, 7d, 30d, 1y, or a custom from and to) and the member choice live in
   the URL hash, so a link reproduces a view; a range ending now refreshes every 5 s
   while the tab is visible. The member dropdown lists every device member with its
   liveness and, since every member serves its own page, links each one's Stats page at
-  the same range by its tailnet address and web port (which `/health` now carries,
+  the same range by its mesh address and web port (which `/health` now carries,
   docs/08). The charts come from `GET /api/stats` as server-rendered SVG, the report's
   own drawing code, so nothing is lost between the report and the live page (§Design).
 - **Theme switch**: a button at the right end of the header cycles system, light and
@@ -73,9 +77,10 @@ operation stays in the CLI.
 - A single-page TypeScript app, no framework, bundled by esbuild into one committed file and
   embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`, `#/stats`,
   `#/search/<q>`, `#/media`, `#/media/<lib>`, `#/media/item/<path>`).
-- A separate listener, not a route on the RPC port: the caller set differs (same-user
-  devices that are not members), a page load cannot send the `X-Tailraid-Cluster` header,
-  and the RPC port's member-only rule must stay exactly as docs/08 states it.
+- A separate listener, not a route on the RPC port: a page load cannot send the
+  `X-Tailraid-Cluster` header, the RPC port's member-only rule must stay exactly as
+  docs/08 states it, and the caller set will differ once client peers exist (docs/20
+  §11).
 - **`tailraid dashboard`** opens the UI from a terminal: it asks the node for its status,
   prints the `web_url` there (the address `status` shows on its `web` line), and hands it to
   the OS's opener: `open` on macOS, `xdg-open` on Linux, `rundll32
@@ -89,26 +94,19 @@ Every request is authorized from the TCP source address alone, before any body b
 read, in this order:
 
 1. `rpc.SourceAddr(r)`; no parseable source → 403.
-2. `Authorizer.Allow(src)`: a cluster member whose WhoIs StableID matches its member record
-   (docs/08 steps 2–4) → allowed. A WhoIs transport failure → 503.
-3. Otherwise `Authorizer.User(src)`: the WhoIs `UserProfile.LoginName` of the source. It is
-   allowed when it is non-empty and equals this node's own login name. A WhoIs failure → 503;
-   anything else → 403, logged at warn with the source and the login it presented.
+2. `Authorizer.Allow(src)`: an active cluster member's mesh address (docs/08: the table
+   authorizer; the tunnel already vouches for the source's key) → allowed; anything else
+   → 403, logged at warn with the source.
 
-The node learns its own login once at `serve` start by `WhoIs`-ing its own Tailscale IP. If
-that fails the UI runs members-only (`Login: ""`) and a warning is logged.
+Under Tailscale a third step admitted a device of the same tailnet user (the phone), by
+its WhoIs login name; the mesh has no users, and a device that is not a node is a later
+feature (docs/20 §11: client peers, a row with a key and an address and nothing else,
+configured on the phone from a QR code; users and groups on those rows after 1.0, which
+is why `Allow` answers with a principal rather than a row). Until then the UI is for
+members.
 
-Tailscale reports `LoginName: "tagged-devices"` for every tagged node, so two tagged devices
-would authorize each other. `(*tailscale.WhoIs).Login()` therefore returns `""` whenever
-`Node.Tags` is non-empty, on the caller's side and on this node's own side, and an empty
-login never matches. The authorizer caches the login next to the StableID with the same TTLs
-and the same purge on membership change as the RPC rule.
-
-What this gives: the user's phone, tablet or laptop that is not a storage node can open the
-UI; a guest device on the tailnet, another user's device and a tagged server cannot.
-
-The listener also answers only to its own name: a request whose `Host` is neither the
-listener's `<tsIP>:port` nor the node's MagicDNS name with the port is a `421` before
+The listener also answers only to its own name: a request whose `Host` is not the
+listener's `<mesh addr>:port` is a `421` before
 anything else runs, so a page on another origin that points a name of its own at this
 node's IP (DNS rebinding) gets nothing from it; the index page's CSP carries
 `frame-ancestors 'none'`, so no other page can frame the UI; and `/api/status` is the
@@ -121,6 +119,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
+| `GET /api/mesh` | – | `{"svg"}`: the Mesh section's picture (§7, docs/20 §10), `chart.Mesh` over `status.mesh` and `status.nodes` of this node's status (I-331); 404 on a device without a mesh; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,live,tier,step},"node","nodes":[{name,addr,live,self,web?}],"charts":[{id,title,svg,caption}]}`: the charts of docs/17 §4 over `[from, to)` (Unix seconds; `to=now` or absent for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; `nodes` carries each device member's tailnet IP, liveness and web port for the member menu's links; a missing or malformed `from`, `from ≥ to` or a range longer than `stats.keep.coarse` → 400; no query wired (`listen.web` on a node without the sampler) → 503; `Cache-Control: no-store` |
 | `GET /api/stat?path=&in=` | – | one entry plus `path`, with effective `protected` and `nsfw` |
@@ -441,6 +440,32 @@ state, what it added to the mirror, and Browse, disabled
 with the reason for an offline mirror's rows; there is no Delete). The section's heading carries the schedule
 (`hourly 24 · daily 30 · weekly 8 · monthly 12 · next in 23 m`).
 
+The dashboard's **Mesh** section (docs/20 §10, after tunnelmesh's node map, re-done as a
+still picture) sits after Balance: one static SVG from `chart.Mesh` with this device at
+the centre and every device member on a ring around it, in the order of the member
+table. One edge runs from the centre to each member, in the class of this device's path
+to it (`lan`, `wan`, `relay`, `none`); a relayed path is drawn to the member it goes
+through and on from there to the peer, so the picture shows who carries it. The ring
+carries names alone, so the edges stay clear; a dead member is dimmed. The facts sit in
+a table under the picture in the same card, as its legend, one row per node in the same
+order:
+the name, the mesh address, the path (its class with a dot in the class's colour, `relay
+via <member>`, or `none` with what the device is fanning out to), the endpoint the path
+is pinned to, the round trip of the last probe to it (the liveness probe of docs/05 §6,
+which runs over the path; `—` while none answered) and how long since the member was
+last heard from; this device's row leads with its interface and port and the gateway
+mapping instead of a path. Every other node
+is a link to that node's own dashboard, on the ring and in the table
+(`http://<addr>:<web>/`, the target the Stats page's member menu uses), so a click
+switches to that node's view of the mesh; a member with no web listener is plain text.
+The heading's sub-line carries the device's address, interface, port and the gateway
+mapping of docs/20 §7 (`portmap pcp 203.0.113.9:20483`, or `none`). The section is drawn
+only on a device with a mesh (`status.mesh` present), and the edges are exactly the
+peers of `status.mesh` (I-331); the picture comes from `GET /api/mesh` (§3), fetched
+beside every status poll, the table is built from the status itself, and both are
+redrawn on every poll like the rest of the page; the picture's classes are the chart
+package's, so it follows the theme (§Charts).
+
 ## 8. Build and assets
 
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
@@ -453,7 +478,7 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 ## 9. Non-goals
 
 User management and per-user access control, mutating admin operations from the browser
-(repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
+(repair, GC, membership, policy), HTTPS of its own (the mesh encrypts), serving on
 loopback, transcoding, saved playlists, a queue shared between tabs or devices,
 server-side video decoding, adding or removing a mirror, a diff between two versions or
 two snapshots, the Windows Previous Versions tab (docs/15 §8), online metadata
@@ -566,7 +591,7 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
   Headings (h1 20 wordmark, h2 17, h3 15), the health pill, badges, tile values (22),
   node names, paths, hashes, sizes, times, counters. `font-variant-numeric: tabular-nums`
   wherever digits line up.
-- No web fonts: the UI is served from the node over the tailnet and must not fetch from the
+- No web fonts: the UI is served from the node over the mesh and must not fetch from the
   internet; the index page's CSP is `default-src 'self'`.
 
 ### Space and shape
@@ -697,6 +722,7 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Inline form | `.inline-form` | the new-folder input; Enter submits, Escape cancels |
 | Toast | `.toast` | `ok` / `bad`, bottom right, 6 s, click to dismiss, `aria-live="polite"` |
 | Spread | `.spread` > `.spread-axis` + `.spread-plot` > `.spread-host` > `.spread-cols` > `.spread-col` | the Disks block's summary, the dashboard's still frame of the soak report's spread chart: one column per target grouped by host, the host's name running up beside its columns so a group is as wide as its disks, rising above or falling below a midline at the expected share, on a symmetric scale of ±25, ±50 or ±100 % chosen by the worst target; neutral within ±25 % (the spread weighted rendezvous leaves at home; docs/14 §7: moves follow home placement, not this band), `warn` past 25 %, `bad` past 50 %; `dead` hatched, `drain` amber-tinted, `off` dashed; the host-cap note sits under it |
+| Mesh chart | `.chart-card` > `svg.chart.mesh` > `g.mesh-node` (+ `self`, `off`) of `circle` + `text.mesh-name` (+ `a.mesh-link`), `line.mesh-edge` (+ `lan` `wan` `relay` `none`); `table.mesh-peers` (rows `self`, `off`; cells `name`, `addr`, `path`, `ep`, `rtt`, `seen`) | the Mesh section (docs/20): the picture with its table under it in one card, the table its legend. This device at the centre in the accent, members on a flattened ring, edges in the path's class: `lan` green, `wan` ink, `relay` amber dashed through the relay, `none` red dotted; `off` dims a dead member; a node's label is its name alone beside it (this device's under its dot), the accent when it is a link, and the whole node is the link. The table's path cell leads with a `.dot` in the class's colour, the address, endpoint, rtt and seen cells are `--dim` mono, rtt and seen right-aligned, this device's row is on `--surface`, a dead member's row dimmed, the endpoint column hidden under 600 px |
 | Diskless host | `.host-row.diskless` + `.host-note` | a host card with no target rows and the note `gateway only · no disks`; its border dimmed |
 | Warning icon | `.warn-icon` | the warnings strip's amber `!` disc at 14 px, inline after a name; the title says why (a target on the same physical disk as others: they fail together) |
 | Disk rows | `.disks` > `.host-row` > `.disk` | one card per host (name, live dot, voter badge, target count and total budget), one row per target in it: name, a slots bar on one scale for the whole block with the expected-share tick (so a bigger budget reads as a tick further right), toned as the spread (neutral within ±25 %), then the slot counts and used of budget; below 600 px the figures drop under the bar; `bad` dead (hatched track), `warn` draining (the word in amber before the slots to move), `off` closed (dashed outline, marker missing); `self` outlines the host card; a host's archive mirror (16) is a row after its disks: used of the disk, `archive · online`, or `off` (dashed) with `archive · offline since <date>`, and no tick, since it holds no slot; the S3 buckets are a card of their own named `S3`, a row per bucket with its slots against its share and its stored bytes and `bucket/prefix` in place of used of budget |
@@ -780,6 +806,18 @@ status, every lane and cell has a `<title>` with its value, the caption says wha
 is, its unit and its window; the one thing the page asks of the drawing that the report
 does not is a clock time axis in place of seconds since the run started (I-197).
 
+**The mesh chart** (docs/20 §10, I-331) is the one picture that is not over a time axis:
+`chart.Mesh` lays this device at the centre of a 760 × 250 frame and the members evenly
+on an ellipse of 300 by 90 around it, clockwise from the top with the first member half
+a step before it, so no member sits straight above or below the centre (four members
+read as a flattened X, the shape the section is sized for), draws each edge from the centre, and a relayed
+edge as two segments through the relay's position, labels each node with its name alone
+beside it on the outer side and this device under its dot (the facts are the table's, §7) and emits only classes (`mesh-edge
+lan|wan|relay|none`, `mesh-node`, `self`, `off`, `mesh-link`, `mesh-name`), which
+`app.css` maps to the tokens above; every node has a `<title>` with its facts, so the
+picture reads on hover too. A ring of more than twelve members keeps every edge and
+drops the names, which the table still carries.
+
 **Event labels** (I-297). A marker is a dashed line over the plot; its label never
 covers the plot. The labels sit in a lane of three rows under the time axis, in 10 px
 text, always reserved so a chart is as tall with events as without (the Stats page draws
@@ -789,7 +827,7 @@ its row, with a thin leader from the axis to it. A label that fits in no row joi
 before it as "repair pass end +4", and its tooltip names every event it carries. Exact
 placement gives way to legible text: the dashed line keeps the event's true time.
 
-## Manual checks (real tailnet, before a release)
+## Manual checks (real cluster, before a release)
 
 1. Desktop Chrome, Safari and Firefox: the dashboard in light and dark (toggle the OS
    theme live); the pill through stopping a node (degraded), killing the leader (stale,
@@ -878,6 +916,12 @@ placement gives way to legible text: the dashed line keeps the event's true time
 26. On an iPhone: the transport, the play buttons and the playing row show Material
     icons, never colour emoji; a row's and a tile's Play shows without hover; every
     control is easy to hit.
+27. The Mesh section on a device of the real cluster: every member on the ring, each
+    edge's class as `tailraid status` reports it, a relayed member drawn through its
+    relay, a dead member dimmed; the table under it shows each member's address,
+    endpoint, round trip and seen age as `status` does; clicking a member on the ring or in the
+    table opens that member's dashboard and its picture is drawn from its own view; in
+    light and dark; at 360 px the ring still fits with the names readable.
 
 ## Invariants
 
@@ -912,10 +956,10 @@ placement gives way to legible text: the dashed line keeps the event's true time
   viewBox, and no emoji-prone glyph (`⏮ ⏭ ⏸ ▶ ⟳ ⤮ ↗` and the emoji planes) appears in the
   TypeScript, `index.html` or the lookdev.
 - **I-68** — Every request to the web listener is authorized from the TCP source address
-  alone, before any request body is read: the source is a cluster member whose WhoIs
-  StableID matches its member record (I-18), or a tailnet device whose WhoIs login name
-  equals this node's own login name; an empty login (unresolved own identity, or a tagged
-  device on either side) never matches; a WhoIs failure is 503 and every other refusal 403.
+  alone, before any request body is read: the source is an active cluster member's mesh
+  address (I-18, I-318) and nothing else is admitted; every refusal is 403. (Under
+  Tailscale a device of the same tailnet user was admitted by its WhoIs login name, an
+  empty or tagged login never matching, and a WhoIs failure was 503.)
 - **I-69** — `GET /files/<path>`, with or without a `Range`, returns exactly the bytes a READ
   on the local NFS gateway returns at the same offset at that moment (committed chunks with
   the overlay on top), with `Accept-Ranges: bytes`, 206 for a satisfiable range, 416 for a
@@ -955,7 +999,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
   file operations, a missing entry 404, an invalid name 400, and the web UI reads no host
   path.
 - **I-73** — The web listener exists only when `listen.web` is non-zero and binds only the
-  node's Tailscale IP; `webui.New` refuses to build without an authorizer; no web endpoint
+  node's mesh address; `webui.New` refuses to build without an authorizer; no web endpoint
   proposes a Raft command other than the file operations of I-70; `/api/status` is served
   from a cache so the chunk table is walked at most once per 2 s.
 - **I-140** — `GET /api/ls` leaves out every entry named `._<name>` (at least one
@@ -968,7 +1012,8 @@ placement gives way to legible text: the dashed line keeps the event's true time
   (Windows) and the URL as one argument, after printing it; with `--print` it launches
   nothing; a status without a `web_url` fails naming `listen.web` and launches nothing.
 - **I-127** — The web listener answers a request only when its `Host` is the listener's
-  `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
+  `<mesh addr>:port` (under Tailscale also the node's MagicDNS name with that port,
+  case-insensitively) and
   refuses every other with `421` before authorization; the index page's CSP contains
   `frame-ancestors 'none'`; `/api/status` never carries the join token.
 - **I-315** — The index page's CSP admits every source the TypeScript gives an image:
@@ -1066,7 +1111,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
   refreshes every 5 s while the tab is visible and pauses while it is hidden, a custom
   range never refreshes; the member dropdown lists every device member with its liveness
   and links each that has a web listener to its own Stats page at the same range and
-  node by its tailnet address and web port, exactly the Host form that page admits.
+  node by its mesh address and web port, exactly the Host form that page admits.
 - **I-209** — `GET /api/render` renders only `.md` and `.markdown` files of at most
   `TEXT_MAX` bytes (400 and 413 otherwise) with the node's escape-first renderer: the
   source is HTML-escaped before any construct is parsed, every tag in the output is one the
@@ -1094,6 +1139,13 @@ placement gives way to legible text: the dashed line keeps the event's true time
   document (absent for system), keeps the choice in the browser's `localStorage` only and
   applies it before the first view renders; a storage failure means system; the server
   never sees the choice.
+- **I-331** — The dashboard's Mesh section draws this device at the centre and exactly the
+  peers of `status.mesh` on a ring, one edge per peer in the class `status.mesh` reports
+  (a relayed one through its relay), and lists the same peers in the table under it with
+  the address, path, endpoint and seen age `status.mesh` reports and the probe round
+  trip of `status.nodes`; every other node is a
+  link to that node's own dashboard by its address and web port, on the ring and in the
+  table; a dead member is dimmed in both; a device without a mesh draws none.
 - **I-187** — The web UI lists every snapshot of every mirror with its state, online or
   not, reads as of a snapshot on an online mirror with `at=` and refuses a mutation given
   `at` with 400, lists a file's distinct contents across the online mirrors with the
@@ -1108,7 +1160,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 
 | Invariant | Tests |
 |---|---|
-| I-68 | `TestWebUI_Authorize_MemberOrSameUser`, `TestWebUI_Authorize_BeforeBody`, `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone` |
+| I-68 | `TestWebUI_Authorize_MembersOnly`, `TestWebUI_Authorize_BeforeBody` |
 | I-69 | `TestWebUI_Get_RangeBoundaries`, `TestWebUI_Get_ETagAndHead`, `TestWebUI_Get_DirtyOverlayReadYourWrites`, `TestWebUI_Get_ContentTypes`, `TestVFS_StatReportsDirty` |
 | I-70 | `TestWebUI_Put_NewAndOverwrite`, `TestWebUI_Put_SizeBoundaries`, `TestWebUI_Put_WaitsForWALCap`, `TestWebUI_Mkdir`, `TestWebUI_Mutations_StaleIs503`, `TestVFS_CapErrorsKeepSentinels` |
 | I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
@@ -1137,6 +1189,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-198 | `TestWebUI_Stats_Route`, `TestStatic_StatsShellAndTheme`; the hash, the 5 s refresh and the member links are manual checks 15 and 16 (the TypeScript has no unit runner) |
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
+| I-331 | `TestChart_Mesh_EdgesNodesAndLinks`, `TestChart_Mesh_ManyAndHostile`, `TestChart_LookdevMeshMatchesDashboard` (the lookdev is the package's rendering), `TestMesh_FromStatus` (the edges, links and dimming from a status); manual check 27 for the picture on the real cluster |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |

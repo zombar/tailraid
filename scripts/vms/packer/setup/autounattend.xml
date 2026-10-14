@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Unattended Windows 11 ARM64 for the rig (docs/vms.md). Setup reads it from the root
      of the unattend CD; the same CD carries the virtio network driver (injected below),
-     OpenSSH, Tailscale and firstlogon.ps1. Local account admin/admin, auto-login, UAC off:
+     OpenSSH and firstlogon.ps1. Local account admin/admin, auto-login, UAC off:
      this is a throwaway test guest. -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="windowsPE">
@@ -95,7 +95,7 @@
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
           <CommandLine>cmd /c for %d in (D E F G H) do if exist %d:\firstlogon.ps1 powershell -ExecutionPolicy Bypass -NoProfile -File %d:\firstlogon.ps1</CommandLine>
-          <Description>rig setup: OpenSSH, Tailscale, power, PATH</Description>
+          <Description>rig setup: OpenSSH, power, PATH</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>

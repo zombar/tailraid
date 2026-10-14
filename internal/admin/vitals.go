@@ -27,25 +27,25 @@ type MachineReport struct {
 	DiskRead     uint64  `json:"disk_read_bytes,omitempty"`
 	NetRx        uint64  `json:"net_rx_bytes,omitempty"` // every interface but loopback, cumulative (I-190)
 	NetTx        uint64  `json:"net_tx_bytes,omitempty"`
-	TailnetRx    uint64  `json:"tailnet_rx_bytes,omitempty"` // the interface that holds the tailnet address
-	TailnetTx    uint64  `json:"tailnet_tx_bytes,omitempty"`
+	MeshRx       uint64  `json:"mesh_rx_bytes,omitempty"` // the interface that holds the tailnet address
+	MeshTx       uint64  `json:"mesh_tx_bytes,omitempty"`
 }
 
-// Vitals measures the node: dataDir names the disk, tailnetIP the address whose interface
+// Vitals measures the node: dataDir names the disk, meshIP the address whose interface
 // the tailnet counters follow (the zero Addr leaves them absent). It never fails; what
 // cannot be measured stays absent.
-func Vitals(dataDir string, tailnetIP netip.Addr) *MachineReport {
+func Vitals(dataDir string, meshIP netip.Addr) *MachineReport {
 	m := &MachineReport{}
 	if free, total, err := (sysfs.OS{}).Free(dataDir); err == nil {
 		m.DiskFree, m.DiskTotal = free, total
 	}
-	platformVitals(m, tailnetInterface(tailnetIP))
+	platformVitals(m, meshInterface(meshIP))
 	return m
 }
 
-// tailnetInterface is the interface that holds ip, found through the standard library so
+// meshInterface is the interface that holds ip, found through the standard library so
 // the match is the same on every OS; nil when ip is unset or no interface holds it.
-func tailnetInterface(ip netip.Addr) *net.Interface {
+func meshInterface(ip netip.Addr) *net.Interface {
 	if !ip.IsValid() {
 		return nil
 	}

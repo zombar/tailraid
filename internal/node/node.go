@@ -3,6 +3,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	smb "github.com/go-filesystems/smb"
@@ -29,6 +29,7 @@ import (
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/dev"
 	"github.com/zombar/tailraid/internal/logx"
+	"github.com/zombar/tailraid/internal/mesh"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mount"
 	"github.com/zombar/tailraid/internal/nfsgw"
@@ -40,65 +41,14 @@ import (
 	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/sysfs"
-	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/vfs"
 	"github.com/zombar/tailraid/internal/webui"
 )
 
 // Identity is what the tailnet says about this machine.
 type Identity struct {
-	IP       netip.Addr
-	StableID string
-	Host     string
-	DNSName  string // MagicDNS name without the trailing dot ("" when unknown)
-}
-
-// Tailnet resolves this node's identity, using a fake when dev.enabled points at one.
-func Tailnet(ctx context.Context, cfg config.Config) (tailscale.Client, Identity, error) {
-	var ts tailscale.Client
-	if cfg.Dev.Enabled && cfg.Dev.TailscaleFake != "" {
-		f, err := tailscale.LoadFake(cfg.Dev.TailscaleFake)
-		if err != nil {
-			return nil, Identity{}, err
-		}
-		ts = f
-	} else {
-		path, err := tailscale.Find(cfg.Tailscale.CLI)
-		if err != nil {
-			return nil, Identity{}, err
-		}
-		ts = &tailscale.CLI{Path: path}
-	}
-	st, err := ts.Status(ctx)
-	if err != nil {
-		return nil, Identity{}, err
-	}
-	ip, err := tailscale.SelfIPv4(st)
-	if err != nil {
-		return nil, Identity{}, err
-	}
-	return ts, Identity{IP: ip, StableID: st.Self.ID, Host: st.Self.HostName, DNSName: strings.TrimSuffix(st.Self.DNSName, ".")}, nil
-}
-
-// WaitTailnet retries Tailnet until tailscaled reports Running or the deadline passes
-// (service start order at boot).
-func WaitTailnet(ctx context.Context, cfg config.Config, timeout time.Duration, log *slog.Logger) (tailscale.Client, Identity, error) {
-	deadline := time.Now().Add(timeout)
-	for {
-		ts, id, err := Tailnet(ctx, cfg)
-		if err == nil {
-			return ts, id, nil
-		}
-		if time.Now().After(deadline) || errors.Is(err, tailscale.ErrCLIMissing) {
-			return nil, Identity{}, err
-		}
-		log.Info("waiting for tailscale", "err", err)
-		select {
-		case <-ctx.Done():
-			return nil, Identity{}, ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
+	IP   netip.Addr // the mesh address (docs/20 §3)
+	Host string
 }
 
 // Serve runs the node until ctx is done.
@@ -111,10 +61,16 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return fmt.Errorf("this node is not initialised (run `tailraid init` or `tailraid join`): %w", err)
 	}
-	ts, ident, err := WaitTailnet(ctx, cfg, 60*time.Second, log)
+	// the mesh first (docs/20 §1): every cross-device listener binds its address, and
+	// the authorizer exists before the cluster node because the Raft transport gates
+	// accepted connections with it (I-92); the member table is bound once the FSM exists
+	intro := &introducer{}
+	nw, err := openNetwork(cfg, clusterID, intro, clock.Real(), log)
 	if err != nil {
 		return err
 	}
+	defer nw.Close()
+	ident := Identity{IP: nw.IP(), Host: cfg.Node.Name}
 	raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
 	rpcAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.RPC))
 	var faults *dev.Faults // /dev/fault rules, dev.enabled only (docs/12 §3)
@@ -123,15 +79,19 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		faults = dev.NewFaults()
 		raftFaults = faults
 	}
-	// the authorizer exists before the cluster node: the Raft transport gates accepted
-	// connections with it (I-92); the member table is bound as soon as the FSM exists
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
+	auth := nw.auth
 	node, err := cluster.Open(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: clusterID, RaftAddr: raftAddr, Logger: log, Faults: raftFaults, PeerAuth: auth})
 	if err != nil {
 		return err
 	}
 	defer node.Shutdown(5 * time.Second) //nolint:errcheck // a leader hands over first (I-123); the close error is logged by Close's callers elsewhere
+	intro.node.Store(node)
 	auth.SetMembers(node.FSM.NodeByAddr)
+	auth.SetPending(func(addr string) bool { _, ok := node.FSM.PendingByAddr(addr); return ok })
+	auth.OnChange = func() { nw.refreshPeers(node) }                                                                                                        // a membership change reconfigures the peers at once (I-317)
+	if err := writeMeshFile(cmp.Or(filepath.Dir(cmp.Or(cfg.Path, "/")), config.Home()), ident.IP, nw.ifname, nw.port, uint16(cfg.Listen.RPC)); err != nil { //nolint:gosec // validated
+		log.Warn("mesh file not written; the CLI falls back to the config", "err", err)
+	}
 	// Raft restores a follower's table from a snapshot only: a node restarted before its
 	// first snapshot (every fresh joiner) has an empty table until the leader connects,
 	// and the leader is accepted only by that table. The table as of this node's own
@@ -147,6 +107,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		startSeed = fileSeed
 	}
 	auth.SetSeed(startSeed)
+	nw.refreshPeers(node)                                                        // the seed's keys open the tunnel before the log arrives (docs/20 §3)
 	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, startSeed); err != nil { // the table may not have caught up yet (I-281)
 		log.Warn("member seed not written", "err", err)
 	}
@@ -156,6 +117,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		clk: clock.Real(), self: id, ask: rpc.NewClient(clusterID, node.RPCAddrOf).MemberList, ready: node.Ready,
 		set: func(seed []meta.Node) {
 			auth.SetSeed(seed)
+			nw.refreshPeers(node)
 			if err := cluster.WriteMemberSeed(cfg.Node.DataDir, seed); err != nil {
 				log.Warn("member seed not written", "err", err)
 			}
@@ -190,6 +152,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err := legacyCheck(node.FSM); err != nil { // a state from before devices stopped being targets (docs/14 §9, I-119)
 		return err
 	}
+	if !nw.fake {
+		if err := keylessCheck(node.FSM); err != nil { // a state from before the mesh (docs/20 §10, I-326)
+			return err
+		}
+	}
 	clk := clock.Real()
 	cacheSize, err := cfg.CacheSize()
 	if err != nil {
@@ -207,14 +174,26 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer ov.Close()
 
-	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // this host's disks, the only shard stores (docs/14 §3, §9)
+	disks := newDiskSet(cfg, clusterID, HostIdent(nw.Key(), id), selfIdx, log) // this host's disks, the only shard stores (docs/14 §3, §9)
 	disks.refresh(node.FSM.Nodes())
 
 	client := rpc.NewClient(clusterID, node.RPCAddrOf)
 	client.SetDisks(node.DiskOf, disks.local)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
+	prober.PathOf = nw.pathOf(node)                                                           // the class of the path to each device, for ranking (docs/20 §8)
 	store := newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk) // docs/19
+	if nw.mesh != nil {
+		// relay frames and probes are authenticated under the cluster key (docs/20 §6):
+		// the device asks for it on every use, so a key fetched later is picked up
+		nw.mesh.SetClusterKey(func() []byte {
+			k, ok := store.Local()
+			if !ok {
+				return nil
+			}
+			return k
+		})
+	}
 	// S3 nodes: the buckets whose credentials the store holds (docs/10 §4.1, docs/19 §6)
 	client.SetS3(cluster.NewS3Buckets(node, s3Keys(store), nil).Bucket)
 	prober.SelfHealth = func() rpc.Health {
@@ -243,10 +222,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, flcfg, log)
 	fl.Events = ring
-	fl.Suspect = prober.Suspect // a PUT that outlasts the straggler grace (I-169)
-	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
+	fl.Suspect = prober.Suspect                          // a PUT that outlasts the straggler grace (I-169)
+	uid, gid := uint32(os.Getuid()), uint32(os.Getgid()) //nolint:gosec // ids
 	if runtime.GOOS == "windows" {
 		uid, gid = 0, 0
+	}
+	if cfg.Mount.Owner != "" { // the user's ownership on a mount served by a root daemon (docs/20 §9)
+		if uid, gid, err = cfg.MountOwner(); err != nil {
+			return err
+		}
 	}
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
 	var st staleness
@@ -257,6 +241,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	if rcfg.Retention, err = cfg.TrashRetention(); err != nil {
+		return err
+	}
+	if rcfg.AvoidRelay, err = cfg.RepairAvoidRelay(); err != nil {
 		return err
 	}
 	if rcfg.S3ScrubBytes, err = cfg.S3ScrubBytes(); err != nil {
@@ -319,7 +306,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Name: cfg.Node.Name, Every: statsEvery, Keep: stats.Keep{Raw: keepRaw, Minute: keepMinute, Coarse: keepCoarse}, Clk: clk, Log: log,
 		Writer: &stats.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Name: cfg.Node.Name, Spill: filepath.Join(cfg.Node.DataDir, "stats", "pending"), Log: log},
 		Src: stats.Sources{
-			Machine: func() *admin.MachineReport { return admin.Vitals(cfg.Node.DataDir, ident.IP) },
+			Machine: func() *admin.MachineReport { return admin.Vitals(cfg.Node.DataDir, nw.IP()) },
 			Gateway: func() *admin.GatewayReport {
 				return admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
 			},
@@ -345,7 +332,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Src: node.FSM, Vol: search.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Log: log,
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	ops := &adminOps{cfg: cfg, reseed: nw.auth.SetSeed, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
@@ -381,7 +368,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		rep := admin.Build(node, prober, clusterID, clk, repairer)
 		rep.WalkMS = time.Since(start).Milliseconds()
 		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
-		rep.Machine = admin.Vitals(cfg.Node.DataDir, ident.IP)
+		rep.Machine = admin.Vitals(cfg.Node.DataDir, nw.IP())
+		rep.Mesh = nw.report(node, cfg, clk.Now())
+		for i := range rep.Nodes { // the path to each device member, for node ls (docs/20 §10)
+			if row, ok := node.FSM.Node(rep.Nodes[i].Idx); ok && row.Kind == meta.KindDevice && row.Idx != selfIdx && nw.mesh != nil {
+				rep.Nodes[i].Path = nw.mesh.Path(mesh.Key(row.Key)).String()
+			}
+		}
 		if w := admin.LowDiskWarning(rep.Machine); w != "" {
 			rep.Warnings = append(rep.Warnings, w)
 		}
@@ -404,6 +397,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	srv, err := rpc.NewServer(rpc.Options{
 		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, MirrorHealth: mirrors.health, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
+		KeylessJoin: nw.fake, SeenFrom: nw.seenFrom(node),
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
 		Grace: rcfg.Grace, BadSlot: repairer.ReportBad, Dev: devHandler, Blocked: blocked,
@@ -414,12 +408,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	var web *webui.Server
-	webUsers := "members only"
 	if webAddr != "" {
-		login := selfLogin(ctx, ts, ident.IP, log)
-		if login != "" {
-			webUsers = login
-		}
 		cacheBytes, err := cfg.StatsCacheBytes()
 		if err != nil {
 			return err
@@ -446,7 +435,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			},
 		}
 		web, err = webui.New(webui.Options{
-			FS: fs, Store: node.FSM, Auth: auth, Login: login, Status: func() any { return status(false) }, Stats: query, Search: searchSvc, Catalog: searchSvc, Hosts: webui.Hosts(webAddr, ident.DNSName),
+			FS: fs, Store: node.FSM, Auth: auth, Status: func() any { return status(false) }, Stats: query, Search: searchSvc, Catalog: searchSvc, Hosts: webui.Hosts(webAddr, ""),
 			Chunks: func(ctx context.Context, sel string, offset, limit int) (int, []admin.ChunkReport, error) {
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
@@ -508,7 +497,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			return fmt.Errorf("web ui listener: %w", err)
 		}
 	}
-	log.Info("tailraid serving", "version", version, "node", id, "idx", selfIdx, "tailnet", ident.IP, "rpc", rl.Addr(), "raft", raftAddr,
+	log.Info("tailraid serving", "version", version, "node", id, "idx", selfIdx, "mesh", ident.IP, "rpc", rl.Addr(), "raft", raftAddr,
 		"nfs", addrOrOff(nl), "smb", addrOrOff(sl), "data", cfg.Node.DataDir, "policy", fmt.Sprintf("%d+%d", vol.K, vol.M))
 	if nl != nil && runtime.GOOS != "windows" {
 		prog, args, _ := mount.Command(runtime.GOOS, nl.Addr().String(), cfg.Mount.Path)
@@ -519,7 +508,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		log.Info("mount with", "cmd", prog+" "+strings.Join(args, " "))
 	}
 	if web != nil {
-		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", webUsers)
+		log.Info("web ui", "url", "http://"+wl.Addr().String()+"/", "users", "members")
 	}
 
 	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, stats, search, web UI
@@ -529,19 +518,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		loops++
 	}
 	done := make(chan struct{}, loops)
-	// an address change re-registers the node, then ends this process: the RPC and Raft
-	// listeners are bound to the old address and the service manager restarts us
 	sctx, stop := context.WithCancel(ctx)
 	defer stop()
-	var addrChanged atomic.Bool
 	go func() { _ = srv.Serve(bg, rl); done <- struct{}{} }()
 	go func() { prober.Run(bg); done <- struct{}{} }()
 	vf := &voterFile{cfg: cfg, voter: cfg.Node.Voter}
 	go func() {
-		if watchSelf(bg, ts, node, client, id, selfIdx, ident.IP, version, vf, log) {
-			addrChanged.Store(true)
-			stop()
-		}
+		watchSelf(bg, nw, cfg, node, prober, client, id, selfIdx, version, vf, log)
 		done <- struct{}{}
 	}()
 	go func() { fl.Run(bg); done <- struct{}{} }()
@@ -586,9 +569,6 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	for range loops {
 		<-done
 	}
-	if addrChanged.Load() {
-		return ErrAddressChanged
-	}
 	return err
 }
 
@@ -598,17 +578,6 @@ func addrOrOff(l net.Listener) string {
 		return "off"
 	}
 	return l.Addr().String()
-}
-
-// selfLogin is this node's tailnet login for the web UI's same-user rule (docs/13 §2):
-// "" (members only) when WhoIs cannot answer for the node's own address or it is tagged.
-func selfLogin(ctx context.Context, ts tailscale.Client, ip netip.Addr, log *slog.Logger) string {
-	w, err := ts.WhoIs(ctx, ip)
-	if err != nil || w.Login() == "" {
-		log.Warn("web ui: own tailnet login unknown; only cluster members may open it", "err", err)
-		return ""
-	}
-	return w.Login()
 }
 
 // staleness is the gateway's stale predicate (docs/02 §Health): the Stale state, or no
@@ -642,13 +611,10 @@ func (s *staleness) stale(state cluster.HealthState, lastContact, now time.Time)
 	}
 }
 
-// ErrAddressChanged is returned by Serve after the node's Tailscale address changed and
-// was re-registered: the listeners are bound to the old address, so the process exits for
-// the service manager to restart it (docs/05, L-99).
-var ErrAddressChanged = errors.New("node: tailscale address changed and re-registered; restart to bind the new address")
-
 // adminOps implements rpc.Admin and runs the periodic GC and sweep.
 type adminOps struct {
+	cfg       config.Config
+	reseed    func([]meta.Node) // the authorizer's seed follows the table (never a removed row)
 	node      *cluster.Node
 	prober    *cluster.Prober
 	repairer  *repair.Repairer
@@ -733,6 +699,7 @@ func (a *adminOps) targets() []target {
 // leader when it moved past the hysteresis (docs/01 §Node budget, I-74).
 func (a *adminOps) rebudget(ctx context.Context) {
 	a.disks.refresh(a.node.FSM.Nodes())
+	a.registerMissing(ctx)
 	bs, err := budgets(a.targets())
 	if err != nil {
 		a.log.Warn("budget: measuring a disk failed", "err", err)
@@ -764,6 +731,48 @@ func (a *adminOps) rebudget(ctx context.Context) {
 			continue
 		}
 		a.log.Info("budget registered", "target", nd.Name, "was", nd.Capacity, "now", b, "pinned", pinned[idx])
+	}
+}
+
+// registerMissing registers every configured disk whose marker is this host's and this
+// cluster's but which has no row (docs/14 §2): a `join` cut after its row landed and
+// before its disks were registered leaves exactly that, and the registration is
+// idempotent by disk ID, so a retry updates and never allocates a second row.
+func (a *adminOps) registerMissing(ctx context.Context) {
+	idxs := a.disks.unregistered()
+	if len(idxs) == 0 {
+		return
+	}
+	self, ok := a.node.FSM.Node(a.disks.host)
+	if !ok {
+		return
+	}
+	for _, i := range idxs {
+		d := a.cfg.Node.Disks[i]
+		id, err := PrepareDisk(d.Path, a.disks.clusterID, a.disks.hostID)
+		if err != nil {
+			a.log.Warn("disk not registered", "path", d.Path, "err", err)
+			continue
+		}
+		budget, err := DiskBudget(d)
+		if err != nil {
+			a.log.Warn("disk not registered", "path", d.Path, "err", err)
+			continue
+		}
+		op := rpc.MemberOp{Op: "add_disk", NodeIdx: self.Idx, DiskID: id, Name: DiskName(self.Name, i+1), Capacity: budget}
+		switch addr := a.node.LeaderRPCAddr(); {
+		case a.node.IsLeader():
+			err = a.node.MemberOp(ctx, op)
+		case addr != "":
+			err = a.client.Members(ctx, addr, op)
+		default:
+			err = cluster.ErrNoLeader
+		}
+		if err != nil {
+			a.log.Warn("disk not registered, will retry", "path", d.Path, "err", err)
+			continue
+		}
+		a.log.Info("disk registered", "path", d.Path, "name", op.Name, "budget", budget)
 	}
 }
 
@@ -834,6 +843,11 @@ func (a *adminOps) refreshSeed() {
 	if err := cluster.WriteMemberSeed(a.dataDir, nodes); err != nil {
 		a.log.Warn("member seed not written", "err", err)
 		return
+	}
+	if a.reseed != nil {
+		// the seed in memory follows the table too: a removed member would otherwise
+		// stay admitted through the seed until a restart (I-318)
+		a.reseed(nodes)
 	}
 	a.seedKey = key.String()
 }
@@ -1030,7 +1044,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]any{"sealed_rows": n}, nil
 	case "rotate_token":
 		// a MetaSet with the token only: the cluster ID is left as it is (docs/08 §Join)
-		token := meta.NewJoinToken()
+		token := mesh.NewToken()
 		res, index, err := a.node.Propose(ctx, meta.Command{Op: meta.OpMetaSet, MetaSet: &meta.MetaSet{JoinToken: token}})
 		if err == nil {
 			err = res.Err
@@ -1260,11 +1274,12 @@ func (d devStores) Fill(id string, n uint64) error {
 	return fmt.Errorf("no open disk %q on this host", id)
 }
 
-// watchSelf keeps this node's row current. At start it reports the version this binary
-// runs when the row names another (retrying until a leader accepts it, I-133), and it
-// re-registers the node when its Tailscale IP changes (docs/02 §IP change), returning
-// true once the new address is in the node table so the caller can restart.
-func watchSelf(ctx context.Context, ts tailscale.Client, node *cluster.Node, client *rpc.Client, id string, self meta.NodeIdx, current netip.Addr, version string, vf *voterFile, log *slog.Logger) bool {
+// watchSelf keeps this node's row and its device current, every probe interval. At
+// start it reports the version this binary runs when the row names another (retrying
+// until a leader accepts it, I-133); on the mesh it refreshes the peers from the table,
+// runs the path monitor (I-323), publishes the endpoint candidates (I-322) and, when
+// leading, expires the pending rows no join followed (I-319).
+func watchSelf(ctx context.Context, nw *network, cfg config.Config, node *cluster.Node, prober *cluster.Prober, client *rpc.Client, id string, self meta.NodeIdx, version string, vf *voterFile, log *slog.Logger) {
 	t := time.NewTicker(cluster.ProbeInterval)
 	defer t.Stop()
 	reported := false
@@ -1278,20 +1293,22 @@ func watchSelf(ctx context.Context, ts tailscale.Client, node *cluster.Node, cli
 				log.Info("version reported to the node table", "version", version)
 			}
 		}
-		if st, err := ts.Status(ctx); err == nil {
-			if ip, err := tailscale.SelfIPv4(st); err == nil && ip != current {
-				log.Warn("tailscale address changed", "old", current, "new", ip)
-				if err := selfMemberOp(ctx, node, client, rpc.MemberOp{Op: "update_addr", NodeIdx: self, Addr: ip.String()}); err != nil {
-					log.Warn("address update failed, will retry", "err", err)
-				} else {
-					log.Warn("address re-registered; exiting so the service manager restarts the listeners on it", "addr", ip)
-					return true
-				}
+		if nw.mesh != nil {
+			nw.refreshPeers(node)
+			if err := nw.mesh.Tick(); err != nil {
+				log.Warn("mesh path monitor", "err", err)
+			}
+			nw.tickPortMap(ctx)
+			nw.publishEndpoints(ctx, cfg, node, client, self, prober.SeenFroms(), time.Now())
+			if n, err := node.ExpirePending(ctx, time.Now()); err != nil {
+				log.Warn("pending joins not expired", "err", err)
+			} else if n > 0 {
+				log.Info("pending joins expired", "rows", n)
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return false
+			return
 		case <-t.C:
 		}
 	}
@@ -1350,67 +1367,144 @@ func selfMemberOp(ctx context.Context, node *cluster.Node, client *rpc.Client, o
 	return cluster.ErrNoLeader
 }
 
-// Join registers this node with an existing cluster: it starts an empty Raft so the
-// leader can replicate to it, sends the join request, waits for the log, and stops.
-func Join(ctx context.Context, cfg config.Config, host, token string, voter bool, version string, log *slog.Logger) (rpc.JoinResponse, error) {
+// Join registers this device with an existing cluster (docs/20 §4): it opens the device
+// and introduces its key to the code's endpoints for an address, configures its
+// interface, starts an empty Raft so the leader can replicate to it, sends the join
+// through the tunnel, waits for the log, and stops. Under dev.mesh_fake there is no
+// device: the join carries the code's token from the fake address.
+func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, version string, log *slog.Logger) (rpc.JoinResponse, error) {
+	code, err := mesh.DecodeJoinCode(codeText)
+	if err != nil {
+		return rpc.JoinResponse{}, err
+	}
 	if cluster.HasState(cfg.Node.DataDir) {
+		if have, err := cluster.LoadClusterID(cfg.Node.DataDir); err == nil && have == code.ClusterID {
+			return joinedAlready(cfg, code, log) // the join landed; serve registers any disk it did not
+		}
 		return rpc.JoinResponse{}, cluster.ErrAlreadyInit
+	}
+	if len(code.Endpoints) == 0 {
+		return rpc.JoinResponse{}, errors.New("the join code names no endpoint to reach the cluster at")
 	}
 	id, err := cluster.LoadOrCreateNodeID(cfg.Node.DataDir)
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	ts, ident, err := Tailnet(ctx, cfg)
-	if err != nil {
-		return rpc.JoinResponse{}, err
+	cid := code.ClusterID
+	clk := clock.Real()
+	req := rpc.JoinRequest{NodeID: id, Name: cfg.Node.Name, RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Voter: voter, Version: version} //nolint:gosec // validated ports
+	var nw *network
+	var target string
+	if cfg.Dev.Enabled && cfg.Dev.MeshFake != "" {
+		addr, err := fakeAddr(cfg.Dev.MeshFake)
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		nw = &network{addr: addr, auth: &rpc.TableAuthorizer{}, fake: true, log: log, port: uint16(cfg.Mesh.Port)} //nolint:gosec // validated
+		host, _, err := net.SplitHostPort(code.Endpoints[0])
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		target = net.JoinHostPort(host, strconv.Itoa(int(code.RPCPort)))
+		req.Token, req.Addr = code.Token, addr.Addr().String()
+		// the bootstrap's Raft connection must be accepted before the join response lists
+		// the members (I-92)
+		nw.auth.SetSeed([]meta.Node{{ID: "join-target", Kind: meta.KindDevice, State: meta.Active, Addr: host}})
+	} else {
+		key, _, err := mesh.LoadOrCreateKey(deviceKeychain(cfg.Node.DataDir), cid)
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		nw = &network{key: key, auth: &rpc.TableAuthorizer{}, log: log, port: uint16(cfg.Mesh.Port)} //nolint:gosec // validated
+		// the device first, with no address yet: the introduce goes through its socket,
+		// so the member sees the mesh port's reflexive address (docs/20 §4)
+		tunDev, ifname, err := mesh.CreateTUN(cfg.Mesh.Interface, mesh.MTU, cid)
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		m, err := mesh.New(tunDev, key, mesh.Options{Port: nw.port, Log: log, Clock: clk, ClusterID: cid})
+		if err != nil {
+			_ = tunDev.Close()
+			return rpc.JoinResponse{}, err
+		}
+		nw.mesh, nw.ifname = m, ifname
+		defer nw.Close()
+		prefix, err := m.Introduce(ctx, code)
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		nw.addr = prefix
+		cmds, err := mesh.Commands(runtime.GOOS, ifname, prefix, mesh.MTU)
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		if err := mesh.Apply(ctx, cmds, mesh.ExecRunner); err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		cfg.Mesh.Address = prefix.String() // survives reset: the device joins again as itself (I-316)
+		if cfg.Path != "" {
+			if err := config.Save(cfg.Path, cfg); err != nil {
+				return rpc.JoinResponse{}, err
+			}
+		}
+		bootAddr, err := mesh.HostAddr(prefix.Masked(), code.Host)
+		if err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		// the bootstrap is the first peer: it, or the leader it names, must be accepted
+		// from the first handshake, before the join response lists the members (I-92)
+		boot := meta.Node{ID: "join-target", Kind: meta.KindDevice, State: meta.Active, Addr: bootAddr.String(), Key: meta.MeshKey(code.Key), MeshPort: code.Port, Endpoints: code.Endpoints}
+		nw.auth.SetSeed([]meta.Node{boot})
+		if err := m.SetPeers(meshPeers([]meta.Node{boot}, nil, nw.Key())); err != nil {
+			return rpc.JoinResponse{}, err
+		}
+		target = net.JoinHostPort(bootAddr.String(), strconv.Itoa(int(code.RPCPort)))
+		req.Key, req.MeshPort = key.Public().String(), m.Port()
+		log.Info("introduced", "addr", prefix, "via", target)
 	}
-	// a device name is looked up in the tailnet (a DNS lookup would give a LAN address
-	// no node listens on); the port is this cluster's RPC port unless one was given
-	st, _ := ts.Status(ctx)
-	target, err := ResolveJoinTarget(st, host, cfg.Listen.RPC)
-	if err != nil {
-		return rpc.JoinResponse{}, err
+	// the tunnel's first handshake takes a moment: the health probe is retried, and it
+	// checks the code's cluster and the codec before the transport opens
+	probe := rpc.NewClient(cid, nil)
+	var h rpc.Health
+	for attempt := 0; ; attempt++ {
+		h, err = probe.Health(ctx, target)
+		if err == nil || attempt >= 30 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return rpc.JoinResponse{}, ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
-	// learn the cluster ID from the target's health endpoint before opening the transport
-	probe := rpc.NewClient([16]byte{}, nil)
-	h, err := probe.Health(ctx, target)
 	if err != nil {
 		return rpc.JoinResponse{}, fmt.Errorf("reach %s: %w", target, err)
 	}
-	var cid [16]byte
-	if raw, err := decodeHex(h.ClusterID); err == nil && len(raw) == 16 {
-		copy(cid[:], raw)
-	} else {
-		return rpc.JoinResponse{}, fmt.Errorf("bad cluster id from %s", target)
+	if h.ClusterID != meta.HexID(cid) {
+		return rpc.JoinResponse{}, fmt.Errorf("%s belongs to cluster %s, not the code's %s", target, h.ClusterID, meta.HexID(cid))
 	}
 	if err := codecCompatible(h.Codec); err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	raftAddr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Raft))
+	req.SeenFrom = h.SeenFrom // the member's view of this device: its first reflexive candidate (I-322)
+	raftAddr := net.JoinHostPort(nw.IP().String(), strconv.Itoa(cfg.Listen.Raft))
 	// the transport accepts the leader's Raft connection only from a member (I-92); the
-	// joiner's own table is empty until the log arrives, so the join response seeds it
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: clock.Real()}
-	// the target is the leader or will name it: its Raft connection must be accepted
-	// from the first attempt, before the join response lists the members, so it is
-	// seeded from WhoIs now (I-92)
-	if targetHost, _, err := net.SplitHostPort(target); err == nil {
-		if ip, err := netip.ParseAddr(targetHost); err == nil {
-			if w, err := ts.WhoIs(ctx, ip); err == nil && w.Node.StableID != "" {
-				auth.SetSeed([]meta.Node{{ID: "join-target", Kind: meta.KindDevice, Addr: ip.String(), TSStableID: w.Node.StableID, State: meta.Active}})
-			}
-		}
-	}
-	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log, PeerAuth: auth})
+	// joiner's own table is empty until the log arrives, so the seed stands in
+	n, err := cluster.OpenFresh(cluster.Options{DataDir: cfg.Node.DataDir, NodeID: id, ClusterID: cid, RaftAddr: raftAddr, Logger: log, PeerAuth: nw.auth})
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	defer n.Close()
-	auth.SetMembers(n.FSM.NodeByAddr)
+	joined := false
+	defer func() {
+		_ = n.Close()
+		if !joined { // a refused or lost join leaves no state behind: the next attempt starts afresh
+			if err := os.RemoveAll(filepath.Join(cfg.Node.DataDir, "raft")); err != nil {
+				log.Warn("could not clear the Raft state of the failed join", "err", err)
+			}
+		}
+	}()
+	nw.auth.SetMembers(n.FSM.NodeByAddr)
 	client := rpc.NewClient(cid, nil)
-	req := rpc.JoinRequest{
-		Token: token, NodeID: id, Name: cfg.Node.Name, TSStableID: ident.StableID, Addr: ident.IP.String(),
-		RaftPort: uint16(cfg.Listen.Raft), RPCPort: uint16(cfg.Listen.RPC), Voter: voter, Version: version,
-	}
 	var resp rpc.JoinResponse
 	for range 5 {
 		resp, err = client.Join(ctx, target, req)
@@ -1418,12 +1512,12 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 			break
 		}
 		if errors.Is(err, rpc.ErrNotLeader) {
-			if leader := rpc.LeaderFromErr(err); leader != "" {
-				target = leader
+			if leader := rpc.LeaderFromErr(err); leader != "" && nw.fake {
+				target = leader // on the mesh the member forwards (docs/20 §4); the fake follows the redirect
 				continue
 			}
 		}
-		if !errors.Is(err, rpc.ErrNoLeader) && !errors.Is(err, rpc.ErrUnavailable) {
+		if !errors.Is(err, rpc.ErrNoLeader) && !errors.Is(err, rpc.ErrUnavailable) && !errors.Is(err, rpc.ErrNotLeader) {
 			return rpc.JoinResponse{}, err
 		}
 		select {
@@ -1435,7 +1529,9 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	auth.SetSeed(resp.Members)
+	joined = true
+	nw.auth.SetSeed(resp.Members)
+	nw.refreshPeers(n) // every member's key, so the leader's Raft connection is accepted whoever leads
 	// persisted for serve: if this process stops before the log has arrived, serve's
 	// own member check would otherwise refuse the leader for good (I-92)
 	if err := cluster.WriteMemberSeed(cfg.Node.DataDir, resp.Members); err != nil {
@@ -1446,11 +1542,15 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	}
 	// the disks listed in the config, registered through the leader as init registers its
 	// own (docs/14 §2, I-121); serve opens them once their rows arrive
-	resp.Disks, err = registerDisks(cfg, cid, id, resp.NodeIdx, func(disk meta.Node) error {
-		return client.Members(ctx, target, rpc.MemberOp{Op: "add_disk", NodeIdx: resp.NodeIdx, DiskID: disk.ID, Name: disk.Name, Capacity: disk.Capacity})
+	resp.Disks, err = registerDisks(cfg, cid, HostIdent(nw.Key(), id), resp.NodeIdx, func(disk meta.Node) error {
+		return registerUntilMember(ctx, func() error {
+			return client.Members(ctx, target, rpc.MemberOp{Op: "add_disk", NodeIdx: resp.NodeIdx, DiskID: disk.ID, Name: disk.Name, Capacity: disk.Capacity})
+		})
 	})
 	if err != nil {
-		return resp, err
+		// the row landed: the join is done, and serve registers the disks left on its
+		// first tick (docs/14 §2), so a joiner cut here is not a failed join
+		log.Warn("joined; a disk was not registered, serve registers it", "err", err)
 	}
 	// receive the log before stopping so `serve` starts with the node table present, and
 	// snapshot it: Raft restores a table at open from a snapshot only
@@ -1459,6 +1559,47 @@ func Join(ctx context.Context, cfg config.Config, host, token string, voter bool
 	} else if err := snapshotAfterJoin(ctx, n); err != nil {
 		log.Warn("no snapshot after the join; serve relies on the member seed until the leader connects", "err", err)
 	}
+	return resp, nil
+}
+
+// registerUntilMember runs a member op of a device that just joined, retrying a
+// refusal for a while: a member's authorizer reads its own table, and the row of the
+// joiner reaches a follower a moment after the leader applied it (docs/20 §4).
+func registerUntilMember(ctx context.Context, op func() error) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		err := op()
+		if err == nil || !errors.Is(err, rpc.ErrForbidden) || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// joinedAlready is `tailraid join` run again after a join that landed its row (a
+// retried entrypoint, a lost connection): the state and the mesh address are this
+// cluster's, serve registers any disk the cut join did not (docs/14 §2), so the command
+// reports the row it has from its member seed and changes nothing.
+func joinedAlready(cfg config.Config, code mesh.JoinCode, log *slog.Logger) (rpc.JoinResponse, error) {
+	id, err := cluster.LoadOrCreateNodeID(cfg.Node.DataDir)
+	if err != nil {
+		return rpc.JoinResponse{}, err
+	}
+	members, err := cluster.LoadMemberSeed(cfg.Node.DataDir)
+	if err != nil {
+		return rpc.JoinResponse{}, fmt.Errorf("joined already, but the member seed is unreadable: %w", err)
+	}
+	resp := rpc.JoinResponse{ClusterID: meta.HexID(code.ClusterID), Members: members}
+	for i := range members {
+		if members[i].ID == id {
+			resp.NodeIdx = members[i].Idx
+		}
+	}
+	log.Info("joined already; serve registers the disks the config lists", "node", resp.NodeIdx)
 	return resp, nil
 }
 
@@ -1533,22 +1674,6 @@ func codecCompatible(leader uint8) error {
 		return fmt.Errorf("the cluster writes codec version %d and this binary reads up to %d: update this node first (tailraid update)", leader, meta.CodecVersion)
 	}
 	return nil
-}
-
-func decodeHex(s string) ([]byte, error) {
-	s = strings.TrimSpace(s)
-	if len(s)%2 != 0 {
-		return nil, errors.New("odd length")
-	}
-	out := make([]byte, len(s)/2)
-	for i := range out {
-		v, err := strconv.ParseUint(s[2*i:2*i+2], 16, 8)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = byte(v)
-	}
-	return out, nil
 }
 
 // webPort is the browser UI's port for /health (docs/13 §1): 0 when the UI is off.

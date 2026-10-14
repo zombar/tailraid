@@ -18,11 +18,11 @@ import (
 // peerGate is a PeerAuth that admits everyone or no one.
 type peerGate struct{ allow atomic.Bool }
 
-func (g *peerGate) Allow(context.Context, netip.Addr) (meta.Node, error) {
+func (g *peerGate) Allow(context.Context, netip.Addr) (rpc.Principal, error) {
 	if g.allow.Load() {
-		return meta.Node{Idx: 1}, nil
+		return rpc.Principal{Node: meta.Node{Idx: 1}}, nil
 	}
-	return meta.Node{}, errors.New("not a member")
+	return rpc.Principal{}, errors.New("not a member")
 }
 
 // The acceptor asks the authorizer before it reads or writes a byte: a non-member is

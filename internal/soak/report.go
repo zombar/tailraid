@@ -44,7 +44,9 @@ type reportData struct {
 	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
 	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
 	RoundTrip  string
-	PeakSkew   int // most chunks above the host cap in any sample
+	MeshPairs  []pairView // phase 26's paths table (docs/20), empty off a mesh
+	MeshJoin   *joinView  // phase 25's round trip, nil when no late device joined
+	PeakSkew   int        // most chunks above the host cap in any sample
 	Generated  string
 	Throughput string
 	Mark       template.HTML // the logo mark, inline
@@ -197,6 +199,9 @@ func buildReport(s Summary) reportData {
 	snapCharts, snaps, roundTrip := snapshotFigures(s)
 	d.Charts = append(d.Charts, snapCharts...)
 	d.Snapshots, d.RoundTrip = snaps, roundTrip
+	meshCharts, pairs, join := meshFigures(s)
+	d.Charts = append(d.Charts, meshCharts...)
+	d.MeshPairs, d.MeshJoin = pairs, join
 	var spread []*Sample
 	for i := range s.Records {
 		if s.Records[i].Kind == "sample" && s.Records[i].S != nil {
@@ -306,7 +311,7 @@ func charts(s Summary) ([]template.HTML, string) {
 	free := chart.Series{Name: "data disk free"}
 	dwr, drd := chart.Series{Name: "disk write MiB/s"}, chart.Series{Name: "disk read MiB/s"}
 	nrx, ntx := chart.Series{Name: "rx MiB/s (every interface)"}, chart.Series{Name: "tx MiB/s (every interface)"}
-	trx, ttx := chart.Series{Name: "tailnet rx MiB/s"}, chart.Series{Name: "tailnet tx MiB/s"}
+	trx, ttx := chart.Series{Name: "mesh rx MiB/s"}, chart.Series{Name: "mesh tx MiB/s"}
 	trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
 	haveTrash := false
 	sdocs, spend := chart.Series{Name: "indexed files"}, chart.Series{Name: "pending"}
@@ -356,9 +361,9 @@ func charts(s Summary) ([]template.HTML, string) {
 		haveDiskIO = haveDiskIO || sm.DiskWriteBps > 0 || sm.DiskReadBps > 0
 		nrx.Points = append(nrx.Points, [2]float64{x(rec), sm.NetRxBps / (1 << 20)})
 		ntx.Points = append(ntx.Points, [2]float64{x(rec), sm.NetTxBps / (1 << 20)})
-		trx.Points = append(trx.Points, [2]float64{x(rec), sm.TailnetRxBps / (1 << 20)})
-		ttx.Points = append(ttx.Points, [2]float64{x(rec), sm.TailnetTxBps / (1 << 20)})
-		haveNet = haveNet || sm.NetRxBps > 0 || sm.NetTxBps > 0 || sm.TailnetRxBps > 0 || sm.TailnetTxBps > 0
+		trx.Points = append(trx.Points, [2]float64{x(rec), sm.MeshRxBps / (1 << 20)})
+		ttx.Points = append(ttx.Points, [2]float64{x(rec), sm.MeshTxBps / (1 << 20)})
+		haveNet = haveNet || sm.NetRxBps > 0 || sm.NetTxBps > 0 || sm.MeshRxBps > 0 || sm.MeshTxBps > 0
 		for name, slots := range sm.Slots {
 			ns, ok := nodeSeries[name]
 			if !ok {
@@ -496,6 +501,7 @@ th{background:#f6f6f6} .ok{color:#16a34a;font-weight:600}.bad{color:#dc2626;font
 path.s0{stroke:#2563eb}rect.s0,circle.s0{fill:#2563eb}path.s1{stroke:#dc2626}rect.s1,circle.s1{fill:#dc2626}path.s2{stroke:#16a34a}rect.s2,circle.s2{fill:#16a34a}path.s3{stroke:#d97706}rect.s3,circle.s3{fill:#d97706}
 path.s4{stroke:#7c3aed}rect.s4,circle.s4{fill:#7c3aed}path.s5{stroke:#0891b2}rect.s5,circle.s5{fill:#0891b2}path.s6{stroke:#be185d}rect.s6,circle.s6{fill:#be185d}path.s7{stroke:#4d7c0f}rect.s7,circle.s7{fill:#4d7c0f}
 .dev-3{fill:#1d4ed8}.dev-2{fill:#7895e4}.dev-1{fill:#c3cdee}.dev0{fill:#e5e7eb}.dev1{fill:#e3c3e6}.dev2{fill:#c272c9}.dev3{fill:#a21caf}
+.mesh{display:block}.mesh-edge{stroke-width:2}.lan{stroke:#16a34a}.wan{stroke:#0f172a}.relay{stroke:#d97706;stroke-dasharray:6 4}.none{stroke:#dc2626;stroke-dasharray:2 4}.mesh-node{fill:#fff;stroke:#64748b;stroke-width:2}.self{fill:#2563eb;stroke:#2563eb}.off{opacity:.55}.mesh-link{stroke:#2563eb}.mesh-name{font:600 12px sans-serif;fill:#0f172a;stroke:none}
 details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-align:right} .cov span{display:inline-block;margin:2px 6px 2px 0;padding:1px 6px;border-radius:4px;background:#eef2f7;font-size:12px} .cov .bad{background:#fee2e2} .dump{font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto;max-height:480px;background:#f8fafc;padding:8px;border:1px solid #eee}
 </style></head><body>
 <h1>{{.Mark}}<span>tail<span style="color:#2563eb">raid</span> soak report</span></h1>
@@ -531,6 +537,14 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <table><tr><th>Snapshot</th><th>Mirror</th><th>Taken</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Added</th><th>State</th><th>Read</th></tr>
 {{range .Snapshots}}<tr><td>{{.Name}}</td><td>{{.Mirror}}</td><td>{{.Taken}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Added}}</td><td>{{.State}}</td><td>{{.Read}}</td></tr>{{end}}
 {{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
+{{if .MeshPairs}}<h2>Mesh paths</h2>
+<p class="meta">phase 26 (docs/20 §5): every ordered pair as the first node sees the second, at the start of the phase; the lanes chart above has the class over the whole run</p>
+<table><tr><th>From</th><th>To</th><th>Class</th><th>Endpoint</th><th>Seen</th></tr>
+{{range .MeshPairs}}<tr><td>{{.From}}</td><td>{{.To}}</td><td>{{.Class}}</td><td>{{.Endpoint}}</td><td>{{.Handshake}}</td></tr>{{end}}</table>{{end}}
+{{if .MeshJoin}}<h2>Join round trip</h2>
+<p class="meta">phase 25 (docs/20 §4): the late device {{.MeshJoin.Late}}, from the moment it was started, with the members that listed its pending row</p>
+<table><tr><th>Pending row seen</th><th>Joined and ready</th><th>Handshake with every member</th><th>Log caught up</th><th>Pending row on</th></tr>
+<tr><td class="num">{{.MeshJoin.Pending}}</td><td class="num">{{.MeshJoin.Join}}</td><td class="num">{{.MeshJoin.Handshake}}</td><td class="num">{{.MeshJoin.Log}}</td><td>{{.MeshJoin.PendingOn}}</td></tr></table>{{end}}
 {{if .Disks}}<h2>Disks</h2>
 <p class="meta">every placement target as of the last sample that held data, grouped by host (docs/14); expected is the capacity share capped at one slot per chunk; most chunks above the host cap in any sample: {{.PeakSkew}}</p>
 <table><tr><th>Host</th><th>Target</th><th class="num">Budget</th><th class="num">Slots</th><th class="num">Expected</th><th class="num">Δ</th><th>State</th></tr>

@@ -1,5 +1,5 @@
 # The macOS golden image: Cirrus Labs' Tahoe base for Tart, plus the rig's SSH key and
-# Tailscale (the open-source daemon from Homebrew, installed as a system daemon).
+# the disk directories; the mesh needs nothing installed (docs/20).
 # Instances are `tart clone`s of tailraid-mac-image (scripts/vms/vm.sh).
 variable "ssh_public_key" { type = string }
 

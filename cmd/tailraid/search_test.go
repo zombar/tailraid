@@ -16,7 +16,7 @@ import (
 // Invariant: I-208
 func TestCLI_Search(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())

@@ -19,10 +19,10 @@ import (
 func otherUI(t *testing.T, u *ui, node string) *ui {
 	t.Helper()
 	fs, fl := u.f.OtherGateway()
-	o := &ui{t: t, f: u.f, fs: fs, ts: u.ts, auth: u.auth, client: u.client}
+	o := &ui{t: t, f: u.f, fs: fs, auth: u.auth, client: u.client}
 	otherFlushers[o] = fl
 	o.member.Store(true)
-	srv, err := webui.New(webui.Options{FS: fs, Store: u.f.FSM, Auth: u.auth, Login: login, Clk: u.f.Clk, Logger: slog.New(slog.DiscardHandler), Node: node})
+	srv, err := webui.New(webui.Options{FS: fs, Store: u.f.FSM, Auth: u.auth, Clk: u.f.Clk, Logger: slog.New(slog.DiscardHandler), Node: node})
 	must(t, err)
 	o.srv = srv
 	o.hs = httptest.NewServer(srv.Handler())

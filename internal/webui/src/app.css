@@ -544,6 +544,32 @@ body:has(aside.nowbar:not([hidden])) .selbar, body:has(aside.nowbar:not([hidden]
 .chart rect.chart-bad { fill: var(--bad); }
 .chart rect.chart-bg { fill: var(--bg); }
 .chart rect.chart-off { fill: var(--line); }
+/* the dashboard's mesh chart (docs/13 §7, docs/20 §10, I-331): this device at the centre,
+   members on a flattened ring with their names alone beside them, this device's under its dot, edges in the path's class; the package
+   emits classes only. The facts are the table under the picture in the same card, as a legend */
+.chart.mesh .mesh-edge { stroke-width: 2; }
+.chart.mesh .mesh-edge.lan { stroke: var(--ok); }
+.chart.mesh .mesh-edge.wan { stroke: var(--text); }
+.chart.mesh .mesh-edge.relay { stroke: var(--warn); stroke-dasharray: 6 4; }
+.chart.mesh .mesh-edge.none { stroke: var(--bad); stroke-dasharray: 2 4; }
+.chart.mesh .mesh-node circle { fill: var(--surface); stroke: var(--dim); stroke-width: 2; }
+.chart.mesh .mesh-node.self circle { fill: var(--accent); stroke: var(--accent); }
+.chart.mesh .mesh-name { font: 600 12px var(--sans); fill: var(--text); }
+.chart.mesh .mesh-link .mesh-name { fill: var(--accent); }
+.chart.mesh .mesh-link:hover circle, .chart.mesh .mesh-link:focus-visible circle { stroke: var(--accent); }
+.chart.mesh .mesh-node.off { opacity: 0.55; }
+.chart.mesh .mesh-node.off circle { stroke-dasharray: 3 3; }
+table.mesh-peers { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.mesh-peers th { text-align: left; font: 500 12px/1 var(--mono); color: var(--dim); padding: var(--sp-2); border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.mesh-peers td { padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+table.mesh-peers td.name { font-weight: 600; }
+table.mesh-peers td.name .badge { margin-left: var(--sp-2); }
+table.mesh-peers td.addr, table.mesh-peers td.ep, table.mesh-peers td.rtt, table.mesh-peers td.seen { font-family: var(--mono); color: var(--dim); }
+table.mesh-peers th.rtt, table.mesh-peers td.rtt, table.mesh-peers th.seen, table.mesh-peers td.seen { width: 1%; text-align: right; font-variant-numeric: tabular-nums; }
+table.mesh-peers td.path .dot { margin-right: var(--sp-1); }
+table.mesh-peers tr.off td { opacity: 0.55; }
+table.mesh-peers tr.self td { background: var(--surface); }
+@media (max-width: 599px) { table.mesh-peers th.ep, table.mesh-peers td.ep { display: none; } }
 .chart rect.dev-3 { fill: var(--under3); } .chart rect.dev-2 { fill: var(--under2); } .chart rect.dev-1 { fill: var(--under1); }
 .chart rect.dev0 { fill: var(--even); }
 .chart rect.dev1 { fill: var(--over1); } .chart rect.dev2 { fill: var(--over2); } .chart rect.dev3 { fill: var(--over3); }

@@ -177,7 +177,8 @@ freshly written chunks carry less than `m` parity until repair completes.
 type Peers interface {
     Self() meta.NodeIdx
     Live() []meta.NodeIdx
-    Rank(nodes []meta.NodeIdx) []meta.NodeIdx   // Self first; then devices by RTT ascending; S3 nodes last
+    Rank(nodes []meta.NodeIdx) []meta.NodeIdx   // Self and own disks first; then by (path class, RTT); S3 nodes last (docs/20 §8)
+    Class(idx meta.NodeIdx) meta.PathClass       // lan, wan, relay or none: the path to the node's host
 }
 ```
 

@@ -31,7 +31,7 @@ repair.grace. Ctrl-C stops after the current phase, restores what it changed and
 the partial report.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			cl, addr, cfg, err := localClient(ctx, cmd)
+			cl, addr, cfg, err := localClient(cmd)
 			if err != nil {
 				return err
 			}

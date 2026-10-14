@@ -212,8 +212,8 @@ func TestReport_NetworkChart(t *testing.T) {
 		return out.String()
 	}
 	const title = "Network on the sampled node (tailnet and every interface)"
-	with := render(Sample{TailnetRxBps: 3 << 20, NetRxBps: 4 << 20})
-	if !strings.Contains(with, title) || !strings.Contains(with, "tailnet rx MiB/s") || !strings.Contains(with, "rx MiB/s (every interface)") {
+	with := render(Sample{MeshRxBps: 3 << 20, NetRxBps: 4 << 20})
+	if !strings.Contains(with, title) || !strings.Contains(with, "mesh rx MiB/s") || !strings.Contains(with, "rx MiB/s (every interface)") {
 		t.Fatal("the network chart is missing with a rate sampled")
 	}
 	if strings.Contains(render(Sample{Load1: 1}), title) {

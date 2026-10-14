@@ -111,9 +111,14 @@ type Sample struct {
 	SearchPending int                        `json:"search_pending"`        // candidates the leader's last pass left
 	Snapshots     int                        `json:"snapshots"`             // catalogue rows on every mirror (docs/16 §5)
 	MirrorUsed    map[string]int64           `json:"mirror_used,omitempty"` // bytes on each mirror of phase 19's host, by row name
-	HeapInuse     uint64                     `json:"heap_inuse"`            // the sampled node's process (docs/12 §8)
-	Sys           uint64                     `json:"sys"`
-	Goroutines    int                        `json:"goroutines"`
+	// the mesh (docs/20 §10): every device's path class to every other, "a>b" → lan, wan,
+	// relay or none, and each device's rx and tx counters; taken every fifth round on a
+	// mesh environment
+	Paths      map[string]string    `json:"paths,omitempty"`
+	MeshBytes  map[string][2]uint64 `json:"mesh_bytes,omitempty"`
+	HeapInuse  uint64               `json:"heap_inuse"` // the sampled node's process (docs/12 §8)
+	Sys        uint64               `json:"sys"`
+	Goroutines int                  `json:"goroutines"`
 	// the sampled node's machine vitals (docs/12 §8); rates are between this node's
 	// consecutive samples, zero when the OS does not expose the counter
 	CPUPct       float64 `json:"cpu_pct"`     // the process, percent of one CPU
@@ -129,8 +134,8 @@ type Sample struct {
 	DiskReadBps  float64 `json:"disk_read_bps"`
 	NetRxBps     float64 `json:"net_rx_bps"` // every interface but loopback (I-190)
 	NetTxBps     float64 `json:"net_tx_bps"`
-	TailnetRxBps float64 `json:"tailnet_rx_bps"` // the tailnet interface
-	TailnetTxBps float64 `json:"tailnet_tx_bps"`
+	MeshRxBps    float64 `json:"mesh_rx_bps"` // the tailnet interface
+	MeshTxBps    float64 `json:"mesh_tx_bps"`
 }
 
 // vitalsPrev is the last machine report of one node that a rate was computed from, and
@@ -341,7 +346,7 @@ func (r *Run) event(name, text string) { r.emit(Record{Kind: "event", Name: name
 // scrubSample replaces NaN and Inf in every float field of s with 0: the sources guard
 // their divisions, but a node's own vitals (load, memory pressure) arrive as it sent them.
 func scrubSample(s *Sample) {
-	for _, f := range []*float64{&s.DedupRatio, &s.CPUPct, &s.MachinePct, &s.Load1, &s.MemPressure, &s.DiskWriteBps, &s.DiskReadBps, &s.NetRxBps, &s.NetTxBps, &s.TailnetRxBps, &s.TailnetTxBps} {
+	for _, f := range []*float64{&s.DedupRatio, &s.CPUPct, &s.MachinePct, &s.Load1, &s.MemPressure, &s.DiskWriteBps, &s.DiskReadBps, &s.NetRxBps, &s.NetTxBps, &s.MeshRxBps, &s.MeshTxBps} {
 		if math.IsNaN(*f) || math.IsInf(*f, 0) {
 			*f = 0
 		}
@@ -579,6 +584,9 @@ func (r *Run) sample(ctx context.Context, round int) {
 		if agree, _, ok := r.fsmAgreement(ctx); ok {
 			s.FSMAgree = &agree
 		}
+		if r.Env.Caps().Mesh {
+			s.Paths, s.MeshBytes = r.meshSample(ctx)
+		}
 	}
 	r.emit(Record{Kind: "sample", S: &s, Node: node})
 }
@@ -604,7 +612,7 @@ func (r *Run) vitalsSample(s *Sample, node string, m admin.MachineReport) {
 	if dt := now.Sub(prev.t); dt < minRateInterval {
 		// too close to divide by: carry the last rates, keep the earlier report as the base
 		s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps = prev.cpu, prev.mcpu, prev.wr, prev.rd
-		s.NetRxBps, s.NetTxBps, s.TailnetRxBps, s.TailnetTxBps = prev.nrx, prev.ntx, prev.trx, prev.ttx
+		s.NetRxBps, s.NetTxBps, s.MeshRxBps, s.MeshTxBps = prev.nrx, prev.ntx, prev.trx, prev.ttx
 		return
 	}
 	dt := now.Sub(prev.t).Seconds()
@@ -628,10 +636,10 @@ func (r *Run) vitalsSample(s *Sample, node string, m admin.MachineReport) {
 		return float64(now-before) / dt
 	}
 	cur.nrx, cur.ntx = rate(m.NetRx, prev.m.NetRx), rate(m.NetTx, prev.m.NetTx)
-	cur.trx, cur.ttx = rate(m.TailnetRx, prev.m.TailnetRx), rate(m.TailnetTx, prev.m.TailnetTx)
+	cur.trx, cur.ttx = rate(m.MeshRx, prev.m.MeshRx), rate(m.MeshTx, prev.m.MeshTx)
 	r.vitals[node] = cur
 	s.CPUPct, s.MachinePct, s.DiskWriteBps, s.DiskReadBps = cur.cpu, cur.mcpu, cur.wr, cur.rd
-	s.NetRxBps, s.NetTxBps, s.TailnetRxBps, s.TailnetTxBps = cur.nrx, cur.ntx, cur.trx, cur.ttx
+	s.NetRxBps, s.NetTxBps, s.MeshRxBps, s.MeshTxBps = cur.nrx, cur.ntx, cur.trx, cur.ttx
 }
 
 func (r *Run) snapshotCounters() Sample {

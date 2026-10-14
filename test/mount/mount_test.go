@@ -55,14 +55,12 @@ func TestMount_Workload(t *testing.T) {
 	cfg.Listen.RPC = 20483
 	cfg.Listen.Web = 20484 // the default web port is this test's Raft port
 	cfg.Mount.Path = filepath.Join(home, "mnt")
-	// no tailscale CLI on CI runners: the dev fake makes loopback this node's tailnet IP
-	fake := filepath.Join(home, "ts.json")
-	if err := os.WriteFile(fake, []byte(`{"status":{"BackendState":"Running","TailscaleIPs":["127.0.0.1"],
-		"Self":{"ID":"ts-mounttest","HostName":"mounttest","TailscaleIPs":["127.0.0.1"],"Online":true},"Peer":{}},
-		"whois":{"127.0.0.1":{"Node":{"StableID":"ts-mounttest","Name":"mounttest.","Addresses":["127.0.0.1/32"]}}}}`), 0o600); err != nil {
+	// no TUN privilege on CI runners: the dev fake makes loopback this node's address
+	fake := filepath.Join(home, "mesh.json")
+	if err := os.WriteFile(fake, []byte(`{"addr":"127.0.0.1"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Dev.Enabled, cfg.Dev.TailscaleFake = true, fake
+	cfg.Dev.Enabled, cfg.Dev.MeshFake = true, fake
 	id, err := cluster.LoadOrCreateNodeID(cfg.Node.DataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +75,7 @@ func TestMount_Workload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := node.RegisterDisks(context.Background(), n, cfg, cid); err != nil {
+	if _, err := node.RegisterDisks(context.Background(), n, cfg, cid, n.ID); err != nil { // no device in this test: the node ID names the host
 		t.Fatal(err)
 	}
 	_ = n.Close()

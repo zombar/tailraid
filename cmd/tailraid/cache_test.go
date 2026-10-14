@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/zombar/tailraid/internal/node"
-	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // The cache commands reach this node's pins (docs/12 §10): an empty list reads as such
@@ -19,7 +17,7 @@ import (
 // Invariant: I-162
 func TestCLI_Cache_PinUnpinLs(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())
@@ -32,8 +30,7 @@ func TestCLI_Cache_PinUnpinLs(t *testing.T) {
 		}
 	}()
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(context.Background(), addr); return err == nil && h.Ready }, "the node never served")
+	waitReady(context.Background(), t, addr, "the node never served") // a CI runner takes longer than Eventually allows (docs/09 §5)
 
 	out, err := run(t, "cache", "ls", "--config", path)
 	if err != nil || !strings.Contains(out, "no pinned folders") || !strings.Contains(out, "of 1.0 GiB") {

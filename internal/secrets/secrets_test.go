@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/raft"
 
@@ -322,5 +325,78 @@ func TestStore_Opened(t *testing.T) {
 	}
 	if got := c.stores[1].Opened("s3/"); len(got) != 1 || got["s3/a"] != "1b" {
 		t.Fatalf("after a replace and a removal: %v", got)
+	}
+}
+
+// Two callers making the first key at once on one node (the leader's tick and a secret
+// set) propose one key: the second waits for the first and takes its key, so the
+// keychain never holds a key that lost.
+// Invariant: I-305
+func TestStore_EnsureKey_OnceOnANode(t *testing.T) {
+	ctx := context.Background()
+	c := newCluster(t, 1)
+	second := make(chan struct{})
+	var inits atomic.Int32
+	c.before = func(cmd meta.Command) {
+		if cmd.Op == meta.OpSecretKeyInit {
+			inits.Add(1)
+			<-second // the first proposal waits until the second caller is in EnsureKey
+			for range 100 {
+				runtime.Gosched()
+			}
+		}
+	}
+	var wg sync.WaitGroup
+	keys := make([][]byte, 2)
+	errs := make([]error, 2)
+	wg.Go(func() { keys[0], errs[0] = c.stores[0].EnsureKey(ctx) })
+	wg.Go(func() {
+		close(second)
+		keys[1], errs[1] = c.stores[0].EnsureKey(ctx)
+	})
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("ensure: %v", errs)
+	}
+	if n := inits.Load(); n != 1 {
+		t.Errorf("%d key proposals from one node, want 1", n)
+	}
+	if !bytes.Equal(keys[0], keys[1]) {
+		t.Error("the two callers hold different keys")
+	}
+	k, _ := c.stores[0].Local()
+	if IDOf(k) != c.fsms[0].SecretKeyID() || !bytes.Equal(k, keys[0]) {
+		t.Error("the keychain holds a key that is not the store's")
+	}
+}
+
+// A key fetch asks members over the network, and the member asked may be this node
+// itself (the leader asking the leader): the fetch runs outside the store's lock, so the
+// answer, which takes it, does not wait on the asker.
+// Invariant: I-304
+func TestStore_Fetch_OutsideTheLock(t *testing.T) {
+	ctx := context.Background()
+	c := newCluster(t, 2)
+	if err := c.stores[0].Set(ctx, "tmdb", "v"); err != nil {
+		t.Fatal(err)
+	}
+	c.stores[1].Fetch = func(context.Context) ([]byte, error) {
+		if k, ok := c.stores[1].Local(); ok { // this node's own answer first, as the leader's would be
+			return k, nil
+		}
+		if k, ok := c.stores[0].Local(); ok {
+			return k, nil
+		}
+		return nil, ErrNoKey
+	}
+	done := make(chan error, 1)
+	go func() { _, err := c.stores[1].Key(ctx); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fetch deadlocked on the store's lock")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -205,6 +206,10 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.secretPut(c.SecretPut)
 	case OpSecretDelete:
 		return Result{}, a.secretDelete(c.SecretDelete)
+	case OpPendingAdd:
+		return a.pendingAdd(c.PendingAdd)
+	case OpPendingDelete:
+		return Result{}, a.pendingDelete(c.PendingDelete)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -264,6 +269,19 @@ func (a *applier) metaSet(c *MetaSet) error {
 	if c.JoinToken != "" {
 		st.Meta.JoinToken = c.JoinToken
 	}
+	if c.MeshSubnet != "" {
+		p, err := netip.ParsePrefix(c.MeshSubnet)
+		if err != nil || !p.Addr().Is4() || p.Bits() != 24 {
+			return ErrBadCommand
+		}
+		if st.Meta.MeshSubnet != "" && st.Meta.MeshSubnet != p.Masked().String() {
+			return ErrBadCommand // set once (I-320)
+		}
+		st.Meta.MeshSubnet = p.Masked().String()
+		if st.Meta.NextMeshHost == 0 {
+			st.Meta.NextMeshHost = MeshFirstHost + 1 // init's node is the first host
+		}
+	}
 	if st.Meta.CreatedAt == 0 && c.CreatedAt != 0 {
 		st.Meta.CreatedAt = c.CreatedAt
 	}
@@ -280,6 +298,9 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 		if _, ok := st.Nodes[n.Idx]; !ok {
 			return Result{}, ErrNoSuchNode
 		}
+	}
+	if err := checkMeshFields(&n); err != nil {
+		return Result{}, err
 	}
 	switch n.Kind {
 	case KindDevice, KindS3:
@@ -309,6 +330,7 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 			}
 		}
 	}
+	st.consumePending(&n) // the join that completes a pending row (docs/20 §4)
 	if n.Idx == 0 {
 		idx := st.NextNode
 		st.NextNode++

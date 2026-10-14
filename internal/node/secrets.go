@@ -39,7 +39,7 @@ func newSecrets(node *cluster.Node, prober *cluster.Prober, client *rpc.Client, 
 	}
 	s.Fetch = func(ctx context.Context) ([]byte, error) {
 		addrs := []string{}
-		if l := node.LeaderRPCAddr(); l != "" {
+		if l := node.LeaderRPCAddr(); l != "" && !node.IsLeader() { // the leader never asks itself
 			addrs = append(addrs, l)
 		}
 		nodes := node.FSM.Nodes()
@@ -93,12 +93,33 @@ func fetchKey(ctx context.Context, s *secrets.Store) (bool, error) {
 	return true, nil
 }
 
+// makeKeyIfLeader makes the cluster key on the leader when the cluster has none yet
+// (docs/19 §3): the node that ran init leads first, so a fresh cluster has its key from
+// its first tick, and the relay frames of docs/20 §6 can be authenticated from the
+// start. A follower makes nothing; a lost race fetches the winner's key.
+func makeKeyIfLeader(ctx context.Context, s *secrets.Store, leader bool) (bool, error) {
+	if !leader || s.State.SecretKeyID() != (meta.KeyID{}) {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, keyFetchTimeout)
+	defer cancel()
+	if _, err := s.EnsureKey(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // keepKey runs fetchKey once a minute, so a device that joined, was reinstalled or was
 // upgraded opens its buckets' credentials without a secret command run on it (the hot
 // path never fetches, I-308). It logs a fetch, and each new reason one failed.
 func (a *adminOps) keepKey(ctx context.Context) {
 	if a.secrets == nil || !a.healthy() {
 		return
+	}
+	if made, err := makeKeyIfLeader(ctx, a.secrets, a.node.IsLeader()); err != nil {
+		a.log.Warn("secrets: the cluster key was not made", "err", err)
+	} else if made {
+		a.log.Info("secrets: made the cluster key (docs/19 §3)")
 	}
 	fetched, err := fetchKey(ctx, a.secrets)
 	switch {

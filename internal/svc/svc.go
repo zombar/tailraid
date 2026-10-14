@@ -1,6 +1,8 @@
 // Package svc plans and applies the per-OS service installation of `tailraid serve`
-// (docs/12 §1): a LaunchAgent on macOS, a systemd system unit on Linux, an SCM service on
-// Windows. Plans are data so `install --print` can show them and tests can check them.
+// (docs/12 §1, docs/20 §9): a root LaunchDaemon on macOS (a utun needs root), a systemd
+// system unit with CAP_NET_ADMIN on Linux (the TUN), an SCM service on Windows with
+// wintun.dll beside the binary and a firewall rule for the mesh port. Plans are data so
+// `install --print` can show them and tests can check them.
 package svc
 
 import (
@@ -30,8 +32,9 @@ type Params struct {
 	Home       string   // config.Home() of the installing user
 	LogFile    string   // where serve's output goes (macOS, Windows)
 	User       string   // the installing user (Linux unit User=)
-	UID        int      // the installing user's uid (macOS launchctl domain)
+	UID        int      // the installing user's uid
 	Root       bool     // running as root/elevated already (no sudo prefix)
+	MeshPort   int      // the mesh's UDP port (Windows: the inbound firewall rule, docs/20 §9)
 	DataDir    string   // the node's data directory (Linux: the unit may write there, I-122)
 	Disks      []string // added disk paths (Linux: likewise)
 	Stage      string   // Linux: a private directory the unit file is staged in before `install` copies it; "" uses os.TempDir()
@@ -69,15 +72,23 @@ const (
 func Install(p Params) (Plan, error) {
 	switch p.GOOS {
 	case "darwin":
-		plist := launchAgentPath(p)
+		// a LaunchDaemon in the system domain: serve runs as root, which a utun needs
+		// (docs/20 §9); the plist is staged where the user may write and installed by root
+		stage := p.Stage
+		if stage == "" {
+			stage = os.TempDir()
+		}
+		tmp := filepath.Join(stage, "app.tailraid.serve.plist")
+		sudo := sudoPrefix(p)
 		return Plan{
-			Files: []File{{Path: plist, Mode: 0o644, Content: launchdPlist(p)}},
+			Files: []File{{Path: tmp, Mode: 0o644, Content: launchdPlist(p)}},
 			Commands: [][]string{
-				{"launchctl", "bootout", "gui/" + strconv.Itoa(p.UID), plist}, // ignore failure: not loaded yet
-				{"launchctl", "bootstrap", "gui/" + strconv.Itoa(p.UID), plist},
-				{"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/app.tailraid.serve", p.UID)},
+				append(slices.Clone(sudo), "launchctl", "bootout", "system", LaunchDaemonPath), // ignore failure: not loaded yet
+				append(slices.Clone(sudo), "install", "-m", "644", "-o", "root", "-g", "wheel", tmp, LaunchDaemonPath),
+				append(slices.Clone(sudo), "launchctl", "bootstrap", "system", LaunchDaemonPath),
+				append(slices.Clone(sudo), "launchctl", "kickstart", "-k", launchdTarget(p)),
 			},
-			Notes: []string{"logs: " + p.LogFile, "mount after login with: tailraid mount"},
+			Notes: []string{"logs: " + p.LogFile, "the service runs as root (a utun needs it); init, join, install, start, stop, update --restart, export, recover and reset run with sudo", "mount after login with: tailraid mount"},
 		}, nil
 	case "linux":
 		unit := unitPath
@@ -100,12 +111,13 @@ func Install(p Params) (Plan, error) {
 		bin := `"` + p.Exe + `" serve --config "` + p.ConfigPath + `" --service`
 		pl := Plan{
 			Commands: [][]string{
-				{"sc.exe", "create", Name, "binPath=", bin, "start=", "delayed-auto", "depend=", "Tailscale", "DisplayName=", "tailraid"},
+				{"sc.exe", "create", Name, "binPath=", bin, "start=", "delayed-auto", "DisplayName=", "tailraid"},
 				{"sc.exe", "description", Name, "tailraid node: metadata, shard store and gateways"},
 				{"sc.exe", "failure", Name, "reset=", "60", "actions=", "restart/5000/restart/5000/restart/5000"},
+				firewallRule(p, true),
 				{"sc.exe", "start", Name},
 			},
-			Notes: []string{"log.file set to " + p.LogFile + " in " + p.ConfigPath + " (services have no stderr)", "run from an elevated prompt"},
+			Notes: []string{"log.file set to " + p.LogFile + " in " + p.ConfigPath + " (services have no stderr)", "wintun.dll beside " + p.Exe + " (docs/20 §9)", "run from an elevated prompt"},
 		}
 		if p.LogonMount {
 			pl.Commands = append(pl.Commands, powershell(registerMountTask(p)), powershell("Start-ScheduledTask -TaskName "+psQuote(MountTask)))
@@ -154,17 +166,20 @@ func RefreshUnit(p Params) (Plan, error) {
 func Uninstall(p Params) (Plan, error) {
 	switch p.GOOS {
 	case "darwin":
-		plist := launchAgentPath(p)
-		return Plan{Commands: [][]string{{"launchctl", "bootout", "gui/" + strconv.Itoa(p.UID), plist}, {"rm", "-f", plist}}}, nil
+		sudo := sudoPrefix(p)
+		return Plan{Commands: [][]string{
+			append(slices.Clone(sudo), "launchctl", "bootout", "system", LaunchDaemonPath),
+			append(slices.Clone(sudo), "rm", "-f", LaunchDaemonPath),
+		}}, nil
 	case "linux":
 		sudo := sudoPrefix(p)
 		return Plan{Commands: [][]string{
-			append(sudo, "systemctl", "disable", "--now", Name),
-			append(sudo, "rm", "-f", unitPath),
-			append(sudo, "systemctl", "daemon-reload"),
+			append(slices.Clone(sudo), "systemctl", "disable", "--now", Name),
+			append(slices.Clone(sudo), "rm", "-f", unitPath),
+			append(slices.Clone(sudo), "systemctl", "daemon-reload"),
 		}}, nil
 	case "windows":
-		pl := Plan{Commands: [][]string{{"sc.exe", "stop", Name}, {"sc.exe", "delete", Name}}}
+		pl := Plan{Commands: [][]string{{"sc.exe", "stop", Name}, {"sc.exe", "delete", Name}, firewallRule(p, false)}}
 		if p.LogonMount {
 			pl.Commands = append(pl.Commands, powershell("Unregister-ScheduledTask -TaskName "+psQuote(MountTask)+" -Confirm:$false -ErrorAction SilentlyContinue"))
 		}
@@ -200,7 +215,7 @@ func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + 
 func Start(p Params) (Plan, error) {
 	switch p.GOOS {
 	case "darwin":
-		return Plan{Commands: [][]string{{"launchctl", "kickstart", launchdTarget(p)}}}, nil
+		return Plan{Commands: [][]string{append(sudoPrefix(p), "launchctl", "kickstart", launchdTarget(p))}}, nil
 	case "linux":
 		return Plan{Commands: [][]string{append(sudoPrefix(p), "systemctl", "start", Name)}}, nil
 	case "windows":
@@ -216,8 +231,8 @@ func Stop(p Params) (Plan, error) {
 	switch p.GOOS {
 	case "darwin":
 		return Plan{
-			Commands:    [][]string{{"launchctl", "kill", "SIGTERM", launchdTarget(p)}},
-			WaitStopped: []string{"launchctl", "print", launchdTarget(p)},
+			Commands:    [][]string{append(sudoPrefix(p), "launchctl", "kill", "SIGTERM", launchdTarget(p))},
+			WaitStopped: append(sudoPrefix(p), "launchctl", "print", launchdTarget(p)),
 		}, nil
 	case "linux":
 		return Plan{Commands: [][]string{append(sudoPrefix(p), "systemctl", "stop", Name)}}, nil
@@ -230,7 +245,22 @@ func Stop(p Params) (Plan, error) {
 	return Plan{}, fmt.Errorf("svc: unsupported OS %q", p.GOOS)
 }
 
-func launchdTarget(p Params) string { return fmt.Sprintf("gui/%d/app.tailraid.serve", p.UID) }
+// LaunchDaemonPath is the plist `install` writes on macOS (docs/20 §9).
+const LaunchDaemonPath = "/Library/LaunchDaemons/app.tailraid.serve.plist"
+
+func launchdTarget(Params) string { return "system/app.tailraid.serve" }
+
+// FirewallRule is the name of the Windows inbound rule for the mesh port.
+const FirewallRule = "tailraid mesh"
+
+// firewallRule is the netsh command that adds or removes the inbound UDP rule for the
+// mesh port (docs/20 §9): a device behind a port forward is reachable only with it.
+func firewallRule(p Params, add bool) []string {
+	if !add {
+		return []string{"netsh", "advfirewall", "firewall", "delete", "rule", "name=" + FirewallRule}
+	}
+	return []string{"netsh", "advfirewall", "firewall", "add", "rule", "name=" + FirewallRule, "dir=in", "action=allow", "protocol=UDP", "localport=" + strconv.Itoa(p.MeshPort)}
+}
 
 // scStopped matches the STATE line of `sc.exe query` for a stopped service.
 var scStopped = regexp.MustCompile(`STATE\s*:\s*1\s+STOPPED`)
@@ -241,7 +271,7 @@ func stopped(query []string, out string, err error) bool {
 	if err != nil {
 		return true
 	}
-	if query[0] == "launchctl" {
+	if query[0] == "launchctl" || (len(query) > 1 && query[1] == "launchctl") {
 		return strings.Contains(out, "state = not running")
 	}
 	return scStopped.MatchString(out)
@@ -250,11 +280,16 @@ func stopped(query []string, out string, err error) bool {
 // notRunning reports a failed stop command whose output says there was no process to
 // stop: launchctl's exit 3 and sc.exe's error 1062. Stopping a stopped service succeeds.
 func notRunning(c []string, out string) bool {
+	if len(c) > 2 && c[0] == "sudo" {
+		c = c[1:]
+	}
 	switch {
 	case c[0] == "launchctl" && c[1] == "kill":
 		return strings.Contains(out, "No process to signal")
 	case c[0] == "sc.exe" && c[1] == "stop":
 		return strings.Contains(out, "1062") || strings.Contains(out, "has not been started")
+	case c[0] == "netsh" && len(c) > 4 && c[4] == "rule":
+		return true // a rule that is not there: nothing to remove
 	}
 	return false
 }
@@ -270,16 +305,6 @@ func Logs(p Params, follow bool, lines int) []string {
 		return cmd
 	}
 	return nil
-}
-
-// launchAgentPath is ~/Library/LaunchAgents/app.tailraid.serve.plist, derived from the
-// config home (~/Library/Application Support/tailraid).
-func launchAgentPath(p Params) string {
-	lib := filepath.Dir(filepath.Dir(p.Home))
-	if p.Home == "" {
-		lib = filepath.Join(os.Getenv("HOME"), "Library")
-	}
-	return filepath.Join(lib, "LaunchAgents", "app.tailraid.serve.plist")
 }
 
 func sudoPrefix(p Params) []string {
@@ -308,10 +333,11 @@ func launchdPlist(p Params) string {
 `, p.Exe, p.ConfigPath, p.LogFile, p.LogFile)
 }
 
-// systemdUnit is the Linux unit (docs/12 §1, I-122): the process may write only its
-// data directory, its disks and its config directory (ProtectSystem=strict with
-// ReadWritePaths), never gains privileges, sees a private /tmp, and gets 45 s to stop
-// (the final flush is capped at 30 s and a leader hands over first).
+// systemdUnit is the Linux unit (docs/12 §1, I-122, I-324): the process may write only
+// its data directory, its disks and its config directory (ProtectSystem=strict with
+// ReadWritePaths), never gains privileges beyond CAP_NET_ADMIN (the TUN, docs/20 §9),
+// sees a private /tmp, and gets 45 s to stop (the final flush is capped at 30 s and a
+// leader hands over first).
 func systemdUnit(p Params) string {
 	// the unit is Linux's whatever OS builds it (Params.GOOS), so its paths are slash paths
 	rw := []string{p.DataDir, path.Dir(filepath.ToSlash(p.ConfigPath))}
@@ -330,7 +356,7 @@ func systemdUnit(p Params) string {
 	}
 	return fmt.Sprintf(`[Unit]
 Description=tailraid node: metadata, shard store and NFS gateway
-After=network-online.target tailscaled.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -342,6 +368,8 @@ RestartSec=2
 TimeoutStopSec=45
 LimitNOFILE=65536
 NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=%s
@@ -395,7 +423,11 @@ func Apply(ctx context.Context, w io.Writer, pl Plan) error {
 		cmd := exec.CommandContext(ctx, c[0], c[1:]...) //nolint:gosec // the plan's commands are launchctl, systemctl and sc.exe (docs/12 §1)
 		cmd.Stdout, cmd.Stderr, cmd.Stdin = io.MultiWriter(w, &out), io.MultiWriter(w, &out), os.Stdin
 		if err := cmd.Run(); err != nil {
-			tolerated := (i == 0 && (c[1] == "bootout" || c[1] == "stop")) || notRunning(c, out.String())
+			first := c
+			if len(first) > 2 && first[0] == "sudo" {
+				first = first[1:]
+			}
+			tolerated := (i == 0 && (first[1] == "bootout" || first[1] == "stop")) || notRunning(c, out.String())
 			if tolerated {
 				continue
 			}

@@ -108,3 +108,27 @@ func TestFetchKey_OnTick(t *testing.T) {
 		}
 	}
 }
+
+// The leader makes the cluster key on its tick when the cluster has none, once; a
+// follower makes nothing (docs/19 §3): the key is there from the cluster's first minute.
+// Invariant: I-303, I-305
+func TestMakeKey_OnLeaderTick(t *testing.T) {
+	ctx := context.Background()
+	s, _ := oneNodeStore(t)
+	if made, err := makeKeyIfLeader(ctx, s, false); made || err != nil {
+		t.Fatalf("a follower: made %v, %v", made, err)
+	}
+	if _, ok := s.Local(); ok {
+		t.Fatal("a follower holds a key")
+	}
+	if made, err := makeKeyIfLeader(ctx, s, true); !made || err != nil {
+		t.Fatalf("the leader: made %v, %v", made, err)
+	}
+	k, ok := s.Local()
+	if !ok || len(k) != secrets.KeySize {
+		t.Fatalf("the leader holds no key after making one: %v", ok)
+	}
+	if made, err := makeKeyIfLeader(ctx, s, true); made || err != nil {
+		t.Fatalf("a second tick: made %v, %v (the key is made once)", made, err)
+	}
+}

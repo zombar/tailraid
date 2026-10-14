@@ -21,9 +21,9 @@ import (
 // node of the cluster, or this one after a restart.
 func (u *ui) node() *ui {
 	u.t.Helper()
-	srv, err := webui.New(webui.Options{FS: u.fs, Store: u.f.FSM, Auth: u.auth, Login: login, Clk: u.f.Clk, Logger: slog.New(slog.DiscardHandler)})
+	srv, err := webui.New(webui.Options{FS: u.fs, Store: u.f.FSM, Auth: u.auth, Clk: u.f.Clk, Logger: slog.New(slog.DiscardHandler)})
 	must(u.t, err)
-	v := &ui{t: u.t, f: u.f, fs: u.fs, ts: u.ts, auth: u.auth, srv: srv, client: u.client}
+	v := &ui{t: u.t, f: u.f, fs: u.fs, auth: u.auth, srv: srv, client: u.client}
 	v.member.Store(true)
 	v.hs = httptest.NewServer(srv.Handler())
 	u.t.Cleanup(v.hs.Close)

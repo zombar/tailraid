@@ -20,22 +20,22 @@ small: Raft carries ~100 bytes per metadata operation; bulk bytes go point to po
 - **Cluster node ID**: 16 random hex characters generated once and persisted at
   `<data_dir>/node_id`. It is the `raft.ServerID`. It never changes while the data directory
   exists; this is what Raft requires.
-- **Tailscale stable ID**: recorded in `Node.TSStableID` and used only to authorize RPCs
-  ([08](08-security.md)). It may change on re-auth; that is handled as a member update, not an
-  identity change.
-- **Address**: `Node.Addr` is the device's Tailscale IPv4. Raft addresses are `Addr:RaftPort`,
-  not MagicDNS names (DNS can be down when tailscaled is down). On every probe cycle a node
-  compares `tailscale status` Self IP with its own `Node.Addr`; if different it asks the
-  leader to update both the Raft configuration (`AddVoter`/`AddNonvoter` with the same ID and
-  the new address updates in place) and the node table. Because the source IP is by
-  definition unknown to the member table at that moment, this one request (`POST
-  /v1/members {update_addr}`) is authorized by `WhoIs(srcIP).StableID == Node.TSStableID`
-  of the claimed node ID, not by IP lookup ([08](08-security.md)).
+- **Mesh key**: the device's WireGuard public key, recorded in `Node.Key` and the
+  device's identity on the network ([20](20-mesh.md) §2, [08](08-security.md)). It
+  outlives the node ID: `reset` keeps it, so a reset device joins again as the same
+  device.
+- **Address**: `Node.Addr` is the device's mesh address, allocated by the leader at the
+  device's introduce from the cluster's subnet and never changed or reused (20 §3). Raft
+  addresses are `Addr:RaftPort`, never names. `Node.Endpoints` are the UDP endpoint
+  candidates the device publishes (`POST /v1/members {update_endpoints}`, its own row
+  only, 20 §5); they are where the tunnel finds the device, not what the cluster calls
+  it.
 - **Cluster ID**: 16 random bytes created at `init`, stored in `Meta.ClusterID` and in
   `<data_dir>/cluster_id`. Every Raft stream exchanges it in a 16-byte handshake on dial and
   accept (a wrapper around `raft.StreamLayer`); mismatch closes the connection. Every RPC
   carries it in `X-Tailraid-Cluster`; mismatch is `409`. This prevents two independently
-  `init`ed clusters on one tailnet from merging logs.
+  `init`ed clusters whose join codes were mixed up from merging logs; it is also what
+  keys the introduce's HMAC (20 §4).
 
 ## Commands
 
@@ -368,7 +368,10 @@ Codec 11 is the secrets store (docs/19, I-307): ops 23–25 (`SecretKeyInit`,
 or older (`meta.CodecSecrets`), and snapshot frame 11, which adds the key ID and the
 sealed secrets after the snapshot catalogue. Codec 12 is reserved for sealed S3 buckets
 (10 §4.7): a codec is a promise to read every lower one, so the store, built first,
-took 11.
+took 11. Codec 13 is the mesh (docs/20, I-326): `NodeUpsert` with `Key`, `Endpoints`
+and `MeshPort`, `MetaSet` with the subnet and the next host, ops 26–27 (`PendingAdd`,
+`PendingDelete`), and snapshot frame 13 with the pending rows; the release that carries
+it starts a new cluster, so nothing gates it against an older member.
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
@@ -488,11 +491,15 @@ when leader, otherwise forwards the encoded command to the current leader with
 its derived budget (01). The node is named after the host; `--name`, `--chunk` and
 `--token` are the only options.
 
-**Join** (`tailraid join <host> <token> [--voter]`): refuses if local Raft state exists.
-Generates `node_id`; `POST /v1/join` with `{token, node_id, name, ts_stable_id, addr, ports,
-voter, version}`. The receiver requires `WhoIs(srcIP).StableID == ts_stable_id`
-and `token == Meta.JoinToken`, then forwards to the leader, which calls
-`raft.AddNonvoter` or `AddVoter` and proposes `NodeUpsert`. A voter just added and not
+**Join** (`tailraid join <code> [--voter]`): refuses if local Raft state exists.
+Generates `node_id`. First the introduce (20 §4): a datagram authenticated by the token
+inside the code, answered with an address once the leader has proposed a *pending row*
+(`PendingAdd{Key, Addr, At}`, op 26; `PendingDelete`, op 27, when the join lands or
+10 min pass). Then `POST /v1/join` through the tunnel from that address with `{node_id,
+name, key, ports, voter, version, seen_from}`; the receiver requires a pending row at the
+source address, then forwards to the leader, which calls `raft.AddNonvoter` or
+`AddVoter` and proposes `NodeUpsert`, which turns the pending row into the member row
+(same `Idx`, `Key` and `Addr`). A voter just added and not
 yet caught up can cost the leader its lease while that proposal is in flight; the
 outcome is then unknown (I-95) and the reply is `503`, which the joiner retries under
 the same node ID: a re-join keeps the row and index whichever way the proposal went
@@ -516,13 +523,14 @@ first, then steps down to follower once the change commits, never shutting Raft 
 I-145), a disk's budget (`set_capacity` → `NodeUpsert`, proposed by the disk's host as
 its free space changes, 01; refused for a device row, I-118), `node drain` (`NodeSetState Draining`:
 excluded from new placement; repairer re-places its slots), `node remove`
-(`NodeSetState Removed`, then `raft.RemoveServer`; a removed row stays in the table for its history, so a device reset and joined again has two rows with one name: a name on the command line names the row that is not removed, and the leader refuses every op but `remove` on a removed row, since `promote` or `update_addr` there would put a dead ID back into the Raft configuration, I-136), `set_version` (`NodeUpsert` with the
+(`NodeSetState Removed`, then `raft.RemoveServer`; a removed row stays in the table for its history, so a device whose key was forgotten and joined again has two rows with one name: a name on the command line names the row that is not removed, and the leader refuses every op but `remove` on a removed row, since `promote` there would put a dead ID back into the Raft configuration, I-136), `set_version` (`NodeUpsert` with the
 version `serve` runs: proposed by the node at start, through the leader, whenever its row
 names another, so `node ls` shows what each node runs rather than what it joined with,
 I-133), `node add-s3` (`NodeUpsert` of a `KindS3` row by the leader's `add_s3`, refused for a name or bucket already registered, I-137, 10 §4.1), `volume set-redundancy` (`SetVolume`
 after `SetVolumeMode{false}`; `--auto` is `SetVolumeMode{true}`),
 `tailraid reset --yes` (local only: deletes `<data_dir>/raft` and `node_id`/`cluster_id` so
-the device can `join` afresh; never touches `shards/`, which the sweep reconciles later; it
+the device can `join` afresh; never touches `shards/`, which the sweep reconciles later,
+nor the mesh key, so the device joins again as itself (20 §4); it
 refuses while `serve` runs and while `staging/` holds unflushed writes, unless
 `--discard-dirty` accepts losing them).
 

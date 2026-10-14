@@ -117,7 +117,9 @@ func TestChart_NoInlineStyle_NoColour(t *testing.T) {
 	for _, c := range Classes {
 		known[c] = true
 	}
-	for name, svg := range everyKind() {
+	kinds := everyKind()
+	kinds["mesh"] = lookdevMesh() // the dashboard's, not the report's: no golden before the move
+	for name, svg := range kinds {
 		if strings.Contains(svg, "style=") {
 			t.Errorf("%s: emits an inline style", name)
 		}

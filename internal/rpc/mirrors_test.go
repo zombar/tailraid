@@ -102,8 +102,7 @@ func TestMirrorRPC_ObjectsAndTrees(t *testing.T) {
 		t.Fatalf("damaged object: %v", err)
 	}
 
-	e.ts.Remove(memberIP)
-	e.auth.Purge()
+	e.deny.Store(true)
 	if _, err := c.MirrorTree(ctx, 5, root); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("stranger: %v", err)
 	}

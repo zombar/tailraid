@@ -238,3 +238,30 @@ func TestDiskSet_UnwritableDiskClosed(t *testing.T) {
 		t.Fatalf("writable again but still closed: %+v", h)
 	}
 }
+
+// A configured disk whose marker is this host's and this cluster's but which has no row
+// is the one case serve registers itself (docs/14 §2): a join cut before its
+// registration; every other closed disk stays closed with its reason.
+func TestDiskSet_Unregistered(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "disk")
+	id, err := PrepareDisk(p, testCluster, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	if _, err := PrepareDisk(other, testCluster, "h2"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Node.Disks = []config.Disk{{Path: p}, {Path: other}, {Path: filepath.Join(t.TempDir(), "unmounted")}}
+	d := newDiskSet(cfg, testCluster, "h1", 1, slog.New(slog.DiscardHandler))
+	host := meta.Node{Idx: 1, ID: "h1", Kind: meta.KindDevice, State: meta.Active}
+	d.refresh([]meta.Node{host})
+	if got := d.unregistered(); len(got) != 1 || got[0] != 0 {
+		t.Fatalf("unregistered %v, want [0]: another host's disk and an unmounted path are not ours to register", got)
+	}
+	d.refresh([]meta.Node{host, {Idx: 7, ID: id, Kind: meta.KindDisk, Host: 1, State: meta.Active}})
+	if got := d.unregistered(); len(got) != 0 {
+		t.Fatalf("unregistered %v after its row arrived", got)
+	}
+}

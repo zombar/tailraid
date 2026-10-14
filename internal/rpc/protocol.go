@@ -58,6 +58,9 @@ type Health struct {
 	Web       uint16         `json:"web,omitempty"`     // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
 	Disks     []DiskHealth   `json:"disks,omitempty"`   // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
 	Mirrors   []MirrorHealth `json:"mirrors,omitempty"` // this host's mirrors (docs/16 §1): online on every node only while listed online here
+	// SeenFrom is the UDP endpoint this node's device currently sees for the caller: the
+	// caller's reflexive address, a candidate it publishes (docs/20 §5, I-322).
+	SeenFrom string `json:"seen_from,omitempty"`
 }
 
 // MirrorHealth is one mirror of the host in /health (docs/16 §1): ID is the mirror's
@@ -96,15 +99,20 @@ type DiskHealth struct {
 
 // JoinRequest is POST /v1/join.
 type JoinRequest struct {
-	Token      string `json:"token"`
+	Token      string `json:"token,omitempty"` // under Tailscale; on the mesh the introduce consumed it (docs/20 §4)
 	NodeID     string `json:"node_id"`
 	Name       string `json:"name"`
-	TSStableID string `json:"ts_stable_id"`
+	TSStableID string `json:"ts_stable_id,omitempty"` // under Tailscale
 	Addr       string `json:"addr"`
 	RaftPort   uint16 `json:"raft_port"`
 	RPCPort    uint16 `json:"rpc_port"`
 	Voter      bool   `json:"voter"`
 	Version    string `json:"version"`
+	// The mesh (docs/20 §4): the joiner's key (base64), its UDP port and the endpoint
+	// the member saw its introduce from, its first candidate.
+	Key      string `json:"key,omitempty"`
+	MeshPort uint16 `json:"mesh_port,omitempty"`
+	SeenFrom string `json:"seen_from,omitempty"`
 }
 
 // JoinResponse is the join reply.
@@ -114,21 +122,26 @@ type JoinResponse struct {
 	Volume    meta.Volume  `json:"volume"`
 	Members   []meta.Node  `json:"members"`
 	Disks     []meta.Node  `json:"disks,omitempty"` // set by the joiner: the disks it registered from its config (docs/14 §2)
+	// Index is the log index of the joiner's row: a member that forwarded the join waits
+	// for it before answering, so the joiner's next request to that member is a member's
+	// (docs/20 §4)
+	Index uint64 `json:"index,omitempty"`
 }
 
 // MemberOp is POST /v1/members.
 type MemberOp struct {
-	Op       string         `json:"op"`                // remove | update_addr | set_version | set_voter | set_capacity | set_state | add_disk | add_s3
-	NodeIdx  meta.NodeIdx   `json:"node_idx"`          // add_disk: the host
-	DiskID   string         `json:"disk_id,omitempty"` // add_disk: the marker's disk ID (docs/14 §2)
-	Name     string         `json:"name,omitempty"`    // add_disk: "<host>/<n>"; add_s3: the S3 node's name
-	Addr     string         `json:"addr,omitempty"`
-	Version  string         `json:"version,omitempty"` // set_version: what the node's serve runs (I-133)
-	Voter    bool           `json:"voter,omitempty"`
-	Capacity uint64         `json:"capacity,omitempty"`
-	State    meta.NodeState `json:"state,omitempty"`
-	Force    bool           `json:"force,omitempty"`
-	S3       *S3Spec        `json:"s3,omitempty"` // add_s3
+	Op        string         `json:"op"`                // remove | update_addr | update_endpoints | set_version | set_voter | set_capacity | set_state | add_disk | add_s3
+	NodeIdx   meta.NodeIdx   `json:"node_idx"`          // add_disk: the host
+	DiskID    string         `json:"disk_id,omitempty"` // add_disk: the marker's disk ID (docs/14 §2)
+	Name      string         `json:"name,omitempty"`    // add_disk: "<host>/<n>"; add_s3: the S3 node's name
+	Addr      string         `json:"addr,omitempty"`
+	Version   string         `json:"version,omitempty"` // set_version: what the node's serve runs (I-133)
+	Voter     bool           `json:"voter,omitempty"`
+	Capacity  uint64         `json:"capacity,omitempty"`
+	State     meta.NodeState `json:"state,omitempty"`
+	Force     bool           `json:"force,omitempty"`
+	S3        *S3Spec        `json:"s3,omitempty"`        // add_s3
+	Endpoints []string       `json:"endpoints,omitempty"` // update_endpoints: the caller's own candidates (docs/20 §5, I-322)
 }
 
 // S3Spec is the bucket of an add_s3 (docs/10 §4.1). Credentials are never part of it (I-139).
