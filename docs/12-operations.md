@@ -14,9 +14,9 @@ path and data directory it bound.
 
 | OS | Unit | Manager commands | Restart | Logs |
 |---|---|---|---|---|
-| macOS | LaunchAgent `~/Library/LaunchAgents/app.tailraid.serve.plist` (per user: Tailscale's GUI session and the mount are per user) | `launchctl bootstrap gui/$UID …` / `bootout`; `kickstart` / `kill SIGTERM` then `print` until `not running` | `KeepAlive`, `ThrottleInterval 5` | `~/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
-| Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `Environment=TAILRAID_HOME=…`, `After=network-online.target tailscaled.service` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
-| Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto depend= Tailscale`), `sc.exe failure … actions= restart/5000` | `sc.exe start|stop|delete` (elevated); `stop` then `query` until `STOPPED` | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
+| macOS | LaunchDaemon `/Library/LaunchDaemons/app.tailraid.serve.plist`, run as root (a utun needs it, docs/20 §9; `install` runs under `sudo`); the home is `/Library/Application Support/tailraid`; `mount.uid`/`mount.gid` from `SUDO_UID` give the NFS mount the user's ownership | `launchctl bootstrap system …` / `bootout`; `kickstart` / `kill SIGTERM` then `print` until `not running` | `KeepAlive`, `ThrottleInterval 5` | `/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
+| Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `AmbientCapabilities=CAP_NET_ADMIN` (the TUN, docs/20 §9), `Environment=TAILRAID_HOME=…`, `After=network-online.target` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
+| Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto`), `sc.exe failure … actions= restart/5000`; `install` writes `wintun.dll` beside the exe and adds the UDP port's firewall rule (docs/20 §9) | `sc.exe start|stop|delete` (elevated); `stop` then `query` until `STOPPED` | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
 
 `log.file` in the config (or `TAILRAID_LOG_FILE`) makes `serve` append to a file in the
 configured format instead of stderr; `install` sets it on macOS and Windows. Only `serve`
@@ -29,22 +29,20 @@ handshake, `SERVICE_RUNNING`); without the flag it is an ordinary console proces
 service runs as LocalSystem, whose config home is `%ProgramData%\tailraid` — the same
 `config.Home()` an elevated `join` used, so no copy step.
 
-Mounting is a user action (`tailraid mount`) on macOS and Linux: the LaunchAgent and the
+Mounting is a user action (`tailraid mount`) on macOS and Linux: the LaunchDaemon and the
 systemd unit only serve. On Windows `install` also registers a logon task that maps the
 drive in the user's desktop session (§2). The mount survives service restarts because handles are stable
 (I-16) and the mounts are `soft`. The three service managers, the three mounts and the
 install, restart and recover paths are exercised on real guests by the three-VM rounds
 ([vms.md](vms.md)).
 
-The service log prints the browser UI address (`http://<tsIP>:20482/`, docs/13) at start,
+The service log prints the browser UI address (`http://<mesh addr>:20482/`, docs/13) at start,
 and `tailraid status` shows it on its `web` line; `tailraid dashboard` opens it in the
 default browser (docs/13 §1); `listen.web: 0` turns the UI off.
 
-**Address changes.** When the device's Tailscale IP changes, `serve` re-registers the new
-address in the node table (every peer dials it from then on) and exits with a non-zero
-status, because its Raft and RPC listeners are bound to the old address; the service unit's
-restart policy brings it back on the new one within seconds. Without a service manager,
-restart `tailraid serve` by hand.
+**Address changes.** A device's mesh address never changes (docs/20 §3). What changes
+when a device moves is where the tunnel finds it: `serve` republishes its endpoint
+candidates and the peers find the new path without a restart (docs/20 §5).
 
 **Start without a leader.** `serve` waits for the log only when its data directory holds
 no snapshot with its own row and the volume (the first start after a join that ended
@@ -254,11 +252,10 @@ through an update never writes an entry half of it cannot read (I-156).
 
 `tailraid init` takes no required options: the node is named after the host and the
 volume starts at `1+0` in automatic redundancy mode (03), growing as disks join.
-`tailraid join <host> <token>` is the same for a second device: `<host>` is the first
-device's Tailscale IP, or its name as `tailscale status` shows it (host name or MagicDNS
-name), which `join` looks up in the tailnet status because a plain DNS lookup gives a LAN
-address no node listens on (I-50); an address off the tailnet is refused with the hint.
-`--voter` stays explicit
+`tailraid join <code>` is the same for a second device: `<code>` is the join code
+`init` printed, or the one `tailraid token` prints on any member (docs/20 §4: the
+cluster ID, the token, that member's key and its endpoints); on macOS and Linux it runs
+under `sudo`, since it creates the interface (docs/20 §9). `--voter` stays explicit
 because only the operator knows which devices are always on. `--name`, `--chunk` (4 MiB by default, 01) and
 `--token` remain for overrides and test rigs; `--k`/`--m` on `init` pin a manual policy
 for test rigs and are hidden. Disks listed under `node.disks` in the config are marked and
@@ -317,9 +314,10 @@ counters into rates between its ticks, and the report draws CPU, memory, memory 
 and disk charts for the sampled node, with peaks in the totals table.
 
 **Network.** `machine` also carries four cumulative byte counters: `net_rx_bytes` and
-`net_tx_bytes` summed over every interface but loopback, and `tailnet_rx_bytes` and
-`tailnet_tx_bytes` for the one interface that holds the node's tailnet address (found
-with the standard library's interface list, so the same on every OS). Linux reads
+`net_tx_bytes` summed over every interface but loopback, and `mesh_rx_bytes` and
+`mesh_tx_bytes` for the mesh interface (`tailnet_rx_bytes`/`tailnet_tx_bytes` under
+Tailscale: the one interface that holds the node's address, found with the standard
+library's interface list, so the same on every OS). Linux reads
 `/proc/net/dev`; macOS the `net.route` interface list (`NET_RT_IFLIST2`, the
 `if_msghdr2` byte counters, parsed by offset as the load average is); Windows
 `GetIfTable2` from `iphlpapi.dll` (`MIB_IF_ROW2`'s octet counters). The same rule holds:
@@ -520,8 +518,8 @@ volume's bytes in the clear: keep the disk where the data may be.
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
 - **I-190** — `status` reports `net_rx_bytes` and `net_tx_bytes` summed over every
-  interface but loopback and `tailnet_rx_bytes` and `tailnet_tx_bytes` for the interface
-  that holds the node's tailnet address, cumulative, on Linux, macOS and Windows; a
+  interface but loopback and `mesh_rx_bytes` and `mesh_tx_bytes` for the mesh interface
+  (docs/20; `tailnet_rx_bytes`/`tailnet_tx_bytes` under Tailscale), cumulative, on Linux, macOS and Windows; a
   counter the OS does not expose is absent, never zero, and none decreases between two
   reports from one process (I-85).
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, fails the Raft connections already open with it, stops incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
@@ -530,14 +528,17 @@ volume's bytes in the clear: keep the disk where the data may be.
 
 - **I-76** — `tailraid init` with no options bootstraps a cluster whose node is named
   after the host, whose device row carries no budget and whose volume is `1+0` with `Auto`
-  set; `tailraid join <host> <token>` with no options joins as a non-voter, resolving a
-  device name through the tailnet status and refusing an address off the tailnet; both register
+  set; `tailraid join <code>` with no options joins as a non-voter (under Tailscale,
+  `join <host> <token>` resolved a device name through the tailnet status and refused an
+  address off the tailnet); both register
   the configured disks with derived budgets (I-74, I-121).
 - **I-122** — The Linux unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only` and `PrivateTmp`, and its `ReadWritePaths` names exactly the
   data directory, every added disk, the config directory and the log file's directory,
-  with every path quoted; the installer stages the unit only in a directory it created;
-  the LaunchAgent restarts the service only after a non-zero exit.
+  with every path quoted, and `CAP_NET_ADMIN` is its only ambient and bounding
+  capability (docs/20 §9); the installer stages the unit only in a directory it created;
+  the LaunchDaemon (the LaunchAgent before docs/20) restarts the service only after a
+  non-zero exit.
 - **I-123** — On the first interrupt a leader transfers leadership before its Raft
   stops, bounded by 5 s, so another node leads the moment the shutdown proceeds; a
   second interrupt ends the process at once; the Windows service handler reports a stop

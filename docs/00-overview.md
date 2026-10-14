@@ -1,8 +1,9 @@
 # 00 — Overview
 
-`tailraid` turns the devices on a Tailscale tailnet into one shared volume that behaves like
+`tailraid` turns a set of devices into one shared volume that behaves like
 a modern RAID array: file data is Reed-Solomon erasure-coded into shards spread across
-devices, identical content is stored once, and the volume is mounted locally on macOS
+devices, identical content is stored once, the devices reach each other over a WireGuard
+mesh the binary runs itself ([20](20-mesh.md)), and the volume is mounted locally on macOS
 and Linux through the operating system's own NFSv3 client and on Windows through its SMB
 client. Metadata is kept
 consistent by a Raft-replicated state machine, so there is one coherent volume and no
@@ -20,7 +21,8 @@ numbered invariant (`I-n`) in these documents is enforced by at least one named 
    quorum are reachable.
 3. **Dedup**: identical chunks (4 MiB by default) are stored once regardless of path or how often they
    are written.
-4. **Native mounts** on Windows, macOS, Linux with no kernel drivers to install.
+4. **Native mounts** on Windows, macOS, Linux with no kernel drivers to install; the mesh
+   uses the OS's own TUN driver (wintun on Windows, a signed dll the binary carries).
 5. **Small, provable code**: a single static binary of about 18.1k production lines through
    M4 (the original 8k budget was optimistic, see the size table), with a test suite that
    would have caught every bug the predecessor shipped.
@@ -33,7 +35,7 @@ S3 features beyond the implemented subset (versioning, ACLs, policies, lifecycle
 SSE, object lock, presigned POST); web UI beyond the dashboard and file browser of docs/13
 (no user management, no mutating admin operations from the browser); metrics stack (a
 `status` JSON instead);
-encryption at rest beyond sealed S3 nodes (docs/10 §4.7: WireGuard covers transit,
+encryption at rest beyond sealed S3 nodes (docs/10 §4.7: the mesh's WireGuard covers transit,
 devices rely on the OS's full-disk encryption, and a mirror disk is plaintext); quotas;
 history in the live pool (the trash keeps deletes for a while; snapshots live on mirror
 disks, docs/16, with no per-save history, no writable clone, no snapshot of one folder,
@@ -83,24 +85,25 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
              chunk table w/ placement+refs,    chunk.Cache (decoded chunks, LRU)
              node table, tombstones)
                         ▲                             ▲
-      cluster (raft wiring, leader forwarding,   rpc (HTTP/1.1 on <tsIP>:20481:
+      cluster (raft wiring, leader forwarding,   rpc (HTTP/1.1 on <mesh addr>:20481:
       membership, prober/liveness, events)      GET/PUT/HEAD/DELETE /v1/disks/{id}/shards/{key},
-      raft TCP <tsIP>:20480 + cluster-id        POST /v1/apply, /v1/members, /v1/join,
-      handshake; raft-boltdb; FileSnapshotStore GET /health; WhoIs authorizer)
-      webui (HTTP on <tsIP>:20482: dashboard over the status report, file browser and
-      media over the vfs; member-or-same-user WhoIs; docs/13)
+      raft TCP <mesh addr>:20480 + cluster-id   POST /v1/apply, /v1/members, /v1/join,
+      handshake; raft-boltdb; FileSnapshotStore GET /health; table authorizer)
+      webui (HTTP on <mesh addr>:20482: dashboard over the status report, file browser and
+      media over the vfs; members only; docs/13)
                         ▲
-      tailscale (CLI shell-out: status/whois JSON, binary finder, Fake)
+      mesh (wireguard-go on a TUN; peers from the member table; the introduce, fan-out,
+      relay and path probe frames on one UDP socket, <any>:20483; docs/20)
       repair (leader only: GC of tombstones after grace; scanner refills missing/dead slots; scrub)
 ```
 
-Ports: Raft `<tsIP>:20480`, node RPC `<tsIP>:20481`, web UI `<tsIP>:20482`, S3 gateway
-`<tsIP>:20443`, NFS
+Ports: Raft `<mesh addr>:20480`, node RPC `<mesh addr>:20481`, web UI `<mesh addr>:20482`,
+S3 gateway `<mesh addr>:20443`, the mesh's UDP socket `20483` on every address, NFS
 `127.0.0.1:20490` (macOS, Linux), SMB `127.0.0.1:20445` (Windows).
 
-Identity and transport security come from Tailscale: every RPC connection is authorized by
-resolving the source IP with `tailscale whois` and matching the Tailscale stable ID recorded
-for a member. No TLS of our own.
+Identity and transport security come from the mesh (docs/20): a packet from a mesh
+address was sealed by the key that owns it, so every RPC connection is authorized by
+looking its source address up in the member table. No TLS of our own.
 
 ## Durability contract
 
@@ -144,6 +147,7 @@ for a member. No TLS of our own.
 | `internal/vfs` (overlay, WAL, flusher, reader, billy) | ~2,550 |
 | `internal/nfsgw`, `internal/repair` | ~900 |
 | `internal/{cluster,rpc,tailscale,config,node}` | ~3,600 |
+| The mesh (docs/20, planned 2026-10-14): `internal/mesh` (keys, the join code and the introduce, the Bind with fan-out and the frame demux, the device and its peer diff, the path monitor, the per-OS interface commands, 0.9k), identity in the FSM and the RPC (`Node.Key`, pending rows, codec 13, the table authorizer, +0.3k −0.3k), the node on the mesh with Tailscale deleted (+0.4k −0.5k), the path class in the prober, reader and flusher (0.15k), the service units (0.15k), the rigs (0.1k); the relay (0.25k) and port mapping (0.5k, clients lifted from tunnelmesh) follow | +0.8k planned, then +0.75k |
 | `internal/{mount,svc,dev}` | ~700 |
 | `internal/soak` (engine, live env, report; shipped for `tailraid verify`) | ~2,300 |
 | `internal/update` | ~350 |
@@ -214,18 +218,19 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived, suspect marks. I-12, I-38..I-40, I-170 |
 | [06-gc-and-repair](06-gc-and-repair.md) | Tombstones, GC grace, the retention purge, DELETE fence, sweep, repair scanner, scrub, drain, migration, the ephemeral `/.tailraid` tree, the sync hold and the mirror schedule. I-13..I-15, I-41..I-44, I-157, I-182, I-195 |
 | [07-nfs-gateway](07-nfs-gateway.md) | go-nfs handler, handles, op mapping, macOS and Linux mounts, the in-tree go-nfs copy. I-16, I-17, I-45..I-47, I-100, I-167 |
-| [08-security](08-security.md) | WhoIs authorization, join token, cluster ID, S3 keys, the stats route. I-18, I-48..I-50, I-199 |
+| [08-security](08-security.md) | The trust model on the mesh, the table authorizer, the join code and the introduce, cluster ID, S3 keys, the stats route. I-18, I-48..I-50, I-199 |
 | [09-testing-strategy](09-testing-strategy.md) | TDD workflow, seams, harness, soak suite (no invariants) |
 | [10-s3](10-s3.md) | Own S3 server and client, S3 storage nodes. I-19..I-21, I-51..I-55 |
 | [11-chunk-lifecycle](11-chunk-lifecycle.md) | Chunk and shard state machines, event catalogue, transition cells L-n. I-56, I-57 |
 | [12-operations](12-operations.md) | Service install per OS, log files, the Windows mount, `/dev/*` fault injection, releases, self-update, `init` without options, machine and network vitals. I-59..I-61, I-76, I-84, I-85, I-190 |
-| [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on a tailnet listener: member-or-same-user authorization, Range reads, atomic resumable uploads, batch rename/move/delete, the trash view, folder flags, tiles and thumbnails, the album view and now-playing bar, pins, the Stats page and the theme switch, the style guide. I-68..I-73, I-81, I-82, I-158..I-165, I-197, I-198, I-200, I-226 |
+| [13-web-ui](13-web-ui.md) | Browser dashboard and file browser on the mesh listener: members-only authorization, Range reads, atomic resumable uploads, batch rename/move/delete, the trash view, folder flags, tiles and thumbnails, the album view and now-playing bar, pins, the Stats page and the theme switch, the style guide. I-68..I-73, I-81, I-82, I-158..I-165, I-197, I-198, I-200, I-226 |
 | [14-disks](14-disks.md) | Several disks per device: disk rows as placement targets, host domains and the host cap, marker, per-disk budget and liveness, host-aware policy, home placement (domain skew and capacity within a host as one rule, behind a gate). I-86..I-91, I-172, I-294..I-296 |
 | [15-smb-gateway](15-smb-gateway.md) | SMB2 gateway for Windows: the library and its backend contract, the adapter over the vfs, case-insensitive names, password and `net use` mount, caps, known gaps, handles judged by inode. I-106..I-110, I-224, I-225 |
 | [16-snapshots](16-snapshots.md) | Snapshots on mirror disks: mirrors, the self-describing differential format, the sync and its GC hold, the schedule and thinning, the catalogue and reconciliation, reading, versions and restore, disaster recovery. I-179..I-181, I-183, I-186 (I-182 in 06; I-184 in 01; I-185 in 07; I-187 in 13; I-188 in 12) |
 | [17-stats](17-stats.md) | Time series kept in the volume: the sampler and its rows, gzip segments per node and hour, daily and monthly rollups, retention, the live-edge RPC and the Stats page's query, the storage budget. I-191..I-194, I-196 |
 | [18-search](18-search.md) | Search and the index kept in the volume: what is indexed, segments and the leader's pass, queries, the media catalogue from sidecars and tags, the library folder flag |
 | [19-secrets](19-secrets.md) | One encrypted secrets store: ciphertexts in the FSM, the cluster key in each device's OS keychain and fetched from a member, the keychain layer, `secret set\|ls\|rm`, the S3 and TMDB keys moved in. I-303..I-309 |
+| [20-mesh](20-mesh.md) | tailraid's own WireGuard mesh in place of Tailscale: the TUN and its privileges, the key as identity, the subnet and addresses, the join code and the introduce, endpoint candidates and fan-out, the relay through a member, port mapping, the path class in the storage code. I-316..I-330 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged

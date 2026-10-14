@@ -7,7 +7,7 @@ re-placed its slots (I-148) and every device that scrapes needed the key typed i
 This doc makes them **one store, replicated and encrypted**: the values live in the FSM as
 ciphertext, so every member has them, and the one key that opens them, the **cluster
 key**, lives in each device's OS keychain. A device that lacks the cluster key fetches it
-from another member over the tailnet.
+from another member over the mesh.
 
 The keychain layer is errol's (`zombar/errol_v2`, `internal/keys`, `internal/secrets`):
 `zalando/go-keyring` for the macOS Keychain, the Windows Credential Manager and the Linux
@@ -49,8 +49,10 @@ stays in the node's config (15).
   a path.
 - macOS reaches the Keychain through `/usr/bin/security` (go-keyring's own shell-out), so
   the item's access list names that tool and a new tailraid binary reads it without a
-  prompt; Windows uses the Credential Manager of the account the service runs as; Linux
-  speaks D-Bus to the Secret Service of the user's session. All three are pure Go.
+  prompt; the service there is a root daemon with no login keychain (docs/20 §9), so its
+  values land in the file fallback; Windows uses the Credential Manager of the account
+  the service runs as; Linux speaks D-Bus to the Secret Service of the user's session.
+  All three are pure Go.
 - Tests use go-keyring's in-memory mock; no test touches the real keychain.
 
 ## 3. The cluster key (I-303, I-304, I-305)
@@ -62,11 +64,12 @@ stays in the node's config (15).
   fetches the winner's.
 - **Fetched on demand.** A node that needs the key and has none (a fresh `join`, a device
   after the upgrade, a reinstall) asks the members in turn, the leader first, with
-  `GET /v1/secrets/key`: a member route (the WhoIs member check, I-18) that answers only
+  `GET /v1/secrets/key`: a member route (the member check, I-18) that answers only
   with the cluster header, only when the asker is a current member, and only with a key
   whose ID matches `Meta.SecretKeyID`. The asker checks the ID too, keeps the key in its
-  keychain, and asks no further. The key crosses the tailnet's WireGuard tunnel between
-  two members and nowhere else. A running node that holds no copy while the store has a
+  keychain, and asks no further. The key crosses the mesh's WireGuard tunnel between
+  two members and nowhere else. It is also the key under which relay frames and path
+  probes are authenticated (docs/20 §6). A running node that holds no copy while the store has a
   key fetches it on its maintenance tick (once a minute, and once at start), so a device
   opens its buckets' credentials without a `secret` command run on it; the hot path
   itself never fetches (§6).
@@ -93,7 +96,7 @@ stays in the node's config (15).
   is 1 to 16 KiB and holds no newline. At most 256 secrets.
 - **Who encrypts.** The node the CLI talks to: `tailraid secret set <name>` reads the
   value from stdin (piped, or typed at a prompt that does not echo), never from argv or
-  a flag, and sends it to its local node in an admin op over the tailnet; that node
+  a flag, and sends it to its local node in an admin op over the mesh; that node
   encrypts it and proposes the put. The leader and the log only ever see ciphertext.
 - **Reading.** A node decrypts a secret only for its own use (an S3 bucket's
   credentials) or for the admin op `secret_get` that a consumer in the CLI calls (the

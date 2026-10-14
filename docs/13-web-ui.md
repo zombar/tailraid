@@ -1,9 +1,9 @@
 # 13 — Web UI: dashboard and file browser
 
 The web UI is another gateway next to the NFS and SMB gateways (docs/07, docs/15): one `http.Handler` over
-the same vfs and FSM, on its own tailnet listener `<tsIP>:20482`. It shows the cluster the
+the same vfs and FSM, on its own mesh listener `<mesh addr>:20482`. It shows the cluster the
 way `tailraid status --json` reports it (data balance across nodes, chunk integrity, the
-repairer's state) and lets a browser on any of the user's tailnet devices browse the volume,
+repairer's state) and lets a browser on any member device browse the volume,
 stream media, upload files, make folders, rename, move and delete, restore what was deleted
 (the trash of docs/02 §Apply rules), flag folders and keep a folder cached on the device
 serving the page. It is read-only for cluster administration: every mutating admin
@@ -24,13 +24,13 @@ operation stays in the CLI.
   history every node keeps inside the volume (docs/17): stored against logical bytes,
   chunks, the repair backlog and the bytes a pass moves, liveness lanes, the data spread
   across disks and the slots per node for the cluster, then one member's client
-  throughput, tailnet and total network rates, CPU, memory, pressure, data disk, disk
+  throughput, mesh and total network rates, CPU, memory, pressure, data disk, disk
   throughput, WAL depth, process memory and readahead. A range picker in the Grafana
   style (1h, 6h, 24h, 7d, 30d, 1y, or a custom from and to) and the member choice live in
   the URL hash, so a link reproduces a view; a range ending now refreshes every 5 s
   while the tab is visible. The member dropdown lists every device member with its
   liveness and, since every member serves its own page, links each one's Stats page at
-  the same range by its tailnet address and web port (which `/health` now carries,
+  the same range by its mesh address and web port (which `/health` now carries,
   docs/08). The charts come from `GET /api/stats` as server-rendered SVG, the report's
   own drawing code, so nothing is lost between the report and the live page (§Design).
 - **Theme switch**: a button at the right end of the header cycles system, light and
@@ -73,9 +73,10 @@ operation stays in the CLI.
 - A single-page TypeScript app, no framework, bundled by esbuild into one committed file and
   embedded in the binary. Hash routing (`#/`, `#/browse/<path>`, `#/file/<path>`, `#/stats`,
   `#/search/<q>`, `#/media`, `#/media/<lib>`, `#/media/item/<path>`).
-- A separate listener, not a route on the RPC port: the caller set differs (same-user
-  devices that are not members), a page load cannot send the `X-Tailraid-Cluster` header,
-  and the RPC port's member-only rule must stay exactly as docs/08 states it.
+- A separate listener, not a route on the RPC port: a page load cannot send the
+  `X-Tailraid-Cluster` header, the RPC port's member-only rule must stay exactly as
+  docs/08 states it, and the caller set will differ once client peers exist (docs/20
+  §11).
 - **`tailraid dashboard`** opens the UI from a terminal: it asks the node for its status,
   prints the `web_url` there (the address `status` shows on its `web` line), and hands it to
   the OS's opener: `open` on macOS, `xdg-open` on Linux, `rundll32
@@ -89,26 +90,17 @@ Every request is authorized from the TCP source address alone, before any body b
 read, in this order:
 
 1. `rpc.SourceAddr(r)`; no parseable source → 403.
-2. `Authorizer.Allow(src)`: a cluster member whose WhoIs StableID matches its member record
-   (docs/08 steps 2–4) → allowed. A WhoIs transport failure → 503.
-3. Otherwise `Authorizer.User(src)`: the WhoIs `UserProfile.LoginName` of the source. It is
-   allowed when it is non-empty and equals this node's own login name. A WhoIs failure → 503;
-   anything else → 403, logged at warn with the source and the login it presented.
+2. `Authorizer.Allow(src)`: an active cluster member's mesh address (docs/08: the table
+   authorizer; the tunnel already vouches for the source's key) → allowed; anything else
+   → 403, logged at warn with the source.
 
-The node learns its own login once at `serve` start by `WhoIs`-ing its own Tailscale IP. If
-that fails the UI runs members-only (`Login: ""`) and a warning is logged.
+Under Tailscale a third step admitted a device of the same tailnet user (the phone), by
+its WhoIs login name; the mesh has no users, and a device that is not a node is a later
+feature (docs/20 §11: client peers, a row with a key and an address and nothing else,
+configured on the phone from a QR code). Until then the UI is for members.
 
-Tailscale reports `LoginName: "tagged-devices"` for every tagged node, so two tagged devices
-would authorize each other. `(*tailscale.WhoIs).Login()` therefore returns `""` whenever
-`Node.Tags` is non-empty, on the caller's side and on this node's own side, and an empty
-login never matches. The authorizer caches the login next to the StableID with the same TTLs
-and the same purge on membership change as the RPC rule.
-
-What this gives: the user's phone, tablet or laptop that is not a storage node can open the
-UI; a guest device on the tailnet, another user's device and a tagged server cannot.
-
-The listener also answers only to its own name: a request whose `Host` is neither the
-listener's `<tsIP>:port` nor the node's MagicDNS name with the port is a `421` before
+The listener also answers only to its own name: a request whose `Host` is not the
+listener's `<mesh addr>:port` is a `421` before
 anything else runs, so a page on another origin that points a name of its own at this
 node's IP (DNS rebinding) gets nothing from it; the index page's CSP carries
 `frame-ancestors 'none'`, so no other page can frame the UI; and `/api/status` is the
@@ -453,7 +445,7 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 ## 9. Non-goals
 
 User management and per-user access control, mutating admin operations from the browser
-(repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
+(repair, GC, membership, policy), HTTPS of its own (the mesh encrypts), serving on
 loopback, transcoding, saved playlists, a queue shared between tabs or devices,
 server-side video decoding, adding or removing a mirror, a diff between two versions or
 two snapshots, the Windows Previous Versions tab (docs/15 §8), online metadata
@@ -566,7 +558,7 @@ A series hue is never a status: the lanes and the host-cap strip use `--ok`, `--
   Headings (h1 20 wordmark, h2 17, h3 15), the health pill, badges, tile values (22),
   node names, paths, hashes, sizes, times, counters. `font-variant-numeric: tabular-nums`
   wherever digits line up.
-- No web fonts: the UI is served from the node over the tailnet and must not fetch from the
+- No web fonts: the UI is served from the node over the mesh and must not fetch from the
   internet; the index page's CSP is `default-src 'self'`.
 
 ### Space and shape
@@ -789,7 +781,7 @@ its row, with a thin leader from the axis to it. A label that fits in no row joi
 before it as "repair pass end +4", and its tooltip names every event it carries. Exact
 placement gives way to legible text: the dashed line keeps the event's true time.
 
-## Manual checks (real tailnet, before a release)
+## Manual checks (real cluster, before a release)
 
 1. Desktop Chrome, Safari and Firefox: the dashboard in light and dark (toggle the OS
    theme live); the pill through stopping a node (degraded), killing the leader (stale,
@@ -912,10 +904,10 @@ placement gives way to legible text: the dashed line keeps the event's true time
   viewBox, and no emoji-prone glyph (`⏮ ⏭ ⏸ ▶ ⟳ ⤮ ↗` and the emoji planes) appears in the
   TypeScript, `index.html` or the lookdev.
 - **I-68** — Every request to the web listener is authorized from the TCP source address
-  alone, before any request body is read: the source is a cluster member whose WhoIs
-  StableID matches its member record (I-18), or a tailnet device whose WhoIs login name
-  equals this node's own login name; an empty login (unresolved own identity, or a tagged
-  device on either side) never matches; a WhoIs failure is 503 and every other refusal 403.
+  alone, before any request body is read: the source is an active cluster member's mesh
+  address (I-18, I-318) and nothing else is admitted; every refusal is 403. (Under
+  Tailscale a device of the same tailnet user was admitted by its WhoIs login name, an
+  empty or tagged login never matching, and a WhoIs failure was 503.)
 - **I-69** — `GET /files/<path>`, with or without a `Range`, returns exactly the bytes a READ
   on the local NFS gateway returns at the same offset at that moment (committed chunks with
   the overlay on top), with `Accept-Ranges: bytes`, 206 for a satisfiable range, 416 for a
@@ -955,7 +947,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
   file operations, a missing entry 404, an invalid name 400, and the web UI reads no host
   path.
 - **I-73** — The web listener exists only when `listen.web` is non-zero and binds only the
-  node's Tailscale IP; `webui.New` refuses to build without an authorizer; no web endpoint
+  node's mesh address; `webui.New` refuses to build without an authorizer; no web endpoint
   proposes a Raft command other than the file operations of I-70; `/api/status` is served
   from a cache so the chunk table is walked at most once per 2 s.
 - **I-140** — `GET /api/ls` leaves out every entry named `._<name>` (at least one
@@ -968,7 +960,8 @@ placement gives way to legible text: the dashed line keeps the event's true time
   (Windows) and the URL as one argument, after printing it; with `--print` it launches
   nothing; a status without a `web_url` fails naming `listen.web` and launches nothing.
 - **I-127** — The web listener answers a request only when its `Host` is the listener's
-  `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
+  `<mesh addr>:port` (under Tailscale also the node's MagicDNS name with that port,
+  case-insensitively) and
   refuses every other with `421` before authorization; the index page's CSP contains
   `frame-ancestors 'none'`; `/api/status` never carries the join token.
 - **I-315** — The index page's CSP admits every source the TypeScript gives an image:
@@ -1066,7 +1059,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
   refreshes every 5 s while the tab is visible and pauses while it is hidden, a custom
   range never refreshes; the member dropdown lists every device member with its liveness
   and links each that has a web listener to its own Stats page at the same range and
-  node by its tailnet address and web port, exactly the Host form that page admits.
+  node by its mesh address and web port, exactly the Host form that page admits.
 - **I-209** — `GET /api/render` renders only `.md` and `.markdown` files of at most
   `TEXT_MAX` bytes (400 and 413 otherwise) with the node's escape-first renderer: the
   source is HTML-escaped before any construct is parsed, every tag in the output is one the

@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><b>One RAID-like volume across every device on your tailnet.</b><br>
+<p align="center"><b>One RAID-like volume across every device you own.</b><br>
 Erasure-coded, deduplicated, snapshotted, mounted by the OS's own client. One static binary.</p>
 
 <p align="center">
@@ -18,7 +18,7 @@ Erasure-coded, deduplicated, snapshotted, mounted by the OS's own client. One st
   <a href="docs/README.md">Design</a>
 </p>
 
-tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into a single volume. Files are cut into content-addressed chunks, each chunk is Reed-Solomon coded into `k` data and `m` parity shards spread over different devices and disks, and the metadata is replicated by Raft on the devices you trust to stay on. Any `m` disks or devices can fail and the volume keeps working, then repairs itself. It appears as an ordinary folder on macOS, Linux and Windows, and nothing ever leaves your tailnet.
+tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into a single volume. Files are cut into content-addressed chunks, each chunk is Reed-Solomon coded into `k` data and `m` parity shards spread over different devices and disks, and the metadata is replicated by Raft on the devices you trust to stay on. Any `m` disks or devices can fail and the volume keeps working, then repairs itself. It appears as an ordinary folder on macOS, Linux and Windows, the devices talk over a WireGuard mesh the binary runs itself, and nothing ever leaves your devices.
 
 ## Features
 
@@ -34,11 +34,11 @@ tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into
 | **Browser UI** | A dashboard, a file browser that streams audio and video with tiles and an album view, a Media tab for films, shows and music, full-text search, rendered markdown and a Stats page with the cluster's history. Works from your phone. |
 | **Search** | Names, audio tags and text contents, from the browser or `tailraid search`. The index lives in the volume, so every device has it. |
 | **Offline folders** | Pin a folder to a device and it reads from that device with every other node away. |
-| **Private by construction** | Only members of your tailnet can reach a node; every request is checked against Tailscale's identity of the caller. |
+| **Private by construction** | Every byte between devices travels inside WireGuard, every device is a key, and only a device the cluster admitted can reach a node. No account, no login, no VPN to install: a join code is the whole of it. |
 | **One binary** | The same static executable is the daemon, the gateways and the CLI. Signed releases, `tailraid update` with rollback, and a service installer for launchd, systemd and Windows. |
 
 > [!IMPORTANT]
-> Every device needs Tailscale (headscale works). Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
+> Every pair of devices needs a direct path (a LAN, IPv6, a port forward or the router's own port mapping, or the always-on cloud voter's public address) until the relay through a member lands ([docs/20](docs/20-mesh.md) §6). On macOS the service runs as root and `init`, `join`, `install` and `reset` need `sudo`; on Linux `join` does. Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
 
 ## Install
 
@@ -56,7 +56,7 @@ Once installed, `tailraid update` fetches the latest release; no token or login 
 On the first always-on device:
 
 ```sh
-tailraid init         # creates the volume and prints a join token
+tailraid init         # creates the volume and prints a join code
 tailraid install      # runs tailraid as a service (launchd / systemd / Windows service)
 tailraid mount        # ~/TailRAID (T: on Windows)
 ```
@@ -64,10 +64,14 @@ tailraid mount        # ~/TailRAID (T: on Windows)
 On each other device:
 
 ```sh
-tailraid join 100.64.0.11 <token>     # the first device's Tailscale IP or name; --voter on other always-on devices
+tailraid join <code>     # the code init printed, or `tailraid token` on any member; --voter on other always-on devices
 tailraid install
 tailraid mount
 ```
+
+The code carries the cluster's identity, the join token and where to find the device
+that printed it; the joiner gets its address from the cluster and its first tunnel in
+the same step, and nothing else runs on the device ([docs/20](docs/20-mesh.md)).
 
 Write a file on one device and read it on any other. `tailraid status` shows the whole cluster and prints the browser UI's address; `tailraid dashboard` opens it.
 
@@ -77,7 +81,7 @@ Write a file on one device and read it on any other. `tailraid status` shows the
 
 ### The browser UI
 
-Every device serves a web page at `http://<tailscale-ip>:20482/`. Cluster members and your own devices (the same Tailscale user) can open it, so your phone works.
+Every device serves a web page at `http://<mesh address>:20482/` (`tailraid status` prints it) to cluster members. Opening it from a phone that is not a node is a later feature ([docs/20](docs/20-mesh.md) §11).
 
 | Tab | What it does |
 |---|---|
@@ -232,7 +236,7 @@ tailraid volume grow jockey/1 auto     # follow free space again
 
 ### Adding an S3 bucket
 
-A bucket at any S3 provider (Backblaze B2, Cloudflare R2, Hetzner, a MinIO on the tailnet) can hold shards like a disk on a host of its own, which gives the volume an off-site copy. Devices read and write it directly; reads use it only when a device that holds a shard is down.
+A bucket at any S3 provider (Backblaze B2, Cloudflare R2, Hetzner, a MinIO on one of your devices) can hold shards like a disk on a host of its own, which gives the volume an off-site copy. Devices read and write it directly; reads use it only when a device that holds a shard is down.
 
 ```sh
 export TAILRAID_S3_SECRET_KEY=…            # or type it when asked: never a flag
@@ -288,14 +292,14 @@ Run these from any member. `tailraid node ls` shows who votes.
 
 ### A cheap always-on voter
 
-A voter needs no disk. A small cloud VM on the tailnet, joined with `--voter` and no `disks:` in its config, is a full member and gateway that stores nothing: it keeps the metadata available while your laptops are closed, and its `node ls` row says `no disks`. Two laptops plus such a VM are three voters, so the volume stays writable with the VM and either laptop up. It fetches the cluster key from another member and with it the S3 key, which matters because the VM is the device most likely to lead.
+A voter needs no disk. A small cloud VM, joined with `--voter` and no `disks:` in its config, is a full member and gateway that stores nothing: it keeps the metadata available while your laptops are closed, and its `node ls` row says `no disks`. Two laptops plus such a VM are three voters, so the volume stays writable with the VM and either laptop up. It fetches the cluster key from another member and with it the S3 key, which matters because the VM is the device most likely to lead.
 
 ```sh
-tailraid join 100.64.0.11 <token> --voter    # on the VM; nothing under disks: in its config
+tailraid join <code> --voter    # on the VM; nothing under disks: in its config; set mesh.endpoint to its public address
 tailraid install
 ```
 
-Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes.
+Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes. With its public address in `mesh.endpoint` the VM is also the device every other one can always reach, and the relay for pairs that cannot reach each other once that lands.
 
 ## Secrets
 
@@ -430,24 +434,24 @@ make soak-single   # one node with four disks
 make soak-full     # the long profile, ~1 h
 ```
 
-Each target cross-compiles the binary for the Docker engine's architecture, brings up `test/soak/docker-compose.yml` (fake tailnet identities, `dev.enabled`, 20 s repair knobs, a worker sidecar per node that reaches the node's loopback NFS gateway, an S3 server for the bucket phase), drives every phase from the host with `cmd/soak`, writes `report.html` and `results.jsonl` in the repository root and tears the cluster down. It needs Docker Desktop (or any engine with Compose) and nothing else. Run it on its own: `make check` alongside it turns ten minutes into an hour.
+Each target cross-compiles the binary for the Docker engine's architecture, brings up `test/soak/docker-compose.yml` (a real mesh over the bridge, joined by code, `dev.enabled`, 20 s repair knobs, a worker sidecar per node that reaches the node's loopback NFS gateway, an S3 server for the bucket phase), drives every phase from the host with `cmd/soak`, writes `report.html` and `results.jsonl` in the repository root and tears the cluster down. It needs Docker Desktop (or any engine with Compose) and nothing else. Run it on its own: `make check` alongside it turns ten minutes into an hour.
 
 ### Three local VMs
 
-On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest on a throwaway tailnet, each OS running `tailraid init` in turn while the other two join it by name, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a metadata export and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
+On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest over a mesh of their own, each OS running `tailraid init` in turn while the other two join by its code, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a metadata export and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
 
 | Step | Command | Notes |
 |---|---|---|
-| once | `make vms-setup` | Tart, Packer, QEMU and the rig's SSH key; no sudo. Docker Desktop must be running (it hosts the control server) |
+| once | `make vms-setup` | Tart, Packer, QEMU and the rig's SSH key; no sudo |
 | once | download the Windows 11 ARM64 ISO into `test/vms/iso/` | from [microsoft.com/software-download/windows11arm64](https://www.microsoft.com/software-download/windows11arm64); the page needs a browser |
 | once | `make vms-images` | the golden images: a minute each for macOS and Linux, 30–60 minutes for the unattended Windows install |
-| each session | `make vms-up` | starts headscale and the three guests, registering fresh ones |
+| each session | `make vms-up` | starts the three guests |
 | | `make vms-rounds` | three rounds, about an hour and a quarter; `FULL=1` runs the long verify profile; summary and reports in `docs/reports/vms/<date>/` |
 | | `make vms-round FIRST=linux` | one round; `OSES="mac linux"` runs it on two guests while the Windows image is not built yet |
 | | `make vms-down` | stops everything and keeps every state, so the next `vms-up` registers nothing |
 | | `make vms-destroy` | removes the instances and the control server's state; the images stay |
 
-The guests take about 120 GB of disk. [docs/vms.md](docs/vms.md) explains what each step proves, how the networking is wired (the Tart guests' NAT, the Windows guest behind QEMU's user-mode NAT, headscale over TLS from a CA the rig generates) and what to do when something does not come up.
+The guests take about 120 GB of disk. [docs/vms.md](docs/vms.md) explains what each step proves, how the networking is wired (the Tart guests' NAT, the Windows guest behind QEMU's user-mode NAT and the reflexive path it gives the mesh) and what to do when something does not come up.
 
 ## Releasing
 
