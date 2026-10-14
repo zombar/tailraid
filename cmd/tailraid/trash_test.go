@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/zombar/tailraid/internal/node"
-	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/testharness"
 )
 
 // The trash commands reach the leader's admin ops (docs/12 §10): an empty trash lists
@@ -32,8 +30,7 @@ func TestCLI_Trash_LsRestorePurge(t *testing.T) {
 		}
 	}()
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(context.Background(), addr); return err == nil && h.Ready }, "the node never served")
+	waitReady(context.Background(), t, addr, "the node never served") // a CI runner takes longer than Eventually allows (docs/09 §5)
 
 	if out, err := run(t, "trash", "ls", "--config", path); err != nil || !strings.Contains(out, "the trash is empty") {
 		t.Fatalf("trash ls: %q %v", out, err)
@@ -72,8 +69,7 @@ func TestCLI_VolumeRebalance_DryRun(t *testing.T) {
 		}
 	}()
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Listen.RPC)
-	probe := rpc.NewClient([16]byte{}, nil)
-	testharness.Eventually(t, func() bool { h, err := probe.Health(context.Background(), addr); return err == nil && h.Ready }, "the node never served")
+	waitReady(context.Background(), t, addr, "the node never served") // a CI runner takes longer than Eventually allows (docs/09 §5)
 
 	out, err := run(t, "volume", "rebalance", "--dry-run", "--config", path)
 	if err != nil || !strings.Contains(out, "0 slots away") || !strings.Contains(out, "dry run: nothing moves") || strings.Contains(out, "→") {
