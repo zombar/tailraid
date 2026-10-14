@@ -523,14 +523,16 @@ func TestModelCheck_Long(t *testing.T) {
 			if partitioned {
 				return
 			}
+			var grantIdx uint64
 			if d, err := c.Leader().Node.FSM.Resolve([]string{"d"}); err == nil {
 				role := meta.RoleNone
 				if !leeWrites {
 					role = meta.RoleWrite
 				}
-				res, _, err := c.Leader().Node.Propose(ctx, meta.Command{Op: meta.OpGrant, Actor: kim, GrantOp: &meta.GrantOp{Ino: d.Ino, Subject: meta.Subject{Kind: meta.SubjectUser, Idx: uint16(lee)}, Role: role, Now: c.Clk.Now().UnixNano()}})
+				res, index, err := c.Leader().Node.Propose(ctx, meta.Command{Op: meta.OpGrant, Actor: kim, GrantOp: &meta.GrantOp{Ino: d.Ino, Subject: meta.Subject{Kind: meta.SubjectUser, Idx: uint16(lee)}, Role: role, Now: c.Clk.Now().UnixNano()}})
 				if err == nil && (res.Err == nil || (role == meta.RoleNone && errors.Is(res.Err, meta.ErrNotExist))) {
 					leeWrites = !leeWrites
+					grantIdx = index
 					log("%d lee %s on /d", step, map[bool]string{true: "granted write", false: "revoked"}[leeWrites])
 				}
 			}
@@ -542,6 +544,13 @@ func TestModelCheck_Long(t *testing.T) {
 				return
 			}
 			gw := gws[rng.Intn(len(gws))]
+			// a view checks its own replica: the revoke takes effect on this gateway once
+			// its FSM holds it (docs/21 §4), and a restarted node may still be catching up
+			if grantIdx != 0 {
+				if err := c.Nodes[gw].Node.FSM.WaitApplied(ctx, grantIdx); err != nil {
+					return // the gateway is not caught up: nothing to assert this step
+				}
+			}
 			fh, err := c.Nodes[gw].FS.As(lee).OpenFile("/d/c", os.O_CREATE|os.O_RDWR, 0o644)
 			if err == nil {
 				_, err = fh.Write([]byte("lee"))

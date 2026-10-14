@@ -354,3 +354,103 @@ func TestAccess_SnapshotRestoreByRole(t *testing.T) {
 		t.Fatalf("the admin's revert: %v", err)
 	}
 }
+
+// A Commit the FSM refuses for the writer's role drops the inode's dirty data: lee's
+// plain write (no truncate) under a grant revoked before the flush never lands, the flush
+// answers EACCES, nothing is retried, the file reads as before and status counts the
+// drop (docs/21 §4).
+// Invariant: I-349, I-353
+func TestFlusher_RefusedCommitDropsDirtyData(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	base := f.FS()
+	fl := f.Flusher()
+	base.SetFlusher(fl)
+	kim, lee := f.Users()
+	kimFS, leeFS := base.As(kim), base.As(lee)
+	mkdirAs(t, kimFS, "/d")
+	f.Grant(kim, "/d", lee, meta.RoleWrite)
+	if err := writeAs(t, leeFS, "/d/f", []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fl.FlushAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fh, err := leeFS.OpenFile("/d/f", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.(*vfs.File).WriteAt([]byte("XX"), 2); err != nil {
+		t.Fatal(err)
+	}
+	_ = fh.Close()
+	in, _ := f.FSM.Resolve([]string{"d", "f"})
+	f.Grant(kim, "/d", lee, meta.RoleRead)
+	if err := fl.FlushInode(context.Background(), in.Ino); !errors.Is(err, meta.ErrAccess) {
+		t.Fatalf("the flush after the revoke: %v, want ErrAccess", err)
+	}
+	if fl.CommitsRefused() != 1 {
+		t.Fatalf("commits refused %d, want 1", fl.CommitsRefused())
+	}
+	if dirty := f.Ov.Dirty(); len(dirty) != 0 {
+		t.Fatalf("dirty data kept after the refusal: %+v", dirty)
+	}
+	if err := fl.FlushInode(context.Background(), in.Ino); err != nil {
+		t.Fatalf("a second flush of the dropped inode: %v", err)
+	}
+	if got, err := readAt(t, leeFS, "/d/f", 16, 0); err != nil || string(got) != "first" {
+		t.Fatalf("the file after the drop: %q %v", got, err)
+	}
+	if fl.CommitsRefused() != 1 {
+		t.Fatalf("the drop was retried: %d refusals", fl.CommitsRefused())
+	}
+}
+
+// Dirty data written before the first user existed carries no actor and commits as
+// System, a plain write and a rewrite alike: the first admin's arrival mid-copy loses
+// nothing (docs/21 §4).
+// Invariant: I-349
+func TestFlusher_PreUsersDirtyDataCommitsAsSystem(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	base := f.FS()
+	fl := f.Flusher()
+	base.SetFlusher(fl)
+	mkdirAs(t, base, "/d")
+	for _, n := range []string{"/d/plain", "/d/rw"} {
+		if err := writeAs(t, base, n, []byte("before")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fl.FlushAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fh, err := base.OpenFile("/d/plain", os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.(*vfs.File).WriteAt([]byte("ZZ"), 2); err != nil {
+		t.Fatal(err)
+	}
+	_ = fh.Close()
+	fh, err = base.OpenFile("/d/rw", os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.Write([]byte("bb")); err != nil {
+		t.Fatal(err)
+	}
+	_ = fh.Close()
+	kim, _ := f.Users() // the first admin arrives with the copy's bytes still dirty
+	if err := fl.FlushAll(context.Background()); err != nil {
+		t.Fatalf("the flush of pre-users data after the first user: %v", err)
+	}
+	if fl.CommitsRefused() != 0 {
+		t.Fatalf("%d commits refused", fl.CommitsRefused())
+	}
+	kimFS := base.As(kim)
+	if got, err := readAt(t, kimFS, "/d/plain", 16, 0); err != nil || string(got) != "beZZre" {
+		t.Fatalf("the plain write: %q %v", got, err)
+	}
+	if got, err := readAt(t, kimFS, "/d/rw", 16, 0); err != nil || string(got) != "bb" {
+		t.Fatalf("the rewrite: %q %v", got, err)
+	}
+}
