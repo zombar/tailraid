@@ -591,6 +591,16 @@ table.mesh-peers tr.self td { background: var(--surface); }
 /* an icon button below 1200 px, the word beside the glyph from there */
 .theme { padding: 0 var(--sp-3); font: 500 13px var(--mono); color: var(--dim); flex: none; }
 .theme:hover { color: var(--text); }
+
+/* the account chip (docs/21 §6): the signed-in name and a sign-out icon button, right of .who */
+.account { display: inline-flex; align-items: center; gap: var(--sp-1); font: 500 13px var(--mono); color: var(--dim); flex: none; }
+.account svg.icon { width: 20px; height: 20px; }
+.account .signout { padding: 0; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; color: var(--dim); border: 0; background: transparent; }
+.account .signout:hover { color: var(--text); background: var(--surface); }
+/* the sign-in page: one card, one command */
+.signin { display: grid; justify-items: center; align-content: start; padding-top: var(--sp-8); }
+.signin-card { max-width: 520px; width: 100%; min-width: 0; }
+.signin-cmd { font: 14px/1.5 var(--mono); margin: 0; padding: var(--sp-3) var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); user-select: all; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1199px) { .theme { width: 48px; padding: 0; } }
 @media (max-width: 1199px) { @media (pointer: fine) { .theme { width: 40px; } } }
 .menu-row .dot { grid-row: 1 / span 2; }

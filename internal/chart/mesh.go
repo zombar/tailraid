@@ -80,7 +80,7 @@ func Mesh(title string, self MeshNode, members []MeshNode, edges []MeshEdge) str
 	node := func(n MeshNode, p pos, cls string, nameX, nameY int, anchor string) {
 		fmt.Fprintf(&b, `<g class="mesh-node%s">`, cls)
 		if n.Href != "" {
-			fmt.Fprintf(&b, `<a class="mesh-link" href="%s">`, html.EscapeString(n.Href))
+			fmt.Fprintf(&b, `<a class="mesh-link" href="%s" data-node="%s">`, html.EscapeString(n.Href), html.EscapeString(n.Name)) // the page sends a click through the hand-off (docs/21 §6)
 		}
 		fmt.Fprintf(&b, `<circle cx="%d" cy="%d" r="%d"/>`, p.x, p.y, meshR)
 		if names {

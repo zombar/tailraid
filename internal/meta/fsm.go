@@ -28,6 +28,7 @@ type FSM struct {
 
 	incompatible atomic.Uint64 // entries that failed to decode (I-105)
 	snapHook     atomic.Pointer[SnapshotHook]
+	applyHook    atomic.Pointer[ApplyHook]
 	lastBadLog   time.Time // rate limit for the log line above; not state
 
 	mu      sync.RWMutex
@@ -46,6 +47,20 @@ type FSM struct {
 // apply lock, so it must not call back into the FSM (not even a read: the lock is not
 // reentrant), and clone is valid only during the call.
 type SnapshotHook func(sn Snapshot, host NodeIdx, hostID string, clone func() *State)
+
+// ApplyHook is called after every applied command, outside the apply lock, with the
+// command, its index and its result: the audit log's observer (docs/21 §8, I-357). It
+// may read the FSM.
+type ApplyHook func(cmd Command, index uint64, res Result)
+
+// SetApplyHook installs (or, with nil, removes) the apply hook; safe while Apply runs.
+func (f *FSM) SetApplyHook(h ApplyHook) {
+	if h == nil {
+		f.applyHook.Store(nil)
+		return
+	}
+	f.applyHook.Store(&h)
+}
 
 // SetSnapshotHook installs (or, with nil, removes) the hook; safe while Apply runs.
 func (f *FSM) SetSnapshotHook(h SnapshotHook) {
@@ -97,6 +112,11 @@ func (f *FSM) Apply(l *raft.Log) any {
 	}
 	f.mu.Unlock()
 	f.setApplied(l.Index)
+	if h := f.applyHook.Load(); h != nil && l.Type == raft.LogCommand && decodeErr == nil {
+		if r, ok := res.(Result); ok {
+			(*h)(cmd, l.Index, r)
+		}
+	}
 	return res
 }
 
@@ -149,6 +169,9 @@ func (a *applier) clock(now int64) int64 {
 }
 
 func (a *applier) apply(c Command) (Result, error) {
+	if err := a.authorize(c); err != nil { // the permission check of docs/21 §4 (I-349)
+		return Result{}, err
+	}
 	switch c.Op {
 	case OpSetVolume:
 		return Result{}, a.setVolume(c.SetVolume)
@@ -203,13 +226,23 @@ func (a *applier) apply(c Command) (Result, error) {
 	case OpSecretKeyInit:
 		return Result{}, a.secretKeyInit(c.SecretKeyInit)
 	case OpSecretPut:
-		return Result{}, a.secretPut(c.SecretPut)
+		return Result{}, a.secretPut(c.Actor, c.SecretPut)
 	case OpSecretDelete:
-		return Result{}, a.secretDelete(c.SecretDelete)
+		return Result{}, a.secretDelete(c.Actor, c.SecretDelete)
 	case OpPendingAdd:
 		return a.pendingAdd(c.PendingAdd)
 	case OpPendingDelete:
 		return Result{}, a.pendingDelete(c.PendingDelete)
+	case OpInvite:
+		return Result{}, a.inviteOp(c)
+	case OpUser:
+		return a.userOp(c)
+	case OpGroup:
+		return a.groupOp(c)
+	case OpGrant:
+		return Result{}, a.grantOp(c)
+	case OpSession:
+		return Result{}, a.sessionOp(c)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -603,6 +636,7 @@ func (a *applier) unlink(c *Unlink) error {
 	}
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
+	st.dropGrants(ino)
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
 	return nil
@@ -644,6 +678,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	now := a.clock(c.Now)
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
+	st.dropGrants(ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -742,6 +777,7 @@ func (a *applier) rename(c *Rename) error {
 			a.stats.LogicalBytes -= dst.Size
 		}
 		delete(st.Inodes, dst.Ino)
+		st.dropGrants(dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
 		}

@@ -15,13 +15,16 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/soak"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 // composeNode is one node of test/soak/docker-compose.yml with its worker sidecar. ip is
@@ -38,6 +41,11 @@ type composeNode struct {
 // composeEnv drives the compose cluster from the host through the worker sidecars and the
 // docker compose CLI (docs/09 §6).
 type composeEnv struct {
+	// the cluster ID and each node's ID, for signing (identityOf)
+	idMu    sync.Mutex
+	cid     [16]byte
+	nodeIDs map[string]string
+
 	soak.Admin
 	dir   string // compose project directory
 	file  string // compose file in dir: docker-compose.yml (4 hosts with disks + a diskless one) or docker-compose.single.yml
@@ -206,7 +214,7 @@ func nodeNumber(ref soak.NodeRef) int {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile, Mesh: e.file != "docker-compose.single.yml"}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile, Mesh: e.file != "docker-compose.single.yml", Users: true}
 }
 
 // multiFile is the compose file with phase 15's bucket, the s3 service (docs/10 §4).
@@ -342,6 +350,7 @@ type rpcReq struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Body   []byte `json:"body"`
+	Sig    string `json:"sig,omitempty"` // a Tailraid-Sig header for the node (docs/21 §2)
 }
 
 type rpcResp struct {
@@ -351,7 +360,7 @@ type rpcResp struct {
 
 func (e *composeEnv) call(ctx context.Context, ref soak.NodeRef, method, path string, body []byte) ([]byte, error) {
 	var resp rpcResp
-	if err := e.post(ctx, e.node(ref), "/rpc", rpcReq{method, path, body}, &resp); err != nil {
+	if err := e.post(ctx, e.node(ref), "/rpc", rpcReq{Method: method, Path: path, Body: body}, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Error != "" {
@@ -703,6 +712,87 @@ func (e *composeEnv) ForgetSecretKey(ctx context.Context, ref soak.NodeRef) erro
 }
 
 var _ soak.SecretEnv = (*composeEnv)(nil)
+
+// --- users (phases 28–31): the bootstrap invite, signed ops, the worker's uid ---------------
+
+// BootstrapInvite runs `tailraid user bootstrap` in the node's container (as root, the
+// daemon's user there) and returns the code it printed.
+func (e *composeEnv) BootstrapInvite(ctx context.Context, n soak.NodeRef, name string) (string, error) {
+	out, err := e.composeOut(ctx, "exec", "-T", n.Name, "tailraid", "user", "bootstrap", "--name", name)
+	if err != nil {
+		return "", fmt.Errorf("user bootstrap on %s: %w: %s", n.Name, err, strings.TrimSpace(string(out)))
+	}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if i := strings.Index(line, "tailraid user create "); i >= 0 {
+			if f := strings.Fields(line[i:]); len(f) >= 5 {
+				return f[4], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("user bootstrap on %s printed no invite:\n%s", n.Name, out)
+}
+
+// SignedOp sends an admin op to n through its worker, signed by id for n's own node ID
+// (the verifier binds a signature to its target, I-344).
+func (e *composeEnv) SignedOp(ctx context.Context, n soak.NodeRef, id *users.Identity, op rpc.AdminOp) (json.RawMessage, error) {
+	body, err := json.Marshal(op)
+	if err != nil {
+		return nil, err
+	}
+	sig := ""
+	if id != nil {
+		cid, nodeID, err := e.identityOf(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+		nonce, err := users.NewNonce()
+		if err != nil {
+			return nil, err
+		}
+		sig = users.Sign(*id, cid, nodeID, http.MethodPost, "/v1/admin", body, time.Now().Unix(), nonce).String()
+	}
+	var resp rpcResp
+	if err := e.post(ctx, e.node(n), "/rpc", rpcReq{Method: http.MethodPost, Path: "/v1/admin", Body: body, Sig: sig}, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Error != "" {
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Body, nil
+}
+
+// identityOf is the cluster ID and n's node ID, from n's status (cached).
+func (e *composeEnv) identityOf(ctx context.Context, n soak.NodeRef) ([16]byte, string, error) {
+	e.idMu.Lock()
+	defer e.idMu.Unlock()
+	if e.nodeIDs == nil {
+		e.nodeIDs = map[string]string{}
+	}
+	if nodeID, ok := e.nodeIDs[n.Name]; ok && e.cid != ([16]byte{}) {
+		return e.cid, nodeID, nil
+	}
+	rep, err := e.Status(ctx, n)
+	if err != nil {
+		return [16]byte{}, "", err
+	}
+	raw, err := hex.DecodeString(rep.ClusterID)
+	if err != nil || len(raw) != 16 {
+		return [16]byte{}, "", fmt.Errorf("status of %s: cluster id %q", n.Name, rep.ClusterID)
+	}
+	copy(e.cid[:], raw)
+	for i := range rep.Nodes {
+		if row := &rep.Nodes[i]; row.Idx == n.Idx {
+			e.nodeIDs[n.Name] = row.ID
+			return e.cid, row.ID, nil
+		}
+	}
+	return [16]byte{}, "", fmt.Errorf("status of %s lists no row %d", n.Name, n.Idx)
+}
+
+// MountUID is the worker's: it mounts the volume as root (AUTH_SYS uid 0).
+func (e *composeEnv) MountUID() int { return 0 }
+
+var _ soak.UsersEnv = (*composeEnv)(nil)
 
 // --- the mesh (phase 25): codes, the late device, a throwaway join, a re-join ------------
 

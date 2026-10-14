@@ -24,6 +24,7 @@ import (
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/stats"
+	"github.com/zombar/tailraid/internal/users"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -73,6 +74,21 @@ type Options struct {
 	// so a page on another origin that resolves a name to this node's IP (DNS
 	// rebinding) gets nothing. Empty allows every Host (tests).
 	Hosts []string
+	// Sessions (docs/21 §6, I-354), used once the cluster has users: CodeKey is the key
+	// sign-in codes are minted under (the cluster key; false while this node holds none)
+	// and Logout removes a session row. Nil answers 503 on /login with a code and on
+	// POST /api/logout.
+	CodeKey func() ([]byte, bool)
+	Logout  func(ctx context.Context, actor meta.UserIdx, hash [32]byte) error
+	// Audit, when set, hears a sign-in and every request refused for want of a session
+	// or a role (docs/21 §8): the user ("" without a session) and the route.
+	Audit AuditHook
+}
+
+// AuditHook is what the audit log hears from the web UI.
+type AuditHook interface {
+	SignedIn(user string)
+	Refused(user, kind, route, detail string)
 }
 
 // Hosts builds Options.Hosts for a listener address and a MagicDNS name ("" to skip).
@@ -93,6 +109,7 @@ type Server struct {
 	refused  logx.Limiter  // one "refused" line a minute (I-124): a probe loop is not a log flood
 	decoders chan struct{} // thumbnail decodes in flight (ThumbDecoders)
 	covers   coverCache
+	codes    users.CodeLog // the sign-in codes this node opened (I-354)
 }
 
 // New validates the options and builds the handler.
@@ -116,6 +133,10 @@ func New(o Options) (*Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /assets/{file}", s.asset)
+	mux.HandleFunc("GET /login", s.login)
+	mux.HandleFunc("GET /api/session", s.sessionInfo)
+	mux.HandleFunc("GET /api/handoff", s.handoff)
+	mux.HandleFunc("POST /api/logout", csrf(s.logout))
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/mesh", s.mesh)
@@ -147,7 +168,7 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("POST /api/copy", csrf(s.copyVersion))
 	mux.HandleFunc("POST /api/restore-tree", csrf(s.restoreTree))
 	s.refused.Clk = o.Clk
-	s.handler = s.hostCheck(s.authz(mux))
+	s.handler = s.hostCheck(s.authz(s.withSession(mux)))
 	return s, nil
 }
 
@@ -237,6 +258,9 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	}
 	if code == http.StatusInternalServerError {
 		s.o.Logger.Error("web ui", "err", err)
+	}
+	if code == http.StatusForbidden && s.o.Audit != nil && errors.Is(err, syscall.EACCES) {
+		s.o.Audit.Refused(s.userOf(w), "web", "", err.Error()) // a role the session's user does not hold (docs/21 §8)
 	}
 	if errors.Is(err, vfs.ErrMirrorOffline) { // the page says why and offers the way back (docs/13 §3)
 		writeJSON(w, code, map[string]any{"error": err.Error(), "offline": true})

@@ -103,7 +103,7 @@ func (e *harnessEnv) secretStore(i int) *secrets.Store {
 }
 
 func (e *harnessEnv) SecretSet(ctx context.Context, n soak.NodeRef, name, value string) error {
-	return e.secretStore(e.node(n).I).Set(ctx, name, value)
+	return e.secretStore(e.node(n).I).Set(ctx, 0, name, value)
 }
 
 func (e *harnessEnv) SecretGet(ctx context.Context, n soak.NodeRef, name string) (string, error) {
@@ -115,7 +115,7 @@ func (e *harnessEnv) SecretList(ctx context.Context, n soak.NodeRef) (json.RawMe
 }
 
 func (e *harnessEnv) SecretRemove(ctx context.Context, n soak.NodeRef, name string) error {
-	return e.secretStore(e.node(n).I).Remove(ctx, name, false)
+	return e.secretStore(e.node(n).I).Remove(ctx, 0, name, false)
 }
 
 // ForgetSecretKey empties the device's keychain: the store is built afresh on every call,

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -76,6 +77,8 @@ func check(name string) error {
 	return nil
 }
 
+var ringMu sync.Mutex
+
 // ring runs one keyring call within Timeout; a call still running then is abandoned (its
 // goroutine ends when the OS tool does) and counts as a failure.
 func (s *Store) ring(call func() (string, error)) (string, error) {
@@ -85,7 +88,12 @@ func (s *Store) ring(call func() (string, error)) (string, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
+		// the keyring is one resource of the process, and a CLI command's identity read
+		// may run beside the daemon's own writes in one test binary (the mock provider's
+		// map is not safe to share): one call at a time
+		ringMu.Lock()
 		v, err := call()
+		ringMu.Unlock()
 		done <- result{v, err}
 	}()
 	select {

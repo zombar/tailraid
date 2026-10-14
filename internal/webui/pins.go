@@ -1,7 +1,9 @@
 package webui
 
 import (
+	"fmt"
 	"net/http"
+	"syscall"
 
 	"github.com/zombar/tailraid/internal/pins"
 )
@@ -20,6 +22,10 @@ func (s *Server) pin(w http.ResponseWriter, r *http.Request) {
 		Pinned bool   `json:"pinned"`
 	}
 	if !decode(w, r, singleBodyCap, &req) {
+		return
+	}
+	if !s.isAdmin(r) { // a pin holds a node's cache: admins once users exist (docs/21 §3)
+		s.fail(w, fmt.Errorf("pin: %w", syscall.EACCES))
 		return
 	}
 	if s.o.Pins == nil {

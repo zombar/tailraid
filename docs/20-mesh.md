@@ -400,8 +400,8 @@ round-trip table.
   print a standard WireGuard configuration (a QR code for the official app) peering with
   every node that has a public endpoint; the browser UI would admit members and clients.
   Until then the browser UI admits cluster members only (docs/13 §2).
-- **Users and groups** (after 1.0). The mesh makes a device's key its identity; a
-  permissions system needs a second layer, who a key belongs to. The client rows above
+- **Users and groups** (after 1.0; designed in docs/21). The mesh makes a device's key
+  its identity; a permissions system needs a second layer, who a key belongs to. The client rows above
   are where it goes (a row carries an owner and groups), the check runs in the FSM's
   apply path as the protected flag does (docs/13), so every mount and the browser agree,
   and the authorizers already answer with an `rpc.Principal` (a member row today, a

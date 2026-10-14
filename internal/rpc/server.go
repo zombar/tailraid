@@ -24,6 +24,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mirror"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 // ShardStore is what the shard endpoints need from chunk.Store.
@@ -99,6 +100,11 @@ type Options struct {
 	// SecretKey is the cluster key this node holds itself, checked against the FSM's key
 	// ID (docs/19 §3, I-304): GET /v1/secrets/key answers a member with it, 404 without.
 	SecretKey func() ([]byte, bool)
+	// Signed is the signature check of docs/21 §2 (I-344): once the cluster has users
+	// (Enforcing), every admin or member op that needs one carries a Tailraid-Sig header
+	// Verify answers the actor for, and IsAdmin says whether that actor is an admin (a
+	// member op's rule); nil: no users layer (tests).
+	Signed *Signed
 	// SeenFrom is the UDP endpoint this node's mesh device sees for a caller's address
 	// (docs/20 §5): /health carries it as the caller's reflexive candidate; nil: none.
 	SeenFrom func(src netip.Addr) string
@@ -678,13 +684,27 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, authErr.Error())
 		return
 	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad member op")
+		return
+	}
 	var op MemberOp
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
+	if err := json.Unmarshal(body, &op); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad member op")
 		return
 	}
 	if op.Op == "update_endpoints" && caller.Node.Idx != op.NodeIdx {
 		writeErr(w, http.StatusForbidden, "update_endpoints: a member publishes its own candidates only")
+		return
+	}
+	need := op.Needs()
+	if op.Actor, _, err = s.actor(r, need, body); err != nil {
+		writeErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if need == NeedAdmins && s.enforcing() && !s.o.Signed.IsAdmin(op.Actor) {
+		writeErr(w, http.StatusForbidden, meta.ErrAccess.Error())
 		return
 	}
 	if s.o.Joiner == nil {
@@ -756,9 +776,24 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
-	var op AdminOp
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad admin op")
+		return
+	}
+	var op AdminOp
+	if err := json.Unmarshal(body, &op); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad admin op")
+		return
+	}
+	need, known := op.Needs()
+	if !known {
+		writeErr(w, http.StatusBadRequest, "unknown admin op "+op.Op)
+		return
+	}
+	op.Source, _ = SourceAddr(r)
+	if op.Actor, op.SignKey, err = s.actor(r, need, body); err != nil {
+		writeErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if s.o.Admin == nil {
@@ -767,15 +802,65 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	reply, err := s.o.Admin.AdminOp(r.Context(), op)
 	if err != nil {
-		if errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader) {
+		switch {
+		case errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader):
 			s.notLeader(w)
-			return
+		case errors.Is(err, meta.ErrAccess), errors.Is(err, meta.ErrInvite):
+			writeErr(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrRateLimited):
+			writeErr(w, http.StatusTooManyRequests, err.Error())
+		case errors.Is(err, users.ErrUnauthorized):
+			writeErr(w, http.StatusUnauthorized, err.Error())
+		default:
+			writeErr(w, http.StatusBadRequest, err.Error())
 		}
-		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(reply)
+}
+
+// Signed is the users layer's check of a request (docs/21 §2).
+type Signed struct {
+	Verify    func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, meta.UserKeyID, error)
+	Enforcing func() bool
+	IsAdmin   func(meta.UserIdx) bool
+	// Refused, when set, hears every request refused for want of a valid signature: the
+	// user the header named ("" without one), the source and the path (docs/21 §8).
+	Refused func(user string, src netip.Addr, path string)
+}
+
+func (s *Server) enforcing() bool { return s.o.Signed != nil && s.o.Signed.Enforcing() }
+
+// actor is the user a request acts for: nobody until the cluster has users or when the
+// op needs none, else the user its Tailraid-Sig names, or ErrUnauthorized (I-344). The
+// header is checked before anything of the body is applied.
+func (s *Server) actor(r *http.Request, need Need, body []byte) (meta.UserIdx, meta.UserKeyID, error) {
+	if need == NeedNone || !s.enforcing() {
+		return 0, meta.UserKeyID{}, nil
+	}
+	hdr := r.Header.Get(users.Header)
+	src, _ := SourceAddr(r)
+	if hdr == "" {
+		s.refusedSig("", src, r.URL.Path)
+		return 0, meta.UserKeyID{}, ErrUnauthorized
+	}
+	actor, key, err := s.o.Signed.Verify(hdr, src, r.Method, r.URL.Path, body)
+	if err != nil {
+		name := ""
+		if sig, perr := users.Parse(hdr); perr == nil {
+			name = sig.User
+		}
+		s.refusedSig(name, src, r.URL.Path)
+		return 0, meta.UserKeyID{}, ErrUnauthorized
+	}
+	return actor, key, nil
+}
+
+func (s *Server) refusedSig(user string, src netip.Addr, path string) {
+	if s.o.Signed != nil && s.o.Signed.Refused != nil {
+		s.o.Signed.Refused(user, src, path)
+	}
 }
 
 // SecretKeyReply is GET /v1/secrets/key's body: the cluster key, to a member only.

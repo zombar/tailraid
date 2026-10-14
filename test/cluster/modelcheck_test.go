@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/vfs"
 )
 
 var steps = flag.Int("steps", 0, "model checker steps (0 = 40 under -short, 600 otherwise)")
@@ -63,7 +65,12 @@ const maxWorlds = 8
 // whose mirror went away fails. Every complete snapshot then reads byte-exact against its
 // world through every gateway, and no chunk a sync could not read was collected while it
 // was held (I-179, I-181, I-185).
-// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155, I-179, I-181, I-185
+// Users (docs/21): the cluster has two users from the start, kim an admin and lee a plain
+// user, every gateway operation runs as kim through the vfs view, so every write, remove,
+// rename, restore and purge carries its actor through the WAL and the FSM under every
+// fault; a step grants or revokes lee's Write on /d and, while lee lacks it, has lee try
+// a write there, which is refused and changes nothing (I-349, I-353).
+// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155, I-179, I-181, I-185, I-349, I-353
 // Lifecycle: L-162, L-163, L-173, L-199, L-200, L-201, L-203, L-204, L-205
 func TestModelCheck_Long(t *testing.T) {
 	n := *steps
@@ -80,6 +87,9 @@ func TestModelCheck_Long(t *testing.T) {
 	cs := int(testharness.ChunkSize)
 	worlds := []world{{}}
 	names := []string{"/a", "/b", "/d/c", "/d/e", "/big"}
+	kim, lee := clusterUsers(t, c)
+	fsOf := func(gw int) *vfs.FS { return c.Nodes[gw].FS.As(kim) }
+	leeWrites := false // whether lee holds Write on /d right now
 	cm := newClusterMirror(t, c, 0)
 	type pendingSync struct {
 		sn    meta.Snapshot
@@ -288,7 +298,7 @@ func TestModelCheck_Long(t *testing.T) {
 				}
 			}
 			data := testharness.Pattern(1+rng.Intn(cs), byte(step))
-			fh, err := c.Nodes[gw].FS.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o644)
+			fh, err := fsOf(gw).OpenFile(name, os.O_CREATE|os.O_RDWR, 0o644)
 			if err != nil {
 				log("%d open %s on n%d: %v (not acknowledged)", step, name, gw, err)
 				if definite(err) {
@@ -327,7 +337,7 @@ func TestModelCheck_Long(t *testing.T) {
 				return
 			}
 			size := rng.Intn(len(worlds[0][name]) + cs)
-			fh, err := c.Nodes[gw].FS.OpenFile(name, os.O_WRONLY, 0)
+			fh, err := fsOf(gw).OpenFile(name, os.O_WRONLY, 0)
 			if err != nil {
 				return
 			}
@@ -351,7 +361,7 @@ func TestModelCheck_Long(t *testing.T) {
 			}
 			ino, resolved := inoOf(gw, name) // the inode this gateway would trash
 			content := worlds[0][name]
-			if err := c.Nodes[gw].FS.Remove(name); err != nil {
+			if err := fsOf(gw).Remove(name); err != nil {
 				if definite(err) {
 					log("%d remove %s via n%d: %v (stale gateway, nothing happened)", step, name, gw, err)
 					return
@@ -386,7 +396,7 @@ func TestModelCheck_Long(t *testing.T) {
 			}
 			replaced, hadTo := inoOf(gw, to)
 			replacedContent := worlds[0][to]
-			if err := c.Nodes[gw].FS.Rename(from, to); err != nil {
+			if err := fsOf(gw).Rename(from, to); err != nil {
 				if definite(err) {
 					log("%d rename %s -> %s via n%d: %v (stale gateway, nothing happened)", step, from, to, gw, err)
 					return
@@ -429,7 +439,7 @@ func TestModelCheck_Long(t *testing.T) {
 				return // the directory is not there yet
 			}
 			content := trashed[ino]
-			res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpRestore, Restore: &meta.Restore{Ino: ino, NewParent: parent.Ino, NewName: parts[len(parts)-1], Now: c.Clk.Now().UnixNano()}})
+			res, _, err := leader.Node.Propose(ctx, meta.Command{Op: meta.OpRestore, Actor: kim, Restore: &meta.Restore{Ino: ino, NewParent: parent.Ino, NewName: parts[len(parts)-1], Now: c.Clk.Now().UnixNano()}})
 			if err == nil {
 				err = res.Err
 			}
@@ -457,11 +467,12 @@ func TestModelCheck_Long(t *testing.T) {
 			if len(inos) == 0 || partitioned {
 				return
 			}
-			cmd := meta.Command{Op: meta.OpPurge, Purge: &meta.Purge{Now: c.Clk.Now().UnixNano()}}
+			cmd := meta.Command{Op: meta.OpPurge, Actor: kim, Purge: &meta.Purge{Now: c.Clk.Now().UnixNano()}}
 			ino := inos[rng.Intn(len(inos))]
 			if rng.Intn(4) == 0 {
 				cmd.Purge.Before = max(c.Clk.Now().UnixNano(), c.Leader().Node.FSM.LastNow()) + 1
 				ino = 0
+				cmd.Actor, cmd.System = 0, true // the sweep is the node's (docs/21 §4)
 			} else {
 				cmd.Purge.Ino = ino
 			}
@@ -506,6 +517,39 @@ func TestModelCheck_Long(t *testing.T) {
 			c.Clk.Advance(cluster.LiveThreshold + time.Second)
 			c.Probe()
 			log("%d clock +live", step)
+		case r < 96:
+			// lee's Write on /d comes and goes; without it a write by lee is refused and
+			// changes nothing (docs/21 §3, §4)
+			if partitioned {
+				return
+			}
+			if d, err := c.Leader().Node.FSM.Resolve([]string{"d"}); err == nil {
+				role := meta.RoleNone
+				if !leeWrites {
+					role = meta.RoleWrite
+				}
+				res, _, err := c.Leader().Node.Propose(ctx, meta.Command{Op: meta.OpGrant, Actor: kim, GrantOp: &meta.GrantOp{Ino: d.Ino, Subject: meta.Subject{Kind: meta.SubjectUser, Idx: uint16(lee)}, Role: role, Now: c.Clk.Now().UnixNano()}})
+				if err == nil && (res.Err == nil || (role == meta.RoleNone && errors.Is(res.Err, meta.ErrNotExist))) {
+					leeWrites = !leeWrites
+					log("%d lee %s on /d", step, map[bool]string{true: "granted write", false: "revoked"}[leeWrites])
+				}
+			}
+			if leeWrites {
+				return
+			}
+			gws := liveGateways()
+			if len(gws) == 0 {
+				return
+			}
+			gw := gws[rng.Intn(len(gws))]
+			fh, err := c.Nodes[gw].FS.As(lee).OpenFile("/d/c", os.O_CREATE|os.O_RDWR, 0o644)
+			if err == nil {
+				_, err = fh.Write([]byte("lee"))
+				_ = fh.Close()
+			}
+			if err == nil || (!errors.Is(err, syscall.EACCES) && !errors.Is(err, os.ErrPermission) && !errors.Is(err, os.ErrNotExist)) {
+				t.Fatalf("step %d: lee's write on /d/c without Write on /d: %v", step, err)
+			}
 		case r < 97: // change the volume policy (new chunks follow it, old ones migrate)
 			limit := len(c.Nodes)
 			if draining >= 0 {
@@ -695,7 +739,7 @@ func checkTrash(t *testing.T, c *testharness.Cluster, trashed map[meta.Ino][]byt
 			if _, ok := c.Nodes[i].Node.FSM.GetInode(ino); ok {
 				t.Fatalf("step %d: n%d serves trashed ino %d as live", step, i, ino)
 			}
-			fh, err := c.Nodes[i].FS.OpenTrash(ino, nil)
+			fh, err := c.Nodes[i].FS.OpenTrash(ino, nil) // the node's own reader: no role to check
 			if err != nil {
 				t.Fatalf("step %d: n%d open trashed ino %d: %v", step, i, ino, err)
 			}
@@ -815,4 +859,32 @@ func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names
 		return true
 	})
 	return matched
+}
+
+// clusterUsers makes kim the first admin and lee a plain user on the cluster (docs/21),
+// through the leader, and answers their indices.
+func clusterUsers(t *testing.T, c *testharness.Cluster) (kim, lee meta.UserIdx) {
+	t.Helper()
+	l := c.Leader().Node
+	now := c.Clk.Now().UnixNano()
+	propose := func(cmd meta.Command) meta.Result {
+		t.Helper()
+		res, index, err := l.Propose(ctx, cmd)
+		if err == nil {
+			err = res.Err
+		}
+		if err != nil {
+			t.Fatalf("op %d: %v", cmd.Op, err)
+		}
+		if err := l.FSM.WaitApplied(ctx, index); err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	propose(meta.Command{Op: meta.OpInvite, InviteOp: &meta.InviteOp{Bootstrap: true, Invite: meta.Invite{Hash: meta.HashCode("aaaaaaaaaa"), Name: "kim", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	kim = meta.UserIdx(propose(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "kim", Code: "aaaaaaaaaa", Key: [32]byte{1}, Now: now}}).Ino)
+	propose(meta.Command{Op: meta.OpInvite, Actor: kim, InviteOp: &meta.InviteOp{Invite: meta.Invite{Hash: meta.HashCode("bbbbbbbbbb"), Name: "lee", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	lee = meta.UserIdx(propose(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "lee", Code: "bbbbbbbbbb", Key: [32]byte{2}, Now: now}}).Ino)
+	c.Settle()
+	return kim, lee
 }

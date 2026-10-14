@@ -17,10 +17,16 @@ import (
 // meta.Usage (docs/15 §4). password is the config's smb.password; the library refuses
 // guest sessions, so an empty one would serve nobody.
 func NewServer(fs *vfs.FS, st *meta.Store, password string) (*smb.Server, error) {
+	return NewServerWith(fs, st, password, nil)
+}
+
+// NewServerWith is NewServer with the device's bindings (docs/21 §5): each session's
+// account is served its user's view once the cluster has users.
+func NewServerWith(fs *vfs.FS, st *meta.Store, password string, bind Bindings) (*smb.Server, error) {
 	if password == "" {
 		return nil, errors.New("smbgw: smb.password is required (init and join generate it)")
 	}
-	a := New(fs, st)
+	a := NewWith(fs, st, bind)
 	srv := smb.New()
 	srv.SetName(ShareName)
 	srv.SetLogger(slog.Default()) // the request trace, at log.level debug

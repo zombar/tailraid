@@ -233,7 +233,7 @@ func checkValue(v string) error {
 
 // Set seals value under name and stores it, replacing any value of that name; the
 // cluster's key is made first when it has none.
-func (s *Store) Set(ctx context.Context, name, value string) error {
+func (s *Store) Set(ctx context.Context, actor meta.UserIdx, name, value string) error {
 	if !meta.SecretName.MatchString(name) {
 		return ErrName
 	}
@@ -249,7 +249,7 @@ func (s *Store) Set(ctx context.Context, name, value string) error {
 		return err
 	}
 	sec := meta.Secret{Name: name, KeyID: IDOf(k), Nonce: nonce, Cipher: sealed, By: s.Self()}
-	return s.Propose(ctx, meta.Command{Op: meta.OpSecretPut, SecretPut: &meta.SecretPut{Secret: sec, Now: s.Now()}})
+	return s.Propose(ctx, meta.Command{Op: meta.OpSecretPut, Actor: actor, SecretPut: &meta.SecretPut{Secret: sec, Now: s.Now()}})
 }
 
 // Get opens the value of name.
@@ -274,7 +274,8 @@ type Entry struct {
 	Name     string       `json:"name"`
 	At       int64        `json:"at"`
 	By       meta.NodeIdx `json:"by"`
-	Readable bool         `json:"readable"` // this node can open it
+	Readable bool         `json:"readable"`          // this node can open it
+	ByUser   meta.UserIdx `json:"by_user,omitempty"` // the user who set it (docs/21 §7)
 }
 
 // List is every secret, by name, and whether this node can open each.
@@ -283,7 +284,7 @@ func (s *Store) List(ctx context.Context) []Entry {
 	all := s.State.Secrets()
 	out := make([]Entry, 0, len(all))
 	for _, sec := range all {
-		e := Entry{Name: sec.Name, At: sec.At, By: sec.By}
+		e := Entry{Name: sec.Name, At: sec.At, By: sec.By, ByUser: sec.ByUser}
 		if kerr == nil {
 			if full, ok := s.State.Secret(sec.Name); ok {
 				_, err := Open(k, s.State.Meta().ClusterID, full)
@@ -297,11 +298,11 @@ func (s *Store) List(ctx context.Context) []Entry {
 
 // Remove removes name, or with all every secret and the key ID (a fresh key comes with
 // the next Set).
-func (s *Store) Remove(ctx context.Context, name string, all bool) error {
+func (s *Store) Remove(ctx context.Context, actor meta.UserIdx, name string, all bool) error {
 	if !all && !meta.SecretName.MatchString(name) {
 		return ErrName
 	}
-	err := s.Propose(ctx, meta.Command{Op: meta.OpSecretDelete, SecretDelete: &meta.SecretDelete{Name: name, All: all, Now: s.Now()}})
+	err := s.Propose(ctx, meta.Command{Op: meta.OpSecretDelete, Actor: actor, SecretDelete: &meta.SecretDelete{Name: name, All: all, Now: s.Now()}})
 	if errors.Is(err, meta.ErrNotExist) {
 		return ErrNotFound
 	}

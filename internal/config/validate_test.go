@@ -13,7 +13,7 @@ import (
 // level or format and a relative mount path; the defaults and the documented values
 // pass.
 //
-// Invariant: I-126
+// Invariant: I-126, I-359
 func TestConfig_Validate_Table(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -38,6 +38,16 @@ func TestConfig_Validate_Table(t *testing.T) {
 		{"mount relative", func(c *Config) { c.Mount.Path = "TailRAID" }, "mount.path"},
 		{"mount unexpanded tilde", func(c *Config) { c.Mount.Path = "~/TailRAID" }, "mount.path"},
 		{"mount empty", func(c *Config) { c.Mount.Path = "" }, ""},
+		{"users clock_skew under", func(c *Config) { c.Users.ClockSkew = "59s" }, "users.clock_skew"},
+		{"users clock_skew low", func(c *Config) { c.Users.ClockSkew = "1m" }, ""},
+		{"users clock_skew high", func(c *Config) { c.Users.ClockSkew = "1h" }, ""},
+		{"users clock_skew over", func(c *Config) { c.Users.ClockSkew = "61m" }, "users.clock_skew"},
+		{"users session under", func(c *Config) { c.Users.Session = "59m" }, "users.session"},
+		{"users session over", func(c *Config) { c.Users.Session = "721h" }, "users.session"},
+		{"users dormant_after under", func(c *Config) { c.Users.DormantAfter = "23h" }, "users.dormant_after"},
+		{"users dormant_after high", func(c *Config) { c.Users.DormantAfter = "8760h" }, ""},
+		{"audit retention under", func(c *Config) { c.Audit.Retention = "167h" }, "audit.retention"},
+		{"audit retention bad", func(c *Config) { c.Audit.Retention = "soon" }, "audit.retention"},
 		{"trash retention default", nil, ""},
 		{"trash retention never", func(c *Config) { c.Trash.Retention = "0" }, ""},
 		{"trash retention 1h", func(c *Config) { c.Trash.Retention = "1h" }, ""},

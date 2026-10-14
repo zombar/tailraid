@@ -87,7 +87,7 @@ func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := f.fs.ov.Write(f.ino, in.Size, uint64(off), p); err != nil {
+	if err := f.fs.ov.WriteAs(f.ino, in.Size, uint64(off), p, f.fs.actor); err != nil {
 		return 0, mapErr("write", f.name, err)
 	}
 	f.fs.bytesWritten.Add(uint64(len(p)))
@@ -185,7 +185,7 @@ func (f *File) Truncate(size int64) error {
 	if err != nil {
 		return err
 	}
-	if err := f.fs.ov.Truncate(f.ino, in.Size, uint64(size)); err != nil {
+	if err := f.fs.ov.TruncateAs(f.ino, in.Size, uint64(size), f.fs.actor); err != nil {
 		return mapErr("truncate", f.name, err)
 	}
 	return nil

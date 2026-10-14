@@ -39,6 +39,7 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [17-stats.md](17-stats.md) | Time series kept in the volume: per-node samples, gzip segments and rollups, retention, the live edge, the Stats page's charts, the storage budget |
 | [19-secrets.md](19-secrets.md) | One encrypted secrets store for the cluster: ciphertexts in the FSM, the cluster key in each device's OS keychain, fetched from a member; the S3 and TMDB keys move in |
 | [20-mesh.md](20-mesh.md) | tailraid's own WireGuard mesh in place of Tailscale: one device per node on a TUN, the member table as the control plane, the join code and the introduce, endpoint candidates and fan-out, the relay through a member, port mapping, what the storage code does with a path's class |
+| [21-users.md](21-users.md) | Users, groups and permissions: a key per device from an admin's invite, signed CLI requests, grants with three roles enforced in the FSM, actors on every gateway, the browser sign-in, personal secrets, the audit log, the standards mapping |
 | [invariants.md](invariants.md) | Generated table: every invariant, its doc, statement and tests |
 | [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows SMB mount path |
 | [vms.md](vms.md) | Three local VMs (macOS, Linux, Windows) forming one volume over the mesh, each OS first in turn; the rounds, the soak and the results |

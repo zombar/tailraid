@@ -378,9 +378,27 @@ func (f *Flusher) restoreTimes(ctx context.Context, ino meta.Ino) {
 		return
 	}
 	sa := &meta.SetAttr{Ino: ino, Mask: meta.AttrAtime | meta.AttrMtime, Atime: atime, Mtime: mtime, Now: f.clk.Now().UnixNano()}
-	if _, _, err := f.prop.Propose(ctx, meta.Command{Op: meta.OpSetAttr, SetAttr: sa}); err != nil && f.log != nil {
+	if _, _, err := f.prop.Propose(ctx, f.actorCommand(f.ov.Actor(ino), meta.Command{Op: meta.OpSetAttr, SetAttr: sa})); err != nil && f.log != nil {
 		f.log.Warn("a client's file times were not set again after the flush", "ino", ino, "err", err)
 	}
+}
+
+// actorCommand stamps the writer on a flush's command (docs/21 §4, I-353): a Commit or
+// the SetAttr that restores a client's times acts for the user who wrote; a cluster
+// whose members read codec 13 gets none, as the gateway sends none.
+func (f *Flusher) actorCommand(actor meta.UserIdx, cmd meta.Command) meta.Command {
+	if !f.st.Enforcing() || (f.MinCodec != nil && f.MinCodec() < meta.CodecUsers) {
+		return cmd // before the first user, and while a member reads an older codec, the wire carries what it did
+	}
+	if actor == 0 {
+		// a write with no actor is the node's own (every user's view stamps theirs, and
+		// nobody's view writes nothing): the stats, audit, thumbnail and index writers
+		// under /.tailraid, whose Commit the FSM takes as System and nowhere else (I-349)
+		cmd.System = true
+		return cmd
+	}
+	cmd.Actor = actor
+	return cmd
 }
 
 // carriesSums reports whether a Commit records any chunk's shard sums (a codec-5 command).
@@ -440,7 +458,7 @@ func (f *Flusher) commitPlan(ctx context.Context, plan *FlushPlan, partial bool)
 			}
 			pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
 			var perr error
-			res, index, perr = f.prop.Propose(pctx, meta.Command{Op: meta.OpCommit, Commit: cmd})
+			res, index, perr = f.prop.Propose(pctx, f.actorCommand(plan.Actor, meta.Command{Op: meta.OpCommit, Commit: cmd}))
 			cancel()
 			if perr != nil {
 				return 0, fmt.Errorf("propose commit: %w", perr)

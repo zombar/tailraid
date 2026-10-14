@@ -60,8 +60,8 @@ func TestMesh_FromStatus(t *testing.T) {
 	for _, want := range []string{
 		`<text x="12" y="18" class="title">Paths from pike (this device)</text>`,
 		`<title>pike: this device, 100.64.0.12, utun4, udp 20483, mapped at 203.0.113.9:20483 by pcp</title>`,
-		`<a class="mesh-link" href="http://100.64.0.3:20482/#/">`,
-		`<a class="mesh-link" href="http://100.64.0.5:20482/#/">`,
+		`<a class="mesh-link" href="http://100.64.0.3:20482/#/" data-node="atlas">`, // the page sends the click through the hand-off (docs/21 §6)
+		`<a class="mesh-link" href="http://100.64.0.5:20482/#/" data-node="lumen">`,
 		`<title>atlas: leader, voter, 100.64.0.3; lan 192.168.1.20:20483, seen 1s ago, handshake 42s ago; open atlas&#39;s dashboard</title>`,
 		`<title>lumen: voter, 100.64.0.5; relayed through atlas, seen 2s ago; open lumen&#39;s dashboard</title>`,
 		`<g class="mesh-node off">`,
@@ -75,7 +75,7 @@ func TestMesh_FromStatus(t *testing.T) {
 		t.Errorf("links %d, disk drawn %v", strings.Count(svg, "mesh-link"), strings.Contains(svg, "atlas/1"))
 	}
 	// the relayed edge starts at atlas's circle, not the centre
-	atlas := regexp.MustCompile(`href="http://100.64.0.3:20482/#/"><circle cx="(\d+)" cy="(\d+)"`).FindStringSubmatch(svg)
+	atlas := regexp.MustCompile(`href="http://100.64.0.3:20482/#/" data-node="atlas"><circle cx="(\d+)" cy="(\d+)"`).FindStringSubmatch(svg)
 	relay := regexp.MustCompile(`<line class="mesh-edge relay" x1="(\d+)" y1="(\d+)"`).FindStringSubmatch(svg)
 	if atlas == nil || relay == nil || atlas[1] != relay[1] || atlas[2] != relay[2] {
 		t.Errorf("relayed edge from %v, atlas at %v", relay, atlas)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"sync"
 	"time"
 
@@ -49,6 +50,7 @@ type openFile struct {
 	pmu           sync.Mutex
 	ino           uint64 // the file's inode when it was opened: what a delete-on-close removes (I-225)
 	share         *share
+	fsys          filesystem.Filesystem // the tree's filesystem: the share's, or the account's view of it
 	dir           bool
 	deleteOnClose bool
 
@@ -159,13 +161,23 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	// SMB is caseless and this server says so; the driver underneath may not
 	// be. See casefold.go: the name is taken as it came unless nothing is
 	// there under it.
-	p = resolveCase(sh.fsys, p)
+	p = resolveCase(tc.fsys, p)
 
-	st, statErr := sh.fsys.Stat(p)
+	st, statErr := tc.fsys.Stat(p)
+	if statErr != nil && errors.Is(statErr, os.ErrPermission) {
+		// a name the account may not look at: refused as such, never taken for absent
+		// (an open would otherwise create beside it, docs/21 §5)
+		return errorResponse(h, statusAccessDenied), nil
+	}
 	exists := statErr == nil
 	action := actionOpened
-	if !exists && parentMissing(sh.fsys, p) {
-		return errorResponse(h, statusObjectPathNotFound), nil // never made on the way (I-233)
+	if !exists {
+		if _, err := tc.fsys.Stat(path.Dir(p)); err != nil && errors.Is(err, os.ErrPermission) {
+			return errorResponse(h, statusAccessDenied), nil // a folder the account may not look at
+		}
+		if parentMissing(tc.fsys, p) {
+			return errorResponse(h, statusObjectPathNotFound), nil // never made on the way (I-233)
+		}
 	}
 
 	// an open that conflicts with one held is refused before it changes anything (I-265)
@@ -180,15 +192,15 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusObjectNameNotFound), nil
 	case !exists && (disposition == dispCreate || disposition == dispOpenIf ||
 		disposition == dispOverwriteIf || disposition == dispSupersede):
-		x, excl := sh.fsys.(ExclusiveCreator)
-		xd, exclDir := sh.fsys.(ExclusiveDirCreator)
+		x, excl := tc.fsys.(ExclusiveCreator)
+		xd, exclDir := tc.fsys.(ExclusiveDirCreator)
 		action = actionCreated
 		var err error
 		switch {
 		case options&optDirectoryFile != 0 && exclDir && disposition == dispCreate:
 			err = xd.MkDirExcl(p, 0o755)
 		case options&optDirectoryFile != 0:
-			err = sh.fsys.MkDir(p, 0o755)
+			err = tc.fsys.MkDir(p, 0o755)
 		case excl && (disposition == dispCreate || disposition == dispOpenIf):
 			// another server over the same volume may have made the name since Stat
 			// looked: the backend decides. A name taken there is a collision for
@@ -199,26 +211,26 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 				err, action = nil, actionOpened
 			}
 		default:
-			err = sh.fsys.WriteFile(p, nil, 0o644)
+			err = tc.fsys.WriteFile(p, nil, 0o644)
 		}
 		if err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
-		if st, statErr = sh.fsys.Stat(p); statErr != nil {
+		if st, statErr = tc.fsys.Stat(p); statErr != nil {
 			return errorResponse(h, statusFor(statErr, statusObjectNameNotFound)), nil
 		}
 	case exists && (disposition == dispOverwrite || disposition == dispOverwriteIf || disposition == dispSupersede):
 		if isDir(st) {
 			return errorResponse(h, statusFileIsADirectory), nil
 		}
-		if err := sh.fsys.WriteFile(p, nil, 0o644); err != nil {
+		if err := tc.fsys.WriteFile(p, nil, 0o644); err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
 		action = actionOverwritten
 		if disposition == dispSupersede {
 			action = actionSuperseded
 		}
-		if st, statErr = sh.fsys.Stat(p); statErr != nil {
+		if st, statErr = tc.fsys.Stat(p); statErr != nil {
 			return errorResponse(h, statusFor(statErr, statusObjectNameNotFound)), nil
 		}
 	}
@@ -237,16 +249,16 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 	if options&optDeleteOnClose != 0 && !tc.ro {
 		// the delete happens at CLOSE, whose reply carries no failure: a backend that
 		// may refuse it is asked now, where the client reads the status
-		if err := canDelete(sh.fsys, p, created); err != nil {
+		if err := canDelete(tc.fsys, p, created); err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
 	}
-	of := &openFile{path: p, share: sh, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID, created: created, access: access, shareAccess: shareAccess}
+	of := &openFile{path: p, share: sh, fsys: tc.fsys, ro: tc.ro, dir: dir, deleteOnClose: options&optDeleteOnClose != 0, session: h.sessionID, created: created, access: access, shareAccess: shareAccess}
 	if st != nil {
 		of.ino = st.Inode()
 	}
 	if !dir {
-		if o, canOpen := sh.fsys.(filesystem.Opener); canOpen {
+		if o, canOpen := tc.fsys.(filesystem.Opener); canOpen {
 			if f, err := o.OpenFile(p); err == nil {
 				of.f = f
 				// The positional write path is an upgrade OF the open file,
@@ -293,6 +305,15 @@ func (c *conn) create(h header, body []byte, msg []byte) ([]byte, error) {
 // delete-on-close, at CREATE or through SET_INFO, and the client reads the status.
 type DeleteChecker interface {
 	CanDelete(path string) error
+}
+
+// fs is the filesystem this handle's requests are served: the tree's view of the share
+// (UserFilesystem), or the share's own when the handle was made without one.
+func (of *openFile) fs() filesystem.Filesystem {
+	if of.fsys != nil {
+		return of.fsys
+	}
+	return of.share.fsys
 }
 
 // OwnDeleter is the optional capability of a filesystem that lets the handle which
@@ -424,19 +445,19 @@ func (c *conn) closeOpen(of *openFile) {
 		// the file this handle opened, or nothing: another client may have renamed it
 		// away (the handle followed) and made a new file under its old name (I-225)
 		p := of.p()
-		d, byIno := of.share.fsys.(InodeDeleter)
+		d, byIno := of.fs().(InodeDeleter)
 		switch {
 		case byIno && of.ino != 0:
 			d.DeleteFileIno(p, of.ino, of.created) // the backend decides, atomically
-		case !sameFile(of.share.fsys, p, of.ino):
+		case !sameFile(of.fs(), p, of.ino):
 			// someone else's file now: left alone
 		default:
-			if o, ok := of.share.fsys.(OwnDeleter); ok && of.created {
+			if o, ok := of.fs().(OwnDeleter); ok && of.created {
 				o.DeleteOwnFile(p)
 			} else if of.dir {
-				of.share.fsys.DeleteDir(p)
+				of.fs().DeleteDir(p)
 			} else {
-				of.share.fsys.DeleteFile(p)
+				of.fs().DeleteFile(p)
 			}
 		}
 		of.share.notify(p, actionRemoved)
@@ -506,7 +527,7 @@ func (c *conn) read(h header, body []byte) ([]byte, error) {
 	// should not pretend to.
 	buf := make([]byte, length)
 	var n int
-	data, err := of.share.fsys.ReadFile(of.p())
+	data, err := of.fs().ReadFile(of.p())
 	if err != nil {
 		return errorResponse(h, statusFor(err, statusUnexpectedIoError)), nil
 	}
@@ -662,7 +683,7 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 		// a client streaming in blocks turns into O(n^2) -- the reason
 		// WritableFile exists. A failure here is reported and NEVER retried
 		// through another path: it has already changed the file.
-		old, err := of.share.fsys.ReadFile(of.p())
+		old, err := of.fs().ReadFile(of.p())
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
@@ -673,7 +694,7 @@ func (c *conn) write(h header, body []byte, msg []byte) ([]byte, error) {
 			old = grown
 		}
 		copy(old[offset:], data)
-		if err := of.share.fsys.WriteFile(of.p(), old, 0o644); err != nil {
+		if err := of.fs().WriteFile(of.p(), old, 0o644); err != nil {
 			return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 		}
 	}

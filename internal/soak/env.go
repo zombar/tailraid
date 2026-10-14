@@ -58,6 +58,9 @@ type Caps struct {
 	// Self names the device running verify on a live cluster, which Kill refuses (its
 	// mount is the run's only volume) and whose path to a killed node stays; "" on a rig.
 	Self string
+	// Users: the environment is a UsersEnv whose cluster is disposable, so phases 28–31
+	// may make users on it (docs/21 §10); a live cluster's users are its own, so it skips.
+	Users bool
 }
 
 // Env is one target cluster (docs/09 §6).

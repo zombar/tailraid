@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/logx"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/users"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -30,9 +32,15 @@ const (
 // FS adapts a vfs.FS to the go-filesystems backend contract: the required Filesystem plus
 // the positional, truncate, symlink and metadata capabilities the server probes for.
 type FS struct {
-	fs  *vfs.FS
+	fs  *vfs.FS // the view this adapter serves: the node's filesystem, or an account's user's (ForUser)
 	st  *meta.Store
 	log *slog.Logger
+	// bind maps the device's SMB accounts to users (docs/21 §5); nil: every session is
+	// served fs. A per-account adapter (ForUser) resolves its view on every request.
+	bind       Bindings
+	views      *views
+	account    string
+	perAccount bool
 	// one line a minute per kind of refusal (I-218): the server itself logs nothing, so
 	// these are the only record of why a client's copy failed
 	warnWrite, warnSize, warnCreate, warnDelete, warnRename logx.Limiter
@@ -50,6 +58,72 @@ var (
 
 // New wraps fs; st answers the share's size (meta.Usage, as NFS FSSTAT and status do).
 func New(fs *vfs.FS, st *meta.Store) *FS { return &FS{fs: fs, st: st, log: slog.Default()} }
+
+// NewWith is New with the device's bindings: once the cluster has users, each tree
+// connect is served the view of the user its account is bound to (I-350, I-352).
+func NewWith(fs *vfs.FS, st *meta.Store, bind Bindings) *FS {
+	a := New(fs, st)
+	a.bind = bind
+	a.views = &views{byAccount: map[string]*FS{}, byUser: map[meta.UserIdx]*vfs.FS{}}
+	return a
+}
+
+// Bindings maps a device's credentials to user names (users.Bindings).
+type Bindings interface {
+	Lookup(cred string) (string, bool)
+}
+
+// views keeps one adapter per account and one filesystem view per user, shared by every
+// connection of the gateway.
+type views struct {
+	mu        sync.Mutex
+	byAccount map[string]*FS
+	byUser    map[meta.UserIdx]*vfs.FS
+}
+
+var _ smb.UserFilesystem = (*FS)(nil)
+
+// ForUser is the adapter a tree connect of account gets (smb.UserFilesystem, docs/21
+// §5): one per account, whose view is resolved on every request, so a session that
+// connected before the first user existed is nobody's the moment that user exists.
+func (a *FS) ForUser(account string) filesystem.Filesystem {
+	if a.bind == nil {
+		return a
+	}
+	v := a.views
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if f, ok := v.byAccount[account]; ok {
+		return f
+	}
+	f := New(a.fs, a.st) // its own limiters: a refusal is logged per account
+	f.log, f.bind, f.views, f.account, f.perAccount = a.log, a.bind, v, account, true
+	v.byAccount[account] = f
+	return f
+}
+
+// view is the filesystem this request is served: the node's before the cluster has
+// users, else the view of the user the account is bound to on this device, or nobody's.
+func (a *FS) view() *vfs.FS {
+	if !a.perAccount || !a.st.Enforcing() {
+		return a.fs
+	}
+	var actor meta.UserIdx
+	if name, bound := a.bind.Lookup(users.SMBCredential(a.account)); bound {
+		if u, found := a.st.UserByName(name); found {
+			actor = u.Idx
+		}
+	}
+	v := a.views
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if f, ok := v.byUser[actor]; ok {
+		return f
+	}
+	f := a.fs.As(actor)
+	v.byUser[actor] = f
+	return f
+}
 
 // WithLogger sets where the adapter logs the refusals it answers (I-218).
 func (a *FS) WithLogger(l *slog.Logger) *FS {
@@ -107,6 +181,9 @@ func (f *FS) CanDelete(p string) error {
 	}
 	if f.st.Protected(in.Ino) {
 		return f.refused(&f.warnDelete, "delete", p, os.ErrPermission)
+	}
+	if v := f.view(); !v.System() && f.st.Enforcing() && f.st.Access(v.Actor(), in.Ino) < meta.RoleWrite {
+		return f.refused(&f.warnDelete, "delete", p, os.ErrPermission) // the account's user holds no Write here (I-352)
 	}
 	if in.Type == meta.TDir {
 		if ents, err := f.st.ReadDir(in.Ino); err == nil && len(ents) > 0 {
@@ -206,7 +283,7 @@ func typeOf(fi os.FileInfo) uint8 {
 func (a *FS) Close() error { return nil }
 
 func (a *FS) Stat(path string) (filesystem.Stat, error) {
-	fi, err := a.fs.Lstat(path)
+	fi, err := a.view().Lstat(path)
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -214,7 +291,7 @@ func (a *FS) Stat(path string) (filesystem.Stat, error) {
 }
 
 func (a *FS) ListDir(path string) ([]filesystem.DirEntry, error) {
-	fis, err := a.fs.ReadDir(path)
+	fis, err := a.view().ReadDir(path)
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -228,12 +305,12 @@ func (a *FS) ListDir(path string) ([]filesystem.DirEntry, error) {
 // FoldName answers the server's caseless lookup from the folder's names alone, where
 // ListDir would build an entry for every file in it (I-267).
 func (a *FS) FoldName(dir, want string) (match string, found, ok bool) {
-	return a.fs.LookupFold(dir, want)
+	return a.view().LookupFold(dir, want)
 }
 
 // ReadFile is the whole-file fallback the server uses only when OpenFile fails.
 func (a *FS) ReadFile(path string) ([]byte, error) {
-	f, err := a.fs.Open(path)
+	f, err := a.view().Open(path)
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -245,7 +322,7 @@ func (a *FS) ReadFile(path string) ([]byte, error) {
 // WriteFile is the server's CREATE, overwrite and supersede: the file is created or
 // emptied, then holds data (nil for a fresh file).
 func (a *FS) WriteFile(path string, data []byte, perm os.FileMode) error {
-	f, err := a.fs.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := a.view().OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return a.refused(&a.warnCreate, "create", path, wrap(err))
 	}
@@ -263,7 +340,7 @@ func (a *FS) WriteFile(path string, data []byte, perm os.FileMode) error {
 // is a collision whether or not this gateway has applied that create yet (I-222). A
 // collision is the client's answer, not a failure, and is not logged.
 func (a *FS) CreateExcl(path string, perm os.FileMode) error {
-	f, err := a.fs.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
+	f, err := a.view().OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, perm)
 	if errors.Is(err, os.ErrExist) {
 		return wrap(err)
 	}
@@ -278,13 +355,13 @@ func (a *FS) CreateExcl(path string, perm os.FileMode) error {
 // once every member reads codec 9 (I-225). own is the creator's own cleanup (I-220). A
 // skipped delete is logged with the refusals (I-218).
 func (a *FS) DeleteFileIno(path string, ino uint64, own bool) error {
-	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.RemoveIno(path, meta.Ino(ino), own)))
+	return a.refused(&a.warnDelete, "delete", path, wrap(a.view().RemoveIno(path, meta.Ino(ino), own)))
 }
 
 // RenameNoReplace is the server's rename without ReplaceIfExists (smb.NoReplaceRenamer):
 // an existing destination, made on this gateway or another, is a collision (I-224).
 func (a *FS) RenameNoReplace(oldPath, newPath string) error {
-	err := wrap(a.fs.RenameNoReplace(oldPath, newPath))
+	err := wrap(a.view().RenameNoReplace(oldPath, newPath))
 	if errors.Is(err, os.ErrExist) {
 		return err // the client's answer, not a failure
 	}
@@ -292,17 +369,17 @@ func (a *FS) RenameNoReplace(oldPath, newPath string) error {
 }
 
 func (a *FS) ReadLink(path string) (string, error) {
-	target, err := a.fs.Readlink(path)
+	target, err := a.view().Readlink(path)
 	return target, wrap(err)
 }
 
-func (a *FS) MkDir(path string, perm os.FileMode) error { return wrap(a.fs.MkdirAll(path, perm)) }
+func (a *FS) MkDir(path string, perm os.FileMode) error { return wrap(a.view().MkdirAll(path, perm)) }
 
 // MkDirExcl is the server's FILE_CREATE of a directory (smb.ExclusiveDirCreator): made
 // only when the name is free, as the leader decides (I-222). A collision is the client's
 // answer, not a failure, and is not logged.
 func (a *FS) MkDirExcl(path string, perm os.FileMode) error {
-	err := wrap(a.fs.MkdirExcl(path, perm))
+	err := wrap(a.view().MkdirExcl(path, perm))
 	if errors.Is(err, os.ErrExist) {
 		return err
 	}
@@ -322,15 +399,15 @@ var (
 )
 
 func (a *FS) DeleteFile(path string) error {
-	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.Remove(path)))
+	return a.refused(&a.warnDelete, "delete", path, wrap(a.view().Remove(path)))
 }
 
 func (a *FS) DeleteDir(path string) error {
-	return a.refused(&a.warnDelete, "delete", path, wrap(a.fs.Remove(path)))
+	return a.refused(&a.warnDelete, "delete", path, wrap(a.view().Remove(path)))
 }
 
 func (a *FS) Rename(oldPath, newPath string) error {
-	return a.refused(&a.warnRename, "rename", oldPath+" -> "+newPath, wrap(a.fs.Rename(oldPath, newPath)))
+	return a.refused(&a.warnRename, "rename", oldPath+" -> "+newPath, wrap(a.view().Rename(oldPath, newPath)))
 }
 
 // --- optional capabilities ---------------------------------------------------------------
@@ -338,9 +415,9 @@ func (a *FS) Rename(oldPath, newPath string) error {
 // OpenFile is the positional handle the server prefers: every READ and WRITE goes through
 // it rather than the whole-file calls.
 func (a *FS) OpenFile(path string) (filesystem.File, error) {
-	f, err := a.fs.OpenFile(path, os.O_RDWR, 0)
+	f, err := a.view().OpenFile(path, os.O_RDWR, 0)
 	if errors.Is(err, vfs.ErrReadOnly) {
-		f, err = a.fs.OpenFile(path, os.O_RDONLY, 0) // a snapshot reads; its writes are refused (I-185)
+		f, err = a.view().OpenFile(path, os.O_RDONLY, 0) // a snapshot reads; its writes are refused (I-185)
 	}
 	if err != nil {
 		return nil, wrap(err)
@@ -354,7 +431,7 @@ func (a *FS) OpenFile(path string) (filesystem.File, error) {
 }
 
 func (a *FS) Truncate(path string, size int64) error {
-	f, err := a.fs.OpenFile(path, os.O_WRONLY, 0)
+	f, err := a.view().OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return a.refused(&a.warnSize, "end of file", path, wrap(err))
 	}
@@ -365,16 +442,16 @@ func (a *FS) Truncate(path string, size int64) error {
 	return wrap(f.Close())
 }
 
-func (a *FS) Symlink(target, linkPath string) error { return wrap(a.fs.Symlink(target, linkPath)) }
+func (a *FS) Symlink(target, linkPath string) error { return wrap(a.view().Symlink(target, linkPath)) }
 
-func (a *FS) Chmod(path string, perm os.FileMode) error { return wrap(a.fs.Chmod(path, perm)) }
+func (a *FS) Chmod(path string, perm os.FileMode) error { return wrap(a.view().Chmod(path, perm)) }
 
 func (a *FS) Chown(path string, uid, gid uint32) error {
-	return wrap(a.fs.Lchown(path, int(uid), int(gid)))
+	return wrap(a.view().Lchown(path, int(uid), int(gid)))
 }
 
 func (a *FS) Chtimes(path string, atime, mtime time.Time) error {
-	return wrap(a.fs.Chtimes(path, atime, mtime))
+	return wrap(a.view().Chtimes(path, atime, mtime))
 }
 
 // file is a filesystem.WritableFile over a vfs handle. WriteAt is durable in the WAL when

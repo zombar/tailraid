@@ -27,7 +27,7 @@ func TestMeshOps_Codec13(t *testing.T) {
 		{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: dev}},
 		{Op: OpMetaSet, MetaSet: &MetaSet{MeshSubnet: "100.70.3.0/24"}},
 	} {
-		if v := CommandCodec(c); v != commandVersionV13 || CodecMesh != commandVersionV13 || CodecVersion != commandVersionV13 {
+		if v := CommandCodec(c); v != commandVersionV13 || CodecMesh != commandVersionV13 || CodecVersion < commandVersionV13 {
 			t.Fatalf("op %d: version %d", c.Op, v)
 		}
 		b := MustEncodeCommand(c)

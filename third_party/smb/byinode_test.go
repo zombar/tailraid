@@ -120,8 +120,8 @@ func (f byInoFS) RenameNoReplace(from, to string) error {
 func twoSessions(fsys filesystem.Filesystem) (*conn, *conn) {
 	sh := &share{name: "disk", fsys: fsys}
 	c1, c2 := newConn(New(), nil), newConn(New(), nil)
-	c1.trees[1] = &treeConn{sh: sh}
-	c2.trees[1] = &treeConn{sh: sh}
+	c1.trees[1] = &treeConn{sh: sh, fsys: sh.fsys}
+	c2.trees[1] = &treeConn{sh: sh, fsys: sh.fsys}
 	return c1, c2
 }
 

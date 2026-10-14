@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -96,11 +97,13 @@ type MediaSeason struct {
 // mediaView is one request's view: the catalogue by inode.
 type mediaView struct {
 	s   *Server
+	r   *http.Request // the request: its user's Read decides what the view lists (I-355)
 	cat map[meta.Ino]search.Entry
 }
 
-func (s *Server) mediaView(ctx context.Context) mediaView {
-	v := mediaView{s: s, cat: map[meta.Ino]search.Entry{}}
+func (s *Server) mediaView(r *http.Request) mediaView {
+	ctx := r.Context()
+	v := mediaView{s: s, r: r, cat: map[meta.Ino]search.Entry{}}
 	if s.o.Catalog != nil {
 		if es, err := s.o.Catalog.Catalog(ctx); err == nil {
 			for i := range es {
@@ -114,7 +117,7 @@ func (s *Server) mediaView(ctx context.Context) mediaView {
 // media is GET /api/media: the libraries, a library's items, or one item (docs/13 §10).
 func (s *Server) media(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	v := s.mediaView(r.Context())
+	v := s.mediaView(r)
 	switch {
 	case q.Has("item"):
 		s.mediaItem(w, r, v)
@@ -124,6 +127,9 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request) {
 		libs := []MediaLib{}
 		for _, l := range s.o.Store.Libraries() {
 			if strings.HasPrefix(l.Path, "/"+meta.ReservedDir+"/") {
+				continue
+			}
+			if in, err := s.o.Store.Resolve(meta.SplitPath(l.Path)); err != nil || !s.traversable(r, in.Ino) {
 				continue
 			}
 			libs = append(libs, MediaLib{Path: l.Path, Kind: l.Kind.String()})
@@ -224,7 +230,7 @@ func (v mediaView) liveKids(dir meta.Ino) []*meta.Inode {
 	kids, _ := v.s.o.Store.ReadDir(dir)
 	out := make([]*meta.Inode, 0, len(kids))
 	for i := range kids {
-		if !meta.IsEphemeral(kids[i].Name) && !strings.HasPrefix(kids[i].Name, ".") {
+		if !meta.IsEphemeral(kids[i].Name) && !strings.HasPrefix(kids[i].Name, ".") && v.s.readable(v.r, kids[i].Ino) {
 			out = append(out, &kids[i])
 		}
 	}
@@ -262,6 +268,10 @@ func (s *Server) mediaLib(w http.ResponseWriter, r *http.Request, v mediaView) {
 	in, err := s.o.Store.Resolve(parts)
 	if err != nil || in.Type != meta.TDir || in.Library() == meta.LibraryNone {
 		writeErr(w, http.StatusNotFound, "media "+canonical+": not a library folder")
+		return
+	}
+	if !s.traversable(r, in.Ino) {
+		s.fail(w, fmt.Errorf("media %s: %w", canonical, syscall.EACCES))
 		return
 	}
 	offset := 0

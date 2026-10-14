@@ -371,7 +371,13 @@ sealed secrets after the snapshot catalogue. Codec 12 is reserved for sealed S3 
 took 11. Codec 13 is the mesh (docs/20, I-326): `NodeUpsert` with `Key`, `Endpoints`
 and `MeshPort`, `MetaSet` with the subnet and the next host, ops 26–27 (`PendingAdd`,
 `PendingDelete`), and snapshot frame 13 with the pending rows; the release that carries
-it starts a new cluster, so nothing gates it against an older member.
+it starts a new cluster, so nothing gates it against an older member. Codec 14 is users,
+groups and permissions (docs/21, I-349; after 1.0): `Actor` and `System` on every
+command, ops 28–32 (`Invite`, `User`, `Group`, `Grant`, `Session`), `ByUser` on a
+secret, and snapshot frame 14 with the users, groups, grants, open invites and sessions
+after the secrets;
+the leader refuses the ops and an actor-carrying command with `ErrCodec` while a live
+member reads codec 13 (`meta.CodecUsers`), and enforcement waits for the first user.
 
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are

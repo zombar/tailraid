@@ -152,7 +152,7 @@ func TestSeal_Open(t *testing.T) {
 func TestStore_ReplicatedAcrossNodes(t *testing.T) {
 	ctx := context.Background()
 	c := newCluster(t, 3)
-	if err := c.stores[0].Set(ctx, "tmdb", "k3y-value"); err != nil {
+	if err := c.stores[0].Set(ctx, 0, "tmdb", "k3y-value"); err != nil {
 		t.Fatal(err)
 	}
 	for i, s := range c.stores {
@@ -175,14 +175,14 @@ func TestStore_ReplicatedAcrossNodes(t *testing.T) {
 		}
 	}
 	// replaced through another node, read through the first
-	if err := c.stores[2].Set(ctx, "tmdb", "second"); err != nil {
+	if err := c.stores[2].Set(ctx, 0, "tmdb", "second"); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := c.stores[0].Get(ctx, "tmdb"); v != "second" {
 		t.Errorf("after the replace: %q", v)
 	}
 	// a removal reaches every node
-	if err := c.stores[1].Remove(ctx, "tmdb", false); err != nil {
+	if err := c.stores[1].Remove(ctx, 0, "tmdb", false); err != nil {
 		t.Fatal(err)
 	}
 	for i, s := range c.stores {
@@ -198,7 +198,7 @@ func TestStore_ReplicatedAcrossNodes(t *testing.T) {
 func TestStore_FetchChecksTheKeyID(t *testing.T) {
 	ctx := context.Background()
 	c := newCluster(t, 2)
-	if err := c.stores[0].Set(ctx, "tmdb", "v"); err != nil {
+	if err := c.stores[0].Set(ctx, 0, "tmdb", "v"); err != nil {
 		t.Fatal(err)
 	}
 	wrong := make([]byte, KeySize)
@@ -232,7 +232,7 @@ func TestStore_KeyRace(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range 2 {
-		wg.Go(func() { errs[i] = c.stores[i].Set(ctx, []string{"a", "b"}[i], "value") })
+		wg.Go(func() { errs[i] = c.stores[i].Set(ctx, 0, []string{"a", "b"}[i], "value") })
 	}
 	wg.Wait()
 	if errs[0] != nil || errs[1] != nil {
@@ -272,18 +272,18 @@ func TestStore_Bounds_RemoveAll(t *testing.T) {
 		{"tmdb", strings.Repeat("x", meta.MaxSecretValue), nil},
 		{"s3/b2", "{}", nil},
 	} {
-		if err := s.Set(ctx, tc.name, tc.value); !errors.Is(err, tc.want) || tc.want == nil && err != nil {
+		if err := s.Set(ctx, 0, tc.name, tc.value); !errors.Is(err, tc.want) || tc.want == nil && err != nil {
 			t.Errorf("Set(%q, %d bytes): %v, want %v", tc.name, len(tc.value), err, tc.want)
 		}
 	}
 	old := c.fsms[0].SecretKeyID()
-	if err := c.stores[1].Remove(ctx, "", true); err != nil {
+	if err := c.stores[1].Remove(ctx, 0, "", true); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.fsms[0].Secrets()) != 0 || c.fsms[0].SecretKeyID() != (meta.KeyID{}) {
 		t.Fatal("remove all left secrets or the key ID")
 	}
-	if err := s.Set(ctx, "tmdb", "fresh"); err != nil {
+	if err := s.Set(ctx, 0, "tmdb", "fresh"); err != nil {
 		t.Fatal(err)
 	}
 	if id := c.fsms[1].SecretKeyID(); id == (meta.KeyID{}) || id == old {
@@ -301,7 +301,7 @@ func TestStore_Opened(t *testing.T) {
 	ctx := context.Background()
 	c := newCluster(t, 2)
 	for name, v := range map[string]string{"s3/a": "1", "s3/b": "2", "tmdb": "3"} {
-		if err := c.stores[0].Set(ctx, name, v); err != nil {
+		if err := c.stores[0].Set(ctx, 0, name, v); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -317,10 +317,10 @@ func TestStore_Opened(t *testing.T) {
 	if got := c.stores[1].Opened("s3/"); len(got) != 2 || got["s3/a"] != "1" || got["s3/b"] != "2" {
 		t.Fatalf("opened %v", got)
 	}
-	if err := c.stores[0].Set(ctx, "s3/a", "1b"); err != nil {
+	if err := c.stores[0].Set(ctx, 0, "s3/a", "1b"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.stores[0].Remove(ctx, "s3/b", false); err != nil {
+	if err := c.stores[0].Remove(ctx, 0, "s3/b", false); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.stores[1].Opened("s3/"); len(got) != 1 || got["s3/a"] != "1b" {
@@ -377,7 +377,7 @@ func TestStore_EnsureKey_OnceOnANode(t *testing.T) {
 func TestStore_Fetch_OutsideTheLock(t *testing.T) {
 	ctx := context.Background()
 	c := newCluster(t, 2)
-	if err := c.stores[0].Set(ctx, "tmdb", "v"); err != nil {
+	if err := c.stores[0].Set(ctx, 0, "tmdb", "v"); err != nil {
 		t.Fatal(err)
 	}
 	c.stores[1].Fetch = func(context.Context) ([]byte, error) {

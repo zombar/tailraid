@@ -14,6 +14,17 @@ tailraid secret rm --all               # if every device lost the key: start ove
 
 Details: [docs/19-secrets.md](19-secrets.md).
 
+## Users (designed, built after 1.0)
+
+A person gets an identity from an admin's one-time invite: `tailraid user invite kim`
+prints a code, and Kim runs `tailraid user create kim <code>` on their own device, which
+makes a key in their keychain. No password anywhere. Another device of Kim's is another
+key (`user key invite`, then `user key add <code>` there). Folders are shared with
+`grant <path> kim read|write|admin` or to a group (`@family`), nothing is shared until
+it is, and the browser signs a person in from the link `tailraid web login` prints.
+Every change that matters is signed by the person who made it and written to an audit
+log you read with `audit ls`. Design: [docs/21-users.md](21-users.md).
+
 ## Command reference
 
 Every command takes `--json`, and `--node <ip>` to talk to another device. `tailraid <command> --help` has the details.
@@ -27,7 +38,8 @@ Every command takes `--json`, and `--node <ip>` to talk to another device. `tail
 | Maintenance | `repair` (also runs every minute) · `gc` · `fsck` |
 | Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` · `media scrape [path]` |
 | Snapshots | `mirror add\|ls\|remove` · `mirror ls\|cat\|export <mirror path> …` · `snapshot ls\|create\|restore` · `versions <path> [--revert\|--copy]` |
-| Secrets | `secret set <name>` · `secret ls` · `secret rm <name>\|--all` |
+| Secrets | `secret set <name> [--system]` · `secret get <name>` · `secret ls [--system]` · `secret rm <name>\|--all` |
+| Users (docs/21) | `user invite\|create\|ls\|key\|disable\|enable\|rm\|bind\|bootstrap` · `group create\|rm\|add\|remove\|ls` · `grant <path> <user\|@group> read\|write\|admin` · `revoke` · `access ls` · `audit ls` · `web login\|logout` |
 | Recovery | `export <dir>` · `recover --voters <id>` · `stats seal` |
 | Releases | `update [--check\|--rollback\|--restart]` · `version` |
 

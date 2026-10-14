@@ -170,6 +170,63 @@ func CheckInvariants(st *State) []string {
 		}
 	}
 	checkSnaps(st, bad)
+	// Users, groups and permissions (docs/21): the built-in groups exist with the first
+	// user, every member and grant subject is a row, a removed user is in no group, every
+	// grant names an inode and a session a user, and nothing is past its bound.
+	if len(st.Users) > 0 {
+		if g := st.Groups[GroupAdmins]; g == nil || g.Name != "admins" {
+			bad("users exist without the admins group")
+		}
+		if g := st.Groups[GroupEveryone]; g == nil || g.Name != "everyone" || len(g.Members) != 0 {
+			bad("users exist without the everyone group, or it has members")
+		}
+	}
+	if len(st.Users) > MaxUsers || len(st.Groups) > MaxGroups || len(st.Grants) > MaxGrants || len(st.Invites) > MaxInvites {
+		bad("a users table is past its bound: %d users, %d groups, %d grants, %d invites", len(st.Users), len(st.Groups), len(st.Grants), len(st.Invites))
+	}
+	for idx, u := range st.Users {
+		if u.Idx != idx || idx == 0 || idx >= st.NextUser || !UserName.MatchString(u.Name) || len(u.Keys) > MaxKeysPerUser {
+			bad("user %d: row %+v", idx, u)
+		}
+	}
+	for idx, g := range st.Groups {
+		if g.Idx != idx || idx == 0 || idx >= st.NextGroup || !slices.IsSorted(g.Members) {
+			bad("group %d: row %+v", idx, g)
+		}
+		for _, m := range g.Members {
+			if u := st.Users[m]; u == nil || u.State == UserRemoved {
+				bad("group %d: member %d is not a live user", idx, m)
+			}
+		}
+	}
+	for key, g := range st.Grants {
+		if g.Ino != key.Ino || g.Subject != key.Subject || g.Role == RoleNone || g.Role > RoleAdmin {
+			bad("grant %+v: row %+v", key, g)
+		}
+		if _, ok := st.Inodes[key.Ino]; !ok {
+			bad("grant on inode %d, which does not exist", key.Ino)
+		}
+		switch key.Subject.Kind {
+		case SubjectUser:
+			if u := st.Users[UserIdx(key.Subject.Idx)]; u == nil || u.State == UserRemoved {
+				bad("grant for user %d, which is not a live row", key.Subject.Idx)
+			}
+		case SubjectGroup:
+			if st.Groups[GroupIdx(key.Subject.Idx)] == nil {
+				bad("grant for group %d, which does not exist", key.Subject.Idx)
+			}
+		default:
+			bad("grant %+v: unknown subject kind", key)
+		}
+	}
+	for h, se := range st.Sessions {
+		if se.Hash != h {
+			bad("session keyed by the wrong hash")
+		}
+		if u := st.Users[se.User]; u == nil || u.State != UserActive {
+			bad("session of user %d, which is not active", se.User)
+		}
+	}
 	sort.Strings(v)
 	return v
 }

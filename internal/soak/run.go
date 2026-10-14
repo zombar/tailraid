@@ -183,10 +183,13 @@ type Run struct {
 	// EvidenceDir, when set and the Env is an EvidenceTaker, receives the rig's evidence at
 	// a phase's first failed check, in a folder per phase (I-270).
 	EvidenceDir string
-	Rng         *rand.Rand
-	Seed        int64    // the Rng's seed, for the report
-	Flags       []string // run flags worth recording ("destructive", "restarts")
-	Root        string   // volume directory for this run, e.g. /_soak/20261008T1200
+	// scratch carries what one phase made for a later one (the people of phases 28–31).
+	scratch map[string]any
+
+	Rng   *rand.Rand
+	Seed  int64    // the Rng's seed, for the report
+	Flags []string // run flags worth recording ("destructive", "restarts")
+	Root  string   // volume directory for this run, e.g. /_soak/20261008T1200
 
 	mu        sync.Mutex
 	records   []Record

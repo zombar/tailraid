@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid sign in</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <span class="who">pike</span>
+  <button type="button" class="theme" title="Theme: system (tap for light)" aria-label="Theme: system (tap for light)"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm40-83q119-15 199.5-104.5T800-480q0-123-80.5-212.5T520-797v634Z"/></svg><span>system</span></button>
+</header>
+<main class="signin">
+  <section class="card signin-card">
+    <h2>Sign in</h2>
+    <p>This volume knows its people by a key on their own device, not by a password. On a device where you have a tailraid identity, run:</p>
+    <pre class="signin-cmd">tailraid web login</pre>
+    <p class="small">It prints a link that opens here and signs this browser in to the volume for a week, on every node's page. The link is a one-time code minted by your key; it works once and for five minutes.</p>
+    <div class="error">That link was already used, or is older than five minutes. Run the command again for a new one.</div>
+    <p class="note">No identity yet? Ask an admin for an invite: <span class="mono">tailraid user invite &lt;name&gt;</span> on their side, <span class="mono">tailraid user create &lt;name&gt; &lt;code&gt;</span> on yours.</p>
+  </section>
+</main>
+</body>
+</html>
