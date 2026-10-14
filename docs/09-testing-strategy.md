@@ -150,8 +150,8 @@ offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrOwnerAndTimes`,
 and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_PutGetHeadDelete_SizeBoundaries`;
 `TestChunkRPC_DeleteFence`,
 `TestChunkRPC_DeleteFence`, ;
-`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`,
-`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`, ;
+`TestTable_DeniesStrangerPendingAndRemoved`,
+`TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`;
 `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`; ;
 `TestListen_RefusesNonLoopbackWithoutAuthorizer`.
 
@@ -172,7 +172,7 @@ Scenarios: `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestCluster_Ki
 `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestCluster_GCDoesNotDeleteInflightUpload`,
 `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestModelCheck_Long`,
 `TestIDStream_RejectsForeignCluster`, 
-`TestJoin_TokenAndIdentity`, `TestCluster_UpdateAddr_ChangesRPCAddr`,
+`TestJoin_TokenAndKey`, `TestCluster_UpdateAddr_ChangesRPCAddr`,
 `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestSecondOpen_IsRefused`.
 
 **Data-loss specific** — `TestCrash_AtEveryPoint`: for each hook, start a write of a known

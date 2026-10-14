@@ -39,7 +39,7 @@ func TestBrowserCommand_PerOS(t *testing.T) {
 // Invariant: I-143
 func TestCLI_Dashboard(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())
@@ -68,7 +68,7 @@ func TestCLI_Dashboard(t *testing.T) {
 // Invariant: I-192
 func TestCLI_StatsSeal(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())

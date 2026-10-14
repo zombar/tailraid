@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,9 +45,13 @@ type Config struct {
 	SMB struct {
 		Password string `yaml:"password"` // the share's password; init and join generate one when listen.smb is set (docs/15 §6)
 	} `yaml:"smb"`
-	Tailscale struct {
-		CLI string `yaml:"cli"` // path override for the tailscale binary
-	} `yaml:"tailscale"`
+	Mesh struct {
+		Port      int    `yaml:"port"`                // the device's UDP port (docs/20 §1)
+		Endpoint  string `yaml:"endpoint,omitempty"`  // a public host:port the operator knows reaches this device
+		Subnet    string `yaml:"subnet,omitempty"`    // init only: the cluster's /24 (default: derived from the cluster ID)
+		Address   string `yaml:"address,omitempty"`   // this device's address with the subnet's bits, written by init and join; survives reset
+		Interface string `yaml:"interface,omitempty"` // the interface name on Linux and Windows (default tailraid0 / tailraid); macOS picks a utun
+	} `yaml:"mesh"`
 	Log struct {
 		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
 		Format string `yaml:"format"` // text | json (env TAILRAID_LOG_FORMAT overrides)
@@ -109,8 +114,11 @@ type Config struct {
 		MaxBytes   string `yaml:"max_bytes,omitempty"`   // index size past which contents are no longer indexed (default 256MiB; at least 16MiB)
 	} `yaml:"search,omitempty"`
 	Dev struct {
-		Enabled       bool   `yaml:"enabled"`
-		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
+		Enabled bool `yaml:"enabled"`
+		// MeshFake replaces the mesh with plain addresses for the CLI tests, which cannot
+		// open a TUN: a JSON file `{"addr": "127.0.0.1"}`; the node binds that address and
+		// joins without an introduce (docs/09 §3).
+		MeshFake string `yaml:"mesh_fake,omitempty"`
 	} `yaml:"dev"`
 	// Path is the file Load read, never written to it: the daemon rewrites the file
 	// there (node.voter follows the member row, docs/12 §7, I-176).
@@ -446,6 +454,7 @@ const (
 	DefaultRaftPort = 20480
 	DefaultRPCPort  = 20481
 	DefaultWebPort  = 20482
+	DefaultMeshPort = 20483 // UDP (docs/20 §1)
 	DefaultNFSAddr  = "127.0.0.1:20490"
 )
 
@@ -458,6 +467,8 @@ func Default() Config {
 	c.Listen.Raft = DefaultRaftPort
 	c.Listen.RPC = DefaultRPCPort
 	c.Listen.Web = DefaultWebPort
+	c.Mesh.Port = DefaultMeshPort
+	c.Mesh.Interface = "tailraid0"
 	c.Listen.NFS = DefaultNFSAddr
 	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
@@ -466,6 +477,7 @@ func Default() Config {
 		c.Listen.NFS = ""
 		c.Listen.SMB = DefaultSMBAddr
 		c.Mount.Path = "T:"
+		c.Mesh.Interface = "tailraid"
 	}
 	return c
 }
@@ -596,6 +608,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: listen.web %d: want 0 (off) or a TCP port", w)
 	} else if w != 0 && (w == c.Listen.RPC || w == c.Listen.Raft) {
 		return fmt.Errorf("config: listen.web %d must differ from listen.rpc and listen.raft", w)
+	}
+	if err := c.validateMesh(); err != nil {
+		return err
 	}
 	// the rest of I-126: every port in range and distinct, known log settings, an
 	// absolute mount path
@@ -888,4 +903,33 @@ func (l *LogFile) Close() error {
 	err := l.f.Close()
 	l.f = nil
 	return err
+}
+
+// validateMesh checks the mesh keys (docs/20 §10): a UDP port, an endpoint of the form
+// host:port, a subnet that is an IPv4 /24, an address with its subnet's bits.
+func (c *Config) validateMesh() error {
+	if p := c.Mesh.Port; p < 1 || p > 65535 {
+		return fmt.Errorf("config: mesh.port %d: want a UDP port", p)
+	}
+	if e := c.Mesh.Endpoint; e != "" {
+		if _, _, err := net.SplitHostPort(e); err != nil {
+			return fmt.Errorf("config: mesh.endpoint %q: want host:port", e)
+		}
+	}
+	if s := c.Mesh.Subnet; s != "" {
+		p, err := netip.ParsePrefix(s)
+		if err != nil || !p.Addr().Is4() || p.Bits() != 24 {
+			return fmt.Errorf("config: mesh.subnet %q: want an IPv4 /24", s)
+		}
+	}
+	if a := c.Mesh.Address; a != "" {
+		p, err := netip.ParsePrefix(a)
+		if err != nil || !p.Addr().Is4() || p.Bits() != 24 {
+			return fmt.Errorf("config: mesh.address %q: want an IPv4 address with its /24 (as init or join wrote it)", a)
+		}
+	}
+	if f := c.Dev.MeshFake; f != "" && !c.Dev.Enabled {
+		return errors.New("config: dev.mesh_fake needs dev.enabled")
+	}
+	return nil
 }

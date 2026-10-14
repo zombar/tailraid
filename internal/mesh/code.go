@@ -14,7 +14,7 @@ import (
 )
 
 // The join code (docs/20 §4): version ‖ cluster ID ‖ token ‖ bootstrap key ‖ bootstrap
-// host ‖ mesh port ‖ endpoints ‖ check, as one lowercase base32 string.
+// host ‖ mesh port ‖ RPC port ‖ endpoints ‖ check, as one lowercase base32 string.
 const (
 	codeVersion  = 1
 	TokenLen     = 16 // base32 characters: 80 bits
@@ -32,7 +32,7 @@ var (
 var (
 	b32      = base32.StdEncoding.WithPadding(base32.NoPadding)
 	tokenRE  = regexp.MustCompile(`^[a-z2-7]{16}$`)
-	codeTail = len(Key{}) + 1 + 2 + 1 + checkLen // after the token: key, host, port, count, check
+	codeTail = len(Key{}) + 1 + 2 + 2 + 1 + checkLen // after the token: key, host, mesh port, RPC port, count, check
 )
 
 // JoinCode is what `init` and `tailraid token` print and `join <code>` takes.
@@ -42,6 +42,7 @@ type JoinCode struct {
 	Key       Key      // the bootstrap device's public key
 	Host      uint8    // its host number in the subnet
 	Port      uint16   // its mesh port
+	RPCPort   uint16   // its RPC port: where /v1/join goes once the tunnel is up
 	Endpoints []string // where to send the introduce: host:port, at most MaxEndpoints
 }
 
@@ -75,6 +76,7 @@ func (c JoinCode) Encode() (string, error) {
 	b = append(b, c.Key[:]...)
 	b = append(b, c.Host)
 	b = binary.BigEndian.AppendUint16(b, c.Port)
+	b = binary.BigEndian.AppendUint16(b, c.RPCPort)
 	b = append(b, byte(len(c.Endpoints)))
 	for _, e := range c.Endpoints {
 		if e == "" || len(e) > maxEndpoint {
@@ -123,6 +125,8 @@ func DecodeJoinCode(s string) (JoinCode, error) {
 	c.Host = body[p]
 	p++
 	c.Port = binary.BigEndian.Uint16(body[p:])
+	p += 2
+	c.RPCPort = binary.BigEndian.Uint16(body[p:])
 	p += 2
 	n := int(body[p])
 	p++

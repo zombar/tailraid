@@ -68,8 +68,8 @@ func NodeRow(name string, prev, cur *Snapshot) Row {
 				rate("disk_r", cm.DiskRead, pm.DiskRead)
 				rate("net_rx", cm.NetRx, pm.NetRx)
 				rate("net_tx", cm.NetTx, pm.NetTx)
-				rate("tailnet_rx", cm.TailnetRx, pm.TailnetRx)
-				rate("tailnet_tx", cm.TailnetTx, pm.TailnetTx)
+				rate("mesh_rx", cm.MeshRx, pm.MeshRx)
+				rate("mesh_tx", cm.MeshTx, pm.MeshTx)
 			}
 			if pg, cg := prev.Gateway, cur.Gateway; pg != nil && cg != nil {
 				counter := func(k string, now, before uint64) {

@@ -23,7 +23,7 @@ the word index, quote it with another word or use --under.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			c, addr, _, err := localClient(ctx, cmd)
+			c, addr, _, err := localClient(cmd)
 			if err != nil {
 				return err
 			}

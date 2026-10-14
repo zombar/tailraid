@@ -48,7 +48,7 @@ func netVitals(m *MachineReport, tailnet *net.Interface) {
 		idx = uint32(tailnet.Index) //nolint:gosec // an interface index
 	}
 	if rx, tx, trx, ttx, ok := sumIfRows(rows, idx); ok {
-		m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
+		m.NetRx, m.NetTx, m.MeshRx, m.MeshTx = rx, tx, trx, ttx
 	}
 }
 

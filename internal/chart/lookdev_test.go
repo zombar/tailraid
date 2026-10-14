@@ -184,11 +184,11 @@ func lookdevCharts() []struct{ id, svg string } {
 		{Name: "write MiB/s", Points: pts(func(x float64) float64 { return wburst(x)*(40+noise(6)) + math.Abs(noise(0.4)) })},
 		{Name: "read MiB/s", Points: pts(func(x float64) float64 { return rburst(x)*(90+noise(12)) + math.Abs(noise(0.6)) })},
 	}, marks, nil, ax))
-	add("tailnet", Line("Network (tailnet)", "MiB/s", []Series{
-		{Name: "tailnet rx MiB/s", Points: pts(func(x float64) float64 {
+	add("tailnet", Line("Network (mesh)", "MiB/s", []Series{
+		{Name: "mesh rx MiB/s", Points: pts(func(x float64) float64 {
 			return rburst(x)*(60+noise(8)) + pass(x)*(9+noise(3)) + wburst(x)*(3+noise(1)) + math.Abs(noise(0.3))
 		})},
-		{Name: "tailnet tx MiB/s", Points: pts(func(x float64) float64 {
+		{Name: "mesh tx MiB/s", Points: pts(func(x float64) float64 {
 			return wburst(x)*(66+noise(8)) + pass(x)*(8+noise(3)) + rburst(x)*(2+noise(1)) + math.Abs(noise(0.3))
 		})},
 	}, marks, nil, ax))

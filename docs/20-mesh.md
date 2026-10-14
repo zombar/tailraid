@@ -22,7 +22,13 @@ tests); PR 2 the identity in the FSM and the RPC (`Node.Key`, `Endpoints` and `M
 `Meta.MeshSubnet`, the pending rows with ops 26–27 at codec 13, `cluster.Node.Introduce`,
 the join from a pending row, `update_endpoints`,
 the pending expiry, `rpc.TableAuthorizer` and `/health`'s `seen_from`); what each later PR
-wires is a stub in `test/invariants/mesh_stubs_test.go`. The release
+wires is a stub in `test/invariants/mesh_stubs_test.go`; PR 3 put the node on it
+(`internal/node/network.go`: the device opened before Raft, peers from the table, the
+seed and the pending rows, the path monitor, the candidates published, the pending
+expiry, `/health`'s `seen_from`, `status.mesh` and `node ls`'s PATH; `tailraid init`
+prints the code, `join <code>` introduces and joins, `token` prints the code; the table
+authorizer everywhere; `internal/tailscale` deleted; `dev.mesh_fake` for the CLI tests,
+which cannot open a TUN). The release
 that carries the mesh starts a new cluster: there is no migration from a Tailscale
 cluster, by decision (the volume was being re-created anyway).*
 
@@ -94,9 +100,10 @@ device while the mesh is up, which is what the override is for.
 **Allocation.** The leader gives each device an address at its introduce (§4):
 `Meta.NextMeshHost++` within the subnet, hosts 1–254, never reused (as `Idx` is never
 reused), `init`'s node taking .1; `status` warns at 200. `Node.Addr` is the mesh address
-and never changes for the life of the row: the `update_addr` member op, the exception
-that let a non-member source change an address (I-93 under Tailscale) and the address
-watch in `serve` are gone. Inner traffic is IPv4; the outer socket is dual-stack and a
+and never changes for the life of the row: the exception that let a non-member source
+change an address (under Tailscale, an IP change) and the address watch in `serve` are
+gone; `update_addr` stays a leader-side member op nothing in the node calls. Inner
+traffic is IPv4; the outer socket is dual-stack and a
 global IPv6 address is an endpoint candidate (§5), often the best path there is.
 
 **Peers.** A node's WireGuard peers are exactly the rows its authorizer admits (docs/08):
@@ -328,6 +335,7 @@ counters (docs/12 §8) are the mesh interface's, `mesh_rx_bytes` and `mesh_tx_by
 | `mesh.relay_rate` | 20 MiB/s | what this device forwards for others (§6) |
 | `repair.relay` | `avoid` | background work on relayed paths (§8) |
 | `mount.uid`, `mount.gid` | from `SUDO_UID` | macOS: the owner the NFS mount shows |
+| `dev.mesh_fake` | — | with `dev.enabled`: a JSON file `{"addr": "127.0.0.1"}` replacing the device for the CLI tests, which cannot open a TUN; the node binds that address and joins by the code's token without an introduce (docs/09 §3) |
 
 Gone: `tailscale.cli`, `dev.tailscale_fake` (`Validate` names them with the hint).
 
@@ -353,6 +361,12 @@ round-trip table.
   print a standard WireGuard configuration (a QR code for the official app) peering with
   every node that has a public endpoint; the browser UI would admit members and clients.
   Until then the browser UI admits cluster members only (docs/13 §2).
+- **Users and groups** (after 1.0). The mesh makes a device's key its identity; a
+  permissions system needs a second layer, who a key belongs to. The client rows above
+  are where it goes (a row carries an owner and groups), the check runs in the FSM's
+  apply path as the protected flag does (docs/13), so every mount and the browser agree,
+  and the authorizers already answer with an `rpc.Principal` (a member row today, a
+  user with groups then) rather than a bare row, so the rows are not reshaped later.
 - **Re-keying** a device without a reset, and rotating the cluster subnet.
 
 ## Invariants
@@ -439,16 +453,16 @@ round-trip table.
 | Invariant | Tests |
 |---|---|
 | I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
-| I-317 | `TestMesh_PeersExchangePackets`; stub `TestStub_I_317` for the node's listeners and peer set |
-| I-318 | `TestTableAuthorizer_Table`; stub `TestStub_I_318` for the node's listeners |
+| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
+| I-318 | `TestTableAuthorizer_Table`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly` |
 | I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
-| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`; stub `TestStub_I_321` for `tailraid join` itself |
-| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`; stub `TestStub_I_322` for the publishing |
+| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
+| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`; stub `TestStub_I_322` for the publishing on a real interface |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`; stub `TestStub_I_324` for the service units |
-| I-325 | `TestClassify_Table`; stub `TestStub_I_325` for `status` |
-| I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`; `serve`'s refusal of keyless rows comes with the node |
+| I-325 | `TestClassify_Table`, `TestLocalAddr_MeshFileThenConfig`; stub `TestStub_I_325` for `status` on a real interface |
+| I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`, `TestKeylessCheck` |
 | I-327 | stub `TestStub_I_327` |
 | I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need); stub `TestStub_I_328` |
 | I-329 | stub `TestStub_I_329` |

@@ -37,7 +37,7 @@ func Catalogue(node string, members []string) []Frame {
 		line(id, title, labels...)
 	}
 	ns("throughput", "Client throughput", "write MiB/s", "read MiB/s")
-	ns("tailnet", "Network (tailnet)", "tailnet rx MiB/s", "tailnet tx MiB/s")
+	ns("tailnet", "Network (mesh)", "mesh rx MiB/s", "mesh tx MiB/s")
 	ns("net", "Network (all interfaces)", "rx MiB/s", "tx MiB/s")
 	ns("cpu", "CPU", "process % of one CPU", "load (1 min)")
 	ns("memory", "Memory", "resident set", "memory available")

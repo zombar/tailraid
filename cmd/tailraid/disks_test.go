@@ -27,7 +27,7 @@ func TestCLI_InitWithDisks_AndAddDisk(t *testing.T) {
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	out, err := run(t, "init", "--config", path, "--token", "testtoken")
+	out, err := run(t, "init", "--config", path, "--token", testToken)
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}

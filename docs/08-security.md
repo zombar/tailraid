@@ -247,7 +247,9 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   volume itself. The node RPC routes that serve a mirror's trees and objects
   (`/v1/mirrors/{id}/…`) are authorized exactly as the shard routes are.
 - Per-user access control inside the volume (POSIX modes are stored, not enforced across
-  devices; S3 keys are per cluster, not per path).
+  devices; S3 keys are per cluster, not per path). Planned after 1.0 as users and groups
+  on client rows with the check in the FSM's apply path (docs/20 §11); the authorizers'
+  `Principal` is the seam.
 - Hiding the cluster: the UDP port answers a handshake initiation from a configured peer
   only, but its existence is observable.
 - Audit logging.
@@ -301,12 +303,6 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
   it knows answers, the leader among them. The route answers members only, so the list
   never leaves the cluster; a row only ever widens the seed, and the leader's table
   replaces it once it arrives.
-- **I-93** — *Retired with the mesh (20 §3): a member's address never changes, so no
-  request from a non-member source is ever accepted; the number stays with the Tailscale
-  rule it named until its tests go with the code.* Under Tailscale: `update_addr` from an
-  address that is not in the member table is accepted only when the caller's WhoIs
-  StableID is that of the member it names, and changes nothing but that member's
-  address; every other op from a non-member is rejected with 403.
 - **I-97** — Reading a PUT or `apply` body and writing a GET body carry a deadline derived
   from the largest transfer (`BodyTimeout`, default `callTimeout(MaxShard)`), so a peer
   that stalls mid-transfer releases its slot when the deadline passes.
@@ -338,15 +334,14 @@ Shards are stored in plaintext on each node's disk. Encryption at rest is a non-
 
 | Invariant | Tests |
 |---|---|
-| I-18 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge` (replaced by the table authorizer's tests with docs/20's PR 2) |
-| I-48 | `TestCluster_JoinDrainRemove`, `TestJoin_RateLimitedPerSource`, `TestJoin_TokenAndIdentity`, `TestToken_Rotate` |
+| I-18 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestTable_DeniesStrangerPendingAndRemoved` |
+| I-48 | `TestCluster_JoinDrainRemove`, `TestJoin_RateLimitedPerSource`, `TestJoin_TokenAndKey`, `TestToken_Rotate` |
 | I-49 | `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`, `TestIDStream_RejectsForeignCluster` |
 | I-50 | `TestListen_RefusesNonLoopbackWithoutAuthorizer`, `TestNFS_FSStatAndUnsupported`, `TestSMB_ListenRefusesNonLoopback` |
 | I-92 | `TestIDStream_RefusesNonMemberBeforeHandshake`, `TestMemberSeed_RoundTrip`, `TestCLI_Join_NoFlags` |
 | I-134 | `TestMembersFromLog_MatchesTable` |
 | I-281 | `TestStartSeed_NamesMembersJoinedAfterTheSnapshot` |
 | I-282 | `TestMemberList_MembersOnly_DeviceRows`, `TestSeedFetch_AddsMembersAPeerKnows` |
-| I-93 | `TestMembers_UpdateAddrFromUnknownAddress` (goes with the op) |
 | I-94 | `TestJoin_AddrMustBeCaller`, `TestJoin_RejoinRequiresSameStableID`, `TestCluster_RejoinAfterReset_ReplacesOldServer` |
 | I-97 | `TestPut_StalledBodyFreesSlot` |
 | I-255 | `TestClient_ControlBurst_ReusesConnections` |

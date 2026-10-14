@@ -43,11 +43,15 @@ var (
 // Options configure Open and Bootstrap.
 type Options struct {
 	DataDir   string
-	NodeID    string         // raft.ServerID; LoadOrCreateNodeID
-	ClusterID [16]byte       // for the Raft stream handshake; Bootstrap generates it
-	RaftAddr  string         // TCP bind/advertise address when Transport is nil
-	Transport raft.Transport // tests pass raft.NewInmemTransport
-	Logger    *slog.Logger
+	NodeID    string   // raft.ServerID; LoadOrCreateNodeID
+	ClusterID [16]byte // for the Raft stream handshake; Bootstrap generates it
+	RaftAddr  string   // TCP bind/advertise address when Transport is nil
+	// RaftAdvertise, when set, is the address the configuration records for this
+	// server while RaftAddr is only where it listens: init binds loopback before the
+	// mesh interface exists and advertises the mesh address serve will bind (docs/20 §9).
+	RaftAdvertise string
+	Transport     raft.Transport // tests pass raft.NewInmemTransport
+	Logger        *slog.Logger
 	// Timing overrides the documented Raft timeouts (docs/02 §Raft configuration); nil
 	// keeps them. The test harness shortens them.
 	Timing *RaftTiming
@@ -243,7 +247,7 @@ func (o *Options) transport(logOutput io.Writer) (raft.Transport, error) {
 	if o.Transport != nil {
 		return o.Transport, nil
 	}
-	return NewTransport(o.RaftAddr, o.ClusterID, logOutput, o.Faults, o.PeerAuth, o.Logger)
+	return NewTransport(o.RaftAddr, o.RaftAdvertise, o.ClusterID, logOutput, o.Faults, o.PeerAuth, o.Logger)
 }
 
 // LoadClusterID reads <data_dir>/cluster_id.
@@ -298,9 +302,11 @@ func Bootstrap(ctx context.Context, o Options, self meta.Node, vol meta.SetVolum
 	if o.hasState() {
 		return nil, ErrAlreadyInit
 	}
-	var cid [16]byte
-	_, _ = rand.Read(cid[:])
-	o.ClusterID = cid
+	cid := o.ClusterID // init draws it first, so the subnet and the first address follow it (docs/20 §3)
+	if cid == [16]byte{} {
+		_, _ = rand.Read(cid[:])
+		o.ClusterID = cid
+	}
 	if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
 		return nil, err
 	}

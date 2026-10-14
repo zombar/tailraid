@@ -8,7 +8,7 @@ import (
 )
 
 func sampleCode(n int) JoinCode {
-	c := JoinCode{Token: "abcdefghijklmnop", Host: 1, Port: 20483}
+	c := JoinCode{Token: "abcdefghijklmnop", Host: 1, Port: 20483, RPCPort: 20481}
 	for i := range c.ClusterID {
 		c.ClusterID[i] = byte(i * 3)
 	}
@@ -37,7 +37,7 @@ func TestJoinCode_RoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode %q: %v", in, err)
 		}
-		if got.ClusterID != c.ClusterID || got.Token != c.Token || got.Key != c.Key || got.Host != c.Host || got.Port != c.Port || strings.Join(got.Endpoints, ",") != strings.Join(c.Endpoints, ",") {
+		if got.ClusterID != c.ClusterID || got.Token != c.Token || got.Key != c.Key || got.Host != c.Host || got.Port != c.Port || got.RPCPort != c.RPCPort || strings.Join(got.Endpoints, ",") != strings.Join(c.Endpoints, ",") {
 			t.Fatalf("round trip: %+v != %+v", got, c)
 		}
 	}
@@ -91,7 +91,7 @@ func TestJoinCode_Refusals_Table(t *testing.T) {
 		{"not base32", "!!!!"},
 		{"short", good[:20]},
 		{"a flipped character", flip(good, 30)},
-		{"a flipped check", flip(good, len(good)-1)},
+		{"a flipped check", flip(good, len(good)-4)}, // the last character may carry only padding bits
 		{"truncated", good[:len(good)-2]},
 	}
 	for _, tc := range bad {

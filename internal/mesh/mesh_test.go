@@ -361,7 +361,7 @@ func TestIntroduce_EndToEnd(t *testing.T) {
 	intro := &fakeIntroducer{addr: want}
 	b := newNode(t, 2, Options{TokenKey: func() []byte { return IntroduceKey(token, testCluster) }, Introducer: intro})
 	a := newNode(t, 1, Options{})
-	code := JoinCode{ClusterID: testCluster, Token: token, Key: b.m.Key(), Host: 2, Port: b.m.Port(), Endpoints: []string{"127.0.0.1:1", b.loopback().String()}}
+	code := JoinCode{ClusterID: testCluster, Token: token, Key: b.m.Key(), Host: 2, Port: b.m.Port(), RPCPort: 20481, Endpoints: []string{"127.0.0.1:1", b.loopback().String()}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	got, err := a.m.Introduce(ctx, code)

@@ -42,7 +42,7 @@ func serveInBackground(t *testing.T, cfg config.Config) (context.Context, string
 // Invariant: I-119
 func TestCLI_Serve_RefusesLegacyState(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	n := openFSM(t, cfg)
@@ -74,9 +74,11 @@ func TestCLI_Serve_RefusesLegacyState(t *testing.T) {
 // Invariant: I-121
 func TestCLI_Join_RegistersConfiguredDisks(t *testing.T) {
 	pathA, cfgA := devHome(t)
-	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
-		t.Fatalf("init: %v\n%s", err, out)
+	initOut, err := run(t, "init", "--config", pathA, "--token", testToken)
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, initOut)
 	}
+	code := joinCodeFrom(t, initOut)
 	ctx, addrA := serveInBackground(t, cfgA)
 
 	pathB, cfgB := devHome(t)
@@ -85,7 +87,7 @@ func TestCLI_Join_RegistersConfiguredDisks(t *testing.T) {
 	if err := config.Save(pathB, cfgB); err != nil {
 		t.Fatal(err)
 	}
-	out, err := run(t, "join", "--config", pathB, addrA, "testtoken")
+	out, err := run(t, "join", "--config", pathB, code)
 	if err != nil {
 		t.Fatalf("join: %v\n%s", err, out)
 	}
@@ -136,13 +138,13 @@ func TestCLI_Join_RegistersConfiguredDisks(t *testing.T) {
 // Invariant: I-121
 func TestCLI_Init_NoDisks_PrintsHint(t *testing.T) {
 	pathA, cfgA := devHome(t)
-	out, err := run(t, "init", "--config", pathA, "--token", "testtoken")
+	out, err := run(t, "init", "--config", pathA, "--token", testToken)
 	if err != nil || !strings.Contains(out, node.NoDisksHint) {
 		t.Fatalf("init without disks: %v\n%s", err, out)
 	}
-	_, addrA := serveInBackground(t, cfgA)
+	_, _ = serveInBackground(t, cfgA)
 	pathB, _ := devHome(t)
-	out, err = run(t, "join", "--config", pathB, addrA, "testtoken")
+	out, err = run(t, "join", "--config", pathB, joinCodeFrom(t, out))
 	if err != nil || !strings.Contains(out, node.NoDisksHint) {
 		t.Fatalf("join without disks: %v\n%s", err, out)
 	}
@@ -151,7 +153,7 @@ func TestCLI_Init_NoDisks_PrintsHint(t *testing.T) {
 	if err := config.Save(pathC, cfgC); err != nil {
 		t.Fatal(err)
 	}
-	out, err = run(t, "init", "--config", pathC, "--token", "testtoken")
+	out, err = run(t, "init", "--config", pathC, "--token", testToken)
 	if err != nil || strings.Contains(out, node.NoDisksHint) {
 		t.Fatalf("init with a disk: %v\n%s", err, out)
 	}

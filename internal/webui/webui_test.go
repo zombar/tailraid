@@ -24,7 +24,6 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
-	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
 	"github.com/zombar/tailraid/internal/webui"
@@ -37,11 +36,6 @@ func TestMain(m *testing.M) {
 var (
 	ctx  = context.Background()
 	loop = netip.MustParseAddr("127.0.0.1") // httptest clients come from loopback
-)
-
-const (
-	login   = "jim@example.com"
-	stableS = "self-1"
 )
 
 func must(t *testing.T, err error) {
@@ -57,8 +51,7 @@ type ui struct {
 	t           *testing.T
 	f           *testharness.Fabric
 	fs          *vfs.FS
-	ts          *tailscale.Fake
-	auth        *rpc.WhoIsAuthorizer
+	auth        *rpc.TableAuthorizer
 	srv         *webui.Server
 	hs          *httptest.Server
 	member      atomic.Bool
@@ -76,17 +69,15 @@ func newUIWith(t *testing.T, prep func(*testharness.Fabric), opts ...func(*webui
 		prep(f)
 	}
 	u := &ui{t: t, f: f, fs: f.FS(), client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	u.ts = tailscale.NewFake(loop, stableS, nil)
-	u.ts.SetUser(loop, login)
 	u.member.Store(true)
-	u.auth = &rpc.WhoIsAuthorizer{TS: u.ts, Clk: f.Clk, Member: func(addr string) (meta.Node, bool) {
+	u.auth = &rpc.TableAuthorizer{Member: func(addr string) (meta.Node, bool) {
 		if u.member.Load() && addr == loop.String() {
-			return meta.Node{Idx: 1, ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: stableS, Addr: addr}, true
+			return meta.Node{Idx: 1, ID: "n1", Name: "one", Kind: meta.KindDevice, Addr: addr}, true
 		}
 		return meta.Node{}, false
 	}}
 	o := webui.Options{
-		FS: u.fs, Store: f.FSM, Auth: u.auth, Login: login, Clk: f.Clk, Logger: slog.New(slog.DiscardHandler),
+		FS: u.fs, Store: f.FSM, Auth: u.auth, Clk: f.Clk, Logger: slog.New(slog.DiscardHandler),
 		Status: func() any { u.statusCalls.Add(1); return map[string]any{"node": "one"} },
 		Chunks: func(ctx context.Context, p string, off, lim int) (int, []admin.ChunkReport, error) {
 			return admin.DescribeChunksPage(ctx, f.FSM, nil, f, nil, p, off, lim)
@@ -165,46 +156,38 @@ func TestWebUI_New_RequiresAuthorizer(t *testing.T) {
 }
 
 // Invariant: I-68
-func TestWebUI_Authorize_MemberOrSameUser(t *testing.T) {
+func TestWebUI_Authorize_MembersOnly(t *testing.T) {
 	u := newUI(t)
-	noLogin := newUI(t, func(o *webui.Options) { o.Login = "" })
 	cases := []struct {
 		name   string
-		u      *ui
 		member bool
-		setup  func(*ui)
 		want   int
 	}{
-		{"member, same login", u, true, nil, 200},
-		{"member, other login", u, true, func(x *ui) { x.ts.SetUser(loop, "other@example.com") }, 200},
-		{"non-member, same login", u, false, func(x *ui) { x.ts.SetUser(loop, login) }, 200},
-		{"non-member, other login", u, false, func(x *ui) { x.ts.SetUser(loop, "other@example.com") }, 403},
-		{"non-member, tagged with the right login", u, false, func(x *ui) { x.ts.SetUser(loop, login, "tag:server") }, 403},
-		{"own login unresolved, caller has none", noLogin, false, func(x *ui) { x.ts.SetUser(loop, "") }, 403},
-		{"own login unresolved, caller is a member", noLogin, true, nil, 200},
-		{"not on the tailnet", u, false, func(x *ui) { x.ts.Remove(loop) }, 403},
-		{"whois down, non-member", u, false, func(x *ui) { x.ts.Add(loop, stableS, "self"); x.ts.Err = errors.New("down") }, 503},
-		{"whois down, member", u, true, func(x *ui) { x.ts.Err = errors.New("down") }, 503},
+		{"member", true, 200},
+		{"a device that is not a member", false, 403},
+		{"member again", true, 200},
 	}
 	for _, c := range cases {
-		c.u.member.Store(c.member)
-		c.u.ts.Err = nil
-		if c.setup != nil {
-			c.setup(c.u)
-		}
-		c.u.auth.Purge()
-		code, _, body := c.u.get("/api/ls?path=/")
+		u.member.Store(c.member)
+		u.auth.Purge()
+		code, _, body := u.get("/api/ls?path=/")
 		if code != c.want {
 			t.Errorf("%s: %d %s, want %d", c.name, code, body, c.want)
 		}
 	}
+	// the seed stands in for the table while a joiner's own table is empty (docs/08 §Join)
+	u.member.Store(false)
+	u.auth.SetSeed([]meta.Node{{Idx: 1, ID: "n1", Kind: meta.KindDevice, State: meta.Active, Addr: loop.String()}})
+	if code, _, body := u.get("/api/ls?path=/"); code != 200 {
+		t.Errorf("seeded member: %d %s", code, body)
+	}
+	u.auth.SetSeed(nil)
 }
 
 // Invariant: I-68
 func TestWebUI_Authorize_BeforeBody(t *testing.T) {
 	u := newUI(t)
 	u.member.Store(false)
-	u.ts.SetUser(loop, "other@example.com")
 	u.auth.Purge()
 	// a huge body from a refused source: the server answers without reading it
 	pr, pw := net.Pipe()

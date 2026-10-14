@@ -21,7 +21,7 @@ func chunkCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// answered by the node asked (its own event ring), not forwarded to the leader
-			cl, addr, _, err := localClient(cmd.Context(), cmd)
+			cl, addr, _, err := localClient(cmd)
 			if err != nil {
 				return err
 			}

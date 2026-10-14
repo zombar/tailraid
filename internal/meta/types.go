@@ -7,8 +7,6 @@
 package meta
 
 import (
-	"crypto/rand"
-	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -629,13 +627,4 @@ func DecodeSnapHandle(b []byte) (SnapHandle, bool) {
 		return SnapHandle{}, false
 	}
 	return SnapHandle{Snap: SnapID(binary.BigEndian.Uint32(b[4:8])), Gen: binary.BigEndian.Uint32(b[8:12]), Ino: binary.BigEndian.Uint64(b[12:20])}, true
-}
-
-// NewJoinToken returns a fresh join token: 8 random base32 characters (docs/08 §Join).
-func NewJoinToken() string {
-	var b [5]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("meta: crypto/rand: " + err.Error())
-	}
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:]))
 }

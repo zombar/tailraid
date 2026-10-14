@@ -26,7 +26,7 @@ Raspberry Pi over Wi‑Fi would be a new steady load.
 ```json
 {"t":1760184000,"n":"jockey","m":{"cpu":0.12,"load1":0.8,"rss":412000000,"mem_avail":2100000000,
  "mem_pressure":0.4,"disk_free":512000000000,"disk_w":1200000,"disk_r":80000,
- "net_rx":2400000,"net_tx":900000,"tailnet_rx":2100000,"tailnet_tx":880000,
+ "net_rx":2400000,"net_tx":900000,"mesh_rx":2100000,"mesh_tx":880000,
  "heap":96000000,"sys":180000000,"goroutines":212,"dirty":0,"wal":0,"plan":0,"flush":0,
  "ra_fetched":3.2,"ra_joined":2.9,"prefetching":2,"bytes_r":1900000,"bytes_w":0}}
 ```
@@ -42,7 +42,7 @@ Raspberry Pi over Wi‑Fi would be a new steady load.
 | `disk_free` | bytes | gauge | `machine.disk_free` |
 | `disk_w`, `disk_r` | bytes/s | rate | `machine.disk_written_bytes`, `machine.disk_read_bytes` |
 | `net_rx`, `net_tx` | bytes/s | rate | `machine.net_rx_bytes`, `machine.net_tx_bytes` (12 §8, I-190) |
-| `tailnet_rx`, `tailnet_tx` | bytes/s | rate | `machine.tailnet_rx_bytes`, `machine.tailnet_tx_bytes` |
+| `tailnet_rx`, `tailnet_tx` | bytes/s | rate | `machine.mesh_rx_bytes`, `machine.mesh_tx_bytes` |
 | `heap`, `sys`, `goroutines` | bytes, bytes, count | gauge | `process.*` |
 | `dirty`, `wal`, `plan`, `flush` | bytes | gauge | `gateway.dirty_bytes`, `wal_bytes`, `plan_bytes`, `flush_bytes` |
 | `ra_fetched`, `ra_joined` | chunks/s | rate | `gateway.readahead_fetched`, `readahead_joined` |

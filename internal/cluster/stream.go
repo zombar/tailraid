@@ -14,7 +14,7 @@ import (
 
 	"github.com/hashicorp/raft"
 
-	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 )
 
 // ErrClusterMismatch is returned when a Raft peer presents a different cluster ID.
@@ -40,7 +40,7 @@ func (s *tcpStream) Addr() net.Addr            { return s.advertise }
 // (docs/08 §Raft transport, I-92): the same member-by-IP plus WhoIs StableID rule the
 // RPC server applies. rpc.WhoIsAuthorizer implements it.
 type PeerAuth interface {
-	Allow(ctx context.Context, src netip.Addr) (meta.Node, error)
+	Allow(ctx context.Context, src netip.Addr) (rpc.Principal, error)
 }
 
 // idStream wraps a StreamLayer with the member check on accept and a 16-byte cluster-ID
@@ -232,14 +232,17 @@ func (s *idStream) pump() {
 // cluster-ID handshake; faults (may be nil) refuses peers under a /dev/fault rule in both
 // directions; auth nil accepts any peer that passes the handshake (tests only: serve and
 // join always pass the WhoIs authorizer).
-func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults Faults, auth PeerAuth, log *slog.Logger) (raft.Transport, error) {
+func NewTransport(bind, advertise string, clusterID [16]byte, logOutput io.Writer, faults Faults, auth PeerAuth, log *slog.Logger) (raft.Transport, error) {
 	var lc net.ListenConfig // raft owns the listener's lifetime through Transport.Close
 	l, err := lc.Listen(context.Background(), "tcp", bind)
 	if err != nil {
 		return nil, fmt.Errorf("cluster: raft listen %s: %w", bind, err)
 	}
 	adv := l.Addr()
-	if host, port, err := net.SplitHostPort(bind); err == nil && host != "" && host != "0.0.0.0" {
+	if advertise == "" {
+		advertise = bind
+	}
+	if host, port, err := net.SplitHostPort(advertise); err == nil && host != "" && host != "0.0.0.0" {
 		if tcp, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(host, port)); err == nil {
 			adv = tcp
 		}

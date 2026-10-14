@@ -468,7 +468,7 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		NodeID: nd.ID, ClusterID: c.CID, Version: "harness", Applier: nd.Node,
 		Disk: nd.disks.lookup, DiskHealth: nd.disks.health,
 		Fence: fence{nd}, Joiner: nd.Node, Auth: rpc.AllowAll{Node: meta.Node{TSStableID: harnessStableID}}, Members: nd.Node.FSM.Nodes,
-		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute,
+		JoinToken: func() string { return nd.Node.FSM.Meta().JoinToken }, KeylessJoin: true, Clk: c.Clk, MaxShard: 1 << 20, Grace: 10 * time.Minute,
 	})
 	if err != nil {
 		c.T.Fatal(err)

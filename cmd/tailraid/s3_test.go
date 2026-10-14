@@ -30,7 +30,7 @@ func TestCLI_AddS3_AndKeys(t *testing.T) {
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

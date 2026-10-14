@@ -14,6 +14,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/chunk"
+	"github.com/zombar/tailraid/internal/mesh"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 	"github.com/zombar/tailraid/internal/rpc"
@@ -133,7 +134,7 @@ func TestToken_Rotate(t *testing.T) {
 	raw, err := opsFor(c, leader).AdminOp(ctx, rpc.AdminOp{Op: "rotate_token"})
 	must(t, err)
 	tok := raw.(map[string]string)["join_token"]
-	if len(tok) != 8 || tok == before.JoinToken {
+	if !mesh.ValidToken(tok) || tok == before.JoinToken {
 		t.Fatalf("new token %q (old %q)", tok, before.JoinToken)
 	}
 	c.Settle()

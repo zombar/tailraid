@@ -33,7 +33,7 @@ func TestCatalogue_MatchesCharts(t *testing.T) {
 	members := []string{"one", "two"}
 	var rows []Row
 	metrics := map[string]float64{}
-	for _, m := range []string{"bytes_w", "bytes_r", "tailnet_rx", "tailnet_tx", "net_rx", "net_tx", "cpu", "load1", "rss", "mem_avail", "mem_pressure", "disk_free", "disk_w", "disk_r", "wal", "dirty", "plan", "flush", "heap", "sys", "ra_fetched", "ra_joined", "prefetching"} {
+	for _, m := range []string{"bytes_w", "bytes_r", "mesh_rx", "mesh_tx", "net_rx", "net_tx", "cpu", "load1", "rss", "mem_avail", "mem_pressure", "disk_free", "disk_w", "disk_r", "wal", "dirty", "plan", "flush", "heap", "sys", "ra_fetched", "ra_joined", "prefetching"} {
 		metrics[m] = 1
 	}
 	for s := int64(0); s < 3600; s += 60 {

@@ -315,7 +315,7 @@ and disk charts for the sampled node, with peaks in the totals table.
 
 **Network.** `machine` also carries four cumulative byte counters: `net_rx_bytes` and
 `net_tx_bytes` summed over every interface but loopback, and `mesh_rx_bytes` and
-`mesh_tx_bytes` for the mesh interface (`tailnet_rx_bytes`/`tailnet_tx_bytes` under
+`mesh_tx_bytes` for the mesh interface (`mesh_rx_bytes`/`mesh_tx_bytes` under
 Tailscale: the one interface that holds the node's address, found with the standard
 library's interface list, so the same on every OS). Linux reads
 `/proc/net/dev`; macOS the `net.route` interface list (`NET_RT_IFLIST2`, the
@@ -519,7 +519,7 @@ volume's bytes in the clear: keep the disk where the data may be.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
 - **I-190** — `status` reports `net_rx_bytes` and `net_tx_bytes` summed over every
   interface but loopback and `mesh_rx_bytes` and `mesh_tx_bytes` for the mesh interface
-  (docs/20; `tailnet_rx_bytes`/`tailnet_tx_bytes` under Tailscale), cumulative, on Linux, macOS and Windows; a
+  (docs/20; `mesh_rx_bytes`/`mesh_tx_bytes` under Tailscale), cumulative, on Linux, macOS and Windows; a
   counter the OS does not expose is absent, never zero, and none decreases between two
   reports from one process (I-85).
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, fails the Raft connections already open with it, stops incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
@@ -627,7 +627,7 @@ volume's bytes in the clear: keep the disk where the data may be.
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC`, `TestFaults_RuleFailsOpenRaftConnection` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder`, `TestConfig_NewRepairKeysWrittenOnlyWhenSet`, `TestConfig_TrashKeyWrittenOnlyWhenSet`, `TestConfig_CacheKeyWrittenOnlyWhenSet` |
-| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
+| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
 | I-190 | `TestVitals_RealMeasurementsOrAbsent`, `TestVitals_NetworkParsers_PerOS`, `TestVitals_IfList2Parser`, `TestVitals_IfTableSum`, `TestVitals_TailnetInterface_Match`, `TestVitals_CounterReset`, `TestReport_NetworkChart` |

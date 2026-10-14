@@ -234,5 +234,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged
-into I-11 and I-7 during review); I-58 is intentionally unused since the Windows portmap
+into I-11 and I-7 during review); I-93 is intentionally unused since the mesh (docs/20:
+a member's address never changes, so no request from a non-member source is accepted);
+I-58 is intentionally unused since the Windows portmap
 stub went with the SMB gateway of docs/15. Numbers are never reused.

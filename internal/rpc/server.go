@@ -89,8 +89,12 @@ type Options struct {
 	Auth         Authorizer
 	Members      func() []meta.Node
 	JoinToken    func() string
-	Status       func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
-	Stats        func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
+	// KeylessJoin admits a join without a mesh key, authenticated by the token and bound
+	// to the caller's address: the in-process harness and dev.mesh_fake, which have no
+	// introduce. A node on the mesh refuses one (docs/20 §4).
+	KeylessJoin bool
+	Status      func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
+	Stats       func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
 	// SecretKey is the cluster key this node holds itself, checked against the FSM's key
 	// ID (docs/19 §3, I-304): GET /v1/secrets/key answers a member with it, 404 without.
 	SecretKey func() ([]byte, bool)
@@ -225,14 +229,14 @@ func NewServer(o Options) (*Server, error) {
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
 	mux.Handle("GET /v1/mirrors/{idx}/{kind}/{hash}", s.clusterCheck(s.member(http.HandlerFunc(s.mirrorGet))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
-	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership, or the update_addr exception (docs/08 step 6, I-93)
+	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership; authorizes inside, so the member is known for update_endpoints
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
 	mux.Handle("POST /v1/admin", s.clusterCheck(s.member(http.HandlerFunc(s.admin))))
 	mux.Handle("GET /v1/status", s.clusterCheck(s.member(http.HandlerFunc(s.status))))
 	mux.Handle("GET /v1/members", s.clusterCheck(s.member(http.HandlerFunc(s.memberList))))
 	mux.Handle("GET /v1/stats", s.clusterCheck(s.member(http.HandlerFunc(s.stats))))
 	mux.Handle("GET /v1/secrets/key", s.clusterCheck(s.member(http.HandlerFunc(s.secretKey)))) // members only (docs/19 §3, I-304)
-	mux.Handle("POST /v1/join", http.HandlerFunc(s.join))                                      // token + claimed identity, not membership
+	mux.Handle("POST /v1/join", http.HandlerFunc(s.join))                                      // a pending joiner (docs/20 §4), or the token without a mesh
 	if o.Dev != nil {
 		mux.Handle("/dev/", s.clusterCheck(s.member(o.Dev)))
 	}
@@ -589,34 +593,44 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad join request")
 		return
 	}
-	// after a failed attempt a source IP gets one attempt per second (docs/08 threat
-	// table); the token compare is constant-time so a wrong token leaks nothing
-	if !s.joinAllowed(src.String()) {
-		writeErr(w, http.StatusTooManyRequests, "join: one attempt per second per source after a failure")
-		return
+	if req.Key != "" {
+		// a mesh join (docs/20 §4): the introduce consumed the token, and the pending row
+		// at the caller's address is the proof; a member may forward one for the pending
+		// joiner it names, and the leader checks the key against that address (I-321)
+		pending, _ := s.o.Auth.(PendingAuthorizer)
+		_, member := s.o.Auth.Allow(r.Context(), src)
+		switch {
+		case pending != nil && pending.IsPending(src):
+			req.Addr = src.String()
+		case member == nil && req.Addr != "":
+		default:
+			writeErr(w, http.StatusForbidden, "join: no introduce from this address")
+			return
+		}
+	} else {
+		if !s.o.KeylessJoin {
+			writeErr(w, http.StatusForbidden, "join: this cluster joins by code (tailraid join <code>)")
+			return
+		}
+		// after a failed attempt a source IP gets one attempt per second (docs/08 threat
+		// table); the token compare is constant-time so a wrong token leaks nothing
+		if !s.joinAllowed(src.String()) {
+			writeErr(w, http.StatusTooManyRequests, "join: one attempt per second per source after a failure")
+			return
+		}
+		if s.o.JoinToken == nil || req.Token == "" || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.o.JoinToken())) != 1 {
+			s.joinFailed(src.String())
+			writeErr(w, http.StatusForbidden, "bad join token")
+			return
+		}
+		// the record's address is the caller's (I-94): a token holder cannot point a
+		// member record at another device
+		if req.Addr != "" && req.Addr != src.String() {
+			writeErr(w, http.StatusForbidden, "join: addr must be the caller's own address or empty")
+			return
+		}
+		req.Addr = src.String()
 	}
-	if s.o.JoinToken == nil || req.Token == "" || subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.o.JoinToken())) != 1 {
-		s.joinFailed(src.String())
-		writeErr(w, http.StatusForbidden, "bad join token")
-		return
-	}
-	id, err := s.o.Auth.Identify(r.Context(), src)
-	if err != nil {
-		s.joinFailed(src.String())
-		writeErr(w, http.StatusForbidden, "join: "+err.Error())
-		return
-	}
-	if id != req.TSStableID {
-		writeErr(w, http.StatusForbidden, "join: claimed tailnet identity does not match the caller")
-		return
-	}
-	// the record's address is the caller's (I-94): a token holder cannot point a member
-	// record at another device
-	if req.Addr != "" && req.Addr != src.String() {
-		writeErr(w, http.StatusForbidden, "join: addr must be the caller's own address or empty")
-		return
-	}
-	req.Addr = src.String()
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "join not available")
 		return
@@ -642,11 +656,8 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// members authorizes like every other endpoint (a member, before the body is read) with
-// one exception (docs/08 step 6, I-93): update_addr arrives from an address that is, by
-// definition, not in the member table yet. A non-member's body is read (64 KiB at most)
-// only to learn the op; update_addr is then allowed when WhoIs(src) is the StableID of the
-// member named in it, and it changes nothing but that member's address.
+// members authorizes like every other endpoint (a member, before the body is read); a
+// member's update_endpoints names its own row only (docs/20 §5, I-322).
 func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 	src, ok := SourceAddr(r)
 	if !ok {
@@ -654,8 +665,12 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	caller, authErr := s.o.Auth.Allow(r.Context(), src)
-	if authErr != nil && errors.Is(authErr, ErrUnavailable) {
-		writeErr(w, http.StatusServiceUnavailable, authErr.Error())
+	if authErr != nil {
+		if errors.Is(authErr, ErrUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, authErr.Error())
+			return
+		}
+		writeErr(w, http.StatusForbidden, authErr.Error())
 		return
 	}
 	var op MemberOp
@@ -663,34 +678,9 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad member op")
 		return
 	}
-	if authErr == nil && op.Op == "update_endpoints" && caller.Idx != op.NodeIdx {
-		writeErr(w, http.StatusForbidden, "update_endpoints: a member publishes its own candidates only") // docs/20 §5, I-322
+	if op.Op == "update_endpoints" && caller.Node.Idx != op.NodeIdx {
+		writeErr(w, http.StatusForbidden, "update_endpoints: a member publishes its own candidates only")
 		return
-	}
-	if authErr != nil {
-		if op.Op != "update_addr" {
-			writeErr(w, http.StatusForbidden, authErr.Error())
-			return
-		}
-		id, err := s.o.Auth.Identify(r.Context(), src)
-		if err != nil {
-			writeErr(w, http.StatusForbidden, "update_addr: "+err.Error())
-			return
-		}
-		var named meta.Node
-		if s.o.Members != nil {
-			members := s.o.Members()
-			for i := range members {
-				if members[i].Idx == op.NodeIdx && members[i].State != meta.Removed {
-					named = members[i]
-				}
-			}
-		}
-		if named.Idx == 0 || named.TSStableID != id {
-			writeErr(w, http.StatusForbidden, "update_addr: the caller is not the tailnet node of the member it names")
-			return
-		}
-		op = MemberOp{Op: "update_addr", NodeIdx: op.NodeIdx, Addr: op.Addr}
 	}
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "members not available")

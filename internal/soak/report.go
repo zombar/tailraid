@@ -306,7 +306,7 @@ func charts(s Summary) ([]template.HTML, string) {
 	free := chart.Series{Name: "data disk free"}
 	dwr, drd := chart.Series{Name: "disk write MiB/s"}, chart.Series{Name: "disk read MiB/s"}
 	nrx, ntx := chart.Series{Name: "rx MiB/s (every interface)"}, chart.Series{Name: "tx MiB/s (every interface)"}
-	trx, ttx := chart.Series{Name: "tailnet rx MiB/s"}, chart.Series{Name: "tailnet tx MiB/s"}
+	trx, ttx := chart.Series{Name: "mesh rx MiB/s"}, chart.Series{Name: "mesh tx MiB/s"}
 	trashB, pinnedB := chart.Series{Name: "trash bytes"}, chart.Series{Name: "pinned cache bytes"}
 	haveTrash := false
 	sdocs, spend := chart.Series{Name: "indexed files"}, chart.Series{Name: "pending"}
@@ -356,9 +356,9 @@ func charts(s Summary) ([]template.HTML, string) {
 		haveDiskIO = haveDiskIO || sm.DiskWriteBps > 0 || sm.DiskReadBps > 0
 		nrx.Points = append(nrx.Points, [2]float64{x(rec), sm.NetRxBps / (1 << 20)})
 		ntx.Points = append(ntx.Points, [2]float64{x(rec), sm.NetTxBps / (1 << 20)})
-		trx.Points = append(trx.Points, [2]float64{x(rec), sm.TailnetRxBps / (1 << 20)})
-		ttx.Points = append(ttx.Points, [2]float64{x(rec), sm.TailnetTxBps / (1 << 20)})
-		haveNet = haveNet || sm.NetRxBps > 0 || sm.NetTxBps > 0 || sm.TailnetRxBps > 0 || sm.TailnetTxBps > 0
+		trx.Points = append(trx.Points, [2]float64{x(rec), sm.MeshRxBps / (1 << 20)})
+		ttx.Points = append(ttx.Points, [2]float64{x(rec), sm.MeshTxBps / (1 << 20)})
+		haveNet = haveNet || sm.NetRxBps > 0 || sm.NetTxBps > 0 || sm.MeshRxBps > 0 || sm.MeshTxBps > 0
 		for name, slots := range sm.Slots {
 			ns, ok := nodeSeries[name]
 			if !ok {

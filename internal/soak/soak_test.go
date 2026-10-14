@@ -34,7 +34,6 @@ import (
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/soak"
 	"github.com/zombar/tailraid/internal/stats"
-	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
 	"github.com/zombar/tailraid/internal/webui"
@@ -237,9 +236,8 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 	go p.Run(wctx)
 	e.pins[nd.I], e.stop[nd.I] = p, cancel
 	loop := netip.MustParseAddr("127.0.0.1")
-	ts := tailscale.NewFake(loop, "soak-driver", nil)
-	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: e.c.Clk, Member: func(string) (meta.Node, bool) {
-		return meta.Node{Idx: nd.Idx(), ID: nd.ID, Name: n.Name, Kind: meta.KindDevice, TSStableID: "soak-driver", Addr: loop.String()}, true
+	auth := &rpc.TableAuthorizer{Member: func(string) (meta.Node, bool) {
+		return meta.Node{Idx: nd.Idx(), ID: nd.ID, Name: n.Name, Kind: meta.KindDevice, Addr: loop.String()}, true
 	}}
 	ui, err := webui.New(webui.Options{
 		FS: nd.FS, Store: nd.Node.FSM, Auth: auth, Clk: e.c.Clk, Logger: slog.New(slog.DiscardHandler), Retention: 30 * 24 * time.Hour, Pins: p,

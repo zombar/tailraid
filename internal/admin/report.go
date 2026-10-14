@@ -41,9 +41,10 @@ type NodeReport struct {
 	Version    string       `json:"version"`
 	Applied    uint64       `json:"applied"`
 	Slots      int          `json:"slots"`
-	Missing    int          `json:"missing_slots"` // slots this node should hold but is dead for
-	Dev        bool         `json:"dev,omitempty"` // /dev/* endpoints enabled
-	Web        uint16       `json:"web,omitempty"` // the member's browser UI port, 0 when off: the dashboard links its pages by tsIP and this port (docs/13 §1)
+	Path       string       `json:"path,omitempty"` // this node's path to the member: lan, wan, relay or none (docs/20 §8)
+	Missing    int          `json:"missing_slots"`  // slots this node should hold but is dead for
+	Dev        bool         `json:"dev,omitempty"`  // /dev/* endpoints enabled
+	Web        uint16       `json:"web,omitempty"`  // the member's browser UI port, 0 when off: the dashboard links its pages by tsIP and this port (docs/13 §1)
 	TSStable   string       `json:"ts_stable_id,omitempty"`
 	JoinedAt   time.Time    `json:"joined_at"`
 	Diskless   bool         `json:"diskless,omitempty"`    // a device with no disk rows: a gateway-only host (docs/14 §9)
@@ -237,6 +238,7 @@ type Report struct {
 	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
 	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
+	Mesh                *MeshReport    `json:"mesh,omitempty"`    // this node's device and its paths (docs/20 §10, I-325)
 	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
 	Mirrors             []MirrorReport `json:"mirrors,omitempty"` // this host's mirrors (docs/16, docs/12 §11)
 	GeneratedAt         time.Time      `json:"generated_at"`
@@ -504,4 +506,30 @@ func liveSnapshots(rows []meta.Snapshot) int {
 		}
 	}
 	return n
+}
+
+// MeshReport is this node's device as `status` shows it (docs/20 §10, I-325).
+type MeshReport struct {
+	Addr      string     `json:"addr"`
+	Interface string     `json:"interface,omitempty"`
+	Port      uint16     `json:"port"`
+	RPCPort   uint16     `json:"rpc_port"`
+	Key       string     `json:"key,omitempty"`       // this device's public key, for the join code
+	Endpoints []string   `json:"endpoints,omitempty"` // the candidates its row publishes
+	Fake      bool       `json:"fake,omitempty"`      // dev.mesh_fake: no device
+	RxBytes   uint64     `json:"rx_bytes,omitempty"`
+	TxBytes   uint64     `json:"tx_bytes,omitempty"`
+	Peers     []MeshPeer `json:"peers,omitempty"`
+}
+
+// MeshPeer is one peer of the device.
+type MeshPeer struct {
+	Idx          meta.NodeIdx `json:"idx,omitempty"`
+	Name         string       `json:"name,omitempty"`
+	Key          string       `json:"key"`
+	Class        string       `json:"class"` // lan, wan, relay or none
+	Endpoint     string       `json:"endpoint,omitempty"`
+	HandshakeAge string       `json:"handshake_age,omitempty"`
+	Rx           uint64       `json:"rx_bytes,omitempty"`
+	Tx           uint64       `json:"tx_bytes,omitempty"`
 }

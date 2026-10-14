@@ -22,7 +22,7 @@ func TestSampler_NodeRow_RatesAndAbsence(t *testing.T) {
 	if r1.T != t0.Unix() || r1.N != "jockey" || r1.C != nil {
 		t.Fatalf("row %+v", r1)
 	}
-	for _, rate := range []string{"cpu", "disk_w", "disk_r", "net_rx", "net_tx", "tailnet_rx", "ra_fetched", "bytes_r", "bytes_w"} {
+	for _, rate := range []string{"cpu", "disk_w", "disk_r", "net_rx", "net_tx", "mesh_rx", "ra_fetched", "bytes_r", "bytes_w"} {
 		if _, ok := r1.M[rate]; ok {
 			t.Errorf("first row carries the rate %s", rate)
 		}
@@ -43,7 +43,7 @@ func TestSampler_NodeRow_RatesAndAbsence(t *testing.T) {
 	}
 	// ten seconds on: rates from the differences; a counter that went backwards (a
 	// restart) carries no rate; a counter the OS stopped exposing carries none
-	mac2 := &admin.MachineReport{CPUSeconds: 103, Load1: 0.9, RSSPeak: 400e6, MemTotal: 8e9, MemAvailable: 2e9, DiskFree: 5e11, DiskTotal: 1e12, NetRx: 1000 + 20480, NetTx: 400, TailnetRx: 50}
+	mac2 := &admin.MachineReport{CPUSeconds: 103, Load1: 0.9, RSSPeak: 400e6, MemTotal: 8e9, MemAvailable: 2e9, DiskFree: 5e11, DiskTotal: 1e12, NetRx: 1000 + 20480, NetTx: 400, MeshRx: 50}
 	gw2 := &admin.GatewayReport{ReadaheadFetched: 30, ReadaheadJoined: 8, BytesRead: 1<<20 + 10240, BytesWritten: 5120, Prefetching: 2}
 	second := &Snapshot{T: t0.Add(10 * time.Second), Machine: mac2, Gateway: gw2, Process: first.Process}
 	r2 := NodeRow("jockey", first, second)
@@ -52,7 +52,7 @@ func TestSampler_NodeRow_RatesAndAbsence(t *testing.T) {
 			t.Errorf("%s = %v (%v), want %v", k, got, ok, want)
 		}
 	}
-	for _, absent := range []string{"net_tx", "tailnet_rx", "disk_w", "disk_r"} {
+	for _, absent := range []string{"net_tx", "mesh_rx", "disk_w", "disk_r"} {
 		if _, ok := r2.M[absent]; ok {
 			t.Errorf("%s has a rate it should not: %v", absent, r2.M[absent])
 		}

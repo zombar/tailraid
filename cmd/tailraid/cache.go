@@ -83,7 +83,7 @@ func printPins(w io.Writer, rep pins.Report) error {
 
 // localCall sends an admin op to this device's node (or --node), not the leader.
 func localCall(cmd *cobra.Command, op rpc.AdminOp) (json.RawMessage, error) {
-	c, addr, _, err := localClient(cmd.Context(), cmd)
+	c, addr, _, err := localClient(cmd)
 	if err != nil {
 		return nil, err
 	}

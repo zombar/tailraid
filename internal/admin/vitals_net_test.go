@@ -42,13 +42,13 @@ func TestVitals_NetworkParsers_PerOS(t *testing.T) {
 // zero address and an address nobody holds give none.
 // Invariant: I-190
 func TestVitals_TailnetInterface_Match(t *testing.T) {
-	if tailnetInterface(netip.Addr{}) != nil {
+	if meshInterface(netip.Addr{}) != nil {
 		t.Error("the zero address matched an interface")
 	}
-	if tailnetInterface(netip.MustParseAddr("192.0.2.1")) != nil {
+	if meshInterface(netip.MustParseAddr("192.0.2.1")) != nil {
 		t.Error("a documentation address matched an interface")
 	}
-	lo := tailnetInterface(netip.MustParseAddr("127.0.0.1"))
+	lo := meshInterface(netip.MustParseAddr("127.0.0.1"))
 	if lo == nil {
 		t.Skip("no loopback address on this host")
 	}

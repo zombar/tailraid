@@ -45,17 +45,22 @@ func TestTableAuthorizer_Table(t *testing.T) {
 	for _, tc := range cases {
 		src := netip.MustParseAddr(tc.src)
 		m, err := a.Allow(context.Background(), src)
-		if (err == nil) != tc.allowed || (err != nil && !errors.Is(err, ErrForbidden)) || m.Idx != tc.idx {
-			t.Errorf("%s: allowed=%v idx=%d err=%v", tc.src, err == nil, m.Idx, err)
+		if (err == nil) != tc.allowed || (err != nil && !errors.Is(err, ErrForbidden)) || m.Node.Idx != tc.idx {
+			t.Errorf("%s: allowed=%v idx=%d err=%v", tc.src, err == nil, m.Node.Idx, err)
 		}
 		if got := a.IsPending(src); got != tc.pending {
 			t.Errorf("%s: pending=%v, want %v", tc.src, got, tc.pending)
 		}
 	}
-	if _, err := a.Identify(context.Background(), netip.MustParseAddr("100.70.3.2")); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("Identify: %v", err)
+	changes := 0
+	a.OnChange = func() { changes++ }
+	a.Purge() // nothing to drop: the hook runs
+	if changes != 1 {
+		t.Fatalf("Purge ran the hook %d times", changes)
 	}
-	a.Purge() // nothing to drop
+	if s := a.Seed(); len(s) != 1 || s[0].Idx != 4 {
+		t.Fatalf("Seed: %+v", s)
+	}
 	var none TableAuthorizer
 	if _, err := none.Allow(context.Background(), netip.MustParseAddr("100.70.3.2")); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("an unbound authorizer admits: %v", err)

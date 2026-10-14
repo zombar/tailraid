@@ -106,8 +106,22 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 	n.memberMu.Lock()
 	defer n.memberMu.Unlock()
 	if !n.IsLeader() {
-		if n.LeaderRPCAddr() == "" {
+		leader := n.LeaderRPCAddr()
+		if leader == "" {
 			return rpc.JoinResponse{}, ErrNoLeader
+		}
+		// a mesh joiner holds the member it introduced itself to as a peer and not yet the
+		// leader, so that member forwards the join (docs/20 §4); a keyless joiner follows
+		// the redirect itself
+		n.fwdMu.Lock()
+		fwd := n.fwd
+		n.fwdMu.Unlock()
+		if req.Key != "" && fwd != nil {
+			resp, err := fwd.Join(ctx, leader, req)
+			if err != nil {
+				return rpc.JoinResponse{}, fmt.Errorf("%w: forwarded to %s: %w", ErrNotLeader, leader, err)
+			}
+			return resp, nil
 		}
 		return rpc.JoinResponse{}, ErrNotLeader
 	}

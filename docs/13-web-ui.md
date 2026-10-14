@@ -97,7 +97,9 @@ read, in this order:
 Under Tailscale a third step admitted a device of the same tailnet user (the phone), by
 its WhoIs login name; the mesh has no users, and a device that is not a node is a later
 feature (docs/20 §11: client peers, a row with a key and an address and nothing else,
-configured on the phone from a QR code). Until then the UI is for members.
+configured on the phone from a QR code; users and groups on those rows after 1.0, which
+is why `Allow` answers with a principal rather than a row). Until then the UI is for
+members.
 
 The listener also answers only to its own name: a request whose `Host` is not the
 listener's `<mesh addr>:port` is a `421` before
@@ -1101,7 +1103,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 
 | Invariant | Tests |
 |---|---|
-| I-68 | `TestWebUI_Authorize_MemberOrSameUser`, `TestWebUI_Authorize_BeforeBody`, `TestWhoIs_User_CachesLogin`, `TestWhoIs_Login_TaggedHasNone` |
+| I-68 | `TestWebUI_Authorize_MembersOnly`, `TestWebUI_Authorize_BeforeBody` |
 | I-69 | `TestWebUI_Get_RangeBoundaries`, `TestWebUI_Get_ETagAndHead`, `TestWebUI_Get_DirtyOverlayReadYourWrites`, `TestWebUI_Get_ContentTypes`, `TestVFS_StatReportsDirty` |
 | I-70 | `TestWebUI_Put_NewAndOverwrite`, `TestWebUI_Put_SizeBoundaries`, `TestWebUI_Put_WaitsForWALCap`, `TestWebUI_Mkdir`, `TestWebUI_Mutations_StaleIs503`, `TestVFS_CapErrorsKeepSentinels` |
 | I-71 | `TestWebUI_CSRFHeaderRequired`, `TestWebUI_Get_ContentTypes` |
