@@ -2,6 +2,17 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.8.2 (2026-10-14)
+
+### Changes
+
+- secrets: the S3 and TMDB keys move into the store, the old files are imported (I-308) ([4936dcb](https://github.com/zombar/tailraid/commit/4936dcb))
+- webui: the index CSP admits blob: images (I-315) ([d2d6661](https://github.com/zombar/tailraid/commit/d2d6661))
+
+### Documentation
+
+- README: a Secrets section and the secret commands in the reference ([ffe76e1](https://github.com/zombar/tailraid/commit/ffe76e1))
+
 ## v0.8.1 (2026-10-14)
 
 ### Changes
