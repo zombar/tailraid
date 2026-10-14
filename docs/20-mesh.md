@@ -333,8 +333,11 @@ OS, the CLI and the rigs).
 - **Windows.** The service already runs as LocalSystem; `depend= Tailscale` goes.
   `wintun.dll` (signed, redistributable under its prebuilt-binaries licence, which ships
   in the release) is embedded in the Windows binary and written beside the exe by
-  `install` and by `update` when absent or different; `install` adds one `netsh
-  advfirewall` inbound rule for the UDP port and `uninstall` removes it and the dll
+  `install` and by `update` when absent or different; `install` adds two `netsh
+  advfirewall` inbound rules, one for the UDP port and one for the program's TCP
+  listeners (the wintun adapter is an unidentified network, which Windows files under
+  the public profile and blocks unsolicited inbound TCP on: without the rule the
+  leader's Raft dial to the node timed out), and `uninstall` removes them and the dll
   (I-324).
 
 `tailraid update --restart` recreates the interface with the same address and port, so
@@ -452,8 +455,8 @@ round-trip table.
   `system` domain with its home under `/Library/Application Support/tailraid`; the
   Windows service runs with `wintun.dll` beside the exe, written by `install`, by
   `update` and by whatever opens the adapter (a `join` runs before any `install`) when
-  absent or different, and one inbound firewall rule for the UDP port,
-  both removed by `uninstall`; a `join` under sudo on Linux writes into the invoking
+  absent or different, and two inbound firewall rules, one for the UDP port and one
+  for the program's TCP listeners, all removed by `uninstall`; a `join` under sudo on Linux writes into the invoking
   user's config home, the one that user's unit names, and gives the data, config, disk
   and mirror directories back to that user; `serve` listens only once the interface's
   address takes a bind (Windows holds a fresh address tentative for a moment); `init`

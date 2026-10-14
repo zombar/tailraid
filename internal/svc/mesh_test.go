@@ -83,6 +83,9 @@ func TestSvc_MeshPrivileges(t *testing.T) {
 	if !containsString(cmds, "netsh advfirewall firewall add rule name=tailraid mesh dir=in action=allow protocol=UDP localport=20483") {
 		t.Errorf("windows install opens no firewall rule: %v", cmds)
 	}
+	if !containsString(cmds, "netsh advfirewall firewall add rule name=tailraid node dir=in action=allow protocol=TCP program="+p.Exe) {
+		t.Errorf("windows install opens no rule for the node's TCP listeners: %v", cmds)
+	}
 	if !containsString(pl.Notes, "wintun.dll beside "+p.Exe+" (docs/20 §9)") {
 		t.Errorf("notes %v", pl.Notes)
 	}
@@ -96,6 +99,16 @@ func TestSvc_MeshPrivileges(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("windows uninstall keeps the firewall rule: %v", un.Commands)
+	}
+	delNode := strings.Join([]string{"netsh", "advfirewall", "firewall", "delete", "rule", "name=tailraid node"}, " ")
+	found = false
+	for _, c := range un.Commands {
+		if strings.Join(c, " ") == delNode {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("windows uninstall keeps the node rule: %v", un.Commands)
 	}
 	if !notRunning(del, "No rules match the specified criteria.") {
 		t.Error("a rule that is not there must not fail the uninstall")
