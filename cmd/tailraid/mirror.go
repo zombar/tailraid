@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zombar/tailraid/internal/admin"
-	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mirror"
@@ -67,7 +66,7 @@ func mirrorAddCmd() *cobra.Command {
 			if host == nil {
 				return errors.New("this device is not in the node table")
 			}
-			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+			cid, err := clusterIDFrom(rep) // never the data directory: root's on macOS (docs/20 §9)
 			if err != nil {
 				return err
 			}
