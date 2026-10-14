@@ -108,3 +108,25 @@ func TestRollup_Rules(t *testing.T) {
 		t.Errorf("no rows: %d", len(got))
 	}
 }
+
+// A rollup takes the minimum of each path.<peer> (the worst class the interval saw)
+// and the mean of the rest, the round trips included; a peer absent from some rows is
+// judged on the rows that carry it.
+// Invariant: I-332
+func TestRollup_PathMinimum(t *testing.T) {
+	day := utc(2026, 10, 11, 0, 0)
+	at := func(s int) int64 { return day.Add(time.Duration(s) * time.Second).Unix() }
+	rows := []Row{
+		{T: at(0), N: "a", M: map[string]float64{"path.b": 3, "rtt.b": 4, "path.c": 1}},
+		{T: at(10), N: "a", M: map[string]float64{"path.b": 3, "rtt.b": 6, "path.c": 0}},
+		{T: at(20), N: "a", M: map[string]float64{"path.b": 2, "rtt.b": 8, "path.c": 1, "relayed": 100}},
+	}
+	out := Rollup(rows, Minute)
+	if len(out) != 1 {
+		t.Fatalf("%d rows", len(out))
+	}
+	m := out[0].M
+	if m["path.b"] != 2 || m["path.c"] != 0 || m["rtt.b"] != 6 || m["relayed"] != 100 {
+		t.Errorf("rollup %+v: want path.b 2 (the worst), path.c 0, rtt.b 6 (the mean), relayed 100", m)
+	}
+}

@@ -352,6 +352,6 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 | I-258 | `TestChart_Frame`, `TestCatalogue_MatchesCharts`, `TestWebUI_Stats_Stream_FramesFirst` |
 | I-259 | `TestStatic_StatsStreamsFramesFirst` |
 | I-196 | `TestStatsQuery_TierChoice_Table`, `TestStatsQuery_NameWindowAndRowFilter`, `TestStatsQuery_CacheBound_Table`, `TestStatsQuery_FanOut_TimeoutIsGap_BackOff`, `TestStatsQuery_Dedup_TermRule_Seeded`, `TestStatsQuery_Downsample_Points_Table`, `TestStatsQuery_Charts`, `TestWebUI_Stats_Route`, `TestStats_SealVisibleFromSecondGateway` (the cache-less reader) |
-| I-332 | stub `TestStub_I_332` (the sampler's peer keys and the relayed rate, the rollup's minimum, the two charts and their `node=all` shapes, phase 20 (g)) |
+| I-332 | `TestSampler_NodeRow_MeshKeys`, `TestRollup_PathMinimum`, `TestStatsQuery_MeshCharts`, `TestCatalogue_MatchesCharts`, soak phase 20 (g) and phase 26's cut round (the in-process harness has no mesh: both skip there) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (09 §2).

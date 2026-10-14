@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"maps"
 	"regexp"
 	"strconv"
 	"testing"
@@ -39,7 +40,14 @@ func TestCatalogue_MatchesCharts(t *testing.T) {
 	for s := int64(0); s < 3600; s += 60 {
 		at := from.Unix() + s
 		for _, n := range members {
-			rows = append(rows, Row{T: at, N: n, M: metrics})
+			m := map[string]float64{"relayed": 1}
+			maps.Copy(m, metrics)
+			for _, peer := range members { // the mesh keys (I-332): a path and a round trip to each other member
+				if peer != n {
+					m["path."+peer], m["rtt."+peer] = 3, 4
+				}
+			}
+			rows = append(rows, Row{T: at, N: n, M: m})
 		}
 		rows = append(rows, Row{T: at, Term: 1, By: "one", C: &Cluster{
 			Stored: 2, Logical: 1, Chunks: 1, Degraded: 1, Pending: 1, Stale: 1, Unreadable: 1, RepairMoved: 1,

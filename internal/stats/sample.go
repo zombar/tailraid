@@ -15,6 +15,49 @@ type Snapshot struct {
 	Machine *admin.MachineReport
 	Gateway *admin.GatewayReport
 	Process *admin.ProcessReport
+	Mesh    *MeshSample // nil on a device without a mesh
+}
+
+// MeshSample is the mesh's side of a snapshot (docs/17 §1, I-332): this device's path
+// to each peer and the bytes it has forwarded for other pairs, cumulative.
+type MeshSample struct {
+	Peers   []PeerSample
+	Relayed uint64
+}
+
+// PeerSample is one peer: its member name, the class of the path to it and the liveness
+// probe's last round trip (zero while none answered).
+type PeerSample struct {
+	Name  string
+	Class string // lan, wan, relay or none
+	RTT   time.Duration
+}
+
+// PathCode is the class as the row stores it: 3 lan, 2 wan, 1 relay, 0 none, so the
+// minimum over an interval is the worst class it saw.
+func PathCode(class string) float64 {
+	switch class {
+	case "lan":
+		return 3
+	case "wan":
+		return 2
+	case "relay":
+		return 1
+	}
+	return 0
+}
+
+// PathClass is the class a code stands for.
+func PathClass(code float64) string {
+	switch {
+	case code >= 3:
+		return "lan"
+	case code >= 2:
+		return "wan"
+	case code >= 1:
+		return "relay"
+	}
+	return "none"
 }
 
 // NodeRow turns the current snapshot into a row. A cumulative counter becomes a rate
@@ -52,6 +95,14 @@ func NodeRow(name string, prev, cur *Snapshot) Row {
 		m["sys"] = float64(p.Sys)
 		m["goroutines"] = float64(p.Goroutines)
 	}
+	if ms := cur.Mesh; ms != nil {
+		for _, p := range ms.Peers {
+			m["path."+p.Name] = PathCode(p.Class)
+			if p.RTT > 0 {
+				m["rtt."+p.Name] = float64(p.RTT) / float64(time.Millisecond)
+			}
+		}
+	}
 	if prev != nil {
 		dt := cur.T.Sub(prev.T).Seconds()
 		if dt > 0 {
@@ -81,6 +132,9 @@ func NodeRow(name string, prev, cur *Snapshot) Row {
 				counter("ra_joined", cg.ReadaheadJoined, pg.ReadaheadJoined)
 				counter("bytes_r", cg.BytesRead, pg.BytesRead)
 				counter("bytes_w", cg.BytesWritten, pg.BytesWritten)
+			}
+			if pm, cm := prev.Mesh, cur.Mesh; pm != nil && cm != nil && cm.Relayed >= pm.Relayed {
+				m["relayed"] = float64(cm.Relayed-pm.Relayed) / dt
 			}
 		}
 	}

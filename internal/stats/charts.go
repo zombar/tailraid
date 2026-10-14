@@ -3,6 +3,7 @@ package stats
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chart"
@@ -124,8 +125,33 @@ func Charts(rows []Row, from, to time.Time, node string) []Chart {
 		line(id, title, y, ss)
 	}
 	ns("throughput", "Client throughput", "MiB/s", [2]string{"bytes_w", "write MiB/s"}, [2]string{"bytes_r", "read MiB/s"})
-	ns("tailnet", "Network (mesh)", "MiB/s", [2]string{"mesh_rx", "mesh rx MiB/s"}, [2]string{"mesh_tx", "mesh tx MiB/s"})
+	ns("tailnet", "Network (mesh)", "MiB/s", [2]string{"mesh_rx", "mesh rx MiB/s"}, [2]string{"mesh_tx", "mesh tx MiB/s"}, [2]string{"relayed", "relayed MiB/s"})
 	ns("net", "Network (all interfaces)", "MiB/s", [2]string{"net_rx", "rx MiB/s"}, [2]string{"net_tx", "tx MiB/s"})
+	// the mesh's history (docs/17 §4, I-332): the path to each peer as lanes and the round
+	// trip to each as a line; every pair, and each member's mean, with node "all"
+	if node == "all" {
+		add("paths", MeshPathsTitle(node), "lan · wan · relay · none, every pair", pathLanes(MeshPathsTitle(node), pairLanes(names, byNode), span, x, ax))
+		ss := make([]chart.Series, 0, len(names))
+		for _, n := range names {
+			if pts := meanRTT(byNode[n], x); len(pts) > 0 { // a member without round trips has no series
+				ss = append(ss, chart.Series{Name: n, Points: Downsample(pts, chart.Points)})
+			}
+		}
+		line("rtt", MeshRTTTitle(node), "ms", ss)
+	} else {
+		rows := byNode[node]
+		lanesOf := map[string][]Row{}
+		for _, peer := range peersOf(rows) {
+			lanesOf[peer] = rows
+		}
+		add("paths", MeshPathsTitle(node), "lan · wan · relay · none", pathLanes(MeshPathsTitle(node), lanesOf, span, x, ax))
+		peers := peersOf(rows)
+		ss := make([]chart.Series, 0, len(peers))
+		for _, peer := range peers {
+			ss = append(ss, chart.Series{Name: peer, Points: Downsample(metricPoints(rows, "rtt."+peer, x), chart.Points)})
+		}
+		line("rtt", MeshRTTTitle(node), "ms", ss)
+	}
 	ns("cpu", "CPU", "%", [2]string{"cpu", "process % of one CPU"}, [2]string{"load1", "load (1 min)"})
 	ns("memory", "Memory", "bytes", [2]string{"rss", "resident set"}, [2]string{"mem_avail", "memory available"})
 	ns("pressure", "Memory pressure", "%", [2]string{"mem_pressure", "memory pressure (PSI some, avg10 %)"})
@@ -142,7 +168,7 @@ func Charts(rows []Row, from, to time.Time, node string) []Chart {
 func metricPoints(rows []Row, metric string, x func(int64) float64) [][2]float64 {
 	scale := 1.0
 	switch metric {
-	case "bytes_w", "bytes_r", "mesh_rx", "mesh_tx", "net_rx", "net_tx", "disk_w", "disk_r":
+	case "bytes_w", "bytes_r", "mesh_rx", "mesh_tx", "relayed", "net_rx", "net_tx", "disk_w", "disk_r":
 		scale = 1.0 / (1 << 20)
 	case "cpu":
 		scale = 100
@@ -270,4 +296,109 @@ func slotSeries(cluster []Row, x func(int64) float64) []chart.Series {
 		ss = append(ss, chart.Series{Name: h, Points: Downsample(per[h], chart.Points)})
 	}
 	return ss
+}
+
+// MeshPathsTitle and MeshRTTTitle name the mesh charts of a node, or of every pair.
+func MeshPathsTitle(node string) string {
+	if node == "all" {
+		return "Mesh paths (every pair)"
+	}
+	return "Mesh paths from " + node
+}
+
+func MeshRTTTitle(node string) string {
+	if node == "all" {
+		return "Mesh round trip (mean per member)"
+	}
+	return "Mesh round trip from " + node
+}
+
+// peersOf is every peer a node's rows carry a path for, sorted.
+func peersOf(rows []Row) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range rows {
+		for k := range r.M {
+			if peer, ok := strings.CutPrefix(k, "path."); ok && !seen[peer] {
+				seen[peer] = true
+				out = append(out, peer)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// pairLanes is one lane per ordered pair "a → b" over the rows of a (the lane's key is
+// the peer's name, the lane's rows the node's).
+func pairLanes(names []string, byNode map[string][]Row) map[string][]Row {
+	out := map[string][]Row{}
+	for _, n := range names {
+		for _, peer := range peersOf(byNode[n]) {
+			// the lane reads rows of n under the key "path.<peer>", so the lane carries
+			// the rows re-keyed to its own name
+			rows := make([]Row, 0, len(byNode[n]))
+			for _, r := range byNode[n] {
+				if v, ok := r.M["path."+peer]; ok {
+					rows = append(rows, Row{T: r.T, N: r.N, M: map[string]float64{"path." + n + " → " + peer: v}})
+				}
+			}
+			out[n+" → "+peer] = rows
+		}
+	}
+	return out
+}
+
+// pathLanes draws one lane per key of lanes, its cells the class codes of path.<key>
+// in that lane's rows, sampled to the chart's width; "" without a lane.
+func pathLanes(title string, lanes map[string][]Row, span float64, x func(int64) float64, ax chart.Axis) string {
+	cells := map[string][]chart.Cell{}
+	var names []string
+	for name, rows := range lanes {
+		key := "path." + name
+		step := max(1, len(rows)/chart.Points)
+		for i := 0; i < len(rows); i += step {
+			v, ok := rows[i].M[key]
+			if !ok {
+				continue
+			}
+			st := chart.Bad
+			switch PathClass(v) {
+			case "lan":
+				st = chart.OK
+			case "wan":
+				st = chart.Warn
+			case "relay":
+				st = chart.Off
+			}
+			cells[name] = append(cells[name], chart.Cell{X: x(rows[i].T), Status: st})
+		}
+		if len(cells[name]) > 0 {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return chart.Lanes(title, span, names, cells, ax)
+}
+
+// meanRTT is a node's mean round trip over its peers, per row.
+func meanRTT(rows []Row, x func(int64) float64) [][2]float64 {
+	var pts [][2]float64
+	for _, r := range rows {
+		var sum float64
+		n := 0
+		for k, v := range r.M {
+			if strings.HasPrefix(k, "rtt.") {
+				sum += v
+				n++
+			}
+		}
+		if n > 0 {
+			pts = append(pts, [2]float64{x(r.T), sum / float64(n)})
+		}
+	}
+	return pts
 }

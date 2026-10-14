@@ -1,13 +1,16 @@
 package stats
 
 import (
+	"maps"
 	"sort"
+	"strings"
 	"time"
 )
 
 // Rollup folds raw rows into the tier's intervals (I-193): per interval and per writer,
-// the mean of every metric over the rows that carry it, the minimum of each device's
-// liveness, the last targets, the highest term; a row's t is its interval's start; an
+// the mean of every metric over the rows that carry it (except a path class, which
+// takes its minimum: the worst class the interval saw, I-332), the minimum of each
+// device's liveness, the last targets, the highest term; a row's t is its interval's start; an
 // interval without rows yields no row. A pure function of its input, whatever the order
 // the rows arrive in, so every node derives the same bytes.
 func Rollup(rows []Row, t Tier) []Row {
@@ -48,16 +51,24 @@ func Rollup(rows []Row, t Tier) []Row {
 			// sum in time order: floating-point sums depend on their order, and two nodes
 			// may hold the rows in different orders
 			sort.SliceStable(g.rows, func(i, j int) bool { return g.rows[i].T < g.rows[j].T })
+			worst := map[string]float64{}
 			for _, r := range g.rows {
 				for name, v := range r.M {
+					if strings.HasPrefix(name, "path.") {
+						if w, ok := worst[name]; !ok || v < w {
+							worst[name] = v
+						}
+						continue
+					}
 					g.sum[name] += v
 					g.cnt[name]++
 				}
 			}
-			m := make(map[string]float64, len(g.sum))
+			m := make(map[string]float64, len(g.sum)+len(worst))
 			for name, s := range g.sum {
 				m[name] = s / g.cnt[name]
 			}
+			maps.Copy(m, worst)
 			out = append(out, Row{T: k.start, N: k.n, M: m})
 			continue
 		}

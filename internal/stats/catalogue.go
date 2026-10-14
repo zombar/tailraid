@@ -37,8 +37,22 @@ func Catalogue(node string, members []string) []Frame {
 		line(id, title, labels...)
 	}
 	ns("throughput", "Client throughput", "write MiB/s", "read MiB/s")
-	ns("tailnet", "Network (mesh)", "mesh rx MiB/s", "mesh tx MiB/s")
+	ns("tailnet", "Network (mesh)", "mesh rx MiB/s", "mesh tx MiB/s", "relayed MiB/s")
 	ns("net", "Network (all interfaces)", "rx MiB/s", "tx MiB/s")
+	// the mesh charts (I-332): one lane and one series per peer of the node, or one lane
+	// per ordered pair and one series per member
+	peers := make([]string, 0, len(members))
+	for _, m := range members {
+		if m != node {
+			peers = append(peers, m)
+		}
+	}
+	lanesN, rttNames := len(peers), peers
+	if node == "all" {
+		lanesN, rttNames = len(members)*max(len(members)-1, 0), members
+	}
+	out = append(out, Frame{ID: "paths", Title: MeshPathsTitle(node), Frame: chart.Frame(MeshPathsTitle(node), chart.LanesHeight(lanesN))})
+	line("rtt", MeshRTTTitle(node), rttNames...)
 	ns("cpu", "CPU", "process % of one CPU", "load (1 min)")
 	ns("memory", "Memory", "resident set", "memory available")
 	ns("pressure", "Memory pressure", "memory pressure (PSI some, avg10 %)")

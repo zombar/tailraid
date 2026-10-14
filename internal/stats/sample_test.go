@@ -2,6 +2,7 @@ package stats
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,6 +133,51 @@ func TestSampler_LiveState_Table(t *testing.T) {
 	}{{false, false, 0}, {false, true, 0}, {true, false, 1}, {true, true, 2}} {
 		if got := LiveState(tc.live, tc.suspect); got != tc.want {
 			t.Errorf("live %v suspect %v: %d, want %d", tc.live, tc.suspect, got, tc.want)
+		}
+	}
+}
+
+// A node row of a device on the mesh carries path.<peer> as the class code and
+// rtt.<peer> in milliseconds for every peer (no rtt while none answered), and the
+// relayed bytes as a rate against the previous snapshot; a device without a mesh
+// carries none of them.
+// Invariant: I-332
+func TestSampler_NodeRow_MeshKeys(t *testing.T) {
+	t0 := time.Unix(1760184000, 0)
+	mesh := &MeshSample{Peers: []PeerSample{{Name: "atlas", Class: "lan", RTT: 4100 * time.Microsecond}, {Name: "honker", Class: "none"}, {Name: "node0", Class: "relay", RTT: 61 * time.Millisecond}, {Name: "nomad", Class: "wan", RTT: 83 * time.Millisecond}}, Relayed: 1000}
+	first := &Snapshot{T: t0, Mesh: mesh}
+	r1 := NodeRow("pike", nil, first)
+	for k, want := range map[string]float64{"path.atlas": 3, "path.honker": 0, "path.node0": 1, "path.nomad": 2, "rtt.atlas": 4.1, "rtt.node0": 61, "rtt.nomad": 83} {
+		if got, ok := r1.M[k]; !ok || math.Abs(got-want) > 1e-9 {
+			t.Errorf("%s = %v (%v), want %v", k, got, ok, want)
+		}
+	}
+	for _, absent := range []string{"rtt.honker", "relayed"} {
+		if _, ok := r1.M[absent]; ok {
+			t.Errorf("%s in the first row", absent)
+		}
+	}
+	second := &Snapshot{T: t0.Add(10 * time.Second), Mesh: &MeshSample{Peers: mesh.Peers, Relayed: 1000 + 20480}}
+	if r2 := NodeRow("pike", first, second); r2.M["relayed"] != 2048 {
+		t.Errorf("relayed = %v, want 2048", r2.M["relayed"])
+	}
+	// a counter that went backwards (a restart) carries no rate
+	if r3 := NodeRow("pike", second, &Snapshot{T: t0.Add(20 * time.Second), Mesh: &MeshSample{Relayed: 5}}); r3.M["relayed"] != 0 {
+		if _, ok := r3.M["relayed"]; ok {
+			t.Errorf("a counter that went backwards produced a rate: %v", r3.M["relayed"])
+		}
+	}
+	for k := range NodeRow("pike", nil, &Snapshot{T: t0}).M {
+		if strings.HasPrefix(k, "path.") || strings.HasPrefix(k, "rtt.") || k == "relayed" {
+			t.Errorf("a device without a mesh carries %s", k)
+		}
+	}
+	for _, c := range []struct {
+		class string
+		code  float64
+	}{{"lan", 3}, {"wan", 2}, {"relay", 1}, {"none", 0}, {"odd", 0}} {
+		if PathCode(c.class) != c.code || (c.class != "odd" && PathClass(c.code) != c.class) {
+			t.Errorf("%s ↔ %v", c.class, c.code)
 		}
 	}
 }

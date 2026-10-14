@@ -27,6 +27,7 @@ import (
 	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/stats"
 )
 
 // The node's attachment to the cluster (docs/20): the mesh, one wireguard-go device on a
@@ -609,4 +610,34 @@ func LocalAddr(cfg config.Config) (string, error) {
 		return "", fmt.Errorf("node: mesh.address: %w", err)
 	}
 	return net.JoinHostPort(p.Addr().String(), strconv.Itoa(cfg.Listen.RPC)), nil
+}
+
+// meshSample is the stats sampler's view of the mesh (docs/17 §1, I-332): each peer's
+// class and the liveness probe's round trip to it, and the bytes relayed for others;
+// nil on a device without a mesh.
+func meshSample(nw *network, node *cluster.Node, cfg config.Config, prober *cluster.Prober, now time.Time) *stats.MeshSample {
+	if nw.mesh == nil {
+		return nil
+	}
+	rep := nw.report(node, cfg, now)
+	if rep == nil {
+		return nil
+	}
+	probes := prober.Snapshot()
+	out := &stats.MeshSample{}
+	for i := range rep.Peers {
+		p := &rep.Peers[i]
+		if p.Name == "" {
+			continue
+		}
+		ps := stats.PeerSample{Name: p.Name, Class: p.Class}
+		if pr, ok := probes[p.Idx]; ok && pr.DeadSince.IsZero() {
+			ps.RTT = pr.RTT
+		}
+		out.Peers = append(out.Peers, ps)
+	}
+	for _, n := range rep.Relayed {
+		out.Relayed += n
+	}
+	return out
 }

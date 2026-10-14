@@ -321,6 +321,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 				p, ok := repairer.Progress()
 				return p.BytesMoved, ok
 			},
+			Mesh: func() *stats.MeshSample { return meshSample(nw, node, cfg, prober, clk.Now()) },
 		},
 	}
 	// the index in the volume (docs/18): the leader's pass, every node's queries
