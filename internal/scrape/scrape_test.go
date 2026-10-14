@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -420,58 +419,24 @@ func TestClient_MusicBrainzOncePerSecond(t *testing.T) {
 	}
 }
 
-// The key is kept 0600 in the data dir, the environment's wins.
-// Invariant: I-302
-func TestKey_SavedPrivate_EnvWins(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "data")
-	t.Setenv(KeyEnv, "")
-	if _, err := LoadKey(dir, nil); !errors.Is(err, ErrNoKey) {
-		t.Errorf("no key: %v", err)
-	}
-	if err := SaveKey(dir, "  abc  \n"); err != nil {
-		t.Fatal(err)
-	}
-	fi, err := os.Stat(filepath.Join(dir, KeyFile))
-	if err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 { // Windows has no permission bits
-		t.Fatalf("key file: %v %v", fi, err)
-	}
-	if k, err := LoadKey(dir, nil); k != "abc" || err != nil {
-		t.Errorf("saved: %q %v", k, err)
-	}
-	t.Setenv(KeyEnv, "fromenv")
-	if k, _ := LoadKey(dir, nil); k != "fromenv" {
-		t.Errorf("env: %q", k)
-	}
-}
-
-// The scrape's key is the environment's when set, else the store's, else the old file's;
-// a store that cannot answer falls through to the file.
+// The TMDB key is needed, and so checked before a run, exactly when a keyed group is
+// in the run: every group, or movies, tv or episodes by name.
 // Invariant: I-308
-func TestTMDBKey_Order(t *testing.T) {
-	dir := t.TempDir()
-	if err := SaveKey(dir, "fromfile"); err != nil {
-		t.Fatal(err)
-	}
-	stored := func(v string, err error) func() (string, error) { return func() (string, error) { return v, err } }
+func TestNeedsKey_Table(t *testing.T) {
 	for _, tc := range []struct {
-		name, env string
-		store     func() (string, error)
-		want      string
+		only map[string]bool
+		want bool
 	}{
-		{"env over everything", "fromenv", stored("fromstore", nil), "fromenv"},
-		{"store over the file", "", stored("fromstore", nil), "fromstore"},
-		{"no secret: the file", "", stored("", nil), "fromfile"},
-		{"store unreachable: the file", "", stored("", errors.New("no node")), "fromfile"},
-		{"no store", "", nil, "fromfile"},
+		{nil, true},
+		{map[string]bool{}, true},
+		{map[string]bool{OnlyMovies: true}, true},
+		{map[string]bool{OnlyMusic: true, OnlyGames: true}, false},
+		{map[string]bool{OnlyMusic: true, OnlyTV: true}, true},
+		{map[string]bool{OnlyEpisodes: true}, true},
 	} {
-		t.Setenv(KeyEnv, tc.env)
-		if k, err := LoadKey(dir, tc.store); k != tc.want || err != nil {
-			t.Errorf("%s: %q %v", tc.name, k, err)
+		if got := NeedsKey(tc.only); got != tc.want {
+			t.Errorf("NeedsKey(%v) = %v", tc.only, got)
 		}
-	}
-	t.Setenv(KeyEnv, "")
-	if _, err := LoadKey(t.TempDir(), stored("", nil)); !errors.Is(err, ErrNoKey) {
-		t.Errorf("nowhere: %v", err)
 	}
 }
 

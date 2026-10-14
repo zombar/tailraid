@@ -3,8 +3,6 @@ package node
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -12,7 +10,6 @@ import (
 
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
-	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/secrets"
 )
 
@@ -62,62 +59,6 @@ func oneNodeStore(t *testing.T) (*secrets.Store, func(error)) {
 		},
 	}
 	return s, func(err error) { refuse = err }
-}
-
-// The old files move into the store: each entry the store lacks is stored, a name it
-// holds keeps the store's value, and a file goes only once every name in it is stored
-// and opens; a store that refuses (a member on an older codec) leaves both files serving.
-// Invariant: I-308
-func TestMigrateLegacy(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	s, refuse := oneNodeStore(t)
-	newer := s3.Credentials{AccessKey: "AK", SecretKey: "rotated"}
-	v, _ := cluster.EncodeS3Secret(newer)
-	if err := s.Set(ctx, "s3/offsite", v); err != nil {
-		t.Fatal(err)
-	}
-	for name, c := range map[string]s3.Credentials{"offsite": {AccessKey: "AK", SecretKey: "old"}, "second": {AccessKey: "AK2", SecretKey: "two"}, "Upper": {AccessKey: "AK3", SecretKey: "three"}} {
-		if err := cluster.SaveS3Key(dir, name, c); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, secrets.TMDBLegacyFile), []byte("tmdb-key\n"), 0o600); err != nil { // as `media key` wrote it before the store
-		t.Fatal(err)
-	}
-	exists := func(name string) bool { _, err := os.Stat(filepath.Join(dir, name)); return err == nil }
-
-	refuse(meta.ErrCodec)
-	if done, err := migrateLegacy(ctx, s, dir); done || !errors.Is(err, meta.ErrCodec) || !exists(cluster.S3KeysFile) || !exists(secrets.TMDBLegacyFile) {
-		t.Fatalf("refused: done %v, %v", done, err)
-	}
-	refuse(nil)
-	if done, err := migrateLegacy(ctx, s, dir); done || err != nil {
-		t.Fatalf("with a name off the pattern: done %v, %v", done, err)
-	}
-	if exists(secrets.TMDBLegacyFile) || !exists(cluster.S3KeysFile) {
-		t.Fatal("the tmdb file stayed, or the s3 file went with Upper unmoved")
-	}
-	if k, err := s.Get(ctx, "tmdb"); k != "tmdb-key" || err != nil {
-		t.Errorf("tmdb: %q %v", k, err)
-	}
-	keys := cluster.MergeS3Keys(s.Opened(cluster.S3SecretPrefix), nil)
-	if keys["offsite"] != newer || keys["second"].SecretKey != "two" || len(keys) != 2 {
-		t.Errorf("stored credentials: %+v", keys)
-	}
-	// the operator renames the odd entry away: the next pass removes the file
-	if err := os.Remove(filepath.Join(dir, cluster.S3KeysFile)); err != nil {
-		t.Fatal(err)
-	}
-	if err := cluster.SaveS3Key(dir, "second", s3.Credentials{AccessKey: "AK2", SecretKey: "two"}); err != nil {
-		t.Fatal(err)
-	}
-	if done, err := migrateLegacy(ctx, s, dir); !done || err != nil || exists(cluster.S3KeysFile) {
-		t.Fatalf("every name stored: done %v, %v, file %v", done, err, exists(cluster.S3KeysFile))
-	}
-	if done, err := migrateLegacy(ctx, s, dir); !done || err != nil {
-		t.Fatalf("nothing left: done %v, %v", done, err)
-	}
 }
 
 // A device holding no copy of the cluster key fetches it on the maintenance tick, so a

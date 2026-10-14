@@ -390,3 +390,9 @@ func (r *runner) write(ctx context.Context, it search.ScrapeItem, data map[strin
 	}
 	return nil
 }
+
+// NeedsKey reports whether only (every group when empty) holds a group TMDB answers:
+// movies, tv or episodes.
+func NeedsKey(only map[string]bool) bool {
+	return len(only) == 0 || only[OnlyMovies] || only[OnlyTV] || only[OnlyEpisodes]
+}

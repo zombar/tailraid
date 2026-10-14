@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/s3"
 	"github.com/zombar/tailraid/internal/soak"
@@ -139,33 +140,18 @@ const (
 	s3SecretKey      = "soak/secret+key" //nolint:gosec // the throwaway key of the compose rig's bucket
 )
 
-// AddS3 runs `node add-s3` on the first node and `node keys` on every other, so every
-// gateway can write the bucket (docs/10 §4.1). A node that has not applied the new row
-// yet refuses `node keys`, so that is retried for a few seconds.
+// AddS3 sets the bucket's credentials in the secrets store and runs `node add-s3` on the
+// first node, so every gateway can write the bucket (docs/10 §4.1, docs/19 §6).
 func (e *composeEnv) AddS3(ctx context.Context, name string) error {
-	secret := "TAILRAID_S3_SECRET_KEY=" + s3SecretKey
 	first := e.nodes[0].ref.Name
-	if err := e.compose(ctx, "exec", "-T", "-e", secret, first, "tailraid", "node", "add-s3", name, "--endpoint", s3NodeEndpoint,
-		"--bucket", s3BucketName, "--prefix", s3Prefix, "--path-style", "--capacity", "1T", "--access-key", s3AccessKey); err != nil {
-		return err
-	}
-	for _, n := range e.nodes[1:] {
-		var err error
-		for range 10 {
-			if err = e.compose(ctx, "exec", "-T", "-e", secret, n.ref.Name, "tailraid", "node", "keys", name, "--access-key", s3AccessKey); err == nil {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Second):
-			}
-		}
-		if err != nil {
+	access, secret, _ := cluster.S3SecretNames(name)
+	for _, sec := range []struct{ name, value string }{{access, s3AccessKey}, {secret, s3SecretKey}} {
+		if err := e.composeIn(ctx, sec.value+"\n", "exec", "-T", first, "tailraid", "secret", "set", sec.name); err != nil {
 			return err
 		}
 	}
-	return nil
+	return e.compose(ctx, "exec", "-T", first, "tailraid", "node", "add-s3", name, "--endpoint", s3NodeEndpoint,
+		"--bucket", s3BucketName, "--prefix", s3Prefix, "--path-style", "--capacity", "1T")
 }
 
 // Bucket is the s3 service's bucket as the driver reaches it.
@@ -434,6 +420,18 @@ func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, 
 func (e *composeEnv) compose(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+// composeIn runs docker compose with stdin (a secret: never in the arguments or an error).
+func (e *composeEnv) composeIn(ctx context.Context, stdin string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd.Dir = e.dir
+	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))

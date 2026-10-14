@@ -126,7 +126,7 @@ Names are answered live from the metadata. Contents and tags are indexed by the 
 ### Posters and descriptions for the Media tab
 
 ```sh
-tailraid media key                     # once per cluster: a free TMDB API key, from TAILRAID_TMDB_API_KEY or stdin
+tailraid secret set tmdb               # once per cluster: a free TMDB API key, typed or piped in
 tailraid media scrape --dry-run        # what would be written
 tailraid media scrape /Films           # write the missing .nfo, posters, backdrops, stills, album covers and game box art
 ```
@@ -235,12 +235,13 @@ tailraid volume grow jockey/1 auto     # follow free space again
 A bucket at any S3 provider (Backblaze B2, Cloudflare R2, Hetzner, a MinIO on the tailnet) can hold shards like a disk on a host of its own, which gives the volume an off-site copy. Devices read and write it directly; reads use it only when a device that holds a shard is down.
 
 ```sh
-export TAILRAID_S3_SECRET_KEY=…            # or type it when asked: never a flag
+tailraid secret set s3/offsite/access_key   # each value typed without echo, or piped in: never a flag
+tailraid secret set s3/offsite/secret_key
 tailraid node add-s3 offsite --endpoint https://s3.eu-central-003.backblazeb2.com \
-  --bucket my-bucket --prefix tailraid --capacity 1T --access-key 003a…
+  --bucket my-bucket --prefix tailraid --capacity 1T
 ```
 
-`add-s3` writes, reads back and deletes a test object first, so a key without those rights is refused before anything is registered. The key then goes into the cluster's encrypted secrets store (`tailraid secret ls` lists it as `s3/offsite`), so every device has it: each one needs it, since a device that leads without it treats the bucket as dead and after `fill_after` copies the bucket's shards back onto disks. `tailraid node keys offsite --access-key …` replaces the key after you rotate it. Devices that kept keys in `s3nodes.yaml` before the store import them and remove the file. Choose a provider with cheap or free egress: repairs read from the bucket when a device is down. Use a key the provider scopes to that one bucket, since every device can open it.
+`add-s3` takes the two secrets from the store, then writes, reads back and deletes a test object, so a key without those rights is refused before anything is registered. Every device has the key through the store, and each one needs it: a device that leads without it treats the bucket as dead and after `fill_after` copies the bucket's shards back onto disks. After a rotation, `secret set` the two again; every device's probe picks the new pair up within a probe interval. Choose a provider with cheap or free egress: repairs read from the bucket when a device is down. Use a key the provider scopes to that one bucket, since every device can open it.
 
 A bucket holds one shard of every stripe, so it stores 1/k of the volume (half at 2+1, a quarter at 4+2). It is written when you write, probed with a cheap HEAD every 30 s by each device, listed once a day by the leader, and read only while a device holding a needed shard is down. A bucket never votes: it keeps your data safe while a device is away, not the volume writable. For that, pair it with a [diskless voter](#a-cheap-always-on-voter). Details: [docs/10-s3.md](docs/10-s3.md) §4.
 
@@ -299,11 +300,11 @@ Together, a diskless voter and a bucket give an always-on cluster of rented part
 
 ## Secrets
 
-The volume needs a few credentials: an S3 bucket's key and the TMDB key. They live in one encrypted store inside the cluster state, so you enter each once, on any device, and every device has it. `node add-s3`, `node keys` and `media key` put theirs in after checking them with the provider; `secret set <name>` takes any other. A value comes from stdin only, never from a flag, and no command prints one back. The key that opens the store sits in each device's keychain (the macOS Keychain, the Windows Credential Manager, the Linux Secret Service, or a 0600 file under the data directory where there is none), and a device that joins fetches it from another member over the tailnet. Devices that kept a key in `s3nodes.yaml` or `tmdb.key` before the store import it and remove the file.
+The volume needs a few credentials: an S3 bucket's key and the TMDB key. They live in one encrypted store inside the cluster state, so you enter each once, on any device, and every device has it. `secret set <name>` is the one way in, and whatever uses a secret checks it when it does: `node add-s3` refuses a bucket its pair does not open, `media scrape` asks TMDB once before a run and a device's probe shows a bucket its key no longer opens as not live. A value comes from stdin only, never from a flag, and no command prints one back. The key that opens the store sits in each device's keychain (the macOS Keychain, the Windows Credential Manager, the Linux Secret Service, or a 0600 file under the data directory where there is none), and a device that joins fetches it from another member over the tailnet.
 
 ```sh
-tailraid secret ls                     # s3/offsite and tmdb: when, by which device, readable here
-tailraid secret set tmdb < key.txt     # what `media key` stores, without the check against TMDB
+tailraid secret ls                     # s3/offsite/access_key, s3/offsite/secret_key, tmdb: when, by which device, readable here
+tailraid secret set tmdb < key.txt     # from a file, or typed without echo at a terminal
 tailraid secret rm --all               # if every device lost the key: start over, then enter each again
 ```
 
@@ -317,10 +318,10 @@ Every command takes `--json`, and `--node <ip>` to talk to another device. `tail
 |---|---|
 | Set up | `init` · `join <host> <token>` · `token` · `install` · `uninstall` · `start` · `stop` · `mount` · `umount` · `reset` |
 | Health | `status` (exit 1 until the node is ready) · `dashboard` · `check` (exit 1 if anything is degraded; `--scrub` verifies every chunk) · `verify` · `logs -f` |
-| Members and disks | `node ls` · `node describe <name>` · `node promote` · `node demote` · `node add-disk <path>` · `node add-s3 <name>` · `node keys <name>` · `node drain` · `node remove` |
+| Members and disks | `node ls` · `node describe <name>` · `node promote` · `node demote` · `node add-disk <path>` · `node add-s3 <name>` · `node drain` · `node remove` |
 | Volume | `volume describe` · `volume grow <disk> <size>\|auto` · `volume set-redundancy --k --m\|--auto` · `chunk describe <path\|hash>` |
 | Maintenance | `repair` (also runs every minute) · `gc` · `fsck` |
-| Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` · `media key` · `media scrape [path]` |
+| Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` · `media scrape [path]` |
 | Snapshots | `mirror add\|ls\|remove` · `mirror ls\|cat\|export <mirror path> …` · `snapshot ls\|create\|restore` · `versions <path> [--revert\|--copy]` |
 | Secrets | `secret set <name>` · `secret ls` · `secret rm <name>\|--all` |
 | Recovery | `export <dir>` · `recover --voters <id>` · `stats seal` |
