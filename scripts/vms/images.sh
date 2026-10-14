@@ -24,9 +24,17 @@ fetch() { # <url> <file>
 }
 
 build_tart() { # <mac|linux>
-  local os=$1
+  local os=$1 sweeper
   log "building $(image_name "$os") (Packer tart-cli)"
-  (cd "$PACKER_DIR" && PATH="$(dirname "$TART"):$PATH" PACKER_CACHE_DIR="$CACHE/packer" "$PACKER" build -var "ssh_public_key=$pubkey" "$os.pkr.hcl")
+  # Packer finds the guest with `tart ip --resolver arp`, which needs the host's ARP
+  # table to hold the guest (common.sh lan_sweep): a sweep every few seconds while it
+  # waits for SSH
+  (while :; do lan_sweep; sleep 5; done) &
+  sweeper=$!
+  (cd "$PACKER_DIR" && PATH="$(dirname "$TART"):$PATH" PACKER_CACHE_DIR="$CACHE/packer" "$PACKER" build -var "ssh_public_key=$pubkey" -var "bridge=$VMS_BRIDGE" "$os.pkr.hcl")
+  local status=$?
+  kill "$sweeper" 2>/dev/null; wait "$sweeper" 2>/dev/null || true
+  return $status
 }
 
 build_win() {

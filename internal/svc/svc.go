@@ -115,6 +115,7 @@ func Install(p Params) (Plan, error) {
 				{"sc.exe", "description", Name, "tailraid node: metadata, shard store and gateways"},
 				{"sc.exe", "failure", Name, "reset=", "60", "actions=", "restart/5000/restart/5000/restart/5000"},
 				firewallRule(p, true),
+				nodeRule(p, true),
 				{"sc.exe", "start", Name},
 			},
 			Notes: []string{"log.file set to " + p.LogFile + " in " + p.ConfigPath + " (services have no stderr)", "wintun.dll beside " + p.Exe + " (docs/20 §9)", "run from an elevated prompt"},
@@ -179,7 +180,7 @@ func Uninstall(p Params) (Plan, error) {
 			append(slices.Clone(sudo), "systemctl", "daemon-reload"),
 		}}, nil
 	case "windows":
-		pl := Plan{Commands: [][]string{{"sc.exe", "stop", Name}, {"sc.exe", "delete", Name}, firewallRule(p, false)}}
+		pl := Plan{Commands: [][]string{{"sc.exe", "stop", Name}, {"sc.exe", "delete", Name}, firewallRule(p, false), nodeRule(p, false)}}
 		if p.LogonMount {
 			pl.Commands = append(pl.Commands, powershell("Unregister-ScheduledTask -TaskName "+psQuote(MountTask)+" -Confirm:$false -ErrorAction SilentlyContinue"))
 		}
@@ -253,6 +254,9 @@ func launchdTarget(Params) string { return "system/app.tailraid.serve" }
 // FirewallRule is the name of the Windows inbound rule for the mesh port.
 const FirewallRule = "tailraid mesh"
 
+// NodeRule names the inbound rule for the node's TCP listeners on the mesh address.
+const NodeRule = "tailraid node"
+
 // firewallRule is the netsh command that adds or removes the inbound UDP rule for the
 // mesh port (docs/20 §9): a device behind a port forward is reachable only with it.
 func firewallRule(p Params, add bool) []string {
@@ -260,6 +264,17 @@ func firewallRule(p Params, add bool) []string {
 		return []string{"netsh", "advfirewall", "firewall", "delete", "rule", "name=" + FirewallRule}
 	}
 	return []string{"netsh", "advfirewall", "firewall", "add", "rule", "name=" + FirewallRule, "dir=in", "action=allow", "protocol=UDP", "localport=" + strconv.Itoa(p.MeshPort)}
+}
+
+// nodeRule is the netsh command that adds or removes the inbound TCP rule for the
+// program (docs/20 §9): the wintun adapter is an unidentified network, which Windows
+// files under the public profile and blocks unsolicited inbound TCP on, so the leader's
+// Raft dial and every member's RPC to this node timed out until the rule existed.
+func nodeRule(p Params, add bool) []string {
+	if !add {
+		return []string{"netsh", "advfirewall", "firewall", "delete", "rule", "name=" + NodeRule}
+	}
+	return []string{"netsh", "advfirewall", "firewall", "add", "rule", "name=" + NodeRule, "dir=in", "action=allow", "protocol=TCP", "program=" + p.Exe}
 }
 
 // scStopped matches the STATE line of `sc.exe query` for a stopped service.

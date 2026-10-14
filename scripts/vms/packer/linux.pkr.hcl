@@ -2,6 +2,7 @@
 # client and the disk directories. Instances are `tart clone`s of tailraid-linux-image
 # (scripts/vms/vm.sh).
 variable "ssh_public_key" { type = string }
+variable "bridge" { type = string } # the host interface the guest is bridged onto (common.sh VMS_BRIDGE)
 
 source "tart-cli" "linux" {
   vm_base_name = "ghcr.io/cirruslabs/ubuntu:latest"
@@ -13,6 +14,8 @@ source "tart-cli" "linux" {
   ssh_password = "admin"
   ssh_timeout  = "300s"
   headless     = true
+  run_extra_args = ["--net-bridged", var.bridge] # bridged, as vm.sh runs the instances (common.sh says why)
+  ip_extra_args  = ["--resolver", "arp"]       # a bridged guest leaves no DHCP lease on the host
 }
 
 build {

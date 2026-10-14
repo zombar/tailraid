@@ -42,14 +42,24 @@ kernel module: the kernel's TUN driver is the only kernel part, and it ships wit
 OS tailraid supports) on a real TUN interface, so the mesh addresses are ordinary
 addresses of the host: Raft, the node RPC and the browser UI bind them exactly as they
 bound the Tailscale address, the CLI dials its own node at that address, and the
-compose rig's worker reaches its node the same way.
+compose rig's worker reaches its node the same way. Every connection a node or the CLI
+opens leaves from the mesh address too: a dial made while the interface is absent (the
+two seconds of a restart) fails at once instead of leaving by another interface with a
+source no member admits, which a client's connection pool would otherwise keep reusing.
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
 | Device | `/dev/net/tun`, named `tailraid0` (`mesh.interface`) | `utun<n>`, the next free number | wintun, adapter "tailraid", GUID derived from the cluster ID so it is the same adapter across restarts |
 | Address, MTU, route | `ip addr add`, `ip link set … mtu … up` | `ifconfig <utun> <addr> <addr> netmask …`, `ifconfig … mtu`, `route add -net <subnet> -interface` | `netsh interface ip set address`, `netsh interface ipv4 set subinterface … mtu`, `route add` |
 | Privilege | `CAP_NET_ADMIN` (the unit grants it, §9) | root (the service is a LaunchDaemon, §9) | LocalSystem (the service already is) |
-| The dll | — | — | `wintun.dll` beside the exe, written by `install` and `update` (§9) |
+| The dll | — | — | `wintun.dll` beside the exe, written by `install`, `update` and whatever opens the adapter (a `join`, a `serve` by hand) when absent or different (§9) |
+
+A packet the OS hands the tunnel for the device's own address goes straight back to the
+kernel: macOS routes a host's traffic to its own utun address into the tunnel (the
+point-to-point route's destination is the address itself), where WireGuard has no peer
+for it, and a node could not reach its own listeners (the CLI's `status`, the browser,
+the mount); Linux delivers such packets locally and never hands them over. Tailscale
+loops them in userspace the same way.
 
 The command sequences are lifted from tunnelmesh's `internal/tun/device.go` and live
 in `internal/mesh/ifconfig_<os>.go` as command tables that `Apply` runs, tested like the
@@ -306,8 +316,11 @@ OS, the CLI and the rigs).
   `AmbientCapabilities=CAP_NET_ADMIN` and `CapabilityBoundingSet=CAP_NET_ADMIN`
   (`NoNewPrivileges` keeps ambient capabilities; `/dev/net/tun` is reachable, since the
   unit sets no `PrivateDevices`); `After=network-online.target` alone, no tailscaled. A
-  `join` run by hand needs the capability too, so it runs under `sudo` and gives what it
-  wrote back to `SUDO_UID:SUDO_GID`; `init` needs no TUN.
+  `join` run by hand needs the capability too, so it runs under `sudo`, writes into the
+  invoking user's config home (`SUDO_USER`'s `~/.config/tailraid`, the one the user's
+  unit names: root's own home only when nothing says who invoked it) and gives what it
+  wrote back to `SUDO_UID:SUDO_GID`, the disk and mirror directories included (their
+  markers and shard directories are root's otherwise); `init` needs no TUN.
 - **macOS.** A utun needs root, so `serve` runs as a LaunchDaemon
   (`/Library/LaunchDaemons/app.tailraid.serve.plist`, the `system` domain: it starts at
   boot, not at login) and `config.Home()` as root is `/Library/Application
@@ -323,8 +336,11 @@ OS, the CLI and the rigs).
 - **Windows.** The service already runs as LocalSystem; `depend= Tailscale` goes.
   `wintun.dll` (signed, redistributable under its prebuilt-binaries licence, which ships
   in the release) is embedded in the Windows binary and written beside the exe by
-  `install` and by `update` when absent or different; `install` adds one `netsh
-  advfirewall` inbound rule for the UDP port and `uninstall` removes it and the dll
+  `install` and by `update` when absent or different; `install` adds two `netsh
+  advfirewall` inbound rules, one for the UDP port and one for the program's TCP
+  listeners (the wintun adapter is an unidentified network, which Windows files under
+  the public profile and blocks unsolicited inbound TCP on: without the rule the
+  leader's Raft dial to the node timed out), and `uninstall` removes them and the dll
   (I-324).
 
 `tailraid update --restart` recreates the interface with the same address and port, so
@@ -400,10 +416,12 @@ round-trip table.
   a snapshot, an export, a report, a log line, an error or any request; the public key
   is the device's member row's `Key`.
 - **I-317** — Raft, the node RPC and the browser UI bind only the device's mesh address
-  (and the loopback listeners of I-50); the device's WireGuard peers are exactly the
+  (and the loopback listeners of I-50), and every connection the node or the CLI opens
+  to a member leaves from it; the device's WireGuard peers are exactly the
   device rows with a key that are not `Removed`, the pending rows and, until the table
   has arrived, the seed rows, each with `AllowedIPs` of its address alone; a packet from
-  any other key is dropped by the tunnel, and a membership change reconfigures the peers
+  any other key is dropped by the tunnel, a packet the OS hands the tunnel for the
+  device's own address is handed back to the kernel, and a membership change reconfigures the peers
   before the authorizer sees it, so a removed member's next packet dies at the tunnel.
 - **I-318** — A request is admitted when its source address is that of an active device
   row (from the table, or the seed until the table arrives) and nothing else is checked;
@@ -439,9 +457,14 @@ round-trip table.
 - **I-324** — The Linux unit runs as the installing user with `CAP_NET_ADMIN` as its
   only ambient and bounding capability; the macOS service is a LaunchDaemon in the
   `system` domain with its home under `/Library/Application Support/tailraid`; the
-  Windows service runs with `wintun.dll` beside the exe, written by `install` and by
-  `update` when absent or different, and one inbound firewall rule for the UDP port,
-  both removed by `uninstall`; `init` creates no interface.
+  Windows service runs with `wintun.dll` beside the exe, written by `install`, by
+  `update` and by whatever opens the adapter (a `join` runs before any `install`) when
+  absent or different, and two inbound firewall rules, one for the UDP port and one
+  for the program's TCP listeners, all removed by `uninstall`; a `join` under sudo on Linux writes into the invoking
+  user's config home, the one that user's unit names, and gives the data, config, disk
+  and mirror directories back to that user; `serve` listens only once the interface's
+  address takes a bind (Windows holds a fresh address tentative for a moment); `init`
+  creates no interface.
 - **I-325** — `status` reports, for every device member, its path class, endpoint,
   handshake age and bytes each way, and the device's own address, interface, port and
   port-mapping state; `node ls` shows the path; the vitals' network counters are the

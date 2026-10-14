@@ -43,7 +43,7 @@ start() {
       "$TART" list --quiet | grep -qx "$name" || create
       # --no-graphics keeps it headless; the login keychain must be unlocked for macOS
       # guests (a logged-in desktop session is enough)
-      nohup "$TART" run --no-graphics --no-audio --no-clipboard "$name" > "$logfile" 2>&1 &
+      nohup "$TART" run --no-graphics --no-audio --no-clipboard --net-bridged "$VMS_BRIDGE" "$name" > "$logfile" 2>&1 &
       echo $! > "$pidfile"
       ;;
     win)

@@ -30,14 +30,20 @@ service managers and the kernel mount clients are real.
 the mesh needs none: the guests find each other through the join code and the member
 table.)
 
-The Tart guests sit on the host's vmnet NAT (macOS gives each vmnet consumer its own
-/24; with Docker Desktop running the Tart network is `192.168.65.0/24` and the host is
-`.1`). The Windows guest runs behind QEMU's user-mode NAT: it reaches the host and,
-through it, the Tart guests; its SSH is forwarded to `127.0.0.1:2222` and the mesh's UDP
-port 20483 from every host address to the guest's, and its config names
-`<Tart gateway>:20483` as `mesh.endpoint` (`checks/slate.ps1`), so the join code it
-prints carries a reachable endpoint and a Windows-first round works. So the two Tart
-guests reach each other on one subnet (a `lan` path, docs/20 §5), while the Windows
+The Tart guests are bridged onto the host's LAN interface (`VMS_BRIDGE`, `en0` by
+default) and take addresses from the LAN's DHCP, found by ARP (`tart ip --resolver arp`,
+after one ping sweep of the /24 when the host's table does not hold the guest yet: the
+macOS guest announces itself, the Ubuntu guest never does).
+They were on the host's vmnet NAT before 2026-10-14; macOS hands each vmnet consumer a
+/24 of its own (`192.168.64.0/24` to the first, `.65` to the next), and a host route for
+one of those subnets (a static route to the LAN router, a VPN's) sends every packet for
+the guests out the wrong interface, which stranded a build with ARP answering and
+nothing above it. The Windows guest runs behind QEMU's user-mode NAT: it reaches the
+host and, through it, the LAN; its SSH is forwarded to `127.0.0.1:2222` and the mesh's
+UDP port 20483 from every host address to the guest's, and its config names `<host LAN
+address>:20483` as `mesh.endpoint` (`checks/slate.ps1`), so the join code it prints
+carries a reachable endpoint and a Windows-first round works. So the two Tart guests
+reach each other on the LAN (a `lan` path, docs/20 §5), while the Windows
 guest is reached through the host's forward and, from its own side, on the reflexive
 endpoint the others learn from its introduce and its probes: the rig exercises a NAT for
 real.
@@ -106,8 +112,8 @@ an hour). A failed step ends the round; teardown still runs.
 | 6 restart after join | kill each joiner's service process outright (`pkill -9`, `Stop-Process -Force`) and wait for its service manager to bring it back ready; then `tailraid stop && start` on the non-voter; every node ready and live within 90 s | the #40 class: a fresh follower restarted before its first snapshot has an empty table and must still accept its leader (member seed, I-92); the restart policies of docs/12 §1; I-131. A voter would mask the defect (refused by the leader, it wins an election and fills its own table), which is why the last joiner is a non-voter here |
 | 7 cross-OS data | each node writes a 3 MiB file and a small one through its own mount; every node reads all of them; a second node overwrites 64 KiB at 1 MiB + 7 of another's file and the third reads it back; rename and remove from a third node are visible on the others; mtimes agree | read-modify-write at a non-zero offset across gateways, docs/04, the NFS and SMB views of one volume |
 | 7b promote | `node promote tailraid-<last joiner>` on FIRST; `status` shows every device a voter | docs/02 membership changes; three voters for step 8 |
-| 8 verify | `tailraid verify --destructive --restarts` on the OS after FIRST in the mac, linux, win cycle, through its mount (so the leader is a node the consensus phase can kill); the report is copied back | the whole soak suite (docs/09 §6) against real service managers and mounts; every target runs `dev.enabled` under a restarting manager, so any *skipped (capability)* other than what three guests cannot offer fails the step: phase 4 (parity kills m+1 hosts besides the gateway and wants a fourth still holding slots), 13 (one disk per host), 14 (no diskless host), 15 (no S3 node on the rig) and 6 (only when leadership has moved to the verifier) |
-| 8b update --restart | on every node: `update --yes --restart --version <latest release> --allow-downgrade` (resolved from GitHub, signature checked, swapped, the service restarted by its manager), `version` reports the release and the node is ready again, or, when the working tree's snapshot codec is newer than the release's, `serve` refuses the snapshot (`unsupported snapshot version`, docs/12 §6) and the step says so; then `update --rollback --restart` puts the working-tree build back and the node is ready once more; every node live afterwards | docs/12 §5: I-61, I-128, I-131 on each OS; the release is named explicitly so the step runs whatever version the working tree carries, and the rollback lands inside the minute after which `serve` forgets the previous binary |
+| 8 verify | `tailraid verify --destructive --restarts` on the OS after FIRST in the mac, linux, win cycle, through its mount (so the leader is a node the consensus phase can kill); the report is copied back | the whole soak suite (docs/09 §6) against real service managers and mounts; every target runs `dev.enabled` under a restarting manager, so any *skipped (capability)* other than what three guests cannot offer fails the step: phase 4 (parity kills m+1 hosts besides the gateway and wants a fourth still holding slots), 13 (one disk per host), 14 (no diskless host), 15 (no S3 node on the rig) and 6 (only when leadership has moved to the verifier); phases 19, 22, 23 and 25 to 27 skip on a live cluster by design (no mirror before step 9, no copy jobs, no mesh of its own to join, cut or map: observed only) |
+| 8b update --restart | on every node: `update --yes --restart --version <latest release> --allow-downgrade` (resolved from GitHub, signature checked, swapped, the service restarted by its manager), `version` reports the release and the node is ready again, or, when the working tree's snapshot codec is newer than the release's, `serve` refuses the snapshot (`unsupported snapshot version`, docs/12 §6) and the step says so; then `update --rollback --restart` puts the working-tree build back and the node is ready once more; every node live afterwards. Until a mesh release exists the latest release predates the mesh and cannot load a mesh config at all: `update` runs the downloaded binary before swapping, it refuses the `mesh` section, nothing is installed, and the step records that and passes (docs/20: a hard cut) | docs/12 §5: I-61, I-128, I-131 on each OS; the release is named explicitly so the step runs whatever version the working tree carries, and the rollback lands inside the minute after which `serve` forgets the previous binary |
 | 9 add-disk, export, recover | `node add-disk <dir> --capacity 2G` live, `export <dir>` (`snapshot <dir>` before docs/16), then `stop`, `recover --voters <self>`, `start`: a one-voter cluster that still reads the round's files | docs/14 §2, I-129 |
 | 10 teardown | `umount`, `uninstall --forget-identity`, `reset` on all three | the next round reuses the guests as new devices |
 
@@ -135,9 +141,9 @@ tag`, and §5 is updated in the same pull request.
 
 - *`tart run` exits at once on the macOS guest*: the host's login keychain is locked
   (no desktop session). Log in on the Mac's console.
-- *The guests sit behind another subnet than last time*: the Tart vmnet subnet moved
-  (Docker Desktop started or stopped between runs). Nothing to do: the join code carries
-  the current endpoints and a round starts from `reset`.
+- *The guests have other addresses than last time*: the LAN's DHCP gave them new ones.
+  Nothing to do: the join code carries the current endpoints and a round starts from
+  `reset`. A host without `en0` as its LAN interface runs the rig with `VMS_BRIDGE=<if>`.
 - *`status` shows the Windows guest `none` from a Tart guest*: the host's forward of UDP
   20483 to the guest is what the others dial (`mesh.endpoint` in its config, written by
   the slate step from the Tart gateway address); a Tart subnet that moved since the

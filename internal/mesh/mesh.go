@@ -54,6 +54,9 @@ type Options struct {
 	ClusterKey func() []byte
 	RelayRate  int64          // bytes per second this device forwards for others; 0: RelayRate
 	Local      []netip.Prefix // this host's subnets, for the LAN class; nil: read from the interfaces (tests)
+	// Addr is the device's own mesh address: a packet the OS hands the tunnel for it goes
+	// back to the kernel (selfLoop); zero: no loop (a test without an address)
+	Addr netip.Addr
 }
 
 // Peer is one row the device holds (docs/20 §3).
@@ -128,6 +131,9 @@ type Mesh struct {
 
 // New starts a device on tunDev with the key, listening on the port (I-317).
 func New(tunDev tun.Device, key PrivateKey, o Options) (*Mesh, error) {
+	if o.Addr.IsValid() {
+		tunDev = &selfLoop{Device: tunDev, addr: o.Addr}
+	}
 	log := o.Log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)

@@ -183,7 +183,7 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		_ = tunDev.Close()
 		return err
 	}
-	o := mesh.Options{Port: nw.port, Log: nw.log, Clock: clk, ClusterID: clusterID, RelayRate: rate}
+	o := mesh.Options{Port: nw.port, Log: nw.log, Clock: clk, ClusterID: clusterID, RelayRate: rate, Addr: nw.addr.Addr()}
 	if intro != nil {
 		o.Introducer, o.TokenKey = intro, intro.tokenKey(clusterID)
 	}
@@ -205,6 +205,13 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		return err
 	}
 	nw.log.Info("mesh up", "addr", nw.addr, "interface", ifname, "port", m.Port())
+	// Windows holds a freshly set address tentative for a moment and refuses a bind to
+	// it ("the requested address is not valid in its context"), which stopped serve on
+	// the Windows guest's first start; the listeners wait until a bind succeeds
+	if err := waitBindable(ctx, nw.addr.Addr(), probeBind, clk, bindWait); err != nil {
+		m.Close()
+		return err
+	}
 	if cfg.MeshPortMap() {
 		nw.portmap = &portmap.Mapper{Port: m.Port(), Clock: clk, Log: nw.log}
 	}
@@ -609,4 +616,39 @@ func LocalAddr(cfg config.Config) (string, error) {
 		return "", fmt.Errorf("node: mesh.address: %w", err)
 	}
 	return net.JoinHostPort(p.Addr().String(), strconv.Itoa(cfg.Listen.RPC)), nil
+}
+
+// bindWait bounds how long serve waits for the interface's address to take a bind.
+const bindWait = 15 * time.Second
+
+// probeBind tries one TCP bind to addr on an ephemeral port and releases it.
+func probeBind(addr netip.Addr) error {
+	var lc net.ListenConfig
+	l, err := lc.Listen(context.Background(), "tcp", net.JoinHostPort(addr.String(), "0"))
+	if err != nil {
+		return err
+	}
+	return l.Close()
+}
+
+// waitBindable returns once probe succeeds for addr, trying every 200 ms until wait has
+// passed; the last error names what refused the bind.
+func waitBindable(ctx context.Context, addr netip.Addr, probe func(netip.Addr) error, clk clock.Clock, wait time.Duration) error {
+	start := clk.Now()
+	var last error
+	for {
+		if last = probe(addr); last == nil {
+			return nil
+		}
+		if clk.Now().Sub(start) >= wait {
+			return fmt.Errorf("node: %s took no bind within %s: %w", addr, wait, last)
+		}
+		t := clk.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C():
+		}
+	}
 }

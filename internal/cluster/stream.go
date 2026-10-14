@@ -30,6 +30,11 @@ type tcpStream struct {
 // Dial is raft's StreamLayer.Dial: no context reaches it, so the timeout is the only bound.
 func (s *tcpStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
 	d := net.Dialer{Timeout: timeout}
+	// from the listener's own address, the mesh one (docs/20 §1, I-317): a dial while the
+	// interface is absent fails at once rather than leaving by another interface
+	if ta, ok := s.l.Addr().(*net.TCPAddr); ok && ta.IP != nil && !ta.IP.IsUnspecified() {
+		d.LocalAddr = &net.TCPAddr{IP: ta.IP}
+	}
 	return d.DialContext(context.Background(), "tcp", string(addr))
 }
 func (s *tcpStream) Accept() (net.Conn, error) { return s.l.Accept() }
