@@ -409,9 +409,12 @@ the voters and lives in each one's Raft log and snapshots under `<data_dir>/raft
 data is the shards on every device and disk. Losing any `m` targets is survived (05 §3)
 and needs nothing from this section.
 
-**Backup.** `tailraid export <dir>` asks the local node for a fresh Raft snapshot
-(`/v1/admin` op `export`, which the node writes under `<data_dir>/export/<id>/` with
-`state.bin` and `meta.json`, each fsynced) and copies it to `<dir>/<id>/`. It is small
+**Backup.** `tailraid export <dir>` asks the local node for a Raft snapshot of its
+current state (`/v1/admin` op `export`, which the node writes under
+`<data_dir>/export/<id>/` with `state.bin` and `meta.json`, each fsynced) and copies it
+to `<dir>/<id>/`. The snapshot is taken now; a node that applied nothing since it
+started (a restarted follower before the next write) cannot take one, and its state is
+the newest snapshot it holds, which is exported instead. It is small
 (the metadata only) and a copy outside the cluster is worth keeping; `state.bin` is the
 `DecodeState` format of 02, so a future `fsck-from-snapshot` can read it. Shards are not
 part of it. The verb was `tailraid snapshot <dir>` until the volume snapshots of docs/16
@@ -576,8 +579,9 @@ volume's bytes in the clear: keep the disk where the data may be.
   `update --rollback` restores it; a release older than the running one needs
   `--version` and `--allow-downgrade`.
 - **I-129** — `tailraid export` (named `snapshot` until docs/16's PR 2 renames it)
-  exports a fresh Raft snapshot whose `state.bin`
-  decodes to the node's current metadata; `tailraid recover --voters` on a stopped node
+  exports a Raft snapshot whose `state.bin` decodes to the node's current metadata,
+  taken now or, on a node that applied nothing since it started, the newest one it
+  holds; `tailraid recover --voters` on a stopped node
   rewrites its Raft membership to the voters named so it restarts as their leader with
   every entry it had, every file whose shards survive readable and the rest `EIO`; it
   refuses a running node, an uninitialised directory and a list without this node.

@@ -14,13 +14,24 @@ import (
 	"github.com/zombar/tailraid/internal/sysfs"
 )
 
-// ExportSnapshot forces a Raft snapshot and writes its bytes to dir/<id>/state.bin with
+// ErrNoSnapshot is an export of a node that applied nothing since it started and holds
+// no snapshot either: there is no state to write yet.
+var ErrNoSnapshot = errors.New("cluster: no snapshot to export yet")
+
+// ExportSnapshot takes a Raft snapshot and writes its bytes to dir/<id>/state.bin with
 // the snapshot's meta.json beside it, each fsynced before its rename (docs/12 §9,
-// I-129). It returns the directory. The state is the metadata only: shards stay where
-// they are.
+// I-129). It returns the directory. Raft refuses a snapshot ("nothing new") from a node
+// whose FSM applied nothing since the process started, which a restarted follower is
+// until the next write; its state is then the newest snapshot the store holds, which the
+// start restored, so that one is exported. The state is the metadata only: shards stay
+// where they are.
 func (n *Node) ExportSnapshot(dir string) (string, raft.SnapshotMeta, error) {
 	f := n.Raft.Snapshot()
-	if err := f.Error(); err != nil {
+	err := f.Error()
+	if errors.Is(err, raft.ErrNothingNewToSnapshot) {
+		return exportNewest(n.snaps, dir)
+	}
+	if err != nil {
 		return "", raft.SnapshotMeta{}, fmt.Errorf("cluster: snapshot: %w", err)
 	}
 	m, rc, err := f.Open()
@@ -28,21 +39,46 @@ func (n *Node) ExportSnapshot(dir string) (string, raft.SnapshotMeta, error) {
 		return "", raft.SnapshotMeta{}, fmt.Errorf("cluster: open snapshot: %w", err)
 	}
 	defer rc.Close()
+	out, err := writeExport(dir, m, rc)
+	return out, *m, err
+}
+
+// exportNewest exports the newest snapshot of the store.
+func exportNewest(snaps raft.SnapshotStore, dir string) (string, raft.SnapshotMeta, error) {
+	list, err := snaps.List()
+	if err != nil {
+		return "", raft.SnapshotMeta{}, fmt.Errorf("cluster: list snapshots: %w", err)
+	}
+	if len(list) == 0 {
+		return "", raft.SnapshotMeta{}, ErrNoSnapshot
+	}
+	m := list[0] // newest first
+	_, rc, err := snaps.Open(m.ID)
+	if err != nil {
+		return "", raft.SnapshotMeta{}, fmt.Errorf("cluster: open snapshot %s: %w", m.ID, err)
+	}
+	defer rc.Close()
+	out, err := writeExport(dir, m, rc)
+	return out, *m, err
+}
+
+// writeExport writes a snapshot's bytes and meta.json under dir/<id>.
+func writeExport(dir string, m *raft.SnapshotMeta, rc io.Reader) (string, error) {
 	out := filepath.Join(dir, m.ID)
 	if err := os.MkdirAll(out, 0o700); err != nil {
-		return "", raft.SnapshotMeta{}, err
+		return "", err
 	}
 	if err := streamFileSync(filepath.Join(out, "state.bin"), rc); err != nil {
-		return "", raft.SnapshotMeta{}, err
+		return "", err
 	}
 	mj, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return "", raft.SnapshotMeta{}, err
+		return "", err
 	}
 	if err := writeFileSync(filepath.Join(out, "meta.json"), mj); err != nil {
-		return "", raft.SnapshotMeta{}, err
+		return "", err
 	}
-	return out, *m, nil
+	return out, nil
 }
 
 // streamFileSync writes r to path through a temp file, fsync and rename.
