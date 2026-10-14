@@ -83,21 +83,25 @@ func ReadaheadDepth(chunkSize uint32) int {
 // the other's prefetches (I-203).
 type streams [2]cursor
 
-// cursor is one stream: the chunk of its last READ and when that READ came.
+// cursor is one stream: its frontier (the furthest chunk a READ of it reached) and when
+// its last READ came.
 type cursor struct {
 	idx  uint64
 	used uint64 // Reader.tick at the last READ; 0 = no stream
 }
 
-// follow places a READ of chunk idx on a stream: the one it continues (the chunk of the
-// stream's last READ or the one after), else the slot of no stream or of the stream
-// read least recently, which the READ replaces. It reports the slot, whether the READ
-// continues a stream, and whether it replaced one.
-func (st *streams) follow(idx, tick uint64) (slot int, sequential, replaced bool) {
+// follow places a READ of chunk idx on a stream: the one it continues (within ReadAhead
+// chunks of the stream's frontier, either side: a client's concurrent READs are served
+// out of order, so a READ of the chunk after the frontier lands before the last READ of
+// the frontier's chunk, and a late READ of an earlier chunk is not a seek), else the
+// slot of no stream or of the stream read least recently, which the READ replaces. It
+// reports the slot, the stream's frontier (the chunk readahead continues from), whether
+// the READ continues a stream, and whether it replaced one.
+func (st *streams) follow(idx, tick uint64) (slot int, front uint64, sequential, replaced bool) {
 	for i, c := range st {
-		if c.used != 0 && (idx == c.idx || idx == c.idx+1) {
-			st[i] = cursor{idx: idx, used: tick}
-			return i, true, false
+		if c.used != 0 && idx+ReadAhead >= c.idx && idx <= c.idx+ReadAhead {
+			st[i] = cursor{idx: max(c.idx, idx), used: tick}
+			return i, st[i].idx, true, false
 		}
 	}
 	slot = 0
@@ -108,7 +112,7 @@ func (st *streams) follow(idx, tick uint64) (slot int, sequential, replaced bool
 	}
 	replaced = st[slot].used != 0
 	st[slot] = cursor{idx: idx, used: tick}
-	return slot, false, replaced
+	return slot, idx, false, replaced
 }
 
 // hintCap bounds the per-inode and per-hash bookkeeping of readahead: past it the maps
@@ -320,12 +324,13 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 	}
 	st := r.last[in.Ino]
 	r.tick++
-	// another READ in the same chunk stays in the sequence: it cancels nothing and retries
-	// the candidates a busy slot made the chunk's first READ skip (an early-served READ
-	// returns while its chunk's fetch still holds a slot); a READ that continues neither
-	// stream starts one in place of the stream read least recently, whose prefetches no
-	// READ joined are cut, and a file's first chunk always starts a stream that prefetches
-	stream, sequential, replaced := st.follow(idx, r.tick)
+	// another READ within a stream's window stays in the sequence: it cancels nothing,
+	// continues readahead from the stream's frontier and retries the candidates a busy
+	// slot made the frontier's first READ skip (an early-served READ returns while its
+	// chunk's fetch still holds a slot); a READ that continues neither stream starts one
+	// in place of the stream read least recently, whose prefetches no READ joined are
+	// cut, and a file's first chunk always starts a stream that prefetches
+	stream, front, sequential, replaced := st.follow(idx, r.tick)
 	r.last[in.Ino] = st
 	if replaced {
 		r.cancelUnjoinedLocked(in.Ino, stream)
@@ -337,12 +342,12 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 	}
 	depth := uint64(ReadaheadDepth(cs))
 	var live map[meta.NodeIdx]bool // the live set, read once per call and only when a second chunk is weighed
-	for j := idx + 1; j <= idx+depth && j < uint64(len(in.Chunks)); j++ {
+	for j := front + 1; j <= front+depth && j < uint64(len(in.Chunks)); j++ {
 		h := in.Chunks[j]
 		if h == meta.HashZero || r.cache.Has(h) {
 			continue
 		}
-		if j > idx+1 {
+		if j > front+1 {
 			if live == nil {
 				live = meta.LiveSet(r.peers.Live())
 			}
