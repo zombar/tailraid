@@ -303,6 +303,8 @@ func (a *adminOps) userOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			ended++
 		}
 		return map[string]any{"ended": ended}, nil
+	case "audit_ls":
+		return a.auditList(ctx, op)
 	case "user_whoami":
 		u, ok := st.User(op.Actor)
 		if !ok {

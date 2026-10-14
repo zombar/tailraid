@@ -517,6 +517,6 @@ stub in `test/invariants/` meanwhile.
 | I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
 | I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
-| I-357 | TestAudit_OneRecordPerOp, TestAudit_RefusalRateLimit, TestAudit_LeaderOnly |
-| I-358 | TestAudit_ChainHash, TestAudit_Retention_Table, TestAudit_Ls_Filters, TestStatus_Users, TestCheck_DormantWarning |
+| I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |
+| I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |
 | I-359 | `TestConfig_Validate_Table` |

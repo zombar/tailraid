@@ -28,6 +28,7 @@ type FSM struct {
 
 	incompatible atomic.Uint64 // entries that failed to decode (I-105)
 	snapHook     atomic.Pointer[SnapshotHook]
+	applyHook    atomic.Pointer[ApplyHook]
 	lastBadLog   time.Time // rate limit for the log line above; not state
 
 	mu      sync.RWMutex
@@ -46,6 +47,20 @@ type FSM struct {
 // apply lock, so it must not call back into the FSM (not even a read: the lock is not
 // reentrant), and clone is valid only during the call.
 type SnapshotHook func(sn Snapshot, host NodeIdx, hostID string, clone func() *State)
+
+// ApplyHook is called after every applied command, outside the apply lock, with the
+// command, its index and its result: the audit log's observer (docs/21 §8, I-357). It
+// may read the FSM.
+type ApplyHook func(cmd Command, index uint64, res Result)
+
+// SetApplyHook installs (or, with nil, removes) the apply hook; safe while Apply runs.
+func (f *FSM) SetApplyHook(h ApplyHook) {
+	if h == nil {
+		f.applyHook.Store(nil)
+		return
+	}
+	f.applyHook.Store(&h)
+}
 
 // SetSnapshotHook installs (or, with nil, removes) the hook; safe while Apply runs.
 func (f *FSM) SetSnapshotHook(h SnapshotHook) {
@@ -97,6 +112,11 @@ func (f *FSM) Apply(l *raft.Log) any {
 	}
 	f.mu.Unlock()
 	f.setApplied(l.Index)
+	if h := f.applyHook.Load(); h != nil && l.Type == raft.LogCommand && decodeErr == nil {
+		if r, ok := res.(Result); ok {
+			(*h)(cmd, l.Index, r)
+		}
+	}
 	return res
 }
 
