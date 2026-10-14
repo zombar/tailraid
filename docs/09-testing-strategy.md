@@ -538,12 +538,19 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   reaches n2 `direct` through it, and a responder restarted empty makes n2 re-map at the
   next refresh (I-322, I-323, I-328, I-330); the report records throughput per path
   class. 28 users and keys, 29 grants on the gateways, 30 secrets per user and 31 audit
-  and sessions are docs/21 §10 (after 1.0): an invite minted on one node creating a user
-  on another, a second device's key, a disabled user and the last admin's lockout; read,
-  write, admin and nobody on NFS, SMB and the web with the same answer from two
-  gateways; personal secrets isolated per user and the system space admins-only; one
-  audit record per operation, refusals counted, a browser session minted, used and
-  revoked (I-342..I-358). `soak.CopySpec`
+  and sessions are docs/21 §10: an invite minted on one node creating a user on another,
+  a second device's key, a disabled user and the last admin's lockout; read, write,
+  admin and nobody on NFS and the web with the same answer from two gateways, a revoke
+  refusing the next write; personal secrets isolated per user and the system space
+  admins-only; one audit record per operation, refusals counted, a browser session
+  minted on one node, handed off to another's page and ended from there (I-342..I-358).
+  The driver holds the people as Ed25519 identities it makes for the run and signs every
+  operation with; the first admin comes from `tailraid user bootstrap` in a node's
+  container, the compose worker relays a signed request (`rpcReq.Sig`), and the driver's
+  mounts stay bound to the admin between the checks. The phases run last, since the
+  first user turns enforcement on for the rest of the run; a live cluster's users are
+  its own, so it records the four as skipped (`Caps.Users`); the harness answers the
+  same ops over its nodes' own FSMs (`users_harness_test.go`), so CI runs the four. `soak.CopySpec`
   carries the open mode (exclusive, the default, or replace) and
   which of the job's sessions copies it (`Conn`), and a result says when a create lost
   to an existing name (`Exists`); the handle races are `smbclient.Races`

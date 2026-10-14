@@ -51,6 +51,10 @@ var phases = []phase{
 	{"25 mesh join", phaseMeshJoin},
 	{"26 mesh paths", phaseMeshPaths},
 	{"27 mesh nat", phaseMeshNAT},
+	{"28 users and keys", phaseUsers},
+	{"29 grants on the gateways", phaseGrants},
+	{"30 secrets per user", phaseUserSecrets},
+	{"31 audit and sessions", phaseAudit},
 }
 
 // model is the client's belief about the corpus: path → content.

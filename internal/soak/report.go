@@ -44,6 +44,7 @@ type reportData struct {
 	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
 	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
 	RoundTrip  string
+	Users      []string   // phases 28–31 (docs/21 §10): the people, the grant matrix and the audit counts
 	MeshPairs  []pairView // phase 26's paths table (docs/20), empty off a mesh
 	MeshJoin   *joinView  // phase 25's round trip, nil when no late device joined
 	PeakSkew   int        // most chunks above the host cap in any sample
@@ -202,6 +203,7 @@ func buildReport(s Summary) reportData {
 	meshCharts, pairs, join := meshFigures(s)
 	d.Charts = append(d.Charts, meshCharts...)
 	d.MeshPairs, d.MeshJoin = pairs, join
+	d.Users = usersLines(s)
 	var spread []*Sample
 	for i := range s.Records {
 		if s.Records[i].Kind == "sample" && s.Records[i].S != nil {
@@ -537,6 +539,10 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <table><tr><th>Snapshot</th><th>Mirror</th><th>Taken</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Added</th><th>State</th><th>Read</th></tr>
 {{range .Snapshots}}<tr><td>{{.Name}}</td><td>{{.Mirror}}</td><td>{{.Taken}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Added}}</td><td>{{.State}}</td><td>{{.Read}}</td></tr>{{end}}
 {{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
+{{if .Users}}<h2>Users</h2>
+<p class="meta">phases 28–31 (docs/21 §10): the people made for the run, what each gateway answered each user, and the audit log's counts</p>
+<pre>{{range .Users}}{{.}}
+{{end}}</pre>{{end}}
 {{if .MeshPairs}}<h2>Mesh paths</h2>
 <p class="meta">phase 26 (docs/20 §5): every ordered pair as the first node sees the second, at the start of the phase; the lanes chart above has the class over the whole run</p>
 <table><tr><th>From</th><th>To</th><th>Class</th><th>Endpoint</th><th>Seen</th></tr>
@@ -560,6 +566,22 @@ func spreadSamples(samples []*Sample) []chart.SpreadSample {
 	for i, s := range samples {
 		if s != nil {
 			out[i] = chart.SpreadSample{Targets: s.Targets, Chunks: s.Chunks, DomainSkew: s.DomainSkew}
+		}
+	}
+	return out
+}
+
+// usersLines are the Users section's lines: the three events of phases 28, 29 and 31.
+func usersLines(s Summary) []string {
+	var out []string
+	for i := range s.Records {
+		rec := &s.Records[i]
+		if rec.Kind != "event" {
+			continue
+		}
+		switch rec.Name {
+		case usersEvent, grantsEvent, auditEvent:
+			out = append(out, rec.Name+": "+rec.Text)
 		}
 	}
 	return out
