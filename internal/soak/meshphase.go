@@ -283,7 +283,11 @@ func phaseMeshJoin(ctx context.Context, r *Run) error {
 				none = false
 			}
 		}
-		r.check("I-319", "no pending row after the refused introduce", none, "a member lists a pending row")
+		why := ""
+		if !none {
+			why = "a member lists a pending row"
+		}
+		r.check("I-319", "no pending row after the refused introduce", none, why)
 	} else {
 		newCode = code
 	}
@@ -559,6 +563,6 @@ func phaseMeshPaths(ctx context.Context, r *Run) error {
 		}
 		return good
 	})
-	r.check("I-323", "after a restart the others keep "+b.Name+"'s endpoint and re-handshake within 10 s", hsOK, strings.Join(why, "; ")+" after "+hsTook.Round(time.Millisecond).String())
+	r.check("I-323", "after a restart the others keep "+b.Name+"'s endpoint and re-handshake within 10 s", hsOK, strings.TrimSpace(strings.Join(why, "; ")+" after "+hsTook.Round(time.Millisecond).String()))
 	return nil
 }
