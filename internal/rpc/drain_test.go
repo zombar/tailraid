@@ -67,6 +67,10 @@ func TestClient_CancelledGet_DrainsAShortRest(t *testing.T) {
 			addr := strings.TrimPrefix(srv.URL, "http://")
 			c := NewClient([16]byte{1}, func(meta.NodeIdx) (string, bool, bool) { return addr, false, true })
 			c.SetDisks(disk0, nil)
+			// one connection to the host: the second request waits for the first's to be
+			// returned to the pool (reused) or closed (a new dial), instead of racing the
+			// transport's return of a drained connection with a dial of its own
+			c.http.Transport.(*http.Transport).MaxConnsPerHost = 1
 			headers := make(chan struct{}, 1)
 			c.http.Transport = signalRT{c.http.Transport, headers}
 

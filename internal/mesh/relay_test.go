@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
+	"golang.zx2c4.com/wireguard/tun/tuntest"
 
 	"github.com/zombar/tailraid/internal/clock"
 )
@@ -446,4 +447,81 @@ func TestBind_ProbeAnsweredByItsTargetOnly(t *testing.T) {
 	if len(pinned) != 1 || pinned[0] != c.m.Key().String()+"@"+c.loopback().String() {
 		t.Fatalf("pinned %v, want c alone at its socket", pinned)
 	}
+}
+
+// A pin holds against a peer that still sends through the relay: the device sends a
+// keepalive on the new path at once, the peer roams to the direct address it came from,
+// and the pair is direct both ways; without it the peer's next relayed packet would roam
+// the device back to the relay and the pin would be lost every probe interval.
+// Invariant: I-329
+func TestRelay_PinSticksWhilePeerStillRelays(t *testing.T) {
+	a := newNode(t, 1, Options{ClusterKey: clusterKey})
+	b := newNode(t, 2, Options{ClusterKey: clusterKey})
+	c := newNode(t, 3, Options{ClusterKey: clusterKey})
+	if err := c.m.SetPeers([]Peer{a.peer(a.loopback()), b.peer(b.loopback())}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.SetPeers([]Peer{b.peer(), c.peer(c.loopback())}); err != nil { // b's endpoints unknown yet
+		t.Fatal(err)
+	}
+	if err := b.m.SetPeers([]Peer{a.peer(), c.peer(c.loopback())}); err != nil { // and b never learns a's
+		t.Fatal(err)
+	}
+	for _, p := range [][2]*node{{a, c}, {c, a}, {b, c}, {c, b}} {
+		if !ping(t, p[0], p[1], 10*time.Second) {
+			t.Fatalf("no direct path %d→%d", p[0].idx, p[1].idx)
+		}
+	}
+	for _, n := range []*node{a, b, c} {
+		if err := n.m.Tick(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.clk.Advance(RelayAfter)
+	b.clk.Advance(RelayAfter)
+	for _, n := range []*node{a, b} {
+		if err := n.m.Tick(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !ping(t, a, b, 10*time.Second) || !ping(t, b, a, 10*time.Second) {
+		t.Fatal("no path through the relay")
+	}
+	// b keeps sending to a through the relay the whole time, as a peer with traffic does
+	stop := make(chan struct{})
+	var sender sync.WaitGroup
+	sender.Go(func() {
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				select {
+				case b.tun.Outbound <- tuntest.Ping(a.addr, b.addr):
+				case <-stop:
+					return
+				}
+			case <-a.tun.Inbound: // drained, so the device never blocks on it
+			}
+		}
+	})
+	defer sender.Wait()
+	defer close(stop)
+	// a learns b's address and probes it; b knows nothing of a's and keeps relaying
+	if err := a.m.SetPeers([]Peer{b.peer(b.loopback()), c.peer(c.loopback())}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.m.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "b to learn a's direct address from the keepalive", func() bool {
+		st := statusOf(t, b, a.m.Key())
+		return !st.Relay && st.Endpoint == a.loopback()
+	})
+	waitFor(t, "a's pin to hold", func() bool {
+		st := statusOf(t, a, b.m.Key())
+		return !st.Relay && st.Endpoint == b.loopback()
+	})
 }

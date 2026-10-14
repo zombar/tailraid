@@ -12,6 +12,12 @@ pub=$(ip -o -4 addr show | awk -v p="$PUBLIC_NET" 'index($4, p) == 1 { print $2;
 # forwarding is the compose file's sysctl (the container's /proc/sys is read-only)
 [ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || { echo "ip_forward is off: set it in the compose file's sysctls" >&2; exit 1; }
 for net in ${DROP_NETS:-}; do iptables -A FORWARD -d "$net" -j DROP; done
+# a flow a mapping lets in (DNAT) leaves for the inner network from the router's own
+# inner address: the Docker bridge drops a new flow whose source is off its subnet, as it
+# dropped the forwarded probes of the mapping round before this; so the cone side sees a
+# mapped-in peer at its router, as behind a home router that hairpins
+inner=$(ip -o -4 addr show | awk -v p="$PUBLIC_NET" 'index($4, p) != 1 && $2 != "lo" { print $2; exit }')
+iptables -t nat -A POSTROUTING -o "$inner" -m conntrack --ctstate DNAT -j MASQUERADE
 case "${NAT_MODE:-cone}" in
   cone) iptables -t nat -A POSTROUTING -o "$pub" -j MASQUERADE ;;
   symmetric) iptables -t nat -A POSTROUTING -o "$pub" -j MASQUERADE --random-fully ;;
