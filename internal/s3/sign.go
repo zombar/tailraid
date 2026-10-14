@@ -16,8 +16,8 @@ import (
 
 // Credentials are an access key pair. They never leave the device (I-139).
 type Credentials struct {
-	AccessKey string `yaml:"access_key"`
-	SecretKey string `yaml:"secret_key"`
+	AccessKey string `yaml:"access_key" json:"access_key"`
+	SecretKey string `yaml:"secret_key" json:"secret_key"`
 }
 
 const (

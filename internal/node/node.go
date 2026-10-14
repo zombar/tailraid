@@ -212,11 +212,12 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	client := rpc.NewClient(clusterID, node.RPCAddrOf)
 	client.SetDisks(node.DiskOf, disks.local)
-	// S3 nodes: the buckets this device holds credentials for (docs/10 §4.1)
-	s3keys := cluster.KeysFromFile(cfg.Node.DataDir, func(err error) { log.Warn("s3 credentials file unreadable; keeping the last good keys", "err", err) })
-	client.SetS3(cluster.NewS3Buckets(node, s3keys, nil).Bucket)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
+	store := newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk) // docs/19
+	// S3 nodes: the buckets whose credentials the store or this device's file holds (docs/10 §4.1, docs/19 §6)
+	s3file := cluster.KeysFromFile(cfg.Node.DataDir, func(err error) { log.Warn("s3 credentials file unreadable; keeping the last good keys", "err", err) })
+	client.SetS3(cluster.NewS3Buckets(node, s3Keys(store, s3file), nil).Bucket)
 	prober.SelfHealth = func() rpc.Health {
 		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Dev: cfg.Dev.Enabled, Web: webPort(cfg), Disks: disks.health()}
 	}
@@ -346,7 +347,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
 	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
-	ops.secrets = newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk)
+	ops.secrets = store
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
 	if err != nil {
@@ -670,6 +671,10 @@ type adminOps struct {
 	mirrors   *mirrorSet // this host's mirrors (docs/16)
 	mirrorPol config.MirrorPolicy
 	secrets   *secrets.Store // the secrets store (docs/19)
+	// the import of the old key files (docs/19 §6): finished, and the last reason it was not
+	legacyDone bool
+	legacyWhy  string
+	keyWhy     string // the last reason the cluster key could not be fetched
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -888,6 +893,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 	// it) is registered now, not a tick later: status reads the host's free space at once,
 	// and the node table must not lag it (I-74)
 	a.rebudget(ctx)
+	a.keepKey(ctx) // a fresh join opens the store's credentials before its first tick (docs/19 §3)
 	for {
 		select {
 		case <-ctx.Done():
@@ -895,6 +901,8 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 		case <-budgetT.C():
 			a.rebudget(ctx) // derived budgets past the hysteresis, pinned ones whenever they differ
 			a.refreshSeed()
+			a.keepKey(ctx)
+			a.importLegacy(ctx)
 			if a.mirrors != nil && a.healthy() {
 				a.mirrors.tick(ctx) // this host's mirrors: schedule, thinning, reconcile (docs/16 §4, §5)
 				if a.node.IsLeader() {

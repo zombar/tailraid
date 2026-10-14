@@ -425,7 +425,7 @@ func TestClient_MusicBrainzOncePerSecond(t *testing.T) {
 func TestKey_SavedPrivate_EnvWins(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 	t.Setenv(KeyEnv, "")
-	if _, err := LoadKey(dir); !errors.Is(err, ErrNoKey) {
+	if _, err := LoadKey(dir, nil); !errors.Is(err, ErrNoKey) {
 		t.Errorf("no key: %v", err)
 	}
 	if err := SaveKey(dir, "  abc  \n"); err != nil {
@@ -435,12 +435,43 @@ func TestKey_SavedPrivate_EnvWins(t *testing.T) {
 	if err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 { // Windows has no permission bits
 		t.Fatalf("key file: %v %v", fi, err)
 	}
-	if k, err := LoadKey(dir); k != "abc" || err != nil {
+	if k, err := LoadKey(dir, nil); k != "abc" || err != nil {
 		t.Errorf("saved: %q %v", k, err)
 	}
 	t.Setenv(KeyEnv, "fromenv")
-	if k, _ := LoadKey(dir); k != "fromenv" {
+	if k, _ := LoadKey(dir, nil); k != "fromenv" {
 		t.Errorf("env: %q", k)
+	}
+}
+
+// The scrape's key is the environment's when set, else the store's, else the old file's;
+// a store that cannot answer falls through to the file.
+// Invariant: I-308
+func TestTMDBKey_Order(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveKey(dir, "fromfile"); err != nil {
+		t.Fatal(err)
+	}
+	stored := func(v string, err error) func() (string, error) { return func() (string, error) { return v, err } }
+	for _, tc := range []struct {
+		name, env string
+		store     func() (string, error)
+		want      string
+	}{
+		{"env over everything", "fromenv", stored("fromstore", nil), "fromenv"},
+		{"store over the file", "", stored("fromstore", nil), "fromstore"},
+		{"no secret: the file", "", stored("", nil), "fromfile"},
+		{"store unreachable: the file", "", stored("", errors.New("no node")), "fromfile"},
+		{"no store", "", nil, "fromfile"},
+	} {
+		t.Setenv(KeyEnv, tc.env)
+		if k, err := LoadKey(dir, tc.store); k != tc.want || err != nil {
+			t.Errorf("%s: %q %v", tc.name, k, err)
+		}
+	}
+	t.Setenv(KeyEnv, "")
+	if _, err := LoadKey(t.TempDir(), stored("", nil)); !errors.Is(err, ErrNoKey) {
+		t.Errorf("nowhere: %v", err)
 	}
 }
 
