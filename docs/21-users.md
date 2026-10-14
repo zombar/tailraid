@@ -283,7 +283,7 @@ it does not reach. §11 maps each control to its mechanism here.
   cluster key, the per-name HKDF and AES-256-GCM, the key fetch and soak phase 24 are
   untouched (`Store.Opened(prefix)` already filters by prefix).
 
-## 8. The audit log (I-357, I-358)
+## 8. The audit log (I-357, I-358, I-333)
 
 - **Records.** Every applied op 28–32, every secret put, delete and personal read, every
   operation that needed `admins`, every session mint and sign-in, every key added or
@@ -298,6 +298,15 @@ it does not reach. §11 maps each control to its mechanism here.
   the SHA-256 of the previous record in its segment: tamper evidence within a segment,
   which with the tree outside every user's grant walk (§3) is what the log offers. A
   segment is dropped after `audit.retention` (365 d).
+- **Never in the leader's way.** The leader records applied operations from the FSM's
+  apply observer, which runs on Raft's apply goroutine; a write into the volume is
+  proposals that goroutine must apply. So `Record` only appends to an in-memory inbox
+  under a lock held for no I/O, and the flush (every 30 s, and the seal at a stop)
+  places the inbox, reads the open hour's segment and writes it with that lock released.
+  A record made while a segment is being written waits for nothing and lands in the next
+  flush; a record whose hour differs from the open segment's closes that hour in the
+  flush, never in `Record` (I-333; the 2026-10-14 soak's leader stopped applying when a
+  `secret set` was applied during the flush's write).
 - **Reading.** `tailraid audit ls [--since 7d] [--user u] [--kind k] [--json]` merges
   the segments newest first; a user sees their own records, admins everyone's.
   `status.users` carries the counts (users, active sessions on this node, refusals in the
@@ -494,6 +503,12 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
 - **I-359** — `users.clock_skew`, `users.session`, `users.dormant_after` and
   `audit.retention` are validated within their bounds (1m..1h, 1h..720h, 24h..8760h,
   168h..87600h) and default to 5m, 168h, 2160h and 8760h.
+- **I-333** — `audit.Writer.Record` and `Refuse` touch no volume and wait for no flush:
+  the record goes into an in-memory inbox under a lock held for no I/O, and `Flush`
+  places the inbox, reads and writes the segments and the seen file with that lock
+  released, so the leader's apply observer never blocks Raft's apply goroutine on a
+  proposal of the writer's own; a record made during a segment write lands in the next
+  flush, and a closed hour is written by the flush alone.
 
 ## Tests
 
@@ -520,3 +535,4 @@ stub in `test/invariants/` meanwhile.
 | I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |
 | I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |
 | I-359 | `TestConfig_Validate_Table` |
+| I-333 | `TestAudit_RecordNeverWaitsForTheVolume` |

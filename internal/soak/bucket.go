@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -80,8 +81,11 @@ func phaseBucket(ctx context.Context, r *Run) error {
 		bucket = NodeRef{Name: bucketName, Idx: nr.Idx}
 		u.add("drain and remove "+bucketName, func(c context.Context) error { _, err := r.removeBucket(c, bucket); return err })
 		r.bucketLive(ctx, bucket)
+		// the leader's refusal names the row (cluster.addS3); any other error, a timeout
+		// above all, is a failure of its own, never a pass
 		err = r.Env.AddS3(ctx, bucketName+"-again")
-		r.check("I-137", "a second S3 node over the same bucket is refused", err != nil, fmt.Sprint(err))
+		refused := err != nil && strings.Contains(err.Error(), "already S3 node")
+		r.check("I-137", "a second S3 node over the same bucket is refused", refused, fmt.Sprint(err))
 	} else {
 		// a live cluster: its own S3 node, if this device holds the key (docs/09 §6)
 		if rep, _, err = r.anyStatus(ctx); err != nil {
