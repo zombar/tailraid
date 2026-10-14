@@ -30,7 +30,7 @@ func main() {
 		},
 	}
 	root.PersistentFlags().String("config", "", "config file (default: per-OS tailraid/config.yaml)")
-	root.AddCommand(initCmd(), joinCmd(), serveCmd(), resetCmd(), statusCmd(), dashboardCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), trashCmd(), cacheCmd(), fsckCmd(), chunkCmd(), verifyCmd(), mountCmd(), umountCmd(), installCmd(), uninstallCmd(), startStopCmd("start", svc.Start), startStopCmd("stop", svc.Stop), logsCmd(), updateCmd(), exportCmd(), recoverCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), statsCmd(), searchCmd(), mediaCmd(), secretCmd(), versionCmd())
+	root.AddCommand(initCmd(), joinCmd(), serveCmd(), resetCmd(), statusCmd(), dashboardCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), trashCmd(), cacheCmd(), fsckCmd(), chunkCmd(), verifyCmd(), mountCmd(), umountCmd(), installCmd(), uninstallCmd(), startStopCmd("start", svc.Start), startStopCmd("stop", svc.Stop), logsCmd(), updateCmd(), exportCmd(), recoverCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), statsCmd(), searchCmd(), mediaCmd(), secretCmd(), userCmd(), groupCmd(), grantCmd(), revokeCmd(), accessCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "tailraid:", err)
 		os.Exit(1)

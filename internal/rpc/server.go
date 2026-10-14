@@ -23,6 +23,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mirror"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 // ShardStore is what the shard endpoints need from chunk.Store.
@@ -94,16 +95,21 @@ type Options struct {
 	// SecretKey is the cluster key this node holds itself, checked against the FSM's key
 	// ID (docs/19 §3, I-304): GET /v1/secrets/key answers a member with it, 404 without.
 	SecretKey func() ([]byte, bool)
-	Web       uint16 // the browser UI's port for /health (0 when off)
-	BadSlot   func(key chunk.ShardKey, node meta.NodeIdx)
-	Dev       http.Handler           // /dev/* (docs/08): nil unless dev.enabled
-	Blocked   func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
-	Clk       clock.Clock
-	Logger    *slog.Logger
-	MaxShard  int64         // PUT body cap; default 2 MiB
-	Grace     time.Duration // DELETE fence minimum shard age; default 10 min
-	PutSlots  int           // concurrent PUTs; default 16
-	GetSlots  int           // concurrent GETs; default 32
+	// Signed is the signature check of docs/21 §2 (I-344): once the cluster has users
+	// (Enforcing), every admin or member op that needs one carries a Tailraid-Sig header
+	// Verify answers the actor for, and IsAdmin says whether that actor is an admin (a
+	// member op's rule); nil: no users layer (tests).
+	Signed   *Signed
+	Web      uint16 // the browser UI's port for /health (0 when off)
+	BadSlot  func(key chunk.ShardKey, node meta.NodeIdx)
+	Dev      http.Handler           // /dev/* (docs/08): nil unless dev.enabled
+	Blocked  func(addr string) bool // /dev/fault rules: inbound requests from these peers get 503
+	Clk      clock.Clock
+	Logger   *slog.Logger
+	MaxShard int64         // PUT body cap; default 2 MiB
+	Grace    time.Duration // DELETE fence minimum shard age; default 10 min
+	PutSlots int           // concurrent PUTs; default 16
+	GetSlots int           // concurrent GETs; default 32
 	// BodyTimeout bounds reading a PUT or apply body and writing a GET body, so a peer
 	// that stalls mid-transfer cannot hold a slot (I-97); default callTimeout(MaxShard).
 	BodyTimeout time.Duration
@@ -650,8 +656,13 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, authErr.Error())
 		return
 	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad member op")
+		return
+	}
 	var op MemberOp
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
+	if err := json.Unmarshal(body, &op); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad member op")
 		return
 	}
@@ -679,6 +690,15 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		op = MemberOp{Op: "update_addr", NodeIdx: op.NodeIdx, Addr: op.Addr}
+	}
+	need := op.Needs()
+	if op.Actor, err = s.actor(r, need, body); err != nil {
+		writeErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if need == NeedAdmins && s.enforcing() && !s.o.Signed.IsAdmin(op.Actor) {
+		writeErr(w, http.StatusForbidden, meta.ErrAccess.Error())
+		return
 	}
 	if s.o.Joiner == nil {
 		writeErr(w, http.StatusServiceUnavailable, "members not available")
@@ -749,9 +769,24 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
-	var op AdminOp
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&op); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, "bad admin op")
+		return
+	}
+	var op AdminOp
+	if err := json.Unmarshal(body, &op); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad admin op")
+		return
+	}
+	need, known := op.Needs()
+	if !known {
+		writeErr(w, http.StatusBadRequest, "unknown admin op "+op.Op)
+		return
+	}
+	op.Source, _ = SourceAddr(r)
+	if op.Actor, err = s.actor(r, need, body); err != nil {
+		writeErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if s.o.Admin == nil {
@@ -760,15 +795,50 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	reply, err := s.o.Admin.AdminOp(r.Context(), op)
 	if err != nil {
-		if errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader) {
+		switch {
+		case errors.Is(err, ErrNotLeader) || errors.Is(err, ErrNoLeader):
 			s.notLeader(w)
-			return
+		case errors.Is(err, meta.ErrAccess), errors.Is(err, meta.ErrInvite):
+			writeErr(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrRateLimited):
+			writeErr(w, http.StatusTooManyRequests, err.Error())
+		case errors.Is(err, users.ErrUnauthorized):
+			writeErr(w, http.StatusUnauthorized, err.Error())
+		default:
+			writeErr(w, http.StatusBadRequest, err.Error())
 		}
-		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(reply)
+}
+
+// Signed is the users layer's check of a request (docs/21 §2).
+type Signed struct {
+	Verify    func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, error)
+	Enforcing func() bool
+	IsAdmin   func(meta.UserIdx) bool
+}
+
+func (s *Server) enforcing() bool { return s.o.Signed != nil && s.o.Signed.Enforcing() }
+
+// actor is the user a request acts for: nobody until the cluster has users or when the
+// op needs none, else the user its Tailraid-Sig names, or ErrUnauthorized (I-344). The
+// header is checked before anything of the body is applied.
+func (s *Server) actor(r *http.Request, need Need, body []byte) (meta.UserIdx, error) {
+	if need == NeedNone || !s.enforcing() {
+		return 0, nil
+	}
+	hdr := r.Header.Get(users.Header)
+	if hdr == "" {
+		return 0, ErrUnauthorized
+	}
+	src, _ := SourceAddr(r)
+	actor, err := s.o.Signed.Verify(hdr, src, r.Method, r.URL.Path, body)
+	if err != nil {
+		return 0, ErrUnauthorized
+	}
+	return actor, nil
 }
 
 // SecretKeyReply is GET /v1/secrets/key's body: the cluster key, to a member only.

@@ -23,6 +23,9 @@ import (
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
+// testToken is the join token the tests hand init.
+const testToken = "testtoken"
+
 // The fake tailnet every dev home shares: loopback is this device, logged in as one user.
 const fakeTailnet = `{"status":{"BackendState":"Running","TailscaleIPs":["127.0.0.1"],
  "Self":{"ID":"ts-dev","HostName":"dev","TailscaleIPs":["127.0.0.1"],"Online":true},"Peer":{}},
@@ -99,7 +102,7 @@ func runStdin(t *testing.T, stdin string, args ...string) (string, error) {
 	t.Helper()
 	root := &cobra.Command{Use: "tailraid", SilenceUsage: true, SilenceErrors: true}
 	root.PersistentFlags().String("config", "", "")
-	root.AddCommand(initCmd(), joinCmd(), statusCmd(), nodeCmd(), volumeCmd(), dashboardCmd(), trashCmd(), cacheCmd(), statsCmd(), searchCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), exportCmd(), secretCmd(), mediaCmd())
+	root.AddCommand(initCmd(), joinCmd(), statusCmd(), nodeCmd(), volumeCmd(), dashboardCmd(), trashCmd(), cacheCmd(), statsCmd(), searchCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), exportCmd(), secretCmd(), mediaCmd(), userCmd(), groupCmd(), grantCmd(), revokeCmd(), accessCmd())
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)

@@ -108,6 +108,16 @@ type Config struct {
 		BatchBytes string `yaml:"batch_bytes,omitempty"` // text a pass holds while it writes its segment (default 64MiB; at least 1MiB)
 		MaxBytes   string `yaml:"max_bytes,omitempty"`   // index size past which contents are no longer indexed (default 256MiB; at least 16MiB)
 	} `yaml:"search,omitempty"`
+	// Users and the audit log (docs/21 §9, I-359): every key is written only when set
+	// (I-61).
+	Users struct {
+		ClockSkew    string `yaml:"clock_skew,omitempty"`    // a signed request's timestamp may be this far from the node's clock (default 5m; 1m..1h)
+		Session      string `yaml:"session,omitempty"`       // a browser session's life (default 168h; 1h..720h)
+		DormantAfter string `yaml:"dormant_after,omitempty"` // check warns for a user silent this long (default 2160h; 24h..8760h)
+	} `yaml:"users,omitempty"`
+	Audit struct {
+		Retention string `yaml:"retention,omitempty"` // the leader drops older audit segments (default 8760h; 168h..87600h)
+	} `yaml:"audit,omitempty"`
 	Dev struct {
 		Enabled       bool   `yaml:"enabled"`
 		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
@@ -164,6 +174,44 @@ type MirrorPolicy struct {
 
 // MaxKeep bounds each mirrors.keep count.
 const MaxKeep = 10000
+
+// UsersPolicy is the parsed users and audit keys (docs/21 §9, I-359).
+type UsersPolicy struct {
+	ClockSkew      time.Duration
+	Session        time.Duration
+	DormantAfter   time.Duration
+	AuditRetention time.Duration
+}
+
+// UsersPolicy parses the users and audit keys, each within its bounds: clock_skew 5m
+// (1m..1h), session 168h (1h..720h), dormant_after 2160h (24h..8760h), audit.retention
+// 8760h (168h..87600h).
+func (c Config) UsersPolicy() (UsersPolicy, error) {
+	p := UsersPolicy{ClockSkew: 5 * time.Minute, Session: 168 * time.Hour, DormantAfter: 2160 * time.Hour, AuditRetention: 8760 * time.Hour}
+	for _, k := range []struct {
+		key, s string
+		lo, hi time.Duration
+		out    *time.Duration
+	}{
+		{"users.clock_skew", c.Users.ClockSkew, time.Minute, time.Hour, &p.ClockSkew},
+		{"users.session", c.Users.Session, time.Hour, 720 * time.Hour, &p.Session},
+		{"users.dormant_after", c.Users.DormantAfter, 24 * time.Hour, 8760 * time.Hour, &p.DormantAfter},
+		{"audit.retention", c.Audit.Retention, 168 * time.Hour, 87600 * time.Hour, &p.AuditRetention},
+	} {
+		if k.s == "" {
+			continue
+		}
+		d, err := time.ParseDuration(k.s)
+		if err != nil {
+			return p, fmt.Errorf("config: %s %q: %w", k.key, k.s, errBadDuration(err))
+		}
+		if d < k.lo || d > k.hi {
+			return p, fmt.Errorf("config: %s %s: want %s to %s", k.key, k.s, k.lo, k.hi)
+		}
+		*k.out = d
+	}
+	return p, nil
+}
 
 // Mirroring parses the mirrors section: every 1h (0, or at least a minute), keep 24, 30,
 // 8 and 12 (0..MaxKeep), rate 50M, hold_max 24h (at least 1h), stale_after 168h.
@@ -590,6 +638,9 @@ func (c Config) Validate() error {
 		seen[p] = true
 	}
 	if _, err := c.Mirroring(); err != nil {
+		return err
+	}
+	if _, err := c.UsersPolicy(); err != nil {
 		return err
 	}
 	if w := c.Listen.Web; w < 0 || w > 65535 {

@@ -52,7 +52,9 @@ func localClient(ctx context.Context, cmd *cobra.Command) (*rpc.Client, string, 
 			addr = net.JoinHostPort(addr, strconv.Itoa(cfg.Listen.RPC))
 		}
 	}
-	return rpc.NewClient(cid, nil), addr, cfg, nil
+	c := rpc.NewClient(cid, nil)
+	c.Sign = userSigner(cmd.Context(), cid) // the person's signature on mutating requests (docs/21 §2)
+	return c, addr, cfg, nil
 }
 
 func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Client, string, error) {

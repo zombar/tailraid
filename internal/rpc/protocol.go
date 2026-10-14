@@ -4,6 +4,8 @@ package rpc
 
 import (
 	"errors"
+	"net/netip"
+	"sort"
 
 	"github.com/zombar/tailraid/internal/meta"
 )
@@ -36,6 +38,9 @@ var (
 	ErrTooLarge     = errors.New("rpc: body too large")
 	ErrBadRequest   = errors.New("rpc: bad request")
 	ErrUnavailable  = errors.New("rpc: node unavailable")
+	// ErrUnauthorized is a 401: the request needed a user's signature and carried none the
+	// node accepts (docs/21 §2, I-344).
+	ErrUnauthorized = errors.New("rpc: unauthorized: this needs a signed request from a user of the volume (docs/21)")
 	// ErrBusy is a shard request a node refused because its slots stayed taken (I-246);
 	// it comes wrapped in ErrUnavailable, so a reader or flusher moves to another slot,
 	// and it never marks the node suspect.
@@ -129,6 +134,8 @@ type MemberOp struct {
 	State    meta.NodeState `json:"state,omitempty"`
 	Force    bool           `json:"force,omitempty"`
 	S3       *S3Spec        `json:"s3,omitempty"` // add_s3
+	// Actor is set by the receiving node from the request's signature (docs/21 §2).
+	Actor meta.UserIdx `json:"-"`
 }
 
 // S3Spec is the bucket of an add_s3 (docs/10 §4.1). Credentials are never part of it (I-139).
@@ -192,6 +199,84 @@ type AdminOp struct {
 	// and, for secret_set, its value, which no node logs (I-306); All with secret_rm
 	// removes every secret and the key ID
 	Value string `json:"value,omitempty"`
+	// Users, groups and permissions (docs/21 §9): the user or group an op names, a role,
+	// an invite code, a public key (hex) with its label, a credential to bind, and the
+	// admin flag of an invite. Code and Key are never logged.
+	User       string `json:"user,omitempty"`
+	Group      string `json:"group,omitempty"`
+	Role       string `json:"role,omitempty"`
+	Code       string `json:"code,omitempty"`
+	Key        string `json:"key,omitempty"`
+	Label      string `json:"label,omitempty"`
+	Credential string `json:"credential,omitempty"`
+	Admin      bool   `json:"admin,omitempty"`
+	// Actor and Source are set by the receiving node, from the request's signature and
+	// its connection, never from the body (docs/21 §2, I-344).
+	Actor  meta.UserIdx `json:"-"`
+	Source netip.Addr   `json:"-"`
+}
+
+// Need is what an admin op asks of its caller (docs/21 §2, I-345): nothing beyond
+// membership, a user, Write or Admin on the inode the op's path names, or admins.
+type Need uint8
+
+// Needs.
+const (
+	NeedNone Need = iota
+	NeedUser
+	NeedWriteOn
+	NeedAdminOn
+	NeedAdmins
+)
+
+// adminNeeds is the one table of every admin op (I-345); an op absent from it is
+// refused before anything runs. The node refines a few: `check` with a scrub,
+// `trash_purge` of everything, `secret_ls` of the system names, `secret_get` of a system
+// name and a key invite for another user all need admins.
+var adminNeeds = map[string]Need{
+	"chunk": NeedNone, "trash_ls": NeedNone, "cache_ls": NeedNone, "search": NeedNone, "snapshot_ls": NeedNone,
+	"versions": NeedNone, "scrape_plan": NeedNone, "fsck": NeedNone, "check": NeedNone,
+	"access_ls": NeedNone, "user_ls": NeedNone, "group_ls": NeedNone, "user_create": NeedNone, "user_key_add": NeedNone, "user_bootstrap": NeedNone,
+	"secret_set": NeedUser, "secret_get": NeedUser, "secret_ls": NeedUser, "secret_rm": NeedUser,
+	"user_whoami": NeedUser, "user_key_invite": NeedUser, "user_key_rm": NeedUser, "user_bind": NeedUser, "user_unbind": NeedUser,
+	"trash_restore": NeedWriteOn,
+	"trash_purge":   NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn,
+	"versions_revert": NeedAdminOn, "versions_copy": NeedAdminOn, "grant": NeedAdminOn, "revoke": NeedAdminOn,
+	"repair_now": NeedAdmins, "gc_now": NeedAdmins, "index_now": NeedAdmins, "rebalance": NeedAdmins, "set_policy": NeedAdmins,
+	"rotate_token": NeedAdmins, "open_disk": NeedAdmins, "open_mirror": NeedAdmins, "snapshot_create": NeedAdmins,
+	"export": NeedAdmins, "snapshot": NeedAdmins, "stats_seal": NeedAdmins,
+	"user_invite": NeedAdmins, "user_disable": NeedAdmins, "user_enable": NeedAdmins, "user_rm": NeedAdmins,
+	"group_create": NeedAdmins, "group_rm": NeedAdmins, "group_add": NeedAdmins, "group_remove": NeedAdmins,
+}
+
+// Needs is what op asks of its caller; known is false for an op the table lacks.
+func (op AdminOp) Needs() (need Need, known bool) {
+	need, known = adminNeeds[op.Op]
+	switch {
+	case op.Op == "check" && op.Scrub, op.Op == "trash_purge" && op.All, op.Op == "secret_ls" && op.All:
+		need = NeedAdmins
+	}
+	return need, known
+}
+
+// AdminOpNames lists every admin op the table knows, sorted.
+func AdminOpNames() []string {
+	out := make([]string, 0, len(adminNeeds))
+	for n := range adminNeeds {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Needs is what a member op asks of its caller (docs/21 §2): a member's own ops need
+// nothing beyond membership, every other needs admins.
+func (op MemberOp) Needs() Need {
+	switch op.Op {
+	case "update_addr", "set_version":
+		return NeedNone
+	}
+	return NeedAdmins
 }
 
 // IsPass reports an op the leader answers only once a pass over the volume is done

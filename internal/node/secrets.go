@@ -143,9 +143,14 @@ func (a *adminOps) secretOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	if a.secrets == nil {
 		return nil, errors.New("secrets: this node has no store")
 	}
+	if op.Op != "secret_ls" {
+		if err := a.secretAllowed(op); err != nil { // the owner rule (docs/21 §7, I-356)
+			return nil, err
+		}
+	}
 	switch op.Op {
 	case "secret_set":
-		if err := a.secrets.Set(ctx, op.Name, op.Value); err != nil {
+		if err := a.secrets.Set(ctx, op.Actor, op.Name, op.Value); err != nil {
 			return nil, err
 		}
 		return map[string]string{"name": op.Name}, nil
@@ -156,9 +161,22 @@ func (a *adminOps) secretOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		return map[string]string{"name": op.Name, "value": v}, nil
 	case "secret_ls":
-		return a.secrets.List(ctx), nil
+		all := a.secrets.List(ctx)
+		if !a.node.FSM.Enforcing() {
+			return all, nil
+		}
+		// a user's own personal names, or with All (an admin) the system names alone
+		me := a.actorName(op)
+		out := make([]secrets.Entry, 0, len(all))
+		for _, e := range all {
+			owner, personal := meta.SecretOwner(e.Name)
+			if (op.All && !personal) || (!op.All && personal && owner == me) {
+				out = append(out, e)
+			}
+		}
+		return out, nil
 	default: // secret_rm
-		if err := a.secrets.Remove(ctx, op.Name, op.All); err != nil {
+		if err := a.secrets.Remove(ctx, op.Actor, op.Name, op.All); err != nil {
 			return nil, err
 		}
 		return map[string]any{"name": op.Name, "all": op.All}, nil

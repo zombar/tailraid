@@ -72,7 +72,7 @@ func TestFetchKey_OnTick(t *testing.T) {
 	if fetched, err := fetchKey(ctx, s); fetched || err != nil {
 		t.Fatalf("a store with no key: fetched %v, %v", fetched, err)
 	}
-	if err := s.Set(ctx, "s3/b2", "v"); err != nil {
+	if err := s.Set(ctx, 0, "s3/b2", "v"); err != nil {
 		t.Fatal(err)
 	}
 	if fetched, err := fetchKey(ctx, s); fetched || err != nil {
