@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -371,5 +373,82 @@ func TestAudit_Ls_Filters(t *testing.T) {
 	}
 	if d := Dormant(users, seen, 30*time.Minute, clk.Now()); strings.Join(d, " ") != "lee pat" {
 		t.Fatalf("dormant %v, want lee pat", d)
+	}
+}
+
+// recordingVolume is a Volume whose segment write calls Record from another goroutine
+// and waits for it, as the leader's apply hook does on raft's FSM goroutine while the
+// flush's own write waits for its proposals to apply: a Record that waits for the flush
+// is the deadlock of 2026-10-14 (make soak phase 15).
+type recordingVolume struct {
+	*memVolume
+	w      *Writer
+	during []Record // recorded from inside WriteFile, one per segment write
+	calls  int
+}
+
+func (v *recordingVolume) WriteFile(ctx context.Context, name string, data []byte) error {
+	if strings.HasSuffix(name, Suffix) && v.calls < len(v.during) {
+		rec := v.during[v.calls]
+		v.calls++
+		done := make(chan struct{})
+		go func() { v.w.Record(rec); close(done) }()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return fmt.Errorf("Record waited for the segment write: %w", ctx.Err())
+		}
+	}
+	return v.memVolume.WriteFile(ctx, name, data)
+}
+
+// Record never touches the volume and never waits for a flush: a record made while the
+// writer's segment write is in progress returns at once and lands in the next flush,
+// also one whose hour differs from the open segment's (the closed hour is written by
+// the flush, never by Record).
+// Invariant: I-333
+func TestAudit_RecordNeverWaitsForTheVolume(t *testing.T) {
+	vol := &recordingVolume{memVolume: newMem()}
+	clk := clock.NewFake(time.Date(2026, 10, 14, 22, 20, 16, 0, time.UTC))
+	w := &Writer{Vol: vol, Node: "pike", Clk: clk}
+	vol.w = w
+	nextHour := clk.Now().Add(time.Hour).UnixNano()
+	vol.during = []Record{
+		{Actor: "kim", Kind: KindSecretSet, Target: "s3/again/access_key"},
+		{At: nextHour, Actor: "lee", Kind: KindGrant, Target: "/p"},
+	}
+	w.Record(Record{Actor: "kim", Kind: KindSecretSet, Target: "s3/first/access_key"})
+	clk.Advance(time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// the first flush writes the segment; a record made during that write is in memory
+	if err := w.Flush(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	// the second flush writes it, and the record made during this write opens the next hour
+	if err := w.Flush(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := List(ctx, vol, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets []string
+	for _, r := range recs {
+		targets = append(targets, r.Target)
+	}
+	if want := []string{"/p", "s3/again/access_key", "s3/first/access_key"}; !slices.Equal(targets, want) {
+		t.Fatalf("records %v, want %v", targets, want)
+	}
+	this := path.Join(Root, "pike", SegmentName(clk.Now()))
+	next := path.Join(Root, "pike", SegmentName(clk.Now().Add(time.Hour)))
+	if _, ok := vol.files[this]; !ok {
+		t.Fatalf("this hour's segment missing: %v", vol.files)
+	}
+	if _, ok := vol.files[next]; !ok {
+		t.Fatalf("the next hour's segment missing: %v", vol.files)
 	}
 }
