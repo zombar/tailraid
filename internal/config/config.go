@@ -730,19 +730,52 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Warnings lists what serve should say about the config file at path and the data
-// directory before it runs (I-126): a mode that lets other users of the machine read
-// the join token or the shards. Windows has no mode bits worth reading.
+// PathEntry is one path the daemon owns on this device: the data directory, a disk or a
+// mirror (docs/08 §Files on disk).
+type PathEntry struct {
+	Kind string `json:"kind"` // "data directory", "disk" or "mirror"
+	Path string `json:"path"`
+}
+
+// Paths lists the data directory, then every disk, then every mirror.
+func (c Config) Paths() []PathEntry {
+	out := make([]PathEntry, 0, 1+len(c.Node.Disks)+len(c.Node.Mirrors))
+	out = append(out, PathEntry{Kind: "data directory", Path: c.Node.DataDir})
+	for _, d := range c.Node.Disks {
+		out = append(out, PathEntry{Kind: "disk", Path: d.Path})
+	}
+	for _, m := range c.Node.Mirrors {
+		out = append(out, PathEntry{Kind: "mirror", Path: m.Path})
+	}
+	return out
+}
+
+// Warnings lists what serve should say about the config file at path, the data
+// directory, the disks and the mirrors before it runs, and what status and check on the
+// device repeat (I-126, I-341): a mode that lets other users of the machine read the join
+// token or the shards, or an owner that is not the daemon's user. A path that does not
+// exist is init's problem, not a warning. Windows has no mode bits worth reading.
 func (c Config) Warnings(path string) []string {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
+	uid := os.Getuid()
 	var out []string
-	if st, err := os.Stat(path); err == nil && st.Mode().Perm()&0o077 != 0 {
-		out = append(out, fmt.Sprintf("config file %s is readable by other users (mode %04o): chmod 600 %s", path, st.Mode().Perm(), path))
+	warn := func(kind, p, how string, want int) {
+		st, err := os.Stat(p)
+		if err != nil {
+			return
+		}
+		if perm := st.Mode().Perm(); perm&0o077 != 0 {
+			out = append(out, fmt.Sprintf("%s %s is %s other users (mode %04o): chmod %o %s", kind, p, how, perm, want, p))
+		}
+		if owner, ok := ownedBy(st); ok && owner != uid {
+			out = append(out, fmt.Sprintf("%s %s is owned by uid %d, not the daemon's uid %d: chown %d %s", kind, p, owner, uid, uid, p))
+		}
 	}
-	if st, err := os.Stat(c.Node.DataDir); err == nil && st.Mode().Perm()&0o077 != 0 {
-		out = append(out, fmt.Sprintf("data directory %s is accessible to other users (mode %04o): chmod 700 %s", c.Node.DataDir, st.Mode().Perm(), c.Node.DataDir))
+	warn("config file", path, "readable by", 0o600)
+	for _, e := range c.Paths() {
+		warn(e.Kind, e.Path, "accessible to", 0o700)
 	}
 	return out
 }

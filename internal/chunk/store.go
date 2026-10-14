@@ -63,7 +63,7 @@ func Open(fsys sysfs.FS, root string, capacity int64) (*Store, error) {
 	s := &Store{fsys: fsys, root: root, locks: map[ShardKey]*keyLock{}}
 	s.capacity.Store(capacity)
 	for _, d := range []string{s.shardsDir(), s.quarantineDir()} {
-		if err := fsys.MkdirAll(d, 0o755); err != nil {
+		if err := privateTree(fsys, d); err != nil {
 			return nil, fmt.Errorf("chunk: open %s: %w", d, err)
 		}
 	}
@@ -122,7 +122,7 @@ func (s *Store) mkdirOnce(dir string) error {
 	if _, ok := s.dirs.Load(dir); ok {
 		return nil
 	}
-	if err := s.fsys.MkdirAll(dir, 0o755); err != nil {
+	if err := privateDir(s.fsys, dir); err != nil {
 		return err
 	}
 	s.dirs.Store(dir, struct{}{})

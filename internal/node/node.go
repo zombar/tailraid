@@ -332,7 +332,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Src: node.FSM, Vol: search.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Log: log,
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
-	ops := &adminOps{cfg: cfg, reseed: nw.auth.SetSeed, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	paths := admin.NewPaths(cfg.Paths(), clk) // the device's paths and their full-disk encryption, hourly (docs/08 §Files on disk)
+	ops := &adminOps{cfg: cfg, paths: paths, reseed: nw.auth.SetSeed, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
@@ -369,6 +370,9 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		rep.WalkMS = time.Since(start).Milliseconds()
 		rep.Gateway = admin.GatewayFromDirty(ov.Dirty()).WithFlusher(fl, ov).WithReader(rd).WithFS(fs)
 		rep.Machine = admin.Vitals(cfg.Node.DataDir, nw.IP())
+		rep.Machine.Paths = paths.Report()
+		rep.Warnings = append(rep.Warnings, cfg.Warnings(cfg.Path)...)
+		rep.Warnings = append(rep.Warnings, admin.PathWarnings(rep.Machine.Paths)...)
 		rep.Mesh = nw.report(node, cfg, clk.Now())
 		for i := range rep.Nodes { // the path to each device member, for node ls (docs/20 §10)
 			if row, ok := node.FSM.Node(rep.Nodes[i].Idx); ok && row.Kind == meta.KindDevice && row.Idx != selfIdx && nw.mesh != nil {
@@ -614,6 +618,7 @@ func (s *staleness) stale(state cluster.HealthState, lastContact, now time.Time)
 // adminOps implements rpc.Admin and runs the periodic GC and sweep.
 type adminOps struct {
 	cfg       config.Config
+	paths     *admin.Paths      // the device's paths and their full-disk encryption (docs/08 §Files on disk)
 	reseed    func([]meta.Node) // the authorizer's seed follows the table (never a removed row)
 	node      *cluster.Node
 	prober    *cluster.Prober
@@ -1103,6 +1108,8 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		rep := admin.Check(a.node.FSM, a.prober, a.repairer.Config().FillAfter, st, prog, op.Files)
 		_, rep.Warnings = a.mirrors.report(a.clk.Now(), a.node.FSM.Snapshots())
+		rep.Warnings = append(rep.Warnings, a.cfg.Warnings(a.cfg.Path)...) // this device's files on disk (docs/08, I-341)
+		rep.Warnings = append(rep.Warnings, admin.PathWarnings(a.paths.Report())...)
 		return rep, nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
