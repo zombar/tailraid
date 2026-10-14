@@ -13,6 +13,7 @@ import { player as audio } from "./audio.ts";
 import * as stats from "./stats.ts";
 import * as search from "./search.ts";
 import * as mediaTab from "./media.ts";
+import * as account from "./account.ts";
 import type { Report } from "./api.ts";
 
 const view = document.getElementById("view") as HTMLElement;
@@ -122,6 +123,9 @@ const searchForm = document.querySelector<HTMLFormElement>("form.search");
 if (searchForm) search.wire(searchForm);
 const themeButton = document.querySelector<HTMLButtonElement>("button.theme");
 if (themeButton) theme.wire(themeButton);
+const header = document.querySelector<HTMLElement>("header.top");
+if (header) void account.mount(header);
+account.wire(document);
 status.subscribe(drawShell);
 window.addEventListener("hashchange", route);
 route();

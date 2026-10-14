@@ -358,6 +358,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	verifier := &users.Verifier{Users: node.FSM, Cluster: clusterID, NodeID: id, Skew: usersPol.ClockSkew, Now: clk.Now}
 	ops := &adminOps{cfg: cfg, paths: paths, bindings: bindings, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
+	ops.sessionLife = usersPol.Session
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
 	if err != nil {
@@ -384,6 +385,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
 	if cfg.Listen.Web != 0 {
 		webAddr = net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.Web))
+		ops.webAddr = webAddr
 	}
 	// the report walks every chunk, so a refresher builds it off the request path and a
 	// request serves the latest build (docs/12 §8, I-205)
@@ -427,10 +429,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Stats: func(since int64) any { return statsSvc.Live(since) }, Web: webPort(cfg),
 		SecretKey: ops.secrets.Local,
 		Signed: &rpc.Signed{ // the users layer's signature check (docs/21 §2, I-344)
-			Verify: func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, error) {
-				idx, _, err := verifier.Verify(hdr, src, method, path, body)
-				return idx, err
-			},
+			Verify:    verifier.Verify,
 			Enforcing: node.FSM.Enforcing, IsAdmin: node.FSM.IsAdmin,
 		},
 	})
@@ -475,7 +474,11 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 				return admin.DescribeChunksPage(ctx, node.FSM, prober, client, ring, sel, offset, limit)
 			}, Clk: clk, Logger: log, Retention: rcfg.Retention, Pins: pinned,
 			Snapshots: webSnapshots{ops: ops, flush: fl.FlushAll},
-			Node:      id, // an upload's temp is this node's own (I-226); names need not be unique
+			CodeKey:   store.Local, // the key sign-in codes are minted under (docs/21 §6)
+			Logout: func(ctx context.Context, actor meta.UserIdx, hash [32]byte) error {
+				return ops.propose(ctx, meta.Command{Op: meta.OpSession, Actor: actor, SessionOp: &meta.SessionOp{Delete: true, Hash: hash, Now: clk.Now().UnixNano()}})
+			},
+			Node: id, // an upload's temp is this node's own (I-226); names need not be unique
 		})
 		if err != nil {
 			return err
@@ -695,10 +698,14 @@ type adminOps struct {
 	s3Swept   time.Time  // the leader's last S3 sweep (docs/06 §3)
 	mirrors   *mirrorSet // this host's mirrors (docs/16)
 	mirrorPol config.MirrorPolicy
-	secrets   *secrets.Store  // the secrets store (docs/19)
-	keyWhy    string          // the last reason the cluster key could not be fetched
-	bindings  *users.Bindings // this device's credentials to users (docs/21 §5)
-	invites   inviteLimiter   // one code attempt a second per source (I-343)
+	secrets   *secrets.Store // the secrets store (docs/19)
+	// webAddr is this node's browser UI listener ("" off) and sessionLife users.session:
+	// `web login` links to the page and mints a session that long (docs/21 §6)
+	webAddr     string
+	sessionLife time.Duration
+	keyWhy      string          // the last reason the cluster key could not be fetched
+	bindings    *users.Bindings // this device's credentials to users (docs/21 §5)
+	invites     inviteLimiter   // one code attempt a second per source (I-343)
 }
 
 // ErrLegacyState is a restored state from before devices stopped being targets
@@ -1049,7 +1056,7 @@ func (a *adminOps) AdminOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return a.secretOp(ctx, op)
 	case "user_invite", "user_key_invite", "user_bootstrap", "user_create", "user_key_add", "user_key_rm",
 		"user_disable", "user_enable", "user_rm", "user_ls", "user_whoami", "user_bind", "user_unbind",
-		"group_create", "group_rm", "group_add", "group_remove", "group_ls", "grant", "revoke", "access_ls": // docs/21 §9
+		"group_create", "group_rm", "group_add", "group_remove", "group_ls", "grant", "revoke", "access_ls", "web_login", "web_logout": // docs/21 §9
 		return a.userOp(ctx, op)
 	case "scrape_plan": // this node's plan for media scrape (docs/18 §11): never forwarded
 		return a.scrapePlan(ctx, op)

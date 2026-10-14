@@ -75,6 +75,13 @@ func newUIWith(t *testing.T, prep func(*testharness.Fabric), opts ...func(*webui
 	if prep != nil {
 		prep(f)
 	}
+	return newUIOn(t, f, opts...)
+}
+
+// newUIOn serves a second web UI over an existing fabric: another node's page over the
+// same FSM (docs/21 §6: a session is the volume's).
+func newUIOn(t *testing.T, f *testharness.Fabric, opts ...func(*webui.Options)) *ui {
+	t.Helper()
 	u := &ui{t: t, f: f, fs: f.FS(), client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	u.ts = tailscale.NewFake(loop, stableS, nil)
 	u.ts.SetUser(loop, login)

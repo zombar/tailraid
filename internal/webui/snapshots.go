@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -60,7 +61,7 @@ func (s *Server) snapshotOf(raw string) (vfs.SnapshotRef, error) {
 	if err != nil || id == 0 {
 		return vfs.SnapshotRef{}, fmt.Errorf("snapshot %q: %w", raw, meta.ErrBadCommand)
 	}
-	ref, ok := s.o.FS.Snapshot(meta.SnapID(id))
+	ref, ok := s.o.FS.Snapshot(meta.SnapID(id)) // the mirrors are the node's facts, not a user's
 	if !ok {
 		return vfs.SnapshotRef{}, fmt.Errorf("snapshot %d: %w", id, meta.ErrNotExist)
 	}
@@ -89,11 +90,11 @@ func (s *Server) statAt(t target) (target, error) {
 	if len(t.parts) == 0 {
 		t.vpath = t.snap.Root
 	}
-	fi, err := s.o.FS.Stat(t.vpath)
+	fi, err := t.fs.Stat(t.vpath)
 	if err != nil {
 		return t, s.snapErr(t, err)
 	}
-	t.in = s.inodeAt(t.vpath, fi)
+	t.in = inodeAt(t.fs, t.vpath, fi)
 	if len(t.parts) == 0 {
 		t.in.Name = ""
 	}
@@ -109,7 +110,7 @@ func (s *Server) snapErr(t target, err error) error {
 }
 
 // inodeAt is the snapshot entry fi (at vpath) in the fields the handlers read.
-func (s *Server) inodeAt(vpath string, fi os.FileInfo) meta.Inode {
+func inodeAt(fs *vfs.FS, vpath string, fi os.FileInfo) meta.Inode {
 	in := meta.Inode{Name: fi.Name(), Type: meta.TFile, Size: uint64(max(fi.Size(), 0)), Mtime: fi.ModTime().UnixNano(), Mode: uint32(fi.Mode().Perm())}
 	if x, ok := fi.(interface{ Ino() meta.Ino }); ok {
 		in.Ino = x.Ino()
@@ -119,7 +120,7 @@ func (s *Server) inodeAt(vpath string, fi os.FileInfo) meta.Inode {
 		in.Type, in.Size = meta.TDir, 0
 	case fi.Mode()&os.ModeSymlink != 0:
 		in.Type, in.Size = meta.TSymlink, 0
-		in.Target, _ = s.o.FS.Readlink(vpath)
+		in.Target, _ = fs.Readlink(vpath)
 	}
 	return in
 }
@@ -135,7 +136,7 @@ func snapEntry(in meta.Inode) Entry {
 
 // lsAt lists a folder as of a snapshot (docs/13 §3).
 func (s *Server) lsAt(w http.ResponseWriter, t target) {
-	fis, err := s.o.FS.ReadDir(t.vpath)
+	fis, err := t.fs.ReadDir(t.vpath)
 	if err != nil {
 		s.fail(w, s.snapErr(t, err))
 		return
@@ -145,7 +146,7 @@ func (s *Server) lsAt(w http.ResponseWriter, t target) {
 		if IsOSMetadata(fi.Name()) {
 			continue
 		}
-		entries = append(entries, snapEntry(s.inodeAt(path.Join(t.vpath, fi.Name()), fi)))
+		entries = append(entries, snapEntry(inodeAt(t.fs, path.Join(t.vpath, fi.Name()), fi)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": t.canonical, "dir": DirInfo{Snapshot: snapInfo(t.snap)}, "entries": entries})
 }
@@ -393,11 +394,15 @@ func (s *Server) versions(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if !s.readable(r, in.Ino) {
+		s.fail(w, fmt.Errorf("versions %s: %w", canonical, syscall.EACCES))
+		return
+	}
 	if in.Type != meta.TFile {
 		s.fail(w, fmt.Errorf("versions %s: %w", canonical, meta.ErrIsDir))
 		return
 	}
-	vs, off, err := s.o.FS.Versions(r.Context(), canonical)
+	vs, off, err := s.fs(r).Versions(r.Context(), canonical)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -464,7 +469,7 @@ func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	n, err := s.o.FS.RevertFile(r.Context(), ref.Root+p, p)
+	n, err := s.fs(r).RevertFile(r.Context(), ref.Root+p, p)
 	if err != nil {
 		s.fail(w, s.snapErr(target{snap: &ref}, err))
 		return
@@ -496,7 +501,7 @@ func (s *Server) copyVersion(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	src := target{snap: &ref, parts: parts, canonical: p}
+	src := target{snap: &ref, parts: parts, canonical: p, fs: s.fs(r)}
 	if src, err = s.statAt(src); err != nil {
 		s.fail(w, err)
 		return
@@ -506,7 +511,7 @@ func (s *Server) copyVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dst := path.Join(path.Dir(p), body.Name)
-	rep, err := s.o.FS.RestoreSnapshot(r.Context(), src.vpath, dst)
+	rep, err := s.fs(r).RestoreSnapshot(r.Context(), src.vpath, dst)
 	if err != nil {
 		s.fail(w, s.snapErr(src, err))
 		return
@@ -517,7 +522,7 @@ func (s *Server) copyVersion(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	e := s.entry(in, dst)
+	e := s.entry(s.fs(r), in, dst)
 	e.Path = dst
 	writeJSON(w, http.StatusCreated, map[string]any{"entry": e, "uploaded": rep.Uploaded})
 }
@@ -544,7 +549,7 @@ func (s *Server) restoreTree(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	src := target{snap: &ref, parts: parts, canonical: p}
+	src := target{snap: &ref, parts: parts, canonical: p, fs: s.fs(r)}
 	if src, err = s.statAt(src); err != nil {
 		s.fail(w, err)
 		return
@@ -565,7 +570,7 @@ func (s *Server) restoreTree(w http.ResponseWriter, r *http.Request) {
 		_, to = cleanPath(body.To)
 	}
 	dst := path.Join(to, name)
-	rep, err := s.o.FS.RestoreSnapshot(r.Context(), src.vpath, dst)
+	rep, err := s.fs(r).RestoreSnapshot(r.Context(), src.vpath, dst)
 	if err != nil {
 		s.fail(w, s.snapErr(src, err))
 		return

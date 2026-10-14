@@ -38,7 +38,17 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	writeJSON(w, http.StatusOK, s.o.Search.Search(r.Context(), q.Get("q"), q.Get("under"), limit))
+	res := s.o.Search.Search(r.Context(), q.Get("q"), q.Get("under"), limit)
+	if _, ok := sessionIn(r); ok { // a hit is one the user holds Read on (docs/21 §3, I-355)
+		hits := res.Hits[:0]
+		for i := range res.Hits {
+			if s.readable(r, res.Hits[i].Ino) {
+				hits = append(hits, res.Hits[i])
+			}
+		}
+		res.Hits = hits
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // render is GET /api/render (docs/13 §4, I-209): a .md or .markdown file of at most

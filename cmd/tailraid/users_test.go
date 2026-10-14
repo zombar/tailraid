@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"testing"
 
@@ -180,5 +183,68 @@ func TestCLI_UserBootstrap(t *testing.T) {
 	}
 	if _, err := rpc.NewClient(mustCID(t, h.ClusterID), nil).Admin(context.Background(), addr, rpc.AdminOp{Op: "user_bootstrap", Value: "nope", User: "x"}); !errors.Is(err, rpc.ErrForbidden) {
 		t.Fatalf("a wrong token: %v", err)
+	}
+}
+
+// `web login` prints a one-time link to this node's page that signs a browser in to
+// the volume; opening it sets the cookie and the page answers who it is; `web logout`
+// ends the sessions this device's key minted and the next request is refused.
+// Invariant: I-354
+func TestCLI_WebLogin(t *testing.T) {
+	t.Setenv("TAILRAID_HOME", t.TempDir())
+	path, cfg := devHome(t)
+	out, err := run(t, "init", "--config", path, "--token", testToken, "--admin", "kim")
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	_, code := inviteFrom(t, out)
+	serveInBackground(t, cfg)
+	if out, err := run(t, "user", "create", "kim", code, "--config", path); err != nil {
+		t.Fatalf("user create: %v\n%s", err, out)
+	}
+	out, err = run(t, "web", "login", "--config", path)
+	if err != nil {
+		t.Fatalf("web login: %v\n%s", err, out)
+	}
+	var link string
+	for f := range strings.FieldsSeq(out) {
+		if strings.Contains(f, "/login?code=") {
+			link = f
+		}
+	}
+	if link == "" {
+		t.Fatalf("no link in:\n%s", out)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Get(link) //nolint:noctx // a test client
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("the link: %d", resp.StatusCode)
+	}
+	base, _, _ := strings.Cut(link, "/login")
+	who := func() (int, string) {
+		r, err := client.Get(base + "/api/session") //nolint:noctx // a test client
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	if st, body := who(); st != 200 || !strings.Contains(body, `"user":"kim"`) {
+		t.Fatalf("signed in: %d %s", st, body)
+	}
+	if out, err := run(t, "web", "logout", "--config", path); err != nil || !strings.Contains(out, "1 browser session") {
+		t.Fatalf("web logout: %v\n%s", err, out)
+	}
+	if st, _ := who(); st != 401 {
+		t.Fatalf("after the logout: %d", st)
 	}
 }

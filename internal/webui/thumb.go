@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/image/draw"
@@ -268,7 +269,7 @@ func (s *Server) makeAudioThumb(ctx context.Context, t target) ([]byte, error) {
 	dir := t.parts[:len(t.parts)-1]
 	for _, name := range coverNames {
 		if t.snap != nil { // a sibling as of the same snapshot
-			sib := target{parts: append(append([]string{}, dir...), name), snap: t.snap}
+			sib := target{parts: append(append([]string{}, dir...), name), snap: t.snap, fs: t.fs}
 			sib.canonical = "/" + strings.Join(sib.parts, "/")
 			if sib, err := s.statAt(sib); err == nil && sib.in.Type == meta.TFile {
 				if data, err := s.makeImageThumb(ctx, sib); err == nil {
@@ -277,7 +278,7 @@ func (s *Server) makeAudioThumb(ctx context.Context, t target) ([]byte, error) {
 			}
 			continue
 		}
-		sib := target{parts: append(append([]string{}, dir...), name), root: t.root, trashed: t.trashed}
+		sib := target{parts: append(append([]string{}, dir...), name), root: t.root, trashed: t.trashed, fs: t.fs}
 		sib.canonical = "/" + strings.Join(sib.parts, "/")
 		var err error
 		if t.trashed {
@@ -329,6 +330,10 @@ func (s *Server) thumbPut(w http.ResponseWriter, r *http.Request) {
 	in, err := s.o.Store.Resolve(parts)
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if !s.readable(r, in.Ino) { // the frame is stored as System, after Read on its source (I-355)
+		s.fail(w, fmt.Errorf("thumb %s: %w", canonical, syscall.EACCES))
 		return
 	}
 	if in.Type != meta.TFile {

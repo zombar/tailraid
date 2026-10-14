@@ -383,9 +383,15 @@ export function thumbURL(path: string, root?: Src, tag?: string): string {
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
+  if (r.status === 401) signInAgain(); // the session ended (docs/21 §6): the sign-in page, with the way back
   if (!r.ok) throw await apiError(r);
   if (r.status === 204) return undefined as T;
   return (await r.json()) as T;
+}
+
+function signInAgain(): void {
+  const to = location.pathname + location.search + location.hash;
+  location.replace("/login?to=" + encodeURIComponent(to));
 }
 
 async function apiError(r: Response): Promise<ApiError> {

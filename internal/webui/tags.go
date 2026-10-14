@@ -36,12 +36,12 @@ func readTags(f io.ReadSeeker, size int64) (Tags, *tag.Picture) { return mediata
 // open opens a file for reading, live, inside a deleted root or as of a snapshot.
 func (s *Server) open(t target) (io.ReadSeekCloser, error) {
 	if t.snap != nil {
-		return s.o.FS.Open(t.vpath)
+		return t.fs.Open(t.vpath)
 	}
 	if t.trashed {
-		return s.o.FS.OpenTrash(t.root.Ino, t.parts)
+		return t.fs.OpenTrash(t.root.Ino, t.parts)
 	}
-	return s.o.FS.Open(t.canonical)
+	return t.fs.Open(t.canonical)
 }
 
 func (s *Server) tags(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +152,7 @@ func (s *Server) valid(dir meta.Inode, e coverEntry) bool {
 // and still holds: one small read where resolving reads the tags of the folder's tracks
 // over the network.
 func (s *Server) storedCover(dir meta.Inode) (coverEntry, bool) {
-	f, err := s.o.FS.Open(path.Join(ThumbDir, coverKey(dir)))
+	f, err := s.o.FS.Open(path.Join(ThumbDir, coverKey(dir))) // the node's own tree (docs/21 §3)
 	if err != nil {
 		return coverEntry{}, false
 	}
@@ -404,7 +404,7 @@ func (s *Server) hasPicture(in meta.Inode) bool {
 	parts, err := s.o.Store.PathOf(in.Ino)
 	var f io.ReadSeekCloser
 	if err == nil {
-		f, err = s.o.FS.Open("/" + path.Join(parts...))
+		f, err = s.o.FS.Open("/" + path.Join(parts...)) // the node resolves covers for everyone
 	}
 	if err != nil { // inside the trash: read through the root
 		root, ok := s.trashRootOf(in)

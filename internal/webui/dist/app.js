@@ -67,6 +67,8 @@ var PATHS = {
   queue_music: "M640-160q-50 0-85-35t-35-85q0-50 35-85t85-35q11 0 21 1.5t19 6.5v-328h200v80H760v360q0 50-35 85t-85 35ZM120-320v-80h320v80H120Zm0-160v-80h480v80H120Zm0-160v-80h480v80H120Z",
   equalizer: "M160-160v-320h160v320H160Zm240 0v-640h160v640H400Zm240 0v-440h160v440H640Z",
   close: "m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z",
+  person: "M480-480q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47ZM160-160v-112q0-34 17.5-62.5T224-378q62-31 126-46.5T480-440q66 0 130 15.5T736-378q29 15 46.5 43.5T800-272v112H160Zm80-80h480v-32q0-11-5.5-20T700-306q-54-27-109-40.5T480-360q-56 0-111 13.5T260-306q-9 5-14.5 14t-5.5 20v32Zm240-320q33 0 56.5-23.5T560-640q0-33-23.5-56.5T480-720q-33 0-56.5 23.5T400-640q0 33 23.5 56.5T480-560Zm0-80Zm0 400Z",
+  logout: "M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h280v80H200v560h280v80H200Zm440-160-55-58 102-102H360v-80h327L585-622l55-58 200 200-200 200Z",
   open_in_new: "M200-120q-33 0-56.5-23.5T120-200v-560q0-33 23.5-56.5T200-840h280v80H200v560h560v-280h80v280q0 33-23.5 56.5T760-120H200Zm188-212-56-56 372-372H560v-80h280v280h-80v-144L388-332Z",
   chevron_left: "M560-240 320-480l240-240 56 56-184 184 184 184-56 56Z",
   chevron_right: "M504-480 320-664l56-56 240 240-240 240-56-56 184-184Z",
@@ -159,9 +161,14 @@ function thumbURL(path, root, tag) {
 }
 async function call(url, init) {
   const r = await fetch(url, init);
+  if (r.status === 401) signInAgain();
   if (!r.ok) throw await apiError(r);
   if (r.status === 204) return void 0;
   return await r.json();
+}
+function signInAgain() {
+  const to = location.pathname + location.search + location.hash;
+  location.replace("/login?to=" + encodeURIComponent(to));
 }
 async function apiError(r) {
   try {
@@ -3541,6 +3548,71 @@ function compare(a, b, s) {
   return s.desc ? -c : c;
 }
 
+// internal/webui/src/account.ts
+var session2 = null;
+function toLogin() {
+  const to = location.pathname + location.search + location.hash;
+  location.replace("/login?to=" + encodeURIComponent(to));
+}
+async function mount(header2) {
+  let r;
+  try {
+    r = await fetch("/api/session");
+  } catch {
+    return;
+  }
+  if (r.status === 401) {
+    toLogin();
+    return;
+  }
+  if (!r.ok) return;
+  session2 = await r.json();
+  const chip = h("span", { class: "account", title: `signed in as ${session2.user}` }, icon("person"), h("span", null, session2.user));
+  const out = h("button", { type: "button", class: "signout", title: "Sign out", "aria-label": "Sign out" }, icon("logout"));
+  out.addEventListener("click", async () => {
+    out.disabled = true;
+    try {
+      await fetch("/api/logout", { method: "POST", headers: { [HEADER]: "1" } });
+    } finally {
+      location.replace("/login");
+    }
+  });
+  chip.append(out);
+  const theme = header2.querySelector("button.theme");
+  if (theme) theme.before(chip);
+  else header2.append(chip);
+}
+function memberLink(name, href, ...kids) {
+  const a = h("a", { href, "data-node": name }, ...kids);
+  return a;
+}
+function wire2(root) {
+  root.addEventListener("click", (ev) => {
+    const a = ev.target?.closest("a[data-node]");
+    if (!a || !session2) return;
+    ev.preventDefault();
+    void follow(a);
+  });
+}
+async function follow(a) {
+  const to = new URL(a.href, location.href);
+  try {
+    const r = await fetch("/api/handoff?to=" + encodeURIComponent(a.dataset.node ?? ""));
+    if (r.status === 401) {
+      toLogin();
+      return;
+    }
+    if (!r.ok) {
+      location.assign(a.href);
+      return;
+    }
+    const { url } = await r.json();
+    location.assign(url + "&to=" + encodeURIComponent(to.pathname + to.search + to.hash));
+  } catch {
+    location.assign(a.href);
+  }
+}
+
 // internal/webui/src/stats.ts
 var RANGES = [
   ["1h", 3600],
@@ -3627,7 +3699,13 @@ function render9(root, query) {
     clear(body);
     const row2 = (name, label, dot, note, m) => {
       const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
-      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name, "aria-label": "open on " + m.name }, icon("open_in_new")));
+      if (m?.web) {
+        const link = memberLink(m.name, `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, icon("open_in_new"));
+        link.className = "menu-link";
+        link.title = "open on " + m.name;
+        link.setAttribute("aria-label", "open on " + m.name);
+        el.append(link);
+      }
       body.append(el);
     };
     row2("all", "all nodes", "off", "one series per member");
@@ -3637,7 +3715,7 @@ function render9(root, query) {
   let order = [];
   const titles = /* @__PURE__ */ new Map();
   const empty = /* @__PURE__ */ new Set();
-  const header = (f) => {
+  const header2 = (f) => {
     last2 = f;
     lastAt = Date.now();
     const nodeName = state.node === "" ? f.node : state.node;
@@ -3724,7 +3802,7 @@ function render9(root, query) {
         refresh ? onScreen() : null,
         (f) => {
           if (disposed) return;
-          header(f);
+          header2(f);
           if (!refresh) frames(f.charts);
         },
         (l) => {
@@ -3777,7 +3855,7 @@ function searchHash(q, under) {
 function typing(t) {
   return t instanceof HTMLElement && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
 }
-function wire2(form) {
+function wire3(form) {
   const input = form.querySelector("input");
   let timer = 0;
   const go = () => {
@@ -4335,9 +4413,12 @@ function route() {
 }
 player.mount();
 var searchForm = document.querySelector("form.search");
-if (searchForm) wire2(searchForm);
+if (searchForm) wire3(searchForm);
 var themeButton = document.querySelector("button.theme");
 if (themeButton) wire(themeButton);
+var header = document.querySelector("header.top");
+if (header) void mount(header);
+wire2(document);
 status.subscribe(drawShell);
 window.addEventListener("hashchange", route);
 route();

@@ -212,8 +212,9 @@ type AdminOp struct {
 	Admin      bool   `json:"admin,omitempty"`
 	// Actor and Source are set by the receiving node, from the request's signature and
 	// its connection, never from the body (docs/21 §2, I-344).
-	Actor  meta.UserIdx `json:"-"`
-	Source netip.Addr   `json:"-"`
+	Actor   meta.UserIdx   `json:"-"`
+	SignKey meta.UserKeyID `json:"-"` // the key that signed the request: a session it mints is its own (docs/21 §6)
+	Source  netip.Addr     `json:"-"`
 }
 
 // Need is what an admin op asks of its caller (docs/21 §2, I-345): nothing beyond
@@ -239,6 +240,7 @@ var adminNeeds = map[string]Need{
 	"access_ls": NeedNone, "user_ls": NeedNone, "group_ls": NeedNone, "user_create": NeedNone, "user_key_add": NeedNone, "user_bootstrap": NeedNone,
 	"secret_set": NeedUser, "secret_get": NeedUser, "secret_ls": NeedUser, "secret_rm": NeedUser,
 	"user_whoami": NeedUser, "user_key_invite": NeedUser, "user_key_rm": NeedUser, "user_bind": NeedUser, "user_unbind": NeedUser,
+	"web_login": NeedUser, "web_logout": NeedUser,
 	"trash_restore": NeedWriteOn,
 	"trash_purge":   NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn,
 	"versions_revert": NeedAdminOn, "versions_copy": NeedAdminOn, "grant": NeedAdminOn, "revoke": NeedAdminOn,

@@ -206,11 +206,12 @@ func TestWebUI_Render_Table(t *testing.T) {
 type fakeSearcher struct {
 	q, under string
 	limit    int
+	hits     []search.Hit // what every search answers
 }
 
 func (f *fakeSearcher) Search(_ context.Context, q, under string, limit int) search.Result {
 	f.q, f.under, f.limit = q, under, limit
-	return search.Result{Query: q, Hits: []search.Hit{}}
+	return search.Result{Query: q, Hits: append([]search.Hit{}, f.hits...)}
 }
 
 // GET /api/search passes the query and folder through, limit 50 by default and 400
