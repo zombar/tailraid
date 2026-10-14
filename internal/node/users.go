@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -263,6 +264,45 @@ func (a *adminOps) userOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return map[string]string{"user": u.Name}, a.propose(ctx, meta.Command{Op: meta.OpUser, Actor: op.Actor, UserOp: &meta.UserOp{Action: action, Target: u.Idx, Now: now.UnixNano()}})
 	case "user_ls":
 		return a.userRows(op.User), nil
+	case "web_login":
+		// a session of the volume (docs/21 §6, I-354): the row through the leader, the
+		// token to the browser through a one-time code under the cluster key, the link
+		// to this node's own page
+		if a.webAddr == "" {
+			return nil, errors.New("web login: this node has no web listener (listen.web)")
+		}
+		key, ok := a.secrets.Local()
+		if !ok {
+			return nil, errors.New("web login: this node holds no cluster key yet; try again in a minute")
+		}
+		tok, err := users.NewToken()
+		if err != nil {
+			return nil, err
+		}
+		exp := now.Add(a.sessionLife)
+		if err := a.propose(ctx, meta.Command{Op: meta.OpSession, Actor: op.Actor, SessionOp: &meta.SessionOp{User: op.Actor, Hash: sha256.Sum256(tok[:]), Key: op.SignKey, ExpiresAt: exp.UnixNano(), Now: now.UnixNano()}}); err != nil {
+			return nil, err
+		}
+		code, err := users.MintCode(key, tok, now)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"url": "http://" + a.webAddr + "/login?code=" + code, "expires_at": exp.UTC().Format(time.RFC3339)}, nil
+	case "web_logout":
+		if op.All {
+			return map[string]any{"ended": -1}, a.propose(ctx, meta.Command{Op: meta.OpSession, Actor: op.Actor, SessionOp: &meta.SessionOp{Delete: true, All: true, User: op.Actor, Now: now.UnixNano()}})
+		}
+		ended := 0
+		for _, se := range st.Sessions() { // the sessions this device's key minted
+			if se.User != op.Actor || se.Key != op.SignKey {
+				continue
+			}
+			if err := a.propose(ctx, meta.Command{Op: meta.OpSession, Actor: op.Actor, SessionOp: &meta.SessionOp{Delete: true, Hash: se.Hash, Now: now.UnixNano()}}); err != nil {
+				return nil, err
+			}
+			ended++
+		}
+		return map[string]any{"ended": ended}, nil
 	case "user_whoami":
 		u, ok := st.User(op.Actor)
 		if !ok {

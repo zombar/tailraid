@@ -179,7 +179,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	}
 	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1], s.o.Node))
 	var cur uint64 // the temp's current size: where the next part must start
-	if fi, err := s.o.FS.Stat(temp); err == nil {
+	if fi, err := s.fs(r).Stat(temp); err == nil {
 		cur = uint64(fi.Size())
 	} else if !errors.Is(err, os.ErrNotExist) {
 		s.fail(w, err)
@@ -212,7 +212,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	if part.whole {
 		flags |= os.O_TRUNC
 	}
-	f, err := s.o.FS.OpenFile(temp, flags, 0o644)
+	f, err := s.fs(r).OpenFile(temp, flags, 0o644)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -227,7 +227,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	rollback := func() {
 		if part.whole {
 			_ = f.Close()
-			_ = s.o.FS.Remove(temp)
+			_ = s.fs(r).Remove(temp)
 			return
 		}
 		_ = f.Truncate(int64(part.start))
@@ -265,14 +265,14 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, map[string]any{"offset": part.end})
 		return
 	}
-	publish := s.o.FS.Rename
+	publish := s.fs(r).Rename
 	if noOverwrite {
 		// exclusive: a name another gateway published since this request looked is
 		// refused by the leader, not replaced (Rename.NoReplace, I-226)
-		publish = s.o.FS.RenameNoReplace
+		publish = s.fs(r).RenameNoReplace
 	}
 	if err := publish(temp, canonical); err != nil {
-		_ = s.o.FS.Remove(temp) // a refused publish leaves nothing behind (docs/13 §4)
+		_ = s.fs(r).Remove(temp) // a refused publish leaves nothing behind (docs/13 §4)
 		if errors.Is(err, os.ErrExist) {
 			writeErr(w, http.StatusPreconditionFailed, "put "+canonical+": exists")
 			return
@@ -340,7 +340,7 @@ func (s *Server) mkdir(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if err := s.o.FS.MkdirAll(canonical, 0o755); err != nil {
+	if err := s.fs(r).MkdirAll(canonical, 0o755); err != nil {
 		s.fail(w, err)
 		return
 	}

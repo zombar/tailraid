@@ -699,7 +699,7 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	need := op.Needs()
-	if op.Actor, err = s.actor(r, need, body); err != nil {
+	if op.Actor, _, err = s.actor(r, need, body); err != nil {
 		writeErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -792,7 +792,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op.Source, _ = SourceAddr(r)
-	if op.Actor, err = s.actor(r, need, body); err != nil {
+	if op.Actor, op.SignKey, err = s.actor(r, need, body); err != nil {
 		writeErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -822,7 +822,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 
 // Signed is the users layer's check of a request (docs/21 §2).
 type Signed struct {
-	Verify    func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, error)
+	Verify    func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, meta.UserKeyID, error)
 	Enforcing func() bool
 	IsAdmin   func(meta.UserIdx) bool
 }
@@ -832,20 +832,20 @@ func (s *Server) enforcing() bool { return s.o.Signed != nil && s.o.Signed.Enfor
 // actor is the user a request acts for: nobody until the cluster has users or when the
 // op needs none, else the user its Tailraid-Sig names, or ErrUnauthorized (I-344). The
 // header is checked before anything of the body is applied.
-func (s *Server) actor(r *http.Request, need Need, body []byte) (meta.UserIdx, error) {
+func (s *Server) actor(r *http.Request, need Need, body []byte) (meta.UserIdx, meta.UserKeyID, error) {
 	if need == NeedNone || !s.enforcing() {
-		return 0, nil
+		return 0, meta.UserKeyID{}, nil
 	}
 	hdr := r.Header.Get(users.Header)
 	if hdr == "" {
-		return 0, ErrUnauthorized
+		return 0, meta.UserKeyID{}, ErrUnauthorized
 	}
 	src, _ := SourceAddr(r)
-	actor, err := s.o.Signed.Verify(hdr, src, r.Method, r.URL.Path, body)
+	actor, key, err := s.o.Signed.Verify(hdr, src, r.Method, r.URL.Path, body)
 	if err != nil {
-		return 0, ErrUnauthorized
+		return 0, meta.UserKeyID{}, ErrUnauthorized
 	}
-	return actor, nil
+	return actor, key, nil
 }
 
 // SecretKeyReply is GET /v1/secrets/key's body: the cluster key, to a member only.

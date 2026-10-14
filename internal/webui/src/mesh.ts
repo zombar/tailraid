@@ -2,6 +2,7 @@
 // its paths (GET /api/mesh, fetched beside every status poll) over a table of the facts,
 // one row per node: address, path, endpoint, probe round trip, seen age.
 
+import { memberLink } from "./account.ts";
 import { h } from "./dom.ts";
 import { meshPicture } from "./api.ts";
 import type { MeshPeer, NodeReport, Report } from "./api.ts";
@@ -67,7 +68,7 @@ export function render(root: HTMLElement, r: Report): void {
 function row(p: MeshPeer, n: NodeReport | undefined): HTMLElement {
   const name = p.name || n?.name || `node ${p.idx}`;
   const host = n?.addr ? n.addr.replace(/:\d+$/, "") : "";
-  const nameCell = h("td", { class: "name" }, n?.web && host ? h("a", { href: `http://${host}:${n.web}/#/` }, name) : name);
+  const nameCell = h("td", { class: "name" }, n?.web && host ? memberLink(name, `http://${host}:${n.web}/#/`, name) : name);
   if (n?.leader) nameCell.append(h("span", { class: "badge strong" }, "leader"));
   else if (n?.state === "draining") nameCell.append(h("span", { class: "badge warn" }, "draining"));
   let dot = "";

@@ -98,7 +98,7 @@ read, in this order:
    authorizer; the tunnel already vouches for the source's key) → allowed; anything else
    → 403, logged at warn with the source.
 
-3. With users (docs/21 §6, built after 1.0): a session of the volume. `tailraid web
+3. With users (docs/21 §6): a session of the volume. `tailraid web
    login` proposes a session row in the FSM and prints
    `http://<mesh IP>:20482/login?code=…` (`--node` picks which member's address); opening
    it sets an `HttpOnly`, `SameSite=Strict` cookie for that origin holding the session
@@ -111,7 +111,9 @@ read, in this order:
    re-reads the session's user row, so a disabled user, a removed key or `web logout`
    is refused at the next request on every node. The session's user is the actor of every
    request: listings show what they hold `Read` on, mutations carry them into the FSM
-   (I-354, I-355). Until the users PRs land the UI is for members, step 2 alone.
+   (I-354, I-355). Before the first user exists the UI is for members, step 2 alone,
+   and `/login` sends a visitor to the root. `GET /api/session` tells the page who it
+   is signed in as, so the header can draw the account chip.
 
 Under Tailscale a third step admitted a device of the same tailnet user (the phone), by
 its WhoIs login name; the mesh has no users, and a device that is not a node is a later
@@ -134,6 +136,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /login?code=&to=` | – | with a valid one-time code (from `web login` or a hand-off): sets the session cookie for this origin and redirects to `to` (a path under `/`, default `/`); without one, or with a used or expired code: the sign-in page, `text/html`, the one command to run and, after a bad code, one line saying so (docs/21 §6, I-354); the only route besides `/assets/*` that needs no session |
 | `GET /api/handoff?to=` | – | `{"url"}`: the `to` member's `/login` with a one-time code (five minutes, single use) that signs that origin into this session; the page uses it for every link to another node's page |
 | `POST /api/logout` | required | removes the session row: ends it on every node; 204 |
+| `GET /api/session` | – | `{"user","admin"}`: who this page is signed in as; 404 before the cluster has users |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
 | `GET /api/mesh` | – | `{"svg"}`: the Mesh section's picture (§7, docs/20 §10), `chart.Mesh` over `status.mesh` and `status.nodes` of this node's status (I-331); 404 on a device without a mesh; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
@@ -153,7 +156,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}`, for a folder whose art waits for a video's frame with `"grab":{path,ino,version}`, the video to frame, its path below the folder (I-275) |
 | `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser chose from a video (§5), stored as `<ino>-<gen>-<version>.f2.jpg`: 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
-| `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4) |
+| `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4); an admin's once users exist (403 for anyone else, docs/21 §3) |
 | `GET /api/pins` | – | `{"size","used","pinned_bytes","pins":[{path,bytes,cached_bytes}]}`, the same object `/api/status` carries as `cache` |
 | `GET /api/search?q=&under=&limit=` | – | `{"query","hits":[{path,type,size,mtime,ino,match,title?,artist?,album?,terms:[{term,off}]}],"index"?}`: the words of `q` ANDed, the last as a prefix, names from the FSM and tags and contents from the index (docs/18 §6); `under` limits to a live folder; `limit` 50 by default, 200 at most, 400 outside `1..200`; `index: "unavailable"` when the node has no loadable index and only names answered; never an entry in the trash or under `/.tailraid` |
 | `GET /api/render?path=&in=` | – | `text/html; charset=utf-8`: the file rendered as a document by the node's own markdown renderer (§4); `.md` and `.markdown` only, else 400; a source over `TEXT_MAX` (1 MiB) → 413; the ETag rule of `/files/`; `Cache-Control: no-cache` |
@@ -851,7 +854,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 
 ## Manual checks (real cluster, before a release)
 
-0. Sign-in (docs/21 §6, once built): a plain visit shows `/login` with the command; `tailraid
+0. Sign-in (docs/21 §6): a plain visit shows `/login` with the command; `tailraid
    web login` prints a link that signs the browser in and the header shows the account
    chip with the name; a second open of the same link is refused with the one line; a
    folder the user holds nothing on is absent from the listing; `web logout` returns the

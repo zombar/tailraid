@@ -49,7 +49,7 @@ func (v mediaView) platforms(lib meta.Ino) []MediaItem {
 	for i := range r.platforms {
 		e := &r.platforms[i]
 		in, ok := v.s.o.Store.GetInode(e.Ino)
-		if !ok {
+		if !ok || !v.s.readable(v.r, in.Ino) {
 			continue
 		}
 		it := v.romFromEntry(in, v.path(e.Ino), "platform", *e)
@@ -120,7 +120,7 @@ func (v mediaView) romItem(in meta.Inode, p string) (MediaItem, bool) {
 			for _, group := range titles(r.games[pl.Ino]) {
 				g := group[0]
 				gin, ok := v.s.o.Store.GetInode(g.Ino)
-				if !ok {
+				if !ok || !v.s.readable(v.r, gin.Ino) {
 					continue
 				}
 				gi := v.romFromEntry(gin, v.path(g.Ino), "game", g)
@@ -156,7 +156,7 @@ func (v mediaView) romItem(in meta.Inode, p string) (MediaItem, bool) {
 // siblings that name the same title and tags), or the file alone.
 func (v mediaView) gameFiles(e *search.Entry) []MediaFile {
 	in, ok := v.s.o.Store.GetInode(e.Ino)
-	if !ok {
+	if !ok || !v.s.readable(v.r, in.Ino) {
 		return nil
 	}
 	p := v.path(e.Ino)

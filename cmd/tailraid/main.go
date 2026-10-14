@@ -33,7 +33,7 @@ func main() {
 		},
 	}
 	root.PersistentFlags().String("config", "", "config file (default: per-OS tailraid/config.yaml)")
-	root.AddCommand(initCmd(), joinCmd(), serveCmd(), resetCmd(), statusCmd(), dashboardCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), trashCmd(), cacheCmd(), fsckCmd(), chunkCmd(), verifyCmd(), mountCmd(), umountCmd(), installCmd(), uninstallCmd(), startStopCmd("start", svc.Start), startStopCmd("stop", svc.Stop), logsCmd(), updateCmd(), exportCmd(), recoverCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), statsCmd(), searchCmd(), mediaCmd(), secretCmd(), userCmd(), groupCmd(), grantCmd(), revokeCmd(), accessCmd(), versionCmd())
+	root.AddCommand(initCmd(), joinCmd(), serveCmd(), resetCmd(), statusCmd(), dashboardCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), trashCmd(), cacheCmd(), fsckCmd(), chunkCmd(), verifyCmd(), mountCmd(), umountCmd(), installCmd(), uninstallCmd(), startStopCmd("start", svc.Start), startStopCmd("stop", svc.Stop), logsCmd(), updateCmd(), exportCmd(), recoverCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), statsCmd(), searchCmd(), mediaCmd(), secretCmd(), userCmd(), groupCmd(), grantCmd(), revokeCmd(), accessCmd(), webCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		if errors.Is(err, fs.ErrPermission) && runtime.GOOS != "windows" {
 			err = fmt.Errorf("%w (the service runs with a privilege the interface needs, docs/20 §9: run this with sudo)", err)

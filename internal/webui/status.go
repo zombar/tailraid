@@ -2,12 +2,15 @@ package webui
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // statusTTL bounds how often the admin report (a walk of every chunk) is rebuilt; every
@@ -82,6 +85,10 @@ func (s *Server) chunks(w http.ResponseWriter, r *http.Request) {
 		limit = chunksDefault
 	}
 	limit = min(limit, chunksMax)
+	if in, err := s.o.Store.Resolve(meta.SplitPath(canonical)); err == nil && !s.readable(r, in.Ino) {
+		s.fail(w, fmt.Errorf("chunks %s: %w", canonical, syscall.EACCES))
+		return
+	}
 	total, reps, err := s.o.Chunks(r.Context(), canonical, max(offset, 0), limit)
 	if err != nil {
 		s.fail(w, err)

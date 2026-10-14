@@ -1,12 +1,16 @@
 package webui
 
 import (
+	"bytes"
 	_ "embed"
 	"net/http"
 )
 
 //go:embed static/index.html
 var indexHTML []byte
+
+//go:embed static/signin.html
+var signinHTML []byte // the lookdev's signin.html, served by /login (docs/21 §6)
 
 //go:embed src/app.css
 var appCSS []byte
@@ -45,4 +49,20 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(body)
+}
+
+// signinPage serves the sign-in page; bad adds the line about a used or expired code.
+func (s *Server) signinPage(w http.ResponseWriter, bad bool) {
+	page := signinHTML
+	if !bad {
+		if i, j := bytes.Index(page, []byte("<!--bad-->")), bytes.Index(page, []byte("<!--/bad-->")); i >= 0 && j > i {
+			page = append(append([]byte{}, page[:i]...), page[j+len("<!--/bad-->"):]...)
+		}
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Security-Policy", indexCSP)
+	h.Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(page)
 }

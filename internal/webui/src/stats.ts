@@ -2,6 +2,7 @@
 // history kept in the volume, a Grafana-style range picker, a member dropdown, and a live
 // refresh while the range ends now (I-198).
 
+import { memberLink } from "./account.ts";
 import { clear, h } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { streamStats, type StatsFirst, type StatsFrame, type StatsLine, type StatsMember } from "./api.ts";
@@ -109,7 +110,13 @@ export function render(root: HTMLElement, query: string): () => void {
     clear(body);
     const row = (name: string, label: string, dot: string, note: string, m?: StatsMember) => {
       const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
-      if (m?.web) el.append(h("a", { class: "menu-link", href: `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, title: "open on " + m.name, "aria-label": "open on " + m.name }, icon("open_in_new")));
+      if (m?.web) {
+        const link = memberLink(m.name, `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, icon("open_in_new"));
+        link.className = "menu-link";
+        link.title = "open on " + m.name;
+        link.setAttribute("aria-label", "open on " + m.name);
+        el.append(link);
+      }
       body.append(el);
     };
     row("all", "all nodes", "off", "one series per member");

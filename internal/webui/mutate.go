@@ -104,7 +104,7 @@ func (s *Server) rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	to := path.Join(path.Dir(canonical), req.Name)
-	if err := s.o.FS.Rename(canonical, to); err != nil {
+	if err := s.fs(r).Rename(canonical, to); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -146,7 +146,7 @@ func (s *Server) move(w http.ResponseWriter, r *http.Request) {
 			if _, taken := s.o.Store.Lookup(dest.Ino, name); taken {
 				err = fmt.Errorf("%s is taken in %s: %w", name, to, meta.ErrExist)
 			} else {
-				err = s.o.FS.Rename(canonical, path.Join(to, name))
+				err = s.fs(r).Rename(canonical, path.Join(to, name))
 			}
 		}
 		if err != nil {
@@ -179,7 +179,7 @@ func (s *Server) del(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 0 || reserved(parts) {
 			err = fmt.Errorf("%s: not a user entry: %w", canonical, meta.ErrBadCommand)
 		} else {
-			err = s.o.FS.Trash(canonical)
+			err = s.fs(r).Trash(canonical)
 		}
 		if err != nil {
 			failed = append(failed, Failure{Path: canonical, Error: err.Error(), Status: errStatus(err)})
@@ -225,7 +225,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	err := s.o.FS.Restore(meta.Ino(req.Ino), parent, req.Name)
+	err := s.fs(r).Restore(meta.Ino(req.Ino), parent, req.Name)
 	switch {
 	case errors.Is(err, meta.ErrExist):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "taken": true})
@@ -257,9 +257,9 @@ func (s *Server) purge(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch {
 	case req.All:
-		err = s.o.FS.PurgeAll()
+		err = s.fs(r).PurgeAll()
 	case req.Ino != 0:
-		err = s.o.FS.Purge(meta.Ino(req.Ino))
+		err = s.fs(r).Purge(meta.Ino(req.Ino))
 	default:
 		writeErr(w, http.StatusBadRequest, "purge: an ino or all is required")
 		return
@@ -318,7 +318,7 @@ func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 		flags = meta.WithLibrary(flags, k)
 	}
 	if flags != in.Flags {
-		if err := s.o.FS.SetFlags(canonical, flags); err != nil {
+		if err := s.fs(r).SetFlags(canonical, flags); err != nil {
 			s.fail(w, err)
 			return
 		}
@@ -328,12 +328,22 @@ func (s *Server) flags(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	e := s.entry(in, canonical)
+	e := s.entry(s.fs(r), in, canonical)
 	e.Path = canonical
 	writeJSON(w, http.StatusOK, e)
 }
 
 // trashList is admin.TrashList for this node's FSM copy, with the retention's purge_at.
-func (s *Server) trashList() []admin.TrashEntry {
-	return admin.TrashList(s.o.Store, nil, s.o.Retention)
+func (s *Server) trashList(r *http.Request) []admin.TrashEntry {
+	all := admin.TrashList(s.o.Store, nil, s.o.Retention)
+	if _, ok := sessionIn(r); !ok {
+		return all
+	}
+	out := all[:0] // a deleted entry shows to who holds Read on its original parent (docs/21 §3)
+	for _, e := range all {
+		if in, ok := s.o.Store.GetInodeAny(meta.Ino(e.Ino)); ok && s.readable(r, in.Parent) {
+			out = append(out, e)
+		}
+	}
+	return out
 }

@@ -58,7 +58,7 @@ func TestChart_LookdevMeshMatchesDashboard(t *testing.T) {
 
 var (
 	edgeRe = regexp.MustCompile(`<line class="mesh-edge ([a-z]+)" x1="(\d+)" y1="(\d+)" x2="(\d+)" y2="(\d+)">`)
-	nodeRe = regexp.MustCompile(`<g class="mesh-node([^"]*)">(<a class="mesh-link" href="([^"]*)">)?<circle cx="(\d+)" cy="(\d+)"`)
+	nodeRe = regexp.MustCompile(`<g class="mesh-node([^"]*)">(<a class="mesh-link" href="([^"]*)" data-node="[^"]*">)?<circle cx="(\d+)" cy="(\d+)"`)
 )
 
 // The chart draws exactly the edges given, each in its class from the centre, a relayed

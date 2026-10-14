@@ -33,11 +33,11 @@ func TestRPC_MutatingOpsNeedSignature(t *testing.T) {
 	e := newEnvWith(t, func(o *Options) {
 		o.Admin = rec
 		o.Signed = &Signed{
-			Verify: func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, error) {
+			Verify: func(hdr string, src netip.Addr, method, path string, body []byte) (meta.UserIdx, meta.UserKeyID, error) {
 				if hdr == "ok" && method == http.MethodPost && (path == "/v1/admin" || path == "/v1/members") && len(body) > 0 && src.IsValid() {
-					return 7, nil
+					return 7, meta.UserKeyID{1}, nil
 				}
-				return 0, users.ErrUnauthorized
+				return 0, meta.UserKeyID{}, users.ErrUnauthorized
 			},
 			Enforcing: func() bool { return enforcing },
 			IsAdmin:   func(u meta.UserIdx) bool { return admin },

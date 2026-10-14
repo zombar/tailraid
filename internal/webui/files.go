@@ -10,6 +10,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -109,14 +110,15 @@ type target struct {
 	trashed   bool
 	snap      *vfs.SnapshotRef // the snapshot when addressed with at=
 	vpath     string           // the entry's /.snapshots path when snap is set
+	fs        *vfs.FS          // the request's view: the session's user's, or the node's (I-355)
 }
 
 // resolveTarget resolves the path (and `in` or `at`) of a read request.
 func (s *Server) resolveTarget(r *http.Request, raw string) (target, error) {
 	parts, canonical := cleanPath(raw)
-	t := target{parts: parts, canonical: canonical}
+	t := target{parts: parts, canonical: canonical, fs: s.fs(r)}
 	if r.URL.Query().Has("at") {
-		return s.resolveAt(r, t)
+		return s.resolveAt(r, t) // the view checks a snapshot entry against the live grants
 	}
 	if q := r.URL.Query().Get("in"); q != "" {
 		ino, err := strconv.ParseUint(q, 10, 64)
@@ -131,12 +133,18 @@ func (s *Server) resolveTarget(r *http.Request, raw string) (target, error) {
 		if err != nil {
 			return t, err
 		}
+		if !s.readable(r, root.Parent) { // a deleted entry evaluates on its original parent (docs/21 §3)
+			return t, fmt.Errorf("%s: %w", canonical, syscall.EACCES)
+		}
 		t.in, t.root, t.trashed = in, root, true
 		return t, nil
 	}
 	in, err := s.o.Store.Resolve(parts)
 	if err != nil {
 		return t, err
+	}
+	if !s.traversable(r, in.Ino) { // Read, or on the way to a grant (I-348)
+		return t, fmt.Errorf("%s: %w", canonical, syscall.EACCES)
 	}
 	t.in = in
 	return t, nil
@@ -170,7 +178,7 @@ func (s *Server) purgeAt(ns int64) string {
 
 // entry describes in; canonical is its live path ("" inside the trash, where the
 // overlay's view is not consulted).
-func (s *Server) entry(in meta.Inode, canonical string) Entry {
+func (s *Server) entry(fs *vfs.FS, in meta.Inode, canonical string) Entry {
 	e := Entry{Name: in.Name, Type: typeName(in), Size: in.Size, Mtime: time.Unix(0, in.Mtime).UTC(), Mode: in.Mode & 0o7777, Ino: uint64(in.Ino), Version: in.Version, Target: in.Target}
 	e.Protected = in.Flags&meta.FlagProtected != 0
 	e.NSFW = in.Flags&meta.FlagNSFW != 0
@@ -183,7 +191,7 @@ func (s *Server) entry(in meta.Inode, canonical string) Entry {
 	case meta.TFile:
 		e.Upload = IsUploadTemp(in.Name)
 		if canonical != "" {
-			if fi, err := s.o.FS.Stat(canonical); err == nil { // the overlay's size and dirty flag
+			if fi, err := fs.Stat(canonical); err == nil { // the overlay's size and dirty flag
 				e.Size = uint64(fi.Size())
 				if d, ok := fi.(interface{ Dirty() bool }); ok {
 					e.Dirty = d.Dirty()
@@ -239,9 +247,15 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	// a folder the user holds no role on lists what is on the way to a grant and no
+	// deleted roots (docs/21 §3, I-348, I-355)
+	onTheWay := !s.readable(r, t.in.Ino)
 	entries := make([]Entry, 0, len(kids))
 	for i := range kids {
 		if IsOSMetadata(kids[i].Name) { // kept in the volume, reachable by path (I-140)
+			continue
+		}
+		if onTheWay && !s.traversable(r, kids[i].Ino) {
 			continue
 		}
 		if !t.trashed && len(t.parts) == 0 && kids[i].Name == meta.ReservedDir { // the thumbnails (I-160)
@@ -251,12 +265,12 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 		if !t.trashed {
 			live = path.Join(t.canonical, kids[i].Name)
 		}
-		entries = append(entries, s.entry(kids[i], live))
+		entries = append(entries, s.entry(t.fs, kids[i], live))
 	}
-	if !t.trashed { // the folder's deleted roots, newest first, after the live entries
+	if !t.trashed && !onTheWay { // the folder's deleted roots, newest first, after the live entries
 		roots := s.o.Store.TrashOf(t.in.Ino)
 		for i := range roots {
-			entries = append(entries, s.entry(roots[i], ""))
+			entries = append(entries, s.entry(t.fs, roots[i], ""))
 		}
 	}
 	cover, known := s.coverCached(t.in)
@@ -301,7 +315,7 @@ func (s *Server) stat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, e)
 		return
 	}
-	e := s.entry(t.in, live)
+	e := s.entry(t.fs, t.in, live)
 	e.Path = t.canonical
 	var lib meta.LibraryKind
 	e.Protected, e.NSFW, lib = s.effective(t.in)
@@ -329,8 +343,8 @@ func (s *Server) pinned(canonical string) bool {
 }
 
 // trash lists every deleted root for the CLI and the dashboard (docs/13 §3).
-func (s *Server) trash(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"entries": s.trashList()})
+func (s *Server) trash(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"entries": s.trashList(r)})
 }
 
 // get serves a file through http.ServeContent: Range, 206/416, HEAD and If-None-Match
@@ -365,26 +379,26 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case t.snap != nil: // a snapshot never changes: its ID and the entry name the bytes
-		f, err = s.o.FS.Open(t.vpath)
+		f, err = s.fs(r).Open(t.vpath)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		h.Set("ETag", fmt.Sprintf(`"s%d.%d.%d"`, t.snap.Snapshot.ID, in.Ino, in.Gen))
 	case t.trashed:
-		f, err = s.o.FS.OpenTrash(t.root.Ino, t.parts)
+		f, err = s.fs(r).OpenTrash(t.root.Ino, t.parts)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 		h.Set("ETag", fmt.Sprintf(`"%d.%d.%d"`, in.Ino, in.Gen, in.Version))
 	default:
-		f, err = s.o.FS.Open(canonical)
+		f, err = s.fs(r).Open(canonical)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
-		fi, err := s.o.FS.Stat(canonical)
+		fi, err := s.fs(r).Stat(canonical)
 		if err != nil {
 			_ = f.Close()
 			s.fail(w, err)
