@@ -104,6 +104,13 @@ func (f *File) Read(p []byte) (int, error) {
 }
 
 func (f *File) ReadAt(p []byte, off int64) (int, error) {
+	return f.ReadAtContext(context.Background(), p, off)
+}
+
+// ReadAtContext is ReadAt for a client whose request carries a context: when it ends
+// (the client went away or seeked elsewhere) the read returns and a chunk fetch it alone
+// waited on is cut (I-314). NFS and SMB requests read through ReadAt.
+func (f *File) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
 	if err := f.checkOpen("read"); err != nil {
 		return 0, err
 	}
@@ -114,7 +121,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 		return 0, mapErr("read", f.name, syscall.EINVAL)
 	}
 	if f.snap != nil {
-		n, err := f.fs.snapReadAt(context.Background(), f.snap, p, off)
+		n, err := f.fs.snapReadAt(ctx, f.snap, p, off)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return n, snapErr("read", f.name, err)
 		}
@@ -128,7 +135,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 	// served, so the chunk the client waits for never competes with its prefetches (I-203)
 	defer f.fs.rd.Prefetch(in, off)
 	if _, dirty := f.fs.ov.Size(f.ino, in.Size); dirty {
-		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReaderEarly(context.Background(), in))
+		n, err := f.fs.ov.Read(f.ino, in.Size, uint64(off), p, f.fs.rd.BaseReaderEarly(ctx, in))
 		if err == nil || errors.Is(err, io.EOF) {
 			f.fs.bytesRead.Add(uint64(max(n, 0))) //nolint:gosec // n is a count
 			return n, err
@@ -137,7 +144,7 @@ func (f *File) ReadAt(p []byte, off int64) (int, error) {
 			return n, mapErr("read", f.name, err)
 		}
 	}
-	n, err := f.fs.rd.ReadAtEarly(context.Background(), in, p, off) // a range from one verified shard when it can (I-202)
+	n, err := f.fs.rd.ReadAtEarly(ctx, in, p, off) // a range from one verified shard when it can (I-202)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, mapErr("read", f.name, err)
 	}

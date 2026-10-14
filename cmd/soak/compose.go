@@ -563,3 +563,15 @@ func (e *composeEnv) Heal(ctx context.Context) error {
 	}
 	return first
 }
+
+// ForgetSecretKey wipes a node's own copy of the cluster key and restarts it (phase 24):
+// a container has no Secret Service, so the key is the keychain's fallback file under
+// the data dir (docs/19 §2); the restart drops the copy the node holds in memory.
+func (e *composeEnv) ForgetSecretKey(ctx context.Context, ref soak.NodeRef) error {
+	if err := e.compose(ctx, "exec", "-T", ref.Name, "sh", "-c", `rm -f "$TAILRAID_HOME"/data/keys/cluster-*.key`); err != nil {
+		return err
+	}
+	return e.Restart(ctx, []soak.NodeRef{ref})
+}
+
+var _ soak.SecretEnv = (*composeEnv)(nil)

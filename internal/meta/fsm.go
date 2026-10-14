@@ -199,6 +199,12 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.snapshotDelete(c.SnapshotDelete)
 	case OpSnapshotImport:
 		return a.snapshotImport(c.SnapshotImport)
+	case OpSecretKeyInit:
+		return Result{}, a.secretKeyInit(c.SecretKeyInit)
+	case OpSecretPut:
+		return Result{}, a.secretPut(c.SecretPut)
+	case OpSecretDelete:
+		return Result{}, a.secretDelete(c.SecretDelete)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -781,7 +787,9 @@ func (a *applier) setAttr(c *SetAttr) error {
 
 // --- commit --------------------------------------------------------------------
 
-func validPlacement(k, m uint8, p []NodeIdx) bool {
+// ValidPlacement reports whether p is a placement the FSM accepts for (k, m): k+m slots,
+// no target named twice (empty slots aside).
+func ValidPlacement(k, m uint8, p []NodeIdx) bool {
 	if k < 1 || int(k)+int(m) > ec.MaxShards || len(p) != int(k)+int(m) {
 		return false
 	}
@@ -871,7 +879,7 @@ func (a *applier) commit(c *Commit) error {
 			}
 			continue
 		}
-		if d.Size == 0 || uint64(d.Size) > cs || !validPlacement(d.K, d.M, d.Placement) || a.onMirror(d.Placement) {
+		if d.Size == 0 || uint64(d.Size) > cs || !ValidPlacement(d.K, d.M, d.Placement) || a.onMirror(d.Placement) {
 			return ErrBadCommand
 		}
 		if len(d.Sums) != 0 && len(d.Sums) != int(d.K) {
@@ -998,7 +1006,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	if !ok {
 		return ErrUnknownChunk
 	}
-	if !validPlacement(c.K, c.M, c.Placement) || a.onMirror(c.Placement) {
+	if !ValidPlacement(c.K, c.M, c.Placement) || a.onMirror(c.Placement) {
 		return ErrBadCommand
 	}
 	if c.Expect != nil && !slices.Equal(ch.Placement, c.Expect) {

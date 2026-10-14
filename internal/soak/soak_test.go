@@ -792,7 +792,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		if len(ph.Checks) == 0 {
 			t.Errorf("%s has no checks", ph.Name)
 		}
-		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "19 snapshots" || ph.Name == "21 search and media" { // the harness offers everything these phases can use
+		if ph.Name == "15 s3 bucket" || ph.Name == "16 web ui" || ph.Name == "19 snapshots" || ph.Name == "21 search and media" || ph.Name == "24 secrets" { // the harness offers everything these phases can use
 			for _, chk := range ph.Checks {
 				if chk.OK == nil {
 					t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
@@ -800,7 +800,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 21 {
+	if sum.Failed != 0 || len(sum.Phases) != 22 {
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0

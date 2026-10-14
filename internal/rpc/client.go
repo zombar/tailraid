@@ -527,6 +527,20 @@ func (c *Client) MemberList(ctx context.Context, addr string) ([]meta.Node, erro
 	return members, nil
 }
 
+// SecretKey fetches the cluster key from a member (GET /v1/secrets/key, docs/19 §3); the
+// caller checks its ID against the FSM's before using or keeping it (I-304).
+func (c *Client) SecretKey(ctx context.Context, addr string) ([]byte, error) {
+	body, err := c.Call(ctx, addr, http.MethodGet, "/v1/secrets/key", nil)
+	if err != nil {
+		return nil, err
+	}
+	var r SecretKeyReply
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("%w: bad key reply: %v", ErrBadRequest, err) //nolint:errorlint // transport
+	}
+	return r.Key, nil
+}
+
 // Health probes a node.
 func (c *Client) Health(ctx context.Context, addr string) (Health, error) {
 	ctx, cancel := bound(ctx, 0)

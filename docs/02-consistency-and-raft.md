@@ -363,6 +363,13 @@ it only while `MinCodec` is 10 (`meta.CodecRoms`, else 503 with the codec messag
 the leader refuses it with `ErrCodec` while a live member reads codec 9 or older; the
 snapshot frame is unchanged, since the flags byte has been stored whole since frame 4.
 
+Codec 11 is the secrets store (docs/19, I-307): ops 23–25 (`SecretKeyInit`,
+`SecretPut`, `SecretDelete`), refused with `ErrCodec` while a live member reads codec 10
+or older (`meta.CodecSecrets`), and snapshot frame 11, which adds the key ID and the
+sealed secrets after the snapshot catalogue. Codec 12 is reserved for sealed S3 buckets
+(10 §4.7): a codec is a promise to read every lower one, so the store, built first,
+took 11.
+
 **`SetShardSums`** (04 §4, 06 §4): the chunk must exist with `len(Sums) == K`
 hashes, else `ErrBadCommand`; a chunk that already carries sums keeps them when they are
 equal and refuses different ones (`ErrConflict`: two leaders cannot disagree about a pure

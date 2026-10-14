@@ -506,7 +506,11 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   puts a new one under the name, the new file surviving the close (I-225, the own
   cleanup of I-220 included); (h) two browser uploads of one name through two gateways, plain and
   with `If-None-Match: *` (I-226); (i) round (a) again while the leader is killed. After
-  the last round the FSM hashes agree. `soak.CopySpec`
+  the last round the FSM hashes agree. 24 secrets (docs/19 §7): a secret set through one node reads back through
+  every node, every node lists it with no value in the reply, a replace through another
+  node reads back through the first, a node whose keychain copy is wiped fetches the key,
+  the others read it with its setter killed, and a removal reaches every node
+  (I-303..I-307). `soak.CopySpec`
   carries the open mode (exclusive, the default, or replace) and
   which of the job's sessions copies it (`Conn`), and a result says when a create lost
   to an existing name (`Exists`); the handle races are `smbclient.Races`

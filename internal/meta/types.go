@@ -16,6 +16,7 @@ import (
 	"math"
 	"net"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -324,8 +325,12 @@ type State struct {
 	// their mirrors; a row's only effect on the pool is the sync hold of GCDelete.
 	Snaps    map[SnapID]*Snapshot
 	NextSnap SnapID
-	Applied  uint64
-	LastNow  int64 // monotonic FSM clock: max of every applied command's Now
+	// Secrets is the secrets store (docs/19 §4): sealed values by name, and the ID of
+	// the cluster key they are sealed under (zero: no key yet).
+	Secrets     map[string]*Secret
+	SecretKeyID KeyID
+	Applied     uint64
+	LastNow     int64 // monotonic FSM clock: max of every applied command's Now
 }
 
 // SnapID identifies a snapshot; allocated from State.NextSnap, never reused, never 0.
@@ -408,6 +413,7 @@ func NewState() *State {
 		Trash:    map[Ino]map[Ino]struct{}{},
 		Snaps:    map[SnapID]*Snapshot{},
 		NextSnap: 1,
+		Secrets:  map[string]*Secret{},
 	}
 }
 
@@ -469,19 +475,26 @@ func (s *State) lineage(ino Ino) lineage {
 // on the original. Inode.Chunks slices are shared because they are immutable.
 func (s *State) Clone() *State {
 	c := &State{
-		Vol:      s.Vol,
-		Meta:     s.Meta,
-		NextIno:  s.NextIno,
-		NextNode: s.NextNode,
-		Applied:  s.Applied,
-		LastNow:  s.LastNow,
-		Inodes:   make(map[Ino]*Inode, len(s.Inodes)),
-		Chunks:   make(map[Hash]*Chunk, len(s.Chunks)),
-		Nodes:    make(map[NodeIdx]*Node, len(s.Nodes)),
-		Tombs:    make(map[Hash]struct{}, len(s.Tombs)),
-		Trash:    make(map[Ino]map[Ino]struct{}, len(s.Trash)),
-		Snaps:    make(map[SnapID]*Snapshot, len(s.Snaps)),
-		NextSnap: s.NextSnap,
+		Vol:         s.Vol,
+		Meta:        s.Meta,
+		NextIno:     s.NextIno,
+		NextNode:    s.NextNode,
+		Applied:     s.Applied,
+		LastNow:     s.LastNow,
+		Inodes:      make(map[Ino]*Inode, len(s.Inodes)),
+		Chunks:      make(map[Hash]*Chunk, len(s.Chunks)),
+		Nodes:       make(map[NodeIdx]*Node, len(s.Nodes)),
+		Tombs:       make(map[Hash]struct{}, len(s.Tombs)),
+		Trash:       make(map[Ino]map[Ino]struct{}, len(s.Trash)),
+		Snaps:       make(map[SnapID]*Snapshot, len(s.Snaps)),
+		NextSnap:    s.NextSnap,
+		Secrets:     make(map[string]*Secret, len(s.Secrets)),
+		SecretKeyID: s.SecretKeyID,
+	}
+	for n, sec := range s.Secrets {
+		cp := *sec
+		cp.Cipher = slices.Clone(sec.Cipher)
+		c.Secrets[n] = &cp
 	}
 	for id, sn := range s.Snaps {
 		cp := *sn

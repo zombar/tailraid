@@ -433,7 +433,11 @@ func TestReader_Readahead_RandomReadCancelsUnjoinedPrefetch(t *testing.T) {
 	k := 2
 	rd.Prefetch(in, 0)
 	testharness.Eventually(t, func() bool { return int(g.entered.Load()) == vfs.ReadAhead*k }, "prefetches in flight")
-	rd.Prefetch(in, int64(9*cs)) // the client seeked: chunks 1..ReadAhead are no longer wanted
+	rd.Prefetch(in, int64(15*cs)) // a second stream (a player's tail probe) cancels nothing
+	if n := rd.ReadaheadCancelled(); n != 0 || rd.Prefetching() != vfs.ReadAhead {
+		t.Fatalf("a second stream cancelled %d prefetches, %d in flight", n, rd.Prefetching())
+	}
+	rd.Prefetch(in, int64(9*cs)) // the client seeked away from both: the older stream's chunks are no longer wanted
 	testharness.Eventually(t, func() bool { return rd.Prefetching() == 0 }, "cancelled prefetches gone while their GETs still hang")
 	if n := rd.ReadaheadCancelled(); n != uint64(vfs.ReadAhead) {
 		t.Fatalf("cancelled %d, want %d", n, vfs.ReadAhead)
@@ -535,7 +539,8 @@ func TestReader_Readahead_JoinedPrefetchSurvivesCancel(t *testing.T) {
 		errs <- err
 	}()
 	testharness.Eventually(t, func() bool { _, joined := rd.ReadaheadStats(); return joined == 1 }, "the client joined chunk 1's prefetch")
-	rd.Prefetch(in, int64(9*cs))
+	rd.Prefetch(in, int64(15*cs)) // a second stream: cancels nothing
+	rd.Prefetch(in, int64(9*cs))  // a seek away from both: the older stream's are cut
 	testharness.Eventually(t, func() bool { return rd.Prefetching() == 1 }, "only the joined prefetch remains")
 	if n := rd.ReadaheadCancelled(); n != uint64(vfs.ReadAhead-1) {
 		t.Fatalf("cancelled %d, want %d", n, vfs.ReadAhead-1)

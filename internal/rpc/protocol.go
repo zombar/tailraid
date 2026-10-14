@@ -188,6 +188,10 @@ type AdminOp struct {
 	// lists the items under Path missing a sidecar, at most Limit after Cursor
 	Query string `json:"query,omitempty"`
 	Limit int    `json:"limit,omitempty"`
+	// secret_set, secret_get, secret_ls, secret_rm (docs/19 §5): the secret's name (Name)
+	// and, for secret_set, its value, which no node logs (I-306); All with secret_rm
+	// removes every secret and the key ID
+	Value string `json:"value,omitempty"`
 }
 
 // IsPass reports an op the leader answers only once a pass over the volume is done
