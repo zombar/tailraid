@@ -2,6 +2,7 @@ package nfs
 
 import (
 	"context"
+	"github.com/willscott/go-nfs-client/nfs/rpc"
 	"io/fs"
 	"net"
 
@@ -49,6 +50,14 @@ type CachingHandler interface {
 
 	// fs.FileInfo needs to be sorted by Name(), nil in case of a cache-miss
 	DataForVerifier(path string, verifier uint64) []fs.FileInfo
+}
+
+// CredentialHandler is a Handler that serves each request's credential its own view
+// (tailraid, docs/21 §5): the connection asks it for the handler of every request before
+// dispatch, with the RPC credential the request carried (AUTH_SYS names the caller's
+// uid). A Handler that does not implement it serves every caller alike.
+type CredentialHandler interface {
+	WithCredential(cred rpc.Auth) Handler
 }
 
 // ListingPruner is the optional capability of a handler that hands out a listing after

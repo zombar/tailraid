@@ -57,7 +57,7 @@ func (c *conn) queryInfo(h header, body []byte) ([]byte, error) {
 	if of.pipe == nil {
 		release := of.share.reading()
 		var err error
-		st, err = of.share.fsys.Stat(of.p())
+		st, err = of.fs().Stat(of.p())
 		if err != nil {
 			release()
 			return errorResponse(h, statusFor(err, statusObjectNameNotFound)), nil
@@ -363,7 +363,7 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 		if in[0] != 0 {
 			// the delete happens at CLOSE, whose reply carries no failure: a backend
 			// that may refuse it is asked now, where the client reads the status
-			if err := canDelete(of.share.fsys, of.p(), of.created); err != nil {
+			if err := canDelete(of.fs(), of.p(), of.created); err != nil {
 				return errorResponse(h, statusFor(err, statusAccessDenied)), nil
 			}
 		}
@@ -383,7 +383,7 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 			return errorResponse(h, statusObjectNameNotFound), nil
 		}
 		from := of.p()
-		to, ok = renameTarget(of.share.fsys, to, of.ino)
+		to, ok = renameTarget(of.fs(), to, of.ino)
 		if !ok {
 			return errorResponse(h, statusObjectPathNotFound), nil // its folder does not exist (I-233)
 		}
@@ -443,7 +443,7 @@ func (c *conn) setInfo(h header, body []byte, msg []byte) ([]byte, error) {
 // 2.4.7); none of those three touches the driver. A driver without
 // MetadataSetter, or without a Stat that knows its times, keeps nothing.
 func (c *conn) setTimes(of *openFile, in []byte) error {
-	ms, ok := of.share.fsys.(filesystem.MetadataSetter)
+	ms, ok := of.fs().(filesystem.MetadataSetter)
 	if !ok {
 		return nil
 	}
@@ -459,7 +459,7 @@ func (c *conn) setTimes(of *openFile, in []byte) error {
 	if !setA && !setM {
 		return nil
 	}
-	st, err := of.share.fsys.Stat(of.p())
+	st, err := of.fs().Stat(of.p())
 	if err != nil {
 		return err
 	}
@@ -484,7 +484,7 @@ func (c *conn) sizeOf(of *openFile) (int64, error) {
 	if of.w != nil {
 		return of.w.Size(), nil
 	}
-	st, err := of.share.fsys.Stat(of.p())
+	st, err := of.fs().Stat(of.p())
 	if err != nil {
 		return 0, err
 	}
@@ -495,13 +495,13 @@ func (c *conn) truncate(of *openFile, size int64) error {
 	if of.w != nil {
 		return of.w.Truncate(size)
 	}
-	if t, ok := of.share.fsys.(filesystem.Truncater); ok {
+	if t, ok := of.fs().(filesystem.Truncater); ok {
 		return t.Truncate(of.p(), size)
 	}
 	// Neither capability: do it the only way left, which is to rewrite the
 	// file. It is O(size), and it is better than telling a client its copy
 	// failed.
-	data, err := of.share.fsys.ReadFile(of.p())
+	data, err := of.fs().ReadFile(of.p())
 	if err != nil {
 		return err
 	}
@@ -512,7 +512,7 @@ func (c *conn) truncate(of *openFile, size int64) error {
 		copy(grown, data)
 		data = grown
 	}
-	return of.share.fsys.WriteFile(of.p(), data, 0o644)
+	return of.fs().WriteFile(of.p(), data, 0o644)
 }
 
 // renameFor renames the file of a handle. With replace an existing destination is
@@ -520,7 +520,7 @@ func (c *conn) truncate(of *openFile, size int64) error {
 // it can (NoReplaceRenamer), else by a look first; the handle's own file under another
 // spelling of its name (a case-only rename) is no collision (I-224).
 func renameFor(of *openFile, from, to string, replace bool) error {
-	fsys := of.share.fsys
+	fsys := of.fs()
 	if replace {
 		return fsys.Rename(from, to)
 	}

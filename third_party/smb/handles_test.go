@@ -71,7 +71,7 @@ func opened(t *testing.T, fsys filesystem.Filesystem, path string, ro bool) (*co
 	t.Helper()
 	c := newConn(New(), nil)
 	sh := &share{name: "disk", fsys: fsys, ro: ro}
-	c.trees[1] = &treeConn{sh: sh, ro: ro}
+	c.trees[1] = &treeConn{sh: sh, ro: ro, fsys: sh.fsys}
 	st, err := fsys.Stat(path)
 	if err != nil {
 		t.Fatal(err)

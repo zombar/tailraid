@@ -84,9 +84,13 @@ func (c *conn) treeConnect(h header, body []byte, msg []byte) ([]byte, error) {
 		return errorResponse(h, statusAccessDenied), nil
 	}
 	ro := sh.readOnlyFor(user)
+	fsys := sh.fsys
+	if uf, ok := sh.fsys.(UserFilesystem); ok && fsys != nil {
+		fsys = uf.ForUser(user) // the account's own view (docs/21 §5)
+	}
 	c.nextTree++
 	tid := c.nextTree
-	c.trees[tid] = &treeConn{sh: sh, ro: ro}
+	c.trees[tid] = &treeConn{sh: sh, ro: ro, fsys: fsys}
 
 	access := accessAll
 	if ro {
@@ -109,5 +113,9 @@ func treeConnectResponse(h header, kind uint8, access uint32) []byte {
 
 // tree returns the share a message is addressed to, as connected.
 func (c *conn) tree(h header) *treeConn {
-	return c.trees[h.treeID]
+	tc := c.trees[h.treeID]
+	if tc != nil && tc.fsys == nil && tc.sh != nil {
+		tc.fsys = tc.sh.fsys // a tree made without its own view (the tests') serves the share's
+	}
+	return tc
 }

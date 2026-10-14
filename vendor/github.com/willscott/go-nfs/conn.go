@@ -180,7 +180,11 @@ func (c *conn) handle(ctx context.Context, w *response) error {
 		}
 		return c.err(ctx, w, refuse)
 	}
-	appError := handler(ctx, w, c.Server.Handler)
+	uh := c.Server.Handler
+	if ch, ok := uh.(CredentialHandler); ok {
+		uh = ch.WithCredential(w.req.Header.Cred) // the caller's own view (docs/21 §5)
+	}
+	appError := handler(ctx, w, uh)
 	if drainErr := w.drain(ctx); drainErr != nil {
 		return drainErr
 	}

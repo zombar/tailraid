@@ -2,7 +2,11 @@
 
 package smb
 
-import "slices"
+import (
+	"slices"
+
+	filesystem "github.com/go-filesystems/interface"
+)
 
 // Who may use a share, and for what.
 //
@@ -80,6 +84,7 @@ func (s *share) readOnlyFor(user string) bool {
 // answer to "may this write" belongs to the CONNECTION. Two people can hold
 // the same share at once with different answers.
 type treeConn struct {
-	sh *share
-	ro bool
+	sh   *share
+	ro   bool
+	fsys filesystem.Filesystem // the share's filesystem, or this account's view of it (UserFilesystem)
 }

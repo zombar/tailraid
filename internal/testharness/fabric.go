@@ -835,3 +835,25 @@ func FirstDiff(a, b []byte) int {
 
 // Seed returns a seeded RNG, logging the seed so a failure can be replayed with -seed.
 func Seed(t *testing.T) *rand.Rand { return testseed.Seed(t) }
+
+// Users makes kim the first admin and lee a plain user (docs/21): from here on the fabric
+// enforces grants, so every view of its filesystem needs an actor.
+func (f *Fabric) Users() (kim, lee meta.UserIdx) {
+	f.TB.Helper()
+	now := f.Clk.Now().UnixNano()
+	f.MustApply(meta.Command{Op: meta.OpInvite, InviteOp: &meta.InviteOp{Bootstrap: true, Invite: meta.Invite{Hash: meta.HashCode("aaaaaaaaaa"), Name: "kim", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	kim = meta.UserIdx(f.MustApply(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "kim", Code: "aaaaaaaaaa", Key: [32]byte{1}, Now: now}}).Ino)
+	f.MustApply(meta.Command{Op: meta.OpInvite, Actor: kim, InviteOp: &meta.InviteOp{Invite: meta.Invite{Hash: meta.HashCode("bbbbbbbbbb"), Name: "lee", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	lee = meta.UserIdx(f.MustApply(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "lee", Code: "bbbbbbbbbb", Key: [32]byte{2}, Now: now}}).Ino)
+	return kim, lee
+}
+
+// Grant gives user role on the folder at path, through admin; RoleNone clears it.
+func (f *Fabric) Grant(admin meta.UserIdx, path string, user meta.UserIdx, role meta.Role) {
+	f.TB.Helper()
+	in, err := f.FSM.Resolve(meta.SplitPath(path))
+	if err != nil {
+		f.TB.Fatal(err)
+	}
+	f.MustApply(meta.Command{Op: meta.OpGrant, Actor: admin, GrantOp: &meta.GrantOp{Ino: in.Ino, Subject: meta.Subject{Kind: meta.SubjectUser, Idx: uint16(user)}, Role: role, Now: f.Clk.Now().UnixNano()}})
+}
