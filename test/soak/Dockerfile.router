@@ -1,0 +1,7 @@
+# Router of the NAT rig (docker-compose.nat.yml): forwarding and one MASQUERADE rule on
+# the public interface, plain (a cone NAT) or --random-fully (symmetric).
+FROM alpine:3.20
+RUN apk add --no-cache iptables iproute2
+COPY router.sh /router.sh
+RUN chmod +x /router.sh
+ENTRYPOINT ["/router.sh"]

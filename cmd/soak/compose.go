@@ -47,13 +47,54 @@ type composeEnv struct {
 
 func newComposeEnv(dir, file string, n int) *composeEnv {
 	e := &composeEnv{dir: dir, file: file, http: &http.Client{Timeout: 90 * time.Second}}
+	if file == natFile {
+		e.nodes = natNodes()
+	}
 	for i := 1; i <= n; i++ {
 		e.nodes = append(e.nodes, containerNode(i))
-		e.Seeds = append(e.Seeds, e.nodes[i-1].ref.RPC)
+	}
+	for _, nd := range e.nodes {
+		e.Seeds = append(e.Seeds, nd.ref.RPC)
 	}
 	e.Caller = e
 	return e
 }
+
+// The NAT rig (docker-compose.nat.yml, docs/20 §10 phase 27): n1 and n5 public, n2
+// behind router A (cone) at 172.30.0.21, n3 behind router B (symmetric) at 172.30.0.22.
+const (
+	natFile         = "docker-compose.nat.yml"
+	natConeRouter   = "172.30.0.21"
+	natSymmetricRtr = "172.30.0.22"
+)
+
+func natNodes() []composeNode {
+	n2, n3 := containerNode(2), containerNode(3)
+	n2.ip, n3.ip = "172.31.1.12", "172.31.2.13"
+	n2.ref.RPC, n3.ref.RPC = n2.ip+":20481", n3.ip+":20481"
+	return []composeNode{containerNode(1), n2, n3, containerNode(5)}
+}
+
+// NATRoles names the rig's parts for phase 27; not a NAT rig otherwise.
+func (e *composeEnv) NATRoles() (soak.NATRoles, bool) {
+	if e.file != natFile {
+		return soak.NATRoles{}, false
+	}
+	roles := soak.NATRoles{ConeRouter: natConeRouter, SymmetricRouter: natSymmetricRtr}
+	for _, n := range e.nodes {
+		switch n.ref.Name {
+		case "n2":
+			roles.Cone = n.ref
+		case "n3":
+			roles.Symmetric = n.ref
+		default:
+			roles.Public = append(roles.Public, n.ref)
+		}
+	}
+	return roles, true
+}
+
+var _ soak.NATEnv = (*composeEnv)(nil)
 
 // containerNode is container n<i> as the compose files lay it out: 172.30.0.1<i> on the
 // network, its worker published on 2050<i>. The RPC label is the container's address
@@ -152,7 +193,7 @@ func nodeNumber(ref soak.NodeRef) int {
 }
 
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile, Mesh: e.file == multiFile}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile, Mesh: e.file != "docker-compose.single.yml"}
 }
 
 // multiFile is the compose file with phase 15's bucket, the s3 service (docs/10 §4).

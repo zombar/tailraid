@@ -770,7 +770,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	// (TestSoak_MeshPhasesSkipWithoutMesh).
 	var all []string
 	for _, ph := range soak.StandardPhases() {
-		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" && num != "25" && num != "26" {
+		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" && num != "25" && num != "26" && num != "27" {
 			all = append(all, num)
 		}
 	}

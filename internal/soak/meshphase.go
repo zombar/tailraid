@@ -47,6 +47,22 @@ type MeshEnv interface {
 	CutUDP(ctx context.Context, a, b NodeRef) error
 }
 
+// NATEnv is the NAT rig of phase 27 (docs/09 §6, test/soak/docker-compose.nat.yml): two
+// nodes on the public network, one behind a cone NAT and one behind a symmetric NAT,
+// each router's public address known to the driver.
+type NATEnv interface {
+	NATRoles() (NATRoles, bool)
+}
+
+// NATRoles are the parts of the NAT rig: the public nodes, the node behind the cone NAT
+// and the node behind the symmetric one, with their routers' public addresses.
+type NATRoles struct {
+	Public          []NodeRef
+	Cone, Symmetric NodeRef
+	ConeRouter      string
+	SymmetricRouter string
+}
+
 // The mesh phases' events in results.jsonl: the join round trip (attrs: the late node,
 // the members that showed its pending row, and the milliseconds to the pending row, the
 // join, the first handshake with every member and the log caught up), and the paths
@@ -516,20 +532,70 @@ func phaseMeshPaths(ctx context.Context, r *Run) error {
 		r.check("I-323", "a write through "+c.Name+" reads back on "+d.Name+" during the cut", werr == nil && slices.Equal(got, data), strings.TrimPrefix(errText(werr), "; "))
 	}
 
-	// (c) the cut lifted: direct again, no restart
+	// (c) the relay (docs/20 §6): with the cut in place the pair comes back through a
+	// member within RelayAfter of its fan-out, a write through one side reads back
+	// through the other, and the member counts what it carried
+	viaOf := func(from, to NodeRef) string {
+		rep, err := r.Env.Status(ctx, from)
+		if err != nil {
+			return ""
+		}
+		return peersOf(rep)[to.Name].Via
+	}
+	relayTook, relayed := r.pollUntil(ctx, 2*mesh.RelayAfter+40*time.Second, func() bool {
+		ab, _, ok1 := view(a, b)
+		ba, _, ok2 := view(b, a)
+		return ok1 && ok2 && ab == mesh.PathRelay.String() && ba == mesh.PathRelay.String()
+	})
+	r.check("I-328", fmt.Sprintf("the cut pair is relayed both ways (%s via %s, %s via %s)", a.Name, viaOf(a, b), b.Name, viaOf(b, a)), relayed && viaOf(a, b) != "" && viaOf(b, a) != "", "after "+relayTook.Round(time.Second).String())
+	if va, ok := r.Env.Volume(a); ok && relayed {
+		path := join(r.Root, "mesh", "through-the-relay.bin")
+		data := r.randomBytes(2*r.Profile.ChunkSize + 33)
+		var werr error
+		var got []byte
+		_, _ = r.pollUntil(ctx, 60*time.Second, func() bool {
+			werr = va.Mkdir(join(r.Root, "mesh"))
+			if werr == nil {
+				werr = va.WriteAt(path, 0, data)
+			}
+			return werr == nil
+		})
+		if werr == nil {
+			if vb, ok := r.Env.Volume(b); ok {
+				_, _ = r.pollUntil(ctx, 60*time.Second, func() bool {
+					got, _ = vb.ReadAll(path)
+					return len(got) == len(data)
+				})
+			}
+		}
+		r.check("I-328", "a write through "+a.Name+" reads back on "+b.Name+" over the relay", werr == nil && slices.Equal(got, data), strings.TrimPrefix(errText(werr), "; "))
+		carried := map[string]uint64{}
+		for _, n := range nodes {
+			if rep, err := r.Env.Status(ctx, n); err == nil && rep.Mesh != nil {
+				for pair, bytes := range rep.Mesh.Relayed {
+					if strings.HasPrefix(pair, a.Name+">") || strings.HasPrefix(pair, b.Name+">") {
+						carried[n.Name+": "+pair] = bytes
+					}
+				}
+			}
+		}
+		r.check("I-328", "a member counts the bytes it relayed for the pair", len(carried) > 0, fmt.Sprintf("%v", carried))
+	}
+
+	// (d) the cut lifted: direct again within the retry of the direct candidates
 	if err := r.Env.Heal(ctx); err != nil {
 		return err
 	}
 	u.done("heal")
 	r.event("heal", "UDP cut lifted")
-	backTook, back := r.pollUntil(ctx, 60*time.Second, func() bool {
+	backTook, back := r.pollUntil(ctx, mesh.RelayRetryDirect+30*time.Second, func() bool {
 		ab, _, ok1 := view(a, b)
 		ba, _, ok2 := view(b, a)
 		return ok1 && ok2 && direct(ab) && direct(ba)
 	})
-	r.check("I-323", "the pair is direct again within 30 s of the cut lifted", back && backTook <= 35*time.Second, "after "+backTook.Round(time.Second).String())
+	r.check("I-323, I-328", "the pair is direct again within the direct retry of the cut lifted", back, "after "+backTook.Round(time.Second).String())
 
-	// (d) a restart keeps the pinned endpoints and re-handshakes at once
+	// (e) a restart keeps the pinned endpoints and re-handshakes at once
 	endpoints := map[string]string{}
 	for _, n := range nodes {
 		if n.Name == b.Name {
@@ -565,5 +631,95 @@ func phaseMeshPaths(ctx context.Context, r *Run) error {
 		return good
 	})
 	r.check("I-323", "after a restart the others keep "+b.Name+"'s endpoint and re-handshake within 10 s", hsOK, strings.TrimSpace(strings.Join(why, "; ")+" after "+hsTook.Round(time.Millisecond).String()))
+	return nil
+}
+
+// --- 27 -------------------------------------------------------------------------------
+
+// phaseMeshNAT runs on the NAT rig (docs/09 §6, docs/20 §10): n2 behind a cone NAT
+// learns its reflexive endpoint from a public member and publishes it, reaches the
+// public members directly, and reaches n3, behind a symmetric NAT, through a member;
+// the port-mapping round waits for docs/20 §7.
+func phaseMeshNAT(ctx context.Context, r *Run) error {
+	ne, ok := r.Env.(NATEnv)
+	if !ok || !r.Env.Caps().Mesh {
+		r.skip("not the NAT rig (make soak-nat)")
+		return nil
+	}
+	roles, ok := ne.NATRoles()
+	if !ok || len(roles.Public) == 0 {
+		r.skip("the environment names no NAT roles")
+		return nil
+	}
+	public, cone, symmetric, coneRouter := roles.Public, roles.Cone, roles.Symmetric, roles.ConeRouter
+	// (a) the reflexive endpoint: the router's public address, learned from a member's
+	// /health and published with the row
+	var endpoints []string
+	pubTook, published := r.pollUntil(ctx, 2*time.Minute, func() bool {
+		rep, err := r.Env.Status(ctx, cone)
+		if err != nil || rep.Mesh == nil {
+			return false
+		}
+		endpoints = rep.Mesh.Endpoints
+		for _, e := range endpoints {
+			if strings.HasPrefix(e, coneRouter+":") {
+				return true
+			}
+		}
+		return false
+	})
+	r.check("I-322", cone.Name+" published the reflexive endpoint its router gives it", published, fmt.Sprintf("router %s, endpoints %v after %s", coneRouter, endpoints, pubTook.Round(time.Second)))
+	// (b) the cone side reaches every public member directly, both ways
+	for _, p := range public {
+		for _, pair := range [][2]NodeRef{{cone, p}, {p, cone}} {
+			var peer admin.MeshPeer
+			_, ok := r.pollUntil(ctx, 2*time.Minute, func() bool {
+				rep, err := r.Env.Status(ctx, pair[0])
+				if err != nil {
+					return false
+				}
+				peer = peersOf(rep)[pair[1].Name]
+				return direct(peer.Class)
+			})
+			r.check("I-323", pair[0].Name+" reaches "+pair[1].Name+" directly through the cone NAT", ok && peer.Via == "", fmt.Sprintf("%s %s via %q", peer.Class, peer.Endpoint, peer.Via))
+		}
+	}
+	// (c) the cone and the symmetric side reach each other through a member, and a write
+	// crosses
+	var cs, sc admin.MeshPeer
+	relTook, relayed := r.pollUntil(ctx, 3*time.Minute, func() bool {
+		rep1, err1 := r.Env.Status(ctx, cone)
+		rep2, err2 := r.Env.Status(ctx, symmetric)
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		cs, sc = peersOf(rep1)[symmetric.Name], peersOf(rep2)[cone.Name]
+		return cs.Class == mesh.PathRelay.String() && sc.Class == mesh.PathRelay.String()
+	})
+	r.check("I-328", cone.Name+" and "+symmetric.Name+" reach each other through a member", relayed && cs.Via != "" && sc.Via != "",
+		fmt.Sprintf("%s sees %s %s via %q, %s sees %s %s via %q, after %s", cone.Name, symmetric.Name, cs.Class, cs.Via, symmetric.Name, cone.Name, sc.Class, sc.Via, relTook.Round(time.Second)))
+	if vc, ok := r.Env.Volume(cone); ok && relayed {
+		path := join(r.Root, "nat", "across.bin")
+		data := r.randomBytes(2*r.Profile.ChunkSize + 11)
+		var werr error
+		var got []byte
+		_, _ = r.pollUntil(ctx, 60*time.Second, func() bool {
+			werr = vc.Mkdir(join(r.Root, "nat"))
+			if werr == nil {
+				werr = vc.WriteAt(path, 0, data)
+			}
+			return werr == nil
+		})
+		if werr == nil {
+			if vs, ok := r.Env.Volume(symmetric); ok {
+				_, _ = r.pollUntil(ctx, 60*time.Second, func() bool {
+					got, _ = vs.ReadAll(path)
+					return len(got) == len(data)
+				})
+			}
+		}
+		r.check("I-328", "a write through "+cone.Name+" reads back on "+symmetric.Name, werr == nil && slices.Equal(got, data), strings.TrimPrefix(errText(werr), "; "))
+	}
+	r.checkSkipped("I-330", "a mapped port makes the symmetric side's reach direct", "the port mapping of docs/20 §7 is not built yet")
 	return nil
 }

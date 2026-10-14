@@ -236,7 +236,7 @@ forwards at most `mesh.relay_rate` (20 MiB/s) and counts what it forwarded per p
 (`status.mesh.relayed_bytes`); a device on a relayed path retries its direct candidates
 every 30 s and moves back the moment one answers (I-328).
 
-**The HMAC** under the cluster key (docs/19 §3, the key every member fetches from
+**The HMAC** under the cluster key (docs/19 §3, made by the leader on its first tick and the key every member fetches from
 another) with a timestamp authenticates relay frames and path probes: a relay forwards
 nothing it cannot verify, so it is never an amplifier for a non-member, and a probe
 cannot be forged. A device that has not fetched the cluster key yet (a fresh joiner

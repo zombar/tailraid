@@ -59,11 +59,13 @@ stays in the node's config (15).
 
 ## 3. The cluster key (I-303, I-304, I-305)
 
-- **Made once.** `tailraid init` makes the key, keeps it in the keychain and proposes its
-  ID (op 23, `SecretKeyInit`, set only while `Meta.SecretKeyID` is empty). An existing
-  cluster has no key until the first `secret set`: that node makes one and proposes its
-  ID the same way. Of two nodes racing, one proposal wins; the loser drops its key and
-  fetches the winner's.
+- **Made once.** The leader makes the key on its first maintenance tick when the cluster
+  has none (the node that ran `tailraid init` leads first, so a cluster has its key from
+  its first minute, and the relay frames of docs/20 §6 are authenticated under it from
+  the start): it keeps the key in its keychain and proposes its ID (op 23,
+  `SecretKeyInit`, set only while `Meta.SecretKeyID` is empty). A `secret set` on a
+  cluster still without one makes it the same way. Of two nodes racing, one proposal
+  wins; the loser drops its key and fetches the winner's.
 - **Fetched on demand.** A node that needs the key and has none (a fresh `join`, a device
   after the upgrade, a reinstall) asks the members in turn, the leader first, with
   `GET /v1/secrets/key`: a member route (the member check, I-18) that answers only

@@ -9,8 +9,12 @@
 #   start, registered by `tailraid mirror add` from the driver), MIRRORS_EVERY
 # A file $TAILRAID_HOME/rejoin holding a code makes the next start reset the node's Raft
 # state and identity and join again by that code (phase 25).
+#   ROUTER (the NAT rig, docker-compose.nat.yml): the router's address on this node's
+#   network, made the default route, so the public network is reached through its NAT;
+#   the host's bridge stays on-link for the published worker ports
 set -eu
 mkdir -p "$TAILRAID_HOME"
+if [ -n "${ROUTER:-}" ]; then ip route replace default via "$ROUTER"; fi
 # one log format for the whole container stream: shell messages and CLI output become
 # JSON lines like the daemon's (already-JSON lines pass through)
 jsonlog() {

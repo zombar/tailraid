@@ -29,12 +29,12 @@ BIN := tailraid
 DOCS := README.md CLAUDE.md CHANGELOG.md docs/*.md docs/windows-checklist.md
 WEB_TEXT := internal/webui/src/*.ts internal/webui/src/app.css internal/webui/static/index.html docs/assets/lookdev/*.html
 YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml
-SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh scripts/vms/packer/setup/*.sh test/soak/entry.sh
+SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh scripts/vms/packer/setup/*.sh test/soak/entry.sh test/soak/router.sh
 
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
+.PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-nat soak-full fuzz lint fmt fmt-check vuln \
         release tag check invariants tidy vendor-check deadcode lint-go lint-cross clean help web web-check web-typecheck \
         spell docs-check actionlint yaml-check yamlfmt shell-check hooks \
         vms-setup vms-images vms-images-clean vms-up vms-round vms-rounds vms-down vms-destroy
@@ -95,6 +95,12 @@ soak-single: soak-binary
 	cd test/soak && docker compose -f docker-compose.single.yml up -d --build
 	go run ./cmd/soak --profile quick --topology single --out report-single.html --results results-single.jsonl; \
 	status=$$?; cd test/soak && docker compose -f docker-compose.single.yml exec -T n1 tailraid status; docker compose -f docker-compose.single.yml down -v >/dev/null; exit $$status
+
+## soak-nat: phase 27 on the NAT rig (two routers, a cone and a symmetric NAT; docs/20 §10)
+soak-nat: soak-binary
+	cd test/soak && docker compose -f docker-compose.nat.yml build && docker compose -f docker-compose.nat.yml up -d
+	go run ./cmd/soak --topology nat --phases 27 --out report-nat.html --results results-nat.jsonl; \
+	status=$$?; cd test/soak && docker compose -f docker-compose.nat.yml down -v >/dev/null; exit $$status
 
 ## soak-full: the long profile (~1 h)
 soak-full: soak-binary

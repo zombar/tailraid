@@ -28,7 +28,7 @@ func run() int {
 	out := flag.String("out", "report.html", "HTML report path")
 	results := flag.String("results", "results.jsonl", "results stream path")
 	dir := flag.String("compose-dir", "test/soak", "compose project directory")
-	topology := flag.String("topology", "multi", "multi (4 hosts × 2 disks plus a diskless voter) | single (one host, four disks)")
+	topology := flag.String("topology", "multi", "multi (4 hosts × 2 disks plus a diskless voter) | single (one host, four disks) | nat (two public nodes, one behind a cone NAT, one behind a symmetric NAT)")
 	nodes := flag.Int("nodes", 0, "number of nodes in the compose file (default: 4 for multi, 1 for single)")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "workload seed")
 	only := flag.String("phases", "", `comma-separated phase numbers to run ("15", "1,13"); default: all`)
@@ -59,11 +59,13 @@ func run() int {
 	case "multi":
 	case "single":
 		file, n = "docker-compose.single.yml", 1
+	case "nat":
+		file, n = natFile, 0
 	default:
 		fmt.Fprintln(os.Stderr, "unknown topology", *topology)
 		return 2
 	}
-	if *nodes > 0 {
+	if *nodes > 0 && file != natFile {
 		n = *nodes
 	}
 	env := newComposeEnv(*dir, file, n)

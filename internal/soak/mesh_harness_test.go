@@ -23,12 +23,12 @@ func TestSoak_MeshPhasesSkipWithoutMesh(t *testing.T) {
 	env := &harnessEnv{t: t, c: c}
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
-	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases("25", "26")}
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases("25", "26", "27")}
 	sum, err := run.Execute(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sum.Phases) != 2 || sum.Failed != 0 || !sum.Partial {
+	if len(sum.Phases) != 3 || sum.Failed != 0 || !sum.Partial {
 		t.Fatalf("summary: %d phases, %d failed, partial %v", len(sum.Phases), sum.Failed, sum.Partial)
 	}
 	for _, ph := range sum.Phases {
