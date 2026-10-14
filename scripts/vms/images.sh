@@ -2,11 +2,11 @@
 # images.sh build [mac|linux|win]... | clean — the golden images, built by Packer from
 # scripts/vms/packer/*.pkr.hcl (docs/vms.md). Built once; rebuilt when a template changes.
 #
-# mac and linux come from Cirrus Labs' Tart base images with the rig's SSH key and
-# Tailscale added (Tart keeps them under ~/.tart as tailraid-<os>-image). win is an
+# mac and linux come from Cirrus Labs' Tart base images with the rig's SSH key and the
+# NFS client added (Tart keeps them under ~/.tart as tailraid-<os>-image). win is an
 # unattended Windows 11 ARM64 install from the ISO in test/vms/iso/ (downloaded by hand
-# from Microsoft once), with the virtio network driver, OpenSSH and Tailscale fetched
-# here and handed to the installer on a second CD; the result lands in test/vms/images/.
+# from Microsoft once), with the virtio network driver and OpenSSH fetched here and
+# handed to the installer on a second CD; the result lands in test/vms/images/.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 PACKER_DIR="$RIG/packer"       # the templates
@@ -15,8 +15,6 @@ CACHE="$STATE/packer/cache"      # downloaded installers and the virtio ISO (sta
 VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/virtio-win.iso}
 OPENSSH_TAG=${OPENSSH_TAG:-10.0.0.0p2-Preview} # the ARM64 MSI's name carries the version, so the tag is pinned
 OPENSSH_URL=${OPENSSH_URL:-https://github.com/PowerShell/Win32-OpenSSH/releases/download/$OPENSSH_TAG/OpenSSH-ARM64-v${OPENSSH_TAG%%p*}.msi}
-TAILSCALE_MSI_VERSION=${TAILSCALE_MSI_VERSION:-1.104.1}
-TAILSCALE_MSI_URL="https://pkgs.tailscale.com/stable/tailscale-setup-$TAILSCALE_MSI_VERSION-arm64.msi"
 
 [ -f "$SSH_KEY.pub" ] || die "no $SSH_KEY.pub (run make vms-setup)"
 pubkey=$(cat "$SSH_KEY.pub")
@@ -38,14 +36,13 @@ build_win() {
   mkdir -p "$CACHE" "$BUILD"
   fetch "$VIRTIO_WIN_URL" "$CACHE/virtio-win.iso"
   fetch "$OPENSSH_URL" "$CACHE/OpenSSH-ARM64.msi"
-  fetch "$TAILSCALE_MSI_URL" "$CACHE/tailscale-setup-$TAILSCALE_MSI_VERSION-arm64.msi"
 
   # the unattend CD: the answer file at its root, the virtio-net driver for the
   # installer, the installers and the key for the first logon
   local cd="$BUILD/unattend"
   [ -d "$cd" ] && chmod -R u+w "$cd" # files copied off an ISO are read-only
   rm -rf "$cd" && mkdir -p "$cd/drivers"
-  cp "$PACKER_DIR/setup/firstlogon.ps1" "$CACHE/OpenSSH-ARM64.msi" "$CACHE"/tailscale-setup-*-arm64.msi "$cd/"
+  cp "$PACKER_DIR/setup/firstlogon.ps1" "$CACHE/OpenSSH-ARM64.msi" "$cd/"
   # the answer file's language must be one the ISO carries: en-GB media (Microsoft names
   # it in the file) gets en-GB, anything else the en-US the file is written with
   case "$(basename "$iso")" in

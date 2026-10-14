@@ -1,6 +1,6 @@
-# The Linux golden image: Cirrus Labs' Ubuntu for Tart, plus the rig's SSH key,
-# Tailscale, the NFS client and the disk directories. Instances are `tart clone`s of
-# tailraid-linux-image (scripts/vms/vm.sh); `tailscale up` runs per instance.
+# The Linux golden image: Cirrus Labs' Ubuntu for Tart, plus the rig's SSH key, the NFS
+# client and the disk directories. Instances are `tart clone`s of tailraid-linux-image
+# (scripts/vms/vm.sh).
 variable "ssh_public_key" { type = string }
 
 source "tart-cli" "linux" {

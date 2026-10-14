@@ -28,7 +28,7 @@ BIN := tailraid
 # Prose and markup the spell check and the docs script cover.
 DOCS := README.md CLAUDE.md CHANGELOG.md docs/*.md docs/windows-checklist.md
 WEB_TEXT := internal/webui/src/*.ts internal/webui/src/app.css internal/webui/static/index.html docs/assets/lookdev/*.html
-YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml scripts/vms/headscale/compose.yml
+YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml
 SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh scripts/vms/packer/setup/*.sh test/soak/entry.sh
 
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
@@ -110,7 +110,7 @@ vms-setup:
 vms-images:
 	scripts/vms/images.sh build $(VMS)
 
-## vms-up: headscale and the three guests up and registered (creates instances from the images on first use)
+## vms-up: the three guests up and named (creates instances from the images on first use)
 vms-up:
 	scripts/vms/rig.sh up
 
@@ -122,11 +122,11 @@ vms-round:
 vms-rounds:
 	scripts/vms/rounds.sh
 
-## vms-down: stop the guests and headscale (state kept: the next vms-up needs no registration)
+## vms-down: stop the guests (state kept)
 vms-down:
 	scripts/vms/rig.sh down
 
-## vms-destroy: delete the instances and headscale's state (the golden images stay; vms-images-clean removes them)
+## vms-destroy: delete the instances (the golden images stay; vms-images-clean removes them)
 vms-destroy:
 	scripts/vms/rig.sh destroy
 

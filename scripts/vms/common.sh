@@ -3,16 +3,17 @@
 #
 # The rig: one macOS and one Linux guest under Tart (on the host's vmnet NAT), one
 # Windows guest under QEMU with user-mode networking (it reaches the host and, through
-# it, the Tart guests; SSH comes in on a forwarded port), all registered with a throwaway
-# headscale in Docker on this Mac. Every guest is reached over SSH as `admin` with the
-# key in test/vms/, which holds nothing but state and is ignored by git as a whole.
+# it, the Tart guests; SSH and the mesh's UDP port come in on forwarded ports), forming a
+# mesh of their own by join code (docs/20): no control server. Every guest is reached
+# over SSH as `admin` with the key in test/vms/, which holds nothing but state and is
+# ignored by git as a whole.
 set -euo pipefail
 export LC_ALL=C
 
 VMS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 STATE="$VMS_ROOT/test/vms"      # ignored state: ssh key, images, run files, results, Packer's cache and builds
 # shellcheck disable=SC2034 # used by the scripts that source this file
-RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts, Packer templates, the headscale compose file
+RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts and Packer templates
 RUN="$STATE/run"                  # pid files, logs, qcow2 overlays of running instances
 IMAGES="$STATE/images"            # the Windows golden image (Tart keeps its own under ~/.tart)
 SSH_KEY="$STATE/id_ed25519"
@@ -51,26 +52,18 @@ wait_for() {
 # ---- addresses ---------------------------------------------------------------------------
 # The Tart guests sit on the host's vmnet NAT; macOS hands each vmnet consumer its own
 # /24 (192.168.64.0/24 to the first, .65 to the next, …), and the host is the .1 of each.
-# headscale is reached at that gateway, so its URL is derived from a running Tart guest
-# and then pinned in test/vms/run/headscale/server_url: a registered guest keeps dialling the
-# URL it was given. The Windows guest, behind QEMU's user-mode NAT, reaches the same
-# address through the host. The URL is https: Tailscale accepts a DERP relay over TLS
-# only, so headscale serves a certificate from the rig's own CA (headscale.sh), which
-# provisioning installs in every guest before `tailscale up`.
-HS_PORT=8443
+# The Windows guest, behind QEMU's user-mode NAT, reaches that address through the host,
+# and the host forwards the mesh's UDP port (MESH_PORT) to it (vm.sh), so the Windows
+# guest's config names <gateway>:MESH_PORT as its endpoint (docs/20 §5, checks/slate.ps1)
+# and the Tart guests reach it there.
+# shellcheck disable=SC2034 # used by vm.sh and round.sh, which source this file
+MESH_PORT=20483
 tart_gateway() {
   local ip
   for os in linux mac; do
     ip=$("$TART" ip "$(vm_name "$os")" 2>/dev/null || true)
     [ -n "$ip" ] && { echo "${ip%.*}.1"; return; }
   done
-}
-headscale_url() {
-  if [ -n "${HEADSCALE_URL:-}" ]; then echo "$HEADSCALE_URL"; return; fi
-  if [ -f "$RUN/headscale/server_url" ]; then cat "$RUN/headscale/server_url"; return; fi
-  local gw
-  gw=$(tart_gateway)
-  [ -n "$gw" ] && echo "https://$gw:$HS_PORT"
 }
 
 # vm_ip <os>: the guest's current address, or nothing when it is not up.

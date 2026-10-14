@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # round.sh <mac|linux|win> — one round of the three-VM rig (docs/vms.md): the named OS
-# runs `tailraid init`, the other two join by name, and the ten steps below exercise the
-# cluster through the real service managers and OS mounts. FULL=1 runs the long verify.
+# runs `tailraid init`, the other two join by its code, and the ten steps below exercise
+# the cluster through the real service managers and OS mounts. FULL=1 runs the long verify.
 #
 # Every step appends a line to test/vms/results/<run>/round-<first>.jsonl and the
 # summary goes to round-<first>.md; a failed step ends the round (teardown still runs).
@@ -20,7 +20,8 @@ if [ "$FIRST" != --live ] && [ "$FIRST" != --voters ]; then
 fi
 others=$(for os in $OSES; do [ "$os" = "$FIRST" ] || printf '%s ' "$os"; done)
 NONVOTER=$(echo "$others" | awk '{ print $NF }') # the last joiner joins without --voter
-TOKEN=vmtoken
+TOKEN=vmtokenvmtokenab # 16 base32 characters (docs/20 §4)
+CODE_FILE="$OUT/code-$FIRST" # the join code init printed, read by the joiners (steps run in subshells)
 failed=""
 # what `status` must show once every guest is in: n devices and n disks live, and the
 # automatic policy for n disks on n hosts (docs/14 §6: 2+1 for three, 1+1 for two)
@@ -42,8 +43,20 @@ guest_home() { case "$1" in mac) echo "/Users/admin" ;; linux) echo "/home/admin
 mount_path() { case "$1" in win) echo "T:" ;; *) echo "$(guest_home "$1")/TailRAID" ;; esac; }
 # tr <os> <args...>: a tailraid command in the guest
 tr_() { vm_ssh "$1" "tailraid ${*:2}" | tr -d '\r'; }
+# tr_root <os> <args...>: the commands docs/20 §9 runs as root: on macOS everything that
+# touches the root daemon, its home or the mount (init, join, install, uninstall, start,
+# stop, update, export, recover, reset, mount, umount), on Linux the join (CAP_NET_ADMIN
+# for its interface; `install` runs its own sudo). Windows sessions are elevated already.
+tr_root() {
+  case "$1" in
+    win) tr_ "$@" ;;
+    *) vm_ssh "$1" "sudo env \"PATH=\$PATH\" tailraid ${*:2}" | tr -d '\r' ;;
+  esac
+}
+# tr_mac_root <os> <args...>: tr_root on macOS, tr_ elsewhere
+tr_mac_root() { case "$1" in mac) tr_root "$@" ;; *) tr_ "$@" ;; esac; }
 # svc_restart <os>: through the service manager
-svc_restart() { tr_ "$1" stop && tr_ "$1" start; }
+svc_restart() { tr_mac_root "$1" stop && tr_mac_root "$1" start; }
 # status_json <os>: the node's status, or nothing while it is not ready (exit 1)
 status_json() { vm_ssh "$1" "tailraid status --json" 2>/dev/null | tr -d '\r'; }
 ready() { status_json "$1" >/dev/null; }
@@ -64,6 +77,23 @@ for n in sorted(json.load(sys.stdin)["nodes"], key=lambda n: n["idx"]):
     print(n["idx"], n["id"], n["kind"], n["state"], n["addr"], n["name"])'
 }
 node_id() { status_json "$1" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["node"])'; }
+# paths <os>: this guest's path class to every member, "<name>=<class>" per peer (docs/20 §5)
+paths() {
+  status_json "$1" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+m = r.get("mesh") or {}
+print(" ".join("%s=%s" % (p.get("name") or p["key"][:6], p["class"]) for p in m.get("peers", [])))'
+}
+# all_direct: every guest sees every other on a direct path (lan or wan), none or relay nowhere
+all_direct() {
+  local os p
+  for os in $OSES; do
+    p=$(paths "$os" 2>/dev/null) || return 1
+    [ -n "$p" ] || return 1
+    case " $p " in *"=none"*|*"=relay"*) return 1 ;; esac
+  done
+}
 # data <os> <op> <args...>: checks/data.* through the guest's mount
 data() {
   local os=$1; shift
@@ -95,7 +125,7 @@ mount_() { # <os>: mount, and on Windows only check that the mapping works (it i
     win)
       # shellcheck disable=SC2016 # PowerShell, expanded in the guest
       vm_ssh win 'for ($i = 0; $i -lt 6; $i++) { tailraid mount; if (Test-Path T:\) { break }; Start-Sleep -Seconds 5 }; if (-not (Test-Path T:\)) { throw "T: not mapped" }; Get-ChildItem T:\ | Out-Null; tailraid umount' | tr -d '\r' ;;
-    *) tr_ "$1" mount && vm_ssh "$1" "ls $(mount_path "$1") >/dev/null" ;;
+    *) tr_mac_root "$1" mount && vm_ssh "$1" "ls $(mount_path "$1") >/dev/null" ;;
   esac
 }
 
@@ -105,32 +135,48 @@ s1_binaries() { "$S/binaries.sh"; }
 s2_slate() {
   for os in $OSES; do
     case "$os" in
-      win) vm_run_script win "$C/slate.ps1" | tr -d '\r' ;;
+      # the Windows guest sits behind QEMU's NAT: its config names the host's forwarded
+      # port as its endpoint (common.sh), so the others reach it there
+      win) vm_run_script win "$C/slate.ps1" "$(tart_gateway):$MESH_PORT" | tr -d '\r' ;;
       *) vm_run_script "$os" "$C/slate.sh" "$os" ;;
     esac
   done
 }
 
 s3_init() {
-  tr_ "$FIRST" init --token "$TOKEN"
-  tr_ "$FIRST" install
+  tr_mac_root "$FIRST" init --token "$TOKEN"
+  tr_mac_root "$FIRST" install
   wait_ready "$FIRST" 90
   live_nodes "$FIRST"
   mount_ "$FIRST"
+  # the join code, read from the running node (docs/20 §4); the joiners take it from the file
+  local code
+  code=$(tr_ "$FIRST" token)
+  [ -n "$code" ] || { echo "no join code from $FIRST"; return 1; }
+  printf '%s\n' "$code" > "$CODE_FILE"
+  echo "join code from $FIRST: ${code:0:16}… ($(printf '%s' "$code" | wc -c | tr -d ' ') chars)"
 }
 
 s4_join() {
+  local code
+  code=$(cat "$CODE_FILE")
   for os in $others; do
-    # by name, through the tailnet (I-76). The last joiner is a non-voter until step 7b:
-    # a restarted voter the leader refuses just wins an election and fills its own
-    # table, so only a non-voter shows the fresh-follower defect step 6 is for
+    # by code, through the introduce and the tunnel (I-321). The last joiner is a
+    # non-voter until step 7b: a restarted voter the leader refuses just wins an election
+    # and fills its own table, so only a non-voter shows the fresh-follower defect step 6
+    # is for
     local voter=--voter
     [ "$os" = "$NONVOTER" ] && voter=""
-    tr_ "$os" join "tailraid-$FIRST" "$TOKEN" $voter
-    tr_ "$os" install
+    case "$os" in
+      win) tr_ win join "$code" $voter ;;
+      *) tr_root "$os" join "$code" $voter ;; # the join opens the interface (docs/20 §9)
+    esac
+    tr_mac_root "$os" install
     wait_ready "$os" 120
     mount_ "$os"
   done
+  wait_for 60 "every pair direct" all_direct
+  for os in $OSES; do echo "$os paths: $(paths "$os")"; done
 }
 
 # all_live <seconds>: every guest's own status shows EXPECT (devices and disks live, the
@@ -151,6 +197,7 @@ s5_membership() {
   local want rc=0
   all_live 120 || rc=1
   for os in $OSES; do echo "$os: $(live_nodes "$os")"; done
+  all_direct || { echo "a pair is not direct:"; for os in $OSES; do echo "$os paths: $(paths "$os")"; done; rc=1; }
   want=$(node_table "$FIRST")
   for os in $others; do
     [ "$(node_table "$os")" = "$want" ] || { echo "$os's node table differs from $FIRST's:"; node_table "$os"; echo "--"; echo "$want"; rc=1; }
@@ -293,7 +340,7 @@ s8b_update() {
   dev=$(tr_ "$FIRST" version)
   echo "latest release $tag; the guests run $dev"
   for os in $OSES; do
-    tr_ "$os" update --yes --restart --version "$tag" --allow-downgrade || return 1
+    tr_mac_root "$os" update --yes --restart --version "$tag" --allow-downgrade || return 1
     local v; v=$(tr_ "$os" version)
     [ "$v" = "tailraid $tag" ] || { echo "$os runs \"$v\" after the update, want $tag"; return 1; }
     if ! ready_or_log "$os" 45; then
@@ -306,7 +353,7 @@ s8b_update() {
     # the rollback runs the release's own code: a release whose --restart cannot find
     # the service after the swap (v0.4.2 on Linux) leaves the restored binary in place
     # but the old image running, so the rig restarts it and says so
-    tr_ "$os" update --rollback --restart || { echo "$os: the release's rollback --restart failed; restarting the restored binary"; svc_restart "$os" || return 1; }
+    tr_mac_root "$os" update --rollback --restart || { echo "$os: the release's rollback --restart failed; restarting the restored binary"; svc_restart "$os" || return 1; }
     v=$(tr_ "$os" version)
     [ "$v" = "$dev" ] || { echo "$os runs \"$v\" after the rollback, want $dev"; return 1; }
     ready_or_log "$os" 45 || return 1
@@ -328,12 +375,12 @@ s9_disk_and_recover() {
   [ "$(live_nodes "$FIRST" | cut -d' ' -f2)" = "$disks" ] || { echo "the added disk is not live"; return 1; }
   case "$FIRST" in
     win) tr_ win export "C:\\tailraid\\snap"; vm_ssh win 'Get-ChildItem -Recurse C:\tailraid\snap | Select-Object -ExpandProperty FullName' | tr -d '\r' ;;
-    *) tr_ "$FIRST" export "$home/tailraid-snap"; vm_ssh "$FIRST" "ls -R $home/tailraid-snap" ;;
+    *) tr_mac_root "$FIRST" export "$home/tailraid-snap"; vm_ssh "$FIRST" "sudo ls -R $home/tailraid-snap" ;;
   esac
   id=$(node_id "$FIRST")
-  tr_ "$FIRST" stop
-  tr_ "$FIRST" recover --voters "$id"
-  tr_ "$FIRST" start
+  tr_mac_root "$FIRST" stop
+  tr_mac_root "$FIRST" recover --voters "$id"
+  tr_mac_root "$FIRST" start
   wait_ready "$FIRST" 90
   live_nodes "$FIRST"
   # a one-voter cluster whose other two nodes still run: every file whose shards survive
@@ -351,7 +398,7 @@ s9_disk_and_recover() {
 collect_logs() {
   for os in $OSES; do
     case "$os" in
-      mac) vm_scp_from mac "/Users/admin/Library/Logs/tailraid/serve.log" "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
+      mac) vm_ssh mac "sudo cat /Library/Logs/tailraid/serve.log" > "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
       linux) vm_ssh linux "sudo journalctl -u tailraid --no-pager -n 3000" > "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
       win) vm_scp_from win "C:/ProgramData/tailraid/serve.log" "$OUT/serve-$FIRST-$os.log" 2>/dev/null || true ;;
     esac
@@ -364,8 +411,9 @@ s10_teardown() {
     case "$os" in
       win)
         # shellcheck disable=SC2016 # PowerShell, expanded in the guest
-        vm_ssh win 'tailraid umount 2>$null | Out-Null; tailraid uninstall; tailraid reset --yes --discard-dirty' | tr -d '\r' || true ;;
-      *) vm_ssh "$os" "tailraid umount >/dev/null 2>&1; tailraid uninstall; tailraid reset --yes --discard-dirty" || true ;;
+        vm_ssh win 'tailraid umount 2>$null | Out-Null; tailraid uninstall --forget-identity; tailraid reset --yes --discard-dirty' | tr -d '\r' || true ;;
+      mac) vm_ssh mac "sudo tailraid umount >/dev/null 2>&1; sudo tailraid uninstall --forget-identity; sudo tailraid reset --yes --discard-dirty" || true ;;
+      *) vm_ssh "$os" "tailraid umount >/dev/null 2>&1; tailraid uninstall --forget-identity; tailraid reset --yes --discard-dirty" || true ;;
     esac
   done
   echo "torn down"
@@ -379,7 +427,7 @@ log "round: FIRST=$FIRST, run $RUN_ID, results in $OUT"
 step "1 binaries" s1_binaries &&
 step "2 clean slate" s2_slate &&
 step "3 init on $FIRST" s3_init &&
-step "4 join by name" s4_join &&
+step "4 join by code" s4_join &&
 step "5 membership" s5_membership &&
 step "6 restart after join" s6_restart_after_join &&
 step "7 cross-OS data" s7_data &&
