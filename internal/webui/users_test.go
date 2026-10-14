@@ -515,3 +515,27 @@ func TestWebUI_AdminRoutes_ByRole(t *testing.T) {
 		t.Fatalf("the admin's purge: %d %s", code, body)
 	}
 }
+
+// An upload tells the user nothing about a name they may not write: a PUT with
+// If-None-Match over an existing file elsewhere is 403, not 412, and a PUT of a new name
+// there is 403 before any body is read.
+// Invariant: I-355
+func TestWebUI_Upload_RoleBeforeExistence(t *testing.T) {
+	u, _, lee := usersUI(t)
+	b := u.signIn(lee)
+	put := func(path string, hdr ...string) int {
+		args := append([]string{webui.HeaderUI, "1", "Content-Length", "5"}, hdr...)
+		resp := u.doWith(b, http.MethodPut, "/files"+path, strings.NewReader("hello"), args...)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := put("/other/f", "If-None-Match", "*"); code != 403 {
+		t.Errorf("an exclusive PUT over a file lee may not see: %d, want 403", code)
+	}
+	if code := put("/other/new"); code != 403 {
+		t.Errorf("a PUT of a new name where lee holds nothing: %d, want 403", code)
+	}
+	if code := put("/w/f", "If-None-Match", "*"); code != 412 {
+		t.Errorf("an exclusive PUT over lee's own file: %d, want 412", code)
+	}
+}

@@ -60,6 +60,14 @@ type CredentialHandler interface {
 	WithCredential(cred rpc.Auth) Handler
 }
 
+// RoleReporter is the optional capability of a filesystem that knows what the caller
+// holds on a path (tailraid, docs/21 §5): ACCESS answers the mask the role allows, so a
+// client learns before its WRITE that it may not, and NFS3ERR_ACCES where the caller may
+// not even look.
+type RoleReporter interface {
+	Role(path string) (read, write bool, err error)
+}
+
 // ListingPruner is the optional capability of a handler that hands out a listing after
 // its directory changed (tailraid, I-232): an entry Gone reports is left out of the
 // page, its cookie still counted, so a listing continued through a kept listing does not

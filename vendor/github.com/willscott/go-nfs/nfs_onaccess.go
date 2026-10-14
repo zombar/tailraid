@@ -34,6 +34,18 @@ func onAccess(ctx context.Context, w *response, userHandle Handler) error {
 	if !billy.CapabilityCheck(fs, billy.WriteCapability) {
 		mask = mask & (1 | 2 | 0x20)
 	}
+	if rr, ok := fs.(RoleReporter); ok {
+		read, write, err := rr.Role(fs.Join(path...))
+		if err != nil {
+			return &NFSStatusError{NFSStatusAccess, err}
+		}
+		if !write {
+			mask &= 1 | 2 | 0x20 // READ, LOOKUP, EXECUTE
+		}
+		if !read {
+			mask &= 2 | 0x20 // LOOKUP and EXECUTE alone: on the way to a role
+		}
+	}
 
 	if err := xdr.Write(writer, mask); err != nil {
 		return &NFSStatusError{NFSStatusServerFault, err}

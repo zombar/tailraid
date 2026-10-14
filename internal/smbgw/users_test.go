@@ -2,10 +2,15 @@ package smbgw_test
 
 import (
 	"bytes"
+	"errors"
+	"log/slog"
 	"os"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/cloudsoda/go-smb2"
+	filesystem "github.com/go-filesystems/interface"
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/smbgw"
@@ -106,4 +111,59 @@ func TestSMB_UnboundDenied(t *testing.T) {
 func statStatus(sh *smb2.Share, name string) uint32 {
 	_, err := sh.Stat(name)
 	return ntStatus(err)
+}
+
+// A Read-only account opens a file it may read as a read-only positional handle: reads
+// work, a WRITE and a size change are refused (STATUS_ACCESS_DENIED on the wire), and
+// the open itself records no refusal, so a Read-only user's every open does not fill
+// the audit log (docs/21 §5).
+// Invariant: I-352
+func TestSMB_ReadOnlyUserReads(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	kim, lee := f.Users()
+	var buf bytes.Buffer
+	a := smbgw.NewWith(f.FS(), f.FSM, bindMap(map[string]string{"smb:lee": "lee"})).WithLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	admin := f.FS().As(kim)
+	must(t, admin.MkdirAll("/r", 0o755))
+	fh, err := admin.OpenFile("/r/f", os.O_CREATE|os.O_RDWR, 0o644)
+	must(t, err)
+	_, err = fh.Write(testharness.Pattern(8192, 3))
+	must(t, err)
+	must(t, fh.Close())
+	f.Grant(kim, "/r", lee, meta.RoleRead)
+	leeFS, ok := a.ForUser("lee").(interface {
+		OpenFile(string) (filesystem.File, error)
+	})
+	if !ok {
+		t.Fatal("the user's filesystem opens no positional handles")
+	}
+	h, err := leeFS.OpenFile("/r/f")
+	if err != nil {
+		t.Fatalf("lee opens a file under /r: %v", err)
+	}
+	defer h.Close()
+	p := make([]byte, 100)
+	if n, err := h.ReadAt(p, 4000); err != nil || n != 100 || !bytes.Equal(p, testharness.Pattern(8192, 3)[4000:4100]) {
+		t.Fatalf("lee reads under /r: %d %v", n, err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("the open and the read logged a refusal:\n%s", buf.String())
+	}
+	w := h.(interface {
+		WriteAt([]byte, int64) (int, error)
+		Truncate(int64) error
+	})
+	if _, err := w.WriteAt([]byte("x"), 10); !errors.Is(err, syscall.EACCES) && !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("lee's write on a Read-only handle: %v, want EACCES", err)
+	}
+	if err := w.Truncate(10); !errors.Is(err, syscall.EACCES) && !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("lee's truncate on a Read-only handle: %v, want EACCES", err)
+	}
+	// one line a minute per kind (I-218): the write's, the truncate's suppressed behind it
+	if lines := strings.Split(strings.TrimSpace(buf.String()), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "write refused") {
+		t.Fatalf("the refused write and truncate logged:\n%s", buf.String())
+	}
+	if fi, err := admin.Stat("/r/f"); err != nil || fi.Size() != 8192 {
+		t.Fatalf("the refused writes changed the file: %v %v", fi, err)
+	}
 }

@@ -479,15 +479,20 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
 - **I-351** — The NFS gateway advertises `AuthFlavorUnix`, decodes the AUTH_SYS
   credential of every call, resolves the actor in `FromHandle` through the bindings and
   keys its duplicate request cache on the credential and the xid; the mode bits it
-  reports are the stored mode masked to 0500 for `Read` and 0700 above, and a SETATTR of
-  mode or owner is stored and never consulted.
+  reports are the stored mode masked to 0500 for `Read` and 0700 above, its ACCESS answer
+  is the mask the role allows (every bit under `Write`, READ, LOOKUP and EXECUTE under
+  `Read`, LOOKUP and EXECUTE on the way to a role, `NFS3ERR_ACCES` elsewhere), and a
+  SETATTR of mode or owner is stored and never consulted.
 - **I-352** — The SMB gateway binds each tree connect to the filesystem of the user its
   session account maps to; `tailraid` stays the mount account; an unbound account's
-  operations are `STATUS_ACCESS_DENIED` and its listing of the share is empty.
-- **I-353** — `vfs.FS.As(actor)` stamps the actor on every proposal, refuses open, stat
-  and list without `Read` on the local replica, filters listings as I-348 says, and keeps
-  the actor on each open file for its `Commit`; a `vfs.FS` with no actor is the `System`
-  writer and reaches `/.tailraid` only.
+  operations are `STATUS_ACCESS_DENIED` and its listing of the share is empty; an account
+  holding `Read` alone opens a file for reading and its WRITE and size changes are
+  `STATUS_ACCESS_DENIED`, with no refusal recorded for the open.
+- **I-353** — `vfs.FS.As(actor)` stamps the actor on every proposal, refuses open, stat,
+  readlink and list without `Read` on the local replica before it tells anything else of
+  the entry (`EEXIST`, `EISDIR`, `ELOOP`, a folded name), filters listings as I-348 says,
+  and keeps the actor on each open file for its `Commit`; a `vfs.FS` with no actor is the
+  `System` writer and reaches `/.tailraid` only.
 - **I-354** — `web login` proposes a session row (the token's SHA-256, the user, the
   minting key, an expiry `users.session` away; at most 16 per user) and prints a
   one-time five-minute code that carries the token; opening the link on any node's
@@ -547,11 +552,11 @@ stub in `test/invariants/` meanwhile.
 | I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths`, `TestAccess_SnapshotRestoreByRole` |
 | I-349 | `TestFSM_ActorEnforced_Table`, `TestFlusher_RefusedCommitDropsDirtyData`, `TestFlusher_PreUsersDirtyDataCommitsAsSystem`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
 | I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
-| I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
-| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied` |
-| I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
+| I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestNFS_AccessFollowsRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
+| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied`, `TestSMB_ReadOnlyUserReads` |
+| I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestVFS_As_RoleBeforeExistence`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
 | I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
-| I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_AdminRoutes_ByRole`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
+| I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_AdminRoutes_ByRole`, `TestWebUI_Upload_RoleBeforeExistence`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
 | I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |
 | I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |

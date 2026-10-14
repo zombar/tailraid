@@ -177,3 +177,30 @@ func lookupStatus(tgt *nfsc.Target, path string) int {
 	_, _, err := tgt.Lookup(path)
 	return wireStatus(err)
 }
+
+// ACCESS answers the mask the caller's role allows, so a client learns before its WRITE
+// what it may do: every bit under Write, READ, LOOKUP and EXECUTE under Read, LOOKUP and
+// EXECUTE alone on the way to a role, and NFS3ERR_ACCES where the caller may not look
+// (docs/21 §5).
+// Invariant: I-351
+func TestNFS_AccessFollowsRole(t *testing.T) {
+	g, _, _ := usersGateway(t)
+	lt := g.targetAs(502)
+	const all = 0x3f
+	for _, tc := range []struct {
+		path string
+		want uint32
+	}{
+		{"/w/f", all},
+		{"/r/f", 1 | 2 | 0x20},
+		{"/", 2 | 0x20},
+	} {
+		got, err := lt.Access(tc.path, all)
+		if err != nil || got != tc.want {
+			t.Errorf("access %s: %#x %v, want %#x", tc.path, got, err, tc.want)
+		}
+	}
+	if _, err := lt.Access("/other/f", all); wireStatus(err) != nfsc.NFS3ErrAcces {
+		t.Errorf("access elsewhere: %v, want NFS3ERR_ACCES", err)
+	}
+}
