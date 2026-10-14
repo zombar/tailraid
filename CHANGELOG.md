@@ -2,6 +2,29 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.8.1 (2026-10-14)
+
+### Changes
+
+- vfs, webui: a seek cuts the fetch nobody waits on; two readahead streams per file (I-314, I-203) ([bfe0a97](https://github.com/zombar/tailraid/commit/bfe0a97))
+- cluster, webui: one missed probe keeps a node live; thumbnails never pin the browser (I-313) ([c465235](https://github.com/zombar/tailraid/commit/c465235))
+- vfs: a soon retry of a flush reuses the shards it placed (I-312) ([218d632](https://github.com/zombar/tailraid/commit/218d632))
+- repair: a home move never names a target twice; failed moves shut the gate (I-311) ([b2bccde](https://github.com/zombar/tailraid/commit/b2bccde))
+- vfs: drop a finished prefetch from the readahead table (I-310) ([7475e2f](https://github.com/zombar/tailraid/commit/7475e2f))
+- secrets: the replicated encrypted store, the member key fetch, secret set|ls|rm (I-303..I-307) ([de51410](https://github.com/zombar/tailraid/commit/de51410))
+- go: tools.sum and actionlint.sum carry the keyring modules' sums ([2c551ed](https://github.com/zombar/tailraid/commit/2c551ed))
+- keychain: the device's keychain over go-keyring, 0600 file fallback (I-309) ([848cb09](https://github.com/zombar/tailraid/commit/848cb09))
+- webui: a show without a poster draws its first episode's frame ([1765eca](https://github.com/zombar/tailraid/commit/1765eca))
+- webui: thumbnails in two lanes, a plain nsfw blur, titles over folder covers, file details ([9972474](https://github.com/zombar/tailraid/commit/9972474))
+
+### Documentation
+
+- docs: one encrypted secrets store for the cluster (docs/19, I-303..I-309) ([9b91244](https://github.com/zombar/tailraid/commit/9b91244))
+
+### Tooling
+
+- tests: Windows has no permission bits and checks out CRLF ([7cae06a](https://github.com/zombar/tailraid/commit/7cae06a))
+
 ## v0.8.0 (2026-10-13)
 
 ### Changes
