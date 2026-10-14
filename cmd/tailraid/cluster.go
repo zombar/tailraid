@@ -111,7 +111,7 @@ func joinCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := giveBack(cfg.Node.DataDir, filepath.Dir(path)); err != nil { // a join under sudo (docs/20 §9)
+			if err := giveBack(ownedPaths(cfg, path)...); err != nil { // a join under sudo (docs/20 §9)
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "joined cluster %s as node %d (%s); %d members, policy %d+%d\nconfig: %s\n",

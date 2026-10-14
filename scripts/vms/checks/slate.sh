@@ -26,7 +26,8 @@ case "$os" in
     tailraid uninstall --forget-identity >/dev/null 2>&1
     tailraid reset --yes --discard-dirty >/dev/null 2>&1
     tailraid umount >/dev/null 2>&1
-    rm -rf "$cfgdir" "$HOME/tailraid-d1" "$HOME/tailraid-d2" "$HOME/TailRAID" "$HOME/tailraid-snap"
+    # a join under sudo leaves root-owned markers until its give-back ran; sudo clears them
+    sudo rm -rf "$cfgdir" "$HOME/tailraid-d1" "$HOME/tailraid-d2" "$HOME/TailRAID" "$HOME/tailraid-snap"
     sudo rm -f /etc/systemd/system/tailraid.service; sudo systemctl daemon-reload
     mkdir -p "$cfgdir" "$HOME/tailraid-d1" "$HOME/tailraid-d2"
     ;;

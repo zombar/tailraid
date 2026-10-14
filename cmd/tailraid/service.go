@@ -72,6 +72,9 @@ func giveBack(paths ...string) error {
 	if runtime.GOOS != "linux" {
 		return nil
 	}
+	if len(paths) == 0 {
+		return nil
+	}
 	uid, gid, ok := sudoIDs()
 	if !ok {
 		return nil
@@ -85,6 +88,22 @@ func giveBack(paths ...string) error {
 		}
 	}
 	return nil
+}
+
+// ownedPaths is everything an init or a join writes for the user: the data directory,
+// the config's directory, and the disk and mirror directories the config lists (a join
+// under sudo writes their markers and shard directories as root; the user's service
+// could not write there otherwise, I-324).
+func ownedPaths(cfg config.Config, cfgPath string) []string {
+	paths := make([]string, 0, 2+len(cfg.Node.Disks)+len(cfg.Node.Mirrors))
+	paths = append(paths, cfg.Node.DataDir, filepath.Dir(cfgPath))
+	for _, d := range cfg.Node.Disks {
+		paths = append(paths, d.Path)
+	}
+	for _, m := range cfg.Node.Mirrors {
+		paths = append(paths, m.Path)
+	}
+	return paths
 }
 
 // sudoIDs is the user behind a sudo; ok is false without sudo or when sudo was run by root.

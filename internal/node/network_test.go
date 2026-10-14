@@ -1,14 +1,19 @@
 package node
 
 import (
+	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/raft"
+
+	"github.com/zombar/tailraid/internal/clock"
 
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/mesh"
@@ -172,5 +177,63 @@ func TestSeenFrom_DirectOnly_Table(t *testing.T) {
 		if got := directEndpoint(tc.peers, k); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// serve listens only once the interface's address takes a bind: a probe that fails a
+// few times (Windows holds a fresh address tentative for a moment) is retried every
+// 200 ms, one that never succeeds fails after the wait with the last error, and a
+// cancelled context ends the wait.
+// Invariant: I-324
+func TestWaitBindable_Table(t *testing.T) {
+	addr := netip.MustParseAddr("100.64.0.2")
+	for _, tc := range []struct {
+		name    string
+		failFor int // probes that fail before one succeeds; -1: never succeeds
+		cancel  bool
+		wantErr bool
+		probes  int
+	}{
+		{"first try", 0, false, false, 1},
+		{"after three", 3, false, false, 4},
+		{"never", -1, false, true, 76}, // 15 s of 200 ms steps plus the first
+		{"cancelled", -1, true, true, 1},
+	} {
+		clk := clock.NewFake(time.Unix(1_800_000_000, 0))
+		ctx, cancel := context.WithCancel(context.Background())
+		n := 0
+		probe := func(a netip.Addr) error {
+			if a != addr {
+				t.Fatalf("%s: probed %s", tc.name, a)
+			}
+			n++
+			if tc.failFor >= 0 && n > tc.failFor {
+				return nil
+			}
+			if tc.cancel {
+				cancel()
+			}
+			return errors.New("bind: the requested address is not valid in its context")
+		}
+		done := make(chan error, 1)
+		go func() { done <- waitBindable(ctx, addr, probe, clk, 15*time.Second) }()
+		// the fake clock advances each pending timer as it appears
+		for {
+			select {
+			case err := <-done:
+				if (err != nil) != tc.wantErr || n != tc.probes {
+					t.Errorf("%s: err %v, %d probes, want err %v and %d", tc.name, err, n, tc.wantErr, tc.probes)
+				}
+				cancel()
+				goto next
+			default:
+			}
+			if clk.Pending() > 0 {
+				clk.Advance(200 * time.Millisecond)
+			} else {
+				time.Sleep(time.Millisecond) //nolint:forbidigo // yielding to the goroutine between timers
+			}
+		}
+	next:
 	}
 }

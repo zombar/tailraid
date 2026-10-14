@@ -4,8 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"testing"
+
+	"github.com/zombar/tailraid/internal/config"
 )
 
 // A command run under sudo hands its files back to the user on Linux and records that
@@ -35,5 +38,23 @@ func TestPrivilege_GiveBackAndSudoOwner(t *testing.T) {
 	t.Setenv("SUDO_UID", "0")
 	if got := sudoOwner(); got != "" {
 		t.Fatalf("sudo from root: %q", got)
+	}
+}
+
+// What a sudo init or join gives back: the data directory, the config's directory and
+// every disk and mirror directory the config lists, in that order; none twice.
+// Invariant: I-324
+func TestPrivilege_OwnedPaths(t *testing.T) {
+	var cfg config.Config
+	cfg.Node.DataDir = "/home/u/.config/tailraid/data"
+	cfg.Node.Disks = []config.Disk{{Path: "/home/u/tailraid-d1"}, {Path: "/mnt/big"}}
+	cfg.Node.Mirrors = []config.Mirror{{Path: "/mnt/archive"}}
+	got := ownedPaths(cfg, "/home/u/.config/tailraid/config.yaml")
+	want := []string{"/home/u/.config/tailraid/data", "/home/u/.config/tailraid", "/home/u/tailraid-d1", "/mnt/big", "/mnt/archive"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("owned paths %v, want %v", got, want)
+	}
+	if got := ownedPaths(config.Config{}, "/x/config.yaml"); !slices.Equal(got, []string{"", "/x"}) {
+		t.Fatalf("no disks: %v", got)
 	}
 }

@@ -316,7 +316,8 @@ OS, the CLI and the rigs).
   `join` run by hand needs the capability too, so it runs under `sudo`, writes into the
   invoking user's config home (`SUDO_USER`'s `~/.config/tailraid`, the one the user's
   unit names: root's own home only when nothing says who invoked it) and gives what it
-  wrote back to `SUDO_UID:SUDO_GID`; `init` needs no TUN.
+  wrote back to `SUDO_UID:SUDO_GID`, the disk and mirror directories included (their
+  markers and shard directories are root's otherwise); `init` needs no TUN.
 - **macOS.** A utun needs root, so `serve` runs as a LaunchDaemon
   (`/Library/LaunchDaemons/app.tailraid.serve.plist`, the `system` domain: it starts at
   boot, not at login) and `config.Home()` as root is `/Library/Application
@@ -453,7 +454,10 @@ round-trip table.
   `update` and by whatever opens the adapter (a `join` runs before any `install`) when
   absent or different, and one inbound firewall rule for the UDP port,
   both removed by `uninstall`; a `join` under sudo on Linux writes into the invoking
-  user's config home, the one that user's unit names; `init` creates no interface.
+  user's config home, the one that user's unit names, and gives the data, config, disk
+  and mirror directories back to that user; `serve` listens only once the interface's
+  address takes a bind (Windows holds a fresh address tentative for a moment); `init`
+  creates no interface.
 - **I-325** — `status` reports, for every device member, its path class, endpoint,
   handshake age and bytes each way, and the device's own address, interface, port and
   port-mapping state; `node ls` shows the path; the vitals' network counters are the
