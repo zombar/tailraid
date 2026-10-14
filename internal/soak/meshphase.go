@@ -12,6 +12,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/mesh"
+	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 )
 
@@ -52,6 +53,10 @@ type MeshEnv interface {
 // each router's public address known to the driver.
 type NATEnv interface {
 	NATRoles() (NATRoles, bool)
+	// SetPortMap turns the cone router's port-mapping responder on or off (docs/20 §7).
+	SetPortMap(ctx context.Context, on bool) error
+	// ResetPortMap is the cone router restarting: its mappings gone, its epoch over.
+	ResetPortMap(ctx context.Context) error
 }
 
 // NATRoles are the parts of the NAT rig: the public nodes, the node behind the cone NAT
@@ -720,6 +725,65 @@ func phaseMeshNAT(ctx context.Context, r *Run) error {
 		}
 		r.check("I-328", "a write through "+cone.Name+" reads back on "+symmetric.Name, werr == nil && slices.Equal(got, data), strings.TrimPrefix(errText(werr), "; "))
 	}
-	r.checkSkipped("I-330", "a mapped port makes the symmetric side's reach direct", "the port mapping of docs/20 §7 is not built yet")
+	// (d) the mapping: with the cone router answering PCP, n2 maps its port, publishes
+	// the external endpoint, the code it prints carries it, and the symmetric side
+	// reaches it directly through the mapped port; a router that lost its mappings
+	// makes n2 map again at its next check
+	u := r.undoer(ctx)
+	defer u.run()
+	u.add("portmap off", func(c context.Context) error { return ne.SetPortMap(c, false) })
+	if err := ne.SetPortMap(ctx, true); err != nil {
+		return err
+	}
+	var pm *portmap.Status
+	var external string
+	mapTook, mapped := r.pollUntil(ctx, portmap.RetryEvery+2*time.Minute, func() bool {
+		rep, err := r.Env.Status(ctx, cone)
+		if err != nil || rep.Mesh == nil || rep.Mesh.PortMap == nil {
+			return false
+		}
+		pm = rep.Mesh.PortMap
+		if pm.Protocol == "none" || !strings.HasPrefix(pm.External, coneRouter+":") {
+			return false
+		}
+		external = pm.External
+		return slices.Contains(rep.Mesh.Endpoints, external)
+	})
+	r.check("I-330", cone.Name+" holds a mapping of its port and publishes the external endpoint", mapped, fmt.Sprintf("%+v after %s", pm, mapTook.Round(time.Second)))
+	if mapped {
+		if me, ok := r.Env.(MeshEnv); ok {
+			codeText, err := me.JoinCode(ctx, cone)
+			var code mesh.JoinCode
+			if err == nil {
+				code, err = mesh.DecodeJoinCode(codeText)
+			}
+			r.check("I-330", "the join code printed on "+cone.Name+" carries the mapped endpoint", err == nil && slices.Contains(code.Endpoints, external), fmt.Sprintf("endpoints %v%s", code.Endpoints, errText(err)))
+		}
+		var sc2 admin.MeshPeer
+		directTook, direct := r.pollUntil(ctx, mesh.RelayRetryDirect+2*time.Minute, func() bool {
+			rep, err := r.Env.Status(ctx, symmetric)
+			if err != nil {
+				return false
+			}
+			sc2 = peersOf(rep)[cone.Name]
+			return direct(sc2.Class) && sc2.Via == "" && sc2.Endpoint == external
+		})
+		r.check("I-330, I-329", symmetric.Name+" reaches "+cone.Name+" directly through the mapped port", direct, fmt.Sprintf("%s %s via %q after %s", sc2.Class, sc2.Endpoint, sc2.Via, directTook.Round(time.Second)))
+		before := pm.Since
+		resetAt := time.Now()
+		if err := ne.ResetPortMap(ctx); err != nil {
+			return err
+		}
+		r.event("portmap reset", coneRouter)
+		againTook, again := r.pollUntil(ctx, portmap.CheckEvery+2*time.Minute, func() bool {
+			rep, err := r.Env.Status(ctx, cone)
+			if err != nil || rep.Mesh == nil || rep.Mesh.PortMap == nil || rep.Mesh.PortMap.Protocol == "none" {
+				return false
+			}
+			since, perr := time.ParseDuration(rep.Mesh.PortMap.Since)
+			return perr == nil && since < time.Since(resetAt) // a mapping younger than the reset
+		})
+		r.check("I-330", cone.Name+" maps again after its router lost the mapping", again, fmt.Sprintf("held %s before the reset, mapped again after %s", before, againTook.Round(time.Second)))
+	}
 	return nil
 }

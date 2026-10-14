@@ -1298,6 +1298,7 @@ func watchSelf(ctx context.Context, nw *network, cfg config.Config, node *cluste
 			if err := nw.mesh.Tick(); err != nil {
 				log.Warn("mesh path monitor", "err", err)
 			}
+			nw.tickPortMap(ctx)
 			nw.publishEndpoints(ctx, cfg, node, client, self, prober.SeenFroms(), time.Now())
 			if n, err := node.ExpirePending(ctx, time.Now()); err != nil {
 				log.Warn("pending joins not expired", "err", err)

@@ -24,6 +24,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/mesh"
+	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 )
@@ -42,17 +43,18 @@ var ErrNoAddress = errors.New("node: no mesh address in the config: run `tailrai
 
 // network is what serve and join open.
 type network struct {
-	addr   netip.Prefix // this device's address with its subnet's bits (the fake: /32)
-	key    mesh.PrivateKey
-	mesh   *mesh.Mesh // nil under the fake
-	ifname string
-	port   uint16
-	auth   *rpc.TableAuthorizer
-	fake   bool
-	log    *slog.Logger
-	mu     sync.Mutex
-	lastEP []string // the candidates last published
-	pubAt  time.Time
+	addr    netip.Prefix // this device's address with its subnet's bits (the fake: /32)
+	key     mesh.PrivateKey
+	mesh    *mesh.Mesh      // nil under the fake
+	portmap *portmap.Mapper // the gateway mapping of the port (docs/20 §7); nil when off or under the fake
+	ifname  string
+	port    uint16
+	auth    *rpc.TableAuthorizer
+	fake    bool
+	log     *slog.Logger
+	mu      sync.Mutex
+	lastEP  []string // the candidates last published
+	pubAt   time.Time
 }
 
 // pathOf is the prober's view of the mesh's path to a device row (docs/20 §8, I-327):
@@ -83,6 +85,11 @@ func (nw *network) Key() mesh.Key {
 
 // Close stops the device and its interface.
 func (nw *network) Close() {
+	if nw.portmap != nil { // the mapping is given back; a restart maps the same port again
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		nw.portmap.Close(ctx)
+		cancel()
+	}
 	if nw.mesh != nil {
 		nw.mesh.Close()
 	}
@@ -198,7 +205,28 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		return err
 	}
 	nw.log.Info("mesh up", "addr", nw.addr, "interface", ifname, "port", m.Port())
+	if cfg.MeshPortMap() {
+		nw.portmap = &portmap.Mapper{Port: m.Port(), Clock: clk, Log: nw.log}
+	}
 	return nil
+}
+
+// tickPortMap drives the gateway mapping (docs/20 §7, I-330).
+func (nw *network) tickPortMap(ctx context.Context) {
+	if nw.portmap != nil {
+		nw.portmap.Tick(ctx)
+	}
+}
+
+// external is the mapped endpoint, as a candidate, or "".
+func (nw *network) external() string {
+	if nw.portmap == nil {
+		return ""
+	}
+	if ep, ok := nw.portmap.External(); ok {
+		return ep.String()
+	}
+	return ""
 }
 
 // meshPeers turns member rows and pending rows into the device's peers (docs/20 §3,
@@ -279,7 +307,7 @@ func (nw *network) refreshPeers(node *cluster.Node) {
 // candidates are this device's endpoint candidates (docs/20 §5, I-322): its interface
 // addresses with the mesh port, mesh.endpoint, and the reflexive addresses members see,
 // deduplicated and at most meta.MaxEndpoints.
-func candidates(port uint16, configured string, seenFroms []string) []string {
+func candidates(port uint16, configured, external string, seenFroms []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(e string) {
@@ -290,6 +318,7 @@ func candidates(port uint16, configured string, seenFroms []string) []string {
 		out = append(out, e)
 	}
 	add(configured)
+	add(external) // the gateway's mapping (docs/20 §7)
 	local, _ := mesh.LocalEndpoints(port)
 	for _, ap := range local {
 		add(ap.String())
@@ -306,7 +335,7 @@ func (nw *network) publishEndpoints(ctx context.Context, cfg config.Config, node
 	if nw.mesh == nil {
 		return
 	}
-	cands := candidates(nw.port, cfg.Mesh.Endpoint, seenFroms)
+	cands := candidates(nw.port, cfg.Mesh.Endpoint, nw.external(), seenFroms)
 	nw.mu.Lock()
 	unchanged := slices.Equal(cands, nw.lastEP)
 	tooSoon := !nw.pubAt.IsZero() && now.Sub(nw.pubAt) < time.Minute
@@ -418,6 +447,10 @@ func (nw *network) report(node *cluster.Node, cfg config.Config, now time.Time) 
 		return rep
 	}
 	rep.RxBytes, rep.TxBytes = nw.mesh.Counters()
+	if nw.portmap != nil {
+		st := nw.portmap.Status()
+		rep.PortMap = &st
+	}
 	peers, err := nw.mesh.Peers()
 	if err != nil {
 		return rep
@@ -534,7 +567,7 @@ func PrepareInit(cfg config.Config, path, subnetFlag string, port int) (InitIden
 		return InitIdentity{}, cluster.Options{}, meta.Node{}, err
 	}
 	self.Addr, self.Key, self.MeshPort = addr.String(), meta.MeshKey(key.Public()), ident.Port
-	self.Endpoints = candidates(ident.Port, cfg.Mesh.Endpoint, nil)
+	self.Endpoints = candidates(ident.Port, cfg.Mesh.Endpoint, "", nil)
 	// init creates no interface (I-324): Raft listens on loopback for the bootstrap and
 	// the configuration records the mesh address serve will bind
 	opts.RaftAddr = "127.0.0.1:0"

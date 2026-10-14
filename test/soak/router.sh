@@ -18,4 +18,7 @@ case "${NAT_MODE:-cone}" in
   *) echo "NAT_MODE must be cone or symmetric" >&2; exit 2 ;;
 esac
 echo "router up: $NAT_MODE NAT on $pub"
-exec sleep infinity
+# the port-mapping responder (docs/20 §7): silent until /run/portmap.on exists, which
+# phase 27's mapping round creates; /run/portmap.reset makes it forget every mapping
+ext=$(ip -o -4 addr show dev "$pub" | awk '{ print $4 }' | cut -d/ -f1 | head -1)
+exec soak-client natpmp 0.0.0.0:5351 "$ext" /run/portmap.on /run/portmap.reset

@@ -251,17 +251,20 @@ home moves from the public path to the LAN within a minute and without a restart
 
 ## 7. Port mapping
 
-*Lands as its own PR, after the relay; the clients are lifted from tunnelmesh's
-`internal/portmap`.*
-
-On the node's tick the mesh probes the default gateway, PCP first and NAT-PMP next,
+On the node's tick the mesh probes the default gateway (the routing table on Linux,
+`route -n get default` on macOS, `route print` on Windows), PCP first and NAT-PMP next,
 asks it to map `mesh.port` for an hour, refreshes the mapping at half its lifetime,
 publishes `<external address>:<external port>` as a candidate (so it also lands in the
-join code this device prints), and releases the mapping on shutdown; a gateway that
-stops answering, or a changed interface list, restarts the probe. `status.mesh.portmap`
+join code this device prints), and releases the mapping on shutdown. Once a minute it
+asks the gateway's epoch: one that went back is a router that restarted and lost its
+mappings (RFC 6886 §3.6), and the device maps again at once; a gateway that stops
+answering drops the mapping and is probed again every minute. `status.mesh.portmap`
 says `pcp`, `natpmp` or `none` and the external endpoint; `mesh.portmap: false` turns it
 off (I-330). With it, a home node behind an ordinary router is reachable directly from
 anywhere, which is what makes the join code enough for a device joining from outside.
+The clients are written after tunnelmesh's `internal/portmap`; `internal/mesh/portmap`
+also holds the responder the tests and the NAT rig's routers run (`soak-client natpmp`),
+which turns every mapping into a DNAT rule there.
 
 ## 8. What the storage code does with the path
 
@@ -469,4 +472,4 @@ round-trip table.
 | I-327 | `TestProber_RankByClass_Determinism`, `TestReader_HedgeSkipsRelayedHolders_Table`, `TestFlusher_StragglerGrace_PerClass` |
 | I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need), `TestNAT_SymmetricToSymmetric_ThroughARelay`, `TestRelay_Codecs_Table`, `TestBind_RelayForwardRules`, `TestRelay_LeavesForADirectPath` |
 | I-329 | `TestRelay_Codecs_Table`, `TestBind_RelayForwardRules`, `TestRelay_LeavesForADirectPath`, `TestProbeTargets_Table`, `TestRepair_RelayedPathsDeferred`, `TestReader_Readahead_RelayedHolderOneChunk` |
-| I-330 | stub `TestStub_I_330` |
+| I-330 | `TestClients_MapRefreshRelease`, `TestMapper_Lifecycle`, `TestParseProcRoute_Table`, `TestCandidates_OrderDedupCap` |

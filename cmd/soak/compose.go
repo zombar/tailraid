@@ -94,6 +94,19 @@ func (e *composeEnv) NATRoles() (soak.NATRoles, bool) {
 	return roles, true
 }
 
+// SetPortMap creates or removes the file the cone router's responder answers behind
+// (test/soak/router.sh); ResetPortMap drops the reset file it empties itself on.
+func (e *composeEnv) SetPortMap(ctx context.Context, on bool) error {
+	if on {
+		return e.compose(ctx, "exec", "-T", "router-a", "touch", "/run/portmap.on")
+	}
+	return e.compose(ctx, "exec", "-T", "router-a", "rm", "-f", "/run/portmap.on")
+}
+
+func (e *composeEnv) ResetPortMap(ctx context.Context) error {
+	return e.compose(ctx, "exec", "-T", "router-a", "touch", "/run/portmap.reset")
+}
+
 var _ soak.NATEnv = (*composeEnv)(nil)
 
 // containerNode is container n<i> as the compose files lay it out: 172.30.0.1<i> on the

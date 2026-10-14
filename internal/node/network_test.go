@@ -66,9 +66,9 @@ func TestMeshPeers_FromRowsAndPending(t *testing.T) {
 // Invariant: I-322
 func TestCandidates_OrderDedupCap(t *testing.T) {
 	seen := []string{"203.0.113.9:20483", "203.0.113.9:20483", "198.51.100.1:1", "198.51.100.2:1", "198.51.100.3:1", "198.51.100.4:1", "198.51.100.5:1", "198.51.100.6:1", "198.51.100.7:1", "198.51.100.8:1"}
-	got := candidates(20483, "vps.example.com:20483", seen)
-	if got[0] != "vps.example.com:20483" {
-		t.Fatalf("the configured endpoint comes first: %v", got)
+	got := candidates(20483, "vps.example.com:20483", "203.0.113.9:20483", seen)
+	if got[0] != "vps.example.com:20483" || got[1] != "203.0.113.9:20483" {
+		t.Fatalf("the configured endpoint comes first, the gateway's mapping second (docs/20 §7): %v", got)
 	}
 	if len(got) > meta.MaxEndpoints {
 		t.Fatalf("%d candidates, at most %d", len(got), meta.MaxEndpoints)
@@ -83,7 +83,7 @@ func TestCandidates_OrderDedupCap(t *testing.T) {
 			t.Fatalf("loopback candidate %s", e)
 		}
 	}
-	none := candidates(20483, "", nil)
+	none := candidates(20483, "", "", nil)
 	for _, e := range none {
 		if _, err := netip.ParseAddrPort(e); err != nil {
 			t.Fatalf("a local candidate that is not an address: %s", e)

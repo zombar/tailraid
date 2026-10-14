@@ -11,6 +11,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
+	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
@@ -536,6 +537,7 @@ type MeshReport struct {
 	Peers     []MeshPeer `json:"peers,omitempty"`
 	// Relayed is what this device forwarded for others, bytes by "from>to" (docs/20 §6, I-328)
 	Relayed map[string]uint64 `json:"relayed_bytes,omitempty"`
+	PortMap *portmap.Status   `json:"portmap,omitempty"` // the gateway mapping of the mesh port (docs/20 §7, I-330)
 }
 
 // MeshPeer is one peer of the device.

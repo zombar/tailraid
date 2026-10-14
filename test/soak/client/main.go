@@ -27,11 +27,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
 	"path"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +44,7 @@ import (
 	"github.com/willscott/go-nfs-client/nfs/xdr"
 
 	"github.com/zombar/tailraid/internal/config"
+	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/smbgw"
 	"github.com/zombar/tailraid/internal/soak"
@@ -49,8 +52,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 6 && os.Args[1] == "natpmp" {
+		runResponder(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+		return
+	}
 	if len(os.Args) != 5 || os.Args[1] != "worker" {
-		fmt.Fprintln(os.Stderr, "usage: soak-client worker <listen> <nfs gateway host:port> <mesh interface>")
+		fmt.Fprintln(os.Stderr, "usage: soak-client worker <listen> <nfs gateway host:port> <mesh interface> | natpmp <listen> <external ip> <on file> <reset file>")
 		os.Exit(2)
 	}
 	// same log format as the nodes (TAILRAID_LOG_FORMAT / TAILRAID_LOG_LEVEL)
@@ -864,4 +871,41 @@ func (w *worker) smbRelease(rw http.ResponseWriter, r *http.Request) {
 	}
 	rw.Header().Set("Content-Type", "application/json")
 	_, _ = rw.Write([]byte("{}"))
+}
+
+// --- the NAT rig's port-mapping responder (phase 27, docs/20 §7) -----------------------
+
+// runResponder answers PCP and NAT-PMP on a router of the NAT rig, turning every mapping
+// into a DNAT rule on the router's public side (the real effect of a mapping), while the
+// on file exists; the reset file, when it appears, empties the table and the epoch (a
+// router that restarted) and is removed.
+func runResponder(listen, external, onFile, resetFile string) {
+	logger := config.Default().Logger().With("src", "portmap-responder")
+	ext, err := netip.ParseAddr(external)
+	if err != nil {
+		logger.Error("bad external address", "err", err)
+		os.Exit(2)
+	}
+	r := &portmap.Responder{External: ext, Log: logger, Apply: func(m portmap.Mapping, add bool) error {
+		op := "-D"
+		if add {
+			op = "-A"
+		}
+		return iptables("-t", "nat", op, "PREROUTING", "-d", ext.String(), "-p", "udp", "--dport", strconv.Itoa(int(m.External)), "-j", "DNAT", "--to-destination", net.JoinHostPort(m.Client.String(), strconv.Itoa(int(m.Internal))))
+	}}
+	if _, err := r.Listen(listen); err != nil {
+		logger.Error("responder listen", "err", err)
+		os.Exit(1)
+	}
+	logger.Info("portmap responder listening", "addr", listen, "external", external, "on", onFile, "reset", resetFile)
+	for {
+		_, err := os.Stat(onFile) //nolint:gosec // the rig's own flag files, named on the command line
+		r.SetOff(err != nil)
+		if _, err := os.Stat(resetFile); err == nil { //nolint:gosec // as above
+			r.Reset()
+			_ = os.Remove(resetFile) //nolint:gosec // as above
+			logger.Info("portmap responder reset: every mapping gone, the epoch over")
+		}
+		time.Sleep(time.Second) //nolint:forbidigo // a sidecar's poll
+	}
 }

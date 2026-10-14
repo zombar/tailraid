@@ -529,7 +529,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   live clusters observe only, the cut needs `--destructive`. 27 mesh nat, on
   `test/soak/docker-compose.nat.yml` (`make soak-nat`): n1 and n5 public, n2 behind a
   router container doing plain MASQUERADE (a cone NAT) and n3 behind one with
-  `--random-fully` (symmetric), the routers running the fake NAT-PMP/PCP responder when
+  `--random-fully` (symmetric), the routers running the fake NAT-PMP/PCP responder (`soak-client natpmp`, every mapping a DNAT rule) when
   asked; n2 learns its reflexive endpoint from n1 and publishes it, n2↔n1 is `direct`,
   n2↔n3 is relayed and a write on n2 places a shard on n3, with the responder on n2 gets
   a mapping, publishes the external endpoint, the code printed on n2 carries it and n3
