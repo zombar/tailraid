@@ -181,6 +181,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	client.SetDisks(node.DiskOf, disks.local)
 	node.SetForwarder(client)
 	prober := cluster.NewProber(node, client, clk)
+	prober.PathOf = nw.pathOf(node)                                                           // the class of the path to each device, for ranking (docs/20 §8)
 	store := newSecrets(node, prober, client, deviceKeychain(cfg.Node.DataDir), selfIdx, clk) // docs/19
 	// S3 nodes: the buckets whose credentials the store or this device's file holds (docs/10 §4.1, docs/19 §6)
 	s3file := cluster.KeysFromFile(cfg.Node.DataDir, func(err error) { log.Warn("s3 credentials file unreadable; keeping the last good keys", "err", err) })

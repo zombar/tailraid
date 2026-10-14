@@ -55,6 +55,21 @@ type network struct {
 	pubAt  time.Time
 }
 
+// pathOf is the prober's view of the mesh's path to a device row (docs/20 §8, I-327):
+// the fake has no mesh and every path is a LAN; a row without a key has no path.
+func (nw *network) pathOf(node *cluster.Node) func(meta.NodeIdx) meta.PathClass {
+	return func(idx meta.NodeIdx) meta.PathClass {
+		if nw.mesh == nil {
+			return meta.PathLAN
+		}
+		row, ok := node.FSM.Node(idx)
+		if !ok || row.Key == (meta.MeshKey{}) {
+			return meta.PathNone
+		}
+		return nw.mesh.Path(mesh.Key(row.Key))
+	}
+}
+
 // IP is the device's address.
 func (nw *network) IP() netip.Addr { return nw.addr.Addr() }
 

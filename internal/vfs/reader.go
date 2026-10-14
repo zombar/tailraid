@@ -583,14 +583,35 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 	}
 	// The first k slots are requested at once; a slot whose reply is late by the hedge
 	// delay (p95 of recent GETs) has the next slot in rank order requested alongside it,
-	// so one slow holder costs a shard's worth of extra traffic, not its timeout.
+	// so one slow holder costs a shard's worth of extra traffic, not its timeout. A
+	// relayed holder is somebody's egress: while k direct holders are still live it is
+	// not hedged to, and it serves only once a direct one failed (docs/20 §8, I-327).
 	out := make(chan res, len(order)) // every launched GET can deliver without a reader
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // the GETs still in flight once k shards are in (or on failure) stop here
-	next, pending := 0, 0
-	launch := func() {
-		slot := order[next]
-		next++
+	launched := make([]bool, len(order))
+	relayed := make([]bool, len(order))
+	direct := 0 // direct holders not yet failed
+	for i, slot := range order {
+		relayed[i] = r.peers.Class(c.Placement[slot]) == meta.PathRelay
+		if !relayed[i] {
+			direct++
+		}
+	}
+	pending := 0
+	// pick is the next holder to ask: the first unlaunched in rank order, skipping the
+	// relayed ones while k direct holders are live; -1 when none qualifies.
+	pick := func() int {
+		for i := range order {
+			if !launched[i] && (direct < k || !relayed[i]) {
+				return i
+			}
+		}
+		return -1
+	}
+	launch := func(i int) {
+		slot := order[i]
+		launched[i] = true
 		pending++
 		go func() {
 			start := time.Now()
@@ -598,8 +619,8 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 			out <- res{slot, b, err, time.Since(start)}
 		}()
 	}
-	for good+pending < k && next < len(order) {
-		launch()
+	for i := pick(); good+pending < k && i >= 0; i = pick() {
+		launch(i)
 	}
 	hedge := time.NewTimer(r.lat.hedgeDelay())
 	defer hedge.Stop()
@@ -607,6 +628,9 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 		select {
 		case x := <-out:
 			pending--
+			if x.err != nil && r.peers.Class(c.Placement[x.slot]) != meta.PathRelay {
+				direct--
+			}
 			switch {
 			case x.err != nil:
 				if errors.Is(x.err, chunk.ErrNotFound) || errors.Is(x.err, chunk.ErrCorrupt) {
@@ -628,12 +652,12 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 					call.publish(k, x.slot, x.b)
 				}
 			}
-			for good+pending < k && next < len(order) { // a failure is replaced at once
-				launch()
+			for i := pick(); good+pending < k && i >= 0; i = pick() { // a failure is replaced at once
+				launch(i)
 			}
 		case <-hedge.C:
-			if next < len(order) {
-				launch()
+			if i := pick(); i >= 0 {
+				launch(i)
 				hedge.Reset(r.lat.hedgeDelay())
 			}
 		case <-ctx.Done():

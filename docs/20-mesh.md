@@ -467,7 +467,7 @@ round-trip table.
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |
 | I-325 | `TestClassify_Table`, `TestLocalAddr_MeshFileThenConfig`; stub `TestStub_I_325` for `status` on a real interface |
 | I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`, `TestKeylessCheck` |
-| I-327 | stub `TestStub_I_327` |
+| I-327 | `TestProber_RankByClass_Determinism`, `TestReader_HedgeSkipsRelayedHolders_Table`, `TestFlusher_StragglerGrace_PerClass` |
 | I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need); stub `TestStub_I_328` |
 | I-329 | stub `TestStub_I_329` |
 | I-330 | stub `TestStub_I_330` |

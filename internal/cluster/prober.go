@@ -86,14 +86,15 @@ type Probe struct {
 	Free      int64
 	Applied   uint64
 	Version   string
-	Codec     uint8     // meta.CodecVersion the node reported (0 from a binary that predates the field)
-	Dev       bool      // /dev/* enabled on that node (docs/08)
-	Web       uint16    // the node's browser UI port, 0 when off (docs/13 §1)
-	SeenFrom  string    // the UDP endpoint that node sees for this one: a reflexive candidate (docs/20 §5)
-	FS        string    // filesystem holding the target's store (docs/14 §8)
-	DeadSince time.Time // zero while live
-	Down      bool      // MemberDown already emitted
-	Lost      bool      // MemberLost already emitted
+	Codec     uint8          // meta.CodecVersion the node reported (0 from a binary that predates the field)
+	Dev       bool           // /dev/* enabled on that node (docs/08)
+	Web       uint16         // the node's browser UI port, 0 when off (docs/13 §1)
+	SeenFrom  string         // the UDP endpoint that node sees for this one: a reflexive candidate (docs/20 §5)
+	FS        string         // filesystem holding the target's store (docs/14 §8)
+	DeadSince time.Time      // zero while live
+	Down      bool           // MemberDown already emitted
+	Lost      bool           // MemberLost already emitted
+	Class     meta.PathClass // the path to the node's host as of the snapshot (docs/20 §5)
 }
 
 // MirrorProbe is what the mirror's host last said of it (docs/16 §1). Online holds only
@@ -124,6 +125,9 @@ type Prober struct {
 	timeout time.Duration
 	// SelfHealth supplies this node's own health row (free bytes, version); optional.
 	SelfHealth func() rpc.Health
+	// PathOf reports the mesh's class of this device's path to a device row (docs/20
+	// §5); optional. Without it every path is a LAN: the in-process harness has no mesh.
+	PathOf func(idx meta.NodeIdx) meta.PathClass
 
 	mu      sync.Mutex
 	probes  map[meta.NodeIdx]*Probe
@@ -478,7 +482,31 @@ func (p *Prober) Snapshot() map[meta.NodeIdx]Probe {
 	for idx, pr := range p.probes {
 		out[idx] = *pr
 	}
+	p.mu.Unlock()
+	for idx := range out {
+		pr := out[idx]
+		pr.Class = p.Class(idx)
+		out[idx] = pr
+	}
+	p.mu.Lock()
 	return out
+}
+
+// Class is the path class to idx's host (docs/20 §8, I-327): a LAN for this host and
+// its own disks, a WAN for a bucket (there is no mesh path to it, only the internet),
+// and the mesh's word for every other device. Without a mesh every path is a LAN.
+func (p *Prober) Class(idx meta.NodeIdx) meta.PathClass {
+	host := p.hostOf(idx)
+	if host == p.Self() {
+		return meta.PathLAN
+	}
+	if nd, found := p.node.nodeByIdx(host); found && nd.Kind == meta.KindS3 {
+		return meta.PathWAN
+	}
+	if p.PathOf == nil {
+		return meta.PathLAN
+	}
+	return p.PathOf(host)
 }
 
 // IsLive reports whether a probe succeeded within LiveThreshold (self is always live).
@@ -599,29 +627,48 @@ func (p *Prober) Live() []meta.NodeIdx {
 	return out
 }
 
-// Rank orders self first, then by RTT ascending, unknown devices after those, S3 nodes last.
+// Rank orders nodes for reads (docs/03 §Rank, docs/20 §8, I-327): this host and its own
+// disks first (no network between us), then by the class of the path to the holder's
+// host and its RTT within the class, S3 nodes last (docs/10 §4.3). Placement never
+// depends on the path; only the order a reader asks holders in does.
 func (p *Prober) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	self := p.Self()
 	snap := p.Snapshot()
 	out := append([]meta.NodeIdx(nil), nodes...)
-	rtt := func(idx meta.NodeIdx) time.Duration {
-		if idx == self {
-			return -1
+	type key struct {
+		class int
+		rtt   time.Duration
+	}
+	keys := make(map[meta.NodeIdx]key, len(out))
+	for _, idx := range out {
+		if _, done := keys[idx]; done {
+			continue
 		}
-		if nd, found := p.node.nodeByIdx(idx); found {
+		k := key{class: int(p.Class(idx)), rtt: time.Hour}
+		if idx == self {
+			k = key{0, -1}
+		} else if nd, found := p.node.nodeByIdx(idx); found {
 			switch {
 			case nd.Kind == meta.KindDisk && nd.Host == self:
-				return -1 // this host's own disk: no network between us (docs/14 §9)
+				k = key{0, -1} // this host's own disk: no network between us (docs/14 §9)
 			case nd.Kind == meta.KindS3:
-				return 2 * time.Hour // after every device, even unprobed ones (docs/10 §4.3)
+				k = key{int(meta.PathNone) + 1, 2 * time.Hour} // after every device, even unprobed ones
 			}
 		}
-		if pr, ok := snap[idx]; ok && !pr.LastOK.IsZero() {
-			return pr.RTT
+		if k.class > 0 && k.class <= int(meta.PathNone) {
+			if pr, ok := snap[idx]; ok && !pr.LastOK.IsZero() {
+				k.rtt = pr.RTT
+			}
 		}
-		return time.Hour
+		keys[idx] = k
 	}
-	sort.SliceStable(out, func(i, j int) bool { return rtt(out[i]) < rtt(out[j]) })
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := keys[out[i]], keys[out[j]]
+		if a.class != b.class {
+			return a.class < b.class
+		}
+		return a.rtt < b.rtt
+	})
 	return out
 }
 

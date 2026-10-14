@@ -20,9 +20,6 @@ func TestStub_I_322(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md 
 // Invariant: I-325
 func TestStub_I_325(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §10") }
 
-// Invariant: I-327
-func TestStub_I_327(t *testing.T) { t.Skip("stub: the mesh; see docs/20-mesh.md §8") }
-
 // Invariant: I-328
 func TestStub_I_328(t *testing.T) { t.Skip("stub: the mesh relay; see docs/20-mesh.md §6") }
 

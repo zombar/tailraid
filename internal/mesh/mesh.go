@@ -18,6 +18,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 
 	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // The path monitor (docs/20 §5, I-323).
@@ -56,29 +57,17 @@ type Peer struct {
 	Candidates []netip.AddrPort
 }
 
-// PathClass is what the storage code ranks by (docs/20 §8).
-type PathClass int
+// PathClass is what the storage code ranks by (docs/20 §8); it is meta's, so the
+// storage packages read it without this package.
+type PathClass = meta.PathClass
 
 // The classes, best first.
 const (
-	PathLAN PathClass = iota + 1
-	PathWAN
-	PathRelay
-	PathNone
+	PathLAN   = meta.PathLAN
+	PathWAN   = meta.PathWAN
+	PathRelay = meta.PathRelay
+	PathNone  = meta.PathNone
 )
-
-func (c PathClass) String() string {
-	switch c {
-	case PathLAN:
-		return "lan"
-	case PathWAN:
-		return "wan"
-	case PathRelay:
-		return "relay"
-	default:
-		return "none"
-	}
-}
 
 // PeerStatus is a peer as the device sees it.
 type PeerStatus struct {
