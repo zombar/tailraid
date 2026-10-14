@@ -2,12 +2,15 @@
 // in two lanes. Thumbnails the node serves load FAST at a time; a video without a stored
 // thumbnail has a frame chosen by the browser, one GRABS at a time in a lane of its own, so
 // a slow or undecodable video never holds up the tiles behind it. A tile that leaves the
-// viewport before its turn waits again, and one a redraw removed is dropped.
+// viewport before its turn (in either lane) waits again, and one a redraw removed is
+// dropped. FAST stays below the browser's six connections to the node, so playback and
+// /api requests always find one, and a thumbnail that has not arrived by LOAD_TIMEOUT is
+// cancelled, freeing its slot and its connection.
 
 import { fileURL, putThumb, thumbURL, type Entry, type Src } from "./api.ts";
 import { ext, join, session } from "./util.ts";
 
-const FAST = 6;
+const FAST = 4;
 const GRABS = 1;
 const WIDTH = 320;
 /** RECIPE is the frame choice below; the node keys a grabbed frame by it (webui.FrameRecipe, I-216). */
@@ -18,6 +21,8 @@ const POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
 const MIN_LUMA = 28;
 const MIN_SPREAD = 14;
 const PROBE = 64;
+/** LOAD_TIMEOUT bounds one thumbnail or folder tile request. */
+const LOAD_TIMEOUT = 20_000;
 /** FRAME_TIMEOUT bounds one video's frame choice. */
 const FRAME_TIMEOUT = 15_000;
 /** NO_FRAME are containers a browser does not decode: no frame is attempted, the tile keeps its icon. */
@@ -87,17 +92,14 @@ export type Thumbable = Pick<Entry, "ino" | "version" | "thumb">;
 
 /** lazy schedules img to show the thumbnail of path once it is near the viewport; onMiss replaces it with the generic icon. A "dir" is a folder whose cover is not known yet. */
 export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Src, kind: "image" | "video" | "audio" | "dir", onMiss: () => void): void {
-  const show = (src: string) =>
-    new Promise<void>((resolve) => {
-      img.onload = () => resolve();
-      img.onerror = () => {
-        onMiss();
-        resolve();
-      };
-      img.src = src;
-    });
   const miss = () => {
     if (img.isConnected) onMiss();
+  };
+  const show = async (url: string): Promise<void> => {
+    const src = await load(url);
+    if (!src) return miss();
+    if (!img.isConnected) return URL.revokeObjectURL(src);
+    return showBlob(img, src, onMiss);
   };
   const tag = kind === "video" ? `${e.version}.f${RECIPE}` : undefined; // a cached frame of another recipe is not reused
   const job = async (): Promise<void> => {
@@ -106,39 +108,73 @@ export function lazy(img: HTMLImageElement, e: Thumbable, path: string, root: Sr
     if (!img.isConnected) return; // a redraw replaced the tile
     if (kind === "dir" && root === undefined) {
       const r = await folder(path);
-      if (r.src) {
-        img.addEventListener("load", () => URL.revokeObjectURL(r.src!), { once: true });
-        return show(r.src);
-      }
+      if (r.src) return showBlob(img, r.src, onMiss);
       if (!r.grab) return miss();
       const g = r.grab;
       // the folder's art is a video nobody framed: frame it in the grab lane, then ask again
       grabs.push(async () => {
         if (!img.isConnected) return;
+        if (!near(img)) return wait(); // scrolled away while queued: framed when it is back
         if (!(await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false }))) return miss();
         const again = await folder(path);
-        if (again.src) {
-          img.addEventListener("load", () => URL.revokeObjectURL(again.src!), { once: true });
-          await show(again.src);
-        } else miss();
+        if (again.src) await showBlob(img, again.src, onMiss);
+        else miss();
       });
       return;
     }
     if (e.thumb || kind !== "video" || root !== undefined) return show(thumbURL(path, root, tag));
     grabs.push(async () => {
       if (!img.isConnected) return;
+      if (!near(img)) return wait();
       if (await grab(path, e)) await show(thumbURL(path, undefined, tag));
       else miss();
     });
   };
   const p: Pending = { img, job, queued: false };
-  if (observer) {
+  const wait = () => {
+    if (!observer) return;
+    p.queued = false;
     pending.set(img, p);
     observer.observe(img);
-  } else {
+  };
+  if (observer) wait();
+  else {
     p.queued = true;
     fast.push(job);
   }
+}
+
+/** near reports whether img is within the observer's margin of the viewport. */
+function near(img: HTMLImageElement): boolean {
+  const r = img.getBoundingClientRect();
+  return r.bottom >= -200 && r.top <= window.innerHeight + 200;
+}
+
+/** load fetches a thumbnail as an object URL, or nothing on a miss, an error or LOAD_TIMEOUT. */
+async function load(url: string): Promise<string | undefined> {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(LOAD_TIMEOUT) });
+    if (!r.ok) return undefined;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return undefined;
+  }
+}
+
+/** showBlob sets img to an object URL and settles once it decoded or failed, revoking the URL. */
+function showBlob(img: HTMLImageElement, src: string, onMiss: () => void): Promise<void> {
+  return new Promise<void>((resolve) => {
+    img.onload = () => {
+      URL.revokeObjectURL(src);
+      resolve();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(src);
+      onMiss();
+      resolve();
+    };
+    img.src = src;
+  });
 }
 
 /** Grab is the video a folder without art names for the page to frame (webui.Grab). */
@@ -150,7 +186,8 @@ interface Grab {
 
 /** folder fetches a folder's tile as an object URL. A folder whose art would be a video nobody framed yet answers 404 naming it: the caller frames that video in the grab lane, which settles the folder, and asks once more (docs/13 §5, I-275). */
 async function folder(path: string): Promise<{ src?: string; grab?: Grab }> {
-  const r = await fetch(thumbURL(path));
+  const r = await fetch(thumbURL(path), { signal: AbortSignal.timeout(LOAD_TIMEOUT) }).catch(() => undefined);
+  if (!r) return {};
   if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
   if (r.status !== 404) return {};
   const miss = (await r.json().catch(() => ({}))) as { grab?: Grab };

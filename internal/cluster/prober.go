@@ -16,8 +16,13 @@ import (
 
 // Liveness constants (docs/05 §timings).
 const (
-	ProbeInterval  = 5 * time.Second
-	LiveThreshold  = 15 * time.Second
+	ProbeInterval = 5 * time.Second
+	ProbeTimeout  = 3 * time.Second
+	// LiveThreshold outlasts one missed probe (I-313): a tick starts ProbeInterval after
+	// the previous one's slowest probe, so good replies around one miss can be
+	// 2 × (ProbeInterval + ProbeTimeout) + ProbeTimeout = 19 s apart; two misses are not
+	// covered. A dead node is excluded sooner by its suspect mark (I-170).
+	LiveThreshold  = 2*(ProbeInterval+ProbeTimeout) + ProbeTimeout + 6*time.Second
 	StaleThreshold = 30 * time.Second
 	FillAfter      = 10 * time.Minute
 	EvictAfter     = 7 * 24 * time.Hour
@@ -136,7 +141,7 @@ var _ meta.Peers = (*Prober)(nil)
 // NewProber wires a prober for node. client may be nil in single-node setups.
 func NewProber(node *Node, client HealthClient, clk clock.Clock) *Prober {
 	return &Prober{
-		node: node, client: client, clk: clk, timeout: 3 * time.Second, probes: map[meta.NodeIdx]*Probe{}, s3Tried: map[meta.NodeIdx]time.Time{}, mirrors: map[meta.NodeIdx]*MirrorProbe{}, events: make(chan Event, 64),
+		node: node, client: client, clk: clk, timeout: ProbeTimeout, probes: map[meta.NodeIdx]*Probe{}, s3Tried: map[meta.NodeIdx]time.Time{}, mirrors: map[meta.NodeIdx]*MirrorProbe{}, events: make(chan Event, 64),
 		fillAfter: FillAfter, evictAfter: EvictAfter,
 	}
 }

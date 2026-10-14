@@ -107,21 +107,22 @@ What the user sees:
 | Parameter | Default | Meaning |
 |---|---|---|
 | probe interval | 5 s | all-to-all `GET /health` |
-| live threshold | 15 s | a node is *live* if a probe succeeded within this window |
+| probe timeout | 3 s | a probe without a reply by then is a miss |
+| live threshold | 25 s | a node is *live* if a probe succeeded within this window: one missed probe never makes it dead (I-313) |
 | `Stale` threshold | 30 s | gateway with no leader contact → metadata mutations `EROFS` |
 | `fill_after` | 10 min | leader waits this long after a node goes dead before re-placing its slots (laptop sleep); `0` slots have no hold-down |
 | `evict_after` | 7 d | `MemberLost` event; `status` marks the node `lost` and its warning names the `node remove --force` command |
 | Raft heartbeat / election / lease / commit | 2 s / 2 s / 1 s / 50 ms | — |
 | GC grace | 10 min | see 06 |
 
-A laptop that sleeps for 5 minutes: dead after 15 s (excluded from placement for new
+A laptop that sleeps for 5 minutes: dead after 25 s (excluded from placement for new
 chunks), no repair before 10 min, `MemberUp` on return, no data moves. A laptop away for a
 week: slots re-placed after 10 min, `MemberLost` at 7 d; its now-unplaced shards are swept
 by its own `Sweep` once it has returned, is `Healthy`, and has applied the log past the
 re-placements (06 §3).
 
-**Suspect marks.** The window between a node dying and the prober noticing is 15–23 s
-(a probe every 5 s, dead after 15 s), during which every chunk written would wait on it
+**Suspect marks.** The window between a node dying and the prober noticing is 25–33 s
+(a probe every 5 s, dead after 25 s), during which every chunk written would wait on it
 for up to `PutDeadline`. A gateway therefore marks a node *suspect* the moment a shard RPC
 to it fails at the transport level (dial refused or timed out, response-header timeout,
 the call's own deadline) or a PUT to it outlasts the straggler grace (docs/04 §4 step 9):
@@ -194,6 +195,13 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
   waiting with `EIO`, records E-134 and never enters the cache; `ReadAt`, `ReadChunk` and
   `BaseReader` never return early and are what the flusher, repair, scrub and the pins
   worker use; `status` counts the ranges served early.
+- **I-313** — One missed probe never makes a node dead: `LiveThreshold` (25 s) exceeds
+  the longest gap between good replies around a single miss, 2 × (`ProbeInterval` +
+  `ProbeTimeout`) + `ProbeTimeout` = 19 s (a tick starts `ProbeInterval` after the
+  previous tick's slowest probe); two consecutive misses do. A node that really fails is
+  excluded sooner by its suspect mark (I-170). (At 15 s, every probe slowed past its
+  timeout by a congested link took the node out for a few seconds, and reads through it
+  failed.)
 - **I-170** — A node whose shard RPC failed at the transport level, or whose PUT outlasted
   the straggler grace, is excluded from `Live()` (with its disks) until the first probe
   that succeeds after the mark; an HTTP-status reply or a request the gateway itself
@@ -231,4 +239,5 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
 | I-262 | `TestClient_CancelledGet_DrainsAShortRest` |
 | I-263 | `TestNotSentLowWater_OnTheBulkSockets` |
 | I-246 | `TestServer_BusySlots_AnswerBusy_NotSuspect` |
+| I-313 | `TestProber_OneMissedProbeKeepsLive` |
 | I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |

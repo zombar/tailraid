@@ -63,7 +63,7 @@ reconstruction; WAL mirroring to a peer before ack (noted as a later option).
 | **gateway** | The NFS or SMB (and later S3) front end running on a device; any device is a gateway for its own user. |
 | **mirror** | A disk given to snapshots (docs/16): `Kind=mirror`, attached to a device, never a placement target, often offline; an independent, self-describing, differential copy of every snapshot it captured. |
 | **diskless host** | A device with no disks: a member, voter if configured, and gateway whose reads and writes go to other hosts' disks (docs/14 §9). |
-| **live** | A node that answered `/health` within the last 15 s (probed every 5 s). Not stored in Raft. |
+| **live** | A node that answered `/health` within the last 25 s (probed every 5 s, docs/05 §6). Not stored in Raft. |
 | **WAL** | Per-inode write-ahead log on the gateway's disk that makes NFS `FILE_SYNC` honest before the chunk is flushed to the cluster. |
 
 ## Architecture

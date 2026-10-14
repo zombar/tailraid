@@ -1160,7 +1160,7 @@ function versionsPanel(path, onChange) {
   const body = h("div", { class: "body" });
   const panel2 = h("details", { class: "panel" }, summary, body);
   let loaded = false;
-  const load = async () => {
+  const load2 = async () => {
     clear(body);
     body.append(h("div", { class: "small dim" }, "loading\u2026"));
     try {
@@ -1202,7 +1202,7 @@ function versionsPanel(path, onChange) {
       const r = await revert(path, s.id);
       toast(`reverted to ${s.name}` + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${s.mirror}` : ""), "ok");
       onChange();
-      void load();
+      void load2();
     } catch (e) {
       toast("revert: " + errText(e), "bad");
     }
@@ -1240,7 +1240,7 @@ function versionsPanel(path, onChange) {
     }
   };
   panel2.addEventListener("toggle", () => {
-    if (panel2.open && !loaded) void load();
+    if (panel2.open && !loaded) void load2();
   });
   return panel2;
 }
@@ -1475,7 +1475,7 @@ function render5(path, expected) {
     more.textContent = `Load ${Math.min(PAGE, total - loaded)} more`;
     more.hidden = loaded >= total;
   };
-  const load = async () => {
+  const load2 = async () => {
     if (fetching) return;
     fetching = true;
     more.disabled = true;
@@ -1511,10 +1511,10 @@ function render5(path, expected) {
       more.disabled = false;
     }
   };
-  more.addEventListener("click", () => void load());
-  retry.addEventListener("click", () => void load());
+  more.addEventListener("click", () => void load2());
+  retry.addEventListener("click", () => void load2());
   panel2.addEventListener("toggle", () => {
-    if (panel2.open && loaded === 0 && !fetching) void load();
+    if (panel2.open && loaded === 0 && !fetching) void load2();
   });
   return {
     el: panel2,
@@ -2464,7 +2464,7 @@ var Selection = class {
 };
 
 // internal/webui/src/thumbs.ts
-var FAST = 6;
+var FAST = 4;
 var GRABS = 1;
 var WIDTH = 320;
 var RECIPE = 2;
@@ -2472,6 +2472,7 @@ var POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
 var MIN_LUMA = 28;
 var MIN_SPREAD = 14;
 var PROBE = 64;
+var LOAD_TIMEOUT = 2e4;
 var FRAME_TIMEOUT = 15e3;
 var NO_FRAME = /* @__PURE__ */ new Set(["avi", "wmv", "mpg", "mpeg", "flv", "vob", "rm", "rmvb", "divx", "asf"]);
 var Lane = class {
@@ -2521,16 +2522,14 @@ var observer = typeof IntersectionObserver === "undefined" ? null : new Intersec
   { rootMargin: "200px" }
 );
 function lazy(img, e, path, root, kind2, onMiss) {
-  const show = (src2) => new Promise((resolve) => {
-    img.onload = () => resolve();
-    img.onerror = () => {
-      onMiss();
-      resolve();
-    };
-    img.src = src2;
-  });
   const miss = () => {
     if (img.isConnected) onMiss();
+  };
+  const show = async (url) => {
+    const src2 = await load(url);
+    if (!src2) return miss();
+    if (!img.isConnected) return URL.revokeObjectURL(src2);
+    return showBlob(img, src2, onMiss);
   };
   const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
   const job = async () => {
@@ -2539,41 +2538,70 @@ function lazy(img, e, path, root, kind2, onMiss) {
     if (!img.isConnected) return;
     if (kind2 === "dir" && root === void 0) {
       const r = await folder(path);
-      if (r.src) {
-        img.addEventListener("load", () => URL.revokeObjectURL(r.src), { once: true });
-        return show(r.src);
-      }
+      if (r.src) return showBlob(img, r.src, onMiss);
       if (!r.grab) return miss();
       const g = r.grab;
       grabs.push(async () => {
         if (!img.isConnected) return;
+        if (!near(img)) return wait2();
         if (!await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return miss();
         const again = await folder(path);
-        if (again.src) {
-          img.addEventListener("load", () => URL.revokeObjectURL(again.src), { once: true });
-          await show(again.src);
-        } else miss();
+        if (again.src) await showBlob(img, again.src, onMiss);
+        else miss();
       });
       return;
     }
     if (e.thumb || kind2 !== "video" || root !== void 0) return show(thumbURL(path, root, tag));
     grabs.push(async () => {
       if (!img.isConnected) return;
+      if (!near(img)) return wait2();
       if (await grab(path, e)) await show(thumbURL(path, void 0, tag));
       else miss();
     });
   };
   const p = { img, job, queued: false };
-  if (observer) {
+  const wait2 = () => {
+    if (!observer) return;
+    p.queued = false;
     pending2.set(img, p);
     observer.observe(img);
-  } else {
+  };
+  if (observer) wait2();
+  else {
     p.queued = true;
     fast.push(job);
   }
 }
+function near(img) {
+  const r = img.getBoundingClientRect();
+  return r.bottom >= -200 && r.top <= window.innerHeight + 200;
+}
+async function load(url) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(LOAD_TIMEOUT) });
+    if (!r.ok) return void 0;
+    return URL.createObjectURL(await r.blob());
+  } catch {
+    return void 0;
+  }
+}
+function showBlob(img, src2, onMiss) {
+  return new Promise((resolve) => {
+    img.onload = () => {
+      URL.revokeObjectURL(src2);
+      resolve();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(src2);
+      onMiss();
+      resolve();
+    };
+    img.src = src2;
+  });
+}
 async function folder(path) {
-  const r = await fetch(thumbURL(path));
+  const r = await fetch(thumbURL(path), { signal: AbortSignal.timeout(LOAD_TIMEOUT) }).catch(() => void 0);
+  if (!r) return {};
   if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
   if (r.status !== 404) return {};
   const miss = await r.json().catch(() => ({}));
@@ -4012,7 +4040,7 @@ function librarySection(lib) {
     clear(grid);
     for (const it of items) grid.append(posterTile(it));
   };
-  const load = () => {
+  const load2 = () => {
     media(lib.path, sort).then(
       (res) => {
         items = res.items;
@@ -4030,7 +4058,7 @@ function librarySection(lib) {
       sort = sorts[i];
       session.set(`tr.media.sort.${lib.path}`, sort);
       buttons.forEach((o, j) => o.setAttribute("aria-pressed", String(i === j)));
-      load();
+      load2();
     })
   );
   fold2.append(h("div", { class: "toolbar" }, h("span", { class: "seg", role: "group", "aria-label": "sort" }, ...buttons)), grid);
@@ -4038,7 +4066,7 @@ function librarySection(lib) {
   const open = () => {
     if (fold2.open && !loaded) {
       loaded = true;
-      load();
+      load2();
     }
   };
   fold2.addEventListener("toggle", () => {

@@ -80,7 +80,7 @@ same key under the node's prefix.
 | **Corrupt** | Header magic/length/hash does not match the payload (bit flip, truncation, zero-fill) — detected only on read or scrub, never assumed. |
 | **Quarantined** | A Corrupt file has been moved by the store to `quarantine/<key>.<unixnano>` (`ErrCorrupt` returned; `shards_corrupt` metric incremented; never served). The chunk's placement still names this slot until repair. |
 | **Repaired** | The repairer wrote a new Durable shard for the same key (same node, or a different node via Relocated). |
-| **Unreachable** | The holding node is not live (no successful `/health` within 15 s, or HEAD-bucket failing for an S3 node). Shard bytes may be intact; the reader skips the slot. |
+| **Unreachable** | The holding node is not live (no successful `/health` within 25 s, or HEAD-bucket failing for an S3 node). Shard bytes may be intact; the reader skips the slot. |
 | **Reachable** | The holding node is live. Default. |
 | **Relocated** | `SetPlacement` moved the slot to another node. The old copy, if still on disk, is now an Orphan shard (placement no longer names its node) and will be Swept. |
 | **Deleted** | Removed by an explicit `DELETE /v1/shards/{key}` (GC after Collected, or repairer after a committed relocation/migration). |
