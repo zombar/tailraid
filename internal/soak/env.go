@@ -52,6 +52,9 @@ type Caps struct {
 	// register, snapshot and unplug (AddMirror, SetMirrorOnline, docs/16). A live
 	// cluster has none: a snapshot taken there could never be removed (I-183).
 	Mirror bool
+	// Users: the environment is a UsersEnv whose cluster is disposable, so phases 28–31
+	// may make users on it (docs/21 §10); a live cluster's users are its own, so it skips.
+	Users bool
 }
 
 // Env is one target cluster (docs/09 §6).

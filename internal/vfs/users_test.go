@@ -55,6 +55,17 @@ func TestVFS_As_StampsActor(t *testing.T) {
 		t.Fatalf("the node's own writer outside /.tailraid: %v", err)
 	}
 	mkdirAs(t, base, "/"+meta.ReservedDir+"/thumbs")
+	// the node's own write under /.tailraid flushes as System: a stats or audit segment
+	// after the first user (the Commit of a truncating write needs Write otherwise)
+	if err := writeAs(t, base, "/"+meta.ReservedDir+"/thumbs/seg", []byte("segment")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fl.FlushAll(context.Background()); err != nil {
+		t.Fatalf("the node's own segment did not flush: %v", err)
+	}
+	if in, err := f.FSM.Resolve([]string{meta.ReservedDir, "thumbs", "seg"}); err != nil || in.Size != 7 {
+		t.Fatalf("the node's own segment: %v size %d", err, in.Size)
+	}
 	mkdirAs(t, kimFS, "/d/w")
 	f.Grant(kim, "/d/w", lee, meta.RoleWrite)
 	if err := writeAs(t, leeFS, "/d/w/f", []byte("first")); err != nil {

@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +38,7 @@ import (
 	"github.com/zombar/tailraid/internal/stats"
 	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
+	"github.com/zombar/tailraid/internal/users"
 	"github.com/zombar/tailraid/internal/vfs"
 	"github.com/zombar/tailraid/internal/webui"
 )
@@ -73,6 +76,9 @@ type harnessEnv struct {
 	// one SMB gateway per node, shared by every copy job and handle race (phases 22, 23),
 	// rebuilt when a restart replaced the node's filesystem
 	smb map[int]*harnessSMB
+	// the users surface of phases 28–31 (users_harness_test.go), made on first use
+	users *harnessUsers
+	webFS map[int]*vfs.FS // the filesystem each web server was built over: a restart rebuilds it
 }
 
 type harnessSearch struct {
@@ -224,10 +230,21 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 		})
 	})
 	if srv := e.web[nd.I]; srv != nil {
+		if e.webFS[nd.I] == nd.FS { // the same handles: the same page, so a session's cookies and the hand-off's address hold
+			return srv.URL + "/", nil
+		}
 		srv.Close()
 	}
 	if stop := e.stop[nd.I]; stop != nil {
 		stop()
+	}
+	if e.webFS == nil {
+		e.webFS = map[int]*vfs.FS{}
+	}
+	e.webFS[nd.I] = nd.FS
+	var auditHook webui.AuditHook
+	if e.users != nil {
+		auditHook = harnessWebAudit{e.users.audit[nd.I]}
 	}
 	p, err := pins.Open(nd.Dir, nd.Node.FSM, nd.Reader, nd.Cache, e.c.Clk, nil)
 	if err != nil {
@@ -249,6 +266,12 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 		Chunks: func(ctx context.Context, sel string, off, lim int) (int, []admin.ChunkReport, error) {
 			return admin.DescribeChunksPage(ctx, nd.Node.FSM, nd.Prober, nd.Client, nd.Events, sel, off, lim)
 		},
+		// sessions and the audit log (docs/21 §6, §8), as node.go wires them
+		CodeKey: func() ([]byte, bool) { return harnessCodeKey, true },
+		Logout: func(ctx context.Context, actor meta.UserIdx, hash [32]byte) error {
+			return e.propose(ctx, nd, meta.Command{Op: meta.OpSession, Actor: actor, SessionOp: &meta.SessionOp{Delete: true, Hash: hash, Now: e.c.Clk.Now().UnixNano()}})
+		},
+		Audit: auditHook,
 	})
 	if err != nil {
 		return "", err
@@ -370,11 +393,15 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 	if !e.c.Alive(nd.I) {
 		return nil, false
 	}
-	return soak.BillyVolume{FS: e.fsOf(n)}, true
+	fs := e.fsOf(n)
+	if nd.Node.FSM.Enforcing() { // the mount acts as whoever its uid is bound to on this node (docs/21 §5)
+		fs = fs.As(e.mountActor(nd))
+	}
+	return soak.BillyVolume{FS: fs}, true
 }
 
 func (e *harnessEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil, Stats: e.stats != nil, Mirror: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil, Stats: e.stats != nil, Mirror: true, Users: true}
 }
 
 func (e *harnessEnv) quorum() bool {
@@ -457,6 +484,11 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		rep.Cache = &c
 	}
 	rep.Mirrors = e.mirrorReports(nd.I)
+	for i := range rep.Nodes { // each member's page, for the hand-off of docs/21 §6
+		if srv := e.web[int(rep.Nodes[i].Idx)-1]; srv != nil && rep.Nodes[i].Kind == "device" {
+			rep.Nodes[i].Addr, rep.Nodes[i].Web = webHostPort(srv.URL)
+		}
+	}
 	return rep, nil
 }
 
@@ -800,7 +832,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 22 {
+	if sum.Failed != 0 || len(sum.Phases) != 26 { // 27 standard phases less 22, 23, 25, 26 and 27, plus 28–31
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -862,3 +894,16 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		t.Fatalf("run directory %s still exists", run.Root)
 	}
 }
+
+// webHostPort is a test server's host and port, as a status row carries them.
+func webHostPort(u string) (string, uint16) {
+	p, err := url.Parse(u)
+	if err != nil {
+		return "", 0
+	}
+	port, _ := strconv.Atoi(p.Port())
+	return p.Hostname(), uint16(port) //nolint:gosec // a test server's port
+}
+
+// tokenHash is a session token's row key.
+func tokenHash(tok [users.TokenSize]byte) [32]byte { return sha256.Sum256(tok[:]) }

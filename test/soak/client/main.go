@@ -79,6 +79,7 @@ func main() {
 }
 
 type worker struct {
+	cid              [16]byte // the cluster ID /health answered, for a signed request's client
 	nfsAddr, rpcAddr string
 
 	mu     sync.Mutex
@@ -417,6 +418,7 @@ type rpcReq struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Body   []byte `json:"body"`
+	Sig    string `json:"sig,omitempty"` // a Tailraid-Sig header the driver computed (docs/21 §2)
 }
 
 type rpcResp struct {
@@ -441,6 +443,7 @@ func (w *worker) rpcClient(ctx context.Context) (*rpc.Client, error) {
 	}
 	var id [16]byte
 	copy(id[:], cid)
+	w.cid = id
 	w.client = rpc.NewClient(id, nil)
 	return w.client, nil
 }
@@ -455,6 +458,11 @@ func (w *worker) rpc(rw http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	c, err := w.rpcClient(ctx)
+	if err == nil && req.Sig != "" { // the driver's signature rides on a client of its own
+		signed := rpc.NewClient(w.cid, nil)
+		signed.Sign = func(string, string, string, []byte) (string, error) { return req.Sig, nil }
+		c = signed
+	}
 	if err != nil {
 		resp.Error = err.Error()
 	} else if body, err := c.Call(ctx, w.rpcAddr, req.Method, req.Path, req.Body); err != nil {

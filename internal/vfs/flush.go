@@ -387,9 +387,17 @@ func (f *Flusher) restoreTimes(ctx context.Context, ino meta.Ino) {
 // the SetAttr that restores a client's times acts for the user who wrote; a cluster
 // whose members read codec 13 gets none, as the gateway sends none.
 func (f *Flusher) actorCommand(actor meta.UserIdx, cmd meta.Command) meta.Command {
-	if actor != 0 && (f.MinCodec == nil || f.MinCodec() >= meta.CodecUsers) {
-		cmd.Actor = actor
+	if !f.st.Enforcing() || (f.MinCodec != nil && f.MinCodec() < meta.CodecUsers) {
+		return cmd // before the first user, and while a member reads an older codec, the wire carries what it did
 	}
+	if actor == 0 {
+		// a write with no actor is the node's own (every user's view stamps theirs, and
+		// nobody's view writes nothing): the stats, audit, thumbnail and index writers
+		// under /.tailraid, whose Commit the FSM takes as System and nowhere else (I-349)
+		cmd.System = true
+		return cmd
+	}
+	cmd.Actor = actor
 	return cmd
 }
 

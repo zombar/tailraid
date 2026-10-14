@@ -44,7 +44,8 @@ type reportData struct {
 	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
 	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
 	RoundTrip  string
-	PeakSkew   int // most chunks above the host cap in any sample
+	Users      []string // phases 28–31 (docs/21 §10): the people, the grant matrix and the audit counts
+	PeakSkew   int      // most chunks above the host cap in any sample
 	Generated  string
 	Throughput string
 	Mark       template.HTML // the logo mark, inline
@@ -197,6 +198,7 @@ func buildReport(s Summary) reportData {
 	snapCharts, snaps, roundTrip := snapshotFigures(s)
 	d.Charts = append(d.Charts, snapCharts...)
 	d.Snapshots, d.RoundTrip = snaps, roundTrip
+	d.Users = usersLines(s)
 	var spread []*Sample
 	for i := range s.Records {
 		if s.Records[i].Kind == "sample" && s.Records[i].S != nil {
@@ -531,6 +533,10 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <table><tr><th>Snapshot</th><th>Mirror</th><th>Taken</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Added</th><th>State</th><th>Read</th></tr>
 {{range .Snapshots}}<tr><td>{{.Name}}</td><td>{{.Mirror}}</td><td>{{.Taken}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Added}}</td><td>{{.State}}</td><td>{{.Read}}</td></tr>{{end}}
 {{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
+{{if .Users}}<h2>Users</h2>
+<p class="meta">phases 28–31 (docs/21 §10): the people made for the run, what each gateway answered each user, and the audit log's counts</p>
+<pre>{{range .Users}}{{.}}
+{{end}}</pre>{{end}}
 {{if .Disks}}<h2>Disks</h2>
 <p class="meta">every placement target as of the last sample that held data, grouped by host (docs/14); expected is the capacity share capped at one slot per chunk; most chunks above the host cap in any sample: {{.PeakSkew}}</p>
 <table><tr><th>Host</th><th>Target</th><th class="num">Budget</th><th class="num">Slots</th><th class="num">Expected</th><th class="num">Δ</th><th>State</th></tr>
@@ -546,6 +552,22 @@ func spreadSamples(samples []*Sample) []chart.SpreadSample {
 	for i, s := range samples {
 		if s != nil {
 			out[i] = chart.SpreadSample{Targets: s.Targets, Chunks: s.Chunks, DomainSkew: s.DomainSkew}
+		}
+	}
+	return out
+}
+
+// usersLines are the Users section's lines: the three events of phases 28, 29 and 31.
+func usersLines(s Summary) []string {
+	var out []string
+	for i := range s.Records {
+		rec := &s.Records[i]
+		if rec.Kind != "event" {
+			continue
+		}
+		switch rec.Name {
+		case usersEvent, grantsEvent, auditEvent:
+			out = append(out, rec.Name+": "+rec.Text)
 		}
 	}
 	return out
