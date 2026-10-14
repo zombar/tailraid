@@ -2,6 +2,7 @@ package dev
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -159,5 +160,62 @@ func TestHandler_CorruptEveryCopy(t *testing.T) {
 		if _, err := s.Get(key); !errors.Is(err, chunk.ErrCorrupt) {
 			t.Fatalf("disk %d after corrupt: %v", i, err)
 		}
+	}
+}
+
+// The hash is a pure function of the applied index it is labelled with: taken while
+// entries keep applying, every (applied, hash) pair equals the hash a second FSM gives
+// at that index after replaying the same log; the index comes from the snapshot, not
+// from a read after it.
+// Invariant: I-4
+func TestHash_LabelledWithItsSnapshotsIndex(t *testing.T) {
+	a, b := meta.NewFSM(), meta.NewFSM()
+	cmds := []meta.Command{{Op: meta.OpSetVolume, SetVolume: &meta.SetVolume{ChunkSize: 65536, K: 2, M: 1, Now: 1}}}
+	for i := range 400 {
+		cmds = append(cmds, meta.Command{Op: meta.OpMkdir, Mkdir: &meta.Mkdir{Parent: meta.RootIno, Name: fmt.Sprintf("d%d", i), Mode: 0o755, Now: int64(i + 2)}})
+	}
+	apply := func(f *meta.FSM, idx int) {
+		f.Apply(&raft.Log{Index: uint64(idx + 1), Type: raft.LogCommand, Data: meta.MustEncodeCommand(cmds[idx])}) //nolint:gosec // a test index
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range cmds {
+			apply(a, i)
+		}
+	}()
+	var seen []FSMHash
+	for {
+		h, err := Hash(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, h)
+		select {
+		case <-done:
+		default:
+			continue
+		}
+		break
+	}
+	want := map[uint64]string{}
+	for i := range cmds {
+		apply(b, i)
+		h, err := Hash(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[h.Applied] = h.Hash
+	}
+	for _, h := range seen {
+		if h.Applied == 0 {
+			continue
+		}
+		if want[h.Applied] != h.Hash {
+			t.Fatalf("hash at applied %d differs from the replay's", h.Applied)
+		}
+	}
+	if len(seen) < 2 {
+		t.Logf("only %d hashes taken while applying", len(seen))
 	}
 }

@@ -213,7 +213,10 @@ func Hash(st *meta.Store) (FSMHash, error) {
 		return FSMHash{}, err
 	}
 	sum := sha256.Sum256(buf.Bytes()[13:]) // skip magic, version and applied index
-	return FSMHash{Applied: st.Applied(), Hash: hex.EncodeToString(sum[:])}, nil
+	// the index is the snapshot's own, never st.Applied() read afterwards: an entry
+	// applied between the two labelled a hash of index N with N+1 and made two nodes at
+	// one index look diverged while a migration was still applying
+	return FSMHash{Applied: state.Applied, Hash: hex.EncodeToString(sum[:])}, nil
 }
 
 // Corrupt flips the last payload byte of a shard file in place: the header hash no longer

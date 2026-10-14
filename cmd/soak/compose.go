@@ -594,6 +594,43 @@ func (e *composeEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 	return nil
 }
 
+// waitConverged polls every node's status until each one sees every device member live:
+// the mesh's paths form a few seconds after a joiner serves (docs/20 §5), and a gateway
+// without a path to a holder answers EIO, which is no phase's finding.
+func (e *composeEnv) waitConverged(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		pending := ""
+		for _, n := range e.nodes {
+			rep, err := e.Status(ctx, n.ref)
+			if err != nil {
+				pending = n.ref.Name + ": " + err.Error()
+				break
+			}
+			for i := range rep.Nodes {
+				if d := &rep.Nodes[i]; d.Kind == "device" && d.State != "removed" && !d.Live {
+					pending = n.ref.Name + " sees " + d.Name + " dead"
+					break
+				}
+			}
+			if pending != "" {
+				break
+			}
+		}
+		if pending == "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the mesh did not converge within %s: %s", timeout, pending)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (e *composeEnv) waitReady(ctx context.Context, ref soak.NodeRef, timeout time.Duration) error {
 	n := e.node(ref)
 	deadline := time.Now().Add(timeout)
