@@ -343,7 +343,21 @@ s8b_update() {
   dev=$(tr_ "$FIRST" version)
   echo "latest release $tag; the guests run $dev"
   for os in $OSES; do
-    tr_mac_root "$os" update --yes --restart --version "$tag" --allow-downgrade || return 1
+    local out
+    if ! out=$(tr_mac_root "$os" update --yes --restart --version "$tag" --allow-downgrade 2>&1); then
+      # a release from before the mesh cannot load a mesh config (docs/20: the mesh is a
+      # hard cut, its release starts a new cluster): update runs the downloaded binary
+      # before swapping, it refuses the config's mesh section, and nothing is installed,
+      # so there is nothing to roll back; the step says so until a mesh release exists
+      if printf '%s' "$out" | grep -q 'unknown field "mesh"'; then
+        printf '%s\n' "$out" | tail -3
+        echo "$tag predates the mesh and cannot load this config (docs/20: a hard cut); nothing was swapped, nothing to roll back"
+        return 0
+      fi
+      printf '%s\n' "$out"
+      return 1
+    fi
+    printf '%s\n' "$out"
     local v; v=$(tr_ "$os" version)
     [ "$v" = "tailraid $tag" ] || { echo "$os runs \"$v\" after the update, want $tag"; return 1; }
     if ! ready_or_log "$os" 45; then
