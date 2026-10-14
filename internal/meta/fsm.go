@@ -149,6 +149,9 @@ func (a *applier) clock(now int64) int64 {
 }
 
 func (a *applier) apply(c Command) (Result, error) {
+	if err := a.authorize(c); err != nil { // the permission check of docs/21 §4 (I-349)
+		return Result{}, err
+	}
 	switch c.Op {
 	case OpSetVolume:
 		return Result{}, a.setVolume(c.SetVolume)
@@ -203,13 +206,23 @@ func (a *applier) apply(c Command) (Result, error) {
 	case OpSecretKeyInit:
 		return Result{}, a.secretKeyInit(c.SecretKeyInit)
 	case OpSecretPut:
-		return Result{}, a.secretPut(c.SecretPut)
+		return Result{}, a.secretPut(c.Actor, c.SecretPut)
 	case OpSecretDelete:
-		return Result{}, a.secretDelete(c.SecretDelete)
+		return Result{}, a.secretDelete(c.Actor, c.SecretDelete)
 	case OpPendingAdd:
 		return a.pendingAdd(c.PendingAdd)
 	case OpPendingDelete:
 		return Result{}, a.pendingDelete(c.PendingDelete)
+	case OpInvite:
+		return Result{}, a.inviteOp(c)
+	case OpUser:
+		return a.userOp(c)
+	case OpGroup:
+		return a.groupOp(c)
+	case OpGrant:
+		return Result{}, a.grantOp(c)
+	case OpSession:
+		return Result{}, a.sessionOp(c)
 	}
 	return Result{}, ErrBadCommand
 }
@@ -603,6 +616,7 @@ func (a *applier) unlink(c *Unlink) error {
 	}
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
+	st.dropGrants(ino)
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
 	return nil
@@ -644,6 +658,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	now := a.clock(c.Now)
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
+	st.dropGrants(ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -742,6 +757,7 @@ func (a *applier) rename(c *Rename) error {
 			a.stats.LogicalBytes -= dst.Size
 		}
 		delete(st.Inodes, dst.Ino)
+		st.dropGrants(dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
 		}

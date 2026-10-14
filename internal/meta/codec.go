@@ -16,7 +16,8 @@ var stateMagic = []byte("TRM1")
 // snapshots are still read (the fields zero) so a cluster upgrades without a format
 // break (docs/12 §6, I-156).
 const (
-	stateVersion    = stateVersionV13 // the newest written; 6, 8, 10 and 12 are never written: those log codecs added no state
+	stateVersion    = stateVersionV14 // the newest written; 6, 8, 10 and 12 are never written: those log codecs added no state
+	stateVersionV14 = 14              // users, groups and permissions (docs/21, I-349): the identity rows, grants, invites, sessions, a secret's user
 	stateVersionV13 = 13              // the mesh (docs/20, I-326): a row's key, port and endpoints, the subnet, the pending rows
 	stateVersionV11 = 11              // the secrets store (docs/19, I-307)
 	stateVersionV9  = 9               // Inode.RewriteAt; gate a field on its own version, never on stateVersion
@@ -150,10 +151,13 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		writeSnaps(w, s)
 	}
 	if version >= stateVersionV11 {
-		writeSecrets(w, s)
+		writeSecrets(w, s, version >= stateVersionV14)
 	}
 	if version >= stateVersionV13 {
 		writePending(w, s)
+	}
+	if version >= stateVersionV14 {
+		writeUsers(w, s)
 	}
 	return w.flush()
 }
@@ -215,18 +219,23 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
-	if r.err == nil && version != stateVersion && version != stateVersionV11 && version != stateVersionV9 && version != stateVersionV7 && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
+	if r.err == nil && version != stateVersion && version != stateVersionV13 && version != stateVersionV11 && version != stateVersionV9 && version != stateVersionV7 && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
 	s := &State{
-		Inodes:  map[Ino]*Inode{},
-		Chunks:  map[Hash]*Chunk{},
-		Nodes:   map[NodeIdx]*Node{},
-		Tombs:   map[Hash]struct{}{},
-		Trash:   map[Ino]map[Ino]struct{}{},
-		Snaps:   map[SnapID]*Snapshot{},
-		Secrets: map[string]*Secret{},
-		Pending: map[MeshKey]*Pending{},
+		Inodes:   map[Ino]*Inode{},
+		Chunks:   map[Hash]*Chunk{},
+		Nodes:    map[NodeIdx]*Node{},
+		Tombs:    map[Hash]struct{}{},
+		Trash:    map[Ino]map[Ino]struct{}{},
+		Snaps:    map[SnapID]*Snapshot{},
+		Secrets:  map[string]*Secret{},
+		Pending:  map[MeshKey]*Pending{},
+		Users:    map[UserIdx]*User{},
+		Groups:   map[GroupIdx]*Group{},
+		Grants:   map[GrantKey]*Grant{},
+		Invites:  map[[32]byte]*Invite{},
+		Sessions: map[[32]byte]*Session{},
 	}
 	s.Applied = r.u64()
 	s.LastNow = r.i64()
@@ -338,10 +347,13 @@ func DecodeState(rd io.Reader) (*State, error) {
 		s.NextSnap = 1 // an older snapshot has no catalogue (I-184)
 	}
 	if version >= stateVersionV11 {
-		readSecrets(r, s)
+		readSecrets(r, s, version >= stateVersionV14)
 	}
 	if version >= stateVersionV13 {
 		readPending(r, s)
+	}
+	if version >= stateVersionV14 {
+		readUsers(r, s)
 	}
 	if err := r.done(); err != nil {
 		return nil, err

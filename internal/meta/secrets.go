@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // The secrets store's state (docs/19 §4): sealed values by name, and the ID of the one
@@ -32,6 +33,7 @@ type Secret struct {
 	Cipher []byte // AES-256-GCM sealed value with its tag
 	At     int64
 	By     NodeIdx
+	ByUser UserIdx // the user who set it (docs/21 §7, codec 14); 0 for a row from before
 }
 
 // SecretKeyInit records the cluster key's ID, once (op 23, I-305).
@@ -64,7 +66,47 @@ func (a *applier) secretKeyInit(c *SecretKeyInit) error {
 	return nil
 }
 
-func (a *applier) secretPut(c *SecretPut) error {
+// SecretOwner is the user a personal secret belongs to: the name is
+// `user/<user name>/<rest>` (docs/21 §7). ok is false for a system secret.
+func SecretOwner(name string) (user string, ok bool) {
+	rest, ok := strings.CutPrefix(name, "user/")
+	if !ok {
+		return "", false
+	}
+	user, _, ok = strings.Cut(rest, "/")
+	return user, ok && user != ""
+}
+
+// MaxSecretsPerUser bounds a user's personal secrets; MaxSecrets bounds the system ones
+// (I-356).
+const MaxSecretsPerUser = 64
+
+// secretActor is the owner rule of the store once users exist (docs/21 §7, I-356): a
+// personal name is its owner's alone to put (an admin may also delete), a system name
+// is the admins'. Before the first user nothing is checked.
+func (a *applier) secretActor(actor UserIdx, name string, del bool) error {
+	st := a.st
+	if !st.Enforcing() {
+		return nil
+	}
+	owner, personal := SecretOwner(name)
+	if !personal {
+		if !st.isAdmin(actor) {
+			return ErrAccess
+		}
+		return nil
+	}
+	u := st.Users[actor]
+	if u != nil && u.State == UserActive && u.Name == owner {
+		return nil
+	}
+	if del && st.isAdmin(actor) {
+		return nil
+	}
+	return ErrAccess
+}
+
+func (a *applier) secretPut(actor UserIdx, c *SecretPut) error {
 	if c == nil {
 		return ErrBadCommand
 	}
@@ -75,26 +117,47 @@ func (a *applier) secretPut(c *SecretPut) error {
 	if a.st.SecretKeyID == (KeyID{}) || s.KeyID != a.st.SecretKeyID {
 		return ErrSecretKey
 	}
-	if _, ok := a.st.Secrets[s.Name]; !ok && len(a.st.Secrets) >= MaxSecrets {
-		return ErrSecretFull
+	if err := a.secretActor(actor, s.Name, false); err != nil {
+		return err
+	}
+	if _, ok := a.st.Secrets[s.Name]; !ok {
+		owner, personal := SecretOwner(s.Name)
+		n := 0
+		for name := range a.st.Secrets {
+			if o, p := SecretOwner(name); p == personal && (!personal || o == owner) {
+				n++
+			}
+		}
+		if (personal && n >= MaxSecretsPerUser) || (!personal && n >= MaxSecrets) {
+			return ErrSecretFull
+		}
 	}
 	s.Cipher = slices.Clone(s.Cipher)
 	s.At = c.Now
+	if a.st.Enforcing() {
+		s.ByUser = actor
+	}
 	a.st.Secrets[s.Name] = &s
 	return nil
 }
 
-func (a *applier) secretDelete(c *SecretDelete) error {
+func (a *applier) secretDelete(actor UserIdx, c *SecretDelete) error {
 	if c == nil {
 		return ErrBadCommand
 	}
 	if c.All {
+		if a.st.Enforcing() && !a.st.isAdmin(actor) {
+			return ErrAccess
+		}
 		clear(a.st.Secrets)
 		a.st.SecretKeyID = KeyID{}
 		return nil
 	}
 	if _, ok := a.st.Secrets[c.Name]; !ok {
 		return ErrNotExist
+	}
+	if err := a.secretActor(actor, c.Name, true); err != nil {
+		return err
 	}
 	delete(a.st.Secrets, c.Name)
 	return nil
@@ -142,16 +205,20 @@ func (f *FSM) Secrets() []Secret {
 	return out
 }
 
-func writeSecret(w *writer, s *Secret) {
+// writeSecret writes a secret; withUser appends ByUser (codec and frame 14).
+func writeSecret(w *writer, s *Secret, withUser bool) {
 	w.str(s.Name)
 	w.b = append(w.b, s.KeyID[:]...)
 	w.b = append(w.b, s.Nonce[:]...)
 	w.bytes(s.Cipher)
 	w.i64(s.At)
 	w.u16(uint16(s.By))
+	if withUser {
+		w.u16(uint16(s.ByUser))
+	}
 }
 
-func readSecret(r *reader) Secret {
+func readSecret(r *reader, withUser bool) Secret {
 	var s Secret
 	s.Name = r.str()
 	copy(s.KeyID[:], r.take(len(s.KeyID)))
@@ -159,11 +226,15 @@ func readSecret(r *reader) Secret {
 	s.Cipher = r.bytes()
 	s.At = r.i64()
 	s.By = NodeIdx(r.u16())
+	if withUser {
+		s.ByUser = UserIdx(r.u16())
+	}
 	return s
 }
 
-// writeSecrets writes the key ID and the secrets in name order (snapshot frame 11).
-func writeSecrets(w *writer, st *State) {
+// writeSecrets writes the key ID and the secrets in name order (snapshot frame 11; 14
+// adds each secret's user).
+func writeSecrets(w *writer, st *State, withUser bool) {
 	w.b = append(w.b, st.SecretKeyID[:]...)
 	names := make([]string, 0, len(st.Secrets))
 	for n := range st.Secrets {
@@ -172,20 +243,20 @@ func writeSecrets(w *writer, st *State) {
 	slices.Sort(names)
 	w.uvarint(uint64(len(names)))
 	for _, n := range names {
-		writeSecret(w, st.Secrets[n])
+		writeSecret(w, st.Secrets[n], withUser)
 	}
 }
 
-func readSecrets(r *reader, st *State) {
+func readSecrets(r *reader, st *State, withUser bool) {
 	copy(st.SecretKeyID[:], r.take(len(st.SecretKeyID)))
 	n := r.uvarint()
-	if r.err == nil && n > MaxSecrets {
+	if r.err == nil && n > MaxSecrets+MaxUsers*MaxSecretsPerUser {
 		r.fail(errors.New("meta: too many secrets"))
 		return
 	}
 	prev := ""
 	for i := uint64(0); i < n && r.err == nil; i++ {
-		s := readSecret(r)
+		s := readSecret(r, withUser)
 		if r.err == nil && (s.Name <= prev || !SecretName.MatchString(s.Name)) {
 			r.fail(errors.New("meta: secrets not in canonical order"))
 			return

@@ -338,8 +338,17 @@ type State struct {
 	SecretKeyID KeyID
 	// Pending holds the joins in progress by key (docs/20 §4, codec 13).
 	Pending map[MeshKey]*Pending
-	Applied uint64
-	LastNow int64 // monotonic FSM clock: max of every applied command's Now
+	// Users, groups and permissions (docs/21, codec 14): the identity rows, the grant
+	// table keyed by inode and subject, the open invites and the browser sessions.
+	Users     map[UserIdx]*User
+	NextUser  UserIdx
+	Groups    map[GroupIdx]*Group
+	NextGroup GroupIdx
+	Grants    map[GrantKey]*Grant
+	Invites   map[[32]byte]*Invite
+	Sessions  map[[32]byte]*Session
+	Applied   uint64
+	LastNow   int64 // monotonic FSM clock: max of every applied command's Now
 }
 
 // SnapID identifies a snapshot; allocated from State.NextSnap, never reused, never 0.
@@ -424,6 +433,11 @@ func NewState() *State {
 		NextSnap: 1,
 		Secrets:  map[string]*Secret{},
 		Pending:  map[MeshKey]*Pending{},
+		Users:    map[UserIdx]*User{},
+		Groups:   map[GroupIdx]*Group{},
+		Grants:   map[GrantKey]*Grant{},
+		Invites:  map[[32]byte]*Invite{},
+		Sessions: map[[32]byte]*Session{},
 	}
 }
 
@@ -501,6 +515,35 @@ func (s *State) Clone() *State {
 		Secrets:     make(map[string]*Secret, len(s.Secrets)),
 		SecretKeyID: s.SecretKeyID,
 		Pending:     make(map[MeshKey]*Pending, len(s.Pending)),
+		Users:       make(map[UserIdx]*User, len(s.Users)),
+		NextUser:    s.NextUser,
+		Groups:      make(map[GroupIdx]*Group, len(s.Groups)),
+		NextGroup:   s.NextGroup,
+		Grants:      make(map[GrantKey]*Grant, len(s.Grants)),
+		Invites:     make(map[[32]byte]*Invite, len(s.Invites)),
+		Sessions:    make(map[[32]byte]*Session, len(s.Sessions)),
+	}
+	for idx, u := range s.Users {
+		cp := *u
+		cp.Keys = slices.Clone(u.Keys)
+		c.Users[idx] = &cp
+	}
+	for idx, g := range s.Groups {
+		cp := *g
+		cp.Members = slices.Clone(g.Members)
+		c.Groups[idx] = &cp
+	}
+	for k, g := range s.Grants {
+		cp := *g
+		c.Grants[k] = &cp
+	}
+	for h, inv := range s.Invites {
+		cp := *inv
+		c.Invites[h] = &cp
+	}
+	for h, se := range s.Sessions {
+		cp := *se
+		c.Sessions[h] = &cp
 	}
 	for k, p := range s.Pending {
 		cp := *p
