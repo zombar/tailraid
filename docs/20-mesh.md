@@ -49,7 +49,7 @@ compose rig's worker reaches its node the same way.
 | Device | `/dev/net/tun`, named `tailraid0` (`mesh.interface`) | `utun<n>`, the next free number | wintun, adapter "tailraid", GUID derived from the cluster ID so it is the same adapter across restarts |
 | Address, MTU, route | `ip addr add`, `ip link set … mtu … up` | `ifconfig <utun> <addr> <addr> netmask …`, `ifconfig … mtu`, `route add -net <subnet> -interface` | `netsh interface ip set address`, `netsh interface ipv4 set subinterface … mtu`, `route add` |
 | Privilege | `CAP_NET_ADMIN` (the unit grants it, §9) | root (the service is a LaunchDaemon, §9) | LocalSystem (the service already is) |
-| The dll | — | — | `wintun.dll` beside the exe, written by `install` and `update` (§9) |
+| The dll | — | — | `wintun.dll` beside the exe, written by `install`, `update` and whatever opens the adapter (a `join`, a `serve` by hand) when absent or different (§9) |
 
 A packet the OS hands the tunnel for the device's own address goes straight back to the
 kernel: macOS routes a host's traffic to its own utun address into the tunnel (the
@@ -449,8 +449,9 @@ round-trip table.
 - **I-324** — The Linux unit runs as the installing user with `CAP_NET_ADMIN` as its
   only ambient and bounding capability; the macOS service is a LaunchDaemon in the
   `system` domain with its home under `/Library/Application Support/tailraid`; the
-  Windows service runs with `wintun.dll` beside the exe, written by `install` and by
-  `update` when absent or different, and one inbound firewall rule for the UDP port,
+  Windows service runs with `wintun.dll` beside the exe, written by `install`, by
+  `update` and by whatever opens the adapter (a `join` runs before any `install`) when
+  absent or different, and one inbound firewall rule for the UDP port,
   both removed by `uninstall`; a `join` under sudo on Linux writes into the invoking
   user's config home, the one that user's unit names; `init` creates no interface.
 - **I-325** — `status` reports, for every device member, its path class, endpoint,
