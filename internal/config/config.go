@@ -13,7 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"os/user"
-	"path"
+	posix "path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -485,7 +485,7 @@ func homeFor(goos string, euid int, home string, env func(string) string, lookup
 		if euid == 0 { // the root daemon's home (docs/20 §9)
 			return "/Library/Application Support/tailraid"
 		}
-		return path.Join(home, "Library", "Application Support", "tailraid")
+		return posix.Join(home, "Library", "Application Support", "tailraid")
 	case "windows":
 		if pd := env("ProgramData"); pd != "" {
 			return filepath.Join(pd, "tailraid")
@@ -493,14 +493,14 @@ func homeFor(goos string, euid int, home string, env func(string) string, lookup
 		return `C:\ProgramData\tailraid`
 	default:
 		if x := env("XDG_CONFIG_HOME"); x != "" {
-			return path.Join(x, "tailraid")
+			return posix.Join(x, "tailraid")
 		}
 		if su := env("SUDO_USER"); euid == 0 && su != "" && su != "root" {
 			if h, err := lookupHome(su); err == nil && h != "" {
 				home = h
 			}
 		}
-		return path.Join(home, ".config", "tailraid")
+		return posix.Join(home, ".config", "tailraid")
 	}
 }
 

@@ -45,6 +45,9 @@ func TestPrivilege_GiveBackAndSudoOwner(t *testing.T) {
 // every disk and mirror directory the config lists, in that order; none twice.
 // Invariant: I-324
 func TestPrivilege_OwnedPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a sudo join is Linux and macOS: the paths are POSIX ones, which filepath.Dir would split on a backslash here")
+	}
 	var cfg config.Config
 	cfg.Node.DataDir = "/home/u/.config/tailraid/data"
 	cfg.Node.Disks = []config.Disk{{Path: "/home/u/tailraid-d1"}, {Path: "/mnt/big"}}
