@@ -121,6 +121,13 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 			if err != nil {
 				return rpc.JoinResponse{}, fmt.Errorf("%w: forwarded to %s: %w", ErrNotLeader, leader, err)
 			}
+			// the joiner's next request comes here, and this node's authorizer reads its
+			// own table: the row must have arrived before the joiner hears it is in
+			if resp.Index > 0 {
+				if err := n.FSM.WaitApplied(ctx, resp.Index); err != nil {
+					return rpc.JoinResponse{}, err
+				}
+			}
 			return resp, nil
 		}
 		return rpc.JoinResponse{}, ErrNotLeader
@@ -215,7 +222,7 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		return rpc.JoinResponse{}, err
 	}
 	m := n.FSM.Meta()
-	return rpc.JoinResponse{ClusterID: meta.HexID(m.ClusterID), NodeIdx: meta.NodeIdx(res.Ino), Volume: n.FSM.Volume(), Members: n.FSM.Nodes()}, nil
+	return rpc.JoinResponse{ClusterID: meta.HexID(m.ClusterID), NodeIdx: meta.NodeIdx(res.Ino), Volume: n.FSM.Volume(), Members: n.FSM.Nodes(), Index: index}, nil
 }
 
 // SlotsHeldBy counts committed shard slots placed on a node.

@@ -75,7 +75,7 @@ func TestMount_Workload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := node.RegisterDisks(context.Background(), n, cfg, cid); err != nil {
+	if _, err := node.RegisterDisks(context.Background(), n, cfg, cid, n.ID); err != nil { // no device in this test: the node ID names the host
 		t.Fatal(err)
 	}
 	_ = n.Close()

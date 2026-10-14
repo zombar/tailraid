@@ -448,7 +448,7 @@ func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, 
 // --- faults through docker compose and the workers ----------------------------------------
 
 func (e *composeEnv) compose(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -459,7 +459,7 @@ func (e *composeEnv) compose(ctx context.Context, args ...string) error {
 
 // composeIn runs docker compose with stdin (a secret: never in the arguments or an error).
 func (e *composeEnv) composeIn(ctx context.Context, stdin string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
@@ -471,7 +471,7 @@ func (e *composeEnv) composeIn(ctx context.Context, stdin string, args ...string
 
 // composeOut runs docker compose and returns its output.
 func (e *composeEnv) composeOut(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	return cmd.CombinedOutput()
 }
@@ -615,13 +615,13 @@ var _ soak.SecretEnv = (*composeEnv)(nil)
 
 // --- the mesh (phase 25): codes, the late device, a throwaway join, a re-join ------------
 
-// composeLate runs docker compose with the `late` profile, which holds n6 and ntry.
+// composeLate runs docker compose and returns its output; every call names the `late`
+// profile (n6 and ntry), since compose refuses to restart, kill or remove a profile's
+// container without it, and the profile changes nothing for the other services.
 func (e *composeEnv) composeLate(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
-	cmd.Dir = e.dir
-	out, err := cmd.CombinedOutput()
+	out, err := e.composeOut(ctx, args...)
 	if err != nil {
-		return out, fmt.Errorf("docker compose --profile late %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
+		return out, fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
 	}
 	return out, nil
 }
@@ -702,9 +702,26 @@ func (e *composeEnv) RemoveLate(ctx context.Context) error {
 	if project == "" {
 		project = strings.ToLower(filepath.Base(e.dir))
 	}
-	cmd := exec.CommandContext(ctx, "docker", "volume", "rm", "-f", project+"_"+late.ref.Name, project+"_"+late.ref.Name+"-d1") //nolint:gosec // the rig's own volumes
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker volume rm: %w: %s", err, bytes.TrimSpace(out))
+	// the named volumes outlive the containers: removed here, retried while the engine
+	// still counts a container just removed as using them, and checked gone
+	vols := []string{project + "_" + late.ref.Name, project + "_" + late.ref.Name + "-d1"}
+	var last error
+	for range 10 {
+		cmd := exec.CommandContext(ctx, "docker", append([]string{"volume", "rm", "-f"}, vols...)...) //nolint:gosec // the rig's own volumes
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			if left, _ := exec.CommandContext(ctx, "docker", append([]string{"volume", "inspect"}, vols...)...).Output(); len(bytes.TrimSpace(left)) <= 2 { //nolint:gosec // the rig's own volumes
+				last = nil
+				break
+			}
+		}
+		last = fmt.Errorf("docker volume rm %v: %w: %s", vols, err, bytes.TrimSpace(out))
+		if err := e.Wait(ctx, time.Second); err != nil {
+			return err
+		}
+	}
+	if last != nil {
+		return last
 	}
 	e.nodes = slices.DeleteFunc(e.nodes, func(n composeNode) bool { return n.ref.Name == late.ref.Name })
 	return nil

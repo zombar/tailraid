@@ -95,7 +95,7 @@ func initCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid)
+			disks, err := node.RegisterDisks(cmd.Context(), n, cfg, cid, node.HostIdent(ident.Key, n.ID))
 			if err != nil {
 				return err
 			}

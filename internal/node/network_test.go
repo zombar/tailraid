@@ -39,6 +39,7 @@ func TestMeshPeers_FromRowsAndPending(t *testing.T) {
 		{Idx: 7, Kind: meta.KindDevice, State: meta.Draining, Addr: "100.70.3.7", Key: key(7)},
 		{Idx: 8, Kind: meta.KindDevice, State: meta.Active, Addr: "not an address", Key: key(8)},
 		{Idx: 9, Kind: meta.KindDevice, State: meta.Active, Addr: "100.70.3.9", Key: key(2)}, // a duplicate key keeps the first
+		{Idx: 3, Kind: meta.KindDevice, State: meta.Active, Addr: "100.70.3.3", Key: key(3)}, // a stale seed copy of the removed row: still no peer (I-318)
 	}
 	pending := []meta.Pending{{Key: key(9), Addr: "100.70.3.9"}, {Key: self, Addr: "100.70.3.1"}, {Key: key(2), Addr: "100.70.3.2"}}
 	got := meshPeers(rows, pending, mesh.Key(self))

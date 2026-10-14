@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -598,9 +599,13 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		// at the caller's address is the proof; a member may forward one for the pending
 		// joiner it names, and the leader checks the key against that address (I-321)
 		pending, _ := s.o.Auth.(PendingAuthorizer)
-		_, member := s.o.Auth.Allow(r.Context(), src)
+		who, member := s.o.Auth.Allow(r.Context(), src)
 		switch {
 		case pending != nil && pending.IsPending(src):
+			req.Addr = src.String()
+		case member == nil && !who.Node.Key.IsZero() && base64.StdEncoding.EncodeToString(who.Node.Key[:]) == req.Key:
+			// a re-join after reset (docs/20 §4, I-94): the introduce answered the key's
+			// own active row, and only the key's holder sends from its address
 			req.Addr = src.String()
 		case member == nil && req.Addr != "":
 		default:

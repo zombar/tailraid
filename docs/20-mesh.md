@@ -202,10 +202,11 @@ that way, because the first authenticated packet back pins the peer to its real 
 (roaming) and every later `Send` carries that endpoint, so data is never fanned out.
 Every node↔node pair keeps a 25 s keepalive, so both sides fan out at the same time,
 which is what opens a cone NAT on each side: each side's first packet creates the
-mapping the other side's packet then passes. A monitor reads each peer's
-`last_handshake_time` every 10 s and returns a peer to fan-out when it is older than
-75 s (three keepalives), so a peer that moved, slept or lost its mapping is found again
-within a tick (I-323).
+mapping the other side's packet then passes. A monitor reads each peer's received
+bytes and `last_handshake_time` every 10 s and returns a peer to fan-out when nothing
+has arrived from it for 75 s (three keepalives; a handshake alone is no sign of life,
+WireGuard renews one only every two minutes), so a peer that moved, slept or lost its
+mapping is found again within a tick (I-323).
 
 **What fan-out cannot do**, until §6: two devices both behind symmetric NATs (each
 mapping is per destination, so a reflexive address learned from one member is wrong for
@@ -323,7 +324,7 @@ within a retry (docs/12 §5 unchanged).
 ## 10. Status, config and the soak
 
 `tailraid status` gains a `mesh` block: the device's address, interface, port and
-port-mapping state, and for every device member its path class, endpoint, handshake age
+port-mapping state, and for every device member its path class, endpoint, handshake age, how long since it was last heard from
 and bytes each way; `node ls` gains a `PATH` column; the machine vitals' network
 counters (docs/12 §8) are the mesh interface's, `mesh_rx_bytes` and `mesh_tx_bytes`
 (I-325).
@@ -413,8 +414,8 @@ round-trip table.
   deduplicated and at most 8; `update_endpoints` is accepted for the caller's own row
   only, and published at most once a minute and only when the set changed.
 - **I-323** — A peer without a session is sent to every candidate at once and pinned to
-  the source of the first authenticated packet; data is never fanned out; a peer whose
-  last handshake is older than 75 s returns to fan-out within 10 s; two devices behind
+  the source of the first authenticated packet; data is never fanned out; a peer not
+  heard from (no packet, no handshake) for 75 s returns to fan-out within 10 s; two devices behind
   cone NATs, and one behind a cone NAT and one behind a symmetric NAT, reach each other
   directly.
 - **I-324** — The Linux unit runs as the installing user with `CAP_NET_ADMIN` as its

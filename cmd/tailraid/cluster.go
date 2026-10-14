@@ -510,7 +510,11 @@ func addDiskCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			id, err := node.PrepareDisk(disk.Path, cid, host.ID)
+			ident := host.ID // the marker names the device by its mesh key (docs/14 §2); the fake has none
+			if rep.Mesh != nil && rep.Mesh.Key != "" {
+				ident = rep.Mesh.Key
+			}
+			id, err := node.PrepareDisk(disk.Path, cid, ident)
 			if err != nil {
 				return err
 			}
@@ -746,12 +750,28 @@ func tokenCmd() *cobra.Command {
 	rotate := &cobra.Command{
 		Use: "rotate", Short: "Replace the join token (a Raft MetaSet); codes printed before stop working at once",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			before, _, _, err := fetchReport(cmd.Context(), cmd)
+			if err != nil {
+				return err
+			}
 			if _, err := adminCall(cmd, rpc.AdminOp{Op: "rotate_token"}); err != nil {
 				return err
 			}
-			rep, _, _, err := fetchReport(cmd.Context(), cmd)
-			if err != nil {
-				return err
+			// the rotation is the leader's; this node's own view of the token follows a
+			// moment later, and a code printed before that would carry the old token
+			rep := before
+			for attempt := 0; rep.JoinToken == before.JoinToken && attempt < 40; attempt++ {
+				select {
+				case <-cmd.Context().Done():
+					return cmd.Context().Err()
+				case <-time.After(250 * time.Millisecond):
+				}
+				if rep, _, _, err = fetchReport(cmd.Context(), cmd); err != nil {
+					return err
+				}
+			}
+			if rep.JoinToken == before.JoinToken {
+				return errors.New("rotated, but this node has not seen the new token yet: run `tailraid token` in a moment")
 			}
 			code := joinCodeOf(rep)
 			if code == "" {

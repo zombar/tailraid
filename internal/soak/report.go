@@ -538,7 +538,7 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 {{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
 {{if .MeshPairs}}<h2>Mesh paths</h2>
 <p class="meta">phase 26 (docs/20 §5): every ordered pair as the first node sees the second, at the start of the phase; the lanes chart above has the class over the whole run</p>
-<table><tr><th>From</th><th>To</th><th>Class</th><th>Endpoint</th><th>Handshake</th></tr>
+<table><tr><th>From</th><th>To</th><th>Class</th><th>Endpoint</th><th>Seen</th></tr>
 {{range .MeshPairs}}<tr><td>{{.From}}</td><td>{{.To}}</td><td>{{.Class}}</td><td>{{.Endpoint}}</td><td>{{.Handshake}}</td></tr>{{end}}</table>{{end}}
 {{if .MeshJoin}}<h2>Join round trip</h2>
 <p class="meta">phase 25 (docs/20 §4): the late device {{.MeshJoin.Late}}, from the moment it was started, with the members that listed its pending row</p>

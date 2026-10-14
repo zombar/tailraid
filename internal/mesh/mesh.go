@@ -30,7 +30,9 @@ const (
 	Keepalive = 25 * time.Second
 	// NoKeepalive as Options.Keepalive sends none: the tests drive every handshake.
 	NoKeepalive = -1 * time.Second
-	// PathDead is the handshake age past which a peer returns to fan-out.
+	// PathDead is how long a pinned peer may send nothing (no packet received from it,
+	// no handshake) before it returns to fan-out: three keepalives. A handshake alone is
+	// no sign of life, since WireGuard renews one only every two minutes.
 	PathDead = 75 * time.Second
 	// TickEvery is how often the monitor looks.
 	TickEvery = 10 * time.Second
@@ -75,9 +77,25 @@ type PeerStatus struct {
 	Endpoint      netip.AddrPort // the pinned endpoint; zero while fanning out or unknown
 	Fanout        bool
 	LastHandshake time.Time // zero when there was none
+	LastRx        time.Time // when the received byte count last grew (a keepalive counts); zero when nothing arrived
 	Rx, Tx        uint64
 	Keepalive     time.Duration
 	Class         PathClass
+}
+
+// LastSeen is the later of the peer's last handshake and its last received packet: the
+// sign of life the path monitor and the class go by.
+func (p PeerStatus) LastSeen() time.Time {
+	if p.LastRx.After(p.LastHandshake) {
+		return p.LastRx
+	}
+	return p.LastHandshake
+}
+
+// rxSeen is what the device last saw of a peer's received bytes, for LastRx.
+type rxSeen struct {
+	bytes uint64
+	at    time.Time
 }
 
 // Mesh is one node's device.
@@ -94,6 +112,7 @@ type Mesh struct {
 	mu    sync.Mutex
 	peers map[Key]Peer
 	local []netip.Prefix // this host's own subnets, for the LAN class
+	seen  map[Key]rxSeen // per peer: the received bytes last read and when they last grew
 }
 
 // New starts a device on tunDev with the key, listening on the port (I-317).
@@ -110,7 +129,7 @@ func New(tunDev tun.Device, key PrivateKey, o Options) (*Mesh, error) {
 	if inner == nil {
 		inner = conn.NewStdNetBind()
 	}
-	m := &Mesh{bind: newBind(inner, log), log: log, clk: clk, key: key, dead: o.PathDead, ka: o.Keepalive, peers: map[Key]Peer{}}
+	m := &Mesh{bind: newBind(inner, log), log: log, clk: clk, key: key, dead: o.PathDead, ka: o.Keepalive, peers: map[Key]Peer{}, seen: map[Key]rxSeen{}}
 	if m.dead == 0 {
 		m.dead = PathDead
 	}
@@ -205,6 +224,11 @@ func (m *Mesh) SetPeers(peers []Peer) error {
 		sb.WriteString("public_key=" + k.Hex() + "\n")
 		if known && old.Addr == p.Addr {
 			sb.WriteString("update_only=true\n")
+			if len(old.Candidates) == 0 && len(p.Candidates) > 0 {
+				// a row that arrived before its endpoints (a joiner publishes them from its
+				// first tick): the device had nowhere to send, so it fans out now
+				sb.WriteString("endpoint=" + (&fanout{idx: p.Idx}).DstToString() + "\n")
+			}
 			continue // the pinned endpoint stays; the monitor decides when to fan out again
 		}
 		sb.WriteString("replace_allowed_ips=true\nallowed_ip=" + p.Addr.String() + "/32\n")
@@ -228,9 +252,6 @@ func (m *Mesh) Peers() ([]PeerStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mesh: read device: %w", err)
 	}
-	m.mu.Lock()
-	local := m.local
-	m.mu.Unlock()
 	now := m.clk.Now()
 	var out []PeerStatus
 	var cur *PeerStatus
@@ -280,6 +301,30 @@ func (m *Mesh) Peers() ([]PeerStatus, error) {
 			}
 		}
 	}
+	m.mu.Lock()
+	local := m.local
+	for i := range out {
+		p := &out[i]
+		// a received byte is a sign of life a handshake is not: keepalives arrive every
+		// Keepalive, handshakes only every two minutes
+		s, known := m.seen[p.Key]
+		switch {
+		case !known && p.Rx > 0:
+			s = rxSeen{bytes: p.Rx, at: now}
+		case known && p.Rx > s.bytes:
+			s = rxSeen{bytes: p.Rx, at: now}
+		case !known:
+			s = rxSeen{}
+		}
+		m.seen[p.Key] = s
+		p.LastRx = s.at
+	}
+	for k := range m.seen {
+		if _, still := m.peers[k]; !still {
+			delete(m.seen, k)
+		}
+	}
+	m.mu.Unlock()
 	for i := range out {
 		out[i].Class = classify(out[i], now, m.dead, local)
 	}
@@ -288,7 +333,8 @@ func (m *Mesh) Peers() ([]PeerStatus, error) {
 }
 
 func classify(p PeerStatus, now time.Time, dead time.Duration, local []netip.Prefix) PathClass {
-	if p.Fanout || !p.Endpoint.IsValid() || p.LastHandshake.IsZero() || now.Sub(p.LastHandshake) > dead {
+	seen := p.LastSeen()
+	if p.Fanout || !p.Endpoint.IsValid() || seen.IsZero() || now.Sub(seen) > dead {
 		return PathNone
 	}
 	for _, pfx := range local {
@@ -299,9 +345,9 @@ func classify(p PeerStatus, now time.Time, dead time.Duration, local []netip.Pre
 	return PathWAN
 }
 
-// Tick is the path monitor: a peer whose last handshake is older than PathDead, or that
-// never had one, is sent back to fan-out so its candidates are tried again (I-323); the
-// host's own subnets are re-read for the LAN class.
+// Tick is the path monitor: a peer not heard from for PathDead (no packet received, no
+// handshake), or never, is sent back to fan-out so its candidates are tried again
+// (I-323); the host's own subnets are re-read for the LAN class.
 func (m *Mesh) Tick() error {
 	m.refreshLocal()
 	peers, err := m.Peers()
@@ -313,14 +359,18 @@ func (m *Mesh) Tick() error {
 	var sb strings.Builder
 	for i := range peers {
 		p := &peers[i]
-		if p.Fanout || !p.Endpoint.IsValid() {
-			continue
-		}
-		if !p.LastHandshake.IsZero() && m.clk.Now().Sub(p.LastHandshake) <= m.dead {
+		if p.Fanout {
 			continue
 		}
 		row, ok := m.peers[p.Key]
 		if !ok || len(row.Candidates) == 0 {
+			continue
+		}
+		if !p.Endpoint.IsValid() { // never had an endpoint: its candidates came after the row
+			sb.WriteString("public_key=" + p.Key.Hex() + "\nupdate_only=true\nendpoint=" + (&fanout{idx: row.Idx}).DstToString() + "\n")
+			continue
+		}
+		if seen := p.LastSeen(); !seen.IsZero() && m.clk.Now().Sub(seen) <= m.dead {
 			continue
 		}
 		sb.WriteString("public_key=" + p.Key.Hex() + "\nupdate_only=true\nendpoint=" + (&fanout{idx: row.Idx}).DstToString() + "\n")

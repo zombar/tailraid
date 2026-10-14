@@ -22,6 +22,9 @@ jsonlog() {
   done
 }
 say() { printf '%s\n' "$*" | jsonlog; }
+# the config is rewritten on every start: the mesh address init or join recorded in it
+# must survive, it is the device's identity on the network (docs/20 §3)
+mesh_address=$(awk '/^mesh:/ { m = 1; next } /^[^ ]/ { m = 0 } m && /^  address:/ { print $2 }' "$TAILRAID_HOME/config.yaml" 2>/dev/null || true)
 cat > "$TAILRAID_HOME/config.yaml" <<EOF2
 node:
   name: $NODE_NAME
@@ -44,6 +47,7 @@ stats:
 dev:
   enabled: true
 EOF2
+if [ -n "$mesh_address" ]; then printf 'mesh:\n  address: %s\n' "$mesh_address" >> "$TAILRAID_HOME/config.yaml"; fi
 # init and join both register the disks the config lists (docs/14 §2, §9): a derived
 # budget for a bare path, a pinned one for `path=capacity`
 diskcfg() {
@@ -85,18 +89,16 @@ wait_code() { # the code another container writes
 voter=; [ "${VOTER:-true}" = true ] && voter=--voter
 if [ "$ROLE" = tryjoin ]; then
   # one join attempt by a throwaway device: its output and exit status are the result
+  # (the if keeps errexit from ending the script before the output is printed)
   wait_code
-  cli tailraid join "$(cat "$code_file")"
-  exit $?
+  if cli tailraid join "$(cat "$code_file")"; then exit 0; else exit 1; fi
 fi
 if [ -f "$TAILRAID_HOME/rejoin" ]; then
   # a reset device joining again under its key (docs/20 §4, phase 25)
   code=$(cat "$TAILRAID_HOME/rejoin"); rm -f "$TAILRAID_HOME/rejoin"
   cli tailraid reset --yes --discard-dirty
-  if [ -n "${DISKS:-}" ]; then
-    diskcfg > "$TAILRAID_HOME/disks.yaml"
-    sed -i "/^  voter:/r $TAILRAID_HOME/disks.yaml" "$TAILRAID_HOME/config.yaml"
-  fi
+  # the config already lists the disks (disks.saved.yaml above): the join re-registers
+  # them under the row the device keeps (docs/20 §4)
   until cli tailraid join "$code" ${voter:+"$voter"}; do say "join retry"; sleep 2; done
 fi
 if [ ! -f "$TAILRAID_HOME/data/cluster_id" ]; then

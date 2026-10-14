@@ -122,6 +122,10 @@ type JoinResponse struct {
 	Volume    meta.Volume  `json:"volume"`
 	Members   []meta.Node  `json:"members"`
 	Disks     []meta.Node  `json:"disks,omitempty"` // set by the joiner: the disks it registered from its config (docs/14 §2)
+	// Index is the log index of the joiner's row: a member that forwarded the join waits
+	// for it before answering, so the joiner's next request to that member is a member's
+	// (docs/20 §4)
+	Index uint64 `json:"index,omitempty"`
 }
 
 // MemberOp is POST /v1/members.

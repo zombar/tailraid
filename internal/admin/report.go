@@ -543,6 +543,7 @@ type MeshPeer struct {
 	Class        string       `json:"class"` // lan, wan, relay or none
 	Endpoint     string       `json:"endpoint,omitempty"`
 	HandshakeAge string       `json:"handshake_age,omitempty"`
+	SeenAge      string       `json:"seen_age,omitempty"` // since the last packet or handshake from it: the path monitor's sign of life
 	Rx           uint64       `json:"rx_bytes,omitempty"`
 	Tx           uint64       `json:"tx_bytes,omitempty"`
 }

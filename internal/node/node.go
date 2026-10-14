@@ -174,7 +174,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	defer ov.Close()
 
-	disks := newDiskSet(cfg, clusterID, id, selfIdx, log) // this host's disks, the only shard stores (docs/14 §3, §9)
+	disks := newDiskSet(cfg, clusterID, HostIdent(nw.Key(), id), selfIdx, log) // this host's disks, the only shard stores (docs/14 §3, §9)
 	disks.refresh(node.FSM.Nodes())
 
 	client := rpc.NewClient(clusterID, node.RPCAddrOf)
@@ -318,7 +318,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Src: node.FSM, Vol: search.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Log: log,
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
-	ops := &adminOps{node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	ops := &adminOps{cfg: cfg, reseed: nw.auth.SetSeed, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
 	// this host's mirrors (docs/16): the hook takes the clone of a snapshot begun on one
 	mpol, err := cfg.Mirroring()
@@ -599,6 +599,8 @@ func (s *staleness) stale(state cluster.HealthState, lastContact, now time.Time)
 
 // adminOps implements rpc.Admin and runs the periodic GC and sweep.
 type adminOps struct {
+	cfg       config.Config
+	reseed    func([]meta.Node) // the authorizer's seed follows the table (never a removed row)
 	node      *cluster.Node
 	prober    *cluster.Prober
 	repairer  *repair.Repairer
@@ -683,6 +685,7 @@ func (a *adminOps) targets() []target {
 // leader when it moved past the hysteresis (docs/01 §Node budget, I-74).
 func (a *adminOps) rebudget(ctx context.Context) {
 	a.disks.refresh(a.node.FSM.Nodes())
+	a.registerMissing(ctx)
 	bs, err := budgets(a.targets())
 	if err != nil {
 		a.log.Warn("budget: measuring a disk failed", "err", err)
@@ -714,6 +717,48 @@ func (a *adminOps) rebudget(ctx context.Context) {
 			continue
 		}
 		a.log.Info("budget registered", "target", nd.Name, "was", nd.Capacity, "now", b, "pinned", pinned[idx])
+	}
+}
+
+// registerMissing registers every configured disk whose marker is this host's and this
+// cluster's but which has no row (docs/14 §2): a `join` cut after its row landed and
+// before its disks were registered leaves exactly that, and the registration is
+// idempotent by disk ID, so a retry updates and never allocates a second row.
+func (a *adminOps) registerMissing(ctx context.Context) {
+	idxs := a.disks.unregistered()
+	if len(idxs) == 0 {
+		return
+	}
+	self, ok := a.node.FSM.Node(a.disks.host)
+	if !ok {
+		return
+	}
+	for _, i := range idxs {
+		d := a.cfg.Node.Disks[i]
+		id, err := PrepareDisk(d.Path, a.disks.clusterID, a.disks.hostID)
+		if err != nil {
+			a.log.Warn("disk not registered", "path", d.Path, "err", err)
+			continue
+		}
+		budget, err := DiskBudget(d)
+		if err != nil {
+			a.log.Warn("disk not registered", "path", d.Path, "err", err)
+			continue
+		}
+		op := rpc.MemberOp{Op: "add_disk", NodeIdx: self.Idx, DiskID: id, Name: DiskName(self.Name, i+1), Capacity: budget}
+		switch addr := a.node.LeaderRPCAddr(); {
+		case a.node.IsLeader():
+			err = a.node.MemberOp(ctx, op)
+		case addr != "":
+			err = a.client.Members(ctx, addr, op)
+		default:
+			err = cluster.ErrNoLeader
+		}
+		if err != nil {
+			a.log.Warn("disk not registered, will retry", "path", d.Path, "err", err)
+			continue
+		}
+		a.log.Info("disk registered", "path", d.Path, "name", op.Name, "budget", budget)
 	}
 }
 
@@ -784,6 +829,11 @@ func (a *adminOps) refreshSeed() {
 	if err := cluster.WriteMemberSeed(a.dataDir, nodes); err != nil {
 		a.log.Warn("member seed not written", "err", err)
 		return
+	}
+	if a.reseed != nil {
+		// the seed in memory follows the table too: a removed member would otherwise
+		// stay admitted through the seed until a restart (I-318)
+		a.reseed(nodes)
 	}
 	a.seedKey = key.String()
 }
@@ -1308,12 +1358,15 @@ func selfMemberOp(ctx context.Context, node *cluster.Node, client *rpc.Client, o
 // through the tunnel, waits for the log, and stops. Under dev.mesh_fake there is no
 // device: the join carries the code's token from the fake address.
 func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, version string, log *slog.Logger) (rpc.JoinResponse, error) {
-	if cluster.HasState(cfg.Node.DataDir) {
-		return rpc.JoinResponse{}, cluster.ErrAlreadyInit
-	}
 	code, err := mesh.DecodeJoinCode(codeText)
 	if err != nil {
 		return rpc.JoinResponse{}, err
+	}
+	if cluster.HasState(cfg.Node.DataDir) {
+		if have, err := cluster.LoadClusterID(cfg.Node.DataDir); err == nil && have == code.ClusterID {
+			return joinedAlready(cfg, code, log) // the join landed; serve registers any disk it did not
+		}
+		return rpc.JoinResponse{}, cluster.ErrAlreadyInit
 	}
 	if len(code.Endpoints) == 0 {
 		return rpc.JoinResponse{}, errors.New("the join code names no endpoint to reach the cluster at")
@@ -1426,7 +1479,15 @@ func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, v
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
-	defer n.Close()
+	joined := false
+	defer func() {
+		_ = n.Close()
+		if !joined { // a refused or lost join leaves no state behind: the next attempt starts afresh
+			if err := os.RemoveAll(filepath.Join(cfg.Node.DataDir, "raft")); err != nil {
+				log.Warn("could not clear the Raft state of the failed join", "err", err)
+			}
+		}
+	}()
 	nw.auth.SetMembers(n.FSM.NodeByAddr)
 	client := rpc.NewClient(cid, nil)
 	var resp rpc.JoinResponse
@@ -1453,6 +1514,7 @@ func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, v
 	if err != nil {
 		return rpc.JoinResponse{}, err
 	}
+	joined = true
 	nw.auth.SetSeed(resp.Members)
 	nw.refreshPeers(n) // every member's key, so the leader's Raft connection is accepted whoever leads
 	// persisted for serve: if this process stops before the log has arrived, serve's
@@ -1465,11 +1527,15 @@ func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, v
 	}
 	// the disks listed in the config, registered through the leader as init registers its
 	// own (docs/14 §2, I-121); serve opens them once their rows arrive
-	resp.Disks, err = registerDisks(cfg, cid, id, resp.NodeIdx, func(disk meta.Node) error {
-		return client.Members(ctx, target, rpc.MemberOp{Op: "add_disk", NodeIdx: resp.NodeIdx, DiskID: disk.ID, Name: disk.Name, Capacity: disk.Capacity})
+	resp.Disks, err = registerDisks(cfg, cid, HostIdent(nw.Key(), id), resp.NodeIdx, func(disk meta.Node) error {
+		return registerUntilMember(ctx, func() error {
+			return client.Members(ctx, target, rpc.MemberOp{Op: "add_disk", NodeIdx: resp.NodeIdx, DiskID: disk.ID, Name: disk.Name, Capacity: disk.Capacity})
+		})
 	})
 	if err != nil {
-		return resp, err
+		// the row landed: the join is done, and serve registers the disks left on its
+		// first tick (docs/14 §2), so a joiner cut here is not a failed join
+		log.Warn("joined; a disk was not registered, serve registers it", "err", err)
 	}
 	// receive the log before stopping so `serve` starts with the node table present, and
 	// snapshot it: Raft restores a table at open from a snapshot only
@@ -1478,6 +1544,47 @@ func Join(ctx context.Context, cfg config.Config, codeText string, voter bool, v
 	} else if err := snapshotAfterJoin(ctx, n); err != nil {
 		log.Warn("no snapshot after the join; serve relies on the member seed until the leader connects", "err", err)
 	}
+	return resp, nil
+}
+
+// registerUntilMember runs a member op of a device that just joined, retrying a
+// refusal for a while: a member's authorizer reads its own table, and the row of the
+// joiner reaches a follower a moment after the leader applied it (docs/20 §4).
+func registerUntilMember(ctx context.Context, op func() error) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		err := op()
+		if err == nil || !errors.Is(err, rpc.ErrForbidden) || time.Now().After(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// joinedAlready is `tailraid join` run again after a join that landed its row (a
+// retried entrypoint, a lost connection): the state and the mesh address are this
+// cluster's, serve registers any disk the cut join did not (docs/14 §2), so the command
+// reports the row it has from its member seed and changes nothing.
+func joinedAlready(cfg config.Config, code mesh.JoinCode, log *slog.Logger) (rpc.JoinResponse, error) {
+	id, err := cluster.LoadOrCreateNodeID(cfg.Node.DataDir)
+	if err != nil {
+		return rpc.JoinResponse{}, err
+	}
+	members, err := cluster.LoadMemberSeed(cfg.Node.DataDir)
+	if err != nil {
+		return rpc.JoinResponse{}, fmt.Errorf("joined already, but the member seed is unreadable: %w", err)
+	}
+	resp := rpc.JoinResponse{ClusterID: meta.HexID(code.ClusterID), Members: members}
+	for i := range members {
+		if members[i].ID == id {
+			resp.NodeIdx = members[i].Idx
+		}
+	}
+	log.Info("joined already; serve registers the disks the config lists", "node", resp.NodeIdx)
 	return resp, nil
 }
 

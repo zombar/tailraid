@@ -324,6 +324,9 @@ func TestClassify_Table(t *testing.T) {
 		{"wan fresh", PeerStatus{Endpoint: wan, LastHandshake: now.Add(-time.Minute)}, PathWAN},
 		{"stale", PeerStatus{Endpoint: lan, LastHandshake: now.Add(-PathDead - time.Second)}, PathNone},
 		{"at the edge", PeerStatus{Endpoint: lan, LastHandshake: now.Add(-PathDead)}, PathLAN},
+		{"old handshake, recent packet", PeerStatus{Endpoint: lan, LastHandshake: now.Add(-3 * time.Minute), LastRx: now.Add(-20 * time.Second)}, PathLAN},
+		{"old handshake, old packet", PeerStatus{Endpoint: wan, LastHandshake: now.Add(-3 * time.Minute), LastRx: now.Add(-PathDead - time.Second)}, PathNone},
+		{"packet only", PeerStatus{Endpoint: wan, LastRx: now}, PathWAN},
 		{"never", PeerStatus{Endpoint: lan}, PathNone},
 		{"fanning out", PeerStatus{Fanout: true, LastHandshake: now}, PathNone},
 		{"no endpoint", PeerStatus{LastHandshake: now}, PathNone},
@@ -405,5 +408,35 @@ func TestMesh_KeepaliveIsOnByDefault(t *testing.T) {
 	}
 	if st := statusOf(t, a, b.m.Key()); st.Keepalive != Keepalive {
 		t.Fatalf("keepalive %s, want %s", st.Keepalive, Keepalive)
+	}
+}
+
+// A peer whose row arrived before its endpoints (a joiner publishes them from its first
+// tick) is sent nothing until they come, and fans out the moment they do: the device
+// does not wait for the dead-path window to notice a peer it never had an endpoint for.
+// Invariant: I-322, I-323
+func TestMesh_CandidatesArrivingLaterFanOut(t *testing.T) {
+	a := newNode(t, 1, Options{})
+	b := newNode(t, 2, Options{})
+	if err := a.m.SetPeers([]Peer{b.peer()}); err != nil { // the row, no endpoints yet
+		t.Fatal(err)
+	}
+	if err := b.m.SetPeers([]Peer{a.peer(a.loopback())}); err != nil {
+		t.Fatal(err)
+	}
+	if st := statusOf(t, a, b.m.Key()); st.Fanout || st.Endpoint.IsValid() {
+		t.Fatalf("a peer without candidates has an endpoint: %+v", st)
+	}
+	if err := a.m.SetPeers([]Peer{b.peer(b.loopback())}); err != nil { // the endpoints published
+		t.Fatal(err)
+	}
+	if st := statusOf(t, a, b.m.Key()); !st.Fanout {
+		t.Fatalf("the peer does not fan out once it has candidates: %+v", st)
+	}
+	if !ping(t, a, b, 10*time.Second) {
+		t.Fatal("no packet reached b once its endpoints were known")
+	}
+	if st := statusOf(t, a, b.m.Key()); st.Fanout || st.Endpoint != b.loopback() {
+		t.Fatalf("a did not pin b: %+v", st)
 	}
 }

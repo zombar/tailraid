@@ -86,13 +86,18 @@ func peersOf(rep admin.Report) map[string]admin.MeshPeer {
 	return out
 }
 
-// handshakeAge parses the status report's handshake age; ok is false for a peer that
-// never shook hands.
+// handshakeAge parses the status report's seen age (since the last packet or handshake
+// from the peer, the path monitor's sign of life; a handshake alone renews only every
+// two minutes); ok is false for a peer never heard from.
 func handshakeAge(p admin.MeshPeer) (time.Duration, bool) {
-	if p.HandshakeAge == "" {
+	age := p.SeenAge
+	if age == "" {
+		age = p.HandshakeAge
+	}
+	if age == "" {
 		return 0, false
 	}
-	d, err := time.ParseDuration(p.HandshakeAge)
+	d, err := time.ParseDuration(age)
 	return d, err == nil
 }
 
@@ -260,8 +265,13 @@ func phaseMeshJoin(ctx context.Context, r *Run) error {
 	}
 	u.done("start " + bootstrap.Name)
 
-	// (c) the token rotated on a third member: the old code gets silence
-	newCode, err := me.RotateToken(ctx, rotator)
+	// (c) the token rotated on a third member: the old code gets silence. The rotation
+	// is a leader op, retried while the leader the bootstrap's return unsettled is found.
+	var newCode string
+	_, _ = r.pollUntil(ctx, 30*time.Second, func() bool {
+		newCode, err = me.RotateToken(ctx, rotator)
+		return err == nil
+	})
 	r.check("I-319", "token rotated through "+rotator.Name, err == nil && newCode != "" && newCode != code, strings.TrimPrefix(errText(err), "; "))
 	if err == nil {
 		out, jerr := me.TryJoin(ctx, code)
@@ -292,7 +302,24 @@ func phaseMeshJoin(ctx context.Context, r *Run) error {
 	r.check("I-321, I-94", "a reset device re-joins under its key with the same index, address and disks",
 		same, fmt.Sprintf("before idx %d addr %s id %s disks %v; after idx %d addr %s id %s disks %v%s", bdev.Idx, bdev.Addr, short(bdev.ID), bdisks, adev.Idx, adev.Addr, short(adev.ID), disksOf(after, late.Idx), errText(errors.Join(err, serr))))
 
-	// (e) removed: every member's device drops it, its own view goes dark
+	// (e) drained, then removed: every member's device drops it, its own view goes dark
+	if err := r.Env.SetState(ctx, late, meta.Draining); err != nil {
+		r.check("I-318", "drain of the late device", false, err.Error())
+		return nil
+	}
+	rep, err := r.repairUntilClean(ctx)
+	if err != nil {
+		return err
+	}
+	// a host leaves after its disks (docs/14 §2): each drained disk row goes first
+	for i := range rep.Nodes {
+		if d := &rep.Nodes[i]; d.Kind == "disk" && d.Host == late.Idx && d.State != "removed" {
+			if err := r.Env.Remove(ctx, NodeRef{Name: d.Name, Idx: d.Idx, Host: late.Name}); err != nil {
+				r.check("I-318", "node remove of the late device's disk "+d.Name, false, err.Error())
+				return nil
+			}
+		}
+	}
 	if err := r.Env.Remove(ctx, late); err != nil {
 		r.check("I-318", "node remove of the late device", false, err.Error())
 		return nil
@@ -372,10 +399,10 @@ func describePeers(rep admin.Report, members []NodeRef) string {
 		switch {
 		case !ok:
 			parts = append(parts, m.Name+" absent")
-		case p.HandshakeAge == "":
-			parts = append(parts, m.Name+" "+p.Class+" (no handshake)")
+		case p.HandshakeAge == "" && p.SeenAge == "":
+			parts = append(parts, m.Name+" "+p.Class+" (never heard from)")
 		default:
-			parts = append(parts, fmt.Sprintf("%s %s %s %s", m.Name, p.Class, p.Endpoint, p.HandshakeAge))
+			parts = append(parts, fmt.Sprintf("%s %s %s seen %s ago (handshake %s)", m.Name, p.Class, p.Endpoint, p.SeenAge, p.HandshakeAge))
 		}
 	}
 	return strings.Join(parts, ", ")
@@ -413,7 +440,7 @@ func phaseMeshPaths(ctx context.Context, r *Run) error {
 			}
 			p, found := peers[m.Name]
 			age, shook := handshakeAge(p)
-			attrs[n.Name+">"+m.Name] = fmt.Sprintf("%s %s %s", p.Class, p.Endpoint, p.HandshakeAge)
+			attrs[n.Name+">"+m.Name] = fmt.Sprintf("%s %s %s", p.Class, p.Endpoint, p.SeenAge)
 			if !found || !direct(p.Class) || p.Endpoint == "" || !shook || age > 2*time.Minute {
 				ok = false
 			}
@@ -462,10 +489,16 @@ func phaseMeshPaths(ctx context.Context, r *Run) error {
 	if vc, ok := r.Env.Volume(c); ok {
 		path := join(r.Root, "mesh", "through-the-cut.bin")
 		data := r.randomBytes(r.Profile.ChunkSize + 77)
-		werr := vc.Mkdir(join(r.Root, "mesh"))
-		if werr == nil {
-			werr = vc.WriteAt(path, 0, data)
-		}
+		var werr error
+		// the cut may have cost the voters an election: a gateway refuses metadata
+		// changes while stale (I-109) and serves again once a leader is back
+		_, _ = r.pollUntil(ctx, 60*time.Second, func() bool {
+			werr = vc.Mkdir(join(r.Root, "mesh"))
+			if werr == nil {
+				werr = vc.WriteAt(path, 0, data)
+			}
+			return werr == nil
+		})
 		var got []byte
 		if werr == nil {
 			if vd, ok := r.Env.Volume(d); ok {

@@ -494,10 +494,24 @@ func TestJoin_TokenAndKey(t *testing.T) {
 		t.Fatalf("joined node %+v", n)
 	}
 	e.pending.Store(false)
+	// a re-join after reset (docs/20 §4, I-94): the caller's address holds an active row
+	// under the request's key, so the join is accepted with no pending row; another key
+	// from that address is not
+	var mk meta.MeshKey
+	mk[0], mk[31] = 7, 9
+	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, Addr: memberIP.String(), Capacity: 1 << 30, Key: mk}}})
+	rejoin := keyed
+	rejoin.NodeID, rejoin.Key = "n1b", base64.StdEncoding.EncodeToString(mk[:])
+	if _, err := c.Join(ctx, e.addr, rejoin); err != nil {
+		t.Fatalf("re-join from the key's own address: %v", err)
+	}
+	if _, err := c.Join(ctx, e.addr, keyed); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("another key from a member's address: %v", err)
+	}
 	// a keyless join with the token, where the server allows one (the harness, the fake)
 	req.Token, req.NodeID = "tok", "n3"
 	jr, err = c.Join(ctx, e.addr, req)
-	if err != nil || jr.NodeIdx != 3 || jr.Volume.K != 2 {
+	if err != nil || jr.NodeIdx != 4 || jr.Volume.K != 2 { // 3 went to the re-join above
 		t.Fatalf("keyless join: %+v %v", jr, err)
 	}
 	// join through a follower is redirected

@@ -202,6 +202,13 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 func meshPeers(rows []meta.Node, pending []meta.Pending, self mesh.Key) []mesh.Peer {
 	var out []mesh.Peer
 	seen := map[mesh.Key]bool{}
+	// a removed row's key is no peer whatever another source (the member seed, which
+	// may lag the table) says of it: its next packet dies at the tunnel (I-318)
+	for i := range rows {
+		if r := &rows[i]; r.Kind == meta.KindDevice && r.State == meta.Removed && !r.Key.IsZero() {
+			seen[mesh.Key(r.Key)] = true
+		}
+	}
 	for i := range rows {
 		r := &rows[i]
 		if r.Kind != meta.KindDevice || r.State == meta.Removed || r.Key.IsZero() || r.Addr == "" {
@@ -428,6 +435,9 @@ func (nw *network) report(node *cluster.Node, cfg config.Config, now time.Time) 
 		}
 		if !p.LastHandshake.IsZero() {
 			mp.HandshakeAge = now.Sub(p.LastHandshake).Round(time.Second).String()
+		}
+		if seen := p.LastSeen(); !seen.IsZero() {
+			mp.SeenAge = now.Sub(seen).Round(time.Second).String()
 		}
 		rep.Peers = append(rep.Peers, mp)
 	}
