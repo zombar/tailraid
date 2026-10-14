@@ -118,7 +118,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 
 | Method and pattern | CSRF header | Response |
 |---|---|---|
-| `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
+| `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
@@ -971,6 +971,10 @@ placement gives way to legible text: the dashed line keeps the event's true time
   `<tsIP>:port` or the node's MagicDNS name with that port (case-insensitively) and
   refuses every other with `421` before authorization; the index page's CSP contains
   `frame-ancestors 'none'`; `/api/status` never carries the join token.
+- **I-315** — The index page's CSP admits every source the TypeScript gives an image:
+  `blob:` for a thumbnail or folder cover fetched and shown through an object URL, `data:`
+  for an inline picture; a test holds the two together (in v0.8.1 every thumbnail went
+  through an object URL under an `img-src` without `blob:`, and the browser drew none).
 - **I-158** — The web UI lists a folder's deleted roots in that folder with their
   `deleted_at` and `purge_at`, after the live entries, when show deleted is ticked; `ls`, `stat`, `files`, `thumb` and
   `tags` with `in=<ino>` read inside a deleted root and `GET /files` there returns exactly
@@ -1113,6 +1117,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-226 | `TestFSM_Rename_NoReplace_Exist`, `TestWebUI_Put_TwoGateways_OneName_OneWhole`, `TestWebUI_Put_TwoGateways_IfNoneMatch_One412`, `TestSoak_MultiUserAgainstHarness` |
 | I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
 | I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
+| I-315 | `TestStatic_CSPAdmitsEveryImageSource` |
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
 | I-143 | `TestBrowserCommand_PerOS`, `TestCLI_Dashboard` |
 | I-140 | `TestWebUI_Ls_HidesOSMetadata` |
