@@ -191,6 +191,51 @@ func lookdevCharts() []struct{ id, svg string } {
 		{Name: "mesh tx MiB/s", Points: pts(func(x float64) float64 {
 			return wburst(x)*(66+noise(8)) + pass(x)*(8+noise(3)) + rburst(x)*(2+noise(1)) + math.Abs(noise(0.3))
 		})},
+		{Name: "relayed MiB/s", Points: pts(func(x float64) float64 {
+			if x >= at(11, 0) { // fern found a direct path at 11:00
+				return 0
+			}
+			return 4 + rburst(x)*(12+noise(3)) + math.Abs(noise(0.5))
+		})},
+	}, marks, nil, ax))
+	// pike's paths: atlas on the lan, nomad over the wan, fern relayed through atlas until it
+	// found a direct path at 11:00, lumen on the lan but gone while it was dead (docs/17 §4, I-332)
+	peers := []string{"atlas", "lumen", "nomad", "fern"}
+	pathCells := map[string][]Cell{}
+	for _, x := range xs3 {
+		pathCells["atlas"] = append(pathCells["atlas"], Cell{x, OK})
+		pathCells["nomad"] = append(pathCells["nomad"], Cell{x, Warn})
+		fern := Off
+		if x >= at(11, 0) {
+			fern = Warn
+		}
+		pathCells["fern"] = append(pathCells["fern"], Cell{x, fern})
+		lumen := OK
+		if in(x, at(10, 10), at(10, 30)) {
+			lumen = Bad
+		}
+		pathCells["lumen"] = append(pathCells["lumen"], Cell{x, lumen})
+	}
+	add("paths", Lanes("Mesh paths from pike", span, peers, pathCells, ax))
+	rtt := func(f func(x float64) (float64, bool)) [][2]float64 {
+		var p [][2]float64
+		for _, x := range xs {
+			if v, ok := f(x); ok {
+				p = append(p, [2]float64{x, v})
+			}
+		}
+		return p
+	}
+	add("rtt", Line("Mesh round trip from pike", "ms", []Series{
+		{Name: "atlas", Points: rtt(func(x float64) (float64, bool) { return 4 + math.Abs(noise(1.5)) + rburst(x)*3, true })},
+		{Name: "lumen", Points: rtt(func(x float64) (float64, bool) { return 2 + math.Abs(noise(1)), !in(x, at(10, 10), at(10, 30)) })},
+		{Name: "nomad", Points: rtt(func(x float64) (float64, bool) { return 83 + noise(9) + wburst(x)*20, true })},
+		{Name: "fern", Points: rtt(func(x float64) (float64, bool) {
+			if x < at(11, 0) {
+				return 140 + noise(20), true
+			}
+			return 58 + noise(6), true
+		})},
 	}, marks, nil, ax))
 	add("net", Line("Network (all interfaces)", "MiB/s", []Series{
 		{Name: "rx MiB/s", Points: pts(func(x float64) float64 {

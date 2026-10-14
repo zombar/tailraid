@@ -330,7 +330,10 @@ and bytes each way; `node ls` gains a `PATH` column; the machine vitals' network
 counters (docs/12 §8) are the mesh interface's, `mesh_rx_bytes` and `mesh_tx_bytes`
 (I-325). The dashboard draws the same block as a picture, the Mesh section of docs/13
 §7: this device at the centre, the members on a ring, the edges in their path classes,
-the facts in a table under it, each member a link to its own dashboard (I-331).
+the facts in a table under it, each member a link to its own dashboard (I-331). The
+Stats page keeps the history (docs/17 §1 and §4): every node's rows carry its path class
+and round trip to each peer and the bytes it relayed, drawn as the paths lanes and the
+round-trip line of its node section (I-332).
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -26,8 +26,10 @@ operation stays in the CLI.
   history every node keeps inside the volume (docs/17): stored against logical bytes,
   chunks, the repair backlog and the bytes a pass moves, liveness lanes, the data spread
   across disks and the slots per node for the cluster, then one member's client
-  throughput, mesh and total network rates, CPU, memory, pressure, data disk, disk
-  throughput, WAL depth, process memory and readahead. A range picker in the Grafana
+  throughput, mesh and total network rates (the mesh one with the bytes it relayed), the
+  class of its path to each peer as lanes and the round trip to each as a line (docs/17
+  §4, I-332), CPU, memory, pressure, data disk, disk throughput, WAL depth, process
+  memory and readahead. A range picker in the Grafana
   style (1h, 6h, 24h, 7d, 30d, 1y, or a custom from and to) and the member choice live in
   the URL hash, so a link reproduces a view; a range ending now refreshes every 5 s
   while the tab is visible. The member dropdown lists every device member with its
