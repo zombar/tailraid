@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -127,5 +128,55 @@ func TestConfig_Warnings_Permissions(t *testing.T) {
 	c.Node.DataDir = filepath.Join(dir, "missing")
 	if w := c.Warnings(p); len(w) != 0 {
 		t.Fatalf("a missing data directory is init's problem, not a warning: %v", w)
+	}
+}
+
+// Every disk and mirror path gets the data directory's rule: a mode that lets other
+// users in is one line naming chmod 700; 0700 is silent; a missing path says nothing.
+// Invariant: I-341
+func TestConfig_Warnings_PathsTable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits are not meaningful on Windows")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("node: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"disk", "mirror"} {
+		for _, mode := range []os.FileMode{0o700, 0o750, 0o755, 0o770, 0o777} {
+			c := Default()
+			c.Node.DataDir = filepath.Join(dir, "data")
+			if err := os.MkdirAll(c.Node.DataDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(dir, fmt.Sprintf("%s-%o", kind, mode))
+			if err := os.Mkdir(target, mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(target, mode); err != nil { // Mkdir applies the umask
+				t.Fatal(err)
+			}
+			switch kind {
+			case "disk":
+				c.Node.Disks = []Disk{{Path: target}}
+			case "mirror":
+				c.Node.Mirrors = []Mirror{{Path: target}}
+			}
+			w := c.Warnings(p)
+			wide := mode&0o077 != 0
+			if wide && (len(w) != 1 || !strings.Contains(w[0], kind+" "+target) || !strings.Contains(w[0], "chmod 700")) {
+				t.Fatalf("%s %o: warnings %v", kind, mode, w)
+			}
+			if !wide && len(w) != 0 {
+				t.Fatalf("%s %o: unexpected warnings %v", kind, mode, w)
+			}
+		}
+		c := Default()
+		c.Node.DataDir = filepath.Join(dir, "data")
+		c.Node.Disks = []Disk{{Path: filepath.Join(dir, "missing-"+kind)}}
+		if w := c.Warnings(p); len(w) != 0 {
+			t.Fatalf("a missing %s is init's problem, not a warning: %v", kind, w)
+		}
 	}
 }

@@ -22,6 +22,8 @@ type FS interface {
 	ReadDir(name string) ([]fs.DirEntry, error)
 	MkdirAll(name string, perm fs.FileMode) error
 	Stat(name string) (fs.FileInfo, error)
+	// Chmod is os.Chmod; the store and the cache tighten their directories with it (I-340).
+	Chmod(name string, mode fs.FileMode) error
 	Chtimes(name string, atime, mtime time.Time) error
 	// SyncDir fsyncs a directory so a completed rename is durable. No-op on Windows.
 	SyncDir(name string) error
@@ -58,6 +60,7 @@ func (OS) Remove(name string) error                     { return os.Remove(name)
 func (OS) ReadDir(name string) ([]fs.DirEntry, error)   { return os.ReadDir(name) }
 func (OS) MkdirAll(name string, perm fs.FileMode) error { return os.MkdirAll(name, perm) }
 func (OS) Stat(name string) (fs.FileInfo, error)        { return os.Stat(name) }
+func (OS) Chmod(name string, mode fs.FileMode) error    { return os.Chmod(name, mode) }
 func (OS) Chtimes(name string, atime, mtime time.Time) error {
 	return os.Chtimes(name, atime, mtime)
 }
