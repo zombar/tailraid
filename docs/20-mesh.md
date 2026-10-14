@@ -22,7 +22,10 @@ tests); PR 2 the identity in the FSM and the RPC (`Node.Key`, `Endpoints` and `M
 `Meta.MeshSubnet`, the pending rows with ops 26–27 at codec 13, `cluster.Node.Introduce`,
 the join from a pending row, `update_endpoints`,
 the pending expiry, `rpc.TableAuthorizer` and `/health`'s `seen_from`); what each later PR
-wires is a stub in `test/invariants/mesh_stubs_test.go`; PR 3 put the node on it
+wires is a stub in `test/invariants/mesh_stubs_test.go`; PR 4 landed the privileges (§9:
+the Linux unit's capability, the macOS LaunchDaemon with `mount.owner`, wintun.dll
+embedded and written by `install` and `update` with the firewall rule, `uninstall
+--forget-identity`, `giveBack` after a `join` under sudo on Linux); PR 3 put the node on it
 (`internal/node/network.go`: the device opened before Raft, peers from the table, the
 seed and the pending rows, the path monitor, the candidates published, the pending
 expiry, `/health`'s `seen_from`, `status.mesh` and `node ls`'s PATH; `tailraid init`
@@ -300,8 +303,9 @@ OS, the CLI and the rigs).
   Support/tailraid`, with the log at `/Library/Logs/tailraid/serve.log`. `init`, `join`,
   `install`, `start`, `stop`, `update --restart`, `export`, `recover` and `reset` run
   under `sudo`; `status`, `dashboard`, `trash`, `cache`, `search` and the browser do not
-  (the CLI finds the node through `mesh.json`). `install` records `mount.uid` and
-  `mount.gid` from `SUDO_UID`, so the user's NFS mount shows their ownership. (A
+  (the CLI finds the node through `mesh.json` in the system home and the cluster ID
+  through `/health`). `install` records `mount.owner` from `SUDO_UID` and `SUDO_GID`, so
+  the user's NFS mount shows their ownership. (A
   privileged helper that only creates the utun and passes its descriptor to an
   unprivileged `serve` was considered and not chosen: 250 lines of privileged code, a
   socket protocol and a second plist, for a per-user data directory.)
@@ -334,7 +338,7 @@ counters (docs/12 §8) are the mesh interface's, `mesh_rx_bytes` and `mesh_tx_by
 | `mesh.portmap` | `true` | ask the router for a mapping (§7) |
 | `mesh.relay_rate` | 20 MiB/s | what this device forwards for others (§6) |
 | `repair.relay` | `avoid` | background work on relayed paths (§8) |
-| `mount.uid`, `mount.gid` | from `SUDO_UID` | macOS: the owner the NFS mount shows |
+| `mount.owner` | from `SUDO_UID:SUDO_GID` at `install` | macOS: `uid:gid` the gateways give files, so the user's mount shows their ownership under the root daemon |
 | `dev.mesh_fake` | — | with `dev.enabled`: a JSON file `{"addr": "127.0.0.1"}` replacing the device for the CLI tests, which cannot open a TUN; the node binds that address and joins by the code's token without an introduce (docs/09 §3) |
 
 Gone: `tailscale.cli`, `dev.tailscale_fake` (`Validate` names them with the hint).
@@ -460,7 +464,7 @@ round-trip table.
 | I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
 | I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`; stub `TestStub_I_322` for the publishing on a real interface |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
-| I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`; stub `TestStub_I_324` for the service units |
+| I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |
 | I-325 | `TestClassify_Table`, `TestLocalAddr_MeshFileThenConfig`; stub `TestStub_I_325` for `status` on a real interface |
 | I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`, `TestKeylessCheck` |
 | I-327 | stub `TestStub_I_327` |

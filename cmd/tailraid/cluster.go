@@ -40,14 +40,25 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 	if err != nil {
 		return nil, "", cfg, err
 	}
-	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
-	if err != nil {
-		return nil, "", cfg, fmt.Errorf("this node is not initialised: %w", err)
-	}
 	cfg.Path = cfgPath
 	addr, err := node.LocalAddr(cfg)
 	if err != nil {
-		return nil, "", cfg, err
+		// a user's CLI beside a root daemon (docs/20 §9): the config is root's, the mesh
+		// file in the system home is not
+		if sysAddr, _, ok := node.ReadMeshFile(config.SystemHome()); ok {
+			addr = sysAddr
+		} else {
+			return nil, "", cfg, err
+		}
+	}
+	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
+	if err != nil {
+		h, herr := rpc.NewClient([16]byte{}, nil).Health(cmd.Context(), addr)
+		raw, derr := hex.DecodeString(h.ClusterID)
+		if herr != nil || derr != nil || len(raw) != 16 {
+			return nil, "", cfg, fmt.Errorf("this node is not initialised: %w", err)
+		}
+		copy(cid[:], raw)
 	}
 	if override, _ := cmd.Flags().GetString("node"); override != "" {
 		addr = override
@@ -98,6 +109,9 @@ func joinCmd() *cobra.Command {
 			cfg.Path = path
 			resp, err := node.Join(cmd.Context(), cfg, args[0], voter, version, slog.Default())
 			if err != nil {
+				return err
+			}
+			if err := giveBack(cfg.Node.DataDir, filepath.Dir(path)); err != nil { // a join under sudo (docs/20 §9)
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "joined cluster %s as node %d (%s); %d members, policy %d+%d\nconfig: %s\n",

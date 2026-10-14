@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -100,6 +101,9 @@ func initCmd() *cobra.Command {
 			}
 			if err := node.Snapshot(cmd.Context(), n); err != nil { // the first serve restores the table from it (I-135)
 				return fmt.Errorf("snapshot after init: %w", err)
+			}
+			if err := giveBack(cfg.Node.DataDir, filepath.Dir(path)); err != nil { // an init under sudo (docs/20 §9)
+				return err
 			}
 			mode := "manual"
 			if auto {

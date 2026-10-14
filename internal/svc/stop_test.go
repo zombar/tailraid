@@ -60,9 +60,11 @@ func TestSvc_StopWaitsForExit(t *testing.T) {
 	}
 	p.GOOS = "darwin"
 	pl, _ = Stop(p)
-	if strings.Join(pl.Commands[0], " ") != "launchctl kill SIGTERM gui/501/app.tailraid.serve" || strings.Join(pl.WaitStopped, " ") != "launchctl print gui/501/app.tailraid.serve" {
+	if strings.Join(pl.Commands[0], " ") != "sudo launchctl kill SIGTERM system/app.tailraid.serve" || strings.Join(pl.WaitStopped, " ") != "sudo launchctl print system/app.tailraid.serve" {
 		t.Fatalf("darwin stop: %+v", pl)
 	}
+	p.Root = true // the fake launchctl below runs without sudo
+	pl, _ = Stop(p)
 	var printed bytes.Buffer
 	Print(&printed, pl)
 	if !strings.Contains(printed.String(), "until the service has stopped") {

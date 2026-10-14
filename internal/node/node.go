@@ -211,10 +211,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, flcfg, log)
 	fl.Events = ring
-	fl.Suspect = prober.Suspect // a PUT that outlasts the straggler grace (I-169)
-	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
+	fl.Suspect = prober.Suspect                          // a PUT that outlasts the straggler grace (I-169)
+	uid, gid := uint32(os.Getuid()), uint32(os.Getgid()) //nolint:gosec // ids
 	if runtime.GOOS == "windows" {
 		uid, gid = 0, 0
+	}
+	if cfg.Mount.Owner != "" { // the user's ownership on a mount served by a root daemon (docs/20 §9)
+		if uid, gid, err = cfg.MountOwner(); err != nil {
+			return err
+		}
 	}
 	fs := vfs.New(node.FSM, node, ov, rd, clk, uid, gid)
 	var st staleness

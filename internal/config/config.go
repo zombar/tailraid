@@ -40,7 +40,8 @@ type Config struct {
 		SMB  string `yaml:"smb"`  // loopback host:port of the SMB gateway (Windows; docs/15); "" disables it
 	} `yaml:"listen"`
 	Mount struct {
-		Path string `yaml:"path"`
+		Path  string `yaml:"path"`
+		Owner string `yaml:"owner,omitempty"` // "uid:gid" the gateways give files; set by install on macOS from SUDO_UID, where serve runs as root (docs/20 §9)
 	} `yaml:"mount"`
 	SMB struct {
 		Password string `yaml:"password"` // the share's password; init and join generate one when listen.smb is set (docs/15 §6)
@@ -430,6 +431,9 @@ func Home() string {
 	}
 	switch runtime.GOOS {
 	case "darwin":
+		if os.Geteuid() == 0 { // the root daemon's home (docs/20 §9)
+			return "/Library/Application Support/tailraid"
+		}
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, "Library", "Application Support", "tailraid")
 	case "windows":
@@ -931,5 +935,40 @@ func (c *Config) validateMesh() error {
 	if f := c.Dev.MeshFake; f != "" && !c.Dev.Enabled {
 		return errors.New("config: dev.mesh_fake needs dev.enabled")
 	}
+	if _, _, err := c.MountOwner(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// MountOwner is mount.owner as a uid and gid; ok is false when it is unset (the
+// gateways then use the process's own).
+func (c *Config) MountOwner() (uid, gid uint32, err error) {
+	o := c.Mount.Owner
+	if o == "" {
+		return 0, 0, nil
+	}
+	u, g, found := strings.Cut(o, ":")
+	if !found {
+		return 0, 0, fmt.Errorf("config: mount.owner %q: want uid:gid", o)
+	}
+	ui, err1 := strconv.ParseUint(u, 10, 32)
+	gi, err2 := strconv.ParseUint(g, 10, 32)
+	if err1 != nil || err2 != nil {
+		return 0, 0, fmt.Errorf("config: mount.owner %q: want uid:gid", o)
+	}
+	return uint32(ui), uint32(gi), nil
+}
+
+// SystemHome is the configuration directory of a service that runs as root: on macOS
+// `/Library/Application Support/tailraid`, where a root daemon's `init` wrote (docs/20
+// §9); elsewhere Home().
+func SystemHome() string {
+	if h := os.Getenv("TAILRAID_HOME"); h != "" {
+		return h
+	}
+	if runtime.GOOS == "darwin" {
+		return "/Library/Application Support/tailraid"
+	}
+	return Home()
 }

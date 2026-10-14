@@ -12,6 +12,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/clock"
+	"github.com/zombar/tailraid/internal/mesh/wintun"
 	"github.com/zombar/tailraid/internal/svc"
 	"github.com/zombar/tailraid/internal/update"
 )
@@ -93,6 +94,13 @@ present (a private fork needs it).`,
 			}
 			if err := u.Apply(ctx, rel, exe, version, runtime.GOOS, runtime.GOARCH, want != "", allowDowngrade); err != nil {
 				return err
+			}
+			if runtime.GOOS == "windows" { // the new binary's wintun.dll beside it (docs/20 §9, I-324)
+				if written, err := wintun.EnsureDLL(filepath.Dir(exe)); err != nil {
+					return err
+				} else if written {
+					fmt.Fprintf(out, "wrote %s beside %s\n", wintun.Name, exe)
+				}
 			}
 			if !restart {
 				switch runtime.GOOS {
