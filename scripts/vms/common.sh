@@ -11,7 +11,10 @@ set -euo pipefail
 export LC_ALL=C
 
 VMS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-STATE="$VMS_ROOT/test/vms"      # ignored state: ssh key, images, run files, results, Packer's cache and builds
+# Ignored state: ssh key, images, run files, results, Packer's cache and builds. It lives
+# under the main checkout's test/vms/ whatever worktree runs the rig (the key is baked
+# into the golden images and the guests run once per host), or where VMS_STATE points.
+STATE=${VMS_STATE:-"$(dirname "$(git -C "$VMS_ROOT" rev-parse --path-format=absolute --git-common-dir)")/test/vms"}
 # shellcheck disable=SC2034 # used by the scripts that source this file
 RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts and Packer templates
 RUN="$STATE/run"                  # pid files, logs, qcow2 overlays of running instances
