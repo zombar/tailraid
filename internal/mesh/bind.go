@@ -159,9 +159,10 @@ func (b *Bind) relayIn(frame []byte, from conn.Endpoint) ([]byte, conn.Endpoint,
 	return nil, nil, false
 }
 
-// probeIn answers a path probe: one carrying this device's own key is an echo from a
-// candidate this device probed, which the monitor then pins; any other verified probe
-// is sent back as it came (I-329).
+// probeIn answers a path probe: one whose prober is this device is an echo from a
+// candidate this device probed, which the monitor pins when the echo names the device
+// probed; one for this device is sent back as it came; one for anyone else is dropped
+// (I-329).
 func (b *Bind) probeIn(frame []byte, from conn.Endpoint) {
 	r := b.relay
 	if r == nil {
@@ -170,7 +171,7 @@ func (b *Bind) probeIn(frame []byte, from conn.Endpoint) {
 	r.mu.Lock()
 	key, self := r.key, r.self
 	r.mu.Unlock()
-	k, ok := decodeProbe(key, frame, r.clk.Now())
+	prober, target, ok := decodeProbe(key, frame, r.clk.Now())
 	if !ok {
 		return
 	}
@@ -178,23 +179,26 @@ func (b *Bind) probeIn(frame []byte, from conn.Endpoint) {
 	if err != nil {
 		return
 	}
-	if k != self {
+	switch {
+	case prober == self: // an echo of this device's own probe: pin only the device it named
+		r.mu.Lock()
+		w, waiting := r.probes[src]
+		waiting = waiting && w.peer == target // an echo naming another device leaves the wait
+		if waiting {
+			delete(r.probes, src)
+		}
+		onProbe := r.onProbe
+		r.mu.Unlock()
+		if waiting && !r.clk.Now().After(w.until) && onProbe != nil {
+			onProbe(w.peer, src)
+		}
+	case target == self: // a probe for this device: answer with the same frame
 		echo := make([]byte, len(frame))
 		copy(echo, frame)
 		if err := b.SendControl(echo, src); err != nil {
 			b.log.Debug("probe echo", "to", src.String(), "err", err)
 		}
-		return
-	}
-	r.mu.Lock()
-	w, waiting := r.probes[src]
-	if waiting {
-		delete(r.probes, src)
-	}
-	onProbe := r.onProbe
-	r.mu.Unlock()
-	if waiting && !r.clk.Now().After(w.until) && onProbe != nil {
-		onProbe(w.peer, src)
+	default: // for another device: silence, so a wrong candidate pins nothing
 	}
 }
 
@@ -218,7 +222,7 @@ func (b *Bind) Probe(cand netip.AddrPort, peer Key) error {
 		}
 	}
 	r.mu.Unlock()
-	return b.SendControl(encodeProbe(key, self, now.Unix()), cand)
+	return b.SendControl(encodeProbe(key, self, peer, now.Unix()), cand)
 }
 
 // probeWindow is how long a probe's echo is awaited.

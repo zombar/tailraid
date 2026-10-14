@@ -25,7 +25,7 @@ import (
 const (
 	relayMACLen    = 16
 	relayHeaderLen = 1 + 32 + 32 + 8 + relayMACLen // 89
-	probeLen       = 1 + 32 + 8 + relayMACLen      // 57
+	probeLen       = 1 + 32 + 32 + 8 + relayMACLen // 89: the prober's key, the probed device's key
 	// RelaySkew is how far a frame's timestamp may be from the receiver's clock.
 	RelaySkew = 10 * time.Minute
 	// RelayAfter is how long a peer's direct candidates fan out unanswered before the
@@ -142,33 +142,35 @@ func decodeRelay(key, frame []byte, now time.Time) (relayFrame, []byte, bool) {
 	return r, frame[relayHeaderLen:], true
 }
 
-func encodeProbe(key []byte, self Key, at int64) []byte {
+func encodeProbe(key []byte, self, target Key, at int64) []byte {
 	b := make([]byte, 0, probeLen)
 	b = append(b, frameProbe)
 	b = append(b, self[:]...)
+	b = append(b, target[:]...)
 	b = binary.BigEndian.AppendUint64(b, uint64(at)) //nolint:gosec // a unix time
 	m := hmac.New(sha256.New, key)
 	m.Write(b)
 	return append(b, m.Sum(nil)[:relayMACLen]...)
 }
 
-// decodeProbe reads a probe and checks its MAC and timestamp.
-func decodeProbe(key, frame []byte, now time.Time) (Key, bool) {
+// decodeProbe reads a probe and checks its MAC and timestamp: the prober's key and the
+// key of the device it is for.
+func decodeProbe(key, frame []byte, now time.Time) (from, to Key, ok bool) {
 	if len(key) == 0 || len(frame) != probeLen || frame[0] != frameProbe {
-		return Key{}, false
+		return Key{}, Key{}, false
 	}
 	m := hmac.New(sha256.New, key)
 	m.Write(frame[:probeLen-relayMACLen])
 	if !hmac.Equal(frame[probeLen-relayMACLen:], m.Sum(nil)[:relayMACLen]) {
-		return Key{}, false
+		return Key{}, Key{}, false
 	}
-	var k Key
-	copy(k[:], frame[1:33])
-	at := int64(binary.BigEndian.Uint64(frame[33:41])) //nolint:gosec // a unix time
+	copy(from[:], frame[1:33])
+	copy(to[:], frame[33:65])
+	at := int64(binary.BigEndian.Uint64(frame[65:73])) //nolint:gosec // a unix time
 	if d := now.Sub(time.Unix(at, 0)); d > RelaySkew || d < -RelaySkew {
-		return Key{}, false
+		return Key{}, Key{}, false
 	}
-	return k, true
+	return from, to, true
 }
 
 // rateLimiter is a token bucket in bytes: what a relay forwards for others (I-328).
