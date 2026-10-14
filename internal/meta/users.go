@@ -400,15 +400,20 @@ func Traverses(s *State, user UserIdx, ino Ino) bool {
 
 // authorize is the FSM's check of a user-facing command (docs/21 §4, I-349): nothing
 // while no user exists; a System command only on the reserved tree or for a Purge; else
-// the actor's effective role on every opTarget must cover the role the command needs.
+// the actor's effective role on every opTarget must cover the role that target needs.
+// A user-facing command always has at least one target, so no actor passes on an empty
+// list.
 func (a *applier) authorize(c Command) error {
 	st := a.st
 	if !st.Enforcing() {
 		return nil
 	}
-	targets, need, user := a.targets(c)
+	targets, user := a.targets(c)
 	if !user {
 		return nil
+	}
+	if len(targets) == 0 {
+		return ErrAccess
 	}
 	if c.System {
 		if c.Op == OpPurge {
@@ -422,79 +427,87 @@ func (a *applier) authorize(c Command) error {
 		return nil
 	}
 	for _, t := range targets {
-		if Access(st, c.Actor, t.ino) < need {
+		if Access(st, c.Actor, t.ino) < t.need {
 			return ErrAccess
 		}
 	}
 	return nil
 }
 
-// opTarget is one inode a command acts on; name is the entry it creates there, if any.
+// opTarget is one inode a command acts on, the role the actor needs there, and the entry
+// it creates there, if any. An inode of 0 (a look-up that found nothing) holds no role
+// for anyone, so the check refuses before the lookup says what is missing.
 type opTarget struct {
 	ino  Ino
+	need Role
 	name string
 }
 
-// targets lists what c touches and the role that needs; user is false for a command the
-// check does not cover (the node's own placement, GC, membership and identity ops, which
-// check their actors themselves).
-func (a *applier) targets(c Command) (ts []opTarget, need Role, user bool) {
+// targets lists what c touches; user is false for a command the check does not cover
+// (the node's own placement, GC, membership and identity ops, which check their actors
+// themselves).
+func (a *applier) targets(c Command) (ts []opTarget, user bool) {
+	write := func(ino Ino, name string) opTarget { return opTarget{ino: ino, need: RoleWrite, name: name} }
+	parentOf := func(ino Ino) Ino {
+		if in, ok := a.st.Inodes[ino]; ok {
+			return in.Parent
+		}
+		return 0
+	}
 	switch c.Op { //nolint:exhaustive // every other op is not user-facing
 	case OpCreate:
 		if c.Create != nil {
-			return []opTarget{{c.Create.Parent, c.Create.Name}}, RoleWrite, true
+			return []opTarget{write(c.Create.Parent, c.Create.Name)}, true
 		}
 	case OpMkdir:
 		if c.Mkdir != nil {
-			return []opTarget{{c.Mkdir.Parent, c.Mkdir.Name}}, RoleWrite, true
+			return []opTarget{write(c.Mkdir.Parent, c.Mkdir.Name)}, true
 		}
 	case OpUnlink:
 		if c.Unlink != nil {
-			return []opTarget{{c.Unlink.Parent, ""}}, RoleWrite, true
+			return []opTarget{write(c.Unlink.Parent, "")}, true
 		}
 	case OpRmdir:
 		if c.Rmdir != nil {
-			return []opTarget{{c.Rmdir.Parent, ""}}, RoleWrite, true
+			return []opTarget{write(c.Rmdir.Parent, "")}, true
 		}
 	case OpTrash:
 		if c.Trash != nil {
-			return []opTarget{{c.Trash.Parent, ""}}, RoleWrite, true
+			return []opTarget{write(c.Trash.Parent, "")}, true
 		}
 	case OpRename:
 		if c.Rename != nil {
-			return []opTarget{{c.Rename.OldParent, ""}, {c.Rename.NewParent, c.Rename.NewName}}, RoleWrite, true
+			return []opTarget{write(c.Rename.OldParent, ""), write(c.Rename.NewParent, c.Rename.NewName)}, true
 		}
 	case OpSetAttr:
 		if c.SetAttr != nil {
-			return []opTarget{{c.SetAttr.Ino, ""}}, RoleWrite, true
+			return []opTarget{write(c.SetAttr.Ino, "")}, true
 		}
 	case OpRestore:
 		if c.Restore != nil {
-			parent := c.Restore.NewParent
-			if parent == 0 {
-				if in, ok := a.st.Inodes[c.Restore.Ino]; ok {
-					parent = in.Parent
-				}
+			// the entry's own parent, whose trash it leaves, and the parent it lands in
+			from := parentOf(c.Restore.Ino)
+			to := c.Restore.NewParent
+			if to == 0 {
+				to = from
 			}
-			return []opTarget{{parent, ""}}, RoleWrite, true
+			return []opTarget{write(from, ""), write(to, c.Restore.NewName)}, true
 		}
 	case OpPurge:
 		if c.Purge != nil {
 			if c.Purge.Ino == 0 {
-				return nil, RoleAdmin, true // the sweep: System only (nobody holds Admin on nothing)
+				// the whole trash: the retention sweep (System) or an admin, who holds
+				// Admin at the root as everywhere (docs/21 §2)
+				return []opTarget{{ino: RootIno, need: RoleAdmin}}, true
 			}
-			parent := Ino(0)
-			if in, ok := a.st.Inodes[c.Purge.Ino]; ok {
-				parent = in.Parent
-			}
-			return []opTarget{{parent, ""}}, RoleAdmin, true
+			return []opTarget{{ino: parentOf(c.Purge.Ino), need: RoleAdmin}}, true
 		}
 	case OpCommit:
 		if c.Commit != nil && c.Commit.RewriteStart {
-			return []opTarget{{c.Commit.Ino, ""}}, RoleWrite, true
+			return []opTarget{write(c.Commit.Ino, "")}, true
 		}
 	}
-	return nil, RoleNone, false
+	return nil, false
 }
 
 // Access, under the FSM's read lock, for the gateways.

@@ -645,13 +645,14 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 // definition, not in the member table yet. A non-member's body is read (64 KiB at most)
 // only to learn the op; update_addr is then allowed when WhoIs(src) is the StableID of the
 // member named in it, and it changes nothing but that member's address.
+// A member's unsigned ops (update_addr, set_version) name its own row only (I-322).
 func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 	src, ok := SourceAddr(r)
 	if !ok {
 		writeErr(w, http.StatusForbidden, "unparseable source address")
 		return
 	}
-	_, authErr := s.o.Auth.Allow(r.Context(), src)
+	caller, authErr := s.o.Auth.Allow(r.Context(), src)
 	if authErr != nil && errors.Is(authErr, ErrUnavailable) {
 		writeErr(w, http.StatusServiceUnavailable, authErr.Error())
 		return
@@ -690,6 +691,12 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		op = MemberOp{Op: "update_addr", NodeIdx: op.NodeIdx, Addr: op.Addr}
+	}
+	// a caller without a row index comes from an authorizer that does not tell members
+	// apart (the test harness's AllowAll): nothing to pin to
+	if op.SelfOnly() && caller.Idx != 0 && caller.Idx != op.NodeIdx {
+		writeErr(w, http.StatusForbidden, op.Op+": a member names its own row only")
+		return
 	}
 	need := op.Needs()
 	if op.Actor, _, err = s.actor(r, need, body); err != nil {

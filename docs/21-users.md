@@ -159,7 +159,12 @@ it does not reach. §11 maps each control to its mechanism here.
   set. The FSM refuses the user-facing operations (`Create`, `Mkdir`, `Unlink`, `Rmdir`,
   `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit` of a `RewriteStart`)
   with `ErrAccess` (a new wire code, the list is append-only) unless `Access(actor,
-  target) ≥` the role the operation needs. This is where the `protected` flag is enforced
+  target) ≥` the role the operation needs on every inode it touches: a `Rename` and a
+  `Restore` name two parents (the one an entry leaves, the one it lands in), both
+  `Write`; a `Purge` of one entry needs `Admin` on its parent and the whole-trash sweep
+  `Admin` at the root, which the retention sweep holds as `System` and an admin as an
+  admin; a target the lookup did not find holds no role for anyone, so the refusal says
+  nothing about what is missing. This is where the `protected` flag is enforced
   today (docs/13, I-154): the check runs once, in apply, so every mount and the browser
   agree.
 - **System commands.** `System` is set by the node's own writers and is allowed only for
@@ -447,7 +452,9 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
 - **I-349** — `Command` carries `Actor` and `System` at codec 14; while the user table is
   non-empty and `MinCodec ≥ 14` the FSM refuses `Create`, `Mkdir`, `Unlink`, `Rmdir`,
   `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge` and a rewrite's `Commit` with
-  `ErrAccess` unless the actor's effective role covers the operation, and refuses a
+  `ErrAccess` unless the actor's effective role covers the operation on every inode it
+  touches (both parents of a rename or a restore; the root, for the whole-trash sweep,
+  which only `System` and admins hold), and refuses a
   `System` command outside the System table (the retention sweep's `Purge`, the writers
   under `/.tailraid`); the flusher's `Commit` carries the actor the WAL recorded for the
   write; before the first user, or while a member reads codec 13, a cluster behaves as
