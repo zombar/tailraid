@@ -28,5 +28,6 @@ prove them; `invariants.md` is generated from those sections by `scripts/check-i
 | [invariants.md](invariants.md) | Generated table: every invariant, its doc, statement and tests |
 | [windows-checklist.md](windows-checklist.md) | Manual hardware validation of the Windows SMB mount path |
 | [vms.md](vms.md) | Three local VMs (macOS, Linux, Windows) on a throwaway tailnet forming one volume, each OS first in turn; the rounds, the soak and the results |
+| [publishing.md](publishing.md) | Taking the work public: the evidence in hand, positioning, venues, the paper's claim, the evaluation plan, the launch checklist, risks and the timeline |
 
 Status of each milestone is tracked in the repository `CLAUDE.md`.
