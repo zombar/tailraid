@@ -254,3 +254,47 @@ func TestRepair_DomainSkew_HomeDeadFillsUnderCap(t *testing.T) {
 		t.Fatal("no slot away once the home host returned")
 	}
 }
+
+// A pass whose home moves all fail shuts the gate for HomeHold: the next passes move
+// nothing and PUT nothing, and the moves resume once the hold has passed and the links
+// are back. On the real cluster a gate that stayed open re-PUT the same chunks every
+// pass for hours.
+// Invariant: I-311
+func TestRepair_Home_FailedMovesShutTheGate(t *testing.T) {
+	c := testharness.NewCluster(t, 5, 2, 2)
+	defer c.Close()
+	leader := c.Leader()
+	downThenUp(t, c, "/f", 8)
+	cfg := repairCfg()
+	r := newRepairer(c, leader, cfg)
+	st, err := r.Scan(ctx) // opens the gate, moving none
+	must(t, err)
+	if !r.Home().Open {
+		t.Fatalf("setup: gate shut after the first pass: %+v", st)
+	}
+	leader.Net.Isolate(true) // every shard RPC of the leader fails: no move can read or PUT
+	st, err = r.Scan(ctx)
+	must(t, err)
+	if st.Homed != 0 || r.Home().Open {
+		t.Fatalf("a pass of failed moves: %+v, gate %+v", st, r.Home())
+	}
+	for pass := range 2 {
+		st, err = r.Scan(ctx)
+		must(t, err)
+		if st.Homed != 0 || st.BytesMoved != 0 || r.Home().Open {
+			t.Fatalf("held pass %d: %+v, gate %+v", pass, st, r.Home())
+		}
+	}
+	leader.Net.Isolate(false)
+	c.Clk.Advance(repair.HomeHold + time.Minute)
+	c.Probe()
+	homed := 0
+	for range 4 {
+		st, err = r.Scan(ctx)
+		must(t, err)
+		homed += st.Homed
+	}
+	if homed == 0 {
+		t.Fatalf("no move after the hold: %+v, gate %+v", st, r.Home())
+	}
+}

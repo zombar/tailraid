@@ -405,6 +405,14 @@ as `<host>/m<n>`.
   the cap; cap-breaking slots move without the gate, so restoring the host tolerance never
   waits on a dead, suspect or full home, and a refill never makes a chunk away that had a
   movable home.
+- **I-311** — A repair never plans or proposes a placement that names a target twice: a
+  holder may move to another slot of its chunk (a swap home), but a slot that keeps its
+  holder (no home could take it) wins over that move, which is planned again without it,
+  and a still-served slot whose PUT failed gets its holder back only when no other slot
+  now names it; a planned placement the FSM would refuse is dropped before any PUT. A pass whose home moves all committed nothing shuts the gate for
+  `HomeHold` (30 min), so a move that cannot succeed is not retried, bytes and all, every
+  pass (on the real cluster after v0.8.0 every home move failed as a malformed
+  `SetPlacement` and the open gate re-PUT the same chunks each minute).
 
 ## Tests
 
@@ -427,4 +435,5 @@ as `<host>/m<n>`.
 | I-172 | `TestHomeMoves_Table`, `TestRepair_Home_AddDiskFillsWithinHost` |
 | I-294 | `TestHome_EqualsWritePlacement`, `TestHome_NNodeDeterminism`, `TestHomeMoves_Idempotent`, `TestHomeMoves_Table`, `TestCluster_DegradedWrite_DataSlotsComeHome` |
 | I-295 | `TestRepair_Home_Gate_Table`, `TestRepair_Home_AddDiskFillsWithinHost`, `TestCluster_DegradedWrite_DataSlotsComeHome`, `TestCLI_VolumeRebalance_DryRun`, `TestConfig_HomeStart` |
+| I-311 | `TestPlanSlots_HomeMoveNeverNamesATargetTwice`, `TestRepair_Home_FailedMovesShutTheGate` |
 | I-296 | `TestChunkState_DomainSkew`, `TestFillHome_RefillsFromHome`, `TestRepair_RefillGoesHome_Table`, `TestRepair_DomainSkew_HomeDeadFillsUnderCap` |

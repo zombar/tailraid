@@ -80,6 +80,10 @@ const DefaultRetention = 30 * 24 * time.Hour
 // before placement-only moves start on their own (`repair.home_start`, docs/14 §7).
 const DefaultHomeStart = 0.05
 
+// HomeHold is how long the home gate stays shut after a pass whose home moves all failed
+// (docs/14 §7, I-311): the moves resume once it passes and the threshold still holds.
+const HomeHold = 30 * time.Minute
+
 // fullHold is how long a target that answered ErrFull to a repair PUT is not a home
 // destination: the flusher's hold-down for the same answer (docs/14 §7).
 const fullHold = 10 * time.Minute
@@ -135,6 +139,7 @@ type Stats struct {
 	MovableBytes int64 `json:"movable_bytes"`
 	HomeOpen     bool  `json:"home_open"` // the gate after this pass: the next one moves placement-only slots
 	badChunks    int   // chunks with a bad slot or a pending migration: home moves wait for a pass without
+	homeFailed   int   // home moves this pass tried that committed nothing (I-311)
 }
 
 // HomeStatus is the home gate as `status` reports it (`repair.home`, docs/12): the last
@@ -166,6 +171,7 @@ func (s *Stats) add(o Stats) {
 	s.AwayBytes += o.AwayBytes
 	s.MovableBytes += o.MovableBytes
 	s.badChunks += o.badChunks
+	s.homeFailed += o.homeFailed
 	s.BytesMoved += o.BytesMoved
 	s.Errors += o.Errors
 	s.SumsRecorded += o.SumsRecorded
@@ -208,6 +214,7 @@ type Repairer struct {
 	homeOpen   bool                       // placement-only moves run
 	homeForced bool                       // opened by OpenHome: stays open until nothing is movable
 	homeIdle   bool                       // the previous pass found no bad slot and no migration
+	homeHeld   time.Time                  // a pass whose home moves all failed shuts the gate until then (I-311)
 	full       map[meta.NodeIdx]time.Time // targets that answered ErrFull, not a destination until then
 }
 
@@ -227,7 +234,7 @@ func New(st *meta.Store, prop meta.Proposer, live Liveness, shards Shards, rd Ch
 // following passes move placement-only away slots until a pass finds none movable.
 func (r *Repairer) OpenHome() {
 	r.mu.Lock()
-	r.homeOpen, r.homeForced = true, true
+	r.homeOpen, r.homeForced, r.homeHeld = true, true, time.Time{}
 	r.mu.Unlock()
 }
 
@@ -601,7 +608,12 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	switch {
 	case st.MovableBytes == 0:
 		r.homeOpen, r.homeForced = false, false
-	case !r.homeOpen && r.cfg.HomeStart > 0 && float64(st.MovableBytes) >= r.cfg.HomeStart*float64(st.StoredBytes):
+	case st.Homed == 0 && st.homeFailed > 0:
+		// every move this pass tried failed: retrying each pass would only move the same
+		// bytes again for nothing, so the gate shuts for HomeHold (I-311)
+		r.homeOpen, r.homeForced = false, false
+		r.homeHeld = r.clk.Now().Add(HomeHold)
+	case !r.homeOpen && r.cfg.HomeStart > 0 && !r.clk.Now().Before(r.homeHeld) && float64(st.MovableBytes) >= r.cfg.HomeStart*float64(st.StoredBytes):
 		r.homeOpen = true
 	}
 	st.HomeOpen = r.homeOpen
@@ -762,13 +774,16 @@ func (r *Repairer) homeOne(ctx context.Context, c meta.Chunk, vol meta.Volume, h
 	st.BytesMoved += out.bytes
 	if err != nil {
 		st.Errors++
+		st.homeFailed++
 		r.warnRepair.Warn(r.log, "home move failed", "chunk", fmt.Sprintf("%x", c.Hash[:8]), "err", err)
 		return true
 	}
-	if out.changed {
-		st.Homed++
-		r.Events.Record(c.Hash, meta.EvHomed, fmt.Sprintf("slots %v moved home", movable))
+	if !out.changed {
+		st.homeFailed++ // every PUT home failed: nothing placeable improved
+		return true
 	}
+	st.Homed++
+	r.Events.Record(c.Hash, meta.EvHomed, fmt.Sprintf("slots %v moved home", movable))
 	return true
 }
 
@@ -797,78 +812,16 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	if err != nil {
 		return outcome{}, err
 	}
-	total := int(k) + int(m)
-	newPlace := make([]meta.NodeIdx, total)
-	if !migrate {
-		copy(newPlace, kept)
-	}
-	// Every emptied slot goes home first (I-296), and a slot no one serves before one whose
-	// holder still serves it (draining, skewed, away): while the readable ones are filled,
-	// their holders stand in for them, so a lone spare replaces the missing shard (I-65).
-	home := hv.Home(c.Hash, int(k), int(m))
-	live := meta.LiveSet(r.live.Live())
-	nodes := r.st.Nodes()
-	fill := func() {
-		hv.FillHome(newPlace, int(k), home, r.dest)
-		var held []meta.NodeIdx
-		for _, n := range newPlace {
-			if n != 0 {
-				held = append(held, n)
-			}
-		}
-		meta.FillPlacement(c.Hash, newPlace, meta.ExcludeIdx(meta.Candidates(nodes, func(n meta.NodeIdx) bool { return live[n] }), held), int(k), meta.DomainsOf(nodes))
-	}
-	var standIn []int
-	if !migrate {
-		for _, b := range bad {
-			if b.Readable && newPlace[b.Idx] == 0 {
-				newPlace[b.Idx] = c.Placement[b.Idx]
-				standIn = append(standIn, b.Idx)
-			}
-		}
-	}
-	fill()
-	away := map[int]bool{}
-	for _, i := range standIn {
-		newPlace[i] = 0
-	}
-	for _, b := range bad {
-		if b.Reason == meta.ReasonAway {
-			away[b.Idx] = true
-		}
-	}
-	if len(away) > 0 {
-		// an away slot goes home or nowhere, and never onto a bucket (I-294, L-220)
-		hv.FillHome(newPlace, int(k), home, func(n meta.NodeIdx) bool { return !hv.S3(n) && r.dest(n) })
-		for i := range away {
-			if newPlace[i] == 0 {
-				newPlace[i] = c.Placement[i]
-			}
-		}
-	}
-	fill()
-	// A slot whose shard is still served (live draining holder) keeps its node until a
-	// replacement is placed: a repair never lowers the readable slot count (I-65, L-184).
-	// unchanged marks slots that need no PUT: kept ones and retained ones.
-	unchanged := make([]bool, total)
-	for i := range unchanged {
-		unchanged[i] = !migrate && i < len(kept) && kept[i] != 0
-	}
-	readableBad := map[int]bool{}
-	if !migrate {
-		for _, b := range bad {
-			if !b.Readable {
-				continue
-			}
-			readableBad[b.Idx] = true
-			if newPlace[b.Idx] == 0 || newPlace[b.Idx] == c.Placement[b.Idx] {
-				newPlace[b.Idx] = c.Placement[b.Idx]
-				unchanged[b.Idx] = true
-			}
-		}
+	plan := planSlots(c, bad, kept, migrate, k, m, hv, r.st.Nodes(), meta.LiveSet(r.live.Live()), r.dest)
+	newPlace, unchanged, readableBad := plan.place, plan.unchanged, plan.readableBad
+	if !meta.ValidPlacement(k, m, newPlace) {
+		// a planner bug, never a state the FSM accepts: refuse it here, before any PUT
+		// moves bytes for a SetPlacement that can only be rejected (I-311)
+		return outcome{}, fmt.Errorf("planned placement %v of %d+%d: %w", newPlace, k, m, meta.ErrBadCommand)
 	}
 	var moved int64
 	acked := 0
+	var revert []int // still-served slots whose PUT failed
 	for i, n := range newPlace {
 		if n == 0 {
 			continue
@@ -884,15 +837,15 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 				r.markFull(n)
 			}
 			newPlace[i] = 0
-			if readableBad[i] { // its holder still serves it: keep it rather than lose a readable slot (I-65)
-				newPlace[i], unchanged[i] = c.Placement[i], true
-				acked++
+			if readableBad[i] {
+				revert = append(revert, i)
 			}
 			continue
 		}
 		moved += int64(len(shards[i]))
 		acked++
 	}
+	acked += keepServed(c.Placement, newPlace, unchanged, revert)
 	if migrate && acked < int(k) {
 		return outcome{bytes: moved}, nil // keep the old encoding committed; try again next pass
 	}
@@ -947,6 +900,147 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 		}
 	}
 	return outcome{changed: true, full: full, bytes: moved}, nil
+}
+
+// slotPlan is where repairOne puts each slot of a chunk before any PUT: the target per
+// slot, the slots that need no PUT, and the slots whose holder still serves them.
+type slotPlan struct {
+	place       []meta.NodeIdx
+	unchanged   []bool
+	readableBad map[int]bool
+}
+
+// planSlots places the bad slots of c (every slot for a migration) for repairOne. A
+// node that still serves a slot of c (kept, or a readable bad slot it stands in for)
+// is never given another slot: a slot that keeps its holder (no home could take it, or
+// its PUT fails) would otherwise name that node twice, which the FSM refuses (I-311).
+func planSlots(c meta.Chunk, bad []meta.SlotIssue, kept []meta.NodeIdx, migrate bool, k, m uint8, hv *meta.HomeView, nodes []meta.Node, live map[meta.NodeIdx]bool, dest func(meta.NodeIdx) bool) slotPlan {
+	total := int(k) + int(m)
+	newPlace := make([]meta.NodeIdx, total)
+	if !migrate {
+		copy(newPlace, kept)
+	}
+	// Every emptied slot goes home first (I-296), and a slot no one serves before one whose
+	// holder still serves it (draining, skewed, away): while the readable ones are filled,
+	// their holders stand in for them, so a lone spare replaces the missing shard (I-65).
+	home := hv.Home(c.Hash, int(k), int(m))
+	fill := func() {
+		hv.FillHome(newPlace, int(k), home, dest)
+		var held []meta.NodeIdx
+		for _, n := range newPlace {
+			if n != 0 {
+				held = append(held, n)
+			}
+		}
+		meta.FillPlacement(c.Hash, newPlace, meta.ExcludeIdx(meta.Candidates(nodes, func(n meta.NodeIdx) bool { return live[n] }), held), int(k), meta.DomainsOf(nodes))
+	}
+	var standIn []int
+	if !migrate {
+		for _, b := range bad {
+			if b.Readable && newPlace[b.Idx] == 0 {
+				newPlace[b.Idx] = c.Placement[b.Idx]
+				standIn = append(standIn, b.Idx)
+			}
+		}
+	}
+	fill()
+	away := map[int]bool{}
+	for _, i := range standIn {
+		newPlace[i] = 0
+	}
+	for _, b := range bad {
+		if b.Reason == meta.ReasonAway {
+			away[b.Idx] = true
+		}
+	}
+	if len(away) > 0 {
+		// an away slot goes home or nowhere, and never onto a bucket (I-294, L-220)
+		hv.FillHome(newPlace, int(k), home, func(n meta.NodeIdx) bool { return !hv.S3(n) && dest(n) })
+		for i := range away {
+			if newPlace[i] == 0 {
+				newPlace[i] = c.Placement[i]
+			}
+		}
+	}
+	fill()
+	// A slot whose shard is still served (live draining holder) keeps its node until a
+	// replacement is placed: a repair never lowers the readable slot count (I-65, L-184).
+	// unchanged marks slots that need no PUT: kept ones and retained ones.
+	unchanged := make([]bool, total)
+	for i := range unchanged {
+		unchanged[i] = !migrate && i < len(kept) && kept[i] != 0
+	}
+	readableBad := map[int]bool{}
+	if !migrate {
+		for _, b := range bad {
+			if !b.Readable {
+				continue
+			}
+			readableBad[b.Idx] = true
+			if newPlace[b.Idx] == 0 || newPlace[b.Idx] == c.Placement[b.Idx] {
+				newPlace[b.Idx] = c.Placement[b.Idx]
+				unchanged[b.Idx] = true
+			}
+		}
+	}
+	// A slot that kept its holder X (no home could take it) while a fill gave X another
+	// slot names X twice, which the FSM refuses: the kept slot wins, the other slot is
+	// planned again without X (I-311). Each round removes one name, so it ends.
+	for {
+		i, j := duplicateSlots(newPlace, unchanged)
+		if i < 0 {
+			break
+		}
+		newPlace[j] = 0
+		if readableBad[j] && !slices.Contains(newPlace, c.Placement[j]) {
+			newPlace[j], unchanged[j] = c.Placement[j], true
+			continue
+		}
+		var held []meta.NodeIdx
+		for _, n := range newPlace {
+			if n != 0 {
+				held = append(held, n)
+			}
+		}
+		held = append(held, newPlace[i])
+		meta.FillPlacement(c.Hash, newPlace, meta.ExcludeIdx(meta.Candidates(nodes, func(n meta.NodeIdx) bool { return live[n] }), held), int(k), meta.DomainsOf(nodes))
+	}
+	return slotPlan{place: newPlace, unchanged: unchanged, readableBad: readableBad}
+}
+
+// keepServed gives each still-served slot whose PUT failed back to its holder, which
+// still serves it, rather than lose a readable slot (I-65), unless a PUT just gave that
+// holder another slot of the chunk (I-311). It returns the slots it gave back.
+func keepServed(old, place []meta.NodeIdx, unchanged []bool, failed []int) int {
+	n := 0
+	for _, i := range failed {
+		if !slices.Contains(place, old[i]) {
+			place[i], unchanged[i] = old[i], true
+			n++
+		}
+	}
+	return n
+}
+
+// duplicateSlots finds a target named by two slots of place: i is the one to keep (a slot
+// that needs no PUT when one does), j the one to plan again; i < 0 when there is none.
+func duplicateSlots(place []meta.NodeIdx, unchanged []bool) (int, int) {
+	first := map[meta.NodeIdx]int{}
+	for j, n := range place {
+		if n == 0 {
+			continue
+		}
+		i, seen := first[n]
+		if !seen {
+			first[n] = j
+			continue
+		}
+		if unchanged[j] && !unchanged[i] {
+			return j, i
+		}
+		return i, j
+	}
+	return -1, -1
 }
 
 // scrub fetches every shard of c and returns the slots whose content is wrong. A slot on
