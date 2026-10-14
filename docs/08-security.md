@@ -15,9 +15,16 @@ accidents and casual misuse. It is explicit about what it does not defend agains
 - **Perimeter**: anything that can reach a node's Tailscale IP is already a tailnet member.
   tailraid narrows that to *cluster members* so that shared, guest or unrelated devices on
   the same tailnet cannot read or write shards or metadata.
-- **Local OS**: the NFS and SMB gateways and all `127.0.0.1` listeners trust the local operating
-  system. A user who can run processes on a device can access that device's mount; that
-  is the same trust as a local disk.
+- **Local OS**: the NFS and SMB gateways and all `127.0.0.1` listeners trust the local
+  operating system to say *which* local user is calling (the AUTH_SYS uid, the SMB
+  session account); docs/21 maps that credential to a tailraid user through the device's
+  bindings and an unbound credential may do nothing. Until the first user exists the
+  mount is that device's, the same trust as a local disk.
+- **People**: a person is a user row with Ed25519 keys, one per device, created from an
+  admin's one-time invite; every mutating operation is signed by a user's key, every
+  gateway operation carries its actor into the FSM, and the browser signs a person in
+  from a link their own CLI mints (docs/21). The FSM trusts the actor a member asserts;
+  a compromised member is the non-goal below.
 
 ## Node RPC authorization (WhoIs authorizer)
 
@@ -152,9 +159,11 @@ cluster member under the RPC rule above, or a tailnet device whose WhoIs
 start by `WhoIs`-ing the node's own Tailscale IP. A tagged device reports the pseudo-login
 `tagged-devices`, so a login is treated as empty whenever the WhoIs answer carries tags, and an
 empty login never matches on either side. The same identity cache, TTLs and purge on
-membership change apply. Mutating routes additionally require a custom header that a
-cross-origin page cannot send, and files served from the volume carry a sandboxing CSP so a
-stored HTML file cannot act as the viewer. Invariants I-68 and I-71 in docs/13.
+membership change apply. With users (docs/21 §6) a session cookie minted by `tailraid web
+login` is required on top of it: an admitted source without one reaches the sign-in page
+only. Mutating routes additionally require a custom header that a cross-origin page cannot
+send, and files served from the volume carry a sandboxing CSP so a stored HTML file cannot
+act as the viewer. Invariants I-68 and I-71 in docs/13.
 
 ## S3 gateway (M5a, deferred)
 
@@ -195,6 +204,9 @@ prints a warning line for every node that has them enabled.
 | S3 gateway access keys | node config (0600) or OS keyring | in Raft, in `status` output |
 | Remote S3 node credentials (M5b) | node config (0600) or OS keyring on each device | in Raft |
 | Secrets store (docs/19): S3 node credentials and the TMDB key once its PR 3 lands | FSM, as AES-256-GCM ciphertext; the cluster key that opens them in each device's OS keychain (0600 file fallback), fetched from a member | the key in Raft, a value in a log, report or argv |
+| User keys (docs/21 §1) | the person's own OS keychain (0600 file fallback under their config home), account `user-<cluster ID>`; the public half in the FSM | the private key in the FSM, a snapshot, a log line, a report or any request; the daemon's keychain |
+| Invite codes (docs/21 §1) | printed once; the FSM holds the SHA-256 with a 24 h expiry | a log line, `status`, the audit record (which names the invite, not the code) |
+| Browser sessions (docs/21 §6) | the node's memory; the cookie in the browser | a log line, a report, disk |
 | Cluster ID | `<data_dir>/cluster_id` and FSM `Meta` | — (not a secret) |
 | Node ID | `<data_dir>/node_id` | — (not a secret) |
 
@@ -261,6 +273,16 @@ daemon tells the operator when the disk under it is not encrypted.
 | A stored HTML or SVG file scripts against the API when opened from `/files/` | `Content-Security-Policy: sandbox` and `nosniff` on every `/files/` response (I-71) |
 | Join-token brute force | tailnet-only, member or not; 8 base32 chars; after a failure 1 attempt/s per source IP; rotate anytime |
 | Another user of the device reads shards, the cache or the WAL | 0600 files in 0700 directories, tightened at open (I-340); `status` warns when a path is wider or owned by someone else (I-341) |
+| A member asserts another user as the actor of a command | not defended: a member is trusted (the non-goal below); every command's actor is in the audit log, so the lie is at least attributable to the node (docs/21 §4) |
+| A captured signature is replayed, on this node or another | the timestamp window, the per-node nonce cache and the target node ID inside the signed bytes (docs/21 §2, I-344) |
+| An invite code is guessed | 50 bits, one attempt per second per source, 24 h expiry, checked on the receiving node before anything is proposed (I-343) |
+| A session cookie is stolen | `HttpOnly`, `SameSite=Strict`, bound to a key the user can remove, 7-day lifetime, dropped by `web logout` (I-354) |
+| Every admin is disabled or every admin key is lost | `user bootstrap` by the OS root on a voter, the same trust as `recover` (I-343); the last admin cannot be removed (I-346) |
+| A member asserts another user as the actor of a command | not defended: a member is trusted (the non-goal below); every command's actor is in the audit log, so the lie is at least attributable to the node (docs/21 §4) |
+| A captured signature is replayed, on this node or another | the timestamp window, the per-node nonce cache and the target node ID inside the signed bytes (docs/21 §2, I-344) |
+| An invite code is guessed | 50 bits, one attempt per second per source, 24 h expiry, checked on the receiving node before anything is proposed (I-343) |
+| A session cookie is stolen | `HttpOnly`, `SameSite=Strict`, bound to a key the user can remove, 7-day lifetime, dropped by `web logout` (I-354) |
+| Every admin is disabled or every admin key is lost | `user bootstrap` by the OS root on a voter, the same trust as `recover` (I-343); the last admin cannot be removed (I-346) |
 | A lost or discarded disk is read | the OS's full-disk encryption; every device probes it hourly and `status` and `check` warn while it is off (I-341); an edited shard is detected by its header sum and the chunk hash, never served |
 
 ## Non-goals (explicit)
@@ -275,10 +297,12 @@ daemon tells the operator when the disk under it is not encrypted.
   Tailscale (`tailraid mirror export`), by design, so a USB mirror is as sensitive as the
   volume itself. The node RPC routes that serve a mirror's trees and objects
   (`/v1/mirrors/{id}/…`) are authorized exactly as the shard routes are.
-- Per-user access control inside the volume (POSIX modes are stored, not enforced across
-  devices; S3 keys are per cluster, not per path).
-- Audit logging.
-- Protecting the local mount from other users of the same device.
+- Enforcing POSIX modes: they are stored and returned, never consulted; access inside
+  the volume is the grants of docs/21, and S3 keys are per cluster, not per path.
+- Defending the actor a member asserts: a command's actor is what the member says it is
+  (docs/21 §4); user-signed commands would close this and are a later hardening.
+- An audit log that survives a member rewriting the volume: the log of docs/21 §8 is
+  tamper-evident within a segment and lives in the volume, under the same trust.
 
 ## Invariants
 - **I-116** — Every request body a node reads is bounded before it is decoded: 4 MiB for

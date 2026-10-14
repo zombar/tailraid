@@ -98,6 +98,16 @@ read, in this order:
 The node learns its own login once at `serve` start by `WhoIs`-ing its own Tailscale IP. If
 that fails the UI runs members-only (`Login: ""`) and a warning is logged.
 
+With users (docs/21 §6): a session cookie on top of the rule above. `tailraid web login
+[--node <name>]` mints a one-time code on that node and prints
+`http://<tailscale IP>:20482/login?code=…`; opening it sets an `HttpOnly` cookie bound to
+the user and the key that minted it, valid `users.session` (168 h). A request without a
+session gets the sign-in page (`/login`; `/assets/*` is the only other route without one),
+whatever its source: an admitted address alone admits nothing more. Every request re-reads
+the user's row, so a disabled user or a removed key is refused at its next request; `web
+logout [--all]` drops the sessions. The session's user is the actor of every request:
+listings show what they hold `Read` on, mutations carry them into the FSM (I-354, I-355).
+
 Tailscale reports `LoginName: "tagged-devices"` for every tagged node, so two tagged devices
 would authorize each other. `(*tailscale.WhoIs).Login()` therefore returns `""` whenever
 `Node.Tags` is non-empty, on the caller's side and on this node's own side, and an empty
@@ -120,6 +130,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 |---|---|---|
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
+| `GET /login?code=` | – | with a valid one-time code: sets the session cookie and redirects to `/`; without one, or with a used or expired code: the sign-in page, `text/html`, the one command to run and, after a bad code, one line saying so (docs/21 §6, I-354); the only route besides `/assets/*` that needs no session |
+| `POST /api/logout` | required | drops this session; 204 |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |
 | `GET /api/stats?from=&to=&node=` | – | `{"range":{from,to,live,tier,step},"node","nodes":[{name,addr,live,self,web?}],"charts":[{id,title,svg,caption}]}`: the charts of docs/17 §4 over `[from, to)` (Unix seconds; `to=now` or absent for the live edge), server-rendered SVG from the finest tier whose retention covers `from`, merged with every live member's unsealed rows when `to` is now (I-196); `node` names the member whose node charts are drawn (default: this node), `all` draws one series per member; `nodes` carries each device member's tailnet IP, liveness and web port for the member menu's links; a missing or malformed `from`, `from ≥ to` or a range longer than `stats.keep.coarse` → 400; no query wired (`listen.web` on a node without the sampler) → 503; `Cache-Control: no-store` |
@@ -443,6 +455,11 @@ with the reason for an offline mirror's rows; there is no Delete). The section's
 
 ## 8. Build and assets
 
+The lookdev pages are `dashboard.html`, `disks.html`, `files.html`, `audio.html`,
+`player.html`, `search.html`, `markdown.html`, `media.html` (and their `-phone` variants),
+`stats.html`, `snapshots.html`, `signin.html` (docs/21 §6) and `components.html`; the
+soak report's are `soak-*.html`.
+
 The TypeScript lives in `internal/webui/src/`; `make web` runs esbuild (a Go tool pinned in
 `tools.mod`, no node or npm anywhere) and writes `internal/webui/dist/app.js`, which is
 committed and embedded. `make web-check` rebuilds into a temporary directory and fails when
@@ -452,7 +469,8 @@ strips types; a `tsconfig.json` is kept so editors type-check.
 
 ## 9. Non-goals
 
-User management and per-user access control, mutating admin operations from the browser
+User management (users, groups and grants are the CLI's, docs/21 §9; the browser shows
+what the signed-in user may see), mutating admin operations from the browser
 (repair, GC, membership, policy), HTTPS of its own (the tailnet encrypts), serving on
 loopback, transcoding, saved playlists, a queue shared between tabs or devices,
 server-side video decoding, adding or removing a mirror, a diff between two versions or
@@ -791,6 +809,11 @@ placement gives way to legible text: the dashed line keeps the event's true time
 
 ## Manual checks (real tailnet, before a release)
 
+0. Sign-in (docs/21 §6, once built): a plain visit shows `/login` with the command; `tailraid
+   web login` prints a link that signs the browser in and the header shows the account
+   chip with the name; a second open of the same link is refused with the one line; a
+   folder the user holds nothing on is absent from the listing; `web logout` returns the
+   next request to `/login`; the lookdev `signin.html` matches in light and dark.
 1. Desktop Chrome, Safari and Firefox: the dashboard in light and dark (toggle the OS
    theme live); the pill through stopping a node (degraded), killing the leader (stale,
    then no leader) and stopping the daemon (unreachable).
@@ -916,6 +939,8 @@ placement gives way to legible text: the dashed line keeps the event's true time
   StableID matches its member record (I-18), or a tailnet device whose WhoIs login name
   equals this node's own login name; an empty login (unresolved own identity, or a tagged
   device on either side) never matches; a WhoIs failure is 503 and every other refusal 403.
+  Once users exist (docs/21, I-354) a session cookie is required on top of it and an
+  admitted source alone reaches the sign-in page only.
 - **I-69** — `GET /files/<path>`, with or without a `Range`, returns exactly the bytes a READ
   on the local NFS gateway returns at the same offset at that moment (committed chunks with
   the overlay on top), with `Accept-Ranges: bytes`, 206 for a satisfiable range, 416 for a

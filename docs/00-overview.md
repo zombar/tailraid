@@ -31,8 +31,8 @@ numbered invariant (`I-n`) in these documents is enforced by at least one named 
 
 S3 features beyond the implemented subset (versioning, ACLs, policies, lifecycle, tagging,
 SSE, object lock, presigned POST); web UI beyond the dashboard and file browser of docs/13
-(no user management, no mutating admin operations from the browser); metrics stack (a
-`status` JSON instead);
+(user management is the CLI's, docs/21; no mutating admin operations from the browser);
+metrics stack (a `status` JSON instead);
 encryption at rest beyond sealed S3 nodes (docs/10 §4.7: WireGuard covers transit,
 devices rely on the OS's full-disk encryption, and a mirror disk is plaintext); quotas;
 history in the live pool (the trash keeps deletes for a while; snapshots live on mirror
@@ -174,6 +174,7 @@ for a member. No TLS of our own.
 | Search, markdown and the Media tab (docs/18, docs/13 §4 and §10, planned 2026-10-11): the library flag and codec 6 (0.12k), `internal/search` with its tokenizer, segment codec, leader pass, catalogue rules and query (0.95k + 0.3k), the markdown renderer (0.45k), the search, render and media routes with the status and CLI (0.25k), soak phase 21 (0.3k); the TypeScript grows by about 1.0k (search box and results, the markdown view, the Media tab), not Go | +2.4k planned |
 | Snapshots on mirror disks (docs/16, planned 2026-10-12): the mirror row, the catalogue, ops 19–21, the sync hold in `GCDelete` and codec 7 (meta 0.25k); `internal/mirror`, the disk format, the object and tree store, the sync walker, reconciliation and the standalone readers (0.75k); the tick's schedule and thinning (0.15k); `/.snapshots`, the snapshot handle index, the mirror RPC routes, the ROFS mapping, revert and tree restore (vfs, rpc and gateways 0.45k); `mirror`, `snapshot`, `versions`, the `export` rename, status and check (0.35k); the web handler's routes (0.3k); soak phase 19 and the report's charts and table (0.35k); config (0.05k); the TypeScript grows by about 0.6k, not Go. PR 1 measured 2026-10-12, comments included: meta 0.48k, `internal/mirror` 1.13k (the plan said 0.25k and 0.75k: the snapshot writer, the crash-safe store and the standalone export came out larger) | +2.65k planned, +1.6k of it landed |
 | Files on disk (docs/08 §Files on disk, planned 2026-10-14, the first PR of the users plan): `sysfs.FS.Chmod`, 0700 directories tightened at open in the store and the cache (0.03k), the disk and mirror mode and owner warnings in `config.Warnings` (0.04k), the full-disk-encryption probes on three OSes with their parsers and the hourly cache in `internal/admin` (0.15k), the wiring into `status` and `check` (0.02k). Measured 2026-10-14, comments included: 0.41k; the Linux device chain with its mountinfo parser and the three OS probe files are the difference | +0.25k planned, +0.41k measured |
+| Users, groups and permissions (docs/21, planned 2026-10-14, after 1.0): the rows, ops 28–31, codec 14, `Access` and the FSM checks (meta 0.6k); signing, the needs table, bindings and the CLI (0.9k); `vfs.FS.As`, the WAL actor, the NFS and SMB actors (0.5k); the browser's sessions and filters (0.4k Go, 0.3k TypeScript); the audit writer and `audit ls` (0.4k); soak phases 28–31 are test code | +2.8k planned |
 | `internal/s3srv` (the S3 gateway, deferred; not in the tree) | ~900 planned |
 
 The original budget was ≈ 7.9k through M4; the measured count is more than twice that. The
@@ -227,6 +228,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | [17-stats](17-stats.md) | Time series kept in the volume: the sampler and its rows, gzip segments per node and hour, daily and monthly rollups, retention, the live-edge RPC and the Stats page's query, the storage budget. I-191..I-194, I-196 |
 | [18-search](18-search.md) | Search and the index kept in the volume: what is indexed, segments and the leader's pass, queries, the media catalogue from sidecars and tags, the library folder flag |
 | [19-secrets](19-secrets.md) | One encrypted secrets store: ciphertexts in the FSM, the cluster key in each device's OS keychain and fetched from a member, the keychain layer, `secret set\|ls\|rm`, the S3 and TMDB keys moved in. I-303..I-309 |
+| [21-users](21-users.md) | Users, groups and permissions: identities with a key per device from an invite, signed CLI requests, grants with three roles enforced in the FSM, the gateways' actors, the browser sign-in, personal secrets, the audit log, the standards mapping. I-342..I-359 |
 | [invariants.md](invariants.md), [lifecycle.md](lifecycle.md) | Generated tables of every I-n / L-n with its tests |
 
 Numbers I-23, I-24, I-25 and I-31 are intentionally unused (their statements were merged

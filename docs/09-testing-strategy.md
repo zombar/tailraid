@@ -510,7 +510,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   every node, every node lists it with no value in the reply, a replace through another
   node reads back through the first, a node whose keychain copy is wiped fetches the key,
   the others read it with its setter killed, and a removal reaches every node
-  (I-303..I-307). `soak.CopySpec`
+  (I-303..I-307). 28 users and keys, 29 grants on the gateways, 30 secrets per user and
+  31 audit and sessions are docs/21 §10: an invite minted on one node creating a user
+  on another, a second device's key, a disabled user and the last admin's lockout; read,
+  write, admin and nobody on NFS, SMB and the web with the same answer from two
+  gateways; personal secrets isolated per user and the system space admins-only; one
+  audit record per operation, refusals counted, a browser session minted, used and
+  revoked (I-342..I-358); phases 25–27 are unused (the mesh of 0.9.x). `soak.CopySpec`
   carries the open mode (exclusive, the default, or replace) and
   which of the job's sessions copies it (`Conn`), and a result says when a create lost
   to an existing name (`Exists`); the handle races are `smbclient.Races`
