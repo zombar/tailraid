@@ -150,6 +150,24 @@ func until(ctx context.Context, r *Run, cond func() bool) bool {
 	}
 }
 
+// caughtUp waits until every node of to has applied at least as far as from had when
+// called (its replica holds what from's does), through the FSM hashes' applied index;
+// an environment without them (a live cluster with dev off) reports true at once.
+func (su *soakUsers) caughtUp(ctx context.Context, r *Run, from NodeRef, to ...NodeRef) bool {
+	at, _, err := r.Env.FSMHash(ctx, from)
+	if err != nil {
+		return true
+	}
+	return until(ctx, r, func() bool {
+		for _, n := range to {
+			if applied, _, err := r.Env.FSMHash(ctx, n); err != nil || applied < at {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // signsOn waits until every node takes id for name: the user row reached each replica.
 func (su *soakUsers) signsOn(ctx context.Context, r *Run, id *users.Identity, name string) bool {
 	return until(ctx, r, func() bool {
@@ -356,6 +374,12 @@ func phaseGrants(ctx context.Context, r *Run) error {
 	for _, g := range []struct{ path, role string }{{root + "/r", "read"}, {root + "/w", "write"}} {
 		err := su.op(ctx, n[2], su.kim, rpc.AdminOp{Op: "grant", Path: g.path, User: "lee", Role: g.role}, nil)
 		r.check("I-347", "grant lee "+g.role+" on "+g.path, err == nil, errText(err))
+	}
+	// a grant reaches a gateway's replica a moment after the proposal (as the revoke
+	// below): the probes start once both gateways have applied past the node the grants
+	// went through, else one answers lee from before them (CI: n1 refused the write)
+	if !su.caughtUp(ctx, r, n[2], gws...) {
+		r.event("note", "the gateways did not catch up with the grants within the replication bound")
 	}
 	var rows []roleMatrix
 	probe := func(gw NodeRef, user string) roleMatrix {
