@@ -182,7 +182,7 @@ func TestInvite_RateLimitedPerSource(t *testing.T) {
 		t.Fatalf("a wrong code: %v", err)
 	}
 	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "user_create", Source: src, User: "pat", Code: code, Key: key}); !errors.Is(err, rpc.ErrRateLimited) {
-		t.Fatalf("a second attempt within the second: %v", err)
+		t.Fatalf("a second attempt within the second of a refusal: %v", err)
 	}
 	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "user_create", Source: other, User: "zed", Code: code, Key: key}); !errors.Is(err, meta.ErrInvite) {
 		t.Fatalf("the right code under another name: %v", err)
@@ -191,6 +191,15 @@ func TestInvite_RateLimitedPerSource(t *testing.T) {
 	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "user_create", Source: src, User: "pat", Code: code, Key: key}); err != nil {
 		t.Fatalf("the right code after the second: %v", err)
 	}
+	// a success throttles nothing: a scripted setup creates its people in a row (soak
+	// phase 28 created two within a second from one host and the second was refused)
+	raw, err = ops.AdminOp(ctx, rpc.AdminOp{Op: "user_invite", Actor: kim, User: "quin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "user_create", Source: src, User: "quin", Code: raw.(InviteReply).Code, Key: strings.Repeat("cd", 32)}); err != nil {
+		t.Fatalf("a create right after a successful one from the same source: %v", err)
+	}
 	if _, ok := c.Leader().Node.FSM.UserByName("pat"); !ok {
 		t.Fatal("pat was not made")
 	}
@@ -198,7 +207,7 @@ func TestInvite_RateLimitedPerSource(t *testing.T) {
 	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "user_create", Source: src, User: "pat", Code: code, Key: key}); !errors.Is(err, meta.ErrInvite) {
 		t.Fatalf("a used code: %v", err)
 	}
-	if n := len(c.Leader().Node.FSM.Users()); n != 3 {
+	if n := len(c.Leader().Node.FSM.Users()); n != 4 { // kim, lee, pat and quin
 		t.Fatalf("%d users", n)
 	}
 	// the leader's tick expires what is past its time
