@@ -277,7 +277,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   member); it exposes both over a small HTTP API on a published port. The driver runs on the
   host: `Volume` and `Call` go through the worker, kills, restarts and partitions through
   `docker compose kill|start|restart` and `docker network disconnect|connect`, corruption
-  through `/dev/corrupt`.
+  through `/dev/corrupt`. Before the first phase it waits until every node's status shows
+  every device live: a joiner's paths form a few seconds after it serves (docs/20 §5),
+  and a read through a gateway with no path to a holder yet is EIO, no phase's finding.
 - **Live** (`tailraid verify [--report out.html] [--destructive]`): runs on one device of
   the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
   uses the device's mesh address. Non-destructive by default: transfer, integrity across every

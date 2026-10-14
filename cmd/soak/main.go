@@ -75,6 +75,13 @@ func run() int {
 			return 1
 		}
 	}
+	// the mesh forms a few seconds after a joiner serves (docs/20 §5): no phase starts
+	// until every node sees every device live, or a read through a gateway that has no
+	// path yet fails for a reason that is not the phase's
+	if err := env.waitConverged(ctx, 120*time.Second); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	if *evidence == "" {
 		*evidence = strings.TrimSuffix(*out, filepath.Ext(*out)) + "-evidence"
 	}
