@@ -545,7 +545,7 @@ tailraid revoke <path> <user|@group>
 tailraid access ls [path]                        # the access review: every grant, subject, role, by, at
 tailraid secret set <name> [--system] | get <name> | ls [--system] | rm <name> [--system] | rm --all
 tailraid audit ls [--since d] [--user u] [--kind k]
-tailraid web login [--node n] | logout [--all]
+tailraid web login [--node n] | logout [--all]   # a session of the volume; --node picks the address the link points at
 ```
 
 Every verb but `user create`, `user key add` and `user bootstrap` is a signed request

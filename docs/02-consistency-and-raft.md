@@ -373,8 +373,9 @@ and `MeshPort`, `MetaSet` with the subnet and the next host, ops 26–27 (`Pendi
 `PendingDelete`), and snapshot frame 13 with the pending rows; the release that carries
 it starts a new cluster, so nothing gates it against an older member. Codec 14 is users,
 groups and permissions (docs/21, I-349; after 1.0): `Actor` and `System` on every
-command, ops 28–31 (`Invite`, `User`, `Group`, `Grant`), `ByUser` on a secret, and
-snapshot frame 14 with the users, groups, grants and open invites after the secrets;
+command, ops 28–32 (`Invite`, `User`, `Group`, `Grant`, `Session`), `ByUser` on a
+secret, and snapshot frame 14 with the users, groups, grants, open invites and sessions
+after the secrets;
 the leader refuses the ops and an actor-carrying command with `ErrCodec` while a live
 member reads codec 13 (`meta.CodecUsers`), and enforcement waits for the first user.
 

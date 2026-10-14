@@ -98,15 +98,18 @@ read, in this order:
    authorizer; the tunnel already vouches for the source's key) → allowed; anything else
    → 403, logged at warn with the source.
 
-3. With users (docs/21 §6, built after 1.0): a session cookie. `tailraid web login
-   [--node <name>]` mints a one-time code on that node and prints
-   `http://<mesh IP>:20482/login?code=…`; opening it sets an `HttpOnly`,
-   `SameSite=Strict` cookie bound to the user and the key that minted it, valid
-   `users.session` (168 h), kept in the node's memory. A request without a session gets
-   the sign-in page (`/login`; `/assets/*` is the only other route without one), whatever
-   its source: a member's address alone admits nothing. Every request re-reads the user's
-   row, so a disabled user or a removed key is refused at its next request; `web logout
-   [--all]` drops the sessions on that node. The session's user is the actor of every
+3. With users (docs/21 §6, built after 1.0): a session of the volume. `tailraid web
+   login` proposes a session row in the FSM and prints
+   `http://<mesh IP>:20482/login?code=…` (`--node` picks which member's address); opening
+   it sets an `HttpOnly`, `SameSite=Strict` cookie for that origin holding the session
+   token, and every node validates a token against its replica. A cookie is per origin
+   and each node's page is its own, so a link to another node's page (the Stats member
+   menu, the Mesh section) carries a one-time hand-off code from `GET /api/handoff` and
+   the other node's `/login` sets its own cookie for the same session. A request without
+   a session gets the sign-in page (`/login`; `/assets/*` is the only other route without
+   one), whatever its source: a member's address alone admits nothing. Every request
+   re-reads the session's user row, so a disabled user, a removed key or `web logout`
+   is refused at the next request on every node. The session's user is the actor of every
    request: listings show what they hold `Read` on, mutations carry them into the FSM
    (I-354, I-355). Until the users PRs land the UI is for members, step 2 alone.
 
@@ -128,8 +131,9 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 |---|---|---|
 | `GET /` | – | `index.html`; `text/html; charset=utf-8`; `Cache-Control: no-cache`; CSP `default-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-src 'self'; frame-ancestors 'none'` |
 | `GET /assets/{file}` | – | `app.js` (`text/javascript`), `app.css` (`text/css`); `no-cache`; anything else 404 (no SPA fallback: routing is in the hash) |
-| `GET /login?code=` | – | with a valid one-time code: sets the session cookie and redirects to `/`; without one, or with a used or expired code: the sign-in page, `text/html`, the one command to run and, after a bad code, one line saying so (docs/21 §6, I-354); the only route besides `/assets/*` that needs no session |
-| `POST /api/logout` | required | drops this session; 204 |
+| `GET /login?code=&to=` | – | with a valid one-time code (from `web login` or a hand-off): sets the session cookie for this origin and redirects to `to` (a path under `/`, default `/`); without one, or with a used or expired code: the sign-in page, `text/html`, the one command to run and, after a bad code, one line saying so (docs/21 §6, I-354); the only route besides `/assets/*` that needs no session |
+| `GET /api/handoff?to=` | – | `{"url"}`: the `to` member's `/login` with a one-time code (five minutes, single use) that signs that origin into this session; the page uses it for every link to another node's page |
+| `POST /api/logout` | required | removes the session row: ends it on every node; 204 |
 | `GET /api/status` | – | the `admin.Report` JSON without `join_token`, cached 2 s; `Cache-Control: no-store` |
 | `GET /api/mesh` | – | `{"svg"}`: the Mesh section's picture (§7, docs/20 §10), `chart.Mesh` over `status.mesh` and `status.nodes` of this node's status (I-331); 404 on a device without a mesh; `Cache-Control: no-store` |
 | `GET /api/ls?path=&in=` | – | `{"path":"/a","dir":{protected,nsfw,pinned,deleted_at?,purge_at?,cover?,no_cover?},"entries":[{name,type,size,mtime,mode,ino,version,dirty?,target?,protected?,nsfw?,deleted_at?,purge_at?,thumb?,cover?,no_cover?}]}`, live entries sorted by name, then the folder's deleted roots newest first, without macOS's `._<name>` and `.DS_Store` and without `/.tailraid` (I-140); `type` is `file`, `dir` or `symlink`; `version` is the file's commit count, the thumbnail key's last part (§5); `mtime`, `deleted_at` and `purge_at` RFC 3339 UTC; `dirty` only on files; `dir.protected` and `dir.nsfw` are effective (the folder or an ancestor carries the flag), an entry's own flags are its own; `cover` names the audio entry whose picture is the folder's tile (§5), `<subfolder>/<entry>` when it comes from a subfolder, and `no_cover` is true for a folder known to have none and waiting for no video's frame (I-275), on the listed folder and on each folder entry, once this node has resolved it: a listing reads no file, `GET /api/thumb` of the folder resolves it (I-165); `in=<ino>` addresses a deleted root and `path` is then relative to it (§4) |

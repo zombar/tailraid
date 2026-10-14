@@ -217,10 +217,7 @@ prints a warning line for every node that has them enabled.
 | Secrets store (docs/19): S3 node credentials and the TMDB key | FSM, as AES-256-GCM ciphertext under the cluster key | a value in a log, report or argv |
 | User keys (docs/21 §1) | the person's own OS keychain (0600 file fallback under their config home), account `user-<cluster ID>`; the public half in the FSM | the private key in the FSM, a snapshot, a log line, a report or any request; the daemon's keychain |
 | Invite codes (docs/21 §1) | printed once; the FSM holds the SHA-256 with a 24 h expiry | a log line, `status`, the audit record (which names the invite, not the code) |
-| Browser sessions (docs/21 §6) | the node's memory; the cookie in the browser | a log line, a report, disk |
-| User keys (docs/21 §1) | the person's own OS keychain (0600 file fallback under their config home), account `user-<cluster ID>`; the public half in the FSM | the private key in the FSM, a snapshot, a log line, a report or any request; the daemon's keychain |
-| Invite codes (docs/21 §1) | printed once; the FSM holds the SHA-256 with a 24 h expiry | a log line, `status`, the audit record (which names the invite, not the code) |
-| Browser sessions (docs/21 §6) | the node's memory; the cookie in the browser | a log line, a report, disk |
+| Browser sessions (docs/21 §6) | the FSM holds the token's SHA-256 with the user, the key and the expiry; the token itself is in the browser's cookie and the one-time link | the token in the FSM, a log line or a report |
 | Cluster ID | `<data_dir>/cluster_id` and FSM `Meta` | — (not a secret) |
 | Node ID | `<data_dir>/node_id` | — (not a secret) |
 
@@ -290,12 +287,7 @@ daemon tells the operator when the disk under it is not encrypted.
 | A member asserts another user as the actor of a command | not defended: a member is trusted (the non-goal below); every command's actor is in the audit log, so the lie is at least attributable to the node (docs/21 §4) |
 | A captured signature is replayed, on this node or another | the timestamp window, the per-node nonce cache and the target node ID inside the signed bytes (docs/21 §2, I-344) |
 | An invite code is guessed | 50 bits, one attempt per second per source, 24 h expiry, checked on the receiving node before anything is proposed (I-343) |
-| A session cookie is stolen | `HttpOnly`, `SameSite=Strict`, bound to a key the user can remove, 7-day lifetime, dropped by `web logout` (I-354) |
-| Every admin is disabled or every admin key is lost | `user bootstrap` by the OS root on a voter, the same trust as `recover` (I-343); the last admin cannot be removed (I-346) |
-| A member asserts another user as the actor of a command | not defended: a member is trusted (the non-goal below); every command's actor is in the audit log, so the lie is at least attributable to the node (docs/21 §4) |
-| A captured signature is replayed, on this node or another | the timestamp window, the per-node nonce cache and the target node ID inside the signed bytes (docs/21 §2, I-344) |
-| An invite code is guessed | 50 bits, one attempt per second per source, 24 h expiry, checked on the receiving node before anything is proposed (I-343) |
-| A session cookie is stolen | `HttpOnly`, `SameSite=Strict`, bound to a key the user can remove, 7-day lifetime, dropped by `web logout` (I-354) |
+| A session cookie is stolen | `HttpOnly`, `SameSite=Strict`, bound to a key the user can remove, 7-day lifetime, ended everywhere by `web logout` (I-354) |
 | Every admin is disabled or every admin key is lost | `user bootstrap` by the OS root on a voter, the same trust as `recover` (I-343); the last admin cannot be removed (I-346) |
 | A lost or discarded disk is read | the OS's full-disk encryption; every device probes it hourly and `status` and `check` warn while it is off (I-341); an edited shard is detected by its header sum and the chunk hash, never served |
 
