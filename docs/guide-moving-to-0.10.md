@@ -130,7 +130,7 @@ The pool needs room for what the snapshot holds (`BYTES` in `tailraid snapshot l
 tailraid snapshot restore pike/m1/before-0.10 /
 ```
 
-The command waits until the whole tree is back, which for a large volume is hours, and prints what it restored. A restore never overwrites, and each file lands whole or not at all. So if it stops (Ctrl-C, a restart, a dropped link), run the same command again: everything already there is skipped. To bring the volume back a folder at a time, name the folder instead of `/`. The browser's as-of menu restores a folder too ([guide-snapshots.md](guide-snapshots.md#browse-restore-and-revert)).
+The command waits until the whole tree is back, which for a large volume is hours, and prints what it restored. A restore never overwrites, and each file lands whole or not at all: its data is written under a `.tailraid-restore-…` name in its folder and renamed into place once it is in. So if it stops (Ctrl-C, a restart, a dropped link), run the same command again: everything already there is skipped, and the file that was in flight is restored again (0.10.1 or later; before it, delete that file, the one empty file the stop left, before the rerun). Ctrl-C ends the restore on the node too. To bring the volume back a folder at a time, name the folder instead of `/`. The browser's as-of menu restores a folder too ([guide-snapshots.md](guide-snapshots.md#browse-restore-and-revert)).
 
 Then make the users, groups and grants again from the notes of step 1 ([guide-operating.md](guide-operating.md#users)), and finish with:
 

@@ -52,7 +52,7 @@ tailraid versions Documents/thesis.tex --copy pike/m1/before-reorg --as thesis-o
 tailraid snapshot restore pike/m1/before-reorg Photos/2024 --to Restored  # a folder, merged into the live tree
 ```
 
-A restore never overwrites: an existing file is skipped and reported. A revert is itself a change, so the content it replaced is in the next snapshot.
+A restore never overwrites: an existing file is skipped and reported. Each file appears under its name only once its data is in, so a restore stopped half-way is finished by running it again. A revert is itself a change, so the content it replaced is in the next snapshot.
 
 ## Without the cluster
 

@@ -204,3 +204,41 @@ func TestVFS_Versions(t *testing.T) {
 		t.Fatalf("offline: %+v %+v", vs, off)
 	}
 }
+
+// A restored file appears under its name only whole: its data lands under a temporary
+// name in the same folder, renamed into place once committed. A restore that fails
+// between (a mirror lost, the CLI interrupted) leaves no entry under the name, so a
+// rerun restores the file instead of skipping an empty one; a temporary file a stopped
+// node left behind is removed by the rerun (docs/16 §6).
+//
+// Invariant: I-186
+func TestVFS_RestoreTree_InterruptedFileIsRestoredByRerun(t *testing.T) {
+	r := newSnapRig(t).withFlusher()
+	r.change(t, 12)
+	r.f.MustApply(meta.Command{Op: meta.OpGCDelete, GCDelete: &meta.GCDelete{Before: 1 << 62}}) // the snapshot's chunks now come from the mirror
+	r.src.FailObjects(errors.New("mirror unplugged"))
+	if _, err := r.fs.RestoreSnapshot(ctx, "/.snapshots/host-m1/s1", "/restored"); err == nil {
+		t.Fatal("a restore whose mirror objects fail succeeded")
+	}
+	if _, err := r.fs.Stat("/restored/docs/a.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("after the failed restore the file's name exists: %v", err)
+	}
+
+	// a node stopped mid-file leaves the temporary file: the rerun removes it
+	tmp := "/restored/docs/" + vfs.RestoreTempName("a.bin")
+	writeFile(t, r.fs, tmp, []byte("left by a stopped node"))
+	r.src.FailObjects(nil)
+	rep, err := r.fs.RestoreSnapshot(ctx, "/.snapshots/host-m1/s1", "/restored")
+	must(t, err)
+	if rep.Files != 1 || slices.Contains(rep.Skipped, "/restored/docs/a.bin") {
+		t.Fatalf("the rerun %+v", rep)
+	}
+	if got := r.content(t, "/restored/docs/a.bin"); !bytes.Equal(got, r.old) {
+		t.Fatalf("the rerun's file differs at %d", testharness.FirstDiff(got, r.old))
+	}
+	fis, err := r.fs.ReadDir("/restored/docs")
+	must(t, err)
+	if got := names(fis); !slices.Equal(got, []string{"a.bin", "link"}) {
+		t.Fatalf("/restored/docs lists %v: a temporary file is left", got)
+	}
+}
