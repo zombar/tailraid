@@ -808,8 +808,11 @@ func (f *FS) LookupFold(dir, name string) (match string, found, ok bool) {
 	return match, found, true
 }
 
-// Role reports what the actor holds on name: read, write, or neither while on the way to
-// something they hold a role on (the NFS ACCESS answer, docs/21 §5); EACCES otherwise.
+// Role reports what the actor holds on name for the NFS ACCESS answer (docs/21 §5,
+// I-351): read and write by the role, and read alone on a directory on the way to
+// something they hold a role on, whose listing they get filtered (I-348): a client asks
+// ACCESS before it lists, and one answered no READ never sends the READDIR (the Linux
+// client refused `ls` of such a folder on the VM rig). EACCES elsewhere.
 func (f *FS) Role(name string) (read, write bool, err error) {
 	parts := meta.SplitPath(name)
 	if isSnapshotPath(parts) {
@@ -833,7 +836,7 @@ func (f *FS) Role(name string) (read, write bool, err error) {
 	if role < meta.RoleRead && in.Ino != meta.RootIno && !f.st.Traverses(f.actor, in.Ino) {
 		return false, false, mapErr("access", name, f.refuse("stat", name))
 	}
-	return role >= meta.RoleRead, role >= meta.RoleWrite, nil
+	return role >= meta.RoleRead || in.Type == meta.TDir, role >= meta.RoleWrite, nil
 }
 
 // OpenBest opens name for writing when the actor holds Write on it and for reading
