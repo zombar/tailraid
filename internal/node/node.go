@@ -430,7 +430,14 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return rep
 	}, clk)
 	defer reporter.Close()
-	status := func(fresh bool) any { return reporter.Get(fresh) }
+	status := func(fresh bool) any {
+		// the report may be the refresher's, built up to ReportEvery ago; the ready bit a
+		// supervisor's `status` exits on (I-125) is read now, so a node that became ready
+		// since answers ready (CI's TestStatus_Users on macOS read a pre-ready report)
+		rep := reporter.Get(fresh)
+		rep.Ready = node.Ready()
+		return rep
+	}
 	srv, err := rpc.NewServer(rpc.Options{
 		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, MirrorHealth: mirrors.health, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
