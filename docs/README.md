@@ -8,6 +8,7 @@ understanding and changing it.
 | [guide-using.md](guide-using.md) | The browser UI, the trash, folder flags, pinned folders, search, posters for the Media tab |
 | [guide-snapshots.md](guide-snapshots.md) | Mirrors, the snapshot schedule, browse, restore and revert, reading a mirror without the cluster |
 | [guide-capacity.md](guide-capacity.md) | Devices, disks and S3 buckets, draining, the redundancy policy, voters |
+| [guide-moving-to-0.10.md](guide-moving-to-0.10.md) | From 0.9.x to 0.10 on each OS: the old cluster down, a new one on Tailscale, the mirror adopted and restored |
 | [guide-operating.md](guide-operating.md) | Secrets, the command reference, configuration, backup and recovery, upgrading, verifying a download, `tailraid verify` |
 | [guide-contributing.md](guide-contributing.md) | The Docker soak, the three-VM rig, releasing |
 

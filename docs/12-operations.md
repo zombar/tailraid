@@ -269,8 +269,10 @@ re-created, as the move onto the mesh was:
 3. Move the old data directory and disk contents aside, then `tailraid init` on the first
    always-on device, `tailraid join <its Tailscale IP> <token>` on the others, `install`
    and `mount` as on day one (§7); create the first admin with the invite `init` prints.
-4. Copy the files back through a mount, and make the users, groups and grants again with
-   the CLI (§12).
+4. Copy the files back through a mount, or adopt a mirror (`mirror add <path> --adopt`)
+   and `snapshot restore <mirror>/<name> /` (16 §7), and make the users, groups and
+   grants again with the CLI (§12). The steps for each OS are
+   [guide-moving-to-0.10.md](guide-moving-to-0.10.md).
 
 ## 7. Day one: `tailraid init`
 

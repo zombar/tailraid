@@ -294,11 +294,13 @@ func (op MemberOp) SelfOnly() bool {
 	return false
 }
 
-// IsPass reports an op the leader answers only once a pass over the volume is done
-// (docs/08, I-189): the client gives it no deadline of its own.
+// IsPass reports an op answered only once a pass over the volume, or a copy out of a
+// mirror, is done (docs/08, I-189): the client gives it no deadline of its own.
 func (op AdminOp) IsPass() bool {
 	switch op.Op {
 	case "repair_now", "gc_now", "index_now":
+		return true
+	case "snapshot_restore", "versions_revert", "versions_copy": // a tree or a file read back from a mirror
 		return true
 	case "check":
 		return op.Scrub

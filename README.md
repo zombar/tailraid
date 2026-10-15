@@ -78,6 +78,7 @@ Write a file on one device and read it on any other. `tailraid status` shows the
 | [Using the volume](docs/guide-using.md) | the browser UI, the trash, folder flags, pinned folders, search, posters for the Media tab |
 | [Snapshots and mirrors](docs/guide-snapshots.md) | adding a mirror, the schedule, browse, restore and revert, reading a mirror without the cluster |
 | [Capacity, redundancy and voters](docs/guide-capacity.md) | adding devices, disks and S3 buckets, draining, the policy, voters and a cheap always-on voter |
+| [Moving from 0.9.x to 0.10](docs/guide-moving-to-0.10.md) | taking a 0.9.x cluster down on each OS, a new cluster on Tailscale, adopting the mirror and restoring from it |
 | [Operating a cluster](docs/guide-operating.md) | secrets, every command, the configuration file, backup and recovery, upgrading, verifying a download, `tailraid verify` |
 | [Testing a change and releasing](docs/guide-contributing.md) | the Docker soak, the three-VM rig, cutting a release |
 
