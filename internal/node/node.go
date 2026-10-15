@@ -988,7 +988,7 @@ func (a *adminOps) maintenance(ctx context.Context, cfg repair.Config) {
 				}
 			}
 			a.sweepS3(ctx, cfg.Grace)
-			if n, err := webui.SweepUploads(ctx, a.fs, a.node.FSM, a.clk.Now(), webui.UploadTTL); err != nil {
+			if n, err := webui.SweepUploads(ctx, a.asUser, a.node.FSM, a.clk.Now(), webui.UploadTTL); err != nil {
 				a.log.Warn("upload sweep failed", "err", err)
 			} else if n > 0 {
 				a.log.Info("sweep", "stale_uploads_removed", n)
@@ -1269,6 +1269,14 @@ func (a *adminOps) trashOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		return map[string]int{"purged": n}, nil
 	}
+}
+
+// asUser is the vfs view of user, the node's own before the cluster has users (user 0).
+func (a *adminOps) asUser(user meta.UserIdx) webui.Remover {
+	if user == 0 {
+		return a.fs
+	}
+	return a.fs.As(user)
 }
 
 // propose applies one command on the leader and waits for it locally.

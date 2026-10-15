@@ -460,7 +460,7 @@ the Cover Art Archive data are CC0 and need none.
 | Invariant | Tests |
 |---|---|
 | I-298 | `TestNoNodePackageImportsScrape` |
-| I-299 | `TestScrapePlan_Slots`, `TestScrapePlan_SameOnEveryNode`, `TestPlanPage_Sizes_Table`, `TestPlanPage_Under`, `TestRun_WritesMissingSlotsOnly`, `TestWebWriter_ExclusiveCreate` |
+| I-299 | `TestScrapePlan_Slots`, `TestScrapePlan_SameOnEveryNode`, `TestPlanPage_Sizes_Table`, `TestPlanPage_Under`, `TestRun_WritesMissingSlotsOnly`, `TestWebWriter_ExclusiveCreate`, `TestCLI_ScrapeWriter_SignsIn` |
 | I-300 | `TestNFO_RoundTrip_Table`, `TestScrapePlan_Slots` |
 | I-301 | `TestClear_Table`, `TestClearAlbum_Table`, `TestClearGame_Table`, `TestRun_UnclearMatch_Table` |
 | I-302 | `TestClient_KeyOnlyToTMDB_UserAgent_Redacted`, `TestClient_ProviderHostsOnly`, `TestClient_429Retries_BoundedBody`, `TestClient_MusicBrainzOncePerSecond` |

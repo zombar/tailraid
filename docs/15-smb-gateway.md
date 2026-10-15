@@ -592,7 +592,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
 | I-218 | `TestSMB_RefusedWrite_IsLogged` |
 | I-227 | `TestQueryFileRegions_FSA`, `TestVFS_ValidDataLength`, `TestSMB_QueryFileRegions_ExplorerProbe` |
 | I-228 | `TestIoctl_Statuses` |
-| I-229 | `TestSMB_ScratchCreate_NotTrashed` |
+| I-229 | `TestSMB_ScratchCreate_NotTrashed`, `TestSMB_OwnCleanup_WriteRoleOnly` |
 | I-233 | `TestSMB_CaseFold_NoTwins` |
 | I-240 | `TestSMB_DeleteOnClose_RunsOnDropLogoffTreeDisconnect` |
 | I-254 | `TestRead_Async_InterimThenFinal_NoShareLock`, `TestRead_SerialDriver_KeepsTheShareLock`, `TestRead_Async_CloseWaits_CancelCancels`, `TestFS_DeclaresConcurrentReadsAndWrites` |

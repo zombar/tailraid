@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zombar/tailraid/internal/meta"
+
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/webui"
@@ -300,7 +302,7 @@ func TestWebUI_SweepUploads_AgeTable(t *testing.T) {
 			u.write("/d/movie.mkv", 0, []byte("real")) // a real file of the same age stays
 			u.flush()
 			now := u.f.Clk.Now().Add(c.age)
-			n, err := webui.SweepUploads(context.Background(), u.fs, u.f.FSM, now, webui.UploadTTL)
+			n, err := webui.SweepUploads(context.Background(), func(meta.UserIdx) webui.Remover { return u.fs }, u.f.FSM, now, webui.UploadTTL)
 			must(t, err)
 			if gone := !u.exists("/d/.movie.tailraid-upload"); gone != c.gone || (c.gone && n != 1) || (!c.gone && n != 0) {
 				t.Fatalf("age %v: removed %d, temp gone %v, want gone %v", c.age, n, gone, c.gone)
@@ -395,5 +397,47 @@ func TestWebUI_Ls_HidesTailraidTree(t *testing.T) {
 	}
 	if code, _, body := u.get("/files/.tailraid/stats/10s/pike/2026-10-11T14-pike.jsonl.gz"); code != 200 || string(body) != "x" {
 		t.Errorf("a segment by its path: %d %q", code, body)
+	}
+}
+
+// Once users exist, an upload's temp carries its uploader and the sweep removes a stale
+// one as them: the node's own view may write only under /.tailraid, so a sweep as the
+// node was refused and stopped at its first temp. A temp the sweep cannot remove (here
+// one from before users, named for nobody) is left and the walk goes on.
+// Invariant: I-81
+func TestWebUI_SweepUploads_AsTheUploader(t *testing.T) {
+	u, kim, lee := usersUI(t)
+	b := u.signIn(lee)
+	resp := u.doWith(b, http.MethodPut, "/files/w/movie.mkv", strings.NewReader("half"), webui.HeaderUI, "1", "Content-Range", "bytes 0-3/10")
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		t.Fatalf("part 0 by lee: %d", resp.StatusCode)
+	}
+	var temp string
+	names, err := u.fs.ReadDir("/w")
+	must(t, err)
+	for _, n := range names {
+		if webui.IsUploadTemp(n.Name()) {
+			temp = n.Name()
+		}
+	}
+	if webui.UploadTempUser(temp) != lee {
+		t.Fatalf("temp %q names user %d, want lee (%d)", temp, webui.UploadTempUser(temp), lee)
+	}
+	fh, err := u.fs.As(kim).OpenFile("/other/.old.tailraid-upload", os.O_RDWR|os.O_CREATE, 0o644)
+	must(t, err)
+	_, err = fh.Write([]byte("from before users"))
+	must(t, err)
+	must(t, fh.Close())
+	u.flush()
+	as := func(user meta.UserIdx) webui.Remover {
+		if user == 0 {
+			return u.fs
+		}
+		return u.fs.As(user)
+	}
+	n, err := webui.SweepUploads(context.Background(), as, u.f.FSM, u.f.Clk.Now().Add(webui.UploadTTL+time.Second), webui.UploadTTL)
+	if n != 1 || u.exists("/w/"+temp) {
+		t.Fatalf("swept %d (%v); lee's temp gone: %v", n, err, !u.exists("/w/"+temp))
 	}
 }

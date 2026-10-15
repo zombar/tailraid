@@ -54,16 +54,23 @@ func (g *GC) fsmNow() int64 { return max(g.clk.Now().UnixNano(), g.st.LastNow())
 // PurgeTrash purges every deleted root older than before, in batches, as actor, and
 // returns how many inodes went (docs/06 §2, I-157). The chunks they held are tombstoned
 // at the FSM clock and collected by GCDelete after grace. Actor 0 is the node's own
-// retention sweep, proposed as System (docs/21 §4, I-349).
+// retention sweep, proposed as System once users exist (docs/21 §4, I-349); before the
+// first user the command carries neither, so it stays readable by a member on a codec
+// older than the users' (a stamp is the codec-14 header).
 func (g *GC) PurgeTrash(ctx context.Context, before int64, actor meta.UserIdx) (int, error) {
 	batch := g.Batch
 	if batch == 0 {
 		batch = GCBatch
 	}
 	purged := 0
+	cmd := meta.Command{Op: meta.OpPurge}
+	if g.st.Enforcing() {
+		cmd.Actor, cmd.System = actor, actor == 0
+	}
 	for g.st.TrashDue(before) > 0 {
 		was := g.st.Stats().TrashInodes
-		r, index, err := g.prop.Propose(ctx, meta.Command{Op: meta.OpPurge, Actor: actor, System: actor == 0, Purge: &meta.Purge{Before: before, Limit: uint32(batch), Now: g.clk.Now().UnixNano()}})
+		cmd.Purge = &meta.Purge{Before: before, Limit: uint32(batch), Now: g.clk.Now().UnixNano()}
+		r, index, err := g.prop.Propose(ctx, cmd)
 		if err == nil {
 			err = r.Err
 		}

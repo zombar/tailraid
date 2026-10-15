@@ -8,11 +8,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/scrape"
 	"github.com/zombar/tailraid/internal/users"
 )
 
@@ -364,5 +367,64 @@ func TestStatus_Users(t *testing.T) {
 	}
 	if out, err := run(t, "check", "--config", path); err != nil || strings.Contains(out, "dormant") {
 		t.Fatalf("check: %v\n%s", err, out)
+	}
+}
+
+// Once the cluster has users the scrape's writer signs in as the admin running it: with
+// no session the node's web listener refuses its writes, after signIn a write
+// lands as that admin (a second write of the name is a 412: it exists), and the logout
+// ends that one session.
+// Invariant: I-299, I-354
+func TestCLI_ScrapeWriter_SignsIn(t *testing.T) {
+	t.Setenv("TAILRAID_HOME", t.TempDir())
+	path, cfg := devHome(t)
+	cfg.Node.Disks = []config.Disk{{Path: filepath.Join(filepath.Dir(path), "d1"), Capacity: "1G"}} // room for the files
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "init", "--config", path, "--token", testToken, "--admin", "kim")
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	_, code := inviteFrom(t, out)
+	serveInBackground(t, cfg)
+	if out, err := run(t, "user", "create", "kim", code, "--config", path); err != nil {
+		t.Fatalf("user create: %v\n%s", err, out)
+	}
+	login := func() (string, error) {
+		out, err := run(t, "web", "login", "--config", path)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s", err, out)
+		}
+		for f := range strings.FieldsSeq(out) {
+			if strings.Contains(f, "/login?code=") {
+				return f, nil
+			}
+		}
+		return "", fmt.Errorf("no link in %s", out)
+	}
+	link, err := login()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _, _ := strings.Cut(link, "/login")
+	ctx := context.Background()
+	w := &webWriter{base: base, http: &http.Client{}}
+	if err := w.Create(ctx, "/before.nfo", []byte("x")); err == nil || !strings.Contains(err.Error(), "sign in") {
+		t.Fatalf("a write with no session: %v, want the sign-in refusal", err)
+	}
+	logout, err := w.signIn(ctx, login)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	if err := w.Create(ctx, "/movie.nfo", []byte("<movie/>")); err != nil {
+		t.Fatalf("a write as the signed-in admin: %v", err)
+	}
+	if err := w.Create(ctx, "/movie.nfo", []byte("<movie/>")); !errors.Is(err, scrape.ErrExist) {
+		t.Fatalf("the name again: %v, want ErrExist", err)
+	}
+	logout()
+	if err := w.Create(ctx, "/after.nfo", []byte("x")); err == nil || !strings.Contains(err.Error(), "sign in") {
+		t.Fatalf("a write after the logout: %v, want the sign-in refusal", err)
 	}
 }

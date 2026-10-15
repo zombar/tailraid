@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"strconv"
@@ -108,6 +109,15 @@ command contacts a provider: no node ever does (docs/18 §11).
 				ch = &ttyChooser{in: bufio.NewReader(cmd.InOrStdin()), out: cmd.ErrOrStderr()}
 			}
 			w := &webWriter{base: strings.TrimSuffix(base, "/"), http: &http.Client{Timeout: 2 * time.Minute}}
+			if rep.Users != nil && rep.Users.Count > 0 {
+				// the listener serves a session's user once the cluster has users: the
+				// scrape signs in as the admin who runs it (docs/21 §4)
+				logout, err := w.signIn(ctx, func() (string, error) { return webLoginURL(cmd) })
+				if err != nil {
+					return fmt.Errorf("scrape: sign in to the node's web listener: %w", err)
+				}
+				defer logout()
+			}
 			sum, err := scrape.Run(ctx, scrape.New(key, version), items, w, ch, o)
 			fmt.Fprintf(out, "%d files for %d items", sum.Files, sum.Items)
 			if sum.Present > 0 {
@@ -206,6 +216,58 @@ func (w *webWriter) Create(ctx context.Context, p string, data []byte) error {
 		e.Error = resp.Status
 	}
 	return fmt.Errorf("write %s: %s", p, e.Error)
+}
+
+// webLoginURL is a one-time sign-in link to this node's page, as `tailraid web login`
+// prints it, signed by the user running the command.
+func webLoginURL(cmd *cobra.Command) (string, error) {
+	raw, err := localCall(cmd, rpc.AdminOp{Op: "web_login"})
+	if err != nil {
+		return "", err
+	}
+	var rep struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return "", err
+	}
+	return rep.URL, nil
+}
+
+// signIn opens the one-time link login answers, so w's client holds the session's
+// cookie and every write acts as that user; logout ends that session alone.
+func (w *webWriter) signIn(ctx context.Context, login func() (string, error)) (logout func(), err error) {
+	link, err := login()
+	if err != nil {
+		return nil, err
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+	w.http.Jar = jar
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := w.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("the sign-in link answered %s", resp.Status)
+	}
+	return func() {
+		req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), http.MethodPost, w.base+"/api/logout", http.NoBody)
+		if err != nil {
+			return
+		}
+		req.Header.Set(webui.HeaderUI, "1")
+		if resp, err := w.http.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}, nil
 }
 
 // escapePath escapes each segment of a volume path for a URL.

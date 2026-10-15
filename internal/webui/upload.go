@@ -40,14 +40,33 @@ func IsUploadTemp(name string) bool { return meta.IsUploadTemp(name) }
 // leaves them out (I-140). Both are ephemeral names: a delete unlinks them (docs/06 §1).
 func IsOSMetadata(name string) bool { return meta.IsOSMetadata(name) }
 
-// tempName is the upload temp of name on node: ".<name>.<node>.tailraid-upload", so two
-// gateways uploading one name never write one temp (I-226); node "" is the plain
-// ".<name>.tailraid-upload".
-func tempName(name, node string) string {
-	if node == "" {
-		return "." + name + uploadSuffix
+// tempName is the upload temp of name on node for user: ".<name>.<node>.u<user>.tailraid-upload",
+// so two gateways uploading one name never write one temp (I-226), and the sweep removes
+// a stale temp as the user who started it (I-81); node "" and user 0 (before the first
+// user) leave their parts out.
+func tempName(name, node string, user meta.UserIdx) string {
+	t := "." + name
+	if node != "" {
+		t += "." + node
 	}
-	return "." + name + "." + node + uploadSuffix
+	if user != 0 {
+		t += ".u" + strconv.FormatUint(uint64(user), 10)
+	}
+	return t + uploadSuffix
+}
+
+// UploadTempUser is the user whose upload made the temp name, 0 for a temp from before
+// the cluster had users.
+func UploadTempUser(name string) meta.UserIdx {
+	_, idx, ok := strings.CutLast(strings.TrimSuffix(name, uploadSuffix), ".u")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.ParseUint(idx, 10, 16)
+	if err != nil {
+		return 0
+	}
+	return meta.UserIdx(n)
 }
 
 // uploads tracks the temps being written right now (a second upload of the same path is
@@ -201,7 +220,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "put "+canonical+": protected: unprotect the folder to replace the file")
 		return
 	}
-	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1], s.o.Node))
+	temp := path.Join(path.Dir(canonical), tempName(parts[len(parts)-1], s.o.Node, s.actor(r)))
 	var cur uint64 // the temp's current size: where the next part must start
 	if fi, err := s.fs(r).Stat(temp); err == nil {
 		cur = uint64(fi.Size())
