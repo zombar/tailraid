@@ -10,6 +10,7 @@ if (-not (Test-Path 'C:\Program Files\Tailscale\tailscale.exe')) { throw 'tailsc
 if (-not (Test-Path C:\tailraid\d1)) { throw 'C:\tailraid\d1 missing' }
 $smb = Get-SmbClientConfiguration
 if (-not $smb.RequireSecuritySignature -or $smb.EnableInsecureGuestLogons) { throw 'SMB client settings not applied' }
-if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -notlike '*C:\tailraid*') { throw 'C:\tailraid not on PATH' }
-Get-Content C:\tailraid\firstlogon.log -Tail 3
+Get-Content C:\tailraid\firstlogon.log -Tail 6
+$path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+if ($path -notlike '*C:\tailraid*') { throw "C:\tailraid not on PATH: $path" }
 Write-Output 'windows image verified'
