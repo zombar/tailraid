@@ -6,6 +6,7 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- vms: the clean slate sets every guest's clock from the host when it drifted ([3d64999](https://github.com/zombar/tailraid/commit/3d64999))
 - soak: phase 29 compares the root listing as a set of names ([311bee9](https://github.com/zombar/tailraid/commit/311bee9))
 - mesh: `mesh.relay_rate: "0"` lifts the limit as documented, and a small rate refills (I-328) ([9d9ab86](https://github.com/zombar/tailraid/commit/9d9ab86))
 - make: the soak target changes into test/soak once ([521e2ee](https://github.com/zombar/tailraid/commit/521e2ee))
