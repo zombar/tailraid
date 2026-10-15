@@ -1265,7 +1265,7 @@ func readSession(r *reader) Session {
 }
 
 // writeUsers writes the users, groups, grants, invites and sessions in canonical order
-// (snapshot frame 14).
+// (snapshot frame 15).
 func writeUsers(w *writer, st *State) {
 	w.u16(uint16(st.NextUser))
 	w.u16(uint16(st.NextGroup))

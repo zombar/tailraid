@@ -23,6 +23,8 @@ var (
 	ErrProtected       = errors.New("meta: entry is under a protected directory")
 	ErrInTrash         = errors.New("meta: entry is in the trash")
 	ErrCodec           = errors.New("meta: a member runs a codec too old for this command")
+	// ErrMeshSnapshot is a snapshot written by 0.9.x, whose mesh this release withdrew.
+	ErrMeshSnapshot = errors.New("meta: a snapshot from 0.9.x (the withdrawn mesh); this data directory cannot be served: re-create the volume, docs/12 §6")
 	// ErrSuperseded refuses a Commit that continues a rewrite another rewrite of the
 	// file started after (docs/04 §6, I-223); the flusher drops the inode's dirty data.
 	ErrSuperseded = errors.New("meta: another rewrite of the file started later")

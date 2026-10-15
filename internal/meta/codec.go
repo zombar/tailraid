@@ -12,20 +12,24 @@ import (
 var stateMagic = []byte("TRM1")
 
 // stateVersion 2 adds Volume.Auto, 3 Node.Host, 4 Inode.Flags and DeletedAt, 5 Chunk.Sums,
-// 7 the snapshot catalogue, 9 Inode.RewriteAt and 11 the secrets store; older
+// 7 the snapshot catalogue, 9 Inode.RewriteAt, 11 the secrets store and 15 the users; older
 // snapshots are still read (the fields zero) so a cluster upgrades without a format
 // break (docs/12 §6, I-156).
 const (
-	stateVersion    = stateVersionV14 // the newest written; 6, 8, 10, 12 and 13 are never written: those log codecs added no state, and 13 was the withdrawn mesh
-	stateVersionV14 = 14              // users, groups and permissions (docs/21, I-349): the identity rows, grants, invites, sessions, a secret's user
-	stateVersionV11 = 11              // the secrets store (docs/19, I-307)
-	stateVersionV9  = 9               // Inode.RewriteAt; gate a field on its own version, never on stateVersion
-	stateVersionV7  = 7               // the snapshot catalogue (docs/16, I-184)
-	stateVersionV5  = 5
-	stateVersionV4  = 4
-	stateVersionV3  = 3
-	stateVersionV2  = 2
-	stateVersionV1  = 1
+	stateVersion    = stateVersionV15 // the newest written; 6, 8, 10 and 12 are never written: those log codecs added no state
+	stateVersionV15 = 15              // users, groups and permissions (docs/21, I-349): the identity rows, grants, invites, sessions, a secret's user
+	// 13 and 14 are 0.9.x's frames, the withdrawn mesh's fields before the users tables:
+	// refused by name (ErrMeshSnapshot), never decoded as this layout
+	stateVersionMesh13 = 13
+	stateVersionMesh14 = 14
+	stateVersionV11    = 11 // the secrets store (docs/19, I-307)
+	stateVersionV9     = 9  // Inode.RewriteAt; gate a field on its own version, never on stateVersion
+	stateVersionV7     = 7  // the snapshot catalogue (docs/16, I-184)
+	stateVersionV5     = 5
+	stateVersionV4     = 4
+	stateVersionV3     = 3
+	stateVersionV2     = 2
+	stateVersionV1     = 1
 )
 
 // EncodeState writes a canonical snapshot of s: maps in sorted key order, so equal states
@@ -143,9 +147,9 @@ func encodeStateVersion(wr io.Writer, s *State, version uint8) error {
 		writeSnaps(w, s)
 	}
 	if version >= stateVersionV11 {
-		writeSecrets(w, s, version >= stateVersionV14)
+		writeSecrets(w, s, version >= stateVersionV15)
 	}
-	if version >= stateVersionV14 {
+	if version >= stateVersionV15 {
 		writeUsers(w, s)
 	}
 	return w.flush()
@@ -208,6 +212,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 		return nil, fmt.Errorf("meta: bad snapshot magic")
 	}
 	version := r.u8()
+	if r.err == nil && (version == stateVersionMesh13 || version == stateVersionMesh14) {
+		return nil, fmt.Errorf("%w (frame %d)", ErrMeshSnapshot, version)
+	}
 	if r.err == nil && version != stateVersion && version != stateVersionV11 && version != stateVersionV9 && version != stateVersionV7 && version != stateVersionV5 && version != stateVersionV4 && version != stateVersionV3 && version != stateVersionV2 && version != stateVersionV1 {
 		return nil, fmt.Errorf("meta: unsupported snapshot version %d", version)
 	}
@@ -328,9 +335,9 @@ func DecodeState(rd io.Reader) (*State, error) {
 		s.NextSnap = 1 // an older snapshot has no catalogue (I-184)
 	}
 	if version >= stateVersionV11 {
-		readSecrets(r, s, version >= stateVersionV14)
+		readSecrets(r, s, version >= stateVersionV15)
 	}
-	if version >= stateVersionV14 {
+	if version >= stateVersionV15 {
 		readUsers(r, s)
 	}
 	if err := r.done(); err != nil {

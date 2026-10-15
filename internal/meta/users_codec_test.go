@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -80,7 +81,7 @@ func TestCodec14_OlderReaderRefuses(t *testing.T) {
 	}
 }
 
-// Snapshot frame 14 carries the users, groups, grants, invites, sessions and a secret's
+// Snapshot frame 15 carries the users, groups, grants, invites, sessions and a secret's
 // user byte for byte; frame 11 of the same state reads back with none of them and
 // NextUser and NextGroup zero.
 // Invariant: I-349
@@ -106,7 +107,7 @@ func TestUsersState_Snapshot(t *testing.T) {
 	if err := EncodeState(&a, u.f.st); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(a.Bytes(), []byte("TRM1\x0e")) {
+	if !bytes.HasPrefix(a.Bytes(), []byte("TRM1\x0f")) {
 		t.Fatalf("header %x", a.Bytes()[:5])
 	}
 	got, err := DecodeState(bytes.NewReader(a.Bytes()))
@@ -114,7 +115,7 @@ func TestUsersState_Snapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, u.f.st) {
-		t.Fatalf("frame 14 round trip\n got %+v\nwant %+v", got, u.f.st)
+		t.Fatalf("frame 15 round trip\n got %+v\nwant %+v", got, u.f.st)
 	}
 	if err := EncodeState(&b, got); err != nil || !bytes.Equal(a.Bytes(), b.Bytes()) {
 		t.Fatalf("re-encode differs: %v", err)
@@ -140,7 +141,7 @@ func TestUsersState_Snapshot(t *testing.T) {
 	// a snapshot out of canonical order is refused
 	bad := append([]byte(nil), a.Bytes()...)
 	if _, err := DecodeState(bytes.NewReader(bad[:len(bad)-3])); err == nil {
-		t.Fatal("a truncated frame 14 was accepted")
+		t.Fatal("a truncated frame 15 was accepted")
 	}
 	// the clone is deep: a change to the clone leaves the original
 	cl := u.f.st.Clone()
@@ -155,5 +156,27 @@ func TestUsersState_Snapshot(t *testing.T) {
 	}
 	if !errors.Is(applyOne(t, u.f, Command{Op: OpGrant, Actor: u.kim, GrantOp: &GrantOp{Ino: dir, Subject: Subject{Kind: 9, Idx: 1}, Role: RoleRead, Now: u.now}}).Err, ErrBadCommand) {
 		t.Fatal("an unknown subject kind")
+	}
+}
+
+// A snapshot frame 13 or 14 is 0.9.x's, whose mesh fields sit before the users tables:
+// it is refused by name with the way out (re-create, docs/12 §6), never decoded as this
+// release's layout; this release writes its users state as frame 15.
+// Invariant: I-349
+func TestDecodeState_MeshFramesRefused(t *testing.T) {
+	var buf bytes.Buffer
+	if err := EncodeState(&buf, NewState()); err != nil {
+		t.Fatal(err)
+	}
+	if v := buf.Bytes()[4]; v != 15 {
+		t.Fatalf("this release writes frame %d, want 15", v)
+	}
+	for _, v := range []byte{13, 14} {
+		b := append([]byte(nil), buf.Bytes()...)
+		b[4] = v
+		_, err := DecodeState(bytes.NewReader(b))
+		if !errors.Is(err, ErrMeshSnapshot) || !strings.Contains(err.Error(), "docs/12 §6") {
+			t.Errorf("frame %d: %v, want ErrMeshSnapshot naming docs/12 §6", v, err)
+		}
 	}
 }
