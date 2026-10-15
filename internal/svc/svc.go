@@ -369,6 +369,7 @@ func systemdUnit(p Params) string {
 		seen[d] = true
 		paths = append(paths, unitQuote(d))
 	}
+	paths = append(paths, "-/run/xtables.lock") // iptables-legacy's lock for the firewall chain, when there is one (docs/20 §9)
 	return fmt.Sprintf(`[Unit]
 Description=tailraid node: metadata, shard store and NFS gateway
 After=network-online.target
@@ -383,8 +384,8 @@ RestartSec=2
 TimeoutStopSec=45
 LimitNOFILE=65536
 NoNewPrivileges=yes
-AmbientCapabilities=CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=%s

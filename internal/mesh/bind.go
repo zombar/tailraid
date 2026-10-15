@@ -34,6 +34,7 @@ type Bind struct {
 	cancel  context.CancelFunc
 
 	rx, tx atomic.Uint64
+	routes routeCache // destinations the host reaches through Tailscale (I-336)
 }
 
 // fanoutPrefix is the endpoint form a peer gets while it has no session.
@@ -92,7 +93,11 @@ func (b *Bind) wrap(fn conn.ReceiveFunc) conn.ReceiveFunc {
 			if sizes[i] == 0 {
 				continue
 			}
-			b.rx.Add(uint64(sizes[i])) //nolint:gosec // a size
+			b.rx.Add(uint64(sizes[i]))                        //nolint:gosec // a size
+			if eps[i] != nil && inTailscale(eps[i].DstIP()) { // through a tailnet: never a mesh path, never pinned (I-336)
+				sizes[i] = 0
+				continue
+			}
 			switch packets[i][0] {
 			case frameIntroduce:
 				frame := make([]byte, sizes[i])
@@ -284,6 +289,9 @@ func (b *Bind) stopIntroduce() {
 
 // SendControl sends one control frame to an address.
 func (b *Bind) SendControl(frame []byte, to netip.AddrPort) error {
+	if b.routes.viaTailscale(to.Addr()) {
+		return errViaTailscale
+	}
 	ep, err := b.inner.ParseEndpoint(to.String())
 	if err != nil {
 		return err
@@ -347,11 +355,15 @@ func (b *Bind) Send(bufs [][]byte, ep conn.Endpoint) error {
 }
 
 // sendTo sends to one endpoint: a relay endpoint wraps each packet in a relay frame to
-// the member (I-328), which needs the relay key; anything else goes as is.
+// the member (I-328), which needs the relay key; anything else goes as is. Nothing goes
+// to a destination the host reaches through Tailscale (I-336).
 func (b *Bind) sendTo(bufs [][]byte, ep conn.Endpoint) error {
 	var n uint64
 	for _, buf := range bufs {
 		n += uint64(len(buf))
+	}
+	if dst := ep.DstIP(); dst.IsValid() && b.routes.viaTailscale(dst) { // a relay endpoint's is its member's
+		return errViaTailscale
 	}
 	rep, isRelay := ep.(*relayEP)
 	if !isRelay {

@@ -345,7 +345,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	verifier := &users.Verifier{Users: node.FSM, Cluster: clusterID, NodeID: id, Skew: usersPol.ClockSkew, Now: clk.Now}
-	ops := &adminOps{cfg: cfg, paths: paths, bindings: bindings, reseed: nw.auth.SetSeed, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
+	ops := &adminOps{cfg: cfg, paths: paths, nw: nw, bindings: bindings, reseed: nw.auth.SetSeed, node: node, prober: prober, repairer: repairer, gc: gc, disks: disks, client: client, rd: rd, ring: ring, fs: fs, pins: pinned, stats: statsSvc, search: searchSvc, self: selfIdx, clk: clk, log: log, dataDir: cfg.Node.DataDir}
 	ops.secrets = store
 	ops.sessionLife = usersPol.Session
 	auditW := &audit.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Node: cfg.Node.Name, Clk: clk, Log: log}
@@ -406,6 +406,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			rep.Users = &admin.UsersReport{Count: len(node.FSM.Users()), Sessions: len(node.FSM.Sessions()), Refused1h: auditW.RefusedLastHour()}
 		}
 		rep.Mesh = nw.report(node, cfg, clk.Now())
+		rep.Warnings = append(rep.Warnings, admin.MeshWarnings(rep.Mesh)...)
 		for i := range rep.Nodes { // the path to each device member, for node ls (docs/20 §10)
 			if row, ok := node.FSM.Node(rep.Nodes[i].Idx); ok && row.Kind == meta.KindDevice && row.Idx != selfIdx && nw.mesh != nil {
 				rep.Nodes[i].Path = nw.mesh.Path(mesh.Key(row.Key)).String()
@@ -673,6 +674,7 @@ func (s *staleness) stale(state cluster.HealthState, lastContact, now time.Time)
 type adminOps struct {
 	cfg       config.Config
 	paths     *admin.Paths      // the device's paths and their full-disk encryption (docs/08 §Files on disk)
+	nw        *network          // the mesh's host side for check's warnings (docs/20 §9); nil in tests
 	reseed    func([]meta.Node) // the authorizer's seed follows the table (never a removed row)
 	node      *cluster.Node
 	prober    *cluster.Prober
@@ -1190,6 +1192,9 @@ func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 		rep.Warnings = append(rep.Warnings, a.userWarnings(ctx)...)        // dormant users, bindings to no one (docs/21 §8, I-358)
 		rep.Warnings = append(rep.Warnings, a.cfg.Warnings(a.cfg.Path)...) // this device's files on disk (docs/08, I-341)
 		rep.Warnings = append(rep.Warnings, admin.PathWarnings(a.paths.Report())...)
+		if a.nw != nil {
+			rep.Warnings = append(rep.Warnings, admin.MeshWarnings(a.nw.hostReport())...) // an own address out of reach (docs/20 §9, I-335)
+		}
 		return rep, nil
 	case "fsck":
 		snap, err := a.node.FSM.Snapshot()
@@ -1380,6 +1385,8 @@ func watchSelf(ctx context.Context, nw *network, cfg config.Config, node *cluste
 				log.Info("version reported to the node table", "version", version)
 			}
 		}
+		nw.tickFirewall(ctx)
+		nw.checkSelf(ctx, cfg)
 		if nw.mesh != nil {
 			nw.refreshPeers(node)
 			if err := nw.mesh.Tick(); err != nil {

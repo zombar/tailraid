@@ -56,6 +56,7 @@ type Config struct {
 		Interface string `yaml:"interface,omitempty"`  // the interface name on Linux and Windows (default tailraid0 / tailraid); macOS picks a utun
 		RelayRate string `yaml:"relay_rate,omitempty"` // bytes per second this device forwards for others (default 20M; "0": no limit; docs/20 §6)
 		PortMap   *bool  `yaml:"portmap,omitempty"`    // ask the default gateway (PCP, NAT-PMP) to map the port (default true; docs/20 §7)
+		Firewall  *bool  `yaml:"firewall,omitempty"`   // Linux: keep the node's chain first in INPUT (default true; docs/20 §9)
 	} `yaml:"mesh"`
 	Log struct {
 		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
@@ -390,6 +391,9 @@ func (c Config) MeshRelayRateBytes() (int64, error) {
 
 // MeshPortMap reports mesh.portmap: on unless set false (docs/20 §7).
 func (c Config) MeshPortMap() bool { return c.Mesh.PortMap == nil || *c.Mesh.PortMap }
+
+// MeshFirewall reports mesh.firewall: on unless set false (docs/20 §9, I-334).
+func (c Config) MeshFirewall() bool { return c.Mesh.Firewall == nil || *c.Mesh.Firewall }
 
 // RepairAvoidRelay reports repair.relay: true unless it is "allow" (docs/20 §8).
 func (c Config) RepairAvoidRelay() (bool, error) {

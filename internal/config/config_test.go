@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/goccy/go-yaml"
 )
 
 func TestParseBytes(t *testing.T) {
@@ -439,5 +441,29 @@ func TestConfig_MeshRelayRate_Table(t *testing.T) {
 		if (err != nil) != tc.bad || got != tc.want {
 			t.Errorf("relay_rate %q: %d %v, want %d bad=%v", tc.in, got, err, tc.want, tc.bad)
 		}
+	}
+}
+
+// mesh.firewall is on unless the file says false, and a file that says nothing keeps
+// saying nothing when written back (docs/20 §9).
+// Invariant: I-334
+func TestConfig_MeshFirewallDefault(t *testing.T) {
+	off, on := false, true
+	for _, tc := range []struct {
+		in   *bool
+		want bool
+	}{{nil, true}, {&on, true}, {&off, false}} {
+		cfg := Default()
+		cfg.Mesh.Firewall = tc.in
+		if got := cfg.MeshFirewall(); got != tc.want {
+			t.Errorf("firewall %v: %v, want %v", tc.in, got, tc.want)
+		}
+	}
+	b, err := yaml.Marshal(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "firewall") {
+		t.Errorf("a default config writes the key:\n%s", b)
 	}
 }

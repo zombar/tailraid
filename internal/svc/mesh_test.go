@@ -7,11 +7,12 @@ import (
 	"testing"
 )
 
-// The Linux unit grants CAP_NET_ADMIN and nothing else and waits for the network alone;
+// The Linux unit grants CAP_NET_ADMIN and CAP_NET_RAW (the TUN and the firewall chain)
+// and nothing else and waits for the network alone;
 // the macOS plist is installed by root into the system domain and its log is the
 // daemon's; the Windows service opens the mesh port's inbound firewall rule and closes
 // it at uninstall, and a rule that was never there does not fail the uninstall.
-// Invariant: I-324
+// Invariant: I-324, I-334
 func TestSvc_MeshPrivileges(t *testing.T) {
 	p := Params{Exe: "/opt/tailraid", ConfigPath: "/etc/tailraid/config.yaml", Home: "/etc/tailraid", User: "u", UID: 501, MeshPort: 20483, Stage: "/stage"}
 	p.GOOS = "linux"
@@ -20,13 +21,13 @@ func TestSvc_MeshPrivileges(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit := pl.Files[0].Content
-	for _, want := range []string{"AmbientCapabilities=CAP_NET_ADMIN\n", "CapabilityBoundingSet=CAP_NET_ADMIN\n", "After=network-online.target\n", "NoNewPrivileges=yes\n", "User=u\n"} {
+	for _, want := range []string{"AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW\n", "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW\n", "After=network-online.target\n", "NoNewPrivileges=yes\n", "User=u\n"} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q:\n%s", want, unit)
 		}
 	}
-	if strings.Contains(unit, "tailscaled") || strings.Count(unit, "CAP_") != 2 {
-		t.Errorf("unit names more than the one capability, or tailscaled:\n%s", unit)
+	if strings.Contains(unit, "tailscaled") || strings.Count(unit, "CAP_") != 4 {
+		t.Errorf("unit names more than the two capabilities, or tailscaled:\n%s", unit)
 	}
 
 	p.GOOS = "darwin"

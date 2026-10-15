@@ -3,6 +3,7 @@ package mesh
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -57,6 +59,28 @@ type Options struct {
 	// Addr is the device's own mesh address: a packet the OS hands the tunnel for it goes
 	// back to the kernel (selfLoop); zero: no loop (a test without an address)
 	Addr netip.Addr
+}
+
+// ErrPortInUse is a mesh port another socket holds (docs/20 §9, I-335).
+var ErrPortInUse = errors.New("mesh: port in use")
+
+// portErr names the port and mesh.port when err is a bind refused because another
+// socket holds the port (the device binds it at configure or at Up, per OS).
+func portErr(port uint16, err error) error {
+	if !portInUse(err) {
+		return err
+	}
+	return fmt.Errorf("%w: UDP port %d is held by another program (a second tailraid serve, a VM's port forward): stop it, or give this device another mesh.port: %w", ErrPortInUse, port, err)
+}
+
+// portInUse reports a bind refused because the address is taken: EADDRINUSE, which
+// Windows spells WSAEADDRINUSE ("only one usage of each socket address").
+func portInUse(err error) bool {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "address already in use") || strings.Contains(s, "only one usage of each socket address")
 }
 
 // Peer is one row the device holds (docs/20 §3).
@@ -185,11 +209,11 @@ func New(tunDev tun.Device, key PrivateKey, o Options) (*Mesh, error) {
 	conf := "private_key=" + Key(key).Hex() + "\nlisten_port=" + strconv.Itoa(int(o.Port)) + "\n"
 	if err := m.dev.IpcSet(conf); err != nil {
 		m.dev.Close()
-		return nil, fmt.Errorf("mesh: configure device: %w", err)
+		return nil, portErr(o.Port, fmt.Errorf("mesh: configure device: %w", err))
 	}
 	if err := m.dev.Up(); err != nil {
 		m.dev.Close()
-		return nil, fmt.Errorf("mesh: bring the device up: %w", err)
+		return nil, portErr(o.Port, fmt.Errorf("mesh: bring the device up: %w", err))
 	}
 	m.refreshLocal()
 	return m, nil
@@ -623,7 +647,8 @@ func decodeHexKey(s string) (Key, error) {
 }
 
 // LocalEndpoints are this host's candidates (I-322): every non-loopback, non-link-local
-// address of an interface that is up, with the mesh port, IPv4 first.
+// address of an interface that is up and outside Tailscale's space (I-336), with the
+// mesh port, IPv4 first.
 func LocalEndpoints(port uint16) ([]netip.AddrPort, error) {
 	pfx, err := LocalPrefixes()
 	if err != nil {
@@ -662,15 +687,12 @@ func LocalPrefixes() ([]netip.Prefix, error) {
 				continue
 			}
 			ip = ip.Unmap()
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+			if !usableCandidate(ip) { // the mesh's own space and Tailscale's among the refused (I-336)
 				continue
 			}
 			bits, _ := ipn.Mask.Size()
 			if ip.Is4() && len(ipn.Mask) == 16 {
 				bits -= 96
-			}
-			if meshSpace.Contains(ip) {
-				continue
 			}
 			out = append(out, netip.PrefixFrom(ip, bits))
 		}

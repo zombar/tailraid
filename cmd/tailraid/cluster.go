@@ -111,9 +111,20 @@ func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Cl
 	}
 	rep, err := admin.FetchStatus(ctx, c, addr)
 	if err != nil {
-		return admin.Report{}, nil, "", fmt.Errorf("status from %s (is `tailraid serve` running?): %w", addr, err)
+		return admin.Report{}, nil, "", fmt.Errorf("status from %s (%s): %w", addr, unreachableHint(err), err)
 	}
 	return rep, c, addr, nil
+}
+
+// unreachableHint is what a failed dial to the node's own address suggests: a refused
+// one a node that is not running, a timed-out one also a host firewall dropping the
+// mesh address, which the node's log names (docs/20 §9, I-335).
+func unreachableHint(err error) string {
+	var ne net.Error
+	if (errors.As(err, &ne) && ne.Timeout()) || strings.Contains(err.Error(), "i/o timeout") {
+		return "is `tailraid serve` running? if `tailraid logs` shows it serving, a host firewall is dropping the mesh address: the log names the cause"
+	}
+	return "is `tailraid serve` running?"
 }
 
 func addNodeFlags(c *cobra.Command) {

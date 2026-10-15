@@ -24,6 +24,7 @@ import (
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
 	"github.com/zombar/tailraid/internal/mesh"
+	"github.com/zombar/tailraid/internal/mesh/firewall"
 	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
@@ -55,7 +56,10 @@ type network struct {
 	mu      sync.Mutex
 	lastEP  []string // the candidates last published
 	pubAt   time.Time
-	kicks   chan struct{} // a membership entry applied: the peers are refreshed (I-317)
+	kicks   chan struct{}    // a membership entry applied: the peers are refreshed (I-317)
+	fw      *firewall.Keeper // the node's chain in the host firewall (docs/20 §9); nil off Linux or with mesh.firewall off
+	fwErr   string           // the keeper's last error, logged once per change
+	self    selfCheck        // the dial to the node's own mesh address (I-335)
 }
 
 // membershipOp reports a command that changes who the peers are: a row, its state, or a
@@ -124,6 +128,11 @@ func (nw *network) Close() {
 	if nw.portmap != nil { // the mapping is given back; a restart maps the same port again
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		nw.portmap.Close(ctx)
+		cancel()
+	}
+	if nw.fw != nil { // the chain goes with the device; the next serve puts it back
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		nw.fw.Close(ctx)
 		cancel()
 	}
 	if nw.mesh != nil {
@@ -241,6 +250,11 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		return err
 	}
 	nw.log.Info("mesh up", "addr", nw.addr, "interface", ifname, "port", m.Port())
+	// the chain goes in before Raft and the listeners, so their first packets pass a
+	// host firewall that drops 100.64/10 (docs/20 §9, I-334)
+	if nw.fw = newKeeper(cfg, runtime.GOOS, nw); nw.fw != nil {
+		nw.tickFirewall(ctx)
+	}
 	// Windows holds a freshly set address tentative for a moment and refuses a bind to
 	// it ("the requested address is not valid in its context"), which stopped serve on
 	// the Windows guest's first start; the listeners wait until a bind succeeds
@@ -252,6 +266,53 @@ func (nw *network) up(cfg config.Config, clusterID [16]byte, intro *introducer, 
 		nw.portmap = &portmap.Mapper{Port: m.Port(), Clock: clk, Log: nw.log}
 	}
 	return nil
+}
+
+// tickFirewall keeps the node's chain first in the host firewall, logging a failure once
+// per change; a failure never stops the node (docs/20 §9, I-334).
+func (nw *network) tickFirewall(ctx context.Context) {
+	if nw.fw == nil {
+		return
+	}
+	err := nw.fw.Tick(ctx)
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	nw.mu.Lock()
+	changed := msg != nw.fwErr
+	nw.fwErr = msg
+	nw.mu.Unlock()
+	switch {
+	case changed && err != nil:
+		nw.log.Warn("mesh firewall chain not kept: a host firewall may drop the mesh", "err", err)
+	case changed:
+		nw.log.Info("mesh firewall chain kept", "chain", firewall.Chain)
+	}
+}
+
+// checkSelf dials the node's own RPC listener at its mesh address (docs/20 §9, I-335).
+func (nw *network) checkSelf(ctx context.Context, cfg config.Config) {
+	addr := net.JoinHostPort(nw.IP().String(), strconv.Itoa(cfg.Listen.RPC))
+	nw.self.check(ctx, addr, func() string {
+		var st *firewall.Status
+		if nw.fw != nil {
+			s := nw.fw.Status()
+			st = &s
+		}
+		return selfCause(runtime.GOOS, cfg.MeshFirewall(), nw.ifname, nw.port, st)
+	}, nw.log)
+}
+
+// hostReport is the host side of the mesh report: the address, the firewall chain and
+// the self-check, for the warnings of status and check.
+func (nw *network) hostReport() *admin.MeshReport {
+	rep := &admin.MeshReport{Addr: nw.IP().String(), SelfReach: nw.self.report()}
+	if nw.fw != nil {
+		st := nw.fw.Status()
+		rep.Firewall = &st
+	}
+	return rep
 }
 
 // tickPortMap drives the gateway mapping (docs/20 §7, I-330).
@@ -510,6 +571,8 @@ func keylessCheck(st *meta.FSM) error {
 // report is the status report's mesh block (docs/20 §10, I-325).
 func (nw *network) report(node *cluster.Node, cfg config.Config, now time.Time) *admin.MeshReport {
 	rep := &admin.MeshReport{Addr: nw.IP().String(), Interface: nw.ifname, Port: nw.port, RPCPort: uint16(cfg.Listen.RPC), Fake: nw.fake} //nolint:gosec // validated
+	host := nw.hostReport()
+	rep.Firewall, rep.SelfReach = host.Firewall, host.SelfReach
 	if !nw.fake {
 		rep.Key = nw.Key().String()
 	}

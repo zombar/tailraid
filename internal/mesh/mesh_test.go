@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -497,5 +499,30 @@ func TestMesh_SelfAddressedPacketLoopsBack(t *testing.T) {
 	case got := <-c.tun.Inbound:
 		t.Fatalf("a device looping another address returned its own: %d bytes", len(got))
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A UDP port another program holds (a VM's port forward held 20483 on a Mac on
+// 2026-10-15) fails New with an error naming the port and mesh.port.
+// Invariant: I-335
+func TestMesh_PortInUseNamesMeshPort(t *testing.T) {
+	held, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := uint16(held.LocalAddr().(*net.UDPAddr).Port) //nolint:gosec // a port
+	key, err := GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := tuntest.NewChannelTUN()
+	m, err := New(ct.TUN(), key, Options{Port: port, Keepalive: NoKeepalive})
+	if err == nil {
+		m.Close()
+		t.Fatal("New took a port another socket holds")
+	}
+	if !errors.Is(err, ErrPortInUse) || !strings.Contains(err.Error(), strconv.Itoa(int(port))) || !strings.Contains(err.Error(), "mesh.port") {
+		t.Errorf("error %q names neither the port nor mesh.port", err)
 	}
 }

@@ -15,7 +15,7 @@ path and data directory it bound.
 | OS | Unit | Manager commands | Restart | Logs |
 |---|---|---|---|---|
 | macOS | LaunchDaemon `/Library/LaunchDaemons/app.tailraid.serve.plist`, run as root (a utun needs it, docs/20 §9; `install` runs under `sudo`); the home is `/Library/Application Support/tailraid`; `mount.owner` from `SUDO_UID` gives the NFS mount the user's ownership | `launchctl bootstrap system …` / `bootout`; `kickstart` / `kill SIGTERM` then `print` until `not running` | `KeepAlive`, `ThrottleInterval 5` | `/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
-| Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `AmbientCapabilities=CAP_NET_ADMIN` (the TUN, docs/20 §9), `Environment=TAILRAID_HOME=…`, `After=network-online.target` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
+| Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW` (the TUN and the firewall chain, docs/20 §9), `Environment=TAILRAID_HOME=…`, `After=network-online.target` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
 | Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto`), `sc.exe failure … actions= restart/5000`; `install` writes `wintun.dll` beside the exe and adds the UDP port's firewall rule (docs/20 §9) | `sc.exe start|stop|delete` (elevated); `stop` then `query` until `STOPPED` | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
 
 `log.file` in the config (or `TAILRAID_LOG_FILE`) makes `serve` append to a file in the
@@ -600,8 +600,8 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 - **I-122** — The Linux unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only` and `PrivateTmp`, and its `ReadWritePaths` names exactly the
   data directory, every added disk, the config directory and the log file's directory,
-  with every path quoted, and `CAP_NET_ADMIN` is its only ambient and bounding
-  capability (docs/20 §9); the installer stages the unit only in a directory it created;
+  with every path quoted, plus the optional `-/run/xtables.lock`, and `CAP_NET_ADMIN`
+  and `CAP_NET_RAW` are its only ambient and bounding capabilities (docs/20 §9); the installer stages the unit only in a directory it created;
   the LaunchDaemon (the LaunchAgent before docs/20) restarts the service only after a
   non-zero exit.
 - **I-123** — On the first interrupt a leader transfers leadership before its Raft

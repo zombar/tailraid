@@ -51,7 +51,7 @@ source no member admits, which a client's connection pool would otherwise keep r
 |---|---|---|---|
 | Device | `/dev/net/tun`, named `tailraid0` (`mesh.interface`) | `utun<n>`, the next free number | wintun, adapter "tailraid", GUID derived from the cluster ID so it is the same adapter across restarts |
 | Address, MTU, route | `ip addr add`, `ip link set … mtu … up` | `ifconfig <utun> <addr> <addr> netmask …`, `ifconfig … mtu`, `route add -net <subnet> -interface` | `netsh interface ip set address`, `netsh interface ipv4 set subinterface … mtu`, `route add` |
-| Privilege | `CAP_NET_ADMIN` (the unit grants it, §9) | root (the service is a LaunchDaemon, §9) | LocalSystem (the service already is) |
+| Privilege | `CAP_NET_ADMIN`, and `CAP_NET_RAW` for the firewall chain (the unit grants both, §9) | root (the service is a LaunchDaemon, §9) | LocalSystem (the service already is) |
 | The dll | — | — | `wintun.dll` beside the exe, written by `install`, `update` and whatever opens the adapter (a `join`, a `serve` by hand) when absent or different (§9) |
 
 A packet the OS hands the tunnel for the device's own address goes straight back to the
@@ -108,7 +108,11 @@ space, never a home LAN) derived from the cluster ID: `100.(64 + id[0] mod 64).i
 one of 16,384; `init --subnet` overrides it. A device that still runs Tailscale routes
 100.64.0.0/10 to `tailscale0`; our /24 is more specific and wins, and a tailnet peer that
 happens to sit inside it (about one chance in 16,384 per peer) is unreachable from that
-device while the mesh is up, which is what the override is for.
+device while the mesh is up, which is what the override is for. The route is not the
+whole story on Linux: tailscaled's netfilter chain `ts-input` drops every packet from
+100.64.0.0/10 that did not arrive on `tailscale0`, the mesh's own included (found on the
+cloud voter on 2026-10-15: `status` timed out dialling the node's own address), which
+is what the node's own firewall chain of §9 is for.
 
 **Allocation.** The leader gives each device an address at its introduce (§4): the
 lowest free host of the subnet, hosts 1–254, `init`'s node taking .1. A host is free
@@ -212,7 +216,8 @@ authenticated packet (roaming). tailraid's `conn.Bind` adds the part a coordinat
 server used to do: finding that endpoint.
 
 **Candidates.** Each row carries `Endpoints`, at most 8: every non-loopback,
-non-link-local interface address of the device with its mesh port; `mesh.endpoint`, a
+non-link-local interface address of the device outside Tailscale's space (below) with
+its mesh port; `mesh.endpoint`, a
 public `host:port` the operator knows (a port forward, the cloud voter's own address; a
 name is resolved by the device that publishes it, each time it publishes, so a DDNS
 name reaches the peers as the addresses it points at today, and a peer never resolves
@@ -224,6 +229,20 @@ relay or is still fanning out to gets none, since the relay's address is not the
 caller's); and, with §7, the port a router mapped. A node publishes
 its candidates with the member op `update_endpoints`, for its own row only, at most once
 a minute and only when they changed (I-322).
+
+**Never over Tailscale.** A device that still runs Tailscale could carry the mesh inside
+the tailnet: its tailnet addresses look like any interface address, and a subnet route
+or an exit node sends a LAN or public candidate into `tailscale0`. That doubles the
+encapsulation, hands the path's fate to a second control plane and hides it from the
+path class, so the mesh never takes such a path. Tailscale's space is 100.64.0.0/10
+(where the mesh's own subnets also live, which already kept it out of the candidates)
+and `fd7a:115c:a1e0::/48`, its IPv6 ULA. No address in either is a candidate. The bind
+sends nothing to an address in either, nor to a destination the host routes from an
+address in either: it asks the kernel which source a connected UDP socket to that
+destination would use, and caches the answer for 30 s per address, so a subnet route
+or an exit node that appears is honoured within that time. It drops every packet
+arriving from either space before WireGuard sees it, so roaming never pins one. An
+older row's candidate in that space is never dialled (I-336).
 
 **Fan-out.** A peer with no session has the endpoint `fanout:<idx>`: a packet to it is
 sent to every candidate at once. Only handshake initiations and keepalives are ever sent
@@ -344,6 +363,33 @@ OS, the CLI and the rigs).
   unit names: root's own home only when nothing says who invoked it) and gives what it
   wrote back to `SUDO_UID:SUDO_GID`, the disk and mirror directories included (their
   markers and shard directories are root's otherwise); `init` needs no TUN.
+  **The firewall.** A host firewall in the `filter` table's `INPUT` chain (ufw's
+  default deny, tailscaled's `ts-input`) drops the mesh unless something lets it in,
+  and tailscaled rebuilds its chains whenever it starts, so a rule an operator added
+  once does not stay ahead of them. With `mesh.firewall` on (the default) the node
+  keeps a chain of its own, as tailscaled does: `tailraid-input` accepts what arrives
+  on the mesh interface, what the host sends itself from its mesh address on `lo`,
+  and the UDP port from anywhere (WireGuard answers nothing that does not
+  authenticate), and the jump to it is the first rule of `INPUT`, in `iptables` and,
+  for the UDP port, `ip6tables`. `serve` installs it once the interface is up, before
+  Raft and the listeners, checks it on every probe tick (`-S INPUT` and `-S
+  tailraid-input`), puts the jump back at the top when another program moved it down or
+  removed it, and removes jump and chain at shutdown. The commands run with `-w`; the
+  unit gains `CAP_NET_RAW` beside `CAP_NET_ADMIN` (iptables-legacy talks over a raw
+  socket) and `ReadWritePaths=-/run/xtables.lock` (the legacy lock; iptables-nft takes
+  none). A host without the `iptables` command keeps nothing, and a failed command is a
+  warning, never a reason to stop: firewalld, whose nftables table an accept in
+  `filter` does not override, and an nftables-only ruleset are left to the operator,
+  whom the self-check below tells. With `mesh.firewall: false` the node never touches
+  the firewall (I-334).
+  **The self-check.** On every probe tick, on every OS, the node dials its own RPC
+  listener at its mesh address (2 s); `status.mesh.self_reach` reports the outcome, a
+  failure is logged once per change as an error naming the likely cause (`ts-input`
+  present, the node's chain not kept, `mesh.firewall` off) and `status` and `check`
+  warn with it; the CLI's dial timeout to its own node says a firewall may be dropping
+  the mesh address and points at `tailraid logs`. A UDP port another program holds (a
+  second `serve`, a VM's port forward) fails `join` and `serve` with an error that names
+  the port and `mesh.port` (I-335).
 - **macOS.** A utun needs root, so `serve` runs as a LaunchDaemon
   (`/Library/LaunchDaemons/app.tailraid.serve.plist`, the `system` domain: it starts at
   boot, not at login) and `config.Home()` as root is `/Library/Application
@@ -393,6 +439,7 @@ round-trip line of its node section (I-332).
 | `mesh.address` | written by `init`/`join` | the device's address; survives `reset` |
 | `mesh.interface` | `tailraid0` / `tailraid` | the interface name on Linux and Windows |
 | `mesh.portmap` | `true` | ask the router for a mapping (§7) |
+| `mesh.firewall` | `true` | Linux: keep the `tailraid-input` chain first in `INPUT` (§9) |
 | `mesh.relay_rate` | 20 MiB/s | what this device forwards for others (§6); `"0"` lifts the limit |
 | `repair.relay` | `avoid` | background work on relayed paths (§8) |
 | `mount.owner` | from `SUDO_UID:SUDO_GID` at `install` | macOS: `uid:gid` the gateways give files, so the user's mount shows their ownership under the root daemon |
@@ -471,17 +518,22 @@ round-trip table.
   presents the same key, keeps the row's index, address and disks and replaces the
   stale Raft server; a code whose cluster ID is not the cluster's is refused at once.
 - **I-322** — A device's endpoint candidates are its non-loopback, non-link-local
-  interface addresses with its mesh port, `mesh.endpoint`, the reflexive addresses it
+  interface addresses outside Tailscale's space (I-336) with its mesh port, `mesh.endpoint`, the reflexive addresses it
   learned from `seen_from` (its introduce, every `/health` reply, which reports a
   direct path's source only) and a mapped port, deduplicated and at most 8; `update_endpoints` (as `set_version`, the other unsigned member op) is accepted for the caller's own row
   only, and published at most once a minute and only when the set changed.
+- **I-336** — No candidate is an address in Tailscale's space (100.64.0.0/10,
+  `fd7a:115c:a1e0::/48`); the bind sends no packet to an address in that space or to a
+  destination whose route's source address lies in it (re-checked within 30 s), and
+  drops every packet whose source lies in it before WireGuard or a control-frame
+  handler sees it.
 - **I-323** — A peer without a session is sent to every candidate at once and pinned to
   the source of the first authenticated packet; data is never fanned out; a peer not
   heard from (no packet, no handshake) for 75 s returns to fan-out within 10 s; two devices behind
   cone NATs, and one behind a cone NAT and one behind a symmetric NAT, reach each other
   directly.
-- **I-324** — The Linux unit runs as the installing user with `CAP_NET_ADMIN` as its
-  only ambient and bounding capability; the macOS service is a LaunchDaemon in the
+- **I-324** — The Linux unit runs as the installing user with `CAP_NET_ADMIN` and
+  `CAP_NET_RAW` as its only ambient and bounding capabilities; the macOS service is a LaunchDaemon in the
   `system` domain with its home under `/Library/Application Support/tailraid`; the
   Windows service runs with `wintun.dll` beside the exe, written by `install`, by
   `update` and by whatever opens the adapter (a `join` runs before any `install`) when
@@ -491,6 +543,18 @@ round-trip table.
   and mirror directories back to that user; `serve` listens only once the interface's
   address takes a bind (Windows holds a fresh address tentative for a moment); `init`
   creates no interface.
+- **I-334** — On Linux with `mesh.firewall` on, after any probe tick on which the
+  `iptables` commands succeed, the first rule of `INPUT` jumps to `tailraid-input`,
+  which holds exactly the accepts of the mesh interface, the host's own mesh address on
+  `lo` and the UDP port (`ip6tables`: the port alone), whatever another program inserted
+  ahead of it in between; the jump appears once; shutdown removes the jump and the
+  chain; with `mesh.firewall: false`, a host without `iptables`, or another OS, no
+  firewall command runs; a failed command never stops `serve`.
+- **I-335** — The node dials its own RPC listener at its mesh address on every probe
+  tick, `status.mesh.self_reach` is that dial's outcome, a change to unreachable is
+  logged once as an error with the cause found, and `status` and `check` warn while it
+  lasts; a UDP port in use fails `join` and `serve` with an error naming the port and
+  `mesh.port`.
 - **I-325** — `status` reports, for every device member, its path class, endpoint,
   handshake age and bytes each way, and the device's own address, interface, port and
   port-mapping state; `node ls` shows the path; the vitals' network counters are the
@@ -534,8 +598,11 @@ round-trip table.
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire`, `TestPendingApply_HostsReusedAndRotationEndsPending` |
 | I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`, `TestJoin_RejoinNewRaftPortKeepsOneRow`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
 | I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`, `TestCandidates_ConfiguredNameResolvedAtPublish`; stub `TestStub_I_322` for the publishing on a real interface |
+| I-336 | `TestUsableCandidate_Table`, `TestBind_NeverSendsOverTailscale`, `TestBind_DropsFromTailscale`, `TestBind_TailscaleRouteRecheckedAfterTTL` |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |
+| I-334 | `TestFirewall_InstallsChainFirst`, `TestFirewall_TickPutsJumpBackOnTop`, `TestFirewall_ChainDriftRewritten`, `TestFirewall_CloseRemoves`, `TestFirewall_NoIptablesNothingRuns`, `TestFirewall_FailureIsReported`, `TestSvc_MeshPrivileges`, `TestConfig_MeshFirewallDefault`, `TestNewKeeper_OnlyLinuxAndOn` |
+| I-335 | `TestSelfReach_Table`, `TestSelfReach_LogsOncePerChange`, `TestMeshReport_SelfReachWarns`, `TestMesh_PortInUseNamesMeshPort`, `TestUnreachableHint_Table` |
 | I-325 | `TestClassify_Table`, `TestLocalAddr_MeshFileThenConfig`; stub `TestStub_I_325` for `status` on a real interface |
 | I-326 | `TestMeshOps_Codec13`, `TestMeshState_Snapshot`, `TestKeylessCheck` |
 | I-327 | `TestProber_RankByClass_Determinism`, `TestReader_HedgeSkipsRelayedHolders_Table`, `TestFlusher_StragglerGrace_PerClass` |
