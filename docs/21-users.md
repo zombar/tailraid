@@ -119,7 +119,8 @@ it does not reach. §11 maps each control to its mechanism here.
   |---|---|
   | nothing beyond membership | `status`, `check` (no scrub), `node ls`, `volume describe`, `chunk describe`, `trash ls`, `cache ls`, `mirror ls`, `snapshot ls`, `versions <path>` (listing), `search`, `audit ls` (own records), `access ls` |
   | a user | `secret set\|get\|ls\|rm` of one's own, `web login`, `web logout`, `user key invite` for oneself, `user key rm` of one's own key, `user whoami`, `user bind\|unbind` of one's own credential on this device |
-  | `Admin` on the inode | `grant`, `revoke`, `access ls <path>` under a subtree; `snapshot restore` and `versions --revert\|--copy` into it; `cache pin\|unpin` under it; `trash restore\|purge` of entries under it |
+  | `Write` on the folder | `trash restore` of an entry deleted from it (and `Write` where `--to` puts it): the undo of a delete, which needs the same role |
+  | `Admin` on the inode | `grant`, `revoke`, `access ls <path>` under a subtree; `snapshot restore` and `versions --revert\|--copy` into it; `cache pin\|unpin` under it; `trash purge` of entries under it |
   | `admins` | `user invite\|disable\|enable\|rm`, `user key invite\|rm` for another, `group *`, `secret * --system`, `audit ls` of everyone, `node promote\|demote\|drain\|remove\|add-disk\|add-s3`, `volume grow\|set-redundancy`, `token rotate`, `repair`, `gc`, `check --scrub`, `rebalance`, `mirror add\|remove`, `snapshot create`, `trash purge --all`, `media scrape`, `stats seal`, `search index` |
 
   A path-scoped operation resolves its path on the node's replica *before* the check

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -349,5 +350,112 @@ func TestSecrets_SystemNeverPrinted(t *testing.T) {
 	}
 	if raw, _ := ops.AdminOp(ctx, rpc.AdminOp{Op: "secret_get", Actor: kim, Name: "tmdb"}); raw.(map[string]string)["value"] != "k" {
 		t.Fatalf("the consumer's get by an admin: %v", raw)
+	}
+}
+
+// Every admin op, once users exist, does for an admin what it does without users: the
+// ops that change the volume run here as the first admin and nothing they propose is
+// refused for want of an actor; the rest say why they never propose a user-checked
+// command, or name the test that runs them under users. A new op must take a row. Two
+// ops had proposed as nobody (trash restore and purge) and two had written as System
+// (snapshot restore, versions --copy), so an admin's own command was refused once the
+// first user existed (2026-10-15).
+// Invariant: I-345, I-348, I-349
+func TestAdminOps_AsAdmin_UnderUsers(t *testing.T) {
+	notRun := map[string]string{
+		"chunk": "reads only", "cache_ls": "this node's pins, no proposal", "search": "reads only",
+		"snapshot_ls": "reads only", "scrape_plan": "reads only", "user_whoami": "reads only",
+		"cache_pin": "this node's pins, no proposal", "cache_unpin": "this node's pins, no proposal",
+		"open_disk": "this host's disks, no user-checked proposal", "open_mirror": "this host's mirrors, no user-checked proposal",
+		"export": "writes a directory outside the volume", "snapshot": "writes a directory outside the volume",
+		"snapshot_create":  "snapshot rows only, not user-checked",
+		"index_now":        "the index under /.tailraid, written as System",
+		"stats_seal":       "stats under /.tailraid, written as System: TestAdminOp_StatsSeal",
+		"set_policy":       "volume rows only, not user-checked",
+		"snapshot_restore": "needs a mirror: TestAdminOps_RestoreUnderUsers", "versions_revert": "needs a mirror: TestAdminOps_RestoreUnderUsers",
+		"versions_copy": "needs a mirror: TestAdminOps_RestoreUnderUsers",
+		"user_create":   "an invite's own check: TestInvite_RateLimitedPerSource", "user_bootstrap": "the bootstrap's own check: cmd/tailraid TestCLI_UserBootstrap",
+		"user_key_add": "an invite's own check: cmd/tailraid TestCLI_UsersFlow", "user_key_invite": "the users applier: cmd/tailraid TestCLI_UsersFlow",
+		"user_key_rm": "the users applier: cmd/tailraid TestCLI_UsersFlow", "user_bind": "this device's bindings file, no proposal",
+		"user_unbind": "this device's bindings file, no proposal", "web_login": "a session row as the signer: cmd/tailraid TestCLI_WebLogin",
+		"web_logout": "a session row as the signer: cmd/tailraid TestCLI_WebLogin", "audit_ls": "reads only: TestAudit_LeaderOnly",
+	}
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	for _, p := range []string{"/docs/a", "/docs/b", "/docs/c"} {
+		c.WriteFile(0, p, testharness.Pattern(100, 1))
+	}
+	c.Settle()
+	inos := map[string]uint64{}
+	for _, n := range []string{"a", "b", "c"} {
+		in, err := c.Leader().Node.FSM.Resolve([]string{"docs", n})
+		must(t, err)
+		inos[n] = uint64(in.Ino)
+		must(t, c.Nodes[0].FS.Remove("/docs/"+n))
+	}
+	c.Settle()
+	kim, _ := withUsers(t, c)
+	l := c.Leader()
+	ops := opsFor(c, l)
+	ops.fs = l.FS
+	ops.secrets = harnessSecrets(c, l)
+	var refused []string
+	l.Node.FSM.SetApplyHook(func(cmd meta.Command, _ uint64, res meta.Result) {
+		if errors.Is(res.Err, meta.ErrAccess) {
+			refused = append(refused, fmt.Sprintf("op %d actor %d system %v", cmd.Op, cmd.Actor, cmd.System))
+		}
+	})
+	defer l.Node.FSM.SetApplyHook(nil)
+	run := []rpc.AdminOp{
+		{Op: "trash_ls"},
+		{Op: "versions", Path: "/docs"},
+		{Op: "fsck"},
+		{Op: "check"},
+		{Op: "access_ls", Path: "/"},
+		{Op: "user_ls"},
+		{Op: "group_ls"},
+		{Op: "trash_restore", Ino: inos["a"]},
+		{Op: "trash_purge", Ino: inos["b"]},
+		{Op: "trash_purge", All: true},
+		{Op: "grant", Path: "/docs", User: "lee", Role: "read"},
+		{Op: "revoke", Path: "/docs", User: "lee"},
+		{Op: "repair_now"},
+		{Op: "gc_now"},
+		{Op: "rebalance", DryRun: true},
+		{Op: "rotate_token"},
+		{Op: "secret_set", Name: "tmdb", Value: "k"},
+		{Op: "secret_set", Name: "user/kim/t", Value: "v"},
+		{Op: "secret_get", Name: "user/kim/t"},
+		{Op: "secret_ls"},
+		{Op: "secret_rm", Name: "user/kim/t"},
+		{Op: "user_invite", User: "quin"},
+		{Op: "group_create", Group: "crew"},
+		{Op: "group_add", Group: "crew", User: "lee"},
+		{Op: "group_remove", Group: "crew", User: "lee"},
+		{Op: "group_rm", Group: "crew"},
+		{Op: "user_disable", User: "lee"},
+		{Op: "user_enable", User: "lee"},
+		{Op: "user_rm", User: "lee"},
+	}
+	ran := map[string]bool{}
+	ctx := context.Background()
+	for _, op := range run {
+		ran[op.Op] = true
+		op.Actor = kim
+		if _, err := ops.AdminOp(ctx, op); err != nil {
+			t.Errorf("%s by an admin: %v", op.Op, err)
+		}
+		c.Settle()
+	}
+	for _, r := range refused {
+		t.Errorf("the FSM refused an admin op's proposal: %s", r)
+	}
+	for _, name := range rpc.AdminOpNames() {
+		if !ran[name] && notRun[name] == "" {
+			t.Errorf("admin op %q is neither run here as an admin under users nor says why not", name)
+		}
+		if ran[name] && notRun[name] != "" {
+			t.Errorf("admin op %q is run here and also listed as not run", name)
+		}
 	}
 }
