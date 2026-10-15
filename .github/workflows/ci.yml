@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: go mod verify && go mod verify -modfile=tools.mod && go mod verify -modfile=actionlint.mod
       - run: go mod tidy && go mod tidy -modfile=tools.mod && go mod tidy -modfile=actionlint.mod && git diff --exit-code -- go.mod go.sum tools.mod tools.sum actionlint.mod actionlint.sum
@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: scripts/check-invariants.sh --check
       - run: make docs-check spell actionlint yaml-check shell-check
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: make lint-go web-check
       # The per-OS files (*_windows.go, *_darwin.go) only type-check under their GOOS;
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: make vuln
 
@@ -103,7 +103,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: false}
       # setup-go's own cache is keyed on go.sum alone, so it is saved once and goes stale.
       # This one is saved by every main run and restored by every run after it: packages
@@ -135,7 +135,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: make test-long
 
@@ -151,7 +151,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y nfs-common
@@ -164,7 +164,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: make soak
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -185,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0 # b7ad1dad31e06c5925ef5d2fc7ad053ef454303e; the tag, not the SHA: codeload answers 404 for setup-go by commit since 2026-10-15 (macOS and Windows runners have no cached copy), 200 by tag; re-pin the SHA once codeload serves it
         with: {go-version-file: go.mod, cache: true}
       - run: make release VERSION="${GITHUB_REF_NAME}"
       - name: sign sha256sums.txt (docs/12 §4)
