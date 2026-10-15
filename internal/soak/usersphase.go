@@ -119,7 +119,7 @@ func (su *soakUsers) addKey(ctx context.Context, r *Run, n NodeRef, op, name, co
 	var err error
 	for start := time.Now(); ; {
 		err = su.op(ctx, n, nil, rpc.AdminOp{Op: op, User: name, Code: code, Key: hex.EncodeToString(pub[:]), Label: label}, nil)
-		if err == nil || !strings.Contains(err.Error(), "no such invite") || time.Since(start) > inviteReplication {
+		if err == nil || (!strings.Contains(err.Error(), "no such invite") && !strings.Contains(err.Error(), rpc.ErrRateLimited.Error())) || time.Since(start) > inviteReplication {
 			return err
 		}
 		if werr := r.Env.Wait(ctx, 250*time.Millisecond); werr != nil {
