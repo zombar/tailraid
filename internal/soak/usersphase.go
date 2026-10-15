@@ -42,6 +42,10 @@ type UsersEnv interface {
 	// MountUID is the uid the environment's mounts present (the worker's), which a
 	// binding maps to a user.
 	MountUID() int
+	// ActAs makes the environment act as id from now on: every admin call it makes is
+	// signed by id, and its own shortcuts that write the volume (the trash purge, a
+	// snapshot restore, a secret) act as id's user (phase 0, I-362).
+	ActAs(id *users.Identity)
 }
 
 // soakUsers are the people of one run: the admin and two users, with their identities.
@@ -50,6 +54,7 @@ type soakUsers struct {
 	kim, lee *users.Identity // kim the admin, lee a plain user
 	lee2     *users.Identity // lee's second device
 	pat      *users.Identity // the removed and re-invited name
+	kimCode  string          // the bootstrap invite kim was made from (used once)
 	nodes    []NodeRef
 	prefix   string // the folder of this run
 }
@@ -218,6 +223,26 @@ func refused(err error) bool {
 	return strings.Contains(s, "permission denied") || strings.Contains(s, "unauthorized") || strings.Contains(s, "forbidden") || strings.Contains(s, "last admin") || strings.Contains(s, "invite")
 }
 
+// bootstrapAdmin makes the first admin, kim: a bootstrap invite on one node, the user
+// created on another, signing on every node; false (with the failed check recorded) when
+// it could not.
+func (su *soakUsers) bootstrapAdmin(ctx context.Context, r *Run) bool {
+	n := su.nodes
+	code, err := su.env.BootstrapInvite(ctx, n[0], "kim")
+	if err != nil {
+		r.check("I-343", "user bootstrap on "+n[0].Name, false, err.Error())
+		return false
+	}
+	kim, err := su.create(ctx, r, n[1], "kim", code)
+	r.check("I-342, I-343", "the admin created on "+n[1].Name+" from "+n[0].Name+"'s invite", err == nil, errText(err))
+	if err != nil {
+		return false
+	}
+	su.kim, su.kimCode = kim, code
+	r.check("I-344", "the admin signs on every node", su.signsOn(ctx, r, su.kim, "kim"), "a node still refuses the admin")
+	return true
+}
+
 // --- 28 users and keys ---------------------------------------------------------------------
 
 func phaseUsers(ctx context.Context, r *Run) error {
@@ -226,25 +251,19 @@ func phaseUsers(ctx context.Context, r *Run) error {
 		return nil
 	}
 	n := su.nodes
-	// the first admin: a bootstrap invite on one node, the user created on another
-	code, err := su.env.BootstrapInvite(ctx, n[0], "kim")
-	if err != nil {
-		r.check("I-343", "user bootstrap on "+n[0].Name, false, err.Error())
+	if su.kim != nil { // made before phase 1 (a UsersFirst run)
+		r.check("I-344", "the admin made before the first phase still signs on every node", su.signsOn(ctx, r, su.kim, "kim"), "a node refuses the admin")
+	} else if !su.bootstrapAdmin(ctx, r) {
 		return nil
 	}
-	su.kim, err = su.create(ctx, r, n[1], "kim", code)
-	r.check("I-342, I-343", "the admin created on "+n[1].Name+" from "+n[0].Name+"'s invite", err == nil, errText(err))
-	if err != nil {
-		return nil //nolint:nilerr // a failed check is recorded, not a run error
-	}
-	r.check("I-344", "the admin signs on every node", su.signsOn(ctx, r, su.kim, "kim"), "a node still refuses the admin")
+	code := su.kimCode
 	// a used code is refused and leaves no row
 	used := users.Identity{Name: "kim2"}
 	if fresh, e := users.NewIdentity("kim2"); e == nil {
 		used = fresh
 	}
 	pub := used.Pub()
-	err = su.op(ctx, n[2], nil, rpc.AdminOp{Op: "user_create", User: "kim2", Code: code, Key: hex.EncodeToString(pub[:]), Label: "soak"}, nil)
+	err := su.op(ctx, n[2], nil, rpc.AdminOp{Op: "user_create", User: "kim2", Code: code, Key: hex.EncodeToString(pub[:]), Label: "soak"}, nil)
 	r.check("I-343", "a used invite code is refused", refused(err), "accepted: "+errText(err))
 	// the driver's mounts act as the admin from here on (the cluster enforces now)
 	for _, nd := range n {

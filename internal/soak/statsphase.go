@@ -40,7 +40,11 @@ func phaseStats(ctx context.Context, r *Run) error {
 		return nil
 	}
 	gw := gws[0]
-	v := r.volume(gw)
+	v, ok := r.reservedVolume(ctx, gw)
+	if !ok {
+		r.skip("the stats segments are under /.tailraid, which no user's mount sees once the cluster has users (docs/21 §3), and the environment has no reading of its own")
+		return nil
+	}
 	var devices []NodeRef
 	for _, n := range r.nodes {
 		if n.Host == "" {
@@ -213,6 +217,19 @@ func phaseStats(ctx context.Context, r *Run) error {
 
 // statsSegments reads a writer's segments at a tier through a gateway's volume: the rows
 // in name order, the largest segment's size, and whether the directory had any.
+// reservedVolume is where a phase reads /.tailraid through gw: the mount while the
+// cluster has no users, the environment's own reading after (ReservedEnv); false when
+// there is none.
+func (r *Run) reservedVolume(ctx context.Context, gw NodeRef) (Volume, bool) {
+	if rep, _, err := r.anyStatus(ctx); err == nil && (rep.Users == nil || rep.Users.Count == 0) {
+		return r.volume(gw), true
+	}
+	if re, ok := r.Env.(ReservedEnv); ok {
+		return re.ReservedVolume(gw)
+	}
+	return nil, false
+}
+
 func (r *Run) statsSegments(v Volume, tier stats.Tier, writer string) ([]stats.Row, int64, bool) {
 	dir := path.Join(stats.Root, tier.Dir(), writer)
 	names, err := v.List(dir)

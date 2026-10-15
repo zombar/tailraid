@@ -180,6 +180,11 @@ type Run struct {
 	EvidenceDir string
 	// scratch carries what one phase made for a later one (the people of phases 28–31).
 	scratch map[string]any
+	// UsersFirst makes the first admin before phase 1, so every phase runs with the FSM
+	// checking actors, as a real volume does (phase "0 users first", I-362); web is then
+	// the driver's signed-in browser.
+	UsersFirst bool
+	web        *webSessions
 
 	Rng   *rand.Rand
 	Seed  int64    // the Rng's seed, for the report
@@ -829,6 +834,9 @@ func (r *Run) Execute(ctx context.Context) (Summary, error) {
 	r.startSampler(ctx)
 	var results []PhaseResult
 	table := r.phaseList()
+	if r.UsersFirst {
+		table = append([]phase{usersFirstPhase}, table...)
+	}
 	for i, ph := range table {
 		if ctx.Err() != nil { // cancelled: the rest is NOT RUN, and the report says so
 			for _, rest := range table[i:] {

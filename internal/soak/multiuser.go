@@ -610,10 +610,7 @@ func (m *multi) webUploads(ctx context.Context, label, rdir string) error {
 	if err := m.mkdirOn(rdir, a); err != nil {
 		return err
 	}
-	hc := m.r.Env.WebClient()
-	if hc == nil {
-		hc = webHTTP
-	}
+	hc := m.r.webClientFor()
 	put := func(base, p string, body []byte, exclusive bool) (int, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/files"+encodeWebPath(p), bytes.NewReader(body))
 		if err != nil {

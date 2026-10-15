@@ -79,10 +79,10 @@ bench:
 test-mount:
 	TAILRAID_MOUNT_TEST=1 go test -v -count=1 -run 'TestMount' -timeout 20m ./test/mount/
 
-## soak: five-node docker-compose cluster (two disks each, one diskless voter), scenario driver, report.html + results.jsonl (needs Docker)
+## soak: five-node docker-compose cluster (two disks each, one diskless voter), scenario driver, report.html + results.jsonl (needs Docker); SOAK_FLAGS=-users-first runs every phase with users enforced
 soak: soak-binary
 	cd test/soak && { docker compose down -v >/dev/null 2>&1; docker compose up -d --build; }
-	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
+	go run ./cmd/soak --profile quick --out report.html --results results.jsonl $(SOAK_FLAGS); \
 	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose down -v >/dev/null; exit $$status
 
 ## soak-binary: static linux binaries for the compose images (arch follows the Docker engine)
@@ -93,13 +93,13 @@ soak-binary:
 ## soak-single: one node with four added disks (docs/14), the single-machine volume
 soak-single: soak-binary
 	cd test/soak && docker compose -f docker-compose.single.yml up -d --build
-	go run ./cmd/soak --profile quick --topology single --out report-single.html --results results-single.jsonl; \
+	go run ./cmd/soak --profile quick --topology single --out report-single.html --results results-single.jsonl $(SOAK_FLAGS); \
 	status=$$?; cd test/soak && docker compose -f docker-compose.single.yml exec -T n1 tailraid status; docker compose -f docker-compose.single.yml down -v >/dev/null; exit $$status
 
 ## soak-full: the long profile (~1 h)
 soak-full: soak-binary
 	cd test/soak && docker compose up -d --build
-	go run ./cmd/soak --profile full --out report.html --results results.jsonl; \
+	go run ./cmd/soak --profile full --out report.html --results results.jsonl $(SOAK_FLAGS); \
 	status=$$?; cd test/soak && docker compose down -v >/dev/null; exit $$status
 
 ## vms-setup: install the three-VM rig's host tooling (Tart, Packer, QEMU, socket_vmnet; docs/vms.md)

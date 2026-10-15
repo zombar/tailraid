@@ -405,6 +405,9 @@ refused outside its bounds by `Validate` (I-126).
   the hand-off, a page lists only the user's folders, `logout` on any node ends the
   session everywhere, a removed key ends it at the next request; the chain hash of a segment verifies; retention drops a
   segment older than `audit.retention` on a fake clock.
+- **Every other phase, with users first.** A run with `-users-first` makes the admin
+  before phase 1 and runs phases 1–24 with every command's actor checked, as on a real
+  volume; phase 28 then reuses that admin (docs/09 §6, I-362).
 
 The report gains a Users section: the round-trip table of the invite, the grant matrix
 per gateway, and the audit counts.

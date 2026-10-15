@@ -79,6 +79,7 @@ type harnessEnv struct {
 	// the users surface of phases 28–31 (users_harness_test.go), made on first use
 	users *harnessUsers
 	webFS map[int]*vfs.FS // the filesystem each web server was built over: a restart rebuilds it
+	act   *users.Identity // ActAs: the env's own shortcuts act as this user (phase 0)
 }
 
 type harnessSearch struct {
@@ -244,7 +245,7 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 	e.webFS[nd.I] = nd.FS
 	var auditHook webui.AuditHook
 	if e.users != nil {
-		auditHook = harnessWebAudit{e.users.audit[nd.I]}
+		auditHook = harnessWebAudit{e.users.writer(nd.I)}
 	}
 	p, err := pins.Open(nd.Dir, nd.Node.FSM, nd.Reader, nd.Cache, e.c.Clk, nil)
 	if err != nil {
@@ -400,6 +401,14 @@ func (e *harnessEnv) Volume(n soak.NodeRef) (soak.Volume, bool) {
 	return soak.BillyVolume{FS: fs}, true
 }
 
+// ReservedVolume is node n's own filesystem: the node's code reads /.tailraid with it.
+func (e *harnessEnv) ReservedVolume(n soak.NodeRef) (soak.Volume, bool) {
+	if !e.c.Alive(e.node(n).I) {
+		return nil, false
+	}
+	return soak.BillyVolume{FS: e.fsOf(n)}, true
+}
+
 func (e *harnessEnv) Caps() soak.Caps {
 	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.bucket != nil, AddS3: e.bucket != nil, Stats: e.stats != nil, Mirror: true, Users: true}
 }
@@ -479,6 +488,9 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 	rep := admin.Build(nd.Node, nd.Prober, e.c.CID, e.c.Clk, nil)
 	rep.Gateway = admin.GatewayFromDirty(nd.Ov.Dirty()).WithFlusher(nd.Flush, nd.Ov).WithReader(nd.Reader)
 	rep.Machine = admin.Vitals(nd.Dir, netip.Addr{})
+	if us := nd.Node.FSM.Users(); len(us) > 0 { // as serve's reporter (I-358)
+		rep.Users = &admin.UsersReport{Count: len(us), Sessions: len(nd.Node.FSM.Sessions())}
+	}
 	if p := e.pins[nd.I]; p != nil {
 		c := p.List()
 		rep.Cache = &c
@@ -537,7 +549,7 @@ func (e *harnessEnv) GCNow(ctx context.Context) (repair.Result, error) {
 func (e *harnessEnv) PurgeTrash(ctx context.Context) (int, error) {
 	l := e.c.Leader()
 	gc := repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil)
-	n, err := gc.PurgeTrash(ctx, max(e.c.Clk.Now().UnixNano(), l.Node.FSM.LastNow())+1, 0)
+	n, err := gc.PurgeTrash(ctx, max(e.c.Clk.Now().UnixNano(), l.Node.FSM.LastNow())+1, e.actor(l)) // as trash_purge --all: the signer, or the node before users
 	e.c.Settle()
 	return n, err
 }
@@ -647,6 +659,9 @@ func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
 	if e.stats != nil {
 		e.startStats(e.node(n).I)
 	}
+	if e.users != nil {
+		e.users.wireAudit(e.node(n), e.c.Clk)
+	}
 	return nil
 }
 
@@ -665,6 +680,11 @@ func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 	if e.stats != nil {
 		for _, n := range nodes {
 			e.startStats(e.node(n).I)
+		}
+	}
+	if e.users != nil {
+		for _, n := range nodes {
+			e.users.wireAudit(e.node(n), e.c.Clk)
 		}
 	}
 	return nil
@@ -782,31 +802,9 @@ func harnessProfile() soak.Profile {
 // Invariant: I-29
 // Lifecycle: L-59, L-148
 func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
-	c := testharness.NewCluster(t, 4, 2, 1, testharness.WALCap(512<<10)) // the large-file phase meets the cap
-	defer c.Close()
-	for i := range c.Nodes { // 4 hosts × 3 targets plus a diskless voter, as the compose rig (docs/14)
-		c.AddDisk(i)
-		c.AddDisk(i)
-	}
-	c.AddDisklessNode(true)
-	bucket := s3test.New() // phase 15's bucket, as the compose rig's s3 service
-	defer bucket.Close()
-	env := &harnessEnv{t: t, c: c, bucket: bucket}
-	for i := range c.Nodes {
-		env.startStats(i)
-	}
-	defer env.stopAllStats()
+	c, env, all := allPhasesRig(t)
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
-	// phases 22 and 23 need the gateways' retry-until-stale (production's) and run in
-	// tests of their own on such a cluster; this one's gateways fail fast for the other
-	// fault phases
-	var all []string
-	for _, ph := range soak.StandardPhases() {
-		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" {
-			all = append(all, num)
-		}
-	}
 	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases(all...)}
 	sum, err := run.Execute(context.Background())
 	if err != nil {
@@ -890,6 +888,88 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 		}
 	}
 	// the cleanup left no run directory behind
+	if _, err := c.Nodes[0].FS.Stat(run.Root); err == nil {
+		t.Fatalf("run directory %s still exists", run.Root)
+	}
+}
+
+// allPhasesRig is the cluster the all-phases runs drive, as the compose rig: 4 hosts × 3
+// targets plus a diskless voter (docs/14), phase 15's bucket and every node's stats
+// sampler; all is every standard phase but 22 and 23, which need the gateways'
+// retry-until-stale (production's) and run in tests of their own on such a cluster,
+// while this one's gateways fail fast for the other fault phases.
+func allPhasesRig(t *testing.T) (c *testharness.Cluster, env *harnessEnv, all []string) {
+	t.Helper()
+	c = testharness.NewCluster(t, 4, 2, 1, testharness.WALCap(512<<10)) // the large-file phase meets the cap
+	t.Cleanup(c.Close)
+	for i := range c.Nodes {
+		c.AddDisk(i)
+		c.AddDisk(i)
+	}
+	c.AddDisklessNode(true)
+	bucket := s3test.New()
+	t.Cleanup(bucket.Close)
+	env = &harnessEnv{t: t, c: c, bucket: bucket}
+	for i := range c.Nodes {
+		env.startStats(i)
+	}
+	t.Cleanup(env.stopAllStats)
+	for _, ph := range soak.StandardPhases() {
+		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" {
+			all = append(all, num)
+		}
+	}
+	return c, env, all
+}
+
+// Every phase with users enforced from the start, as a real volume runs (phase 0, I-362):
+// the admin is made before phase 1, the mounts and the SMB account are bound to them, the
+// env's shortcuts act as them and the driver's browser is signed in on every page, and
+// phase 28 reuses the admin. The phases pass as they do without users: an admin's own
+// trash purge, restore, secret and web traffic are admitted, and nothing a phase
+// proposes is refused for want of an actor.
+// Under -short the run is phase 0 and the phases that write as the admin through the
+// paths users broke (the trash purge in 5 and 8, the browser in 16, restores in 19, the
+// index in 21, secrets in 24) with the baseline and the users phases: two whole runs of
+// every phase overran the package's ten minutes on the Windows race runner; the long
+// run takes them all.
+//
+// Invariant: I-362
+func TestSoak_AllPhasesUnderUsersAgainstHarness(t *testing.T) {
+	c, env, all := allPhasesRig(t)
+	if testing.Short() {
+		all = []string{"1", "5", "8", "16", "19", "21", "24", "28", "29", "30", "31"}
+	}
+	var jsonl bytes.Buffer
+	seed, rng := testseed.New(t)
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases(all...), UsersFirst: true}
+	sum, err := run.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ph := range sum.Phases {
+		if ph.Skipped {
+			t.Errorf("%s skipped: %s", ph.Name, ph.Reason)
+		}
+		if len(ph.Checks) == 0 {
+			t.Errorf("%s has no checks", ph.Name)
+		}
+		for _, chk := range ph.Checks {
+			if chk.OK != nil && !*chk.OK {
+				t.Errorf("%s: %s: %s", ph.Name, chk.Name, chk.Text)
+			}
+		}
+	}
+	if sum.Failed != 0 || len(sum.Phases) != len(all)+1 || sum.Phases[0].Name != "0 users first" { // phase 0, then the phases asked for
+		t.Fatalf("summary: %d failed, %d phases, first %q", sum.Failed, len(sum.Phases), sum.Phases[0].Name)
+	}
+	if !c.Leader().Node.FSM.Enforcing() {
+		t.Fatal("the cluster has no users after the run")
+	}
+	var html bytes.Buffer
+	if err := soak.Render(&html, sum); err != nil || !strings.Contains(html.String(), "0 users first") {
+		t.Fatalf("the report: %v, phase 0 listed %v", err, strings.Contains(html.String(), "0 users first"))
+	}
 	if _, err := c.Nodes[0].FS.Stat(run.Root); err == nil {
 		t.Fatalf("run directory %s still exists", run.Root)
 	}

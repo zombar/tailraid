@@ -61,9 +61,10 @@ const harnessSMBPassword = "soak-copies"
 
 // harnessSMB is one node's SMB gateway on the in-process cluster.
 type harnessSMB struct {
-	fs   *vfs.FS
-	addr string
-	stop func()
+	fs    *vfs.FS
+	bound bool // built with the device's bindings (the users surface existed)
+	addr  string
+	stop  func()
 }
 
 // smbDial is how a client reaches node n's SMB gateway: one server per node over its
@@ -94,12 +95,16 @@ func (e *harnessEnv) smbAddr(n soak.NodeRef) (string, error) {
 	defer e.mu.Unlock()
 	nd := e.node(n)
 	if s := e.smb[int(n.Idx)]; s != nil {
-		if s.fs == nd.FS {
+		if s.fs == nd.FS && s.bound == (e.users != nil) {
 			return s.addr, nil
 		}
 		s.stop()
 	}
-	srv, err := smbgw.NewServer(nd.FS, nd.Node.FSM, harnessSMBPassword)
+	var bind smbgw.Bindings
+	if e.users != nil { // the device's bindings, as serve passes them (docs/21 §5)
+		bind = e.users.bind[nd.I]
+	}
+	srv, err := smbgw.NewServerWith(nd.FS, nd.Node.FSM, harnessSMBPassword, bind)
 	if err != nil {
 		return "", err
 	}
@@ -116,7 +121,7 @@ func (e *harnessEnv) smbAddr(n soak.NodeRef) (string, error) {
 	if e.smb == nil {
 		e.smb = map[int]*harnessSMB{}
 	}
-	e.smb[int(n.Idx)] = &harnessSMB{fs: nd.FS, addr: l.Addr().String(), stop: stop}
+	e.smb[int(n.Idx)] = &harnessSMB{fs: nd.FS, bound: bind != nil, addr: l.Addr().String(), stop: stop}
 	return l.Addr().String(), nil
 }
 

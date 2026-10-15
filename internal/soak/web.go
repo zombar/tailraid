@@ -258,10 +258,7 @@ func phaseWeb(ctx context.Context, r *Run) error {
 		r.skip("no browser UI in this environment")
 		return nil
 	}
-	hc := r.Env.WebClient()
-	if hc == nil {
-		hc = webHTTP
-	}
+	hc := r.webClientFor()
 	w := &webClient{base: strings.TrimSuffix(base, "/"), c: hc}
 	v := r.volume(gw)
 	caps := r.Env.Caps()

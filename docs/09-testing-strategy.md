@@ -523,7 +523,23 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   mounts stay bound to the admin between the checks. The phases run last, since the
   first user turns enforcement on for the rest of the run; a live cluster's users are
   its own, so it records the four as skipped (`Caps.Users`); the harness answers the
-  same ops over its nodes' own FSMs (`users_harness_test.go`), so CI runs the four. `soak.CopySpec`
+  same ops over its nodes' own FSMs (`users_harness_test.go`), so CI runs the four.
+  **Users first** (`make soak SOAK_FLAGS=-users-first`, `Run.UsersFirst`): a real volume
+  has its first admin from `init`, so a run can put phase 0 before phase 1: the admin
+  made as phase 28 makes them, the driver's mount uid and SMB account bound to them on
+  every node, the environment told to act as them (`UsersEnv.ActAs`: the compose rig
+  signs every mutating RPC, the harness runs its own trash purge, snapshot restores and
+  secrets as the admin's user) and the driver's browser signed in on every page through
+  `web login`, signing in again on a 401. Every phase then runs with the FSM checking
+  every command's actor, and phase 28 reuses the admin (I-362). `/.tailraid` is no user's
+  once the cluster has users (docs/21 §3), so phase 20 reads and plants its segments
+  through the environment's own reading of it (`ReservedEnv`, the harness's node
+  filesystem) and records itself skipped where there is none. Without users first, every
+  phase but 28–31 ran on a cluster with no users, where nothing is checked: an admin's
+  `trash purge` and `snapshot restore` were refused on the real cluster for want of an
+  actor while every soak stayed green (2026-10-15). The harness's admin shortcuts do not
+  run `node.adminOps`, so the signatures and the needs table of every op but 28–31's are
+  exercised under users by the compose run alone. `soak.CopySpec`
   carries the open mode (exclusive, the default, or replace) and
   which of the job's sessions copies it (`Conn`), and a result says when a create lost
   to an existing name (`Exists`); the handle races are `smbclient.Races`
@@ -649,6 +665,12 @@ components they exercise.
 - **I-113** — A live run without `--destructive` changes nothing but the files under its
   own run directory: no policy change, drain, removal, fill, corruption, kill or cut is
   issued, and each such step is recorded skipped with its reason.
+- **I-362** — A run with users first makes the first admin before phase 1 and binds the
+  driver's mount uid and SMB account to them on every node; from then on the
+  environment signs every admin call as that admin, its own shortcuts that write the
+  volume act as the admin's user, and the driver's browser carries a session on every
+  page; every phase passes as it does on a cluster without users, phase 28 reusing the
+  admin, and a proposal of the CLI's or the node's own that names no actor fails a phase.
 - **I-114** — A check that could not be measured is recorded skipped with its reason and
   counts as neither pass nor fail; a run that stops before or between phases returns a
   summary with the reason and the unreached phases as not run, and the report renders it
@@ -662,4 +684,5 @@ components they exercise.
 | I-111 | `TestExecute_PhasePanicIsFailure`, `TestExecute_PhaseTimeoutIsFailure`, `TestExecute_SilentPhaseFails` |
 | I-112 | `TestUndo_RunsRemainingStepsInReverse`, `TestExecute_CancelledPhaseRestores`, `TestPhases_MembershipRestoresAutoMode` |
 | I-113 | `TestLiveEnv_CapsFollowFlags`, `TestPhases_MutatingStepsGated` |
+| I-362 | `TestSoak_AllPhasesUnderUsersAgainstHarness` |
 | I-114 | `TestExecute_AbortBeforePhases`, `TestExecute_CancelMarksNotRun`, `TestRender_ZeroPhasesAborted`, `TestRender_NotRunPhases`, `TestSummary_SkippedCheckCoversNothing` |
