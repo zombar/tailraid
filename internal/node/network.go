@@ -287,8 +287,9 @@ func pendingIdx(k mesh.Key) uint32 {
 	return 1<<31 | uint32(k[0])<<16 | uint32(k[1])<<8 | uint32(k[2])
 }
 
-// parseCandidates keeps the endpoints that are addresses; a name is resolved once at
-// publication by the device that owns it, never here.
+// parseCandidates keeps the endpoints that are addresses; a name is resolved at
+// publication by the device that owns it (configuredEndpoints), never here, and a row
+// from before that rule may still carry one.
 func parseCandidates(eps []string) []netip.AddrPort {
 	var out []netip.AddrPort
 	for _, e := range eps {
@@ -311,10 +312,11 @@ func (nw *network) refreshPeers(node *cluster.Node) {
 	}
 }
 
-// candidates are this device's endpoint candidates (docs/20 §5, I-322): its interface
-// addresses with the mesh port, mesh.endpoint, and the reflexive addresses members see,
-// deduplicated and at most meta.MaxEndpoints.
-func candidates(port uint16, configured, external string, seenFroms []string) []string {
+// candidates are this device's endpoint candidates (docs/20 §5, I-322): mesh.endpoint
+// (its addresses, resolved by configuredEndpoints), the gateway's mapping, its interface
+// addresses with the mesh port, and the reflexive addresses members see, deduplicated
+// and at most meta.MaxEndpoints.
+func candidates(port uint16, configured []string, external string, seenFroms []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(e string) {
@@ -324,7 +326,9 @@ func candidates(port uint16, configured, external string, seenFroms []string) []
 		seen[e] = true
 		out = append(out, e)
 	}
-	add(configured)
+	for _, e := range configured {
+		add(e)
+	}
 	add(external) // the gateway's mapping (docs/20 §7)
 	local, _ := mesh.LocalEndpoints(port)
 	for _, ap := range local {
@@ -336,13 +340,29 @@ func candidates(port uint16, configured, external string, seenFroms []string) []
 	return out
 }
 
+// configuredEndpoints is mesh.endpoint as addresses: an address as given, a name resolved
+// now, so a DDNS name reaches the peers as what it points at today (docs/20 §5); a
+// name that does not resolve contributes nothing until the next publication.
+func configuredEndpoints(ctx context.Context, configured string) []string {
+	if configured == "" {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(ctx, mesh.IntroduceRetry)
+	defer cancel()
+	var out []string
+	for _, ap := range mesh.ResolveEndpoint(rctx, configured) {
+		out = append(out, ap.String())
+	}
+	return out
+}
+
 // publishEndpoints proposes update_endpoints when the candidates changed, at most once
 // a minute (I-322).
 func (nw *network) publishEndpoints(ctx context.Context, cfg config.Config, node *cluster.Node, client *rpc.Client, self meta.NodeIdx, seenFroms []string, now time.Time) {
 	if nw.mesh == nil {
 		return
 	}
-	cands := candidates(nw.port, cfg.Mesh.Endpoint, nw.external(), seenFroms)
+	cands := candidates(nw.port, configuredEndpoints(ctx, cfg.Mesh.Endpoint), nw.external(), seenFroms)
 	nw.mu.Lock()
 	unchanged := slices.Equal(cands, nw.lastEP)
 	tooSoon := !nw.pubAt.IsZero() && now.Sub(nw.pubAt) < time.Minute
@@ -582,7 +602,7 @@ func PrepareInit(cfg config.Config, path, subnetFlag string, port int) (InitIden
 		return InitIdentity{}, cluster.Options{}, meta.Node{}, err
 	}
 	self.Addr, self.Key, self.MeshPort = addr.String(), meta.MeshKey(key.Public()), ident.Port
-	self.Endpoints = candidates(ident.Port, cfg.Mesh.Endpoint, "", nil)
+	self.Endpoints = candidates(ident.Port, configuredEndpoints(context.Background(), cfg.Mesh.Endpoint), "", nil)
 	// init creates no interface (I-324): Raft listens on loopback for the bootstrap and
 	// the configuration records the mesh address serve will bind
 	opts.RaftAddr = "127.0.0.1:0"

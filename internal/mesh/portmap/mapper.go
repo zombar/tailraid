@@ -2,6 +2,8 @@ package portmap
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -68,6 +70,26 @@ func (m *Mapper) log() *slog.Logger {
 	}
 	return m.Log
 }
+
+// Usable refuses an external endpoint no peer on the internet reaches: an unspecified,
+// loopback, private, link-local or multicast address, one inside the mesh's own space
+// (100.64/10), or port 0 (I-330). A gateway that answers one is behind another NAT or
+// misconfigured; the mapping is given back and tried again later.
+func Usable(ip netip.Addr, port uint16) error {
+	ip = ip.Unmap()
+	switch {
+	case !ip.IsValid() || ip.IsUnspecified():
+		return errors.New("portmap: the gateway answered no external address")
+	case ip.IsLoopback(), ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast(), ip.IsMulticast(), ip.IsPrivate(), cgnat.Contains(ip):
+		return fmt.Errorf("portmap: the gateway's external address %s is not reachable from the internet (a second NAT in front of it?)", ip)
+	case port == 0:
+		return errors.New("portmap: the gateway mapped port 0")
+	}
+	return nil
+}
+
+// cgnat is RFC 6598's shared address space, where the mesh's subnets live (docs/20 §3).
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // External is the mapped endpoint while one is held.
 func (m *Mapper) External() (netip.AddrPort, bool) {
@@ -138,6 +160,13 @@ func (m *Mapper) acquire(ctx context.Context, now time.Time) {
 		fail(err.Error())
 		return
 	}
+	if err := Usable(mp.ExternalIP, mp.External); err != nil {
+		// the gateway answered an address no peer reaches: published, it would only
+		// draw handshakes into the void (I-330)
+		_ = c.Release(cctx, mp)
+		fail(err.Error())
+		return
+	}
 	m.mu.Lock()
 	m.client, m.mapping, m.held, m.since, m.expires, m.nextTry, m.why = c, mp, true, now, now.Add(mp.Lifetime), now.Add(CheckEvery), ""
 	m.mu.Unlock()
@@ -154,6 +183,10 @@ func (m *Mapper) refresh(ctx context.Context, now time.Time) {
 	defer cancel()
 	again, err := c.Map(cctx, mp.Internal, mp.External, MapLifetime)
 	if err != nil {
+		m.drop(now, "refresh: "+err.Error())
+		return
+	}
+	if err := Usable(again.ExternalIP, again.External); err != nil {
 		m.drop(now, "refresh: "+err.Error())
 		return
 	}

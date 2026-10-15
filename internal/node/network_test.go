@@ -66,13 +66,42 @@ func TestMeshPeers_FromRowsAndPending(t *testing.T) {
 	}
 }
 
+// mesh.endpoint reaches the peers as addresses: a name is resolved when the candidates
+// are published (a peer never resolves a name, parseCandidates drops one), an address
+// passes as it is, and a name that does not resolve contributes nothing.
+// Invariant: I-322
+func TestCandidates_ConfiguredNameResolvedAtPublish(t *testing.T) {
+	ctx := context.Background()
+	got := configuredEndpoints(ctx, "localhost:20483")
+	if len(got) == 0 || !slices.Contains(got, "127.0.0.1:20483") && !slices.Contains(got, "[::1]:20483") {
+		t.Fatalf("localhost resolved to %v", got)
+	}
+	for _, e := range got {
+		if _, err := netip.ParseAddrPort(e); err != nil {
+			t.Fatalf("a published endpoint that is not an address: %q", e)
+		}
+	}
+	if got := configuredEndpoints(ctx, "203.0.113.5:20483"); !slices.Equal(got, []string{"203.0.113.5:20483"}) {
+		t.Fatalf("an address: %v", got)
+	}
+	if got := configuredEndpoints(ctx, "no-such-host.invalid:20483"); len(got) != 0 {
+		t.Fatalf("an unresolvable name published %v", got)
+	}
+	if got := configuredEndpoints(ctx, ""); got != nil {
+		t.Fatalf("nothing configured: %v", got)
+	}
+	if cands := parseCandidates([]string{"vps.example.com:20483", "203.0.113.5:20483"}); len(cands) != 1 {
+		t.Fatalf("a peer resolved a name: %v", cands)
+	}
+}
+
 // Candidates: the configured endpoint first, then the host's addresses, then what
 // members see; deduplicated, at most meta.MaxEndpoints, no loopback.
 // Invariant: I-322
 func TestCandidates_OrderDedupCap(t *testing.T) {
 	seen := []string{"203.0.113.9:20483", "203.0.113.9:20483", "198.51.100.1:1", "198.51.100.2:1", "198.51.100.3:1", "198.51.100.4:1", "198.51.100.5:1", "198.51.100.6:1", "198.51.100.7:1", "198.51.100.8:1"}
-	got := candidates(20483, "vps.example.com:20483", "203.0.113.9:20483", seen)
-	if got[0] != "vps.example.com:20483" || got[1] != "203.0.113.9:20483" {
+	got := candidates(20483, []string{"203.0.113.7:20483"}, "203.0.113.9:20483", seen)
+	if got[0] != "203.0.113.7:20483" || got[1] != "203.0.113.9:20483" {
 		t.Fatalf("the configured endpoint comes first, the gateway's mapping second (docs/20 §7): %v", got)
 	}
 	if len(got) > meta.MaxEndpoints {
@@ -88,7 +117,7 @@ func TestCandidates_OrderDedupCap(t *testing.T) {
 			t.Fatalf("loopback candidate %s", e)
 		}
 	}
-	none := candidates(20483, "", "", nil)
+	none := candidates(20483, nil, "", nil)
 	for _, e := range none {
 		if _, err := netip.ParseAddrPort(e); err != nil {
 			t.Fatalf("a local candidate that is not an address: %s", e)
