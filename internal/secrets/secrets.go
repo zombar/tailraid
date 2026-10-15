@@ -191,9 +191,11 @@ func (s *Store) Local() ([]byte, bool) {
 	return k, true
 }
 
-// ensureKey is the store's key, made now when the cluster has none: kept in the keychain
+// EnsureKey is the store's key, made now when the cluster has none: kept in the keychain
 // first, then its ID proposed; a node that loses the race fetches the winner's (I-305).
-func (s *Store) ensureKey(ctx context.Context) ([]byte, error) {
+// The leader runs it on its tick, so a cluster has its key from its first minute; a
+// `secret set` runs it too.
+func (s *Store) EnsureKey(ctx context.Context) ([]byte, error) {
 	if s.State.SecretKeyID() != (meta.KeyID{}) {
 		return s.Key(ctx)
 	}
@@ -233,7 +235,7 @@ func (s *Store) Set(ctx context.Context, name, value string) error {
 	if err := checkValue(value); err != nil {
 		return err
 	}
-	k, err := s.ensureKey(ctx)
+	k, err := s.EnsureKey(ctx)
 	if err != nil {
 		return err
 	}
