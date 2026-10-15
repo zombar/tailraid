@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -51,16 +52,29 @@ func (id Identity) Pub() [32]byte {
 // KeyID is the key's short name.
 func (id Identity) KeyID() meta.UserKeyID { return meta.UserKeyIDOf(id.Pub()) }
 
-// Account is the keychain account of a cluster's identity on this device.
+// Account is the keychain account of a cluster's active identity on this device: the one
+// the CLI signs with, and the only account before an OS account held several (I-360).
 func Account(clusterID [16]byte) string { return "user-" + hex.EncodeToString(clusterID[:]) }
+
+// heldAccount is the account of one held identity; a '-' after the cluster ID, so no name
+// meets the list's account.
+func heldAccount(clusterID [16]byte, name string) string { return Account(clusterID) + "-" + name }
+
+// listAccount holds the names of the held identities, comma-separated: a keychain cannot
+// list its accounts.
+func listAccount(clusterID [16]byte) string { return Account(clusterID) + ".held" }
 
 // UserKeychain is the keychain of the person running the CLI: the OS keyring, with a
 // 0600 file under their own config home as the fallback (I-342).
 func UserKeychain() *keychain.Store { return keychain.New(config.Home()) }
 
-// Load reads the identity for the cluster; ok is false when the device holds none.
+// Load reads the active identity for the cluster; ok is false when the device holds none.
 func Load(kc Keychain, clusterID [16]byte) (Identity, bool, error) {
-	v, _, err := kc.Get(Account(clusterID))
+	return loadAccount(kc, Account(clusterID))
+}
+
+func loadAccount(kc Keychain, account string) (Identity, bool, error) {
+	v, _, err := kc.Get(account)
 	if errors.Is(err, keychain.ErrNotFound) {
 		return Identity{}, false, nil
 	}
@@ -75,7 +89,62 @@ func Load(kc Keychain, clusterID [16]byte) (Identity, bool, error) {
 	return Identity{Name: name, Priv: ed25519.NewKeyFromSeed(seed)}, true, nil
 }
 
-// NewIdentity draws a key for name; nothing is kept until Keep.
+// LoadAs reads the held identity named name; ok is false when the device holds none by
+// that name. A keychain from before several identities holds its one only as the active.
+func LoadAs(kc Keychain, clusterID [16]byte, name string) (Identity, bool, error) {
+	if !meta.UserName.MatchString(name) {
+		return Identity{}, false, nil
+	}
+	if id, ok, err := loadAccount(kc, heldAccount(clusterID, name)); ok || err != nil {
+		return id, ok, err
+	}
+	id, ok, err := Load(kc, clusterID)
+	if err != nil || !ok || id.Name != name {
+		return Identity{}, false, nil //nolint:nilerr // a malformed active entry is not this name
+	}
+	return id, true, nil
+}
+
+// Held is the names of the identities this OS account holds for the cluster, in the
+// order they were added, and the active one's name ("" when none).
+func Held(kc Keychain, clusterID [16]byte) (names []string, active string, err error) {
+	if id, ok, err := Load(kc, clusterID); err != nil && !errors.Is(err, ErrBadIdent) {
+		return nil, "", err
+	} else if ok {
+		active = id.Name
+	}
+	v, _, err := kc.Get(listAccount(clusterID))
+	switch {
+	case errors.Is(err, keychain.ErrNotFound):
+		if active != "" {
+			names = []string{active} // the one entry an older CLI wrote
+		}
+	case err != nil:
+		return nil, "", fmt.Errorf("users: keychain: %w", err)
+	default:
+		for n := range strings.SplitSeq(v, ",") {
+			if meta.UserName.MatchString(n) {
+				names = append(names, n)
+			}
+		}
+	}
+	return names, active, nil
+}
+
+func setHeld(kc Keychain, clusterID [16]byte, names []string) error {
+	if len(names) == 0 {
+		if err := kc.Delete(listAccount(clusterID)); err != nil && !errors.Is(err, keychain.ErrNotFound) {
+			return fmt.Errorf("users: keychain: %w", err)
+		}
+		return nil
+	}
+	if _, _, err := kc.Set(listAccount(clusterID), strings.Join(names, ",")); err != nil {
+		return fmt.Errorf("users: keychain: %w", err)
+	}
+	return nil
+}
+
+// NewIdentity draws a key for name; nothing is kept until Add.
 func NewIdentity(name string) (Identity, error) {
 	if !meta.UserName.MatchString(name) {
 		return Identity{}, fmt.Errorf("users: name %q: want %s", name, meta.UserName)
@@ -87,37 +156,95 @@ func NewIdentity(name string) (Identity, error) {
 	return Identity{Name: name, Priv: priv}, nil
 }
 
-// Keep stores id as the device's identity for the cluster, replacing any.
+func encode(id Identity) string { return id.Name + ":" + hex.EncodeToString(id.Priv.Seed()) }
+
+// Keep stores id as the device's active identity for the cluster, replacing any.
 func Keep(kc Keychain, clusterID [16]byte, id Identity) error {
 	if !meta.UserName.MatchString(id.Name) || len(id.Priv) != ed25519.PrivateKeySize {
 		return ErrBadIdent
 	}
-	if _, _, err := kc.Set(Account(clusterID), id.Name+":"+hex.EncodeToString(id.Priv.Seed())); err != nil {
+	if _, _, err := kc.Set(Account(clusterID), encode(id)); err != nil {
 		return fmt.Errorf("users: keychain: %w", err)
 	}
 	return nil
 }
 
-// Create makes the identity for the cluster under name and keeps it; a device that
-// already holds one refuses (one person per OS account per cluster).
+// Add keeps id among the held identities and makes it active; a name already held
+// refuses (I-360).
+func Add(kc Keychain, clusterID [16]byte, id Identity) error {
+	if !meta.UserName.MatchString(id.Name) || len(id.Priv) != ed25519.PrivateKeySize {
+		return ErrBadIdent
+	}
+	names, active, err := Held(kc, clusterID)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(names, id.Name) {
+		return fmt.Errorf("%w: %s", ErrHasIdent, id.Name)
+	}
+	if active != "" && len(names) == 1 && names[0] == active {
+		// an older CLI's one entry: give it its own account before another joins it
+		old, _, err := Load(kc, clusterID)
+		if err != nil {
+			return err
+		}
+		if _, _, err := kc.Set(heldAccount(clusterID, old.Name), encode(old)); err != nil {
+			return fmt.Errorf("users: keychain: %w", err)
+		}
+	}
+	if _, _, err := kc.Set(heldAccount(clusterID, id.Name), encode(id)); err != nil {
+		return fmt.Errorf("users: keychain: %w", err)
+	}
+	if err := setHeld(kc, clusterID, append(names, id.Name)); err != nil {
+		return err
+	}
+	return Keep(kc, clusterID, id)
+}
+
+// Create makes an identity for the cluster under name, keeps it and makes it active.
 func Create(kc Keychain, clusterID [16]byte, name string) (Identity, error) {
 	id, err := NewIdentity(name)
 	if err != nil {
 		return Identity{}, err
 	}
-	if _, ok, err := Load(kc, clusterID); err != nil && !errors.Is(err, ErrBadIdent) {
-		return Identity{}, err
-	} else if ok {
-		return Identity{}, ErrHasIdent
-	}
-	if err := Keep(kc, clusterID, id); err != nil {
+	if err := Add(kc, clusterID, id); err != nil {
 		return Identity{}, err
 	}
 	return id, nil
 }
 
-// Forget removes the identity for the cluster from this device.
-func Forget(kc Keychain, clusterID [16]byte) error {
+// Use makes the held identity named name the active one; ErrNoIdentity when none is held.
+func Use(kc Keychain, clusterID [16]byte, name string) error {
+	id, ok, err := LoadAs(kc, clusterID, name)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoIdentity, name)
+	}
+	return Keep(kc, clusterID, id)
+}
+
+// Remove forgets the held identity named name; when it was the active one, the first
+// identity still held becomes active, or none.
+func Remove(kc Keychain, clusterID [16]byte, name string) error {
+	names, active, err := Held(kc, clusterID)
+	if err != nil {
+		return err
+	}
+	if err := kc.Delete(heldAccount(clusterID, name)); err != nil && !errors.Is(err, keychain.ErrNotFound) {
+		return fmt.Errorf("users: keychain: %w", err)
+	}
+	names = slices.DeleteFunc(names, func(n string) bool { return n == name })
+	if err := setHeld(kc, clusterID, names); err != nil {
+		return err
+	}
+	if active != name {
+		return nil
+	}
+	if len(names) > 0 {
+		return Use(kc, clusterID, names[0])
+	}
 	if err := kc.Delete(Account(clusterID)); err != nil && !errors.Is(err, keychain.ErrNotFound) {
 		return fmt.Errorf("users: keychain: %w", err)
 	}

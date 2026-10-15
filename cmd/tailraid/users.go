@@ -27,9 +27,10 @@ import (
 // attaches the signature of the identity this person holds for the cluster.
 
 // userSigner signs the CLI's mutating requests with the identity in the person's keychain
-// (docs/21 §2, I-344); with no identity the requests go unsigned, which a cluster with
-// users refuses with the hint to create one.
-func userSigner(ctx context.Context, cid [16]byte) func(addr, method, path string, body []byte) (string, error) {
+// (docs/21 §2, I-344): the active one, or the held identity named by --identity (I-360); with no
+// identity the requests go unsigned, which a cluster with users refuses with the hint to
+// create one.
+func userSigner(ctx context.Context, cid [16]byte, as string) func(addr, method, path string, body []byte) (string, error) {
 	var (
 		once sync.Once // the keychain is read on the first mutating request, never for a read-only command
 		id   users.Identity
@@ -39,7 +40,7 @@ func userSigner(ctx context.Context, cid [16]byte) func(addr, method, path strin
 	)
 	nodeIDs := map[string]string{}
 	return func(addr, method, path string, body []byte) (string, error) {
-		once.Do(func() { id, ok, err = users.Load(users.UserKeychain(), cid) })
+		once.Do(func() { id, ok, err = cliIdentity(users.UserKeychain(), cid, as) })
 		if err != nil {
 			return "", err
 		}
@@ -65,6 +66,28 @@ func userSigner(ctx context.Context, cid [16]byte) func(addr, method, path strin
 		}
 		return users.Sign(id, cid, nodeID, method, path, body, time.Now().Unix(), nonce).String(), nil
 	}
+}
+
+// cliIdentity is the identity a command acts as: the held one named as, else the active
+// one (I-360). A name this OS account does not hold is an error, never the active one.
+func cliIdentity(kc users.Keychain, cid [16]byte, as string) (users.Identity, bool, error) {
+	if as == "" {
+		return users.Load(kc, cid)
+	}
+	id, ok, err := users.LoadAs(kc, cid, as)
+	if err == nil && !ok {
+		err = fmt.Errorf("%w: %s (tailraid user use lists the identities held here)", users.ErrNoIdentity, as)
+	}
+	return id, ok, err
+}
+
+// mountCredential is this device's mount credential for the person running the CLI: their
+// uid, or on Windows the SMB account the mount uses (I-350).
+func mountCredential() string {
+	if runtime.GOOS == "windows" {
+		return users.SMBCredential(smbgw.User)
+	}
+	return users.UIDCredential(users.CallerUID())
 }
 
 // osUserName is the name of the OS account running the CLI.
@@ -106,6 +129,10 @@ func userCmd() *cobra.Command {
 			}
 			cid := clusterOf(c)
 			kc := users.UserKeychain()
+			_, prev, err := users.Held(kc, cid)
+			if err != nil {
+				return err
+			}
 			id, err := users.Create(kc, cid, args[0])
 			if err != nil {
 				return err
@@ -113,7 +140,12 @@ func userCmd() *cobra.Command {
 			pub := id.Pub()
 			raw, err := c.Admin(cmd.Context(), addr, rpc.AdminOp{Op: "user_create", User: args[0], Code: args[1], Key: hex.EncodeToString(pub[:]), Label: labelOr(label)})
 			if err != nil {
-				_ = users.Forget(kc, cid) // the identity is for the row the invite makes; none, none
+				// the identity is for the row the invite makes; none, none, and the one
+				// active before stays active
+				_ = users.Remove(kc, cid, args[0])
+				if prev != "" {
+					_ = users.Use(kc, cid, prev)
+				}
 				return err
 			}
 			return bindAndReport(cmd, raw, args[0])
@@ -151,10 +183,8 @@ func userCmd() *cobra.Command {
 			}
 			cid := clusterOf(c)
 			kc := users.UserKeychain()
-			if _, ok, err := users.Load(kc, cid); err != nil {
+			if _, _, err := users.Held(kc, cid); err != nil {
 				return err
-			} else if ok {
-				return users.ErrHasIdent
 			}
 			id, err := users.NewIdentity("pending")
 			if err != nil {
@@ -167,13 +197,16 @@ func userCmd() *cobra.Command {
 			}
 			var r struct {
 				User string `json:"user"`
+				Key  string `json:"key"`
 			}
 			if err := json.Unmarshal(raw, &r); err != nil || r.User == "" {
 				return fmt.Errorf("user key add reply: %w", err)
 			}
 			id.Name = r.User
-			if err := users.Keep(kc, cid, id); err != nil {
-				return err
+			if err := users.Add(kc, cid, id); err != nil {
+				// the name is known only from the reply: the key is registered, and its
+				// own user may remove it
+				return fmt.Errorf("%w; the key just added is not kept here (tailraid user key rm %s %s)", err, r.User, r.Key)
 			}
 			return bindAndReport(cmd, raw, r.User)
 		},
@@ -311,6 +344,52 @@ func userCmd() *cobra.Command {
 	}
 	unbind.Flags().IntVar(&uid, "uid", 0, "the uid to unbind")
 	unbind.Flags().StringVar(&smb, "smb", "", "the SMB account to unbind")
+	use := &cobra.Command{
+		Use:   "use [<name>]",
+		Short: "Switch the identity this OS account acts as and bind this device's mount to it; alone, list the identities held",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, addr, _, err := localClient(cmd.Context(), cmd)
+			if err != nil {
+				return err
+			}
+			cid := clusterOf(c)
+			kc := users.UserKeychain()
+			if len(args) == 0 {
+				names, active, err := users.Held(kc, cid)
+				if err != nil {
+					return err
+				}
+				if len(names) == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "no identity here (tailraid user create <name> <code>)")
+				}
+				for _, n := range names {
+					mark := "  "
+					if n == active {
+						mark = "* "
+					}
+					fmt.Fprintln(cmd.OutOrStdout(), mark+n)
+				}
+				return nil
+			}
+			name := args[0]
+			if _, _, err := cliIdentity(kc, cid, name); err != nil {
+				return err
+			}
+			// the bind first, signed as the user it binds to (their own credential, I-350):
+			// a refused bind leaves the active identity as it was (I-360)
+			c.Sign = userSigner(cmd.Context(), cid, name)
+			cred := mountCredential()
+			if _, err := c.Admin(cmd.Context(), addr, rpc.AdminOp{Op: "user_bind", Credential: cred, User: name}); err != nil {
+				return fmt.Errorf("bind %s to %s: %w", cred, name, err)
+			}
+			if err := users.Use(kc, cid, name); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "you are %s on this device (bound to %s)\n", name, cred)
+			return nil
+		},
+	}
 	var bootName string
 	bootstrap := &cobra.Command{
 		Use:   "bootstrap",
@@ -337,7 +416,7 @@ func userCmd() *cobra.Command {
 		},
 	}
 	bootstrap.Flags().StringVar(&bootName, "name", "", "the admin's name (default: yours)")
-	for _, s := range []*cobra.Command{invite, create, key, ls, whoami, state("disable", "user_disable", "disabled"), state("enable", "user_enable", "enabled"), state("rm", "user_rm", "removed"), bind, unbind, bootstrap} {
+	for _, s := range []*cobra.Command{invite, create, key, ls, whoami, use, state("disable", "user_disable", "disabled"), state("enable", "user_enable", "enabled"), state("rm", "user_rm", "removed"), bind, unbind, bootstrap} {
 		addNodeFlags(s)
 		c.AddCommand(s)
 	}
@@ -394,10 +473,7 @@ func printInvite(cmd *cobra.Command, raw json.RawMessage, name string) error {
 // bindAndReport binds this person's own credential on the device (I-350) and says what
 // was made.
 func bindAndReport(cmd *cobra.Command, raw json.RawMessage, name string) error {
-	cred := users.UIDCredential(users.CallerUID())
-	if runtime.GOOS == "windows" {
-		cred = users.SMBCredential(smbgw.User)
-	}
+	cred := mountCredential()
 	if _, err := localCall(cmd, rpc.AdminOp{Op: "user_bind", Credential: cred, User: name}); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "identity made, but this device's mount is not bound to it: %v (tailraid user bind %s)\n", err, name)
 	}

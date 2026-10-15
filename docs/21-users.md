@@ -25,7 +25,7 @@ small-team volume. What a program can do is implement the technical controls an 
 needs to meet the standards their organisation is assessed against, and say plainly which
 it does not reach. §11 maps each control to its mechanism here.
 
-## 1. Identities (I-342, I-343)
+## 1. Identities (I-342, I-343, I-360)
 
 - **A user** is a row in the replicated state: `User{Idx, Name, State, Keys, CreatedAt,
   By}`. `Name` matches `^[a-z][a-z0-9._-]{0,31}$`; `State` is `Active`, `Disabled` or
@@ -46,6 +46,23 @@ it does not reach. §11 maps each control to its mechanism here.
   groups and personal secrets attach to the user and follow to every device; the key, the
   uid binding (§5) and a browser session (§6) are per device. `user key rm` revokes one
   device and leaves the others working.
+- **Several users in one OS account** (I-360). One person may act as more than one user,
+  an admin who browses as a plain user being the case. The keychain then holds each
+  identity under `user-<hex cluster ID>-<name>`, the list of names under
+  `user-<hex cluster ID>.held` (a keychain cannot list its accounts), and the *active*
+  identity under `user-<hex cluster ID>`, the account a single identity always used, so
+  a keychain from before keeps working and gains the per-name entry the first time
+  another identity is added. `user create` and `user key add` add an identity and make
+  it active; they refuse only a name the account already holds. `tailraid user use
+  <name>` switches: it binds this device's mount credential (the caller's uid, or the
+  `tailraid` SMB account on Windows) to the user, signed as that user, and only then
+  makes the identity active, so a refused bind changes nothing; `user use` alone lists
+  the identities held and marks the active one. `--identity <name>` on any command signs that
+  one command as another held identity and leaves the active one and the binding alone.
+  Holding several identities in one OS account gives no separation between them, which
+  is the intent: whoever uses the account is each of them, as an admin already could be
+  by rebinding. Every operation still carries the user who signed it, so the audit log
+  names the identity, not the account.
 - **Invites.** An invite is a row `Invite{Hash, Name, Kind, ForUser, Admin, ExpiresAt,
   By}`: the SHA-256 of a 10-character base32 code (50 bits), the name it is for, whether
   it creates a user or adds a key to one, whether the new user joins `admins`, and a
@@ -109,8 +126,9 @@ it does not reach. §11 maps each control to its mechanism here.
   (resolve, check, propose); a path that does not exist answers `403` exactly as a
   missing right does, so the namespace cannot be probed by a user who holds nothing
   there.
-- **The CLI signs** with the key of the OS user running it (`--as <name>` picks one when
-  the keychain holds several identities of this cluster). The daemon's own callers
+- **The CLI signs** with the key of the OS user running it (`--identity <name>` picks one
+  when the keychain holds several identities of this cluster, I-360; `--as` was taken by
+  the restore commands' new name). The daemon's own callers
   (`update --restart`'s idle wait, the service) use read-only operations only; nothing in
   `serve` signs anything.
 
@@ -335,6 +353,7 @@ it does not reach. §11 maps each control to its mechanism here.
 tailraid user invite <name> [--admin]            # admins: a one-time code, 24 h
 tailraid user create <name> <code>               # on the person's own device: key → their keychain, row registered, uid bound
 tailraid user ls [<name>] | whoami               # ls <name>: keys, groups, grants
+tailraid user use [<name>]                       # switch this OS account's identity and rebind the mount; alone: list
 tailraid user key invite [<name>]                # oneself (or admins): a code for another device
 tailraid user key add <code>                     # on the new device
 tailraid user key rm <name> <key-id>
@@ -349,6 +368,9 @@ tailraid secret set <name> [--system] | get <name> | ls [--system] | rm <name> [
 tailraid audit ls [--since d] [--user u] [--kind k]
 tailraid web login [--node n] | logout [--all]   # a session of the volume; --node picks the address the link points at
 ```
+
+Every signed verb takes `--identity <name>`: one command as another identity this OS account
+holds (I-360).
 
 Config (I-359): `users.clock_skew` (5m; 1m..1h), `users.session` (168h; 1h..720h),
 `users.dormant_after` (2160h; 24h..8760h), `audit.retention` (8760h; 168h..87600h), each
@@ -537,6 +559,16 @@ per-user S3 gateway keys (the gateway is deferred, docs/10); a verifier-issued c
   proposal of the writer's own; a record made during a segment write lands in the next
   flush, and a closed hour is written by the flush alone.
 
+- **I-360** — An OS account may hold several identities for one cluster, each under
+  `user-<cluster>-<name>` with the names listed under `user-<cluster>.held`, and exactly
+  one active identity under `user-<cluster>`, which the CLI signs with; a keychain holding
+  only the active entry reads as holding that one identity; `user create` and `user key
+  add` refuse only a name already held and make the new identity active; `user use
+  <name>` binds this device's mount credential to the user, signed as that user, before
+  making it active, and changes nothing when the bind is refused or the name is not
+  held; `--identity <name>` signs one command as a held identity and changes neither the
+  active identity nor a binding.
+
 ## Tests
 
 Planned names are written without backticks until the tests exist; each ID is cited by a
@@ -563,3 +595,4 @@ stub in `test/invariants/` meanwhile.
 | I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |
 | I-359 | `TestConfig_Validate_Table` |
 | I-333 | `TestAudit_RecordNeverWaitsForTheVolume` |
+| I-360 | `TestIdentity_SeveralHeld`, `TestIdentity_LegacySingleEntry`, `TestCLI_UserUse` |

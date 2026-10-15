@@ -39,7 +39,7 @@ Every command takes `--json`, and `--node <ip>` to talk to another device. `tail
 | Files | `trash ls\|restore\|purge` · `cache pin\|unpin\|ls` · `search <words>` · `search index` · `media scrape [path]` |
 | Snapshots | `mirror add\|ls\|remove` · `mirror ls\|cat\|export <mirror path> …` · `snapshot ls\|create\|restore` · `versions <path> [--revert\|--copy]` |
 | Secrets | `secret set <name> [--system]` · `secret get <name>` · `secret ls [--system]` · `secret rm <name>\|--all` |
-| Users (docs/21) | `user invite\|create\|ls\|key\|disable\|enable\|rm\|bind\|bootstrap` · `group create\|rm\|add\|remove\|ls` · `grant <path> <user\|@group> read\|write\|admin` · `revoke` · `access ls` · `audit ls` · `web login\|logout` |
+| Users (docs/21) | `user invite\|create\|use\|ls\|key\|disable\|enable\|rm\|bind\|bootstrap` · `group create\|rm\|add\|remove\|ls` · `grant <path> <user\|@group> read\|write\|admin` · `revoke` · `access ls` · `audit ls` · `web login\|logout` |
 | Recovery | `export <dir>` · `recover --voters <id>` · `stats seal` |
 | Releases | `update [--check\|--rollback\|--restart]` · `version` |
 

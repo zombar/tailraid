@@ -569,6 +569,7 @@ device, and an admin's one-time invite is how they get the first one.
 tailraid user invite <name> [--admin]            # admins: a one-time code, 24 h
 tailraid user create <name> <code>               # on the person's own device: key → their keychain, row registered, uid bound
 tailraid user ls [<name>] | whoami               # ls <name>: keys, groups, grants
+tailraid user use [<name>]                       # switch this OS account's identity and rebind the mount; alone: list
 tailraid user key invite [<name>]                # oneself (or admins): a code for another device
 tailraid user key add <code>                     # on the new device
 tailraid user key rm <name> <key-id>
@@ -588,6 +589,12 @@ Every verb but `user create`, `user key add` and `user bootstrap` is a signed re
 (docs/21 §2): the CLI signs with the key of the OS user running it, and the table in
 docs/21 §2 says which verbs need a user, `Admin` on the path or membership of `admins`.
 Read-only verbs (`status`, `check`, every `ls`) stay as they are.
+
+**One person, two users.** An admin who wants to browse as a plain user (a folder out of
+sight, say) creates the second user from an invite in the same OS account and switches
+with `tailraid user use <name>`, which also rebinds this device's mount to it; `--identity
+<name>` runs one command as the other (docs/21 §1, I-360). Admins hold every right, so
+the hiding is the plain user's grants, not a deny.
 
 **The order on an existing cluster.** Enforcement starts with the first user: until then
 the volume behaves as before, and the moment a user exists every unbound uid and SMB

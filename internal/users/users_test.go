@@ -236,6 +236,99 @@ func TestSig_FailureLockout(t *testing.T) {
 // second create refuses, a malformed value is reported, forget removes it; a code is
 // ten base32 characters and a bootstrap token is read once.
 // Invariant: I-342, I-343
+// Several identities in one keychain: each under its name, one active, switched by Use,
+// added only under a new name, and removed with the active one falling back.
+// Invariant: I-360
+func TestIdentity_SeveralHeld(t *testing.T) {
+	kc := newMem()
+	kim, err := Create(kc, cid, "kim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lee, err := Create(kc, cid, "lee")
+	if err != nil {
+		t.Fatalf("a second name: %v", err)
+	}
+	names, active, err := Held(kc, cid)
+	if err != nil || strings.Join(names, ",") != "kim,lee" || active != "lee" {
+		t.Fatalf("held %v active %q: %v", names, active, err)
+	}
+	if got, ok, err := Load(kc, cid); err != nil || !ok || got.Pub() != lee.Pub() {
+		t.Fatalf("active after create: %v %v %s", err, ok, got.Name)
+	}
+	if _, err := Create(kc, cid, "lee"); !errors.Is(err, ErrHasIdent) {
+		t.Fatalf("a held name again: %v", err)
+	}
+	if err := Use(kc, cid, "kim"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := Load(kc, cid); got.Pub() != kim.Pub() {
+		t.Fatalf("active after use: %s", got.Name)
+	}
+	if got, ok, err := LoadAs(kc, cid, "lee"); err != nil || !ok || got.Pub() != lee.Pub() {
+		t.Fatalf("load as lee: %v %v", err, ok)
+	}
+	if got, _, _ := Load(kc, cid); got.Name != "kim" {
+		t.Fatalf("load as moved the active identity to %s", got.Name)
+	}
+	if err := Use(kc, cid, "ann"); !errors.Is(err, ErrNoIdentity) {
+		t.Fatalf("use of a name not held: %v", err)
+	}
+	if _, ok, err := LoadAs(kc, cid, "ann"); ok || err != nil {
+		t.Fatalf("load as a name not held: %v %v", ok, err)
+	}
+	if got, _, _ := Load(kc, cid); got.Name != "kim" {
+		t.Fatalf("a refused use changed the active identity to %s", got.Name)
+	}
+	if err := Remove(kc, cid, "kim"); err != nil {
+		t.Fatal(err)
+	}
+	names, active, err = Held(kc, cid)
+	if err != nil || strings.Join(names, ",") != "lee" || active != "lee" {
+		t.Fatalf("after removing the active one: %v %q %v", names, active, err)
+	}
+	other := [16]byte{9}
+	if names, _, err := Held(kc, other); err != nil || len(names) != 0 {
+		t.Fatalf("another cluster: %v %v", names, err)
+	}
+}
+
+// A keychain from before several identities holds only the active entry: it reads as that
+// one identity, and adding another keeps it under its name.
+// Invariant: I-360
+func TestIdentity_LegacySingleEntry(t *testing.T) {
+	kc := newMem()
+	kim, err := NewIdentity("kim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Keep(kc, cid, kim); err != nil { // the one entry an older CLI wrote
+		t.Fatal(err)
+	}
+	if len(kc.m) != 1 {
+		t.Fatalf("keep wrote %v", kc.m)
+	}
+	names, active, err := Held(kc, cid)
+	if err != nil || strings.Join(names, ",") != "kim" || active != "kim" {
+		t.Fatalf("legacy held %v %q %v", names, active, err)
+	}
+	if got, ok, err := LoadAs(kc, cid, "kim"); err != nil || !ok || got.Pub() != kim.Pub() {
+		t.Fatalf("legacy load as: %v %v", err, ok)
+	}
+	if _, err := Create(kc, cid, "kim"); !errors.Is(err, ErrHasIdent) {
+		t.Fatalf("the legacy name again: %v", err)
+	}
+	if _, err := Create(kc, cid, "lee"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Use(kc, cid, "kim"); err != nil {
+		t.Fatalf("back to the legacy identity: %v", err)
+	}
+	if got, _, _ := Load(kc, cid); got.Pub() != kim.Pub() {
+		t.Fatal("the legacy key was lost")
+	}
+}
+
 func TestIdentity_Keychain(t *testing.T) {
 	kc := newMem()
 	if _, ok, err := Load(kc, cid); ok || err != nil {
@@ -245,8 +338,8 @@ func TestIdentity_Keychain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Create(kc, cid, "lee"); !errors.Is(err, ErrHasIdent) {
-		t.Fatalf("a second identity: %v", err)
+	if _, err := Create(kc, cid, "kim"); !errors.Is(err, ErrHasIdent) {
+		t.Fatalf("the same name again: %v", err)
 	}
 	if _, err := Create(newMem(), cid, "Kim"); err == nil {
 		t.Fatal("a bad name")
@@ -262,14 +355,14 @@ func TestIdentity_Keychain(t *testing.T) {
 	if _, _, err := Load(kc, cid); !errors.Is(err, ErrBadIdent) {
 		t.Fatalf("malformed: %v", err)
 	}
-	if err := Forget(kc, cid); err != nil {
+	if err := Remove(kc, cid, "kim"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := Load(kc, cid); ok {
-		t.Fatal("forgotten identity found")
+		t.Fatal("removed identity found")
 	}
-	if err := Forget(kc, cid); err != nil {
-		t.Fatalf("forget twice: %v", err)
+	if err := Remove(kc, cid, "kim"); err != nil {
+		t.Fatalf("remove twice: %v", err)
 	}
 	code, err := NewCode()
 	if err != nil || len(code) != meta.InviteCodeLen || strings.Trim(code, "abcdefghijklmnopqrstuvwxyz234567") != "" {

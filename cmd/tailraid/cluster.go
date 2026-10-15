@@ -53,7 +53,8 @@ func localClient(ctx context.Context, cmd *cobra.Command) (*rpc.Client, string, 
 		}
 	}
 	c := rpc.NewClient(cid, nil)
-	c.Sign = userSigner(cmd.Context(), cid) // the person's signature on mutating requests (docs/21 §2)
+	as, _ := cmd.Flags().GetString("identity")
+	c.Sign = userSigner(cmd.Context(), cid, as) // the person's signature on mutating requests (docs/21 §2)
 	return c, addr, cfg, nil
 }
 
