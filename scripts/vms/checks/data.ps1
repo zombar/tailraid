@@ -14,7 +14,10 @@ try {
       $buf = New-Object byte[] (3 * 1MB)
       [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
       [IO.File]::WriteAllBytes("$dir\$os.bin", $buf)
-      Set-Content -NoNewline "$dir\$os-small.txt" "hello from $os at $((Get-Date).ToUniversalTime().ToString('o'))`n"
+      # WriteAllText, not Set-Content -NoNewline: the guest's PowerShell refused the switch
+      # ("A parameter cannot be found that matches parameter name 'NoNewline'") and the
+      # round recorded the step ok while the file was never written
+      [IO.File]::WriteAllText("$dir\$os-small.txt", "hello from $os at $((Get-Date).ToUniversalTime().ToString('o'))`n")
       Write-Output "$os.bin $(Sha "$dir\$os.bin")"
       Write-Output "$os-small.txt $(Sha "$dir\$os-small.txt")"
     }
