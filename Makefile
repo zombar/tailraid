@@ -81,7 +81,7 @@ test-mount:
 
 ## soak: five-node docker-compose cluster (two disks each, one diskless voter), scenario driver, report.html + results.jsonl (needs Docker)
 soak: soak-binary
-	cd test/soak && docker compose --profile late down -v >/dev/null 2>&1; cd test/soak && docker compose --profile late build && docker compose up -d
+	cd test/soak && { docker compose --profile late down -v >/dev/null 2>&1; docker compose --profile late build && docker compose up -d; }
 	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
 	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose --profile late down -v >/dev/null; exit $$status
 
