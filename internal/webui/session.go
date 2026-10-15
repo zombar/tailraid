@@ -20,8 +20,13 @@ import (
 // /assets/* carries a session cookie whose token's hash is a row of the FSM, read on
 // every request, and the session's user is the actor of the request (I-355). A token
 // reaches a browser through a one-time code: `web login` mints one on a node, a
-// hand-off between two nodes' pages another, each under the cluster key, so any node
-// opens any node's code.
+// hand-off between two nodes' pages another, each sealed under the cluster key, so any
+// node opens any node's code and a code leaked from a history or a log yields no token.
+// The cookie is SameSite=Lax, not Strict: a hand-off is a navigation one node's page
+// starts to another's origin, and a Strict cookie is withheld for that navigation's
+// whole redirect chain, so the page would land on the sign-in it just passed. Lax
+// still keeps the cookie off every cross-site POST, and every mutating route is a POST
+// or PUT that also needs the UI header (docs/13 §3).
 
 // SessionCookie holds the session token on one origin.
 const SessionCookie = "tailraid_session"
@@ -192,7 +197,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // no Secure: the page is plain HTTP inside the mesh (docs/13 §2), which is the transport boundary
-		Name: SessionCookie, Value: users.TokenText(tok), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		Name: SessionCookie, Value: users.TokenText(tok), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		MaxAge: int(time.Duration(row.ExpiresAt-now.UnixNano()) / time.Second), // relative: the browser's clock need not be the node's
 	})
 	http.Redirect(w, r, safeTo(q.Get("to")), http.StatusSeeOther) //nolint:gosec // safeTo keeps it a path on this origin
@@ -278,7 +283,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1}) //nolint:gosec // plain HTTP inside the mesh
+	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1}) //nolint:gosec // plain HTTP inside the mesh
 	w.WriteHeader(http.StatusNoContent)
 }
 

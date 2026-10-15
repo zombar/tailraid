@@ -101,8 +101,11 @@ read, in this order:
 3. With users (docs/21 §6): a session of the volume. `tailraid web
    login` proposes a session row in the FSM and prints
    `http://<mesh IP>:20482/login?code=…` (`--node` picks which member's address); opening
-   it sets an `HttpOnly`, `SameSite=Strict` cookie for that origin holding the session
-   token, and every node validates a token against its replica. A cookie is per origin
+   it sets an `HttpOnly`, `SameSite=Lax` cookie for that origin holding the session
+   token (Lax, because a hand-off is a navigation one origin starts to another and a
+   Strict cookie is withheld for that navigation's whole redirect chain; every mutating
+   route is a POST or PUT with the UI header, which Lax keeps cross-site requests off),
+   and every node validates a token against its replica. A cookie is per origin
    and each node's page is its own, so a link to another node's page (the Stats member
    menu, the Mesh section) carries a one-time hand-off code from `GET /api/handoff` and
    the other node's `/login` sets its own cookie for the same session. A request without

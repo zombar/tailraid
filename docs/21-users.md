@@ -252,9 +252,12 @@ it does not reach. §11 maps each control to its mechanism here.
   the SHA-256 of 32 random bytes, the user, the key ID that minted it, `users.session`
   (168 h) from now; at most 16 open sessions per user, the oldest replaced) and prints
   `http://<this device's mesh IP>:20482/login?code=…`, a one-time code good for five
-  minutes that carries the session token to the browser; `--node <name>` only chooses
+  minutes that carries the session token to the browser sealed with AES-256-GCM under a
+  key derived from the cluster key (a code copied from a browser's history or a proxy's
+  log yields no token to anyone without it); `--node <name>` only chooses
   which member's address the link points at (a phone that reaches one address and not
-  another). Opening the link sets a cookie (`HttpOnly`, `SameSite=Strict`) holding the
+  another). Opening the link sets a cookie (`HttpOnly`, `SameSite=Lax`: a hand-off is a
+  cross-origin navigation, for which a Strict cookie is withheld) holding the
   token on that origin, and every node validates a token against its replica: the
   session is cluster-wide, survives any node's restart, and `tailraid web logout
   [--all]` removes the row, which ends it everywhere. Revocation needs no hook: a
@@ -495,8 +498,9 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   `System` writer and reaches `/.tailraid` only.
 - **I-354** — `web login` proposes a session row (the token's SHA-256, the user, the
   minting key, an expiry `users.session` away; at most 16 per user) and prints a
-  one-time five-minute code that carries the token; opening the link on any node's
-  `/login` sets an `HttpOnly`, `SameSite=Strict` cookie for that origin, every node
+  one-time five-minute code that carries the token sealed under the cluster key, so the
+  code alone yields no token; opening the link on any node's
+  `/login` sets an `HttpOnly`, `SameSite=Lax` cookie for that origin, every node
   validates a token against its replica, and a link between two nodes' pages carries a
   one-time hand-off code that signs the second origin into the same session; `/login` and
   `/assets/*` are the only routes without a session and a member's address alone admits
@@ -555,7 +559,7 @@ stub in `test/invariants/` meanwhile.
 | I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestNFS_AccessFollowsRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
 | I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied`, `TestSMB_ReadOnlyUserReads` |
 | I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestVFS_As_RoleBeforeExistence`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
-| I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
+| I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestCodes_TokenNotRecoverableFromCode`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
 | I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_AdminRoutes_ByRole`, `TestWebUI_Upload_RoleBeforeExistence`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
 | I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |
