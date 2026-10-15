@@ -42,6 +42,8 @@ const (
 	ProbeEvery = 60 * time.Second
 	// RelayRate is the default of mesh.relay_rate: what a device forwards for others.
 	RelayRate = 20 << 20
+	// RelayUnlimited as Options.RelayRate forwards without a limit (`mesh.relay_rate: "0"`).
+	RelayUnlimited = -1
 	// MaxRelayFrame bounds a relayed packet: the WireGuard packet of one MTU-sized
 	// datagram plus the header.
 	MaxRelayFrame = relayHeaderLen + MTU + 128
@@ -184,6 +186,7 @@ type rateLimiter struct {
 	clk    clock.Clock
 	mu     sync.Mutex
 	tokens int64
+	frac   float64 // the refill below one byte, carried to the next take
 	last   time.Time
 }
 
@@ -192,7 +195,9 @@ func newRateLimiter(perSec int64, clk clock.Clock) *rateLimiter {
 }
 
 // take reports whether n bytes are within credit now and spends them if so; the bucket
-// refills at perSec and holds at most one second's worth.
+// refills at perSec and holds at most one second's worth. The refill keeps its fraction
+// of a byte, so a small rate asked often still fills (a whole-byte refill that advanced
+// the clock each call starved below one byte per call).
 func (l *rateLimiter) take(n int64) bool {
 	if l == nil || l.perSec <= 0 {
 		return true
@@ -201,11 +206,14 @@ func (l *rateLimiter) take(n int64) bool {
 	defer l.mu.Unlock()
 	now := l.clk.Now()
 	if !l.last.IsZero() {
-		l.tokens += int64(now.Sub(l.last).Seconds() * float64(l.perSec))
+		l.frac += now.Sub(l.last).Seconds() * float64(l.perSec)
+		whole := int64(l.frac)
+		l.tokens += whole
+		l.frac -= float64(whole)
 	}
 	l.last = now
 	if l.tokens > l.perSec {
-		l.tokens = l.perSec
+		l.tokens, l.frac = l.perSec, 0
 	}
 	if l.tokens < n {
 		return false

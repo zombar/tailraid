@@ -372,7 +372,8 @@ func (c Config) RepairRateBytes() (n int64, set bool, err error) {
 }
 
 // MeshRelayRateBytes parses mesh.relay_rate: what this device forwards for others per
-// second (docs/20 §6); the mesh's default when unset, 0 for "0".
+// second (docs/20 §6). 0 means the mesh's default (the key is unset), and "0" in the
+// file means no limit, which the mesh reads as a negative rate.
 func (c Config) MeshRelayRateBytes() (int64, error) {
 	if c.Mesh.RelayRate == "" {
 		return 0, nil
@@ -380,6 +381,9 @@ func (c Config) MeshRelayRateBytes() (int64, error) {
 	u, err := ParseBytes(c.Mesh.RelayRate)
 	if err != nil || u > 1<<62 {
 		return 0, fmt.Errorf("config: mesh.relay_rate %q: bad size", c.Mesh.RelayRate)
+	}
+	if u == 0 {
+		return -1, nil // mesh.RelayUnlimited: the mesh reads a negative rate as no limit
 	}
 	return int64(u), nil //nolint:gosec // bounded above
 }

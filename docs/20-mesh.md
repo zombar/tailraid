@@ -383,7 +383,7 @@ round-trip line of its node section (I-332).
 | `mesh.address` | written by `init`/`join` | the device's address; survives `reset` |
 | `mesh.interface` | `tailraid0` / `tailraid` | the interface name on Linux and Windows |
 | `mesh.portmap` | `true` | ask the router for a mapping (§7) |
-| `mesh.relay_rate` | 20 MiB/s | what this device forwards for others (§6) |
+| `mesh.relay_rate` | 20 MiB/s | what this device forwards for others (§6); `"0"` lifts the limit |
 | `repair.relay` | `avoid` | background work on relayed paths (§8) |
 | `mount.owner` | from `SUDO_UID:SUDO_GID` at `install` | macOS: `uid:gid` the gateways give files, so the user's mount shows their ownership under the root daemon |
 | `dev.mesh_fake` | — | with `dev.enabled`: a JSON file `{"addr": "127.0.0.1"}` replacing the device for the CLI tests, which cannot open a TUN; the node binds that address and joins by the code's token without an introduce (docs/09 §3) |

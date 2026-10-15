@@ -423,3 +423,21 @@ func TestHome_SudoKeepsTheInvokingUsers(t *testing.T) {
 		}
 	}
 }
+
+// mesh.relay_rate: unset is the mesh's default (0), "0" lifts the limit (a negative rate
+// to the mesh), a size is itself, junk is an error (docs/20 §6).
+// Invariant: I-328
+func TestConfig_MeshRelayRate_Table(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int64
+		bad  bool
+	}{{"", 0, false}, {"0", -1, false}, {"5M", 5 << 20, false}, {"lots", 0, true}} {
+		cfg := Default()
+		cfg.Mesh.RelayRate = tc.in
+		got, err := cfg.MeshRelayRateBytes()
+		if (err != nil) != tc.bad || got != tc.want {
+			t.Errorf("relay_rate %q: %d %v, want %d bad=%v", tc.in, got, err, tc.want, tc.bad)
+		}
+	}
+}
