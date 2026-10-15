@@ -1,6 +1,9 @@
 package users
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
@@ -58,7 +61,7 @@ func TestCodes_OnceWithinLife(t *testing.T) {
 	var big CodeLog
 	exp = now.Add(time.Hour)
 	for i := range CodeLogMax + 1 {
-		var n [codeNonce]byte
+		var n [CodeNonceLen]byte
 		n[0], n[1] = byte(i), byte(i>>8)
 		if !big.Use(n, exp, now) {
 			t.Fatalf("code %d refused", i)
@@ -67,7 +70,45 @@ func TestCodes_OnceWithinLife(t *testing.T) {
 	if len(big.used) != CodeLogMax {
 		t.Fatalf("log holds %d", len(big.used))
 	}
-	if !big.Use([codeNonce]byte{0, 0}, exp, now) { // the oldest was dropped: it opens again
+	if !big.Use([CodeNonceLen]byte{0, 0}, exp, now) { // the oldest was dropped: it opens again
 		t.Fatal("the oldest code was kept")
+	}
+}
+
+// A code carries the token sealed, not in the clear: the code's bytes hold neither the
+// token nor its expiry, two codes for one token differ, and a code opens under the key
+// it was minted under alone (docs/21 §6).
+// Invariant: I-354
+func TestCodes_TokenNotRecoverableFromCode(t *testing.T) {
+	key := []byte("the cluster key")
+	now := time.Unix(1_700_000_000, 0)
+	tok, err := NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := MintCode(key, tok, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := 8; n <= len(tok); n += 8 {
+		if bytes.Contains(raw, tok[:n]) || bytes.Contains(raw, tok[len(tok)-n:]) {
+			t.Fatalf("%d bytes of the token appear in the code", n)
+		}
+	}
+	var exp [8]byte
+	binary.LittleEndian.PutUint64(exp[:], uint64(now.Add(CodeLife).Unix()))
+	if bytes.Contains(raw, exp[:]) {
+		t.Fatal("the expiry appears in the code in the clear")
+	}
+	again, err := MintCode(key, tok, now)
+	if err != nil || again == code {
+		t.Fatalf("two codes for one token: %v %v", again == code, err)
+	}
+	if got, _, _, err := OpenCode(key, again, now); err != nil || got != tok {
+		t.Fatalf("the second code: %v", err)
 	}
 }
