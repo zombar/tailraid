@@ -6,6 +6,7 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- docs, rpc: the move to 0.10 per OS; a restore from a mirror waits as a pass (I-189) ([2ce5b06](https://github.com/zombar/tailraid/commit/2ce5b06))
 - vms: the Windows image keeps C:\tailraid on the machine Path after the Tailscale MSI ([549c15c](https://github.com/zombar/tailraid/commit/549c15c))
 - CLAUDE.md: tailraid on Tailscale again, the mesh withdrawn in 0.10.0, users kept ([2a70a00](https://github.com/zombar/tailraid/commit/2a70a00))
 - meta: the users state is snapshot frame 15; 0.9.x's frames 13 and 14 are refused by name (I-349) ([47b1dac](https://github.com/zombar/tailraid/commit/47b1dac))
@@ -55,6 +56,7 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Tooling
 
+- ci: one make tag releases (restore #321, discarded by the rollback merge) ([75dd316](https://github.com/zombar/tailraid/commit/75dd316))
 - ci: one make tag releases ([bf93468](https://github.com/zombar/tailraid/commit/bf93468))
 
 ## v0.9.1 (2026-10-15)
