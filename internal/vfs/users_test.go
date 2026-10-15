@@ -501,6 +501,11 @@ func TestVFS_As_RoleBeforeExistence(t *testing.T) {
 	if err != nil || !read || write {
 		t.Errorf("role under Read: %v %v %v", read, write, err)
 	}
+	// a directory on the way to the grant reads (its listing is the filtered one, I-348),
+	// never writes; a file there is not on the way
+	if read, write, err := leeFS.Role("/"); err != nil || !read || write {
+		t.Errorf("role on the way: %v %v %v", read, write, err)
+	}
 	if _, _, err := leeFS.Role("/other-nothing"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("role of a missing path: %v", err)
 	}

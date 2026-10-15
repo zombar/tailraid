@@ -193,7 +193,8 @@ func TestNFS_AccessFollowsRole(t *testing.T) {
 	}{
 		{"/w/f", all},
 		{"/r/f", 1 | 2 | 0x20},
-		{"/", 2 | 0x20},
+		{"/", 1 | 2 | 0x20}, // on the way to a role: READ too, since the listing lee gets is the filtered one (I-348)
+		{"/r", 1 | 2 | 0x20},
 	} {
 		got, err := lt.Access(tc.path, all)
 		if err != nil || got != tc.want {
