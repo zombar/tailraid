@@ -48,23 +48,31 @@ func TestRelay_Codecs_Table(t *testing.T) {
 		{"no payload", key, short, now},
 		{"too old", key, good, now.Add(RelaySkew + time.Second)},
 		{"from the future", key, good, now.Add(-RelaySkew - time.Second)},
-		{"a probe", key, encodeProbe(key, from, to, now.Unix()), now},
+		{"a probe", key, encodeProbe(key, probeAsk, from, to, now.Unix()), now},
 	}
 	for _, c := range cases {
 		if _, _, ok := decodeRelay(c.key, c.frame, c.at); ok {
 			t.Errorf("%s: accepted", c.name)
 		}
 	}
-	probe := encodeProbe(key, from, to, now.Unix())
-	if f, t2, ok := decodeProbe(key, probe, now); !ok || f != from || t2 != to || len(probe) != probeLen {
-		t.Fatalf("probe decode: %s %s %v (len %d)", f, t2, ok, len(probe))
+	probe := encodeProbe(key, probeAsk, from, to, now.Unix())
+	if k, f, t2, ok := decodeProbe(key, probe, now); !ok || k != probeAsk || f != from || t2 != to || len(probe) != probeLen {
+		t.Fatalf("probe decode: %d %s %s %v (len %d)", k, f, t2, ok, len(probe))
 	}
 	retargeted := bytes.Clone(probe)
-	retargeted[40] ^= 1 // the probed device's key is under the MAC
-	if _, _, ok := decodeProbe(key, retargeted, now); ok {
+	retargeted[41] ^= 1 // the probed device's key is under the MAC
+	if _, _, _, ok := decodeProbe(key, retargeted, now); ok {
 		t.Error("a probe with its target changed was accepted")
 	}
-	if _, _, ok := decodeProbe(key, good, now); ok {
+	echoed := bytes.Clone(probe)
+	echoed[1] = probeEcho // the kind is under the MAC too: a reflector cannot turn a probe into an echo
+	if _, _, _, ok := decodeProbe(key, echoed, now); ok {
+		t.Error("a probe with its kind flipped was accepted")
+	}
+	if _, _, _, ok := decodeProbe(key, encodeProbe(key, 7, from, to, now.Unix()), now); ok {
+		t.Error("an unknown kind was accepted")
+	}
+	if _, _, _, ok := decodeProbe(key, good, now); ok {
 		t.Error("a relay frame decoded as a probe")
 	}
 	for _, c := range []struct {
@@ -78,7 +86,7 @@ func TestRelay_Codecs_Table(t *testing.T) {
 		{"too old", key, probe, now.Add(RelaySkew + time.Second)},
 		{"a relay frame", key, good, now},
 	} {
-		if _, _, ok := decodeProbe(c.key, c.frame, c.at); ok {
+		if _, _, _, ok := decodeProbe(c.key, c.frame, c.at); ok {
 			t.Errorf("probe %s: accepted", c.name)
 		}
 	}
@@ -187,17 +195,19 @@ func TestBind_RelayForwardRules(t *testing.T) {
 	if !ok || string(payload) != "to me" || !isRelay || rep.via != aEP || rep.peer != a {
 		t.Fatalf("a frame for this device: %q %+v %v", payload, ep, ok)
 	}
-	// a probe from a peer for this device is echoed as it came, one for another device is
-	// dropped; this device's own echo pins the probed candidate, and an echo nobody waits
-	// for does nothing
-	bind.probeIn(encodeProbe(rs.key, a, b, clk.Now().Unix()), from)
+	// a probe from a peer for this device is answered with an echo under this device's
+	// MAC, one for another device is dropped; the echo of this device's own probe pins
+	// the probed candidate, the probe itself reflected from the candidate pins nothing (a
+	// candidate that is this device's own address, or a UDP echo service), and an echo
+	// nobody waits for does nothing
+	bind.probeIn(encodeProbe(rs.key, probeAsk, a, b, clk.Now().Unix()), from)
 	if inner.count() != 2 {
 		t.Fatalf("a probe for another device was answered: %d sends", inner.count())
 	}
-	probe := encodeProbe(rs.key, a, self, clk.Now().Unix())
+	probe := encodeProbe(rs.key, probeAsk, a, self, clk.Now().Unix())
 	bind.probeIn(probe, from)
-	if inner.count() != 3 || !bytes.Equal(inner.sent[2].buf, probe) || inner.sent[2].to != aEP.String() {
-		t.Fatalf("probe echo: %d sends", inner.count())
+	if k, p, tg, ok := decodeProbe(rs.key, inner.sent[2].buf, clk.Now()); inner.count() != 3 || !ok || k != probeEcho || p != a || tg != self || inner.sent[2].to != aEP.String() {
+		t.Fatalf("probe echo: %d sends, kind %d ok %v", inner.count(), k, ok)
 	}
 	var pinned []string
 	rs.onProbe = func(peer Key, to netip.AddrPort) { pinned = append(pinned, peer.String()+"@"+to.String()) }
@@ -205,9 +215,14 @@ func TestBind_RelayForwardRules(t *testing.T) {
 	if err := bind.Probe(cand, b); err != nil {
 		t.Fatal(err)
 	}
-	echo := inner.sent[3].buf
-	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: netip.MustParseAddrPort("10.0.0.6:6")})          // from elsewhere: no match
-	bind.probeIn(encodeProbe(rs.key, self, a, clk.Now().Unix()), &conn.StdNetEndpoint{AddrPort: cand}) // names another device: no match
+	sent := inner.sent[3].buf
+	bind.probeIn(sent, &conn.StdNetEndpoint{AddrPort: cand}) // the probe itself reflected: no echo, no pin
+	if len(pinned) != 0 || inner.count() != 4 {
+		t.Fatalf("a reflected probe pinned or was answered: %v, %d sends", pinned, inner.count())
+	}
+	echo := encodeProbe(rs.key, probeEcho, self, b, clk.Now().Unix())
+	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: netip.MustParseAddrPort("10.0.0.6:6")})                     // from elsewhere: no match
+	bind.probeIn(encodeProbe(rs.key, probeEcho, self, a, clk.Now().Unix()), &conn.StdNetEndpoint{AddrPort: cand}) // names another device: no match
 	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: cand})
 	bind.probeIn(echo, &conn.StdNetEndpoint{AddrPort: cand}) // once
 	if len(pinned) != 1 || pinned[0] != b.String()+"@"+cand.String() {
@@ -217,7 +232,7 @@ func TestBind_RelayForwardRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	clk.Advance(probeWindow + time.Second)
-	bind.probeIn(inner.sent[len(inner.sent)-1].buf, &conn.StdNetEndpoint{AddrPort: cand})
+	bind.probeIn(encodeProbe(rs.key, probeEcho, self, b, clk.Now().Unix()), &conn.StdNetEndpoint{AddrPort: cand})
 	if len(pinned) != 1 {
 		t.Fatalf("a late echo pinned: %v", pinned)
 	}
