@@ -371,7 +371,8 @@ sealed secrets after the snapshot catalogue. Codec 12 is reserved for sealed S3 
 took 11. Codec 13 is unused (the mesh of 0.9.x, withdrawn in 0.10.0, 00 §Transport).
 Codec 14 is users, groups and permissions (docs/21, I-349): `Actor` and `System` on
 every command, ops 28–32 (`Invite`, `User`, `Group`, `Grant`, `Session`; ops 26–27 are
-unused), `ByUser` on a secret, and snapshot frame 14 with the users, groups, grants,
+unused), `ByUser` on a secret, and snapshot frame 15 (0.9.x wrote 13 and 14 with the
+mesh's fields; both are refused, `meta.ErrMeshSnapshot`) with the users, groups, grants,
 open invites and sessions after the secrets; the leader refuses the ops and an
 actor-carrying command with `ErrCodec` while a live member reads an older codec
 (`meta.CodecUsers`), and enforcement waits for the first user.

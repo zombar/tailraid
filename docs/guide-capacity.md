@@ -6,7 +6,7 @@ Growing and shrinking the volume (devices, disks, S3 buckets), the redundancy po
 
 | To add capacity | Do this |
 |---|---|
-| Add a device | `tailraid join <code>` on the new device, the code from `tailraid token` on any member |
+| Add a device | `tailraid join <ip> <token>` on the new device |
 | Add a disk to a device | `tailraid node add-disk /path/to/empty/dir` on that device |
 | Add an S3 bucket off-site | `tailraid node add-s3 <name> …` on one device |
 | Grow a device or disk in place | [Growing in place](#growing-in-place) |
@@ -92,11 +92,11 @@ Run these from any member. `tailraid node ls` shows who votes.
 
 ### A cheap always-on voter
 
-A voter needs no disk. A small cloud VM, joined with `--voter` and no `disks:` in its config, is a full member and gateway that stores nothing: it keeps the metadata available while your laptops are closed, and its `node ls` row says `no disks`. Two laptops plus such a VM are three voters, so the volume stays writable with the VM and either laptop up. It fetches the cluster key from another member and with it the S3 key, which matters because the VM is the device most likely to lead.
+A voter needs no disk. A small cloud VM on the tailnet, joined with `--voter` and no `disks:` in its config, is a full member and gateway that stores nothing: it keeps the metadata available while your laptops are closed, and its `node ls` row says `no disks`. Two laptops plus such a VM are three voters, so the volume stays writable with the VM and either laptop up. It fetches the cluster key from another member and with it the S3 key, which matters because the VM is the device most likely to lead.
 
 ```sh
-tailraid join <code> --voter    # on the VM; nothing under disks: in its config; set mesh.endpoint to its public address
+tailraid join 100.64.0.11 <token> --voter    # on the VM; nothing under disks: in its config
 tailraid install
 ```
 
-Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes. With its public address in `mesh.endpoint` the VM is also the device every other one can always reach, and the relay for pairs that cannot reach each other once that lands.
+Together, a diskless voter and a bucket give an always-on cluster of rented parts: the VM holds the votes and no data, the bucket holds the data and no votes.

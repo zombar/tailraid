@@ -233,7 +233,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1 to 10 and snapshots version 9 (02 §Codec versions;
+Log entries carry codec version 1 to 11 and 14, and snapshots version 15 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows
@@ -249,6 +249,28 @@ refuses to propose their commands with `ErrCodec` while any live active member r
 an older codec, the mounts delete and replace as before in that window, and the browser
 UI answers 503 with the hint to update the remaining nodes, so a cluster half-way
 through an update never writes an entry half of it cannot read (I-156).
+
+Users (codec 14, docs/21) follow the same rule: a cluster from before users upgrades in
+place, the leader refusing the users ops and every actor-carrying command while a live
+member reads less (I-349), and nothing is enforced until the first user exists.
+
+**From 0.9.x to 0.10.0: a new cluster.** 0.9.x ran on its own WireGuard mesh, which
+0.10.0 withdrew for Tailscale (00 §Transport). A 0.9.x node's rows carry mesh keys and
+no Tailscale identity, and its snapshots are frames 13 and 14, which 0.10.0 refuses
+(`meta.ErrMeshSnapshot`, naming this section), so a 0.9.x volume is not upgraded, it is
+re-created, as the move onto the mesh was:
+
+1. Copy the files off the volume (any mount, or `tailraid export <dir>` for the metadata
+   alone), then `tailraid umount` and `tailraid uninstall --forget-identity` on every
+   device (on macOS under `sudo`, as 0.9.x installed a root daemon).
+2. Install Tailscale (headscale works) on every device and the 0.10.0 binary
+   (`tailraid update --version v0.10.0` installs it but the old data directory will not
+   serve).
+3. Move the old data directory and disk contents aside, then `tailraid init` on the first
+   always-on device, `tailraid join <its Tailscale IP> <token>` on the others, `install`
+   and `mount` as on day one (§7); create the first admin with the invite `init` prints.
+4. Copy the files back through a mount, and make the users, groups and grants again with
+   the CLI (§12).
 
 ## 7. Day one: `tailraid init`
 

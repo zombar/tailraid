@@ -14,11 +14,11 @@ make soak-single   # one node with four disks
 make soak-full     # the long profile, ~1 h
 ```
 
-Each target cross-compiles the binary for the Docker engine's architecture, brings up `test/soak/docker-compose.yml` (a real mesh over the bridge, joined by code, `dev.enabled`, 20 s repair knobs, a worker sidecar per node that reaches the node's loopback NFS gateway, an S3 server for the bucket phase), drives every phase from the host with `cmd/soak`, writes `report.html` and `results.jsonl` in the repository root and tears the cluster down. It needs Docker Desktop (or any engine with Compose) and nothing else. Run it on its own: `make check` alongside it turns ten minutes into an hour.
+Each target cross-compiles the binary for the Docker engine's architecture, brings up `test/soak/docker-compose.yml` (fake tailnet identities, `dev.enabled`, 20 s repair knobs, a worker sidecar per node that reaches the node's loopback NFS gateway, an S3 server for the bucket phase), drives every phase from the host with `cmd/soak`, writes `report.html` and `results.jsonl` in the repository root and tears the cluster down. It needs Docker Desktop (or any engine with Compose) and nothing else. Run it on its own: `make check` alongside it turns ten minutes into an hour.
 
 ### Three local VMs
 
-On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest over a mesh of their own, each OS running `tailraid init` in turn while the other two join by its code, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a metadata export and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
+On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest on a throwaway tailnet, each OS running `tailraid init` in turn while the other two join it by name, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a metadata export and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
 
 | Step | Command | Notes |
 |---|---|---|
@@ -31,7 +31,7 @@ On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux 
 | | `make vms-down` | stops everything and keeps every state, so the next `vms-up` registers nothing |
 | | `make vms-destroy` | removes the instances and the control server's state; the images stay |
 
-The guests take about 120 GB of disk. [docs/vms.md](vms.md) explains what each step proves, how the networking is wired (the Tart guests' NAT, the Windows guest behind QEMU's user-mode NAT and the reflexive path it gives the mesh) and what to do when something does not come up.
+The guests take about 120 GB of disk. [docs/vms.md](vms.md) explains what each step proves, how the networking is wired (the Tart guests' NAT, the Windows guest behind QEMU's user-mode NAT, headscale over TLS from a CA the rig generates) and what to do when something does not come up.
 
 ## Releasing
 

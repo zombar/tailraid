@@ -223,9 +223,8 @@ daemon tells the operator when the disk under it is not encrypted.
   directories, a mirror's tree and the WAL directory are created 0700, and the store and
   the cache tighten their own directories to 0700 at open (a tree created by an older
   release was 0755: another user of the device could list shard names, never read them).
-  The config file and the keychain fallback are 0600 in 0700 directories. The config home
-  that holds `mesh.json` stays readable on purpose (docs/20 §3: the CLI of an unprivileged
-  user reads it beside a root daemon), which is why no umask is set (I-340).
+  The config file and the keychain fallback are 0600 in 0700 directories. No umask is
+  set: each path is created with its own mode (I-340).
 - **Ownership and width.** `serve` warns at start, and `status` and `check` on that
   device carry the same lines, when the config file, the data directory, a disk or a
   mirror is wider than its mode above or owned by another user than the daemon (the
@@ -245,7 +244,7 @@ daemon tells the operator when the disk under it is not encrypted.
 - **Tampering** is detected, not prevented: the receiver's SHA-256 in the shard header
   (`PutVerified`), the chunk hash on every read and the scrub turn an edited shard into a
   bad slot and a repair (docs/06). Prevention against root is not a software property:
-  root holds the cluster key and the mesh key too. Encrypting the shards under the
+  root holds the cluster key too. Encrypting the shards under the
   cluster key (as sealed S3 nodes do per object, docs/10 §4.7) would cover a lost disk
   without full-disk encryption; it is recorded as a later plan, not built.
 

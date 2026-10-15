@@ -104,7 +104,7 @@ stays in the node's config (15).
 - **Reading.** A node decrypts a secret only for its own use (an S3 bucket's
   credentials) or for the admin op `secret_get` that a consumer in the CLI calls (`node
   add-s3` for the bucket's credentials, the scrape for its TMDB key). There is no
-  `tailraid secret get`: no command prints a value. With users (docs/21 §7, after 1.0)
+  `tailraid secret get`: no command prints a value. With users (docs/21 §7)
   the store gains a personal name space, `user/<name>/…`, whose values `secret get`
   prints to their owner only; a system value still crosses to no CLI, and the two
   consumers open theirs inside the node (I-356).

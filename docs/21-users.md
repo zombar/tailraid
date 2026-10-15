@@ -1,25 +1,22 @@
 # 21 — Users, groups and permissions
 
 A person is not a device. Until this document a device was the only identity tailraid
-knew (its WireGuard key, docs/20 §2): every mount on a device was "that device's user",
+knew (its Tailscale `StableID`, docs/08): every mount on a device was "that device's user",
 every process on a member device could run every admin operation, POSIX modes were
 stored and never enforced, and audit logging was a non-goal. This document adds the
-second layer docs/20 §11 left room for: who a key belongs to. A user is a name with
+second layer: who a device's key belongs to. A user is a name with
 public keys, one per device they use; groups are the roles; grants map a user or a group
 to a folder with a role; every mutating operation is signed by a user's key and recorded;
 the browser signs a person in from a link their own CLI mints. Nothing here has a
 password.
 
-*Status (2026-10-14): designed; the plan is
-`~/.claude/plans/let-s-get-a-plan-concurrent-flame.md`. The first PR, the files-on-disk
-posture of docs/08 (I-340, I-341), is built, and so is `users-meta` (§1, §3, §4, the
-FSM halves of §6 and §7: the rows, ops 28–32, codec 14 and frame 14, `meta.Access`, the
-checks in apply) and `users-auth` (§2, the CLI of §9, the bindings file of §5, the
-personal secrets of §7: `internal/users`, the signed admin and member ops, the needs
-table, `init`'s admin invite and `user bootstrap`). The rest lands after the mesh
-(docs/20) and 1.0.0: `users-meta` (§1, §3, §4), `users-auth` (§2, §7, the CLI),
-`users-gateways` (§5), `users-web` (§6, with the session op of `users-meta`), `users-audit` (§8), `users-soak` (§10). The
-invariants I-342..I-359 are stubs in `test/invariants/users_stubs_test.go` until then.*
+*Status (2026-10-15): built and shipped in 0.10.0, on Tailscale. It was written on top of
+0.9.x's own WireGuard mesh, which 0.10.0 withdrew (docs/00 §Transport); nothing here
+depended on it. The plans were `~/.claude/plans/let-s-get-a-plan-concurrent-flame.md`
+and `i-think-0-9-x-has-transient-nest.md`. Codec 14 wraps any lower codec, so a
+cluster from before users upgrades in place: the leader refuses the users ops while a
+live member reads less (I-349), and enforcement waits for the first user. The users
+state is snapshot frame 15 (0.9.x's frames 13 and 14 are refused, docs/12 §6).*
 
 **What the standards ask for, and what this is.** ISO/IEC 27001 certifies an
 organisation's information security management system, not a program; Common Criteria
@@ -63,11 +60,10 @@ it does not reach. §11 maps each control to its mechanism here.
   presenting one code are serialised by the log and exactly one succeeds (as `O_EXCL` is,
   I-222). A guessed code never reaches the log.
 - **Bootstrap.** `tailraid init` mints an admin invite and prints its code beside the
-  join code; it never generates a user key, because on macOS it runs under `sudo` and the
-  root daemon has no session keychain (docs/20 §9). The person runs `tailraid user
-  create <name> <code>` unprivileged on the same device. `tailraid user bootstrap`, run on
+  join token; it never generates a user key: the key is the person's, made by `tailraid
+  user create <name> <code>`, run by that person on the same device. `tailraid user bootstrap`, run on
   a voter as the OS root and unsigned like `recover` (docs/12 §9), mints the same invite
-  for a cluster upgraded from codec 13 and for lockout recovery (every admin disabled or
+  for a cluster upgraded from a release before users and for lockout recovery (every admin disabled or
   every admin key lost): local root on a member is already full trust (docs/08 non-goals).
 - **Groups** are rows `Group{Idx, Name, Members}` with the user name pattern, created and
   changed by admins only. Two are built in: `admins`, whose members hold every right
@@ -158,7 +154,7 @@ it does not reach. §11 maps each control to its mechanism here.
 ## 4. Enforcement in the FSM (I-349)
 
 - **Every command carries its actor.** `Command` gains `Actor UserIdx` and `System bool`
-  at codec 14 (`meta.CodecUsers`, snapshot frame 14, ops 28–32: `Invite`, `User`,
+  at codec 14 (`meta.CodecUsers`, snapshot frame 15, ops 28–32: `Invite`, `User`,
   `Group`, `Grant`, `Session`; docs/02 §Codec versions). `CommandCodec` answers 14 when either is
   set. The FSM refuses the user-facing operations (`Create`, `Mkdir`, `Unlink`, `Rmdir`,
   `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit`)
@@ -251,7 +247,7 @@ it does not reach. §11 maps each control to its mechanism here.
   operation, proposes a session row `Session{Hash, User, Key, ExpiresAt, By}` (op 32:
   the SHA-256 of 32 random bytes, the user, the key ID that minted it, `users.session`
   (168 h) from now; at most 16 open sessions per user, the oldest replaced) and prints
-  `http://<this device's mesh IP>:20482/login?code=…`, a one-time code good for five
+  `http://<this device's Tailscale IP>:20482/login?code=…`, a one-time code good for five
   minutes that carries the session token to the browser sealed with AES-256-GCM under a
   key derived from the cluster key (a code copied from a browser's history or a proxy's
   log yields no token to anyone without it); `--node <name>` only chooses
@@ -265,7 +261,7 @@ it does not reach. §11 maps each control to its mechanism here.
   at its next request on every node.
 - **Across nodes.** A browser cookie belongs to one origin and each node's page is its
   own origin (`<its address>:20482`), so a link from one node's page to another's (the
-  member menu of the Stats page, docs/17; the dashboard's Mesh section, docs/20 §10)
+  member menu of the Stats page, docs/17)
   carries a hand-off: the page asks its node for a one-time code minted from the
   session (`GET /api/handoff?to=…`, five minutes, single use) and the target's `/login`
   sets its own cookie for the same session and continues to the page asked for. A person
@@ -278,7 +274,7 @@ it does not reach. §11 maps each control to its mechanism here.
   users, groups or grants (docs/13 §9). The lookdev is `assets/lookdev/signin.html` and
   the chip in `components.html` and `dashboard.html`.
 - **Phishing resistance** (NIST SP 800-63B §3.2.5) is not claimed: the code travels in a
-  URL the person pastes; the mesh is the transport boundary.
+  URL the person pastes; the tailnet is the transport boundary.
 
 ## 7. Secrets (I-356; docs/19 amended)
 
@@ -298,7 +294,7 @@ it does not reach. §11 maps each control to its mechanism here.
   and never written out, and the read is an audit record. The admin route's `secret_get`
   answers a personal name to its owner and a system name to an admin, and nothing else.
 - **Rows.** `Secret.By NodeIdx` keeps its meaning for rows written before codec 14;
-  `ByUser UserIdx` is added at frame 14. Bounds: 256 system secrets and 64 per user. The
+  `ByUser UserIdx` is added at frame 15. Bounds: 256 system secrets and 64 per user. The
   cluster key, the per-name HKDF and AES-256-GCM, the key fetch and soak phase 24 are
   untouched (`Store.Opened(prefix)` already filters by prefix).
 
@@ -413,8 +409,7 @@ Deny entries and ACL ordering; role hierarchies and separation-of-duty constrain
 the `admins`/everyone split; quotas; user-signed Raft commands (§4); one cookie for every
 node (each node's page is its own origin, §6); passkeys and WebAuthn (a later sign-in method the session layer would carry);
 a second factor; LDAP or OIDC federation; enforcing POSIX modes (they stay stored, docs/07);
-per-user S3 gateway keys (the gateway is deferred, docs/10); client peers that are not
-nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and nonce
+per-user S3 gateway keys (the gateway is deferred, docs/10); a verifier-issued challenge in place of the timestamp and nonce
 (§2); a page that manages users, groups or grants (docs/13 §9).
 
 ## Invariants
@@ -471,8 +466,8 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   anywhere, the writers under `/.tailraid`); the flusher's `Commit` carries the actor
   the WAL recorded for the write, and a `Commit` the FSM refuses drops that inode's
   dirty data at the gateway, which answers `EACCES` and retries nothing; before the
-  first user, or while a member reads codec 13, a cluster behaves as before, and a
-  13-reader refuses a codec-14 entry.
+  first user, or while a member reads a codec older than 14, a cluster behaves as before, and a
+  reader of an older codec refuses a codec-14 entry.
 - **I-350** — A device maps `uid:<n>` and `smb:<account>` to users in
   `<data_dir>/bindings.json` (0600), changed only by signed operations on that node (a
   user for their own credential, an admin for any); `user create` and `user key add`
@@ -556,7 +551,7 @@ stub in `test/invariants/` meanwhile.
 | I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
 | I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
 | I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths`, `TestAccess_SnapshotRestoreByRole` |
-| I-349 | `TestFSM_ActorEnforced_Table`, `TestFlusher_RefusedCommitDropsDirtyData`, `TestFlusher_PreUsersDirtyDataCommitsAsSystem`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
+| I-349 | `TestCluster_Codec14RefusedWhileMemberOld`, `TestDecodeState_MeshFramesRefused`, `TestFSM_ActorEnforced_Table`, `TestFlusher_RefusedCommitDropsDirtyData`, `TestFlusher_PreUsersDirtyDataCommitsAsSystem`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
 | I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
 | I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestNFS_AccessFollowsRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
 | I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied`, `TestSMB_ReadOnlyUserReads` |

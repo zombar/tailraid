@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><b>One RAID-like volume across every device you own.</b><br>
+<p align="center"><b>One RAID-like volume across every device on your tailnet.</b><br>
 Erasure-coded, deduplicated, snapshotted, mounted by the OS's own client. One static binary.</p>
 
 <p align="center">
@@ -15,7 +15,7 @@ Erasure-coded, deduplicated, snapshotted, mounted by the OS's own client. One st
   <a href="docs/README.md">Design</a>
 </p>
 
-tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into a single volume. Files are cut into content-addressed chunks, each chunk is Reed-Solomon coded into `k` data and `m` parity shards spread over different devices and disks, and the metadata is replicated by Raft on the devices you trust to stay on. Any `m` disks or devices can fail and the volume keeps working, then repairs itself. It appears as an ordinary folder on macOS, Linux and Windows, the devices talk over a WireGuard mesh the binary runs itself, and nothing ever leaves your devices.
+tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into a single volume. Files are cut into content-addressed chunks, each chunk is Reed-Solomon coded into `k` data and `m` parity shards spread over different devices and disks, and the metadata is replicated by Raft on the devices you trust to stay on. Any `m` disks or devices can fail and the volume keeps working, then repairs itself. It appears as an ordinary folder on macOS, Linux and Windows, and nothing ever leaves your tailnet.
 
 ## Features
 
@@ -31,11 +31,12 @@ tailraid pools the disks of your laptops, desktops, NAS boxes and cloud VMs into
 | **Browser UI** | A dashboard, a file browser that streams audio and video with tiles and an album view, a Media tab for films, shows and music, full-text search, rendered markdown and a Stats page with the cluster's history. Works from your phone. |
 | **Search** | Names, audio tags and text contents, from the browser or `tailraid search`. The index lives in the volume, so every device has it. |
 | **Offline folders** | Pin a folder to a device and it reads from that device with every other node away. |
-| **Private by construction** | Every byte between devices travels inside WireGuard, every device is a key, and only a device the cluster admitted can reach a node. No account, no login, no VPN to install: a join code is the whole of it. |
+| **Users and permissions** | People get their own keys from an admin's invite; read, write and admin grants on folders hold on every mount and in the browser, and every change is in a tamper-evident audit log. |
+| **Private by construction** | Only members of your tailnet can reach a node; every request is checked against Tailscale's identity of the caller. |
 | **One binary** | The same static executable is the daemon, the gateways and the CLI. Signed releases, `tailraid update` with rollback, and a service installer for launchd, systemd and Windows. |
 
 > [!IMPORTANT]
-> Every pair of devices needs a direct path (a LAN, IPv6, a port forward or the router's own port mapping, or the always-on cloud voter's public address) until the relay through a member lands ([docs/20](docs/20-mesh.md) §6). On macOS the service runs as root and `init`, `join`, `install` and `reset` need `sudo`; on Linux `join` does. Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
+> Every device needs Tailscale (headscale works). Windows needs Windows 11 24H2 or newer, whose SMB client can be told the port tailraid listens on; the Windows mount is experimental, see [docs/windows-checklist.md](docs/windows-checklist.md). tailraid does not encrypt data at rest: whoever holds a disk, a bucket or a mirror can read what is on it.
 
 ## Install
 
@@ -53,7 +54,7 @@ Once installed, `tailraid update` fetches the latest release; no token or login 
 On the first always-on device:
 
 ```sh
-tailraid init         # creates the volume and prints a join code
+tailraid init         # creates the volume and prints a join token
 tailraid install      # runs tailraid as a service (launchd / systemd / Windows service)
 tailraid mount        # ~/TailRAID (T: on Windows)
 ```
@@ -61,14 +62,10 @@ tailraid mount        # ~/TailRAID (T: on Windows)
 On each other device:
 
 ```sh
-tailraid join <code>     # the code init printed, or `tailraid token` on any member; --voter on other always-on devices
+tailraid join 100.64.0.11 <token>     # the first device's Tailscale IP or name; --voter on other always-on devices
 tailraid install
 tailraid mount
 ```
-
-The code carries the cluster's identity, the join token and where to find the device
-that printed it; the joiner gets its address from the cluster and its first tunnel in
-the same step, and nothing else runs on the device ([docs/20](docs/20-mesh.md)).
 
 Write a file on one device and read it on any other. `tailraid status` shows the whole cluster and prints the browser UI's address; `tailraid dashboard` opens it.
 

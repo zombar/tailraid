@@ -82,7 +82,7 @@ func Serve(ctx context.Context, addr string, h *Handler) error      // net.Liste
 - **Mount**: a single export `/`. Any dirpath the client sends is accepted. Auth flavor
   `AuthFlavorNull`; the
   listener is bound to `127.0.0.1` so the OS, not NFS, is the security boundary (`docs/08`).
-  With users (docs/21 §5, after 1.0) the flavor is `AuthFlavorUnix`: the AUTH_SYS uid of
+  With users (docs/21 §5) the flavor is `AuthFlavorUnix`: the AUTH_SYS uid of
   every call is mapped through the device's bindings to the actor, an unbound uid is
   nobody, and the duplicate request cache is keyed on the credential too (I-350, I-351).
 - **Handles are 16 bytes**: `magic u32 | gen u32 | ino u64`, big-endian. `ToHandle` resolves
