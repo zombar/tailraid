@@ -21,6 +21,12 @@ import (
 // own RPC, which is where the macOS write ceiling of a few MB/s came from.
 const TransferSize = 1 << 20
 
+// DarwinTimeout is the macOS mount's soft timeout, 60 s per RPC and two retries as on
+// Linux's TCP default: inside it a WRITE waits at a cap (vfs.DefaultCapWait) without the
+// client failing it (docs/07, I-361). Without timeo, macOS mounts with timeo=10,retrans=10,
+// and a Finder copy that met a 20 s cap wait failed with ETIMEDOUT (error 100060).
+const DarwinTimeout = "timeo=600,retrans=2"
+
 // Command returns the program and arguments that mount the NFS gateway at nfsAddr
 // (host:port) onto target for the given GOOS. Windows mounts over SMB (SMBCommand).
 // On macOS the options ask for TransferSize; a kernel that refuses them is retried with
@@ -42,7 +48,7 @@ func command(goos, nfsAddr, target string, sized bool) (string, []string, error)
 	}
 	switch goos {
 	case "darwin":
-		opts := fmt.Sprintf("port=%s,mountport=%s,vers=3,tcp,nolocks,soft", port, port)
+		opts := fmt.Sprintf("port=%s,mountport=%s,vers=3,tcp,nolocks,soft,%s", port, port, DarwinTimeout)
 		if sized {
 			opts += fmt.Sprintf(",rsize=%d,wsize=%d", TransferSize, TransferSize)
 		}

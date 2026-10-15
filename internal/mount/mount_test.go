@@ -9,11 +9,12 @@ import (
 	"time"
 )
 
+// Invariant: I-361
 func TestCommand_PerOS(t *testing.T) {
 	cases := []struct {
 		goos, want string
 	}{
-		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,rsize=1048576,wsize=1048576 127.0.0.1:/ /Users/me/TailRAID"},
+		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,timeo=600,retrans=2,rsize=1048576,wsize=1048576 127.0.0.1:/ /Users/me/TailRAID"},
 		{"linux", "mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ /Users/me/TailRAID"},
 	}
 	for _, tc := range cases {
@@ -28,7 +29,7 @@ func TestCommand_PerOS(t *testing.T) {
 	// the fallback when a kernel refuses the sizes: the same mount without them (macOS);
 	// Linux takes its sizes from FSINFO and has none to drop
 	plain := []struct{ goos, want string }{
-		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft 127.0.0.1:/ /Users/me/TailRAID"},
+		{"darwin", "mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,timeo=600,retrans=2 127.0.0.1:/ /Users/me/TailRAID"},
 		{"linux", "mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ /Users/me/TailRAID"},
 	}
 	for _, tc := range plain {

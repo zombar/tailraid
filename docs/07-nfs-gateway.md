@@ -159,7 +159,7 @@ the ports instead.
 
 | OS | Listener | Mount |
 |---|---|---|
-| macOS | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,rsize=1048576,wsize=1048576 127.0.0.1:/ ~/TailRAID` |
+| macOS | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,vers=3,tcp,nolocks,soft,timeo=600,retrans=2,rsize=1048576,wsize=1048576 127.0.0.1:/ ~/TailRAID` |
 | Linux | `127.0.0.1:20490` | `mount -t nfs -o port=20490,mountport=20490,nfsvers=3,tcp,nolock,noacl,soft 127.0.0.1:/ <dir>` |
 
 `tailraid mount` runs these for you (`internal/mount`); it retries via `sudo` when
@@ -198,7 +198,13 @@ transparent rather than an I/O error:
 | Client | Soft timeout before `EIO` | Verified |
 |---|---|---|
 | Linux (`timeo=600,retrans=2`, TCP default) | 60 s per RPC, retried twice | by the compose soak (phase 12) |
-| macOS (`timeo=600` default on TCP) | 60 s per RPC | manual check below |
+| macOS (`timeo=600,retrans=2`, set by the mount) | 60 s per RPC, retried twice | `nfsstat -m`, and the manual check below |
+
+macOS has no 60 s default: a mount without `timeo` runs with `timeo=10,retrans=10`
+(`nfsstat -m`, macOS 26), which gives up on a WRITE waiting at a cap well before
+`CapWait`, so a Finder copy that outran replication failed with "an unexpected error
+occurred (error code 100060)", `ETIMEDOUT` (2026-10-15). The mount sets the timeout
+itself (I-361).
 
 Manual check (macOS, before a release): copy a file larger than 512 MiB onto the mount while
 the uplink is throttled to ~5 MiB/s; `cp` slows down but finishes without an I/O error and
@@ -323,6 +329,11 @@ device"), not `EIO`.
   over its reply stop. Before, the reply writer returned alone, the handlers blocked on
   it for good, and the reader went on accepting requests until every one of the
   `InFlight` slots was held: the connection hung with nothing to close it.
+- **I-361** — The macOS mount names its soft timeout, `timeo=600,retrans=2` (60 s per
+  RPC, retried twice, as Linux's TCP default), with and without the transfer sizes, so a
+  WRITE waiting at a cap for up to `CapWait` (20 s, I-79) is never failed by the client.
+  Before, the mount named none and macOS used `timeo=10,retrans=10`: Finder copies that
+  outran replication failed with error 100060 (`ETIMEDOUT`).
 
 ## Tests
 
@@ -342,6 +353,7 @@ device"), not `EIO`.
 | I-260 | `TestDRC_RetransmissionRunsOnce`, `TestDRC_Bounded_CoversOnlyChanges` |
 | I-266 | `TestNFS_FailureBodies` |
 | I-269 | `TestConn_WriteFailure_ClosesTheConnection` |
+| I-361 | `TestCommand_PerOS` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |
 | I-167 | `TestNFS_ConcurrentRPCsOnOneConnection`, `TestNFS_InFlightBound`, `TestNFS_FSInfo_AdvertisesFrameCap`, `TestConn_RepliesInCompletionOrder`, `TestConn_InFlightBound`, `TestConn_ReadsWholeFrame_CapsIt` |
