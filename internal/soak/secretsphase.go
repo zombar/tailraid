@@ -117,6 +117,16 @@ func phaseSecrets(ctx context.Context, r *Run) error {
 		r.skip("one node: nothing to replicate to")
 		return nil
 	}
+	// the setter is a node the environment can take down for (e): on a live cluster the
+	// device running verify, listed first, is never killed, so another sets
+	if self := r.Env.Caps().Self; self != "" && nodes[0].Name == self {
+		for i := range nodes {
+			if nodes[i].Name != self {
+				nodes[0], nodes[i] = nodes[i], nodes[0]
+				break
+			}
+		}
+	}
 	name := fmt.Sprintf("soak/%016x", r.Rng.Uint64())
 	value := hex.EncodeToString(r.randomBytes(24))
 	u := r.undoer(ctx)
