@@ -6,6 +6,7 @@ Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
 ### Changes
 
+- vms: the Windows image keeps C:\tailraid on the machine Path after the Tailscale MSI ([549c15c](https://github.com/zombar/tailraid/commit/549c15c))
 - CLAUDE.md: tailraid on Tailscale again, the mesh withdrawn in 0.10.0, users kept ([2a70a00](https://github.com/zombar/tailraid/commit/2a70a00))
 - meta: the users state is snapshot frame 15; 0.9.x's frames 13 and 14 are refused by name (I-349) ([47b1dac](https://github.com/zombar/tailraid/commit/47b1dac))
 - soak: a live run sets its secret through a node it can kill, and judges a live kill by the leader's rows ([82979b6](https://github.com/zombar/tailraid/commit/82979b6))
