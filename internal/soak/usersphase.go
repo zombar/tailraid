@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -404,6 +405,7 @@ func phaseGrants(ctx context.Context, r *Run) error {
 		if err != nil {
 			m.ListRoot = outcome(err)
 		} else {
+			slices.Sort(names) // a mount returns dirents in cookie order, not by name: the set is what the role decides
 			m.ListRoot = strings.Join(names, " ")
 		}
 		return m
