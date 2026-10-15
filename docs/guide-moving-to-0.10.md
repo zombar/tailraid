@@ -68,10 +68,8 @@ Install Tailscale on every device and sign it in to the same tailnet (`tailscale
 
 ```sh
 tailraid update
-tailraid version            # v0.10.1 or later
+tailraid version            # v0.10.0 or later
 ```
-
-Use 0.10.1 or later: 0.10.0's CLI gave a restore ten seconds before it gave up, which a whole volume does not fit in.
 
 ## 4. Create the new cluster
 
