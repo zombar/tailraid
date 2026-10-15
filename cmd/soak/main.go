@@ -33,6 +33,7 @@ func run() int {
 	seed := flag.Int64("seed", time.Now().UnixNano(), "workload seed")
 	only := flag.String("phases", "", `comma-separated phase numbers to run ("15", "1,13"); default: all`)
 	evidence := flag.String("evidence", "", "folder for each failing phase's node logs and status (default: beside the report, <out>-evidence)")
+	usersFirst := flag.Bool("users-first", false, "make the first admin before phase 1, so every phase runs with users enforced (phase 0, docs/09 §6)")
 	flag.Parse()
 
 	var p soak.Profile
@@ -76,14 +77,17 @@ func run() int {
 	if *evidence == "" {
 		*evidence = strings.TrimSuffix(*out, filepath.Ext(*out)) + "-evidence"
 	}
-	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed, EvidenceDir: *evidence} //nolint:gosec // workload
+	r := &soak.Run{Env: env, Profile: p, Log: log, Out: f, Rng: rand.New(rand.NewSource(*seed)), Seed: *seed, EvidenceDir: *evidence, UsersFirst: *usersFirst} //nolint:gosec // workload
 	if *only != "" {
 		if r.Phases = soak.StandardPhases(strings.Split(*only, ",")...); len(r.Phases) == 0 {
 			fmt.Fprintln(os.Stderr, "no phase numbered", *only)
 			return 2
 		}
 	}
-	log.Info("soak run", "profile", p.Name, "seed", *seed, "topology", *topology, "nodes", n)
+	if *usersFirst {
+		r.Flags = append(r.Flags, "users-first")
+	}
+	log.Info("soak run", "profile", p.Name, "seed", *seed, "topology", *topology, "nodes", n, "users_first", *usersFirst)
 	sum, runErr := r.Execute(ctx) // an aborted or cancelled run still renders its partial report
 	if runErr != nil {
 		fmt.Fprintln(os.Stderr, runErr)

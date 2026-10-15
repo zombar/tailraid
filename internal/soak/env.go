@@ -154,3 +154,11 @@ type FsckResult struct {
 	Listed  []string
 	Detail  string
 }
+
+// ReservedEnv reads and writes /.tailraid (thumbnails, stats, the index, the audit log)
+// as the node's own code does. Once the cluster has users no user's mount sees that tree,
+// admins included (docs/21 §3): phase 20 then reads and plants its stats segments here,
+// and records them skipped in an environment without it.
+type ReservedEnv interface {
+	ReservedVolume(node NodeRef) (Volume, bool)
+}

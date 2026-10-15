@@ -69,10 +69,7 @@ func (w *webClient) rangeGet(ctx context.Context, p string, from, to int) (int, 
 func phaseSearch(ctx context.Context, r *Run) error {
 	var clients []*webClient
 	var names []string
-	hc := r.Env.WebClient()
-	if hc == nil {
-		hc = webHTTP
-	}
+	hc := r.webClientFor()
 	for _, n := range r.gateways() {
 		base, err := r.Env.WebURL(ctx, n)
 		if err != nil || base == "" {

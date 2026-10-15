@@ -39,6 +39,7 @@ type composeEnv struct {
 	idMu    sync.Mutex
 	cid     [16]byte
 	nodeIDs map[string]string
+	act     *users.Identity // ActAs: every mutating RPC is signed by it (under idMu)
 
 	soak.Admin
 	dir   string // compose project directory
@@ -276,8 +277,12 @@ type rpcResp struct {
 }
 
 func (e *composeEnv) call(ctx context.Context, ref soak.NodeRef, method, path string, body []byte) ([]byte, error) {
+	sig, err := e.actSig(ctx, ref, method, path, body)
+	if err != nil {
+		return nil, err
+	}
 	var resp rpcResp
-	if err := e.post(ctx, e.node(ref), "/rpc", rpcReq{Method: method, Path: path, Body: body}, &resp); err != nil {
+	if err := e.post(ctx, e.node(ref), "/rpc", rpcReq{Method: method, Path: path, Body: body, Sig: sig}, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Error != "" {
@@ -657,6 +662,38 @@ func (e *composeEnv) identityOf(ctx context.Context, n soak.NodeRef) ([16]byte, 
 		}
 	}
 	return [16]byte{}, "", fmt.Errorf("status of %s lists no row %d", n.Name, n.Idx)
+}
+
+// ActAs signs every mutating RPC the environment sends from now on as id (docs/21 §2):
+// a run with -users-first makes the admin before phase 1, and the cluster then refuses
+// an unsigned admin or member op (phase 0, I-362).
+func (e *composeEnv) ActAs(id *users.Identity) {
+	e.idMu.Lock()
+	defer e.idMu.Unlock()
+	e.act = id
+}
+
+// actSig is the Tailraid-Sig of a mutating request to ref as the acting identity, ""
+// when nobody acts or the request reads.
+func (e *composeEnv) actSig(ctx context.Context, ref soak.NodeRef, method, path string, body []byte) (string, error) {
+	if method == http.MethodGet || !strings.HasPrefix(path, "/v1/") { // before the lock: identityOf reads status under it
+		return "", nil
+	}
+	e.idMu.Lock()
+	id := e.act
+	e.idMu.Unlock()
+	if id == nil {
+		return "", nil
+	}
+	cid, nodeID, err := e.identityOf(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	nonce, err := users.NewNonce()
+	if err != nil {
+		return "", err
+	}
+	return users.Sign(*id, cid, nodeID, method, path, body, time.Now().Unix(), nonce).String(), nil
 }
 
 // MountUID is the worker's: it mounts the volume as root (AUTH_SYS uid 0).

@@ -107,9 +107,13 @@ func (e *harnessEnv) SnapshotOp(ctx context.Context, n soak.NodeRef, op rpc.Admi
 			out = []soak.SnapshotInfo{{Mirror: e.mirror.name, Name: sn.Name, State: sn.State.String()}}
 		}
 	default:
+		actor := e.actor(e.node(n))
 		e.mu.RLock()
 		fs := e.fsOf(n)
 		e.mu.RUnlock()
+		if actor != 0 { // the signer's view, as node.adminOps' restoreOp
+			fs = fs.As(actor)
+		}
 		p := path.Join("/", op.Path)
 		src := path.Join("/", vfs.SnapshotDir, strings.ReplaceAll(op.Mirror, "/", "-"), op.Name, p)
 		switch op.Op {
