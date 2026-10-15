@@ -189,3 +189,38 @@ func TestSMB_ReadOnlyUserReads(t *testing.T) {
 		t.Fatalf("the refused writes changed the file: %v %v", fi, err)
 	}
 }
+
+// A failed copy's own cleanup works for a user with Write alone: the delete-on-close of
+// a file the handle created goes through the account's view, and the unwritten scratch
+// it leaves is purged from the trash. Before, the delete went through the node's own
+// view, which the FSM refuses outside /.tailraid once users exist, so the partial file
+// stayed; and the scratch purge asked lee for Admin.
+// Invariant: I-220, I-229, I-352
+func TestSMB_OwnCleanup_WriteRoleOnly(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	kim, lee := f.Users()
+	must(t, fs.As(kim).MkdirAll("/w", 0o755))
+	f.Grant(kim, "/w", lee, meta.RoleWrite)
+	a := smbgw.NewWith(fs, f.FSM, bindMap(map[string]string{"smb:lee": "lee"}))
+	ls := a.ForUser("lee").(*smbgw.FS)
+	must(t, ls.WriteFile("/w/copy.bin", nil, 0o644)) // the handle's CREATE, nothing written
+	if err := ls.CanDeleteOwn("/w/copy.bin"); err != nil {
+		t.Fatalf("can lee delete their own file: %v", err)
+	}
+	if err := ls.DeleteOwnFile("/w/copy.bin"); err != nil {
+		t.Fatalf("lee's own cleanup: %v", err)
+	}
+	if _, err := ls.Stat("/w/copy.bin"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the file is still there: %v", err)
+	}
+	// the server's delete-on-close by inode: the unwritten scratch leaves no trash entry
+	was := f.FSM.Stats().TrashInodes
+	must(t, ls.WriteFile("/w/scratch.bin", nil, 0o644))
+	if err := ls.DeleteFileIno("/w/scratch.bin", uint64(f.InodeOf(fs, "/w/scratch.bin")), true); err != nil {
+		t.Fatalf("lee's own cleanup by inode: %v", err)
+	}
+	if n := f.FSM.Stats().TrashInodes; n != was {
+		t.Fatalf("%d entries in the trash after the scratch's cleanup, want %d", n, was)
+	}
+}

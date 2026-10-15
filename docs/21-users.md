@@ -192,13 +192,17 @@ it does not reach. §11 maps each control to its mechanism here.
   | Writer | Operation |
   |---|---|
   | the trash sweep | `Purge` of an entry past `trash.retention` |
+  | an SMB handle's own cleanup of a file it created and wrote nothing into (docs/15, I-229) | `Purge` of that entry, after the account's own view removed the name |
   | the flusher, for data written before the first user existed | `Commit` of any inode (its bytes alone change) |
   | the thumbnail writer, and the browser's `PUT /api/thumb` after the handler has checked `Read` on the source file | `Create`, `Commit` under `/.tailraid/thumbs` |
   | the stats sampler, the search indexer and catalogue, the audit writer | `Create`, `Commit`, `Unlink` under `/.tailraid/stats`, `/.tailraid/index`, `/.tailraid/audit` |
-  | the scrape | nothing: it runs as the admin who started it and writes sidecars under their actor |
+  | the scrape | nothing: it runs as the admin who started it and writes sidecars under their actor, through a session the CLI opens with `web login` and ends when done |
 
   A web upload's temp file is created under the user's actor beside its target (docs/13
-  §4) and published under it; nothing of a user's lands as `System`.
+  §4) and published under it, and its name carries that user (`.<name>.<node>.u<user>.tailraid-upload`):
+  the hourly sweep removes a stale temp as the user who started it, so nothing of a
+  user's lands as `System`. A temp the sweep may not remove (its user lost `Write` there,
+  or it is from before the first user) stays, and the sweep goes on to the next.
 - **The flusher's `Commit`** carries the actor who wrote: the WAL record gains the actor
   per inode, so a flush after a gateway restart still names them, and the FSM checks
   every `Commit` for `Write` on its inode. A grant revoked, or a user disabled, between
@@ -587,9 +591,9 @@ stub in `test/invariants/` meanwhile.
 | I-349 | `TestCluster_Codec14RefusedWhileMemberOld`, `TestDecodeState_MeshFramesRefused`, `TestFSM_ActorEnforced_Table`, `TestFlusher_RefusedCommitDropsDirtyData`, `TestFlusher_PreUsersDirtyDataCommitsAsSystem`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
 | I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
 | I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestNFS_AccessFollowsRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
-| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied`, `TestSMB_ReadOnlyUserReads` |
+| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied`, `TestSMB_ReadOnlyUserReads`, `TestSMB_OwnCleanup_WriteRoleOnly` |
 | I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestVFS_As_RoleBeforeExistence`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
-| I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestCodes_TokenNotRecoverableFromCode`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
+| I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestCodes_TokenNotRecoverableFromCode`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin`, `TestCLI_ScrapeWriter_SignsIn` |
 | I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_AdminRoutes_ByRole`, `TestWebUI_Upload_RoleBeforeExistence`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
 | I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |

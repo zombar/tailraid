@@ -647,7 +647,11 @@ func (f *FS) purgeScratch(ino meta.Ino) {
 	if !f.unwritten(ino) {
 		return
 	}
-	if err := f.Purge(ino); err != nil {
+	// as the node's own writer: the FSM wants Admin on the folder for a user's Purge,
+	// and a user who may create and delete there with Write alone made this file and
+	// removed it just now, so its scratch would otherwise pile up in the trash (I-229)
+	sys := &FS{fsCore: f.fsCore, system: true}
+	if err := sys.Purge(ino); err != nil {
 		return // left in the trash, where the retention purge takes it
 	}
 	f.ov.Drop(ino)

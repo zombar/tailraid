@@ -210,7 +210,7 @@ func (f *FS) CanDeleteOwn(p string) error {
 // DeleteOwnFile is that handle's delete-on-close: an own cleanup, which a protected folder
 // takes (I-220).
 func (f *FS) DeleteOwnFile(p string) error {
-	return f.refused(&f.warnDelete, "delete", p, wrap(f.fs.RemoveOwn(p)))
+	return f.refused(&f.warnDelete, "delete", p, wrap(f.view().RemoveOwn(p)))
 }
 
 // POSIX type bits of a Stat mode, which is what the server reads.

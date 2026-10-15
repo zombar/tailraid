@@ -139,6 +139,14 @@ func (s *Server) fs(r *http.Request) *vfs.FS {
 	return s.o.FS
 }
 
+// actor is the request's user, 0 before the cluster has users.
+func (s *Server) actor(r *http.Request) meta.UserIdx {
+	if se, ok := sessionIn(r); ok {
+		return se.user.Idx
+	}
+	return 0
+}
+
 // readable reports whether the request's user holds Read on ino (always, before users).
 func (s *Server) readable(r *http.Request, ino meta.Ino) bool {
 	se, ok := sessionIn(r)

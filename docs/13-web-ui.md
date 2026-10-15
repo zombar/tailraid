@@ -240,7 +240,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   sends the part again from where it was and adopts the 409's offset: the temp is the
   node's own, so its name is not the browser's to know). Temps show in
   listings with `"upload": true`, are skipped by the player, and are removed by the node's
-  hourly sweep once idle for 24 h (I-81).
+  hourly sweep once idle for 24 h (I-81), as the user whose upload made the temp: its
+  name ends `.<node>.u<user>.tailraid-upload` once the cluster has users (docs/21 §4).
 - Before any body byte is read the gateway refuses what cannot succeed: no length (411),
   an announced size the volume cannot hold at the current policy (507, from the cached
   status), a fifth concurrent upload (503 with `Retry-After: 2`); and it drops an upload
@@ -1151,7 +1152,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-72 | `TestWebUI_Paths` |
 | I-73 | `TestWebUI_New_RequiresAuthorizer`, `TestWebUI_StatusCached`, `TestWebUI_StaticAssets`, `TestConfig_ListenWeb` |
 | I-226 | `TestFSM_Rename_NoReplace_Exist`, `TestWebUI_Put_TwoGateways_OneName_OneWhole`, `TestWebUI_Put_TwoGateways_IfNoneMatch_One412`, `TestSoak_MultiUserAgainstHarness` |
-| I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable` |
+| I-81 | `TestWebUI_Put_AtomicOverwrite_DisconnectKeepsOld`, `TestWebUI_Put_ShortBody_400_NoTemp`, `TestWebUI_Put_Parts_Table`, `TestWebUI_Put_Resume_AfterFailedPart`, `TestWebUI_SweepUploads_AgeTable`, `TestWebUI_SweepUploads_AsTheUploader` |
 | I-82 | `TestWebUI_Put_NoContentLength_411`, `TestWebUI_Put_FreeSpace_507`, `TestWebUI_Put_Concurrency_503`, `TestWebUI_Put_BodyStall_DropsTemp` |
 | I-315 | `TestStatic_CSPAdmitsEveryImageSource` |
 | I-127 | `TestWebUI_HostCheckFramingAndToken` |
