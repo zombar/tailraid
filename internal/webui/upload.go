@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -133,6 +134,24 @@ func parsePart(r *http.Request) (partRange, int, error) {
 	return partRange{start: a, end: b + 1, total: total}, 0, nil
 }
 
+// uploadAllowed reports whether the session's user holds Write where an upload lands:
+// on the nearest existing ancestor of the path, since the folders below it are created
+// by the upload (always, before the cluster has users).
+func (s *Server) uploadAllowed(r *http.Request, parts []string) bool {
+	se, ok := sessionIn(r)
+	if !ok {
+		return true
+	}
+	for n := len(parts); ; n-- {
+		if in, err := s.o.Store.Resolve(parts[:n]); err == nil {
+			return s.o.Store.Access(se.user.Idx, in.Ino) >= meta.RoleWrite
+		}
+		if n == 0 {
+			return false
+		}
+	}
+}
+
 // put stores a whole file or one part of it (docs/13 §4): the bytes go through the vfs,
 // the NFS write path (overlay, fsynced WAL, flusher), one WAL record per chunk-sized
 // read (I-70), into the temp beside the target; the last byte renames it over the target.
@@ -145,6 +164,11 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	if reserved(parts) { // the thumbnails are the node's (I-160)
 		early(w)
 		writeErr(w, http.StatusBadRequest, "put "+canonical+": not a user file")
+		return
+	}
+	if !s.uploadAllowed(r, parts) { // Write where it lands, before anything about the name is told (I-355)
+		early(w)
+		s.fail(w, fmt.Errorf("put %s: %w", canonical, syscall.EACCES))
 		return
 	}
 	in, err := s.o.Store.Resolve(parts)

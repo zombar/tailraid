@@ -668,7 +668,8 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 }
 
 // members authorizes like every other endpoint (a member, before the body is read); a
-// member's update_endpoints names its own row only (docs/20 §5, I-322).
+// member's unsigned ops (update_endpoints, set_version) name its own row only (docs/20
+// §5, I-322).
 func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 	src, ok := SourceAddr(r)
 	if !ok {
@@ -694,8 +695,10 @@ func (s *Server) members(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad member op")
 		return
 	}
-	if op.Op == "update_endpoints" && caller.Node.Idx != op.NodeIdx {
-		writeErr(w, http.StatusForbidden, "update_endpoints: a member publishes its own candidates only")
+	// a principal without a row index comes from an authorizer that does not tell members
+	// apart (the join seed's bootstrap row, the test harness's AllowAll): nothing to pin to
+	if op.SelfOnly() && caller.Node.Idx != 0 && caller.Node.Idx != op.NodeIdx {
+		writeErr(w, http.StatusForbidden, op.Op+": a member names its own row only")
 		return
 	}
 	need := op.Needs()

@@ -132,6 +132,15 @@ func (f *FS) checkWrite(ino meta.Ino, name string) error {
 	return nil
 }
 
+// checkAdmin refuses an operation on ino without Admin: a revert or a restore from a
+// snapshot into the live tree (docs/21 §3, I-348).
+func (f *FS) checkAdmin(ino meta.Ino, name string) error {
+	if f.enforced() && f.role(ino) < meta.RoleAdmin {
+		return f.refuse("admin", name)
+	}
+	return nil
+}
+
 // SetHealth gives the filesystem the gateway's health view: while stale reports false a
 // failed proposal (no leader, leader lost) is retried, because the leader is usually back
 // within seconds; once stale (no leader contact for 30 s, docs/02) the mutation fails
@@ -367,6 +376,11 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 	in, err := f.resolve(filename)
 	switch {
 	case err == nil:
+		// Read first: what the entry is (a directory, a link, exists at all for an
+		// O_EXCL) is told to those who may read it, and nothing to anyone else (I-353)
+		if aerr := f.checkRead(in.Ino, filename); aerr != nil {
+			return nil, mapErr("open", filename, aerr)
+		}
 		if flag&os.O_CREATE != 0 && flag&os.O_EXCL != 0 {
 			return nil, mapErr("open", filename, meta.ErrExist)
 		}
@@ -378,12 +392,10 @@ func (f *FS) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, 
 			// so a handle here would only swallow writes (flush ignores non-files)
 			return nil, mapErr("open", filename, syscall.ELOOP)
 		}
-		need := f.checkRead
 		if flag&(os.O_WRONLY|os.O_RDWR) != 0 {
-			need = f.checkWrite
-		}
-		if aerr := need(in.Ino, filename); aerr != nil {
-			return nil, mapErr("open", filename, aerr)
+			if aerr := f.checkWrite(in.Ino, filename); aerr != nil {
+				return nil, mapErr("open", filename, aerr)
+			}
 		}
 	case errors.Is(err, meta.ErrNotExist) && flag&os.O_CREATE != 0:
 		dirParts, base := parentOf(parts)
@@ -787,7 +799,68 @@ func (f *FS) LookupFold(dir, name string) (match string, found, ok bool) {
 	if found && in.Ino == meta.RootIno && match == SnapshotDir {
 		return "", false, true // the reserved name never lists (I-185), and never folds
 	}
+	if found && f.enforced() {
+		// a name folds only for an actor who would see it listed (I-348, I-353)
+		if child, ok := f.st.Lookup(in.Ino, match); !ok || (f.role(in.Ino) < meta.RoleRead && !f.st.Traverses(f.actor, child.Ino)) {
+			return "", false, true
+		}
+	}
 	return match, found, true
+}
+
+// Role reports what the actor holds on name: read, write, or neither while on the way to
+// something they hold a role on (the NFS ACCESS answer, docs/21 §5); EACCES otherwise.
+func (f *FS) Role(name string) (read, write bool, err error) {
+	parts := meta.SplitPath(name)
+	if isSnapshotPath(parts) {
+		n, lerr := f.snapLookup(context.Background(), parts)
+		if lerr != nil {
+			return false, false, snapErr("access", name, lerr)
+		}
+		if cerr := f.checkSnap(&n); cerr != nil {
+			return false, false, mapErr("access", name, cerr)
+		}
+		return true, false, nil
+	}
+	in, err := f.resolve(name)
+	if err != nil {
+		return false, false, mapErr("access", name, err)
+	}
+	if !f.enforced() {
+		return true, true, nil
+	}
+	role := f.role(in.Ino)
+	if role < meta.RoleRead && in.Ino != meta.RootIno && !f.st.Traverses(f.actor, in.Ino) {
+		return false, false, mapErr("access", name, f.refuse("stat", name))
+	}
+	return role >= meta.RoleRead, role >= meta.RoleWrite, nil
+}
+
+// OpenBest opens name for writing when the actor holds Write on it and for reading
+// otherwise, telling the caller which; the SMB gateway, whose CREATE asks for no access
+// of its own, keeps a Read-only user's handle read-only without a refusal recorded for
+// every open (docs/21 §5).
+func (f *FS) OpenBest(name string) (fh *File, writable bool, err error) {
+	flag := os.O_RDWR
+	if parts := meta.SplitPath(name); !isSnapshotPath(parts) && f.enforced() {
+		if in, rerr := f.resolve(name); rerr == nil && f.role(in.Ino) < meta.RoleWrite {
+			flag = os.O_RDONLY
+		}
+	}
+	bf, err := f.OpenFile(name, flag, 0)
+	if errors.Is(err, ErrReadOnly) {
+		flag = os.O_RDONLY
+		bf, err = f.OpenFile(name, flag, 0) // a snapshot reads; its writes are refused (I-185)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	vf, ok := bf.(*File)
+	if !ok {
+		_ = bf.Close()
+		return nil, false, fmt.Errorf("open %s: not a vfs file", name)
+	}
+	return vf, flag == os.O_RDWR, nil
 }
 
 func (f *FS) MkdirAll(filename string, perm os.FileMode) error {
@@ -902,6 +975,9 @@ func (f *FS) Readlink(link string) (string, error) {
 	}
 	in, err := f.resolve(link)
 	if err != nil {
+		return "", mapErr("readlink", link, err)
+	}
+	if err := f.checkRead(in.Ino, link); err != nil { // the target is the link's content (I-353)
 		return "", mapErr("readlink", link, err)
 	}
 	if in.Type != meta.TSymlink {

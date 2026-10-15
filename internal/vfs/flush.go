@@ -89,6 +89,7 @@ type Flusher struct {
 	peak    atomic.Int64
 
 	superseded atomic.Uint64 // rewrites dropped because another started later (I-223)
+	refused    atomic.Uint64 // flushes dropped because the FSM refused the writer's Commit (docs/21 §4)
 
 	mu      sync.Mutex
 	backoff map[meta.Ino]backoffState
@@ -163,6 +164,10 @@ func NewFlusher(ov *Overlay, st *meta.Store, prop meta.Proposer, peers meta.Peer
 // Buffers reports the chunk and shard bytes the flusher holds in memory right now and
 // the most it has held since start: at most ChunkWorkers chunks with their shards,
 // whatever the file or the plan (docs/04 §9, I-78).
+// CommitsRefused counts the flushes dropped because the FSM refused the writer's Commit:
+// a grant revoked, or a user disabled, between the write and the flush (docs/21 §4).
+func (f *Flusher) CommitsRefused() uint64 { return f.refused.Load() }
+
 // RewritesSuperseded counts the flushes whose rewrite another client's later rewrite of
 // the same file replaced, so their dirty data was dropped (docs/04 §6, I-223).
 func (f *Flusher) RewritesSuperseded() uint64 { return f.superseded.Load() }
@@ -358,6 +363,18 @@ func (f *Flusher) flush(ctx context.Context, ino meta.Ino, partial bool) error {
 				f.log.Info("rewrite superseded by a later one, dirty data dropped", "ino", ino)
 			}
 			return nil
+		}
+		if errors.Is(err, meta.ErrAccess) {
+			// the writer's role is gone (a grant revoked, the user disabled): the data is
+			// not theirs to land and waiting changes nothing, so it goes, and the flush
+			// answers EACCES to whoever asked for it (docs/21 §4, I-349)
+			f.ov.Drop(ino)
+			f.clearRetry(ino)
+			f.refused.Add(1)
+			if f.log != nil {
+				f.log.Warn("commit refused for the writer's role, dirty data dropped", "ino", ino, "actor", plan.Actor)
+			}
+			return err
 		}
 		f.ov.AbortFlush(plan)
 		f.ov.NoteFlush(ino, err) // a WRITE at the cap fails at once behind this (L-189)

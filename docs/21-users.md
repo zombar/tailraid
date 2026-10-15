@@ -136,7 +136,11 @@ it does not reach. §11 maps each control to its mechanism here.
   up and stat the ancestors of any inode they hold a role on, and a listing of a
   directory where they hold no role shows exactly the children under which they hold one.
   A trash entry evaluates on its original parent; `/.snapshots/<mirror>/<name>/…` evaluates
-  the live grants of the same inode (an inode no longer in the volume: admins only).
+  the live grants of the same inode (an inode no longer in the volume: admins only), a
+  snapshot directory lists what the user may reach as a live one does, a revert needs
+  Read on the snapshot entry and `Admin` on the live file, and a restore from a snapshot
+  needs `Admin` on the folder it lands in and copies the entries the user may read,
+  reporting the rest as refused.
 - **`/.tailraid/`** (thumbnails, stats, the search index, the audit log) is outside the
   grant walk for every user, admins included: only `System` commands write under it (§4)
   and only the node's own code reads it; the API reaches a thumbnail, a chart, a hit or a
@@ -155,9 +159,14 @@ it does not reach. §11 maps each control to its mechanism here.
   at codec 14 (`meta.CodecUsers`, snapshot frame 14, ops 28–32: `Invite`, `User`,
   `Group`, `Grant`, `Session`; docs/02 §Codec versions). `CommandCodec` answers 14 when either is
   set. The FSM refuses the user-facing operations (`Create`, `Mkdir`, `Unlink`, `Rmdir`,
-  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit` of a `RewriteStart`)
+  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge`, and `Commit`)
   with `ErrAccess` (a new wire code, the list is append-only) unless `Access(actor,
-  target) ≥` the role the operation needs. This is where the `protected` flag is enforced
+  target) ≥` the role the operation needs on every inode it touches: a `Rename` and a
+  `Restore` name two parents (the one an entry leaves, the one it lands in), both
+  `Write`; a `Purge` of one entry needs `Admin` on its parent and the whole-trash sweep
+  `Admin` at the root, which the retention sweep holds as `System` and an admin as an
+  admin; a target the lookup did not find holds no role for anyone, so the refusal says
+  nothing about what is missing. This is where the `protected` flag is enforced
   today (docs/13, I-154): the check runs once, in apply, so every mount and the browser
   agree.
 - **System commands.** `System` is set by the node's own writers and is allowed only for
@@ -166,6 +175,7 @@ it does not reach. §11 maps each control to its mechanism here.
   | Writer | Operation |
   |---|---|
   | the trash sweep | `Purge` of an entry past `trash.retention` |
+  | the flusher, for data written before the first user existed | `Commit` of any inode (its bytes alone change) |
   | the thumbnail writer, and the browser's `PUT /api/thumb` after the handler has checked `Read` on the source file | `Create`, `Commit` under `/.tailraid/thumbs` |
   | the stats sampler, the search indexer and catalogue, the audit writer | `Create`, `Commit`, `Unlink` under `/.tailraid/stats`, `/.tailraid/index`, `/.tailraid/audit` |
   | the scrape | nothing: it runs as the admin who started it and writes sidecars under their actor |
@@ -173,9 +183,13 @@ it does not reach. §11 maps each control to its mechanism here.
   A web upload's temp file is created under the user's actor beside its target (docs/13
   §4) and published under it; nothing of a user's lands as `System`.
 - **The flusher's `Commit`** carries the actor who wrote: the WAL record gains the actor
-  per inode, so a flush after a gateway restart still names them. A grant revoked between
-  the write and the flush still lands: the write was authorised when it was accepted, and
-  the WAL promised it (docs/04).
+  per inode, so a flush after a gateway restart still names them, and the FSM checks
+  every `Commit` for `Write` on its inode. A grant revoked, or a user disabled, between
+  the write and the flush ends that data: the FSM refuses the `Commit`, the gateway drops
+  the inode's dirty bytes, retries nothing and answers `EACCES` to the flush that asked,
+  and `status` counts it in `gateway.commits_refused`. Data written before the first user
+  existed carries no actor and commits as `System`, which a `Commit` may be anywhere: it
+  changes only its inode's bytes, and nobody held a role when it was written.
 - **When it is on.** Enforcement is active only while the user table is non-empty and the
   prober's `MinCodec` is 14 or more; before either, a cluster behaves exactly as it did
   before this document, which is how every codec feature gates (docs/02). The moment the
@@ -438,17 +452,21 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   subtree, revert and restore into it, and pins; a rename across subtrees needs `Write`
   on both; a user may look up and stat the ancestors of any inode they hold a role on,
   and a listing of a directory where they hold none shows exactly the children under
-  which they hold one; a trash entry evaluates on its original parent, a snapshot path on
+  which they hold one, a snapshot directory likewise; a revert needs Read on the snapshot entry and `Admin` on the live file, a restore from a snapshot `Admin` where it lands and copies only what the user may read; a trash entry evaluates on its original parent, a snapshot path on
   the live inode (admins only once it is gone); `/.tailraid/` is outside the grant walk
   for every user.
 - **I-349** — `Command` carries `Actor` and `System` at codec 14; while the user table is
   non-empty and `MinCodec ≥ 14` the FSM refuses `Create`, `Mkdir`, `Unlink`, `Rmdir`,
-  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge` and a rewrite's `Commit` with
-  `ErrAccess` unless the actor's effective role covers the operation, and refuses a
-  `System` command outside the System table (the retention sweep's `Purge`, the writers
-  under `/.tailraid`); the flusher's `Commit` carries the actor the WAL recorded for the
-  write; before the first user, or while a member reads codec 13, a cluster behaves as
-  before, and a 13-reader refuses a codec-14 entry.
+  `Rename`, `SetAttr`, `Trash`, `Restore`, `Purge` and every `Commit` with
+  `ErrAccess` unless the actor's effective role covers the operation on every inode it
+  touches (both parents of a rename or a restore; the root, for the whole-trash sweep,
+  which only `System` and admins hold), and refuses a
+  `System` command outside the System table (the retention sweep's `Purge`, a `Commit`
+  anywhere, the writers under `/.tailraid`); the flusher's `Commit` carries the actor
+  the WAL recorded for the write, and a `Commit` the FSM refuses drops that inode's
+  dirty data at the gateway, which answers `EACCES` and retries nothing; before the
+  first user, or while a member reads codec 13, a cluster behaves as before, and a
+  13-reader refuses a codec-14 entry.
 - **I-350** — A device maps `uid:<n>` and `smb:<account>` to users in
   `<data_dir>/bindings.json` (0600), changed only by signed operations on that node (a
   user for their own credential, an admin for any); `user create` and `user key add`
@@ -458,15 +476,20 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
 - **I-351** — The NFS gateway advertises `AuthFlavorUnix`, decodes the AUTH_SYS
   credential of every call, resolves the actor in `FromHandle` through the bindings and
   keys its duplicate request cache on the credential and the xid; the mode bits it
-  reports are the stored mode masked to 0500 for `Read` and 0700 above, and a SETATTR of
-  mode or owner is stored and never consulted.
+  reports are the stored mode masked to 0500 for `Read` and 0700 above, its ACCESS answer
+  is the mask the role allows (every bit under `Write`, READ, LOOKUP and EXECUTE under
+  `Read`, LOOKUP and EXECUTE on the way to a role, `NFS3ERR_ACCES` elsewhere), and a
+  SETATTR of mode or owner is stored and never consulted.
 - **I-352** — The SMB gateway binds each tree connect to the filesystem of the user its
   session account maps to; `tailraid` stays the mount account; an unbound account's
-  operations are `STATUS_ACCESS_DENIED` and its listing of the share is empty.
-- **I-353** — `vfs.FS.As(actor)` stamps the actor on every proposal, refuses open, stat
-  and list without `Read` on the local replica, filters listings as I-348 says, and keeps
-  the actor on each open file for its `Commit`; a `vfs.FS` with no actor is the `System`
-  writer and reaches `/.tailraid` only.
+  operations are `STATUS_ACCESS_DENIED` and its listing of the share is empty; an account
+  holding `Read` alone opens a file for reading and its WRITE and size changes are
+  `STATUS_ACCESS_DENIED`, with no refusal recorded for the open.
+- **I-353** — `vfs.FS.As(actor)` stamps the actor on every proposal, refuses open, stat,
+  readlink and list without `Read` on the local replica before it tells anything else of
+  the entry (`EEXIST`, `EISDIR`, `ELOOP`, a folded name), filters listings as I-348 says,
+  and keeps the actor on each open file for its `Commit`; a `vfs.FS` with no actor is the
+  `System` writer and reaches `/.tailraid` only.
 - **I-354** — `web login` proposes a session row (the token's SHA-256, the user, the
   minting key, an expiry `users.session` away; at most 16 per user) and prints a
   one-time five-minute code that carries the token; opening the link on any node's
@@ -523,14 +546,14 @@ stub in `test/invariants/` meanwhile.
 | I-345 | `TestAdminOp_Needs_Exhaustive`, `TestAdminOp_Needs_Refinements`, `TestAdminOp_PathResolvesBeforeCheck`, `TestRPC_MutatingOpsNeedSignature` |
 | I-346 | `TestGroups_Builtin`, `TestGroups_LastAdminLockout` |
 | I-347 | `TestAccess_Table`, `TestAccess_NNodeDeterminism`, `TestRole_Words` |
-| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths` |
-| I-349 | `TestFSM_ActorEnforced_Table`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
+| I-348 | `TestAccess_Roles_Table`, `TestAccess_TrashEvaluatesOnOriginalParent`, `TestAccess_TailraidTreeExcluded`, `TestAccess_ListingFilter`, `TestAccess_SnapshotPaths`, `TestAccess_SnapshotRestoreByRole` |
+| I-349 | `TestFSM_ActorEnforced_Table`, `TestFlusher_RefusedCommitDropsDirtyData`, `TestFlusher_PreUsersDirtyDataCommitsAsSystem`, `TestAccess_Roles_Table`, `TestAccess_TailraidTreeExcluded`, `TestCodec14_OlderReaderRefuses`, `TestUsersState_Snapshot`, `TestNFS_UnboundIsNobody`, the users steps of `TestModelCheck_Long` |
 | I-350 | `TestBindings_File`, `TestBindings_OwnUidNeverSudo`, `TestCLI_UsersFlow`, `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestSMB_UnboundDenied` |
-| I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
-| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied` |
-| I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
+| I-351 | `TestNFS_AuthSysActor`, `TestNFS_UnboundIsNobody`, `TestNFS_ModeFromRole`, `TestNFS_AccessFollowsRole`, `TestDRC_KeyedOnCredential` (in `third_party/nfs`) |
+| I-352 | `TestSMB_TreeConnectActor`, `TestSMB_UnboundDenied`, `TestSMB_ReadOnlyUserReads` |
+| I-353 | `TestVFS_As_StampsActor`, `TestVFS_As_ReadCheck`, `TestVFS_As_RoleBeforeExistence`, `TestWAL_RecordsActor`, `FuzzWALReplay` |
 | I-354 | `TestSessions_Apply` (the FSM's rows), `TestCodes_OnceWithinLife`, `TestWebUI_Login_CodeOnce`, `TestWebUI_Session_Lifecycle_Table`, `TestWebUI_SessionOnEveryNode` (the hand-off between two nodes' pages), `TestWebUI_MemberAddressAlone_Refused`, `TestWebUI_RevokedAtNextRequest`, `TestCLI_WebLogin` |
-| I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
+| I-355 | `TestWebUI_RoutesFilterByRole`, `TestWebUI_AdminRoutes_ByRole`, `TestWebUI_Upload_RoleBeforeExistence`, `TestWebUI_ThumbPut_SystemAfterRead`, `TestWebUI_RevokedAtNextRequest` |
 | I-356 | `TestSecrets_PersonalNamespace`, `TestSecrets_GetOwnerOnly`, `TestSecrets_SystemNeverPrinted`, `TestCLI_UsersFlow` |
 | I-357 | `TestAudit_OneRecordPerOp`, `TestAudit_RefusalRateLimit`, `TestAudit_LeaderOnly`, `TestStatus_Users` |
 | I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |

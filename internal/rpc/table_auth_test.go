@@ -71,15 +71,19 @@ func TestTableAuthorizer_Table(t *testing.T) {
 	var _ Authorizer = &none
 }
 
-// A member publishes its own candidates and nobody else's; /health tells a caller the
-// endpoint the device sees for it.
-// Invariant: I-322
+// A member publishes its own candidates and its own version and nobody else's: the
+// unsigned member ops name the caller's row alone; /health tells a caller the endpoint
+// the device sees for it.
+// Invariant: I-322, I-345
 func TestMembers_UpdateEndpointsOwnRowOnly(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n2", Name: "two", Kind: meta.KindDevice, TSStableID: "someone-else", Addr: "100.64.0.60"}}})
 	if err := c.Members(ctx, e.addr, MemberOp{Op: "update_endpoints", NodeIdx: 2, Endpoints: []string{"1.2.3.4:1"}}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("another row's endpoints: %v, want ErrForbidden", err)
+	}
+	if err := c.Members(ctx, e.addr, MemberOp{Op: "set_version", NodeIdx: 2, Version: "v9"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("another row's version: %v, want ErrForbidden", err)
 	}
 	if len(e.joiner.ops) != 0 {
 		t.Fatalf("the refused op reached the joiner: %+v", e.joiner.ops)

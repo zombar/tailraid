@@ -343,6 +343,10 @@ func (s *Server) takeSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "a snapshot name is 1 to 64 bytes, without /")
 		return
 	}
+	if !s.isAdmin(r) { // snapshot create is the admins' (docs/21 §2)
+		s.fail(w, fmt.Errorf("snapshot: %w", syscall.EACCES))
+		return
+	}
 	row := ""
 	if body.Mirror != "" {
 		nodes := s.o.Store.Nodes()
@@ -581,6 +585,6 @@ func (s *Server) restoreTree(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"path": dst, "files": rep.Files, "dirs": rep.Dirs, "links": rep.Links,
-		"skipped": append([]string{}, skipped...), "skipped_count": len(rep.Skipped), "uploaded": rep.Uploaded,
+		"skipped": append([]string{}, skipped...), "skipped_count": len(rep.Skipped), "refused_count": len(rep.Refused), "uploaded": rep.Uploaded,
 	})
 }

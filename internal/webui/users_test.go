@@ -462,3 +462,74 @@ func TestWebUI_ThumbPut_SystemAfterRead(t *testing.T) {
 		t.Fatalf("the frame did not land: %d entries", len(kids))
 	}
 }
+
+// The routes that reach past a session's role answer 403 for a plain user and pass for
+// an admin: emptying the whole trash, taking a snapshot, reverting a file the user holds
+// Write but not Admin on, and restoring a snapshot tree into such a folder (docs/21 §2,
+// §3).
+// Invariant: I-355
+func TestWebUI_AdminRoutes_ByRole(t *testing.T) {
+	svc := &fakeSnapshots{}
+	u, kim, lee := usersUI(t, func(o *webui.Options) { o.Snapshots = svc })
+	src := testharness.NewMirrors()
+	u.fs.SetFlusher(u.f.Flusher())
+	must(t, u.f.Flusher().FlushAll(ctx))
+	m := u.f.AddMirror(src, "host/m1")
+	u.fs.SetMirrors(src)
+	sn := u.f.TakeSnapshot(src, m, "s1")
+	b := u.signIn(lee)
+	for _, tc := range []struct{ path, body string }{
+		{"/api/purge", `{"all":true}`},
+		{"/api/snapshot", `{"name":"x"}`},
+		{"/api/revert", fmt.Sprintf(`{"path":"/w/f","snapshot":%d}`, sn.ID)},
+		{"/api/restore-tree", fmt.Sprintf(`{"snapshot":%d,"path":"","to":"/w","name":"all"}`, sn.ID)},
+		{"/api/copy", fmt.Sprintf(`{"path":"/w/f","snapshot":%d,"name":"f (s1)"}`, sn.ID)},
+	} {
+		if code, body := u.postAs(b, tc.path, tc.body); code != 403 {
+			t.Errorf("lee %s: %d %s, want 403", tc.path, code, body)
+		}
+	}
+	if len(svc.took) != 0 {
+		t.Fatalf("lee's snapshot was taken: %v", svc.took)
+	}
+	if _, err := u.f.FSM.Resolve([]string{"w", "all"}); err == nil {
+		t.Fatal("lee's refused restore landed")
+	}
+	a := u.signIn(kim)
+	if code, body := u.postAs(a, "/api/restore-tree", fmt.Sprintf(`{"snapshot":%d,"path":"","to":"/w","name":"all"}`, sn.ID)); code != 200 || !strings.Contains(body, `"refused_count":0`) {
+		t.Fatalf("the admin's restore: %d %s", code, body)
+	}
+	if code, body := u.postAs(a, "/api/revert", fmt.Sprintf(`{"path":"/w/f","snapshot":%d}`, sn.ID)); code != 200 {
+		t.Fatalf("the admin's revert: %d %s", code, body)
+	}
+	if code, body := u.postAs(a, "/api/snapshot", `{"name":"x"}`); code != 201 || len(svc.took) != 1 {
+		t.Fatalf("the admin's snapshot: %d %s %v", code, body, svc.took)
+	}
+	if code, body := u.postAs(a, "/api/purge", `{"all":true}`); code != 200 && code != 204 {
+		t.Fatalf("the admin's purge: %d %s", code, body)
+	}
+}
+
+// An upload tells the user nothing about a name they may not write: a PUT with
+// If-None-Match over an existing file elsewhere is 403, not 412, and a PUT of a new name
+// there is 403 before any body is read.
+// Invariant: I-355
+func TestWebUI_Upload_RoleBeforeExistence(t *testing.T) {
+	u, _, lee := usersUI(t)
+	b := u.signIn(lee)
+	put := func(path string, hdr ...string) int {
+		args := append([]string{webui.HeaderUI, "1", "Content-Length", "5"}, hdr...)
+		resp := u.doWith(b, http.MethodPut, "/files"+path, strings.NewReader("hello"), args...)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := put("/other/f", "If-None-Match", "*"); code != 403 {
+		t.Errorf("an exclusive PUT over a file lee may not see: %d, want 403", code)
+	}
+	if code := put("/other/new"); code != 403 {
+		t.Errorf("a PUT of a new name where lee holds nothing: %d, want 403", code)
+	}
+	if code := put("/w/f", "If-None-Match", "*"); code != 412 {
+		t.Errorf("an exclusive PUT over lee's own file: %d, want 412", code)
+	}
+}
