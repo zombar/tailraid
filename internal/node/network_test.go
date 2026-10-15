@@ -292,3 +292,24 @@ func TestMembershipOp_KicksPeerRefresh(t *testing.T) {
 	var none network
 	none.kick() // a network without a device (the fake) takes a kick and does nothing
 }
+
+// A removed device joins again: its key gets a fresh pending row and then a fresh active
+// row, each a peer, while the removed row's own copies (its index, its address, a stale
+// seed copy) stay no peer (docs/20 §4, I-317, I-318).
+// Invariant: I-317, I-318
+func TestMeshPeers_RemovedKeyReturnsAsPending(t *testing.T) {
+	self := key(1)
+	removed := meta.Node{Idx: 3, Kind: meta.KindDevice, State: meta.Removed, Addr: "100.70.3.3", Key: key(3)}
+	seedCopy := meta.Node{Idx: 3, Kind: meta.KindDevice, State: meta.Active, Addr: "100.70.3.3", Key: key(3)}
+	rows := []meta.Node{{Idx: 1, Kind: meta.KindDevice, State: meta.Active, Addr: "100.70.3.1", Key: self}, removed, seedCopy}
+	if got := meshPeers(rows, []meta.Pending{{Key: key(3), Addr: "100.70.3.10"}}, mesh.Key(self)); len(got) != 1 || got[0].Addr.String() != "100.70.3.10" || got[0].Idx < 1<<31 {
+		t.Fatalf("the pending row of a removed device's key: %+v", got)
+	}
+	rows = append(rows, meta.Node{Idx: 11, Kind: meta.KindDevice, State: meta.Active, Addr: "100.70.3.10", Key: key(3)})
+	if got := meshPeers(rows, nil, mesh.Key(self)); len(got) != 1 || got[0].Idx != 11 || got[0].Addr.String() != "100.70.3.10" {
+		t.Fatalf("the new row of a removed device's key: %+v", got)
+	}
+	if got := meshPeers(rows, []meta.Pending{{Key: key(4), Addr: "100.70.3.3"}}, mesh.Key(self)); len(got) != 1 {
+		t.Fatalf("a pending row at a removed address is no peer: %+v", got)
+	}
+}

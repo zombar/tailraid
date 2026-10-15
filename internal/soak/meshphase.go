@@ -389,6 +389,39 @@ func phaseMeshJoin(ctx context.Context, r *Run) error {
 		return true
 	})
 	r.check("I-318", "the removed device sees every member none and dead (its packets die at the tunnel, no 403)", dark, "after "+darkTook.Round(time.Second).String())
+
+	// (f) the removed device, reset, joins again: a fresh row and address under its key,
+	// and every member takes it back as a peer (docs/20 §4)
+	code, err = me.JoinCode(ctx, printer)
+	if err != nil {
+		r.check("I-321", "join code for the re-join after removal", false, err.Error())
+		return nil
+	}
+	if err := me.RejoinAfterReset(ctx, late, code); err != nil {
+		r.check("I-321, I-317", "a removed device joins again after a reset", false, err.Error())
+		return nil
+	}
+	again, err := r.Env.Status(ctx, printer)
+	if err != nil {
+		return err
+	}
+	rdev := devices(again)[late.Name]
+	r.check("I-321", "the re-joined device holds a fresh row and address under its key",
+		rdev.Idx != 0 && rdev.Idx != adev.Idx && rdev.Addr != adev.Addr && rdev.State != "removed",
+		fmt.Sprintf("removed idx %d addr %s; again idx %d addr %s state %s", adev.Idx, adev.Addr, rdev.Idx, rdev.Addr, rdev.State))
+	backTook, back := r.pollUntil(ctx, 60*time.Second, func() bool {
+		for _, m := range nodes {
+			rep, err := r.Env.Status(ctx, m)
+			if err != nil || rep.Mesh == nil {
+				return false
+			}
+			if p, ok := peersOf(rep)[late.Name]; !ok || p.Class == mesh.PathNone.String() {
+				return false
+			}
+		}
+		return true
+	})
+	r.check("I-317", "every member holds the re-joined device as a live peer", back, "after "+backTook.Round(time.Millisecond).String())
 	return nil
 }
 

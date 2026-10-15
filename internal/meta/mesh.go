@@ -105,7 +105,7 @@ func (a *applier) pendingAdd(c *PendingAdd) (Result, error) {
 	if st.Pending == nil {
 		st.Pending = map[MeshKey]*Pending{}
 	}
-	st.Pending[c.Key] = &Pending{Key: c.Key, Addr: addr, At: c.Now}
+	st.Pending[c.Key] = &Pending{Key: c.Key, Addr: addr, At: a.clock(c.Now)}
 	return Result{Addr: addr}, nil
 }
 

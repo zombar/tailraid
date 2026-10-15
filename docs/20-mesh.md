@@ -191,9 +191,13 @@ response names the leader.
 **A re-join after `reset`** is an introduce with the device's existing key: the leader
 finds the active row by key and answers its address, and the `/v1/join` from that
 address under the new node ID re-keys the row to the new ID and replaces the stale Raft
-server (docs/02's `replaceStaleServer`, by address: the address is cryptographic, so no
-identity compare is needed). The device keeps its index, its address and its disks. A
-removed row's key gets a fresh pending row and a fresh address.
+server (by the row's previous node ID, and by address for the keyless rigs: the address
+is cryptographic, so no identity compare is needed), whatever Raft port the device comes
+back with. The device keeps its index, its address and its disks; the FSM holds one
+active device row per key, so a re-join never leaves two. A removed
+row's key gets a fresh pending row and a fresh address, and every member takes the
+device back as a peer: what a removal retires is the row (its index and its address),
+never the key.
 
 ## 5. Paths: candidates, fan-out, pinning
 
@@ -517,11 +521,11 @@ round-trip table.
 | Invariant | Tests |
 |---|---|
 | I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
-| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`, `TestMembershipOp_KicksPeerRefresh`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
-| I-318 | `TestTableAuthorizer_Table`, `TestTableAuthorizer_RemovedRowBeatsSeed`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh` |
-| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
+| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`, `TestMembershipOp_KicksPeerRefresh`, `TestMeshPeers_RemovedKeyReturnsAsPending`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
+| I-318 | `TestTableAuthorizer_Table`, `TestTableAuthorizer_RemovedRowBeatsSeed`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh`, `TestNodeUpsert_RefusesDuplicateKeyOrAddr` |
+| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire`, `TestErrorCode_MeshSentinels` |
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
-| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
+| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`, `TestJoin_RejoinNewRaftPortKeepsOneRow`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
 | I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`, `TestCandidates_ConfiguredNameResolvedAtPublish`; stub `TestStub_I_322` for the publishing on a real interface |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |

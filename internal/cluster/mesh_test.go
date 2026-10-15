@@ -168,3 +168,44 @@ func TestMesh_IntroduceJoinExpire(t *testing.T) {
 		t.Fatalf("join after the expiry: %v", err)
 	}
 }
+
+// A device reset and re-joined under a new node ID and a new Raft port keeps its one row
+// (its index, its address), and the Raft configuration holds its new server alone: the
+// key names the device, not the address of its old server (docs/20 §4).
+//
+// Invariant: I-321, I-94
+func TestJoin_RejoinNewRaftPortKeepsOneRow(t *testing.T) {
+	n := bootstrapMesh(t, t.TempDir())
+	defer n.Close()
+	k2 := meshKey(2)
+	if _, err := n.Introduce(ctx, k2); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := n.Join(ctx, rpc.JoinRequest{NodeID: "0000000000000002", Name: "two", Key: keyText(k2), RaftPort: 1, RPCPort: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2, err := n.Join(ctx, rpc.JoinRequest{NodeID: "0000000000000022", Name: "two", Key: keyText(k2), RaftPort: 7, RPCPort: 2})
+	if err != nil {
+		t.Fatalf("re-join with another raft port: %v", err)
+	}
+	if resp2.NodeIdx != resp.NodeIdx {
+		t.Fatalf("the re-join took index %d, want the row's %d", resp2.NodeIdx, resp.NodeIdx)
+	}
+	rows := 0
+	for _, r := range n.FSM.Nodes() {
+		if r.Kind == meta.KindDevice && r.State != meta.Removed && r.Key == k2 {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("%d active rows hold the key, want 1", rows)
+	}
+	seen := map[raft.ServerID]int{}
+	for _, s := range n.Raft.GetConfiguration().Configuration().Servers {
+		seen[s.ID]++
+	}
+	if seen["0000000000000002"] != 0 || seen["0000000000000022"] != 1 {
+		t.Fatalf("configuration %+v", n.Raft.GetConfiguration().Configuration().Servers)
+	}
+}

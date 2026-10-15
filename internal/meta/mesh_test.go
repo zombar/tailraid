@@ -238,3 +238,54 @@ func TestMeshState_Snapshot(t *testing.T) {
 		t.Fatal("a frame with pending rows out of order decoded")
 	}
 }
+
+// One active device row per key: a fresh row that repeats another's key is refused, a
+// row keeps its own on an update, and a removed row's key is free again (docs/20 §3).
+// Invariant: I-318
+func TestNodeUpsert_RefusesDuplicateKeyOrAddr(t *testing.T) {
+	f := NewFSM()
+	apply := func(c Command) Result { t.Helper(); return applyOne(t, f, c) }
+	k1, k2 := meshKey(1), meshKey(2)
+	first := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "n1", Name: "one", Kind: KindDevice, Addr: "100.70.3.1", Key: k1}}})
+	if first.Err != nil {
+		t.Fatal(first.Err)
+	}
+	if r := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "n2", Name: "two", Kind: KindDevice, Addr: "100.70.3.2", Key: k1}}}); !errors.Is(r.Err, ErrExist) {
+		t.Errorf("a fresh row with the same key: %v, want ErrExist", r.Err)
+	}
+	if r := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "n3", Name: "three", Kind: KindDevice, Addr: "100.70.3.3", Key: k2}}}); r.Err != nil {
+		t.Fatalf("another key: %v", r.Err)
+	}
+	// the row's own update (a re-key to a new node ID) passes
+	if r := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{Idx: NodeIdx(first.Ino), ID: "n1b", Name: "one", Kind: KindDevice, Addr: "100.70.3.1", Key: k1}}}); r.Err != nil {
+		t.Fatalf("the row's own update: %v", r.Err)
+	}
+	if r := apply(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: NodeIdx(first.Ino), State: Removed, Now: 1}}); r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if r := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: "n9", Name: "nine", Kind: KindDevice, Addr: "100.70.3.9", Key: k1}}}); r.Err != nil {
+		t.Fatalf("a removed row's key on a fresh row: %v", r.Err)
+	}
+	// keyless rows (the rigs under dev.mesh_fake) share an address as they always did
+	for _, id := range []string{"f1", "f2"} {
+		if r := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: id, Name: id, Kind: KindDevice, Addr: "127.0.0.1"}}}); r.Err != nil {
+			t.Fatalf("keyless row %s at a shared address: %v", id, r.Err)
+		}
+	}
+}
+
+// Every mesh sentinel has a wire code, so a forwarded PendingAdd's refusal reaches the
+// introducing member as the error it was and never as an empty address.
+// Invariant: I-319
+func TestErrorCode_MeshSentinels(t *testing.T) {
+	for _, e := range []error{ErrMeshFull, ErrNoSubnet, ErrNoPending, ErrPendingFul} {
+		c := ErrorCode(e)
+		if c == 0 {
+			t.Errorf("%v has code 0", e)
+			continue
+		}
+		if got, ok := ErrorFromCode(c); !ok || !errors.Is(got, e) {
+			t.Errorf("ErrorFromCode(%d) = %v, %v; want %v", c, got, ok, e)
+		}
+	}
+}

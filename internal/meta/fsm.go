@@ -363,6 +363,17 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 			}
 		}
 	}
+	if n.Kind == KindDevice && !n.Key.IsZero() {
+		// one active device per key (docs/20 §3): the key is the device, so a fresh row
+		// that repeats another's is refused and a row keeps its own; the address needs no
+		// rule of its own, since pendingAdd hands out each host once and a re-join under
+		// the key lands on the key's row
+		for idx, cur := range st.Nodes {
+			if idx != n.Idx && cur.Kind == KindDevice && cur.State != Removed && cur.Key == n.Key {
+				return Result{}, ErrExist // device idx holds that key
+			}
+		}
+	}
 	st.consumePending(&n) // the join that completes a pending row (docs/20 §4)
 	if n.Idx == 0 {
 		idx := st.NextNode
