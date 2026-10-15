@@ -1,7 +1,9 @@
 package users
 
 import (
-	"crypto/hmac"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,10 +15,12 @@ import (
 
 // A browser session (docs/21 §6, I-354) is a 32-byte token whose SHA-256 is the FSM's
 // row; the browser holds the token in a cookie. The token reaches a browser through a
-// one-time code: the token, an expiry and a nonce under an HMAC of the cluster key, so
-// any node opens a code any other node minted (`web login` on one node, a hand-off
-// between two nodes' pages) and nothing about codes is replicated. A node remembers
-// the codes it opened until they expire, so each works once there.
+// one-time code: the expiry and the token sealed with AES-256-GCM under a key derived
+// from the cluster key, so any node opens a code any other node minted (`web login` on
+// one node, a hand-off between two nodes' pages) and nothing about codes is replicated,
+// while a code copied from a browser's history or a proxy's log yields no token to
+// anyone without the cluster key. A node remembers the codes it opened until they
+// expire, so each works once there.
 
 const (
 	// CodeLife is how long a code is good for.
@@ -27,9 +31,11 @@ const (
 	// TokenSize is a session token's size.
 	TokenSize = 32
 
-	codeNonce = 8
-	codeMAC   = 16
-	codeLen   = codeNonce + 8 + TokenSize + codeMAC
+	codeNonce = 12 // the GCM nonce; its first CodeNonceLen bytes name the code to the CodeLog
+	codeTag   = 16
+	codeLen   = codeNonce + 8 + TokenSize + codeTag
+	// CodeNonceLen is how much of a code's nonce the CodeLog keys on.
+	CodeNonceLen = 8
 )
 
 // ErrCode is a used, expired or malformed code; a page says that much and no more.
@@ -56,41 +62,59 @@ func ParseToken(s string) ([TokenSize]byte, bool) {
 	return t, true
 }
 
-func codeMac(key, body []byte) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write([]byte("tailraid-web-code v1"))
-	m.Write(body)
-	return m.Sum(nil)[:codeMAC]
+// codeCipher is AES-256-GCM under the code key derived from the cluster key.
+func codeCipher(key []byte) (cipher.AEAD, error) {
+	k, err := hkdf.Key(sha256.New, key, nil, "tailraid web code v2", 32)
+	if err != nil {
+		return nil, err
+	}
+	blk, err := aes.NewCipher(k)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(blk)
 }
 
-// MintCode wraps token in a code good for CodeLife from now under key.
+// MintCode seals token in a code good for CodeLife from now under key.
 func MintCode(key []byte, token [TokenSize]byte, now time.Time) (string, error) {
-	var b [codeLen]byte
-	if _, err := rand.Read(b[:codeNonce]); err != nil {
+	aead, err := codeCipher(key)
+	if err != nil {
 		return "", err
 	}
-	binary.LittleEndian.PutUint64(b[codeNonce:], uint64(now.Add(CodeLife).Unix())) //nolint:gosec // a unix time
-	copy(b[codeNonce+8:], token[:])
-	copy(b[codeNonce+8+TokenSize:], codeMac(key, b[:codeNonce+8+TokenSize]))
-	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+	var nonce [codeNonce]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	var plain [8 + TokenSize]byte
+	binary.LittleEndian.PutUint64(plain[:], uint64(now.Add(CodeLife).Unix())) //nolint:gosec // a unix time
+	copy(plain[8:], token[:])
+	b := make([]byte, 0, codeLen)
+	b = append(b, nonce[:]...)
+	b = aead.Seal(b, nonce[:], plain[:], nil)
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// OpenCode checks a code under key at now and returns its token and its nonce, which the
+// OpenCode opens a code under key at now and returns its token and its nonce, which the
 // CodeLog remembers. Every refusal is ErrCode.
-func OpenCode(key []byte, code string, now time.Time) (token [TokenSize]byte, nonce [codeNonce]byte, expires time.Time, err error) {
+func OpenCode(key []byte, code string, now time.Time) (token [TokenSize]byte, nonce [CodeNonceLen]byte, expires time.Time, err error) {
 	b, derr := base64.RawURLEncoding.DecodeString(code)
 	if derr != nil || len(b) != codeLen {
 		return token, nonce, expires, ErrCode
 	}
-	if !hmac.Equal(b[codeNonce+8+TokenSize:], codeMac(key, b[:codeNonce+8+TokenSize])) {
+	aead, err := codeCipher(key)
+	if err != nil {
 		return token, nonce, expires, ErrCode
 	}
-	expires = time.Unix(int64(binary.LittleEndian.Uint64(b[codeNonce:])), 0) //nolint:gosec // a unix time
+	plain, err := aead.Open(nil, b[:codeNonce], b[codeNonce:], nil)
+	if err != nil || len(plain) != 8+TokenSize {
+		return token, nonce, expires, ErrCode
+	}
+	expires = time.Unix(int64(binary.LittleEndian.Uint64(plain[:8])), 0) //nolint:gosec // a unix time
 	if !now.Before(expires) {
 		return token, nonce, expires, ErrCode
 	}
-	copy(nonce[:], b[:codeNonce])
-	copy(token[:], b[codeNonce+8:])
+	copy(nonce[:], b[:CodeNonceLen])
+	copy(token[:], plain[8:])
 	return token, nonce, expires, nil
 }
 
@@ -98,7 +122,7 @@ func OpenCode(key []byte, code string, now time.Time) (token [TokenSize]byte, no
 type CodeLog struct {
 	mu   sync.Mutex
 	seq  uint64
-	used map[[codeNonce]byte]codeUse
+	used map[[CodeNonceLen]byte]codeUse
 }
 
 type codeUse struct {
@@ -107,11 +131,11 @@ type codeUse struct {
 }
 
 // Use records nonce as opened; false when it was already.
-func (l *CodeLog) Use(nonce [codeNonce]byte, expires, now time.Time) bool {
+func (l *CodeLog) Use(nonce [CodeNonceLen]byte, expires, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.used == nil {
-		l.used = map[[codeNonce]byte]codeUse{}
+		l.used = map[[CodeNonceLen]byte]codeUse{}
 	}
 	for n, u := range l.used {
 		if !now.Before(u.expires) {
@@ -122,7 +146,7 @@ func (l *CodeLog) Use(nonce [codeNonce]byte, expires, now time.Time) bool {
 		return false
 	}
 	for len(l.used) >= CodeLogMax {
-		var oldest [codeNonce]byte
+		var oldest [CodeNonceLen]byte
 		first := true
 		var oldestSeq uint64
 		for n, u := range l.used {
