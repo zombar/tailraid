@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -106,6 +107,29 @@ func TestAdminOps_RestoreAndVersions(t *testing.T) {
 	} {
 		if _, err := do(bad); err == nil {
 			t.Fatalf("%+v succeeded", bad)
+		}
+	}
+}
+
+// A restore's reply lists at most ReplyPaths skipped and refused paths, so a re-run over
+// a large tree (every file skipped) fits the client's reply bound; the counts are whole.
+func TestRestoreReply_BoundsPaths(t *testing.T) {
+	for _, n := range []int{0, 1, ReplyPaths - 1, ReplyPaths, ReplyPaths + 1} {
+		paths := make([]string, n)
+		for i := range paths {
+			paths[i] = fmt.Sprintf("/f%d", i)
+		}
+		reply := restoreReply("/x", vfs.RestoreReport{Files: 3, Skipped: paths, Refused: paths})
+		rep := reply["report"].(vfs.RestoreReport)
+		want := min(n, ReplyPaths)
+		if len(rep.Skipped) != want || len(rep.Refused) != want || rep.Files != 3 {
+			t.Fatalf("n=%d: report %d skipped, %d refused, %d files", n, len(rep.Skipped), len(rep.Refused), rep.Files)
+		}
+		if reply["skipped_count"] != n || reply["refused_count"] != n || reply["path"] != "/x" {
+			t.Fatalf("n=%d: reply %v %v %v", n, reply["skipped_count"], reply["refused_count"], reply["path"])
+		}
+		if n > 0 && rep.Skipped[0] != "/f0" {
+			t.Fatalf("n=%d: first skipped %q", n, rep.Skipped[0])
 		}
 	}
 }

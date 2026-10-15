@@ -116,7 +116,7 @@ Losing more voters than Raft can spare, permanently, is the one failure the clus
 
 Run `tailraid update` on every device, voters first, then `tailraid stop && tailraid start` on each (or `tailraid update --restart`). Do the whole cluster in one go: the first snapshot an upgraded node writes may be one an older node cannot read ([docs/12-operations.md](12-operations.md) §6). The previous binary stays beside the new one as `tailraid.old` for a minute after a clean start; `tailraid update --rollback` puts it back. A release older than the running one needs `--version` and `--allow-downgrade`.
 
-A 0.9.x volume does not upgrade to 0.10.0. 0.9.x ran on its own WireGuard mesh, which 0.10.0 withdrew in favour of Tailscale, so the volume is re-created: copy the files off, install Tailscale, `init` and `join` again, and copy the files back ([docs/12-operations.md](12-operations.md) §6 has the steps).
+A 0.9.x volume does not upgrade to 0.10.0. 0.9.x ran on its own WireGuard mesh, which 0.10.0 withdrew in favour of Tailscale, so the volume is re-created: take every device down, install Tailscale, `init` and `join` again, and restore from a mirror or copy the files back. [Moving from 0.9.x to 0.10](guide-moving-to-0.10.md) has the steps for each OS.
 
 ## Verifying a download
 

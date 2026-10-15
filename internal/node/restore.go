@@ -53,7 +53,7 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"path": dst, "report": rep}, nil
+		return restoreReply(dst, rep), nil
 	}
 	// snapshot_restore: to the same path, or under To, named As
 	if op.Mirror == "" || op.Name == "" {
@@ -73,5 +73,19 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"path": dst, "report": rep}, nil
+	return restoreReply(dst, rep), nil
+}
+
+// ReplyPaths bounds the skipped and refused paths a restore's reply lists: a restore run
+// again over a large tree skips every file, and the client reads at most 4 MiB of reply.
+const ReplyPaths = 1000
+
+// restoreReply is a restore's answer: the report with its path lists bounded and the
+// whole counts beside it.
+func restoreReply(dst string, rep vfs.RestoreReport) map[string]any {
+	reply := map[string]any{"path": dst, "skipped_count": len(rep.Skipped), "refused_count": len(rep.Refused)}
+	rep.Skipped = rep.Skipped[:min(len(rep.Skipped), ReplyPaths)]
+	rep.Refused = rep.Refused[:min(len(rep.Refused), ReplyPaths)]
+	reply["report"] = rep
+	return reply
 }

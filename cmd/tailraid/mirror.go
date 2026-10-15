@@ -387,8 +387,10 @@ func splitSnapshotRef(ref string) (mirrorName, name string, err error) {
 
 func printRestore(w io.Writer, raw json.RawMessage) error {
 	var r struct {
-		Path   string            `json:"path"`
-		Report vfs.RestoreReport `json:"report"`
+		Path    string            `json:"path"`
+		Report  vfs.RestoreReport `json:"report"`
+		Skipped int               `json:"skipped_count"`
+		Refused int               `json:"refused_count"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return err
@@ -396,6 +398,12 @@ func printRestore(w io.Writer, raw json.RawMessage) error {
 	fmt.Fprintf(w, "restored to %s: %d files, %d folders, %d links, %d chunks read from the mirror\n", r.Path, r.Report.Files, r.Report.Dirs, r.Report.Links, r.Report.Uploaded)
 	for _, s := range r.Report.Skipped {
 		fmt.Fprintf(w, "  skipped %s (exists)\n", s)
+	}
+	if more := r.Skipped - len(r.Report.Skipped); more > 0 {
+		fmt.Fprintf(w, "  and %d more skipped\n", more)
+	}
+	if r.Refused > 0 {
+		fmt.Fprintf(w, "%d entries left out: you may not read them\n", r.Refused)
 	}
 	return nil
 }
