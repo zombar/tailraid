@@ -55,6 +55,42 @@ type network struct {
 	mu      sync.Mutex
 	lastEP  []string // the candidates last published
 	pubAt   time.Time
+	kicks   chan struct{} // a membership entry applied: the peers are refreshed (I-317)
+}
+
+// membershipOp reports a command that changes who the peers are: a row, its state, or a
+// pending row (docs/20 §3).
+func membershipOp(op meta.Op) bool {
+	switch op { //nolint:exhaustive // every other op leaves the peer table alone
+	case meta.OpNodeUpsert, meta.OpNodeSetState, meta.OpPendingAdd, meta.OpPendingDelete, meta.OpMetaSet:
+		return true
+	}
+	return false
+}
+
+// kick asks for a peer refresh; several kicks before the refresh runs are one.
+func (nw *network) kick() {
+	if nw.kicks == nil {
+		return
+	}
+	select {
+	case nw.kicks <- struct{}{}:
+	default:
+	}
+}
+
+// refreshLoop refreshes the peers on every kick until ctx ends: the device's peer table
+// follows a membership entry the moment this node applies it, not at the next tick, so
+// a removed member's next packet dies at the tunnel on every node at once (I-317).
+func (nw *network) refreshLoop(ctx context.Context, node *cluster.Node) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-nw.kicks:
+			nw.refreshPeers(node)
+		}
+	}
 }
 
 // pathOf is the prober's view of the mesh's path to a device row (docs/20 §8, I-327):
@@ -164,7 +200,7 @@ func openNetwork(cfg config.Config, clusterID [16]byte, intro *introducer, clk c
 	if err != nil {
 		return nil, err
 	}
-	nw := &network{addr: addr, key: key, auth: auth, log: log, port: uint16(cfg.Mesh.Port)} //nolint:gosec // validated
+	nw := &network{addr: addr, key: key, auth: auth, log: log, port: uint16(cfg.Mesh.Port), kicks: make(chan struct{}, 1)} //nolint:gosec // validated
 	if err := nw.up(cfg, clusterID, intro, clk); err != nil {
 		return nil, err
 	}

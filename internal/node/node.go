@@ -368,7 +368,12 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	node.FSM.SetSnapshotHook(mirrors.onBegin)
 	defer node.FSM.SetSnapshotHook(nil)
-	node.FSM.SetApplyHook(ops.audited) // the leader records every applied users and secrets op (I-357)
+	node.FSM.SetApplyHook(func(cmd meta.Command, index uint64, res meta.Result) {
+		ops.audited(cmd, index, res) // the leader records every applied users and secrets op (I-357)
+		if membershipOp(cmd.Op) {
+			nw.kick() // the peer table follows the entry at once (I-317)
+		}
+	})
 	defer node.FSM.SetApplyHook(nil)
 	ops.mirrors, ops.mirrorPol = mirrors, mpol
 	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, online: prober.MirrorOnline}) // /.snapshots (docs/16 §6)
@@ -590,6 +595,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	go func() { pinned.Run(bg); done <- struct{}{} }()
 	go func() { statsSvc.Run(bg); done <- struct{}{} }()
 	go func() { ops.auditLoop(bg); done <- struct{}{} }()
+	go func() { nw.refreshLoop(bg, node); done <- struct{}{} }()
 	go func() { ops.searchLoop(bg, sset.Interval); done <- struct{}{} }()
 	if web != nil {
 		go func() { _ = web.Serve(bg, wl); done <- struct{}{} }()

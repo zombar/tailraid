@@ -124,11 +124,14 @@ global IPv6 address is an endpoint candidate (§5), often the best path there is
 every device row that carries a key and is not `Removed`, every pending row (§4), and,
 until the table has arrived from the log, the rows of the seed file (I-134, I-281,
 I-282). Each peer has `AllowedIPs = Addr/32` and a 25 s persistent keepalive. The peer
-set is diffed into the device on every membership event, before the authorizer learns
-of the change, so a removed member's next packet dies at the tunnel rather than at a
-403 (I-317). Cryptokey routing is what makes the authorizer simple: a packet from mesh
-address X was sealed by the key that owns X, so "which row is at this source address"
-is the whole question (I-318).
+set is diffed into the device the moment a node applies a membership entry (a row, its
+state, a pending row, the token: a hook on the FSM's apply, coalesced into one refresh),
+and again on the tick, so a removed member's next packet dies at the tunnel on every
+node at once rather than at a 403 (I-317). Cryptokey routing is what makes the
+authorizer simple: a packet from mesh address X was sealed by the key that owns X, so
+"which row is at this source address" is the whole question; the table decides every
+address it holds, and the seed file stands in only for one it does not hold yet, so a
+row the table marks removed is refused whatever the seed still says (I-318).
 
 **`mesh.json`.** `serve` writes `<home>/mesh.json` (`{addr, ifname, port}`, world-
 readable) so the CLI finds its node without the tailnet status it used to ask; the
@@ -514,8 +517,8 @@ round-trip table.
 | Invariant | Tests |
 |---|---|
 | I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
-| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
-| I-318 | `TestTableAuthorizer_Table`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh` |
+| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`, `TestMembershipOp_KicksPeerRefresh`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
+| I-318 | `TestTableAuthorizer_Table`, `TestTableAuthorizer_RemovedRowBeatsSeed`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh` |
 | I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |

@@ -104,3 +104,28 @@ func TestMembers_UpdateEndpointsOwnRowOnly(t *testing.T) {
 		t.Fatalf("health seen_from %q %v, want the caller's", h.SeenFrom, err)
 	}
 }
+
+// The table decides an address it knows: a row the table marks removed is refused even
+// while the seed (which follows the table only now and then) still lists it as active;
+// the seed stands in only for an address the table does not hold (I-318).
+// Invariant: I-318
+func TestTableAuthorizer_RemovedRowBeatsSeed(t *testing.T) {
+	removed := meta.Node{Idx: 3, ID: "r", Kind: meta.KindDevice, State: meta.Removed, Addr: "100.70.3.3"}
+	stale := removed
+	stale.State = meta.Active
+	unknown := meta.Node{Idx: 5, ID: "u", Kind: meta.KindDevice, State: meta.Active, Addr: "100.70.3.5"}
+	a := &TableAuthorizer{}
+	a.SetMembers(func(addr string) (meta.Node, bool) {
+		if addr == removed.Addr {
+			return removed, true
+		}
+		return meta.Node{}, false
+	})
+	a.SetSeed([]meta.Node{stale, unknown})
+	if _, err := a.Allow(context.Background(), netip.MustParseAddr(removed.Addr)); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("a removed row the seed still lists: %v, want ErrForbidden", err)
+	}
+	if p, err := a.Allow(context.Background(), netip.MustParseAddr(unknown.Addr)); err != nil || p.Node.Idx != 5 {
+		t.Fatalf("an address the table does not hold yet comes from the seed: %+v %v", p, err)
+	}
+}
