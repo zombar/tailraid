@@ -537,7 +537,7 @@ func (e *harnessEnv) GCNow(ctx context.Context) (repair.Result, error) {
 func (e *harnessEnv) PurgeTrash(ctx context.Context) (int, error) {
 	l := e.c.Leader()
 	gc := repair.NewGC(l.Node.FSM, l.Node, l.Client, l.Prober, e.c.Clk, 10*time.Minute, nil)
-	n, err := gc.PurgeTrash(ctx, max(e.c.Clk.Now().UnixNano(), l.Node.FSM.LastNow())+1)
+	n, err := gc.PurgeTrash(ctx, max(e.c.Clk.Now().UnixNano(), l.Node.FSM.LastNow())+1, 0)
 	e.c.Settle()
 	return n, err
 }

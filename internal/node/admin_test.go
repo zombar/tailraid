@@ -36,6 +36,7 @@ func opsFor(c *testharness.Cluster, nd *testharness.ClusterNode) *adminOps {
 		node: nd.Node, prober: nd.Prober, repairer: r, client: nd.Client, rd: nd.Reader,
 		ring: nd.Events, self: nd.Idx(), clk: c.Clk, log: slog.Default(),
 		disks: &diskSet{clusterID: c.CID, hostID: nd.ID, host: nd.Idx(), log: slog.Default()},
+		gc:    repair.NewGC(nd.Node.FSM, nd.Node, nd.Client, nd.Prober, c.Clk, time.Minute, nil),
 	}
 	// the harness node's default disk is this host's one open disk (docs/14 §9)
 	if nd.Store != nil {
