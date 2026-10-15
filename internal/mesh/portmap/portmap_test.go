@@ -182,3 +182,49 @@ func TestParseProcRoute_Table(t *testing.T) {
 		t.Fatal("a table without a default route gave a gateway")
 	}
 }
+
+// A gateway whose external address no peer reaches (a second NAT in front of it, a
+// misconfigured router) gets its mapping back and nothing is published: unspecified,
+// loopback, private, link-local, multicast and shared-space addresses are refused, a
+// public one is kept.
+// Invariant: I-330
+func TestMapper_RejectsUnusableExternal_Table(t *testing.T) {
+	for _, tc := range []struct {
+		external string
+		usable   bool
+	}{
+		{"0.0.0.0", false},
+		{"127.0.0.1", false},
+		{"10.0.0.9", false},
+		{"192.168.1.9", false},
+		{"172.16.5.5", false},
+		{"169.254.1.1", false},
+		{"224.0.0.1", false},
+		{"100.64.0.9", false},
+		{"100.127.255.254", false},
+		{"198.51.100.9", true},
+		{"100.128.0.1", true},
+	} {
+		clk := clock.NewFake(time.Now())
+		r, gw := fakeGateway(t, tc.external, clk, 10*time.Minute, nil)
+		m := &Mapper{Port: 20483, Clock: clk, GatewayPort: gw.Port(), Gateway: func(context.Context) (netip.Addr, netip.Addr, error) {
+			return gw.Addr(), netip.MustParseAddr("127.0.0.1"), nil
+		}}
+		m.Tick(ctx)
+		_, ok := m.External()
+		if ok != tc.usable {
+			t.Errorf("external %s: held %v, want %v (%+v)", tc.external, ok, tc.usable, m.Status())
+		}
+		if n := len(r.Mappings()); (n != 0) != tc.usable {
+			t.Errorf("external %s: %d mappings held at the gateway", tc.external, n)
+		}
+		if !tc.usable && !strings.Contains(m.Status().Why, "portmap") {
+			t.Errorf("external %s: why %q", tc.external, m.Status().Why)
+		}
+		m.Close(ctx)
+		_ = r.Close()
+	}
+	if err := Usable(netip.MustParseAddr("198.51.100.9"), 0); err == nil {
+		t.Error("port 0 accepted")
+	}
+}

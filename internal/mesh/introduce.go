@@ -261,6 +261,12 @@ func introduce(ctx context.Context, b *Bind, code JoinCode, key Key, clk clock.C
 	}
 }
 
+// ResolveEndpoint turns host:port into addresses: an address as it is, a name through the
+// resolver (nothing while it does not resolve). The joiner uses it for the code's
+// endpoints on every send, the node for mesh.endpoint when it publishes its candidates
+// (docs/20 §5): a peer gets addresses, never a name to resolve itself.
+func ResolveEndpoint(ctx context.Context, e string) []netip.AddrPort { return resolveEndpoint(ctx, e) }
+
 // resolveEndpoint turns host:port into addresses; a name that does not resolve now is
 // retried with the next send.
 func resolveEndpoint(ctx context.Context, e string) []netip.AddrPort {

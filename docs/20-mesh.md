@@ -200,7 +200,10 @@ server used to do: finding that endpoint.
 
 **Candidates.** Each row carries `Endpoints`, at most 8: every non-loopback,
 non-link-local interface address of the device with its mesh port; `mesh.endpoint`, a
-public `host:port` the operator knows (a port forward, the cloud voter's own address);
+public `host:port` the operator knows (a port forward, the cloud voter's own address; a
+name is resolved by the device that publishes it, each time it publishes, so a DDNS
+name reaches the peers as the addresses it points at today, and a peer never resolves
+a name);
 the reflexive addresses it has learned (the `seen_from` of its introduce, and the
 `seen_from` every `/health` reply carries: the UDP source the responder's device
 currently sees for the caller, on a direct path only; a caller it reaches through a
@@ -276,7 +279,11 @@ home moves from the public path to the LAN within a minute and without a restart
 On the node's tick the mesh probes the default gateway (the routing table on Linux,
 `route -n get default` on macOS, `route print` on Windows), PCP first and NAT-PMP next,
 asks it to map `mesh.port` for an hour, refreshes the mapping at half its lifetime,
-publishes `<external address>:<external port>` as a candidate (so it also lands in the
+publishes `<external address>:<external port>` as a candidate (an external address no
+peer reaches, one that is unspecified, loopback, private, link-local, multicast or in
+the shared space the mesh lives in, or a port of 0, is a gateway behind another NAT or
+misconfigured: the mapping is given back, nothing is published, and it is tried again
+every minute) (so it also lands in the
 join code this device prints), and releases the mapping on shutdown. Once a minute it
 asks the gateway's epoch: one that went back is a router that restarted and lost its
 mappings (RFC 6886 §3.6), and the device maps again at once; a gateway that stops
@@ -512,7 +519,7 @@ round-trip table.
 | I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
 | I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
-| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`; stub `TestStub_I_322` for the publishing on a real interface |
+| I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`, `TestCandidates_ConfiguredNameResolvedAtPublish`; stub `TestStub_I_322` for the publishing on a real interface |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |
 | I-325 | `TestClassify_Table`, `TestLocalAddr_MeshFileThenConfig`; stub `TestStub_I_325` for `status` on a real interface |
@@ -520,4 +527,4 @@ round-trip table.
 | I-327 | `TestProber_RankByClass_Determinism`, `TestReader_HedgeSkipsRelayedHolders_Table`, `TestFlusher_StragglerGrace_PerClass` |
 | I-328 | `TestNAT_SymmetricToSymmetric_NeedsARelay` (the need), `TestNAT_SymmetricToSymmetric_ThroughARelay`, `TestRelay_Codecs_Table`, `TestBind_RelayForwardRules`, `TestRelay_LeavesForADirectPath` |
 | I-329 | `TestRelay_Codecs_Table`, `TestBind_RelayForwardRules`, `TestRelay_LeavesForADirectPath`, `TestProbeTargets_Table`, `TestRepair_RelayedPathsDeferred`, `TestReader_Readahead_RelayedHolderOneChunk` |
-| I-330 | `TestClients_MapRefreshRelease`, `TestMapper_Lifecycle`, `TestParseProcRoute_Table`, `TestCandidates_OrderDedupCap` |
+| I-330 | `TestClients_MapRefreshRelease`, `TestMapper_Lifecycle`, `TestMapper_RejectsUnusableExternal_Table`, `TestParseProcRoute_Table`, `TestCandidates_OrderDedupCap` |
