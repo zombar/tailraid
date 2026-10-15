@@ -2,6 +2,15 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.9.1 (2026-10-15)
+
+### Changes
+
+- mesh: never carry the mesh over a Tailscale route ([6192402](https://github.com/zombar/tailraid/commit/6192402))
+- smbgw: the admin reads a file under another user's Read grant (I-352) ([99386e4](https://github.com/zombar/tailraid/commit/99386e4))
+- mesh: keep the node's chain first in the host firewall ([c3748da](https://github.com/zombar/tailraid/commit/c3748da))
+- vfs, nfsgw: ACCESS grants READ on a directory on the way to a role (I-351) ([a7b17f9](https://github.com/zombar/tailraid/commit/a7b17f9))
+
 ## v0.9.0 (2026-10-15)
 
 ### Changes
