@@ -39,7 +39,6 @@ The guests take about 120 GB of disk. [docs/vms.md](vms.md) explains what each s
 make tag VERSION=v0.3.0
 ```
 
-1. The first run opens a pull request with the changelog. Merge it and `git pull`.
-2. Run the same command again. It tags the release, and CI publishes six binaries, the sums file and its signature (the `MINISIGN_SECRET_KEY` secret holds the key).
+That is the whole release. The command opens a pull request with the changelog, merges it and pulls `main`. CI then builds the release from the merge commit, tags it and publishes six binaries, the sums file and its signature (the `MINISIGN_SECRET_KEY` secret holds the key). If the merge is refused, the pull request stays open, and merging it by hand releases the same way.
 
 Details: [docs/12-operations.md](12-operations.md) §4.
