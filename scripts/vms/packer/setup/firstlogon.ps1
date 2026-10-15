@@ -52,9 +52,16 @@ powercfg /change monitor-timeout-ac 0
 powercfg /hibernate off
 Stop-Service wuauserv -ErrorAction SilentlyContinue
 Set-Service wuauserv -StartupType Disabled
-# tailraid.exe lands in C:\tailraid (scripts/vms/binaries.sh)
-$path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-if ($path -notlike '*C:\tailraid*') { [Environment]::SetEnvironmentVariable('Path', "$path;C:\tailraid", 'Machine') }
+# tailraid.exe lands in C:\tailraid (scripts/vms/binaries.sh). The Tailscale MSI writes
+# the machine Path too (its own directory) and can land after an earlier write, so the
+# entry is added, read back and added again until it holds, and the result is logged.
+foreach ($try in 1..10) {
+  $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+  if ($path -like '*C:\tailraid*') { break }
+  [Environment]::SetEnvironmentVariable('Path', "$path;C:\tailraid", 'Machine')
+  Start-Sleep -Seconds 3
+}
+Write-Output "machine Path: $([Environment]::GetEnvironmentVariable('Path', 'Machine'))"
 # the SMB client as docs/15 expects it: signed, no guest fallback
 Set-SmbClientConfiguration -RequireSecuritySignature $true -EnableInsecureGuestLogons $false -Force
 Set-Content C:\tailraid\image-ready.txt (Get-Date -Format o)
