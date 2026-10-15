@@ -484,7 +484,9 @@ nodes (docs/20 §11); a verifier-issued challenge in place of the timestamp and 
   keys its duplicate request cache on the credential and the xid; the mode bits it
   reports are the stored mode masked to 0500 for `Read` and 0700 above, its ACCESS answer
   is the mask the role allows (every bit under `Write`, READ, LOOKUP and EXECUTE under
-  `Read`, LOOKUP and EXECUTE on the way to a role, `NFS3ERR_ACCES` elsewhere), and a
+  `Read` and on a directory on the way to a role, whose listing is the filtered one of
+  I-348 and which a client never lists once ACCESS denied READ, `NFS3ERR_ACCES`
+  elsewhere), and a
   SETATTR of mode or owner is stored and never consulted.
 - **I-352** — The SMB gateway binds each tree connect to the filesystem of the user its
   session account maps to; `tailraid` stays the mount account; an unbound account's
