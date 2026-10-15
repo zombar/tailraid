@@ -97,7 +97,7 @@ func TestGC_PurgeTrash_DrainsInBatches(t *testing.T) {
 	gc := repair.NewGC(f.FSM, f, f, f, f.Clk, time.Minute, nil)
 	gc.Batch = 2
 	before := f.Ops()
-	purged, err := gc.PurgeTrash(ctx, f.Clk.Now().UnixNano()+1)
+	purged, err := gc.PurgeTrash(ctx, f.Clk.Now().UnixNano()+1, 0)
 	must(t, err)
 	if purged != n || f.FSM.Stats().TrashInodes != 0 {
 		t.Fatalf("purged %d, trash %+v", purged, f.FSM.Stats())
@@ -135,5 +135,31 @@ func TestGC_PurgeThenCollect(t *testing.T) {
 	}
 	if _, ok := f.FSM.GetChunk(c.Hash); ok {
 		t.Fatal("entry survived GC")
+	}
+}
+
+// The retention purge is the node's own sweep: once users exist it proposes as System,
+// which the FSM admits for a Purge, so the trash still empties after retention. Before,
+// it proposed as nobody and every pass failed.
+//
+// Invariant: I-157, I-349
+func TestGC_PurgeTrash_RetentionUnderUsers(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	_, ino := trashedChunk(t, f)
+	now := f.Clk.Now().UnixNano()
+	f.MustApply(meta.Command{Op: meta.OpInvite, InviteOp: &meta.InviteOp{Bootstrap: true, Invite: meta.Invite{Hash: meta.HashCode("aaaaaaaaaa"), Name: "kim", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	f.MustApply(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "kim", Code: "aaaaaaaaaa", Key: [32]byte{1}, Now: now}})
+	if !f.FSM.Enforcing() {
+		t.Fatal("users exist but the FSM does not enforce")
+	}
+	f.Clk.Set(f.Clk.Now().Add(31 * 24 * time.Hour))
+	gc := repair.NewGC(f.FSM, f, f, f, f.Clk, time.Minute, nil)
+	gc.Retention = 30 * 24 * time.Hour
+	res, err := gc.RunOnce(ctx)
+	if err != nil || res.Purged != 1 {
+		t.Fatalf("%+v %v, want the root purged", res, err)
+	}
+	if _, inTrash := f.FSM.GetInodeAny(ino); inTrash {
+		t.Fatal("root still in the trash")
 	}
 }

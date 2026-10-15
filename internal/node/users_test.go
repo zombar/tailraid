@@ -162,6 +162,53 @@ func TestAdminOp_PathResolvesBeforeCheck(t *testing.T) {
 	}
 }
 
+// Once users exist, every trash op proposes as the user who signed it: an admin restores
+// an entry, purges one and purges the whole trash; a plain user without Admin where an
+// entry lived purges nothing. Before, the proposals carried no actor, so the FSM refused
+// all three for the admin too ("purge: meta: permission denied", 2026-10-15).
+// Invariant: I-349
+func TestTrashOps_ProposeAsTheSigner(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	for _, p := range []string{"/docs/a", "/docs/b", "/docs/c", "/docs/d"} {
+		c.WriteFile(0, p, testharness.Pattern(100, 1))
+	}
+	c.Settle()
+	inos := map[string]meta.Ino{}
+	for _, n := range []string{"a", "b", "c", "d"} {
+		in, err := c.Leader().Node.FSM.Resolve([]string{"docs", n})
+		must(t, err)
+		inos[n] = in.Ino
+		must(t, c.Nodes[0].FS.Remove("/docs/"+n))
+	}
+	c.Settle()
+	kim, lee := withUsers(t, c)
+	ops := opsFor(c, c.Leader())
+	ctx := context.Background()
+	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "trash_purge", Actor: lee, Ino: uint64(inos["b"])}); !errors.Is(err, meta.ErrAccess) {
+		t.Fatalf("a purge by a plain user: %v", err)
+	}
+	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "trash_purge", Actor: lee, All: true}); !errors.Is(err, meta.ErrAccess) {
+		t.Fatalf("a purge of the whole trash by a plain user: %v", err)
+	}
+	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "trash_restore", Actor: kim, Ino: uint64(inos["a"])}); err != nil {
+		t.Fatalf("a restore by an admin: %v", err)
+	}
+	if _, err := c.Leader().Node.FSM.Resolve([]string{"docs", "a"}); err != nil {
+		t.Fatalf("restored entry: %v", err)
+	}
+	if _, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "trash_purge", Actor: kim, Ino: uint64(inos["b"])}); err != nil {
+		t.Fatalf("a purge of one entry by an admin: %v", err)
+	}
+	raw, err := ops.AdminOp(ctx, rpc.AdminOp{Op: "trash_purge", Actor: kim, All: true})
+	if err != nil {
+		t.Fatalf("a purge of the whole trash by an admin: %v", err)
+	}
+	if got := raw.(map[string]int)["purged"]; got != 2 || c.Leader().Node.FSM.Stats().TrashInodes != 0 {
+		t.Fatalf("purged %d, trash %+v, want c and d gone", got, c.Leader().Node.FSM.Stats())
+	}
+}
+
 // A code is checked on the node's replica before anything is proposed, one attempt a
 // second per source, and a wrong or used code answers ErrInvite with no row made.
 // Invariant: I-343

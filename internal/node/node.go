@@ -1235,7 +1235,7 @@ func (a *adminOps) trashOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			}
 			c.NewParent = in.Ino
 		}
-		if err := a.propose(ctx, meta.Command{Op: meta.OpRestore, Restore: c}); err != nil {
+		if err := a.propose(ctx, meta.Command{Op: meta.OpRestore, Actor: op.Actor, Restore: c}); err != nil {
 			return nil, err
 		}
 		parts, err := st.PathOf(c.Ino)
@@ -1246,7 +1246,7 @@ func (a *adminOps) trashOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	default: // trash_purge
 		if op.Ino != 0 {
 			was := st.Stats().TrashInodes
-			if err := a.propose(ctx, meta.Command{Op: meta.OpPurge, Purge: &meta.Purge{Ino: meta.Ino(op.Ino), Now: now}}); err != nil {
+			if err := a.propose(ctx, meta.Command{Op: meta.OpPurge, Actor: op.Actor, Purge: &meta.Purge{Ino: meta.Ino(op.Ino), Now: now}}); err != nil {
 				return nil, err
 			}
 			return map[string]int{"purged": was - st.Stats().TrashInodes}, nil
@@ -1263,7 +1263,7 @@ func (a *adminOps) trashOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		} else if !op.All {
 			return nil, errors.New("trash purge: one of --ino, --older-than or --all is required")
 		}
-		n, err := a.gc.PurgeTrash(ctx, before)
+		n, err := a.gc.PurgeTrash(ctx, before, op.Actor)
 		if err != nil {
 			return nil, err
 		}
