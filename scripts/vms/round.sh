@@ -140,7 +140,43 @@ mount_() { # <os>: mount, and on Windows only check that the mapping works (it i
 # ---- the steps ---------------------------------------------------------------------------
 s1_binaries() { "$S/binaries.sh"; }
 
+# guest_epoch <os>: the guest's clock as unix seconds
+guest_epoch() {
+  case "$1" in
+    win) vm_ssh win 'powershell -NoProfile -NonInteractive -Command "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()"' | tr -d '\r ' ;;
+    *) vm_ssh "$1" 'date +%s' ;;
+  esac
+}
+# sync_clocks: every guest within 5 s of the host, else set from the host. A guest resumed
+# from a saved state keeps the clock it was saved with (the QEMU Windows guest came back
+# two hours behind on 2026-10-15), and an introduce more than 10 minutes off is refused
+# in silence (docs/20 §4), which reads as "no answer to the introduce".
+sync_clocks() {
+  local os host guest off
+  for os in $OSES; do
+    host=$(date -u +%s)
+    guest=$(guest_epoch "$os") || { echo "$os: clock unreadable"; return 1; }
+    off=$((guest - host))
+    if [ "${off#-}" -le 5 ]; then
+      echo "$os clock: ${off}s from the host"
+      continue
+    fi
+    echo "$os clock: ${off}s from the host; setting it"
+    host=$(date -u +%s)
+    case "$os" in
+      mac) vm_ssh mac "sudo date -u -f %s $host" >/dev/null ;;
+      linux) vm_ssh linux "sudo date -u -s @$host" >/dev/null ;;
+      win) vm_ssh win "powershell -NoProfile -NonInteractive -Command \"Set-Date -Date ([DateTimeOffset]::FromUnixTimeSeconds($host).LocalDateTime) | Out-Null\"" ;;
+    esac
+    guest=$(guest_epoch "$os") || return 1
+    off=$((guest - $(date -u +%s)))
+    [ "${off#-}" -le 5 ] || { echo "$os clock still ${off}s off after setting it"; return 1; }
+    echo "$os clock: ${off}s from the host after setting it"
+  done
+}
+
 s2_slate() {
+  sync_clocks || return 1
   for os in $OSES; do
     case "$os" in
       # the Windows guest sits behind QEMU's NAT: its config names the host's forwarded
