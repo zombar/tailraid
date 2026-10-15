@@ -24,7 +24,8 @@ jobs:
   # What this run must test (scripts/ci-changes.sh): a change of prose alone (the changelog
   # of a release, docs) runs only checks and docs; a pull request tests on Linux alone
   # unless it touches per-OS code or carries the full-ci label; a tag whose parent passed
-  # on main skips straight to the release.
+  # on main skips straight to the release, and so does the merge of make tag's changelog
+  # pull request, which the release job then tags.
   changes:
     name: what changed
     runs-on: ubuntu-latest
@@ -34,6 +35,7 @@ jobs:
     outputs:
       code: ${{ steps.diff.outputs.code }}
       oses: ${{ steps.diff.outputs.oses }}
+      release: ${{ steps.diff.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: {fetch-depth: 0}
@@ -177,24 +179,37 @@ jobs:
 
   release:
     name: release binaries
-    # A skipped need (a tag whose parent passed on main) is no failure; a failed one is.
-    if: startsWith(github.ref, 'refs/tags/v') && !failure() && !cancelled()
+    # A pushed tag, or the merge of make tag's changelog pull request on main (the job
+    # tags it once the binaries are built and signed; a tag pushed with the job's token
+    # starts no second run). A skipped need (a parent that passed on main) is no failure;
+    # a failed one is.
+    if: (startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.release != '') && !failure() && !cancelled()
     needs: [changes, checks, docs, lint, vuln, test]
     permissions:
-      contents: write # release uploads
+      contents: write # the tag and the release uploads
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.changes.outputs.release || github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: {go-version-file: go.mod, cache: true}
-      - run: make release VERSION="${GITHUB_REF_NAME}"
+      - run: make release VERSION="${VERSION}"
       - name: sign sha256sums.txt (docs/12 §4)
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
         run: go run -mod=vendor ./cmd/tailraid-sign -key-env MINISIGN_SECRET_KEY -sign dist/sha256sums.txt && go run -mod=vendor ./cmd/tailraid-sign -verify dist/sha256sums.txt
-      - run: scripts/changelog.sh notes "${GITHUB_REF_NAME}" > dist/release-notes.md && cat dist/release-notes.md
+      - run: scripts/changelog.sh notes "${VERSION}" > dist/release-notes.md && cat dist/release-notes.md
+      - name: tag the changelog merge
+        if: needs.changes.outputs.release != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "tailraid ${VERSION}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${VERSION}"
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ env.VERSION }}
           body_path: dist/release-notes.md
           files: |
             dist/tailraid_*
