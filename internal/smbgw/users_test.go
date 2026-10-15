@@ -113,6 +113,28 @@ func statStatus(sh *smb2.Share, name string) uint32 {
 	return ntStatus(err)
 }
 
+// The admin reads, read-only, a file under a folder another user holds Read on: a
+// whole-file read and a positional read-only handle both find it. On the VM rig the
+// Windows guest's mount, probed as nobody before its account was bound to the admin,
+// answered "could not find file" for exactly this; the gateway's open path finds it, so
+// that answer came from outside this path (the Windows client, not reproduced here).
+// Invariant: I-352
+func TestSMB_AdminReadsUnderAnotherUsersReadGrant(t *testing.T) {
+	g, _, _ := usersGateway(t) // g.sh is the mount account, bound to the admin
+	if b, err := g.sh.ReadFile("r/f"); err != nil || len(b) != 8192 {
+		t.Fatalf("the admin's whole-file read of r/f: %d bytes, %v", len(b), err)
+	}
+	fh, err := g.sh.OpenFile("r/f", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatalf("the admin's read-only open of r/f: %v", err)
+	}
+	buf := make([]byte, 16)
+	if _, err := fh.ReadAt(buf, 4096); err != nil {
+		t.Fatalf("the admin's read at 4 KiB: %v", err)
+	}
+	must(t, fh.Close())
+}
+
 // A Read-only account opens a file it may read as a read-only positional handle: reads
 // work, a WRITE and a size change are refused (STATUS_ACCESS_DENIED on the wire), and
 // the open itself records no refusal, so a Read-only user's every open does not fill
