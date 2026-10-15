@@ -26,10 +26,16 @@ for os in ${1:-$OSES}; do
       vm_ssh "$os" "mkdir -p ~/.local/bin && sudo rm -f /usr/local/bin/tailraid && install -m 755 /tmp/tailraid ~/.local/bin/.tailraid.new && mv -f ~/.local/bin/.tailraid.new ~/.local/bin/tailraid"
       ;;
     win)
-      # a running service keeps the exe open: stop it before the copy
+      # a running tailraid keeps the exe open: the service, and the logon task's `mount
+      # --wait` from the previous round (its conhost outlives the service, and the scp
+      # into the open file ended with "Broken pipe" on 2026-10-15). Stop both, end any
+      # tailraid.exe left, and land the copy beside the exe before moving it over: Windows
+      # renames a running image where it refuses to overwrite one
       # shellcheck disable=SC2016 # PowerShell, expanded in the guest
-      vm_ssh win 'if (Get-Service tailraid -ErrorAction SilentlyContinue) { tailraid stop 2>$null | Out-Null }; New-Item -ItemType Directory -Force C:\tailraid | Out-Null' || true
-      vm_scp win "$out/tailraid_windows_arm64.exe" "C:/tailraid/tailraid.exe"
+      vm_ssh win 'if (Get-Service tailraid -ErrorAction SilentlyContinue) { tailraid stop 2>$null | Out-Null }; Stop-ScheduledTask -TaskName tailraid-mount -ErrorAction SilentlyContinue; taskkill /F /IM tailraid.exe 2>$null | Out-Null; New-Item -ItemType Directory -Force C:\tailraid | Out-Null' || true
+      vm_scp win "$out/tailraid_windows_arm64.exe" "C:/tailraid/tailraid.exe.new"
+      vm_ssh win 'Move-Item -Force C:\tailraid\tailraid.exe.new C:\tailraid\tailraid.exe'
+
       ;;
   esac
   got=$(vm_ssh "$os" "tailraid version" | tr -d '\r')

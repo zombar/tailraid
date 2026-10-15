@@ -18,7 +18,7 @@ Each target cross-compiles the binary for the Docker engine's architecture, brin
 
 ### Three local VMs
 
-On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest over a mesh of their own, each OS running `tailraid init` in turn while the other two join by its code, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a metadata export and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
+On an Apple Silicon Mac, `make vms-rounds` forms a volume from a macOS, a Linux and a Windows guest over a mesh of their own, each OS running `tailraid init` in turn while the other two join by its code, then crashes and restarts the joiners through launchd, systemd and the SCM, moves data across the three mounts, mints an admin and a user and checks their grants through the three mounts, runs `tailraid verify --destructive --restarts` from the next OS, updates every node to the latest release with `tailraid update --restart` and rolls it back, adds a disk, takes a metadata export and recovers a one-voter cluster. It is the tier that would have caught the v0.3.2 join defects.
 
 | Step | Command | Notes |
 |---|---|---|

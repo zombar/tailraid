@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # round.sh <mac|linux|win> — one round of the three-VM rig (docs/vms.md): the named OS
-# runs `tailraid init`, the other two join by its code, and the ten steps below exercise
+# runs `tailraid init`, the other two join by its code, and the steps below exercise
 # the cluster through the real service managers and OS mounts. FULL=1 runs the long verify.
 #
 # Every step appends a line to test/vms/results/<run>/round-<first>.jsonl and the
@@ -109,6 +109,80 @@ data() {
       ;;
     *) vm_run_script "$os" "$C/data.sh" "$(mount_path "$os")" "$@" ;;
   esac
+}
+# perm <os> <op> <run> [<sub>]: the permission probes of checks/perm.sh (perm.ps1 on Windows)
+# through the guest's own mount, as the user its mount is bound to
+perm() {
+  local os=$1; shift
+  case "$os" in
+    win)
+      local out rc=0
+      out=$(vm_run_script win "$C/perm.ps1" "T:" "$@") || rc=$?
+      printf '%s\n' "$out" | tr -d '\r'
+      return $rc
+      ;;
+    *) vm_run_script "$os" "$C/perm.sh" "$(mount_path "$os")" "$@" ;;
+  esac
+}
+# probe_until <seconds> <os> <op> <run> [<sub>] <want>: probes until the last line is
+# want, printing how long it took, or what the guest still answered. A change of role
+# reaches a mount within the replication bound plus the NFS client's access cache (a
+# cached answer for the uid lives until the directory's attributes expire, up to 60 s on
+# Linux and macOS), so the waits are long and the seconds are what the step reports.
+probe_until() {
+  local secs=$1 os=$2; shift 2
+  local want=${*: -1} got t0 run=$2
+  t0=$(date +%s)
+  while :; do
+    got=$(perm "$os" "${@:1:$#-1}" 2>&1 | tail -1) || true
+    if [ "$got" = "$want" ]; then echo "$os answers as expected after $(( $(date +%s) - t0 ))s"; return 0; fi
+    if [ $(( $(date +%s) - t0 )) -ge "$secs" ]; then
+      echo "$os still answers \"$got\" after ${secs}s, want \"$want\""
+      # the mount's own view and the node's log, so a failure says what the gateway held
+      perm "$os" diag "$run" 2>&1 | sed "s/^/$os /"
+      # every node's applied index as this guest sees it: a node level with the leader
+      # holds every create, so an empty listing there is the view, not missing data
+      status_json "$os" | python3 -c 'import json,sys
+r=json.load(sys.stdin)
+print("applied:", " ".join("%s=%s%s" % (n.get("name"), n.get("applied"), "*" if n.get("leader") else "") for n in r.get("nodes", []) if n.get("kind") == "device"))' 2>&1 | sed "s/^/$os /"
+      # the refusals the vfs recorded (docs/21 §8): one here means the view refused the
+      # operation; none means the refusal came from above it, in the gateway
+      tr_ "$FIRST" audit ls --since 15m --json 2>&1 | python3 -c 'import json,sys
+try:
+  recs=json.load(sys.stdin)
+except Exception as e:
+  print("audit: unreadable:", e); sys.exit()
+ref=[x for x in recs if x.get("result")=="refused"]
+print("audit: %d records, %d refusals" % (len(recs), len(ref)))
+for x in ref[-30:]:
+  print("audit refused: node=%s actor=%s kind=%s target=%s count=%s" % (x.get("node"), x.get("actor"), x.get("kind"), x.get("target"), x.get("count")))' 2>&1 | sed "s/^/$os /"
+      tr_ "$os" logs -n 60 2>&1 | grep -iv 'heartbeat\|probe ok' | tail -40 | sed "s/^/$os log: /" || true
+      return 1
+    fi
+    sleep 2
+  done
+}
+# tr_daemon <os> <args...>: a command that runs as the daemon's user (user bootstrap writes
+# the data directory, docs/21 §1): root on macOS, the installing user on Linux, the
+# elevated session on Windows
+tr_daemon() { case "$1" in mac) tr_root "$@" ;; *) tr_ "$@" ;; esac; }
+# code_from <text>: the one-time code in an invite's "tailraid user create <name> <code>"
+# or "tailraid user key add <code>" line
+code_from() { printf '%s\n' "$1" | sed -n 's/.*tailraid user create [^ ]* \([^ ]*\).*/\1/p; s/.*tailraid user key add \([^ ]*\).*/\1/p' | head -1; }
+# with_invite <os> <args...>: a user create or key add on the guest, retried while the
+# invite has not reached its replica (a node checks its own replica before proposing,
+# I-343) or the code limiter holds the source
+with_invite() {
+  local os=$1; shift
+  local i out rc
+  for i in 1 2 3 4 5 6; do
+    rc=0; out=$(tr_ "$os" "$@" 2>&1) || rc=$?
+    [ $rc -eq 0 ] && { printf '%s\n' "$out"; return 0; }
+    printf '%s' "$out" | grep -q 'no such invite\|too many' || break
+    [ "$i" -lt 6 ] && sleep 2
+  done
+  printf '%s\n' "$out"
+  return 1
 }
 wait_ready() { # <os> <seconds>
   wait_for "$2" "$1 ready" ready "$1"
@@ -325,6 +399,69 @@ s7b_promote() {
 }
 voters() { status_json "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["voters"])'; }
 
+# users and permissions through the real CLIs, keychains and mounts (docs/21): FIRST mints
+# the first admin from a bootstrap invite, the verifier's guest becomes a plain user from
+# the admin's invite, the third holds the admin's second key; the grants an admin makes on
+# one guest decide what the other two mounts may do (NFS on macOS and Linux, SMB on
+# Windows), a revoke and a disable reach them, and the user ends in admins so step 8's
+# verify runs from an admin's mount
+s7c_permissions() {
+  local a=$FIRST b c os out code
+  b=$(verifier)
+  c=$(for os in $OSES; do [ "$os" = "$a" ] || [ "$os" = "$b" ] || echo "$os"; done)
+  local nobody="read-r=refused write-r=refused write-w=refused stat-other=refused list=refused"
+  local sam="read-r=ok write-r=refused write-w=ok stat-other=refused list=r w"
+  local admin="read-r=ok write-r=ok write-w=ok stat-other=ok list=other r w"
+  local dir="/_vms/$RUN_ID/perm"
+  # the first admin: the invite minted as the daemon's user on a voter, the identity
+  # made as the person (its key in their keychain, their mount bound to it)
+  out=$(tr_daemon "$a" user bootstrap --name ops) || { printf '%s\n' "$out"; return 1; }
+  code=$(code_from "$out")
+  [ -n "$code" ] || { echo "no invite in: $out"; return 1; }
+  tr_ "$a" user create ops "$code"
+  echo "$a whoami: $(tr_ "$a" user whoami)"
+  # the cluster enforces from here: the admin lays out the folders, the unbound mounts
+  # see nothing
+  perm "$a" setup "$RUN_ID"
+  probe_until 150 "$a" probe "$RUN_ID" "$admin" || return 1
+  for os in $b $c; do
+    probe_until 150 "$os" probe "$RUN_ID" "$nobody" || return 1
+  done
+  echo "the admin's mount on $a answers every role; the unbound mounts on $b and $c are refused"
+  # a plain user from the admin's invite, created on another guest as the person
+  out=$(tr_ "$a" user invite sam); code=$(code_from "$out")
+  [ -n "$code" ] || { echo "no invite in: $out"; return 1; }
+  with_invite "$b" user create sam "$code"
+  # the admin's second device: a key invite from the first, the key added on the third
+  out=$(tr_ "$a" user key invite); code=$(code_from "$out")
+  [ -n "$code" ] || { echo "no key invite in: $out"; return 1; }
+  with_invite "$c" user key add "$code"
+  echo "$b whoami: $(tr_ "$b" user whoami); $c whoami: $(tr_ "$c" user whoami)"
+  # the grants, made on the first guest, decide what the second's mount may do
+  tr_ "$a" grant "$dir/r" sam read
+  tr_ "$a" grant "$dir/w" sam write
+  probe_until 150 "$b" probe "$RUN_ID" "$sam" || return 1
+  probe_until 150 "$c" probe "$RUN_ID" "$admin" || return 1
+  # the third guest binds its own mount to sam (signed by the admin key it holds): two
+  # gateways on two OSes answer the same roles (I-347)
+  tr_ "$c" user bind sam
+  probe_until 150 "$c" probe "$RUN_ID" "$sam" || return 1
+  echo "sam's roles answered alike by $b and $c: $(perm "$b" probe "$RUN_ID" | tail -1)"
+  # a revoke on the first guest reaches both mounts
+  tr_ "$a" revoke "$dir/w" sam
+  for os in $b $c; do probe_until 150 "$os" write "$RUN_ID" w refused || return 1; done
+  # a disabled user's mounts go dark everywhere, and come back
+  tr_ "$a" user disable sam
+  for os in $b $c; do probe_until 150 "$os" read "$RUN_ID" r refused || return 1; done
+  tr_ "$a" user enable sam
+  for os in $b $c; do probe_until 150 "$os" read "$RUN_ID" r ok || return 1; done
+  # sam joins admins: both mounts answer every role, which step 8's verify needs of $b's
+  tr_ "$a" group add admins sam
+  for os in $b $c; do probe_until 150 "$os" probe "$RUN_ID" "$admin" || return 1; done
+  tr_ "$a" access ls "$dir" | sed 's/^/access: /'
+  echo "ops on $a; sam on $b and $c, an admin now; grants, a revoke and a disable reached every mount"
+}
+
 # verifier: the guest that runs verify, the OS after FIRST in the mac, linux, win cycle,
 # so the leader (FIRST) is a target the consensus phase can kill, and over three rounds
 # every OS drives the soak once through its own mount
@@ -368,6 +505,9 @@ s8_verify() {
       # a live cluster has no mirror before step 9 (19), no copy jobs (22, 23) and no
       # mesh of its own to join, cut or map (25-27): observed only, as docs/20 §10 says
       '"phase":"19 snapshots"'|'"phase":"22 copies under faults"'|'"phase":"23 many users at once"'|'"phase":"25 mesh join"'|'"phase":"26 mesh paths"'|'"phase":"27 mesh nat"') ;;
+      # a live cluster's users are its own: verify mints no admin, binds no uid and signs
+      # for nobody there (docs/21 §10), so the users phases are the compose rig's
+      '"phase":"28 users and keys"'|'"phase":"29 grants on the gateways"'|'"phase":"30 secrets per user"'|'"phase":"31 audit and sessions"') ;;
       *) echo "unexpected skip: $p"; rc=1 ;;
     esac
   done < "$OUT/skipped-$FIRST.txt"
@@ -493,6 +633,7 @@ step "5 membership" s5_membership &&
 step "6 restart after join" s6_restart_after_join &&
 step "7 cross-OS data" s7_data &&
 step "7b promote" s7b_promote &&
+step "7c permissions" s7c_permissions &&
 step "8 verify" s8_verify &&
 step "8b update --restart" s8b_update &&
 step "9 add-disk, snapshot, recover" s9_disk_and_recover || true

@@ -10,6 +10,10 @@ tailraid uninstall --forget-identity 2>$null | Out-Null
 tailraid reset --yes --discard-dirty 2>$null | Out-Null
 net use T: /delete /y 2>$null | Out-Null
 sc.exe delete tailraid 2>$null | Out-Null
+# the SMB client's metadata caches at the Windows defaults, pinned each round: the
+# setting is the machine's and outlives a round, and a guest left with them off (one
+# round on 2026-10-15) failed every Rename-Item with "The parameter is incorrect"
+Set-SmbClientConfiguration -DirectoryCacheLifetime 10 -FileInfoCacheLifetime 10 -FileNotFoundCacheLifetime 5 -Force 2>$null | Out-Null
 Remove-Item -Recurse -Force $cfgdir, 'C:\tailraid\d1', 'C:\tailraid\d2', 'C:\tailraid\snap' -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $cfgdir, 'C:\tailraid\d1', 'C:\tailraid\d2' | Out-Null
 $ErrorActionPreference = 'Stop'
