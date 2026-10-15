@@ -257,11 +257,13 @@ cannot be forged. A device that has not fetched the cluster key yet (a fresh joi
 before its first fetch) uses direct paths only; the fetch itself runs over its first
 direct path, to the bootstrap.
 
-**The path probe.** A device pinned on a `wan` or `relay` path sends `0x12 ‖ its key ‖
+**The path probe.** A device pinned on a `wan` or `relay` path sends `0x12 ‖ kind ‖ its key ‖
 the candidate's key ‖ unix seconds ‖ HMAC` to its better-class candidates every 60 s;
-the device the probe names answers with the same frame, any other member drops it, and
-a candidate whose answer comes back naming that device becomes the endpoint (so a
-candidate that is really another member, or a relay, pins nothing), and the device sends
+the device the probe names answers with the frame marked an echo under a MAC of its own,
+any other member drops it, and a candidate whose echo comes back naming that device
+becomes the endpoint (so a candidate that is really another member, a relay, a UDP echo
+service or the prober's own address pins nothing: the probe reflected unchanged is no
+echo), and the device sends
 a keepalive on it at once, so the peer, still sending through the relay, learns the
 direct address and moves too; without that the peer's next relayed packet would roam
 the device back to the relay before anything had gone direct. A laptop that comes
@@ -487,7 +489,8 @@ round-trip table.
   through a member both reach.
 - **I-329** — A device pinned on a `wan` or `relay` path probes its better-class
   candidates every 60 s with an authenticated frame naming the candidate's device, which
-  that device alone answers, moves to a candidate that answers within two probe
+  that device alone answers with an echo under its own MAC (the probe reflected
+  unchanged is no answer), moves to a candidate that answers within two probe
   intervals and sends a keepalive on it at once, so the pin holds against a peer still
   sending through the relay; the repairer and the scrub defer background work
   whose only source or target is relayed unless the slot is bad, and readahead to a

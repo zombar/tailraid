@@ -20,12 +20,16 @@ import (
 // `0x11 ‖ from ‖ to ‖ unix seconds ‖ MAC ‖ WireGuard packet`, authenticated under a key
 // derived from the cluster key (docs/19 §3), which every member holds: a relay forwards
 // nothing it cannot verify, and never holds a key that opens the payload. A probe is
-// `0x12 ‖ key ‖ unix seconds ‖ MAC`: the responder sends the same frame back, and the
-// sender, seeing its own key come back from a candidate, pins that candidate.
+// `0x12 ‖ kind ‖ prober ‖ target ‖ unix seconds ‖ MAC`: the device the probe names
+// answers with the kind set to echo under a MAC of its own, so a reflector (a candidate
+// that is the prober's own address, a UDP echo service) returns nothing the prober
+// takes for an answer, and the prober, seeing the echo from a candidate, pins it.
 const (
 	relayMACLen    = 16
-	relayHeaderLen = 1 + 32 + 32 + 8 + relayMACLen // 89
-	probeLen       = 1 + 32 + 32 + 8 + relayMACLen // 89: the prober's key, the probed device's key
+	relayHeaderLen = 1 + 32 + 32 + 8 + relayMACLen     // 89
+	probeLen       = 1 + 1 + 32 + 32 + 8 + relayMACLen // 90: the kind, the prober's key, the probed device's key
+	probeAsk       = 0                                 // the probe itself
+	probeEcho      = 1                                 // the target's answer
 	// RelaySkew is how far a frame's timestamp may be from the receiver's clock.
 	RelaySkew = 10 * time.Minute
 	// RelayAfter is how long a peer's direct candidates fan out unanswered before the
@@ -142,10 +146,10 @@ func decodeRelay(key, frame []byte, now time.Time) (relayFrame, []byte, bool) {
 	return r, frame[relayHeaderLen:], true
 }
 
-func encodeProbe(key []byte, self, target Key, at int64) []byte {
+func encodeProbe(key []byte, kind byte, prober, target Key, at int64) []byte {
 	b := make([]byte, 0, probeLen)
-	b = append(b, frameProbe)
-	b = append(b, self[:]...)
+	b = append(b, frameProbe, kind)
+	b = append(b, prober[:]...)
 	b = append(b, target[:]...)
 	b = binary.BigEndian.AppendUint64(b, uint64(at)) //nolint:gosec // a unix time
 	m := hmac.New(sha256.New, key)
@@ -153,24 +157,25 @@ func encodeProbe(key []byte, self, target Key, at int64) []byte {
 	return append(b, m.Sum(nil)[:relayMACLen]...)
 }
 
-// decodeProbe reads a probe and checks its MAC and timestamp: the prober's key and the
-// key of the device it is for.
-func decodeProbe(key, frame []byte, now time.Time) (from, to Key, ok bool) {
-	if len(key) == 0 || len(frame) != probeLen || frame[0] != frameProbe {
-		return Key{}, Key{}, false
+// decodeProbe reads a probe or an echo and checks its MAC and timestamp: the kind, the
+// prober's key and the key of the device it is for.
+func decodeProbe(key, frame []byte, now time.Time) (kind byte, prober, target Key, ok bool) {
+	if len(key) == 0 || len(frame) != probeLen || frame[0] != frameProbe || frame[1] > probeEcho {
+		return 0, Key{}, Key{}, false
 	}
 	m := hmac.New(sha256.New, key)
 	m.Write(frame[:probeLen-relayMACLen])
 	if !hmac.Equal(frame[probeLen-relayMACLen:], m.Sum(nil)[:relayMACLen]) {
-		return Key{}, Key{}, false
+		return 0, Key{}, Key{}, false
 	}
-	copy(from[:], frame[1:33])
-	copy(to[:], frame[33:65])
-	at := int64(binary.BigEndian.Uint64(frame[65:73])) //nolint:gosec // a unix time
+	kind = frame[1]
+	copy(prober[:], frame[2:34])
+	copy(target[:], frame[34:66])
+	at := int64(binary.BigEndian.Uint64(frame[66:74])) //nolint:gosec // a unix time
 	if d := now.Sub(time.Unix(at, 0)); d > RelaySkew || d < -RelaySkew {
-		return Key{}, Key{}, false
+		return 0, Key{}, Key{}, false
 	}
-	return from, to, true
+	return kind, prober, target, true
 }
 
 // rateLimiter is a token bucket in bytes: what a relay forwards for others (I-328).
