@@ -280,7 +280,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   through `/dev/corrupt`. Before the first phase it waits until every node's status shows
   every device live: a joiner's paths form a few seconds after it serves (docs/20 §5),
   and a read through a gateway with no path to a holder yet is EIO, no phase's finding.
-- **Live** (`tailraid verify [--report out.html] [--destructive]`): runs on one device of
+- **Live** (`tailraid verify [--report out.html] [--destructive] [--users]`): runs on one device of
   the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
   uses the device's mesh address. Non-destructive by default: transfer, integrity across every
   node's FSM hash, churn, dedup and GC, repair backlog; the only thing a non-destructive
@@ -549,8 +549,15 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   container, the compose worker relays a signed request (`rpcReq.Sig`), and the driver's
   mounts stay bound to the admin between the checks. The phases run last, since the
   first user turns enforcement on for the rest of the run; a live cluster's users are
-  its own, so it records the four as skipped (`Caps.Users`); the harness answers the
-  same ops over its nodes' own FSMs (`users_harness_test.go`), so CI runs the four. `soak.CopySpec`
+  its own, so `verify` records the four as skipped (`Caps.Users`) unless `--users` says
+  the cluster is disposable: then the driver's people sign through the device's own RPC
+  client for the node each request goes to, the first admin's invite is minted by the
+  admin identity the device holds (else by `user bootstrap` on its own node, which the
+  daemon's user runs), the mount it drives is its own, bound by the credential the CLI
+  presents (its uid, the SMB account on Windows), and the two-gateway check of phase 29
+  is skipped by name; the harness answers the
+  same ops over its nodes' own FSMs (`users_harness_test.go`), so CI runs the four,
+  once with every node a gateway and once with one, as a live run has. `soak.CopySpec`
   carries the open mode (exclusive, the default, or replace) and
   which of the job's sessions copies it (`Conn`), and a result says when a create lost
   to an existing name (`Exists`); the handle races are `smbclient.Races`

@@ -59,7 +59,8 @@ type Caps struct {
 	// mount is the run's only volume) and whose path to a killed node stays; "" on a rig.
 	Self string
 	// Users: the environment is a UsersEnv whose cluster is disposable, so phases 28–31
-	// may make users on it (docs/21 §10); a live cluster's users are its own, so it skips.
+	// may make users on it (docs/21 §10); a live cluster's users are its own, so it skips
+	// unless `verify --users` says the cluster is disposable.
 	Users bool
 }
 

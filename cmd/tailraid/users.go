@@ -394,10 +394,7 @@ func printInvite(cmd *cobra.Command, raw json.RawMessage, name string) error {
 // bindAndReport binds this person's own credential on the device (I-350) and says what
 // was made.
 func bindAndReport(cmd *cobra.Command, raw json.RawMessage, name string) error {
-	cred := users.UIDCredential(users.CallerUID())
-	if runtime.GOOS == "windows" {
-		cred = users.SMBCredential(smbgw.User)
-	}
+	cred := deviceCredential()
 	if _, err := localCall(cmd, rpc.AdminOp{Op: "user_bind", Credential: cred, User: name}); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "identity made, but this device's mount is not bound to it: %v (tailraid user bind %s)\n", err, name)
 	}
@@ -411,6 +408,15 @@ func bindAndReport(cmd *cobra.Command, raw json.RawMessage, name string) error {
 	_ = json.Unmarshal(raw, &r)
 	fmt.Fprintf(cmd.OutOrStdout(), "you are %s on this device (key %s, bound to %s)\n", r.User, r.Key, cred)
 	return nil
+}
+
+// deviceCredential is the binding key this person's IO through the device's mount
+// presents: their uid over NFS, the share's account over SMB on Windows (docs/21 §5).
+func deviceCredential() string {
+	if runtime.GOOS == "windows" {
+		return users.SMBCredential(smbgw.User)
+	}
+	return users.UIDCredential(users.CallerUID())
 }
 
 func groupCmd() *cobra.Command {

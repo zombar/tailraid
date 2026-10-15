@@ -92,7 +92,7 @@ func (e *harnessEnv) mountActor(nd *testharness.ClusterNode) meta.UserIdx {
 	return 0
 }
 
-func (e *harnessEnv) MountUID() int { return harnessMountUID }
+func (e *harnessEnv) MountCredential() string { return users.UIDCredential(harnessMountUID) }
 
 // BootstrapInvite mints the first admin's invite on n, as `user bootstrap` does on a voter.
 func (e *harnessEnv) BootstrapInvite(ctx context.Context, n soak.NodeRef, name string) (string, error) {
@@ -509,5 +509,51 @@ func TestSoak_UsersAgainstHarness(t *testing.T) {
 	}
 	if !strings.Contains(html.String(), "<h2>Users</h2>") || !strings.Contains(html.String(), "grant matrix") {
 		t.Fatal("the report has no Users section")
+	}
+}
+
+// oneGateway is the harness with a volume on its first node alone, as a live run has
+// (`verify --users` drives the verifying device's own mount): phase 29 probes the one
+// gateway and leaves the two-gateway check skipped.
+type oneGateway struct{ *harnessEnv }
+
+func (e oneGateway) Volume(n soak.NodeRef) (soak.Volume, bool) {
+	if e.node(n).I != 0 {
+		return nil, false
+	}
+	return e.harnessEnv.Volume(n)
+}
+
+func (e oneGateway) Caps() soak.Caps {
+	c := e.harnessEnv.Caps()
+	c.MultiGateway = false
+	return c
+}
+
+// The users phases run against one gateway, as a live `verify --users` does: no phase
+// skipped, no check failed, and the one check that needs two gateways skipped by name.
+func TestSoak_UsersOneGatewayAgainstHarness(t *testing.T) {
+	c := testharness.NewCluster(t, 3, 2, 1)
+	defer c.Close()
+	env := oneGateway{&harnessEnv{t: t, c: c}}
+	var jsonl bytes.Buffer
+	seed, rng := testseed.New(t)
+	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases("28", "29", "30", "31")}
+	sum, err := run.Execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ph := range sum.Phases {
+		if ph.Skipped {
+			t.Errorf("%s skipped: %s", ph.Name, ph.Reason)
+		}
+		for _, chk := range ph.Checks {
+			switch {
+			case chk.OK != nil && !*chk.OK:
+				t.Errorf("%s: %s: %s", ph.Name, chk.Name, chk.Text)
+			case chk.OK == nil && !strings.Contains(chk.Name, "add-s3") && !strings.Contains(chk.Name, "two gateways"):
+				t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
+			}
+		}
 	}
 }

@@ -789,8 +789,8 @@ func (e *composeEnv) identityOf(ctx context.Context, n soak.NodeRef) ([16]byte, 
 	return [16]byte{}, "", fmt.Errorf("status of %s lists no row %d", n.Name, n.Idx)
 }
 
-// MountUID is the worker's: it mounts the volume as root (AUTH_SYS uid 0).
-func (e *composeEnv) MountUID() int { return 0 }
+// MountCredential is the worker's: it mounts the volume as root (AUTH_SYS uid 0).
+func (e *composeEnv) MountCredential() string { return users.UIDCredential(0) }
 
 var _ soak.UsersEnv = (*composeEnv)(nil)
 

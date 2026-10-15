@@ -157,9 +157,13 @@ func (c *Client) do(ctx context.Context, method, addr, path string, body []byte,
 	}
 	req.Header.Set(HeaderCluster, c.clusID)
 	for k, v := range hdr {
-		req.Header.Set(k, v)
+		if v != "" {
+			req.Header.Set(k, v)
+		}
 	}
-	if c.Sign != nil && (path == "/v1/admin" || path == "/v1/members") {
+	// a caller that named the signature itself (AdminSigned: another person's, or none)
+	// keeps the device's own signer out
+	if _, explicit := hdr[users.Header]; !explicit && c.Sign != nil && (path == "/v1/admin" || path == "/v1/members") {
 		// the user's signature on a mutating request (docs/21 §2, I-344)
 		h, err := c.Sign(addr, method, path, body)
 		if err != nil {
@@ -620,6 +624,27 @@ func (c *Client) Call(ctx context.Context, addr, method, path string, body []byt
 		return nil, errFromStatus(resp)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+}
+
+// AdminSigned sends an admin op with the given Tailraid-Sig header value, "" for none,
+// in place of the client's own signer: the soak driver's people sign for themselves
+// (docs/21 §10), and an unsigned op stays unsigned.
+func (c *Client) AdminSigned(ctx context.Context, addr string, body []byte, sig string) (json.RawMessage, error) {
+	ctx, cancel := bound(ctx, int64(len(body))+16<<20)
+	defer cancel()
+	resp, err := c.do(ctx, http.MethodPost, addr, "/v1/admin", body, map[string]string{"Content-Type": "application/json", users.Header: sig})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errFromStatus(resp)
+	}
+	var raw json.RawMessage
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("%w: bad admin reply: %v", ErrBadRequest, err) //nolint:errorlint // transport
+	}
+	return raw, nil
 }
 
 func (c *Client) Admin(ctx context.Context, addr string, op AdminOp) (json.RawMessage, error) {

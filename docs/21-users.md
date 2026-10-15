@@ -386,6 +386,14 @@ refused outside its bounds by `Validate` (I-126).
 The report gains a Users section: the round-trip table of the invite, the grant matrix
 per gateway, and the audit counts.
 
+A live cluster's users are its own, so `tailraid verify` skips the four unless it is run
+with `--users`, which says the cluster is disposable (the VM rig's, docs/vms.md step 8):
+the people stay on the cluster, the first of them turns enforcement on for every mount,
+and the verifying device's mount is bound to the run's admin afterwards. The first
+admin's invite is minted by the admin identity the device holds; a device holding none
+runs `user bootstrap` on its own node, as the daemon's user. The run drives its own mount
+alone, so the two-gateway check is left to the compose rig and the harness.
+
 ## 11. Standards mapping
 
 | Control | Mechanism here |

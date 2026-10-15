@@ -25,8 +25,16 @@ type LiveEnv struct {
 	Destructive bool
 	Restarts    bool   // every target runs with dev.enabled under a restarting service manager
 	DataDir     string // this device's data directory: its S3 keys live there (docs/10 §4.1)
+	// Users (--users, docs/21 §10): the run makes its people on this cluster, which turns
+	// enforcement on for every mount and leaves the users behind; a disposable cluster's.
+	Users     bool
+	MountCred string      // the binding key this device's mount presents (uid:<n>, smb:<account>)
+	Client    *rpc.Client // the signed admin ops of the users phases
+	Cluster   [16]byte    // the cluster ID the signatures are bound to
+	AdminHere bool        // this device holds an identity, which mints the first admin's invite
 
-	all    []NodeRef // the members as of Nodes
+	all    []NodeRef         // the members as of Nodes
+	ids    map[string]string // RPC address → node ID, for the signatures
 	faults faultTable
 }
 
@@ -38,7 +46,7 @@ func NewLiveEnv(client *rpc.Client, selfAddr, mountPath, clusterID, dataDir stri
 func (e *LiveEnv) Name() string { return "live cluster " + e.ClusterID }
 
 func (e *LiveEnv) Caps() Caps {
-	c := Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts, S3: e.DataDir != "", Stats: true}
+	c := Caps{Corrupt: e.Destructive, Mutate: e.Destructive, Kill: e.Destructive && e.Restarts, Partition: e.Destructive && e.Restarts, S3: e.DataDir != "", Stats: true, Users: e.Users}
 	for _, n := range e.all {
 		if n.RPC == e.SelfAddr {
 			c.Self = n.Name
@@ -55,19 +63,21 @@ func (e *LiveEnv) Nodes(ctx context.Context) ([]NodeRef, error) {
 		return nil, err
 	}
 	var out []NodeRef
+	ids := map[string]string{}
 	for i := range rep.Nodes {
 		n := &rep.Nodes[i]
 		if n.Kind != "device" || n.State == "removed" {
 			continue
 		}
 		ref := NodeRef{Name: n.Name, Idx: n.Idx, RPC: n.RPCAddr()}
+		ids[ref.RPC] = n.ID
 		if n.Self {
 			out = append([]NodeRef{ref}, out...)
 		} else {
 			out = append(out, ref)
 		}
 	}
-	e.all = out
+	e.all, e.ids = out, ids
 	return out, nil
 }
 

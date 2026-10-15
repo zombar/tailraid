@@ -39,9 +39,9 @@ type UsersEnv interface {
 	BootstrapInvite(ctx context.Context, n NodeRef, name string) (string, error)
 	// SignedOp sends an admin op to n, signed by id (nil: unsigned).
 	SignedOp(ctx context.Context, n NodeRef, id *users.Identity, op rpc.AdminOp) (json.RawMessage, error)
-	// MountUID is the uid the environment's mounts present (the worker's), which a
-	// binding maps to a user.
-	MountUID() int
+	// MountCredential is the binding key the environment's mounts present (the worker's
+	// uid, the verifying device's uid or SMB account), which a binding maps to a user.
+	MountCredential() string
 }
 
 // soakUsers are the people of one run: the admin and two users, with their identities.
@@ -71,7 +71,7 @@ func (r *Run) soakUsers() *soakUsers {
 func (r *Run) usersPhase(ctx context.Context) (*soakUsers, bool) {
 	ue, ok := r.Env.(UsersEnv)
 	if !ok || !r.Env.Caps().Users {
-		r.skip("the environment has no users surface, or its users are its own (a live cluster)")
+		r.skip("the environment has no users surface, or its users are its own (a live cluster without --users)")
 		return nil, false
 	}
 	if su := r.soakUsers(); su != nil {
@@ -192,7 +192,7 @@ func (su *soakUsers) invite(ctx context.Context, n NodeRef, as *users.Identity, 
 
 // bind maps the environment's mount uid on n to user; "" unbinds it (nobody).
 func (su *soakUsers) bind(ctx context.Context, n NodeRef, as *users.Identity, user string) error {
-	cred := users.UIDCredential(su.env.MountUID())
+	cred := su.env.MountCredential()
 	if user == "" {
 		return su.op(ctx, n, as, rpc.AdminOp{Op: "user_unbind", Credential: cred}, nil)
 	}
@@ -353,7 +353,16 @@ func phaseGrants(ctx context.Context, r *Run) error {
 		return nil
 	}
 	n := su.nodes
-	gws := n[:2] // two gateways answer the same role for the same user (I-347)
+	// two gateways answer the same role for the same user (I-347); a live run drives one
+	// mount, its own, and leaves that check to the rig
+	gws := r.gateways()
+	if len(gws) == 0 {
+		r.skip("no gateway")
+		return nil
+	}
+	if len(gws) > 2 {
+		gws = gws[:2]
+	}
 	u := r.undoer(ctx)
 	defer u.run()
 	for _, gw := range gws {
@@ -434,13 +443,17 @@ func phaseGrants(ctx context.Context, r *Run) error {
 		}
 	}
 	// the same answer from both gateways for the same user (the N-node determinism of Access)
-	same := true
-	for i := 0; i+1 < len(rows); i += 2 {
-		a, b := rows[i], rows[i+1]
-		a.Gateway, b.Gateway = "", ""
-		same = same && a == b
+	if len(gws) == 2 {
+		same := true
+		for i := 0; i+1 < len(rows); i += 2 {
+			a, b := rows[i], rows[i+1]
+			a.Gateway, b.Gateway = "", ""
+			same = same && a == b
+		}
+		r.check("I-347", "two gateways answer the same roles", same, fmt.Sprintf("%+v", rows))
+	} else {
+		r.checkSkipped("I-347", "two gateways answer the same roles", "one gateway: a live run drives its own mount alone")
 	}
-	r.check("I-347", "two gateways answer the same roles", same, fmt.Sprintf("%+v", rows))
 	// a revoke takes effect at the next operation
 	if err := su.bind(ctx, gws[0], su.kim, "lee"); err == nil {
 		if err := su.op(ctx, n[2], su.kim, rpc.AdminOp{Op: "revoke", Path: root + "/w", User: "lee"}, nil); err != nil {
@@ -470,8 +483,8 @@ func phaseGrants(ctx context.Context, r *Run) error {
 		r.check("I-348", "/.tailraid is refused on "+gw.Name+"'s mount", err != nil, "listed")
 	}
 	// the web: lee's listing through a session shows what lee holds
-	if b, err := su.signIn(ctx, r.Env, gws[1], su.lee); err != nil {
-		r.check("I-354", "lee signs in to "+gws[1].Name+"'s page", false, err.Error())
+	if b, err := su.signIn(ctx, r.Env, gws[len(gws)-1], su.lee); err != nil {
+		r.check("I-354", "lee signs in to "+gws[len(gws)-1].Name+"'s page", false, err.Error())
 	} else {
 		code, body := b.get(ctx, "/api/ls?path="+url.QueryEscape(root))
 		r.check("I-355", "lee's page lists the folders lee holds", code == 200 && strings.Contains(body, `"name":"r"`) && strings.Contains(body, `"name":"w"`) && !strings.Contains(body, `"name":"other"`), fmt.Sprintf("%d %s", code, body))

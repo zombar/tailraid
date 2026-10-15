@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/zombar/tailraid/internal/soak"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 func verifyCmd() *cobra.Command {
@@ -27,7 +28,11 @@ this device's mount, compares every node's FSM state, and records the result in 
 report (docs/09 §6). Phases that need node kills or partitions are reported as skipped;
 --destructive adds shard corruption on nodes that run with dev.enabled and allows the
 phases that change the cluster itself (policy changes, drains, a disk fill); without it
-the volume's files are the only thing touched. The GC phase waits the cluster's
+the volume's files are the only thing touched. --users runs the users phases (docs/21
+§10) on this cluster: they make an admin and two users from an invite minted by this
+device's admin identity, or by user bootstrap on this node, and bind this device's mount
+to them; the first user turns enforcement on for every mount and the users stay, so it is
+for a disposable cluster, never for one people use. The GC phase waits the cluster's
 repair.grace. Ctrl-C stops after the current phase, restores what it changed and writes
 the partial report.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -56,6 +61,7 @@ the partial report.`,
 			if restarts && !destructive {
 				return fmt.Errorf("--restarts needs --destructive")
 			}
+			withUsers, _ := cmd.Flags().GetBool("users")
 			out, _ := cmd.Flags().GetString("report")
 			resultsPath, _ := cmd.Flags().GetString("results")
 			seed, _ := cmd.Flags().GetInt64("seed")
@@ -66,6 +72,13 @@ the partial report.`,
 			chunk, _ := cmd.Flags().GetInt("chunk")
 			p := verifyProfile(full, chunk, grace, fillAfter)
 			env := soak.NewLiveEnv(cl, addr, cfg.Mount.Path, fmt.Sprintf("%x", cid[:4]), cfg.Node.DataDir, destructive, restarts)
+			if withUsers {
+				_, held, kerr := users.Load(users.UserKeychain(), cid)
+				if kerr != nil {
+					return kerr
+				}
+				env.Users, env.MountCred, env.Client, env.Cluster, env.AdminHere = true, deviceCredential(), cl, cid, held
+			}
 			rf, err := os.Create(resultsPath) //nolint:gosec // --results names the file
 			if err != nil {
 				return err
@@ -81,6 +94,9 @@ the partial report.`,
 			}
 			if full {
 				flags = append(flags, "full")
+			}
+			if withUsers {
+				flags = append(flags, "users")
 			}
 			run := &soak.Run{Env: env, Profile: p, Log: log, Out: rf, Rng: rand.New(rand.NewSource(seed)), Seed: seed, Flags: flags} //nolint:gosec // workload
 			log.Info("verify", "cluster", env.ClusterID, "mount", cfg.Mount.Path, "seed", seed, "destructive", destructive, "restarts", restarts)
@@ -132,6 +148,7 @@ the partial report.`,
 	c.Flags().Bool("restarts", false, "with --destructive: every target runs under a restarting service manager, so kill, restart and partition phases run through /dev/exit and /dev/fault")
 	c.Flags().Int64("seed", 0, "workload seed (0 = time)")
 	c.Flags().Int("chunk", 0, "the volume's chunk size in bytes (default: the quick profile's 256 KiB)")
+	c.Flags().Bool("users", false, "run the users phases (docs/21 §10) on this cluster: makes users that stay and turns enforcement on; for a disposable cluster")
 	c.Flags().Bool("full", false, "the long profile (~1 h): a 64 MiB corpus file, a 1 GiB large file, more churn, ten leader kills")
 	return c
 }

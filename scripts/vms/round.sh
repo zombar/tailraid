@@ -476,7 +476,9 @@ verifier() {
 }
 
 s8_verify() {
-  local v flags="--destructive --restarts" rep="verify-$FIRST.html" res="verify-$FIRST.jsonl"
+  # --users: the users phases run on the rig's disposable cluster, their first admin
+  # invited by the admin identity step 7c left in the verifier's keychain (docs/21 §10)
+  local v flags="--destructive --restarts --users" rep="verify-$FIRST.html" res="verify-$FIRST.jsonl"
   v=$(verifier)
   [ "${FULL:-}" = 1 ] && flags="$flags --full"
   if [ "${SKIP_VERIFY:-}" = 1 ]; then echo "SKIP_VERIFY=1"; return 0; fi
@@ -505,9 +507,6 @@ s8_verify() {
       # a live cluster has no mirror before step 9 (19), no copy jobs (22, 23) and no
       # mesh of its own to join, cut or map (25-27): observed only, as docs/20 §10 says
       '"phase":"19 snapshots"'|'"phase":"22 copies under faults"'|'"phase":"23 many users at once"'|'"phase":"25 mesh join"'|'"phase":"26 mesh paths"'|'"phase":"27 mesh nat"') ;;
-      # a live cluster's users are its own: verify mints no admin, binds no uid and signs
-      # for nobody there (docs/21 §10), so the users phases are the compose rig's
-      '"phase":"28 users and keys"'|'"phase":"29 grants on the gateways"'|'"phase":"30 secrets per user"'|'"phase":"31 audit and sessions"') ;;
       *) echo "unexpected skip: $p"; rc=1 ;;
     esac
   done < "$OUT/skipped-$FIRST.txt"
