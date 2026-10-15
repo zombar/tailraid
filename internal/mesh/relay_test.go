@@ -540,3 +540,33 @@ func TestRelay_PinSticksWhilePeerStillRelays(t *testing.T) {
 		return !st.Relay && st.Endpoint == b.loopback()
 	})
 }
+
+// A small rate asked often still refills: 100 bytes a second taken every millisecond
+// refills a tenth of a byte per call, which once truncated per call was never a byte;
+// the fraction is carried, so a second's worth of calls yields the second's bytes.
+// Invariant: I-328
+func TestRateLimiter_SmallRateRefills(t *testing.T) {
+	clk := clock.NewFake(time.Unix(1_800_000_000, 0))
+	l := newRateLimiter(100, clk)
+	for range 100 { // the bucket starts full: a second's worth
+		if !l.take(1) {
+			t.Fatal("the full bucket refused a byte")
+		}
+	}
+	if l.take(1) {
+		t.Fatal("an empty bucket gave a byte")
+	}
+	got := 0
+	for range 1000 { // one second in millisecond steps
+		clk.Advance(time.Millisecond)
+		if l.take(1) {
+			got++
+		}
+	}
+	if got < 99 || got > 101 {
+		t.Fatalf("a second of millisecond takes at 100 B/s gave %d bytes, want 100", got)
+	}
+	if !newRateLimiter(RelayUnlimited, clk).take(1 << 30) {
+		t.Fatal("an unlimited relay refused")
+	}
+}
