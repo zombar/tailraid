@@ -153,7 +153,8 @@ func secretName(cmd *cobra.Command, name string, system bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	id, ok, err := users.Load(users.UserKeychain(), clusterOf(c))
+	as, _ := cmd.Flags().GetString("identity")
+	id, ok, err := cliIdentity(users.UserKeychain(), clusterOf(c), as)
 	if err != nil {
 		return "", err
 	}

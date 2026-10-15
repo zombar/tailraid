@@ -13,6 +13,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/users"
 )
 
 // inviteFrom picks the name and code out of an invite line.
@@ -144,6 +145,86 @@ func TestCLI_UsersFlow(t *testing.T) {
 	}
 	if _, err := rpc.NewClient(mustCID(t, h.ClusterID), nil).Admin(context.Background(), addr, rpc.AdminOp{Op: "gc_now"}); !errors.Is(err, rpc.ErrUnauthorized) {
 		t.Fatalf("an unsigned gc_now at the wire: %v", err)
+	}
+}
+
+// One OS account holding two users: the second created from an invite beside the first,
+// `user use` rebinding the mount before switching, `--identity` for one command, and a name not
+// held or a refused bind changing nothing.
+// Invariant: I-360
+func TestCLI_UserUse(t *testing.T) {
+	t.Setenv("TAILRAID_HOME", t.TempDir())
+	path, cfg := devHome(t)
+	out, err := run(t, "init", "--config", path, "--token", testToken, "--admin", "kim")
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	_, code := inviteFrom(t, out)
+	serveInBackground(t, cfg)
+	if out, err := run(t, "user", "create", "kim", code, "--config", path); err != nil {
+		t.Fatalf("user create kim: %v\n%s", err, out)
+	}
+	out, err = run(t, "user", "invite", "lee", "--config", path)
+	if err != nil {
+		t.Fatalf("user invite: %v\n%s", err, out)
+	}
+	_, code = inviteFrom(t, out)
+	if out, err := run(t, "user", "create", "lee", code, "--config", path); err != nil || !strings.Contains(out, "you are lee") {
+		t.Fatalf("a second user in the same OS account: %v\n%s", err, out)
+	}
+	bound := func() string {
+		t.Helper()
+		b, err := users.OpenBindings(cfg.Node.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _ := b.Lookup(mountCredential())
+		return u
+	}
+	whoami := func(extra ...string) string {
+		t.Helper()
+		out, err := run(t, append([]string{"user", "whoami", "--config", path}, extra...)...)
+		if err != nil {
+			t.Fatalf("whoami %v: %v\n%s", extra, err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	if got := whoami(); got != "lee (user)" || bound() != "lee" {
+		t.Fatalf("after the second create: %q, bound to %q", got, bound())
+	}
+	if got := whoami("--identity", "kim"); got != "kim (admin)" {
+		t.Fatalf("--identity kim: %q", got)
+	}
+	if got := whoami(); got != "lee (user)" || bound() != "lee" {
+		t.Fatalf("--identity moved the identity or binding: %q, %q", got, bound())
+	}
+	if out, err := runStdin(t, "v\n", "secret", "set", "token", "--identity", "kim", "--config", path); err != nil || !strings.Contains(out, "user/kim/token") {
+		t.Fatalf("a personal secret --identity kim: %v\n%s", err, out)
+	}
+	if out, err := run(t, "user", "use", "--config", path); err != nil || out != "  kim\n* lee\n" {
+		t.Fatalf("user use alone: %v\n%q", err, out)
+	}
+	if out, err := run(t, "user", "use", "kim", "--config", path); err != nil || !strings.Contains(out, "you are kim") {
+		t.Fatalf("user use kim: %v\n%s", err, out)
+	}
+	if got := whoami(); got != "kim (admin)" || bound() != "kim" {
+		t.Fatalf("after use kim: %q, bound to %q", got, bound())
+	}
+	if out, err := run(t, "user", "use", "ann", "--config", path); !errors.Is(err, users.ErrNoIdentity) {
+		t.Fatalf("use of a name not held: %v\n%s", err, out)
+	}
+	if out, err := run(t, "user", "whoami", "--identity", "ann", "--config", path); !errors.Is(err, users.ErrNoIdentity) {
+		t.Fatalf("--identity a name not held: %v\n%s", err, out)
+	}
+	// a disabled user's signature is refused: the bind fails, nothing switches
+	if out, err := run(t, "user", "disable", "lee", "--config", path); err != nil {
+		t.Fatalf("disable lee: %v\n%s", err, out)
+	}
+	if out, err := run(t, "user", "use", "lee", "--config", path); err == nil {
+		t.Fatalf("use of a disabled user: %s", out)
+	}
+	if got := whoami(); got != "kim (admin)" || bound() != "kim" {
+		t.Fatalf("a refused use changed something: %q, bound to %q", got, bound())
 	}
 }
 

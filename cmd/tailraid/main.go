@@ -29,12 +29,18 @@ func main() {
 			return nil
 		},
 	}
-	root.PersistentFlags().String("config", "", "config file (default: per-OS tailraid/config.yaml)")
+	addRootFlags(root)
 	root.AddCommand(initCmd(), joinCmd(), serveCmd(), resetCmd(), statusCmd(), dashboardCmd(), nodeCmd(), volumeCmd(), tokenCmd(), checkCmd(), repairCmd(), gcCmd(), trashCmd(), cacheCmd(), fsckCmd(), chunkCmd(), verifyCmd(), mountCmd(), umountCmd(), installCmd(), uninstallCmd(), startStopCmd("start", svc.Start), startStopCmd("stop", svc.Stop), logsCmd(), updateCmd(), exportCmd(), recoverCmd(), mirrorCmd(), snapshotCmd(), versionsCmd(), statsCmd(), searchCmd(), mediaCmd(), secretCmd(), userCmd(), groupCmd(), grantCmd(), revokeCmd(), accessCmd(), webCmd(), auditCmd(), versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "tailraid:", err)
 		os.Exit(1)
 	}
+}
+
+// addRootFlags adds the flags every command takes.
+func addRootFlags(root *cobra.Command) {
+	root.PersistentFlags().String("config", "", "config file (default: per-OS tailraid/config.yaml)")
+	root.PersistentFlags().String("identity", "", "sign this one command as another identity this OS account holds (docs/21 §1)")
 }
 
 func versionCmd() *cobra.Command {

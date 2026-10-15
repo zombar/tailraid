@@ -53,7 +53,7 @@ Names are answered live from the metadata. Contents and tags are indexed by the 
 ## Posters and descriptions for the Media tab
 
 ```sh
-tailraid secret set tmdb               # once per cluster: a free TMDB API key, typed or piped in
+tailraid secret set tmdb --system      # once per cluster, an admin: a free TMDB API key, typed or piped in
 tailraid media scrape --dry-run        # what would be written
 tailraid media scrape /Films           # write the missing .nfo, posters, backdrops, stills, album covers and game box art
 ```
