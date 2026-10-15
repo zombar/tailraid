@@ -237,3 +237,29 @@ func TestWaitBindable_Table(t *testing.T) {
 	next:
 	}
 }
+
+// The peer table follows a membership entry the moment the node applies it: a row, a
+// state change, a pending row or the token (whose rotation ends pending rows) kicks a
+// refresh, several kicks coalesce into one, and a chunk's commit kicks nothing (I-317).
+// Invariant: I-317
+func TestMembershipOp_KicksPeerRefresh(t *testing.T) {
+	for _, op := range []meta.Op{meta.OpNodeUpsert, meta.OpNodeSetState, meta.OpPendingAdd, meta.OpPendingDelete, meta.OpMetaSet} {
+		if !membershipOp(op) {
+			t.Errorf("op %d does not refresh the peers", op)
+		}
+	}
+	for _, op := range []meta.Op{meta.OpCommit, meta.OpCreate, meta.OpSetPlacement, meta.OpGCDelete, meta.OpGrant} {
+		if membershipOp(op) {
+			t.Errorf("op %d refreshes the peers", op)
+		}
+	}
+	nw := &network{kicks: make(chan struct{}, 1)}
+	nw.kick()
+	nw.kick()
+	nw.kick()
+	if len(nw.kicks) != 1 {
+		t.Fatalf("%d kicks queued, want the three coalesced into one", len(nw.kicks))
+	}
+	var none network
+	none.kick() // a network without a device (the fake) takes a kick and does nothing
+}

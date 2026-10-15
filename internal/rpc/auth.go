@@ -103,7 +103,10 @@ func seedOf(members []meta.Node) map[string]meta.Node {
 	return seed
 }
 
-// Allow returns the active member at src: the table first, then the seed.
+// Allow returns the active member at src: the table decides an address it knows (a
+// removed row is refused, whatever a seed that lags the table says of it, I-318), and the
+// seed stands in for an address the table does not hold yet (a joiner's own table is
+// empty until the log arrives, docs/08 §Join).
 func (a *TableAuthorizer) Allow(_ context.Context, src netip.Addr) (Principal, error) {
 	addr := src.Unmap().String()
 	a.mu.Lock()
@@ -111,7 +114,10 @@ func (a *TableAuthorizer) Allow(_ context.Context, src netip.Addr) (Principal, e
 	seeded, inSeed := a.seed[addr]
 	a.mu.Unlock()
 	if lookup != nil {
-		if m, ok := lookup(addr); ok && m.State != meta.Removed {
+		if m, ok := lookup(addr); ok {
+			if m.State == meta.Removed {
+				return Principal{}, fmt.Errorf("%w: %s was removed", ErrForbidden, addr)
+			}
 			return Principal{Node: m}, nil
 		}
 	}
