@@ -92,7 +92,7 @@ an hour). A failed step ends the round; teardown still runs.
 | Step | What | Proves |
 |---|---|---|
 | 1 binaries | cross-build darwin, linux and windows arm64 from the working tree, copy in, `tailraid version` on each | the branch under test is what runs |
-| 2 clean slate | `umount`, `uninstall`, `reset --discard-dirty`, wipe the data and disk dirs, write a fresh config (one derived disk, `dev.enabled`, 20 s repair knobs) | every round starts from nothing |
+| 2 clean slate | every guest's clock set from the host when more than 5 s off (a guest resumed from a saved state keeps the clock it was saved with, and a signed request outside `users.clock_skew` is refused, docs/21 §2), then `umount`, `uninstall`, `reset --discard-dirty`, wipe the data and disk dirs, write a fresh config (one derived disk, `dev.enabled`, 20 s repair knobs) | every round starts from nothing |
 | 3 init on FIRST | `init --token`, `install`, `status` until ready, `mount` | docs/12 §1 install on that OS, I-125 |
 | 4 join by name | on the other two in turn: `join tailraid-<first> vmtoken` (the first joiner `--voter`, the last one a non-voter until step 7b), `install`, ready, `mount` | I-76 (a device name resolved through the tailnet), I-92 (the WhoIs member check on accept), the mount of each OS (docs/07, docs/15) |
 | 5 membership | `status --json` on every node: every device and disk live, the automatic policy (2+1 for three disks), identical node tables | docs/03, docs/14 §6, I-94 |
