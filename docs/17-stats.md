@@ -26,8 +26,7 @@ Raspberry Pi over Wi‑Fi would be a new steady load.
 ```json
 {"t":1760184000,"n":"jockey","m":{"cpu":0.12,"load1":0.8,"rss":412000000,"mem_avail":2100000000,
  "mem_pressure":0.4,"disk_free":512000000000,"disk_w":1200000,"disk_r":80000,
- "net_rx":2400000,"net_tx":900000,"mesh_rx":2100000,"mesh_tx":880000,"relayed":0,
- "path.atlas":3,"rtt.atlas":4.1,"path.honker":0,"path.node0":1,"rtt.node0":61,
+ "net_rx":2400000,"net_tx":900000,"tailnet_rx":2100000,"tailnet_tx":880000,
  "heap":96000000,"sys":180000000,"goroutines":212,"dirty":0,"wal":0,"plan":0,"flush":0,
  "ra_fetched":3.2,"ra_joined":2.9,"prefetching":2,"bytes_r":1900000,"bytes_w":0}}
 ```
@@ -43,10 +42,7 @@ Raspberry Pi over Wi‑Fi would be a new steady load.
 | `disk_free` | bytes | gauge | `machine.disk_free` |
 | `disk_w`, `disk_r` | bytes/s | rate | `machine.disk_written_bytes`, `machine.disk_read_bytes` |
 | `net_rx`, `net_tx` | bytes/s | rate | `machine.net_rx_bytes`, `machine.net_tx_bytes` (12 §8, I-190) |
-| `tailnet_rx`, `tailnet_tx` | bytes/s | rate | `machine.mesh_rx_bytes`, `machine.mesh_tx_bytes` |
-| `relayed` | bytes/s | rate | the sum of `mesh.relayed_bytes`: what this device forwarded for other pairs (20 §6) |
-| `path.<peer>` | class | gauge | `mesh.peers[].class` (20 §5): `3` lan, `2` wan, `1` relay, `0` none, one key per peer of `status.mesh` under its member name; absent on a device without a mesh (I-332) |
-| `rtt.<peer>` | ms | gauge | the liveness probe's last round trip to that peer (`nodes[].rtt`, 05 §6); absent while none answered |
+| `tailnet_rx`, `tailnet_tx` | bytes/s | rate | `machine.tailnet_rx_bytes`, `machine.tailnet_tx_bytes` |
 | `heap`, `sys`, `goroutines` | bytes, bytes, count | gauge | `process.*` |
 | `dirty`, `wal`, `plan`, `flush` | bytes | gauge | `gateway.dirty_bytes`, `wal_bytes`, `plan_bytes`, `flush_bytes` |
 | `ra_fetched`, `ra_joined` | chunks/s | rate | `gateway.readahead_fetched`, `readahead_joined` |
@@ -103,9 +99,8 @@ never collide.
 | `10m` | 600 s | UTC month | `2026-10-jockey.jsonl.gz` | **rebuilt daily**: the month file's rows plus the new day's rows derived from its raw files; so a year is twelve files per node, not 365 (a one-year page would otherwise open 1 825 one-chunk files at about 66 ms each) |
 
 - A **rollup row** is a pure function of the raw rows of its interval: the mean of every
-  rate and gauge except `path.<peer>`, which takes the minimum (the worst class the
-  interval saw, as `live` does), the minimum of `live`, the last `targets` of the interval,
-  the highest `term`; its `t` is the interval's start; an interval with no raw rows produces no row (a
+  rate and gauge, the minimum of `live`, the last `targets` of the interval, the highest
+  `term`; its `t` is the interval's start; an interval with no raw rows produces no row (a
   gap stays a gap). The bytes are therefore identical on every node (I-193).
 - **Catch-up.** On every hourly tick a node checks the last `keep.raw` days for a day whose
   `1m` file is missing while its raw files exist and rolls it up then. A node gone for good
@@ -208,13 +203,7 @@ The page itself, its range picker, refresh rule, member dropdown and theme switc
 | Volume | stored vs logical bytes · chunks | cluster |
 | Integrity | repair backlog (degraded, pending, stale, unreadable) · repair bytes moved · liveness lanes | cluster |
 | Spread | data spread across disks (the lanes with the host-cap strip) · slots per node | cluster |
-| *node* | client throughput · mesh rx/tx/relayed · all interfaces rx/tx · mesh paths (lanes, one per peer: lan green, wan amber, relay grey, none red, the soak report's cells) · mesh round trip (one series per peer, ms) · CPU and load · memory · memory pressure · data disk free · disk read/write · WAL depth (dirty, WAL, plan, flush) · process (heap, sys) · readahead | the chosen member, or one series per member with `node=all` |
-
-With `node=all` the two mesh charts change shape as the others do: the paths lanes become
-one lane per ordered pair (`pike → atlas`), the round-trip chart one series per member,
-its mean over its peers. The lanes and the series follow the member table's order, and a
-peer with no key in the rows (a device without a mesh, a member that joined later) is
-left out rather than drawn as `none` (I-332).
+| *node* | client throughput · tailnet rx/tx · all interfaces rx/tx · CPU and load · memory · memory pressure · data disk free · disk read/write · WAL depth (dirty, WAL, plan, flush) · process (heap, sys) · readahead | the chosen member, or one series per member with `node=all` |
 
 ## 5. Configuration
 
@@ -274,11 +263,7 @@ a 6 h range from the rows read and the live edge every node answers over `/v1/st
 same code `/api/stats` runs; the page itself is 13's manual checks); (e) a member killed
 mid-phase answers no live edge and the leader's rows mark it dead, never a zero; (f)
 `stored_bytes` grows by no more than §6's estimate for one sealed hour and the rollups per
-node, printed measured against estimated; (g) on the mesh rigs every node's rows carry a
-`path.<peer>` for each peer of its `status.mesh` in the class phase 26 saw and an
-`rtt.<peer>` for each live one, the paths lanes draw one lane per peer and the round-trip
-chart one series per peer, and after phase 26's cut the cut pair's rows read `0` on both
-sides until it is lifted (I-332). `verify` runs (a) to (d), (f) and (g) on a live
+node, printed measured against estimated. `verify` runs (a) to (d) and (f) on a live
 cluster and (e) with `--destructive --restarts`; the three-VM rounds (vms.md) pick the
 phase up unchanged.
 
@@ -333,14 +318,6 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
   with its reason, and on a live refresh asks only for the charts at least partly on
   screen.
 
-- **I-332** — A node row of a device on the mesh carries, for every peer of `status.mesh`,
-  `path.<peer>` as the class code (3 lan, 2 wan, 1 relay, 0 none) and, while the probe
-  has answered, `rtt.<peer>` in milliseconds, plus `relayed` as the rate of the bytes it
-  forwarded; a rollup takes the minimum of each `path.<peer>` and the mean of the rest;
-  the Stats page's node section draws the paths lanes and the round-trip line from exactly
-  those keys, one lane and one series per peer with a key (per ordered pair, and per
-  member's mean, with `node=all`), never a lane for a peer without one.
-
 ## Tests
 
 | Invariant | Tests |
@@ -352,6 +329,5 @@ unsealed hour anywhere but memory and the shutdown spill, and sampling faster th
 | I-258 | `TestChart_Frame`, `TestCatalogue_MatchesCharts`, `TestWebUI_Stats_Stream_FramesFirst` |
 | I-259 | `TestStatic_StatsStreamsFramesFirst` |
 | I-196 | `TestStatsQuery_TierChoice_Table`, `TestStatsQuery_NameWindowAndRowFilter`, `TestStatsQuery_CacheBound_Table`, `TestStatsQuery_FanOut_TimeoutIsGap_BackOff`, `TestStatsQuery_Dedup_TermRule_Seeded`, `TestStatsQuery_Downsample_Points_Table`, `TestStatsQuery_Charts`, `TestWebUI_Stats_Route`, `TestStats_SealVisibleFromSecondGateway` (the cache-less reader) |
-| I-332 | stub `TestStub_I_332` (the sampler's peer keys and the relayed rate, the rollup's minimum, the two charts and their `node=all` shapes, phase 20 (g)) |
 
 The stubs live in `test/invariants/` until the PR that lands each feature replaces them with the tests named after them (09 §2).

@@ -248,24 +248,6 @@
   </section>
 
   <section>
-    <h2>Mesh<span class="h-sub">100.64.0.12 on utun4 · udp 20483 · portmap pcp 203.0.113.9:20483 · 4 peers: 1 lan, 1 wan, 1 relayed, 1 none</span></h2>
-    <div class="chart-card">
-      <svg class="chart mesh" viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="this device&#39;s paths to every member: atlas lan, nomad wan, honker none, lumen relayed through atlas"><text x="12" y="18" class="title">Paths from pike (this device)</text><line class="mesh-edge lan" x1="380" y1="130" x2="168" y2="66"><title>atlas: lan 192.168.1.20:20483, seen 1s ago, handshake 42s ago</title></line><line class="mesh-edge wan" x1="380" y1="130" x2="592" y2="66"><title>nomad: wan 203.0.113.40:20483, seen 0s ago, handshake 1m10s ago</title></line><line class="mesh-edge none" x1="380" y1="130" x2="592" y2="194"><title>honker: none, last seen 3m0s ago (fanning out to 2 candidates)</title></line><line class="mesh-edge relay" x1="168" y1="66" x2="168" y2="194"><title>lumen: relayed through atlas, seen 2s ago</title></line><g class="mesh-node self"><circle cx="380" cy="130" r="11"/><text x="380" y="156" text-anchor="middle" class="mesh-name">pike</text><title>pike: this device, 100.64.0.12, utun4, udp 20483, mapped at 203.0.113.9:20483 by pcp</title></g><g class="mesh-node"><a class="mesh-link" href="http://100.64.0.3:20482/#/" data-node="atlas"><circle cx="168" cy="66" r="11"/><text x="150" y="71" text-anchor="end" class="mesh-name">atlas</text></a><title>atlas: leader, voter, 100.64.0.3; lan 192.168.1.20:20483, seen 1s ago, handshake 42s ago; open atlas&#39;s dashboard</title></g><g class="mesh-node"><a class="mesh-link" href="http://100.64.0.40:20482/#/" data-node="nomad"><circle cx="592" cy="66" r="11"/><text x="610" y="71" text-anchor="start" class="mesh-name">nomad</text></a><title>nomad: non-voter, draining, 100.64.0.40; wan 203.0.113.40:20483, seen 0s ago; open nomad&#39;s dashboard</title></g><g class="mesh-node off"><circle cx="592" cy="194" r="11"/><text x="610" y="199" text-anchor="start" class="mesh-name">honker</text><title>honker: dead 3m0s, 100.64.0.31; no path (fanning out to 2 candidates); no web listener</title></g><g class="mesh-node"><a class="mesh-link" href="http://100.64.0.5:20482/#/" data-node="lumen"><circle cx="168" cy="194" r="11"/><text x="150" y="199" text-anchor="end" class="mesh-name">lumen</text></a><title>lumen: voter, 100.64.0.5; relayed through atlas, seen 2s ago; open lumen&#39;s dashboard</title></g></svg>
-      <table class="mesh-peers">
-        <thead><tr><th>member</th><th>address</th><th>path</th><th>endpoint</th><th class="rtt">rtt</th><th class="seen">seen</th></tr></thead>
-        <tbody>
-          <tr class="self"><td class="name">pike<span class="badge self">this device</span></td><td class="addr">100.64.0.12</td><td class="path">utun4 · udp 20483</td><td class="ep">portmap pcp 203.0.113.9:20483</td><td class="rtt"></td><td class="seen"></td></tr>
-          <tr><td class="name"><a href="http://100.64.0.3:20482/#/">atlas</a><span class="badge strong">leader</span></td><td class="addr">100.64.0.3</td><td class="path"><span class="dot ok"></span>lan</td><td class="ep">192.168.1.20:20483</td><td class="rtt">4ms</td><td class="seen">1s</td></tr>
-          <tr><td class="name"><a href="http://100.64.0.40:20482/#/">nomad</a><span class="badge warn">draining</span></td><td class="addr">100.64.0.40</td><td class="path"><span class="dot"></span>wan</td><td class="ep">203.0.113.40:20483</td><td class="rtt">83ms</td><td class="seen">0s</td></tr>
-          <tr class="off"><td class="name">honker</td><td class="addr">100.64.0.31</td><td class="path"><span class="dot bad"></span>none</td><td class="ep">fanning out to 2 candidates</td><td class="rtt">—</td><td class="seen">3m0s</td></tr>
-          <tr><td class="name"><a href="http://100.64.0.5:20482/#/">lumen</a></td><td class="addr">100.64.0.5</td><td class="path"><span class="dot warn"></span>relay via atlas</td><td class="ep">—</td><td class="rtt">61ms</td><td class="seen">2s</td></tr>
-        </tbody>
-      </table>
-      <p class="small dim">this device's view: one edge per member in the class of the path to it, lan green, wan ink, relay amber through the member that carries it, none red; the table under it carries each member's facts; click a member for its own view</p>
-    </div>
-  </section>
-
-  <section>
     <h2>Integrity</h2>
     <div class="tiles">
       <div class="tile warn"><div class="label"><span class="dot warn"></span>Degraded</div><div class="value">37</div><div class="sub">chunks with fewer than 8 good slots</div></div>

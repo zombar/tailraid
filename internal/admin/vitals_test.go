@@ -45,10 +45,10 @@ func TestVitals_RealMeasurementsOrAbsent(t *testing.T) {
 	// the network counters never decrease and the tailnet pair stays absent without an
 	// address; with the loopback address the tailnet pair is still absent, since loopback
 	// is never counted (I-190)
-	if m.NetRx < first.NetRx || m.NetTx < first.NetTx || m.MeshRx != 0 || m.MeshTx != 0 {
+	if m.NetRx < first.NetRx || m.NetTx < first.NetTx || m.TailnetRx != 0 || m.TailnetTx != 0 {
 		t.Fatalf("network vitals %+v then %+v", first, m)
 	}
-	if lo := admin.Vitals(t.TempDir(), netip.MustParseAddr("127.0.0.1")); lo.MeshRx != 0 || lo.MeshTx != 0 {
+	if lo := admin.Vitals(t.TempDir(), netip.MustParseAddr("127.0.0.1")); lo.TailnetRx != 0 || lo.TailnetTx != 0 {
 		t.Fatalf("loopback counted as the tailnet interface: %+v", lo)
 	}
 	// absent, not zero: a field this OS cannot measure is not in the JSON

@@ -1,0 +1,19 @@
+# The rig's control server (scripts/vms/headscale.sh): one headscale on the Tart guests'
+# gateway address, state in a named volume that survives `down` and goes with `down -v`.
+# HS_DIR (test/vms/run/headscale) holds the generated config.
+services:
+  headscale:
+    image: docker.io/headscale/headscale:0.27
+    command: serve
+    ports:
+      - "8443:8443" # control and the embedded DERP, over TLS from the rig's CA
+      - "3478:3478/udp" # STUN, so the guests learn their endpoints
+    volumes:
+      - ${HS_DIR}/config.yaml:/etc/headscale/config.yaml:ro
+      - ${HS_DIR}/tls:/etc/headscale/tls:ro
+      - headscale:/var/lib/headscale
+    restart: unless-stopped
+
+volumes:
+  headscale:
+    name: tailraid-vms-headscale

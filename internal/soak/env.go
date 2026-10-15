@@ -52,9 +52,6 @@ type Caps struct {
 	// register, snapshot and unplug (AddMirror, SetMirrorOnline, docs/16). A live
 	// cluster has none: a snapshot taken there could never be removed (I-183).
 	Mirror bool
-	// Mesh: the nodes run on the mesh of docs/20 with a real device each, and the
-	// environment is a MeshEnv (phases 25 and 26; a live cluster observes its paths only).
-	Mesh bool
 	// Self names the device running verify on a live cluster, which Kill refuses (its
 	// mount is the run's only volume) and whose path to a killed node stays; "" on a rig.
 	Self string

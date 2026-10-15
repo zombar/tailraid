@@ -100,7 +100,7 @@ func userCmd() *cobra.Command {
 			if os.Getenv("SUDO_USER") != "" {
 				return errors.New("run user create as yourself, not with sudo: the key goes into your own keychain")
 			}
-			c, addr, _, err := localClient(cmd)
+			c, addr, _, err := localClient(cmd.Context(), cmd)
 			if err != nil {
 				return err
 			}
@@ -145,7 +145,7 @@ func userCmd() *cobra.Command {
 			if os.Getenv("SUDO_USER") != "" {
 				return errors.New("run user key add as yourself, not with sudo")
 			}
-			c, addr, _, err := localClient(cmd)
+			c, addr, _, err := localClient(cmd.Context(), cmd)
 			if err != nil {
 				return err
 			}
@@ -317,7 +317,7 @@ func userCmd() *cobra.Command {
 		Short: "As the daemon's user on a voter: mint an admin invite (the first admin, or a lockout)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, _, cfg, err := localClient(cmd)
+			_, _, cfg, err := localClient(cmd.Context(), cmd)
 			if err != nil {
 				return err
 			}

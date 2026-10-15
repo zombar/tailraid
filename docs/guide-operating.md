@@ -14,7 +14,7 @@ tailraid secret rm --all               # if every device lost the key: start ove
 
 Details: [docs/19-secrets.md](19-secrets.md).
 
-## Users (designed, built after 1.0)
+## Users
 
 A person gets an identity from an admin's one-time invite: `tailraid user invite kim`
 prints a code, and Kim runs `tailraid user create kim <code>` on their own device, which
@@ -31,7 +31,7 @@ Every command takes `--json`, and `--node <ip>` to talk to another device. `tail
 
 | Area | Commands |
 |---|---|
-| Set up | `init` · `join <code>` · `token` · `install` · `uninstall` · `start` · `stop` · `mount` · `umount` · `reset` |
+| Set up | `init` · `join <host> <token>` · `token` · `install` · `uninstall` · `start` · `stop` · `mount` · `umount` · `reset` |
 | Health | `status` (exit 1 until the node is ready) · `dashboard` · `check` (exit 1 if anything is degraded; `--scrub` verifies every chunk) · `verify` · `logs -f` |
 | Members and disks | `node ls` · `node describe <name>` · `node promote` · `node demote` · `node add-disk <path>` · `node add-s3 <name>` · `node drain` · `node remove` |
 | Volume | `volume describe` · `volume grow <disk> <size>\|auto` · `volume set-redundancy --k --m\|--auto` · `chunk describe <path\|hash>` |
@@ -115,6 +115,8 @@ Losing more voters than Raft can spare, permanently, is the one failure the clus
 ## Upgrading
 
 Run `tailraid update` on every device, voters first, then `tailraid stop && tailraid start` on each (or `tailraid update --restart`). Do the whole cluster in one go: the first snapshot an upgraded node writes may be one an older node cannot read ([docs/12-operations.md](12-operations.md) §6). The previous binary stays beside the new one as `tailraid.old` for a minute after a clean start; `tailraid update --rollback` puts it back. A release older than the running one needs `--version` and `--allow-downgrade`.
+
+A 0.9.x volume does not upgrade to 0.10.0. 0.9.x ran on its own WireGuard mesh, which 0.10.0 withdrew in favour of Tailscale, so the volume is re-created: copy the files off, install Tailscale, `init` and `join` again, and copy the files back ([docs/12-operations.md](12-operations.md) §6 has the steps).
 
 ## Verifying a download
 

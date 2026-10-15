@@ -5,6 +5,8 @@ Write-Output "Windows build $build ($env:COMPUTERNAME, $env:PROCESSOR_ARCHITECTU
 if ($build -lt 26100) { throw "build $build is older than 24H2 (26100): the SMB loopback mount needs /TCPPORT" }
 if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { throw "not an ARM64 Windows" }
 if ((Get-Service sshd).StartType -ne 'Automatic') { throw 'sshd is not automatic' }
+if (-not (Test-Path 'C:\Program Files\Tailscale\tailscale.exe')) { throw 'tailscale is not installed' }
+& 'C:\Program Files\Tailscale\tailscale.exe' version
 if (-not (Test-Path C:\tailraid\d1)) { throw 'C:\tailraid\d1 missing' }
 $smb = Get-SmbClientConfiguration
 if (-not $smb.RequireSecuritySignature -or $smb.EnableInsecureGuestLogons) { throw 'SMB client settings not applied' }

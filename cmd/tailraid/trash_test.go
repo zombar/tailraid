@@ -17,7 +17,7 @@ import (
 // Invariant: I-157
 func TestCLI_Trash_LsRestorePurge(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())
@@ -56,7 +56,7 @@ func TestCLI_Trash_LsRestorePurge(t *testing.T) {
 // Invariant: I-295
 func TestCLI_VolumeRebalance_DryRun(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())

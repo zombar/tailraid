@@ -10,10 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
-	"net/netip"
 	"os"
-	"os/user"
-	posix "path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -42,22 +39,14 @@ type Config struct {
 		SMB  string `yaml:"smb"`  // loopback host:port of the SMB gateway (Windows; docs/15); "" disables it
 	} `yaml:"listen"`
 	Mount struct {
-		Path  string `yaml:"path"`
-		Owner string `yaml:"owner,omitempty"` // "uid:gid" the gateways give files; set by install on macOS from SUDO_UID, where serve runs as root (docs/20 §9)
+		Path string `yaml:"path"`
 	} `yaml:"mount"`
 	SMB struct {
 		Password string `yaml:"password"` // the share's password; init and join generate one when listen.smb is set (docs/15 §6)
 	} `yaml:"smb"`
-	Mesh struct {
-		Port      int    `yaml:"port"`                 // the device's UDP port (docs/20 §1)
-		Endpoint  string `yaml:"endpoint,omitempty"`   // a public host:port the operator knows reaches this device
-		Subnet    string `yaml:"subnet,omitempty"`     // init only: the cluster's /24 (default: derived from the cluster ID)
-		Address   string `yaml:"address,omitempty"`    // this device's address with the subnet's bits, written by init and join; survives reset
-		Interface string `yaml:"interface,omitempty"`  // the interface name on Linux and Windows (default tailraid0 / tailraid); macOS picks a utun
-		RelayRate string `yaml:"relay_rate,omitempty"` // bytes per second this device forwards for others (default 20M; "0": no limit; docs/20 §6)
-		PortMap   *bool  `yaml:"portmap,omitempty"`    // ask the default gateway (PCP, NAT-PMP) to map the port (default true; docs/20 §7)
-		Firewall  *bool  `yaml:"firewall,omitempty"`   // Linux: keep the node's chain first in INPUT (default true; docs/20 §9)
-	} `yaml:"mesh"`
+	Tailscale struct {
+		CLI string `yaml:"cli"` // path override for the tailscale binary
+	} `yaml:"tailscale"`
 	Log struct {
 		Level  string `yaml:"level"`  // debug | info | warn | error (env TAILRAID_LOG_LEVEL overrides)
 		Format string `yaml:"format"` // text | json (env TAILRAID_LOG_FORMAT overrides)
@@ -76,10 +65,6 @@ type Config struct {
 		// the percentage of the stored bytes that must be movable away from home before
 		// placement-only moves start (default 5; "0": only `volume rebalance`; docs/14 §7)
 		HomeStart string `yaml:"home_start,omitempty"`
-		// background work on relayed paths (docs/20 §8): avoid (the default) defers a move,
-		// fill or scrub read whose only source or target is relayed unless the slot is bad;
-		// allow runs it
-		Relay string `yaml:"relay,omitempty"`
 	} `yaml:"repair"`
 	// these sections are written only when set, so a release from before them can still
 	// read a file this build wrote (a rollback after update, I-61)
@@ -134,11 +119,8 @@ type Config struct {
 		Retention string `yaml:"retention,omitempty"` // the leader drops older audit segments (default 8760h; 168h..87600h)
 	} `yaml:"audit,omitempty"`
 	Dev struct {
-		Enabled bool `yaml:"enabled"`
-		// MeshFake replaces the mesh with plain addresses for the CLI tests, which cannot
-		// open a TUN: a JSON file `{"addr": "127.0.0.1"}`; the node binds that address and
-		// joins without an introduce (docs/09 §3).
-		MeshFake string `yaml:"mesh_fake,omitempty"`
+		Enabled       bool   `yaml:"enabled"`
+		TailscaleFake string `yaml:"tailscale_fake"` // JSON fixture replacing the tailscale CLI
 	} `yaml:"dev"`
 	// Path is the file Load read, never written to it: the daemon rewrites the file
 	// there (node.voter follows the member row, docs/12 §7, I-176).
@@ -372,40 +354,6 @@ func (c Config) RepairRateBytes() (n int64, set bool, err error) {
 	return int64(u), true, nil //nolint:gosec // bounded above
 }
 
-// MeshRelayRateBytes parses mesh.relay_rate: what this device forwards for others per
-// second (docs/20 §6). 0 means the mesh's default (the key is unset), and "0" in the
-// file means no limit, which the mesh reads as a negative rate.
-func (c Config) MeshRelayRateBytes() (int64, error) {
-	if c.Mesh.RelayRate == "" {
-		return 0, nil
-	}
-	u, err := ParseBytes(c.Mesh.RelayRate)
-	if err != nil || u > 1<<62 {
-		return 0, fmt.Errorf("config: mesh.relay_rate %q: bad size", c.Mesh.RelayRate)
-	}
-	if u == 0 {
-		return -1, nil // mesh.RelayUnlimited: the mesh reads a negative rate as no limit
-	}
-	return int64(u), nil //nolint:gosec // bounded above
-}
-
-// MeshPortMap reports mesh.portmap: on unless set false (docs/20 §7).
-func (c Config) MeshPortMap() bool { return c.Mesh.PortMap == nil || *c.Mesh.PortMap }
-
-// MeshFirewall reports mesh.firewall: on unless set false (docs/20 §9, I-334).
-func (c Config) MeshFirewall() bool { return c.Mesh.Firewall == nil || *c.Mesh.Firewall }
-
-// RepairAvoidRelay reports repair.relay: true unless it is "allow" (docs/20 §8).
-func (c Config) RepairAvoidRelay() (bool, error) {
-	switch c.Repair.Relay {
-	case "", "avoid":
-		return true, nil
-	case "allow":
-		return false, nil
-	}
-	return false, fmt.Errorf("config: repair.relay %q: want avoid or allow", c.Repair.Relay)
-}
-
 // StatsEvery parses stats.every, the sample interval of docs/17 §1: 10 s when unset,
 // otherwise 5 s to 1 min (I-194).
 func (c Config) StatsEvery() (time.Duration, error) {
@@ -517,46 +465,24 @@ func errBadDuration(err error) error {
 
 // Home returns the per-OS configuration directory, or $TAILRAID_HOME.
 func Home() string {
-	home, _ := os.UserHomeDir()
-	return homeFor(runtime.GOOS, os.Geteuid(), home, os.Getenv, func(name string) (string, error) {
-		u, err := user.Lookup(name)
-		if err != nil {
-			return "", err
-		}
-		return u.HomeDir, nil
-	})
-}
-
-// homeFor is Home as a function of its inputs: the OS, the effective uid, the process's
-// home directory, the environment and a lookup of a user's home. On macOS root's home
-// is the system one (the daemon's, docs/20 §9); on Linux a command run under sudo (a
-// `join`, which needs CAP_NET_ADMIN) keeps the invoking user's home, since the user's
-// unit names it and the user owns the data: root's own home only without `SUDO_USER`.
-func homeFor(goos string, euid int, home string, env func(string) string, lookupHome func(string) (string, error)) string {
-	if h := env("TAILRAID_HOME"); h != "" {
+	if h := os.Getenv("TAILRAID_HOME"); h != "" {
 		return h
 	}
-	switch goos { // POSIX paths are joined as such whatever host runs this (the table test runs on Windows too)
+	switch runtime.GOOS {
 	case "darwin":
-		if euid == 0 { // the root daemon's home (docs/20 §9)
-			return "/Library/Application Support/tailraid"
-		}
-		return posix.Join(home, "Library", "Application Support", "tailraid")
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, "Library", "Application Support", "tailraid")
 	case "windows":
-		if pd := env("ProgramData"); pd != "" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
 			return filepath.Join(pd, "tailraid")
 		}
 		return `C:\ProgramData\tailraid`
 	default:
-		if x := env("XDG_CONFIG_HOME"); x != "" {
-			return posix.Join(x, "tailraid")
+		if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+			return filepath.Join(x, "tailraid")
 		}
-		if su := env("SUDO_USER"); euid == 0 && su != "" && su != "root" {
-			if h, err := lookupHome(su); err == nil && h != "" {
-				home = h
-			}
-		}
-		return posix.Join(home, ".config", "tailraid")
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".config", "tailraid")
 	}
 }
 
@@ -568,7 +494,6 @@ const (
 	DefaultRaftPort = 20480
 	DefaultRPCPort  = 20481
 	DefaultWebPort  = 20482
-	DefaultMeshPort = 20483 // UDP (docs/20 §1)
 	DefaultNFSAddr  = "127.0.0.1:20490"
 )
 
@@ -581,8 +506,6 @@ func Default() Config {
 	c.Listen.Raft = DefaultRaftPort
 	c.Listen.RPC = DefaultRPCPort
 	c.Listen.Web = DefaultWebPort
-	c.Mesh.Port = DefaultMeshPort
-	c.Mesh.Interface = "tailraid0"
 	c.Listen.NFS = DefaultNFSAddr
 	c.Log.Level, c.Log.Format = "info", "text"
 	home, _ := os.UserHomeDir()
@@ -591,7 +514,6 @@ func Default() Config {
 		c.Listen.NFS = ""
 		c.Listen.SMB = DefaultSMBAddr
 		c.Mount.Path = "T:"
-		c.Mesh.Interface = "tailraid"
 	}
 	return c
 }
@@ -725,9 +647,6 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: listen.web %d: want 0 (off) or a TCP port", w)
 	} else if w != 0 && (w == c.Listen.RPC || w == c.Listen.Raft) {
 		return fmt.Errorf("config: listen.web %d must differ from listen.rpc and listen.raft", w)
-	}
-	if err := c.validateMesh(); err != nil {
-		return err
 	}
 	// the rest of I-126: every port in range and distinct, known log settings, an
 	// absolute mount path
@@ -1053,74 +972,4 @@ func (l *LogFile) Close() error {
 	err := l.f.Close()
 	l.f = nil
 	return err
-}
-
-// validateMesh checks the mesh keys (docs/20 §10): a UDP port, an endpoint of the form
-// host:port, a subnet that is an IPv4 /24, an address with its subnet's bits.
-func (c *Config) validateMesh() error {
-	if _, err := c.MeshRelayRateBytes(); err != nil {
-		return err
-	}
-	if _, err := c.RepairAvoidRelay(); err != nil {
-		return err
-	}
-	if p := c.Mesh.Port; p < 1 || p > 65535 {
-		return fmt.Errorf("config: mesh.port %d: want a UDP port", p)
-	}
-	if e := c.Mesh.Endpoint; e != "" {
-		if _, _, err := net.SplitHostPort(e); err != nil {
-			return fmt.Errorf("config: mesh.endpoint %q: want host:port", e)
-		}
-	}
-	if s := c.Mesh.Subnet; s != "" {
-		p, err := netip.ParsePrefix(s)
-		if err != nil || !p.Addr().Is4() || p.Bits() != 24 {
-			return fmt.Errorf("config: mesh.subnet %q: want an IPv4 /24", s)
-		}
-	}
-	if a := c.Mesh.Address; a != "" {
-		p, err := netip.ParsePrefix(a)
-		if err != nil || !p.Addr().Is4() || p.Bits() != 24 {
-			return fmt.Errorf("config: mesh.address %q: want an IPv4 address with its /24 (as init or join wrote it)", a)
-		}
-	}
-	if f := c.Dev.MeshFake; f != "" && !c.Dev.Enabled {
-		return errors.New("config: dev.mesh_fake needs dev.enabled")
-	}
-	if _, _, err := c.MountOwner(); err != nil {
-		return err
-	}
-	return nil
-}
-
-// MountOwner is mount.owner as a uid and gid; ok is false when it is unset (the
-// gateways then use the process's own).
-func (c *Config) MountOwner() (uid, gid uint32, err error) {
-	o := c.Mount.Owner
-	if o == "" {
-		return 0, 0, nil
-	}
-	u, g, found := strings.Cut(o, ":")
-	if !found {
-		return 0, 0, fmt.Errorf("config: mount.owner %q: want uid:gid", o)
-	}
-	ui, err1 := strconv.ParseUint(u, 10, 32)
-	gi, err2 := strconv.ParseUint(g, 10, 32)
-	if err1 != nil || err2 != nil {
-		return 0, 0, fmt.Errorf("config: mount.owner %q: want uid:gid", o)
-	}
-	return uint32(ui), uint32(gi), nil
-}
-
-// SystemHome is the configuration directory of a service that runs as root: on macOS
-// `/Library/Application Support/tailraid`, where a root daemon's `init` wrote (docs/20
-// §9); elsewhere Home().
-func SystemHome() string {
-	if h := os.Getenv("TAILRAID_HOME"); h != "" {
-		return h
-	}
-	if runtime.GOOS == "darwin" {
-		return "/Library/Application Support/tailraid"
-	}
-	return Home()
 }

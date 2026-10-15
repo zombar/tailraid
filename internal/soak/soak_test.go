@@ -36,6 +36,7 @@ import (
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/soak"
 	"github.com/zombar/tailraid/internal/stats"
+	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/users"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -253,8 +254,9 @@ func (e *harnessEnv) WebURL(_ context.Context, n soak.NodeRef) (string, error) {
 	go p.Run(wctx)
 	e.pins[nd.I], e.stop[nd.I] = p, cancel
 	loop := netip.MustParseAddr("127.0.0.1")
-	auth := &rpc.TableAuthorizer{Member: func(string) (meta.Node, bool) {
-		return meta.Node{Idx: nd.Idx(), ID: nd.ID, Name: n.Name, Kind: meta.KindDevice, Addr: loop.String()}, true
+	ts := tailscale.NewFake(loop, "soak-driver", nil)
+	auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: e.c.Clk, Member: func(string) (meta.Node, bool) {
+		return meta.Node{Idx: nd.Idx(), ID: nd.ID, Name: n.Name, Kind: meta.KindDevice, TSStableID: "soak-driver", Addr: loop.String()}, true
 	}}
 	ui, err := webui.New(webui.Options{
 		FS: nd.FS, Store: nd.Node.FSM, Auth: auth, Clk: e.c.Clk, Logger: slog.New(slog.DiscardHandler), Retention: 30 * 24 * time.Hour, Pins: p,
@@ -798,11 +800,10 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 	seed, rng := testseed.New(t)
 	// phases 22 and 23 need the gateways' retry-until-stale (production's) and run in
 	// tests of their own on such a cluster; this one's gateways fail fast for the other
-	// fault phases. Phases 25 and 26 need the mesh, which the harness never opens
-	// (TestSoak_MeshPhasesSkipWithoutMesh).
+	// fault phases
 	var all []string
 	for _, ph := range soak.StandardPhases() {
-		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" && num != "25" && num != "26" && num != "27" {
+		if num, _, _ := strings.Cut(ph.Name, " "); num != "22" && num != "23" {
 			all = append(all, num)
 		}
 	}

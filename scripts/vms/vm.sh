@@ -3,9 +3,8 @@
 #
 # mac and linux are Tart clones of the golden images Packer built (images.sh); win is a
 # qcow2 overlay of the Windows golden image run by qemu-system-aarch64 under HVF with
-# user-mode networking (SSH forwarded to 127.0.0.1:2222, the mesh's UDP port forwarded
-# from every host address, common.sh). `provision` names a fresh instance; `destroy`
-# removes the instance and keeps the image.
+# user-mode networking (SSH forwarded to 127.0.0.1:2222). `provision` registers a fresh
+# instance with the rig's headscale; `destroy` removes the instance and keeps the image.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 os=${1:-}; action=${2:-}
@@ -43,7 +42,7 @@ start() {
       "$TART" list --quiet | grep -qx "$name" || create
       # --no-graphics keeps it headless; the login keychain must be unlocked for macOS
       # guests (a logged-in desktop session is enough)
-      nohup "$TART" run --no-graphics --no-audio --no-clipboard --net-bridged "$VMS_BRIDGE" "$name" > "$logfile" 2>&1 &
+      nohup "$TART" run --no-graphics --no-audio --no-clipboard "$name" > "$logfile" 2>&1 &
       echo $! > "$pidfile"
       ;;
     win)
@@ -56,7 +55,7 @@ start() {
         -drive "if=pflash,format=raw,readonly=on,file=$BREW_PREFIX/share/qemu/edk2-aarch64-code.fd" \
         -drive "if=pflash,format=raw,file=$RUN/$name-efivars.fd" \
         -drive "file=$RUN/$name.qcow2,if=none,id=nvm,format=qcow2" -device nvme,serial=tailraid,drive=nvm \
-        -device virtio-net-pci,netdev=net0 -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$WIN_SSH_PORT-:22,hostfwd=udp::$MESH_PORT-:$MESH_PORT" \
+        -device virtio-net-pci,netdev=net0 -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$WIN_SSH_PORT-:22" \
         -device ramfb -device qemu-xhci -device usb-kbd -device usb-tablet -device virtio-rng-pci \
         -display none -monitor "unix:$RUN/$name.mon,server,nowait" > "$logfile" 2>&1 &
       echo $! > "$pidfile"
@@ -94,11 +93,17 @@ destroy() {
   log "destroyed $name"
 }
 
-provision() { # a fresh instance gets its rig name; the mesh needs nothing else of it
+provision() {
   running || die "$name is not running"
+  local key url
+  key=$("$VMS_ROOT/scripts/vms/headscale.sh" key)
+  [ -n "$key" ] || die "no pre-auth key from headscale"
+  url=$(headscale_url)
+  local ca
+  ca=$("$VMS_ROOT/scripts/vms/headscale.sh" ca)
   case "$os" in
-    win) vm_run_script win "$VMS_ROOT/scripts/vms/provision/win.ps1" "$name" ;;
-    *) vm_run_script "$os" "$VMS_ROOT/scripts/vms/provision/$os.sh" "$name" ;;
+    win) vm_scp win "$ca" "C:/tailraid/rig-ca.crt"; vm_run_script win "$VMS_ROOT/scripts/vms/provision/win.ps1" "$url" "$key" "$name" ;;
+    *) vm_scp "$os" "$ca" /tmp/rig-ca.crt; vm_run_script "$os" "$VMS_ROOT/scripts/vms/provision/$os.sh" "$url" "$key" "$name" ;;
   esac
 }
 

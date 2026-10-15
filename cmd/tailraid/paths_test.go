@@ -26,7 +26,7 @@ func TestStatus_CarriesPathsAndWarnings(t *testing.T) {
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	if err := os.Chmod(disk, 0o755); err != nil {

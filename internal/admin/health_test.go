@@ -24,7 +24,6 @@ type allLive struct{}
 
 func (allLive) IsLive(meta.NodeIdx) bool           { return true }
 func (allLive) DeadFor(meta.NodeIdx) time.Duration { return 0 }
-func (allLive) Class(meta.NodeIdx) meta.PathClass  { return meta.PathLAN }
 
 // `check` is not OK when the scan it ran found more corrupt shards than parity can cover
 // (m+1 corrupt, L-106) or anything unrepairable, even though liveness alone looks fine;

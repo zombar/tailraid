@@ -49,19 +49,11 @@ node:
       capacity: ""                   # "" derives from the disk's filesystem, "500G" pins
 ```
 
-A disk the config lists whose marker names this cluster and host but which has no row
-(a `join` cut after its row landed and before its disks were registered, which `join`
-run again reports as joined already) is registered by `serve` on its next maintenance
-tick; the registration is idempotent by disk ID, so a retry updates and never allocates
-a second row.
-
 `tailraid node add-disk <path> [--capacity SIZE]`, run on the host:
 
 1. refuses a path that holds anything other than a `lost+found` directory;
 2. writes the **disk marker** `<path>/disk_id`: `cluster_id`, a fresh disk ID and the
-   host's identity, its mesh key (docs/20 §2; the node ID under the fake device), which a
-   reset keeps, so a device that joined again under a new node ID still owns its disks;
-   fsynced with its directory;
+   host's node ID, fsynced with its directory;
 3. appends the entry to the config;
 4. proposes `NodeUpsert{Kind: KindDisk, Host: self, ID: diskID, Capacity: budget}` through
    the leader (the `member` op `add_disk`, forwarded like `join`);

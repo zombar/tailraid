@@ -124,7 +124,7 @@ func Charts(rows []Row, from, to time.Time, node string) []Chart {
 		line(id, title, y, ss)
 	}
 	ns("throughput", "Client throughput", "MiB/s", [2]string{"bytes_w", "write MiB/s"}, [2]string{"bytes_r", "read MiB/s"})
-	ns("tailnet", "Network (mesh)", "MiB/s", [2]string{"mesh_rx", "mesh rx MiB/s"}, [2]string{"mesh_tx", "mesh tx MiB/s"})
+	ns("tailnet", "Network (tailnet)", "MiB/s", [2]string{"tailnet_rx", "tailnet rx MiB/s"}, [2]string{"tailnet_tx", "tailnet tx MiB/s"})
 	ns("net", "Network (all interfaces)", "MiB/s", [2]string{"net_rx", "rx MiB/s"}, [2]string{"net_tx", "tx MiB/s"})
 	ns("cpu", "CPU", "%", [2]string{"cpu", "process % of one CPU"}, [2]string{"load1", "load (1 min)"})
 	ns("memory", "Memory", "bytes", [2]string{"rss", "resident set"}, [2]string{"mem_avail", "memory available"})
@@ -142,7 +142,7 @@ func Charts(rows []Row, from, to time.Time, node string) []Chart {
 func metricPoints(rows []Row, metric string, x func(int64) float64) [][2]float64 {
 	scale := 1.0
 	switch metric {
-	case "bytes_w", "bytes_r", "mesh_rx", "mesh_tx", "net_rx", "net_tx", "disk_w", "disk_r":
+	case "bytes_w", "bytes_r", "tailnet_rx", "tailnet_tx", "net_rx", "net_tx", "disk_w", "disk_r":
 		scale = 1.0 / (1 << 20)
 	case "cpu":
 		scale = 100

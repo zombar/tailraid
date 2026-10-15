@@ -32,11 +32,12 @@ import (
 // origin cannot make the browser send it, and there is no CORS to grant it.
 const HeaderUI = "X-Tailraid-UI"
 
-// Authorizer is what the UI needs from rpc.TableAuthorizer (docs/13 §2): the principal
-// behind a source address, a member row today and a user with groups later (docs/20 §11).
+// Authorizer is what the UI needs from rpc.WhoIsAuthorizer (docs/13 §2).
 type Authorizer interface {
-	// Allow returns the principal behind src under the RPC rule (docs/08), or an error.
-	Allow(ctx context.Context, src netip.Addr) (rpc.Principal, error)
+	// Allow returns the member behind src under the RPC rule (docs/08), or an error.
+	Allow(ctx context.Context, src netip.Addr) (meta.Node, error)
+	// User returns the tailnet StableID and login behind src ("" login for tagged devices).
+	User(ctx context.Context, src netip.Addr) (stableID, login string, err error)
 }
 
 // Options wire a Server.
@@ -44,6 +45,7 @@ type Options struct {
 	FS     *vfs.FS
 	Store  *meta.Store
 	Auth   Authorizer
+	Login  string       // this node's tailnet login; "" = cluster members only
 	Status func() any   // the admin report (same closure as the RPC status endpoint)
 	Stats  *stats.Query // the Stats page's history (docs/17 §3); nil = 503 on /api/stats
 	Chunks func(ctx context.Context, path string, offset, limit int) (int, []admin.ChunkReport, error)
@@ -139,7 +141,6 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("POST /api/logout", csrf(s.logout))
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/stats", s.stats)
-	mux.HandleFunc("GET /api/mesh", s.mesh)
 	mux.HandleFunc("GET /api/ls", s.ls)
 	mux.HandleFunc("GET /api/stat", s.stat)
 	mux.HandleFunc("GET /api/trash", s.trash)
@@ -208,14 +209,23 @@ func (s *Server) authz(next http.Handler) http.Handler {
 			return
 		}
 		_, err := s.o.Auth.Allow(r.Context(), src)
+		if err == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if errors.Is(err, rpc.ErrUnavailable) {
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		_, login, err := s.o.Auth.User(r.Context(), src)
 		switch {
-		case err == nil:
+		case err == nil && login != "" && login == s.o.Login:
 			next.ServeHTTP(w, r)
 		case errors.Is(err, rpc.ErrUnavailable):
 			writeErr(w, http.StatusServiceUnavailable, err.Error())
 		default:
-			s.refused.Warn(s.o.Logger, "web ui: refused", "src", src, "err", err)
-			writeErr(w, http.StatusForbidden, "not a cluster member")
+			s.refused.Warn(s.o.Logger, "web ui: refused", "src", src, "login", login, "err", err)
+			writeErr(w, http.StatusForbidden, "not a cluster member and not this node's user")
 		}
 	})
 }

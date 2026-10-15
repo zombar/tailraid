@@ -149,7 +149,7 @@ func secretName(cmd *cobra.Command, name string, system bool) (string, error) {
 	if system || strings.HasPrefix(name, "user/") {
 		return name, nil
 	}
-	c, _, _, err := localClient(cmd)
+	c, _, _, err := localClient(cmd.Context(), cmd)
 	if err != nil {
 		return "", err
 	}

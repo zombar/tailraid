@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"net/netip"
 	"slices"
 	"sort"
 	"strings"
@@ -229,10 +228,6 @@ func (a *applier) apply(c Command) (Result, error) {
 		return Result{}, a.secretPut(c.Actor, c.SecretPut)
 	case OpSecretDelete:
 		return Result{}, a.secretDelete(c.Actor, c.SecretDelete)
-	case OpPendingAdd:
-		return a.pendingAdd(c.PendingAdd)
-	case OpPendingDelete:
-		return Result{}, a.pendingDelete(c.PendingDelete)
 	case OpInvite:
 		return Result{}, a.inviteOp(c)
 	case OpUser:
@@ -300,25 +295,7 @@ func (a *applier) metaSet(c *MetaSet) error {
 		st.Meta.ClusterID = c.ClusterID
 	}
 	if c.JoinToken != "" {
-		if c.JoinToken != st.Meta.JoinToken {
-			// a rotation ends every join in progress with the token that admitted it
-			// (docs/20 §4, I-319): a pending row is what the old code bought
-			clear(st.Pending)
-		}
 		st.Meta.JoinToken = c.JoinToken
-	}
-	if c.MeshSubnet != "" {
-		p, err := netip.ParsePrefix(c.MeshSubnet)
-		if err != nil || !p.Addr().Is4() || p.Bits() != 24 {
-			return ErrBadCommand
-		}
-		if st.Meta.MeshSubnet != "" && st.Meta.MeshSubnet != p.Masked().String() {
-			return ErrBadCommand // set once (I-320)
-		}
-		st.Meta.MeshSubnet = p.Masked().String()
-		if st.Meta.NextMeshHost == 0 {
-			st.Meta.NextMeshHost = MeshFirstHost + 1 // init's node is the first host
-		}
 	}
 	if st.Meta.CreatedAt == 0 && c.CreatedAt != 0 {
 		st.Meta.CreatedAt = c.CreatedAt
@@ -336,9 +313,6 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 		if _, ok := st.Nodes[n.Idx]; !ok {
 			return Result{}, ErrNoSuchNode
 		}
-	}
-	if err := checkMeshFields(&n); err != nil {
-		return Result{}, err
 	}
 	switch n.Kind {
 	case KindDevice, KindS3:
@@ -368,18 +342,6 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 			}
 		}
 	}
-	if n.Kind == KindDevice && !n.Key.IsZero() {
-		// one active device per key (docs/20 §3): the key is the device, so a fresh row
-		// that repeats another's is refused and a row keeps its own; the address needs no
-		// rule of its own, since pendingAdd hands out each host once and a re-join under
-		// the key lands on the key's row
-		for idx, cur := range st.Nodes {
-			if idx != n.Idx && cur.Kind == KindDevice && cur.State != Removed && cur.Key == n.Key {
-				return Result{}, ErrExist // device idx holds that key
-			}
-		}
-	}
-	st.consumePending(&n) // the join that completes a pending row (docs/20 §4)
 	if n.Idx == 0 {
 		idx := st.NextNode
 		st.NextNode++

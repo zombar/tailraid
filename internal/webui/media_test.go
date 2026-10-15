@@ -20,6 +20,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/tailscale"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/webui"
 )
@@ -554,8 +555,9 @@ func TestWebUI_Ls_DirCoverDeterministic(t *testing.T) {
 	c.WriteFile(0, "/alb/b.mp3", append(id3v2(map[string]string{"TIT2": "b"}, pic), audio...))
 	c.Settle()
 	for i := range c.Nodes {
-		auth := &rpc.TableAuthorizer{Member: func(string) (meta.Node, bool) {
-			return meta.Node{Idx: 1, ID: "n1", Name: "one", Kind: meta.KindDevice, Addr: loop.String()}, true
+		ts := tailscale.NewFake(loop, stableS, nil)
+		auth := &rpc.WhoIsAuthorizer{TS: ts, Clk: c.Clk, Member: func(string) (meta.Node, bool) {
+			return meta.Node{Idx: 1, ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: stableS, Addr: loop.String()}, true
 		}}
 		srv, err := webui.New(webui.Options{FS: c.Nodes[i].FS, Store: c.Nodes[i].Node.FSM, Auth: auth, Clk: c.Clk, Logger: slog.New(slog.DiscardHandler)})
 		must(t, err)

@@ -4,7 +4,7 @@ The mount is an ordinary folder; this guide covers what the browser adds and the
 
 ## The browser UI
 
-Every device serves a web page at `http://<mesh address>:20482/` (`tailraid status` prints it) to cluster members. Opening it from a phone that is not a node is a later feature ([docs/20](20-mesh.md) §11).
+Every device serves a web page at `http://<tailscale-ip>:20482/`. Cluster members and your own devices (the same Tailscale user) can open it, so your phone works. Once the volume has users, each person signs in from the link `tailraid web login` prints on their own device, and sees what they have been granted ([docs/21](21-users.md) §6).
 
 | Tab | What it does |
 |---|---|

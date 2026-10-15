@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -86,7 +85,7 @@ func TestMember_SetVersion(t *testing.T) {
 		t.Fatalf("version %q, want v9.9.9", after.Version)
 	}
 	after.Version = before.Version
-	if !reflect.DeepEqual(after, before) {
+	if after != before {
 		t.Fatalf("set_version changed more than the version:\n%+v\n%+v", before, after)
 	}
 	if err := n.MemberOp(ctx, rpc.MemberOp{Op: "set_version", NodeIdx: self}); !errors.Is(err, ErrBadMemberOp) {
@@ -145,7 +144,7 @@ func TestMember_RemovedRowRefusesOps(t *testing.T) {
 	if got := servers(); got != want {
 		t.Fatalf("raft configuration has %d servers, want %d", got, want)
 	}
-	if after, _ := n.FSM.Node(nd.Idx); !reflect.DeepEqual(after, before) {
+	if after, _ := n.FSM.Node(nd.Idx); after != before {
 		t.Fatalf("removed row changed:\n%+v\n%+v", before, after)
 	}
 	if len(n.FSM.Nodes()) != 2 {

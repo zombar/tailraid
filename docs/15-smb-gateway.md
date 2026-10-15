@@ -380,7 +380,7 @@ When the cluster is full the WRITE answers `STATUS_DISK_FULL`, which Windows sho
   implement; out of scope.
 - **Mode, owner, attributes.** SMB2 carries no POSIX mode or owner; the READONLY attribute
   is derived from the permission bits and a change of it is dropped. `chmod` and `chown`
-  from a Windows client do not reach the FSM. With users (docs/21 §5, after 1.0) a tree
+  from a Windows client do not reach the FSM. With users (docs/21 §5) a tree
   connect is bound to the user the session's account maps to through the device's
   bindings, `tailraid` stays the mount account, a second Windows user binds another
   account, and an unbound account's operations are `STATUS_ACCESS_DENIED` (I-352).

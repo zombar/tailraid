@@ -210,12 +210,6 @@ function mediaItem(path) {
 function search(q, under) {
   return call("/api/search?q=" + encodeURIComponent(q) + (under ? "&under=" + encodeURIComponent(under) : ""));
 }
-async function meshPicture() {
-  const r = await fetch("/api/mesh");
-  if (r.status === 404) return "";
-  if (!r.ok) throw await apiError(r);
-  return (await r.json()).svg;
-}
 async function rendered(path, root) {
   const r = await fetch("/api/render?path=" + encodeURIComponent(path) + inQuery(root));
   if (!r.ok) throw await apiError(r);
@@ -847,10 +841,10 @@ function bucketCard(s3, sh, scale) {
   const head = h("div", { class: "name-row" }, h("span", { class: "dot " + (live === s3.length ? "ok" : live ? "warn" : "bad") }), h("span", { class: "name" }, "S3"), h("span", { class: "host-sum" }, `${plural(s3.length, "bucket")} \xB7 ${bytes(s3.reduce((s, b) => s + b.stored_bytes, 0))} stored`));
   const strip = h("div", { class: "disk-strip" });
   for (const b of s3) {
-    const row3 = diskRow(b, sh.get(b.idx), scale);
+    const row2 = diskRow(b, sh.get(b.idx), scale);
     const where = b.s3 ? b.s3.prefix ? `${b.s3.bucket}/${b.s3.prefix}` : b.s3.bucket : "";
-    row3.lastElementChild?.replaceWith(h("div", { class: "disk-val" }, h("span", null, bytes(b.stored_bytes) + " stored"), h("span", null, where)));
-    strip.append(row3);
+    row2.lastElementChild?.replaceWith(h("div", { class: "disk-val" }, h("span", null, bytes(b.stored_bytes) + " stored"), h("span", null, where)));
+    strip.append(row2);
   }
   return h("div", { class: "host-row" }, head, strip);
 }
@@ -910,20 +904,20 @@ function repair(r) {
   }
   const s = r.repair.stats;
   const kv = h("dl", { class: "kv" });
-  const row3 = (k, v, tone) => kv.append(h("div", null, h("dt", null, k), h("dd", { class: tone }, v)));
-  row3("scanned", count(s.scanned));
-  row3("repaired", count(s.repaired));
-  row3("partial", count(s.partial));
-  row3("unrepairable", count(s.unrepairable), s.unrepairable > 0 ? "bad" : void 0);
-  row3("deferred", count(s.deferred));
-  row3("migrated", count(s.migrated));
-  row3("moved home", count(s.homed ?? 0));
-  row3("policy stale", count(s.policy_stale));
-  row3("scrubbed", count(s.scrubbed));
-  row3("scrub bad", count(s.scrub_bad), s.scrub_bad > 0 ? "bad" : void 0);
-  row3("bytes moved", bytes(s.bytes_moved));
-  row3("errors", count(s.errors), s.errors > 0 ? "bad" : void 0);
-  row3("reported bad slots", count(r.repair.reported_bad_slots), r.repair.reported_bad_slots > 0 ? "warn" : void 0);
+  const row2 = (k, v, tone) => kv.append(h("div", null, h("dt", null, k), h("dd", { class: tone }, v)));
+  row2("scanned", count(s.scanned));
+  row2("repaired", count(s.repaired));
+  row2("partial", count(s.partial));
+  row2("unrepairable", count(s.unrepairable), s.unrepairable > 0 ? "bad" : void 0);
+  row2("deferred", count(s.deferred));
+  row2("migrated", count(s.migrated));
+  row2("moved home", count(s.homed ?? 0));
+  row2("policy stale", count(s.policy_stale));
+  row2("scrubbed", count(s.scrubbed));
+  row2("scrub bad", count(s.scrub_bad), s.scrub_bad > 0 ? "bad" : void 0);
+  row2("bytes moved", bytes(s.bytes_moved));
+  row2("errors", count(s.errors), s.errors > 0 ? "bad" : void 0);
+  row2("reported bad slots", count(r.repair.reported_bad_slots), r.repair.reported_bad_slots > 0 ? "warn" : void 0);
   const p = r.repair.in_progress;
   const away = home(r.repair.home);
   if (!p) return h("div", null, h("h3", null, "Repair \xB7 last scan " + ago(r.repair.last_scan)), away, kv);
@@ -946,163 +940,6 @@ function home(st) {
     "away from home",
     bar(st.open ? 1 : st.start > 0 ? Math.min(share / st.start, 1) : 0),
     `${count(st.away_slots)} slots \xB7 ${bytes(st.away_bytes)} \xB7 ${bytes(st.movable_bytes)} movable${of} \xB7 ${gate}`
-  );
-}
-
-// internal/webui/src/account.ts
-var session2 = null;
-function toLogin() {
-  const to = location.pathname + location.search + location.hash;
-  location.replace("/login?to=" + encodeURIComponent(to));
-}
-async function mount(header2) {
-  let r;
-  try {
-    r = await fetch("/api/session");
-  } catch {
-    return;
-  }
-  if (r.status === 401) {
-    toLogin();
-    return;
-  }
-  if (!r.ok) return;
-  session2 = await r.json();
-  const chip = h("span", { class: "account", title: `signed in as ${session2.user}` }, icon("person"), h("span", null, session2.user));
-  const out = h("button", { type: "button", class: "signout", title: "Sign out", "aria-label": "Sign out" }, icon("logout"));
-  out.addEventListener("click", async () => {
-    out.disabled = true;
-    try {
-      await fetch("/api/logout", { method: "POST", headers: { [HEADER]: "1" } });
-    } finally {
-      location.replace("/login");
-    }
-  });
-  chip.append(out);
-  const theme = header2.querySelector("button.theme");
-  if (theme) theme.before(chip);
-  else header2.append(chip);
-}
-function memberLink(name, href, ...kids) {
-  const a = h("a", { href, "data-node": name }, ...kids);
-  return a;
-}
-function wire2(root) {
-  root.addEventListener("click", (ev) => {
-    const a = ev.target?.closest("a[data-node]");
-    if (!a || !session2) return;
-    ev.preventDefault();
-    void follow(a);
-  });
-}
-async function follow(a) {
-  const to = new URL(a.href, location.href);
-  try {
-    const r = await fetch("/api/handoff?to=" + encodeURIComponent(a.dataset.node ?? ""));
-    if (r.status === 401) {
-      toLogin();
-      return;
-    }
-    if (!r.ok) {
-      location.assign(a.href);
-      return;
-    }
-    const { url } = await r.json();
-    location.assign(url + "&to=" + encodeURIComponent(to.pathname + to.search + to.hash));
-  } catch {
-    location.assign(a.href);
-  }
-}
-
-// internal/webui/src/mesh.ts
-var picture = "";
-async function refresh() {
-  let svg2 = "";
-  try {
-    svg2 = await meshPicture();
-  } catch {
-    svg2 = "";
-  }
-  if (svg2 === picture) return false;
-  picture = svg2;
-  return true;
-}
-function render4(root, r) {
-  const m = r.mesh;
-  if (!m) return;
-  const peers = m.peers ?? [];
-  const byIdx = /* @__PURE__ */ new Map();
-  for (const n of r.nodes) byIdx.set(n.idx, n);
-  const counts = { lan: 0, wan: 0, relay: 0, none: 0 };
-  for (const p of peers) {
-    const c = p.class === "lan" || p.class === "wan" || p.class === "relay" ? p.class : "none";
-    counts[c]++;
-  }
-  const pm = m.portmap && m.portmap.external ? `portmap ${m.portmap.protocol} ${m.portmap.external}` : "portmap none";
-  const sub = `${m.addr}${m.interface ? " on " + m.interface : ""} \xB7 udp ${m.port} \xB7 ${pm} \xB7 ${peers.length} ${peers.length === 1 ? "peer" : "peers"}: ${counts.lan} lan, ${counts.wan} wan, ${counts.relay} relayed, ${counts.none} none`;
-  const card3 = h("div", { class: "chart-card" });
-  const pic = h("div");
-  pic.innerHTML = picture;
-  if (picture) card3.append(...pic.childNodes);
-  const self = r.nodes.find((n) => n.self);
-  const rows = [
-    h(
-      "tr",
-      { class: "self" },
-      h("td", { class: "name" }, self?.name ?? r.node, h("span", { class: "badge self" }, "this device")),
-      h("td", { class: "addr" }, m.addr),
-      h("td", { class: "path" }, `${m.interface ? m.interface + " \xB7 " : ""}udp ${m.port}`),
-      h("td", { class: "ep" }, pm),
-      h("td", { class: "rtt" }),
-      h("td", { class: "seen" })
-    )
-  ];
-  for (const p of peers) rows.push(row(p, byIdx.get(p.idx)));
-  card3.append(
-    h(
-      "table",
-      { class: "mesh-peers" },
-      h("thead", null, h("tr", null, h("th", null, "member"), h("th", null, "address"), h("th", null, "path"), h("th", null, "endpoint"), h("th", { class: "rtt" }, "rtt"), h("th", { class: "seen" }, "seen"))),
-      h("tbody", null, ...rows)
-    ),
-    h("p", { class: "small dim" }, "this device's view: one edge per member in the class of the path to it, lan green, wan ink, relay amber through the member that carries it, none red; the table under it carries each member's facts; click a member for its own view")
-  );
-  root.append(h("section", null, h("h2", null, "Mesh", h("span", { class: "h-sub" }, sub)), card3));
-}
-function row(p, n) {
-  const name = p.name || n?.name || `node ${p.idx}`;
-  const host = n?.addr ? n.addr.replace(/:\d+$/, "") : "";
-  const nameCell = h("td", { class: "name" }, n?.web && host ? memberLink(name, `http://${host}:${n.web}/#/`, name) : name);
-  if (n?.leader) nameCell.append(h("span", { class: "badge strong" }, "leader"));
-  else if (n?.state === "draining") nameCell.append(h("span", { class: "badge warn" }, "draining"));
-  let dot = "";
-  let path = p.class;
-  let ep = p.endpoint || "\u2014";
-  switch (p.class) {
-    case "lan":
-      dot = " ok";
-      break;
-    case "relay":
-      dot = " warn";
-      path = "relay via " + (p.via ?? "?");
-      ep = "\u2014";
-      break;
-    case "wan":
-      break;
-    default:
-      dot = " bad";
-      path = "none";
-      ep = p.endpoint && !p.endpoint.startsWith("fanout:") ? p.endpoint : "\u2014";
-  }
-  return h(
-    "tr",
-    { class: n && !n.live ? "off" : "" },
-    nameCell,
-    h("td", { class: "addr" }, host),
-    h("td", { class: "path" }, h("span", { class: "dot" + dot }), path),
-    h("td", { class: "ep" }, ep),
-    h("td", { class: "rtt" }, n?.rtt || "\u2014"),
-    h("td", { class: "seen" }, p.seen_age || "\u2014")
   );
 }
 
@@ -1234,7 +1071,7 @@ function asofMenu(ctx, view3, current) {
     if (at !== void 0) next2.at = at;
     location.hash = view3 === "browse" ? browseHash(next2) : fileHash(next2);
   };
-  const row3 = (label, note, checked, disabled, onPick) => {
+  const row2 = (label, note, checked, disabled, onPick) => {
     const radio = h("input", { type: "radio", name: "asof", checked, disabled: !!disabled });
     const lab = h("label", { class: "menu-row" }, radio, h("span", null, label), h("span", { class: "small dim" }, disabled ? "offline: attach it to browse" : note));
     if (disabled) {
@@ -1248,11 +1085,11 @@ function asofMenu(ctx, view3, current) {
   };
   const fill = async () => {
     clear(body);
-    body.append(row3("Now", "the live volume", !current, null, () => go()));
+    body.append(row2("Now", "the live volume", !current, null, () => go()));
     try {
       const c = await catalogue();
       clear(body);
-      body.append(row3("Now", "the live volume", !current, null, () => go()));
+      body.append(row2("Now", "the live volume", !current, null, () => go()));
       let n = 0;
       for (const m of c.mirrors) {
         const mine = c.snapshots.filter((s) => s.mirror === m.name && s.state !== "syncing");
@@ -1262,7 +1099,7 @@ function asofMenu(ctx, view3, current) {
           n++;
           const label = h("span", null, s.name);
           if (!s.auto) label.append(h("span", { class: "badge" }, "manual"));
-          body.append(row3(label, taken(s, c), current?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go(s.id)));
+          body.append(row2(label, taken(s, c), current?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go(s.id)));
         }
       }
       const mirrors = new Set(c.snapshots.map((s) => s.mirror)).size;
@@ -1544,7 +1381,7 @@ function takeDialog(onTaken) {
 }
 
 // internal/webui/src/dashboard.ts
-function render5(root) {
+function render4(root) {
   const draw = () => {
     clear(root);
     const r = status.current;
@@ -1555,7 +1392,6 @@ function render5(root) {
     volume(root, r);
     render2(root, r, last());
     render(root, r);
-    render4(root, r);
     render3(root, r, status.history);
     const mirrors = section(last(), draw);
     if (mirrors) root.append(mirrors);
@@ -1563,7 +1399,6 @@ function render5(root) {
   let drawn = last();
   const unsub = status.subscribe(() => {
     draw();
-    if (status.current?.mesh) refresh().then((changed) => changed && draw(), () => void 0);
     catalogue().then(
       (c) => {
         if (c !== drawn) {
@@ -1614,7 +1449,7 @@ function tile3(label, value, sub) {
 
 // internal/webui/src/chunks.ts
 var PAGE = 64;
-function render6(path, expected) {
+function render5(path, expected) {
   const title = h("span");
   const summaryExtra = h("span", { class: "dim small" });
   const summary = h("summary", null, title, summaryExtra);
@@ -1660,7 +1495,7 @@ function render6(path, expected) {
       total = page.total;
       if (expected === void 0) setTitle(total);
       page.chunks.forEach((c, i) => {
-        rows.append(row2(loaded + i, c));
+        rows.append(row(loaded + i, c));
         if (c.state === "committed") counts.committed++;
         else if (c.state === "degraded") counts.degraded++;
         else if (c.state === "unreadable") counts.unreadable++;
@@ -1696,7 +1531,7 @@ function render6(path, expected) {
     }
   };
 }
-function row2(i, c) {
+function row(i, c) {
   const km = c.k + c.m;
   const live = h("span", { class: "live" + (c.live_slots < c.k ? " bad" : c.live_slots < km ? " warn" : "") }, `${c.live_slots}/${km}`);
   const hash2 = h("span", { title: c.hash }, c.hash.slice(0, 10));
@@ -2298,7 +2133,7 @@ function mediaKind(e) {
 }
 var media2 = null;
 var panel = null;
-function render7(root, ctx) {
+function render6(root, ctx) {
   const path = ctx.path;
   const dir = dirname(path);
   const name = basename(path) || "/";
@@ -2418,7 +2253,7 @@ function render7(root, ctx) {
       section2.append(versionsPanel2);
       const cs = status.current?.volume.chunk_size;
       const expected = entry && cs ? Math.ceil(entry.size / cs) : void 0;
-      if (!panel || panel.path !== path) panel = { path, p: render6(path, expected) };
+      if (!panel || panel.path !== path) panel = { path, p: render5(path, expected) };
       else if (expected !== void 0) panel.p.expect(expected);
       section2.append(panel.p.el);
     }
@@ -2537,29 +2372,29 @@ function encodeForHash(path) {
 var DETAILS_KEY = "tr.details";
 function details(path, e, kind2, mime, f, nsfw, viewer) {
   const dl = h("dl", { class: "kv facts" });
-  const row3 = (k, v2, title, full = false) => dl.append(h("div", full ? { class: "full" } : null, h("dt", null, k), h("dd", title ? { title } : null, v2)));
-  row3("path", path, void 0, true);
-  row3("type", mime ? `${kind2} \xB7 ${mime}` : kind2);
-  row3("size", bytes(e.size), `${e.size.toLocaleString()} bytes`);
-  row3("modified", date2(e.mtime), e.mtime);
-  row3("mode", "0" + (e.mode & 511).toString(8));
-  row3("inode", `${e.ino.toLocaleString()} \xB7 v${e.version}`);
+  const row2 = (k, v2, title, full = false) => dl.append(h("div", full ? { class: "full" } : null, h("dt", null, k), h("dd", title ? { title } : null, v2)));
+  row2("path", path, void 0, true);
+  row2("type", mime ? `${kind2} \xB7 ${mime}` : kind2);
+  row2("size", bytes(e.size), `${e.size.toLocaleString()} bytes`);
+  row2("modified", date2(e.mtime), e.mtime);
+  row2("mode", "0" + (e.mode & 511).toString(8));
+  row2("inode", `${e.ino.toLocaleString()} \xB7 v${e.version}`);
   const v = status.current?.volume;
-  if (v) row3("chunks", `${Math.ceil(e.size / v.chunk_size).toLocaleString()} \xB7 ${bytes(v.chunk_size)} \xB7 ${v.k}+${v.m}`);
+  if (v) row2("chunks", `${Math.ceil(e.size / v.chunk_size).toLocaleString()} \xB7 ${bytes(v.chunk_size)} \xB7 ${v.k}+${v.m}`);
   const flags = [f.protected ? "protected" : "", nsfw ? "nsfw" : "", f.pinned ? "kept here" : ""].filter(Boolean);
-  if (flags.length) row3("folder", flags.join(" \xB7 "));
+  if (flags.length) row2("folder", flags.join(" \xB7 "));
   const vid = viewer.querySelector("video");
   if (vid) {
     const add = () => {
-      if (Number.isFinite(vid.duration)) row3("length", mmss(vid.duration));
-      if (vid.videoWidth) row3("resolution", `${vid.videoWidth} \xD7 ${vid.videoHeight}`);
+      if (Number.isFinite(vid.duration)) row2("length", mmss(vid.duration));
+      if (vid.videoWidth) row2("resolution", `${vid.videoWidth} \xD7 ${vid.videoHeight}`);
     };
     if (vid.readyState >= HTMLMediaElement.HAVE_METADATA) add();
     else vid.addEventListener("loadedmetadata", add, { once: true });
   }
   const img = viewer.querySelector("img");
   if (img) {
-    const add = () => row3("resolution", `${img.naturalWidth} \xD7 ${img.naturalHeight}`);
+    const add = () => row2("resolution", `${img.naturalWidth} \xD7 ${img.naturalHeight}`);
     if (img.complete && img.naturalWidth) add();
     else img.addEventListener("load", add, { once: true });
   }
@@ -2895,7 +2730,7 @@ function menu(ctx) {
   const body = h("div", { class: "menu-body" });
   const details2 = h("details", { class: "menu" }, h("summary", null, "Folder"), body);
   const isRoot = ctx.path === "/";
-  const row3 = (label, note, checked, disabled, onToggle) => {
+  const row2 = (label, note, checked, disabled, onToggle) => {
     const box = h("input", { type: "checkbox" });
     box.checked = checked;
     const noteEl = h("span", { class: "small dim" }, disabled ?? note);
@@ -2957,9 +2792,9 @@ function menu(ctx) {
     const why = isRoot ? "not for the root" : ctx.inTrash ? "not for a deleted folder" : null;
     const self = status.current?.nodes.find((n) => n.self)?.name ?? "this device";
     body.replaceChildren(
-      row3("Protect", "nothing in it can be deleted, replaced or moved out, from any device", own?.protected ?? ctx.dir.protected, why ?? inherited(ctx.dir.protected, own?.protected), (on) => setFlags(ctx.path, { protected: on })),
-      row3("Mark nsfw", "thumbnails and previews are blurred until tapped", own?.nsfw ?? ctx.dir.nsfw, why ?? inherited(ctx.dir.nsfw, own?.nsfw), (on) => setFlags(ctx.path, { nsfw: on })),
-      row3(
+      row2("Protect", "nothing in it can be deleted, replaced or moved out, from any device", own?.protected ?? ctx.dir.protected, why ?? inherited(ctx.dir.protected, own?.protected), (on) => setFlags(ctx.path, { protected: on })),
+      row2("Mark nsfw", "thumbnails and previews are blurred until tapped", own?.nsfw ?? ctx.dir.nsfw, why ?? inherited(ctx.dir.nsfw, own?.nsfw), (on) => setFlags(ctx.path, { nsfw: on })),
+      row2(
         "Keep on this device",
         pinned ? `${self} holds every chunk in its cache \xB7 ${bytes(pinned.cached_bytes)} of ${bytes(pinned.bytes)} here` : `${self} fetches every chunk under it into its cache and keeps it there`,
         ctx.dir.pinned,
@@ -2982,7 +2817,7 @@ function isAlbum(entries) {
   return audio > 0 && audio > live.length - audio;
 }
 var PROBES = 4;
-function render8(ctx, cover, entries) {
+function render7(ctx, cover, entries) {
   const audio = entries.filter((e) => !e.deleted_at && !e.upload && e.type === "file" && isAudioName(e.name)).sort((a, b) => trackNo(a.name) - trackNo(b.name) || a.name.localeCompare(b.name, void 0, { numeric: true }));
   const tracks = audio.map((e) => ({ path: join(ctx.path, e.name), root: src(ctx) }));
   const img = h("img", { class: "cover", alt: "" });
@@ -3158,7 +2993,7 @@ async function runQueue() {
   }
   running = false;
 }
-function render9(root, ctx) {
+function render8(root, ctx) {
   const dir = ctx.path;
   const inTrash = ctx.root !== void 0;
   const asOf = ctx.at !== void 0;
@@ -3175,7 +3010,7 @@ function render9(root, ctx) {
   let alb = null;
   const live = () => entries.filter((e) => !e.deleted_at);
   const pathOf = (e) => join(dir, e.name);
-  const refresh2 = async () => {
+  const refresh = async () => {
     try {
       const r = await ls(dir, source);
       entries = r.entries;
@@ -3198,7 +3033,7 @@ function render9(root, ctx) {
       const msg = e instanceof Error ? e.message : String(e);
       root.append(h("section", null, crumbs(ctx), h("div", { class: "error" }, `Could not list ${dir}: ${msg}. `, h("a", { href: "#", onClick: (ev) => {
         ev.preventDefault();
-        void refresh2();
+        void refresh();
       } }, "Retry"))));
     }
   };
@@ -3242,7 +3077,7 @@ function render9(root, ctx) {
         } }, "New folder")
       );
     }
-    if (!asOf) toolbar.append(menu({ path: dir, inTrash, dir: info, onChange: () => void refresh2() }));
+    if (!asOf) toolbar.append(menu({ path: dir, inTrash, dir: info, onChange: () => void refresh() }));
     if (!inTrash) toolbar.append(asofMenu(ctx, "browse", info.snapshot));
     const seg = h(
       "span",
@@ -3274,7 +3109,7 @@ function render9(root, ctx) {
     alb = null;
     if (sorted(entries).length === 0) section2.append(h("div", { class: "empty" }, deleted ? "empty folder \xB7 tick show deleted to list what was deleted here" : "empty folder"));
     else if (asAlbum) {
-      alb = render8(ctx, info.no_cover ? null : info.cover, entries);
+      alb = render7(ctx, info.no_cover ? null : info.cover, entries);
       section2.append(alb.el);
       const rest = sorted(entries).filter((e) => !(e.type === "file" && isAudioName(e.name) && !e.deleted_at));
       if (rest.length) section2.append(table(rest));
@@ -3305,7 +3140,7 @@ function render9(root, ctx) {
         () => {
           toast("Created " + n, "ok");
           formOpen = false;
-          void refresh2();
+          void refresh();
         },
         (e) => toast("mkdir " + n + ": " + (e instanceof ApiError ? e.message : String(e)), "bad")
       );
@@ -3338,7 +3173,7 @@ function render9(root, ctx) {
           toast(`Renamed to ${n}`, "ok");
           renaming = null;
           sel.clear();
-          void refresh2();
+          void refresh();
         },
         (e) => toast("rename: " + (e instanceof Error ? e.message : String(e)), "bad")
       );
@@ -3428,11 +3263,11 @@ function render9(root, ctx) {
     if (!asOf) head.prepend(h("th", { class: "sel" }, all));
     const t = h("table", { class: "files" }, h("thead", null, head));
     const body = h("tbody");
-    for (const e of sorted(list)) body.append(row3(e));
+    for (const e of sorted(list)) body.append(row2(e));
     t.append(body);
     return t;
   };
-  const row3 = (e) => {
+  const row2 = (e) => {
     const { href, kind: kind2 } = linkOf(e);
     let link;
     if (e.type === "symlink") link = h("span", { class: "linkname" }, icon("link"), e.name + " ", h("span", { class: "target" }, "\u2192 " + (e.target ?? "")));
@@ -3548,7 +3383,7 @@ function render9(root, ctx) {
       if (r.deleted.length) toast(`Deleted ${r.deleted.length} ${r.deleted.length === 1 ? "entry" : "entries"} \xB7 in the trash` + (info.purge_at || chosen[0]?.purge_at ? "" : " for 30 d"), "ok");
       for (const f of r.failed) toast(`${f.path.split("/").pop()}: ${f.error}`, "bad");
       sel.clear();
-      void refresh2();
+      void refresh();
     } catch (e) {
       toast("delete: " + (e instanceof Error ? e.message : String(e)), "bad");
     }
@@ -3566,7 +3401,7 @@ function render9(root, ctx) {
       if (r.moved.length) toast(`Moved ${r.moved.length} to ${to}`, "ok");
       for (const f of r.failed) toast(`${f.path.split("/").pop()}: ${f.error}`, "bad");
       sel.clear();
-      void refresh2();
+      void refresh();
     } catch (e) {
       toast("move: " + (e instanceof Error ? e.message : String(e)), "bad");
     }
@@ -3639,9 +3474,9 @@ function render9(root, ctx) {
   });
   onQueueChange = draw;
   onJobDone = (j) => {
-    if (j.dir === dir) void refresh2();
+    if (j.dir === dir) void refresh();
   };
-  void refresh2();
+  void refresh();
   return () => {
     onQueueChange = null;
     onJobDone = null;
@@ -3713,6 +3548,71 @@ function compare(a, b, s) {
   return s.desc ? -c : c;
 }
 
+// internal/webui/src/account.ts
+var session2 = null;
+function toLogin() {
+  const to = location.pathname + location.search + location.hash;
+  location.replace("/login?to=" + encodeURIComponent(to));
+}
+async function mount(header2) {
+  let r;
+  try {
+    r = await fetch("/api/session");
+  } catch {
+    return;
+  }
+  if (r.status === 401) {
+    toLogin();
+    return;
+  }
+  if (!r.ok) return;
+  session2 = await r.json();
+  const chip = h("span", { class: "account", title: `signed in as ${session2.user}` }, icon("person"), h("span", null, session2.user));
+  const out = h("button", { type: "button", class: "signout", title: "Sign out", "aria-label": "Sign out" }, icon("logout"));
+  out.addEventListener("click", async () => {
+    out.disabled = true;
+    try {
+      await fetch("/api/logout", { method: "POST", headers: { [HEADER]: "1" } });
+    } finally {
+      location.replace("/login");
+    }
+  });
+  chip.append(out);
+  const theme = header2.querySelector("button.theme");
+  if (theme) theme.before(chip);
+  else header2.append(chip);
+}
+function memberLink(name, href, ...kids) {
+  const a = h("a", { href, "data-node": name }, ...kids);
+  return a;
+}
+function wire2(root) {
+  root.addEventListener("click", (ev) => {
+    const a = ev.target?.closest("a[data-node]");
+    if (!a || !session2) return;
+    ev.preventDefault();
+    void follow(a);
+  });
+}
+async function follow(a) {
+  const to = new URL(a.href, location.href);
+  try {
+    const r = await fetch("/api/handoff?to=" + encodeURIComponent(a.dataset.node ?? ""));
+    if (r.status === 401) {
+      toLogin();
+      return;
+    }
+    if (!r.ok) {
+      location.assign(a.href);
+      return;
+    }
+    const { url } = await r.json();
+    location.assign(url + "&to=" + encodeURIComponent(to.pathname + to.search + to.hash));
+  } catch {
+    location.assign(a.href);
+  }
+}
+
 // internal/webui/src/stats.ts
 var RANGES = [
   ["1h", 3600],
@@ -3750,7 +3650,7 @@ function local(t) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function render10(root, query) {
+function render9(root, query) {
   const state = parse(query);
   let timer;
   let disposed = false;
@@ -3797,7 +3697,7 @@ function render10(root, query) {
   const sub = head.querySelector(".h-sub");
   const drawMembers = (nodes, current) => {
     clear(body);
-    const row3 = (name, label, dot, note, m) => {
+    const row2 = (name, label, dot, note, m) => {
       const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
       if (m?.web) {
         const link = memberLink(m.name, `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, icon("open_in_new"));
@@ -3808,8 +3708,8 @@ function render10(root, query) {
       }
       body.append(el);
     };
-    row3("all", "all nodes", "off", "one series per member");
-    for (const m of nodes) row3(m.name, m.name, m.live ? "ok" : "bad", (m.self ? "this device \xB7 " : "") + (m.live ? "live" : "dead") + (m.web ? "" : " \xB7 no web listener"), m);
+    row2("all", "all nodes", "off", "one series per member");
+    for (const m of nodes) row2(m.name, m.name, m.live ? "ok" : "bad", (m.self ? "this device \xB7 " : "") + (m.live ? "live" : "dead") + (m.web ? "" : " \xB7 no web listener"), m);
   };
   const cards = /* @__PURE__ */ new Map();
   let order = [];
@@ -3889,8 +3789,8 @@ function render10(root, query) {
   };
   const fetchOnce = async () => {
     const b = bounds(state, Date.now());
-    const refresh2 = last2 !== null && cards.size + empty.size > 0;
-    if (!refresh2) {
+    const refresh = last2 !== null && cards.size + empty.size > 0;
+    if (!refresh) {
       pill2.className = "pill";
       pill2.textContent = "loading";
     }
@@ -3899,11 +3799,11 @@ function render10(root, query) {
         b.from,
         b.to,
         state.node,
-        refresh2 ? onScreen() : null,
+        refresh ? onScreen() : null,
         (f) => {
           if (disposed) return;
           header2(f);
-          if (!refresh2) frames(f.charts);
+          if (!refresh) frames(f.charts);
         },
         (l) => {
           if (!disposed) fill(l);
@@ -4031,7 +3931,7 @@ function hitRow(hit, want) {
   }
   return li;
 }
-function render11(root, q, params) {
+function render10(root, q, params) {
   const under = new URLSearchParams(params).get("under") ?? "";
   const input = document.querySelector("form.search input");
   if (input && document.activeElement !== input) input.value = q;
@@ -4400,9 +4300,9 @@ function detail(root, path) {
             thumb.append(img);
             const title = h("td", { class: "title" }, e.title);
             if (e.plot) title.append(h("div", { class: "plot small dim" }, e.plot));
-            const row3 = h("tr", null, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration2(e.runtime)));
-            row3.addEventListener("click", () => location.hash = fileHash({ path: e.path }));
-            tbody.append(row3);
+            const row2 = h("tr", null, h("td", { class: "no" }, episodeNo(e)), thumb, title, h("td", { class: "dur" }, duration2(e.runtime)));
+            row2.addEventListener("click", () => location.hash = fileHash({ path: e.path }));
+            tbody.append(row2);
           }
         };
         seasons.forEach((s, i) => {
@@ -4420,7 +4320,7 @@ function detail(root, path) {
     (e) => root.append(h("div", { class: "note" }, "could not open: " + (e instanceof Error ? e.message : String(e))))
   );
 }
-function render12(root, rest) {
+function render11(root, rest) {
   if (rest.startsWith("/item/")) detail(root, rest.slice("/item".length));
   else overview(root);
   return () => void 0;
@@ -4492,21 +4392,21 @@ function route() {
   if (head === "browse" || head === "trash" && ctx.root !== void 0) {
     tab = "files";
     if (head === "browse") setFolder(ctx.path);
-    dispose = render9(view2, ctx);
+    dispose = render8(view2, ctx);
   } else if (head === "media") {
     tab = "media";
-    dispose = render12(view2, decodeHashPath(rawRest(location.hash)));
+    dispose = render11(view2, decodeHashPath(rawRest(location.hash)));
   } else if (head === "search") {
     tab = "";
-    dispose = render11(view2, decodeHashPath(rawRest(location.hash)).slice(1), query);
+    dispose = render10(view2, decodeHashPath(rawRest(location.hash)).slice(1), query);
   } else if (head === "file" || head === "trashfile" && ctx.root !== void 0) {
     tab = "files";
-    dispose = render7(view2, ctx);
+    dispose = render6(view2, ctx);
   } else if (head === "stats") {
     tab = "stats";
-    dispose = render10(view2, query);
+    dispose = render9(view2, query);
   } else {
-    dispose = render5(view2);
+    dispose = render4(view2);
   }
   for (const a of tabs) a.classList.toggle("active", a.dataset.tab === tab);
   window.scrollTo(0, 0);

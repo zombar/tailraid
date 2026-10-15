@@ -329,8 +329,9 @@ func TestWebUI_SessionOnEveryNode(t *testing.T) {
 }
 
 // A member's address alone admits nothing once users exist: the page goes to /login
-// and the API is 401; a non-member with a valid cookie is still 403 (the member rule
-// runs first); a user's session on a member device is admitted.
+// and the API is 401; a user's session on a member device, or on a device of this node's
+// tailnet user (the phone), is admitted; another tailnet user's device with a valid
+// cookie is still 403 (the source rule runs first).
 // Invariant: I-354, I-68
 func TestWebUI_MemberAddressAlone_Refused(t *testing.T) {
 	u, kim, _ := usersUI(t)
@@ -342,6 +343,11 @@ func TestWebUI_MemberAddressAlone_Refused(t *testing.T) {
 		t.Fatalf("a member with a session: %d", code)
 	}
 	u.member.Store(false)
+	if code, _ := u.getAs(b, "/api/status"); code != 200 {
+		t.Fatalf("the same tailnet user's device with a session: %d", code)
+	}
+	u.ts.SetUser(loop, "someone-else@example.com")
+	u.auth.Purge()
 	if code, _ := u.getAs(b, "/api/status"); code != 403 {
 		t.Fatalf("a non-member with a session: %d", code)
 	}

@@ -12,8 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,14 +25,10 @@ import (
 	"github.com/zombar/tailraid/internal/users"
 )
 
-// composeNode is one node of test/soak/docker-compose.yml with its worker sidecar. ip is
-// the container's address on the compose network, where iptables cuts it; the node's RPC
-// and browser UI listen on its mesh address (docs/20), learned from the cluster's status
-// into ref.RPC and addr.
+// composeNode is one node of test/soak/docker-compose.yml with its worker sidecar.
 type composeNode struct {
 	ref    soak.NodeRef
 	ip     string
-	addr   string // the mesh address, "" until Nodes resolved it
 	worker string // http://127.0.0.1:2050X (published port of the sidecar)
 }
 
@@ -55,81 +49,17 @@ type composeEnv struct {
 
 func newComposeEnv(dir, file string, n int) *composeEnv {
 	e := &composeEnv{dir: dir, file: file, http: &http.Client{Timeout: 90 * time.Second}}
-	if file == natFile {
-		e.nodes = natNodes()
-	}
 	for i := 1; i <= n; i++ {
-		e.nodes = append(e.nodes, containerNode(i))
-	}
-	for _, nd := range e.nodes {
-		e.Seeds = append(e.Seeds, nd.ref.RPC)
+		e.nodes = append(e.nodes, composeNode{
+			ref:    soak.NodeRef{Name: fmt.Sprintf("n%d", i), Idx: meta.NodeIdx(i), RPC: fmt.Sprintf("172.30.0.%d:20481", 10+i)},
+			ip:     fmt.Sprintf("172.30.0.%d", 10+i),
+			worker: fmt.Sprintf("http://127.0.0.1:%d", 20500+i),
+		})
+		e.Seeds = append(e.Seeds, e.nodes[i-1].ref.RPC)
 	}
 	e.Caller = e
 	return e
 }
-
-// The NAT rig (docker-compose.nat.yml, docs/20 §10 phase 27): n1 and n5 public, n2
-// behind router A (cone) at 172.30.0.21, n3 behind router B (symmetric) at 172.30.0.22.
-const (
-	natFile         = "docker-compose.nat.yml"
-	natConeRouter   = "172.30.0.21"
-	natSymmetricRtr = "172.30.0.22"
-)
-
-func natNodes() []composeNode {
-	n2, n3 := containerNode(2), containerNode(3)
-	n2.ip, n3.ip = "172.31.1.12", "172.31.2.13"
-	n2.ref.RPC, n3.ref.RPC = n2.ip+":20481", n3.ip+":20481"
-	return []composeNode{containerNode(1), n2, n3, containerNode(5)}
-}
-
-// NATRoles names the rig's parts for phase 27; not a NAT rig otherwise.
-func (e *composeEnv) NATRoles() (soak.NATRoles, bool) {
-	if e.file != natFile {
-		return soak.NATRoles{}, false
-	}
-	roles := soak.NATRoles{ConeRouter: natConeRouter, SymmetricRouter: natSymmetricRtr}
-	for _, n := range e.nodes {
-		switch n.ref.Name {
-		case "n2":
-			roles.Cone = n.ref
-		case "n3":
-			roles.Symmetric = n.ref
-		default:
-			roles.Public = append(roles.Public, n.ref)
-		}
-	}
-	return roles, true
-}
-
-// SetPortMap creates or removes the file the cone router's responder answers behind
-// (test/soak/router.sh); ResetPortMap drops the reset file it empties itself on.
-func (e *composeEnv) SetPortMap(ctx context.Context, on bool) error {
-	if on {
-		return e.compose(ctx, "exec", "-T", "router-a", "touch", "/run/portmap.on")
-	}
-	return e.compose(ctx, "exec", "-T", "router-a", "rm", "-f", "/run/portmap.on")
-}
-
-func (e *composeEnv) ResetPortMap(ctx context.Context) error {
-	return e.compose(ctx, "exec", "-T", "router-a", "touch", "/run/portmap.reset")
-}
-
-var _ soak.NATEnv = (*composeEnv)(nil)
-
-// containerNode is container n<i> as the compose files lay it out: 172.30.0.1<i> on the
-// network, its worker published on 2050<i>. The RPC label is the container's address
-// until the mesh address is known; the worker routes either.
-func containerNode(i int) composeNode {
-	return composeNode{
-		ref:    soak.NodeRef{Name: fmt.Sprintf("n%d", i), Idx: meta.NodeIdx(i), RPC: fmt.Sprintf("172.30.0.%d:20481", 10+i)},
-		ip:     fmt.Sprintf("172.30.0.%d", 10+i),
-		worker: fmt.Sprintf("http://127.0.0.1:%d", 20500+i),
-	}
-}
-
-// lateNode is n6, the device of phase 25 (the compose file's `late` profile).
-const lateNode = 6
 
 func (e *composeEnv) Name() string {
 	return fmt.Sprintf("docker compose (%s), %d nodes", strings.TrimSuffix(e.file, ".yml"), len(e.nodes))
@@ -153,19 +83,13 @@ func (e *composeEnv) Nodes(ctx context.Context) ([]soak.NodeRef, error) {
 	return out, nil
 }
 
-// resolveIndices sets each compose node's index and mesh address from the status report,
-// matched by name; the RPC label becomes the mesh address, which the leader's redirects
-// name (docs/20 §1).
+// resolveIndices sets each compose node's index from the status report, matched by name.
 func resolveIndices(nodes []composeNode, members []admin.NodeReport) error {
 	for i := range nodes {
 		found := false
 		for j := range members {
-			if m := &members[j]; m.Name == nodes[i].ref.Name && m.Kind == "device" && m.State != "removed" {
-				nodes[i].ref.Idx, found = m.Idx, true
-				if m.Addr != "" {
-					nodes[i].addr = m.Addr
-					nodes[i].ref.RPC = m.RPCAddr()
-				}
+			if members[j].Name == nodes[i].ref.Name {
+				nodes[i].ref.Idx, found = members[j].Idx, true
 			}
 		}
 		if !found {
@@ -185,10 +109,9 @@ func (e *composeEnv) node(ref soak.NodeRef) composeNode {
 	panic("compose: unknown node " + ref.Name)
 }
 
-// webPort is the browser UI's port on the node's mesh address; the compose files publish
-// node i's worker proxy of it on 127.0.0.1:2052i, so the driver dials the published port
-// while the request names the node's own address, which its Host check expects (docs/13
-// §2, I-127).
+// webPort is the browser UI's container port; the compose files publish node i's on
+// 127.0.0.1:2052i, so the driver dials the published port while the request names the
+// node's own address, which its Host check expects (docs/13 §2, I-127).
 const webPort = "20482"
 
 func (e *composeEnv) WebClient() *http.Client {
@@ -196,9 +119,9 @@ func (e *composeEnv) WebClient() *http.Client {
 	return &http.Client{Timeout: 90 * time.Second, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if host, port, err := net.SplitHostPort(addr); err == nil && port == webPort {
-				for _, n := range e.nodes {
-					if n.ip == host || (n.addr != "" && n.addr == host) {
-						addr = fmt.Sprintf("127.0.0.1:%d", 20520+nodeNumber(n.ref))
+				for i, n := range e.nodes {
+					if n.ip == host {
+						addr = fmt.Sprintf("127.0.0.1:%d", 20520+i+1)
 					}
 				}
 			}
@@ -207,14 +130,8 @@ func (e *composeEnv) WebClient() *http.Client {
 	}}
 }
 
-// nodeNumber is the i of container n<i>.
-func nodeNumber(ref soak.NodeRef) int {
-	n, _ := strconv.Atoi(strings.TrimPrefix(ref.Name, "n"))
-	return n
-}
-
 func (e *composeEnv) Caps() soak.Caps {
-	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile, Mesh: e.file != "docker-compose.single.yml", Users: true}
+	return soak.Caps{Kill: true, Partition: true, Corrupt: true, MultiGateway: true, Disks: true, Mutate: true, S3: e.file == multiFile, AddS3: e.file == multiFile, Stats: true, Mirror: e.file == multiFile, Users: true}
 }
 
 // multiFile is the compose file with phase 15's bucket, the s3 service (docs/10 §4).
@@ -479,11 +396,10 @@ func (e *composeEnv) Call(ctx context.Context, addr, method, path string, body [
 	return e.call(ctx, ref, method, path, body)
 }
 
-// byRPC maps a node RPC address (host:port) to its NodeRef: the mesh address once known,
-// or the container's, which the seeds name before the first status.
+// byRPC maps a node RPC address (host:port) to its NodeRef.
 func (e *composeEnv) byRPC(addr string) (soak.NodeRef, bool) {
 	for _, n := range e.nodes {
-		if n.ref.RPC == addr || n.ip+":20481" == addr {
+		if n.ref.RPC == addr {
 			return n.ref, true
 		}
 	}
@@ -511,7 +427,7 @@ func (e *composeEnv) Goroutines(ctx context.Context, ref soak.NodeRef) (string, 
 // --- faults through docker compose and the workers ----------------------------------------
 
 func (e *composeEnv) compose(ctx context.Context, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -522,7 +438,7 @@ func (e *composeEnv) compose(ctx context.Context, args ...string) error {
 
 // composeIn runs docker compose with stdin (a secret: never in the arguments or an error).
 func (e *composeEnv) composeIn(ctx context.Context, stdin string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.CombinedOutput()
@@ -534,7 +450,7 @@ func (e *composeEnv) composeIn(ctx context.Context, stdin string, args ...string
 
 // composeOut runs docker compose and returns its output.
 func (e *composeEnv) composeOut(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file, "--profile", "late"}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
+	cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", e.file}, args...)...) //nolint:gosec // the driver runs docker compose on its own rig
 	cmd.Dir = e.dir
 	return cmd.CombinedOutput()
 }
@@ -603,43 +519,6 @@ func (e *composeEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 	return nil
 }
 
-// waitConverged polls every node's status until each one sees every device member live:
-// the mesh's paths form a few seconds after a joiner serves (docs/20 §5), and a gateway
-// without a path to a holder answers EIO, which is no phase's finding.
-func (e *composeEnv) waitConverged(ctx context.Context, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		pending := ""
-		for _, n := range e.nodes {
-			rep, err := e.Status(ctx, n.ref)
-			if err != nil {
-				pending = n.ref.Name + ": " + err.Error()
-				break
-			}
-			for i := range rep.Nodes {
-				if d := &rep.Nodes[i]; d.Kind == "device" && d.State != "removed" && !d.Live {
-					pending = n.ref.Name + " sees " + d.Name + " dead"
-					break
-				}
-			}
-			if pending != "" {
-				break
-			}
-		}
-		if pending == "" {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("the mesh did not converge within %s: %s", timeout, pending)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
-}
-
 func (e *composeEnv) waitReady(ctx context.Context, ref soak.NodeRef, timeout time.Duration) error {
 	n := e.node(ref)
 	deadline := time.Now().Add(timeout)
@@ -659,15 +538,6 @@ func (e *composeEnv) waitReady(ctx context.Context, ref soak.NodeRef, timeout ti
 			return err
 		}
 	}
-}
-
-// CutUDP drops the UDP between a and b both ways and nothing else (phase 26): the mesh
-// goes dark between them while the TCP rules stay.
-func (e *composeEnv) CutUDP(ctx context.Context, a, b soak.NodeRef) error {
-	if err := e.post(ctx, e.node(a), "/partition", map[string]any{"ips": []string{e.node(b).ip}, "udp": true}, nil); err != nil {
-		return err
-	}
-	return e.post(ctx, e.node(b), "/partition", map[string]any{"ips": []string{e.node(a).ip}, "udp": true}, nil)
 }
 
 func (e *composeEnv) Partition(ctx context.Context, a, b []soak.NodeRef) error {
@@ -793,138 +663,3 @@ func (e *composeEnv) identityOf(ctx context.Context, n soak.NodeRef) ([16]byte, 
 func (e *composeEnv) MountUID() int { return 0 }
 
 var _ soak.UsersEnv = (*composeEnv)(nil)
-
-// --- the mesh (phase 25): codes, the late device, a throwaway join, a re-join ------------
-
-// composeLate runs docker compose and returns its output; every call names the `late`
-// profile (n6 and ntry), since compose refuses to restart, kill or remove a profile's
-// container without it, and the profile changes nothing for the other services.
-func (e *composeEnv) composeLate(ctx context.Context, args ...string) ([]byte, error) {
-	out, err := e.composeOut(ctx, args...)
-	if err != nil {
-		return out, fmt.Errorf("docker compose %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
-	}
-	return out, nil
-}
-
-// JoinCode is `tailraid token` on the node: the current token with its key and endpoints.
-func (e *composeEnv) JoinCode(ctx context.Context, n soak.NodeRef) (string, error) {
-	out, err := e.composeOut(ctx, "exec", "-T", n.Name, "tailraid", "token")
-	if err != nil {
-		return "", fmt.Errorf("token on %s: %w: %s", n.Name, err, bytes.TrimSpace(out))
-	}
-	return lastField(out), nil
-}
-
-// RotateToken is `tailraid token rotate` through the node; the new code is printed.
-func (e *composeEnv) RotateToken(ctx context.Context, n soak.NodeRef) (string, error) {
-	out, err := e.composeOut(ctx, "exec", "-T", n.Name, "tailraid", "token", "rotate")
-	if err != nil {
-		return "", fmt.Errorf("token rotate on %s: %w: %s", n.Name, err, bytes.TrimSpace(out))
-	}
-	return lastField(out), nil
-}
-
-// lastField is the last whitespace-separated word of a command's output: the code.
-func lastField(out []byte) string {
-	f := strings.Fields(string(out))
-	if len(f) == 0 {
-		return ""
-	}
-	return f[len(f)-1]
-}
-
-// writeCode puts a join code into the shared /codes volume through the first running
-// node (the bootstrap may be down when phase 25 asks).
-func (e *composeEnv) writeCode(ctx context.Context, file, code string) error {
-	var last error
-	for _, n := range e.nodes {
-		if nodeNumber(n.ref) == lateNode {
-			continue
-		}
-		last = e.composeIn(ctx, code+"\n", "exec", "-T", n.ref.Name, "sh", "-c", "cat > "+file)
-		if last == nil {
-			return nil
-		}
-	}
-	return last
-}
-
-// LateJoin starts n6 and its worker (the `late` profile) joining by the code written to
-// /codes/late, waits for it to be ready and returns it with the index the cluster gave it.
-func (e *composeEnv) LateJoin(ctx context.Context, code string) (soak.NodeRef, error) {
-	if err := e.writeCode(ctx, "/codes/late", code); err != nil {
-		return soak.NodeRef{}, err
-	}
-	late := containerNode(lateNode)
-	if _, err := e.composeLate(ctx, "up", "-d", "--no-recreate", late.ref.Name, workerName(late.ref)); err != nil {
-		return soak.NodeRef{}, err
-	}
-	if !slices.ContainsFunc(e.nodes, func(n composeNode) bool { return n.ref.Name == late.ref.Name }) {
-		e.nodes = append(e.nodes, late)
-	}
-	if err := e.waitReady(ctx, late.ref, 180*time.Second); err != nil {
-		return soak.NodeRef{}, err
-	}
-	if _, err := e.Nodes(ctx); err != nil { // resolves its index and mesh address
-		return soak.NodeRef{}, err
-	}
-	return e.node(late.ref).ref, nil
-}
-
-// RemoveLate stops n6 and its worker and deletes their state, so the next phase 25 starts
-// it afresh; a run that never started it has nothing to do.
-func (e *composeEnv) RemoveLate(ctx context.Context) error {
-	late := containerNode(lateNode)
-	if _, err := e.composeLate(ctx, "rm", "-s", "-f", "-v", late.ref.Name, workerName(late.ref)); err != nil {
-		return err
-	}
-	project := os.Getenv("COMPOSE_PROJECT_NAME")
-	if project == "" {
-		project = strings.ToLower(filepath.Base(e.dir))
-	}
-	// the named volumes outlive the containers: removed here, retried while the engine
-	// still counts a container just removed as using them, and checked gone
-	vols := []string{project + "_" + late.ref.Name, project + "_" + late.ref.Name + "-d1"}
-	var last error
-	for range 10 {
-		cmd := exec.CommandContext(ctx, "docker", append([]string{"volume", "rm", "-f"}, vols...)...) //nolint:gosec // the rig's own volumes
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			if left, _ := exec.CommandContext(ctx, "docker", append([]string{"volume", "inspect"}, vols...)...).Output(); len(bytes.TrimSpace(left)) <= 2 { //nolint:gosec // the rig's own volumes
-				last = nil
-				break
-			}
-		}
-		last = fmt.Errorf("docker volume rm %v: %w: %s", vols, err, bytes.TrimSpace(out))
-		if err := e.Wait(ctx, time.Second); err != nil {
-			return err
-		}
-	}
-	if last != nil {
-		return last
-	}
-	e.nodes = slices.DeleteFunc(e.nodes, func(n composeNode) bool { return n.ref.Name == late.ref.Name })
-	return nil
-}
-
-// TryJoin runs the throwaway ntry container once with the code in /codes/try: the output
-// of its `tailraid join` and the failure, if the join failed.
-func (e *composeEnv) TryJoin(ctx context.Context, code string) (string, error) {
-	if err := e.writeCode(ctx, "/codes/try", code); err != nil {
-		return "", err
-	}
-	out, err := e.composeLate(ctx, "run", "--rm", "-T", "--no-deps", "ntry")
-	return string(out), err
-}
-
-// RejoinAfterReset leaves the node a code in its home and restarts it: the entry script
-// resets its Raft state and identity and joins again by the code (test/soak/entry.sh).
-func (e *composeEnv) RejoinAfterReset(ctx context.Context, n soak.NodeRef, code string) error {
-	if err := e.composeIn(ctx, code+"\n", "exec", "-T", n.Name, "sh", "-c", `cat > "$TAILRAID_HOME/rejoin"`); err != nil {
-		return err
-	}
-	return e.Restart(ctx, []soak.NodeRef{n})
-}
-
-var _ soak.MeshEnv = (*composeEnv)(nil)

@@ -82,7 +82,7 @@ type Flusher struct {
 	// meta.CodecShardSums, so a flush never fails the leader's codec gate (I-201). nil
 	// means every member is current.
 	MinCodec func() uint8
-	putLat   [meta.PathNone + 1]latencyRing // recent PUT durations by the path class of the node, the straggler grace follows their p95 (I-327)
+	putLat   latencyRing // recent PUT durations: the straggler grace follows their p95
 
 	sem     chan struct{} // ChunkWorkers slots: chunks in memory across every flush
 	buffers atomic.Int64  // chunk and shard bytes held right now
@@ -876,15 +876,6 @@ func allFull(failed map[int]error) bool {
 	return true
 }
 
-// classOf is the path class a PUT to node travels, clamped into the latency table.
-func (f *Flusher) classOf(node meta.NodeIdx) meta.PathClass {
-	c := f.peers.Class(node)
-	if c < meta.PathLAN || c > meta.PathNone {
-		return meta.PathNone
-	}
-	return c
-}
-
 // StragglerGrace is how long a chunk with k acks waits for its remaining PUTs: four
 // times the p95 of recent PUT durations, within [floor, deadline] (docs/04 §4 step 9,
 // I-169).
@@ -941,13 +932,7 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 	expired := false
 	armGrace := func() {
 		if grace == nil && acks >= int(w.k) && len(inflight) > 0 {
-			// the p95 of the stragglers' own classes: a slow WAN member does not
-			// stretch the grace of a LAN straggler, and a LAN one is cut sooner
-			var p95 time.Duration
-			for slot := range inflight {
-				p, _ := f.putLat[f.classOf(place[slot])].p95()
-				p95 = max(p95, p)
-			}
+			p95, _ := f.putLat.p95()
 			grace = f.clk.After(StragglerGrace(p95, f.cfg.StragglerMin, f.cfg.PutDeadline))
 		}
 	}
@@ -980,7 +965,7 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 		}
 		acked[r.slot] = true
 		acks++
-		f.putLat[f.classOf(place[r.slot])].add(r.took)
+		f.putLat.add(r.took)
 		armGrace()
 	}
 	for slot := range inflight { // stragglers: still pending at the grace or the deadline

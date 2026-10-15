@@ -22,7 +22,7 @@ stop does; the hour boundary does it on its own (docs/17 §7).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			c, addr, _, err := localClient(cmd)
+			c, addr, _, err := localClient(ctx, cmd)
 			if err != nil {
 				return err
 			}

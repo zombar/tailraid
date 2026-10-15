@@ -158,8 +158,8 @@ func TestAdminOp_Needs_Refinements(t *testing.T) {
 		op   string
 		want Need
 	}{
-		{"update_endpoints", NeedNone}, {"set_version", NeedNone}, // a member's own row (the handler pins them to it)
-		{"update_addr", NeedAdmins}, {"remove", NeedAdmins}, {"set_voter", NeedAdmins}, {"add_disk", NeedAdmins},
+		{"update_addr", NeedNone}, {"set_version", NeedNone}, // a member's own row (the handler pins them to it)
+		{"remove", NeedAdmins}, {"set_voter", NeedAdmins}, {"add_disk", NeedAdmins},
 	} {
 		if got := (MemberOp{Op: tc.op}).Needs(); got != tc.want {
 			t.Errorf("member op %s needs %d, want %d", tc.op, got, tc.want)

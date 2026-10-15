@@ -13,11 +13,9 @@ import (
 	"github.com/zombar/tailraid/internal/rpc"
 )
 
-// Forwarder sends a command to another node's /v1/apply, and a join to its /v1/join
-// (rpc.Client).
+// Forwarder sends a command to another node's /v1/apply (rpc.Client).
 type Forwarder interface {
 	ApplyAt(ctx context.Context, addr string, cmd meta.Command) (meta.Result, uint64, error)
-	Join(ctx context.Context, addr string, req rpc.JoinRequest) (rpc.JoinResponse, error)
 }
 
 // SetForwarder enables leader forwarding for Propose on followers.

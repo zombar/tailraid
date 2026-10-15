@@ -1,7 +1,7 @@
 # First logon inside the Windows golden image (run by autounattend.xml from the unattend
 # CD): the virtio network driver (the WinPE driver injection does not reach it under
 # QEMU, and Windows ARM64 has no inbox virtio-net), OpenSSH with the rig's key and
-# PowerShell as its shell, no sleep, the tailraid directory on PATH, the SMB
+# PowerShell as its shell, Tailscale, no sleep, the tailraid directory on PATH, the SMB
 # client settings docs/15 wants. Native commands log their output; nothing here stops
 # the script, so the log tells what happened.
 $ErrorActionPreference = 'Continue'
@@ -38,6 +38,13 @@ if (-not (Get-NetFirewallRule -Name OpenSSH-Server-In-TCP -ErrorAction SilentlyC
 }
 Restart-Service sshd
 Write-Output "sshd: $((Get-Service sshd).Status)"
+
+# Tailscale: unattended mode so the service runs without a logged-in user; the login
+# server is given at `tailscale up` time by the rig
+Write-Output 'installing Tailscale'
+$msi = Get-ChildItem "$cd\tailscale-setup-*.msi" | Select-Object -First 1
+$p = Start-Process msiexec -Wait -PassThru -ArgumentList "/i `"$($msi.FullName)`" /quiet /norestart TS_UNATTENDEDMODE=always TS_NOLAUNCH=1 TS_INSTALLUPDATES=never"
+Write-Output "Tailscale msiexec exit $($p.ExitCode)"
 
 # never sleep, never hibernate; no Windows Update reboots mid-round
 powercfg /change standby-timeout-ac 0

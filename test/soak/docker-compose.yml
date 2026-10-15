@@ -1,26 +1,21 @@
-# Five tailraid nodes (n1, n2, n5 voters; n3, n4 non-voters) on a private network, each
-# with a device of its own on the mesh of docs/20 (a TUN inside the container, NET_ADMIN
-# and /dev/net/tun), and a worker sidecar sharing its network namespace: the sidecar
-# reaches the node's loopback NFS gateway, its RPC and its browser UI on the mesh address
-# (which a published port cannot reach: the worker proxies the UI on 20496), and exposes
-# them to the host driver (cmd/soak) on published ports. n1 runs `init` and writes the
-# join code to the shared /codes volume; the others join by it. n1–n4 each have two disks
-# (docs/14), named volumes at /disks/d1 (pinned to 8G) and /disks/d2 (derived), so the
-# volume is 4 hosts × 2 targets; n5 has none: a diskless voter and gateway (docs/14 §9,
-# phase 14). Every node has an empty /disks/spare that phase 13 adds, drains and removes.
-# The s3 service is phase 15's bucket (docs/10 §4): rclone's S3 server, which checks every
-# signature, reached by the nodes at 172.30.0.20:8080 and by the driver on a published
-# port. n2 lists /mirrors/m1, on a volume of its own, as a mirror (docs/16) with a
-# one-minute schedule; phase 19 registers it, snapshots it and unplugs it. The `late`
-# profile holds n6, the device phase 25 joins by a code written to /codes/late, and ntry,
-# the throwaway device of its one refused join (`docker compose run`). Build the binaries
+# Five tailraid nodes (n1, n2, n5 voters; n3, n4 non-voters) on a private network with
+# fake tailnet identities, each with a worker sidecar sharing its network namespace: the
+# sidecar reaches the node's loopback NFS gateway and its RPC, and exposes both to the host
+# driver (cmd/soak) on a published port. n1–n4 each have two disks (docs/14), named volumes
+# at /disks/d1 (pinned to 8G) and /disks/d2 (derived), so the volume is 4 hosts × 2
+# targets; n5 has none: a diskless voter and gateway (docs/14 §9, phase 14). Every node has
+# an empty /disks/spare that phase 13 adds, drains and removes. The s3 service is phase
+# 15's bucket (docs/10 §4): rclone's S3 server, which checks every signature, reached by
+# the nodes at 172.30.0.20:8080 and by the driver on a published port. n2 lists
+# /mirrors/m1, on a volume of its own, as a mirror (docs/16) with a one-minute schedule;
+# phase 19 registers it, snapshots it and unplugs it. Build the binaries
 # first: make soak-binary. docker-compose.single.yml is one host with four disks.
 x-node: &node
   build: .
   cap_add: [NET_ADMIN]
-  devices: ["/dev/net/tun:/dev/net/tun"]
   environment: &env
-    TOKEN: soakcomposetoken # 16 base32 characters (docs/20 §4)
+    IDENTITIES: "172.30.0.11=n1,172.30.0.12=n2,172.30.0.13=n3,172.30.0.14=n4,172.30.0.15=n5"
+    TOKEN: compose-token
     TAILRAID_LOG_LEVEL: info
     TAILRAID_LOG_FORMAT: json
     K: "2"
@@ -32,8 +27,7 @@ x-node: &node
     # d2 derives its own (phase 11 fills it and watches the budget follow)
     DISKS: /disks/d1=8G /disks/d2
   healthcheck:
-    # the RPC listens on the mesh address, which serve records in mesh.json
-    test: ["CMD-SHELL", "curl -fsS \"http://$$(sed -n 's/.*\"addr\":\"\\([^\"]*\\)\".*/\\1/p' $$TAILRAID_HOME/mesh.json):20481/health\""]
+    test: ["CMD-SHELL", "curl -fsS http://$$SELF_IP:20481/health"]
     interval: 2s
     timeout: 2s
     retries: 30
@@ -42,83 +36,68 @@ x-worker: &worker
   build: {context: ., dockerfile: Dockerfile.client}
   cap_add: [NET_ADMIN]
   environment: {TAILRAID_LOG_LEVEL: info, TAILRAID_LOG_FORMAT: json, SMB_PASSWORD: soak-copies} # the nodes' smb.password (entry.sh), phase 22
-  command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "tailraid0"]
 
 services:
   n1:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: init, NODE_NAME: n1}
+    environment: {!!merge <<: *env, ROLE: init, SELF_IP: 172.30.0.11, NODE_NAME: n1}
     networks: {tailraid: {ipv4_address: 172.30.0.11}}
-    ports: ["127.0.0.1:20501:20495", "127.0.0.1:20521:20496"]
-    volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-spare:/disks/spare', 'codes:/codes']
+    ports: ["127.0.0.1:20501:20495", "127.0.0.1:20521:20482"]
+    volumes: ['n1:/var/lib/tailraid', 'n1-d1:/disks/d1', 'n1-d2:/disks/d2', 'n1-spare:/disks/spare']
   n2:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: join, NODE_NAME: n2, MIRRORS: /mirrors/m1, MIRRORS_EVERY: 1m}
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.12, NODE_NAME: n2, MIRRORS: /mirrors/m1, MIRRORS_EVERY: 1m}
     networks: {tailraid: {ipv4_address: 172.30.0.12}}
-    ports: ["127.0.0.1:20502:20495", "127.0.0.1:20522:20496"]
-    volumes: ['n2:/var/lib/tailraid', 'n2-d1:/disks/d1', 'n2-d2:/disks/d2', 'n2-spare:/disks/spare', 'n2-mirror:/mirrors', 'codes:/codes']
+    ports: ["127.0.0.1:20502:20495", "127.0.0.1:20522:20482"]
+    volumes: ['n2:/var/lib/tailraid', 'n2-d1:/disks/d1', 'n2-d2:/disks/d2', 'n2-spare:/disks/spare', 'n2-mirror:/mirrors']
     depends_on: [n1]
   n3:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: join, NODE_NAME: n3, VOTER: "false"}
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.13, NODE_NAME: n3, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.13}}
-    ports: ["127.0.0.1:20503:20495", "127.0.0.1:20523:20496"]
-    volumes: ['n3:/var/lib/tailraid', 'n3-d1:/disks/d1', 'n3-d2:/disks/d2', 'n3-spare:/disks/spare', 'codes:/codes']
+    ports: ["127.0.0.1:20503:20495", "127.0.0.1:20523:20482"]
+    volumes: ['n3:/var/lib/tailraid', 'n3-d1:/disks/d1', 'n3-d2:/disks/d2', 'n3-spare:/disks/spare']
     depends_on: [n2]
   n4:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: join, NODE_NAME: n4, VOTER: "false"}
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.14, NODE_NAME: n4, VOTER: "false"}
     networks: {tailraid: {ipv4_address: 172.30.0.14}}
-    ports: ["127.0.0.1:20504:20495", "127.0.0.1:20524:20496"]
-    volumes: ['n4:/var/lib/tailraid', 'n4-d1:/disks/d1', 'n4-d2:/disks/d2', 'n4-spare:/disks/spare', 'codes:/codes']
+    ports: ["127.0.0.1:20504:20495", "127.0.0.1:20524:20482"]
+    volumes: ['n4:/var/lib/tailraid', 'n4-d1:/disks/d1', 'n4-d2:/disks/d2', 'n4-spare:/disks/spare']
     depends_on: [n3]
   n5:
     !!merge <<: *node
-    environment: {!!merge <<: *env, ROLE: join, NODE_NAME: n5, DISKS: ""}
+    environment: {!!merge <<: *env, ROLE: join, LEADER: 172.30.0.11, SELF_IP: 172.30.0.15, NODE_NAME: n5, DISKS: ""}
     networks: {tailraid: {ipv4_address: 172.30.0.15}}
-    ports: ["127.0.0.1:20505:20495", "127.0.0.1:20525:20496"]
-    volumes: ['n5:/var/lib/tailraid', 'n5-spare:/disks/spare', 'codes:/codes']
+    ports: ["127.0.0.1:20505:20495", "127.0.0.1:20525:20482"]
+    volumes: ['n5:/var/lib/tailraid', 'n5-spare:/disks/spare']
     depends_on: [n4]
-  n6:
-    !!merge <<: *node
-    profiles: [late]
-    environment: {!!merge <<: *env, ROLE: join, NODE_NAME: n6, VOTER: "false", CODE_FILE: /codes/late, DISKS: /disks/d1=8G}
-    networks: {tailraid: {ipv4_address: 172.30.0.16}}
-    ports: ["127.0.0.1:20506:20495", "127.0.0.1:20526:20496"]
-    volumes: ['n6:/var/lib/tailraid', 'n6-d1:/disks/d1', 'codes:/codes']
-  ntry:
-    !!merge <<: *node
-    profiles: [late]
-    environment: {!!merge <<: *env, ROLE: tryjoin, NODE_NAME: ntry, VOTER: "false", CODE_FILE: /codes/try, DISKS: ""}
-    networks: [tailraid]
-    volumes: ['codes:/codes']
-    healthcheck: {disable: true}
 
   w1:
     !!merge <<: *worker
     network_mode: "service:n1"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.11:20481"]
     depends_on: [n1]
   w2:
     !!merge <<: *worker
     network_mode: "service:n2"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.12:20481"]
     depends_on: [n2]
   w3:
     !!merge <<: *worker
     network_mode: "service:n3"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.13:20481"]
     depends_on: [n3]
   w4:
     !!merge <<: *worker
     network_mode: "service:n4"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.14:20481"]
     depends_on: [n4]
   w5:
     !!merge <<: *worker
     network_mode: "service:n5"
+    command: ["worker", "0.0.0.0:20495", "127.0.0.1:20490", "172.30.0.15:20481"]
     depends_on: [n5]
-  w6:
-    !!merge <<: *worker
-    profiles: [late]
-    network_mode: "service:n6"
-    depends_on: [n6]
 
   s3:
     image: rclone/rclone:1.75.2
@@ -138,7 +117,6 @@ volumes:
   n3: {}
   n4: {}
   n5: {}
-  n6: {}
   n1-d1: {}
   n1-d2: {}
   n2-d1: {}
@@ -147,11 +125,9 @@ volumes:
   n3-d2: {}
   n4-d1: {}
   n4-d2: {}
-  n6-d1: {}
   n1-spare: {}
   n2-spare: {}
   n3-spare: {}
   n4-spare: {}
   n5-spare: {}
   n2-mirror: {}
-  codes: {}

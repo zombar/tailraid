@@ -1,12 +1,9 @@
 # Runs inside the Windows guest (elevated SSH): wipe every trace of tailraid and write a
-# fresh config for the round (docs/vms.md step 2). usage: slate.ps1 [<endpoint>]: the
-# host:port the other guests reach this one at (the host's forwarded UDP port, since the
-# guest sits behind QEMU's NAT; docs/20 §5 mesh.endpoint).
-param([string]$Endpoint = '')
+# fresh config for the round (docs/vms.md step 2).
 $ErrorActionPreference = 'Continue'
 $cfgdir = 'C:\ProgramData\tailraid'
 tailraid umount 2>$null | Out-Null
-tailraid uninstall --forget-identity 2>$null | Out-Null
+tailraid uninstall 2>$null | Out-Null
 tailraid reset --yes --discard-dirty 2>$null | Out-Null
 net use T: /delete /y 2>$null | Out-Null
 sc.exe delete tailraid 2>$null | Out-Null
@@ -36,8 +33,5 @@ log:
   level: info
 dev:
   enabled: true
-mesh:
-  portmap: false
 "@ | Set-Content -Encoding ascii "$cfgdir\config.yaml"
-if ($Endpoint -ne '') { Add-Content -Encoding ascii "$cfgdir\config.yaml" "  endpoint: $Endpoint" }
 Write-Output "config: $cfgdir\config.yaml"

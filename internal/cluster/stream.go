@@ -14,7 +14,7 @@ import (
 
 	"github.com/hashicorp/raft"
 
-	"github.com/zombar/tailraid/internal/rpc"
+	"github.com/zombar/tailraid/internal/meta"
 )
 
 // ErrClusterMismatch is returned when a Raft peer presents a different cluster ID.
@@ -30,11 +30,6 @@ type tcpStream struct {
 // Dial is raft's StreamLayer.Dial: no context reaches it, so the timeout is the only bound.
 func (s *tcpStream) Dial(addr raft.ServerAddress, timeout time.Duration) (net.Conn, error) {
 	d := net.Dialer{Timeout: timeout}
-	// from the listener's own address, the mesh one (docs/20 §1, I-317): a dial while the
-	// interface is absent fails at once rather than leaving by another interface
-	if ta, ok := s.l.Addr().(*net.TCPAddr); ok && ta.IP != nil && !ta.IP.IsUnspecified() {
-		d.LocalAddr = &net.TCPAddr{IP: ta.IP}
-	}
 	return d.DialContext(context.Background(), "tcp", string(addr))
 }
 func (s *tcpStream) Accept() (net.Conn, error) { return s.l.Accept() }
@@ -45,7 +40,7 @@ func (s *tcpStream) Addr() net.Addr            { return s.advertise }
 // (docs/08 §Raft transport, I-92): the same member-by-IP plus WhoIs StableID rule the
 // RPC server applies. rpc.WhoIsAuthorizer implements it.
 type PeerAuth interface {
-	Allow(ctx context.Context, src netip.Addr) (rpc.Principal, error)
+	Allow(ctx context.Context, src netip.Addr) (meta.Node, error)
 }
 
 // idStream wraps a StreamLayer with the member check on accept and a 16-byte cluster-ID
@@ -237,17 +232,14 @@ func (s *idStream) pump() {
 // cluster-ID handshake; faults (may be nil) refuses peers under a /dev/fault rule in both
 // directions; auth nil accepts any peer that passes the handshake (tests only: serve and
 // join always pass the WhoIs authorizer).
-func NewTransport(bind, advertise string, clusterID [16]byte, logOutput io.Writer, faults Faults, auth PeerAuth, log *slog.Logger) (raft.Transport, error) {
+func NewTransport(bind string, clusterID [16]byte, logOutput io.Writer, faults Faults, auth PeerAuth, log *slog.Logger) (raft.Transport, error) {
 	var lc net.ListenConfig // raft owns the listener's lifetime through Transport.Close
 	l, err := lc.Listen(context.Background(), "tcp", bind)
 	if err != nil {
 		return nil, fmt.Errorf("cluster: raft listen %s: %w", bind, err)
 	}
 	adv := l.Addr()
-	if advertise == "" {
-		advertise = bind
-	}
-	if host, port, err := net.SplitHostPort(advertise); err == nil && host != "" && host != "0.0.0.0" {
+	if host, port, err := net.SplitHostPort(bind); err == nil && host != "" && host != "0.0.0.0" {
 		if tcp, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(host, port)); err == nil {
 			adv = tcp
 		}

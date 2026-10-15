@@ -196,8 +196,8 @@ func (s *Store) Local() ([]byte, bool) {
 
 // EnsureKey is the store's key, made now when the cluster has none: kept in the keychain
 // first, then its ID proposed; a node that loses the race fetches the winner's (I-305).
-// The leader runs it on its tick, so a cluster has its key from its first minute (the
-// relay frames of docs/20 §6 are authenticated under it); a `secret set` runs it too.
+// The leader runs it on its tick, so a cluster has its key from its first minute; a
+// `secret set` runs it too.
 func (s *Store) EnsureKey(ctx context.Context) ([]byte, error) {
 	s.making.Lock()
 	defer s.making.Unlock()

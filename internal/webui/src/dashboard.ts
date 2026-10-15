@@ -1,5 +1,5 @@
 // Dashboard: the volume summary (with the trash), Disks (every drive: disks, archive
-// mirrors and S3 buckets), Balance, Mesh, Integrity and the mirrors. Re-rendered on every poll.
+// mirrors and S3 buckets), Balance, Integrity and the mirrors. Re-rendered on every poll.
 
 import { clear, h } from "./dom.ts";
 import { bar, barRow, fillTone } from "./chart.ts";
@@ -8,7 +8,6 @@ import { status } from "./status.ts";
 import * as balance from "./balance.ts";
 import * as disks from "./disks.ts";
 import * as integrity from "./integrity.ts";
-import * as mesh from "./mesh.ts";
 import * as snaps from "./snapshots.ts";
 import type { Report } from "./api.ts";
 
@@ -23,7 +22,6 @@ export function render(root: HTMLElement): () => void {
     volume(root, r);
     disks.render(root, r, snaps.last());
     balance.render(root, r);
-    mesh.render(root, r); // docs/13 §7: after Balance
     integrity.render(root, r, status.history);
     const mirrors = snaps.section(snaps.last(), draw); // docs/13 §7: after Integrity
     if (mirrors) root.append(mirrors);
@@ -33,7 +31,6 @@ export function render(root: HTMLElement): () => void {
   let drawn = snaps.last();
   const unsub = status.subscribe(() => {
     draw();
-    if (status.current?.mesh) mesh.refresh().then((changed) => changed && draw(), () => undefined);
     snaps.catalogue().then(
       (c) => {
         if (c !== drawn) {

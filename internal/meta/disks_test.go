@@ -2,7 +2,6 @@ package meta
 
 import (
 	"bytes"
-	"reflect"
 	"testing"
 	"time"
 
@@ -380,7 +379,7 @@ func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 		t.Errorf("disk upsert written as version %d, want 2", b[0])
 	}
 	c, err := DecodeCommand(b)
-	if err != nil || !reflect.DeepEqual(c.NodeUpsert.Node, disk) {
+	if err != nil || c.NodeUpsert.Node != disk {
 		t.Fatalf("decode: %+v %v", c.NodeUpsert, err)
 	}
 	// a device upsert keeps the version-1 bytes, so a cluster without disks writes what an
@@ -390,7 +389,7 @@ func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 	if b[0] != 1 {
 		t.Errorf("device upsert written as version %d, want 1", b[0])
 	}
-	if c, err := DecodeCommand(b); err != nil || !reflect.DeepEqual(c.NodeUpsert.Node, dev) {
+	if c, err := DecodeCommand(b); err != nil || c.NodeUpsert.Node != dev {
 		t.Fatalf("decode device: %+v %v", c.NodeUpsert, err)
 	}
 
@@ -406,7 +405,7 @@ func TestCodec_DiskNode_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(*got.Nodes[2], *st.Nodes[2]) {
+	if *got.Nodes[2] != *st.Nodes[2] {
 		t.Fatalf("snapshot node: %+v", got.Nodes[2])
 	}
 	if err := EncodeState(&b2, got); err != nil || !bytes.Equal(a.Bytes(), b2.Bytes()) {

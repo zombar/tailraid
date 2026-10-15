@@ -1,22 +1,18 @@
 #!/usr/bin/env bash
 # common.sh — helpers shared by the three-VM rig (docs/vms.md). Sourced, never run.
 #
-# The rig: one macOS and one Linux guest under Tart (bridged onto the host's LAN), one
+# The rig: one macOS and one Linux guest under Tart (on the host's vmnet NAT), one
 # Windows guest under QEMU with user-mode networking (it reaches the host and, through
-# it, the Tart guests; SSH and the mesh's UDP port come in on forwarded ports), forming a
-# mesh of their own by join code (docs/20): no control server. Every guest is reached
-# over SSH as `admin` with the key in test/vms/, which holds nothing but state and is
-# ignored by git as a whole.
+# it, the Tart guests; SSH comes in on a forwarded port), all registered with a throwaway
+# headscale in Docker on this Mac. Every guest is reached over SSH as `admin` with the
+# key in test/vms/, which holds nothing but state and is ignored by git as a whole.
 set -euo pipefail
 export LC_ALL=C
 
 VMS_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-# Ignored state: ssh key, images, run files, results, Packer's cache and builds. It lives
-# under the main checkout's test/vms/ whatever worktree runs the rig (the key is baked
-# into the golden images and the guests run once per host), or where VMS_STATE points.
-STATE=${VMS_STATE:-"$(dirname "$(git -C "$VMS_ROOT" rev-parse --path-format=absolute --git-common-dir)")/test/vms"}
+STATE="$VMS_ROOT/test/vms"      # ignored state: ssh key, images, run files, results, Packer's cache and builds
 # shellcheck disable=SC2034 # used by the scripts that source this file
-RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts and Packer templates
+RIG="$VMS_ROOT/scripts/vms"      # the rig's sources: scripts, Packer templates, the headscale compose file
 RUN="$STATE/run"                  # pid files, logs, qcow2 overlays of running instances
 IMAGES="$STATE/images"            # the Windows golden image (Tart keeps its own under ~/.tart)
 SSH_KEY="$STATE/id_ed25519"
@@ -53,44 +49,34 @@ wait_for() {
 }
 
 # ---- addresses ---------------------------------------------------------------------------
-# The Tart guests are bridged onto the host's LAN interface (VMS_BRIDGE, en0 by default)
-# and take their addresses from the LAN's DHCP, found by ARP (`tart ip --resolver arp`:
-# bridged guests leave no lease on the host). Not vmnet NAT: macOS hands each vmnet
-# consumer a /24 of its own (192.168.64.0/24 to the first, .65 to the next), and a host
-# route for one of those subnets (a static route to the LAN router, a VPN) sends every
-# packet for the guests out the wrong interface, which is what stranded the rig on
-# 2026-10-14. The Windows guest, behind QEMU's user-mode NAT, reaches the LAN through
-# the host, and the host forwards the mesh's UDP port (MESH_PORT) to it (vm.sh), so the
-# Windows guest's config names <host LAN address>:MESH_PORT as its endpoint (docs/20 §5,
-# checks/slate.ps1) and the Tart guests reach it there.
-# shellcheck disable=SC2034 # used by vm.sh and round.sh, which source this file
-MESH_PORT=20483
-VMS_BRIDGE=${VMS_BRIDGE:-en0}
-# tart_gateway: the address the guests reach the host at, the host's own on the bridge
-# interface (the name is from the vmnet days, when it was the subnet's .1)
-tart_gateway() { ipconfig getifaddr "$VMS_BRIDGE" 2>/dev/null || true; }
-
-# lan_sweep: one ping to every address of the bridge's /24, in parallel, so the host's
-# ARP table learns every guest. The ARP resolver reads that table, and it only fills
-# for a guest the host has exchanged packets with: the macOS guest announces itself
-# (Bonjour), the Ubuntu guest never does, so without the sweep `tart ip` finds it never.
-lan_sweep() {
-  local host prefix i
-  host=$(ipconfig getifaddr "$VMS_BRIDGE" 2>/dev/null) || return 0
-  prefix=${host%.*}
-  for i in $(seq 1 254); do ping -c 1 -W 1 -q "$prefix.$i" >/dev/null 2>&1 & done
-  wait
+# The Tart guests sit on the host's vmnet NAT; macOS hands each vmnet consumer its own
+# /24 (192.168.64.0/24 to the first, .65 to the next, …), and the host is the .1 of each.
+# headscale is reached at that gateway, so its URL is derived from a running Tart guest
+# and then pinned in test/vms/run/headscale/server_url: a registered guest keeps dialling the
+# URL it was given. The Windows guest, behind QEMU's user-mode NAT, reaches the same
+# address through the host. The URL is https: Tailscale accepts a DERP relay over TLS
+# only, so headscale serves a certificate from the rig's own CA (headscale.sh), which
+# provisioning installs in every guest before `tailscale up`.
+HS_PORT=8443
+tart_gateway() {
+  local ip
+  for os in linux mac; do
+    ip=$("$TART" ip "$(vm_name "$os")" 2>/dev/null || true)
+    [ -n "$ip" ] && { echo "${ip%.*}.1"; return; }
+  done
+}
+headscale_url() {
+  if [ -n "${HEADSCALE_URL:-}" ]; then echo "$HEADSCALE_URL"; return; fi
+  if [ -f "$RUN/headscale/server_url" ]; then cat "$RUN/headscale/server_url"; return; fi
+  local gw
+  gw=$(tart_gateway)
+  [ -n "$gw" ] && echo "https://$gw:$HS_PORT"
 }
 
 # vm_ip <os>: the guest's current address, or nothing when it is not up.
 vm_ip() {
   case "$1" in
-    mac|linux)
-      local ip
-      ip=$("$TART" ip --resolver arp "$(vm_name "$1")" 2>/dev/null || true)
-      [ -n "$ip" ] || { lan_sweep; ip=$("$TART" ip --resolver arp "$(vm_name "$1")" 2>/dev/null || true); }
-      echo "$ip"
-      ;;
+    mac|linux) "$TART" ip "$(vm_name "$1")" 2>/dev/null || true ;;
     win) nc -z 127.0.0.1 "$WIN_SSH_PORT" 2>/dev/null && echo 127.0.0.1 || true ;;
     *) die "unknown os $1" ;;
   esac

@@ -25,7 +25,7 @@ func TestSvc_SystemdHardeningAndQuoting(t *testing.T) {
 	for _, want := range []string{
 		`ExecStart="/opt/tail raid/tailraid" serve --config /home/u/.config/tailraid/config.yaml`,
 		"NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=read-only", "PrivateTmp=yes", "TimeoutStopSec=45",
-		`ReadWritePaths="/srv/tail raid/data" /home/u/.config/tailraid /mnt/a /mnt/b -/run/xtables.lock`,
+		`ReadWritePaths="/srv/tail raid/data" /home/u/.config/tailraid /mnt/a /mnt/b`,
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q:\n%s", want, unit)

@@ -29,9 +29,6 @@ type Liveness interface {
 	Live() []meta.NodeIdx
 	IsLive(idx meta.NodeIdx) bool
 	DeadFor(idx meta.NodeIdx) time.Duration
-	// Class is the path class to the node's host (docs/20 §8): a relayed one is somebody's
-	// egress, and background work on it waits (I-329).
-	Class(idx meta.NodeIdx) meta.PathClass
 }
 
 // Shards is the transport the repairer uses (rpc.Client).
@@ -70,10 +67,6 @@ type Config struct {
 	// SumsBatch is how many chunks without recorded data-shard sums a pass fetches,
 	// verifies and records sums for (docs/06 §4, I-201); 0 disables the backfill.
 	SumsBatch int
-	// AvoidRelay defers a home move whose target is relayed and a scrub read whose only
-	// sources are relayed (docs/20 §8, I-329, repair.relay); a bad slot is filled whatever
-	// the path.
-	AvoidRelay bool
 }
 
 // DefaultScrubPeriod is how long the background scrub takes to verify the whole volume
@@ -669,12 +662,8 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 		if !scrubDue {
 			return st
 		}
-		corrupt, err := r.scrub(ctx, c)
-		if errors.Is(err, errRelayedOnly) {
-			st.Deferred++ // every live holder is relayed: the read waits for a direct path (I-329)
-			return st
-		}
 		st.Scrubbed++
+		corrupt, err := r.scrub(ctx, c)
 		if err != nil {
 			st.Errors++
 			return st
@@ -772,18 +761,7 @@ func (r *Repairer) homeOne(ctx context.Context, c meta.Chunk, vol meta.Volume, h
 	st.AwayBytes += int64(len(away)) * shard
 	movable := hv.Movable(c, r.dest)
 	st.MovableBytes += int64(len(movable)) * shard
-	if len(movable) == 0 {
-		return false
-	}
-	if r.cfg.AvoidRelay {
-		for _, i := range movable {
-			if i < len(home) && home[i] != 0 && r.live.Class(home[i]) == meta.PathRelay {
-				st.Deferred++ // the move's target is relayed: it waits for a direct path (I-329)
-				return false
-			}
-		}
-	}
-	if r.homeLeft.Add(-1) < 0 {
+	if len(movable) == 0 || r.homeLeft.Add(-1) < 0 {
 		return false
 	}
 	issues := make([]meta.SlotIssue, 0, len(away))
@@ -1074,16 +1052,10 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 	total := int(c.K) + int(c.M)
 	got := make([][]byte, total)
 	var corrupt []int
-	fetched, relayed := 0, 0
 	for i, n := range c.Placement {
 		if n == 0 || !r.live.IsLive(n) {
 			continue
 		}
-		if r.cfg.AvoidRelay && r.live.Class(n) == meta.PathRelay {
-			relayed++ // read once a direct path is back (I-329)
-			continue
-		}
-		fetched++
 		if nd, ok := r.st.Node(n); ok && nd.Kind == meta.KindS3 && !r.s3scrub.take(int64(c.Size)/int64(c.K)+chunk.HeaderSize) {
 			if has, err := r.shards.Has(ctx, n, chunk.Key(c.Hash, c.K, c.M, i)); err == nil && !has {
 				corrupt = append(corrupt, i)
@@ -1098,9 +1070,6 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 			continue
 		}
 		got[i] = b
-	}
-	if fetched == 0 && relayed > 0 {
-		return nil, errRelayedOnly
 	}
 	codec, err := r.codecs.Get(c.K, c.M)
 	if err != nil {
@@ -1128,9 +1097,6 @@ func (r *Repairer) scrub(ctx context.Context, c meta.Chunk) ([]int, error) {
 	sort.Ints(corrupt)
 	return corrupt, nil
 }
-
-// errRelayedOnly is a scrub whose every live holder sits behind a relay: deferred.
-var errRelayedOnly = errors.New("repair: every live holder is relayed")
 
 // --- daily budget ----------------------------------------------------------------
 

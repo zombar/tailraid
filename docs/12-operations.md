@@ -14,9 +14,9 @@ path and data directory it bound.
 
 | OS | Unit | Manager commands | Restart | Logs |
 |---|---|---|---|---|
-| macOS | LaunchDaemon `/Library/LaunchDaemons/app.tailraid.serve.plist`, run as root (a utun needs it, docs/20 §9; `install` runs under `sudo`); the home is `/Library/Application Support/tailraid`; `mount.owner` from `SUDO_UID` gives the NFS mount the user's ownership | `launchctl bootstrap system …` / `bootout`; `kickstart` / `kill SIGTERM` then `print` until `not running` | `KeepAlive`, `ThrottleInterval 5` | `/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
-| Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW` (the TUN and the firewall chain, docs/20 §9), `Environment=TAILRAID_HOME=…`, `After=network-online.target` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
-| Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto`), `sc.exe failure … actions= restart/5000`; `install` writes `wintun.dll` beside the exe and adds the UDP port's firewall rule (docs/20 §9) | `sc.exe start|stop|delete` (elevated); `stop` then `query` until `STOPPED` | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
+| macOS | LaunchAgent `~/Library/LaunchAgents/app.tailraid.serve.plist` (per user: Tailscale's GUI session and the mount are per user) | `launchctl bootstrap gui/$UID …` / `bootout`; `kickstart` / `kill SIGTERM` then `print` until `not running` | `KeepAlive`, `ThrottleInterval 5` | `~/Library/Logs/tailraid/serve.log` (`StandardOutPath`/`StandardErrorPath`) |
+| Linux | system unit `/etc/systemd/system/tailraid.service`, `User=<installing user>`, `Environment=TAILRAID_HOME=…`, `After=network-online.target tailscaled.service` | `systemctl daemon-reload`, `enable --now`, `stop`, `disable --now` (via `sudo` when not root) | `Restart=always`, `RestartSec=2` | journald: `tailraid logs` runs `journalctl -u tailraid` |
+| Windows | SCM service `tailraid` (`sc.exe create … binPath= "<exe> serve --config … --service" start= delayed-auto depend= Tailscale`), `sc.exe failure … actions= restart/5000` | `sc.exe start|stop|delete` (elevated); `stop` then `query` until `STOPPED` | SCM failure actions | `%ProgramData%\tailraid\serve.log` (`log.file`): services have no stderr |
 
 `log.file` in the config (or `TAILRAID_LOG_FILE`) makes `serve` append to a file in the
 configured format instead of stderr; `install` sets it on macOS and Windows. Only `serve`
@@ -29,20 +29,22 @@ handshake, `SERVICE_RUNNING`); without the flag it is an ordinary console proces
 service runs as LocalSystem, whose config home is `%ProgramData%\tailraid` — the same
 `config.Home()` an elevated `join` used, so no copy step.
 
-Mounting is a user action (`tailraid mount`) on macOS and Linux: the LaunchDaemon and the
+Mounting is a user action (`tailraid mount`) on macOS and Linux: the LaunchAgent and the
 systemd unit only serve. On Windows `install` also registers a logon task that maps the
 drive in the user's desktop session (§2). The mount survives service restarts because handles are stable
 (I-16) and the mounts are `soft`. The three service managers, the three mounts and the
 install, restart and recover paths are exercised on real guests by the three-VM rounds
 ([vms.md](vms.md)).
 
-The service log prints the browser UI address (`http://<mesh addr>:20482/`, docs/13) at start,
+The service log prints the browser UI address (`http://<tsIP>:20482/`, docs/13) at start,
 and `tailraid status` shows it on its `web` line; `tailraid dashboard` opens it in the
 default browser (docs/13 §1); `listen.web: 0` turns the UI off.
 
-**Address changes.** A device's mesh address never changes (docs/20 §3). What changes
-when a device moves is where the tunnel finds it: `serve` republishes its endpoint
-candidates and the peers find the new path without a restart (docs/20 §5).
+**Address changes.** When the device's Tailscale IP changes, `serve` re-registers the new
+address in the node table (every peer dials it from then on) and exits with a non-zero
+status, because its Raft and RPC listeners are bound to the old address; the service unit's
+restart policy brings it back on the new one within seconds. Without a service manager,
+restart `tailraid serve` by hand.
 
 **Start without a leader.** `serve` waits for the log only when its data directory holds
 no snapshot with its own row and the volume (the first start after a join that ended
@@ -154,18 +156,11 @@ A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
    one section per tag, entries grouped into Changes / Documentation / Tooling by the
    subject's `scope:` prefix, so commit subjects are the changelog). `main` only takes
    pull requests, so when the changelog changed the target commits it on
-   `changelog/<version>`, opens the pull request, merges it and pulls `main`; nothing is
-   left to run. (When the merge is refused the pull request stays open, and merging it
-   by hand does the same.) With the changelog already current it creates the annotated
-   tag and pushes it, as before.
-2. CI (`release` job, after `checks`, `lint`, `vuln` and `test`) runs for a pushed tag,
-   and for a push to `main` that merges the `changelog: <version>` commit (a merge's
-   second parent or a squash) of a version with no tag yet (`scripts/ci-changes.sh`
-   prints it as `release`). Either way the release waits for a green run on the parent
-   commit, or runs the whole suite. On a changelog merge the job creates the annotated
-   tag on the merge commit once the binaries are built and signed, so a failed build
-   leaves no tag, and a tag pushed with the job's own token starts no second run. The
-   job runs `make release VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
+   `changelog/<version>`, opens the pull request and stops; merge it, pull, and run the
+   same command again: with nothing left to commit it creates the annotated tag and
+   pushes it.
+2. CI (`release` job, after `checks`, `lint`, `vuln` and `test`) runs `make release
+   VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
    built with `-trimpath -mod=vendor -ldflags "-s -w -X main.version=<tag>"` from the
    committed `vendor/` tree (no module download at release time), plus `sha256sums.txt`
    over them, attached to a GitHub release named after the tag whose notes are that tag's
@@ -238,7 +233,7 @@ I-128):
 `node ls` and `status` show in VERSION what each node's `serve` runs: a node reports its
 version into its own row at start (02 §Lifecycle commands, I-133).
 
-Log entries carry codec version 1 to 10 and snapshots version 9 (02 §Codec versions;
+Log entries carry codec version 1 to 11 and 14, and snapshots version 15 (02 §Codec versions;
 every older version is still read). `/health` reports the newest version a node writes
 (`meta.CodecVersion`), `join` refuses a cluster whose node reports a newer one, and a
 node that meets an entry it cannot decode counts it (`status` shows
@@ -255,17 +250,40 @@ an older codec, the mounts delete and replace as before in that window, and the 
 UI answers 503 with the hint to update the remaining nodes, so a cluster half-way
 through an update never writes an entry half of it cannot read (I-156).
 
+Users (codec 14, docs/21) follow the same rule: a cluster from before users upgrades in
+place, the leader refusing the users ops and every actor-carrying command while a live
+member reads less (I-349), and nothing is enforced until the first user exists.
+
+**From 0.9.x to 0.10.0: a new cluster.** 0.9.x ran on its own WireGuard mesh, which
+0.10.0 withdrew for Tailscale (00 §Transport). A 0.9.x node's rows carry mesh keys and
+no Tailscale identity, and its snapshots are frames 13 and 14, which 0.10.0 refuses
+(`meta.ErrMeshSnapshot`, naming this section), so a 0.9.x volume is not upgraded, it is
+re-created, as the move onto the mesh was:
+
+1. Copy the files off the volume (any mount, or `tailraid export <dir>` for the metadata
+   alone), then `tailraid umount` and `tailraid uninstall --forget-identity` on every
+   device (on macOS under `sudo`, as 0.9.x installed a root daemon).
+2. Install Tailscale (headscale works) on every device and the 0.10.0 binary
+   (`tailraid update --version v0.10.0` installs it but the old data directory will not
+   serve).
+3. Move the old data directory and disk contents aside, then `tailraid init` on the first
+   always-on device, `tailraid join <its Tailscale IP> <token>` on the others, `install`
+   and `mount` as on day one (§7); create the first admin with the invite `init` prints.
+4. Copy the files back through a mount, and make the users, groups and grants again with
+   the CLI (§12).
+
 ## 7. Day one: `tailraid init`
 
 `tailraid init` takes no required options: the node is named after the host and the
 volume starts at `1+0` in automatic redundancy mode (03), growing as disks join. It also
-prints an admin invite code beside the join code; the person who will administer the
+prints an admin invite code beside the token; the person who will administer the
 volume runs `tailraid user create <name> <code>`, unprivileged, on the same device (§12,
 docs/21 §1).
-`tailraid join <code>` is the same for a second device: `<code>` is the join code
-`init` printed, or the one `tailraid token` prints on any member (docs/20 §4: the
-cluster ID, the token, that member's key and its endpoints); on macOS and Linux it runs
-under `sudo`, since it creates the interface (docs/20 §9). `--voter` stays explicit
+`tailraid join <host> <token>` is the same for a second device: `<host>` is the first
+device's Tailscale IP, or its name as `tailscale status` shows it (host name or MagicDNS
+name), which `join` looks up in the tailnet status because a plain DNS lookup gives a LAN
+address no node listens on (I-50); an address off the tailnet is refused with the hint.
+`--voter` stays explicit
 because only the operator knows which devices are always on. `--name`, `--chunk` (4 MiB by default, 01) and
 `--token` remain for overrides and test rigs; `--k`/`--m` on `init` pin a manual policy
 for test rigs and are hidden. Disks listed under `node.disks` in the config are marked and
@@ -331,10 +349,9 @@ hour. A path at `off` is a warning line in `status` and `check` on that device; 
 is shown and never warned about (I-341).
 
 **Network.** `machine` also carries four cumulative byte counters: `net_rx_bytes` and
-`net_tx_bytes` summed over every interface but loopback, and `mesh_rx_bytes` and
-`mesh_tx_bytes` for the mesh interface (`mesh_rx_bytes`/`mesh_tx_bytes` under
-Tailscale: the one interface that holds the node's address, found with the standard
-library's interface list, so the same on every OS). Linux reads
+`net_tx_bytes` summed over every interface but loopback, and `tailnet_rx_bytes` and
+`tailnet_tx_bytes` for the one interface that holds the node's tailnet address (found
+with the standard library's interface list, so the same on every OS). Linux reads
 `/proc/net/dev`; macOS the `net.route` interface list (`NET_RT_IFLIST2`, the
 `if_msghdr2` byte counters, parsed by offset as the load average is); Windows
 `GetIfTable2` from `iphlpapi.dll` (`MIB_IF_ROW2`'s octet counters). The same rule holds:
@@ -590,8 +607,8 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 - **I-84** — `status` reports the process's heap in use, system memory and goroutine count, and the gateway's plan bytes, flush buffer bytes, WAL cap and last flush error; the soak sampler records them and the report charts the heap.
 - **I-85** — Every machine vital in `status` is a measurement the operating system exposes to a pure-Go binary (process CPU seconds and resident set, load average, total and available memory, data-disk free and total, and on Linux machine CPU ticks, memory pressure and disk bytes); a vital the OS does not expose is absent from the report, never zero, and cumulative counters never decrease between two reports from one process.
 - **I-190** — `status` reports `net_rx_bytes` and `net_tx_bytes` summed over every
-  interface but loopback and `mesh_rx_bytes` and `mesh_tx_bytes` for the mesh interface
-  (docs/20; `mesh_rx_bytes`/`mesh_tx_bytes` under Tailscale), cumulative, on Linux, macOS and Windows; a
+  interface but loopback and `tailnet_rx_bytes` and `tailnet_tx_bytes` for the interface
+  that holds the node's tailnet address, cumulative, on Linux, macOS and Windows; a
   counter the OS does not expose is absent, never zero, and none decreases between two
   reports from one process (I-85).
 - **I-59** — A `/dev/fault` drop rule for a peer stops Raft dials to it, fails the Raft connections already open with it, stops incoming Raft connections from it, outbound RPC to it and inbound RPC from it on the node that holds the rule; an empty rule set restores all four paths.
@@ -600,17 +617,14 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 
 - **I-76** — `tailraid init` with no options bootstraps a cluster whose node is named
   after the host, whose device row carries no budget and whose volume is `1+0` with `Auto`
-  set; `tailraid join <code>` with no options joins as a non-voter (under Tailscale,
-  `join <host> <token>` resolved a device name through the tailnet status and refused an
-  address off the tailnet); both register
+  set; `tailraid join <host> <token>` with no options joins as a non-voter, resolving a
+  device name through the tailnet status and refusing an address off the tailnet; both register
   the configured disks with derived budgets (I-74, I-121).
 - **I-122** — The Linux unit runs with `NoNewPrivileges`, `ProtectSystem=strict`,
   `ProtectHome=read-only` and `PrivateTmp`, and its `ReadWritePaths` names exactly the
   data directory, every added disk, the config directory and the log file's directory,
-  with every path quoted, plus the optional `-/run/xtables.lock`, and `CAP_NET_ADMIN`
-  and `CAP_NET_RAW` are its only ambient and bounding capabilities (docs/20 §9); the installer stages the unit only in a directory it created;
-  the LaunchDaemon (the LaunchAgent before docs/20) restarts the service only after a
-  non-zero exit.
+  with every path quoted; the installer stages the unit only in a directory it created;
+  the LaunchAgent restarts the service only after a non-zero exit.
 - **I-123** — On the first interrupt a leader transfers leadership before its Raft
   stops, bounded by 5 s, so another node leads the moment the shutdown proceeds; a
   second interrupt ends the process at once; the Windows service handler reports a stop
@@ -700,7 +714,7 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 | I-59 | `TestFaults_DropRulesCutRaftAndRPC`, `TestFaults_RuleFailsOpenRaftConnection` |
 | I-60 | `TestConfig_LogFile`, `TestSvc_UnitsRouteLogs` |
 | I-61 | `FuzzParseSums`, `TestUpdate_AppliesVerifiedRelease`, `TestUpdate_RefusesBadChecksumAndOlder`, `TestConfig_NewRepairKeysWrittenOnlyWhenSet`, `TestConfig_TrashKeyWrittenOnlyWhenSet`, `TestConfig_CacheKeyWrittenOnlyWhenSet` |
-| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags` |
+| I-76 | `TestCLI_Init_NoFlags`, `TestCLI_Join_NoFlags`, `TestResolveJoinTarget_Table` |
 | I-84 | `TestReport_ProcessAndFlushFields`, `TestSoak_AllPhasesAgainstHarness` |
 | I-85 | `TestVitals_RealMeasurementsOrAbsent`, `TestSoak_AllPhasesAgainstHarness` |
 | I-190 | `TestVitals_RealMeasurementsOrAbsent`, `TestVitals_NetworkParsers_PerOS`, `TestVitals_IfList2Parser`, `TestVitals_IfTableSum`, `TestVitals_TailnetInterface_Match`, `TestVitals_CounterReset`, `TestReport_NetworkChart` |

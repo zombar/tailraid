@@ -2,7 +2,6 @@
 package admin
 
 import (
-	"encoding/base64"
 	"fmt"
 	"runtime"
 	"sort"
@@ -11,8 +10,6 @@ import (
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
-	"github.com/zombar/tailraid/internal/mesh/firewall"
-	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
@@ -44,10 +41,9 @@ type NodeReport struct {
 	Version    string       `json:"version"`
 	Applied    uint64       `json:"applied"`
 	Slots      int          `json:"slots"`
-	Path       string       `json:"path,omitempty"` // this node's path to the member: lan, wan, relay or none (docs/20 §8)
-	Missing    int          `json:"missing_slots"`  // slots this node should hold but is dead for
-	Dev        bool         `json:"dev,omitempty"`  // /dev/* endpoints enabled
-	Web        uint16       `json:"web,omitempty"`  // the member's browser UI port, 0 when off: the dashboard links its pages by tsIP and this port (docs/13 §1)
+	Missing    int          `json:"missing_slots"` // slots this node should hold but is dead for
+	Dev        bool         `json:"dev,omitempty"` // /dev/* endpoints enabled
+	Web        uint16       `json:"web,omitempty"` // the member's browser UI port, 0 when off: the dashboard links its pages by tsIP and this port (docs/13 §1)
 	TSStable   string       `json:"ts_stable_id,omitempty"`
 	JoinedAt   time.Time    `json:"joined_at"`
 	Diskless   bool         `json:"diskless,omitempty"`    // a device with no disk rows: a gateway-only host (docs/14 §9)
@@ -253,8 +249,6 @@ type Report struct {
 	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
 	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
 	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
-	Mesh                *MeshReport    `json:"mesh,omitempty"`    // this node's device and its paths (docs/20 §10, I-325)
-	Pending             []PendingRow   `json:"pending,omitempty"` // devices introduced and not yet joined (docs/20 §4)
 	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
 	Mirrors             []MirrorReport `json:"mirrors,omitempty"` // this host's mirrors (docs/16, docs/12 §11)
 	Users               *UsersReport   `json:"users,omitempty"`   // users, sessions and this node's refusals (docs/21 §8, I-358)
@@ -355,9 +349,6 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		rep.Nodes = append(rep.Nodes, r)
 	}
 	sort.Slice(rep.Nodes, func(i, j int) bool { return rep.Nodes[i].Idx < rep.Nodes[j].Idx })
-	for _, pd := range st.Pending() {
-		rep.Pending = append(rep.Pending, PendingRow{Key: base64.StdEncoding.EncodeToString(pd.Key[:]), Addr: pd.Addr, At: time.Unix(0, pd.At)})
-	}
 	var used uint64
 	rep.Volume.UsableCapacity, used, rep.Volume.Free = meta.Usage(vol, nodes, stats)
 	if used > 0 {
@@ -516,7 +507,6 @@ func (s selfLiveness) IsLive(idx meta.NodeIdx) bool {
 }
 
 func (selfLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
-func (selfLiveness) Class(meta.NodeIdx) meta.PathClass  { return meta.PathLAN }
 
 // liveSnapshots counts the catalogue rows a user sees: every state but Deleting.
 func liveSnapshots(rows []meta.Snapshot) int {
@@ -527,74 +517,4 @@ func liveSnapshots(rows []meta.Snapshot) int {
 		}
 	}
 	return n
-}
-
-// PendingRow is a device the leader allocated an address to on its introduce, waiting for
-// its join (docs/20 §4); the row expires on the leader's tick.
-type PendingRow struct {
-	Key  string    `json:"key"` // the device's public key, base64
-	Addr string    `json:"addr"`
-	At   time.Time `json:"at"` // when it was introduced
-}
-
-// MeshReport is this node's device as `status` shows it (docs/20 §10, I-325).
-type MeshReport struct {
-	Addr      string     `json:"addr"`
-	Interface string     `json:"interface,omitempty"`
-	Port      uint16     `json:"port"`
-	RPCPort   uint16     `json:"rpc_port"`
-	Key       string     `json:"key,omitempty"`       // this device's public key, for the join code
-	Endpoints []string   `json:"endpoints,omitempty"` // the candidates its row publishes
-	Fake      bool       `json:"fake,omitempty"`      // dev.mesh_fake: no device
-	RxBytes   uint64     `json:"rx_bytes,omitempty"`
-	TxBytes   uint64     `json:"tx_bytes,omitempty"`
-	Peers     []MeshPeer `json:"peers,omitempty"`
-	// Relayed is what this device forwarded for others, bytes by "from>to" (docs/20 §6, I-328)
-	Relayed map[string]uint64 `json:"relayed_bytes,omitempty"`
-	PortMap *portmap.Status   `json:"portmap,omitempty"` // the gateway mapping of the mesh port (docs/20 §7, I-330)
-	// Firewall is the node's chain in the host firewall, Linux with mesh.firewall on
-	// (docs/20 §9, I-334)
-	Firewall  *firewall.Status `json:"firewall,omitempty"`
-	SelfReach *SelfReach       `json:"self_reach,omitempty"` // the node's dial to its own mesh address (I-335)
-}
-
-// SelfReach is the outcome of the node's dial to its own RPC listener at its mesh
-// address (docs/20 §9, I-335).
-type SelfReach struct {
-	OK    bool   `json:"ok"`
-	Err   string `json:"error,omitempty"`
-	Cause string `json:"cause,omitempty"` // with a failure: what the node found that explains it
-}
-
-// MeshWarnings are the status and check warnings of the mesh's host side: an own
-// address the node cannot reach, or a firewall chain it could not keep (I-334, I-335).
-func MeshWarnings(m *MeshReport) []string {
-	if m == nil {
-		return nil
-	}
-	if s := m.SelfReach; s != nil && !s.OK {
-		w := "this node cannot reach its own mesh address " + m.Addr + " (" + s.Err + "): peers and the CLI cannot reach it either"
-		if s.Cause != "" {
-			w += "; " + s.Cause
-		}
-		return []string{w}
-	}
-	if f := m.Firewall; f != nil && f.Err != "" {
-		return []string{"the mesh's firewall chain could not be kept (" + f.Err + "): a host firewall may drop the mesh (docs/20 §9)"}
-	}
-	return nil
-}
-
-// MeshPeer is one peer of the device.
-type MeshPeer struct {
-	Idx          meta.NodeIdx `json:"idx,omitempty"`
-	Name         string       `json:"name,omitempty"`
-	Key          string       `json:"key"`
-	Class        string       `json:"class"` // lan, wan, relay or none
-	Endpoint     string       `json:"endpoint,omitempty"`
-	Via          string       `json:"via,omitempty"` // a relayed path: the member it goes through (docs/20 §6)
-	HandshakeAge string       `json:"handshake_age,omitempty"`
-	SeenAge      string       `json:"seen_age,omitempty"` // since the last packet or handshake from it: the path monitor's sign of life
-	Rx           uint64       `json:"rx_bytes,omitempty"`
-	Tx           uint64       `json:"tx_bytes,omitempty"`
 }

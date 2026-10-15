@@ -205,7 +205,7 @@ func (f *FSM) Secrets() []Secret {
 	return out
 }
 
-// writeSecret writes a secret; withUser appends ByUser (codec and frame 14).
+// writeSecret writes a secret; withUser appends ByUser (codec 14, frame 15).
 func writeSecret(w *writer, s *Secret, withUser bool) {
 	w.str(s.Name)
 	w.b = append(w.b, s.KeyID[:]...)

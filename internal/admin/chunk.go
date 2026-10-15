@@ -195,4 +195,3 @@ type noLiveness struct{}
 
 func (noLiveness) IsLive(meta.NodeIdx) bool           { return false }
 func (noLiveness) DeadFor(meta.NodeIdx) time.Duration { return 0 }
-func (noLiveness) Class(meta.NodeIdx) meta.PathClass  { return meta.PathNone }

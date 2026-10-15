@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"net"
-	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/soak"
 )
 
@@ -32,15 +31,11 @@ repair.grace. Ctrl-C stops after the current phase, restores what it changed and
 the partial report.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			cl, addr, cfg, err := localClient(cmd)
+			cl, addr, cfg, err := localClient(ctx, cmd)
 			if err != nil {
 				return err
 			}
-			var localIP netip.Addr
-			if host, _, herr := net.SplitHostPort(addr); herr == nil {
-				localIP, _ = netip.ParseAddr(host)
-			}
-			cid, err := clusterIDOf(ctx, cfg, addr, localIP) // root's data directory on macOS (docs/20 §9)
+			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
 			if err != nil {
 				return err
 			}

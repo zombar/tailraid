@@ -26,14 +26,11 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 			t.Errorf("plist lacks %q", want)
 		}
 	}
-	if !strings.HasSuffix(filepath.ToSlash(pl.Files[0].Path), "/app.tailraid.serve.plist") || strings.Contains(pl.Files[0].Path, "LaunchDaemons") {
-		t.Errorf("the plist is staged, not written to the daemons directory by the user: %s", pl.Files[0].Path)
+	if !strings.HasSuffix(filepath.ToSlash(pl.Files[0].Path), "/Users/u/Library/LaunchAgents/app.tailraid.serve.plist") {
+		t.Errorf("plist path %s", pl.Files[0].Path)
 	}
-	if got := strings.Join(pl.Commands[2], " "); got != "sudo launchctl bootstrap system "+LaunchDaemonPath {
+	if got := strings.Join(pl.Commands[1], " "); got != "launchctl bootstrap gui/501 "+pl.Files[0].Path {
 		t.Errorf("bootstrap: %s", got)
-	}
-	if got := strings.Join(pl.Commands[1], " "); !strings.HasPrefix(got, "sudo install -m 644 -o root -g wheel ") || !strings.HasSuffix(got, LaunchDaemonPath) {
-		t.Errorf("install: %s", got)
 	}
 
 	p.GOOS = "linux"
@@ -42,7 +39,7 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	unit := pl.Files[0].Content
-	for _, want := range []string{"ExecStart=/opt/tailraid serve --config /home/u/.config/tailraid/config.yaml", "User=u", "Restart=always", "After=network-online.target\n", `Environment="TAILRAID_HOME=/Users/u/Library/Application Support/tailraid"`} {
+	for _, want := range []string{"ExecStart=/opt/tailraid serve --config /home/u/.config/tailraid/config.yaml", "User=u", "Restart=always", "After=network-online.target tailscaled.service", `Environment="TAILRAID_HOME=/Users/u/Library/Application Support/tailraid"`} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q", want)
 		}
@@ -69,13 +66,10 @@ func TestSvc_UnitsRouteLogs(t *testing.T) {
 		t.Fatalf("windows: %v %+v", err, pl)
 	}
 	create := strings.Join(pl.Commands[0], " ")
-	for _, want := range []string{`binPath= "C:\tailraid\tailraid.exe" serve --config "C:\ProgramData\tailraid\config.yaml" --service`, "start= delayed-auto"} {
+	for _, want := range []string{`binPath= "C:\tailraid\tailraid.exe" serve --config "C:\ProgramData\tailraid\config.yaml" --service`, "start= delayed-auto", "depend= Tailscale"} {
 		if !strings.Contains(create, want) {
 			t.Errorf("sc create lacks %q: %s", want, create)
 		}
-	}
-	if strings.Contains(create, "depend=") {
-		t.Errorf("the service depends on nothing since the mesh: %s", create)
 	}
 	if !strings.Contains(strings.Join(pl.Commands[2], " "), "actions= restart/5000") {
 		t.Errorf("no failure actions: %v", pl.Commands[2])

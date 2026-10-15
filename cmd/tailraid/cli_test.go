@@ -23,11 +23,13 @@ import (
 	"github.com/zombar/tailraid/internal/testharness"
 )
 
-// The fake mesh every dev home shares (dev.mesh_fake): loopback is this device, no TUN.
-const fakeMesh = `{"addr":"127.0.0.1"}`
+// testToken is the join token the tests hand init.
+const testToken = "testtoken"
 
-// testToken is the 16-character join token the tests hand init.
-const testToken = "testtokentesttok"
+// The fake tailnet every dev home shares: loopback is this device, logged in as one user.
+const fakeTailnet = `{"status":{"BackendState":"Running","TailscaleIPs":["127.0.0.1"],
+ "Self":{"ID":"ts-dev","HostName":"dev","TailscaleIPs":["127.0.0.1"],"Online":true},"Peer":{}},
+ "whois":{"127.0.0.1":{"Node":{"StableID":"ts-dev","Name":"dev.","Addresses":["127.0.0.1/32"]},"UserProfile":{"LoginName":"jim@example.com"}}}}`
 
 // testPorts is where freePorts picks: below every OS's ephemeral range (Linux 32768+,
 // macOS and Windows 49152+). freePorts must release its ports before a node binds them;
@@ -69,8 +71,8 @@ func freePorts(t *testing.T, n int) []int {
 func devHome(t *testing.T) (string, config.Config) {
 	t.Helper()
 	home := t.TempDir()
-	fake := filepath.Join(home, "mesh.json")
-	if err := os.WriteFile(fake, []byte(fakeMesh), 0o600); err != nil {
+	fake := filepath.Join(home, "ts.json")
+	if err := os.WriteFile(fake, []byte(fakeTailnet), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	p := freePorts(t, 5)
@@ -81,7 +83,7 @@ func devHome(t *testing.T) (string, config.Config) {
 	cfg.Listen.SMB = fmt.Sprintf("127.0.0.1:%d", p[4]) // both gateways, so serve runs both
 	cfg.SMB.Password = config.NewSMBPassword()
 	cfg.Mount.Path = filepath.Join(home, "mnt")
-	cfg.Dev.Enabled, cfg.Dev.MeshFake = true, fake
+	cfg.Dev.Enabled, cfg.Dev.TailscaleFake = true, fake
 	path := filepath.Join(home, "config.yaml")
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
@@ -134,7 +136,7 @@ func openFSM(t *testing.T, cfg config.Config) *cluster.Node {
 // Invariant: I-76
 func TestCLI_Init_NoFlags(t *testing.T) {
 	path, cfg := devHome(t)
-	out, err := run(t, "init", "--config", path, "--token", testToken)
+	out, err := run(t, "init", "--config", path, "--token", "testtoken")
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
@@ -182,7 +184,7 @@ func TestCLI_Init_GeneratesSMBPassword(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := run(t, "init", "--config", path, "--token", testToken)
+	out, err := run(t, "init", "--config", path, "--token", "testtoken")
 	if err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
@@ -201,11 +203,9 @@ func TestCLI_Init_GeneratesSMBPassword(t *testing.T) {
 // Invariant: I-76
 func TestCLI_Join_NoFlags(t *testing.T) {
 	pathA, cfgA := devHome(t)
-	initOut, err := run(t, "init", "--config", pathA, "--token", testToken)
-	if err != nil {
-		t.Fatalf("init: %v\n%s", err, initOut)
+	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
 	}
-	code := joinCodeFrom(t, initOut)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- node.Serve(ctx, cfgA, slog.Default(), "test") }()
@@ -220,7 +220,7 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addrA); return err == nil }, "node A never served")
 
 	pathB, _ := devHome(t)
-	out, err := run(t, "join", "--config", pathB, code)
+	out, err := run(t, "join", "--config", pathB, addrA, "testtoken")
 	if err != nil {
 		t.Fatalf("join: %v\n%s", err, out)
 	}
@@ -287,11 +287,9 @@ func TestCLI_Join_NoFlags(t *testing.T) {
 // Invariant: I-135, I-125
 func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 	pathA, cfgA := devHome(t)
-	initOut, err := run(t, "init", "--config", pathA, "--token", testToken)
-	if err != nil {
-		t.Fatalf("init: %v\n%s", err, initOut)
+	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
 	}
-	code := joinCodeFrom(t, initOut)
 	serve := func(cfg config.Config) func() { // returns the stop
 		sctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
@@ -309,7 +307,7 @@ func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 	probe := rpc.NewClient([16]byte{}, nil)
 	testharness.Eventually(t, func() bool { _, err := probe.Health(ctx, addrA); return err == nil }, "node A never served")
 	pathB, _ := devHome(t)
-	if out, err := run(t, "join", "--config", pathB, code); err != nil {
+	if out, err := run(t, "join", "--config", pathB, addrA, "testtoken"); err != nil {
 		t.Fatalf("join: %v\n%s", err, out)
 	}
 	cfgB, err := config.Load(pathB)
@@ -343,11 +341,9 @@ func TestCLI_Serve_WithoutLeader_StartsStale(t *testing.T) {
 // Invariant: I-135
 func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
 	pathA, cfgA := devHome(t)
-	initOut, err := run(t, "init", "--config", pathA, "--token", testToken)
-	if err != nil {
-		t.Fatalf("init: %v\n%s", err, initOut)
+	if out, err := run(t, "init", "--config", pathA, "--token", "testtoken"); err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
 	}
-	code := joinCodeFrom(t, initOut)
 	serve := func(cfg config.Config) func() {
 		sctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
@@ -365,7 +361,7 @@ func TestCLI_Serve_InitNode_WithoutQuorum_StartsStale(t *testing.T) {
 	probe := rpc.NewClient([16]byte{}, nil)
 	waitReady(ctx, t, addrA, "node A never served")
 	pathB, _ := devHome(t)
-	if out, err := run(t, "join", "--config", pathB, code, "--voter"); err != nil {
+	if out, err := run(t, "join", "--config", pathB, addrA, "testtoken", "--voter"); err != nil {
 		t.Fatalf("join: %v\n%s", err, out)
 	}
 	cfgB, err := config.Load(pathB)
@@ -413,16 +409,4 @@ func waitReady(ctx context.Context, t *testing.T, addr, msg string) {
 		case <-tick.C:
 		}
 	}
-}
-
-// joinCodeFrom picks the join code out of init's output.
-func joinCodeFrom(t *testing.T, out string) string {
-	t.Helper()
-	for line := range strings.SplitSeq(out, "\n") {
-		if rest, ok := strings.CutPrefix(line, "join from another device: tailraid join "); ok {
-			return strings.TrimSpace(rest)
-		}
-	}
-	t.Fatalf("no join code in init's output:\n%s", out)
-	return ""
 }

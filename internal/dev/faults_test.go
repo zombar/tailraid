@@ -27,12 +27,12 @@ func TestFaults_DropRulesCutRaftAndRPC(t *testing.T) {
 	cid[0] = 9
 	faults := dev.NewFaults()
 	// Raft stream: node A holds the rules, node B is the peer
-	ta, err := cluster.NewTransport("127.0.0.1:0", "", cid, nil, faults, nil, nil)
+	ta, err := cluster.NewTransport("127.0.0.1:0", cid, nil, faults, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ta.(*raft.NetworkTransport).Close()
-	tb, err := cluster.NewTransport("127.0.0.1:0", "", cid, nil, nil, nil, nil)
+	tb, err := cluster.NewTransport("127.0.0.1:0", cid, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestFaults_RuleFailsOpenRaftConnection(t *testing.T) {
 	var cid [16]byte
 	cid[0] = 9
 	faults := dev.NewFaults()
-	ta, err := cluster.NewTransport("127.0.0.1:0", "", cid, nil, faults, nil, nil)
+	ta, err := cluster.NewTransport("127.0.0.1:0", cid, nil, faults, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestFaults_RuleFailsOpenRaftConnection(t *testing.T) {
 	}
 	addrB := l.Addr().String()
 	_ = l.Close()
-	tb, err := cluster.NewTransport(addrB, "", cid, nil, nil, nil, nil)
+	tb, err := cluster.NewTransport(addrB, cid, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

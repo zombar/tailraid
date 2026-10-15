@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"net"
-	"net/netip"
 	"time"
 )
 
@@ -21,16 +20,6 @@ func shardDialer() *net.Dialer {
 
 // controlDialer dials the control transport's, with the kernel's defaults.
 func controlDialer() *net.Dialer { return &net.Dialer{Timeout: 3 * time.Second} }
-
-// fromIP is d dialing from ip: every connection leaves from the mesh address, and a dial
-// made while the interface is absent (a restart's gap) fails at once instead of leaving
-// by another interface with a source no member refuses later (docs/20 §1, I-317).
-func fromIP(d *net.Dialer, ip netip.Addr) *net.Dialer {
-	if ip.IsValid() {
-		d.LocalAddr = &net.TCPAddr{IP: ip.AsSlice()}
-	}
-	return d
-}
 
 // lowWaterListener sets the low water mark on every connection it accepts: a listening
 // socket's options are not reliably inherited by the connections it accepts.

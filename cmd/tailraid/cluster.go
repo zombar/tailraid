@@ -3,14 +3,12 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-	"net/netip"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,7 +24,6 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/config"
-	"github.com/zombar/tailraid/internal/mesh"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/node"
 	"github.com/zombar/tailraid/internal/repair"
@@ -35,32 +32,20 @@ import (
 )
 
 // localClient dials this device's running node over its tailnet RPC address.
-func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error) {
-	cfg, cfgPath, err := loadConfig(cmd)
+func localClient(ctx context.Context, cmd *cobra.Command) (*rpc.Client, string, config.Config, error) {
+	cfg, _, err := loadConfig(cmd)
 	if err != nil {
 		return nil, "", cfg, err
 	}
-	cfg.Path = cfgPath
-	addr, err := node.LocalAddr(cfg)
+	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
 	if err != nil {
-		// a user's CLI beside a root daemon (docs/20 §9): the config is root's, the mesh
-		// file in the system home is not
-		if sysAddr, _, ok := node.ReadMeshFile(config.SystemHome()); ok {
-			addr = sysAddr
-		} else {
-			return nil, "", cfg, err
-		}
+		return nil, "", cfg, fmt.Errorf("this node is not initialised: %w", err)
 	}
-	// the CLI dials from its node's mesh address too (I-317): with the node down the
-	// address is gone and the dial fails at once, which is the answer
-	var localIP netip.Addr
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		localIP, _ = netip.ParseAddr(host)
-	}
-	cid, err := clusterIDOf(cmd.Context(), cfg, addr, localIP)
+	_, ident, err := node.Tailnet(ctx, cfg)
 	if err != nil {
 		return nil, "", cfg, err
 	}
+	addr := net.JoinHostPort(ident.IP.String(), strconv.Itoa(cfg.Listen.RPC))
 	if override, _ := cmd.Flags().GetString("node"); override != "" {
 		addr = override
 		if _, _, err := net.SplitHostPort(addr); err != nil {
@@ -68,63 +53,20 @@ func localClient(cmd *cobra.Command) (*rpc.Client, string, config.Config, error)
 		}
 	}
 	c := rpc.NewClient(cid, nil)
-	c.SetLocalIP(localIP)
 	c.Sign = userSigner(cmd.Context(), cid) // the person's signature on mutating requests (docs/21 §2)
 	return c, addr, cfg, nil
 }
 
-// clusterIDOf is the cluster the local node belongs to: the identity file when this
-// user may read it, else the node's own answer over /health (a user's CLI beside the
-// root daemon of macOS, docs/20 §9: status, node add-disk, mirror add and verify run
-// unprivileged there, and the data directory is root's).
-func clusterIDOf(ctx context.Context, cfg config.Config, addr string, localIP netip.Addr) ([16]byte, error) {
-	cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
-	if err == nil {
-		return cid, nil
-	}
-	probe := rpc.NewClient([16]byte{}, nil)
-	probe.SetLocalIP(localIP)
-	h, herr := probe.Health(ctx, addr)
-	raw, derr := hex.DecodeString(h.ClusterID)
-	if herr != nil || derr != nil || len(raw) != 16 {
-		return [16]byte{}, fmt.Errorf("this node is not initialised: %w", err)
-	}
-	copy(cid[:], raw)
-	return cid, nil
-}
-
-// clusterIDFrom is the cluster of a status report, for commands that already hold one.
-func clusterIDFrom(rep admin.Report) ([16]byte, error) {
-	var cid [16]byte
-	raw, err := hex.DecodeString(rep.ClusterID)
-	if err != nil || len(raw) != 16 {
-		return cid, fmt.Errorf("status carries no cluster id (%q)", rep.ClusterID)
-	}
-	copy(cid[:], raw)
-	return cid, nil
-}
-
 func fetchReport(ctx context.Context, cmd *cobra.Command) (admin.Report, *rpc.Client, string, error) {
-	c, addr, _, err := localClient(cmd)
+	c, addr, _, err := localClient(ctx, cmd)
 	if err != nil {
 		return admin.Report{}, nil, "", err
 	}
 	rep, err := admin.FetchStatus(ctx, c, addr)
 	if err != nil {
-		return admin.Report{}, nil, "", fmt.Errorf("status from %s (%s): %w", addr, unreachableHint(err), err)
+		return admin.Report{}, nil, "", fmt.Errorf("status from %s (is `tailraid serve` running?): %w", addr, err)
 	}
 	return rep, c, addr, nil
-}
-
-// unreachableHint is what a failed dial to the node's own address suggests: a refused
-// one a node that is not running, a timed-out one also a host firewall dropping the
-// mesh address, which the node's log names (docs/20 §9, I-335).
-func unreachableHint(err error) string {
-	var ne net.Error
-	if (errors.As(err, &ne) && ne.Timeout()) || strings.Contains(err.Error(), "i/o timeout") {
-		return "is `tailraid serve` running? if `tailraid logs` shows it serving, a host firewall is dropping the mesh address: the log names the cause"
-	}
-	return "is `tailraid serve` running?"
 }
 
 func addNodeFlags(c *cobra.Command) {
@@ -136,9 +78,9 @@ func joinCmd() *cobra.Command {
 	var voter bool
 	var name string
 	c := &cobra.Command{
-		Use:   "join <code>",
-		Short: "Join this device to an existing cluster, with the code init or `tailraid token` printed",
-		Args:  cobra.ExactArgs(1),
+		Use:   "join <host> <token>",
+		Short: "Join this device to an existing cluster",
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, path, err := loadConfig(cmd)
 			if err != nil {
@@ -152,12 +94,8 @@ func joinCmd() *cobra.Command {
 			if err := config.Save(path, cfg); err != nil {
 				return err
 			}
-			cfg.Path = path
-			resp, err := node.Join(cmd.Context(), cfg, args[0], voter, version, slog.Default())
+			resp, err := node.Join(cmd.Context(), cfg, args[0], args[1], voter, version, slog.Default())
 			if err != nil {
-				return err
-			}
-			if err := giveBack(ownedPaths(cfg, path)...); err != nil { // a join under sudo (docs/20 §9)
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "joined cluster %s as node %d (%s); %d members, policy %d+%d\nconfig: %s\n",
@@ -238,14 +176,6 @@ func printStatus(w io.Writer, r admin.Report) {
 	if r.WebURL != "" {
 		fmt.Fprintf(w, "web     %s\n", r.WebURL)
 	}
-	if m := r.Mesh; m != nil && !m.Fake {
-		classes := map[string]int{}
-		for i := range m.Peers {
-			classes[m.Peers[i].Class]++
-		}
-		fmt.Fprintf(w, "mesh    %s on %s, udp %d · %d lan, %d wan, %d relay, %d none · %s in, %s out\n",
-			m.Addr, cmp.Or(m.Interface, "?"), m.Port, classes["lan"], classes["wan"], classes["relay"], classes["none"], bytesStr(m.RxBytes), bytesStr(m.TxBytes))
-	}
 	for i := range r.Mirrors { // every mirror of the cluster, from the probes (docs/12 §11)
 		m := &r.Mirrors[i]
 		state := "offline (" + m.Reason + ")"
@@ -281,44 +211,9 @@ func printStatus(w io.Writer, r admin.Report) {
 	for _, warn := range r.Warnings {
 		fmt.Fprintf(w, "! %s\n", warn)
 	}
-	if code := joinCodeOf(r); code != "" {
-		fmt.Fprintf(w, "join: tailraid join %s\n", code)
+	if r.JoinToken != "" {
+		fmt.Fprintf(w, "join: tailraid join <this-device-ip> %s\n", r.JoinToken)
 	}
-}
-
-// joinCodeOf is the join code a report describes (docs/20 §4): this node's key,
-// address and candidates with the cluster's token; "" without them.
-func joinCodeOf(r admin.Report) string {
-	m := r.Mesh
-	if m == nil || r.JoinToken == "" || !mesh.ValidToken(r.JoinToken) {
-		return ""
-	}
-	raw, err := hex.DecodeString(r.ClusterID)
-	if err != nil || len(raw) != 16 {
-		return ""
-	}
-	var c mesh.JoinCode
-	copy(c.ClusterID[:], raw)
-	c.Token, c.Port, c.RPCPort, c.Endpoints = r.JoinToken, m.Port, m.RPCPort, m.Endpoints
-	if m.Key != "" {
-		if c.Key, err = mesh.ParseKey(m.Key); err != nil {
-			return ""
-		}
-	}
-	addr, err := netip.ParseAddr(m.Addr)
-	if err != nil || !addr.Is4() {
-		return ""
-	}
-	c.Host = addr.As4()[3]
-	if m.Fake { // no device: the candidate is the address the node listens on
-		c.Host = 1
-		c.Endpoints = []string{net.JoinHostPort(m.Addr, strconv.Itoa(int(m.Port)))}
-	}
-	code, err := c.Encode()
-	if err != nil {
-		return ""
-	}
-	return code
 }
 
 // hostOrder lists the nodes with each device's disks right after it (docs/14 §8).
@@ -347,7 +242,7 @@ func hostOrder(nodes []admin.NodeReport) []admin.NodeReport {
 // is never reused, docs/02), so it is left out unless all is set (I-132).
 func printNodes(w io.Writer, nodes []admin.NodeReport, all bool) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "IDX\tNAME\tKIND\tSTATE\tADDR\tVOTER\tLIVE\tPATH\tSLOTS\tFREE\tVERSION\tFLAGS")
+	fmt.Fprintln(tw, "IDX\tNAME\tKIND\tSTATE\tADDR\tVOTER\tLIVE\tSLOTS\tFREE\tVERSION\tFLAGS")
 	if !all {
 		nodes = slices.DeleteFunc(slices.Clone(nodes), func(n admin.NodeReport) bool { return n.State == "removed" })
 	}
@@ -378,11 +273,7 @@ func printNodes(w io.Writer, nodes []admin.NodeReport, all bool) {
 				live = "dead " + n.DeadFor
 			}
 		}
-		free := "-"   // a device stores nothing; its disks have the free space
-		pathCol := "" // the mesh path to a device member (docs/20 §8); a disk is reached through its host
-		if n.Kind == "device" {
-			pathCol = cmp.Or(n.Path, "-")
-		}
+		free := "-" // a device stores nothing; its disks have the free space
 		addr := n.Addr
 		switch {
 		case n.S3 != nil: // a bucket reports no free space, and its address is the bucket
@@ -390,7 +281,7 @@ func printNodes(w io.Writer, nodes []admin.NodeReport, all bool) {
 		case n.Kind != "device":
 			free = bytesStr(uint64(max(n.Free, 0)))
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, addr, n.Voter, live, pathCol, n.Slots, free, n.Version, strings.Join(flags, ", "))
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%v\t%s\t%d\t%s\t%s\t%s\n", n.Idx, name, n.Kind, n.State, addr, n.Voter, live, n.Slots, free, n.Version, strings.Join(flags, ", "))
 	}
 	_ = tw.Flush()
 }
@@ -552,15 +443,11 @@ func addDiskCmd() *cobra.Command {
 					n++
 				}
 			}
-			cid, err := clusterIDFrom(rep) // never the data directory: root's on macOS (docs/20 §9)
+			cid, err := cluster.LoadClusterID(cfg.Node.DataDir)
 			if err != nil {
 				return err
 			}
-			ident := host.ID // the marker names the device by its mesh key (docs/14 §2); the fake has none
-			if rep.Mesh != nil && rep.Mesh.Key != "" {
-				ident = rep.Mesh.Key
-			}
-			id, err := node.PrepareDisk(disk.Path, cid, ident)
+			id, err := node.PrepareDisk(disk.Path, cid, host.ID)
 			if err != nil {
 				return err
 			}
@@ -779,51 +666,30 @@ while staging/ holds unflushed writes, unless --discard-dirty says to lose them.
 
 func tokenCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use: "token", Short: "Show the join code: the token with this device's key and endpoints (docs/20 §4)",
+		Use: "token", Short: "Show the join token",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			rep, _, _, err := fetchReport(cmd.Context(), cmd)
 			if err != nil {
 				return err
 			}
-			code := joinCodeOf(rep)
-			if code == "" {
-				return errors.New("no join code: the node has no token or no mesh address yet")
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), code)
+			fmt.Fprintln(cmd.OutOrStdout(), rep.JoinToken)
 			return nil
 		},
 	}
 	rotate := &cobra.Command{
-		Use: "rotate", Short: "Replace the join token (a Raft MetaSet); codes printed before stop working at once",
+		Use: "rotate", Short: "Replace the join token (a Raft MetaSet); the old token stops working at once",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			before, _, _, err := fetchReport(cmd.Context(), cmd)
+			raw, err := adminCall(cmd, rpc.AdminOp{Op: "rotate_token"})
 			if err != nil {
 				return err
 			}
-			if _, err := adminCall(cmd, rpc.AdminOp{Op: "rotate_token"}); err != nil {
+			var rep struct {
+				JoinToken string `json:"join_token"`
+			}
+			if err := json.Unmarshal(raw, &rep); err != nil {
 				return err
 			}
-			// the rotation is the leader's; this node's own view of the token follows a
-			// moment later, and a code printed before that would carry the old token
-			rep := before
-			for attempt := 0; rep.JoinToken == before.JoinToken && attempt < 40; attempt++ {
-				select {
-				case <-cmd.Context().Done():
-					return cmd.Context().Err()
-				case <-time.After(250 * time.Millisecond):
-				}
-				if rep, _, _, err = fetchReport(cmd.Context(), cmd); err != nil {
-					return err
-				}
-			}
-			if rep.JoinToken == before.JoinToken {
-				return errors.New("rotated, but this node has not seen the new token yet: run `tailraid token` in a moment")
-			}
-			code := joinCodeOf(rep)
-			if code == "" {
-				return errors.New("rotated, but no join code: the node has no mesh address yet")
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), code)
+			fmt.Fprintln(cmd.OutOrStdout(), rep.JoinToken)
 			return nil
 		},
 	}

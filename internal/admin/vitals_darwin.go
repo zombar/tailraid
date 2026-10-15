@@ -21,7 +21,7 @@ func platformVitals(m *MachineReport, tailnet *net.Interface) {
 			idx = tailnet.Index
 		}
 		if rx, tx, trx, ttx, ok := sumIfList2(raw, idx); ok {
-			m.NetRx, m.NetTx, m.MeshRx, m.MeshTx = rx, tx, trx, ttx
+			m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
 		}
 	}
 	// struct loadavg { fixpt_t ldavg[3]; long fscale; }: three uint32, padding, int64

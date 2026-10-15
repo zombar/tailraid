@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -15,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +24,7 @@ import (
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/sysfs"
+	"github.com/zombar/tailraid/internal/tailscale"
 )
 
 func TestMain(m *testing.M) {
@@ -99,21 +98,9 @@ func (j *fakeJoiner) Join(_ context.Context, req JoinRequest) (JoinResponse, err
 	if j.fail != nil {
 		return JoinResponse{}, j.fail
 	}
-	var key meta.MeshKey
-	if req.Key != "" {
-		b, err := base64.StdEncoding.DecodeString(req.Key)
-		if err != nil || len(b) != len(key) {
-			return JoinResponse{}, errors.New("bad key")
-		}
-		copy(key[:], b)
-	}
-	nd := meta.Node{
-		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Key: key,
-	}
-	if row, ok := j.app.fsm.NodeByKey(key); ok {
-		nd.Idx = row.Idx // a re-join after reset lands on the key's row, as the leader's Join does (docs/20 §4)
-	}
-	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
+	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
+		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter,
+	}}})
 	if res.Err != nil {
 		return JoinResponse{}, res.Err
 	}
@@ -131,20 +118,19 @@ func (j *fakeJoiner) MemberOp(_ context.Context, op MemberOp) error {
 }
 
 type env struct {
-	t       *testing.T
-	app     *fakeApplier
-	store   *chunk.Store
-	auth    *TableAuthorizer
-	deny    atomic.Bool // the caller is a stranger
-	pending atomic.Bool // the caller is a joiner in progress
-	srv     *Server
-	hs      *httptest.Server
-	clk     *clock.Fake
-	fence   fakeFence
-	joiner  *fakeJoiner
-	bad     []BadSlot
-	addr    string
-	cid     [16]byte
+	t      *testing.T
+	app    *fakeApplier
+	store  *chunk.Store
+	ts     *tailscale.Fake
+	auth   *WhoIsAuthorizer
+	srv    *Server
+	hs     *httptest.Server
+	clk    *clock.Fake
+	fence  fakeFence
+	joiner *fakeJoiner
+	bad    []BadSlot
+	addr   string
+	cid    [16]byte
 }
 
 var (
@@ -165,22 +151,13 @@ func newEnvWith(t *testing.T, mod func(*Options)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.ts = tailscale.NewFake(memberIP, "self-1", nil)
 	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, TSStableID: "self-1", Addr: memberIP.String(), Capacity: 1 << 30}}})
-	// the table authorizer over the fake FSM; deny makes the caller a stranger (a row the
-	// table does not hold) and pending a joiner in progress (docs/20 §4)
-	e.auth = &TableAuthorizer{
-		Member: func(addr string) (meta.Node, bool) {
-			if e.deny.Load() {
-				return meta.Node{}, false
-			}
-			return e.app.fsm.NodeByAddr(addr)
-		},
-		Pending: func(addr string) bool { return e.pending.Load() && addr == memberIP.String() },
-	}
+	e.auth = &WhoIsAuthorizer{TS: e.ts, Member: e.app.fsm.NodeByAddr, Clk: e.clk}
 	e.joiner = &fakeJoiner{app: e.app}
 	opts := Options{
 		NodeID: "n1", ClusterID: e.cid, Version: "t", Applier: e.app, Fence: e.fence, Joiner: e.joiner, Disk: e.diskLookup, DiskHealth: e.diskHealth,
-		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, KeylessJoin: true, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
+		Auth: e.auth, Members: e.app.fsm.Nodes, JoinToken: func() string { return "tok" }, Clk: e.clk, MaxShard: 1 << 16, Grace: 10 * time.Minute,
 		BadSlot: func(k chunk.ShardKey, n meta.NodeIdx) { e.bad = append(e.bad, BadSlot{Key: string(k), Node: n}) },
 	}
 	if mod != nil {
@@ -344,33 +321,40 @@ func TestChunkRPC_DeleteFence(t *testing.T) {
 	}
 }
 
-// Invariant: I-18, I-318
-func TestTable_DeniesStrangerPendingAndRemoved(t *testing.T) {
+// Invariant: I-18
+func TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
-	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, chunk.ErrNotFound) {
-		t.Fatalf("member: %v", err)
-	}
-	// an address the table does not hold: a stranger, refused before any body
-	e.deny.Store(true)
+	// member whose tailnet identity changed (IP reassigned): WhoIs says another StableID
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "stranger", "x")
+	e.auth.Purge()
 	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("stranger: %v", err)
+		t.Fatalf("stable id mismatch: %v", err)
 	}
-	// a joiner in progress may call /health and /v1/join and nothing else (docs/20 §4)
-	e.pending.Store(true)
-	if _, err := c.Health(ctx, e.addr); err != nil {
-		t.Fatalf("pending health: %v", err)
-	}
-	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("pending shard read: %v", err)
-	}
-	e.deny.Store(false)
-	e.pending.Store(false)
+	// restore identity: a mismatch purged the cache, so the next call re-resolves
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "self-1", "self")
 	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, chunk.ErrNotFound) {
-		t.Fatalf("member again: %v", err)
+		t.Fatalf("after restore: %v", err)
 	}
-	// a removed row is no member, with nothing cached to purge
+	// not on the tailnet at all → forbidden, and negative-cached
+	e.ts.Remove(memberIP)
+	e.auth.Purge()
+	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("off tailnet: %v", err)
+	}
+	e.ts.Add(memberIP, "self-1", "self")
+	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, ErrForbidden) {
+		t.Fatal("negative cache not honoured")
+	}
+	e.clk.Advance(time.Minute)
+	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, chunk.ErrNotFound) {
+		t.Fatalf("after negative TTL: %v", err)
+	}
+	// removed member → forbidden regardless of WhoIs
 	e.app.apply(meta.Command{Op: meta.OpNodeSetState, NodeSetState: &meta.NodeSetState{Idx: 1, State: meta.Removed, Now: 2}})
+	e.auth.Purge()
 	if _, err := c.Get(ctx, 1, key([]byte("p"), 0)); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("removed member: %v", err)
 	}
@@ -379,7 +363,8 @@ func TestTable_DeniesStrangerPendingAndRemoved(t *testing.T) {
 // Invariant: I-18, I-49
 func TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader(t *testing.T) {
 	e := newEnv(t)
-	e.deny.Store(true)
+	e.ts.Remove(memberIP)
+	e.auth.Purge()
 	// a huge body with a forbidden source: the server must answer without reading it
 	pr, pw := net.Pipe()
 	defer pr.Close()
@@ -470,12 +455,12 @@ func TestJoin_RateLimitedPerSource(t *testing.T) {
 	}
 }
 
-// Invariant: I-48, I-321
+// Invariant: I-48
 // Lifecycle: L-96
-func TestJoin_TokenAndKey(t *testing.T) {
+func TestJoin_TokenAndIdentity(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
-	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", RaftPort: 1, RPCPort: 2}
+	req := JoinRequest{Token: "wrong", NodeID: "n2", Name: "two", TSStableID: "self-1", RaftPort: 1, RPCPort: 2}
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("wrong token: %v", err)
 	}
@@ -483,50 +468,23 @@ func TestJoin_TokenAndKey(t *testing.T) {
 		t.Fatal("wrong token changed membership")
 	}
 	e.clk.Advance(JoinInterval) // a failed attempt throttles the source for a second
-	// a mesh join needs an introduce: without a pending row the key is refused, token or not
-	keyed := req
-	keyed.Token, keyed.Key = "tok", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-	if _, err := c.Join(ctx, e.addr, keyed); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("keyed join without an introduce: %v", err)
+	req.Token, req.TSStableID = "tok", "someone-else"
+	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("identity mismatch: %v", err)
 	}
-	e.pending.Store(true)
-	jr, err := c.Join(ctx, e.addr, keyed)
-	if err != nil || jr.NodeIdx != 2 || len(jr.Members) != 2 {
-		t.Fatalf("keyed join from a pending address: %+v %v", jr, err)
+	e.clk.Advance(JoinInterval)
+	req.TSStableID = "self-1"
+	jr, err := c.Join(ctx, e.addr, req)
+	if err != nil || jr.NodeIdx != 2 || len(jr.Members) != 2 || jr.Volume.K != 2 {
+		t.Fatalf("join: %+v %v", jr, err)
 	}
-	if n := e.app.fsm.Nodes()[1]; n.Addr != memberIP.String() || n.ID != "n2" {
+	if n := e.app.fsm.Nodes()[1]; n.Addr != memberIP.String() || n.ID != "n2" || n.State != meta.Active {
 		t.Fatalf("joined node %+v", n)
-	}
-	e.pending.Store(false)
-	// a re-join after reset (docs/20 §4, I-94): the caller's address holds an active row
-	// under the request's key, so the join is accepted with no pending row; another key
-	// from that address is not
-	var mk meta.MeshKey
-	mk[0], mk[31] = 7, 9
-	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "n1", Name: "one", Kind: meta.KindDevice, Addr: memberIP.String(), Capacity: 1 << 30, Key: mk}}})
-	rejoin := keyed
-	rejoin.NodeID, rejoin.Key = "n1b", base64.StdEncoding.EncodeToString(mk[:])
-	if _, err := c.Join(ctx, e.addr, rejoin); err != nil {
-		t.Fatalf("re-join from the key's own address: %v", err)
-	}
-	if _, err := c.Join(ctx, e.addr, keyed); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("another key from a member's address: %v", err)
-	}
-	// a keyless join with the token, where the server allows one (the harness, the fake)
-	req.Token, req.NodeID = "tok", "n3"
-	jr, err = c.Join(ctx, e.addr, req)
-	if err != nil || jr.NodeIdx != 3 || jr.Volume.K != 2 { // the re-join above kept row 1 under its key (docs/20 §4)
-		t.Fatalf("keyless join: %+v %v", jr, err)
 	}
 	// join through a follower is redirected
 	e.app.setLeader(false, "100.64.0.9:20481")
 	if _, err := c.Join(ctx, e.addr, req); !errors.Is(err, ErrNotLeader) {
 		t.Fatalf("follower join: %v", err)
-	}
-	// a node on the mesh refuses a keyless join: it joins by code
-	strict := newEnvWith(t, func(o *Options) { o.KeylessJoin = false })
-	if _, err := strict.client().Join(ctx, strict.addr, req); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("keyless join on the mesh: %v", err)
 	}
 }
 
@@ -630,7 +588,9 @@ func TestRPC_Stats_MemberOnly_OwnRows(t *testing.T) {
 		t.Fatalf("health web port %d %v", h.Web, err)
 	}
 	// a stranger (the WhoIs identity no longer matches the member record) is refused
-	e.deny.Store(true)
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "stranger", "x")
+	e.auth.Purge()
 	if _, err := c.Call(ctx, e.addr, http.MethodGet, "/v1/stats?since=5", nil); err == nil {
 		t.Fatal("a non-member read the stats")
 	}
@@ -666,7 +626,9 @@ func TestMemberList_MembersOnly_DeviceRows(t *testing.T) {
 	if err != nil || len(got) != 2 || got[0].ID != "a" || got[1].ID != "late" || got[1].TSStableID != "ts-late" {
 		t.Fatalf("member list: %+v %v", got, err)
 	}
-	e.deny.Store(true)
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "stranger", "x")
+	e.auth.Purge()
 	if got, err := c.MemberList(ctx, e.addr); err == nil {
 		t.Fatalf("a non-member read the member list: %+v", got)
 	}
@@ -695,7 +657,9 @@ func TestSecretKey_MembersOnly(t *testing.T) {
 	if got, err := other.SecretKey(ctx, e.addr); err == nil {
 		t.Fatalf("another cluster read the key: %q", got)
 	}
-	e.deny.Store(true)
+	e.ts.Remove(memberIP)
+	e.ts.Add(memberIP, "stranger", "x")
+	e.auth.Purge()
 	if got, err := c.SecretKey(ctx, e.addr); err == nil {
 		t.Fatalf("a non-member read the key: %q", got)
 	}

@@ -1,14 +1,11 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/goccy/go-yaml"
 )
 
 func TestParseBytes(t *testing.T) {
@@ -385,85 +382,5 @@ func TestConfig_CacheKeyWrittenOnlyWhenSet(t *testing.T) {
 	got, err := Load(p)
 	if err != nil || got.Cache.Size != "2GiB" {
 		t.Fatalf("a set cache.size did not round-trip: %+v %v", got.Cache, err)
-	}
-}
-
-// The config home under sudo on Linux is the invoking user's, where the user's unit
-// looks and the user owns the data; root's own home only when nothing says who invoked
-// it; TAILRAID_HOME and XDG_CONFIG_HOME still win; macOS root is the system home and an
-// unprivileged user's is their own.
-// Invariant: I-324
-func TestHome_SudoKeepsTheInvokingUsers(t *testing.T) {
-	envOf := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	lookup := func(name string) (string, error) {
-		if name == "gurgeh" {
-			return "/home/gurgeh", nil
-		}
-		return "", errors.New("no such user")
-	}
-	for _, tc := range []struct {
-		name string
-		goos string
-		euid int
-		home string
-		env  map[string]string
-		want string
-	}{
-		{"linux user", "linux", 1000, "/home/gurgeh", nil, "/home/gurgeh/.config/tailraid"},
-		{"linux sudo join", "linux", 0, "/root", map[string]string{"SUDO_USER": "gurgeh", "SUDO_UID": "1000"}, "/home/gurgeh/.config/tailraid"},
-		{"linux real root", "linux", 0, "/root", nil, "/root/.config/tailraid"},
-		{"linux sudo as root", "linux", 0, "/root", map[string]string{"SUDO_USER": "root"}, "/root/.config/tailraid"},
-		{"linux sudo unknown user", "linux", 0, "/root", map[string]string{"SUDO_USER": "nobody-here"}, "/root/.config/tailraid"},
-		{"linux xdg wins", "linux", 0, "/root", map[string]string{"SUDO_USER": "gurgeh", "XDG_CONFIG_HOME": "/x"}, "/x/tailraid"},
-		{"explicit home wins", "linux", 0, "/root", map[string]string{"SUDO_USER": "gurgeh", "TAILRAID_HOME": "/t"}, "/t"},
-		{"darwin root is the system", "darwin", 0, "/var/root", map[string]string{"SUDO_USER": "gurgeh"}, "/Library/Application Support/tailraid"},
-		{"darwin user", "darwin", 501, "/Users/gurgeh", nil, "/Users/gurgeh/Library/Application Support/tailraid"},
-		{"windows", "windows", 0, `C:\Users\g`, map[string]string{"ProgramData": `C:\ProgramData`}, `C:\ProgramData` + string(filepath.Separator) + "tailraid"},
-	} {
-		if got := homeFor(tc.goos, tc.euid, tc.home, envOf(tc.env), lookup); got != tc.want {
-			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
-// mesh.relay_rate: unset is the mesh's default (0), "0" lifts the limit (a negative rate
-// to the mesh), a size is itself, junk is an error (docs/20 §6).
-// Invariant: I-328
-func TestConfig_MeshRelayRate_Table(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want int64
-		bad  bool
-	}{{"", 0, false}, {"0", -1, false}, {"5M", 5 << 20, false}, {"lots", 0, true}} {
-		cfg := Default()
-		cfg.Mesh.RelayRate = tc.in
-		got, err := cfg.MeshRelayRateBytes()
-		if (err != nil) != tc.bad || got != tc.want {
-			t.Errorf("relay_rate %q: %d %v, want %d bad=%v", tc.in, got, err, tc.want, tc.bad)
-		}
-	}
-}
-
-// mesh.firewall is on unless the file says false, and a file that says nothing keeps
-// saying nothing when written back (docs/20 §9).
-// Invariant: I-334
-func TestConfig_MeshFirewallDefault(t *testing.T) {
-	off, on := false, true
-	for _, tc := range []struct {
-		in   *bool
-		want bool
-	}{{nil, true}, {&on, true}, {&off, false}} {
-		cfg := Default()
-		cfg.Mesh.Firewall = tc.in
-		if got := cfg.MeshFirewall(); got != tc.want {
-			t.Errorf("firewall %v: %v, want %v", tc.in, got, tc.want)
-		}
-	}
-	b, err := yaml.Marshal(Default())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(b), "firewall") {
-		t.Errorf("a default config writes the key:\n%s", b)
 	}
 }

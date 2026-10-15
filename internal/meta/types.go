@@ -7,6 +7,8 @@
 package meta
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -198,20 +200,15 @@ type Node struct {
 	Name       string
 	Kind       NodeKind
 	State      NodeState
-	TSStableID string // Tailscale stable node ID; authorization only (retired with docs/20)
-	Addr       string // the device's mesh address, canonical text (docs/20 §3); empty for S3 nodes
+	TSStableID string // Tailscale stable node ID; authorization only
+	Addr       string // canonical Tailscale IP text; empty for S3 nodes
 	RaftPort   uint16
 	RPCPort    uint16
-	// The mesh (docs/20, codec 13): the device's WireGuard public key, its UDP port
-	// and the endpoint candidates it publishes (I-322).
-	Key       MeshKey
-	MeshPort  uint16
-	Endpoints []string
-	Voter     bool   // devices only
-	Capacity  uint64 // shard-byte budget; also the placement weight
-	Version   string // software version last reported
-	JoinedAt  int64
-	Host      NodeIdx // KindDisk, KindMirror: the device that serves the disk; 0 for every other kind
+	Voter      bool   // devices only
+	Capacity   uint64 // shard-byte budget; also the placement weight
+	Version    string // software version last reported
+	JoinedAt   int64
+	Host       NodeIdx // KindDisk, KindMirror: the device that serves the disk; 0 for every other kind
 	// S3 nodes only
 	S3Endpoint  string
 	S3Bucket    string
@@ -308,10 +305,6 @@ type Meta struct {
 	ClusterID [16]byte
 	JoinToken string
 	CreatedAt int64
-	// The mesh (docs/20 §3, codec 13): the cluster subnet as prefix text, and the host
-	// number the next introduce gets (I-320).
-	MeshSubnet   string
-	NextMeshHost uint8
 }
 
 // State is everything the cluster agrees on. It is only ever mutated by the FSM.
@@ -336,8 +329,6 @@ type State struct {
 	// the cluster key they are sealed under (zero: no key yet).
 	Secrets     map[string]*Secret
 	SecretKeyID KeyID
-	// Pending holds the joins in progress by key (docs/20 §4, codec 13).
-	Pending map[MeshKey]*Pending
 	// Users, groups and permissions (docs/21, codec 14): the identity rows, the grant
 	// table keyed by inode and subject, the open invites and the browser sessions.
 	Users     map[UserIdx]*User
@@ -432,7 +423,6 @@ func NewState() *State {
 		Snaps:    map[SnapID]*Snapshot{},
 		NextSnap: 1,
 		Secrets:  map[string]*Secret{},
-		Pending:  map[MeshKey]*Pending{},
 		Users:    map[UserIdx]*User{},
 		Groups:   map[GroupIdx]*Group{},
 		Grants:   map[GrantKey]*Grant{},
@@ -514,7 +504,6 @@ func (s *State) Clone() *State {
 		NextSnap:    s.NextSnap,
 		Secrets:     make(map[string]*Secret, len(s.Secrets)),
 		SecretKeyID: s.SecretKeyID,
-		Pending:     make(map[MeshKey]*Pending, len(s.Pending)),
 		Users:       make(map[UserIdx]*User, len(s.Users)),
 		NextUser:    s.NextUser,
 		Groups:      make(map[GroupIdx]*Group, len(s.Groups)),
@@ -544,10 +533,6 @@ func (s *State) Clone() *State {
 	for h, se := range s.Sessions {
 		cp := *se
 		c.Sessions[h] = &cp
-	}
-	for k, p := range s.Pending {
-		cp := *p
-		c.Pending[k] = &cp
 	}
 	for n, sec := range s.Secrets {
 		cp := *sec
@@ -581,7 +566,6 @@ func (s *State) Clone() *State {
 	}
 	for idx, n := range s.Nodes {
 		cp := *n
-		cp.Endpoints = slices.Clone(n.Endpoints)
 		c.Nodes[idx] = &cp
 	}
 	for h := range s.Tombs {
@@ -670,4 +654,13 @@ func DecodeSnapHandle(b []byte) (SnapHandle, bool) {
 		return SnapHandle{}, false
 	}
 	return SnapHandle{Snap: SnapID(binary.BigEndian.Uint32(b[4:8])), Gen: binary.BigEndian.Uint32(b[8:12]), Ino: binary.BigEndian.Uint64(b[12:20])}, true
+}
+
+// NewJoinToken returns a fresh join token: 8 random base32 characters (docs/08 §Join).
+func NewJoinToken() string {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("meta: crypto/rand: " + err.Error())
+	}
+	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:]))
 }

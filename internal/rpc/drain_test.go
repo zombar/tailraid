@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,32 +119,4 @@ func (s signalRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	return resp, err
-}
-
-// A client bound to its mesh address leaves from it: a server on the loopback sees the
-// loopback as the source, and a bind to an address the host does not hold fails the
-// dial at once (the interface is absent) instead of leaving by another interface.
-// Invariant: I-317
-func TestClient_DialsFromItsAddress(t *testing.T) {
-	var seen atomic.Value
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen.Store(r.RemoteAddr)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"node_id":"n","cluster_id":"00000000000000000000000000000001","version":"v","applied":1,"codec":1,"ready":true}`))
-	}))
-	defer srv.Close()
-	addr := strings.TrimPrefix(srv.URL, "http://")
-	c := NewClient([16]byte{1}, nil)
-	c.SetLocalIP(netip.MustParseAddr("127.0.0.1"))
-	if _, err := c.Health(t.Context(), addr); err != nil {
-		t.Fatalf("from the loopback: %v", err)
-	}
-	if host, _, _ := net.SplitHostPort(seen.Load().(string)); host != "127.0.0.1" {
-		t.Fatalf("the server saw %q", seen.Load())
-	}
-	c = NewClient([16]byte{1}, nil)
-	c.SetLocalIP(netip.MustParseAddr("192.0.2.1")) // TEST-NET-1: never a local address
-	if _, err := c.Health(t.Context(), addr); err == nil {
-		t.Fatal("a dial from an address the host does not hold succeeded")
-	}
 }

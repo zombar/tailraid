@@ -86,7 +86,7 @@ func (s *S3Buckets) Bucket(idx meta.NodeIdx) (*s3.Bucket, bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c, ok := s.cache[idx]; ok && sameBucket(c.row, row) && c.creds == creds {
+	if c, ok := s.cache[idx]; ok && c.row == row && c.creds == creds {
 		return c.b, true
 	}
 	b, err := s3.New(s3.Target{Endpoint: row.S3Endpoint, Bucket: row.S3Bucket, Prefix: row.S3Prefix, Region: row.S3Region, PathStyle: row.S3PathStyle}, creds, s.rt)
@@ -95,11 +95,4 @@ func (s *S3Buckets) Bucket(idx meta.NodeIdx) (*s3.Bucket, bool) {
 	}
 	s.cache[idx] = cachedBucket{row: row, creds: creds, b: b}
 	return b, true
-}
-
-// sameBucket reports whether two rows name the same bucket the same way: what the
-// cached client was built from (a row's mesh fields never matter here).
-func sameBucket(a, b meta.Node) bool {
-	return a.Idx == b.Idx && a.Name == b.Name && a.S3Endpoint == b.S3Endpoint && a.S3Bucket == b.S3Bucket &&
-		a.S3Prefix == b.S3Prefix && a.S3Region == b.S3Region && a.S3PathStyle == b.S3PathStyle
 }

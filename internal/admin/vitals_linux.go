@@ -21,7 +21,7 @@ func platformVitals(m *MachineReport, tailnet *net.Interface) {
 			name = tailnet.Name
 		}
 		if rx, tx, trx, ttx, ok := parseNetDev(string(b), name); ok {
-			m.NetRx, m.NetTx, m.MeshRx, m.MeshTx = rx, tx, trx, ttx
+			m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
 		}
 	}
 	if f := fields("/proc/self/statm"); len(f) > 1 {

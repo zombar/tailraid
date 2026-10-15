@@ -11,7 +11,7 @@ state. Every claim here is backed by a named test in §9.
 | Gateway process (vfs + nfsgw + s3srv on a device) | crash, kill -9, power loss, restart with dirty WAL |
 | Storage node (chunk store on a device) | process crash, disk full, disk destroyed, bit rot, truncated or zero-filled shard files, lost rename |
 | Raft voter / non-voter | crash, long absence (days), partition, IP change |
-| Network (the mesh, docs/20) | partition, asymmetric reachability, a pair with no path, a path lost and found again, latency spikes, dropped connections |
+| Network (tailnet) | partition, asymmetric reachability, latency spikes, dropped connections |
 | Clock | skew between nodes; the FSM never reads a clock and clamps proposer timestamps to be monotonic (02) |
 
 ## 2. Crash points
@@ -218,7 +218,7 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
   transport's keep the kernel's default. A control call to a host then waits behind far
   less queued shard data; data in flight is not limited. The transport study's rig models
   the link in user space and cannot show the effect; it is to be measured on the real
-  cluster.
+  tailnet.
 - **I-246** — A shard GET or PUT (and a mirror GET) queues for its slots at most
   `SlotWait` (3 s, well inside the caller's 10 s header timeout) and is then answered
   `503` with `X-Tailraid-Busy`, which the caller sees as `ErrBusy` wrapped in

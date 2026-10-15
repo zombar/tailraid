@@ -95,8 +95,7 @@ func fetchKey(ctx context.Context, s *secrets.Store) (bool, error) {
 
 // makeKeyIfLeader makes the cluster key on the leader when the cluster has none yet
 // (docs/19 §3): the node that ran init leads first, so a fresh cluster has its key from
-// its first tick, and the relay frames of docs/20 §6 can be authenticated from the
-// start. A follower makes nothing; a lost race fetches the winner's key.
+// its first tick. A follower makes nothing; a lost race fetches the winner's key.
 func makeKeyIfLeader(ctx context.Context, s *secrets.Store, leader bool) (bool, error) {
 	if !leader || s.State.SecretKeyID() != (meta.KeyID{}) {
 		return false, nil

@@ -9,7 +9,10 @@ sudo -n true || { echo "admin needs passwordless sudo"; exit 1; }
 
 sudo apt-get update -q
 sudo apt-get install -y -q nfs-common curl ca-certificates
+curl -fsSL https://tailscale.com/install.sh | sudo sh
+sudo systemctl enable tailscaled
 sudo systemctl disable --now unattended-upgrades 2>/dev/null || true
 mkdir -p "$HOME/tailraid-d1" "$HOME/tailraid-d2"
 sudo hostnamectl set-hostname tailraid-linux
+tailscale version
 echo "linux image ready"

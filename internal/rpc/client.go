@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -88,22 +87,6 @@ func NewClient(clusterID [16]byte, resolve Resolver) *Client {
 	// workers) must not dial a fresh connection for every call past the fourth (I-255)
 	ctl := &http.Transport{DialContext: controlDialer().DialContext, MaxIdleConnsPerHost: 32, IdleConnTimeout: 90 * time.Second}
 	return &Client{http: &http.Client{Transport: tr}, ctl: &http.Client{Transport: ctl}, clusID: hex.EncodeToString(clusterID[:]), resolve: resolve, grace: 10 * time.Minute, clk: clock.Real()}
-}
-
-// SetLocalIP makes every connection the client opens leave from ip, the device's mesh
-// address (I-317): a dial while the interface is absent fails at once rather than
-// leaving by another interface, and a pooled connection never carries a source a member
-// refuses. Called before the first request.
-func (c *Client) SetLocalIP(ip netip.Addr) {
-	if !ip.IsValid() {
-		return
-	}
-	if tr, ok := c.http.Transport.(*http.Transport); ok {
-		tr.DialContext = fromIP(shardDialer(), ip).DialContext
-	}
-	if tr, ok := c.ctl.Transport.(*http.Transport); ok {
-		tr.DialContext = fromIP(controlDialer(), ip).DialContext
-	}
 }
 
 // transferRate is the slowest tailnet path a shard transfer is given: a DERP relay at

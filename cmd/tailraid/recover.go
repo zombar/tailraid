@@ -29,7 +29,7 @@ snapshot and log after a majority is lost (docs/12 §9).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			c, addr, _, err := localClient(cmd)
+			c, addr, _, err := localClient(ctx, cmd)
 			if err != nil {
 				return err
 			}

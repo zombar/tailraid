@@ -341,19 +341,10 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 		return
 	}
 	depth := uint64(ReadaheadDepth(cs))
-	var live map[meta.NodeIdx]bool // the live set, read once per call and only when a second chunk is weighed
 	for j := front + 1; j <= front+depth && j < uint64(len(in.Chunks)); j++ {
 		h := in.Chunks[j]
 		if h == meta.HashZero || r.cache.Has(h) {
 			continue
-		}
-		if j > front+1 {
-			if live == nil {
-				live = meta.LiveSet(r.peers.Live())
-			}
-			if r.relayedHolders(h, live) {
-				break // readahead to a relayed holder fetches at most one chunk (docs/20 §8, I-329)
-			}
 		}
 		select {
 		case r.slots <- struct{}{}:
@@ -367,9 +358,7 @@ func (r *Reader) Prefetch(in meta.Inode, off int64) {
 			<-r.slots
 			return
 		}
-		// a prefetch that finished between the check above and this lock has left the
-		// in-flight table and landed in the cache: fetching it again would count twice
-		if _, running := r.inflight[h]; running || r.cache.Has(h) {
+		if _, running := r.inflight[h]; running {
 			r.mu.Unlock()
 			<-r.slots
 			continue
@@ -599,35 +588,14 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 	}
 	// The first k slots are requested at once; a slot whose reply is late by the hedge
 	// delay (p95 of recent GETs) has the next slot in rank order requested alongside it,
-	// so one slow holder costs a shard's worth of extra traffic, not its timeout. A
-	// relayed holder is somebody's egress: while k direct holders are still live it is
-	// not hedged to, and it serves only once a direct one failed (docs/20 §8, I-327).
+	// so one slow holder costs a shard's worth of extra traffic, not its timeout.
 	out := make(chan res, len(order)) // every launched GET can deliver without a reader
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // the GETs still in flight once k shards are in (or on failure) stop here
-	launched := make([]bool, len(order))
-	relayed := make([]bool, len(order))
-	direct := 0 // direct holders not yet failed
-	for i, slot := range order {
-		relayed[i] = r.peers.Class(c.Placement[slot]) == meta.PathRelay
-		if !relayed[i] {
-			direct++
-		}
-	}
-	pending := 0
-	// pick is the next holder to ask: the first unlaunched in rank order, skipping the
-	// relayed ones while k direct holders are live; -1 when none qualifies.
-	pick := func() int {
-		for i := range order {
-			if !launched[i] && (direct < k || !relayed[i]) {
-				return i
-			}
-		}
-		return -1
-	}
-	launch := func(i int) {
-		slot := order[i]
-		launched[i] = true
+	next, pending := 0, 0
+	launch := func() {
+		slot := order[next]
+		next++
 		pending++
 		go func() {
 			start := time.Now()
@@ -635,8 +603,8 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 			out <- res{slot, b, err, time.Since(start)}
 		}()
 	}
-	for i := pick(); good+pending < k && i >= 0; i = pick() {
-		launch(i)
+	for good+pending < k && next < len(order) {
+		launch()
 	}
 	hedge := time.NewTimer(r.lat.hedgeDelay())
 	defer hedge.Stop()
@@ -644,9 +612,6 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 		select {
 		case x := <-out:
 			pending--
-			if x.err != nil && r.peers.Class(c.Placement[x.slot]) != meta.PathRelay {
-				direct--
-			}
 			switch {
 			case x.err != nil:
 				if errors.Is(x.err, chunk.ErrNotFound) || errors.Is(x.err, chunk.ErrCorrupt) {
@@ -668,12 +633,12 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 					call.publish(k, x.slot, x.b)
 				}
 			}
-			for i := pick(); good+pending < k && i >= 0; i = pick() { // a failure is replaced at once
-				launch(i)
+			for good+pending < k && next < len(order) { // a failure is replaced at once
+				launch()
 			}
 		case <-hedge.C:
-			if i := pick(); i >= 0 {
-				launch(i)
+			if next < len(order) {
+				launch()
 				hedge.Reset(r.lat.hedgeDelay())
 			}
 		case <-ctx.Done():
@@ -688,22 +653,6 @@ func (r *Reader) fetch(ctx context.Context, c meta.Chunk, call *fetchCall) ([]by
 		return nil, fmt.Errorf("%w: decode chunk %x: %w", ErrIO, c.Hash[:8], err)
 	}
 	return data, nil
-}
-
-// relayedHolders reports a chunk whose fetch would use a relayed holder: fewer than k
-// of its live holders are on a direct path.
-func (r *Reader) relayedHolders(h meta.Hash, live map[meta.NodeIdx]bool) bool {
-	c, ok := r.st.GetChunk(h)
-	if !ok {
-		return false
-	}
-	direct := 0
-	for _, n := range c.Placement {
-		if n != 0 && live[n] && r.peers.Class(n) != meta.PathRelay {
-			direct++
-		}
-	}
-	return direct < int(c.K)
 }
 
 // localTargets is this host and its own disks: shards there cost no network.

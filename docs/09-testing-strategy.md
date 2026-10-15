@@ -77,7 +77,7 @@ Rules that keep it honest:
 | `sysfs.FS` (`CreateTemp, OpenFile, Rename, Remove, Open, ReadDir, SyncDir`; file `Write, WriteAt, Sync, Close, Truncate`) + `sysfstest.Fault` | `internal/chunk` and the `internal/vfs` WAL only | ENOSPC, torn writes, failed fsync, crash at each fsync step (`SyncDir` is on the ack path: a PUT is acked only after it; a WAL append is acked only after its fsync) |
 | `FaultNet` (`http.RoundTripper` wrapper keyed src→dst: `Drop`, `Delay`, `Partition`, `ErrorOnce`) | RPC client in tests and under `--dev` | production HTTP code runs in every multi-node test |
 | `cluster.Hooks` (nil-checked func fields, one per crash point C1..C7 of `docs/05`: `BeforeWALSync`, `BeforeClientAck`, `AfterShardTempWritten`, `AfterShardFsync`, `AfterShardRename`, `AfterAllShardsAcked`, `AfterRaftCommit`) | write path | crash injection at every durability point; nil in production, no behaviour change |
-| `tun.Device` (wireguard-go's interface; `tuntest.ChannelTUN` in tests) and loopback UDP sockets | `internal/mesh` | a TUN needs a privilege CI does not have; the Bind, fan-out, pinning, the introduce and the NAT simulator run over channel TUNs and real `127.0.0.1:0` sockets, and the in-process harness never opens a mesh (docs/20) |
+| `tailscale.Client` interface + `tailscale.Fake` | WhoIs authorizer, prober | tailscaled is not available in CI |
 | Raft: `raft.NewInmemTransport`, `raft.NewInmemStore`, `raft.NewInmemSnapshotStore` | cluster tests | raft is not wrapped; its own fakes are used |
 
 Not seams: no mock shard store or mock FSM inside vfs tests (use the real ones over an
@@ -150,8 +150,8 @@ offsets), `TestNFS_SetattrSizeTruncates`, `TestNFS_SetattrOwnerAndTimes`,
 and server limits asserted equal; `TestChunkRPC_HashMismatchRejected`; `TestChunkRPC_PutGetHeadDelete_SizeBoundaries`;
 `TestChunkRPC_DeleteFence`,
 `TestChunkRPC_DeleteFence`, ;
-`TestTable_DeniesStrangerPendingAndRemoved`,
-`TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`;
+`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`,
+`TestWhoIs_DeniesUnknownPeer_AndStableIDMismatch_AndPurge`, ;
 `TestChunkRPC_ReadsAuthBeforeBody_AndClusterHeader`; ;
 `TestListen_RefusesNonLoopbackWithoutAuthorizer`.
 
@@ -172,7 +172,7 @@ Scenarios: `TestCluster_WriteOnA_ReadOnB_ShardsOnDistinctNodes`, `TestCluster_Ki
 `TestCluster_RejoinAfterLongAbsence_SnapshotInstall`, `TestCluster_GCDoesNotDeleteInflightUpload`,
 `TestCluster_SplitBrain_OnlyMajorityCommits`, `TestModelCheck_Long`,
 `TestIDStream_RejectsForeignCluster`, 
-`TestJoin_TokenAndKey`, `TestCluster_UpdateAddr_ChangesRPCAddr`,
+`TestJoin_TokenAndIdentity`, `TestCluster_UpdateAddr_ChangesRPCAddr`,
 `TestRepair_DeadNodeHoldDown_ThenReplaced`, `TestSecondOpen_IsRefused`.
 
 **Data-loss specific** — `TestCrash_AtEveryPoint`: for each hook, start a write of a known
@@ -200,9 +200,9 @@ schedule, covered by the `TestSchedule_*` tests.
 write-tmp-rename ×100, `truncate -s`, concurrent reads during writes, umount, remount,
 `diff -r`.
 
-**`internal/webui`** — handler tests on `testharness.Fabric` with a real table
-authorizer (docs/08): authorization table (member, pending joiner, removed member,
-unknown source) and a body-unread 403; the CSRF header; a path
+**`internal/webui`** — handler tests on `testharness.Fabric` with a real `WhoIsAuthorizer`
+over `tailscale.Fake`: authorization table (member, same-user non-member, other user,
+tagged, unresolved own login, WhoIs down) and a body-unread 403; the CSRF header; a path
 table (`..`, `//`, backslash, root, directory, NUL, missing); Range boundaries
 {0, 1, size−1, size, size+1} plus a chunk-crossing range on a file written at a non-zero
 offset, ETag / 304 / HEAD, read-your-writes on a dirty overlay, content types and the
@@ -273,16 +273,14 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   pure-Go NFSv3 client (with a 60 s call timeout and a fresh connection after any
   operation that overruns 75 s: a reply landing after that client's own timeout wedges its
   receive loop for good, and a follower gateway legitimately holds a metadata operation
-  for up to the 30 s Stale threshold during an election) and the node's RPC from the node's own mesh address (so the authorizer sees a
+  for up to the 30 s Stale threshold during an election) and the node's RPC from the node's own tailnet IP (so WhoIs sees a
   member); it exposes both over a small HTTP API on a published port. The driver runs on the
   host: `Volume` and `Call` go through the worker, kills, restarts and partitions through
   `docker compose kill|start|restart` and `docker network disconnect|connect`, corruption
-  through `/dev/corrupt`. Before the first phase it waits until every node's status shows
-  every device live: a joiner's paths form a few seconds after it serves (docs/20 §5),
-  and a read through a gateway with no path to a holder yet is EIO, no phase's finding.
+  through `/dev/corrupt`.
 - **Live** (`tailraid verify [--report out.html] [--destructive]`): runs on one device of
   the real cluster. `Volume` is the device's own mount path (kernel NFS client), `Call`
-  uses the device's mesh address. Non-destructive by default: transfer, integrity across every
+  uses the device's tailnet IP. Non-destructive by default: transfer, integrity across every
   node's FSM hash, churn, dedup and GC, repair backlog; the only thing a non-destructive
   run changes is the files under its own directory (I-113). `--destructive` adds corruption
   (`/dev/corrupt`, needs `dev.enabled` on the targets) and the steps that change the
@@ -362,9 +360,9 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   it registers nothing, skips the refusal and the drain, deletes behind the cluster's
   back only with `--destructive`, and is skipped where there is no S3 node or no key; I-52,
   I-137, I-138, I-42, I-149, L-104, L-112, L-139); 16 web ui (the browser UI of docs/13
-  driven over HTTP at the node's `web_url`: on the compose rig the driver cannot reach the
-  mesh, so each node's worker, which shares its network namespace, proxies the UI on a
-  published port with the `Host` rewritten to the node's own (docs/13 §2); listings and stats
+  driven over HTTP at the node's `web_url` as a same-user device: on the compose rig every
+  node's fake tailnet gives the nodes and the driver's address, the bridge's gateway, one
+  login, so the driver is a non-member device of the nodes' user (docs/13 §2); listings and stats
   against the corpus model; rename, move and delete batches with a deliberate taken
   name and a protected entry inside, every item reported on its own and the untouched
   ones unchanged; the trash round trip: a delete listed in place with its dates and its
@@ -512,32 +510,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   every node, every node lists it with no value in the reply, a replace through another
   node reads back through the first, a node whose keychain copy is wiped fetches the key,
   the others read it with its setter killed, and a removal reaches every node
-  (I-303..I-307). 25 mesh join (docs/20 §4, §10): a sixth container started late joins by
-  a code printed on n2 while n1, the bootstrap, is killed (the pending row on every
-  node, the join, a first handshake with every member within 10 s, the log caught up); a
-  `token rotate` and a join with the old code (silence, the token message, no pending
-  row); a `reset` and a re-join with the new code keeping the index, address and disks;
-  `node remove` of it (every member's peer dropped within a tick, its probe of a member
-  timing out rather than 403, its own status showing every member `none`); the report's
-  join round-trip table (I-319, I-321, I-317). 26 mesh paths (docs/20 §5, §6): every
-  pair `direct` with a pinned endpoint and a handshake under 2 min; a UDP-only cut
-  between n1 and n2 (iptables, the TCP rules untouched) shows the pair `none` within the
-  dead-path window while Raft and shard traffic through the others continue; the cut
-  lifted, `direct` again within 30 s with no restart; n2 restarted, the others keep
-  their pinned endpoints and re-handshake within 10 s; with the relay built, the cut in
-  place shows `relay via n5` within 20 s, a write on n1 lands shards on n2 through it,
-  n5's relayed bytes grow, and the lifted cut returns the pair to `direct`; a read whose
-  holders sit on LAN and relayed paths asks the LAN holders first (I-323, I-328, I-327);
-  live clusters observe only, the cut needs `--destructive`. 27 mesh nat, on
-  `test/soak/docker-compose.nat.yml` (`make soak-nat`): n1 and n5 public, n2 behind a
-  router container doing plain MASQUERADE (a cone NAT) and n3 behind one with
-  `--random-fully` (symmetric), the routers running the fake NAT-PMP/PCP responder (`soak-client natpmp`, every mapping a DNAT rule) when
-  asked; n2 learns its reflexive endpoint from n1 and publishes it, n2↔n1 is `direct`,
-  n2↔n3 is relayed and a write on n2 places a shard on n3, with the responder on n2 gets
-  a mapping, publishes the external endpoint, the code printed on n2 carries it and n3
-  reaches n2 `direct` through it, and a responder restarted empty makes n2 re-map at the
-  next refresh (I-322, I-323, I-328, I-330); the report records throughput per path
-  class. 28 users and keys, 29 grants on the gateways, 30 secrets per user and 31 audit
+  (I-303..I-307). Phases 25–27 are unused (the mesh of 0.9.x). 28 users and keys, 29 grants on the gateways, 30 secrets per user and 31 audit
   and sessions are docs/21 §10: an invite minted on one node creating a user on another,
   a second device's key, a disabled user and the last admin's lockout; read, write,
   admin and nobody on NFS and the web with the same answer from two gateways, a revoke
@@ -571,7 +544,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   the phases on the rig; `cmd/soak -topology single` runs one node with four
   disks, where phase 13 checks the automatic 2+2 and the disk failure. The sampler also records each sampled node's
   machine vitals (docs/12 §8) and the report charts CPU, memory, memory pressure, disk
-  and network (the mesh interface's rx and tx, I-190) next to the process memory. A phase the environment cannot run is recorded as
+  and network (the tailnet interface's rx and tx, I-190) next to the process memory. A phase the environment cannot run is recorded as
   *skipped (capability)*, never passed.
   On a live cluster a kill is held down: the victim's peers drop it, `/dev/exit` bounces
   it, and once the service manager has it back it drops every peer until the phase's
@@ -621,7 +594,7 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   phase (`/dev/goroutines`; the compose driver appends the worker's own dump), and the charts: throughput by sample interval with phase
   bands and every event marker, node liveness lanes, repair backlog, stored vs logical
   bytes, overlay WAL depth, slots per node, network throughput, latency histograms, the
-  FSM-hash strip, the trash and the pinned cache over time, the snapshot count and each mirror's used bytes over time with a bar per snapshot of what it added to its mirror and the phase's round-trip table (drawn only when a snapshot was taken; the lookdev is `assets/lookdev/soak-snapshots.html`), the mesh's figures (a lane per ordered pair with its path class over the run, each device's mesh traffic, the paths table and the join round-trip table, drawn only on a run whose samples carry paths; the lookdev is `assets/lookdev/soak-mesh.html`), and the data spread across disks (one lane per
+  FSM-hash strip, the trash and the pinned cache over time, the snapshot count and each mirror's used bytes over time with a bar per snapshot of what it added to its mirror and the phase's round-trip table (drawn only when a snapshot was taken; the lookdev is `assets/lookdev/soak-snapshots.html`), and the data spread across disks (one lane per
   target grouped by host, each sample coloured by the target's slot share against its
   expected share, dead hatched, with a host-cap strip underneath that is green while no
   chunk exceeds the cap and amber while `domain_skew > 0`).
@@ -631,15 +604,13 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   into ten.
   Acceptance for M3b includes injecting one deliberate bug and watching the suite go red.
 - **Three local VMs** ([vms.md](vms.md)): one macOS, one Linux and one Windows guest on
-  this Mac, forming a mesh of their own, running the real binaries under launchd,
+  this Mac, joined to a throwaway headscale, running the real binaries under launchd,
   systemd and the SCM with the real NFS and SMB mounts. `make vms-rounds` runs three
-  rounds, each OS running `init` in turn while the other two join by its code, restarts
-  the joiners, moves data across the three mounts, runs `verify --destructive --restarts`
-  from the first node and recovers a one-voter cluster. It is the tier where the TUN on
-  each OS, the privileges of docs/20 §9, the service managers and the kernel mount
-  clients are real (the Windows guest sits behind QEMU's user-mode NAT, so its path is a
-  reflexive one), and the one that would have caught the v0.3.2 join defects (I-76,
-  I-92).
+  rounds, each OS running `init` in turn while the other two join by name, restarts the
+  joiners, moves data across the three mounts, runs `verify --destructive --restarts` from
+  the first node and recovers a one-voter cluster. It is the tier where Tailscale, WhoIs,
+  the service managers and the kernel mount clients are real, and the one that would have
+  caught the v0.3.2 join defects (I-76, I-92).
 
 ## 7. CI
 

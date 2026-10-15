@@ -3,7 +3,7 @@
 # Windows ARM64 ships drivers for NVMe, USB storage and the ramfb display, and nothing
 # for virtio, so the disk is NVMe, both CD-ROMs are USB (the install ISO and the rig's
 # unattend ISO, built by scripts/vms/images.sh with the answer file, the virtio network
-# driver, OpenSSH and the rig's SSH key), and the virtio-net driver is injected
+# driver, OpenSSH, Tailscale and the rig's SSH key), and the virtio-net driver is injected
 # by the answer file. The qemu plugin only knows ide/sata/scsi/virtio disks, so every
 # drive and device is spelled out in qemuargs. The result is tailraid-win.qcow2 plus the
 # UEFI variable store the install wrote (the boot entry lives there).

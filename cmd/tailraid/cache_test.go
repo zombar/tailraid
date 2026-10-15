@@ -17,7 +17,7 @@ import (
 // Invariant: I-162
 func TestCLI_Cache_PinUnpinLs(t *testing.T) {
 	path, cfg := devHome(t)
-	if out, err := run(t, "init", "--config", path, "--token", testToken); err != nil {
+	if out, err := run(t, "init", "--config", path, "--token", "testtoken"); err != nil {
 		t.Fatalf("init: %v\n%s", err, out)
 	}
 	sctx, cancel := context.WithCancel(context.Background())

@@ -28,13 +28,13 @@ BIN := tailraid
 # Prose and markup the spell check and the docs script cover.
 DOCS := README.md CLAUDE.md CHANGELOG.md docs/*.md docs/windows-checklist.md
 WEB_TEXT := internal/webui/src/*.ts internal/webui/src/app.css internal/webui/static/index.html docs/assets/lookdev/*.html
-YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml
-SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh scripts/vms/packer/setup/*.sh test/soak/entry.sh test/soak/router.sh
+YAML := .github/workflows/*.yml .golangci.yml lefthook.yml .yamlfmt test/soak/docker-compose*.yml scripts/vms/headscale/compose.yml
+SHELL_SCRIPTS := scripts/*.sh scripts/vms/*.sh scripts/vms/provision/*.sh scripts/vms/checks/*.sh scripts/vms/packer/setup/*.sh test/soak/entry.sh
 
 # Release matrix. windows/arm64 is included; drop it here if a dependency fails to build.
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-nat soak-full fuzz lint fmt fmt-check vuln \
+.PHONY: build install changelog test test-race test-long test-mount soak soak-single soak-full fuzz lint fmt fmt-check vuln \
         release tag check invariants tidy vendor-check deadcode lint-go lint-cross clean help web web-check web-typecheck \
         spell docs-check actionlint yaml-check yamlfmt shell-check hooks \
         vms-setup vms-images vms-images-clean vms-up vms-round vms-rounds vms-down vms-destroy
@@ -81,9 +81,9 @@ test-mount:
 
 ## soak: five-node docker-compose cluster (two disks each, one diskless voter), scenario driver, report.html + results.jsonl (needs Docker)
 soak: soak-binary
-	cd test/soak && { docker compose --profile late down -v >/dev/null 2>&1; docker compose --profile late build && docker compose up -d; }
+	cd test/soak && { docker compose down -v >/dev/null 2>&1; docker compose up -d --build; }
 	go run ./cmd/soak --profile quick --out report.html --results results.jsonl; \
-	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose --profile late down -v >/dev/null; exit $$status
+	status=$$?; cd test/soak && docker compose exec -T n1 tailraid status; docker compose down -v >/dev/null; exit $$status
 
 ## soak-binary: static linux binaries for the compose images (arch follows the Docker engine)
 soak-binary:
@@ -96,17 +96,11 @@ soak-single: soak-binary
 	go run ./cmd/soak --profile quick --topology single --out report-single.html --results results-single.jsonl; \
 	status=$$?; cd test/soak && docker compose -f docker-compose.single.yml exec -T n1 tailraid status; docker compose -f docker-compose.single.yml down -v >/dev/null; exit $$status
 
-## soak-nat: phase 27 on the NAT rig (two routers, a cone and a symmetric NAT; docs/20 §10)
-soak-nat: soak-binary
-	cd test/soak && docker compose -f docker-compose.nat.yml build && docker compose -f docker-compose.nat.yml up -d
-	go run ./cmd/soak --topology nat --phases 27 --out report-nat.html --results results-nat.jsonl; \
-	status=$$?; cd test/soak && docker compose -f docker-compose.nat.yml down -v >/dev/null; exit $$status
-
 ## soak-full: the long profile (~1 h)
 soak-full: soak-binary
-	cd test/soak && docker compose --profile late build && docker compose up -d
+	cd test/soak && docker compose up -d --build
 	go run ./cmd/soak --profile full --out report.html --results results.jsonl; \
-	status=$$?; cd test/soak && docker compose --profile late down -v >/dev/null; exit $$status
+	status=$$?; cd test/soak && docker compose down -v >/dev/null; exit $$status
 
 ## vms-setup: install the three-VM rig's host tooling (Tart, Packer, QEMU, socket_vmnet; docs/vms.md)
 vms-setup:
@@ -116,7 +110,7 @@ vms-setup:
 vms-images:
 	scripts/vms/images.sh build $(VMS)
 
-## vms-up: the three guests up and named (creates instances from the images on first use)
+## vms-up: headscale and the three guests up and registered (creates instances from the images on first use)
 vms-up:
 	scripts/vms/rig.sh up
 
@@ -128,11 +122,11 @@ vms-round:
 vms-rounds:
 	scripts/vms/rounds.sh
 
-## vms-down: stop the guests (state kept)
+## vms-down: stop the guests and headscale (state kept: the next vms-up needs no registration)
 vms-down:
 	scripts/vms/rig.sh down
 
-## vms-destroy: delete the instances (the golden images stay; vms-images-clean removes them)
+## vms-destroy: delete the instances and headscale's state (the golden images stay; vms-images-clean removes them)
 vms-destroy:
 	scripts/vms/rig.sh destroy
 
@@ -278,25 +272,17 @@ tag:
 	@! git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null || { echo "$(VERSION) exists"; exit 1; }
 	$(MAKE) check
 	scripts/changelog.sh gen $(VERSION)
-	@# main is protected: a changed changelog goes up as a pull request, which this merges.
-	@# CI sees the merge of "changelog: $(VERSION)", builds and signs the release and tags
-	@# the merge commit (scripts/ci-changes.sh, docs/12 §4), so nothing is left to run here.
-	@# The branch is named after the commit, so a rerun after more merges never collides
-	@# with an earlier one, and any failing step stops here with git's own error, back on a
-	@# clean main.
+	@# main is protected: a changed changelog goes up as a pull request first. The branch is
+	@# named after the commit, so a rerun after more merges never collides with an earlier
+	@# one, and any failing step stops here with git's own error, back on a clean main.
 	@if ! git diff --quiet -- CHANGELOG.md; then \
 	  branch=changelog/$(VERSION)-$$(git rev-parse --short HEAD); \
 	  if git checkout -q -b "$$branch" && git add CHANGELOG.md && git commit -q -m "changelog: $(VERSION)" && \
 	     git push -q -u origin "$$branch" && \
 	     gh pr create --base main --head "$$branch" --title "changelog: $(VERSION)" \
-	       --body "CHANGELOG.md for $(VERSION), generated by make tag. Merging it releases $(VERSION): CI builds, signs and tags the merge commit."; then \
+	       --body "CHANGELOG.md for $(VERSION), generated by make tag. Merge it, then on an updated main run: make tag VERSION=$(VERSION)"; then \
 	    git checkout -q main; \
-	    if gh pr merge "$$branch" --merge --delete-branch; then \
-	      git pull -q --ff-only; \
-	      echo "merged the changelog; CI releases $(VERSION) from the merge: https://github.com/zombar/tailraid/actions"; \
-	      exit 0; \
-	    fi; \
-	    echo "the changelog pull request ($$branch) is open but did not merge: merging it releases $(VERSION), nothing else to run."; \
+	    echo "main is protected: the changelog went up as a pull request ($$branch). Merge it, git pull, then run make tag VERSION=$(VERSION) again to cut the tag."; \
 	    exit 2; \
 	  fi; \
 	  echo "make tag: opening the changelog pull request failed (see the error above); nothing was tagged." >&2; \

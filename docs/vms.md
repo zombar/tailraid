@@ -1,10 +1,10 @@
 # Three local VMs: macOS, Linux and Windows forming one volume
 
-The validation tier between the Docker soak rig (docs/09 §6) and a real cluster: three
-guests on one Apple Silicon Mac, one per OS, forming a mesh of their own (docs/20), running the
+The validation tier between the Docker soak rig (docs/09 §6) and a real tailnet: three
+guests on one Apple Silicon Mac, one per OS, joined to a throwaway tailnet, running the
 actual binaries under the actual service managers (launchd, systemd, the SCM) and the
 actual OS mounts (NFS on macOS and Linux, SMB on Windows), forming one tailraid volume.
-A *round* picks one OS to run `tailraid init`; the other two join by its code; then the
+A *round* picks one OS to run `tailraid init`; the other two join it by name; then the
 round restarts the joiners through their service managers, moves data across the three
 mounts, runs `tailraid verify --destructive --restarts` from the first node, adds a disk,
 takes a snapshot, recovers a one-voter cluster and tears everything down. `make
@@ -14,44 +14,27 @@ leader, a follower and the verifier.
 Why it exists: two defects reached a real cluster within an hour of v0.3.2 (a fresh
 follower refusing its leader after every restart, I-92; `join <name>` dialling the LAN,
 I-76). Neither the in-process harness (which skips the Raft peer check) nor the compose
-rig (no restart policy, one network) could see them. This rig can: it is the only tier
-where the TUN of each OS and its privileges (docs/20 §9), a joiner behind a NAT, the
-service managers and the kernel mount clients are real.
+rig (a fake tailnet, no restart policy) could see them. This rig can: it is the only
+tier where Tailscale, WhoIs, the service managers and the kernel mount clients are real.
 
 ## 1. What runs where
 
 | Piece | Where | How |
 |---|---|---|
-| `tailraid-mac` | Tart (Virtualization.framework) | clone of a golden image built by Packer from `ghcr.io/cirruslabs/macos-tahoe-base` |
-| `tailraid-linux` | Tart | clone of a golden image built from `ghcr.io/cirruslabs/ubuntu`; `nfs-common` |
-| `tailraid-win` | QEMU with HVF | a qcow2 overlay of a golden image Packer installed unattended from Microsoft's Windows 11 ARM64 ISO; OpenSSH, the virtio network driver |
+| headscale (the control server) | Docker on the Mac | `scripts/vms/headscale/`: one container, TLS from a CA the rig generates, embedded DERP relay and STUN, MagicDNS `tr.test`, state in a named volume |
+| `tailraid-mac` | Tart (Virtualization.framework) | clone of a golden image built by Packer from `ghcr.io/cirruslabs/macos-tahoe-base`; Tailscale is the open-source daemon from Homebrew |
+| `tailraid-linux` | Tart | clone of a golden image built from `ghcr.io/cirruslabs/ubuntu`; `nfs-common`, Tailscale's package |
+| `tailraid-win` | QEMU with HVF | a qcow2 overlay of a golden image Packer installed unattended from Microsoft's Windows 11 ARM64 ISO; OpenSSH, Tailscale's MSI, the virtio network driver |
 
-(Before docs/20 the rig also ran a headscale container as the guests' control server;
-the mesh needs none: the guests find each other through the join code and the member
-table.)
-
-The Tart guests are bridged onto the host's LAN interface (`VMS_BRIDGE`, `en0` by
-default) and take addresses from the LAN's DHCP, found by ARP (`tart ip --resolver arp`,
-after one ping sweep of the /24 when the host's table does not hold the guest yet: the
-macOS guest announces itself, the Ubuntu guest never does).
-They were on the host's vmnet NAT before 2026-10-14; macOS hands each vmnet consumer a
-/24 of its own (`192.168.64.0/24` to the first, `.65` to the next), and a host route for
-one of those subnets (a static route to the LAN router, a VPN's) sends every packet for
-the guests out the wrong interface, which stranded a build with ARP answering and
-nothing above it. The Windows guest runs behind QEMU's user-mode NAT: it reaches the
-host and, through it, the LAN; its SSH is forwarded to `127.0.0.1:2222` and the mesh's
-UDP port 20483 from every host address to the guest's, and its config names `<host LAN
-address>:20483` as `mesh.endpoint` (`checks/slate.ps1`), so the join code it prints
-carries a reachable endpoint and a Windows-first round works. So the two Tart guests
-reach each other on the LAN (a `lan` path, docs/20 §5), while the Windows
-guest is reached through the host's forward and, from its own side, on the reflexive
-endpoint the others learn from its introduce and its probes: the rig exercises a NAT for
-real.
+The Tart guests sit on the host's vmnet NAT (macOS gives each vmnet consumer its own
+/24; with Docker Desktop running the Tart network is `192.168.65.0/24` and the host is
+`.1`). headscale is reached at that gateway address; the URL is derived from a running
+Tart guest and pinned in `test/vms/run/headscale/server_url` because a registered guest
+keeps dialling the URL it was given. The Windows guest runs behind QEMU's user-mode NAT:
+it reaches the host and, through it, the Tart guests; its SSH is forwarded to
+`127.0.0.1:2222`. Peers that cannot connect directly go through the relay on the host.
 
 Every guest is reached over SSH as `admin` with the key in `test/vms/id_ed25519`
-(of the main checkout whatever worktree runs the rig, or `VMS_STATE`: the key is baked
-into the golden images and the guests run once per host, so the rig's state is one
-per host, never per branch)
 (generated by `make vms-setup`, baked into the golden images). On Windows the SSH shell
 is PowerShell and the session carries the elevated token, so `sc.exe` and `net use` work
 there; a drive mapped in a session is gone with it, which is why the Windows check
@@ -62,12 +45,12 @@ scripts mount, work and unmount inside one SSH command.
 ```
 make vms-setup     # Tart (release tarball), Packer + plugins, QEMU, the SSH key; no sudo
 make vms-images    # the golden images: ~1 min each for mac and linux, 30–60 min for win
-make vms-up        # the three guests
+make vms-up        # headscale and the three guests, registered
 make vms-rounds    # three rounds; summary and reports in docs/reports/vms/<date>/
 make vms-down      # stop everything, keep every state
 ```
 
-Prerequisites: an Apple Silicon Mac, a desktop
+Prerequisites: an Apple Silicon Mac with Docker Desktop running (headscale), a desktop
 session (headless Tart macOS guests need the login keychain unlocked), about 120 GB
 free, and, for the Windows image, the official Windows 11 ARM64 ISO downloaded once by
 hand from <https://www.microsoft.com/software-download/windows11arm64> into
@@ -79,24 +62,25 @@ after checking its published checksum.
 The Windows build (`scripts/vms/packer/windows.pkr.hcl`): Windows ARM64 ships drivers for
 NVMe, USB storage and the `ramfb` display and nothing for virtio, so the disk is NVMe,
 both CD-ROMs are USB (the install ISO and an *unattend* ISO `images.sh` builds with
-`autounattend.xml`, the virtio-net driver from `virtio-win.iso`, the Win32-OpenSSH MSI
-and the rig's public key), and the answer file injects the network driver
+`autounattend.xml`, the virtio-net driver from `virtio-win.iso`, the Win32-OpenSSH and
+Tailscale MSIs and the rig's public key), and the answer file injects the network driver
 during setup, bypasses the TPM and Secure Boot checks, creates `admin`/`admin` with
 auto-login, and runs `firstlogon.ps1` (OpenSSH with PowerShell as its shell and the key
-in `administrators_authorized_keys`, no sleep, no Windows
+in `administrators_authorized_keys`, Tailscale in unattended mode, no sleep, no Windows
 Update, `C:\tailraid` on the PATH, the SMB client settings docs/15 wants). Packer's
 `boot_command` presses Enter through the installer's "press any key" prompt, waits for
-SSH and runs `win-verify.ps1` (build ≥ 26100, sshd automatic). The
+SSH and runs `win-verify.ps1` (build ≥ 26100, sshd automatic, Tailscale present). The
 UEFI variable store the install wrote is kept beside the image: the boot entry lives in
 it, and every instance starts from a copy.
 
 **Persistence.** The guests are created once and reused: `make vms-down` stops the three
-VMs but keeps their disks, and `make vms-up` starts them again; no step is manual. Only
-the tailraid state inside the guests is wiped, by every round's step 2 (the mesh key
-with it: every round joins as a new device). `make vms-destroy` deletes the instances
-but keeps the golden images; the next `vms-up` clones fresh instances and provisions
-them by script (Windows included, over SSH). `make vms-images-clean` deletes the images
-too, and only then is the Windows install run again.
+VMs and headscale but keeps their disks and headscale's volume, and `make vms-up` starts
+them again; the guests reconnect with their stored node keys, so nothing is re-registered
+and no step is manual. Only the tailraid state inside the guests is wiped, by every
+round's step 2. `make vms-destroy` deletes the instances and headscale's state but keeps
+the golden images; the next `vms-up` clones fresh instances and registers them by script
+(Windows included, over SSH). `make vms-images-clean` deletes the images too, and only
+then is the Windows install run again.
 
 ## 3. A round
 
@@ -108,17 +92,17 @@ an hour). A failed step ends the round; teardown still runs.
 | Step | What | Proves |
 |---|---|---|
 | 1 binaries | cross-build darwin, linux and windows arm64 from the working tree, copy in, `tailraid version` on each | the branch under test is what runs |
-| 2 clean slate | every guest's clock set from the host when more than 5 s off (a guest resumed from a saved state keeps the clock it was saved with, and an introduce more than 10 minutes off is refused in silence, docs/20 §4), then `umount`, `uninstall --forget-identity`, `reset --discard-dirty`, wipe the data and disk dirs, write a fresh config (one derived disk, `dev.enabled`, 20 s repair knobs; on macOS in the system home for the root daemon with a copy under the user's home for the user's commands, on Windows with the host's forwarded port as `mesh.endpoint`) | every round starts from nothing |
-| 3 init on FIRST | `init --token`, `install`, `status` until ready, `mount` (under `sudo` on macOS, docs/20 §9); the join code read from `tailraid token` | docs/12 §1 install on that OS, I-125; the privileges of docs/20 §9 on that OS (I-324) |
-| 4 join by code | on the other two in turn: `join <code>` (under `sudo` on macOS and Linux; the first joiner `--voter`, the last one a non-voter until step 7b), `install`, ready, `mount`; then `status` on every guest shows every pair `lan` or `wan`, none `none` | I-321 (the introduce and the join through the tunnel), I-323 (the Windows guest behind a NAT), I-92 (the member check on accept), the mount of each OS (docs/07, docs/15) |
+| 2 clean slate | every guest's clock set from the host when more than 5 s off (a guest resumed from a saved state keeps the clock it was saved with, and a signed request outside `users.clock_skew` is refused, docs/21 §2), then `umount`, `uninstall`, `reset --discard-dirty`, wipe the data and disk dirs, write a fresh config (one derived disk, `dev.enabled`, 20 s repair knobs) | every round starts from nothing |
+| 3 init on FIRST | `init --token`, `install`, `status` until ready, `mount` | docs/12 §1 install on that OS, I-125 |
+| 4 join by name | on the other two in turn: `join tailraid-<first> vmtoken` (the first joiner `--voter`, the last one a non-voter until step 7b), `install`, ready, `mount` | I-76 (a device name resolved through the tailnet), I-92 (the WhoIs member check on accept), the mount of each OS (docs/07, docs/15) |
 | 5 membership | `status --json` on every node: every device and disk live, the automatic policy (2+1 for three disks), identical node tables | docs/03, docs/14 §6, I-94 |
 | 6 restart after join | kill each joiner's service process outright (`pkill -9`, `Stop-Process -Force`) and wait for its service manager to bring it back ready; then `tailraid stop && start` on the non-voter; every node ready and live within 90 s | the #40 class: a fresh follower restarted before its first snapshot has an empty table and must still accept its leader (member seed, I-92); the restart policies of docs/12 §1; I-131. A voter would mask the defect (refused by the leader, it wins an election and fills its own table), which is why the last joiner is a non-voter here |
 | 7 cross-OS data | each node writes a 3 MiB file and a small one through its own mount; every node reads all of them; a second node overwrites 64 KiB at 1 MiB + 7 of another's file and the third reads it back; rename and remove from a third node are visible on the others; mtimes agree | read-modify-write at a non-zero offset across gateways, docs/04, the NFS and SMB views of one volume |
 | 7b promote | `node promote tailraid-<last joiner>` on FIRST; `status` shows every device a voter | docs/02 membership changes; three voters for step 8 |
-| 8 verify | `tailraid verify --destructive --restarts` on the OS after FIRST in the mac, linux, win cycle, through its mount (so the leader is a node the consensus phase can kill); the report is copied back | the whole soak suite (docs/09 §6) against real service managers and mounts; every target runs `dev.enabled` under a restarting manager, so any *skipped (capability)* other than what three guests cannot offer fails the step: phase 4 (parity kills m+1 hosts besides the gateway and wants a fourth still holding slots), 13 (one disk per host), 14 (no diskless host), 15 (no S3 node on the rig) and 6 (only when leadership has moved to the verifier); phases 19, 22, 23 and 25 to 27 skip on a live cluster by design (no mirror before step 9, no copy jobs, no mesh of its own to join, cut or map: observed only) |
-| 8b update --restart | on every node: `update --yes --restart --version <latest release> --allow-downgrade` (resolved from GitHub, signature checked, swapped, the service restarted by its manager), `version` reports the release and the node is ready again, or, when the working tree's snapshot codec is newer than the release's, `serve` refuses the snapshot (`unsupported snapshot version`, docs/12 §6) and the step says so; then `update --rollback --restart` puts the working-tree build back and the node is ready once more; every node live afterwards. Until a mesh release exists the latest release predates the mesh and cannot load a mesh config at all: `update` runs the downloaded binary before swapping, it refuses the `mesh` section, nothing is installed, and the step records that and passes (docs/20: a hard cut) | docs/12 §5: I-61, I-128, I-131 on each OS; the release is named explicitly so the step runs whatever version the working tree carries, and the rollback lands inside the minute after which `serve` forgets the previous binary |
+| 8 verify | `tailraid verify --destructive --restarts` on the OS after FIRST in the mac, linux, win cycle, through its mount (so the leader is a node the consensus phase can kill); the report is copied back | the whole soak suite (docs/09 §6) against real service managers and mounts; every target runs `dev.enabled` under a restarting manager, so any *skipped (capability)* other than what three guests cannot offer fails the step: phase 4 (parity kills m+1 hosts besides the gateway and wants a fourth still holding slots), 13 (one disk per host), 14 (no diskless host), 15 (no S3 node on the rig) and 6 (only when leadership has moved to the verifier); phases 19, 22, 23 and 28 to 31 skip on a live cluster by design (no mirror before step 9, no copy jobs, users of its own) |
+| 8b update --restart | on every node: `update --yes --restart --version <latest release> --allow-downgrade` (resolved from GitHub, signature checked, swapped, the service restarted by its manager), `version` reports the release and the node is ready again, or, when the working tree's snapshot codec is newer than the release's, `serve` refuses the snapshot (`unsupported snapshot version`, docs/12 §6) and the step says so; then `update --rollback --restart` puts the working-tree build back and the node is ready once more; every node live afterwards | docs/12 §5: I-61, I-128, I-131 on each OS; the release is named explicitly so the step runs whatever version the working tree carries, and the rollback lands inside the minute after which `serve` forgets the previous binary |
 | 9 add-disk, export, recover | `node add-disk <dir> --capacity 2G` live, `export <dir>` (`snapshot <dir>` before docs/16), then `stop`, `recover --voters <self>`, `start`: a one-voter cluster that still reads the round's files | docs/14 §2, I-129 |
-| 10 teardown | `umount`, `uninstall --forget-identity`, `reset` on all three | the next round reuses the guests as new devices |
+| 10 teardown | `umount`, `uninstall`, `reset` on all three; headscale keeps the registrations | the next round reuses the guests |
 
 The soak is step 8. `verify` runs the same fourteen phases the compose rig runs, driven
 through the verifying node's OS mount; because the verifier rotates with FIRST, each
@@ -134,9 +118,9 @@ round runs with `SKIP_VERIFY=1` or shows phase 7 failing.
 it was built for. Reverting commit `8191d4a` (the member seed) must fail step 6: the
 crashed non-voter never becomes ready again (checked 2026-10-10 on the two-guest rig:
 step 6 failed with "mac not ready after 90s"; with the fix restored the round passed).
-Reverting `0e611b5` (join by name) failed step 4 with the LAN-address refusal while the rig ran on Tailscale; with the mesh, a join code with the wrong cluster ID must fail step 4 at once (I-321).
+Reverting `0e611b5` (join by name) must fail step 4 with the LAN-address refusal.
 
-**Process rule.** A change under `internal/{cluster,node,rpc,mesh,mount,svc,smbgw}`
+**Process rule.** A change under `internal/{cluster,node,rpc,tailscale,mount,svc,smbgw}`
 or `cmd/tailraid/{cluster,serve,service,recover}.go` runs `make vms-rounds` before `make
 tag`, and §5 is updated in the same pull request.
 
@@ -144,16 +128,19 @@ tag`, and §5 is updated in the same pull request.
 
 - *`tart run` exits at once on the macOS guest*: the host's login keychain is locked
   (no desktop session). Log in on the Mac's console.
-- *The guests have other addresses than last time*: the LAN's DHCP gave them new ones.
-  Nothing to do: the join code carries the current endpoints and a round starts from
-  `reset`. A host without `en0` as its LAN interface runs the rig with `VMS_BRIDGE=<if>`.
-- *`status` shows the Windows guest `none` from a Tart guest*: the host's forward of UDP
-  20483 to the guest is what the others dial (`mesh.endpoint` in its config, written by
-  the slate step from the Tart gateway address); a Tart subnet that moved since the
-  config was written names the wrong gateway, and a round starts from the slate again.
+- *headscale was set up at one address and the guests now sit behind another*: the Tart
+  vmnet subnet moved (Docker Desktop started or stopped between runs). `make vms-destroy`
+  then `vms-up`; the guests re-register.
+- *`tailscale ping` answers only via DERP*: fine for the rig (the relay is on the host,
+  2 ms away); direct paths come and go with STUN through Docker's port mapping.
+- *A guest's Tailscale says "certificate is not standards compliant"*: the server
+  certificate outlived macOS's 398-day cap; `headscale.sh up` renews it a month before
+  expiry, so delete `test/vms/run/headscale/tls/server.crt` and run `vms-up`.
 - *Windows SSH refused*: the first logon is still installing (the Packer build waits up
   to 90 minutes); `test/vms/run/tailraid-win.log` has QEMU's errors, and
   `C:\tailraid\firstlogon.log` inside the guest has the rest.
+- *A pre-auth key is rejected*: keys live an hour; `headscale.sh key` makes a new one and
+  `vm.sh <os> provision` uses it.
 
 ## 5. Results
 
@@ -161,4 +148,3 @@ tag`, and §5 is updated in the same pull request.
 |---|---|---|---|---|
 | 2026-10-10 | v0.4.1-3 | linux, mac | PASS (two guests, `OSES="mac linux"`, verify skipped: the Windows image was not built yet); the member-seed revert failed step 6 as required | |
 | 2026-10-11 | v0.4.6-7 (branch `repair-converges`) | mac, linux, win | mac PASS, win PASS (every step: verify with phases 17 and 18, `update --restart` to v0.4.6 and the rollback, add-disk, snapshot, recover); linux FAIL at step 8 only: its verify runs on the Windows guest, where phase 12's directory listing after the 256 MiB file fails with the SMB error "The specified server cannot perform the requested operation" (also in the 2026-10-10 run: a Windows SMB gateway issue, docs/15). Found on the way: a config this build wrote named `repair.workers`/`repair.rate` unset and the v0.4.6 release's strict loader refused it, so step 8b's downgrade failed until the keys became omit-when-unset (I-61). | [20261011](reports/vms/20261011/summary.md) |
-| 2026-10-14 | v0.8.3-58-gc977014 (branch `mesh-vms-rounds`: the mesh, docs/20) | mac, linux, win | mac PASS, linux PASS (every step: the three guests form a mesh of their own by join code with no control server, the Windows guest behind QEMU's NAT, verify with phases 16–21 and 24, step 8b recording the v0.8.3 release's refusal of a mesh config as the hard cut, add-disk, export, recover); win FAIL at step 8 only: its verify runs on the macOS guest, whose NFS client serves its concurrent READs out of order, so phase 17's sequential read was served 36 of 64 chunks from readahead with 14 prefetches cancelled by late READs taken for seeks (fixed in #292: a stream keeps a frontier and a READ within `ReadAhead` chunks of it stays in the sequence, I-203). Nine runs found, in order: the macOS TUN looping packets to the node's own address, `join` under sudo writing root's config home on Linux, wintun.dll missing at `join` and a fresh Windows address not yet bindable, the disks a sudo join wrote owned by root, the Windows firewall refusing the Raft and RPC port, a restarted node dialling from its LAN address, a live verify setting its secret through the node it then kills, the unprivileged CLI needing the cluster ID from the node on macOS, and `export` on a restarted follower refused with "nothing new to snapshot" (#291). | [20261014](reports/vms/20261014/summary.md) |

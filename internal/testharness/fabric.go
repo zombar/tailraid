@@ -55,7 +55,6 @@ type Fabric struct {
 	targetOf       map[meta.NodeIdx]meta.NodeIdx // host → its disk (docs/14 §9)
 	hostOf         map[meta.NodeIdx]meta.NodeIdx // disk → its host
 	down           map[meta.NodeIdx]bool
-	classes        map[meta.NodeIdx]meta.PathClass // by host: the path class SetClass gave it (LAN by default)
 	full           map[meta.NodeIdx]bool
 	failPutOnce    map[meta.NodeIdx]int
 	failPutWith    map[meta.NodeIdx]error     // every PUT to the node fails with this
@@ -289,43 +288,15 @@ func (f *Fabric) Live() []meta.NodeIdx {
 	return out
 }
 
-// SetClass sets the path class of a host (or its disk's host) as the reader and the
-// flusher see it; every host is a LAN until set (docs/20 §8).
-func (f *Fabric) SetClass(n meta.NodeIdx, c meta.PathClass) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.classes == nil {
-		f.classes = map[meta.NodeIdx]meta.PathClass{}
-	}
-	f.classes[f.hostLocked(n)] = c
-}
-
-// Class is the path class to n's host: a LAN for this host, else what SetClass gave it.
-func (f *Fabric) Class(n meta.NodeIdx) meta.PathClass {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	host := f.hostLocked(n)
-	if host == f.SelfIdx {
-		return meta.PathLAN
-	}
-	if c, ok := f.classes[host]; ok {
-		return c
-	}
-	return meta.PathLAN
-}
-
-// Rank puts this host's own disk first, then the rest by path class and index.
+// Rank puts this host's own disk first, then the rest by index.
 func (f *Fabric) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	out := append([]meta.NodeIdx(nil), nodes...)
-	sort.SliceStable(out, func(i, j int) bool {
+	sort.Slice(out, func(i, j int) bool {
 		if f.host(out[i]) == f.SelfIdx {
-			return f.host(out[j]) != f.SelfIdx
+			return true
 		}
 		if f.host(out[j]) == f.SelfIdx {
 			return false
-		}
-		if a, b := f.Class(out[i]), f.Class(out[j]); a != b {
-			return a < b
 		}
 		return out[i] < out[j]
 	})

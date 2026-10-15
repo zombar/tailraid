@@ -34,9 +34,7 @@ const (
 	OpSecretKeyInit Op = 23 // {ID, Now}: the cluster key's ID, only while none is set (I-305)
 	OpSecretPut     Op = 24 // {Secret{Name, KeyID, Nonce, Cipher, By}, Now}: a sealed value (I-306)
 	OpSecretDelete  Op = 25 // {Name, All, Now}: one secret, or every one and the key ID
-	// docs/20, codec 13
-	OpPendingAdd    Op = 26 // {Key, Now} → Result.Addr: a join in progress gets its address (I-319)
-	OpPendingDelete Op = 27 // {Key, Now}: the leader's expiry of a pending row
+	// 26 and 27 are unused (the mesh of 0.9.x, withdrawn).
 	// Users, groups and permissions (docs/21, codec 14).
 	OpInvite  Op = 28 // {Delete, Bootstrap, Invite, Now}: an invite minted or removed (I-343)
 	OpUser    Op = 29 // {Action, Name, Code, Key, Label, KeyID, Target, Now}: a user from an invite, a key added or removed, a state change (I-342)
@@ -65,13 +63,8 @@ const (
 	// commandVersionV10: a SetAttr whose Flags carry the roms library kind (docs/18 §9,
 	// I-277); an older binary rejects the third bit.
 	commandVersionV10 = 10
-	// commandVersionV13: the mesh (docs/20, I-326): pending rows, a device row's key,
-	// port and endpoints, the subnet in MetaSet; 12 is sealed S3's (docs/10 §4.7)
-	commandVersionV13 = 13
-	// CodecMesh is the codec every member reads once the mesh release is installed; the
-	// release starts a new cluster, so nothing gates it against an older member.
-	CodecMesh = commandVersionV13
-	// commandVersionV14: users, groups and permissions (docs/21, I-349). A codec-14 entry
+	// commandVersionV14: users, groups and permissions (docs/21, I-349); 12 is sealed S3's
+	// (docs/10 §4.7) and 13 is unused (the mesh of 0.9.x, withdrawn). A codec-14 entry
 	// is a header (the actor and the System flag) around a lower-version entry, so every
 	// op can carry its actor without a second layout; the users ops 28–32 and a secret
 	// with its user are written at inner version 14. An older binary refuses the entry.
@@ -130,9 +123,6 @@ type (
 		ClusterID [16]byte
 		JoinToken string
 		CreatedAt int64
-		// MeshSubnet sets the cluster subnet once, at init (docs/20 §3, codec 13); the
-		// first host is init's node, so the next to allocate becomes the second.
-		MeshSubnet string
 	}
 	NodeUpsert struct {
 		Node Node // Idx 0 allocates; otherwise updates mutable fields of an existing node
@@ -359,9 +349,6 @@ type Command struct {
 	SecretKeyInit *SecretKeyInit
 	SecretPut     *SecretPut
 	SecretDelete  *SecretDelete
-	// docs/20, codec 13
-	PendingAdd    *PendingAdd
-	PendingDelete *PendingDelete
 	// docs/21, codec 14
 	InviteOp  *InviteOp
 	UserOp    *UserOp
@@ -383,21 +370,6 @@ func innerCodec(c Command) uint8 {
 		return commandVersionV14
 	}
 	return baseCodec(c)
-}
-
-// needsV13 reports whether c is a mesh op or carries a mesh field (docs/20): a pending
-// row op, a device row with a key, port or endpoints, or a MetaSet with the subnet.
-func needsV13(c Command) bool {
-	switch c.Op { //nolint:exhaustive // every other op is below codec 13
-	case OpPendingAdd, OpPendingDelete:
-		return true
-	case OpNodeUpsert:
-		return c.NodeUpsert != nil && hasMeshFields(&c.NodeUpsert.Node)
-	case OpMetaSet:
-		return c.MetaSet != nil && c.MetaSet.MeshSubnet != ""
-	default:
-		return false
-	}
 }
 
 // needsV7 reports whether c is a snapshot command or registers a mirror (docs/16): an
@@ -491,7 +463,6 @@ type Result struct {
 	Victims []GCVictim
 	SnapID  SnapID // SnapshotBegin's new row
 	Version uint64 // a RewriteStart Commit's new version, the gateway's rewrite id (I-223)
-	Addr    string // PendingAdd's address (docs/20 §4, codec 13)
 	Err     error  // nil or one of the sentinel errors
 }
 
@@ -533,8 +504,6 @@ func baseCodec(c Command) uint8 {
 	v3 := (c.Op == OpSetPlacement && c.SetPlacement != nil && c.SetPlacement.Expect != nil) ||
 		(c.Op == OpGCDelete && c.GCDelete != nil && c.GCDelete.Limit != 0)
 	switch {
-	case needsV13(c):
-		return commandVersionV13
 	case needsV11(c):
 		return commandVersionV11
 	case needsV10(c):
@@ -577,8 +546,7 @@ func encodeCommand(c Command) []byte {
 func encodeBody(w *writer, c Command, v uint8) {
 	v3, v4, v5 := v == commandVersionV3, v == commandVersionV4 || v == commandVersionV6 || v == commandVersionV10, v == commandVersionV5 || v == commandVersionV9
 	v9 := v == commandVersionV9
-	v13 := v == commandVersionV13
-	v2 := v == commandVersionV2 || v == commandVersionV7 || v13 // a mirror row carries its Host as a disk row does
+	v2 := v == commandVersionV2 || v == commandVersionV7 // a mirror row carries its Host as a disk row does
 	w.u8(v)
 	w.u8(uint8(c.Op))
 	switch c.Op {
@@ -593,15 +561,9 @@ func encodeBody(w *writer, c Command, v uint8) {
 		w.b = append(w.b, p.ClusterID[:]...)
 		w.str(p.JoinToken)
 		w.i64(p.CreatedAt)
-		if v13 {
-			w.str(p.MeshSubnet)
-		}
 	case OpNodeUpsert:
 		p := mustPayload(c.NodeUpsert, c.Op)
 		writeNode(w, &p.Node, v2)
-		if v13 {
-			writeMeshFields(w, &p.Node)
-		}
 	case OpNodeSetState:
 		p := mustPayload(c.NodeSetState, c.Op)
 		w.u16(uint16(p.Idx))
@@ -779,14 +741,6 @@ func encodeBody(w *writer, c Command, v uint8) {
 		w.str(p.Name)
 		w.bool(p.All)
 		w.i64(p.Now)
-	case OpPendingAdd:
-		p := mustPayload(c.PendingAdd, c.Op)
-		w.b = append(w.b, p.Key[:]...)
-		w.i64(p.Now)
-	case OpPendingDelete:
-		p := mustPayload(c.PendingDelete, c.Op)
-		w.b = append(w.b, p.Key[:]...)
-		w.i64(p.Now)
 	case OpInvite, OpUser, OpGroup, OpGrant, OpSession:
 		writeUsersPayload(w, c)
 	default:
@@ -816,7 +770,7 @@ func DecodeCommand(b []byte) (Command, error) {
 		c.System = r.bool()
 		v = r.u8()
 	}
-	if r.err == nil && (v < commandVersion || v > commandVersionV14 || v == 12 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet
+	if r.err == nil && (v < commandVersion || v > commandVersionV14 || v == 12 || v == 13 || (v == commandVersionV14 && !wrapped)) { // 12 is sealed S3's, never written yet; 13 was the withdrawn mesh
 		return c, fmt.Errorf("meta: unsupported command version %d", v)
 	}
 	c.Op = Op(r.u8())
@@ -847,15 +801,13 @@ func DecodeCommand(b []byte) (Command, error) {
 		legal = c.Op == OpSetAttr
 	case commandVersionV11:
 		legal = c.Op == OpSecretKeyInit || c.Op == OpSecretPut || c.Op == OpSecretDelete
-	case commandVersionV13:
-		legal = c.Op == OpPendingAdd || c.Op == OpPendingDelete || c.Op == OpNodeUpsert || c.Op == OpMetaSet
 	case commandVersionV14:
 		legal = isUsersOp(c.Op) || c.Op == OpSecretPut
 	default:
 		legal = c.Op != OpTrash && c.Op != OpRestore && c.Op != OpPurge && c.Op != OpSetShardSums &&
 			c.Op != OpSnapshotBegin && c.Op != OpSnapshotEnd && c.Op != OpSnapshotDelete && c.Op != OpSnapshotImport &&
 			c.Op != OpSecretKeyInit && c.Op != OpSecretPut && c.Op != OpSecretDelete &&
-			c.Op != OpPendingAdd && c.Op != OpPendingDelete && !isUsersOp(c.Op)
+			!isUsersOp(c.Op)
 	}
 	if !legal {
 		return c, fmt.Errorf("meta: op %d in command version %d", c.Op, v)
@@ -871,15 +823,9 @@ func DecodeCommand(b []byte) (Command, error) {
 		copy(p.ClusterID[:], r.take(16))
 		p.JoinToken = r.str()
 		p.CreatedAt = r.i64()
-		if v == commandVersionV13 {
-			p.MeshSubnet = r.str()
-		}
 		c.MetaSet = p
 	case OpNodeUpsert:
 		c.NodeUpsert = &NodeUpsert{Node: readNode(r, v >= commandVersionV2)}
-		if v == commandVersionV13 {
-			readMeshFields(r, &c.NodeUpsert.Node)
-		}
 		if r.err == nil && (c.NodeUpsert.Node.Kind == KindMirror) != (v == commandVersionV7) {
 			return c, fmt.Errorf("meta: a mirror row is written in command version 7 and only it (got version %d)", v) // never smuggled to an older reader (I-184)
 		}
@@ -994,16 +940,6 @@ func DecodeCommand(b []byte) (Command, error) {
 		}
 	case OpSecretDelete:
 		c.SecretDelete = &SecretDelete{Name: r.str(), All: r.bool(), Now: r.i64()}
-	case OpPendingAdd:
-		p := &PendingAdd{}
-		copy(p.Key[:], r.take(len(p.Key)))
-		p.Now = r.i64()
-		c.PendingAdd = p
-	case OpPendingDelete:
-		p := &PendingDelete{}
-		copy(p.Key[:], r.take(len(p.Key)))
-		p.Now = r.i64()
-		c.PendingDelete = p
 	case OpInvite, OpUser, OpGroup, OpGrant, OpSession:
 		readUsersPayload(r, &c)
 	default:
@@ -1066,18 +1002,14 @@ func EncodeResult(res Result) []byte {
 		w.u8(res.Victims[i].M)
 		w.nodeIdxs(res.Victims[i].Placement)
 	}
-	if res.SnapID != 0 || res.Version != 0 || res.Addr != "" {
-		// appended only when set: only SnapshotBegin sets SnapID (codec 7), only a
-		// RewriteStart Commit sets Version (codec 9) and only PendingAdd sets Addr
-		// (codec 13), so a node that reads the extra fields is the only kind that ever
-		// receives them
+	if res.SnapID != 0 || res.Version != 0 {
+		// appended only when set: only SnapshotBegin sets SnapID (codec 7) and only a
+		// RewriteStart Commit sets Version (codec 9), so a node that reads the extra
+		// fields is the only kind that ever receives them
 		w.u32(uint32(res.SnapID))
 	}
-	if res.Version != 0 || res.Addr != "" {
+	if res.Version != 0 {
 		w.u64(res.Version)
-	}
-	if res.Addr != "" {
-		w.str(res.Addr)
 	}
 	return w.b
 }
@@ -1108,9 +1040,6 @@ func DecodeResult(b []byte) (Result, error) {
 	}
 	if r.err == nil && r.pos < len(r.b) {
 		res.Version = r.u64()
-	}
-	if r.err == nil && r.pos < len(r.b) {
-		res.Addr = r.str()
 	}
 	if err := r.done(); err != nil {
 		return Result{}, err
