@@ -67,6 +67,8 @@ tailraid install
 tailraid mount
 ```
 
+`init` also prints an admin invite. Until someone uses it the volume has no users and every mount sees everything; once the first user exists, each device's mount needs a binding to a user before it shows anything, so follow [the first admin](docs/guide-users.md#the-first-admin) when you are ready to share the volume with other people.
+
 Write a file on one device and read it on any other. `tailraid status` shows the whole cluster and prints the browser UI's address; `tailraid dashboard` opens it.
 
 `init` needs no options: each disk's budget follows its free space, and the redundancy follows the devices and disks the cluster has ([redundancy](docs/guide-capacity.md#redundancy)). To give tailraid a disk other than the data directory, list it under `node.disks` in the config before `init`, or add it later with `tailraid node add-disk`.
@@ -76,6 +78,7 @@ Write a file on one device and read it on any other. `tailraid status` shows the
 | Guide | What it covers |
 |---|---|
 | [Using the volume](docs/guide-using.md) | the browser UI, the trash, folder flags, pinned folders, search, posters for the Media tab |
+| [Users and permissions](docs/guide-users.md) | the first admin, binding each device, inviting people, groups and grants, two users for one person, browser sign-in, personal and system secrets |
 | [Snapshots and mirrors](docs/guide-snapshots.md) | adding a mirror, the schedule, browse, restore and revert, reading a mirror without the cluster |
 | [Capacity, redundancy and voters](docs/guide-capacity.md) | adding devices, disks and S3 buckets, draining, the policy, voters and a cheap always-on voter |
 | [Moving from 0.9.x to 0.10](docs/guide-moving-to-0.10.md) | taking a 0.9.x cluster down on each OS, a new cluster on Tailscale, adopting the mirror and restoring from it |

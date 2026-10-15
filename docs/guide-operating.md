@@ -4,11 +4,11 @@ Secrets, the command reference, the configuration file, backup and recovery, upg
 
 ## Secrets
 
-The volume needs a few credentials: an S3 bucket's key and the TMDB key. They live in one encrypted store inside the cluster state, so you enter each once, on any device, and every device has it. `secret set <name>` is the one way in, and whatever uses a secret checks it when it does: `node add-s3` refuses a bucket its pair does not open, `media scrape` asks TMDB once before a run and a device's probe shows a bucket its key no longer opens as not live. A value comes from stdin only, never from a flag, and no command prints one back. The key that opens the store sits in each device's keychain (the macOS Keychain, the Windows Credential Manager, the Linux Secret Service, or a 0600 file under the data directory where there is none), and a device that joins fetches it from another member over the tailnet.
+The volume needs a few credentials: an S3 bucket's key and the TMDB key. They live in one encrypted store inside the cluster state, so you enter each once, on any device, and every device has it. `secret set <name> --system` is the one way in (an admin's, once the volume has users; without `--system` a user's secret is their own, [guide-users.md](guide-users.md#secrets-and-the-audit-log)), and whatever uses a secret checks it when it does: `node add-s3` refuses a bucket its pair does not open, `media scrape` asks TMDB once before a run and a device's probe shows a bucket its key no longer opens as not live. A value comes from stdin only, never from a flag, and no command prints one back. The key that opens the store sits in each device's keychain (the macOS Keychain, the Windows Credential Manager, the Linux Secret Service, or a 0600 file under the data directory where there is none), and a device that joins fetches it from another member over the tailnet.
 
 ```sh
 tailraid secret ls                     # s3/offsite/access_key, s3/offsite/secret_key, tmdb: when, by which device, readable here
-tailraid secret set tmdb < key.txt     # from a file, or typed without echo at a terminal
+tailraid secret set tmdb --system < key.txt   # from a file, or typed without echo at a terminal
 tailraid secret rm --all               # if every device lost the key: start over, then enter each again
 ```
 
@@ -23,7 +23,8 @@ key (`user key invite`, then `user key add <code>` there). Folders are shared wi
 `grant <path> kim read|write|admin` or to a group (`@family`), nothing is shared until
 it is, and the browser signs a person in from the link `tailraid web login` prints.
 Every change that matters is signed by the person who made it and written to an audit
-log you read with `audit ls`. Design: [docs/21-users.md](21-users.md).
+log you read with `audit ls`. The setup step by step, and two users for one person, are
+in [guide-users.md](guide-users.md); the design is [docs/21-users.md](21-users.md).
 
 ## Command reference
 

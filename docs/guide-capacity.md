@@ -38,13 +38,13 @@ tailraid volume grow jockey/1 auto     # follow free space again
 A bucket at any S3 provider (Backblaze B2, Cloudflare R2, Hetzner, a MinIO on one of your devices) can hold shards like a disk on a host of its own, which gives the volume an off-site copy. Devices read and write it directly; reads use it only when a device that holds a shard is down.
 
 ```sh
-tailraid secret set s3/offsite/access_key   # each value typed without echo, or piped in: never a flag
-tailraid secret set s3/offsite/secret_key
+tailraid secret set s3/offsite/access_key --system   # each value typed without echo, or piped in: never a flag
+tailraid secret set s3/offsite/secret_key --system
 tailraid node add-s3 offsite --endpoint https://s3.eu-central-003.backblazeb2.com \
   --bucket my-bucket --prefix tailraid --capacity 1T
 ```
 
-`add-s3` takes the two secrets from the store, then writes, reads back and deletes a test object, so a key without those rights is refused before anything is registered. Every device has the key through the store, and each one needs it: a device that leads without it treats the bucket as dead and after `fill_after` copies the bucket's shards back onto disks. After a rotation, `secret set` the two again; every device's probe picks the new pair up within a probe interval. Choose a provider with cheap or free egress: repairs read from the bucket when a device is down. Use a key the provider scopes to that one bucket, since every device can open it.
+`add-s3` takes the two secrets from the store, then writes, reads back and deletes a test object, so a key without those rights is refused before anything is registered. Every device has the key through the store, and each one needs it: a device that leads without it treats the bucket as dead and after `fill_after` copies the bucket's shards back onto disks. After a rotation, `secret set --system` the two again; every device's probe picks the new pair up within a probe interval. Choose a provider with cheap or free egress: repairs read from the bucket when a device is down. Use a key the provider scopes to that one bucket, since every device can open it.
 
 A bucket holds one shard of every stripe, so it stores 1/k of the volume (half at 2+1, a quarter at 4+2). It is written when you write, probed with a cheap HEAD every 30 s by each device, listed once a day by the leader, and read only while a device holding a needed shard is down. A bucket never votes: it keeps your data safe while a device is away, not the volume writable. For that, pair it with a [diskless voter](#a-cheap-always-on-voter). Details: [docs/10-s3.md](10-s3.md) §4.
 

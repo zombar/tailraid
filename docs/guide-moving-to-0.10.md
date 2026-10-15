@@ -100,10 +100,10 @@ tailraid status             # every device live, the policy grown with the disks
 If the cluster had an S3 bucket or a TMDB key, enter them again (values from stdin) and add the bucket under its old name, with the flags of [guide-capacity.md](guide-capacity.md):
 
 ```sh
-tailraid secret set s3/b2/access_key
-tailraid secret set s3/b2/secret_key
+tailraid secret set s3/b2/access_key --system
+tailraid secret set s3/b2/secret_key --system
 tailraid node add-s3 b2 --endpoint <url> --region <region> --bucket <bucket> --prefix <prefix> --capacity 1T
-tailraid secret set tmdb
+tailraid secret set tmdb --system
 ```
 
 The old bucket objects under the prefix belong to no chunk of the new cluster, and the leader's daily S3 sweep deletes them.
