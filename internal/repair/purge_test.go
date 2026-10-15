@@ -1,6 +1,7 @@
 package repair_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -161,5 +162,39 @@ func TestGC_PurgeTrash_RetentionUnderUsers(t *testing.T) {
 	}
 	if _, inTrash := f.FSM.GetInodeAny(ino); inTrash {
 		t.Fatal("root still in the trash")
+	}
+}
+
+// capture records every command it proposes through p.
+type capture struct {
+	p    meta.Proposer
+	cmds []meta.Command
+}
+
+func (c *capture) Propose(ctx context.Context, cmd meta.Command) (meta.Result, uint64, error) {
+	c.cmds = append(c.cmds, cmd)
+	return c.p.Propose(ctx, cmd)
+}
+
+// Before the first user a purge carries neither an actor nor the System flag: either is
+// the codec-14 header, which a member on an older codec refuses, and the retention purge
+// would then fail every pass of a rolling upgrade and hold up the chunk GC behind it.
+//
+// Invariant: I-157, I-349
+func TestGC_PurgeTrash_NoStampBeforeUsers(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	_, ino := trashedChunk(t, f)
+	prop := &capture{p: f}
+	gc := repair.NewGC(f.FSM, prop, f, f, f.Clk, time.Minute, nil)
+	if n, err := gc.PurgeTrash(ctx, f.Clk.Now().UnixNano()+1, 0); err != nil || n != 1 {
+		t.Fatalf("purged %d: %v", n, err)
+	}
+	if _, inTrash := f.FSM.GetInodeAny(ino); inTrash {
+		t.Fatal("root still in the trash")
+	}
+	for _, c := range prop.cmds {
+		if c.Actor != 0 || c.System {
+			t.Fatalf("a purge before the first user carried actor %d system %v", c.Actor, c.System)
+		}
 	}
 }

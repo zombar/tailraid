@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -38,6 +40,66 @@ func fabricRead(t *testing.T, fs *vfs.FS, name string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// fabricUsers makes kim the first admin and lee a plain user on the fabric.
+func fabricUsers(t *testing.T, f *testharness.Fabric) (kim, lee meta.UserIdx) {
+	t.Helper()
+	now := f.Clk.Now().UnixNano()
+	f.MustApply(meta.Command{Op: meta.OpInvite, InviteOp: &meta.InviteOp{Bootstrap: true, Invite: meta.Invite{Hash: meta.HashCode("aaaaaaaaaa"), Name: "kim", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	kim = meta.UserIdx(f.MustApply(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "kim", Code: "aaaaaaaaaa", Key: [32]byte{1}, Now: now}}).Ino)
+	f.MustApply(meta.Command{Op: meta.OpInvite, Actor: kim, InviteOp: &meta.InviteOp{Invite: meta.Invite{Hash: meta.HashCode("bbbbbbbbbb"), Name: "lee", Kind: meta.InviteUser, ExpiresAt: now + int64(time.Hour)}, Now: now}})
+	lee = meta.UserIdx(f.MustApply(meta.Command{Op: meta.OpUser, UserOp: &meta.UserOp{Action: meta.UserCreate, Name: "lee", Code: "bbbbbbbbbb", Key: [32]byte{2}, Now: now}}).Ino)
+	return kim, lee
+}
+
+// Once users exist the restore ops write as the user who signed them: an admin restores
+// a tree, copies a version and reverts a file; a plain user without a role there is
+// refused by the FSM and nothing lands. Before, they wrote through the node's System
+// view, which the FSM admits only under /.tailraid, so an admin's `snapshot restore`
+// and `versions --copy` failed with "permission denied" (2026-10-15).
+//
+// Invariant: I-348
+func TestAdminOps_RestoreUnderUsers(t *testing.T) {
+	f := testharness.NewFabric(t, 3, 2, 1)
+	fs := f.FS()
+	fs.SetFlusher(f.Flusher())
+	old := []byte("the report as it was")
+	fabricWrite(t, fs, "/docs/report.txt", old)
+	if err := f.Flusher().FlushAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	src := testharness.NewMirrors()
+	m := f.AddMirror(src, "pike/m1")
+	f.TakeSnapshot(src, m, "s1")
+	fs.SetMirrors(src)
+	fabricWrite(t, fs, "/docs/report.txt", []byte("rewritten since"))
+	if err := f.Flusher().FlushAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	kim, lee := fabricUsers(t, f)
+	a := &adminOps{fs: fs}
+	ctx := context.Background()
+	if _, err := a.restoreOp(ctx, rpc.AdminOp{Op: "snapshot_restore", Actor: lee, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt", To: "/old"}); err == nil {
+		t.Fatal("a plain user restored into a folder they hold no role on")
+	}
+	if _, err := f.FSM.Resolve([]string{"old", "report.txt"}); err == nil {
+		t.Fatal("the refused restore left a file")
+	}
+	for _, op := range []rpc.AdminOp{
+		{Op: "snapshot_restore", Actor: kim, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt", To: "/old"},
+		{Op: "versions_copy", Actor: kim, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt", As: "copy.txt"},
+		{Op: "versions_revert", Actor: kim, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt"},
+	} {
+		if _, err := a.restoreOp(ctx, op); err != nil {
+			t.Fatalf("%s by an admin: %v", op.Op, err)
+		}
+	}
+	for _, p := range []string{"/old/report.txt", "/docs/copy.txt", "/docs/report.txt"} {
+		if got := fabricRead(t, fs, p); !bytes.Equal(got, old) {
+			t.Fatalf("%s holds %q", p, got)
+		}
+	}
 }
 
 // The restore and versions ops run on the node asked, through its vfs: snapshot restore

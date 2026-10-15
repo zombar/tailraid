@@ -25,12 +25,14 @@ type VersionsReply struct {
 }
 
 // restoreOp answers versions, versions_revert, versions_copy and snapshot_restore on the
-// node asked, through its vfs as the gateways' writes (docs/12 §11, docs/16 §6).
+// node asked, through its vfs as the gateways' writes (docs/12 §11, docs/16 §6), as the
+// user who signed the op (docs/21 §4, I-348).
 func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 	p := path.Join("/", op.Path)
+	fs := a.actorFS(op)
 	switch op.Op {
 	case "versions":
-		vs, off, err := a.fs.Versions(ctx, p)
+		vs, off, err := fs.Versions(ctx, p)
 		if err != nil {
 			return nil, err
 		}
@@ -39,7 +41,7 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		if op.Mirror == "" || op.Name == "" {
 			return nil, errors.New("versions --revert needs <mirror>/<name>")
 		}
-		n, err := a.fs.RevertFile(ctx, snapshotPath(op.Mirror, op.Name, p), p)
+		n, err := fs.RevertFile(ctx, snapshotPath(op.Mirror, op.Name, p), p)
 		if err != nil {
 			return nil, err
 		}
@@ -49,7 +51,7 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			return nil, errors.New("versions --copy needs <mirror>/<name> and --as <name>")
 		}
 		dst := path.Join(path.Dir(p), op.As)
-		rep, err := a.fs.RestoreSnapshot(ctx, snapshotPath(op.Mirror, op.Name, p), dst)
+		rep, err := fs.RestoreSnapshot(ctx, snapshotPath(op.Mirror, op.Name, p), dst)
 		if err != nil {
 			return nil, err
 		}
@@ -69,11 +71,21 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		}
 		dst = path.Join(path.Dir(dst), op.As)
 	}
-	rep, err := a.fs.RestoreSnapshot(ctx, snapshotPath(op.Mirror, op.Name, p), dst)
+	rep, err := fs.RestoreSnapshot(ctx, snapshotPath(op.Mirror, op.Name, p), dst)
 	if err != nil {
 		return nil, err
 	}
 	return restoreReply(dst, rep), nil
+}
+
+// actorFS is the vfs an admin op writes through: the signer's view once users exist, so
+// the FSM checks the signer's role on every proposal; before the first user an op is
+// unsigned and the node's own view writes, as the gateways did then.
+func (a *adminOps) actorFS(op rpc.AdminOp) *vfs.FS {
+	if op.Actor == 0 {
+		return a.fs
+	}
+	return a.fs.As(op.Actor)
 }
 
 // ReplyPaths bounds the skipped and refused paths a restore's reply lists: a restore run
