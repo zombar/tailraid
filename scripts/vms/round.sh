@@ -98,7 +98,15 @@ all_direct() {
 data() {
   local os=$1; shift
   case "$os" in
-    win) vm_run_script win "$C/data.ps1" "T:" "$@" | tr -d '\r' ;;
+    win)
+      # the script's exit status, not tr's: a pipeline reports its last command's, which
+      # once recorded a failed write as ok
+      local out rc
+      out=$(vm_run_script win "$C/data.ps1" "T:" "$@")
+      rc=$?
+      printf '%s\n' "$out" | tr -d '\r'
+      return $rc
+      ;;
     *) vm_run_script "$os" "$C/data.sh" "$(mount_path "$os")" "$@" ;;
   esac
 }
