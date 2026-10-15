@@ -215,3 +215,38 @@ func TestIntroduce_ReplyDecode_Table(t *testing.T) {
 		t.Fatal("a reply decoded as a request")
 	}
 }
+
+// An answered introduce holds its source for a second as a failed one does: a code
+// holder mints pending rows no faster than one a second, and a joiner, which resends
+// every IntroduceRetry, never waits (I-319).
+func TestIntroduceServer_SuccessRateLimit(t *testing.T) {
+	token := NewToken()
+	var cluster [16]byte
+	key := IntroduceKey(token, cluster)
+	clk := clock.NewFake(time.Unix(1_800_000_000, 0))
+	f := &fakeIntroducer{addr: netip.MustParsePrefix("100.70.3.5/24")}
+	s := newIntroduceServer(cluster, func() []byte { return key }, f, clk)
+	src := netip.MustParseAddrPort("203.0.113.9:4000")
+	ctx := context.Background()
+	frame := func() []byte {
+		k, _ := GenerateKey()
+		return encodeIntroduce(introduceReq{cluster: cluster, key: k.Public(), at: clk.Now().Unix()}, key)
+	}
+	first := frame()
+	if s.handle(ctx, first, src) == nil {
+		t.Fatal("the first introduce was not answered")
+	}
+	if s.handle(ctx, first, src) == nil {
+		t.Fatal("the same key again (a joiner's resend) was not answered")
+	}
+	if s.handle(ctx, frame(), src) != nil {
+		t.Fatal("another key within the second was answered")
+	}
+	if s.handle(ctx, frame(), netip.MustParseAddrPort("203.0.113.10:4000")) == nil {
+		t.Fatal("another source was held")
+	}
+	clk.Advance(introduceHold)
+	if s.handle(ctx, frame(), src) == nil {
+		t.Fatal("the introduce after the hold was not answered")
+	}
+}

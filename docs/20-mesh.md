@@ -110,9 +110,13 @@ one of 16,384; `init --subnet` overrides it. A device that still runs Tailscale 
 happens to sit inside it (about one chance in 16,384 per peer) is unreachable from that
 device while the mesh is up, which is what the override is for.
 
-**Allocation.** The leader gives each device an address at its introduce (§4):
-`Meta.NextMeshHost++` within the subnet, hosts 1–254, never reused (as `Idx` is never
-reused), `init`'s node taking .1; `status` warns at 200. `Node.Addr` is the mesh address
+**Allocation.** The leader gives each device an address at its introduce (§4): the
+lowest free host of the subnet, hosts 1–254, `init`'s node taking .1. A host is free
+while no device row holds it and no pending row does: a member's address is never reused
+(as `Idx` is never reused, and a removed row keeps its address), but a pending row that
+expired, was deleted or was ended by a token rotation frees its host, so a code holder
+who introduces strangers' keys burns nothing for good. `Meta.NextMeshHost` is the
+high-water mark `status` warns on at 200. `Node.Addr` is the mesh address
 and never changes for the life of the row: the exception that let a non-member source
 change an address (under Tailscale, an IP change) and the address watch in `serve` are
 gone; `update_addr` is an admins' member op the leader refuses for any row that carries
@@ -160,9 +164,11 @@ introduce, key}` to the leader, which allocates the address (§3) and proposes a
 **pending row** (op 26, `PendingAdd{Key, Addr, At}`), waits for its own apply, and
 answers 38 bytes: `0x10 ‖ addr ‖ prefix ‖ HMAC`. The reply is shorter than the request,
 so the socket is not an amplifier; a bad HMAC gets silence; the same key introduced
-again, with a pending or an active row, gets that row's address back (I-319). A pending
-row expires after 10 min on the leader's tick (op 27, `PendingDelete`), and a token
-rotation invalidates later introduces, never a pending row.
+again, with a pending or an active row, gets that row's address back (I-319). A source
+gets one answered introduce a second as it gets one failed one. A pending row expires
+after 10 min on the leader's tick (op 27, `PendingDelete`), and a token rotation ends
+every pending row at once with the introduces that would follow: what the old code
+bought, the old code loses.
 
 Why not a shared "lobby" key derived from the token, so that the join needs no frame of
 its own? Because wireguard-go's responder breaks it three ways: two joiners under one
@@ -191,9 +197,13 @@ response names the leader.
 **A re-join after `reset`** is an introduce with the device's existing key: the leader
 finds the active row by key and answers its address, and the `/v1/join` from that
 address under the new node ID re-keys the row to the new ID and replaces the stale Raft
-server (docs/02's `replaceStaleServer`, by address: the address is cryptographic, so no
-identity compare is needed). The device keeps its index, its address and its disks. A
-removed row's key gets a fresh pending row and a fresh address.
+server (by the row's previous node ID, and by address for the keyless rigs: the address
+is cryptographic, so no identity compare is needed), whatever Raft port the device comes
+back with. The device keeps its index, its address and its disks; the FSM holds one
+active device row per key, so a re-join never leaves two. A removed
+row's key gets a fresh pending row and a fresh address, and every member takes the
+device back as a peer: what a removal retires is the row (its index and its address),
+never the key.
 
 ## 5. Paths: candidates, fan-out, pinning
 
@@ -446,9 +456,10 @@ round-trip table.
 - **I-319** — An introduce is accepted only with a valid HMAC under the current token
   and a timestamp within 10 minutes; it yields a pending row with an address the leader
   allocated, the same address again for a key that already has a pending or active row,
-  and silence otherwise; after a failure a source gets one attempt per second; the reply
-  is shorter than the request; a token rotation invalidates later introduces and never a
-  pending row, and a pending row expires after 10 minutes.
+  and silence otherwise; a source gets one attempt per second, answered or failed; the
+  reply is shorter than the request; a token rotation invalidates later introduces and
+  ends every pending row, a pending row expires after 10 minutes, and a host a pending
+  row held is allocated again while a member's address never is.
 - **I-320** — The mesh subnet is derived from the cluster ID by a pure function, the same
   on every node, unless set at `init`; addresses are allocated by the leader from
   `Meta.NextMeshHost`, never reused, `init`'s node taking .1; a row's address never
@@ -517,11 +528,11 @@ round-trip table.
 | Invariant | Tests |
 |---|---|
 | I-316 | `TestKey_GeneratePublicParse`, `TestKey_KeychainLoadCreateForget` |
-| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`, `TestMembershipOp_KicksPeerRefresh`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
-| I-318 | `TestTableAuthorizer_Table`, `TestTableAuthorizer_RemovedRowBeatsSeed`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh` |
-| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
-| I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire` |
-| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
+| I-317 | `TestMesh_PeersExchangePackets`, `TestMeshPeers_FromRowsAndPending`, `TestMembershipOp_KicksPeerRefresh`, `TestMeshPeers_RemovedKeyReturnsAsPending`; stub `TestStub_I_317` for the listeners on a real interface (the VM rig) |
+| I-318 | `TestTableAuthorizer_Table`, `TestTableAuthorizer_RemovedRowBeatsSeed`, `TestTable_DeniesStrangerPendingAndRemoved`, `TestWebUI_Authorize_MembersOnly`, `TestMemberOp_UpdateAddrRefusedOnMesh`, `TestNodeUpsert_RefusesDuplicateKeyOrAddr` |
+| I-319 | `TestIntroduceServer_Table`, `TestIntroduce_ReplyDecode_Table`, `TestIntroduce_EndToEnd`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire`, `TestErrorCode_MeshSentinels`, `TestIntroduceServer_SuccessRateLimit`, `TestPendingApply_HostsReusedAndRotationEndsPending` |
+| I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire`, `TestPendingApply_HostsReusedAndRotationEndsPending` |
+| I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`, `TestJoin_RejoinNewRaftPortKeepsOneRow`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
 | I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`, `TestCandidates_ConfiguredNameResolvedAtPublish`; stub `TestStub_I_322` for the publishing on a real interface |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |

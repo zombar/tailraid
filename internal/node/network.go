@@ -278,11 +278,15 @@ func (nw *network) external() string {
 func meshPeers(rows []meta.Node, pending []meta.Pending, self mesh.Key) []mesh.Peer {
 	var out []mesh.Peer
 	seen := map[mesh.Key]bool{}
-	// a removed row's key is no peer whatever another source (the member seed, which
-	// may lag the table) says of it: its next packet dies at the tunnel (I-318)
+	// a removed row is no peer whatever another source (the member seed, which may lag
+	// the table) says of it: a copy of the row (its index or its address) dies at the
+	// tunnel (I-318). The key itself is not retired: the device may be reset and join
+	// again, with a fresh pending row and a fresh address (docs/20 §4)
+	retiredIdx, retiredAddr := map[meta.NodeIdx]bool{}, map[string]bool{}
 	for i := range rows {
 		if r := &rows[i]; r.Kind == meta.KindDevice && r.State == meta.Removed && !r.Key.IsZero() {
-			seen[mesh.Key(r.Key)] = true
+			retiredIdx[r.Idx] = true
+			retiredAddr[r.Addr] = true
 		}
 	}
 	for i := range rows {
@@ -291,7 +295,7 @@ func meshPeers(rows []meta.Node, pending []meta.Pending, self mesh.Key) []mesh.P
 			continue
 		}
 		k := mesh.Key(r.Key)
-		if k == self || seen[k] {
+		if k == self || seen[k] || retiredIdx[r.Idx] || retiredAddr[r.Addr] {
 			continue
 		}
 		addr, err := netip.ParseAddr(r.Addr)
@@ -304,7 +308,7 @@ func meshPeers(rows []meta.Node, pending []meta.Pending, self mesh.Key) []mesh.P
 	for i := range pending {
 		p := &pending[i]
 		k := mesh.Key(p.Key)
-		if k == self || seen[k] {
+		if k == self || seen[k] || retiredAddr[p.Addr] {
 			continue
 		}
 		addr, err := netip.ParseAddr(p.Addr)

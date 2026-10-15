@@ -300,6 +300,11 @@ func (a *applier) metaSet(c *MetaSet) error {
 		st.Meta.ClusterID = c.ClusterID
 	}
 	if c.JoinToken != "" {
+		if c.JoinToken != st.Meta.JoinToken {
+			// a rotation ends every join in progress with the token that admitted it
+			// (docs/20 §4, I-319): a pending row is what the old code bought
+			clear(st.Pending)
+		}
 		st.Meta.JoinToken = c.JoinToken
 	}
 	if c.MeshSubnet != "" {
@@ -360,6 +365,17 @@ func (a *applier) nodeUpsert(c *NodeUpsert) (Result, error) {
 			if cur.ID == n.ID && cur.State != Removed {
 				n.Idx = idx
 				break
+			}
+		}
+	}
+	if n.Kind == KindDevice && !n.Key.IsZero() {
+		// one active device per key (docs/20 §3): the key is the device, so a fresh row
+		// that repeats another's is refused and a row keeps its own; the address needs no
+		// rule of its own, since pendingAdd hands out each host once and a re-join under
+		// the key lands on the key's row
+		for idx, cur := range st.Nodes {
+			if idx != n.Idx && cur.Kind == KindDevice && cur.State != Removed && cur.Key == n.Key {
+				return Result{}, ErrExist // device idx holds that key
 			}
 		}
 	}

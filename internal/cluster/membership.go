@@ -101,6 +101,23 @@ func (n *Node) replaceStaleServer(req rpc.JoinRequest, key meta.MeshKey, addr ra
 	return idx, nil
 }
 
+// removeServer drops a Raft server by ID if the configuration holds it.
+func (n *Node) removeServer(id string) error {
+	cfg := n.Raft.GetConfiguration()
+	if err := cfg.Error(); err != nil {
+		return raftErr("read configuration", err)
+	}
+	for _, s := range cfg.Configuration().Servers {
+		if string(s.ID) == id {
+			if err := n.Raft.RemoveServer(s.ID, 0, 10*time.Second).Error(); err != nil {
+				return raftErr("remove stale raft server", err)
+			}
+			n.log.Info("replaced the raft server of a re-joined device", "old", id)
+		}
+	}
+	return nil
+}
+
 // Join implements the leader side of `tailraid join` (docs/02 §Bootstrap and join).
 func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse, error) {
 	n.memberMu.Lock()
@@ -151,11 +168,28 @@ func (n *Node) Join(ctx context.Context, req rpc.JoinRequest) (rpc.JoinResponse,
 		if req.SeenFrom != "" {
 			nd.Endpoints = []string{req.SeenFrom}
 		}
+		var staleID string // the row's previous node ID, whose Raft server a re-join replaces
 		switch {
-		case func() bool { row, ok := n.FSM.NodeByKey(key); nd.Addr = row.Addr; return ok }():
+		case func() bool {
+			row, ok := n.FSM.NodeByKey(key)
+			if ok {
+				// a re-join after reset (docs/20 §4): the key is the device, so the row is
+				// its row whatever node ID or Raft port it comes back with
+				nd.Addr, nd.Idx = row.Addr, row.Idx
+				if row.ID != req.NodeID {
+					staleID = row.ID
+				}
+			}
+			return ok
+		}():
 		case func() bool { p, ok := n.FSM.PendingByKey(key); nd.Addr = p.Addr; return ok }():
 		default:
 			return rpc.JoinResponse{}, ErrNoIntroduce
+		}
+		if staleID != "" {
+			if err := n.removeServer(staleID); err != nil {
+				return rpc.JoinResponse{}, err
+			}
 		}
 		if req.Addr != "" && req.Addr != nd.Addr {
 			return rpc.JoinResponse{}, fmt.Errorf("%w: the key's address is %s, not %s", ErrBadMemberOp, nd.Addr, req.Addr)

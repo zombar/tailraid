@@ -107,9 +107,13 @@ func (j *fakeJoiner) Join(_ context.Context, req JoinRequest) (JoinResponse, err
 		}
 		copy(key[:], b)
 	}
-	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{
+	nd := meta.Node{
 		ID: req.NodeID, Name: req.Name, Kind: meta.KindDevice, TSStableID: req.TSStableID, Addr: req.Addr, RaftPort: req.RaftPort, RPCPort: req.RPCPort, Voter: req.Voter, Key: key,
-	}}})
+	}
+	if row, ok := j.app.fsm.NodeByKey(key); ok {
+		nd.Idx = row.Idx // a re-join after reset lands on the key's row, as the leader's Join does (docs/20 §4)
+	}
+	res, _ := j.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: nd}})
 	if res.Err != nil {
 		return JoinResponse{}, res.Err
 	}
@@ -511,7 +515,7 @@ func TestJoin_TokenAndKey(t *testing.T) {
 	// a keyless join with the token, where the server allows one (the harness, the fake)
 	req.Token, req.NodeID = "tok", "n3"
 	jr, err = c.Join(ctx, e.addr, req)
-	if err != nil || jr.NodeIdx != 4 || jr.Volume.K != 2 { // 3 went to the re-join above
+	if err != nil || jr.NodeIdx != 3 || jr.Volume.K != 2 { // the re-join above kept row 1 under its key (docs/20 §4)
 		t.Fatalf("keyless join: %+v %v", jr, err)
 	}
 	// join through a follower is redirected

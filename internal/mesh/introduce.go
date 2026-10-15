@@ -35,7 +35,9 @@ const (
 	IntroduceRetry = 2 * time.Second
 	// IntroduceTimeout is how long it keeps trying.
 	IntroduceTimeout = 60 * time.Second
-	// introduceHold is the pause a source gets after a failed introduce.
+	// introduceHold is the pause a source gets after an introduce, answered or failed: a
+	// joiner retries every IntroduceRetry, so it never waits, and a code holder cannot
+	// mint pending rows faster than one a second (I-319).
 	introduceHold = time.Second
 	// introduceWorkers bounds the proposals one node runs for introduces at once.
 	introduceWorkers = 16
@@ -128,13 +130,20 @@ type introduceServer struct {
 	intro   Introducer
 	clk     clock.Clock
 
-	mu   sync.Mutex
-	held map[netip.Addr]time.Time // sources paused after a failure, until
-	sem  chan struct{}
+	mu       sync.Mutex
+	held     map[netip.Addr]time.Time // sources paused after a failure, until
+	answered map[netip.Addr]answered  // sources answered within introduceHold: the key, for a repeat
+	sem      chan struct{}
+}
+
+// answered is the last introduce a source got an answer to.
+type answered struct {
+	key   Key
+	until time.Time
 }
 
 func newIntroduceServer(cluster [16]byte, keyFn func() []byte, intro Introducer, clk clock.Clock) *introduceServer {
-	return &introduceServer{cluster: cluster, keyFn: keyFn, intro: intro, clk: clk, held: map[netip.Addr]time.Time{}, sem: make(chan struct{}, introduceWorkers)}
+	return &introduceServer{cluster: cluster, keyFn: keyFn, intro: intro, clk: clk, held: map[netip.Addr]time.Time{}, answered: map[netip.Addr]answered{}, sem: make(chan struct{}, introduceWorkers)}
 }
 
 // handle answers one introduce, or nothing: silence is the answer to every refusal.
@@ -165,6 +174,9 @@ func (s *introduceServer) handle(ctx context.Context, pkt []byte, src netip.Addr
 	if d := now.Sub(time.Unix(req.at, 0)); d > IntroduceSkew || d < -IntroduceSkew {
 		return fail()
 	}
+	if s.answeredOther(src.Addr(), req.key, now) {
+		return nil // one answered key a second per source; the same key again is answered (a joiner's resend)
+	}
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -175,6 +187,7 @@ func (s *introduceServer) handle(ctx context.Context, pkt []byte, src netip.Addr
 	if err != nil || !addr.IsValid() || !addr.Addr().Is4() {
 		return nil // not the sender's fault: no hold, no answer
 	}
+	s.noteAnswered(src.Addr(), req.key, now.Add(introduceHold))
 	return encodeReply(key, addr, req)
 }
 
@@ -190,6 +203,36 @@ func (s *introduceServer) heldNow(a netip.Addr, now time.Time) bool {
 		return false
 	}
 	return true
+}
+
+// answeredOther reports whether a was answered for another key within the hold: a code
+// holder mints pending rows no faster than one a second, while a joiner resending its own
+// key is answered every time (I-319).
+func (s *introduceServer) answeredOther(a netip.Addr, key Key, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last, ok := s.answered[a]
+	if !ok {
+		return false
+	}
+	if !now.Before(last.until) {
+		delete(s.answered, a)
+		return false
+	}
+	return last.key != key
+}
+
+func (s *introduceServer) noteAnswered(a netip.Addr, key Key, until time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.answered) >= maxHeld {
+		for k, v := range s.answered {
+			if !until.Before(v.until) {
+				delete(s.answered, k)
+			}
+		}
+	}
+	s.answered[a] = answered{key: key, until: until}
 }
 
 func (s *introduceServer) hold(a netip.Addr, until time.Time) {
