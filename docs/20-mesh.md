@@ -216,7 +216,8 @@ authenticated packet (roaming). tailraid's `conn.Bind` adds the part a coordinat
 server used to do: finding that endpoint.
 
 **Candidates.** Each row carries `Endpoints`, at most 8: every non-loopback,
-non-link-local interface address of the device with its mesh port; `mesh.endpoint`, a
+non-link-local interface address of the device outside Tailscale's space (below) with
+its mesh port; `mesh.endpoint`, a
 public `host:port` the operator knows (a port forward, the cloud voter's own address; a
 name is resolved by the device that publishes it, each time it publishes, so a DDNS
 name reaches the peers as the addresses it points at today, and a peer never resolves
@@ -228,6 +229,20 @@ relay or is still fanning out to gets none, since the relay's address is not the
 caller's); and, with §7, the port a router mapped. A node publishes
 its candidates with the member op `update_endpoints`, for its own row only, at most once
 a minute and only when they changed (I-322).
+
+**Never over Tailscale.** A device that still runs Tailscale could carry the mesh inside
+the tailnet: its tailnet addresses look like any interface address, and a subnet route
+or an exit node sends a LAN or public candidate into `tailscale0`. That doubles the
+encapsulation, hands the path's fate to a second control plane and hides it from the
+path class, so the mesh never takes such a path. Tailscale's space is 100.64.0.0/10
+(where the mesh's own subnets also live, which already kept it out of the candidates)
+and `fd7a:115c:a1e0::/48`, its IPv6 ULA. No address in either is a candidate. The bind
+sends nothing to an address in either, nor to a destination the host routes from an
+address in either: it asks the kernel which source a connected UDP socket to that
+destination would use, and caches the answer for 30 s per address, so a subnet route
+or an exit node that appears is honoured within that time. It drops every packet
+arriving from either space before WireGuard sees it, so roaming never pins one. An
+older row's candidate in that space is never dialled (I-336).
 
 **Fan-out.** A peer with no session has the endpoint `fanout:<idx>`: a packet to it is
 sent to every candidate at once. Only handshake initiations and keepalives are ever sent
@@ -503,10 +518,15 @@ round-trip table.
   presents the same key, keeps the row's index, address and disks and replaces the
   stale Raft server; a code whose cluster ID is not the cluster's is refused at once.
 - **I-322** — A device's endpoint candidates are its non-loopback, non-link-local
-  interface addresses with its mesh port, `mesh.endpoint`, the reflexive addresses it
+  interface addresses outside Tailscale's space (I-336) with its mesh port, `mesh.endpoint`, the reflexive addresses it
   learned from `seen_from` (its introduce, every `/health` reply, which reports a
   direct path's source only) and a mapped port, deduplicated and at most 8; `update_endpoints` (as `set_version`, the other unsigned member op) is accepted for the caller's own row
   only, and published at most once a minute and only when the set changed.
+- **I-336** — No candidate is an address in Tailscale's space (100.64.0.0/10,
+  `fd7a:115c:a1e0::/48`); the bind sends no packet to an address in that space or to a
+  destination whose route's source address lies in it (re-checked within 30 s), and
+  drops every packet whose source lies in it before WireGuard or a control-frame
+  handler sees it.
 - **I-323** — A peer without a session is sent to every candidate at once and pinned to
   the source of the first authenticated packet; data is never fanned out; a peer not
   heard from (no packet, no handshake) for 75 s returns to fan-out within 10 s; two devices behind
@@ -578,6 +598,7 @@ round-trip table.
 | I-320 | `TestSubnet_FromClusterID_Table`, `TestSubnet_HostAddr_Bounds`, `TestPendingApply_Table`, `TestMesh_IntroduceJoinExpire`, `TestPendingApply_HostsReusedAndRotationEndsPending` |
 | I-321 | `TestJoinCode_RoundTrip`, `TestJoinCode_Endpoints_Table`, `TestJoinCode_Refusals_Table`, `TestIntroduce_EndToEnd`, `TestMesh_IntroduceJoinExpire`, `TestJoin_TokenAndKey`, `TestCLI_Join_NoFlags`, `TestJoin_RejoinNewRaftPortKeepsOneRow`; stub `TestStub_I_321` for the join over a real interface (the VM rig) |
 | I-322 | `TestLocalEndpoints_NeverLoopbackOrMesh`, `TestPendingApply_Table`, `TestMembers_UpdateEndpointsOwnRowOnly`, `TestMesh_IntroduceJoinExpire`, `TestCandidates_OrderDedupCap`, `TestCandidates_ConfiguredNameResolvedAtPublish`; stub `TestStub_I_322` for the publishing on a real interface |
+| I-336 | `TestUsableCandidate_Table`, `TestBind_NeverSendsOverTailscale`, `TestBind_DropsFromTailscale`, `TestBind_TailscaleRouteRecheckedAfterTTL` |
 | I-323 | `TestBind_FanoutPinsOnFirstAuthenticatedPacket`, `TestBind_FanoutWithoutCandidates`, `TestMesh_DeadPathReturnsToFanout`, `TestMesh_KeepaliveIsOnByDefault`, `TestNAT_ConeToCone_Punches`, `TestNAT_ConeToSymmetric_Punches`, `TestNAT_SymmetricToSymmetric_NeedsARelay` |
 | I-324 | `TestCommands_PerOS`, `TestApply_OptionalStepsMayFail`, `TestCreateTUN_NeedsAPrivilege`, `TestExecRunner_ReportsTheCommand`, `TestSvc_MeshPrivileges`, `TestEnsureDLL_WritesOnceAndReplaces`, `TestEnsureDLL_NothingOffWindows`, `TestMountOwner_Table`, `TestPrivilege_GiveBackAndSudoOwner` |
 | I-334 | `TestFirewall_InstallsChainFirst`, `TestFirewall_TickPutsJumpBackOnTop`, `TestFirewall_ChainDriftRewritten`, `TestFirewall_CloseRemoves`, `TestFirewall_NoIptablesNothingRuns`, `TestFirewall_FailureIsReported`, `TestSvc_MeshPrivileges`, `TestConfig_MeshFirewallDefault`, `TestNewKeeper_OnlyLinuxAndOn` |

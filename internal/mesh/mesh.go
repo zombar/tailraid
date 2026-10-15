@@ -647,7 +647,8 @@ func decodeHexKey(s string) (Key, error) {
 }
 
 // LocalEndpoints are this host's candidates (I-322): every non-loopback, non-link-local
-// address of an interface that is up, with the mesh port, IPv4 first.
+// address of an interface that is up and outside Tailscale's space (I-336), with the
+// mesh port, IPv4 first.
 func LocalEndpoints(port uint16) ([]netip.AddrPort, error) {
 	pfx, err := LocalPrefixes()
 	if err != nil {
@@ -686,15 +687,12 @@ func LocalPrefixes() ([]netip.Prefix, error) {
 				continue
 			}
 			ip = ip.Unmap()
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
+			if !usableCandidate(ip) { // the mesh's own space and Tailscale's among the refused (I-336)
 				continue
 			}
 			bits, _ := ipn.Mask.Size()
 			if ip.Is4() && len(ipn.Mask) == 16 {
 				bits -= 96
-			}
-			if meshSpace.Contains(ip) {
-				continue
 			}
 			out = append(out, netip.PrefixFrom(ip, bits))
 		}
