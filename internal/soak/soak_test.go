@@ -928,9 +928,18 @@ func allPhasesRig(t *testing.T) (c *testharness.Cluster, env *harnessEnv, all []
 // phase 28 reuses the admin. The phases pass as they do without users: an admin's own
 // trash purge, restore, secret and web traffic are admitted, and nothing a phase
 // proposes is refused for want of an actor.
+// Under -short the run is phase 0 and the phases that write as the admin through the
+// paths users broke (the trash purge in 5 and 8, the browser in 16, restores in 19, the
+// index in 21, secrets in 24) with the baseline and the users phases: two whole runs of
+// every phase overran the package's ten minutes on the Windows race runner; the long
+// run takes them all.
+//
 // Invariant: I-362
 func TestSoak_AllPhasesUnderUsersAgainstHarness(t *testing.T) {
 	c, env, all := allPhasesRig(t)
+	if testing.Short() {
+		all = []string{"1", "5", "8", "16", "19", "21", "24", "28", "29", "30", "31"}
+	}
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
 	run := &soak.Run{Env: env, Profile: harnessProfile(), Out: &jsonl, Rng: rng, Seed: seed, Phases: soak.StandardPhases(all...), UsersFirst: true}
@@ -951,7 +960,7 @@ func TestSoak_AllPhasesUnderUsersAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 27 || sum.Phases[0].Name != "0 users first" { // the all-phases run's 26 after phase 0
+	if sum.Failed != 0 || len(sum.Phases) != len(all)+1 || sum.Phases[0].Name != "0 users first" { // phase 0, then the phases asked for
 		t.Fatalf("summary: %d failed, %d phases, first %q", sum.Failed, len(sum.Phases), sum.Phases[0].Name)
 	}
 	if !c.Leader().Node.FSM.Enforcing() {
