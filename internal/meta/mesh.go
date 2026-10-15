@@ -21,7 +21,8 @@ const (
 	// MeshFirstHost and MeshMaxHost bound a /24's host numbers; init's node takes the first.
 	MeshFirstHost = 1
 	MeshMaxHost   = 254
-	// PendingTTL is how long a pending row lives without its join (I-319).
+	// PendingTTL is how long a pending row lives without its join (I-319); a token
+	// rotation ends every pending row at once.
 	PendingTTL = 10 * time.Minute
 	// MaxPending bounds the table a flood of introduces could grow.
 	MaxPending = 512
@@ -72,8 +73,10 @@ func (m Meta) MeshPrefix() netip.Prefix {
 }
 
 // pendingAdd answers a key with its address: the active device row that holds the key,
-// the pending row it already has, or a fresh pending row at the next host number
-// (I-319, I-320). The address comes back in Result.Addr.
+// the pending row it already has, or a fresh pending row at the lowest free host
+// (I-319, I-320). A host is free when no device row but a removed one and no pending row
+// holds it: a pending row that expired or was deleted frees its host, a member's address
+// is retired for good (docs/20 §3). The address comes back in Result.Addr.
 func (a *applier) pendingAdd(c *PendingAdd) (Result, error) {
 	if c == nil || c.Key.IsZero() {
 		return Result{}, ErrBadCommand
@@ -94,19 +97,49 @@ func (a *applier) pendingAdd(c *PendingAdd) (Result, error) {
 	if len(st.Pending) >= MaxPending {
 		return Result{}, ErrPendingFul
 	}
-	host := max(st.Meta.NextMeshHost, MeshFirstHost)
-	if host > MeshMaxHost {
+	host, ok := st.freeMeshHost(sub)
+	if !ok {
 		return Result{}, ErrMeshFull
 	}
 	b := sub.Masked().Addr().As4()
 	b[3] = host
 	addr := netip.AddrFrom4(b).String()
-	st.Meta.NextMeshHost = host + 1
+	if host >= st.Meta.NextMeshHost {
+		st.Meta.NextMeshHost = host + 1 // the high-water mark status warns on
+	}
 	if st.Pending == nil {
 		st.Pending = map[MeshKey]*Pending{}
 	}
 	st.Pending[c.Key] = &Pending{Key: c.Key, Addr: addr, At: a.clock(c.Now)}
 	return Result{Addr: addr}, nil
+}
+
+// freeMeshHost is the lowest host of sub above init's no device row (removed ones
+// included: a member's address is never reused) and no pending row holds; false when
+// none is left.
+func (st *State) freeMeshHost(sub netip.Prefix) (uint8, bool) {
+	var used [MeshMaxHost + 1]bool
+	mark := func(addr string) {
+		a, err := netip.ParseAddr(addr)
+		if err != nil || !sub.Contains(a) {
+			return
+		}
+		used[a.As4()[3]] = true
+	}
+	for _, n := range st.Nodes {
+		if n.Kind == KindDevice {
+			mark(n.Addr)
+		}
+	}
+	for _, p := range st.Pending {
+		mark(p.Addr)
+	}
+	for h := MeshFirstHost + 1; h <= MeshMaxHost; h++ { // .1 is init's node (docs/20 §3)
+		if !used[h] {
+			return uint8(h), true
+		}
+	}
+	return 0, false
 }
 
 func (a *applier) pendingDelete(c *PendingDelete) error {

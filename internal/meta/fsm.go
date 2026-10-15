@@ -300,6 +300,11 @@ func (a *applier) metaSet(c *MetaSet) error {
 		st.Meta.ClusterID = c.ClusterID
 	}
 	if c.JoinToken != "" {
+		if c.JoinToken != st.Meta.JoinToken {
+			// a rotation ends every join in progress with the token that admitted it
+			// (docs/20 §4, I-319): a pending row is what the old code bought
+			clear(st.Pending)
+		}
 		st.Meta.JoinToken = c.JoinToken
 	}
 	if c.MeshSubnet != "" {

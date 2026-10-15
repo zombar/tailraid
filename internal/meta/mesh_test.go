@@ -3,6 +3,7 @@ package meta
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -159,23 +160,69 @@ func TestPendingApply_Table(t *testing.T) {
 			t.Fatalf("%d endpoints (%q): %v", len(eps), eps[0][:min(4, len(eps[0]))], r.Err)
 		}
 	}
-	// the last host, then none
-	f.st.Meta.NextMeshHost = MeshMaxHost
-	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: k3, Now: 30}}); r.Err != nil || r.Addr != "100.70.3.254" {
-		t.Fatalf("the last host: %+v", r)
+	// the lowest free host: k2's row went, so .3 is free again while .2 is pike's
+	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: k3, Now: 30}}); r.Err != nil || r.Addr != "100.70.3.3" {
+		t.Fatalf("the freed host: %+v", r)
 	}
-	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: meshKey(4), Now: 31}}); !errors.Is(r.Err, ErrMeshFull) {
-		t.Fatalf("past the last host: %v", r.Err)
+}
+
+// Hosts: the lowest free one is allocated, a pending row that expired or was deleted
+// frees its host, a member's address (removed or not) is never reused, the subnet
+// fills at 253 pending rows and empties again as they go, and a token rotation ends
+// every pending row at once (docs/20 §3, §4).
+// Invariant: I-319, I-320
+func TestPendingApply_HostsReusedAndRotationEndsPending(t *testing.T) {
+	f := NewFSM()
+	apply := func(c Command) Result { t.Helper(); return applyOne(t, f, c) }
+	if r := apply(Command{Op: OpMetaSet, MetaSet: &MetaSet{JoinToken: "abcdefghabcdefgh", MeshSubnet: "100.70.3.0/24"}}); r.Err != nil {
+		t.Fatal(r.Err)
 	}
-	// the pending table is bounded
-	f.st.Meta.NextMeshHost = 2
-	for i := range MaxPending + 2 {
-		var k MeshKey
-		k[0], k[1], k[2] = 0xff, byte(i>>8), byte(i)
-		r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: k, Now: 40}})
-		if len(f.Pending()) >= MaxPending && !errors.Is(r.Err, ErrPendingFul) && !errors.Is(r.Err, ErrMeshFull) {
-			t.Fatalf("pending row %d: %v", i, r.Err)
+	// a member at .2 and a removed member at .3: neither host is ever handed out again
+	for i, st := range []NodeState{Active, Removed} {
+		r := apply(Command{Op: OpNodeUpsert, NodeUpsert: &NodeUpsert{Node: Node{ID: fmt.Sprintf("m%d", i), Name: fmt.Sprintf("m%d", i), Kind: KindDevice, Addr: fmt.Sprintf("100.70.3.%d", i+2), RaftPort: 1, RPCPort: 2, Key: meshKey(byte(i + 1))}}})
+		if r.Err != nil {
+			t.Fatal(r.Err)
 		}
+		if st == Removed {
+			if r := apply(Command{Op: OpNodeSetState, NodeSetState: &NodeSetState{Idx: NodeIdx(r.Ino), State: Removed, Now: 1}}); r.Err != nil {
+				t.Fatal(r.Err)
+			}
+		}
+	}
+	key := func(i int) MeshKey {
+		var k MeshKey
+		k[0], k[1], k[2] = 0xee, byte(i>>8), byte(i)
+		return k
+	}
+	// every host from .4 to .254: 251 pending rows, then the subnet is full
+	for i := range 251 {
+		r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: key(i), Now: 10}})
+		if r.Err != nil || r.Addr != fmt.Sprintf("100.70.3.%d", i+4) {
+			t.Fatalf("pending row %d: %+v", i, r)
+		}
+	}
+	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: key(900), Now: 11}}); !errors.Is(r.Err, ErrMeshFull) {
+		t.Fatalf("a full subnet: %v", r.Err)
+	}
+	// one row expires: its host, and no other, is handed out again
+	if r := apply(Command{Op: OpPendingDelete, PendingDelete: &PendingDelete{Key: key(100), Now: 12}}); r.Err != nil {
+		t.Fatal(r.Err)
+	}
+	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: key(900), Now: 13}}); r.Err != nil || r.Addr != "100.70.3.104" {
+		t.Fatalf("the freed host: %+v", r)
+	}
+	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: key(901), Now: 14}}); !errors.Is(r.Err, ErrMeshFull) {
+		t.Fatalf("full again: %v", r.Err)
+	}
+	// a rotation ends every pending row; the same token again ends nothing
+	if r := apply(Command{Op: OpMetaSet, MetaSet: &MetaSet{JoinToken: "zzzzzzzzzzzzzzzz"}}); r.Err != nil || len(f.Pending()) != 0 {
+		t.Fatalf("after the rotation: %d pending rows, %v", len(f.Pending()), r.Err)
+	}
+	if r := apply(Command{Op: OpPendingAdd, PendingAdd: &PendingAdd{Key: key(1), Now: 15}}); r.Err != nil || r.Addr != "100.70.3.4" {
+		t.Fatalf("after the rotation the hosts are free again: %+v", r)
+	}
+	if r := apply(Command{Op: OpMetaSet, MetaSet: &MetaSet{JoinToken: "zzzzzzzzzzzzzzzz"}}); r.Err != nil || len(f.Pending()) != 1 {
+		t.Fatalf("the same token again ended a pending row: %d", len(f.Pending()))
 	}
 }
 
