@@ -361,7 +361,10 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   volume exactly the snapshot's bytes, committing by hash every chunk the pool still holds
   and uploading every other from the mirror after verifying it; a revert flushes or drops
   the file's dirty bytes first; a tree restore descends an existing directory, skips an
-  existing file and reports every entry; nothing on a mirror changes.
+  existing file and reports every entry; a copied or restored file is written under
+  `RestoreTempName` in its folder and renamed into place once committed, so its name
+  holds the whole file or nothing and a rerun after an interrupted restore restores it
+  (removing the temporary file a stopped run left); nothing on a mirror changes.
 - **I-239** — A sync reads and writes up to `SyncWorkers` chunks at once, each distinct
   chunk once, and writes the same snapshot as one chunk at a time would: every object
   durable before any tree naming it, every tree before its parent, the manifest last,
@@ -389,4 +392,4 @@ stub in `test/invariants/` meanwhile.
 | I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |
 | I-181 | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext`, `TestFSM_DeterministicAcrossReplicas`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestCluster_OverwriteDuringSync_SnapshotExact`, `TestModelCheck_Long` |
 | I-183 | `TestFSM_SnapshotDelete_TwoStep`, `TestMirror_DeleteReconciles_MarkAndSweep`, `TestMirror_SweepNeverTakesReachable`, `TestMirror_SweepKeepsActiveWrite`, `TestMirror_RowlessManifestImported`, `TestMirror_ForeignClusterUntouched`, `TestAdminOps_NoSnapshotDelete`, `TestSchedule_ThinThenSweep`, `TestMirror_OfflineDeleteReconciledOnAttach`, `TestFSM_SnapshotImport_Table`, `TestMirror_RowlessManifestsImportedOnTick`, `TestMirror_RenumberNeverReplaces`, `TestCLI_MirrorRemove_LeavesDisk`, `TestWebUI_Snapshots_ListTake_NoDeleteRoute` |
-| I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |
+| I-186 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestVFS_Revert_FromPoolAndMirror`, `TestVFS_Revert_FlushesDirtyFirst`, `TestVFS_SaveCopy`, `TestVFS_RestoreTree_SkipsExisting`, `TestVFS_RestoreTree_InterruptedFileIsRestoredByRerun`, `TestVFS_Versions`, `TestAdminOps_RestoreAndVersions` |

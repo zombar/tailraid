@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -248,7 +249,17 @@ func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *R
 		rep.Skipped = append(rep.Skipped, name)
 		return nil
 	}
-	fh, err := f.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, os.FileMode(e.Mode&0o777))
+	// the data lands under a temporary name and the file is renamed into place once it
+	// is committed, so the name holds the whole file or nothing: an interrupted restore
+	// leaves no empty file a rerun would skip as present (docs/16 §6)
+	tmpParts := append(slices.Clip(dst[:len(dst)-1]), RestoreTempName(dst[len(dst)-1]))
+	tmp := "/" + path.Join(tmpParts...)
+	if old, err := f.st.Resolve(tmpParts); err == nil { // an interrupted run's, or a stopped node's
+		if err := f.RemoveIno(tmp, old.Ino, true); err != nil {
+			return mapErr("restore", tmp, err)
+		}
+	}
+	fh, err := f.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, os.FileMode(e.Mode&0o777))
 	if err != nil {
 		return err
 	}
@@ -256,7 +267,16 @@ func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *R
 	_ = fh.Close()
 	up, err := f.writeEntry(ctx, ino, m, e)
 	if err != nil {
+		_ = f.RemoveIno(tmp, ino, true) // best effort: a rerun removes it otherwise
 		return mapErr("restore", name, err)
+	}
+	if err := f.RenameNoReplace(tmp, name); err != nil {
+		if errors.Is(err, os.ErrExist) { // the name was taken meanwhile: that file stays
+			_ = f.RemoveIno(tmp, ino, true)
+			rep.Skipped = append(rep.Skipped, name)
+			return nil
+		}
+		return err
 	}
 	rep.Files++
 	rep.Uploaded += up
@@ -371,4 +391,13 @@ func (f *FS) Versions(ctx context.Context, p string) ([]Version, []OfflineMirror
 		out[i] = g.v
 	}
 	return out, offline, nil
+}
+
+// RestoreTempName is the name a restore writes a file under, in its final folder, until
+// the file's data is committed and it is renamed into place (docs/16 §6): fixed-length,
+// so any final name has one, and the same for the same name, so a rerun finds what an
+// interrupted run or a stopped node left.
+func RestoreTempName(name string) string {
+	sum := sha256.Sum256([]byte(name))
+	return ".tailraid-restore-" + hex.EncodeToString(sum[:8])
 }

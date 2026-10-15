@@ -20,6 +20,7 @@ type Mirrors struct {
 	ms      map[meta.NodeIdx]*mirror.Mirror
 	offline map[meta.NodeIdx]bool
 	objects atomic.Int64
+	failObj error // every Object read fails with it while set (a mirror lost mid-restore)
 }
 
 // NewMirrors returns an empty source.
@@ -52,8 +53,22 @@ func (s *Mirrors) Object(_ context.Context, m meta.NodeIdx, h meta.Hash) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	fail := s.failObj
+	s.mu.Unlock()
+	if fail != nil {
+		return nil, fail
+	}
 	s.objects.Add(1)
 	return mm.Object(h)
+}
+
+// FailObjects makes every object read fail with err (nil: read again), the trees still
+// readable: a restore that loses its mirror, or is cancelled, between two files' data.
+func (s *Mirrors) FailObjects(err error) {
+	s.mu.Lock()
+	s.failObj = err
+	s.mu.Unlock()
 }
 
 // Online reports whether mirror m is attached.
