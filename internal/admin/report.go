@@ -11,6 +11,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/clock"
 	"github.com/zombar/tailraid/internal/cluster"
+	"github.com/zombar/tailraid/internal/mesh/firewall"
 	"github.com/zombar/tailraid/internal/mesh/portmap"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/pins"
@@ -551,6 +552,37 @@ type MeshReport struct {
 	// Relayed is what this device forwarded for others, bytes by "from>to" (docs/20 §6, I-328)
 	Relayed map[string]uint64 `json:"relayed_bytes,omitempty"`
 	PortMap *portmap.Status   `json:"portmap,omitempty"` // the gateway mapping of the mesh port (docs/20 §7, I-330)
+	// Firewall is the node's chain in the host firewall, Linux with mesh.firewall on
+	// (docs/20 §9, I-334)
+	Firewall  *firewall.Status `json:"firewall,omitempty"`
+	SelfReach *SelfReach       `json:"self_reach,omitempty"` // the node's dial to its own mesh address (I-335)
+}
+
+// SelfReach is the outcome of the node's dial to its own RPC listener at its mesh
+// address (docs/20 §9, I-335).
+type SelfReach struct {
+	OK    bool   `json:"ok"`
+	Err   string `json:"error,omitempty"`
+	Cause string `json:"cause,omitempty"` // with a failure: what the node found that explains it
+}
+
+// MeshWarnings are the status and check warnings of the mesh's host side: an own
+// address the node cannot reach, or a firewall chain it could not keep (I-334, I-335).
+func MeshWarnings(m *MeshReport) []string {
+	if m == nil {
+		return nil
+	}
+	if s := m.SelfReach; s != nil && !s.OK {
+		w := "this node cannot reach its own mesh address " + m.Addr + " (" + s.Err + "): peers and the CLI cannot reach it either"
+		if s.Cause != "" {
+			w += "; " + s.Cause
+		}
+		return []string{w}
+	}
+	if f := m.Firewall; f != nil && f.Err != "" {
+		return []string{"the mesh's firewall chain could not be kept (" + f.Err + "): a host firewall may drop the mesh (docs/20 §9)"}
+	}
+	return nil
 }
 
 // MeshPeer is one peer of the device.
