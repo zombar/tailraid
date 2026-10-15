@@ -154,11 +154,18 @@ A release is a git tag `vMAJOR.MINOR.PATCH` on `main`:
    one section per tag, entries grouped into Changes / Documentation / Tooling by the
    subject's `scope:` prefix, so commit subjects are the changelog). `main` only takes
    pull requests, so when the changelog changed the target commits it on
-   `changelog/<version>`, opens the pull request and stops; merge it, pull, and run the
-   same command again: with nothing left to commit it creates the annotated tag and
-   pushes it.
-2. CI (`release` job, after `checks`, `lint`, `vuln` and `test`) runs `make release
-   VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
+   `changelog/<version>`, opens the pull request, merges it and pulls `main`; nothing is
+   left to run. (When the merge is refused the pull request stays open, and merging it
+   by hand does the same.) With the changelog already current it creates the annotated
+   tag and pushes it, as before.
+2. CI (`release` job, after `checks`, `lint`, `vuln` and `test`) runs for a pushed tag,
+   and for a push to `main` that merges the `changelog: <version>` commit (a merge's
+   second parent or a squash) of a version with no tag yet (`scripts/ci-changes.sh`
+   prints it as `release`). Either way the release waits for a green run on the parent
+   commit, or runs the whole suite. On a changelog merge the job creates the annotated
+   tag on the merge commit once the binaries are built and signed, so a failed build
+   leaves no tag, and a tag pushed with the job's own token starts no second run. The
+   job runs `make release VERSION=<tag>`: six static binaries `tailraid_{linux,darwin,windows}_{amd64,arm64}[.exe]`
    built with `-trimpath -mod=vendor -ldflags "-s -w -X main.version=<tag>"` from the
    committed `vendor/` tree (no module download at release time), plus `sha256sums.txt`
    over them, attached to a GitHub release named after the tag whose notes are that tag's

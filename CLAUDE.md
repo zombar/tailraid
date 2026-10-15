@@ -71,7 +71,10 @@ make web          esbuild → internal/webui/dist/app.js  make web-check   fails
 CI (`.github/workflows/ci.yml`) asks `scripts/ci-changes.sh` what a run must test: a
 prose-only change (the release changelog, docs Markdown) skips lint-go, vuln and the tests;
 a pull request tests on Linux alone unless it touches per-OS code or has the `full-ci`
-label; a tag whose parent passed on main goes straight to the release.
+label; a tag whose parent passed on main goes straight to the release. `make tag` merges
+its own changelog pull request, and CI releases from that merge (`release=` from
+`ci-changes.sh`: the job builds, signs, then tags the merge commit), so one `make tag` is
+the whole release.
 
 Runtime dependencies are vendored (`vendor/`, refreshed by `make tidy`, checked by
 `make vendor-check`); builds use `-mod=vendor`. Dev tools are pinned in `tools.mod`, so the
