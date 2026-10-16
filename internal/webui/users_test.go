@@ -16,6 +16,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/users"
@@ -473,10 +474,11 @@ func TestWebUI_ThumbPut_SystemAfterRead(t *testing.T) {
 // an admin: emptying the whole trash, taking a snapshot, reverting a file the user holds
 // Write but not Admin on, and restoring a snapshot tree into such a folder (docs/21 §2,
 // §3).
-// Invariant: I-355
+// Invariant: I-355, I-369
 func TestWebUI_AdminRoutes_ByRole(t *testing.T) {
 	svc := &fakeSnapshots{}
 	u, kim, lee := usersUI(t, func(o *webui.Options) { o.Snapshots = svc })
+	svc.fs, svc.st = u.fs, u.f.FSM
 	src := testharness.NewMirrors()
 	u.fs.SetFlusher(u.f.Flusher())
 	must(t, u.f.Flusher().FlushAll(ctx))
@@ -502,8 +504,11 @@ func TestWebUI_AdminRoutes_ByRole(t *testing.T) {
 		t.Fatal("lee's refused restore landed")
 	}
 	a := u.signIn(kim)
-	if code, body := u.postAs(a, "/api/restore-tree", fmt.Sprintf(`{"snapshot":%d,"path":"","to":"/w","name":"all"}`, sn.ID)); code != 200 || !strings.Contains(body, `"refused_count":0`) {
+	if code, body := u.postAs(a, "/api/restore-tree", fmt.Sprintf(`{"snapshot":%d,"path":"","to":"/w","name":"all"}`, sn.ID)); code != http.StatusAccepted || !strings.Contains(body, `"path":"/w/all"`) {
 		t.Fatalf("the admin's restore: %d %s", code, body)
+	}
+	if rep := svc.reports[len(svc.reports)-1]; len(rep.Refused) != 0 {
+		t.Fatalf("the admin's restore refused %v", rep.Refused)
 	}
 	if code, body := u.postAs(a, "/api/revert", fmt.Sprintf(`{"path":"/w/f","snapshot":%d}`, sn.ID)); code != 200 {
 		t.Fatalf("the admin's revert: %d %s", code, body)
@@ -537,5 +542,61 @@ func TestWebUI_Upload_RoleBeforeExistence(t *testing.T) {
 	}
 	if code := put("/w/f", "If-None-Match", "*"); code != 412 {
 		t.Errorf("an exclusive PUT over lee's own file: %d, want 412", code)
+	}
+}
+
+// A folder restore is a job: the route checks Admin where the copy lands before it asks
+// the mirror's host (a user without it is refused and nothing is started), answers 202
+// with the job, its host and the path once the host has recorded it, and the status the
+// page polls carries the jobs; a cancel acts for the session's user, the job's starter
+// or an admin (403 for anyone else, 404 for a job nobody lists) (docs/13 §3, §7).
+// Invariant: I-369
+func TestWebUI_RestoreTree_JobAndCancel(t *testing.T) {
+	svc := &fakeSnapshots{}
+	jobs := []rpc.RestoreJob{{ID: "1-1", Host: "one", Dst: "/w/all", State: rpc.RestoreRunning, FilesTotal: 3, BytesTotal: 99}}
+	u, kim, lee := usersUI(t, func(o *webui.Options) {
+		o.Snapshots = svc
+		o.Status = func() any { return admin.Report{Node: "one", Restores: jobs} }
+	})
+	svc.fs, svc.st = u.fs, u.f.FSM
+	src := testharness.NewMirrors()
+	u.fs.SetFlusher(u.f.Flusher())
+	must(t, u.f.Flusher().FlushAll(ctx))
+	m := u.f.AddMirror(src, "host/m1")
+	u.fs.SetMirrors(src)
+	sn := u.f.TakeSnapshot(src, m, "s1")
+	l, a := u.signIn(lee), u.signIn(kim)
+	if code, body := u.postAs(l, "/api/restore-tree", fmt.Sprintf(`{"snapshot":%d,"path":"/w","to":"/w","name":"again"}`, sn.ID)); code != 403 || len(svc.jobs) != 0 {
+		t.Fatalf("lee's restore into a folder they hold Write on: %d %s, %d jobs, want 403 and none started", code, body, len(svc.jobs))
+	}
+	code, body := u.postAs(a, "/api/restore-tree", fmt.Sprintf(`{"snapshot":%d,"path":"/w","to":"/w","name":"again"}`, sn.ID))
+	var started rpc.RestoreStarted
+	if code != http.StatusAccepted || json.Unmarshal([]byte(body), &started) != nil || started.Job == "" || started.Host != "one" || started.Path != "/w/again" {
+		t.Fatalf("the admin's restore: %d %s", code, body)
+	}
+	if svc.jobs[started.Job] != kim {
+		t.Fatalf("the job was started for user %d, want kim (%d)", svc.jobs[started.Job], kim)
+	}
+	if code, body := u.getAs(a, "/api/status"); code != 200 || !strings.Contains(body, `"restores":[{"id":"1-1"`) {
+		t.Fatalf("status: %d %s, want the jobs", code, body)
+	}
+	for _, tc := range []struct {
+		who  *http.Client
+		job  string
+		want int
+	}{
+		{l, started.Job, 403}, // not theirs, not an admin
+		{a, "9-9", 404},       // no host lists it
+		{a, started.Job, 204}, // the starter
+	} {
+		if code, body := u.postAs(tc.who, "/api/restore/cancel", fmt.Sprintf(`{"job":%q}`, tc.job)); code != tc.want {
+			t.Errorf("cancel %s: %d %s, want %d", tc.job, code, body, tc.want)
+		}
+	}
+	if code, _ := u.postAs(a, "/api/restore/cancel", `{}`); code != 400 {
+		t.Errorf("a cancel naming no job: %d, want 400", code)
+	}
+	if len(svc.cancels) != 1 {
+		t.Fatalf("%d cancels reached the host, want the starter's one", len(svc.cancels))
 	}
 }

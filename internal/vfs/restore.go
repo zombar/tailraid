@@ -260,19 +260,10 @@ func (f *FS) RestoreSnapshotWith(ctx context.Context, src, dst string, opt Resto
 	if err != nil {
 		return rep, err
 	}
+	if err := f.CheckRestoreInto(dst); err != nil {
+		return rep, err
+	}
 	dparts := meta.SplitPath(dst)
-	if isSnapshotPath(dparts) || (len(dparts) > 0 && dparts[0] == meta.ReservedDir) {
-		return rep, mapErr("restore", dst, ErrReadOnly)
-	}
-	// Admin where the copy lands: the nearest existing ancestor, since the folders below
-	// it are made by the restore (the root, for a merge into it)
-	into, err := f.nearest(dparts[:max(len(dparts)-1, 0)])
-	if err != nil {
-		return rep, mapErr("restore", dst, err)
-	}
-	if err := f.checkAdmin(into.Ino, dst); err != nil {
-		return rep, mapErr("restore", dst, err)
-	}
 	if n.e.Type != mirror.TypeDir {
 		if _, err := f.resolve(dst); err == nil {
 			return rep, mapErr("restore", dst, meta.ErrExist)
@@ -281,6 +272,25 @@ func (f *FS) RestoreSnapshotWith(ctx context.Context, src, dst string, opt Resto
 	r := &restoreRun{f: f, opt: opt, rep: &rep, slots: make(chan struct{}, max(1, opt.InFlight))}
 	err = r.run(ctx, &n, dparts)
 	return rep, err
+}
+
+// CheckRestoreInto refuses a restore to dst the view may not make: under /.snapshots or
+// /.tailraid, or without Admin on the nearest existing ancestor of dst, since the folders
+// below it are made by the restore (the root, for a merge into it) (docs/21 §3, I-348).
+// The web UI checks it before it hands a restore to the mirror's host (docs/13 §3).
+func (f *FS) CheckRestoreInto(dst string) error {
+	dparts := meta.SplitPath(dst)
+	if isSnapshotPath(dparts) || (len(dparts) > 0 && dparts[0] == meta.ReservedDir) {
+		return mapErr("restore", dst, ErrReadOnly)
+	}
+	into, err := f.nearest(dparts[:max(len(dparts)-1, 0)])
+	if err != nil {
+		return mapErr("restore", dst, err)
+	}
+	if err := f.checkAdmin(into.Ino, dst); err != nil {
+		return mapErr("restore", dst, err)
+	}
+	return nil
 }
 
 // RestoreTotals is what a tree restore of src into dst writes when nothing is there yet:

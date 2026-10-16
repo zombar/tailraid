@@ -39,8 +39,8 @@ export function clear(el: Element): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
-/** toast shows a message bottom right for 6 s; click dismisses. */
-export function toast(msg: string, cls?: "ok" | "bad"): void {
+/** toast shows a message (text, or text with a link) bottom right for 6 s; click dismisses. */
+export function toast(msg: string | Node, cls?: "ok" | "bad"): void {
   const box = document.getElementById("toasts");
   if (!box) return;
   const el = h("div", { class: "toast" + (cls ? " " + cls : ""), role: "status" }, msg);

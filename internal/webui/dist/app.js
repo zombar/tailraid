@@ -116,12 +116,12 @@ function wire(button) {
     button.setAttribute("aria-label", label);
     button.replaceChildren(GLYPHS[t](), Object.assign(document.createElement("span"), { textContent: t }));
   };
-  let current = stored();
-  draw(current);
+  let current2 = stored();
+  draw(current2);
   button.addEventListener("click", () => {
-    current = next(current);
-    apply(current);
-    draw(current);
+    current2 = next(current2);
+    apply(current2);
+    draw(current2);
   });
 }
 apply(stored());
@@ -252,10 +252,10 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function upload(path, file, onProgress, onNote) {
-  let current = null;
+  let current2 = null;
   let aborted = false;
   const track = (x) => {
-    current = x;
+    current2 = x;
   };
   const promise = (async () => {
     if (file.size <= PART) {
@@ -299,7 +299,7 @@ function upload(path, file, onProgress, onNote) {
     promise,
     abort: () => {
       aborted = true;
-      current?.abort();
+      current2?.abort();
     }
   };
 }
@@ -333,6 +333,7 @@ var versions = (path) => call("/api/versions?path=" + encodeURIComponent(path));
 var revert = (path, snapshot) => post("/api/revert", { path, snapshot });
 var copyVersion = (path, snapshot, name) => post("/api/copy", { path, snapshot, name });
 var restoreTree = (snapshot, path, opts = {}) => post("/api/restore-tree", { snapshot, path, ...opts });
+var cancelRestore = (job) => post("/api/restore/cancel", { job });
 
 // internal/webui/src/status.ts
 var INTERVAL = 5e3;
@@ -401,10 +402,10 @@ function signedPct(frac) {
   return (frac < 0 ? "\u2212" : "+") + s;
 }
 var ZERO_TIME = "0001-01-01";
-function ago(iso, now = Date.now()) {
-  if (!iso || iso.startsWith(ZERO_TIME)) return "never";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
+function ago(iso2, now = Date.now()) {
+  if (!iso2 || iso2.startsWith(ZERO_TIME)) return "never";
+  const t = Date.parse(iso2);
+  if (Number.isNaN(t)) return iso2;
   const s = Math.max(0, Math.round((now - t) / 1e3));
   if (s < 60) return s + " s ago";
   const m = Math.round(s / 60);
@@ -413,11 +414,11 @@ function ago(iso, now = Date.now()) {
   if (hrs < 24) return hrs + " h ago";
   return date(t);
 }
-function when(iso, now = Date.now()) {
-  if (!iso || iso.startsWith(ZERO_TIME)) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  if (now - t < 24 * 3600 * 1e3 && now >= t) return ago(iso, now);
+function when(iso2, now = Date.now()) {
+  if (!iso2 || iso2.startsWith(ZERO_TIME)) return "";
+  const t = Date.parse(iso2);
+  if (Number.isNaN(t)) return iso2;
+  if (now - t < 24 * 3600 * 1e3 && now >= t) return ago(iso2, now);
   return date(t);
 }
 function date(t) {
@@ -425,10 +426,10 @@ function date(t) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function shortDate(iso) {
-  if (!iso || iso.startsWith(ZERO_TIME)) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
+function shortDate(iso2) {
+  if (!iso2 || iso2.startsWith(ZERO_TIME)) return "";
+  const t = Date.parse(iso2);
+  if (Number.isNaN(t)) return iso2;
   return date(t).slice(0, 10);
 }
 function mmss(sec) {
@@ -443,17 +444,17 @@ function days(ms) {
   const d = Math.round(Math.abs(ms) / 864e5);
   return d < 1 ? "today" : `${d} d`;
 }
-function daysAgo(iso, now = Date.now()) {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
+function daysAgo(iso2, now = Date.now()) {
+  if (!iso2) return "";
+  const t = Date.parse(iso2);
+  if (Number.isNaN(t)) return iso2;
   const d = days(now - t);
   return d === "today" ? d : d + " ago";
 }
-function daysUntil(iso, now = Date.now()) {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
+function daysUntil(iso2, now = Date.now()) {
+  if (!iso2) return "";
+  const t = Date.parse(iso2);
+  if (Number.isNaN(t)) return iso2;
   const d = days(t - now);
   return d === "today" ? d : "in " + d;
 }
@@ -1020,6 +1021,74 @@ function pick(opts) {
   });
 }
 
+// internal/webui/src/account.ts
+var session2 = null;
+function current() {
+  return session2;
+}
+function toLogin() {
+  const to = location.pathname + location.search + location.hash;
+  location.replace("/login?to=" + encodeURIComponent(to));
+}
+async function mount(header2) {
+  let r;
+  try {
+    r = await fetch("/api/session");
+  } catch {
+    return;
+  }
+  if (r.status === 401) {
+    toLogin();
+    return;
+  }
+  if (!r.ok) return;
+  session2 = await r.json();
+  const chip = h("span", { class: "account", title: `signed in as ${session2.user}` }, icon("person"), h("span", null, session2.user));
+  const out = h("button", { type: "button", class: "signout", title: "Sign out", "aria-label": "Sign out" }, icon("logout"));
+  out.addEventListener("click", async () => {
+    out.disabled = true;
+    try {
+      await fetch("/api/logout", { method: "POST", headers: { [HEADER]: "1" } });
+    } finally {
+      location.replace("/login");
+    }
+  });
+  chip.append(out);
+  const theme = header2.querySelector("button.theme");
+  if (theme) theme.before(chip);
+  else header2.append(chip);
+}
+function memberLink(name, href, ...kids) {
+  const a = h("a", { href, "data-node": name }, ...kids);
+  return a;
+}
+function wire2(root) {
+  root.addEventListener("click", (ev) => {
+    const a = ev.target?.closest("a[data-node]");
+    if (!a || !session2) return;
+    ev.preventDefault();
+    void follow(a);
+  });
+}
+async function follow(a) {
+  const to = new URL(a.href, location.href);
+  try {
+    const r = await fetch("/api/handoff?to=" + encodeURIComponent(a.dataset.node ?? ""));
+    if (r.status === 401) {
+      toLogin();
+      return;
+    }
+    if (!r.ok) {
+      location.assign(a.href);
+      return;
+    }
+    const { url } = await r.json();
+    location.assign(url + "&to=" + encodeURIComponent(to.pathname + to.search + to.hash));
+  } catch {
+    location.assign(a.href);
+  }
+}
+
 // internal/webui/src/snapshots.ts
 var FRESH_MS = 1e4;
 var cached = null;
@@ -1063,9 +1132,9 @@ function offlineFor(m) {
   const d = daysAgo(m.last_seen);
   return d === "today" ? "offline" : "offline " + d.replace(" ago", "");
 }
-function asofMenu(ctx, view3, current) {
+function asofMenu(ctx, view3, current2) {
   const body = h("div", { class: "menu-body", role: "radiogroup", "aria-label": "as of" });
-  const details2 = h("details", { class: "menu asof" }, h("summary", null, current ? current.name : "Now"), body);
+  const details2 = h("details", { class: "menu asof" }, h("summary", null, current2 ? current2.name : "Now"), body);
   const go = (at) => {
     const next2 = { path: ctx.path, root: ctx.root };
     if (at !== void 0) next2.at = at;
@@ -1085,11 +1154,11 @@ function asofMenu(ctx, view3, current) {
   };
   const fill = async () => {
     clear(body);
-    body.append(row2("Now", "the live volume", !current, null, () => go()));
+    body.append(row2("Now", "the live volume", !current2, null, () => go()));
     try {
       const c = await catalogue();
       clear(body);
-      body.append(row2("Now", "the live volume", !current, null, () => go()));
+      body.append(row2("Now", "the live volume", !current2, null, () => go()));
       let n = 0;
       for (const m of c.mirrors) {
         const mine = c.snapshots.filter((s) => s.mirror === m.name && s.state !== "syncing");
@@ -1099,7 +1168,7 @@ function asofMenu(ctx, view3, current) {
           n++;
           const label = h("span", null, s.name);
           if (!s.auto) label.append(h("span", { class: "badge" }, "manual"));
-          body.append(row2(label, taken(s, c), current?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go(s.id)));
+          body.append(row2(label, taken(s, c), current2?.id === s.id, m.online ? null : `${m.name} is offline: attach it to browse`, () => go(s.id)));
         }
       }
       const mirrors = new Set(c.snapshots.map((s) => s.mirror)).size;
@@ -1138,13 +1207,14 @@ async function restoreFolder(ctx, ref) {
   if (to === null) return;
   try {
     const r = await restoreTree(ref.id, ctx.path, { to });
-    const made = r.files + r.dirs + r.links;
-    toast(`restored ${made} ${made === 1 ? "entry" : "entries"} to ${r.path}` + (r.skipped_count ? ` \xB7 ${r.skipped_count} existing left alone` : "") + (r.refused_count ? ` \xB7 ${r.refused_count} not yours to read` : "") + (r.uploaded ? ` \xB7 ${r.uploaded} chunks copied back from ${ref.mirror}` : ""), "ok");
-    location.hash = browseHash({ path: r.path });
+    const follow2 = h("a", { href: "#/", onClick: () => scrollToRestores = true }, "follow it on the dashboard");
+    toast(h("span", null, `restoring ${basename(r.path) || r.path} from ${ref.name} on ${r.host} \xB7 `, follow2), "ok");
+    void status.refresh();
   } catch (e) {
     toast("restore: " + errText(e), "bad");
   }
 }
+var scrollToRestores = false;
 function range(v) {
   const names = v.snapshots.map((s) => s.name);
   if (names.length <= 1) return names[0] ?? "";
@@ -1184,7 +1254,7 @@ function versionsPanel(path, onChange) {
     const held = vs.reduce((n, v) => n + v.snapshots.length, 0);
     const mirrors = [...new Set(vs.flatMap((v) => v.snapshots.map((s) => s.mirror)))];
     summary.textContent = `Versions (${vs.length} ${vs.length === 1 ? "content" : "contents"} \xB7 ${held} snapshots${mirrors.length ? " on " + mirrors.join(", ") : ""})`;
-    const current = vs.find((v) => v.current);
+    const current2 = vs.find((v) => v.current);
     const tbody = h("tbody");
     for (const v of vs) {
       const asof = h("td", { class: "asof" }, v.current ? "now" : range(v), h("span", { class: "small dim" }, v.current ? v.snapshots.length ? "also in " + holders(v) : "in no snapshot yet" : holders(v)));
@@ -1194,7 +1264,7 @@ function versionsPanel(path, onChange) {
       else if (first) {
         acts.append(
           h("button", { type: "button", onClick: () => location.hash = fileHash({ path, at: first.id }) }, "View"),
-          h("button", { type: "button", onClick: () => askRevert(first, !!current && current.snapshots.length === 0) }, "Revert"),
+          h("button", { type: "button", onClick: () => askRevert(first, !!current2 && current2.snapshots.length === 0) }, "Revert"),
           h("button", { type: "button", onClick: () => void saveCopy(first) }, "Save a copy")
         );
       }
@@ -1306,10 +1376,18 @@ function schedule(c) {
   }
   return parts.join(" \xB7 ");
 }
-function section(c, onTaken) {
+function section(c, onTaken, restores = []) {
   if (!c || !c.mirrors.length) return null;
   const sec = h("section", null, h("h2", null, "Mirrors", h("span", { class: "h-sub" }, schedule(c))));
   sec.append(h("div", { class: "cards" }, ...c.mirrors.map((m) => card2(m, c))));
+  if (restores.length) {
+    const head = h("h3", { id: "restores" }, "Restores");
+    sec.append(head, h("div", { class: "cards" }, ...restores.map((j) => restoreCard(j, restores))));
+    if (scrollToRestores) {
+      scrollToRestores = false;
+      requestAnimationFrame(() => head.scrollIntoView({ block: "start" }));
+    }
+  }
   const manual = c.snapshots.filter((s) => !s.auto).length;
   const online = c.mirrors.filter((m) => m.online).length;
   const take = h("button", { type: "button", disabled: online === 0, title: online ? "" : "no mirror is online" }, "Take a snapshot");
@@ -1317,7 +1395,10 @@ function section(c, onTaken) {
   sec.append(h("div", { class: "snap-head" }, take, h("span", { class: "small dim" }, `every online mirror \xB7 ${c.snapshots.length} snapshots \xB7 ${manual} manual`)));
   const byName = new Map(c.mirrors.map((m) => [m.name, m]));
   const tbody = h("tbody");
-  for (const s of c.snapshots) {
+  const pages = Math.max(1, Math.ceil(c.snapshots.length / PAGE));
+  page = Math.min(page, pages - 1);
+  const shown = c.snapshots.slice(page * PAGE, (page + 1) * PAGE);
+  for (const s of shown) {
     const m = byName.get(s.mirror);
     const on = !!m?.online;
     const name = h("td", { class: "name" }, s.name);
@@ -1335,8 +1416,118 @@ function section(c, onTaken) {
   if (c.snapshots.length) {
     sec.append(h("table", { class: "snapshots" }, h("thead", null, h("tr", null, h("th", null, "name"), h("th", { class: "mirror" }, "mirror"), h("th", { class: "taken" }, "taken"), h("th", { class: "holds" }, "added"), h("th", { class: "acts" }))), tbody));
   } else sec.append(h("div", { class: "empty" }, "no snapshot yet: the first one copies the whole volume"));
+  if (c.snapshots.length > PAGE) {
+    const go = (p) => () => {
+      page = p;
+      onTaken();
+    };
+    const first = page * PAGE + 1;
+    const lastRow = Math.min((page + 1) * PAGE, c.snapshots.length);
+    sec.append(
+      h(
+        "div",
+        { class: "pager" },
+        h("button", { type: "button", disabled: page === 0, onClick: go(page - 1) }, "Newer"),
+        h("span", { class: "small dim" }, `${first}\u2013${lastRow} of ${c.snapshots.length}`),
+        h("button", { type: "button", disabled: page >= pages - 1, onClick: go(page + 1) }, "Older")
+      )
+    );
+  }
   sec.append(h("div", { class: "small dim" }, "a snapshot copies only what changed since the last one on its mirror; \u201Cadded\u201D is what it wrote"));
   return sec;
+}
+var PAGE = 20;
+var page = 0;
+var UNFINISHED = /* @__PURE__ */ new Set(["counting", "queued", "running", "waiting", "retrying"]);
+function iso(ns) {
+  return ns ? new Date(ns / 1e6).toISOString() : void 0;
+}
+function span(secs) {
+  const s = Math.max(0, Math.round(secs));
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} m`;
+  return `${Math.floor(m / 60)} h ${m % 60} m`;
+}
+function mirrorDir(row2) {
+  return row2.replace(/\//g, "-");
+}
+function restoreCard(j, all) {
+  const warn = j.state === "queued" || j.state === "waiting" || j.state === "retrying";
+  const finished = j.state === "done" || j.state === "cancelled";
+  const tone = warn ? "warn" : j.state === "failed" ? "bad" : "";
+  const dot = j.state === "cancelled" ? "off" : tone || "ok";
+  const badges = h("span", { class: "badges" }, h("span", { class: "badge" }, "on " + j.host), h("span", { class: "badge" + (tone ? " " + tone : "") }, j.state));
+  const el = h("div", { class: "card restore" + (tone ? " " + tone : "") + (finished ? " done" : "") }, h("div", { class: "name-row" }, h("span", { class: "dot " + dot }), h("span", { class: "name" }, j.dst), badges));
+  const frac = j.bytes_total > 0 ? j.bytes_done / j.bytes_total : 0;
+  const so = `${bytes(j.bytes_done)} of ${bytes(j.bytes_total)} \xB7 ${Math.floor(frac * 100)} %`;
+  const empty = () => h("div", { class: "bar" });
+  switch (j.state) {
+    case "counting":
+      el.append(barRow("bytes", empty(), "counting what to restore" + (j.files_total ? ` \xB7 ${j.files_total.toLocaleString("en")} files so far` : "")));
+      break;
+    case "queued": {
+      const ahead = all.find((o) => o !== j && o.host === j.host && o.state !== "queued" && UNFINISHED.has(o.state));
+      el.append(barRow("bytes", empty(), ahead ? `after the restore of ${ahead.dst} on ${j.host}` : `waiting its turn on ${j.host}`));
+      break;
+    }
+    case "running": {
+      const left = j.rate > 0 ? ` \xB7 ${span((j.bytes_total - j.bytes_done) / j.rate)} left` : "";
+      el.append(barRow("bytes", bar(frac), `${so} \xB7 ${bytes(j.rate)}/s${left}`));
+      break;
+    }
+    case "waiting":
+      el.append(barRow("bytes", bar(frac, "warn"), `${so} \xB7 ${mirrorDir(j.mirror)} is offline: attach it and the restore goes on`));
+      break;
+    case "retrying": {
+      const next2 = j.next_try ? ` \xB7 again in ${span(j.next_try / 1e9 - Date.now() / 1e3)}` : "";
+      el.append(barRow("bytes", bar(frac, "warn"), `${so}${next2}${j.error ? ": " + j.error : ""}`));
+      break;
+    }
+    case "failed":
+      el.append(barRow("bytes", bar(frac, "bad"), `${bytes(j.bytes_done)} of ${bytes(j.bytes_total)} \xB7 ${j.error || "failed"}: a rerun goes on from here`));
+      break;
+    case "cancelled": {
+      const fill = h("i");
+      setWidth(fill, frac);
+      const off2 = h("div", { class: "bar off" }, fill);
+      el.append(barRow("bytes", off2, `${bytes(j.bytes_done)} of ${bytes(j.bytes_total)} \xB7 what was restored stays`));
+      break;
+    }
+    case "done":
+      el.append(barRow("bytes", bar(1), `${bytes(j.bytes_total)} \xB7 ${j.files_total.toLocaleString("en")} files` + (j.existing ? ` \xB7 ${j.existing.toLocaleString("en")} already there` : "")));
+      break;
+  }
+  if (j.state === "running" || j.state === "waiting") {
+    const ff = j.files_total > 0 ? j.files_done / j.files_total : 0;
+    el.append(barRow("files", bar(ff, j.state === "waiting" ? "warn" : ""), `${j.files_done.toLocaleString("en")} of ${j.files_total.toLocaleString("en")}` + (j.existing ? ` \xB7 ${j.existing.toLocaleString("en")} already there` : "")));
+  }
+  const meta2 = h("div", { class: "meta" }, h("span", null, `from ${mirrorDir(j.mirror)} \xB7 ${j.snapshot}`));
+  if (j.user) meta2.append(h("span", null, "by " + j.user));
+  if (j.state === "done") meta2.append(h("span", null, `finished ${when(iso(j.ended))} \xB7 took ${span(((j.ended ?? j.updated) - j.started) / 1e9)}`));
+  else if (j.state === "failed") meta2.append(h("span", null, "failed " + when(iso(j.ended ?? j.updated))));
+  else if (j.state === "cancelled") meta2.append(h("span", null, "cancelled " + when(iso(j.ended ?? j.updated))));
+  else meta2.append(h("span", null, `started ${when(iso(j.started))}` + (j.resumed ? ` \xB7 resumed after a restart${j.resumed > 1 ? ` ${j.resumed}\xD7` : ""}` : "") + (j.state === "retrying" && j.tries ? ` \xB7 ${j.tries} ${j.tries === 1 ? "try" : "tries"}` : "")));
+  el.append(meta2);
+  const se = current();
+  if (UNFINISHED.has(j.state) && (!se || se.admin || se.user === j.user)) {
+    const btn = h("button", { type: "button" }, "Cancel restore");
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      cancelRestore(j.id).then(
+        () => {
+          toast(`cancelled the restore of ${j.dst}: what was restored stays`, "ok");
+          void status.refresh();
+        },
+        (e) => {
+          btn.disabled = false;
+          toast("cancel: " + errText(e), "bad");
+        }
+      );
+    });
+    el.append(h("div", { class: "card-acts" }, btn));
+  }
+  return el;
 }
 function takeDialog(onTaken) {
   return new Promise((resolve) => {
@@ -1393,7 +1584,7 @@ function render4(root) {
     render2(root, r, last());
     render(root, r);
     render3(root, r, status.history);
-    const mirrors = section(last(), draw);
+    const mirrors = section(last(), draw, r.restores ?? []);
     if (mirrors) root.append(mirrors);
   };
   let drawn = last();
@@ -1448,7 +1639,7 @@ function tile3(label, value, sub) {
 }
 
 // internal/webui/src/chunks.ts
-var PAGE = 64;
+var PAGE2 = 64;
 function render5(path, expected) {
   const title = h("span");
   const summaryExtra = h("span", { class: "dim small" });
@@ -1479,7 +1670,7 @@ function render5(path, expected) {
     if (counts.stale) parts.push(`${count(counts.stale)} policy stale`);
     summaryExtra.textContent = parts.length ? " \xB7 " + parts.join(" \xB7 ") : "";
     caption.textContent = `a hash that appears more than once is the same stored chunk (dedup) \xB7 ${count(loaded)} of ${count(total)}`;
-    more.textContent = `Load ${Math.min(PAGE, total - loaded)} more`;
+    more.textContent = `Load ${Math.min(PAGE2, total - loaded)} more`;
     more.hidden = loaded >= total;
   };
   const load2 = async () => {
@@ -1488,13 +1679,13 @@ function render5(path, expected) {
     more.disabled = true;
     failure2.remove();
     const known = total || expected;
-    loading.textContent = `loading ${known !== void 0 ? Math.min(PAGE, Math.max(known - loaded, 0)) : PAGE} of ${known !== void 0 ? count(known) : "?"}\u2026`;
+    loading.textContent = `loading ${known !== void 0 ? Math.min(PAGE2, Math.max(known - loaded, 0)) : PAGE2} of ${known !== void 0 ? count(known) : "?"}\u2026`;
     body.append(loading);
     try {
-      const page = await chunks(path, loaded, PAGE);
-      total = page.total;
+      const page2 = await chunks(path, loaded, PAGE2);
+      total = page2.total;
       if (expected === void 0) setTitle(total);
-      page.chunks.forEach((c, i) => {
+      page2.chunks.forEach((c, i) => {
         rows.append(row(loaded + i, c));
         if (c.state === "committed") counts.committed++;
         else if (c.state === "degraded") counts.degraded++;
@@ -1503,7 +1694,7 @@ function render5(path, expected) {
         else if (c.state === "zero") counts.holes++;
         if (c.policy_stale) counts.stale++;
       });
-      loaded += page.chunks.length;
+      loaded += page2.chunks.length;
       loading.remove();
       if (!body.contains(rows)) body.append(rows, caption, more);
       describe();
@@ -2403,9 +2594,9 @@ function details(path, e, kind2, mime, f, nsfw, viewer) {
   panel2.addEventListener("toggle", () => session.set(DETAILS_KEY, panel2.open));
   return panel2;
 }
-function date2(iso) {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
+function date2(iso2) {
+  const t = Date.parse(iso2);
+  if (Number.isNaN(t)) return iso2;
   const d = new Date(t);
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -2752,9 +2943,9 @@ function menu(ctx) {
     });
     return lab;
   };
-  const libraryRow = (current, why) => {
+  const libraryRow = (current2, why) => {
     const select = h("select", { "aria-label": "library kind" });
-    for (const word of ["none", "movies", "tv", "music", "roms"]) select.append(h("option", { value: word, selected: (current || "none") === word ? "" : void 0 }, word));
+    for (const word of ["none", "movies", "tv", "music", "roms"]) select.append(h("option", { value: word, selected: (current2 || "none") === word ? "" : void 0 }, word));
     const note = h("span", { class: "small dim" }, why ?? "the Media tab lists this folder as films, shows, music or games");
     const lab = h("label", { class: "menu-row library" }, h("span", null, "Library"), select, note);
     if (why) {
@@ -2766,7 +2957,7 @@ function menu(ctx) {
       setFlags(ctx.path, { library: select.value }).then(
         () => ctx.onChange(),
         (e) => {
-          select.value = current || "none";
+          select.value = current2 || "none";
           select.disabled = false;
           toast("Library: " + (e instanceof Error ? e.message : String(e)), "bad");
         }
@@ -3548,71 +3739,6 @@ function compare(a, b, s) {
   return s.desc ? -c : c;
 }
 
-// internal/webui/src/account.ts
-var session2 = null;
-function toLogin() {
-  const to = location.pathname + location.search + location.hash;
-  location.replace("/login?to=" + encodeURIComponent(to));
-}
-async function mount(header2) {
-  let r;
-  try {
-    r = await fetch("/api/session");
-  } catch {
-    return;
-  }
-  if (r.status === 401) {
-    toLogin();
-    return;
-  }
-  if (!r.ok) return;
-  session2 = await r.json();
-  const chip = h("span", { class: "account", title: `signed in as ${session2.user}` }, icon("person"), h("span", null, session2.user));
-  const out = h("button", { type: "button", class: "signout", title: "Sign out", "aria-label": "Sign out" }, icon("logout"));
-  out.addEventListener("click", async () => {
-    out.disabled = true;
-    try {
-      await fetch("/api/logout", { method: "POST", headers: { [HEADER]: "1" } });
-    } finally {
-      location.replace("/login");
-    }
-  });
-  chip.append(out);
-  const theme = header2.querySelector("button.theme");
-  if (theme) theme.before(chip);
-  else header2.append(chip);
-}
-function memberLink(name, href, ...kids) {
-  const a = h("a", { href, "data-node": name }, ...kids);
-  return a;
-}
-function wire2(root) {
-  root.addEventListener("click", (ev) => {
-    const a = ev.target?.closest("a[data-node]");
-    if (!a || !session2) return;
-    ev.preventDefault();
-    void follow(a);
-  });
-}
-async function follow(a) {
-  const to = new URL(a.href, location.href);
-  try {
-    const r = await fetch("/api/handoff?to=" + encodeURIComponent(a.dataset.node ?? ""));
-    if (r.status === 401) {
-      toLogin();
-      return;
-    }
-    if (!r.ok) {
-      location.assign(a.href);
-      return;
-    }
-    const { url } = await r.json();
-    location.assign(url + "&to=" + encodeURIComponent(to.pathname + to.search + to.hash));
-  } catch {
-    location.assign(a.href);
-  }
-}
-
 // internal/webui/src/stats.ts
 var RANGES = [
   ["1h", 3600],
@@ -3695,10 +3821,10 @@ function render9(root, query) {
   const head = h("section", null, h("h2", null, "Stats", h("span", { class: "h-sub" }, "")), toolbar, form);
   root.append(head, charts);
   const sub = head.querySelector(".h-sub");
-  const drawMembers = (nodes, current) => {
+  const drawMembers = (nodes, current2) => {
     clear(body);
     const row2 = (name, label, dot, note, m) => {
-      const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
+      const el = h("div", { class: "menu-row" + (m?.web ? " link" : ""), "aria-current": String(name === current2) }, h("span", { class: "dot " + dot }), h("a", { href: hash({ ...state, node: name }) }, label), h("span", { class: "small dim" }, note));
       if (m?.web) {
         const link = memberLink(m.name, `http://${m.addr}:${m.web}/${hash({ ...state, node: name })}`, icon("open_in_new"));
         link.className = "menu-link";
@@ -3721,8 +3847,8 @@ function render9(root, query) {
     const nodeName = state.node === "" ? f.node : state.node;
     summary.textContent = "Node: " + (nodeName === "all" ? "all nodes" : nodeName);
     drawMembers(f.nodes, nodeName);
-    const span = f.range.to - f.range.from;
-    sub.textContent = `${f.range.tier} rows \xB7 ${span >= 2 * 86400 ? Math.round(span / 86400) + " d" : Math.round(span / 3600) + " h"}` + (f.range.live ? " \xB7 refreshes every 5 s while live" : "");
+    const span2 = f.range.to - f.range.from;
+    sub.textContent = `${f.range.tier} rows \xB7 ${span2 >= 2 * 86400 ? Math.round(span2 / 86400) + " d" : Math.round(span2 / 3600) + " h"}` + (f.range.live ? " \xB7 refreshes every 5 s while live" : "");
   };
   const frames = (list) => {
     cards.clear();

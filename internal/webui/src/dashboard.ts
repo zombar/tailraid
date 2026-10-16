@@ -23,7 +23,7 @@ export function render(root: HTMLElement): () => void {
     disks.render(root, r, snaps.last());
     balance.render(root, r);
     integrity.render(root, r, status.history);
-    const mirrors = snaps.section(snaps.last(), draw); // docs/13 §7: after Integrity
+    const mirrors = snaps.section(snaps.last(), draw, r.restores ?? []); // docs/13 §7: after Integrity, its restore jobs from the status
     if (mirrors) root.append(mirrors);
   };
   // the catalogue is fetched beside the status, at most every few seconds; a fetch that

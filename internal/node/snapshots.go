@@ -133,6 +133,18 @@ func (w webSnapshots) Take(ctx context.Context, name, mirror string) (any, error
 	return w.ops.snapshotCreate(ctx, rpc.AdminOp{Op: "snapshot_create", Name: name, Mirror: mirror})
 }
 
+// StartRestore starts a restore job as the admin op does, for the session's user, whose
+// role where the copy lands the web handler checked (docs/16 §6).
+func (w webSnapshots) StartRestore(ctx context.Context, actor meta.UserIdx, mirror, snapshot, src, dst string) (rpc.RestoreStarted, error) {
+	return w.ops.startRestore(ctx, rpc.AdminOp{Op: "snapshot_restore", Actor: actor, Mirror: mirror, Name: snapshot}, src, dst)
+}
+
+// CancelRestore cancels a restore job as the admin op does, on the job's host.
+func (w webSnapshots) CancelRestore(ctx context.Context, actor meta.UserIdx, job string) error {
+	_, err := w.ops.cancelRestore(ctx, rpc.AdminOp{Op: "restore_cancel", Actor: actor, Job: job})
+	return err
+}
+
 func (w webSnapshots) Schedule() webui.Schedule {
 	p := w.ops.mirrorPol
 	return webui.Schedule{Every: p.Every, Hourly: p.Hourly, Daily: p.Daily, Weekly: p.Weekly, Monthly: p.Monthly, StaleAfter: p.StaleAfter}
