@@ -195,6 +195,14 @@ func (c *Cache) Pin(h [32]byte) bool {
 	return true
 }
 
+// IsPinned reports whether h is held out of eviction.
+func (c *Cache) IsPinned(h [32]byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, p := c.pinned[h]
+	return p
+}
+
 // Unpin returns h to the LRU: it is evicted like any other entry once the unpinned bytes
 // exceed the budget. Unpinning an unknown or unpinned hash is a no-op.
 func (c *Cache) Unpin(h [32]byte) {

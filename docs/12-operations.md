@@ -314,7 +314,7 @@ most once a minute and retried (I-176). Nothing reads the key but an operator.
 `mount.path`, `log.file`) and `Validate` refuses a listener port outside 1..65535 or
 shared between `listen.raft`, `listen.rpc`, `listen.nfs` and `listen.web`, an unknown
 `log.level` or `log.format`, a relative `mount.path`, the `mirrors` keys outside the bounds of §11, a `trash.retention` that is neither
-`0` nor at least an hour, and a `cache.size` under 64 MiB (§10); `serve` warns at start
+`0` nor at least an hour, a `cache.size` under 64 MiB and a `cache.system` that is not a size (§10); `serve` warns at start
 when the config file or the data directory is readable by other users of the machine
 (I-126); the same check covers each disk and mirror and the owner of every path, and
 `status` and `check` on the device repeat the lines (I-341, docs/08 §Files on disk).
@@ -502,7 +502,12 @@ are fetched into the cache and never evicted while the pin stands, so the folder
 from the device with every other node away; `cache unpin <path>` releases it and
 `cache ls` shows each pin's bytes and how many have arrived. The browser UI's folder menu
 ("Keep on this device", 13 §4) is the same per-node state. Pinned bytes may exceed
-`cache.size`; `status` warns when the data disk falls under 20 % free (I-162).
+`cache.size`; `status` warns when the data disk falls under 20 % free (I-162). Every node
+also keeps the thumbnails, the search index and the stats history under `/.tailraid` in
+its cache, newest first, up to `cache.system` (`1GiB` unless set, `0` off, written only
+when set), so covers, search and the Stats page read locally when the network is busy
+(01 §Local chunk cache, I-373); `cache ls` lists it first as `/.tailraid (system)` with
+its budget, and `status --json` carries it as `cache.system`.
 
 ## 11. Mirrors and snapshots
 

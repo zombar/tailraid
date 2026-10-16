@@ -69,6 +69,9 @@ func cacheCmd() *cobra.Command {
 
 func printPins(w io.Writer, rep pins.Report) error {
 	fmt.Fprintf(w, "cache %s used of %s, %s pinned\n", iec(uint64(rep.Used)), iec(uint64(rep.Size)), iec(uint64(rep.PinnedBytes)))
+	if s := rep.System; s != nil { // the reserved tree this node keeps for itself (I-373)
+		fmt.Fprintf(w, "%s (system, up to %s): %s, %s cached\n", s.Path, iec(uint64(s.Budget)), iec(s.Bytes), iec(s.CachedBytes))
+	}
 	if len(rep.Pins) == 0 {
 		_, err := fmt.Fprintln(w, "no pinned folders")
 		return err

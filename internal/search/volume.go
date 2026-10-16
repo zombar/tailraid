@@ -14,12 +14,13 @@ import (
 )
 
 // VFS is the Volume of a running node: writes go through the vfs like an upload's (a
-// temp beside the target, flushed, then renamed), reads through a reader with no chunk
-// cache and no readahead, under the background mark (docs/06 §4, I-175).
+// temp beside the target, flushed, then renamed), reads through a reader that consults
+// the chunk cache, where the system pin keeps the segments, but never fills it and never
+// reads ahead (Reader.NoFill, I-373), under the background mark (docs/06 §4, I-175).
 type VFS struct {
 	FS *vfs.FS
 	St *meta.Store
-	Rd *vfs.Reader // vfs.NewReader(..., nil cache, ...)
+	Rd *vfs.Reader // NoFill
 }
 
 func (v VFS) Create(_ context.Context, name string) error {

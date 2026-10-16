@@ -134,9 +134,11 @@ Two routes carry the series out:
   read route behind the Host check and the member rule, no CSRF header. The handler:
   1. picks the finest tier whose retention covers `from` (`10s` within `keep.raw`, else
      `1m`, else `10m`), lists the tier's directories and reads the files named within an
-     hour of the range through a **second `vfs.Reader` with no cache**, which disables
-     both caching and readahead, so the stats never touch the 1 GiB chunk cache or the
-     readahead of 04 §5; parsed files are cached in memory by `(path, inode version)` up to
+     hour of the range through a **second `vfs.Reader` that never fills the cache**
+     (`Reader.NoFill`: it consults the node's chunk cache, never adds to it and never
+     prefetches), so the stats never push anything out of the 1 GiB chunk cache or start
+     the readahead of 04 §5, while the segments the system pin keeps on every node (01
+     §Local chunk cache, I-373) read from the local disk even when the network is busy; parsed files are cached in memory by `(path, inode version)` up to
      `stats.cache`, since a sealed file never changes and the month file's version changes
      with its daily rebuild;
   2. when `to` is now, asks every live member for its rows since the newest `t` **that

@@ -261,6 +261,26 @@ free space falls under 20 %, since the cache shares it with the WAL and the Raft
 cached_bytes}]}` (I-162). Nothing about a pin is replicated: the same folder may be pinned
 on any number of devices, each for itself.
 
+**The system pin (I-373).** Every node also keeps the volume's own data in its cache, with
+no command and no config: the thumbnails (`/.tailraid/thumbs`), the search index
+(`/.tailraid/index`) and the stats history (`/.tailraid/stats`), up to `cache.system`
+(1 GiB unless set, `0` turns it off). The pin worker's walk takes those folders' files
+newest first (by modification time) and pins their chunks until the next file would pass
+the budget, so a long stats history keeps its recent end; a file left out returns to the
+LRU. `/.tailraid/audit` is left out: it is written far more often than it is read. The
+bytes are pinned like a user's pin, outside `cache.size`, and the walk runs on the same
+schedule, so a new segment or thumbnail is cached within one walk of its commit. The
+readers that serve these files consult the cache: the browser's thumbnail serve reads
+through the gateway's reader, and the search and stats readers read through a reader that
+consults the cache but never fills it and never prefetches (`Reader.NoFill`), so the
+system pin is what fills them and they still leave the LRU alone (I-196). A stored cover,
+a search and the Stats page then read from the node's disk whatever the network is doing.
+Until 2026-10-16 the search and stats readers had no cache at all: with honker's restore
+filling the home uplink, a cold read through the Mac took 3–9 s, and covers, search and
+the Stats page all stalled, exactly when the page was needed. `status --json` and
+`/api/pins` report it as `cache.system{path, bytes, cached_bytes, budget}`, and
+`tailraid cache ls` lists it first.
+
 ### Gateway WAL
 
 `<data_dir>/staging/<ino>.wal` holds dirty extents for an inode between NFS WRITE and
@@ -414,6 +434,13 @@ directory holds no shards (14 §1).
 Shard-file integrity (header hash matches payload, temp files never visible) is **I-11**,
 defined in `04-write-path-and-durability.md`.
 
+- **I-373** — Every node keeps in its chunk cache, pinned and outside `cache.size`, the
+  chunks of the newest files under `/.tailraid/thumbs`, `/.tailraid/index` and
+  `/.tailraid/stats` whose bytes fit `cache.system` together, and no others under that
+  pin; a file newer than one it keeps is never left out for it; a new file is fetched
+  within one pin walk of its commit; and with every other holder dead, a stored
+  thumbnail, the index and the stats segments it keeps read from the cache, the search
+  and stats readers consulting the cache without filling it.
 - **I-204** — A chunk is in the cache's memory tier and its accounting when `Put`
   returns and its file is written behind it: at most `CacheWriters` writes run at once
   and at most `CacheQueue` are outstanding, past which a `Put` writes synchronously; a
@@ -454,4 +481,5 @@ defined in `04-write-path-and-durability.md`.
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
 | I-184 | `TestEncodeCommand_V7Gating`, `TestEncodeCommand_Golden`, `TestCodec_CatalogueRoundTrip`, `TestCodec_ReadsVersion5Snapshot`, `TestCodec_StateRoundTrip`, `TestFSM_MirrorRow_Table`, `TestCandidates_MirrorNeverATarget`, `TestResult_SnapIDRoundTrip`, `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCluster_CatalogueSurvivesSnapshotInstall` |
+| I-373 | `TestPins_System_NewestFirstWithinBudget`, `TestPins_System_NewFileCachedNextWalk`, `TestReader_NoFill_ConsultsCacheNeverFills`, `TestSystemPin_ReadsWithEveryPeerDead` |
 | I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously`, `TestReader_Close_CancelsDetachedFetches` |

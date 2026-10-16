@@ -334,7 +334,9 @@ images, videos, audio files with a picture, and folders of music through their f
 track's cover. Thumbnails live in the volume so every device shares them:
 `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, at most 320 px wide, written through the
 same vfs path as an upload (temp beside the target, one `Rename`), so a thumbnail is a
-file like any other: replicated, erasure-coded and deduplicated. `/.tailraid` is a plain
+file like any other: replicated, erasure-coded and deduplicated, and kept in every node's
+chunk cache by the system pin (01 §Local chunk cache, I-373), so a stored cover is served
+from the node's disk when the network is busy. `/.tailraid` is a plain
 folder on the mount, left out of this UI's listings and refused as a target of user
 operations (400). The key carries `Version`, which bumps on every commit, so a changed
 file gets a new thumbnail and the hourly sweep (docs/06 §3) removes any whose

@@ -240,6 +240,18 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return err
 	}
+	systemBudget, err := cfg.CacheSystem()
+	if err != nil {
+		return err
+	}
+	pinned.SetSystem(systemBudget) // /.tailraid's thumbnails, index and stats kept on this node (I-373)
+	// noFill is a reader for the stats and search volumes: it consults the cache, where the
+	// system pin keeps their files, and never fills it or prefetches (I-196, I-373)
+	noFill := func() *vfs.Reader {
+		r := vfs.NewReader(node.FSM, prober, client, cache, nil)
+		r.NoFill = true
+		return r
+	}
 	flcfg := vfs.DefaultConfig()
 	if grace, _, err := cfg.RepairDurations(); err == nil {
 		flcfg.ReuseFor = grace / 2 // a reused shard stays well inside the sweep's grace (I-312)
@@ -320,7 +332,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	statsSvc := &stats.Service{
 		Name: cfg.Node.Name, Every: statsEvery, Keep: stats.Keep{Raw: keepRaw, Minute: keepMinute, Coarse: keepCoarse}, Clk: clk, Log: log,
-		Writer: &stats.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Name: cfg.Node.Name, Spill: filepath.Join(cfg.Node.DataDir, "stats", "pending"), Log: log},
+		Writer: &stats.Writer{Vol: stats.VFS{FS: fs, St: node.FSM, Rd: noFill()}, Name: cfg.Node.Name, Spill: filepath.Join(cfg.Node.DataDir, "stats", "pending"), Log: log},
 		Src: stats.Sources{
 			Machine: func() *admin.MachineReport { return admin.Vitals(cfg.Node.DataDir, ident.IP) },
 			Gateway: func() *admin.GatewayReport {
@@ -345,7 +357,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return err
 	}
 	searchSvc := &search.Service{
-		Src: node.FSM, Vol: search.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Log: log,
+		Src: node.FSM, Vol: search.VFS{FS: fs, St: node.FSM, Rd: noFill()}, Clk: clk, Log: log,
 		Cfg: search.Config{MaxFile: sset.MaxFile, Workers: sset.Workers, Batch: sset.Batch, BatchBytes: sset.BatchBytes, MaxBytes: sset.MaxBytes},
 	}
 	paths := admin.NewPaths(cfg.Paths(), clk) // the device's paths and their full-disk encryption, hourly (docs/08 §Files on disk)
@@ -483,7 +495,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			return err
 		}
 		query := &stats.Query{
-			Vol: stats.VFS{FS: fs, St: node.FSM, Rd: vfs.NewReader(node.FSM, prober, client, nil, nil)}, Clk: clk, Keep: statsSvc.Keep, CacheBytes: cacheBytes, Log: log,
+			Vol: stats.VFS{FS: fs, St: node.FSM, Rd: noFill()}, Clk: clk, Keep: statsSvc.Keep, CacheBytes: cacheBytes, Log: log,
 			Self: statsSvc.Live, Fetch: stats.FetchRPC(client),
 			Members: func() []stats.Member {
 				probes := prober.Snapshot()
