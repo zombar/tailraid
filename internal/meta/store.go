@@ -26,6 +26,7 @@ type Stats struct {
 
 	cls *classTable // the placement classes, kept with the totals (I-377); never copied out
 	due *dueIndex   // the GC and purge queues (I-381, I-382); never copied out
+	lib *libraries  // the library directories (I-384); never copied out
 }
 
 // copyInode is the read API's view of an inode: every field but the Children map, which
@@ -144,10 +145,11 @@ type Library struct {
 func (f *FSM) Libraries() []Library {
 	f.mu.RLock()
 	var out []Library
-	for ino, in := range f.st.Inodes {
-		if in.Type != TDir || in.Library() == LibraryNone || f.st.lineage(ino).inTrash {
+	for ino := range f.stats.lib.dirs { // the flagged directories, never every inode (I-384)
+		if f.st.lineage(ino).inTrash {
 			continue
 		}
+		in := f.st.Inodes[ino]
 		parts, err := f.pathLocked(ino)
 		if err != nil {
 			continue
@@ -502,14 +504,14 @@ func (f *FSM) Stats() Stats {
 	defer f.mu.RUnlock()
 	s := f.stats
 	s.Inodes = len(f.st.Inodes)
-	s.cls, s.due = nil, nil
+	s.cls, s.due, s.lib = nil, nil, nil
 	return s
 }
 
 // computeStats walks the state (Restore, tests); the applier keeps the same totals
 // incrementally.
 func computeStats(st *State) Stats {
-	s := Stats{cls: buildClasses(st), due: buildDue(st)}
+	s := Stats{cls: buildClasses(st), due: buildDue(st), lib: buildLibraries(st)}
 	s.Inodes = len(st.Inodes)
 	trashed := map[Ino]bool{}
 	for _, set := range st.Trash {

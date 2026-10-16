@@ -71,7 +71,7 @@ func (f *FSM) SetSnapshotHook(h SnapshotHook) {
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
 	st := NewState()
-	return &FSM{st: st, stats: Stats{cls: newClassTable(st), due: newDueIndex()}, waitCh: make(chan struct{})}
+	return &FSM{st: st, stats: Stats{cls: newClassTable(st), due: newDueIndex(), lib: newLibraries()}, waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
@@ -616,6 +616,7 @@ func (a *applier) unlink(c *Unlink) error {
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
+	a.stats.lib.drop(ino)
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
 	return nil
@@ -658,6 +659,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
+	a.stats.lib.drop(ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -757,6 +759,7 @@ func (a *applier) rename(c *Rename) error {
 		}
 		delete(st.Inodes, dst.Ino)
 		st.dropGrants(dst.Ino)
+		a.stats.lib.drop(dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
 		}
@@ -802,6 +805,7 @@ func (a *applier) setAttr(c *SetAttr) error {
 	now := a.clock(c.Now)
 	if c.Mask&AttrFlags != 0 {
 		in.Flags = c.Flags
+		a.stats.lib.set(in)
 	}
 	if c.Mask&AttrMode != 0 {
 		in.Mode = c.Mode

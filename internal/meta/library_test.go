@@ -2,8 +2,11 @@ package meta
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // The library kind lives in two bits of a directory's Flags: every kind sets and reads
@@ -188,4 +191,34 @@ func TestEncodeCommand_V10Gating(t *testing.T) {
 	if _, err := DecodeCommand(u); err == nil {
 		t.Fatal("a version-10 Unlink was accepted")
 	}
+}
+
+// Libraries costs the same beside a hundred thousand inodes as beside a thousand: it
+// reads the applier's set of flagged directories, never every inode (I-384). Each size
+// is timed at its best of 20 calls; a walk grows about a hundredfold.
+// Invariant: I-384
+func TestStore_Libraries_CostIndependentOfInodes(t *testing.T) {
+	best := func(files int) time.Duration {
+		tf := newTFSM(t)
+		lib := tf.mkdir(RootIno, "films")
+		tf.flags(lib, WithLibrary(0, LibraryMovies))
+		dir := tf.mkdir(lib, "all")
+		for i := range files {
+			tf.raw(Command{Op: OpCreate, Create: &Create{Parent: dir, Name: fmt.Sprintf("f%d", i), Type: TFile, Mode: 0o644, Now: 1}})
+		}
+		d := time.Duration(math.MaxInt64)
+		for range 20 {
+			t0 := time.Now()
+			if len(tf.f.Libraries()) != 1 {
+				t.Fatal("the library is not listed")
+			}
+			d = min(d, time.Since(t0))
+		}
+		return d
+	}
+	small, large := best(1_000), best(100_000)
+	if large > 20*max(small, time.Microsecond) {
+		t.Fatalf("Libraries took %v beside 100k inodes, %v beside 1k", large, small)
+	}
+	t.Logf("Libraries: %v beside 1k inodes, %v beside 100k", small, large)
 }

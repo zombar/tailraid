@@ -307,6 +307,7 @@ func (a *applier) deleteBatch(batch []delItem, cmdNow int64) error {
 		}
 		delete(st.Inodes, in.Ino)
 		st.dropGrants(in.Ino)
+		a.stats.lib.drop(in.Ino)
 	}
 	return nil
 }

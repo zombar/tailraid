@@ -274,7 +274,11 @@ FSM identical. The effective kind of a folder is the nearest flagged ancestor's 
 first); a library inside a library is its own section. `ls` and `stat` carry `library`
 next to `protected` and `nsfw`, `POST /api/flags` accepts `library` with one of the four
 words, and the folder menu offers it (13 §4). `Store.Libraries()` lists every flagged
-folder in kind-then-path order for the Media tab; no new CLI command is needed.
+folder in kind-then-path order for the Media tab; no new CLI command is needed. It asks
+for each request and each catalogue pass, so it reads a set of flagged directories that
+the applier keeps (the one `SetAttr` that sets flags adds or drops a directory; a delete
+drops it; `Restore` rebuilds it, never encoded) instead of walking every inode: O(libraries
+× depth), whatever the volume holds (I-384).
 
 ## 10. Non-goals
 
@@ -433,6 +437,9 @@ the Cover Art Archive data are CC0 and need none.
   other bit; the effective kind is the nearest flagged ancestor's; `ls` and `stat` carry
   `library`, `POST /api/flags` sets it, and `Store.Libraries()` lists flagged folders in
   kind-then-path order, the same on every node.
+- **I-384** — `Store.Libraries()` reads an applier-kept set of the directories whose flags
+  carry a library kind, never a walk of the inodes: its cost is the libraries' number times
+  their depth, and the set equals a recount after every apply and after `Restore`.
 - **I-211** — The catalogue is a pure function of the tree, the sidecars and the tags
   under each library folder: a film from a folder or a loose video file, a show from a
   folder with seasons and episodes parsed from `SnnEnn`, `nnxnn` or `Episode nn`, an album
@@ -469,6 +476,7 @@ the Cover Art Archive data are CC0 and need none.
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
+| I-384 | `TestStore_Libraries_CostIndependentOfInodes`, `TestStore_Libraries`, `TestFSM_ApplySnapshotRestoreEquivalence` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |
