@@ -10,15 +10,10 @@ import (
 	"strings"
 
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/restore"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/vfs"
 )
-
-// snapshotPath is where path p of snapshot name on mirror lies on the mounts: mirror is
-// the row's name (pike/m1) or its directory (pike-m1).
-func snapshotPath(mirror, name, p string) string {
-	return path.Join("/", vfs.SnapshotDir, strings.ReplaceAll(mirror, "/", "-"), name, p)
-}
 
 // VersionsReply is the answer of `versions`: the file's versions newest first (the live
 // one first) and the mirrors that were offline.
@@ -45,7 +40,7 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 		if op.Mirror == "" || op.Name == "" {
 			return nil, errors.New("versions --revert needs <mirror>/<name>")
 		}
-		n, err := fs.RevertFile(ctx, snapshotPath(op.Mirror, op.Name, p), p)
+		n, err := fs.RevertFile(ctx, restore.SnapshotPath(op.Mirror, op.Name, p), p)
 		if err != nil {
 			return nil, err
 		}
@@ -55,7 +50,7 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 			return nil, errors.New("versions --copy needs <mirror>/<name> and --as <name>")
 		}
 		dst := path.Join(path.Dir(p), op.As)
-		rep, err := fs.RestoreSnapshot(ctx, snapshotPath(op.Mirror, op.Name, p), dst)
+		rep, err := fs.RestoreSnapshot(ctx, restore.SnapshotPath(op.Mirror, op.Name, p), dst)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +89,7 @@ func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst st
 		return rpc.RestoreStarted{}, fmt.Errorf("snapshot restore: no mirror %q: %w", op.Mirror, meta.ErrNotExist)
 	}
 	var sn meta.Snapshot
-	for _, s := range a.restores.st.Snapshots() {
+	for _, s := range a.restores.Store().Snapshots() {
 		if s.Mirror == row.Idx && s.Name == op.Name {
 			sn = s
 		}
@@ -105,13 +100,13 @@ func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst st
 	// a file or link lands only where nothing is (a folder merges): refused here, so a job
 	// that finds its one file in place has only to be a resumed one (docs/16 §6)
 	fs := a.actorFS(op)
-	if fi, err := fs.Lstat(snapshotPath(row.Name, sn.Name, src)); err == nil && !fi.IsDir() {
+	if fi, err := fs.Lstat(restore.SnapshotPath(row.Name, sn.Name, src)); err == nil && !fi.IsDir() {
 		if _, err := fs.Lstat(dst); err == nil {
 			return rpc.RestoreStarted{}, fmt.Errorf("snapshot restore %s: %w", dst, os.ErrExist)
 		}
 	}
 	req := rpc.RestoreStart{Mirror: row.Idx, Snapshot: sn.ID, Path: src, Dst: dst, Actor: op.Actor}
-	if self, ok := a.restores.self(); ok && self == row.Host {
+	if self, ok := a.restores.Self(); ok && self == row.Host {
 		return a.restores.Start(ctx, req)
 	}
 	addr, _, ok := a.node.RPCAddrOf(row.Host)
@@ -120,7 +115,7 @@ func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst st
 	}
 	started, err := a.client.StartRestore(ctx, addr, req)
 	if errors.Is(err, rpc.ErrNoRestoreJobs) {
-		host, _ := a.restores.st.Node(row.Host)
+		host, _ := a.restores.Store().Node(row.Host)
 		return rpc.RestoreStarted{}, fmt.Errorf("%s runs tailraid %s, which has no restore jobs; update it", host.Name, cmp.Or(host.Version, "of an older version"))
 	}
 	return started, err
@@ -128,11 +123,11 @@ func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst st
 
 // cancelRestore asks the job's host to cancel it for the op's user (docs/16 §6, I-368).
 func (a *adminOps) cancelRestore(ctx context.Context, op rpc.AdminOp) (any, error) {
-	host, ok := restoreHost(op.Job)
+	host, ok := restore.HostOf(op.Job)
 	if !ok || a.restores == nil {
 		return nil, fmt.Errorf("%w: %s", rpc.ErrNoRestore, op.Job)
 	}
-	if self, ok := a.restores.self(); ok && self == host {
+	if self, ok := a.restores.Self(); ok && self == host {
 		return map[string]string{"cancelled": op.Job}, a.restores.Cancel(ctx, op.Job, op.Actor)
 	}
 	addr, _, ok := a.node.RPCAddrOf(host)
@@ -144,7 +139,7 @@ func (a *adminOps) cancelRestore(ctx context.Context, op rpc.AdminOp) (any, erro
 
 // mirrorRow is the mirror named by its row name (pike/m1) or its directory (pike-m1).
 func (a *adminOps) mirrorRow(name string) (meta.Node, bool) {
-	nodes := a.restores.st.Nodes()
+	nodes := a.restores.Store().Nodes()
 	for i := range nodes {
 		if n := &nodes[i]; n.Kind == meta.KindMirror && n.State != meta.Removed && (n.Name == name || strings.ReplaceAll(n.Name, "/", "-") == name) {
 			return *n, true

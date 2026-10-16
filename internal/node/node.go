@@ -35,6 +35,7 @@ import (
 	"github.com/zombar/tailraid/internal/nfsgw"
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/restore"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/secrets"
@@ -384,8 +385,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	defer node.FSM.SetApplyHook(nil)
 	ops.mirrors, ops.mirrorPol = mirrors, mpol
 	// restore jobs (docs/16 §6): this host's, reading its own mirrors
-	jobs := newRestoreJobs(cfg.Node.DataDir, fs, node.FSM, node.SelfIdx, func(idx meta.NodeIdx) bool { _, ok := mirrors.get(idx); return ok }, clk, log)
-	mirrors.held = jobs.held // thinning and the reserve leave a snapshot a job reads (I-364)
+	jobs := restore.New(cfg.Node.DataDir, fs, node.FSM, node.SelfIdx, func(idx meta.NodeIdx) bool { _, ok := mirrors.get(idx); return ok }, clk, log)
+	mirrors.held = jobs.Held // thinning and the reserve leave a snapshot a job reads (I-364)
 	ops.restores = jobs
 	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, online: prober.MirrorOnline}) // /.snapshots (docs/16 §6)
 	selfHealth := prober.SelfHealth
@@ -731,10 +732,10 @@ type adminOps struct {
 	clk       clock.Clock
 	log       *slog.Logger
 	dataDir   string
-	seedKey   string       // the device members the seed file holds (refreshSeed)
-	s3Swept   time.Time    // the leader's last S3 sweep (docs/06 §3)
-	mirrors   *mirrorSet   // this host's mirrors (docs/16)
-	restores  *restoreJobs // this host's restore jobs (docs/16 §6)
+	seedKey   string        // the device members the seed file holds (refreshSeed)
+	s3Swept   time.Time     // the leader's last S3 sweep (docs/06 §3)
+	mirrors   *mirrorSet    // this host's mirrors (docs/16)
+	restores  *restore.Jobs // this host's restore jobs (docs/16 §6)
 	mirrorPol config.MirrorPolicy
 	secrets   *secrets.Store // the secrets store (docs/19)
 	audit     *audit.Writer  // this node's audit log (docs/21 §8); nil in tests without one

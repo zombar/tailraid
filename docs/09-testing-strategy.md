@@ -524,15 +524,25 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   first user turns enforcement on for the rest of the run; a live cluster's users are
   its own, so it records the four as skipped (`Caps.Users`); the harness answers the
   same ops over its nodes' own FSMs (`users_harness_test.go`), so CI runs the four.
-  32 restore jobs (docs/16 §6, docs/13 §7): a tree restore of a few hundred files
-  started through a gateway that is not the mirror's host answers at once; every node's
-  `status.restores` lists the job with totals before its first chunk and done counts that
-  never fall; the mirror's host restarts mid-job and the job resumes and completes; the
-  mirror goes offline (`SetMirrorOnline`) and the job waits, then goes on; every restored
-  file's hash matches the snapshot's; a second job queues behind the first; a cancelled
-  job leaves no `.tailraid-restore-` file; a user who may not read the destination cannot
-  cancel another's job (I-363..I-368). The report's Restores section charts each job's
-  bytes over time with its resumes marked, and a table of jobs, states and rates.
+  32 restore jobs (docs/16 §6, docs/13 §7, `restorephase.go`): a tree restore of 242 files
+  (eight folders of 30 small files and two multi-chunk ones) started through a gateway
+  that is not the mirror's host answers at once; every node's `status.restores` lists the
+  job with totals before its first chunk and done counts that never fall and end at the
+  totals; every restored file's hash matches the snapshot's. Then, with the mirror
+  unplugged (`SetMirrorOnline`), so that every later job is certainly unfinished whatever
+  the environment's speed: a restore waits, the mirror's host restarts and the recorded
+  job survives it, two more queue one behind the other, one is cancelled; once the
+  mirror is back the waiting job completes with the snapshot's bytes, the two run one
+  after the other (read from one status report, as two looks would straddle a job's
+  end), and the cancelled one leaves no `.tailraid-restore-` file. Once the cluster has
+  users (a users-first run) a user made for the check may not cancel another's job and
+  the job goes on (I-363..I-368); otherwise that check records itself skipped. The phase
+  runs before 28: its starts are the environment's own ops, which sign only in a
+  users-first run. The harness runs the node's own runner (`internal/restore`) on the
+  mirror's host over its current handles, stopped and started again over the same file
+  when the host restarts. The report's Restores section charts each job's bytes done
+  with what was done meanwhile marked (the mirror unplugged and back, the host
+  restarted, the cancel), and a table of jobs, roles, states, files and resumes.
   **Users first** (`make soak SOAK_FLAGS=-users-first`, `Run.UsersFirst`): a real volume
   has its first admin from `init`, so a run can put phase 0 before phase 1: the admin
   made as phase 28 makes them, the driver's mount uid and SMB account bound to them on

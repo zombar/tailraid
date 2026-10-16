@@ -480,12 +480,12 @@ stub in `test/invariants/` meanwhile.
 |---|---|
 | I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
 | I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
-| I-363 | `TestRestoreJob_OutlivesRequest`, `TestAdminOps_RestoreAndVersions` |
-| I-364 | `TestRestoreJob_ResumesAfterRestartAndOfflineMirror` |
-| I-365 | `TestRestoreJob_ProgressAddsUpToTotals`, `TestRestoreJob_ProgressMonotone_SameOnEveryNode`, `TestStatus_RestoreLine` |
-| I-366 | `TestRestoreJob_ParallelEqualsSerial`, `TestRestoreJob_OneJobPerHost_Queued` |
+| I-363 | `TestRestoreJob_OutlivesRequest`, `TestAdminOps_RestoreAndVersions`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
+| I-364 | `TestRestoreJob_ResumesAfterRestartAndOfflineMirror`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
+| I-365 | `TestRestoreJob_ProgressAddsUpToTotals`, `TestRestoreJob_ProgressMonotone_SameOnEveryNode`, `TestStatus_RestoreLine`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
+| I-366 | `TestRestoreJob_ParallelEqualsSerial`, `TestRestoreJob_OneJobPerHost_Queued`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-367 | `TestRestoreJob_RunsAsStarter_RecheckedOnResume`, `TestAdminOps_RestoreUnderUsers` |
-| I-368 | `TestRestoreJob_Cancel_NoTempLeft`, `TestRestoreJob_CancelByStarterOrAdmin` |
+| I-368 | `TestRestoreJob_Cancel_NoTempLeft`, `TestRestoreJob_CancelByStarterOrAdmin`, `TestSoak_AllPhasesAgainstHarness` (phase 32), `TestSoak_AllPhasesUnderUsersAgainstHarness` (phase 32, another user's cancel) |
 | I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | I-241 | `TestClient_MirrorGet_OnBoundedTransport` |
 | I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |
