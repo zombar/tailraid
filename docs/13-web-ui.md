@@ -451,7 +451,11 @@ neither fetched nor rebuilt, so nothing flickers. The selection bar, the now-pla
 and the queue carry `hidden` while they have nothing to show, and the stylesheet lets the
 attribute win over any display a class sets. The bar carries the cover, title and
 artist — album, previous · play/pause · next, a seek slider with the elapsed and total
-time, repeat (off, all, one) and shuffle, and opens into the queue. Playing a track queues
+time, repeat (off, all, one) and shuffle, opens into the queue, and ends in a close button
+that stops the track and empties the queue, as the queue's Clear does, so the bar goes
+away. A track whose cover will not load (no picture in it and none beside it: the
+thumbnail answers 404) leaves the cover's box empty, never a broken image, and the bar
+does not ask for that URL again until another track plays. Playing a track queues
 its folder in track order; "Play all" and "Shuffle" on an album, "Play" and "Add to queue"
 on a selection do the same for any set of audio files or folders. The next track is
 preloaded in a second hidden `<audio>` and swapped in when the first ends, so an album

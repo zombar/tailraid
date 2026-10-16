@@ -378,7 +378,13 @@ class Player {
 
   private buildBar(): void {
     const cover = h("img", { class: "cover", alt: "" }) as HTMLImageElement;
-    cover.addEventListener("error", () => cover.removeAttribute("src"));
+    // a track with no picture and no cover beside it answers 404: the box stays empty
+    // and this URL is not asked again until another track plays (a redraw on every
+    // timeupdate otherwise set it again and showed the broken-image glyph)
+    cover.addEventListener("error", () => {
+      cover.dataset.failed = cover.getAttribute("src") ?? "";
+      cover.removeAttribute("src");
+    });
     const title = h("div", { class: "title" });
     const sub = h("div", { class: "sub" });
     const prev = iconBtn("skip_previous_fill", "previous", () => this.prev());
@@ -391,6 +397,8 @@ class Player {
     repeat.setAttribute("aria-pressed", "false");
     const shuffle = iconBtn("shuffle", "shuffle", () => this.toggleShuffle());
     shuffle.setAttribute("aria-pressed", "false");
+    const close = iconBtn("close", "close the player", () => this.clear()); // stop and empty the queue, as Clear does
+    close.classList.add("close");
     const queueBtn = h("button", { type: "button", class: "queue-btn", "aria-pressed": "false", onClick: () => { this.bar?.classList.toggle("expanded"); this.notify(); } }, icon("queue_music"), h("span", null, "Queue"));
     const bar = h(
       "aside",
@@ -401,6 +409,7 @@ class Player {
       h("div", { class: "seek" }, seek, time),
       h("div", { class: "modes" }, repeat, shuffle),
       queueBtn,
+      close,
     );
     const list = h("ol");
     const summary = h("span", { class: "small dim" });
@@ -424,7 +433,8 @@ class Player {
     if (!c) return;
     const e = this.els;
     const cover = e.cover as HTMLImageElement;
-    const want = c.hasCover === false ? "" : thumbURL(c.path, c.root);
+    let want = c.hasCover === false ? "" : thumbURL(c.path, c.root);
+    if (want && cover.dataset.failed === want) want = "";
     if (cover.getAttribute("src") !== want) {
       if (want) cover.src = want;
       else cover.removeAttribute("src");
