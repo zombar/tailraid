@@ -761,3 +761,12 @@ table.snapshots tr.offline td { color: var(--dim); }
 /* a mirror's card: online, offline (dashed, as a closed disk) or warn */
 .card.mirror.off { border-style: dashed; }
 .card.mirror.warn { border-color: var(--warn); }
+/* a restore job's card (docs/16 §6): running, warn while queued, waiting or retrying, bad
+   once failed, done (finished or cancelled) quiet; Cancel in its bottom right corner */
+.card.restore { display: flex; flex-direction: column; } /* the row's height, Cancel pinned to its bottom right */
+.card.restore.warn { border-color: var(--warn); }
+.card.restore.bad { border-color: var(--bad); }
+.card.restore.done { border-style: dashed; }
+.card-acts { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: auto; }
+/* the Snapshots table's pages: Newer, where it is, Older */
+.pager { display: flex; align-items: center; justify-content: center; gap: var(--sp-3); }

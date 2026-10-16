@@ -193,11 +193,12 @@ since a dead host cannot end its own:
 **Thinning**, per mirror, on the same tick: of the mirror's automatic snapshots the host
 keeps the newest of each of the last `keep.hourly` hour, `keep.daily` day, `keep.weekly`
 ISO week and `keep.monthly` month buckets (UTC; 24, 30, 8 and 12 unless set) and proposes
-`SnapshotDelete` for the rest, oldest first. A manual snapshot is never thinned. When the
+`SnapshotDelete` for the rest, oldest first. A manual snapshot is never thinned, nor is a
+snapshot an unfinished restore job reads (§6). When the
 mirror's free space falls under its reserve (`max(5 %, 4 GiB)` of its filesystem, measured
 by the host) the oldest automatic snapshot goes first, then syncs to that mirror stop with
-a warning in `status` and `check` until space is freed; a manual snapshot is never deleted
-for space.
+a warning in `status` and `check` until space is freed; a manual snapshot, and one a
+restore job reads, is never deleted for space.
 
 **Nobody removes a snapshot by hand.** Thinning and the free-space reserve, both on the
 host's tick, are the only ways a snapshot ever leaves a mirror: there is no CLI verb,
@@ -297,7 +298,72 @@ contributes "n snapshots on `pike-m1`, offline" and nothing else.
   the root.
 
 The CLI (`tailraid snapshot restore`, `tailraid versions --revert|--copy`, 12 §11) and the
-browser (13 §4) use the same `vfs` calls.
+browser (13 §4) use the same `vfs` calls. A revert and a copy are one file and answer when
+it is written. A tree restore is a **job** (below).
+
+**Restore jobs.** A tree restore can be hundreds of gigabytes, so it does not live in the
+request that asked for it. Until 2026-10-15 it did: the browser held one request open for
+the whole tree, showed no progress, and a refresh ended the restore. Each 4 MiB chunk was
+fetched from the mirror's host over the tailnet (0.6–1.0 s measured) and then uploaded,
+one after the other, about 2–3 MB/s.
+
+- **Where it runs.** A job runs on the **mirror's host**, which reads the mirror from its
+  own disk. The node that is asked (the browser's or the CLI's) checks `Admin` where the
+  copy lands (docs/21 §2), then forwards the start to the host with
+  `POST /v1/restores {mirror, snapshot, path, to, actor}` (08). The host records the job
+  and answers `202 {job, host}`. The start returns then; nothing the asker does later,
+  closing the page, refreshing it, dropping the connection or interrupting the CLI,
+  touches the job.
+- **The record.** The host keeps its jobs in `<data_dir>/restores.json`, written with
+  `sysfs.WriteFileSync` (temp, fsync, rename, directory fsync) on every change of state
+  and every 30 s for the counters. A job is `{id, actor, mirror, snapshot, src, dst,
+  state, error, files_total, bytes_total, files_done, bytes_done, existing, started,
+  updated, ended}`. Its ID is `<host idx>-<n>`, unique in the cluster. Nothing about a job
+  is replicated: losing the host loses its jobs, as it loses the mirror they read.
+- **States.**
+  - **counting**: the host walks the snapshot's trees under `src` for `files_total` and
+    `bytes_total`, or takes them from the catalogue row for a whole snapshot.
+  - **queued**: a host runs one job at a time; the others wait in the order they came.
+  - **running**: copying.
+  - **waiting**: the mirror is offline (detached); the job goes on when it is back.
+  - **retrying**: a transient error (no leader, a peer restarting, `ENOSPC`, a busy or
+    unreachable node); tried again after 1 min, doubling to 10 min, with no limit.
+  - **done**, **failed** or **cancelled**.
+
+  A job fails only for what waiting does not mend: its user was removed or disabled, it no
+  longer holds `Admin` where the copy lands, the destination's parent became a file, or
+  the snapshot is gone. A failed job is not retried. A rerun of the same restore skips
+  what exists and goes on from there.
+- **Resume.** At start the host resumes every job it recorded as counting, queued,
+  running, waiting or retrying. Resuming is the tree restore again: an existing file is
+  skipped and counted under `existing`, and the file a stopped run left under its
+  `RestoreTempName` is restored again (I-186). So a resumed job ends with the same tree as
+  one run that was never stopped. `files_done` and `bytes_done` count both what this job
+  wrote and what it found, so they never fall across a resume.
+- **The snapshot stays.** While a job is not done, failed or cancelled, the host's
+  thinning and free-space reserve skip the snapshot it restores from (§4), as they skip
+  manual snapshots.
+- **Speed.** A job writes `RestoreFiles` (4) files at once, and at most `RestoreInFlight`
+  (8) chunks of the job are being read and written at any moment. A large file's chunks
+  run alongside each other, and a folder of small files runs four files at a time. Every
+  request carries `X-Tailraid-Priority: background` (I-175), so client traffic keeps its
+  share. The result is the tree one chunk at a time would have written: each file still
+  lands under its temporary name and is renamed into place once committed.
+- **Who it runs as.** A job writes as the user who started it, through that user's view
+  (docs/21 §5); before the cluster has users, as the node. At every start and every resume
+  the host checks the user exists, is enabled and holds `Admin` where the copy lands, and
+  the FSM checks every proposal as for any write.
+- **Cancel.** The job's starter or an admin cancels it with `POST /v1/restores/{id}/cancel`
+  (the browser's Cancel, `tailraid snapshot restore --cancel <id>`). It stops before its
+  next chunk. The file it was writing is removed from under its temporary name, and what
+  was restored stays.
+- **Progress.** A host's `/health` carries only how many jobs it lists (`restores`, a
+  count: `/health` is open to the tailnet and a job names paths and a user). Each node's
+  status refresher reads `GET /v1/restores` (members only, 08) from every live host whose
+  count is not zero, with the rate over the last minute, so every node's `status` carries
+  `restores`, every job of every live host, and every node's dashboard shows them all
+  within a refresh. A job stays listed 7 days after it ends, at most 20 finished jobs per
+  host.
 
 ## 7. Disaster recovery
 
@@ -315,6 +381,8 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
 
 ## 8. Bounds and gaps
 
+- One restore job running per host, `RestoreFiles` (4) files and `RestoreInFlight` (8)
+  chunks of it at once; finished jobs listed 7 days, at most 20 per host.
 - One sync per mirror at a time, reading `SyncWorkers` (8) chunks at once; any number of
   mirrors sync at once, each at `mirrors.rate` (50 MiB/s by default, `0` unmetered).
 - A snapshot name is 1 to 64 bytes, no `/`, not `.` or `..`, unique per mirror; an
@@ -365,6 +433,31 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   `RestoreTempName` in its folder and renamed into place once committed, so its name
   holds the whole file or nothing and a rerun after an interrupted restore restores it
   (removing the temporary file a stopped run left); nothing on a mirror changes.
+- **I-363** — A tree restore is a job on the mirror's host: the start, from the browser or
+  the CLI, returns once the host has recorded the job durably, and nothing that happens to
+  the request afterwards (a closed or refreshed page, a dropped connection, an interrupted
+  CLI) stops it or changes what it writes.
+- **I-364** — A job resumes: after its host restarts, the host resumes every job it
+  recorded as unfinished; while its mirror is offline the job waits and goes on when the
+  mirror is back; after a transient failure it is tried again with a backoff of 1 min
+  doubling to 10 min; and a job stopped and resumed any number of times ends with the same
+  tree as one that never stopped. While a job is unfinished, its host thins and reserves
+  around the snapshot it reads, never removing it.
+- **I-365** — A job's totals are known before it copies its first chunk; `files_done` and
+  `bytes_done` never fall over the job's life, across resumes included, and end at the
+  totals when it is done; every node's `status.restores` lists every job of every live
+  host, the same on every node within a probe interval.
+- **I-366** — A host runs at most one restore job at a time, the others queued in order;
+  a running job has at most `RestoreFiles` files and `RestoreInFlight` chunks in flight,
+  every request at background priority; the tree it writes is the tree a one-chunk-at-a-
+  time restore writes.
+- **I-367** — A job writes as the user who started it (before the first user, as the
+  node). At every start and resume its host checks that the user exists, is enabled and
+  holds `Admin` where the copy lands; failing that check ends the job as failed, and a
+  failed job is never retried.
+- **I-368** — The job's starter or an admin may cancel it, nobody else; a cancelled job
+  writes no chunk after the one in flight, removes the temporary file of the file it was
+  writing, and leaves every file it had renamed into place.
 - **I-239** — A sync reads and writes up to `SyncWorkers` chunks at once, each distinct
   chunk once, and writes the same snapshot as one chunk at a time would: every object
   durable before any tree naming it, every tree before its parent, the manifest last,
@@ -387,6 +480,12 @@ stub in `test/invariants/` meanwhile.
 |---|---|
 | I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
 | I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
+| I-363 | `TestStub_I_363` (planned: TestRestoreJob_OutlivesRequest) |
+| I-364 | `TestStub_I_364` (planned: TestRestoreJob_ResumesAfterRestartAndOfflineMirror) |
+| I-365 | `TestStub_I_365` (planned: TestRestoreJob_ProgressMonotone_SameOnEveryNode) |
+| I-366 | `TestStub_I_366` (planned: TestRestoreJob_ParallelEqualsSerial) |
+| I-367 | `TestStub_I_367` (planned: TestRestoreJob_RunsAsStarter_RecheckedOnResume) |
+| I-368 | `TestStub_I_368` (planned: TestRestoreJob_Cancel_NoTempLeft) |
 | I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | I-241 | `TestClient_MirrorGet_OnBoundedTransport` |
 | I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |

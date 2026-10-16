@@ -173,7 +173,8 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `GET /api/versions?path=` | – | `{"versions":[{key,size,mtime,snapshots:[{id,mirror,name}],current}],"offline":[{mirror,count}]}`: the file's distinct contents on the online mirrors, newest first, the live one `current` with the snapshots holding it (possibly none); `offline` counts what the offline mirrors would add |
 | `POST /api/revert` `{"path","snapshot"}` | required | 200 `{"uploaded":n}`: the content as of that snapshot becomes current (docs/16 §6), `n` the chunks copied back from the mirror because the pool no longer held them; a dirty file is flushed first; an offline mirror → 409 `offline` |
 | `POST /api/copy` `{"path","snapshot","name"}` | required | 201 the new entry beside the file; a taken name → 409 |
-| `POST /api/restore-tree` `{"snapshot","path","to"?,"name"?}` | required | 200 `{"path","files","dirs","links","skipped":[…],"skipped_count","uploaded"}`: the snapshot's tree at `path` recreated under `to` (its parent unless given) as `name`, an existing directory descended, an existing file skipped and counted, the first `MaxBatch` skipped paths listed; the request runs until the tree is restored, and a second request after an interruption continues it, since what exists is skipped |
+| `POST /api/restore-tree` `{"snapshot","path","to"?,"name"?}` | required | 202 `{"job","host","path"}`: a restore job of the snapshot's tree at `path` into `to` (its parent unless given) as `name` is recorded on the mirror's host, which runs it (docs/16 §6); the node asked checks `Admin` where it lands and forwards the start, so the answer comes once the job is recorded, not when it ends; the job's progress is in `/api/status` (`restores`); a mirror host on an older version → 501 with its version |
+| `POST /api/restore/cancel` `{"job"}` | required | 204: the job stops before its next chunk, and what it restored stays; only its starter or an admin (403), forwarded to the job's host; an unknown or finished job → 404 |
 
 - `ls`, `stat`, `files`, `thumb` and `tags` take `at=<snapid>` and then read as of that
   snapshot from its mirror (docs/16 §6): no `dirty`, `deleted_at` or `upload` fields, and
@@ -313,14 +314,16 @@ admin report without the join token, which belongs to the CLI on a member (I-127
   every read, and the listing becomes read-only: no select boxes, no upload, no folder
   menu, no dirty or deleted rows; the breadcrumb ends in the snapshot's badge, and a
   banner says "As of `2026-10-12-0900Z` on `pike-m1` · taken 3 h ago · read-only" with
-  "Restore folder to…" (the picker, then `restore-tree`) and "Back to now". A file's view
+  "Restore folder to…" (the picker, then `restore-tree`, which starts a restore job on
+  the mirror's host and answers at once; the toast links the dashboard's Restores block)
+  and "Back to now". A file's view
   carries a **Versions** panel: one row per distinct content, the snapshots holding it
   folded into a range ("2026-10-12-0600Z – 0900Z · 4 hourly · pike-m1"), its size and
   modified time, and View (the file view with `at=`), Revert and Save a copy; the live
   content is the `current` row, saying which snapshots hold it or "in no snapshot yet",
   and Revert asks first when the current content is in no snapshot. Offline mirrors add
-  one dim line ("12 more snapshots on `atlas-m1`, offline"). The toasts say how many
-  chunks came back from the mirror. The dashboard's Mirrors section (§7) is where
+  one dim line ("12 more snapshots on `atlas-m1`, offline"). The toasts of a revert and a
+  copy say how many chunks came back from the mirror. The dashboard's Mirrors section (§7) is where
   snapshots are taken (a manual one is permanent, and the dialog says so); "Take a snapshot" flushes the serving gateway's dirty
   files first so the user's own last writes are in it.
 
@@ -460,9 +463,20 @@ Volume (the count, the mirrors and how many are offline), then one card per mirr
 and host, an online dot, used and free on its disk, the newest snapshot, the sync under
 way as a progress bar with the bytes it is adding, `warn` when it is offline past
 `stale_after`, under its reserve or holding an incomplete snapshot), "Take a snapshot",
-and a table of every snapshot newest first (name with a `manual` badge, mirror, taken,
+then a **Restores** block (`#restores`, present while `status.restores` lists a job), and a
+table of every snapshot newest first (name with a `manual` badge, mirror, taken,
 state, what it added to the mirror, and Browse, disabled
-with the reason for an offline mirror's rows; there is no Delete). The section's heading carries the schedule
+with the reason for an offline mirror's rows; there is no Delete), 20 rows a page under a
+pager (Newer, "21–40 of 57", Older) once there are more than 20; the page is the
+browser's own and starts at the newest on every load. The Restores block holds one card
+per job of every host, newest first: the destination path, the host and the state as
+badges; a bar of bytes with the percentage, the rate and the time left; a bar of files with
+how many were already there; the snapshot it reads, who started it and when, and a resume
+after a restart; Cancel on an unfinished job for its starter or an admin. Counting shows
+an empty bar and the files counted so far; queued names the job ahead; waiting says the
+mirror is offline and the job goes on when it is back; retrying says when and why; failed
+says why and that a rerun goes on from there; done says what was restored and how many
+chunks came back from the mirror, and leaves after 7 days. The section's heading carries the schedule
 (`hourly 24 · daily 30 · weekly 8 · monthly 12 · next in 23 m`).
 
 ## 8. Build and assets
@@ -769,6 +783,8 @@ sort marks `▴ ▾`. None of them is drawn as emoji.
 | Versions list | `details.panel` > `table.versions` > `tr` (`td.asof`, `td.size`, `td.mtime`, `td.acts`) + `.small.dim` offline line | one row per distinct content, newest first; `td.asof` the snapshot range in mono with the count and mirror under it; the live content `tr.current` with a `.badge.strong` "current" and its holders or "in no snapshot yet"; others View · Revert · Save a copy; the table sizes to its content, the actions never wrap; below 600 px the modified column drops |
 | Mirror card | `.cards` > `.card.mirror` > `.name-row` (dot, name, host, badges) + bar rows (used of the disk; the sync's progress) + `.meta` | `ok` online, `off` dashed offline with "offline 3 d"; `warn` past `stale_after`, under its reserve, or holding an incomplete snapshot (the word says which) |
 | Snapshots table | `section` > `h2` + `.h-sub` (the schedule) + `.snap-head` (Take a snapshot · counts) + `table.snapshots` > `tr` (`td.name` (+ `.badge` manual), `td.mirror`, `td.taken`, `td.holds`, `td.acts` Browse; no delete) | newest first; a syncing row carries `.badge` "syncing 41 %", an incomplete one `.badge.warn` "3 missing"; an offline mirror's actions disabled with the reason; below 600 px mirror, taken and holds drop under the name |
+| Restore card | `.cards` > `.card.restore` (+ `.warn` queued, waiting or retrying, `.bad` failed, `.done` done or cancelled) > `.name-row` (dot, destination path, `.badges`: on host, state) + `.bar-row` bytes + `.bar-row` files + `.meta` (from mirror · snapshot, by user, started, resumed) + `.card-acts` (Cancel restore) | in the Mirrors section under `h3#restores`, newest first; counting shows an empty bar; the card's border follows its state (warn, bad, dashed when finished); Cancel sits in the card's bottom right corner, level across a row of cards of different heights |
+| Pager | `.pager` > `button` Newer + `.small.dim` "21–40 of 57" + `button` Older | under the Snapshots table past 20 snapshots; Newer disabled on the first page, Older on the last |
 
 ### Copy
 
@@ -782,8 +798,10 @@ counts days: "Deleted 3 d ago · gone for good in 27 d". A refusal names the cau
 "protected: unprotect Concerts 2024 to delete", "pike-m1 is offline: attach it to
 browse". A snapshot is named as the server names it, in mono (`2026-10-12-0900Z`, or the
 user's own name), with its mirror after it (`on pike-m1`), never reformatted; "as of"
-introduces it everywhere; a restore's toast says what came back from the mirror ("3
-chunks copied back from pike-m1"). Tooltips on the health pill quote the
+introduces it everywhere; a revert's or a copy's toast says what came back from the mirror ("3
+chunks copied back from pike-m1"), a tree restore's toast says where it runs and links the
+dashboard ("restoring Concerts 2024 from 2026-10-12-0900Z on pike · follow it on the
+dashboard"). Tooltips on the health pill quote the
 degraded-operation table of docs/00.
 
 ### Charts
@@ -913,6 +931,14 @@ placement gives way to legible text: the dashed line keeps the event's true time
 26. On an iPhone: the transport, the play buttons and the playing row show Material
     icons, never colour emoji; a row's and a tile's Play shows without hover; every
     control is easy to hit.
+27. Restore jobs: from a snapshot on another device's mirror, Restore folder to… a folder
+    of a few gigabytes; the toast links the dashboard, where the card counts, then runs
+    with its rate and time left. Refresh the page and close the tab: the card goes on.
+    Restart the mirror's host (`tailraid stop && tailraid start` there): the card says it
+    resumed, and the restored files match the snapshot's (`sha256`). Unplug the mirror:
+    the card waits; plug it back: it goes on. Start a second restore: it queues behind the
+    first. Cancel it: no `.tailraid-restore-` file is left. Past 20 snapshots, the table
+    pages.
 
 ## Invariants
 
@@ -1131,6 +1157,12 @@ placement gives way to legible text: the dashed line keeps the event's true time
   document (absent for system), keeps the choice in the browser's `localStorage` only and
   applies it before the first view renders; a storage failure means system; the server
   never sees the choice.
+- **I-369** — A tree restore from the browser answers `202` once its job is recorded on the
+  mirror's host and the page shows a toast linking `#restores`; the dashboard lists every
+  job of `status.restores` with its state, its bytes and files done of the totals, and
+  Cancel on an unfinished job for its starter or an admin, whose cancel the job's host
+  answers and every other user's is `403`; and the Snapshots table shows at most 20 rows
+  a page, newest first, with Newer and Older.
 - **I-187** — The web UI lists every snapshot of every mirror with its state, online or
   not, reads as of a snapshot on an online mirror with `at=` and refuses a mutation given
   `at` with 400, lists a file's distinct contents across the online mirrors with the
@@ -1175,6 +1207,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
+| I-369 | `TestStub_I_369` (planned: TestWebUI_RestoreTree_JobAndCancel) |
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-212 | `TestWebUI_Media_Library_Table`, `TestWebUI_Media_VideoFrameFields`, `TestWebUI_Media_ShowStill`, `TestWebUI_Media_ShowSplitAcrossFolders`, `TestWebUI_Media_Item_ShowSeasonsEpisodes`, `TestWebUI_Media_TrashedAndReservedHidden`, `TestWebUI_Media_NSFWFlagCarried`, `TestWebUI_Media_DeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` (the hero and the grids are manual checks 20 and 21) |
