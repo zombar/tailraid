@@ -23,13 +23,13 @@ import (
 // and blocks every read of block until release closes.
 type gatedSource struct {
 	*testharness.Mirrors
-	mu      sync.Mutex
-	in, max int
-	meet    int
-	met     chan struct{}
-	block   meta.Hash
-	release chan struct{}
-	blocked chan struct{} // closed once a read of block is waiting
+	mu                   sync.Mutex
+	in, max              int
+	meet                 int
+	met                  chan struct{}
+	block                meta.Hash
+	release              chan struct{}
+	blocked              chan struct{} // closed once a read of block is waiting
 	metOnce, blockedOnce sync.Once
 }
 
