@@ -223,6 +223,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	prober.SelfHealth = func() rpc.Health {
 		return rpc.Health{NodeID: id, Version: version, Applied: node.AppliedIndex(), Leader: node.IsLeader(), Dev: cfg.Dev.Enabled, Web: webPort(cfg), Disks: disks.health()}
 	}
+	prober.SelfDisks = disks.health
 	var ring *meta.EventRing // chunk history, dev.enabled only (docs/11 §7)
 	var devHandler http.Handler
 	var blocked func(string) bool

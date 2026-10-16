@@ -130,6 +130,9 @@ type Prober struct {
 	timeout time.Duration
 	// SelfHealth supplies this node's own health row (free bytes, version); optional.
 	SelfHealth func() rpc.Health
+	// SelfDisks supplies this host's disk rows alone, which IsLive reads for an own disk
+	// once per slot of a status walk (I-375); nil falls back to SelfHealth's.
+	SelfDisks func() []rpc.DiskHealth
 
 	mu      sync.Mutex
 	probes  map[meta.NodeIdx]*Probe
@@ -590,8 +593,12 @@ func (p *Prober) probedLive(idx meta.NodeIdx) bool {
 	// this host's own disks: live iff the host's own health lists them OK, without an age
 	// test, since nothing probes self over the network (docs/14 §4)
 	if nd, found := p.node.nodeByIdx(idx); found && nd.Kind == meta.KindDisk {
-		if self, ok := p.node.SelfIdx(); ok && nd.Host == self && p.SelfHealth != nil {
-			for _, dh := range p.SelfHealth().Disks {
+		if self, ok := p.node.SelfIdx(); ok && nd.Host == self && (p.SelfDisks != nil || p.SelfHealth != nil) {
+			disks := p.SelfDisks
+			if disks == nil {
+				disks = func() []rpc.DiskHealth { return p.SelfHealth().Disks }
+			}
+			for _, dh := range disks() {
 				if dh.ID == nd.ID {
 					return dh.OK
 				}

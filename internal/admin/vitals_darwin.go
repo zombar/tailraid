@@ -5,6 +5,7 @@ package admin
 import (
 	"encoding/binary"
 	"net"
+	"strconv"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -15,15 +16,17 @@ import (
 // counter to a pure-Go binary; those stay absent (I-85).
 func platformVitals(m *MachineReport, tailnet *net.Interface) {
 	rusageVitals(m)
-	if raw, err := syscall.RouteRIB(syscall.NET_RT_IFLIST2, 0); err == nil { //nolint:staticcheck // the standard library's own sysctl of the route MIB; x/sys has no name for it
+	procNet.apply(m, func() []ifCount {
+		raw, err := syscall.RouteRIB(syscall.NET_RT_IFLIST2, 0) //nolint:staticcheck // the standard library's own sysctl of the route MIB; x/sys has no name for it
+		if err != nil {
+			return nil
+		}
 		idx := -1
 		if tailnet != nil {
 			idx = tailnet.Index
 		}
-		if rx, tx, trx, ttx, ok := sumIfList2(raw, idx); ok {
-			m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
-		}
-	}
+		return ifList2(raw, idx)
+	})
 	// struct loadavg { fixpt_t ldavg[3]; long fscale; }: three uint32, padding, int64
 	if raw, err := unix.SysctlRaw("vm.loadavg"); err == nil && len(raw) >= 24 {
 		if scale := binary.LittleEndian.Uint64(raw[16:]); scale > 0 {
@@ -61,10 +64,11 @@ const (
 	ifd64Out  = 72 // IfData64.Obytes
 )
 
-// sumIfList2 sums the byte counters of every interface but loopback and picks out the
-// one at tailnet (an interface index; -1 for none).
-func sumIfList2(b []byte, tailnet int) (rx, tx, trx, ttx uint64, ok bool) {
+// ifList2 reads the byte counters of every interface but loopback, marking the one at
+// tailnet (an interface index; -1 for none).
+func ifList2(b []byte, tailnet int) []ifCount {
 	const need = ifm2Data + ifd64Out + 8
+	var ifs []ifCount
 	for off := 0; off+4 <= len(b); {
 		ml := int(binary.LittleEndian.Uint16(b[off:]))
 		if ml < 4 || off+ml > len(b) {
@@ -73,14 +77,14 @@ func sumIfList2(b []byte, tailnet int) (rx, tx, trx, ttx uint64, ok bool) {
 		if b[off+ifm2Type] == unix.RTM_IFINFO2 && ml >= need {
 			flags := int32(binary.LittleEndian.Uint32(b[off+ifm2Flags:])) //nolint:gosec // the kernel's int32
 			if flags&unix.IFF_LOOPBACK == 0 {
-				in, out := binary.LittleEndian.Uint64(b[off+ifm2Data+ifd64In:]), binary.LittleEndian.Uint64(b[off+ifm2Data+ifd64Out:])
-				rx, tx, ok = rx+in, tx+out, true
-				if int(binary.LittleEndian.Uint16(b[off+ifm2Index:])) == tailnet {
-					trx, ttx = in, out
-				}
+				idx := int(binary.LittleEndian.Uint16(b[off+ifm2Index:]))
+				ifs = append(ifs, ifCount{
+					ID: strconv.Itoa(idx), Rx: binary.LittleEndian.Uint64(b[off+ifm2Data+ifd64In:]), Tx: binary.LittleEndian.Uint64(b[off+ifm2Data+ifd64Out:]),
+					Tailnet: idx == tailnet,
+				})
 			}
 		}
 		off += ml
 	}
-	return rx, tx, trx, ttx, ok
+	return ifs
 }

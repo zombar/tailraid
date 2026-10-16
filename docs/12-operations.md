@@ -364,7 +364,15 @@ with the standard library's interface list, so the same on every OS). Linux read
 `/proc/net/dev`; macOS the `net.route` interface list (`NET_RT_IFLIST2`, the
 `if_msghdr2` byte counters, parsed by offset as the load average is); Windows
 `GetIfTable2` from `iphlpapi.dll` (`MIB_IF_ROW2`'s octet counters). The same rule holds:
-absent when the OS does not expose a counter, never zero (I-190). The soak sampler turns
+absent when the OS does not expose a counter, never zero (I-190). The four are the
+process's own sums, not the OS's: the first report carries the OS's counters, and each
+later one adds every interface's increase since the report before (the OS is read under
+the sums' lock, so two reports built at once apply in the order they read). A counter
+that dropped across 2^32 wrapped and adds what crossed the wrap (macOS keeps a utun's
+counters in 32 bits although the list carries 64: a Mac's tailnet tx fell from 4.06 GB
+to 34 MB in 30 s), one that dropped otherwise was re-created (Tailscale restarted, a
+new utun index) and adds its new value, and an interface that is gone keeps what it
+added (I-376). The soak sampler turns
 them into rates and the report draws a network chart next to the disk one; the Stats page
 (docs/13 §1, docs/17) keeps them as history.
 
@@ -431,6 +439,20 @@ build that starts after the request (one build serves every request waiting on i
 `fresh=1`: what they print follows the action before them, which the soak's checks
 depend on (a report up to a refresh old had failed fourteen of them, I-214); the
 dashboard's polling takes the cheap path.
+
+**One liveness view per walk (I-375).** The walk judges every slot of every chunk live or
+dead, and it used to ask the prober each time: on a real node of twelve members with 115k
+chunks that was over a million questions per walk, each scanning the member table for
+this node's own index and, for a slot on this host's own disk, building the whole
+`/health` reply (mirrors, restore jobs) to read one disk's flag. `walk_ms` was 1103, the
+walk ran every 2 s while the dashboard was open, and the process's CPU climbed with the
+volume to half a core. `ScanHealth` (behind `status`, `check` and the leader's stats
+sample) now asks about each member once when it starts (`meta.FreezeLiveness`) and
+judges the whole walk by that one view; the prober finds this node's index by checking
+the index it found last against its row, and reads this host's disk rows alone
+(`Prober.SelfDisks`). The repair pass keeps asking per slot, since a pass runs for
+minutes and a member that dies during it must stop taking shards, and that per-slot
+question is now a few map lookups.
 
 **Readiness.** `/health` and `status` carry `ready`: the node knows a leader and Raft has
 handed its FSM every entry it has committed. A freshly restarted node is not ready
@@ -700,6 +722,15 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 - **I-144** — A node waiting for the log at start waits until its FSM holds its own
   row and the volume, not only until it knows a leader and has applied its local log;
   it fails with `ErrNotMember` when they have not arrived within the bound.
+- **I-375** — One `ScanHealth` walk asks its liveness source about each member at most
+  once (`IsLive` and `DeadFor`) and judges every slot of the walk by those answers; the
+  prober answers this node's own index without scanning the member table and this
+  host's own disk from its disk rows alone, never by building its `/health` reply.
+- **I-376** — `net_rx_bytes`, `net_tx_bytes`, `tailnet_rx_bytes` and `tailnet_tx_bytes`
+  are the process's sums of each interface's increases: the first report carries the
+  OS's counters, a counter that dropped across 2^32 adds what crossed the wrap, one that
+  dropped otherwise adds its new value, an interface that vanishes keeps what it added,
+  and reports built concurrently apply their readings in the order they were read.
 - **I-205** — After the first report, `status`, `/v1/status` and `/api/status` never run
   the chunk walk on the request's goroutine: a refresher rebuilds the report every
   `ReportEvery` while one was asked for within `ReportIdle` and stops otherwise, a request
@@ -759,6 +790,8 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 | I-131 | `TestSvc_Stopped_Table`, `TestSvc_StopWaitsForExit` |
 | I-135 | `TestCLI_Serve_WithoutLeader_StartsStale`, `TestCLI_Serve_InitNode_WithoutQuorum_StartsStale` |
 | I-144 | `TestWaitMember_WaitsForOwnRow` |
+| I-375 | `TestScanHealth_AsksEachMemberOnce`, `TestProber_IsLive_OwnDiskReadsOnlyDisks`, `TestNode_SelfIdx_FollowsRow` |
+| I-376 | `TestVitals_NetCounters_WrapAndReset`, `TestVitals_NetCounters_Concurrent` |
 | I-205 | `TestReporter_RequestNeverWalks`, `TestReporter_IdleStopsRefreshing`, `TestReporter_CloseStopsRefresher` |
 | I-221 | `TestWaitIdle_Table`, `TestWaitIdle_StatusUnreadable_ReturnsAtOnce` |
 | I-234 | `TestTrashPage_EveryEntryOnceWithinBudget` |

@@ -4,6 +4,7 @@ package admin
 
 import (
 	"net"
+	"strconv"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -37,9 +38,14 @@ func platformVitals(m *MachineReport, tailnet *net.Interface) {
 
 // netVitals sums the interface table's byte counters (GetIfTable2Ex, MIB_IF_ROW2).
 func netVitals(m *MachineReport, tailnet *net.Interface) {
+	procNet.apply(m, func() []ifCount { return ifTable(tailnet) })
+}
+
+// ifTable reads the interface table, copying its rows out before the table is freed.
+func ifTable(tailnet *net.Interface) []ifCount {
 	var table *windows.MibIfTable2
 	if err := windows.GetIfTable2Ex(windows.MibIfEntryNormal, &table); err != nil || table == nil {
-		return
+		return nil
 	}
 	defer windows.NewLazySystemDLL("iphlpapi.dll").NewProc("FreeMibTable").Call(uintptr(unsafe.Pointer(table))) //nolint:errcheck,gosec // frees the table the call allocated
 	rows := unsafe.Slice(&table.Table[0], table.NumEntries)                                                     //nolint:gosec // NumEntries rows follow the header, as GetIfTable2Ex documents
@@ -47,23 +53,19 @@ func netVitals(m *MachineReport, tailnet *net.Interface) {
 	if tailnet != nil && tailnet.Index > 0 {
 		idx = uint32(tailnet.Index) //nolint:gosec // an interface index
 	}
-	if rx, tx, trx, ttx, ok := sumIfRows(rows, idx); ok {
-		m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
-	}
+	return ifRows(rows, idx)
 }
 
-// sumIfRows sums every row but the software loopback and picks out the row at tailnet
-// (an interface index; 0 for none).
-func sumIfRows(rows []windows.MibIfRow2, tailnet uint32) (rx, tx, trx, ttx uint64, ok bool) {
+// ifRows reads every row but the software loopback, marking the row at tailnet (an
+// interface index; 0 for none).
+func ifRows(rows []windows.MibIfRow2, tailnet uint32) []ifCount {
+	var ifs []ifCount
 	for i := range rows {
 		r := &rows[i]
 		if r.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK {
 			continue
 		}
-		rx, tx, ok = rx+r.InOctets, tx+r.OutOctets, true
-		if tailnet != 0 && r.InterfaceIndex == tailnet {
-			trx, ttx = r.InOctets, r.OutOctets
-		}
+		ifs = append(ifs, ifCount{ID: strconv.FormatUint(uint64(r.InterfaceIndex), 10), Rx: r.InOctets, Tx: r.OutOctets, Tailnet: tailnet != 0 && r.InterfaceIndex == tailnet})
 	}
-	return rx, tx, trx, ttx, ok
+	return ifs
 }

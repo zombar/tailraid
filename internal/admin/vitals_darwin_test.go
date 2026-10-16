@@ -37,17 +37,17 @@ func TestVitals_IfList2Parser(t *testing.T) {
 	list = append(list, other...)
 	list = append(list, msg(4, unix.IFF_UP, 1000, 200)...)
 	list = append(list, msg(12, unix.IFF_UP, 50, 7)...)
-	rx, tx, trx, ttx, ok := sumIfList2(list, 12)
+	rx, tx, trx, ttx, ok := sumIfs(ifList2(list, 12))
 	if !ok || rx != 1050 || tx != 207 || trx != 50 || ttx != 7 {
 		t.Fatalf("got %d %d %d %d %v", rx, tx, trx, ttx, ok)
 	}
-	if _, _, trx, ttx, _ := sumIfList2(list, -1); trx != 0 || ttx != 0 {
+	if _, _, trx, ttx, _ := sumIfs(ifList2(list, -1)); trx != 0 || ttx != 0 {
 		t.Fatal("no tailnet index matched something")
 	}
-	if _, _, _, _, ok := sumIfList2(nil, -1); ok {
+	if _, _, _, _, ok := sumIfs(ifList2(nil, -1)); ok {
 		t.Fatal("an empty list reported counters")
 	}
-	if _, _, _, _, ok := sumIfList2(list[:ifm2Data], -1); ok {
+	if _, _, _, _, ok := sumIfs(ifList2(list[:ifm2Data], -1)); ok {
 		t.Fatal("a truncated message reported counters")
 	}
 	// the live list parses and reports something for this machine
@@ -55,7 +55,7 @@ func TestVitals_IfList2Parser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, ok := sumIfList2(raw, -1); !ok {
+	if _, _, _, _, ok := sumIfs(ifList2(raw, -1)); !ok {
 		t.Fatal("the live interface list has no counters")
 	}
 }
