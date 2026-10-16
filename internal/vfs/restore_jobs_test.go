@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -265,5 +266,78 @@ func TestRestoreJob_Cancel_NoTempLeft(t *testing.T) {
 	}
 	if _, ok := got["/a.bin"]; ok {
 		t.Fatal("the file being written when the restore was cancelled has its name")
+	}
+}
+
+// yieldSource counts the object reads in flight and keeps the most seen while the
+// restore yields and once it stops; while it does not yield, a read waits for a third to
+// be in flight (or a second), so a restore at full width shows more than RestoreYield.
+type yieldSource struct {
+	*testharness.Mirrors
+	reads    atomic.Int64
+	yielding atomic.Bool
+	mu       sync.Mutex
+	in       int
+	maxYield int
+	maxFull  int
+	met      chan struct{}
+	metOnce  sync.Once
+}
+
+func (y *yieldSource) Object(ctx context.Context, m meta.NodeIdx, h meta.Hash) ([]byte, error) {
+	yielding := y.yielding.Load()
+	y.mu.Lock()
+	y.in++
+	if yielding {
+		y.maxYield = max(y.maxYield, y.in)
+	} else {
+		y.maxFull = max(y.maxFull, y.in)
+		if y.in >= 3 {
+			y.metOnce.Do(func() { close(y.met) })
+		}
+	}
+	y.mu.Unlock()
+	defer func() { y.mu.Lock(); y.in--; y.mu.Unlock() }()
+	if !yielding {
+		select {
+		case <-y.met:
+		case <-time.After(time.Second):
+		}
+	}
+	y.reads.Add(1)
+	return y.Mirrors.Object(ctx, m, h)
+}
+
+// While Yield answers true a restore has at most RestoreYield chunks in flight; once it
+// answers false the same restore, not restarted, widens past that; and it writes the
+// snapshot's tree either way.
+//
+// Invariant: I-372
+func TestRestoreJob_YieldsToClients(t *testing.T) {
+	r := newTreeRig(t)
+	y := &yieldSource{Mirrors: r.src, met: make(chan struct{})}
+	y.yielding.Store(true)
+	r.fs.SetMirrors(y)
+	yield := func() bool {
+		if y.reads.Load() >= 6 { // clients went quiet after six chunks
+			y.yielding.Store(false)
+		}
+		return y.yielding.Load()
+	}
+	if _, err := r.fs.RestoreSnapshotWith(ctx, "/.snapshots/host-m1/s1/t", "/out", vfs.RestoreOptions{Files: vfs.RestoreFiles, InFlight: vfs.RestoreInFlight, Yield: yield}); err != nil {
+		t.Fatal(err)
+	}
+	if y.maxYield > vfs.RestoreYield || y.maxYield == 0 {
+		t.Fatalf("%d chunk reads in flight while yielding, want 1..%d", y.maxYield, vfs.RestoreYield)
+	}
+	if y.maxFull <= vfs.RestoreYield {
+		t.Fatalf("%d chunk reads in flight once clients were quiet, want more than %d", y.maxFull, vfs.RestoreYield)
+	}
+	for name, data := range r.want {
+		got, err := readAt(t, r.fs, "/out"+strings.TrimPrefix(name, "/t"), len(data)+1, 0)
+		must(t, err)
+		if !bytes.Equal(got, data) {
+			t.Fatalf("%s differs at %d", name, testharness.FirstDiff(got, data))
+		}
 	}
 }

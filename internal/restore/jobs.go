@@ -38,12 +38,58 @@ const (
 	restoreKeep      = 7 * 24 * time.Hour // a finished job stays listed this long
 	restoreKeepMax   = 20                 // and at most this many finished jobs
 	restoreRateOver  = time.Minute        // the rate's window
+	YieldWindow      = 10 * time.Second   // a running job stays narrow this long after clients were last busy (I-372)
 )
+
+// Clients tells a running job whether clients are busy (docs/16 §6, I-372): this host
+// served a shard request without the background priority, or its own gateways' client
+// bytes moved, within the last YieldWindow. Both are counters the host keeps anyway, so
+// nothing is asked of the other nodes: another node's gateway reading or flushing a
+// client's file reaches this host as foreground shard requests, nearly every chunk of a
+// 3+2 volume having a slot here.
+type Clients struct {
+	LastForeground func() time.Time              // the host's rpc server
+	ClientBytes    func() (read, written uint64) // the host's gateways
+	Clk            clock.Clock
+
+	mu    sync.Mutex
+	bytes uint64
+	seen  bool
+	moved time.Time
+}
+
+// Busy reports whether clients were busy within the last YieldWindow.
+func (c *Clients) Busy() bool {
+	now := c.Clk.Now()
+	busy := false
+	if c.LastForeground != nil {
+		if t := c.LastForeground(); !t.IsZero() && now.Sub(t) < YieldWindow {
+			busy = true
+		}
+	}
+	if c.ClientBytes != nil {
+		r, w := c.ClientBytes()
+		c.mu.Lock()
+		if c.seen && r+w != c.bytes {
+			c.moved = now
+		}
+		c.bytes, c.seen = r+w, true
+		if !c.moved.IsZero() && now.Sub(c.moved) < YieldWindow {
+			busy = true
+		}
+		c.mu.Unlock()
+	}
+	return busy
+}
 
 // Jobs is this host's restore jobs (docs/16 §6): recorded in <data_dir>/restores.json,
 // run one at a time in the order they came, each as the user who started it, resumed at
 // start. A job reads its mirror from this host's own disk.
 type Jobs struct {
+	// Busy, when set, says whether clients are busy: a running job then narrows itself
+	// (Clients.Busy, I-372). Set before Run.
+	Busy func() bool
+
 	file   string
 	fs     *vfs.FS // the node's own view; a job runs on its starter's (fs.As)
 	st     *meta.Store
@@ -141,6 +187,9 @@ func (j *Jobs) saveLocked() {
 func (j *Jobs) setLocked(job *restoreJob, state, why string) {
 	now := j.clk.Now()
 	job.State, job.Error, job.Updated = state, why, now.UnixNano()
+	if state != rpc.RestoreRunning {
+		job.Yielding = false // only a running job narrows
+	}
 	if job.Finished() {
 		job.Ended, job.NextTry = now.UnixNano(), 0
 	}
@@ -400,11 +449,21 @@ func (j *Jobs) attempt(ctx context.Context, job *restoreJob) error {
 	_, err := fs.RestoreSnapshotWith(ctx, src, job.Dst, vfs.RestoreOptions{
 		Files: vfs.RestoreFiles, InFlight: vfs.RestoreInFlight,
 		Progress: func(p vfs.RestoreProgress) { j.progress(job, p) },
+		Yield:    func() bool { return j.yielding(job) },
 	})
 	if errors.Is(err, os.ErrExist) && job.FilesTotal <= 1 {
 		return nil // a single file the last attempt finished before its state was saved
 	}
 	return err
+}
+
+// yielding asks Busy whether the job should narrow and marks it in its record (I-372).
+func (j *Jobs) yielding(job *restoreJob) bool {
+	busy := j.Busy != nil && j.Busy()
+	j.mu.Lock()
+	job.Yielding = busy
+	j.mu.Unlock()
+	return busy
 }
 
 // progress adds one step to this attempt's counts; the job shows the larger of what it

@@ -352,6 +352,19 @@ one after the other, about 2–3 MB/s.
   request carries `X-Tailraid-Priority: background` (I-175), so client traffic keeps its
   share. The result is the tree one chunk at a time would have written: each file still
   lands under its temporary name and is renamed into place once committed.
+- **Yielding to clients.** Background priority keeps half of each node's slots for
+  clients, but a job at full width still fills the host's uplink and disks. So while
+  clients are busy a running job narrows itself to one file and `RestoreYield` (2) chunks
+  at once, and widens again once they have been quiet for `YieldWindow` (10 s); the width
+  changes between chunks, never by restarting the job, and `status.restores` marks the
+  job `yielding`. Clients are busy while, within the last `YieldWindow`, the host served a
+  shard request without the background priority (another node's gateway reading or
+  flushing a client's file: nearly every chunk of a 3+2 volume has a slot on each host),
+  or its own gateways' client bytes moved (`vfs.FS.ClientBytes`). Both are counters the
+  host already keeps, so nothing is asked of the other nodes. On 2026-10-16 a Finder copy
+  on one laptop and browsing through another node, both reaching the restoring host only
+  as foreground shard requests, made the volume feel stalled while a job ran at full
+  width.
 - **Who it runs as.** A job writes as the user who started it, through that user's view
   (docs/21 §5); before the cluster has users, as the node. At every start and every resume
   the host checks the user exists, is enabled and holds `Admin` where the copy lands, and
@@ -385,7 +398,7 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
 ## 8. Bounds and gaps
 
 - One restore job running per host, `RestoreFiles` (4) files and `RestoreInFlight` (8)
-  chunks of it at once; finished jobs listed 7 days, at most 20 per host.
+  chunks of it at once, one file and `RestoreYield` (2) chunks while clients are busy; finished jobs listed 7 days, at most 20 per host.
 - One sync per mirror at a time, reading `SyncWorkers` (8) chunks at once; any number of
   mirrors sync at once, each at `mirrors.rate` (50 MiB/s by default, `0` unmetered).
 - A snapshot name is 1 to 64 bytes, no `/`, not `.` or `..`, unique per mirror; an
@@ -454,6 +467,12 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
   a running job has at most `RestoreFiles` files and `RestoreInFlight` chunks in flight,
   every request at background priority; the tree it writes is the tree a one-chunk-at-a-
   time restore writes.
+- **I-372** — While the job's host served a foreground shard request, or its gateways'
+  client bytes moved, within the last `YieldWindow`, a running job has at most one file
+  and `RestoreYield` chunks in flight and `status.restores` marks it `yielding`; once
+  both have been quiet for `YieldWindow` it returns to `RestoreFiles` and
+  `RestoreInFlight`; the width changes without restarting the job, and the tree it
+  writes is the same either way.
 - **I-367** — A job writes as the user who started it (before the first user, as the
   node). At every start and resume its host checks that the user exists, is enabled and
   holds `Admin` where the copy lands; failing that check ends the job as failed, and a
@@ -487,6 +506,7 @@ stub in `test/invariants/` meanwhile.
 | I-364 | `TestRestoreJob_ResumesAfterRestartAndOfflineMirror`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-365 | `TestRestoreJob_ProgressAddsUpToTotals`, `TestRestoreJob_ProgressMonotone_SameOnEveryNode`, `TestStatus_RestoreLine`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-366 | `TestRestoreJob_ParallelEqualsSerial`, `TestRestoreJob_OneJobPerHost_Queued`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
+| I-372 | `TestRestoreJob_YieldsToClients`, `TestClients_BusyWindow`, `TestRestoreJob_YieldingInStatus` |
 | I-367 | `TestRestoreJob_RunsAsStarter_RecheckedOnResume`, `TestAdminOps_RestoreUnderUsers` |
 | I-368 | `TestRestoreJob_Cancel_NoTempLeft`, `TestRestoreJob_CancelByStarterOrAdmin`, `TestSoak_AllPhasesAgainstHarness` (phase 32), `TestSoak_AllPhasesUnderUsersAgainstHarness` (phase 32, another user's cancel) |
 | I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |

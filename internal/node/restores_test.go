@@ -11,6 +11,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -497,4 +498,26 @@ func awaitJob(t *testing.T, jobs *restore.Jobs, reply any, state string) rpc.Res
 		return got.State == state
 	}, "job "+started.Job+" never reached "+state)
 	return got
+}
+
+// A running job asks whether clients are busy and its status says so: yielding while Busy
+// answers true, and no longer once it has finished.
+// Invariant: I-372
+func TestRestoreJob_YieldingInStatus(t *testing.T) {
+	r := newJobRig(t)
+	var busy atomic.Bool
+	busy.Store(true)
+	r.jobs.Busy = busy.Load // before the first job: Start's kick orders it for the runner
+	r.gate.hold(r.big)
+	id := r.start(0, "/out")
+	<-r.gate.blocked
+	if j := r.job(id); j.State != rpc.RestoreRunning || !j.Yielding {
+		t.Fatalf("a running job while clients are busy: %+v, want running and yielding", j)
+	}
+	busy.Store(false)
+	r.gate.open()
+	if j := r.await(id, rpc.RestoreDone); j.Yielding {
+		t.Fatalf("a finished job still says yielding: %+v", j)
+	}
+	r.matches("/out")
 }

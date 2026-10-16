@@ -481,7 +481,7 @@ function restoreCard(j: RestoreJob, all: RestoreJob[]): HTMLElement {
     }
     case "running": {
       const left = j.rate > 0 ? ` · ${span((j.bytes_total - j.bytes_done) / j.rate)} left` : "";
-      el.append(barRow("bytes", bar(frac), `${so} · ${bytes(j.rate)}/s${left}`));
+      el.append(barRow("bytes", bar(frac), `${so} · ${bytes(j.rate)}/s${j.yielding ? " · yielding to clients" : ""}${left}`));
       break;
     }
     case "waiting":

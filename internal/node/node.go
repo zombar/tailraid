@@ -470,6 +470,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err != nil {
 		return err
 	}
+	jobs.Busy = (&restore.Clients{LastForeground: srv.LastForeground, ClientBytes: fs.ClientBytes, Clk: clk}).Busy // a running restore yields to clients (I-372)
 	var web *webui.Server
 	webUsers := "members only"
 	if webAddr != "" {

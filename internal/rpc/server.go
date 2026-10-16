@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zombar/tailraid/internal/chunk"
@@ -143,6 +144,24 @@ type Server struct {
 	bgPutSem chan struct{}
 	bgGetSem chan struct{}
 	handler  http.Handler
+	lastFg   atomic.Int64 // the last shard request without the background priority, unix ns
+}
+
+// LastForeground is when this node last served a shard request without the background
+// priority: a gateway reading or flushing a client's file (zero: never). A restore job
+// yields while it is recent (docs/16 §6, I-372).
+func (s *Server) LastForeground() time.Time {
+	if ns := s.lastFg.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
+}
+
+// noteForeground records r when it is client traffic.
+func (s *Server) noteForeground(r *http.Request) {
+	if !background(r) {
+		s.lastFg.Store(s.o.Clk.Now().UnixNano())
+	}
 }
 
 // backgroundSlots is the share of slots background requests may hold: half, at least one.
@@ -487,6 +506,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		}
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
+		s.noteForeground(r)
 		release, ok := s.take(w, r, slots(r, s.bgGetSem, s.getSem)...)
 		if !ok {
 			return
@@ -510,6 +530,7 @@ func (s *Server) serveShard(w http.ResponseWriter, r *http.Request, store ShardS
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		_, _ = io.Copy(w, rc)
 	case http.MethodPut:
+		s.noteForeground(r)
 		release, ok := s.take(w, r, slots(r, s.bgPutSem, s.putSem)...)
 		if !ok {
 			return
