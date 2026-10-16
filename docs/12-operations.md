@@ -554,7 +554,7 @@ cluster, from the probes (docs/16 §1; `path` only on the mirror's own host), an
 mirror (`mirror  pike/m1  online · 1.2 TiB used, 2.4 TiB free · newest 12 min ago ·
 syncing 41 %`). It also carries `restores[{id, host, mirror, snapshot, src, dst, user,
 state, error, files_total, bytes_total, files_done, bytes_done, existing, rate, started,
-ended, next_try}]`, every restore job of every live host and those finished in the last 7
+ended, next_try, yielding}]`, every restore job of every live host and those finished in the last 7
 days (docs/16 §6), and `tailraid status` prints one line per unfinished job (`restore
 3-7  /music on honker · running · 280.1 GiB of 895.0 GiB · 41.0 MiB/s · 4 h 16 m left`). `check` warns when a mirror has been offline longer than
 `mirrors.stale_after`, when an online mirror's newest snapshot is older than `2 × every`,

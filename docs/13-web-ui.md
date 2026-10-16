@@ -474,7 +474,8 @@ badges; a bar of bytes with the percentage, the rate and the time left; a bar of
 how many were already there; the snapshot it reads, who started it and when, and a resume
 after a restart; Cancel on an unfinished job for its starter or an admin. Counting shows
 an empty bar and the files counted so far; queued names the job ahead; waiting says the
-mirror is offline and the job goes on when it is back; retrying says when and why; failed
+mirror is offline and the job goes on when it is back; a running job that yields to
+clients (docs/16 §6) says "yielding to clients" after its rate; retrying says when and why; failed
 says why and that a rerun goes on from there; done says what was restored and how many
 chunks came back from the mirror, and leaves after 7 days. The section's heading carries the schedule
 (`hourly 24 · daily 30 · weekly 8 · monthly 12 · next in 23 m`).

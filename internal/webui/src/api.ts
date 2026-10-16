@@ -183,6 +183,7 @@ export interface RestoreJob {
   updated: number;
   ended?: number;
   next_try?: number;
+  yielding?: boolean; // narrowed while clients are busy (docs/16 §6)
 }
 
 /** SearchStatus is `status.search` (docs/12 §8, docs/18 §5). */

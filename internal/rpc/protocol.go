@@ -102,6 +102,7 @@ type RestoreJob struct {
 	Updated    int64        `json:"updated"`
 	Ended      int64        `json:"ended,omitempty"`
 	NextTry    int64        `json:"next_try,omitempty"`
+	Yielding   bool         `json:"yielding,omitempty"` // narrowed while clients are busy (I-372)
 }
 
 // The states of a restore job (docs/16 §6).

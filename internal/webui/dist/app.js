@@ -1473,7 +1473,7 @@ function restoreCard(j, all) {
     }
     case "running": {
       const left = j.rate > 0 ? ` \xB7 ${span((j.bytes_total - j.bytes_done) / j.rate)} left` : "";
-      el.append(barRow("bytes", bar(frac), `${so} \xB7 ${bytes(j.rate)}/s${left}`));
+      el.append(barRow("bytes", bar(frac), `${so} \xB7 ${bytes(j.rate)}/s${j.yielding ? " \xB7 yielding to clients" : ""}${left}`));
       break;
     }
     case "waiting":

@@ -28,10 +28,10 @@ func (f *Flusher) CommitChunks(ctx context.Context, actor meta.UserIdx, ino meta
 	return f.commitChunks(ctx, actor, ino, size, hashes, fetch, nil, nil)
 }
 
-// commitChunks is CommitChunks with its chunks resolved at once, each holding one of
-// slots (nil: one at a time), and done told the bytes each chunk slot covers the first
-// time it is decided, a hole at once (I-365, I-366).
-func (f *Flusher) commitChunks(ctx context.Context, actor meta.UserIdx, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error), slots chan struct{}, done func(int64)) (uploaded int, err error) {
+// commitChunks is CommitChunks with its chunks resolved at once, each holding a place
+// in slots (nil: one at a time), and done told the bytes each chunk slot covers the
+// first time it is decided, a hole at once (I-365, I-366).
+func (f *Flusher) commitChunks(ctx context.Context, actor meta.UserIdx, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error), slots *gate, done func(int64)) (uploaded int, err error) {
 	spans := chunkSpans(size, len(hashes), uint64(f.st.Volume().ChunkSize))
 	counted := make([]bool, len(hashes)) // per index: each written by its own goroutine
 	report := func(i int) {
@@ -42,7 +42,7 @@ func (f *Flusher) commitChunks(ctx context.Context, actor meta.UserIdx, ino meta
 	}
 	workers := 1
 	if slots != nil {
-		workers = cap(slots)
+		workers = slots.full
 	}
 	force, noSums := false, false
 	for range 16 {
@@ -59,12 +59,10 @@ func (f *Flusher) commitChunks(ctx context.Context, actor meta.UserIdx, ino meta
 				return nil
 			}
 			if slots != nil {
-				select {
-				case slots <- struct{}{}:
-				case <-ctx.Done():
-					return ctx.Err()
+				if err := slots.acquire(ctx); err != nil {
+					return err
 				}
-				defer func() { <-slots }()
+				defer slots.release()
 			}
 			w := &chunkWork{idx: uint64(i), hash: h}
 			slot[i] = w
@@ -164,7 +162,7 @@ func (f *FS) snapEntry(ctx context.Context, src string) (snapNode, error) {
 
 // writeEntry makes the live file at ino hold entry e's bytes from mirror m, its chunks
 // holding slots and told to done as commitChunks does (nil, nil: one at a time).
-func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mirror.Entry, slots chan struct{}, done func(int64)) (int, error) {
+func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mirror.Entry, slots *gate, done func(int64)) (int, error) {
 	if f.fl == nil {
 		return 0, errors.New("restore: no flusher")
 	}
@@ -221,6 +219,7 @@ type RestoreReport struct {
 const (
 	RestoreFiles    = 4
 	RestoreInFlight = 8
+	RestoreYield    = 2 // the chunks in flight while RestoreOptions.Yield says so, one file at a time (I-372)
 )
 
 // RestoreProgress is one step of a tree restore, added to its done counts: a chunk's bytes
@@ -232,10 +231,13 @@ type RestoreProgress struct {
 }
 
 // RestoreOptions shapes a tree restore: Files files at once and InFlight chunks across it
-// (under 1: one), and Progress told every step, one call at a time (nil: none).
+// (under 1: one), and Progress told every step, one call at a time (nil: none). While
+// Yield answers true (nil: never), one file and at most RestoreYield chunks run, the
+// width read again before each file and chunk starts (I-372).
 type RestoreOptions struct {
 	Files, InFlight int
 	Progress        func(RestoreProgress)
+	Yield           func() bool
 }
 
 // RestoreSnapshot copies the snapshot entry src (a /.snapshots path: a file, a symlink or a
@@ -269,7 +271,12 @@ func (f *FS) RestoreSnapshotWith(ctx context.Context, src, dst string, opt Resto
 			return rep, mapErr("restore", dst, meta.ErrExist)
 		}
 	}
-	r := &restoreRun{f: f, opt: opt, rep: &rep, slots: make(chan struct{}, max(1, opt.InFlight))}
+	full := max(1, opt.InFlight)
+	r := &restoreRun{
+		f: f, opt: opt, rep: &rep,
+		slots: newGate(full, min(full, RestoreYield), opt.Yield),
+		files: newGate(max(1, opt.Files), 1, opt.Yield),
+	}
 	err = r.run(ctx, &n, dparts)
 	return rep, err
 }
@@ -362,8 +369,9 @@ func (f *FS) nearest(parts []string) (meta.Inode, error) {
 type restoreRun struct {
 	f     *FS
 	opt   RestoreOptions
-	slots chan struct{} // the chunks in flight across the restore
-	mu    sync.Mutex    // rep and opt.Progress
+	slots *gate      // the chunks in flight across the restore
+	files *gate      // the files being written
+	mu    sync.Mutex // rep and opt.Progress
 	rep   *RestoreReport
 }
 
@@ -412,7 +420,12 @@ func (r *restoreRun) run(ctx context.Context, n *snapNode, dst []string) error {
 				if ctx.Err() != nil {
 					continue // drained: the walk is stopping
 				}
-				if err := r.file(ctx, &t); err != nil {
+				if err := r.files.acquire(ctx); err != nil {
+					continue // stopping: the walk sees ctx too
+				}
+				err := r.file(ctx, &t)
+				r.files.release()
+				if err != nil {
 					fail(err)
 				}
 			}
@@ -668,4 +681,51 @@ func (f *FS) Versions(ctx context.Context, p string) ([]Version, []OfflineMirror
 func RestoreTempName(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	return ".tailraid-restore-" + hex.EncodeToString(sum[:8])
+}
+
+// gate bounds how many of something run at once: full, or low while yield answers true
+// (nil: never). The width is read again whenever one would start, so it follows yield
+// without anything restarting, and every release wakes the waiters to look again
+// (I-372).
+type gate struct {
+	full, low int
+	yield     func() bool
+	mu        sync.Mutex
+	in        int
+	wake      chan struct{}
+}
+
+func newGate(full, low int, yield func() bool) *gate {
+	return &gate{full: full, low: low, yield: yield, wake: make(chan struct{})}
+}
+
+// acquire waits until fewer than the current width run, then takes a place.
+func (g *gate) acquire(ctx context.Context) error {
+	for {
+		limit := g.full
+		if g.yield != nil && g.yield() {
+			limit = g.low
+		}
+		g.mu.Lock()
+		if g.in < limit {
+			g.in++
+			g.mu.Unlock()
+			return nil
+		}
+		wake := g.wake
+		g.mu.Unlock()
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (g *gate) release() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.in--
+	close(g.wake)
+	g.wake = make(chan struct{})
 }
