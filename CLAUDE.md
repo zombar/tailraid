@@ -39,6 +39,7 @@ internal/dev        /dev/* endpoints, only with dev.enabled
 internal/webui      browser UI: Go handler over vfs + admin; src/ TypeScript (no framework), src/app.css, dist/app.js (esbuild, committed)
 internal/soak       Env interface, scenarios, HTML report (shared by cmd/soak and `tailraid verify`)
 internal/chart       inline SVG charts (line, bars, lanes, strip, disk spread) for the soak report and the Stats page; classes only, no colour
+internal/restore     a host's restore jobs (docs/16 §6): the record in restores.json, the runner, resume, queue, cancel
 internal/stats       the Stats page's history in the volume (docs/17): sampler, rows, gzip segments, rollups, retention, the live edge
 internal/testharness  in-process Cluster, FaultNet, Hooks (test only)
 test/invariants     skipped stubs that cite not-yet-implemented I-n / L-n (the S3 gateway only now)

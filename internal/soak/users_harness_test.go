@@ -463,6 +463,8 @@ func (e *harnessEnv) userDispatch(ctx context.Context, nd *testharness.ClusterNo
 			recs = []audit.Record{}
 		}
 		return recs, nil
+	case "snapshot_restore", "restore_cancel":
+		return e.restoreOp(ctx, op)
 	}
 	return nil, fmt.Errorf("harness: unknown admin op %q", op.Op)
 }

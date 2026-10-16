@@ -48,6 +48,7 @@ var phases = []phase{
 	{"22 copies under faults", phaseCopies},
 	{"23 many users at once", phaseMultiUser},
 	{"24 secrets", phaseSecrets},
+	{"32 restore jobs", phaseRestoreJobs}, // before 28: its starts are the env's own ops, which sign only in a users-first run
 	{"28 users and keys", phaseUsers},
 	{"29 grants on the gateways", phaseGrants},
 	{"30 secrets per user", phaseUserSecrets},

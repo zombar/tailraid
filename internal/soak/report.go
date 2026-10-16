@@ -44,8 +44,9 @@ type reportData struct {
 	Disks      []diskView // the targets at the end of the run (docs/14), empty without disks
 	Snapshots  []snapView // phase 19's round trip (docs/16), empty when no snapshot was recorded
 	RoundTrip  string
-	Users      []string // phases 28–31 (docs/21 §10): the people, the grant matrix and the audit counts
-	PeakSkew   int      // most chunks above the host cap in any sample
+	Restores   []restoreView // phase 32's jobs (docs/16 §6), empty when no job was followed
+	Users      []string      // phases 28–31 (docs/21 §10): the people, the grant matrix and the audit counts
+	PeakSkew   int           // most chunks above the host cap in any sample
 	Generated  string
 	Throughput string
 	Mark       template.HTML // the logo mark, inline
@@ -198,6 +199,9 @@ func buildReport(s Summary) reportData {
 	snapCharts, snaps, roundTrip := snapshotFigures(s)
 	d.Charts = append(d.Charts, snapCharts...)
 	d.Snapshots, d.RoundTrip = snaps, roundTrip
+	restoreCharts, restores := restoreFigures(s)
+	d.Charts = append(d.Charts, restoreCharts...)
+	d.Restores = restores
 	d.Users = usersLines(s)
 	var spread []*Sample
 	for i := range s.Records {
@@ -533,6 +537,10 @@ details summary{cursor:pointer} .checks td:first-child{width:38%} .num{text-alig
 <table><tr><th>Snapshot</th><th>Mirror</th><th>Taken</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Added</th><th>State</th><th>Read</th></tr>
 {{range .Snapshots}}<tr><td>{{.Name}}</td><td>{{.Mirror}}</td><td>{{.Taken}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Added}}</td><td>{{.State}}</td><td>{{.Read}}</td></tr>{{end}}
 {{if .RoundTrip}}<tr><td colspan="8" class="meta">{{.RoundTrip}}</td></tr>{{end}}</table>{{end}}
+{{if .Restores}}<h2>Restores</h2>
+<p class="meta">phase 32 (docs/16 §6): every restore job the phase followed, with what it restored and whether it resumed</p>
+<table><tr><th>Job</th><th>Role</th><th>Destination</th><th>State</th><th class="num">Files</th><th class="num">Bytes</th><th class="num">Already there</th><th class="num">Resumed</th><th class="num">Took</th></tr>
+{{range .Restores}}<tr><td>{{.ID}}</td><td>{{.Label}}</td><td>{{.Dst}}</td><td>{{.State}}</td><td class="num">{{.Files}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.Existing}}</td><td class="num">{{.Resumed}}</td><td class="num">{{.Took}}</td></tr>{{end}}</table>{{end}}
 {{if .Users}}<h2>Users</h2>
 <p class="meta">phases 28–31 (docs/21 §10): the people made for the run, what each gateway answered each user, and the audit log's counts</p>
 <pre>{{range .Users}}{{.}}

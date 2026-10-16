@@ -16,6 +16,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/cluster"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/restore"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
@@ -83,7 +84,7 @@ type jobRig struct {
 	dir  string
 	want map[string][]byte
 	big  meta.Hash // the first chunk of /docs/a.bin
-	jobs *restoreJobs
+	jobs *restore.Jobs
 	stop func()
 }
 
@@ -132,7 +133,7 @@ func newJobRig(t *testing.T) *jobRig {
 
 // run starts this host's restore jobs from its file, as a node start does.
 func (r *jobRig) run() {
-	r.jobs = newRestoreJobs(r.dir, r.fs, r.f.FSM, func() (meta.NodeIdx, bool) { return r.f.SelfIdx, true }, r.src.Online, r.f.Clk, slog.New(slog.DiscardHandler))
+	r.jobs = restore.New(r.dir, r.fs, r.f.FSM, func() (meta.NodeIdx, bool) { return r.f.SelfIdx, true }, r.src.Online, r.f.Clk, slog.New(slog.DiscardHandler))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.jobs.Run(ctx); close(done) }()
@@ -265,10 +266,10 @@ func TestRestoreJob_ResumesAfterRestartAndOfflineMirror(t *testing.T) {
 	r.gate.hold(r.big)
 	id := r.start(0, "/back")
 	<-r.gate.blocked
-	if !r.jobs.held()[r.sn.ID] {
+	if !r.jobs.Held()[r.sn.ID] {
 		t.Fatal("the snapshot a running job reads is not held from thinning")
 	}
-	ms := &mirrorSet{held: r.jobs.held}
+	ms := &mirrorSet{held: r.jobs.Held}
 	if got := ms.unheld([]meta.SnapID{r.sn.ID, r.sn.ID + 1}); len(got) != 1 || got[0] != r.sn.ID+1 {
 		t.Fatalf("thinning would delete %v", got)
 	}
@@ -279,7 +280,7 @@ func TestRestoreJob_ResumesAfterRestartAndOfflineMirror(t *testing.T) {
 		t.Fatalf("resumed %d times, want 1", job.Resumed)
 	}
 	r.matches("/back")
-	if r.jobs.held()[r.sn.ID] {
+	if r.jobs.Held()[r.sn.ID] {
 		t.Fatal("a finished job still holds its snapshot")
 	}
 
@@ -416,7 +417,7 @@ func TestRestoreJob_RunsAsStarter_RecheckedOnResume(t *testing.T) {
 	if !strings.Contains(j.Error, "disabled") {
 		t.Fatalf("the job failed for %q", j.Error)
 	}
-	r.f.Clk.Advance(restoreRetryMax + time.Minute)
+	r.f.Clk.Advance(restore.RetryMax + time.Minute)
 	if got := r.job(id); got.State != rpc.RestoreFailed || got.Updated != j.Updated {
 		t.Fatalf("a failed job was tried again: %+v", got)
 	}
@@ -462,15 +463,15 @@ func TestRestoreJob_CancelByStarterOrAdmin(t *testing.T) {
 	if err := r.jobs.Cancel(ctx, queued, kim); !errors.Is(err, rpc.ErrNoRestore) {
 		t.Fatalf("a second cancel: %v", err)
 	}
-	if _, err := os.Stat(path.Join(r.dir, restoreFile)); err != nil {
+	if _, err := os.Stat(path.Join(r.dir, restore.File)); err != nil {
 		t.Fatalf("the jobs' file: %v", err)
 	}
 }
 
 // runJobs is a host's restore jobs over the fabric, running until the test ends.
-func runJobs(t *testing.T, f *testharness.Fabric, fs *vfs.FS, src *testharness.Mirrors) *restoreJobs {
+func runJobs(t *testing.T, f *testharness.Fabric, fs *vfs.FS, src *testharness.Mirrors) *restore.Jobs {
 	t.Helper()
-	jobs := newRestoreJobs(t.TempDir(), fs, f.FSM, func() (meta.NodeIdx, bool) { return f.SelfIdx, true }, src.Online, f.Clk, slog.New(slog.DiscardHandler))
+	jobs := restore.New(t.TempDir(), fs, f.FSM, func() (meta.NodeIdx, bool) { return f.SelfIdx, true }, src.Online, f.Clk, slog.New(slog.DiscardHandler))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { jobs.Run(ctx); close(done) }()
@@ -479,7 +480,7 @@ func runJobs(t *testing.T, f *testharness.Fabric, fs *vfs.FS, src *testharness.M
 }
 
 // awaitJob waits until the job a snapshot_restore started is in state.
-func awaitJob(t *testing.T, jobs *restoreJobs, reply any, state string) rpc.RestoreJob {
+func awaitJob(t *testing.T, jobs *restore.Jobs, reply any, state string) rpc.RestoreJob {
 	t.Helper()
 	started, ok := reply.(rpc.RestoreStarted)
 	if !ok {

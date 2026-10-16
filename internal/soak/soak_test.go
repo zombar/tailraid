@@ -69,10 +69,10 @@ type harnessEnv struct {
 	once sync.Once
 	// the stats sampler of docs/17 on every node, as serve runs it, on the fake clock
 	stats map[int]*harnessStats
-	// the restore jobs phase 19 started (docs/16 §6): the harness runs one to its end
-	// before it answers, as its mirror is this process's
-	restores []rpc.RestoreJob
-	restoreN int
+	// the mirror host's restore jobs (docs/16 §6, phases 19 and 32), run by the node's own
+	// runner; jobsDir holds its file across the host's restarts
+	jobs    *harnessJobs
+	jobsDir string
 	// the index of docs/18 on every node, rebuilt when a restart replaced its handles
 	search map[int]*harnessSearch
 	// phase 19's mirror once AddMirror registered it (mirror_harness_test.go)
@@ -483,6 +483,7 @@ func (e *harnessEnv) flushing() bool {
 }
 
 func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, error) {
+	restores := e.restoreList() // every node lists every host's jobs (I-365)
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	nd := e.node(n)
@@ -500,8 +501,8 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		rep.Cache = &c
 	}
 	rep.Mirrors = e.mirrorReports(nd.I)
-	rep.Restores = slices.Clone(e.restores) // every node lists every host's jobs (I-365)
-	for i := range rep.Nodes {              // each member's page, for the hand-off of docs/21 §6
+	rep.Restores = restores
+	for i := range rep.Nodes { // each member's page, for the hand-off of docs/21 §6
 		if srv := e.web[int(rep.Nodes[i].Idx)-1]; srv != nil && rep.Nodes[i].Kind == "device" {
 			rep.Nodes[i].Addr, rep.Nodes[i].Web = webHostPort(srv.URL)
 		}
@@ -648,6 +649,9 @@ func (e *harnessEnv) Kill(_ context.Context, n soak.NodeRef) error {
 	defer e.mu.Unlock()
 	e.stopStats(e.node(n).I)
 	e.stopSMB(n)
+	if e.mirror != nil && e.mirror.host == e.node(n).I {
+		e.stopRestoreJobs() // the host's process ends, and its jobs with it
+	}
 	e.c.Kill(e.node(n).I)
 	e.c.Clk.Advance(cluster.LiveThreshold + time.Second)
 	e.c.Probe()
@@ -667,6 +671,9 @@ func (e *harnessEnv) Start(_ context.Context, n soak.NodeRef) error {
 	if e.users != nil {
 		e.users.wireAudit(e.node(n), e.c.Clk)
 	}
+	if e.mirror != nil && e.mirror.host == e.node(n).I {
+		e.restoreJobs() // serve resumes the recorded jobs at start (I-364)
+	}
 	return nil
 }
 
@@ -676,6 +683,9 @@ func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 	for _, n := range nodes {
 		e.stopStats(e.node(n).I)
 		e.stopSMB(n)
+		if e.mirror != nil && e.mirror.host == e.node(n).I {
+			e.stopRestoreJobs()
+		}
 		e.c.Kill(e.node(n).I)
 	}
 	for _, n := range nodes {
@@ -692,6 +702,7 @@ func (e *harnessEnv) Restart(ctx context.Context, nodes []soak.NodeRef) error {
 			e.users.wireAudit(e.node(n), e.c.Clk)
 		}
 	}
+	e.restoreJobs() // the mirror's host resumes its recorded jobs (I-364)
 	return nil
 }
 
@@ -835,7 +846,7 @@ func TestSoak_AllPhasesAgainstHarness(t *testing.T) {
 			}
 		}
 	}
-	if sum.Failed != 0 || len(sum.Phases) != 26 { // 27 standard phases less 22, 23, 25, 26 and 27, plus 28–31
+	if sum.Failed != 0 || len(sum.Phases) != 27 { // the standard phases (1–24, 32, 28–31) less 22 and 23
 		t.Fatalf("summary: %d failed, %d phases", sum.Failed, len(sum.Phases))
 	}
 	samples, events := 0, 0
@@ -935,7 +946,7 @@ func allPhasesRig(t *testing.T) (c *testharness.Cluster, env *harnessEnv, all []
 // proposes is refused for want of an actor.
 // Under -short the run is phase 0 and the phases that write as the admin through the
 // paths users broke (the trash purge in 5 and 8, the browser in 16, restores in 19, the
-// index in 21, secrets in 24) with the baseline and the users phases: two whole runs of
+// index in 21, secrets in 24, restore jobs in 32) with the baseline and the users phases: two whole runs of
 // every phase overran the package's ten minutes on the Windows race runner; the long
 // run takes them all.
 //
@@ -943,7 +954,7 @@ func allPhasesRig(t *testing.T) (c *testharness.Cluster, env *harnessEnv, all []
 func TestSoak_AllPhasesUnderUsersAgainstHarness(t *testing.T) {
 	c, env, all := allPhasesRig(t)
 	if testing.Short() {
-		all = []string{"1", "5", "8", "16", "19", "21", "24", "28", "29", "30", "31"}
+		all = []string{"1", "5", "8", "16", "19", "21", "24", "32", "28", "29", "30", "31"}
 	}
 	var jsonl bytes.Buffer
 	seed, rng := testseed.New(t)
@@ -962,6 +973,16 @@ func TestSoak_AllPhasesUnderUsersAgainstHarness(t *testing.T) {
 		for _, chk := range ph.Checks {
 			if chk.OK != nil && !*chk.OK {
 				t.Errorf("%s: %s: %s", ph.Name, chk.Name, chk.Text)
+			}
+		}
+	}
+	for _, ph := range sum.Phases {
+		if ph.Name != "32 restore jobs" {
+			continue
+		}
+		for _, chk := range ph.Checks { // with users every one of its checks runs, the other user's cancel included
+			if chk.OK == nil {
+				t.Errorf("%s: %s skipped: %s", ph.Name, chk.Name, chk.Text)
 			}
 		}
 	}

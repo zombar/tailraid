@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/mirror"
+	"github.com/zombar/tailraid/internal/restore"
 	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/soak"
 	"github.com/zombar/tailraid/internal/sysfs"
@@ -80,7 +82,11 @@ func (e *harnessEnv) SetMirrorOnline(ctx context.Context, _ string, online bool)
 	}
 	hm.src.SetOnline(hm.idx, online)
 	if online { // the host's first tick after the return: the catch-up
-		_, err := e.takeSnapshot(ctx, e.c.Clk.Now().UTC().Format("2006-01-02-1504Z"), true)
+		now := e.c.Clk.Now().UTC()
+		_, err := e.takeSnapshot(ctx, now.Format("2006-01-02-1504Z"), true)
+		if errors.Is(err, meta.ErrExist) { // plugged back within the minute of an earlier one
+			_, err = e.takeSnapshot(ctx, now.Format("2006-01-02-150405Z"), true)
+		}
 		return err
 	}
 	return nil
@@ -123,29 +129,9 @@ func (e *harnessEnv) SnapshotOp(ctx context.Context, n soak.NodeRef, op rpc.Admi
 		case "versions_revert":
 			n, rerr := fs.RevertFile(ctx, src, p)
 			out, err = map[string]any{"path": p, "uploaded": n}, rerr
-		case "snapshot_restore": // a job, as the mirror's host runs it (docs/16 §6); here run to the end before the answer
-			dst := p
-			if op.As != "" {
-				dst = path.Join(path.Dir(p), op.As)
-			}
-			files, bytes, rerr := fs.RestoreTotals(ctx, src, dst)
-			var rep vfs.RestoreReport
-			if rerr == nil {
-				rep, rerr = fs.RestoreSnapshot(ctx, src, dst)
-			}
-			if rerr == nil {
-				nd := e.node(n)
-				e.mu.Lock()
-				e.restoreN++
-				job := rpc.RestoreJob{
-					ID: fmt.Sprintf("%d-%d", nd.Idx(), e.restoreN), Host: n.Name, Mirror: op.Mirror, Snapshot: op.Name, Src: p, Dst: dst, Actor: actor,
-					State: rpc.RestoreDone, Counted: true, FilesTotal: files, BytesTotal: bytes, FilesDone: files, BytesDone: bytes, Existing: int64(len(rep.Skipped)),
-				}
-				e.restores = append(e.restores, job)
-				e.mu.Unlock()
-				out = rpc.RestoreStarted{Job: job.ID, Host: job.Host, Path: dst}
-			}
-			err = rerr
+		case "snapshot_restore", "restore_cancel": // a job on the mirror's host (docs/16 §6)
+			op.Actor = actor
+			out, err = e.restoreOp(ctx, op)
 		default:
 			return nil, fmt.Errorf("harness: no snapshot op %q", op.Op)
 		}
@@ -239,4 +225,107 @@ func (e *harnessEnv) mirrorReports(i int) []admin.MirrorReport {
 		r.Reason = "not attached"
 	}
 	return []admin.MirrorReport{r}
+}
+
+// harnessJobs is the mirror host's restore jobs: the node's own runner (internal/restore)
+// over its current handles, its file in a directory that outlives a restart, so a
+// restarted host resumes what it recorded (I-364).
+type harnessJobs struct {
+	dir  string
+	fs   *vfs.FS // the handles the runner was built over
+	jobs *restore.Jobs
+	stop context.CancelFunc
+	done chan struct{}
+}
+
+// restoreJobs is the mirror host's runner, started over the host's current handles (a
+// restart replaced them: the old runner is stopped and a new one resumes from the file);
+// nil while there is no mirror or its host is down. e.mu held.
+func (e *harnessEnv) restoreJobs() *restore.Jobs {
+	hm := e.mirror
+	if hm == nil || !e.c.Alive(hm.host) {
+		e.stopRestoreJobs()
+		return nil
+	}
+	nd := e.c.Nodes[hm.host]
+	nd.FS.SetMirrors(hm.src)
+	if e.jobs != nil && e.jobs.fs == nd.FS {
+		return e.jobs.jobs
+	}
+	e.stopRestoreJobs()
+	if e.jobsDir == "" {
+		e.jobsDir = e.t.TempDir()
+		e.t.Cleanup(func() { e.mu.Lock(); e.stopRestoreJobs(); e.mu.Unlock() })
+	}
+	idx, src := hm.idx, hm.src
+	jobs := restore.New(e.jobsDir, nd.FS, nd.Node.FSM, func() (meta.NodeIdx, bool) { return nd.Idx(), true },
+		func(m meta.NodeIdx) bool { return m == idx && src.Online(m) }, e.c.Clk, slog.New(slog.DiscardHandler))
+	ctx, cancel := context.WithCancel(context.Background())
+	hj := &harnessJobs{dir: e.jobsDir, fs: nd.FS, jobs: jobs, stop: cancel, done: make(chan struct{})}
+	go func() { defer close(hj.done); jobs.Run(ctx) }()
+	e.jobs = hj
+	return jobs
+}
+
+// stopRestoreJobs stops the runner, as the host's process ending does. e.mu held.
+func (e *harnessEnv) stopRestoreJobs() {
+	if e.jobs == nil {
+		return
+	}
+	e.jobs.stop()
+	<-e.jobs.done
+	e.jobs = nil
+}
+
+// restoreList is every host's restore jobs as every node's status lists them (I-365).
+func (e *harnessEnv) restoreList() []rpc.RestoreJob {
+	e.mu.Lock()
+	jobs := e.restoreJobs()
+	e.mu.Unlock()
+	if jobs == nil {
+		return nil
+	}
+	out := jobs.List()
+	restore.Sort(out)
+	return out
+}
+
+// restoreOp starts or cancels a restore job as node.adminOps does: the mirror's host
+// records the job and answers; a cancel is the host's, for the job's starter or an admin.
+func (e *harnessEnv) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	jobs := e.restoreJobs()
+	if jobs == nil {
+		return nil, errors.New("harness: no mirror host for restore jobs")
+	}
+	if op.Op == "restore_cancel" {
+		return map[string]string{"cancelled": op.Job}, jobs.Cancel(ctx, op.Job, op.Actor)
+	}
+	st := jobs.Store()
+	var row meta.Node
+	nodes := st.Nodes()
+	for i := range nodes {
+		if n := &nodes[i]; n.Kind == meta.KindMirror && (n.Name == op.Mirror || strings.ReplaceAll(n.Name, "/", "-") == op.Mirror) {
+			row = *n
+		}
+	}
+	var sn meta.Snapshot
+	for _, s := range st.Snapshots() {
+		if s.Mirror == row.Idx && s.Name == op.Name {
+			sn = s
+		}
+	}
+	if sn.ID == 0 {
+		return nil, fmt.Errorf("snapshot restore: no snapshot %s on %s: %w", op.Name, op.Mirror, meta.ErrNotExist)
+	}
+	src := path.Join("/", op.Path)
+	dst := src
+	if op.To != "" {
+		dst = path.Join("/", op.To, path.Base(src))
+	}
+	if op.As != "" {
+		dst = path.Join(path.Dir(dst), op.As)
+	}
+	return jobs.Start(ctx, rpc.RestoreStart{Mirror: row.Idx, Snapshot: sn.ID, Path: src, Dst: dst, Actor: op.Actor})
 }

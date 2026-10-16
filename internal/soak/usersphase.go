@@ -186,12 +186,12 @@ func (su *soakUsers) signsOn(ctx context.Context, r *Run, id *users.Identity, na
 	})
 }
 
-// invite mints an invite for name through n, as admin.
-func (su *soakUsers) invite(ctx context.Context, n NodeRef, as *users.Identity, name string, admin bool) (string, error) {
+// invite mints an invite for name, a plain user, through n, as admin.
+func (su *soakUsers) invite(ctx context.Context, n NodeRef, as *users.Identity, name string) (string, error) {
 	var rep struct {
 		Code string `json:"code"`
 	}
-	err := su.op(ctx, n, as, rpc.AdminOp{Op: "user_invite", User: name, Admin: admin}, &rep)
+	err := su.op(ctx, n, as, rpc.AdminOp{Op: "user_invite", User: name}, &rep)
 	return rep.Code, err
 }
 
@@ -273,7 +273,7 @@ func phaseUsers(ctx context.Context, r *Run) error {
 		}
 	}
 	// a second person from kim's invite, created on a third node
-	code, err = su.invite(ctx, n[0], su.kim, "lee", false)
+	code, err = su.invite(ctx, n[0], su.kim, "lee")
 	if err == nil {
 		su.lee, err = su.create(ctx, r, n[2], "lee", code)
 	}
@@ -327,7 +327,7 @@ func phaseUsers(ctx context.Context, r *Run) error {
 	who, err := su.whoami(ctx, n[1], su.kim)
 	r.check("I-346", "the admin still signs after the lockout refusals", err == nil && who == "kim", errText(err))
 	// a removed name is invited again and gets a new user
-	code, err = su.invite(ctx, n[0], su.kim, "pat", false)
+	code, err = su.invite(ctx, n[0], su.kim, "pat")
 	if err == nil {
 		su.pat, err = su.create(ctx, r, n[1], "pat", code)
 	}
@@ -339,7 +339,7 @@ func phaseUsers(ctx context.Context, r *Run) error {
 	}
 	r.check("I-342", "a user removed", err == nil, errText(err))
 	r.check("I-344", "a removed user is refused", until(ctx, r, func() bool { _, e := su.whoami(ctx, n[0], su.pat); return refused(e) }), "still accepted after the wait")
-	code, err = su.invite(ctx, n[1], su.kim, "pat", false)
+	code, err = su.invite(ctx, n[1], su.kim, "pat")
 	if err == nil {
 		su.pat, err = su.create(ctx, r, n[0], "pat", code)
 	}
