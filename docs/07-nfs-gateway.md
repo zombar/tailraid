@@ -21,7 +21,15 @@ needs, each with a test in the copy:
   kernel client pipelines its requests on one connection and never has two WRITEs for one
   page in flight, so two overlapping WRITEs applying in either order is the same as on any
   multi-threaded NFS server. Upstream handled one request at a time per connection, which
-  made every cold READ and every cap wait a stall of the whole mount.
+  made every cold READ and every cap wait a stall of the whole mount. A request that may
+  wait on the write path (WRITE and COMMIT, which can wait up to `CapWait` at a cap) holds
+  at most `WriteSlots` (8) of the 16; a WRITE that finds those taken waits in an ordered
+  queue of at most `QueuedWrites` (32, so about 32 MiB) while the reader goes on reading,
+  so a READ, LOOKUP, GETATTR or READDIR behind it on the same connection takes a free slot
+  at once. Only with 8 writes running and 32 queued does the reader stop, as it did for
+  every request before (2026-10-16: during a Finder copy that held the WAL at its cap,
+  every slot held a waiting WRITE, the reader stopped, and a song playing from the same
+  mount stopped and `ls` took seconds).
 - `nfs_onfsinfo.go` advertises `rtmax`/`wtmax`/`rtpref`/`wtpref` of 1 MiB instead of
   1 GiB, so the frame bound is the protocol's own: a client that honours FSINFO never sends
   a WRITE larger than `MaxFrame`.
@@ -42,7 +50,7 @@ These facts drive the vfs design and are the reason the previous attempt corrupt
 | LOOKUP / GETATTR / READDIR(PLUS) | `Lstat`, `ReadDir`; fileid from `FileInfo.Sys()` when it returns `*file.FileInfo{Fileid, Nlink, UID, GID}` (go-nfs's own type), otherwise an FNV hash of the path |
 | LINK | optional `UnixChange.Link`; not implemented → NFS3ERR_NOTSUPP |
 | SYMLINK / READLINK | `Symlink`, `Readlink` (billy `Symlink` capability) |
-| any procedure | dispatched concurrently with the connection's other requests, at most `InFlight` at once (the in-tree copy, I-167); a request that blocks (a cold READ, a WRITE waiting at a cap) delays no other |
+| any procedure | dispatched concurrently with the connection's other requests, at most `InFlight` at once (the in-tree copy, I-167); a request that blocks (a cold READ, a WRITE waiting at a cap) delays no other; WRITE and COMMIT hold at most `WriteSlots` of them, the rest waiting in order while the reader goes on (I-370) |
 
 Consequences:
 
@@ -188,8 +196,8 @@ quickly under the service manager; the mount survives because handles are stable
 the tailnet; the gateway then throttles the client instead of failing it: a WRITE that
 meets the WAL cap or `MaxDirty` blocks for up to `CapWait` (20 s) until the flusher has
 committed a batch (docs/04 §3, I-79). A waiting WRITE holds one of its connection's
-`InFlight` slots (I-167) and the client keeps that page's write-back waiting; the rest of
-the mount goes on. Batches are at most 32 MiB of chunks so a wait is a few seconds even on
+`WriteSlots`, at most 8 of the `InFlight` 16 (I-167, I-370), and the client keeps that
+page's write-back waiting; reads, listings and attributes on the same mount go on. Batches are at most 32 MiB of chunks so a wait is a few seconds even on
 a slow DERP path. `NFS3ERR_JUKEBOX` ("try again later")
 cannot be used: go-nfs maps the handler's error to a status itself and never emits it. The
 bound must stay inside each client's soft-mount timeout, which is what makes the wait
@@ -258,6 +266,14 @@ device"), not `EIO`.
   writer in completion order; a blocked request delays neither its connection's other
   requests nor other connections, FSINFO advertises `MaxFrame`'s payload as the largest
   transfer, and a connection holds at most `InFlight × MaxFrame` request bytes.
+
+- **I-370** — On one connection a WRITE or COMMIT runs only while fewer than `WriteSlots`
+  (8) of them run, and every request runs only while fewer than `InFlight` run in all; a
+  WRITE or COMMIT that finds the write slots taken waits in an ordered queue of at most
+  `QueuedWrites` (32) and the reader goes on reading, so a request that is neither runs
+  as soon as an `InFlight` slot is free whatever the writes ahead of it wait for; the
+  reader stops only while that queue is full; and writes start in the order they were
+  read.
 
 - **I-185** — `/.snapshots` is absent from the root's READDIR, resolves by name and lists
   every mirror and, in each, its complete and incomplete snapshots from the catalogue;
@@ -353,6 +369,7 @@ device"), not `EIO`.
 | I-260 | `TestDRC_RetransmissionRunsOnce`, `TestDRC_Bounded_CoversOnlyChanges` |
 | I-266 | `TestNFS_FailureBodies` |
 | I-269 | `TestConn_WriteFailure_ClosesTheConnection` |
+| I-370 | `TestConn_WaitingWritesNeverHoldReads`, `TestConn_QueuedWritesBounded_InOrder`, `TestNFS_InFlightBound` |
 | I-361 | `TestCommand_PerOS` |
 | I-238 | `TestNFS_NamespaceErrors_RFCStatuses`, `TestNFS_Mkdir_RacingBackend_Exist`, `TestVFS_RenameOntoItself_KeepsDirtyEphemeral` |
 | I-232 | `TestNFS_ReadDir_ChangedMidListing_NoBadCookie`, `TestNFS_ReadDirPlus_RemoveBetweenPages` |

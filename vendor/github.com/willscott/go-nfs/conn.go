@@ -52,10 +52,23 @@ var versions = map[uint32]uint32{nfsServiceID: 3, mountServiceID: 3}
 // InFlight is the most requests one connection has in flight at once; MaxFrame is the
 // largest request frame accepted, a WRITE of the advertised wtmax (1 MiB, nfs_onfsinfo.go)
 // plus its RPC and NFS headers. A larger frame closes the connection.
+//
+// WriteSlots is the most of those a request that may wait on the write path holds, and
+// QueuedWrites the most such requests waiting for a write slot, read but not started
+// (tailraid, I-370): a WRITE can wait seconds at a cap, and without the split a copy's
+// WRITEs took every slot and stopped the reader, so a READ behind them waited too.
 const (
-	InFlight = 16
-	MaxFrame = 1<<20 + 8<<10
+	InFlight     = 16
+	WriteSlots   = 8
+	QueuedWrites = 32
+	MaxFrame     = 1<<20 + 8<<10
 )
+
+// waitsOnWrites reports a request that may wait on the write path: WRITE, held at a cap
+// until the flusher frees room, and COMMIT, which waits for the flush.
+var waitsOnWrites = func(h rpc.Header) bool {
+	return h.Prog == nfsServiceID && (h.Proc == uint32(NFSProcedureWrite) || h.Proc == uint32(NFSProcedureCommit))
+}
 
 type conn struct {
 	*Server
@@ -65,9 +78,12 @@ type conn struct {
 
 // serve reads request frames one after another and runs each on its own goroutine, at
 // most InFlight at once; replies go through the connection's single writer in completion
-// order (NFSv3 over TCP matches replies by XID, RFC 1813 §1.6). A frame that cannot be
-// read or parsed, or a handler that fails at the transport level, closes the connection;
-// the reader then returns and waits for the handlers still running.
+// order (NFSv3 over TCP matches replies by XID, RFC 1813 §1.6). A request that may wait on
+// the write path runs on at most WriteSlots of the slots, in the order read; one that
+// finds them taken waits in a queue of at most QueuedWrites while the reader goes on, so
+// the requests behind it are served (I-370). A frame that cannot be read or parsed, or a
+// handler that fails at the transport level, closes the connection; the reader then
+// returns and waits for the handlers still running.
 func (c *conn) serve(ctx context.Context) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -77,9 +93,37 @@ func (c *conn) serve(ctx context.Context) {
 
 	bio := bufio.NewReader(c.Conn)
 	slots := make(chan struct{}, InFlight)
+	writeSlots := make(chan struct{}, WriteSlots)
+	writes := make(chan *response, QueuedWrites-1) // and one in the dispatcher's hand
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	defer cancel() // runs before wg.Wait: a handler blocked on its reply stops
+	defer cancel()      // runs before wg.Wait: a handler blocked on its reply stops
+	defer close(writes) // runs first: the dispatcher's range ends
+	run := func(w *response, release func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer release()
+			c.run(connCtx, cancel, w)
+		}()
+	}
+	wg.Add(1)
+	go func() { // the writes, in the order read, each once a write slot and a slot are free
+		defer wg.Done()
+		for w := range writes {
+			select {
+			case writeSlots <- struct{}{}:
+			case <-connCtx.Done():
+				return
+			}
+			select {
+			case slots <- struct{}{}:
+			case <-connCtx.Done():
+				return
+			}
+			run(w, func() { <-slots; <-writeSlots })
+		}
+	}()
 	for {
 		w, err := c.readRequest(connCtx, bio)
 		if err != nil {
@@ -88,32 +132,41 @@ func (c *conn) serve(ctx context.Context) {
 			return
 		}
 		Log.Tracef("request: %v", w.req)
+		if waitsOnWrites(w.req.Header) {
+			select {
+			case writes <- w: // the reader stops only while the queue is full
+			case <-connCtx.Done():
+				return
+			}
+			continue
+		}
 		select {
 		case slots <- struct{}{}:
 		case <-connCtx.Done():
 			return
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-slots }()
-			handle := c.handle
-			if cached[w.req.Header.Prog][w.req.Header.Proc] {
-				handle = c.handleOnce // a retransmission runs once (I-260)
-			}
-			if err := handle(connCtx, w); err != nil {
-				Log.Errorf("error handling req: %v", err)
-				// failure to handle at a level needing to close the connection.
-				c.Close()
-				cancel()
-				return
-			}
-			if err := w.finish(connCtx); err != nil {
-				Log.Errorf("error sending response: %v", err)
-				c.Close()
-				cancel()
-			}
-		}()
+		run(w, func() { <-slots })
+	}
+}
+
+// run handles one request and sends its reply; a failure at the transport level closes
+// the connection.
+func (c *conn) run(connCtx context.Context, cancel context.CancelFunc, w *response) {
+	handle := c.handle
+	if cached[w.req.Header.Prog][w.req.Header.Proc] {
+		handle = c.handleOnce // a retransmission runs once (I-260)
+	}
+	if err := handle(connCtx, w); err != nil {
+		Log.Errorf("error handling req: %v", err)
+		// failure to handle at a level needing to close the connection.
+		c.Close()
+		cancel()
+		return
+	}
+	if err := w.finish(connCtx); err != nil {
+		Log.Errorf("error sending response: %v", err)
+		c.Close()
+		cancel()
 	}
 }
 

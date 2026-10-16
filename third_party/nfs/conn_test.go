@@ -26,6 +26,8 @@ const testProg = 400_000_000
 var block = struct {
 	mu      sync.Mutex
 	release chan struct{}
+	tokens  chan struct{} // when set, each blocked request also finishes on one token
+	order   []uint32      // the XIDs in the order they entered
 	entered atomic.Int32
 	arrived chan struct{} // one token per request that entered the blocking procedure
 }{release: make(chan struct{}), arrived: make(chan struct{}, 1024)}
@@ -44,13 +46,15 @@ func awaitEntered(t *testing.T, n int) {
 
 func init() {
 	_ = RegisterMessageHandler(testProg, 1, func(ctx context.Context, w *response, _ Handler) error {
+		block.mu.Lock()
+		block.order = append(block.order, w.req.xid)
+		release, tokens := block.release, block.tokens
+		block.mu.Unlock()
 		block.entered.Add(1)
 		block.arrived <- struct{}{}
-		block.mu.Lock()
-		release := block.release
-		block.mu.Unlock()
 		select {
 		case <-release:
+		case <-tokens: // nil unless the test hands out tokens
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -66,7 +70,11 @@ func arm() func() {
 	ch := make(chan struct{})
 	block.mu.Lock()
 	block.release = ch
+	block.tokens, block.order = nil, nil
 	block.entered.Store(0)
+	for len(block.arrived) > 0 { // a test before this one left arrivals it did not wait for
+		<-block.arrived
+	}
 	block.mu.Unlock()
 	var once sync.Once
 	return func() { once.Do(func() { close(ch) }) }
@@ -212,5 +220,106 @@ func TestConn_ReadsWholeFrame_CapsIt(t *testing.T) {
 		if (xid != 7 || xid2 != 8) && (xid != 8 || xid2 != 7) { // served concurrently: either order
 			t.Fatalf("size %d: replies %d and %d, want 7 and 8", size, xid, xid2)
 		}
+	}
+}
+
+// asWrites makes the blocking procedure count as a write for the test, as WRITE and
+// COMMIT do, and puts the rule back after it.
+func asWrites(t *testing.T) {
+	t.Helper()
+	was := waitsOnWrites
+	waitsOnWrites = func(h rpc.Header) bool { return h.Prog == testProg && h.Proc == 1 }
+	t.Cleanup(func() { waitsOnWrites = was })
+}
+
+// Writes waiting on the write path never hold the connection's other requests: with more
+// writes blocked than the write slots, at most WriteSlots of them run, the reader goes
+// on, and a request behind them is answered at once (2026-10-16: a song stopped during a
+// Finder copy whose WRITEs waited at the WAL cap).
+// Invariant: I-370
+func TestConn_WaitingWritesNeverHoldReads(t *testing.T) {
+	asWrites(t)
+	release := arm()
+	defer release()
+	c := serveTCP(t)
+	var all []byte
+	for i := 1; i <= InFlight+4; i++ {
+		all = append(all, frame(uint32(i), testProg, 1, 1, 0)...)
+	}
+	all = append(all, frame(99, testProg, 1, 2, 0)...)
+	if _, err := c.Write(all); err != nil {
+		t.Fatal(err)
+	}
+	awaitEntered(t, WriteSlots)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if xid, err := readReply(c); err != nil || xid != 99 {
+		t.Fatalf("first reply xid %d err %v, want 99, the request behind the writes", xid, err)
+	}
+	if n := block.entered.Load(); n != WriteSlots {
+		t.Fatalf("%d writes running, want %d", n, WriteSlots)
+	}
+	_ = c.SetReadDeadline(time.Time{})
+	release()
+	for range InFlight + 4 {
+		if _, err := readReply(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The writes waiting for a write slot are bounded: with WriteSlots running and
+// QueuedWrites queued, the reader stops (the request behind them waits, as every request
+// did before); and the queued writes start in the order they were read, one per slot
+// freed.
+// Invariant: I-370
+func TestConn_QueuedWritesBounded_InOrder(t *testing.T) {
+	asWrites(t)
+	release := arm()
+	defer release()
+	tokens := make(chan struct{})
+	block.mu.Lock()
+	block.tokens = tokens
+	block.mu.Unlock()
+	c := serveTCP(t)
+	n := WriteSlots + QueuedWrites + 1 // one more than fits: the reader holds it
+	var all []byte
+	for i := 1; i <= n; i++ {
+		all = append(all, frame(uint32(i), testProg, 1, 1, 0)...)
+	}
+	all = append(all, frame(999, testProg, 1, 2, 0)...)
+	if _, err := c.Write(all); err != nil {
+		t.Fatal(err)
+	}
+	awaitEntered(t, WriteSlots)
+	_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if xid, err := readReply(c); err == nil {
+		t.Fatalf("reply %d arrived while the write queue was full", xid)
+	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("read: %v", err)
+	}
+	_ = c.SetReadDeadline(time.Time{})
+	// one slot freed at a time: the next write to start is the next one read (and the
+	// reader, with room in the queue again, reads and answers the request behind it)
+	for want := WriteSlots + 1; want <= WriteSlots+4; want++ {
+		tokens <- struct{}{}
+		awaitEntered(t, 1)
+		block.mu.Lock()
+		got := block.order[len(block.order)-1]
+		block.mu.Unlock()
+		if got != uint32(want) {
+			t.Fatalf("write %d started next, want %d", got, want)
+		}
+	}
+	release()
+	seen := map[uint32]bool{}
+	for len(seen) < n+1 {
+		xid, err := readReply(c)
+		if err != nil {
+			t.Fatalf("after %d replies: %v", len(seen), err)
+		}
+		seen[xid] = true
+	}
+	if !seen[999] {
+		t.Fatalf("the request behind the queue never answered: %v", seen)
 	}
 }
