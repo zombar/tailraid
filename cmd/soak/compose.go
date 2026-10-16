@@ -246,12 +246,13 @@ func (e *composeEnv) SetMirrorOnline(ctx context.Context, _ string, online bool)
 	return e.run(ctx, "exec", "-T", mirrorHost, "sh", "-c", mirrorMoveScript(from, to, online))
 }
 
-// mirrorMoveScript moves from to to. Both present is an error, not a state already
-// reached: an empty directory at the plugged-in path beside the moved-away mirror is
-// what a write that recreated the root leaves (2026-10-16, I-180), and quietly keeping
-// it would show the phase a mirror with no marker.
+// mirrorMoveScript moves from to to. Plugging in over an empty directory replaces it, as
+// a disk mounts over its empty mount point: entry.sh makes every listed mirror path at
+// each start, so a node restarted while the mirror was unplugged has one (soak, phase 32
+// after phase 22's restarts, 2026-10-16). Both present otherwise is an error, not a state
+// already reached: quietly keeping the other would show the phase a mirror with no marker.
 func mirrorMoveScript(from, to string, online bool) string {
-	return fmt.Sprintf("if [ -e %[1]s ] && [ -e %[2]s ]; then echo 'both %[1]s and %[2]s exist' >&2; exit 1; "+
+	return fmt.Sprintf("if [ -e %[1]s ] && [ -e %[2]s ] && ! { [ %[3]t = true ] && rmdir %[2]s 2>/dev/null; }; then echo 'both %[1]s and %[2]s exist' >&2; exit 1; "+
 		"elif [ -e %[1]s ]; then mv %[1]s %[2]s; elif [ -e %[2]s ] || [ %[3]t = true ]; then :; else echo 'no mirror at %[1]s' >&2; exit 1; fi", from, to, online)
 }
 

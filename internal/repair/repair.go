@@ -230,6 +230,7 @@ type Repairer struct {
 	sumsPending int                   // chunks without sums: the last sweep's count less what passes recorded since
 	swept       Stats                 // the last sweep's statistics: away, movable and disk skew between sweeps
 	replaced    bool                  // a pass since the last sweep re-placed chunks: their home is uncounted
+	sweptDest   map[meta.NodeIdx]bool // the targets that could take a shard at the last sweep
 	pass        int
 	progress    Progress // the pass under way, while running
 	running     bool
@@ -492,7 +493,7 @@ func (r *Repairer) Scrub(ctx context.Context) (Stats, error) { return r.scan(ctx
 func (r *Repairer) LostLeadership() {
 	r.mu.Lock()
 	r.prevSweep = time.Time{}
-	r.homeQueue, r.sumsQueue, r.stuck = nil, nil, nil
+	r.homeQueue, r.sumsQueue, r.stuck, r.sweptDest = nil, nil, nil, nil
 	r.homeOpen, r.homeForced, r.home = false, false, nil // a new leader judges the gate afresh
 	r.mu.Unlock()
 }
@@ -542,6 +543,12 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	// view to change (I-380)
 	view := r.view(all, vol)
 	badClasses, badChunks := r.badClasses(vol, nodes, view, now)
+	dest := map[meta.NodeIdx]bool{}
+	for i := range all {
+		if r.dest(all[i].Idx) {
+			dest[all[i].Idx] = true
+		}
+	}
 	r.mu.Lock()
 	r.pass++
 	pass := r.pass
@@ -555,14 +562,21 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	// in its queue, and once repairs re-placed chunks and no class needs work any more (a
 	// refill can leave a slot away from home, which only a sweep counts). Any other pass
 	// visits only where work is.
+	// a target that can take shards again (a host back from the dead, a full disk with
+	// room) may make movable what the last sweep counted away and could not move (I-379)
+	destGained := false
+	for n := range dest {
+		destGained = destGained || !r.sweptDest[n]
+	}
 	sweep := scrubAll || r.prevSweep.IsZero() || now.Sub(r.prevSweep) >= r.cfg.SweepInterval || homesMoved ||
-		(r.homeOpen && len(r.homeQueue) == 0) || (r.replaced && len(badClasses) == 0)
+		(r.homeOpen && len(r.homeQueue) == 0) || (r.replaced && len(badClasses) == 0) ||
+		(destGained && r.swept.AwayBytes > r.swept.MovableBytes)
 	from := r.prevSweep // the scrub's arc: since the previous sweep, or one SweepInterval on the first (I-215)
 	if from.IsZero() {
 		from = now.Add(-max(r.cfg.SweepInterval, r.cfg.ScanInterval))
 	}
 	if sweep {
-		r.prevSweep = now
+		r.prevSweep, r.sweptDest = now, dest
 	}
 	scrub := func(h meta.Hash) bool {
 		return scrubAll || (sweep && ScrubDue(h, from, now, r.cfg.ScrubPeriod))

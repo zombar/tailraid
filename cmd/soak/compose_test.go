@@ -92,8 +92,9 @@ func TestCompose_AddMirrorTwice_SameMirror(t *testing.T) {
 	}
 }
 
-// The rig's plug and unplug: a move, or nothing when already in that state; both paths
-// present (a write recreated the root while the mirror was away) fails loudly.
+// The rig's plug and unplug: a move, or nothing when already in that state; plugging in
+// over an empty directory (the mount point a restart's entry.sh made) replaces it; both
+// paths present otherwise fails loudly.
 func TestCompose_MirrorMoveScript(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil || runtime.GOOS == "windows" {
 		t.Skip("the script runs in the rig's Linux containers; Windows' sh is Git's, over Windows paths")
@@ -110,7 +111,8 @@ func TestCompose_MirrorMoveScript(t *testing.T) {
 		{"plug in again", []string{"m"}, true, true, []string{"m"}},
 		{"plug in a mirror never added", nil, true, true, nil},
 		{"unplug a mirror never added", nil, false, false, nil},
-		{"plug in beside a recreated root", []string{"m", "m.away"}, true, false, []string{"m", "m.away"}},
+		{"plug in over an empty mount point", []string{"m", "m.away", "m.away/marker"}, true, true, []string{"m"}},
+		{"plug in beside a non-empty root", []string{"m", "m/x", "m.away"}, true, false, []string{"m", "m.away"}},
 		{"unplug beside a recreated root", []string{"m", "m.away"}, false, false, []string{"m", "m.away"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -135,6 +137,11 @@ func TestCompose_MirrorMoveScript(t *testing.T) {
 			}
 			if !slices.Equal(got, c.want) {
 				t.Fatalf("left %v, want %v", got, c.want)
+			}
+			if slices.Contains(c.have, "m.away/marker") {
+				if _, err := os.Stat(filepath.Join(dir, "m", "marker")); err != nil {
+					t.Fatalf("the mirror did not move over the mount point: %v", err)
+				}
 			}
 		})
 	}
