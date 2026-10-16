@@ -5,12 +5,14 @@
 // operation here; no page removes one (I-183), and adding or removing a mirror stays in
 // the CLI.
 
-import { clear, h, toast } from "./dom.ts";
-import { ApiError, copyVersion, offline, restoreTree, revert, snapshots, takeSnapshot, versions, type Mirror, type SnapRef, type Snapshot, type Snapshots, type Version } from "./api.ts";
+import { clear, h, setWidth, toast } from "./dom.ts";
+import { ApiError, cancelRestore, copyVersion, offline, restoreTree, revert, snapshots, takeSnapshot, versions, type Mirror, type RestoreJob, type SnapRef, type Snapshot, type Snapshots, type Version } from "./api.ts";
 import { bar, barRow, fillTone } from "./chart.ts";
 import { basename, browseHash, bytes, dirname, ext, fileHash, when, type Ctx } from "./util.ts";
 import { ago, daysAgo, shortDate } from "./fmt.ts";
 import { pick } from "./picker.ts";
+import { status } from "./status.ts";
+import * as account from "./account.ts";
 
 // --- the catalogue, fetched at most every few seconds ------------------------------------
 
@@ -163,18 +165,26 @@ export function offlineView(ctx: Ctx, e: unknown, back: string): HTMLElement[] {
 /** isOffline re-exports the 409-offline test for the views. */
 export const isOffline = offline;
 
+/**
+ * restoreFolder starts a restore job of the folder on the mirror's host (docs/16 §6): the
+ * answer comes once the job is recorded, and the toast links the dashboard's Restores
+ * block, where the job's progress is (docs/13 §4, I-369).
+ */
 async function restoreFolder(ctx: Ctx, ref: SnapRef): Promise<void> {
   const to = await pick({ start: dirname(ctx.path) || "/", disabled: () => null, action: (p) => `Restore here as ${basename(ctx.path) || ref.name}` + (p === "/" ? "" : "") });
   if (to === null) return;
   try {
     const r = await restoreTree(ref.id, ctx.path, { to });
-    const made = r.files + r.dirs + r.links;
-    toast(`restored ${made} ${made === 1 ? "entry" : "entries"} to ${r.path}` + (r.skipped_count ? ` · ${r.skipped_count} existing left alone` : "") + (r.refused_count ? ` · ${r.refused_count} not yours to read` : "") + (r.uploaded ? ` · ${r.uploaded} chunks copied back from ${ref.mirror}` : ""), "ok");
-    location.hash = browseHash({ path: r.path });
+    const follow = h("a", { href: "#/", onClick: () => (scrollToRestores = true) }, "follow it on the dashboard");
+    toast(h("span", null, `restoring ${basename(r.path) || r.path} from ${ref.name} on ${r.host} · `, follow), "ok");
+    void status.refresh();
   } catch (e) {
     toast("restore: " + errText(e), "bad");
   }
 }
+
+/** scrollToRestores is set by the toast's link: the dashboard scrolls to its Restores block once drawn. */
+let scrollToRestores = false;
 
 // --- a file's Versions panel ------------------------------------------------------------------
 
@@ -361,10 +371,18 @@ function schedule(c: Snapshots): string {
  * snapshot" (a manual one is permanent, and the dialog says so), and every snapshot newest
  * first with Browse; there is no Delete (I-183).
  */
-export function section(c: Snapshots | null, onTaken: () => void): HTMLElement | null {
+export function section(c: Snapshots | null, onTaken: () => void, restores: RestoreJob[] = []): HTMLElement | null {
   if (!c || !c.mirrors.length) return null;
   const sec = h("section", null, h("h2", null, "Mirrors", h("span", { class: "h-sub" }, schedule(c))));
   sec.append(h("div", { class: "cards" }, ...c.mirrors.map((m) => card(m, c))));
+  if (restores.length) {
+    const head = h("h3", { id: "restores" }, "Restores");
+    sec.append(head, h("div", { class: "cards" }, ...restores.map((j) => restoreCard(j, restores))));
+    if (scrollToRestores) {
+      scrollToRestores = false;
+      requestAnimationFrame(() => head.scrollIntoView({ block: "start" }));
+    }
+  }
   const manual = c.snapshots.filter((s) => !s.auto).length;
   const online = c.mirrors.filter((m) => m.online).length;
   const take = h("button", { type: "button", disabled: online === 0, title: online ? "" : "no mirror is online" }, "Take a snapshot") as HTMLButtonElement;
@@ -372,7 +390,10 @@ export function section(c: Snapshots | null, onTaken: () => void): HTMLElement |
   sec.append(h("div", { class: "snap-head" }, take, h("span", { class: "small dim" }, `every online mirror · ${c.snapshots.length} snapshots · ${manual} manual`)));
   const byName = new Map(c.mirrors.map((m) => [m.name, m]));
   const tbody = h("tbody");
-  for (const s of c.snapshots) {
+  const pages = Math.max(1, Math.ceil(c.snapshots.length / PAGE));
+  page = Math.min(page, pages - 1);
+  const shown = c.snapshots.slice(page * PAGE, (page + 1) * PAGE);
+  for (const s of shown) {
     const m = byName.get(s.mirror);
     const on = !!m?.online;
     const name = h("td", { class: "name" }, s.name);
@@ -390,8 +411,131 @@ export function section(c: Snapshots | null, onTaken: () => void): HTMLElement |
   if (c.snapshots.length) {
     sec.append(h("table", { class: "snapshots" }, h("thead", null, h("tr", null, h("th", null, "name"), h("th", { class: "mirror" }, "mirror"), h("th", { class: "taken" }, "taken"), h("th", { class: "holds" }, "added"), h("th", { class: "acts" }))), tbody));
   } else sec.append(h("div", { class: "empty" }, "no snapshot yet: the first one copies the whole volume"));
+  if (c.snapshots.length > PAGE) {
+    const go = (p: number) => () => {
+      page = p;
+      onTaken();
+    };
+    const first = page * PAGE + 1;
+    const lastRow = Math.min((page + 1) * PAGE, c.snapshots.length);
+    sec.append(
+      h(
+        "div",
+        { class: "pager" },
+        h("button", { type: "button", disabled: page === 0, onClick: go(page - 1) }, "Newer"),
+        h("span", { class: "small dim" }, `${first}–${lastRow} of ${c.snapshots.length}`),
+        h("button", { type: "button", disabled: page >= pages - 1, onClick: go(page + 1) }, "Older"),
+      ),
+    );
+  }
   sec.append(h("div", { class: "small dim" }, "a snapshot copies only what changed since the last one on its mirror; “added” is what it wrote"));
   return sec;
+}
+
+/** PAGE is how many snapshots the table shows a page; page is this page load's, newest first (I-369). */
+const PAGE = 20;
+let page = 0;
+
+// --- the dashboard's Restores block (docs/13 §7, docs/16 §6, I-369) ----------------------------
+
+const UNFINISHED = new Set<RestoreJob["state"]>(["counting", "queued", "running", "waiting", "retrying"]);
+
+/** iso is a job's Unix-nanosecond time as the formatters take it. */
+function iso(ns: number | undefined): string | undefined {
+  return ns ? new Date(ns / 1e6).toISOString() : undefined;
+}
+
+/** span says how long secs is: "45 s", "4 m", "3 h 35 m". */
+function span(secs: number): string {
+  const s = Math.max(0, Math.round(secs));
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} m`;
+  return `${Math.floor(m / 60)} h ${m % 60} m`;
+}
+
+/** mirrorDir is a mirror row's directory under /.snapshots: pike/m1 is pike-m1. */
+function mirrorDir(row: string): string {
+  return row.replace(/\//g, "-");
+}
+
+/** restoreCard is one restore job, as the lookdev draws it: the destination and its state, a bar of bytes, a bar of files while it copies, where it reads from and who started it, Cancel while it is unfinished. */
+function restoreCard(j: RestoreJob, all: RestoreJob[]): HTMLElement {
+  const warn = j.state === "queued" || j.state === "waiting" || j.state === "retrying";
+  const finished = j.state === "done" || j.state === "cancelled";
+  const tone = warn ? "warn" : j.state === "failed" ? "bad" : "";
+  const dot = j.state === "cancelled" ? "off" : tone || "ok";
+  const badges = h("span", { class: "badges" }, h("span", { class: "badge" }, "on " + j.host), h("span", { class: "badge" + (tone ? " " + tone : "") }, j.state));
+  const el = h("div", { class: "card restore" + (tone ? " " + tone : "") + (finished ? " done" : "") }, h("div", { class: "name-row" }, h("span", { class: "dot " + dot }), h("span", { class: "name" }, j.dst), badges));
+  const frac = j.bytes_total > 0 ? j.bytes_done / j.bytes_total : 0;
+  const so = `${bytes(j.bytes_done)} of ${bytes(j.bytes_total)} · ${Math.floor(frac * 100)} %`;
+  const empty = () => h("div", { class: "bar" });
+  switch (j.state) {
+    case "counting":
+      el.append(barRow("bytes", empty(), "counting what to restore" + (j.files_total ? ` · ${j.files_total.toLocaleString("en")} files so far` : "")));
+      break;
+    case "queued": {
+      const ahead = all.find((o) => o !== j && o.host === j.host && o.state !== "queued" && UNFINISHED.has(o.state));
+      el.append(barRow("bytes", empty(), ahead ? `after the restore of ${ahead.dst} on ${j.host}` : `waiting its turn on ${j.host}`));
+      break;
+    }
+    case "running": {
+      const left = j.rate > 0 ? ` · ${span((j.bytes_total - j.bytes_done) / j.rate)} left` : "";
+      el.append(barRow("bytes", bar(frac), `${so} · ${bytes(j.rate)}/s${left}`));
+      break;
+    }
+    case "waiting":
+      el.append(barRow("bytes", bar(frac, "warn"), `${so} · ${mirrorDir(j.mirror)} is offline: attach it and the restore goes on`));
+      break;
+    case "retrying": {
+      const next = j.next_try ? ` · again in ${span(j.next_try / 1e9 - Date.now() / 1000)}` : "";
+      el.append(barRow("bytes", bar(frac, "warn"), `${so}${next}${j.error ? ": " + j.error : ""}`));
+      break;
+    }
+    case "failed":
+      el.append(barRow("bytes", bar(frac, "bad"), `${bytes(j.bytes_done)} of ${bytes(j.bytes_total)} · ${j.error || "failed"}: a rerun goes on from here`));
+      break;
+    case "cancelled": {
+      const fill = h("i");
+      setWidth(fill, frac);
+      const off = h("div", { class: "bar off" }, fill); // hatched, with what was restored
+      el.append(barRow("bytes", off, `${bytes(j.bytes_done)} of ${bytes(j.bytes_total)} · what was restored stays`));
+      break;
+    }
+    case "done":
+      el.append(barRow("bytes", bar(1), `${bytes(j.bytes_total)} · ${j.files_total.toLocaleString("en")} files` + (j.existing ? ` · ${j.existing.toLocaleString("en")} already there` : "")));
+      break;
+  }
+  if (j.state === "running" || j.state === "waiting") {
+    const ff = j.files_total > 0 ? j.files_done / j.files_total : 0;
+    el.append(barRow("files", bar(ff, j.state === "waiting" ? "warn" : ""), `${j.files_done.toLocaleString("en")} of ${j.files_total.toLocaleString("en")}` + (j.existing ? ` · ${j.existing.toLocaleString("en")} already there` : "")));
+  }
+  const meta = h("div", { class: "meta" }, h("span", null, `from ${mirrorDir(j.mirror)} · ${j.snapshot}`));
+  if (j.user) meta.append(h("span", null, "by " + j.user));
+  if (j.state === "done") meta.append(h("span", null, `finished ${when(iso(j.ended))} · took ${span(((j.ended ?? j.updated) - j.started) / 1e9)}`));
+  else if (j.state === "failed") meta.append(h("span", null, "failed " + when(iso(j.ended ?? j.updated))));
+  else if (j.state === "cancelled") meta.append(h("span", null, "cancelled " + when(iso(j.ended ?? j.updated))));
+  else meta.append(h("span", null, `started ${when(iso(j.started))}` + (j.resumed ? ` · resumed after a restart${j.resumed > 1 ? ` ${j.resumed}×` : ""}` : "") + (j.state === "retrying" && j.tries ? ` · ${j.tries} ${j.tries === 1 ? "try" : "tries"}` : "")));
+  el.append(meta);
+  const se = account.current();
+  if (UNFINISHED.has(j.state) && (!se || se.admin || se.user === j.user)) {
+    const btn = h("button", { type: "button" }, "Cancel restore") as HTMLButtonElement;
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      cancelRestore(j.id).then(
+        () => {
+          toast(`cancelled the restore of ${j.dst}: what was restored stays`, "ok");
+          void status.refresh();
+        },
+        (e) => {
+          btn.disabled = false;
+          toast("cancel: " + errText(e), "bad");
+        },
+      );
+    });
+    el.append(h("div", { class: "card-acts" }, btn));
+  }
+  return el;
 }
 
 /** takeDialog asks for an optional name and says a manual snapshot is permanent. */

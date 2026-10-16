@@ -17,6 +17,7 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
@@ -30,6 +31,13 @@ type SnapshotService interface {
 	Take(ctx context.Context, name, mirror string) (any, error)
 	// Schedule is this node's mirrors config.
 	Schedule() Schedule
+	// StartRestore records a restore of src in the snapshot named snapshot on mirror (its
+	// row's name or its directory) into dst, as actor's job on the mirror's host, and
+	// returns once the host has recorded it, not when it ends (docs/16 §6, I-363).
+	StartRestore(ctx context.Context, actor meta.UserIdx, mirror, snapshot, src, dst string) (rpc.RestoreStarted, error)
+	// CancelRestore asks the job's host to cancel job for actor, its starter or an admin
+	// (docs/16 §6, I-368).
+	CancelRestore(ctx context.Context, actor meta.UserIdx, job string) error
 }
 
 // Schedule is the snapshot schedule of docs/16 §4 as the dashboard's heading shows it.
@@ -531,8 +539,10 @@ func (s *Server) copyVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"entry": e, "uploaded": rep.Uploaded})
 }
 
-// restoreTree is POST /api/restore-tree (docs/13 §3): the snapshot's entry at path
-// recreated under to (its parent unless given) as name (its own unless given).
+// restoreTree is POST /api/restore-tree (docs/13 §3): a job of the snapshot's entry at
+// path recreated under to (its parent unless given) as name (its own unless given),
+// recorded on the mirror's host, which runs it (docs/16 §6). The answer is 202 once the
+// host has recorded it; the job's progress is in /api/status (I-369).
 func (s *Server) restoreTree(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Snapshot uint32 `json:"snapshot"`
@@ -541,6 +551,10 @@ func (s *Server) restoreTree(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 	}
 	if !decode(w, r, 8192, &body) {
+		return
+	}
+	if s.o.Snapshots == nil {
+		writeErr(w, http.StatusServiceUnavailable, "snapshots are not available on this node")
 		return
 	}
 	parts, p := cleanPath(body.Path)
@@ -574,17 +588,38 @@ func (s *Server) restoreTree(w http.ResponseWriter, r *http.Request) {
 		_, to = cleanPath(body.To)
 	}
 	dst := path.Join(to, name)
-	rep, err := s.fs(r).RestoreSnapshot(r.Context(), src.vpath, dst)
+	if err := s.fs(r).CheckRestoreInto(dst); err != nil { // the job's host checks it again when it runs (I-367)
+		s.fail(w, err)
+		return
+	}
+	started, err := s.o.Snapshots.StartRestore(r.Context(), s.actor(r), ref.Mirror, ref.Snapshot.Name, p, dst)
 	if err != nil {
 		s.fail(w, s.snapErr(src, err))
 		return
 	}
-	skipped := rep.Skipped
-	if len(skipped) > MaxBatch {
-		skipped = skipped[:MaxBatch]
+	writeJSON(w, http.StatusAccepted, started)
+}
+
+// cancelRestore is POST /api/restore/cancel (docs/13 §3): the job's host cancels it for the
+// session's user, its starter or an admin (I-369).
+func (s *Server) cancelRestore(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Job string `json:"job"`
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"path": dst, "files": rep.Files, "dirs": rep.Dirs, "links": rep.Links,
-		"skipped": append([]string{}, skipped...), "skipped_count": len(rep.Skipped), "refused_count": len(rep.Refused), "uploaded": rep.Uploaded,
-	})
+	if !decode(w, r, 4096, &body) {
+		return
+	}
+	if s.o.Snapshots == nil {
+		writeErr(w, http.StatusServiceUnavailable, "snapshots are not available on this node")
+		return
+	}
+	if body.Job == "" {
+		writeErr(w, http.StatusBadRequest, "cancel: no job")
+		return
+	}
+	if err := s.o.Snapshots.CancelRestore(r.Context(), s.actor(r), body.Job); err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

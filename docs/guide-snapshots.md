@@ -54,6 +54,8 @@ tailraid snapshot restore pike/m1/before-reorg Photos/2024 --to Restored  # a fo
 
 `snapshot restore` hands the copy to the mirror's host as a job and returns at once, printing the job's ID and where it runs. The job goes on whatever happens to your terminal: it survives the host restarting, waits while the mirror is unplugged, and retries a failure that may pass. `tailraid status` shows each job's progress while it runs, and `tailraid snapshot restore --cancel <job>` stops one; what it restored stays.
 
+In the browser, pick a snapshot from the *as of* menu, open the folder and choose **Restore folder to…**: it starts the same job, and the toast links the dashboard, whose Mirrors section shows a card per restore with its bytes and files, its speed and the time left, and a Cancel button for whoever started it and for admins. Closing or refreshing the page changes nothing. Past 20 snapshots, the dashboard's snapshot table pages with Newer and Older.
+
 A restore never overwrites: an existing file is skipped and counted. Each file appears under its name only once its data is in, so a restore stopped half-way is finished by running it again. A revert is itself a change, so the content it replaced is in the next snapshot.
 
 ## Without the cluster

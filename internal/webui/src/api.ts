@@ -155,7 +155,34 @@ export interface Report {
   cache?: CacheReport | null;
   web_url?: string;
   search?: SearchStatus | null;
+  restores?: RestoreJob[] | null;
   generated_at: string;
+}
+
+/** RestoreJob is one restore job of a mirror's host as status lists it (docs/16 §6); times are Unix nanoseconds. */
+export interface RestoreJob {
+  id: string;
+  host: string;
+  mirror: string;
+  snapshot: string;
+  src: string;
+  dst: string;
+  user?: string;
+  state: "counting" | "queued" | "running" | "waiting" | "retrying" | "done" | "failed" | "cancelled";
+  error?: string;
+  counted?: boolean;
+  files_total: number;
+  bytes_total: number;
+  files_done: number;
+  bytes_done: number;
+  existing: number;
+  rate: number;
+  tries?: number;
+  resumed?: number;
+  started: number;
+  updated: number;
+  ended?: number;
+  next_try?: number;
 }
 
 /** SearchStatus is `status.search` (docs/12 §8, docs/18 §5). */
@@ -795,15 +822,11 @@ export interface Versions {
   offline: { mirror: string; count: number }[];
 }
 
-export interface TreeRestore {
+/** RestoreStarted is the answer to a folder restore: the job, the mirror's host that runs it, where it lands. */
+export interface RestoreStarted {
+  job: string;
+  host: string;
   path: string;
-  files: number;
-  dirs: number;
-  links: number;
-  skipped: string[];
-  skipped_count: number;
-  refused_count: number;
-  uploaded: number;
 }
 
 export const snapshots = (): Promise<Snapshots> => call("/api/snapshots");
@@ -811,4 +834,5 @@ export const takeSnapshot = (opts: { name?: string; mirror?: string } = {}): Pro
 export const versions = (path: string): Promise<Versions> => call("/api/versions?path=" + encodeURIComponent(path));
 export const revert = (path: string, snapshot: number): Promise<{ path: string; uploaded: number }> => post("/api/revert", { path, snapshot });
 export const copyVersion = (path: string, snapshot: number, name: string): Promise<{ entry: Entry; uploaded: number }> => post("/api/copy", { path, snapshot, name });
-export const restoreTree = (snapshot: number, path: string, opts: { to?: string; name?: string } = {}): Promise<TreeRestore> => post("/api/restore-tree", { snapshot, path, ...opts });
+export const restoreTree = (snapshot: number, path: string, opts: { to?: string; name?: string } = {}): Promise<RestoreStarted> => post("/api/restore-tree", { snapshot, path, ...opts });
+export const cancelRestore = (job: string): Promise<void> => post("/api/restore/cancel", { job });

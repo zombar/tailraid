@@ -85,13 +85,13 @@ func (a *adminOps) restoreOp(ctx context.Context, op rpc.AdminOp) (any, error) {
 // host has (docs/16 §6, I-363): here when this node hosts the mirror, else forwarded. The
 // caller's role where the copy lands was checked before the op ran (authorize); the job
 // checks it again when it runs.
-func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst string) (any, error) {
+func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst string) (rpc.RestoreStarted, error) {
 	if a.restores == nil {
-		return nil, errors.New("snapshot restore: this node runs no restore jobs")
+		return rpc.RestoreStarted{}, errors.New("snapshot restore: this node runs no restore jobs")
 	}
 	row, ok := a.mirrorRow(op.Mirror)
 	if !ok {
-		return nil, fmt.Errorf("snapshot restore: no mirror %q: %w", op.Mirror, meta.ErrNotExist)
+		return rpc.RestoreStarted{}, fmt.Errorf("snapshot restore: no mirror %q: %w", op.Mirror, meta.ErrNotExist)
 	}
 	var sn meta.Snapshot
 	for _, s := range a.restores.st.Snapshots() {
@@ -100,14 +100,14 @@ func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst st
 		}
 	}
 	if sn.ID == 0 {
-		return nil, fmt.Errorf("snapshot restore: no snapshot %s on %s: %w", op.Name, row.Name, meta.ErrNotExist)
+		return rpc.RestoreStarted{}, fmt.Errorf("snapshot restore: no snapshot %s on %s: %w", op.Name, row.Name, meta.ErrNotExist)
 	}
 	// a file or link lands only where nothing is (a folder merges): refused here, so a job
 	// that finds its one file in place has only to be a resumed one (docs/16 §6)
 	fs := a.actorFS(op)
 	if fi, err := fs.Lstat(snapshotPath(row.Name, sn.Name, src)); err == nil && !fi.IsDir() {
 		if _, err := fs.Lstat(dst); err == nil {
-			return nil, fmt.Errorf("snapshot restore %s: %w", dst, os.ErrExist)
+			return rpc.RestoreStarted{}, fmt.Errorf("snapshot restore %s: %w", dst, os.ErrExist)
 		}
 	}
 	req := rpc.RestoreStart{Mirror: row.Idx, Snapshot: sn.ID, Path: src, Dst: dst, Actor: op.Actor}
@@ -116,12 +116,12 @@ func (a *adminOps) startRestore(ctx context.Context, op rpc.AdminOp, src, dst st
 	}
 	addr, _, ok := a.node.RPCAddrOf(row.Host)
 	if !ok {
-		return nil, fmt.Errorf("snapshot restore: the host of %s has no address", row.Name)
+		return rpc.RestoreStarted{}, fmt.Errorf("snapshot restore: the host of %s has no address", row.Name)
 	}
 	started, err := a.client.StartRestore(ctx, addr, req)
 	if errors.Is(err, rpc.ErrNoRestoreJobs) {
 		host, _ := a.restores.st.Node(row.Host)
-		return nil, fmt.Errorf("%s runs tailraid %s, which has no restore jobs; update it", host.Name, cmp.Or(host.Version, "of an older version"))
+		return rpc.RestoreStarted{}, fmt.Errorf("%s runs tailraid %s, which has no restore jobs; update it", host.Name, cmp.Or(host.Version, "of an older version"))
 	}
 	return started, err
 }

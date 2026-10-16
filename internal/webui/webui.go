@@ -168,6 +168,7 @@ func New(o Options) (*Server, error) {
 	mux.HandleFunc("POST /api/revert", csrf(s.revert))
 	mux.HandleFunc("POST /api/copy", csrf(s.copyVersion))
 	mux.HandleFunc("POST /api/restore-tree", csrf(s.restoreTree))
+	mux.HandleFunc("POST /api/restore/cancel", csrf(s.cancelRestore))
 	s.refused.Clk = o.Clk
 	s.handler = s.hostCheck(s.authz(s.withSession(mux)))
 	return s, nil
@@ -283,8 +284,12 @@ func errStatus(err error) int {
 	switch {
 	case errors.Is(err, vfs.ErrMirrorOffline):
 		return http.StatusConflict
-	case errors.Is(err, os.ErrNotExist), errors.Is(err, meta.ErrNotExist), errors.Is(err, meta.ErrNoSuchNode):
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, meta.ErrNotExist), errors.Is(err, meta.ErrNoSuchNode), errors.Is(err, rpc.ErrNoRestore):
 		return http.StatusNotFound
+	case errors.Is(err, meta.ErrAccess), errors.Is(err, rpc.ErrForbidden):
+		return http.StatusForbidden // a restore job another user started (docs/16 §6)
+	case errors.Is(err, rpc.ErrNoRestoreJobs):
+		return http.StatusNotImplemented // the mirror's host runs a version without them
 	case errors.Is(err, os.ErrExist), errors.Is(err, meta.ErrExist), errors.Is(err, admin.ErrAmbiguous),
 		errors.Is(err, meta.ErrInTrash), errors.Is(err, meta.ErrNotEmpty), errors.Is(err, syscall.ENOTEMPTY):
 		return http.StatusConflict

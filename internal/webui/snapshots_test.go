@@ -15,17 +15,56 @@ import (
 
 	"github.com/zombar/tailraid/internal/admin"
 	"github.com/zombar/tailraid/internal/meta"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/testharness"
 	"github.com/zombar/tailraid/internal/vfs"
 	"github.com/zombar/tailraid/internal/webui"
 )
 
 // fakeSnapshots is the node's snapshot service: the mirrors as given, and Take records
-// what it was asked and answers err.
+// what it was asked and answers err. A restore job it starts runs at once over fs as its
+// user, its report kept in reports and its starter in jobs; a cancel follows the host's
+// rule (the starter or an admin, once users exist) over the jobs it started.
 type fakeSnapshots struct {
 	mirrors []admin.MirrorReport
 	took    []string
 	err     error
+	fs      *vfs.FS
+	st      *meta.Store
+	reports []vfs.RestoreReport
+	jobs    map[string]meta.UserIdx
+	cancels []string
+}
+
+func (f *fakeSnapshots) StartRestore(ctx context.Context, actor meta.UserIdx, mirror, snapshot, src, dst string) (rpc.RestoreStarted, error) {
+	fs := f.fs
+	if actor != 0 {
+		fs = fs.As(actor)
+	}
+	vsrc := "/.snapshots/" + strings.ReplaceAll(mirror, "/", "-") + "/" + snapshot + strings.TrimSuffix(src, "/")
+	rep, err := fs.RestoreSnapshot(ctx, vsrc, dst)
+	if err != nil {
+		return rpc.RestoreStarted{}, err
+	}
+	f.reports = append(f.reports, rep)
+	if f.jobs == nil {
+		f.jobs = map[string]meta.UserIdx{}
+	}
+	id := fmt.Sprintf("1-%d", len(f.jobs)+1)
+	f.jobs[id] = actor
+	return rpc.RestoreStarted{Job: id, Host: "one", Path: dst}, nil
+}
+
+func (f *fakeSnapshots) CancelRestore(_ context.Context, actor meta.UserIdx, job string) error {
+	starter, ok := f.jobs[job]
+	if !ok {
+		return fmt.Errorf("%w: %s", rpc.ErrNoRestore, job)
+	}
+	if st := f.st; st.Enforcing() && actor != starter && !st.IsAdmin(actor) {
+		return fmt.Errorf("cancel restore %s: %w", job, meta.ErrAccess)
+	}
+	f.cancels = append(f.cancels, job)
+	return nil
 }
 
 func (f *fakeSnapshots) Mirrors() []admin.MirrorReport { return f.mirrors }
@@ -56,6 +95,7 @@ func newSnapUI(t *testing.T) *snapUI {
 	svc := &fakeSnapshots{}
 	u := newUI(t, func(o *webui.Options) { o.Snapshots = svc })
 	s := &snapUI{ui: u, src: testharness.NewMirrors(), svc: svc, cs: int(u.f.FSM.Volume().ChunkSize)}
+	svc.fs, svc.st = u.fs, u.f.FSM
 	u.fs.SetFlusher(u.f.Flusher())
 	must(t, u.fs.MkdirAll("/docs/sub", 0o755))
 	s.m = u.f.AddMirror(s.src, "host/m1")
@@ -377,10 +417,11 @@ func TestWebUI_Versions_DistinctContents(t *testing.T) {
 }
 
 // Revert makes the snapshot's bytes current and counts the chunks copied back from the
-// mirror; copy writes them beside the file; restore-tree recreates a folder, skipping
-// what exists; nothing on the mirror changes (docs/13 §3, docs/16 §6, I-186).
+// mirror; copy writes them beside the file; restore-tree starts the job that recreates a
+// folder, skipping what exists, and answers 202; nothing on the mirror changes (docs/13
+// §3, docs/16 §6, I-186).
 //
-// Invariant: I-187, I-186
+// Invariant: I-187, I-186, I-369
 func TestWebUI_Revert_Copy_RestoreTree(t *testing.T) {
 	s := newSnapUI(t)
 	old := testharness.Pattern(2*s.cs+s.cs/2, 5)
@@ -429,21 +470,25 @@ func TestWebUI_Revert_Copy_RestoreTree(t *testing.T) {
 	}
 
 	var tree struct {
-		Path         string   `json:"path"`
-		Files        int      `json:"files"`
-		Dirs         int      `json:"dirs"`
-		Skipped      []string `json:"skipped"`
-		SkippedCount int      `json:"skipped_count"`
+		Job  string `json:"job"`
+		Host string `json:"host"`
+		Path string `json:"path"`
 	}
-	if code := s.post("/api/restore-tree", fmt.Sprintf(`{"path":"/docs","snapshot":%d,"to":"/","name":"restored"}`, sn.ID), &tree); code != 200 || tree.Path != "/restored" || tree.Files != 2 || tree.SkippedCount != 0 {
+	if code := s.post("/api/restore-tree", fmt.Sprintf(`{"path":"/docs","snapshot":%d,"to":"/","name":"restored"}`, sn.ID), &tree); code != http.StatusAccepted || tree.Path != "/restored" || tree.Job == "" {
 		t.Fatalf("restore-tree: %d %+v", code, tree)
+	}
+	if rep := s.svc.reports[len(s.svc.reports)-1]; rep.Files != 2 || len(rep.Skipped) != 0 {
+		t.Fatalf("the job's restore %+v", rep)
 	}
 	if got := s.readAt("/restored/sub/b.txt", 0, 10); string(got) != "bee" {
 		t.Fatalf("restored b.txt = %q", got)
 	}
 	must(t, s.fs.Remove("/restored/sub/b.txt"))
-	if code := s.post("/api/restore-tree", fmt.Sprintf(`{"path":"/docs","snapshot":%d,"to":"/","name":"restored"}`, sn.ID), &tree); code != 200 || tree.Files != 1 || tree.SkippedCount != 1 || len(tree.Skipped) != 1 {
-		t.Fatalf("second restore-tree: %d %+v, want the missing file made and the other skipped", code, tree)
+	if code := s.post("/api/restore-tree", fmt.Sprintf(`{"path":"/docs","snapshot":%d,"to":"/","name":"restored"}`, sn.ID), &tree); code != http.StatusAccepted {
+		t.Fatalf("second restore-tree: %d %+v", code, tree)
+	}
+	if rep := s.svc.reports[len(s.svc.reports)-1]; rep.Files != 1 || len(rep.Skipped) != 1 {
+		t.Fatalf("second restore %+v, want the missing file made and the other skipped", rep)
 	}
 	if code := s.post("/api/restore-tree", fmt.Sprintf(`{"path":"/docs","snapshot":%d,"to":"/.tailraid"}`, sn.ID), nil); code < 400 {
 		t.Errorf("restore into /.tailraid: %d", code)
