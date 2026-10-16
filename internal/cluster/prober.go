@@ -411,7 +411,7 @@ func (p *Prober) MirrorOnline(idx meta.NodeIdx) bool {
 		return false
 	}
 	nd, found := p.node.nodeByIdx(idx)
-	return found && p.IsLive(nd.Host)
+	return found && p.probedLive(nd.Host)
 }
 
 // holdDowns emits MemberDown/MemberLost once a node has been dead long enough.
@@ -491,6 +491,16 @@ func (p *Prober) IsLive(idx meta.NodeIdx) bool {
 	}
 	if p.IsSuspect(idx) {
 		return false // until its host's next good probe (docs/05 §6, I-170)
+	}
+	return p.probedLive(idx)
+}
+
+// probedLive is IsLive by the probes alone, without the suspect mark: a shard call that
+// timed out routes traffic around its host for a probe interval, but a mirror on it is
+// still attached, so MirrorOnline follows this (docs/16 §1, I-188).
+func (p *Prober) probedLive(idx meta.NodeIdx) bool {
+	if self, ok := p.node.SelfIdx(); ok && self == idx {
+		return true
 	}
 	// this host's own disks: live iff the host's own health lists them OK, without an age
 	// test, since nothing probes self over the network (docs/14 §4)

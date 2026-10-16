@@ -109,6 +109,13 @@ func TestMirror_OnlineFollowsMarkerAndHost(t *testing.T) {
 	if !p.MirrorOnline(peerMirror) {
 		t.Fatal("not online after the host answered again")
 	}
+	// a shard call to the host timed out: the host is suspect, routed around until its
+	// next good probe, but its mirror is still attached and stays online (2026-10-16: a
+	// busy host's fixed mirror flickered offline on every other node)
+	p.Suspect(peer)
+	if p.IsLive(peer) || !p.MirrorOnline(peerMirror) {
+		t.Fatalf("a suspect host: live %v, its mirror online %v, want false and true", p.IsLive(peer), p.MirrorOnline(peerMirror))
+	}
 	fh.down["10.0.0.2:1"] = true
 	clk.Advance(LiveThreshold + time.Second)
 	p.mu.Lock()

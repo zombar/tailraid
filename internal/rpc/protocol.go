@@ -379,6 +379,8 @@ func (op AdminOp) IsPass() bool {
 	switch op.Op {
 	case "repair_now", "gc_now", "index_now":
 		return true
+	case "scrape_plan": // a walk of the library that reads its sidecars and gamelists
+		return true
 	case "versions_revert", "versions_copy": // a file read back from a mirror; a tree restore is a job (docs/16 §6)
 		return true
 	case "check":

@@ -265,7 +265,7 @@ daemon tells the operator when the disk under it is not encrypted.
 | Corrupt or forged shard body | receiver hashes the body once, verifies `X-Shard-SHA256` and stores that sum in the shard header (`PutVerified`); reader verifies decoded chunk hash |
 | Oversized body exhausts memory/disk | `MaxBytesReader(shardMax+1)`, PUT semaphore, 507 on no space |
 | A peer stalls mid-body and holds a PUT or GET slot | per-request body deadline derived from the transfer size (I-97) |
-| An admin op runs a pass longer than a shard call's header timeout | the client's control-plane transport has no response-header timeout, and a pass op (`repair_now`, `gc_now`, `check` with a scrub, `trash_purge` of the whole trash, and a restore, revert or copy from a mirror) is bounded by the caller's context alone; shard calls keep the 10 s header timeout (I-189) |
+| An admin op runs a pass longer than a shard call's header timeout | the client's control-plane transport has no response-header timeout, and a pass op (`repair_now`, `gc_now`, `index_now`, `check` with a scrub, `trash_purge` of the whole trash, the scrape's plan, and a revert or copy from a mirror) is bounded by the caller's context alone; shard calls keep the 10 s header timeout (I-189) |
 | LAN host reaches NFS, SMB or RPC | NFS and SMB bound to loopback; RPC bound to Tailscale IP only |
 | `/dev/*` abuse | only with `dev.enabled`; member-authorized; flagged in `status` |
 | Guest, other-user or tagged tailnet device opens the web UI | member-or-same-user WhoIs rule; tagged devices have no login (docs/13, I-68) |
@@ -352,11 +352,12 @@ daemon tells the operator when the disk under it is not encrypted.
   that stalls mid-transfer releases its slot when the deadline passes.
 - **I-189** — The RPC client reaches a node's control plane (`/v1/*` JSON calls, `/health`)
   through a transport without a response-header timeout, and an admin op that runs a
-  pass (`repair_now`, `gc_now`, `check` with a scrub, `trash_purge` of the whole trash)
-  or copies out of a mirror (`snapshot_restore`, `versions_revert`, `versions_copy`)
-  carries no client deadline beyond
+  pass (`repair_now`, `gc_now`, `index_now`, `check` with a scrub, `trash_purge` of the
+  whole trash, `scrape_plan`'s walk of the library and its sidecars) or copies a file
+  out of a mirror (`versions_revert`, `versions_copy`) carries no client deadline beyond
   the caller's context: the node answers when the work is done, `tailraid repair`,
-  `gc`, `check --scrub`, `snapshot restore` and `versions --revert|--copy` wait for it, and the soak's live environment gives a pass
+  `gc`, `search index`, `check --scrub`, `media scrape` and `versions --revert|--copy`
+  wait for it (`snapshot restore` starts a job and answers at once, docs/16 §6), and the soak's live environment gives a pass
   `PassTimeout` (30 min). Shard calls keep their size-scaled deadline and the 10 s
   header timeout (I-83), so a stalled holder still fails fast.
 - **I-255** — The control transport keeps as many idle connections per host (32) as the
