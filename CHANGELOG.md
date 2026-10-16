@@ -2,6 +2,17 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.10.3 (2026-10-16)
+
+### Changes
+
+- cluster, vfs, repair: a host whose PUT is cut at the straggler grace is held slow, 1 to 10 min, and takes no new shards (I-371, L-222) ([786db72](https://github.com/zombar/tailraid/commit/786db72))
+- pins, vfs: every node keeps /.tailraid's thumbnails, index and stats in its cache; the stats and search readers consult it (I-373) ([b605b38](https://github.com/zombar/tailraid/commit/b605b38))
+- webui: a thumbnail the node must make is made in the background, and the page asks for it again later (I-374) ([655c593](https://github.com/zombar/tailraid/commit/655c593))
+- restore, vfs, rpc: a running restore job narrows to one file and two chunks while clients are busy (I-372) ([33c1fe2](https://github.com/zombar/tailraid/commit/33c1fe2))
+- nfs: WRITE and COMMIT hold at most 8 of a connection's 16 slots and queue in order, so reads go on during a copy (I-370) ([0321b73](https://github.com/zombar/tailraid/commit/0321b73))
+- cluster, rpc: a suspect host keeps its mirrors online, and the scrape's plan is a pass op (I-188, I-189) ([64a9f75](https://github.com/zombar/tailraid/commit/64a9f75))
+
 ## v0.10.2 (2026-10-16)
 
 ### Changes
