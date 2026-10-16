@@ -185,7 +185,8 @@ these numbers.
 - E-126 Trash: a file or directory is deleted into the trash (02 §Apply rules), from a mount or the browser UI
 - E-127 Restore of a deleted root
 - E-128 Purge of a deleted root, by the user or by the retention tick (06 §2)
-- E-129 a shard RPC to a node fails at the transport level, or a PUT to it outlasts the straggler grace (05 §6)
+- E-129 a shard RPC to a node fails at the transport level (05 §6)
+- E-136 a PUT to a node is cut at the straggler grace (05 §6)
 - E-130 a repair pass with the home gate open finds a slot away from its home for placement only: on a non-voter where a voter is home, on the wrong disk of its host, or on a host that is not home since a target joined (14 §7)
 - E-131 SnapshotBegin: a sync to a mirror starts and holds GC (16 §3, §4)
 - E-132 SnapshotEnd: the sync completes, completes with missing chunks, or fails (16 §3)
@@ -315,8 +316,9 @@ client sees; S3 equivalents are 200/500/503. Shard-level cells use shard states.
 | L-111 | Committed | E-97 shard file missing | Degraded | GET 404 → treated as slot missing → repair | `TestRepair_ReportedBadSlot_AndScrub_RepairCorruption` |
 | L-112 | Committed (S3 slot) | E-98 object missing | Degraded | HEAD/GET 404 → repair re-PUTs | `TestS3Node_ObjectMissing_Repaired` |
 | L-198 | Committed (S3 slot) | E-96 scrub fetch finds the object's bytes wrong (within `repair.s3_scrub`) | Degraded → Committed | ErrCorrupt on the GET → bad slot → repair re-PUTs; outside the budget the slot is only HEADed and the corruption waits for a read | `TestS3Node_ScrubFetchesSample` |
-| L-209 | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | the PUT is cancelled and awaited (L-190), its slot re-placed or recorded 0, and its node marked suspect (I-169, I-170) | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
-| L-210 | Durable | E-129 | Unreachable (until the next successful probe of its host) | `Live()` excludes the host and its disks: reads and placement skip it without a dial, as L-131; the hold-downs do not start | `TestProber_SuspectUntilNextProbe`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |
+| L-209 | Uploading (k acks in) | E-35 a PUT still pending at the straggler grace | as L-43 | the PUT is cancelled and awaited (L-190), its slot re-placed or recorded 0, and its host held slow (I-169, I-371, L-222) | `TestFlusher_StragglerGrace_CutsWaitAfterKAcks` |
+| L-210 | Durable | E-129 | Unreachable (until the next successful probe of its host) | `Live()` excludes the host and its disks: reads and placement skip it without a dial, as L-131; the hold-downs do not start | `TestProber_SuspectUntilNextProbe` |
+| L-222 | Durable | E-136 | Durable (its host held slow) | the gateway places no new shard on the host or its disks for the hold (1 min, doubling to 10 min per further cut); the slot stays good, reads rank the host last before S3, no repair or hold-down starts (I-371) | `TestProber_SlowHold_DoublesCapsResets`, `TestFlusher_SlowNodeHeldFromNextChunk`, `TestRepair_SlowHostNotADestination` |
 | L-212 | Committed (referenced by a syncing snapshot) | Commit overwrite or truncate, or a Purge, after E-131 | Tombstoned (held) | `Refs` → 0 and `TombstonedAt` set as usual, but `GCDelete` skips it: its `TombstonedAt` is at or after the oldest syncing row's `At`; still placed and readable, so the sync copies it (I-181) | `TestFSM_GCDelete_HeldBySyncingRow`; planned: TestCluster_OverwriteDuringSync_SnapshotExact |
 | L-213 | Tombstoned (held) | E-132 | Tombstoned → Collected | the hold ends with the row; `GCDelete` collects the chunk after grace as any tombstone, the mirror keeps its object | `TestFSM_GCDelete_HeldBySyncingRow`, `TestFSM_SnapshotEnd_Table` |
 | L-214 | Committed | E-131 sync reads it | Committed (and an object on the mirror) | read through the reader at background priority, verified against its hash, written to the mirror once whatever the number of snapshots that reference it; no change in the pool | `TestMirror_SecondSyncWritesOnlyChanges` |

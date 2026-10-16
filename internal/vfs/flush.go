@@ -73,10 +73,13 @@ type Flusher struct {
 	codecs             *ec.Pool
 	Hooks              Hooks
 	Events             *meta.EventRing // chunk history (nil unless dev.enabled)
-	// Suspect, when set, is called for every node whose PUT was still pending when a
-	// chunk stopped waiting (the straggler grace or the deadline): the prober excludes
-	// it until its next good probe (docs/05 §6, I-170). Must not block.
-	Suspect func(meta.NodeIdx)
+	// Slow, when set, is called for every node whose PUT was still pending when a chunk
+	// stopped waiting (the straggler grace or the deadline): the prober holds its host
+	// slow (docs/05 §6, I-371). Must not block.
+	Slow func(meta.NodeIdx)
+	// Held, when set, reports a node whose host is held slow: placement and fill choose
+	// no new shard on it (I-371).
+	Held func(meta.NodeIdx) bool
 	// MinCodec, when set, is the oldest codec a live active member reads (the prober's
 	// view): a Commit carries the chunks' data-shard sums only when it is at least
 	// meta.CodecShardSums, so a flush never fails the leader's codec gate (I-201). nil
@@ -763,9 +766,16 @@ func (f *Flusher) presentSlots(ctx context.Context, c meta.Chunk) ([]meta.NodeId
 	return keep, present
 }
 
-// candidates returns the live, Active, non-full nodes minus excluded ones.
+// candidates returns the live, Active, non-full nodes not held slow, minus excluded ones.
 func (f *Flusher) candidates(exclude []meta.NodeIdx) []meta.Candidate {
 	live := meta.LiveSet(f.peers.Live())
+	if f.Held != nil {
+		for n := range live {
+			if f.Held(n) {
+				delete(live, n) // answering, but slowly: no new shard until the hold ends (I-371)
+			}
+		}
+	}
 	now := f.clk.Now()
 	f.mu.Lock()
 	for n, until := range f.full {
@@ -969,9 +979,9 @@ func (f *Flusher) putSlots(ctx context.Context, w *chunkWork, shards [][]byte, p
 		armGrace()
 	}
 	for slot := range inflight { // stragglers: still pending at the grace or the deadline
-		f.Events.Record(w.hash, meta.EvPutFailed, fmt.Sprintf("slot %d node %d: still pending, marked suspect", slot, place[slot]))
-		if f.Suspect != nil {
-			f.Suspect(place[slot])
+		f.Events.Record(w.hash, meta.EvPutFailed, fmt.Sprintf("slot %d node %d: still pending, its host held slow", slot, place[slot]))
+		if f.Slow != nil {
+			f.Slow(place[slot])
 		}
 	}
 	return failed

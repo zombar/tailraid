@@ -28,6 +28,12 @@ const (
 	EvictAfter     = 7 * 24 * time.Hour
 	// a bucket is probed less often and given longer: every probe is a billed request
 	// (docs/10 §4.3)
+	// SlowHold is how long a host whose PUT was cut at the straggler grace takes no new
+	// shards, doubled on each further cut during or right after a hold, at most
+	// SlowHoldMax (docs/05 §6, I-371).
+	SlowHold    = time.Minute
+	SlowHoldMax = 10 * time.Minute
+
 	S3ProbeInterval = 30 * time.Second
 	S3LiveThreshold = 90 * time.Second
 	s3ProbeTimeout  = 5 * time.Second
@@ -129,6 +135,7 @@ type Prober struct {
 	probes  map[meta.NodeIdx]*Probe
 	s3Tried map[meta.NodeIdx]time.Time    // last S3 probe sent, good or not
 	suspect map[meta.NodeIdx]time.Time    // hosts marked suspect, by host idx, until their next good probe (I-170)
+	slow    map[meta.NodeIdx]slowHold     // hosts held slow, by host idx (I-371)
 	mirrors map[meta.NodeIdx]*MirrorProbe // by mirror row: the host's last /health word on it (docs/16 §1)
 	// codecView overrides what MinCodec takes a peer to read (dev.enabled only, SetCodecView)
 	codecView map[meta.NodeIdx]uint8
@@ -461,6 +468,84 @@ func (p *Prober) Suspect(idx meta.NodeIdx) {
 	}
 }
 
+// slowHold is one host's slow hold: no new shards until until; dur is the length it ran
+// for, which the next cut doubles if it comes before until+dur (I-371).
+type slowHold struct {
+	until time.Time
+	dur   time.Duration
+}
+
+// Slow holds idx's host slow (docs/05 §6, I-371): a PUT to it was cut at the straggler
+// grace. For SlowHold, doubled on a cut during the hold or within one hold's length after
+// it and at most SlowHoldMax, neither the host nor its disks take a new shard (Held). A
+// hold that would leave fewer than k+m live, unheld targets is not taken, and this host
+// never holds itself. It reports whether the hold was taken.
+func (p *Prober) Slow(idx meta.NodeIdx) bool {
+	host := p.hostOf(idx)
+	if self, ok := p.node.SelfIdx(); ok && self == host {
+		return false
+	}
+	now := p.clk.Now()
+	p.mu.Lock()
+	prev, had := p.slow[host]
+	p.mu.Unlock()
+	if (!had || !now.Before(prev.until)) && !p.spareWithout(host) {
+		return false // holding it would leave too few targets: a slow write beats a degraded one
+	}
+	dur := SlowHold
+	if had && now.Before(prev.until.Add(prev.dur)) {
+		dur = min(2*prev.dur, SlowHoldMax)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.slow == nil {
+		p.slow = map[meta.NodeIdx]slowHold{}
+	}
+	p.slow[host] = slowHold{until: now.Add(dur), dur: dur}
+	return true
+}
+
+// spareWithout reports whether the volume keeps at least k+m live targets that are
+// neither on host nor on a host held slow.
+func (p *Prober) spareWithout(host meta.NodeIdx) bool {
+	vol := p.node.FSM.Volume()
+	need := int(vol.K) + int(vol.M)
+	n := 0
+	nodes := p.node.FSM.Nodes()
+	for i := range nodes {
+		nd := &nodes[i]
+		if !nd.Kind.Target() || nd.State != meta.Active || nd.Capacity == 0 {
+			continue
+		}
+		h := nd.Idx
+		if nd.Kind == meta.KindDisk {
+			h = nd.Host
+		}
+		if h == host || p.Held(nd.Idx) || !p.IsLive(nd.Idx) {
+			continue
+		}
+		n++
+	}
+	return n >= need
+}
+
+// Held reports whether idx's host is held slow now: no new shard goes to it or its disks.
+func (p *Prober) Held(idx meta.NodeIdx) bool {
+	return p.SlowLeft(idx) > 0
+}
+
+// SlowLeft is how long idx's host stays held slow (0: not held).
+func (p *Prober) SlowLeft(idx meta.NodeIdx) time.Duration {
+	host := p.hostOf(idx)
+	p.mu.Lock()
+	h, ok := p.slow[host]
+	p.mu.Unlock()
+	if !ok {
+		return 0
+	}
+	return max(0, h.until.Sub(p.clk.Now()))
+}
+
 // IsSuspect reports whether idx's host is marked suspect.
 func (p *Prober) IsSuspect(idx meta.NodeIdx) bool {
 	host := p.hostOf(idx)
@@ -609,7 +694,8 @@ func (p *Prober) Live() []meta.NodeIdx {
 	return out
 }
 
-// Rank orders self first, then by RTT ascending, unknown devices after those, S3 nodes last.
+// Rank orders self first, then by RTT ascending, unknown devices after those, then the
+// hosts held slow (I-371), S3 nodes last.
 func (p *Prober) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 	self := p.Self()
 	snap := p.Snapshot()
@@ -625,6 +711,9 @@ func (p *Prober) Rank(nodes []meta.NodeIdx) []meta.NodeIdx {
 			case nd.Kind == meta.KindS3:
 				return 2 * time.Hour // after every device, even unprobed ones (docs/10 §4.3)
 			}
+		}
+		if p.Held(idx) {
+			return 90 * time.Minute // answering, but slowly: after every other device (I-371)
 		}
 		if pr, ok := snap[idx]; ok && !pr.LastOK.IsZero() {
 			return pr.RTT

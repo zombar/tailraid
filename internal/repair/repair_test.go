@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -260,5 +261,52 @@ func TestRepair_FanOut_CancelDrains(t *testing.T) {
 	}
 	if slotsOn(f, inos, victim) == 0 {
 		t.Fatal("a cancelled pass re-placed every chunk")
+	}
+}
+
+// A host held slow takes no refill: with every spare but one held, the dead slot's
+// refill lands on that one, whichever spare it is (so the test does not pass by the
+// refill's own choice); and a held host's own slot stays where it is, a good slot, since
+// it answers (I-371).
+//
+// Invariant: I-371
+// Lifecycle: L-222
+func TestRepair_SlowHostNotADestination(t *testing.T) {
+	probe := testharness.NewFabric(t, 6, 2, 1)
+	c := flushedChunk(t, probe)
+	var spares []meta.NodeIdx
+	for _, cand := range meta.Candidates(probe.FSM.Nodes(), func(meta.NodeIdx) bool { return true }) {
+		if !slices.Contains(c.Placement, cand.Idx) {
+			spares = append(spares, cand.Idx)
+		}
+	}
+	if len(spares) < 2 {
+		t.Fatalf("setup: %d spare targets, want at least 2", len(spares))
+	}
+	for _, free := range spares {
+		t.Run(fmt.Sprintf("free %d", free), func(t *testing.T) {
+			f := testharness.NewFabric(t, 6, 2, 1)
+			c := flushedChunk(t, f) // the same bytes on the same fabric: the same placement
+			victim, keptHeld := c.Placement[0], c.Placement[1]
+			held := map[meta.NodeIdx]bool{keptHeld: true}
+			for _, s := range spares {
+				if s != free {
+					held[s] = true
+				}
+			}
+			f.SetDown(victim, true)
+			r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, fanoutCfg(1), nil)
+			r.Held = func(n meta.NodeIdx) bool { return held[n] }
+			if _, err := r.Scan(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := f.FSM.GetChunk(c.Hash)
+			if got.Placement[0] != free {
+				t.Fatalf("the dead slot went to %d, want the one unheld spare %d (placement %v)", got.Placement[0], free, got.Placement)
+			}
+			if got.Placement[1] != keptHeld {
+				t.Fatalf("the held host's own slot moved: %v", got.Placement)
+			}
+		})
 	}
 }

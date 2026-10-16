@@ -2,6 +2,7 @@ package vfs_test
 
 import (
 	"bytes"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 	"github.com/zombar/tailraid/internal/vfs"
 )
 
-// marks records the nodes the flusher marked suspect.
+// marks records the nodes the flusher held slow.
 type marks struct {
 	mu    sync.Mutex
 	nodes map[meta.NodeIdx]int
@@ -33,7 +34,7 @@ func (m *marks) count(n meta.NodeIdx) int {
 }
 
 // Once k acks are in, a PUT still pending at the straggler grace is cut exactly as at
-// the deadline: cancelled, its slot re-placed, its node marked suspect, and the flush
+// the deadline: cancelled, its slot re-placed, its host held slow, and the flush
 // completes within the grace rather than the 10 s deadline.
 // Invariant: I-169
 // Lifecycle: L-209, L-190
@@ -51,7 +52,7 @@ func TestFlusher_StragglerGrace_CutsWaitAfterKAcks(t *testing.T) {
 	cfg.PutDeadline, cfg.StragglerMin = 100*time.Second, 2*time.Second
 	fl := f.Flusher(func(c *vfs.Config) { *c = cfg })
 	var m marks
-	fl.Suspect = m.mark
+	fl.Slow = m.mark
 	done := make(chan error, 1)
 	go func() { done <- fl.FlushInode(ctx, ino) }()
 	<-entered
@@ -174,34 +175,19 @@ func TestFlusher_StragglerGrace_NotBeforeKAcks(t *testing.T) {
 	}
 }
 
-// suspectPeers is the fabric with a gateway-side suspect set: Live() excludes a marked
-// node, as the prober does (I-170).
-type suspectPeers struct {
-	*testharness.Fabric
-	marks
-}
-
-func (p *suspectPeers) Live() []meta.NodeIdx {
-	var out []meta.NodeIdx
-	for _, n := range p.Fabric.Live() {
-		if p.count(n) == 0 {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-// A node that was cut as a straggler is marked suspect, and the next chunk places around
-// it without a PUT to it.
-// Invariant: I-170
-// Lifecycle: L-210
-func TestFlusher_SuspectNodeExcludedFromNextChunk(t *testing.T) {
+// A node that was cut as a straggler is held slow, and the next chunk places around it
+// without a PUT to it, while the node stays live (it is slow, not dead): a held host
+// takes no new shard, as the prober's Held reports it (I-371).
+// Invariant: I-371
+// Lifecycle: L-222
+func TestFlusher_SlowNodeHeldFromNextChunk(t *testing.T) {
 	f := testharness.NewFabric(t, 4, 2, 1)
-	sp := &suspectPeers{Fabric: f}
+	var sp marks
 	cfg := vfs.DefaultConfig()
 	cfg.PutDeadline, cfg.StragglerMin = 100*time.Second, 2*time.Second
-	fl := vfs.NewFlusher(f.Ov, f.FSM, f, sp, f, f.Reader(), f.Clk, cfg, nil)
-	fl.Suspect = sp.mark
+	fl := vfs.NewFlusher(f.Ov, f.FSM, f, f, f, f.Reader(), f.Clk, cfg, nil)
+	fl.Slow = sp.mark
+	fl.Held = func(n meta.NodeIdx) bool { return sp.count(n) > 0 }
 
 	a := f.Create("a")
 	dataA := testharness.Pattern(int(testharness.ChunkSize), 10)
@@ -229,7 +215,10 @@ func TestFlusher_SuspectNodeExcludedFromNextChunk(t *testing.T) {
 	must(t, err)
 	release()
 	if sp.count(victim) == 0 {
-		t.Fatal("the straggler was not marked suspect")
+		t.Fatal("the straggler's host was not held slow")
+	}
+	if !slices.Contains(f.Live(), victim) {
+		t.Fatal("a slow node left Live(): it answers, it is not dead")
 	}
 
 	b := f.Create("b")
@@ -243,10 +232,10 @@ func TestFlusher_SuspectNodeExcludedFromNextChunk(t *testing.T) {
 	}
 	for _, s := range c.Placement {
 		if s == 0 || s == victim {
-			t.Fatalf("placement %v should be full and avoid the suspect node %d", c.Placement, victim)
+			t.Fatalf("placement %v should be full and avoid the held node %d", c.Placement, victim)
 		}
 	}
 	if f.Puts()-puts != 3 {
-		t.Fatalf("%d PUTs for the second chunk, want 3 (none to the suspect node)", f.Puts()-puts)
+		t.Fatalf("%d PUTs for the second chunk, want 3 (none to the held node)", f.Puts()-puts)
 	}
 }

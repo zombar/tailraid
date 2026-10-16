@@ -423,7 +423,8 @@ func (nd *ClusterNode) start(c *Cluster, bootstrap bool, vol meta.SetVolume) {
 		return self.MinCodec()
 	}
 	nd.Client.OnUnreachable = nd.Prober.Suspect // as node.go wires them (docs/05 §6, I-170)
-	nd.Flush.Suspect = nd.Prober.Suspect
+	nd.Flush.Slow = func(n meta.NodeIdx) { nd.Prober.Slow(n) }
+	nd.Flush.Held = nd.Prober.Held
 	nd.Flush.Events = nd.Events
 	nd.FS = vfs.New(nd.Node.FSM, nd.Node, nd.Ov, nd.Reader, c.Clk, 501, 20)
 	nd.FS.SetFlusher(nd.Flush)

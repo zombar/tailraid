@@ -98,9 +98,9 @@ What the user sees:
   directory listings and writes to existing files keep working (the latter into the WAL).
 - Nothing is ever returned as wrong bytes: every read path verifies the chunk hash.
 - A holder that stops answering mid-write costs the write at most one straggler grace
-  (docs/04 §4 step 9): it is marked suspect and the chunks that follow place around it
-  (§6). A persistently slow peer therefore receives fewer hot-path shards and relies on
-  the repairer's fill to reach full redundancy.
+  (docs/04 §4 step 9): it is held slow and the chunks that follow place around it for the
+  hold (§6). A persistently slow peer therefore receives no hot-path shards while it stays
+  slow and relies on the repairer's fill to reach full redundancy.
 
 ## 6. Liveness, hold-downs and timings
 
@@ -114,6 +114,7 @@ What the user sees:
 | `evict_after` | 7 d | `MemberLost` event; `status` marks the node `lost` and its warning names the `node remove --force` command |
 | Raft heartbeat / election / lease / commit | 2 s / 2 s / 1 s / 50 ms | — |
 | GC grace | 10 min | see 06 |
+| `SlowHold` / `SlowHoldMax` | 1 min / 10 min | a host whose PUT was cut at the straggler grace takes no new shards for this long, doubling per further cut (below) |
 
 A laptop that sleeps for 5 minutes: dead after 25 s (excluded from placement for new
 chunks), no repair before 10 min, `MemberUp` on return, no data moves. A laptop away for a
@@ -125,13 +126,31 @@ re-placements (06 §3).
 (a probe every 5 s, dead after 25 s), during which every chunk written would wait on it
 for up to `PutDeadline`. A gateway therefore marks a node *suspect* the moment a shard RPC
 to it fails at the transport level (dial refused or timed out, response-header timeout,
-the call's own deadline) or a PUT to it outlasts the straggler grace (docs/04 §4 step 9):
-`Live()` excludes a suspect host and its disks, so neither placement nor a read dials it,
+the call's own deadline): `Live()` excludes a suspect host and its disks, so neither
+placement nor a read dials it,
 until the first probe of it that succeeds after the mark (at most one probe interval for a
 false positive). A reply with any HTTP status, and a request the gateway cancelled for its
 own reasons (a losing hedge, a decided chunk), never mark. A mark changes placement and
 reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are untouched.
 `status` shows `suspect` on the node while the mark holds (I-170, L-210).
+
+**Slow holds.** A host that answers, but slowly, is a different case: a laptop away from
+home on a full uplink answers every probe (a probe is tiny) and every PUT, seconds late.
+Marked suspect, it was back in placement at its next probe, five seconds later, and the
+next chunk waited on it again; every write of the cluster, a restore's included, went at
+its pace (2026-10-16: a restore fell from 6 MiB/s to 74 KB/s while the Mac copied files).
+So a PUT cut at the straggler grace (docs/04 §4 step 9) *holds its host slow* on the
+gateway that cut it: for `SlowHold` (1 min), doubled on every further cut while the hold
+runs or within one hold after it ends, up to `SlowHoldMax` (10 min), and back to 1 min
+after a whole hold's length with no cut. While held, the host and its disks are not
+targets for new shards: the flusher's placement and fill, and the repairer's refills and
+home moves, place around it. Nothing else changes: the host stays live, its shards stay
+good slots (no repair, no hold-down starts), and reads still use it but rank it after
+every other device and before S3 (`Prober.Rank`), so a read reaches it only when it needs
+it. A hold is never taken that would leave fewer than `k + m` live, unheld targets for the
+volume's policy: holding the only spare would make every write degraded (or impossible),
+which is worse than a slow one. A transport failure still marks suspect, as above.
+`status` shows `slow` on the node with the time left (I-371, L-222).
 
 ## 7. Clock assumptions
 
@@ -202,10 +221,18 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
   excluded sooner by its suspect mark (I-170). (At 15 s, every probe slowed past its
   timeout by a congested link took the node out for a few seconds, and reads through it
   failed.)
-- **I-170** — A node whose shard RPC failed at the transport level, or whose PUT outlasted
-  the straggler grace, is excluded from `Live()` (with its disks) until the first probe
-  that succeeds after the mark; an HTTP-status reply or a request the gateway itself
+- **I-170** — A node whose shard RPC failed at the transport level is excluded from
+  `Live()` (with its disks) until the first probe that succeeds after the mark (a PUT cut
+  at the straggler grace holds its host slow instead, I-371); an HTTP-status reply or a request the gateway itself
   cancelled never marks a node, and a mark never affects the hold-downs or repair.
+- **I-371** — A host whose PUT was cut at the straggler grace is held slow by the gateway
+  that cut it, for `SlowHold`, doubled on each further cut during the hold or within one
+  hold's length after it, at most `SlowHoldMax`, and reset after a hold's length with no
+  cut; while held, neither it nor its disks are chosen for a new shard by the flusher's
+  placement or fill or by the repairer's refills and home moves, it stays live with its
+  slots good, and reads rank it after every other device and before S3; a hold that would
+  leave fewer than `k + m` live, unheld targets is not taken; this host never holds
+  itself.
 - **I-262** — A shard GET whose caller gives up after the reply's headers arrived reads
   the rest and keeps its connection when at most `DrainMax` (256 KiB) is left as it
   notices, between reads of 64 KiB; with more left it closes the connection, as a GET
@@ -240,4 +267,5 @@ reads only: the hold-downs above (`fill_after`, `evict_after`) and repair are un
 | I-263 | `TestNotSentLowWater_OnTheBulkSockets` |
 | I-246 | `TestServer_BusySlots_AnswerBusy_NotSuspect` |
 | I-313 | `TestProber_OneMissedProbeKeepsLive` |
-| I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table`, `TestFlusher_SuspectNodeExcludedFromNextChunk` |
+| I-170 | `TestProber_SuspectUntilNextProbe`, `TestClient_TransportFailureMarksSuspect_Table` |
+| I-371 | `TestProber_SlowHold_DoublesCapsResets`, `TestProber_SlowHold_NeverBelowKPlusM`, `TestProber_Rank_SlowHostLastBeforeS3`, `TestFlusher_SlowNodeHeldFromNextChunk`, `TestRepair_SlowHostNotADestination` |

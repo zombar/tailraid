@@ -230,7 +230,7 @@ func (r *Run) hotpathStraggler(ctx context.Context, gw NodeRef) error {
 					if st.Nodes[i].Idx != victim.Idx {
 						continue
 					}
-					if st.Nodes[i].Suspect && suspectAt < 0 {
+					if (st.Nodes[i].Suspect || st.Nodes[i].Slow != "") && suspectAt < 0 { // a refused dial marks suspect, a hung PUT cut at the grace holds slow (I-371)
 						suspectAt = time.Since(cutAt)
 					}
 					if st.Nodes[i].DeadFor != "" && deadAt < 0 {
@@ -252,14 +252,14 @@ func (r *Run) hotpathStraggler(ctx context.Context, gw NodeRef) error {
 	if suspectAt < 0 { // the mark may have landed after the last piece
 		if st, err := r.Env.Status(ctx, gw); err == nil {
 			for i := range st.Nodes {
-				if st.Nodes[i].Idx == victim.Idx && st.Nodes[i].Suspect {
+				if st.Nodes[i].Idx == victim.Idx && (st.Nodes[i].Suspect || st.Nodes[i].Slow != "") {
 					suspectAt = time.Since(cutAt)
 				}
 			}
 		}
 	}
-	r.checkAt("I-170", name, suspectAt >= 0 && (deadAt < 0 || suspectAt <= deadAt),
-		fmt.Sprintf("%s marked suspect after %s, dead after %s (-1: never during the write)", victim.Name, suspectAt, deadAt), p, "", gw.Name)
+	r.checkAt("I-170 I-371", name, suspectAt >= 0 && (deadAt < 0 || suspectAt <= deadAt),
+		fmt.Sprintf("%s marked suspect or held slow after %s, dead after %s (-1: never during the write)", victim.Name, suspectAt, deadAt), p, "", gw.Name)
 	reps, err := r.chunksOf(ctx, p)
 	if err != nil {
 		r.check("I-169", "chunk reports of the cut-off write", false, err.Error())
@@ -281,7 +281,7 @@ func (r *Run) hotpathStraggler(ctx context.Context, gw NodeRef) error {
 			}
 		}
 	}
-	r.checkAt("I-169 I-170", "chunks after the cut place around the suspect holder", late > 0 && onVictim == 0,
+	r.checkAt("I-169 I-170 I-371", "chunks after the cut place around the suspect or slow holder", late > 0 && onVictim == 0,
 		fmt.Sprintf("%d of %d chunks committed after the cut hold a slot on %s", onVictim, late, victim.Name), p, "", gw.Name)
 	if err := heal(); err != nil {
 		return err

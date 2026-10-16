@@ -33,6 +33,7 @@ type NodeReport struct {
 	Self       bool         `json:"self"`
 	Live       bool         `json:"live"`
 	Suspect    bool         `json:"suspect,omitempty"` // a shard RPC to it failed; excluded until its next good probe (docs/05 §6)
+	Slow       string       `json:"slow,omitempty"`    // held slow for this long more: no new shards to it (docs/05 §6, I-371)
 	DeadFor    string       `json:"dead_for,omitempty"`
 	Lost       bool         `json:"lost,omitempty"` // dead longer than evict_after (MemberLost): remove it
 	RTT        string       `json:"rtt,omitempty"`
@@ -333,6 +334,9 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 		}
 		if p != nil {
 			r.Suspect = p.IsSuspect(nd.Idx)
+			if left := p.SlowLeft(nd.Idx); left > 0 {
+				r.Slow = left.Round(time.Second).String()
+			}
 		}
 		if pr, ok := probes[nd.Idx]; ok {
 			r.fs = pr.FS

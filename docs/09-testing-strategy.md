@@ -394,10 +394,11 @@ type Volume interface { Mkdir, WriteAt, ReadAll, Hash, Truncate, Rename, Remove,
   than `ReadAhead` prefetches in flight in any status sample; on a rig with one gateway the
   readahead checks are skipped when the client's own cache served the read; then, where
   the environment can partition, the writing gateway is cut off from one holder a quarter
-  of the way through a second file: the gateway marks the holder suspect within the
-  straggler grace and before the prober's threshold, the chunks committed after the cut
-  hold no slot on it, the mark clears on the first good probe after the heal, repair fills
-  the degraded chunks and the file reads back whole; I-166, I-169, I-170); 18 repair fan-out (a
+  of the way through a second file: the gateway marks the holder suspect (a refused dial)
+  or holds it slow (a PUT cut at the grace) within the straggler grace and before the
+  prober's threshold, the chunks committed after the cut hold no slot on it, the suspect
+  mark clears on the first good probe after the heal, repair fills
+  the degraded chunks and the file reads back whole; I-166, I-169, I-170, I-371); 18 repair fan-out (a
   64-chunk file written and read cold through another gateway for an idle figure, then
   the neighbouring policy set so every chunk is stale, the migration pass run while the
   leader's status is sampled every 100 ms and the same file read cold again: the pass
