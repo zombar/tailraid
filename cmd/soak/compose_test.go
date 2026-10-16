@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/zombar/tailraid/internal/admin"
@@ -42,5 +44,45 @@ func TestCompose_DiskDir(t *testing.T) {
 		if (err == nil) != c.ok || got != c.want {
 			t.Errorf("%s: %q %v", c.name, got, err)
 		}
+	}
+}
+
+// The scratch mirror is added once per run: a later phase that asks for it again gets
+// the same name, with the mirror plugged back in first, and never runs `mirror add` on
+// the path a phase left unplugged, which would register a second, empty mirror (soak,
+// 2026-10-16: phase 32 after phase 19 found n2/m2 online and n2/m1 "not attached").
+func TestCompose_AddMirrorTwice_SameMirror(t *testing.T) {
+	e := newComposeEnv(t.TempDir(), multiFile, 5)
+	var calls []string
+	e.run = func(_ context.Context, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
+	ctx := context.Background()
+	first, _, err := e.AddMirror(ctx)
+	if err != nil || first != "n2/m1" {
+		t.Fatalf("first: %q %v", first, err)
+	}
+	adds := func() (n int) {
+		for _, c := range calls {
+			if strings.Contains(c, "mirror add") {
+				n++
+			}
+		}
+		return n
+	}
+	if adds() != 1 {
+		t.Fatalf("first add ran %d `mirror add`: %q", adds(), calls)
+	}
+	if err := e.SetMirrorOnline(ctx, first, false); err != nil {
+		t.Fatal(err)
+	}
+	calls = nil
+	second, _, err := e.AddMirror(ctx)
+	if err != nil || second != first {
+		t.Fatalf("second: %q %v, want %q", second, err, first)
+	}
+	if adds() != 0 || len(calls) != 1 || !strings.Contains(calls[0], "mv /mirrors/m1.away /mirrors/m1") {
+		t.Fatalf("second add ran %q, want only the plug back in", calls)
 	}
 }
