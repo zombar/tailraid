@@ -482,10 +482,10 @@ stub in `test/invariants/` meanwhile.
 | I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
 | I-363 | `TestStub_I_363` (planned: TestRestoreJob_OutlivesRequest) |
 | I-364 | `TestStub_I_364` (planned: TestRestoreJob_ResumesAfterRestartAndOfflineMirror) |
-| I-365 | `TestStub_I_365` (planned: TestRestoreJob_ProgressMonotone_SameOnEveryNode) |
-| I-366 | `TestStub_I_366` (planned: TestRestoreJob_ParallelEqualsSerial) |
+| I-365 | `TestRestoreJob_ProgressAddsUpToTotals` (the counts and the steps); `TestStub_I_365` (planned: TestRestoreJob_ProgressMonotone_SameOnEveryNode, the job record and `status.restores`) |
+| I-366 | `TestRestoreJob_ParallelEqualsSerial`; `TestStub_I_366` (planned: TestRestoreJob_OneJobPerHost_Queued) |
 | I-367 | `TestStub_I_367` (planned: TestRestoreJob_RunsAsStarter_RecheckedOnResume) |
-| I-368 | `TestStub_I_368` (planned: TestRestoreJob_Cancel_NoTempLeft) |
+| I-368 | `TestRestoreJob_Cancel_NoTempLeft` (the restore stops, no temporary file); `TestStub_I_368` (planned: TestRestoreJob_CancelByStarterOrAdmin) |
 | I-239 | `TestMirror_SyncReadsChunksConcurrently`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_UnreadableChunk_Incomplete_RetriedNext` |
 | I-241 | `TestClient_MirrorGet_OnBoundedTransport` |
 | I-243 | `TestMirror_InterruptedSyncResumes`, `TestMirror_DeleteReconciles_MarkAndSweep` |
