@@ -35,6 +35,7 @@ type Stats struct {
 func copyInode(in *Inode) Inode {
 	cp := *in
 	cp.Children = nil
+	cp.Chunks = slices.Clip(in.Chunks) // an append by the caller reallocates, never writes where the FSM grows the list (I-385)
 	return cp
 }
 

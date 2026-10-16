@@ -497,6 +497,8 @@ func (s *State) mutChunk(h Hash) *Chunk {
 // Clone returns a copy of s suitable for a snapshot taken while Apply keeps running on
 // the original. Inode.Chunks slices are shared because they are immutable, and so are the
 // chunk entries, which an apply replaces through mutChunk instead of changing (I-383).
+// A clone is read-only: an append on the original extends a chunk list in capacity the
+// clone's copy of that list shares (I-385), so applying to both would collide.
 func (s *State) Clone() *State {
 	c := &State{
 		Vol:         s.Vol,
@@ -560,6 +562,7 @@ func (s *State) Clone() *State {
 	}
 	for ino, in := range s.Inodes {
 		cp := *in
+		cp.Chunks = slices.Clip(in.Chunks) // shared, capped: see copyInode (I-385)
 		if in.Children != nil {
 			cp.Children = make(map[string]Ino, len(in.Children))
 			maps.Copy(cp.Children, in.Children)

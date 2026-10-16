@@ -1017,10 +1017,23 @@ func (a *applier) commit(c *Commit) error {
 	now := a.clock(c.Now)
 	delta.commit(st, a.stats, now)
 	// Chunk lists are immutable (copy-on-write): readers, snapshots and the clone share
-	// the slice without a lock, so a Commit allocates a new list (O(file length) in copy,
-	// though O(writes) in reference accounting) rather than rewriting it in place (I-104).
-	newList := make([]Hash, n)
-	copy(newList, oldList[:keep])
+	// the slice without a lock, so no element they can see changes (I-104). A Commit that
+	// only appends extends the list in place, into capacity no earlier list covers (this
+	// list is the longest on its array: every other Commit makes a new one), growing by
+	// doubling: O(writes) amortized, so a streamed file's commits are O(n) in all, not
+	// O(n²) (I-385). Any other Commit allocates a new list.
+	appendOnly := !c.HasTruncate
+	for _, w := range c.Writes {
+		appendOnly = appendOnly && int(w.Idx) >= len(oldList)
+	}
+	var newList []Hash
+	if appendOnly && keep == len(oldList) {
+		newList = slices.Grow(oldList, n-len(oldList))[:n]
+		clear(newList[len(oldList):])
+	} else {
+		newList = make([]Hash, n)
+		copy(newList, oldList[:keep])
+	}
 	for _, w := range c.Writes {
 		newList[w.Idx] = w.Hash
 	}

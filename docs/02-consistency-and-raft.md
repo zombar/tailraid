@@ -271,6 +271,18 @@ only `Restore` and `Purge` take anything out.
    writer's in-place WRITE merges into the current rewrite at chunk granularity, as any
    two writers did before codec 9.
 
+`newChunks` is a new list because readers, clones and snapshots share `inode.Chunks`
+without a lock, so no element they can see may change (I-104). A Commit that only appends
+(no truncate, every `Writes[i].Idx >= len(old)`) changes no element anyone can see. It
+therefore extends the old list in place, into spare capacity that no earlier list covers,
+and the list grows by doubling when that runs out. Holders of the old list keep its
+length, so they never see the new tail; a list handed out by the read API or a clone is
+capped at its length, so a caller's own `append` reallocates rather than writing where the
+list grows. Each appending Commit then costs O(its writes)
+amortized instead of O(file length). The commits of a streamed file of n chunks copy O(n)
+hashes in all, not O(n²) (I-385: a million-chunk file, the I-64 cap, is 32 MiB of list,
+and with per-chunk commits the copies had summed to 16 TiB).
+
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
 to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy.
@@ -629,6 +641,9 @@ no divergent state to merge because it never applied uncommitted entries.
   and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
   `Commit` applied after the snapshot never changes it, and a snapshot is written and read
   as a stream, never held whole in memory a second time.
+- **I-385** — A `Commit` that only appends extends the chunk list in capacity no earlier
+  list covers and copies O(appended) hashes amortized. Every other `Commit` installs a new
+  list. Either way, no element of a list a reader, clone or snapshot holds ever changes.
 - **I-383** — A state clone allocates nothing per chunk: a chunk entry is replaced, never
   changed in place, so the clone shares the entries and an apply after the clone never
   changes what the clone holds.
@@ -723,6 +738,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
 | I-381 | `TestFSM_GCDelete_QueueMatchesWalk`, `TestFSM_GCDelete_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
 | I-382 | `TestFSM_Purge_QueueMatchesWalk`, `TestFSM_Purge_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
+| I-385 | `TestFSM_Commit_AppendCostIndependentOfLength`, `TestFSM_Commit_AppendLeavesHeldListsAlone`, `TestFSM_Commit_ReaderAppendReallocates`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
 | I-383 | `TestState_Clone_SharesChunkEntries`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
 | I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |
 | I-105 | `TestFSM_IncompatibleEntryCounted`, `TestCodecCompatible`, `TestMembersBadSlotHealthStatus` |
