@@ -229,7 +229,7 @@ up later is additive. docs/10 keeps the design; its invariants stay as stubs.
 | Doc | Defines |
 |---|---|
 | [01-data-model](01-data-model.md) | Types, chunking, hashing, on-disk formats, handles, the trash index, the local cache and its pins. I-1..I-3, I-22, I-156 |
-| [02-consistency-and-raft](02-consistency-and-raft.md) | FSM commands and apply rules (the trash, restore, purge, protection), Raft wiring, membership, forwarding, reads. I-4..I-6, I-26..I-29, I-152..I-155, I-222, I-381..I-383, I-385 |
+| [02-consistency-and-raft](02-consistency-and-raft.md) | FSM commands and apply rules (the trash, restore, purge, protection), Raft wiring, membership, forwarding, reads. I-4..I-6, I-26..I-29, I-152..I-155, I-222, I-381..I-383, I-385, I-386 |
 | [03-erasure-coding-and-placement](03-erasure-coding-and-placement.md) | `ec.Codec`, rendezvous placement, degraded writes, policy migration. I-8..I-10, I-30, I-32, I-33 |
 | [04-write-path-and-durability](04-write-path-and-durability.md) | Overlay/WAL, flush protocol, acks, fsync policy, the write path's memory model, readahead, concurrent writers and whole rewrites. I-7, I-11, I-34..I-37, I-63, I-78..I-80, I-83, I-166, I-168, I-169, I-171, I-223 |
 | [05-failure-model](05-failure-model.md) | Crash points, partitions, what is and is not survived, suspect marks. I-12, I-38..I-40, I-170 |

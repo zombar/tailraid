@@ -73,8 +73,8 @@ func TestIndexer_ReindexOnlyWhenChunksChange(t *testing.T) {
 	}
 }
 
-// Nothing under /.tailraid, nothing in the trash, no ephemeral name and no other
-// extension is read.
+// Nothing under /.tailraid, no ephemeral name and no other extension is read; a file in
+// the trash is indexed (a restore then needs no pass) and never a hit.
 // Invariant: I-207
 func TestIndexer_SkipsTrashReservedEphemeral(t *testing.T) {
 	e := newEnv(t)
@@ -86,7 +86,7 @@ func TestIndexer_SkipsTrashReservedEphemeral(t *testing.T) {
 	if err := e.fs.Remove("/gone.txt"); err != nil {
 		t.Fatal(err)
 	}
-	if res := e.pass(); res.Indexed != 1 {
+	if res := e.pass(); res.Indexed != 2 {
 		t.Fatalf("pass %+v", res)
 	}
 	if got := paths(e.search("needle")); !reflect.DeepEqual(got, []string{"content:/keep.txt"}) {
@@ -185,8 +185,8 @@ func TestIndexer_AudioFirstChunkOnly(t *testing.T) {
 	}
 }
 
-// Past RebuildAt the pass merges the chain into one segment: every live doc kept, a
-// deleted one dropped.
+// Past RebuildAt the pass merges the chain into one segment: every doc of a file that
+// exists kept, a purged one dropped.
 // Invariant: I-206
 func TestIndexer_RebuildWhenChainExceedsEight(t *testing.T) {
 	e := newEnv(t)
@@ -196,9 +196,11 @@ func TestIndexer_RebuildWhenChainExceedsEight(t *testing.T) {
 			t.Fatalf("pass %d: %+v", i, res)
 		}
 	}
+	f0 := e.ino("/f0.txt")
 	if err := e.fs.Remove("/f0.txt"); err != nil {
 		t.Fatal(err)
 	}
+	e.f.MustApply(meta.Command{Op: meta.OpPurge, Purge: &meta.Purge{Ino: f0, Now: 1}})
 	e.write("/last.txt", []byte("unique99 common"))
 	res := e.pass()
 	if !res.Rebuilt {
@@ -209,7 +211,7 @@ func TestIndexer_RebuildWhenChainExceedsEight(t *testing.T) {
 		t.Fatalf("after the rebuild: %v %+v", err, x)
 	}
 	if x.Docs() != RebuildAt {
-		t.Fatalf("docs %d, want %d (one deleted, one added)", x.Docs(), RebuildAt)
+		t.Fatalf("docs %d, want %d (one purged, one added)", x.Docs(), RebuildAt)
 	}
 	if got := len(e.search("common").Hits); got != RebuildAt {
 		t.Fatalf("common: %d hits", got)
@@ -356,7 +358,6 @@ func TestSearch_FiltersDeletedAndUnder(t *testing.T) {
 	if err := e.fs.Remove("/docs/readme.md"); err != nil {
 		t.Fatal(err)
 	}
-	e.f.Clk.Advance(NameRefresh)
 	if got := paths(e.search("needle")); !reflect.DeepEqual(got, []string{"name:/other/needle.txt"}) {
 		t.Fatalf("after the delete: %v", got)
 	}
@@ -380,7 +381,7 @@ func TestSearch_LimitBoundaries(t *testing.T) {
 	}
 }
 
-// The name list follows the FSM: a new name is found once NameRefresh has passed, with
+// The name list follows the FSM: a new name is found by the next query, with
 // no pass at all.
 // Invariant: I-208
 func TestSearch_NameListFollowsApplied(t *testing.T) {
@@ -389,14 +390,12 @@ func TestSearch_NameListFollowsApplied(t *testing.T) {
 		t.Fatal("found before written")
 	}
 	e.write("/fresh file.bin", []byte{1})
-	e.f.Clk.Advance(NameRefresh)
 	if got := paths(e.search("fresh")); !reflect.DeepEqual(got, []string{"name:/fresh file.bin"}) {
 		t.Fatalf("hits %v", got)
 	}
 	if err := e.fs.Rename("/fresh file.bin", "/renamed.bin"); err != nil {
 		t.Fatal(err)
 	}
-	e.f.Clk.Advance(NameRefresh)
 	if got := paths(e.search("renamed")); !reflect.DeepEqual(got, []string{"name:/renamed.bin"}) {
 		t.Fatalf("after the rename %v", got)
 	}

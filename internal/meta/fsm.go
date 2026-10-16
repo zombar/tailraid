@@ -30,7 +30,8 @@ type FSM struct {
 
 	mu      sync.RWMutex
 	st      *State
-	stats   Stats // volume totals, kept in step with every apply (Inodes filled on read)
+	stats   Stats      // volume totals, kept in step with every apply (Inodes filled on read)
+	feed    changeFeed // which inodes each entry changed, for the consumers that follow it (I-386)
 	applied atomic.Uint64
 
 	waitMu sync.Mutex
@@ -71,7 +72,7 @@ func (f *FSM) SetSnapshotHook(h SnapshotHook) {
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
 	st := NewState()
-	return &FSM{st: st, stats: Stats{cls: newClassTable(st), due: newDueIndex(), lib: newLibraries()}, waitCh: make(chan struct{})}
+	return &FSM{st: st, feed: changeFeed{max: FeedMax}, stats: Stats{cls: newClassTable(st), due: newDueIndex(), lib: newLibraries()}, waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
@@ -138,7 +139,7 @@ func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
 		}
 		return Result{Err: ErrBadCommand}
 	}
-	a := &applier{st: f.st, stats: &f.stats, index: index}
+	a := &applier{st: f.st, stats: &f.stats, feed: &f.feed, index: index}
 	res, err := a.apply(cmd)
 	if err != nil {
 		return Result{Err: err}
@@ -153,6 +154,7 @@ func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
 type applier struct {
 	st    *State
 	stats *Stats
+	feed  *changeFeed
 	index uint64
 	now   int64 // clamped command clock; 0 when the op carries no Now
 }
@@ -469,6 +471,7 @@ func (a *applier) newInode(typ FileType, parent *Inode, name string, mode, uid, 
 	parent.Children[name] = in.Ino
 	parent.Mtime, parent.Ctime = now, now
 	parent.Version++ // the name table changed (docs/01)
+	a.touch(in.Ino, parent.Ino)
 	return in
 }
 
@@ -617,6 +620,7 @@ func (a *applier) unlink(c *Unlink) error {
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
 	a.stats.lib.drop(ino)
+	a.touch(ino, p.Ino)
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
 	return nil
@@ -660,6 +664,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
 	a.stats.lib.drop(ino)
+	a.touch(ino, p.Ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -777,6 +782,10 @@ func (a *applier) rename(c *Rename) error {
 	op.Version++ // the name table changed (docs/01)
 	np.Mtime, np.Ctime = now, now
 	np.Version++ // the name table changed (docs/01)
+	a.touch(srcIno, op.Ino, np.Ino)
+	if dst != nil {
+		a.touch(dst.Ino)
+	}
 	return nil
 }
 
@@ -803,6 +812,7 @@ func (a *applier) setAttr(c *SetAttr) error {
 		}
 	}
 	now := a.clock(c.Now)
+	a.touch(in.Ino)
 	if c.Mask&AttrFlags != 0 {
 		in.Flags = c.Flags
 		a.stats.lib.set(in)
@@ -1043,6 +1053,7 @@ func (a *applier) commit(c *Commit) error {
 	} else {
 		a.stats.LogicalBytes += c.NewSize - in.Size
 	}
+	a.touch(in.Ino)
 	in.Size = c.NewSize
 	in.Version++
 	if c.RewriteStart {
@@ -1168,6 +1179,7 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	f.mu.Lock()
 	f.st = st
 	f.stats = computeStats(st)
+	f.feed.reset(st.Applied) // nothing before the snapshot is known (I-386)
 	f.mu.Unlock()
 	f.setApplied(st.Applied)
 	return nil

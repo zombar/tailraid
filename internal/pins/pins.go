@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,7 +75,14 @@ type Store interface {
 	PathOf(meta.Ino) ([]string, error)
 	GetChunk(meta.Hash) (meta.Chunk, bool)
 	Applied() uint64
+	// Changes and GetInodeAny are the change feed (docs/02 §The change feed): the worker
+	// walks again only where a change lies (I-389).
+	Changes(after uint64) (inos []meta.Ino, upto uint64, complete bool)
+	GetInodeAny(meta.Ino) (meta.Inode, bool)
 }
+
+// sysRoot keys the system pin's collection in Pins.coll: no inode is 0.
+const sysRoot meta.Ino = 0
 
 // Reader fetches a chunk into the cache: *vfs.Reader.
 type Reader interface {
@@ -94,7 +102,12 @@ type Pins struct {
 	pins   []Pin
 	system int64                  // cache.system: the system pin's budget, 0 off (I-373)
 	held   map[meta.Hash]struct{} // what the last walk pinned in the cache
-	cancel context.CancelFunc     // the running walk's, so an unpin stops it
+	// coll is what the last walk collected under each pin, and under the system pin at
+	// sysRoot: a walk collects again only the roots a change lies under (I-389). A map is
+	// replaced, never changed, so List reads one after unlocking.
+	coll   map[meta.Ino]map[meta.Hash]int64
+	fed    uint64             // the feed index the collections run to
+	cancel context.CancelFunc // the running walk's, so an unpin stops it
 	kick   chan struct{}
 
 	walkMu sync.Mutex // one walk at a time
@@ -105,7 +118,7 @@ func Open(dataDir string, st Store, rd Reader, cache *chunk.Cache, clk clock.Clo
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	p := &Pins{file: filepath.Join(dataDir, File), st: st, rd: rd, cache: cache, clk: clk, log: log, held: map[meta.Hash]struct{}{}, kick: make(chan struct{}, 1)}
+	p := &Pins{file: filepath.Join(dataDir, File), st: st, rd: rd, cache: cache, clk: clk, log: log, held: map[meta.Hash]struct{}{}, coll: map[meta.Ino]map[meta.Hash]int64{}, kick: make(chan struct{}, 1)}
 	b, err := os.ReadFile(p.file)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -285,7 +298,7 @@ func (p *Pins) Unpin(path string) error {
 	if p.cancel != nil {
 		p.cancel()
 	}
-	want := p.wantLocked()
+	want := p.wantLocked(nil)
 	p.releaseLocked(want)
 	p.mu.Unlock()
 	if err != nil {
@@ -320,8 +333,13 @@ func (p *Pins) entry(pin Pin) (Entry, bool) {
 	if parts, err := p.st.PathOf(pin.Ino); err == nil {
 		e.Path = "/" + strings.Join(parts, "/")
 	}
-	want := map[meta.Hash]int64{}
-	p.collect(pin.Ino, want)
+	p.mu.Lock()
+	want := p.coll[pin.Ino] // the last walk's, current as of the feed (I-389)
+	p.mu.Unlock()
+	if want == nil {
+		want = map[meta.Hash]int64{}
+		p.collect(pin.Ino, want)
+	}
 	for h, size := range want {
 		e.Bytes += uint64(size)
 		if p.cache.Has(h) {
@@ -359,15 +377,63 @@ func (p *Pins) collect(dir meta.Ino, want map[meta.Hash]int64) {
 }
 
 // wantLocked is every chunk under every pin that still resolves, and the system pin's.
-func (p *Pins) wantLocked() map[meta.Hash]int64 {
+// It collects again the roots dirty names (every root when dirty is nil, and any root
+// not collected yet) and keeps the last walk's collection of the others (I-389).
+func (p *Pins) wantLocked(dirty map[meta.Ino]bool) map[meta.Hash]int64 {
 	want := map[meta.Hash]int64{}
+	coll := map[meta.Ino]map[meta.Hash]int64{}
+	take := func(root meta.Ino, fill func(map[meta.Hash]int64)) {
+		m := p.coll[root]
+		if m == nil || dirty == nil || dirty[root] {
+			m = map[meta.Hash]int64{}
+			fill(m)
+		}
+		coll[root] = m
+		maps.Copy(want, m)
+	}
 	for _, pin := range p.pins {
 		if in, ok := p.st.GetInode(pin.Ino); ok && in.Gen == pin.Gen && in.Type == meta.TDir {
-			p.collect(pin.Ino, want)
+			take(pin.Ino, func(m map[meta.Hash]int64) { p.collect(pin.Ino, m) })
 		}
 	}
-	p.addChunks(p.systemFiles(p.system), want)
+	if p.system > 0 {
+		take(sysRoot, func(m map[meta.Hash]int64) { p.addChunks(p.systemFiles(p.system), m) })
+	}
+	p.coll = coll
 	return want
+}
+
+// dirtyRoots is the pins and the system pin a changed inode lies under (its own folder
+// included): the only roots a walk need collect again (I-389).
+func (p *Pins) dirtyRoots(changed []meta.Ino) map[meta.Ino]bool {
+	p.mu.Lock()
+	roots := map[meta.Ino]meta.Ino{}
+	for _, pin := range p.pins {
+		roots[pin.Ino] = pin.Ino
+	}
+	system := p.system > 0
+	p.mu.Unlock()
+	if system {
+		for _, d := range SystemDirs {
+			if in, err := p.st.Resolve([]string{meta.ReservedDir, d}); err == nil {
+				roots[in.Ino] = sysRoot
+			}
+		}
+	}
+	dirty := map[meta.Ino]bool{}
+	for _, ino := range changed {
+		for cur := ino; ; {
+			if root, ok := roots[cur]; ok {
+				dirty[root] = true
+			}
+			in, ok := p.st.GetInodeAny(cur)
+			if !ok || cur == meta.RootIno {
+				break
+			}
+			cur = in.Parent
+		}
+	}
+	return dirty
 }
 
 // releaseLocked unpins what the last walk held and no pin wants any more.
@@ -392,6 +458,44 @@ func (p *Pins) wake() {
 // gone. A chunk that cannot be read now is left for the next walk; the error says how
 // many.
 func (p *Pins) Walk(ctx context.Context) error {
+	upto := p.st.Applied() // what changes after it the feed brings to Follow
+	err := p.walk(ctx, nil)
+	if err == nil {
+		p.setFed(upto)
+	}
+	return err
+}
+
+// Follow is the worker's check every Interval (docs/01 §Pins, I-389): it asks the change
+// feed what changed since the collections, and walks only when a change lies under a
+// pin or a system folder, collecting just those roots again; when the feed cannot answer
+// it collects everything. walked reports whether it walked.
+func (p *Pins) Follow(ctx context.Context) (walked bool, err error) {
+	p.mu.Lock()
+	fed := p.fed
+	p.mu.Unlock()
+	changed, upto, ok := p.st.Changes(fed)
+	var dirty map[meta.Ino]bool // nil: every root
+	if ok {
+		if dirty = p.dirtyRoots(changed); len(dirty) == 0 {
+			p.setFed(upto)
+			return false, nil
+		}
+	}
+	if err := p.walk(ctx, dirty); err != nil {
+		return true, err // the feed is not advanced: the next check collects these roots again
+	}
+	p.setFed(upto)
+	return true, nil
+}
+
+func (p *Pins) setFed(upto uint64) {
+	p.mu.Lock()
+	p.fed = upto
+	p.mu.Unlock()
+}
+
+func (p *Pins) walk(ctx context.Context, dirty map[meta.Ino]bool) error {
 	p.walkMu.Lock()
 	defer p.walkMu.Unlock()
 	// a prefetch is background work: its shard requests hold at most half of a node's
@@ -413,7 +517,7 @@ func (p *Pins) Walk(ctx context.Context) error {
 		p.pins = keep
 		saveErr = p.saveLocked()
 	}
-	want := p.wantLocked()
+	want := p.wantLocked(dirty)
 	p.mu.Unlock()
 	if saveErr != nil {
 		return saveErr
@@ -472,12 +576,10 @@ func (p *Pins) Walk(ctx context.Context) error {
 	return nil
 }
 
-// Run is the worker: a walk at start, on every pin, and every Interval when the FSM's
-// applied index has moved since the last walk; it returns when ctx ends.
+// Run is the worker: a walk at start and on every pin, and Follow every Interval; it
+// returns when ctx ends.
 func (p *Pins) Run(ctx context.Context) {
-	last := uint64(0)
 	walk := func() {
-		last = p.st.Applied()
 		if err := p.Walk(ctx); err != nil && ctx.Err() == nil {
 			p.log.Warn("pin walk", "err", err)
 		}
@@ -493,8 +595,8 @@ func (p *Pins) Run(ctx context.Context) {
 			t.Stop()
 			walk()
 		case <-t.C():
-			if p.st.Applied() != last {
-				walk()
+			if _, err := p.Follow(ctx); err != nil && ctx.Err() == nil {
+				p.log.Warn("pin walk", "err", err)
 			}
 		}
 	}

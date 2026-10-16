@@ -454,6 +454,34 @@ successor; a follower gateway's `WaitApplied` bounds on it), `SnapshotInterval 2
 without any switch that skips an fsync).
 Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
 
+### The change feed
+
+Some work on a node depends on which inodes changed, never on the whole tree: the search
+name list and the leader's index pass (18 §5, §6) and the pin worker (01 §Pins). Each one
+once noticed that `Applied` had moved and walked every inode, or every pinned subtree, to
+find out what. The FSM now keeps a **change feed** alongside the state, never replicated
+or encoded:
+
+- **What it records:** every apply adds `(index, ino)` for each inode it created,
+  changed or deleted. That includes a parent whose name table changed: a create, a delete,
+  a rename (both parents), a trash, a fold, a restore or a purge.
+- **What a consumer asks:** `Changes(after)` returns the distinct inodes changed by
+  entries in `(after, upto]` and `upto`, the applied index the answer runs to. The cost is
+  O(changes since `after`). It reports `complete = false` when the feed no longer reaches
+  back to `after`.
+- **Its floor:** the feed is complete for indexes after its floor. `Restore` moves the
+  floor to the restored index and empties the feed, since a node started from a snapshot
+  never saw the changes before it. Past `FeedMax` (2¹⁹ records, 8 MiB) the oldest half is
+  dropped and the floor rises.
+- **Falling back:** a consumer that gets `complete = false` walks once, as it did before,
+  and continues from `upto`.
+- **Descendants:** a changed directory stands for itself. A consumer that cares about its
+  descendants (a renamed, trashed or restored folder) visits that subtree. That cost
+  scales with what changed, not with the volume.
+
+A deleted inode is still reported (its parent too). A consumer asking `GetInode` finds it
+gone and drops what it held for it (I-386).
+
 ## Reads
 
 `meta.Store` is the read API of the FSM (`type Store = FSM`); the vfs, gateways, repairer
@@ -641,6 +669,11 @@ no divergent state to merge because it never applied uncommitted entries.
   and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
   `Commit` applied after the snapshot never changes it, and a snapshot is written and read
   as a stream, never held whole in memory a second time.
+- **I-386** — The change feed lists every inode an apply created, changed or deleted
+  (a parent whose name table changed among them) for every index after its floor.
+  `Changes(after)` costs O(changes since `after`) and says `complete = false` when `after`
+  lies below the floor. `Restore` and overflow past `FeedMax` raise the floor, and nothing
+  in it is replicated or encoded.
 - **I-385** — A `Commit` that only appends extends the chunk list in capacity no earlier
   list covers and copies O(appended) hashes amortized. Every other `Commit` installs a new
   list. Either way, no element of a list a reader, clone or snapshot holds ever changes.
@@ -738,6 +771,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
 | I-381 | `TestFSM_GCDelete_QueueMatchesWalk`, `TestFSM_GCDelete_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
 | I-382 | `TestFSM_Purge_QueueMatchesWalk`, `TestFSM_Purge_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
+| I-386 | `TestFSM_Changes_ListEveryChangedInode`, `TestFSM_Changes_FoldRestorePurge`, `TestFSM_Changes_FloorAndOverflow` |
 | I-385 | `TestFSM_Commit_AppendCostIndependentOfLength`, `TestFSM_Commit_AppendLeavesHeldListsAlone`, `TestFSM_Commit_ReaderAppendReallocates`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
 | I-383 | `TestState_Clone_SharesChunkEntries`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
 | I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |

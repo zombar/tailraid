@@ -61,6 +61,7 @@ func (a *applier) trashEntry(in, p *Inode, now int64) {
 	in.DeletedAt = now
 	in.Ctime = now
 	a.indexTrash(p.Ino, in)
+	a.touch(in.Ino, p.Ino)
 	if in.Type == TDir {
 		p.Nlink--
 		a.fold(in, now)
@@ -92,6 +93,7 @@ func (a *applier) fold(dir *Inode, now int64) {
 		}
 		dir.Children[r.Name] = ino
 		r.DeletedAt = 0
+		a.touch(ino, dir.Ino)
 		a.unindexTrash(dir.Ino, ino)
 		if r.Type == TDir {
 			dir.Nlink++
@@ -174,6 +176,7 @@ func (a *applier) restore(c *Restore) error {
 	a.unindexTrash(in.Parent, in.Ino)
 	np.Children[name] = in.Ino
 	in.Parent, in.Name, in.DeletedAt, in.Ctime = parent, name, 0, now
+	a.touch(in.Ino, np.Ino)
 	if in.Type == TDir {
 		np.Nlink++
 	}
@@ -308,6 +311,7 @@ func (a *applier) deleteBatch(batch []delItem, cmdNow int64) error {
 		delete(st.Inodes, in.Ino)
 		st.dropGrants(in.Ino)
 		a.stats.lib.drop(in.Ino)
+		a.touch(in.Ino, in.Parent)
 	}
 	return nil
 }

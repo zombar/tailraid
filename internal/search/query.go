@@ -42,12 +42,16 @@ type Result struct {
 	Index string `json:"index,omitempty"` // "unavailable" when only the names answered
 }
 
-// nameList is every live inode's folded name words, rebuilt when Applied moved
-// (docs/18 §6): one byte slice, each name as " w1 w2 ".
+// nameList is the folded name words of every inode (docs/18 §6): one byte slice, each
+// name as " w1 w2 ", kept up to date from the change feed (I-388). Every inode is in it,
+// the trash and /.tailraid too, so an entry depends on its own name alone; hitOf filters
+// those per hit. An entry replaced or dropped stays in the slice as dead until a compaction.
 type nameList struct {
-	applied uint64
+	applied uint64 // the feed's index this list runs to
 	buf     []byte
-	ents    []nameEnt
+	ents    []nameEnt // ino 0: dead
+	at      map[meta.Ino]int
+	dead    int
 }
 
 type nameEnt struct {
@@ -55,49 +59,90 @@ type nameEnt struct {
 	off, n uint32
 }
 
-// reservedSet is every directory under /.tailraid, the folder itself included.
-func reservedSet(src Source) map[meta.Ino]bool {
-	out := map[meta.Ino]bool{}
-	res, ok := src.Lookup(meta.RootIno, meta.ReservedDir)
-	if !ok {
-		return out
+func newNameList(applied uint64) *nameList {
+	return &nameList{applied: applied, at: map[meta.Ino]int{}}
+}
+
+// set records in's name, replacing what the list held for it; a name with no words, an
+// ephemeral one and the root hold nothing.
+func (nl *nameList) set(in meta.Inode) {
+	nl.drop(in.Ino)
+	if in.Ino == meta.RootIno || meta.IsEphemeral(in.Name) {
+		return
 	}
-	stack := []meta.Ino{res.Ino}
-	for len(stack) > 0 {
-		d := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		out[d] = true
-		kids, _ := src.ReadDir(d)
-		for i := range kids {
-			if kids[i].Type == meta.TDir && !out[kids[i].Ino] {
-				stack = append(stack, kids[i].Ino)
+	ws := Words(in.Name)
+	if len(ws) == 0 {
+		return
+	}
+	off := len(nl.buf)
+	nl.buf = append(nl.buf, ' ')
+	for _, w := range ws {
+		nl.buf = append(nl.buf, w.Text...)
+		nl.buf = append(nl.buf, ' ')
+	}
+	nl.at[in.Ino] = len(nl.ents)
+	nl.ents = append(nl.ents, nameEnt{ino: in.Ino, off: uint32(off), n: uint32(len(nl.buf) - off)}) //nolint:gosec // a name list fits
+}
+
+func (nl *nameList) drop(ino meta.Ino) {
+	if i, ok := nl.at[ino]; ok {
+		nl.ents[i].ino = 0
+		delete(nl.at, ino)
+		nl.dead++
+	}
+}
+
+// compact rewrites the slice without its dead entries once they are the majority.
+func (nl *nameList) compact() {
+	if nl.dead < 1024 || nl.dead < len(nl.ents)/2 {
+		return
+	}
+	buf := make([]byte, 0, len(nl.buf))
+	ents := make([]nameEnt, 0, len(nl.at))
+	for _, e := range nl.ents {
+		if e.ino == 0 {
+			continue
+		}
+		off := len(buf)
+		buf = append(buf, nl.buf[e.off:e.off+e.n]...)
+		nl.at[e.ino] = len(ents)
+		ents = append(ents, nameEnt{ino: e.ino, off: uint32(off), n: e.n}) //nolint:gosec // a name list fits
+	}
+	nl.buf, nl.ents, nl.dead = buf, ents, 0
+}
+
+// underReserved reports whether ino lies under /.tailraid, which the list leaves out.
+func underReserved(src Source, ino meta.Ino) bool {
+	parts, err := src.PathOf(ino)
+	return err == nil && len(parts) > 0 && parts[0] == meta.ReservedDir
+}
+
+// freshNames brings nl up to date: from the change feed, O(the changes) (I-388), or by a
+// walk when there is no list yet or the feed cannot answer.
+func freshNames(src Source, nl *nameList) *nameList {
+	if nl != nil {
+		inos, upto, ok := src.Changes(nl.applied)
+		if ok {
+			for _, ino := range inos {
+				if in, ok := src.GetInodeAny(ino); ok {
+					nl.set(in)
+				} else {
+					nl.drop(ino)
+				}
 			}
+			nl.applied = upto
+			nl.compact()
+			return nl
 		}
 	}
-	return out
+	return buildNames(src)
 }
 
 func buildNames(src Source) *nameList {
-	nl := &nameList{applied: src.Applied()}
-	reserved := reservedSet(src)
+	_, upto, _ := src.Changes(src.Applied()) // the index the walk starts at: what changes after it the feed brings
+	nl := newNameList(upto)
 	src.ForEachInode(func(in meta.Inode) bool {
-		if in.Ino == meta.RootIno || reserved[in.Ino] || reserved[in.Parent] || meta.IsEphemeral(in.Name) {
-			return true
-		}
-		if _, ok := src.GetInode(in.Ino); !ok { // in the trash
-			return true
-		}
-		ws := Words(in.Name)
-		if len(ws) == 0 {
-			return true
-		}
-		off := len(nl.buf)
-		nl.buf = append(nl.buf, ' ')
-		for _, w := range ws {
-			nl.buf = append(nl.buf, w.Text...)
-			nl.buf = append(nl.buf, ' ')
-		}
-		nl.ents = append(nl.ents, nameEnt{ino: in.Ino, off: uint32(off), n: uint32(len(nl.buf) - off)}) //nolint:gosec // a name list fits
+		nl.set(in) // every inode, the trash and /.tailraid too: an entry is its own name alone, so a move or a restore needs no other
 		return true
 	})
 	return nl
@@ -140,7 +185,7 @@ func (x *Index) search(src Source, names *nameList, q, under string, limit int) 
 	seen := map[meta.Ino]bool{}
 	var nameHits, tagHits, contentHits []Hit
 	for _, e := range names.ents {
-		if !names.matches(e, words) {
+		if e.ino == 0 || !names.matches(e, words) {
 			continue
 		}
 		h, ok := hitOf(src, e.ino, underParts)
