@@ -172,7 +172,7 @@ func TestFSM_Purge_QueueMatchesWalk(t *testing.T) {
 		}
 		slices.SortFunc(roots, func(a, b *Inode) int { return cmp.Or(cmp.Compare(a.DeletedAt, b.DeletedAt), cmp.Compare(a.Ino, b.Ino)) })
 		stats := computeStats(st)
-		a := &applier{st: st, stats: &stats}
+		a := &applier{st: st, stats: &stats, feed: &changeFeed{max: FeedMax}} // a feed of its own: the purge records what it deletes
 		limit := int(p.Limit)
 		if limit == 0 {
 			limit = math.MaxInt

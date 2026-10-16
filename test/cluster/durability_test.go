@@ -109,6 +109,9 @@ func TestCrash_AtEveryPoint(t *testing.T) {
 				if n, err := sweepNode(c, i); err != nil || n != 0 {
 					t.Fatalf("n%d: the sweep removed %d orphans (%v)", i, n, err)
 				}
+				// the chunk cache writes a fetched chunk's file behind the Put (I-204): one
+				// still in flight is no leftover (CI, 2026-10-16: n0's cache .tmp-)
+				c.Nodes[i].Cache.Drain()
 				var temps []string
 				must(t, filepath.WalkDir(c.Nodes[i].Dir, func(p string, d os.DirEntry, err error) error {
 					if err == nil && !d.IsDir() && (strings.HasPrefix(d.Name(), ".tmp-") || strings.HasSuffix(d.Name(), ".wal.new")) {

@@ -54,13 +54,18 @@ func TestFlusher_StragglerGrace_CutsWaitAfterKAcks(t *testing.T) {
 	var m marks
 	fl.Slow = m.mark
 	done := make(chan error, 1)
+	before := f.Clk.Pending()
 	go func() { done <- fl.FlushInode(ctx, ino) }()
 	<-entered
 	testharness.Eventually(t, func() bool { return len(f.ShardsOn(h, 2, 1)) == 2 }, "live PUTs never landed")
-	// The clock is advanced in grace-sized steps until the straggler is cut. The grace
-	// is four times the p95 of the live PUTs as the fake clock measured them (a step or
-	// two of it may land inside a measurement), so the exact value is pinned by the
-	// table test; here the wait must end far short of the deadline.
+	// the live PUTs' durations are taken on the fake clock after their shards land, and
+	// the grace is armed only once both are recorded: advancing before that inflates the
+	// p95 a step at a time under load (CI, 2026-10-16: 27.5 s of clock), so wait for the
+	// grace's timer beside the deadline's
+	testharness.Eventually(t, func() bool { return f.Clk.Pending() >= before+2 }, "the straggler grace was never armed")
+	// The clock is advanced in grace-sized steps until the straggler is cut. The grace is
+	// four times the p95 of the live PUTs as the fake clock measured them, so the exact
+	// value is pinned by the table test; here the wait must end far short of the deadline.
 	var err error
 	var advanced time.Duration
 	testharness.Eventually(t, func() bool {

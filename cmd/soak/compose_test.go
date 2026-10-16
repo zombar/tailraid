@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -94,8 +95,8 @@ func TestCompose_AddMirrorTwice_SameMirror(t *testing.T) {
 // The rig's plug and unplug: a move, or nothing when already in that state; both paths
 // present (a write recreated the root while the mirror was away) fails loudly.
 func TestCompose_MirrorMoveScript(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("no sh: the script runs in the rig's Linux containers")
+	if _, err := exec.LookPath("sh"); err != nil || runtime.GOOS == "windows" {
+		t.Skip("the script runs in the rig's Linux containers; Windows' sh is Git's, over Windows paths")
 	}
 	for _, c := range []struct {
 		name       string

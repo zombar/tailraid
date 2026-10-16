@@ -198,6 +198,9 @@ func TestPass_FromFeed_MatchesFullWalk(t *testing.T) {
 	for round := range 12 {
 		for range 4 {
 			p := places[rng.Intn(len(places))]
+			if _, err := e.f.FSM.Resolve(meta.SplitPath(p)); err != nil {
+				continue // a trash of its parent took it (CI seed 1792182167521611652)
+			}
 			name := fmt.Sprintf("%s/f%d%s", p, rng.Intn(4), exts[rng.Intn(len(exts))])
 			switch rng.Intn(4) {
 			case 0, 1:
