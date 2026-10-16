@@ -78,12 +78,14 @@ func TestNFS_ConcurrentRPCsOnOneConnection(t *testing.T) {
 	}
 }
 
-// A connection runs at most InFlight requests at once: with that many WRITEs waiting at
-// the cap, the next request waits for a slot, and everything completes once the flusher
-// frees the cap.
-// Invariant: I-167
+// WRITEs waiting at the cap hold at most WriteSlots of a connection's slots: with
+// InFlight of them sent, only WriteSlots wait at the cap and the rest wait in order
+// behind them, a GETATTR on the same connection is answered at once, and every write
+// completes once the flusher frees the cap (2026-10-16: a song stopped during a Finder
+// copy whose WRITEs held every slot).
+// Invariant: I-167, I-370
 func TestNFS_InFlightBound(t *testing.T) {
-	const inFlight = 16 // nfs.InFlight
+	const inFlight, writeSlots = 16, 8 // nfs.InFlight, nfs.WriteSlots
 	cs := int64(testharness.ChunkSize)
 	g := startGatewayWith(t, func(f *testharness.Fabric) { f.RestartOverlay(vfs.WithWALCap(cs)) })
 	if _, err := g.tgt.Create("/big", 0o644); err != nil {
@@ -100,7 +102,7 @@ func TestNFS_InFlightBound(t *testing.T) {
 	for i := range int64(inFlight) {
 		go g.writeRange("/big", payload, cs+i*piece, piece, piece, done)
 	}
-	testharness.Eventually(t, func() bool { return g.f.Clk.Pending() >= pending+inFlight }, "the WRITEs never all waited at the cap")
+	testharness.Eventually(t, func() bool { return g.f.Clk.Pending() >= pending+writeSlots }, "the WRITEs never waited at the cap")
 	got := make(chan error, 1)
 	go func() {
 		_, err := g.tgt.Getattr("/other")
@@ -108,8 +110,12 @@ func TestNFS_InFlightBound(t *testing.T) {
 	}()
 	select {
 	case err := <-got:
-		t.Fatalf("GETATTR answered (%v) while every slot held a waiting WRITE", err)
-	case <-time.After(300 * time.Millisecond):
+		must(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("GETATTR waited behind the WRITEs held at the cap")
+	}
+	if n := g.f.Clk.Pending() - pending; n > writeSlots {
+		t.Fatalf("%d WRITEs waiting at the cap, want at most %d", n, writeSlots)
 	}
 	finished := 0
 	testharness.Eventually(t, func() bool {
@@ -125,12 +131,6 @@ func TestNFS_InFlightBound(t *testing.T) {
 			}
 		}
 	}, "writes never completed past the WAL cap")
-	select {
-	case err := <-got:
-		must(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("GETATTR never answered after the slots freed")
-	}
 	must(t, g.f.Flusher().FlushAll(ctx))
 	if got := g.readAll("/big", len(payload)); !bytes.Equal(got, payload) {
 		t.Fatalf("content differs at %d", testharness.FirstDiff(got, payload))
