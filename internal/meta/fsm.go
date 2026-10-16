@@ -558,7 +558,7 @@ func (d refDelta) check(st *State) error {
 // Call only after check.
 func (d refDelta) commit(st *State, stats *Stats, now int64) {
 	for h, n := range d {
-		c := st.Chunks[h]
+		c := st.mutChunk(h)
 		fresh := c.Refs == 0 && c.TombstonedAt == 0 // registered by this command, not counted yet
 		wasLive := c.Refs > 0
 		c.Refs = uint32(int(c.Refs) + n)
@@ -985,7 +985,7 @@ func (a *applier) commit(c *Commit) error {
 		st.Chunks[d.Hash] = ch
 	}
 	for _, d := range fill {
-		st.Chunks[d.Hash].Sums = append([]Hash(nil), d.Sums...)
+		st.mutChunk(d.Hash).Sums = append([]Hash(nil), d.Sums...)
 	}
 	// Only the indices that change carry a delta: written ones (old entry out, new in),
 	// and the entries a truncate drops; everything below keep that was not written is
@@ -1053,6 +1053,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 		a.stats.StoredBytes -= storedBytes(ch)
 		a.stats.cls.out(ch)
 	}
+	ch = a.st.mutChunk(c.Hash)
 	if ch.K != c.K || ch.M != c.M {
 		ch.Sums = nil // the shards are different bytes now; the backfill records the new sums (I-201)
 	}
@@ -1085,7 +1086,7 @@ func (a *applier) setShardSums(c *SetShardSums) error {
 		}
 		return ErrConflict
 	}
-	ch.Sums = append([]Hash(nil), c.Sums...)
+	a.st.mutChunk(c.Hash).Sums = append([]Hash(nil), c.Sums...)
 	return nil
 }
 

@@ -39,6 +39,7 @@ func TestInoGen_RootIsOne_ZeroIsNever(t *testing.T) {
 	}
 }
 
+// Invariant: I-383
 func TestState_Clone_IsDeep(t *testing.T) {
 	s := sampleState()
 	c := s.Clone()
@@ -50,10 +51,14 @@ func TestState_Clone_IsDeep(t *testing.T) {
 	if &s.Inodes[2].Chunks[0] != &c.Inodes[2].Chunks[0] {
 		t.Fatal("Chunks slice was copied; the documented choice is to share it")
 	}
+	// chunk entries are shared too, and an apply changes one through mutChunk (I-383)
+	if s.Chunks[sampleHash(1)] != c.Chunks[sampleHash(1)] {
+		t.Fatal("a chunk entry was copied; the documented choice is to share it")
+	}
 	c.Inodes[RootIno].Children["new"] = 99
 	c.Inodes[RootIno].Name = "x"
 	c.Nodes[1].Name = "renamed"
-	c.Chunks[sampleHash(1)].Refs = 42
+	c.mutChunk(sampleHash(1)).Refs = 42
 	c.Tombs[sampleHash(9)] = struct{}{}
 	delete(c.Inodes, 2)
 	if _, ok := s.Inodes[RootIno].Children["new"]; ok {

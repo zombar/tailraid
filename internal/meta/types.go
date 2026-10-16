@@ -485,8 +485,18 @@ func (s *State) lineage(ino Ino) lineage {
 	return l
 }
 
-// Clone returns a deep copy of s suitable for a snapshot taken while Apply keeps running
-// on the original. Inode.Chunks slices are shared because they are immutable.
+// mutChunk is the entry of chunk h for an apply to change: a fresh copy installed under
+// the hash, so a clone sharing the old entry never sees the change (I-383). Every apply
+// that changes a chunk goes through it; the slices are replaced, never written into.
+func (s *State) mutChunk(h Hash) *Chunk {
+	cp := *s.Chunks[h]
+	s.Chunks[h] = &cp
+	return &cp
+}
+
+// Clone returns a copy of s suitable for a snapshot taken while Apply keeps running on
+// the original. Inode.Chunks slices are shared because they are immutable, and so are the
+// chunk entries, which an apply replaces through mutChunk instead of changing (I-383).
 func (s *State) Clone() *State {
 	c := &State{
 		Vol:         s.Vol,
@@ -496,9 +506,9 @@ func (s *State) Clone() *State {
 		Applied:     s.Applied,
 		LastNow:     s.LastNow,
 		Inodes:      make(map[Ino]*Inode, len(s.Inodes)),
-		Chunks:      make(map[Hash]*Chunk, len(s.Chunks)),
+		Chunks:      maps.Clone(s.Chunks), // the entries are shared: never changed in place (mutChunk, I-383)
 		Nodes:       make(map[NodeIdx]*Node, len(s.Nodes)),
-		Tombs:       make(map[Hash]struct{}, len(s.Tombs)),
+		Tombs:       maps.Clone(s.Tombs),
 		Trash:       make(map[Ino]map[Ino]struct{}, len(s.Trash)),
 		Snaps:       make(map[SnapID]*Snapshot, len(s.Snaps)),
 		NextSnap:    s.NextSnap,
@@ -556,20 +566,9 @@ func (s *State) Clone() *State {
 		}
 		c.Inodes[ino] = &cp
 	}
-	for h, ch := range s.Chunks {
-		cp := *ch
-		cp.Placement = append([]NodeIdx(nil), ch.Placement...)
-		if ch.Sums != nil {
-			cp.Sums = append([]Hash(nil), ch.Sums...)
-		}
-		c.Chunks[h] = &cp
-	}
 	for idx, n := range s.Nodes {
 		cp := *n
 		c.Nodes[idx] = &cp
-	}
-	for h := range s.Tombs {
-		c.Tombs[h] = struct{}{}
 	}
 	return c
 }

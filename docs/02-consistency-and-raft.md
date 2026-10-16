@@ -420,9 +420,16 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error
 ```
 
 `hashicorp/raft` guarantees `Apply` never runs concurrently with `Snapshot()` but *does* run
-concurrently with `Persist`. Hence `Snapshot()` clones under the read lock (Children maps
-deep-copied; `Chunks` slices shared because they are immutable) and `Persist` works on the
-clone with no lock. Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
+concurrently with `Persist`. Hence `Snapshot()` clones under the read lock (inodes and
+their Children maps deep-copied; file chunk lists shared because they are immutable) and
+`Persist` works on the clone with no lock. Applies wait for the clone, so it must be
+cheap. A chunk entry is never changed in place: every apply that changes one (references,
+the tombstone, placement, shard sums) installs a fresh copy under the hash
+(`State.mutChunk`). The clone therefore shares the chunk entries, and copying the chunk
+table is one pointer map copy, not a copy of every chunk and its slot list (I-383: 0.25 s
+at a million chunks on an M-series Mac before, for each Raft snapshot every 2 minutes on
+every node and for each mirror sync's begin on its host). The same clone serves the
+mirror's snapshot hook (16 §3). Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
 on close. These Raft snapshots (log compaction) are not the volume snapshots of 16,
 which are catalogue rows here and trees and chunks on a mirror disk. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db` with
 `NoSync = false`.
@@ -622,6 +629,9 @@ no divergent state to merge because it never applied uncommitted entries.
   and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
   `Commit` applied after the snapshot never changes it, and a snapshot is written and read
   as a stream, never held whole in memory a second time.
+- **I-383** — A state clone allocates nothing per chunk: a chunk entry is replaced, never
+  changed in place, so the clone shares the entries and an apply after the clone never
+  changes what the clone holds.
 - **I-105** — A log entry this binary cannot decode is counted (`status` shows
   `incompatible_entries` and a warning) and logged, while the applied index advances as on
   every replica; `/health` reports `meta.CodecVersion`, and `join` refuses a cluster whose
@@ -713,6 +723,7 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
 | I-381 | `TestFSM_GCDelete_QueueMatchesWalk`, `TestFSM_GCDelete_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
 | I-382 | `TestFSM_Purge_QueueMatchesWalk`, `TestFSM_Purge_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
+| I-383 | `TestState_Clone_SharesChunkEntries`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
 | I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |
 | I-105 | `TestFSM_IncompatibleEntryCounted`, `TestCodecCompatible`, `TestMembersBadSlotHealthStatus` |
 | I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |
