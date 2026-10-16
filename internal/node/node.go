@@ -383,11 +383,16 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	node.FSM.SetApplyHook(ops.audited) // the leader records every applied users and secrets op (I-357)
 	defer node.FSM.SetApplyHook(nil)
 	ops.mirrors, ops.mirrorPol = mirrors, mpol
+	// restore jobs (docs/16 §6): this host's, reading its own mirrors
+	jobs := newRestoreJobs(cfg.Node.DataDir, fs, node.FSM, node.SelfIdx, func(idx meta.NodeIdx) bool { _, ok := mirrors.get(idx); return ok }, clk, log)
+	mirrors.held = jobs.held // thinning and the reserve leave a snapshot a job reads (I-364)
+	ops.restores = jobs
 	fs.SetMirrors(mirrorSource{local: mirrors, client: client, st: node.FSM, online: prober.MirrorOnline}) // /.snapshots (docs/16 §6)
 	selfHealth := prober.SelfHealth
 	prober.SelfHealth = func() rpc.Health { // this host's mirrors, as /health lists them (docs/16 §1)
 		h := selfHealth()
 		h.Mirrors = mirrors.health()
+		h.Restores = len(jobs.List())
 		return h
 	}
 	webAddr := "" // the browser UI listener (docs/13); listen.web 0 turns it off
@@ -422,6 +427,13 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		me, _ := node.SelfIdx()
 		rep.Mirrors = clusterMirrors(node.FSM.Nodes(), snaps, prober, me, local)
 		rep.Warnings = append(rep.Warnings, mwarn...)
+		rep.Restores = clusterRestores(context.Background(), node.FSM.Nodes(), prober.Snapshot(), prober.IsLive, me, jobs.List(), func(ctx context.Context, idx meta.NodeIdx) ([]rpc.RestoreJob, error) {
+			addr, _, ok := node.RPCAddrOf(idx)
+			if !ok {
+				return nil, rpc.ErrUnavailable
+			}
+			return client.Restores(ctx, addr)
+		})
 		searchRep := searchSvc.Status()
 		rep.Search = &searchRep
 		if webAddr != "" {
@@ -439,7 +451,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return rep
 	}
 	srv, err := rpc.NewServer(rpc.Options{
-		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, MirrorHealth: mirrors.health, Applier: node, Fence: fence{node},
+		NodeID: id, ClusterID: clusterID, Version: version, Disk: disks.lookup, DiskHealth: disks.health, Mirror: mirrors.get, MirrorHealth: mirrors.health, Restores: jobs, Applier: node, Fence: fence{node},
 		Joiner: node, Admin: ops, Auth: auth, Members: node.FSM.Nodes, JoinToken: func() string { return node.FSM.Meta().JoinToken },
 		Status: status, Clk: clk, Logger: log, MaxShard: int64(vol.ChunkSize) + 4096,
 		PutSlots: rpc.Slots(int64(vol.ChunkSize) + 4096), GetSlots: rpc.Slots(int64(vol.ChunkSize) + 4096),
@@ -573,7 +585,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	// background loops: RPC server, prober, address watch, flusher, repairer, maintenance, pins, stats, search, web UI
 	bg, cancelBg := context.WithCancel(context.Background())
-	loops := 10 // mirrors.worker included (docs/16 §3)
+	loops := 11 // mirrors.worker and the restore jobs included (docs/16 §3, §6)
 	if web != nil {
 		loops++
 	}
@@ -604,6 +616,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		done <- struct{}{}
 	}()
 	go func() { pinned.Run(bg); done <- struct{}{} }()
+	go func() { jobs.Run(bg); done <- struct{}{} }()
 	go func() { statsSvc.Run(bg); done <- struct{}{} }()
 	go func() { ops.auditLoop(bg); done <- struct{}{} }()
 	go func() { ops.searchLoop(bg, sset.Interval); done <- struct{}{} }()
@@ -718,9 +731,10 @@ type adminOps struct {
 	clk       clock.Clock
 	log       *slog.Logger
 	dataDir   string
-	seedKey   string     // the device members the seed file holds (refreshSeed)
-	s3Swept   time.Time  // the leader's last S3 sweep (docs/06 §3)
-	mirrors   *mirrorSet // this host's mirrors (docs/16)
+	seedKey   string       // the device members the seed file holds (refreshSeed)
+	s3Swept   time.Time    // the leader's last S3 sweep (docs/06 §3)
+	mirrors   *mirrorSet   // this host's mirrors (docs/16)
+	restores  *restoreJobs // this host's restore jobs (docs/16 §6)
 	mirrorPol config.MirrorPolicy
 	secrets   *secrets.Store // the secrets store (docs/19)
 	audit     *audit.Writer  // this node's audit log (docs/21 §8); nil in tests without one
@@ -1126,7 +1140,7 @@ func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 		return snapshotList(a.node.FSM.Nodes(), a.node.FSM.Snapshots(), op.Mirror), nil
 	case "snapshot_create": // manual snapshots: permanent, never thinned (docs/16 §4)
 		return a.snapshotCreate(ctx, op)
-	case "versions", "versions_revert", "versions_copy", "snapshot_restore": // on the node asked (docs/12 §11)
+	case "versions", "versions_revert", "versions_copy", "snapshot_restore", "restore_cancel": // on the node asked (docs/12 §11); a restore job on the mirror's host (docs/16 §6)
 		return a.restoreOp(ctx, op)
 	case "export", "snapshot": // docs/12 §9: the newest state, exported under the data directory for the CLI to copy out ("snapshot" is the name before docs/16)
 		dir, m, err := a.node.ExportSnapshot(filepath.Join(a.dataDir, "export"))

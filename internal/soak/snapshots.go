@@ -64,17 +64,6 @@ type versionsReply struct {
 	} `json:"offline"`
 }
 
-// restoreReply is the answer of snapshot_restore and versions_copy.
-type restoreReply struct {
-	Path   string `json:"path"`
-	Report struct {
-		Files    int      `json:"files"`
-		Dirs     int      `json:"dirs"`
-		Uploaded int      `json:"uploaded"`
-		Skipped  []string `json:"skipped"`
-	} `json:"report"`
-}
-
 // The phase's report records (report.go draws them): one snapshotEvent per snapshot the
 // phase saw complete, mirrorOffline and mirrorOnline around the unplugged stretch, and
 // one roundTripEvent whose text closes the table.
@@ -491,10 +480,22 @@ func (m *mirrorRun) versionsAndRestore(ctx context.Context, snap1 string, before
 	r.checkAt("I-186", "a revert gives back the snapshot's bytes", err == nil && bytes.Equal(got, before[over]),
 		fmt.Sprintf("%d bytes read, want %d, %v", len(got), len(before[over]), err), over, "", m.writer.Name)
 
+	// a tree restore is a job on the mirror's host (docs/16 §6): started, then followed
 	raw, err = r.Env.SnapshotOp(ctx, m.reader, rpc.AdminOp{Op: "snapshot_restore", Path: join(m.dir, "day2"), Mirror: m.name, Name: snap1, As: "restored-day2"})
-	var rr restoreReply
+	var started rpc.RestoreStarted
 	if err == nil {
-		err = json.Unmarshal(raw, &rr)
+		err = json.Unmarshal(raw, &started)
+	}
+	var job rpc.RestoreJob
+	if err == nil {
+		if !r.poll(ctx, 3*time.Minute, time.Second, func() bool {
+			job = m.restoreJob(ctx, started.Job)
+			return job.Finished()
+		}) {
+			err = fmt.Errorf("restore job %s is %s after 3 minutes", started.Job, job.State)
+		} else if job.State != rpc.RestoreDone {
+			err = fmt.Errorf("restore job %s ended %s: %s", started.Job, job.State, job.Error)
+		}
 	}
 	restored := model{}
 	for p, b := range before {
@@ -507,9 +508,24 @@ func (m *mirrorRun) versionsAndRestore(ctx context.Context, snap1 string, before
 		_ = r.Env.Wait(ctx, r.Profile.FlushIdle)
 		bad, first = r.verifyModel(r.volume(m.writer), restored)
 	}
-	r.check("I-186", "the deleted folder restored from "+snap1+" under a new name reads exact", err == nil && bad == 0 && rr.Report.Files == len(restored),
-		fmt.Sprintf("%d files restored (%d uploaded from the mirror, %d skipped), %d differ %s, %v", rr.Report.Files, rr.Report.Uploaded, len(rr.Report.Skipped), bad, first, err))
-	m.reads["restore"] = fmt.Sprintf("restore-tree recreated the deleted folder as restored-day2 (%d created, %d skipped)", rr.Report.Files, len(rr.Report.Skipped))
+	created := job.FilesDone - job.Existing
+	r.check("I-186", "the deleted folder restored from "+snap1+" under a new name reads exact", err == nil && bad == 0 && created == int64(len(restored)),
+		fmt.Sprintf("%d files restored (%d already there) by job %s on %s, %d differ %s, %v", created, job.Existing, job.ID, job.Host, bad, first, err))
+	m.reads["restore"] = fmt.Sprintf("restore job %s on %s recreated the deleted folder as restored-day2 (%d created, %d already there)", job.ID, job.Host, created, job.Existing)
+}
+
+// restoreJob is job id as the reader's status lists it (status.restores), or nothing yet.
+func (m *mirrorRun) restoreJob(ctx context.Context, id string) rpc.RestoreJob {
+	rep, err := m.r.Env.Status(ctx, m.reader)
+	if err != nil {
+		return rpc.RestoreJob{}
+	}
+	for i := range rep.Restores {
+		if rep.Restores[i].ID == id {
+			return rep.Restores[i]
+		}
+	}
+	return rpc.RestoreJob{}
 }
 
 // offlineAndBack unplugs the mirror: the catalogue keeps listing its snapshots, reads

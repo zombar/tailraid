@@ -83,15 +83,17 @@ type Options struct {
 	Mirror func(idx meta.NodeIdx) (*mirror.Mirror, bool)
 	// MirrorHealth lists this host's mirrors for /health (docs/16 §1); nil lists none.
 	MirrorHealth func() []MirrorHealth
-	Applier      Applier
-	Fence        Fence
-	Joiner       Joiner
-	Admin        Admin
-	Auth         Authorizer
-	Members      func() []meta.Node
-	JoinToken    func() string
-	Status       func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
-	Stats        func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
+	// Restores is this host's restore jobs (docs/16 §6); nil answers their routes 503.
+	Restores  Restores
+	Applier   Applier
+	Fence     Fence
+	Joiner    Joiner
+	Admin     Admin
+	Auth      Authorizer
+	Members   func() []meta.Node
+	JoinToken func() string
+	Status    func(fresh bool) any  // GET /v1/status body (admin report); fresh: built after the request (I-214)
+	Stats     func(since int64) any // GET /v1/stats body: this node's unsealed stats rows newer than since (docs/17 §3, I-199)
 	// SecretKey is the cluster key this node holds itself, checked against the FSM's key
 	// ID (docs/19 §3, I-304): GET /v1/secrets/key answers a member with it, 404 without.
 	SecretKey func() ([]byte, bool)
@@ -227,6 +229,9 @@ func NewServer(o Options) (*Server, error) {
 	mux.HandleFunc("GET /health", s.health)
 	mux.Handle("/v1/disks/", s.clusterCheck(s.member(http.HandlerFunc(s.diskShards))))
 	mux.Handle("GET /v1/mirrors/{idx}/{kind}/{hash}", s.clusterCheck(s.member(http.HandlerFunc(s.mirrorGet))))
+	mux.Handle("GET /v1/restores", s.clusterCheck(s.member(http.HandlerFunc(s.restoreList))))
+	mux.Handle("POST /v1/restores", s.clusterCheck(s.member(http.HandlerFunc(s.restoreStart))))
+	mux.Handle("POST /v1/restores/{id}/cancel", s.clusterCheck(s.member(http.HandlerFunc(s.restoreCancel))))
 	mux.Handle("POST /v1/apply", s.clusterCheck(s.member(http.HandlerFunc(s.apply))))
 	mux.Handle("POST /v1/members", s.clusterCheck(http.HandlerFunc(s.members))) // membership, or the update_addr exception (docs/08 step 6, I-93)
 	mux.Handle("POST /v1/bad-slot", s.clusterCheck(s.member(http.HandlerFunc(s.badSlot))))
@@ -371,8 +376,76 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	if s.o.MirrorHealth != nil {
 		h.Mirrors = s.o.MirrorHealth()
 	}
+	if s.o.Restores != nil {
+		h.Restores = len(s.o.Restores.List())
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h)
+}
+
+// Restores is a host's restore jobs (docs/16 §6): its list, a start the node a user asked
+// forwards once it checked the user's role, and a cancel the host checks itself.
+type Restores interface {
+	List() []RestoreJob
+	Start(ctx context.Context, req RestoreStart) (RestoreStarted, error)
+	Cancel(ctx context.Context, id string, actor meta.UserIdx) error
+}
+
+func (s *Server) restoreList(w http.ResponseWriter, _ *http.Request) {
+	if s.o.Restores == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no restore jobs on this node")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.o.Restores.List())
+}
+
+func (s *Server) restoreStart(w http.ResponseWriter, r *http.Request) {
+	var req RestoreStart
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad restore")
+		return
+	}
+	if s.o.Restores == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no restore jobs on this node")
+		return
+	}
+	started, err := s.o.Restores.Start(r.Context(), req)
+	if err != nil {
+		writeRestoreErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(started)
+}
+
+func (s *Server) restoreCancel(w http.ResponseWriter, r *http.Request) {
+	var req RestoreCancel
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad cancel")
+		return
+	}
+	if s.o.Restores == nil {
+		writeErr(w, http.StatusServiceUnavailable, "no restore jobs on this node")
+		return
+	}
+	if err := s.o.Restores.Cancel(r.Context(), r.PathValue("id"), req.Actor); err != nil {
+		writeRestoreErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeRestoreErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, meta.ErrAccess):
+		writeErr(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, ErrNoRestore), errors.Is(err, meta.ErrNotExist):
+		writeErr(w, http.StatusNotFound, err.Error()) // a JSON body: a bare 404 is a host without the routes
+	default:
+		writeErr(w, http.StatusBadRequest, err.Error())
+	}
 }
 
 // diskShards serves /v1/disks/{id}/shards/{key}, the shard endpoint of a disk: the only

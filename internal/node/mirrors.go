@@ -39,8 +39,9 @@ type mirrorSet struct {
 	propose   func(ctx context.Context, cmd meta.Command) error
 	read      func(ctx context.Context, h meta.Hash) ([]byte, error)
 	self      func() (meta.NodeIdx, bool)
-	selfID    string       // this node's ID, for the FSM hook (it may not read the FSM)
-	minCodec  func() uint8 // the oldest codec a live member reads; nil: every one is current
+	selfID    string                      // this node's ID, for the FSM hook (it may not read the FSM)
+	minCodec  func() uint8                // the oldest codec a live member reads; nil: every one is current
+	held      func() map[meta.SnapID]bool // the snapshots this host's unfinished restore jobs read (docs/16 §6); nil: none
 	clk       clock.Clock
 	log       *slog.Logger
 
@@ -341,7 +342,7 @@ func (s *mirrorSet) tick(ctx context.Context) {
 			}
 		}
 		full := d.Total > 0 && d.Free < mirrorReserve(d.Total)
-		for _, id := range drop(rows, now, s.pol, full) {
+		for _, id := range s.unheld(drop(rows, now, s.pol, full)) {
 			s.do(ctx, "thin", meta.Command{Op: meta.OpSnapshotDelete, SnapshotDelete: &meta.SnapshotDelete{ID: id, Now: now.UnixNano()}})
 		}
 		if !syncing && !full && due(rows, now, s.pol.Every) {
@@ -437,6 +438,16 @@ func due(rows []meta.Snapshot, now time.Time, every time.Duration) bool {
 		}
 	}
 	return newest == 0 || now.Sub(time.Unix(0, newest)) >= every
+}
+
+// unheld is ids without the snapshots an unfinished restore job reads: thinning and the
+// free-space reserve leave them until the job ends (docs/16 §4, I-364).
+func (s *mirrorSet) unheld(ids []meta.SnapID) []meta.SnapID {
+	if s.held == nil {
+		return ids
+	}
+	held := s.held()
+	return slices.DeleteFunc(ids, func(id meta.SnapID) bool { return held[id] })
 }
 
 // drop picks the automatic snapshots of one mirror to delete (docs/16 §4): every one

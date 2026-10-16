@@ -59,7 +59,7 @@ func fabricUsers(t *testing.T, f *testharness.Fabric) (kim, lee meta.UserIdx) {
 // view, which the FSM admits only under /.tailraid, so an admin's `snapshot restore`
 // and `versions --copy` failed with "permission denied" (2026-10-15).
 //
-// Invariant: I-348
+// Invariant: I-348, I-367
 func TestAdminOps_RestoreUnderUsers(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()
@@ -78,10 +78,15 @@ func TestAdminOps_RestoreUnderUsers(t *testing.T) {
 		t.Fatal(err)
 	}
 	kim, lee := fabricUsers(t, f)
-	a := &adminOps{fs: fs}
+	jobs := runJobs(t, f, fs, src)
+	a := &adminOps{fs: fs, restores: jobs}
 	ctx := context.Background()
-	if _, err := a.restoreOp(ctx, rpc.AdminOp{Op: "snapshot_restore", Actor: lee, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt", To: "/old"}); err == nil {
-		t.Fatal("a plain user restored into a folder they hold no role on")
+	reply, err := a.restoreOp(ctx, rpc.AdminOp{Op: "snapshot_restore", Actor: lee, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt", To: "/old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := awaitJob(t, jobs, reply, rpc.RestoreFailed); j.Error == "" { // the job runs as lee, who holds no role there
+		t.Fatal("a plain user's refused restore says nothing")
 	}
 	if _, err := f.FSM.Resolve([]string{"old", "report.txt"}); err == nil {
 		t.Fatal("the refused restore left a file")
@@ -91,8 +96,12 @@ func TestAdminOps_RestoreUnderUsers(t *testing.T) {
 		{Op: "versions_copy", Actor: kim, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt", As: "copy.txt"},
 		{Op: "versions_revert", Actor: kim, Mirror: "pike/m1", Name: "s1", Path: "/docs/report.txt"},
 	} {
-		if _, err := a.restoreOp(ctx, op); err != nil {
+		reply, err := a.restoreOp(ctx, op)
+		if err != nil {
 			t.Fatalf("%s by an admin: %v", op.Op, err)
+		}
+		if op.Op == "snapshot_restore" {
+			awaitJob(t, jobs, reply, rpc.RestoreDone)
 		}
 	}
 	for _, p := range []string{"/old/report.txt", "/docs/copy.txt", "/docs/report.txt"} {
@@ -102,11 +111,11 @@ func TestAdminOps_RestoreUnderUsers(t *testing.T) {
 	}
 }
 
-// The restore and versions ops run on the node asked, through its vfs: snapshot restore
-// to the same path (refused when it exists), under --to, as --as; versions lists, reverts
+// The restore and versions ops run on the node asked, through its vfs, a snapshot restore
+// as a job on the mirror's host: to the same path (refused when it exists), under --to, as --as; versions lists, reverts
 // and copies; a ref names the mirror by its row name or its directory (docs/12 §11).
 //
-// Invariant: I-186, I-188
+// Invariant: I-186, I-188, I-363
 func TestAdminOps_RestoreAndVersions(t *testing.T) {
 	f := testharness.NewFabric(t, 3, 2, 1)
 	fs := f.FS()
@@ -124,9 +133,16 @@ func TestAdminOps_RestoreAndVersions(t *testing.T) {
 	if err := f.Flusher().FlushAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	a := &adminOps{fs: fs}
+	jobs := runJobs(t, f, fs, src)
+	a := &adminOps{fs: fs, restores: jobs}
 	ctx := context.Background()
-	do := func(op rpc.AdminOp) (any, error) { return a.restoreOp(ctx, op) }
+	do := func(op rpc.AdminOp) (any, error) {
+		reply, err := a.restoreOp(ctx, op)
+		if err == nil && op.Op == "snapshot_restore" { // a job on the mirror's host, this one (docs/16 §6)
+			awaitJob(t, jobs, reply, rpc.RestoreDone)
+		}
+		return reply, err
+	}
 
 	if _, err := do(rpc.AdminOp{Op: "snapshot_restore", Mirror: "pike/m1", Name: "s1", Path: "docs/report.txt"}); !errors.Is(err, os.ErrExist) {
 		t.Fatalf("restore over the live file: %v", err)

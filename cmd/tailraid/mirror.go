@@ -351,12 +351,24 @@ func snapshotCmd() *cobra.Command {
 	}
 	create.Flags().StringVar(&mirrorName, "mirror", "", "one mirror by name")
 	addNodeFlags(create)
-	var to, as string
+	var to, as, cancelJob string
 	restore := &cobra.Command{
-		Use:   "restore <mirror>/<name> <path>",
-		Short: "Copy a file or folder of a snapshot into the live volume (an existing file is skipped, never overwritten)",
-		Args:  cobra.ExactArgs(2),
+		Use:   "restore <mirror>/<name> <path> | --cancel <job>",
+		Short: "Start a job on the mirror's host that copies a file or folder of a snapshot into the live volume (an existing file is skipped, never overwritten)",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cancelJob != "" {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(2)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cancelJob != "" {
+				if _, err := localCall(cmd, rpc.AdminOp{Op: "restore_cancel", Job: cancelJob}); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "restore %s cancelled; what it restored stays\n", cancelJob)
+				return nil
+			}
 			m, name, err := splitSnapshotRef(args[0])
 			if err != nil {
 				return err
@@ -365,11 +377,18 @@ func snapshotCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printRestore(cmd.OutOrStdout(), raw)
+			var started rpc.RestoreStarted
+			if err := json.Unmarshal(raw, &started); err != nil {
+				return err
+			}
+			// the job goes on whatever happens to this terminal (docs/12 §11)
+			fmt.Fprintf(cmd.OutOrStdout(), "restore %s started on %s: %s from %s · %s\n`tailraid status` follows it; `tailraid snapshot restore --cancel %s` stops it\n", started.Job, started.Host, started.Path, m, name, started.Job)
+			return nil
 		},
 	}
 	restore.Flags().StringVar(&to, "to", "", "the folder to restore into (default: where it was)")
 	restore.Flags().StringVar(&as, "as", "", "the name to restore it as")
+	restore.Flags().StringVar(&cancelJob, "cancel", "", "stop restore job <job> (yours, or any as an admin)")
 	addNodeFlags(restore)
 	c.AddCommand(ls, create, restore)
 	return c

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -574,6 +575,59 @@ func (c *Client) Health(ctx context.Context, addr string) (Health, error) {
 		return Health{}, fmt.Errorf("%w: bad health: %v", ErrBadRequest, err) //nolint:errorlint // transport
 	}
 	return h, nil
+}
+
+// Restores lists the restore jobs of the host at addr (GET /v1/restores, docs/16 §6).
+func (c *Client) Restores(ctx context.Context, addr string) ([]RestoreJob, error) {
+	var jobs []RestoreJob
+	err := c.restoreCall(ctx, http.MethodGet, addr, "/v1/restores", nil, &jobs, http.StatusOK)
+	return jobs, err
+}
+
+// StartRestore asks the mirror's host at addr to record a restore job; it answers once the
+// job is recorded, not when it ends.
+func (c *Client) StartRestore(ctx context.Context, addr string, req RestoreStart) (RestoreStarted, error) {
+	var out RestoreStarted
+	err := c.restoreCall(ctx, http.MethodPost, addr, "/v1/restores", req, &out, http.StatusAccepted)
+	return out, err
+}
+
+// CancelRestore asks the host at addr to cancel job id for actor.
+func (c *Client) CancelRestore(ctx context.Context, addr, id string, actor meta.UserIdx) error {
+	return c.restoreCall(ctx, http.MethodPost, addr, "/v1/restores/"+url.PathEscape(id)+"/cancel", RestoreCancel{Actor: actor}, nil, http.StatusNoContent)
+}
+
+// restoreCall is a restore route's request: a bare 404 is a host whose version has none of
+// them (ErrNoRestoreJobs), a 404 with a body a job it does not list (ErrNoRestore).
+func (c *Client) restoreCall(ctx context.Context, method, addr, path string, in, out any, want int) error {
+	var body []byte
+	if in != nil {
+		body, _ = json.Marshal(in)
+	}
+	ctx, cancel := bound(ctx, int64(len(body)))
+	defer cancel()
+	resp, err := c.do(ctx, method, addr, path, body, map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		var eb ErrorBody
+		if json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&eb) != nil || eb.Error == "" {
+			return ErrNoRestoreJobs
+		}
+		return fmt.Errorf("%w: %s", ErrNoRestore, eb.Error)
+	}
+	if resp.StatusCode != want {
+		return errFromStatus(resp)
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out); err != nil {
+		return fmt.Errorf("%w: bad %s reply: %v", ErrBadRequest, path, err) //nolint:errorlint // transport
+	}
+	return nil
 }
 
 // ReportBadSlot tells the leader a slot was unreadable.

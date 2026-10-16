@@ -223,14 +223,16 @@ func TestCLI_MirrorAdd_MarkRehomeAdopt(t *testing.T) {
 	if out := n.must("snapshot", "restore", n.mirrorName()+"/keep", "/doc", "--as", "doc.back"); !strings.Contains(out, "doc.back") {
 		t.Fatalf("restore from an adopted snapshot: %s", out)
 	}
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/files/doc.back", n.cfg.Listen.Web))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if b, _ := io.ReadAll(resp.Body); string(b) != mirrorDoc {
-		t.Fatalf("restored doc.back: %q", b)
-	}
+	// a restore is a job on the mirror's host: the file lands once it ran (docs/16 §6)
+	testharness.Eventually(t, func() bool {
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/files/doc.back", n.cfg.Listen.Web)) //nolint:noctx // a test client
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b) == mirrorDoc
+	}, "the restored doc.back never held the snapshot's bytes")
 }
 
 // `mirror remove` forgets the mirror and its catalogue rows and leaves the disk as it

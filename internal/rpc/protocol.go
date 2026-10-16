@@ -48,6 +48,13 @@ var (
 	// ErrApplyFailed is a 500 from POST /v1/apply: the leader handed the command to Raft and
 	// then failed (leadership lost, timeout); the outcome is unknown (docs/02 §forwarding).
 	ErrApplyFailed = errors.New("rpc: apply failed on the leader after dispatch")
+	// ErrNoRestore is a restore job the host does not list, or one that ended.
+	ErrNoRestore = errors.New("rpc: no such restore job")
+	// ErrNotHost is a restore started on a node that does not host the mirror.
+	ErrNotHost = errors.New("rpc: this node does not host the mirror")
+	// ErrNoRestoreJobs is a host whose version has no restore jobs (it answers their
+	// routes with a bare 404, docs/16 §6).
+	ErrNoRestoreJobs = errors.New("rpc: the mirror's host runs a version without restore jobs; update it")
 )
 
 // Health is the unauthenticated GET /health body.
@@ -59,10 +66,81 @@ type Health struct {
 	Codec     uint8          `json:"codec,omitempty"` // meta.CodecVersion of this binary (docs/12 §6)
 	Ready     bool           `json:"ready"`           // a leader is known and the FSM has every committed entry (I-125)
 	Leader    bool           `json:"leader"`
-	Dev       bool           `json:"dev,omitempty"`     // /dev/* endpoints enabled on this node
-	Web       uint16         `json:"web,omitempty"`     // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
-	Disks     []DiskHealth   `json:"disks,omitempty"`   // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
-	Mirrors   []MirrorHealth `json:"mirrors,omitempty"` // this host's mirrors (docs/16 §1): online on every node only while listed online here
+	Dev       bool           `json:"dev,omitempty"`      // /dev/* endpoints enabled on this node
+	Web       uint16         `json:"web,omitempty"`      // the browser UI's port (docs/13 §1), 0 when off: for the dashboard's member links
+	Disks     []DiskHealth   `json:"disks,omitempty"`    // this host's disks (docs/14 §4): the whole storage picture; a device stores nothing
+	Mirrors   []MirrorHealth `json:"mirrors,omitempty"`  // this host's mirrors (docs/16 §1): online on every node only while listed online here
+	Restores  int            `json:"restores,omitempty"` // how many restore jobs this host lists (docs/16 §6): a count, since /health is open to the tailnet
+}
+
+// RestoreJob is one restore job of a mirror's host (docs/16 §6), as GET /v1/restores and
+// status.restores list it. Times are Unix nanoseconds; Rate is bytes a second over the
+// last minute.
+type RestoreJob struct {
+	ID         string       `json:"id"` // "<host idx>-<n>", unique in the cluster
+	Host       string       `json:"host"`
+	Mirror     string       `json:"mirror"` // the mirror row's name (pike/m1)
+	MirrorIdx  meta.NodeIdx `json:"mirror_idx"`
+	Snapshot   string       `json:"snapshot"`
+	SnapID     meta.SnapID  `json:"snap_id"`
+	Src        string       `json:"src"` // the path inside the snapshot
+	Dst        string       `json:"dst"`
+	Actor      meta.UserIdx `json:"actor"`
+	User       string       `json:"user,omitempty"`
+	State      string       `json:"state"`
+	Error      string       `json:"error,omitempty"`
+	Counted    bool         `json:"counted,omitempty"` // the totals are known
+	FilesTotal int64        `json:"files_total"`
+	BytesTotal int64        `json:"bytes_total"`
+	FilesDone  int64        `json:"files_done"`
+	BytesDone  int64        `json:"bytes_done"`
+	Existing   int64        `json:"existing"`
+	Rate       int64        `json:"rate"`
+	Tries      int          `json:"tries,omitempty"`   // failed attempts since the last progress
+	Resumed    int          `json:"resumed,omitempty"` // starts after a restart of the host
+	Started    int64        `json:"started"`
+	Updated    int64        `json:"updated"`
+	Ended      int64        `json:"ended,omitempty"`
+	NextTry    int64        `json:"next_try,omitempty"`
+}
+
+// The states of a restore job (docs/16 §6).
+const (
+	RestoreCounting  = "counting"
+	RestoreQueued    = "queued"
+	RestoreRunning   = "running"
+	RestoreWaiting   = "waiting"
+	RestoreRetrying  = "retrying"
+	RestoreDone      = "done"
+	RestoreFailed    = "failed"
+	RestoreCancelled = "cancelled"
+)
+
+// Finished reports a job that runs no more.
+func (j *RestoreJob) Finished() bool {
+	return j.State == RestoreDone || j.State == RestoreFailed || j.State == RestoreCancelled
+}
+
+// RestoreStart is POST /v1/restores: a tree restore of path in snapshot of mirror into
+// dst, for actor, sent to the mirror's host by the node a user asked (docs/16 §6).
+type RestoreStart struct {
+	Mirror   meta.NodeIdx `json:"mirror"`
+	Snapshot meta.SnapID  `json:"snapshot"`
+	Path     string       `json:"path"`
+	Dst      string       `json:"dst"`
+	Actor    meta.UserIdx `json:"actor"`
+}
+
+// RestoreStarted is the host's answer once the job is recorded.
+type RestoreStarted struct {
+	Job  string `json:"job"`
+	Host string `json:"host"`
+	Path string `json:"path"`
+}
+
+// RestoreCancel is POST /v1/restores/{id}/cancel: the user who asks.
+type RestoreCancel struct {
+	Actor meta.UserIdx `json:"actor"`
 }
 
 // MirrorHealth is one mirror of the host in /health (docs/16 §1): ID is the mirror's
@@ -161,8 +239,9 @@ type ErrorBody struct {
 
 // AdminOp is POST /v1/admin: leader-side maintenance actions.
 type AdminOp struct {
-	Op     string `json:"op"`               // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | export (was snapshot) | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal | rebalance | snapshot_ls | snapshot_create | snapshot_restore | versions | versions_revert | versions_copy (docs/16: Name, Mirror, Path, To, As; no op removes a snapshot, I-183)
+	Op     string `json:"op"`               // repair_now | gc_now | set_policy | check | fsck | chunk | rotate_token | open_disk | export (was snapshot) | trash_ls | trash_restore | trash_purge | cache_pin | cache_unpin | cache_ls | stats_seal | rebalance | snapshot_ls | snapshot_create | snapshot_restore | restore_cancel | versions | versions_revert | versions_copy (docs/16: Name, Mirror, Path, To, As; no op removes a snapshot, I-183)
 	Mirror string `json:"mirror,omitempty"` // snapshot_create, snapshot_ls: one mirror by name ("" every one)
+	Job    string `json:"job,omitempty"`    // restore_cancel: the restore job (docs/16 §6)
 	Name   string `json:"name,omitempty"`   // snapshot_create: the snapshot's name ("" the UTC minute)
 	K      uint8  `json:"k,omitempty"`
 	M      uint8  `json:"m,omitempty"`
@@ -245,7 +324,7 @@ var adminNeeds = map[string]Need{
 	"user_whoami": NeedUser, "user_key_invite": NeedUser, "user_key_rm": NeedUser, "user_bind": NeedUser, "user_unbind": NeedUser,
 	"web_login": NeedUser, "web_logout": NeedUser, "audit_ls": NeedUser,
 	"trash_restore": NeedWriteOn,
-	"trash_purge":   NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn,
+	"trash_purge":   NeedAdminOn, "cache_pin": NeedAdminOn, "cache_unpin": NeedAdminOn, "snapshot_restore": NeedAdminOn, "restore_cancel": NeedUser,
 	"versions_revert": NeedAdminOn, "versions_copy": NeedAdminOn, "grant": NeedAdminOn, "revoke": NeedAdminOn,
 	"repair_now": NeedAdmins, "gc_now": NeedAdmins, "index_now": NeedAdmins, "rebalance": NeedAdmins, "set_policy": NeedAdmins,
 	"rotate_token": NeedAdmins, "open_disk": NeedAdmins, "open_mirror": NeedAdmins, "snapshot_create": NeedAdmins,
@@ -300,7 +379,7 @@ func (op AdminOp) IsPass() bool {
 	switch op.Op {
 	case "repair_now", "gc_now", "index_now":
 		return true
-	case "snapshot_restore", "versions_revert", "versions_copy": // a tree or a file read back from a mirror
+	case "versions_revert", "versions_copy": // a file read back from a mirror; a tree restore is a job (docs/16 §6)
 		return true
 	case "check":
 		return op.Scrub
