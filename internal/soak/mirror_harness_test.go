@@ -123,13 +123,29 @@ func (e *harnessEnv) SnapshotOp(ctx context.Context, n soak.NodeRef, op rpc.Admi
 		case "versions_revert":
 			n, rerr := fs.RevertFile(ctx, src, p)
 			out, err = map[string]any{"path": p, "uploaded": n}, rerr
-		case "snapshot_restore":
+		case "snapshot_restore": // a job, as the mirror's host runs it (docs/16 §6); here run to the end before the answer
 			dst := p
 			if op.As != "" {
 				dst = path.Join(path.Dir(p), op.As)
 			}
-			rep, rerr := fs.RestoreSnapshot(ctx, src, dst)
-			out, err = map[string]any{"path": dst, "report": rep}, rerr
+			files, bytes, rerr := fs.RestoreTotals(ctx, src, dst)
+			var rep vfs.RestoreReport
+			if rerr == nil {
+				rep, rerr = fs.RestoreSnapshot(ctx, src, dst)
+			}
+			if rerr == nil {
+				nd := e.node(n)
+				e.mu.Lock()
+				e.restoreN++
+				job := rpc.RestoreJob{
+					ID: fmt.Sprintf("%d-%d", nd.Idx(), e.restoreN), Host: n.Name, Mirror: op.Mirror, Snapshot: op.Name, Src: p, Dst: dst, Actor: actor,
+					State: rpc.RestoreDone, Counted: true, FilesTotal: files, BytesTotal: bytes, FilesDone: files, BytesDone: bytes, Existing: int64(len(rep.Skipped)),
+				}
+				e.restores = append(e.restores, job)
+				e.mu.Unlock()
+				out = rpc.RestoreStarted{Job: job.ID, Host: job.Host, Path: dst}
+			}
+			err = rerr
 		default:
 			return nil, fmt.Errorf("harness: no snapshot op %q", op.Op)
 		}

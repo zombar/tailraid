@@ -195,6 +195,11 @@ func printStatus(w io.Writer, r admin.Report) {
 	if v.Snapshots > 0 {
 		fmt.Fprintf(w, "        %d snapshots on the mirrors\n", v.Snapshots)
 	}
+	for i := range r.Restores { // every unfinished restore job of the cluster (docs/12 §11)
+		if j := &r.Restores[i]; !j.Finished() {
+			fmt.Fprintln(w, restoreLine(j))
+		}
+	}
 	if s := r.Search; s != nil && (s.Docs > 0 || s.Pending > 0 || s.Index != "") {
 		line := fmt.Sprintf("index   %d files, %d segments, %s, catalogue %d", s.Docs, s.Segments, bytesStr(uint64(max(s.Bytes, 0))), s.Catalog)
 		if s.Pending > 0 {
@@ -966,4 +971,34 @@ func openDiskWhenUp(cmd *cobra.Command, c *rpc.Client, addr string, op rpc.Admin
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// restoreLine is a restore job's status line: where it lands and runs, its state and how
+// far it got (docs/12 §11).
+func restoreLine(j *rpc.RestoreJob) string {
+	line := fmt.Sprintf("restore %s  %s on %s · %s", j.ID, j.Dst, j.Host, j.State)
+	if j.Counted {
+		line += fmt.Sprintf(" · %s of %s", bytesStr(uint64(max(j.BytesDone, 0))), bytesStr(uint64(max(j.BytesTotal, 0))))
+	}
+	if j.State == rpc.RestoreRunning && j.Rate > 0 {
+		line += fmt.Sprintf(" · %s/s", bytesStr(uint64(j.Rate)))
+		if left := j.BytesTotal - j.BytesDone; left > 0 {
+			line += " · " + leftStr(time.Duration(left/j.Rate)*time.Second) + " left"
+		}
+	}
+	if j.Error != "" {
+		line += " · " + j.Error
+	}
+	return line
+}
+
+// leftStr is a time left as docs/12 prints it: "4 h 16 m", "12 m", "40 s".
+func leftStr(d time.Duration) string {
+	switch h, m := int(d.Hours()), int(d.Minutes())%60; {
+	case h > 0:
+		return fmt.Sprintf("%d h %d m", h, m)
+	case m > 0:
+		return fmt.Sprintf("%d m", m)
+	}
+	return fmt.Sprintf("%d s", int(d.Seconds()))
 }

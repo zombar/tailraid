@@ -69,6 +69,10 @@ type harnessEnv struct {
 	once sync.Once
 	// the stats sampler of docs/17 on every node, as serve runs it, on the fake clock
 	stats map[int]*harnessStats
+	// the restore jobs phase 19 started (docs/16 §6): the harness runs one to its end
+	// before it answers, as its mirror is this process's
+	restores []rpc.RestoreJob
+	restoreN int
 	// the index of docs/18 on every node, rebuilt when a restart replaced its handles
 	search map[int]*harnessSearch
 	// phase 19's mirror once AddMirror registered it (mirror_harness_test.go)
@@ -496,7 +500,8 @@ func (e *harnessEnv) Status(_ context.Context, n soak.NodeRef) (admin.Report, er
 		rep.Cache = &c
 	}
 	rep.Mirrors = e.mirrorReports(nd.I)
-	for i := range rep.Nodes { // each member's page, for the hand-off of docs/21 §6
+	rep.Restores = slices.Clone(e.restores) // every node lists every host's jobs (I-365)
+	for i := range rep.Nodes {              // each member's page, for the hand-off of docs/21 §6
 		if srv := e.web[int(rep.Nodes[i].Idx)-1]; srv != nil && rep.Nodes[i].Kind == "device" {
 			rep.Nodes[i].Addr, rep.Nodes[i].Web = webHostPort(srv.URL)
 		}

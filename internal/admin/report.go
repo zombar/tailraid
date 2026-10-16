@@ -13,6 +13,7 @@ import (
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/pins"
 	"github.com/zombar/tailraid/internal/repair"
+	"github.com/zombar/tailraid/internal/rpc"
 	"github.com/zombar/tailraid/internal/search"
 	"github.com/zombar/tailraid/internal/vfs"
 )
@@ -245,15 +246,16 @@ type Report struct {
 	Process     *ProcessReport `json:"process,omitempty"` // this node's runtime (docs/12 §8)
 	// IncompatibleEntries counts log entries this binary could not decode: a newer release
 	// is writing to the cluster and this node must be updated (docs/12 §6, I-105).
-	IncompatibleEntries uint64         `json:"incompatible_entries,omitempty"`
-	Machine             *MachineReport `json:"machine,omitempty"` // this node's OS vitals (docs/12 §8)
-	Cache               *pins.Report   `json:"cache,omitempty"`   // this node's chunk cache and pins (docs/01 §Pins, I-162)
-	WebURL              string         `json:"web_url,omitempty"` // this node's browser UI (docs/13), "" when off
-	Search              *search.Status `json:"search,omitempty"`  // this node's index (docs/12 §8, docs/18 §5)
-	Mirrors             []MirrorReport `json:"mirrors,omitempty"` // this host's mirrors (docs/16, docs/12 §11)
-	Users               *UsersReport   `json:"users,omitempty"`   // users, sessions and this node's refusals (docs/21 §8, I-358)
-	GeneratedAt         time.Time      `json:"generated_at"`
-	WalkMS              int64          `json:"walk_ms"` // how long this report's chunk walk took (docs/12 §8, I-205)
+	IncompatibleEntries uint64           `json:"incompatible_entries,omitempty"`
+	Machine             *MachineReport   `json:"machine,omitempty"`  // this node's OS vitals (docs/12 §8)
+	Cache               *pins.Report     `json:"cache,omitempty"`    // this node's chunk cache and pins (docs/01 §Pins, I-162)
+	WebURL              string           `json:"web_url,omitempty"`  // this node's browser UI (docs/13), "" when off
+	Search              *search.Status   `json:"search,omitempty"`   // this node's index (docs/12 §8, docs/18 §5)
+	Mirrors             []MirrorReport   `json:"mirrors,omitempty"`  // this host's mirrors (docs/16, docs/12 §11)
+	Restores            []rpc.RestoreJob `json:"restores,omitempty"` // every restore job of every live host (docs/16 §6, I-365)
+	Users               *UsersReport     `json:"users,omitempty"`    // users, sessions and this node's refusals (docs/21 §8, I-358)
+	GeneratedAt         time.Time        `json:"generated_at"`
+	WalkMS              int64            `json:"walk_ms"` // how long this report's chunk walk took (docs/12 §8, I-205)
 }
 
 // RepairStatus is the leader's last scan (nil on followers).

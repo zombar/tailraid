@@ -66,7 +66,7 @@ func TestAdminOp_IsPass_Table(t *testing.T) {
 		{AdminOp{Op: "check"}, false},
 		{AdminOp{Op: "trash_purge", All: true}, true},
 		{AdminOp{Op: "trash_purge", Ino: 7}, false},
-		{AdminOp{Op: "snapshot_restore", Mirror: "pike/m1", Name: "s", Path: "/"}, true},
+		{AdminOp{Op: "snapshot_restore", Mirror: "pike/m1", Name: "s", Path: "/"}, false}, // a job on the mirror's host, answered once recorded (docs/16 §6)
 		{AdminOp{Op: "versions_revert", Mirror: "pike/m1", Name: "s", Path: "/f"}, true},
 		{AdminOp{Op: "versions_copy", Mirror: "pike/m1", Name: "s", Path: "/f"}, true},
 		{AdminOp{Op: "versions", Path: "/f"}, false},
