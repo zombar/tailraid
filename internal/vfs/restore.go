@@ -11,6 +11,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/zombar/tailraid/internal/meta"
@@ -23,39 +25,81 @@ import (
 // (L-217); any other is read through fetch, checked against its hash and filled or
 // uploaded as a flush would (L-216). It returns how many chunks it uploaded or filled.
 func (f *Flusher) CommitChunks(ctx context.Context, actor meta.UserIdx, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error)) (uploaded int, err error) {
+	return f.commitChunks(ctx, actor, ino, size, hashes, fetch, nil, nil)
+}
+
+// commitChunks is CommitChunks with its chunks resolved at once, each holding one of
+// slots (nil: one at a time), and done told the bytes each chunk slot covers the first
+// time it is decided, a hole at once (I-365, I-366).
+func (f *Flusher) commitChunks(ctx context.Context, actor meta.UserIdx, ino meta.Ino, size uint64, hashes []meta.Hash, fetch func(ctx context.Context, h meta.Hash) ([]byte, error), slots chan struct{}, done func(int64)) (uploaded int, err error) {
+	spans := chunkSpans(size, len(hashes), uint64(f.st.Volume().ChunkSize))
+	counted := make([]bool, len(hashes)) // per index: each written by its own goroutine
+	report := func(i int) {
+		if done != nil && !counted[i] {
+			counted[i] = true
+			done(spans[i])
+		}
+	}
+	workers := 1
+	if slots != nil {
+		workers = cap(slots)
+	}
 	force, noSums := false, false
 	for range 16 {
 		base, ok := f.st.GetInode(ino)
 		if !ok || base.Type != meta.TFile {
 			return 0, meta.ErrNotExist
 		}
-		works := make([]*chunkWork, 0, len(hashes))
-		uploaded = 0
-		for i, h := range hashes {
+		slot := make([]*chunkWork, len(hashes))
+		var up atomic.Int64
+		perr := parallel(ctx, workers, len(hashes), func(i int) error {
+			h := hashes[i]
 			if h == meta.HashZero {
-				continue
+				report(i)
+				return nil
+			}
+			if slots != nil {
+				select {
+				case slots <- struct{}{}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				defer func() { <-slots }()
 			}
 			w := &chunkWork{idx: uint64(i), hash: h}
-			works = append(works, w)
+			slot[i] = w
 			if c, ok := f.st.GetChunk(h); ok && !force {
 				if _, present := f.presentSlots(ctx, c); present >= int(c.K) {
 					w.k, w.m, w.place, w.size = c.K, c.M, c.Placement, c.Size
-					continue
+					report(i)
+					return nil
 				}
 			}
 			data, err := fetch(ctx, h)
 			if err != nil {
-				return 0, fmt.Errorf("chunk %x: %w", h[:4], err)
+				return fmt.Errorf("chunk %x: %w", h[:4], err)
 			}
 			if sha256.Sum256(data) != h {
-				return 0, fmt.Errorf("chunk %x: %w", h[:4], mirror.ErrCorrupt)
+				return fmt.Errorf("chunk %x: %w", h[:4], mirror.ErrCorrupt)
 			}
 			w.size = uint32(len(data)) //nolint:gosec // a chunk is at most the chunk size
 			if err := f.resolve(ctx, w, data, force); err != nil {
-				return 0, err
+				return err
 			}
-			uploaded++
+			up.Add(1)
+			report(i)
+			return nil
+		})
+		if perr != nil {
+			return 0, perr
 		}
+		works := make([]*chunkWork, 0, len(hashes))
+		for _, w := range slot {
+			if w != nil {
+				works = append(works, w)
+			}
+		}
+		uploaded = int(up.Load())
 		// a truncate to zero, then the chunks: buildCommit's truncate case sizes it to size
 		cmd := f.buildCommit(&FlushPlan{Ino: ino, Size: size, SizeSet: true}, base, works, false, noSums)
 		pctx, cancel := context.WithTimeout(ctx, f.cfg.ProposeTimeout)
@@ -81,6 +125,26 @@ func (f *Flusher) CommitChunks(ctx context.Context, actor meta.UserIdx, ino meta
 	return 0, errRebaseLimit
 }
 
+// chunkSpans is how many bytes each of n chunk slots of a size-byte file covers: cs each
+// but the last, or, where the file's chunk list does not fit cs (a snapshot taken at
+// another chunk size), size spread over the n slots.
+func chunkSpans(size uint64, n int, cs uint64) []int64 {
+	if n == 0 {
+		return nil
+	}
+	if cs == 0 || uint64(n-1)*cs >= size || uint64(n)*cs < size { //nolint:gosec // n is a chunk count
+		cs = (size + uint64(n) - 1) / uint64(n) //nolint:gosec // n is a chunk count
+	}
+	out := make([]int64, n)
+	left := size
+	for i := range out {
+		s := min(cs, left)
+		out[i] = int64(s) //nolint:gosec // at most the chunk size
+		left -= s
+	}
+	return out
+}
+
 // snapEntry resolves src, a path under /.snapshots inside a snapshot, to its node, with
 // the actor's right to read it checked (I-348).
 func (f *FS) snapEntry(ctx context.Context, src string) (snapNode, error) {
@@ -98,17 +162,18 @@ func (f *FS) snapEntry(ctx context.Context, src string) (snapNode, error) {
 	return n, nil
 }
 
-// writeEntry makes the live file at ino hold entry e's bytes from mirror m.
-func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mirror.Entry) (int, error) {
+// writeEntry makes the live file at ino hold entry e's bytes from mirror m, its chunks
+// holding slots and told to done as commitChunks does (nil, nil: one at a time).
+func (f *FS) writeEntry(ctx context.Context, ino meta.Ino, m meta.NodeIdx, e *mirror.Entry, slots chan struct{}, done func(int64)) (int, error) {
 	if f.fl == nil {
 		return 0, errors.New("restore: no flusher")
 	}
 	if err := f.fl.FlushInode(ctx, ino); err != nil { // the file's dirty bytes land first (I-186)
 		return 0, err
 	}
-	return f.fl.CommitChunks(ctx, f.actor, ino, e.Size, e.Chunks, func(ctx context.Context, h meta.Hash) ([]byte, error) {
+	return f.fl.commitChunks(ctx, f.actor, ino, e.Size, e.Chunks, func(ctx context.Context, h meta.Hash) ([]byte, error) {
 		return f.snapChunk(ctx, m, h)
-	})
+	}, slots, done)
 }
 
 // RevertFile makes the live file at dst hold the bytes of the snapshot file src (a
@@ -136,7 +201,7 @@ func (f *FS) RevertFile(ctx context.Context, src, dst string) (uploaded int, err
 	if err := f.checkAdmin(in.Ino, dst); err != nil {
 		return 0, mapErr("revert", dst, err)
 	}
-	uploaded, err = f.writeEntry(ctx, in.Ino, n.row.Idx, &n.e)
+	uploaded, err = f.writeEntry(ctx, in.Ino, n.row.Idx, &n.e, nil, nil)
 	return uploaded, mapErr("revert", dst, err)
 }
 
@@ -151,13 +216,45 @@ type RestoreReport struct {
 	Refused  []string `json:"refused,omitempty"` // entries the actor may not read (I-348)
 }
 
+// The bounds of a tree restore job (docs/16 §6, I-366): the files it writes at once, and
+// the chunks being read and written at once across the whole restore.
+const (
+	RestoreFiles    = 4
+	RestoreInFlight = 8
+)
+
+// RestoreProgress is one step of a tree restore, added to its done counts: a chunk's bytes
+// decided, a file renamed into place (Files 1, its bytes counted by its chunks), or a file
+// that was already there (Files 1, Bytes its size, Existing).
+type RestoreProgress struct {
+	Files, Bytes int64
+	Existing     bool
+}
+
+// RestoreOptions shapes a tree restore: Files files at once and InFlight chunks across it
+// (under 1: one), and Progress told every step, one call at a time (nil: none).
+type RestoreOptions struct {
+	Files, InFlight int
+	Progress        func(RestoreProgress)
+}
+
 // RestoreSnapshot copies the snapshot entry src (a /.snapshots path: a file, a symlink or a
 // directory) to dst in the live volume. A file or symlink must not exist at dst; a
 // directory is merged: an existing directory is descended, an existing file or symlink is
 // skipped and reported, and .snapshots and .tailraid are never created at the root
 // (docs/16 §6, I-186). The actor holds Admin on the directory dst lands in, and the copy
 // holds the entries the actor may read, the rest listed as refused (docs/21 §3, I-348).
+// It writes one file and one chunk at a time; RestoreSnapshotWith takes more.
 func (f *FS) RestoreSnapshot(ctx context.Context, src, dst string) (RestoreReport, error) {
+	return f.RestoreSnapshotWith(ctx, src, dst, RestoreOptions{})
+}
+
+// RestoreSnapshotWith is RestoreSnapshot writing opt.Files files and opt.InFlight chunks at
+// once and telling opt.Progress each step: the folders and links in walk order, the files
+// beside them, each under its temporary name until committed, so the tree it leaves is the
+// one a restore one chunk at a time leaves (I-365, I-366). A cancelled ctx stops it before
+// the next chunk, and the file it was writing leaves no temporary file (I-368).
+func (f *FS) RestoreSnapshotWith(ctx context.Context, src, dst string, opt RestoreOptions) (RestoreReport, error) {
 	var rep RestoreReport
 	n, err := f.snapEntry(ctx, src)
 	if err != nil {
@@ -181,8 +278,63 @@ func (f *FS) RestoreSnapshot(ctx context.Context, src, dst string) (RestoreRepor
 			return rep, mapErr("restore", dst, meta.ErrExist)
 		}
 	}
-	err = f.restoreEntry(ctx, &n, dparts, &rep)
+	r := &restoreRun{f: f, opt: opt, rep: &rep, slots: make(chan struct{}, max(1, opt.InFlight))}
+	err = r.run(ctx, &n, dparts)
 	return rep, err
+}
+
+// RestoreTotals is what a tree restore of src into dst writes when nothing is there yet:
+// its files and their bytes, leaving out what the restore leaves out (an entry the actor
+// may not read, .snapshots and .tailraid at the root). It reads the mirror's trees past
+// the gateway's tree cache, which one walk of a large snapshot would only churn (I-365).
+func (f *FS) RestoreTotals(ctx context.Context, src, dst string) (files, bytes int64, err error) {
+	n, err := f.snapEntry(ctx, src)
+	if err != nil {
+		return 0, 0, err
+	}
+	return f.snapTotals(ctx, &n, meta.SplitPath(dst))
+}
+
+// snapTotals counts the files under n and their bytes, as a restore to dst would write them.
+func (f *FS) snapTotals(ctx context.Context, n *snapNode, dst []string) (files, bytes int64, err error) {
+	if leftOut(dst) {
+		return 0, 0, nil
+	}
+	switch n.e.Type {
+	case mirror.TypeFile:
+		return 1, int64(n.e.Size), nil //nolint:gosec // a file size
+	case mirror.TypeDir:
+	default:
+		return 0, 0, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	src := f.snaps.online(n.row.Idx)
+	if src == nil {
+		return 0, 0, ErrMirrorOffline
+	}
+	t, err := src.Tree(ctx, n.row.Idx, n.e.Child)
+	if err != nil {
+		return 0, 0, err
+	}
+	for i := range t.Entries {
+		child := snapChild(n, &t.Entries[i])
+		if f.checkSnap(&child) != nil {
+			continue
+		}
+		cf, cb, err := f.snapTotals(ctx, &child, append(slices.Clip(dst), t.Entries[i].Name))
+		if err != nil {
+			return 0, 0, err
+		}
+		files, bytes = files+cf, bytes+cb
+	}
+	return files, bytes, nil
+}
+
+// leftOut reports a name a restore never makes: .snapshots and .tailraid at the root.
+func leftOut(dst []string) bool {
+	return len(dst) == 1 && (dst[0] == SnapshotDir || dst[0] == meta.ReservedDir)
 }
 
 // nearest is the deepest existing ancestor of parts (the root at least).
@@ -195,13 +347,94 @@ func (f *FS) nearest(parts []string) (meta.Inode, error) {
 	}
 }
 
-// restoreEntry copies the snapshot node n to dst; a child the actor may not read is
-// listed as refused and left out.
-func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *RestoreReport) error {
+// restoreRun is one tree restore: the walk makes folders and links and decides what is
+// already there, and opt.Files workers write the files it hands them (I-366).
+type restoreRun struct {
+	f     *FS
+	opt   RestoreOptions
+	slots chan struct{} // the chunks in flight across the restore
+	mu    sync.Mutex    // rep and opt.Progress
+	rep   *RestoreReport
+}
+
+// fileTask is one file the walk found missing: the snapshot entry and its live path.
+type fileTask struct {
+	n   snapNode
+	dst []string
+}
+
+func (r *restoreRun) progress(p RestoreProgress) {
+	if r.opt.Progress == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.opt.Progress(p)
+}
+
+func (r *restoreRun) note(fn func(rep *RestoreReport)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fn(r.rep)
+}
+
+// run walks n into dst, the files written by the workers; the first error stops the rest.
+func (r *restoreRun) run(ctx context.Context, n *snapNode, dst []string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	fail := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if first == nil {
+			first = err
+			cancel()
+		}
+	}
+	tasks := make(chan fileTask)
+	for range max(1, r.opt.Files) {
+		wg.Go(func() {
+			for t := range tasks {
+				if ctx.Err() != nil {
+					continue // drained: the walk is stopping
+				}
+				if err := r.file(ctx, &t); err != nil {
+					fail(err)
+				}
+			}
+		})
+	}
+	werr := r.walk(ctx, n, dst, func(t fileTask) error {
+		select {
+		case tasks <- t:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	close(tasks)
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if first != nil {
+		return first
+	}
+	return werr
+}
+
+// walk restores the snapshot node n at dst: a folder made or descended, a link made, a
+// missing file handed to give; what exists is skipped and counted, a child the actor may
+// not read listed as refused and left out.
+func (r *restoreRun) walk(ctx context.Context, n *snapNode, dst []string, give func(fileTask) error) error {
+	f := r.f
 	m, e := n.row.Idx, &n.e
 	name := "/" + path.Join(dst...)
-	if len(dst) == 1 && (dst[0] == SnapshotDir || dst[0] == meta.ReservedDir) {
-		rep.Skipped = append(rep.Skipped, name)
+	if leftOut(dst) {
+		r.note(func(rep *RestoreReport) { rep.Skipped = append(rep.Skipped, name) })
 		return nil
 	}
 	cur, err := f.st.Resolve(dst)
@@ -209,14 +442,13 @@ func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *R
 	switch e.Type {
 	case mirror.TypeDir:
 		if exists && cur.Type != meta.TDir {
-			rep.Skipped = append(rep.Skipped, name)
-			return nil
+			return r.skip(ctx, n, dst, name)
 		}
 		if !exists {
 			if err := f.MkdirAll(name, os.FileMode(e.Mode&0o7777)); err != nil {
 				return err
 			}
-			rep.Dirs++
+			r.note(func(rep *RestoreReport) { rep.Dirs++ })
 		}
 		t, err := f.snapTree(ctx, m, e.Child)
 		if err != nil {
@@ -225,33 +457,58 @@ func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *R
 		for i := range t.Entries {
 			child := snapChild(n, &t.Entries[i])
 			if f.checkSnap(&child) != nil {
-				rep.Refused = append(rep.Refused, path.Join(name, t.Entries[i].Name))
+				r.note(func(rep *RestoreReport) { rep.Refused = append(rep.Refused, path.Join(name, t.Entries[i].Name)) })
 				continue
 			}
-			if err := f.restoreEntry(ctx, &child, append(slices.Clip(dst), t.Entries[i].Name), rep); err != nil {
+			if err := r.walk(ctx, &child, append(slices.Clip(dst), t.Entries[i].Name), give); err != nil {
 				return err
 			}
 		}
 		return nil
 	case mirror.TypeSymlink:
 		if exists {
-			rep.Skipped = append(rep.Skipped, name)
+			r.note(func(rep *RestoreReport) { rep.Skipped = append(rep.Skipped, name) })
 			return nil
 		}
 		if err := f.Symlink(e.Target, name); err != nil {
 			return err
 		}
-		rep.Links++
+		r.note(func(rep *RestoreReport) { rep.Links++ })
 		return nil
 	case mirror.TypeFile:
 	}
 	if exists {
-		rep.Skipped = append(rep.Skipped, name)
+		return r.skip(ctx, n, dst, name)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return give(fileTask{n: *n, dst: slices.Clone(dst)})
+}
+
+// skip reports name as left alone and counts what the restore would have written there
+// as already there, so the done counts still reach the totals (I-365).
+func (r *restoreRun) skip(ctx context.Context, n *snapNode, dst []string, name string) error {
+	r.note(func(rep *RestoreReport) { rep.Skipped = append(rep.Skipped, name) })
+	if r.opt.Progress == nil {
 		return nil
 	}
-	// the data lands under a temporary name and the file is renamed into place once it
-	// is committed, so the name holds the whole file or nothing: an interrupted restore
-	// leaves no empty file a rerun would skip as present (docs/16 §6)
+	files, bytes, err := r.f.snapTotals(ctx, n, dst)
+	if err != nil {
+		return snapErr("restore", name, err)
+	}
+	if files > 0 || bytes > 0 {
+		r.progress(RestoreProgress{Files: files, Bytes: bytes, Existing: true})
+	}
+	return nil
+}
+
+// file writes one missing file: under its temporary name in its folder, renamed into place
+// once committed, so the name holds the whole file or nothing and an interrupted restore
+// leaves no empty file a rerun would skip as present (docs/16 §6).
+func (r *restoreRun) file(ctx context.Context, t *fileTask) error {
+	f, dst, e := r.f, t.dst, &t.n.e
+	name := "/" + path.Join(dst...)
 	tmpParts := append(slices.Clip(dst[:len(dst)-1]), RestoreTempName(dst[len(dst)-1]))
 	tmp := "/" + path.Join(tmpParts...)
 	if old, err := f.st.Resolve(tmpParts); err == nil { // an interrupted run's, or a stopped node's
@@ -265,7 +522,7 @@ func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *R
 	}
 	ino := fh.(*File).ino
 	_ = fh.Close()
-	up, err := f.writeEntry(ctx, ino, m, e)
+	up, err := f.writeEntry(ctx, ino, t.n.row.Idx, e, r.slots, func(b int64) { r.progress(RestoreProgress{Bytes: b}) })
 	if err != nil {
 		_ = f.RemoveIno(tmp, ino, true) // best effort: a rerun removes it otherwise
 		return mapErr("restore", name, err)
@@ -273,13 +530,14 @@ func (f *FS) restoreEntry(ctx context.Context, n *snapNode, dst []string, rep *R
 	if err := f.RenameNoReplace(tmp, name); err != nil {
 		if errors.Is(err, os.ErrExist) { // the name was taken meanwhile: that file stays
 			_ = f.RemoveIno(tmp, ino, true)
-			rep.Skipped = append(rep.Skipped, name)
+			r.note(func(rep *RestoreReport) { rep.Skipped = append(rep.Skipped, name) })
+			r.progress(RestoreProgress{Files: 1, Existing: true})
 			return nil
 		}
 		return err
 	}
-	rep.Files++
-	rep.Uploaded += up
+	r.note(func(rep *RestoreReport) { rep.Files++; rep.Uploaded += up })
+	r.progress(RestoreProgress{Files: 1})
 	return nil
 }
 
