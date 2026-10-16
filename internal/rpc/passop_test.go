@@ -70,6 +70,7 @@ func TestAdminOp_IsPass_Table(t *testing.T) {
 		{AdminOp{Op: "versions_revert", Mirror: "pike/m1", Name: "s", Path: "/f"}, true},
 		{AdminOp{Op: "versions_copy", Mirror: "pike/m1", Name: "s", Path: "/f"}, true},
 		{AdminOp{Op: "versions", Path: "/f"}, false},
+		{AdminOp{Op: "scrape_plan", Path: "/films"}, true}, // walks the library and reads its sidecars: no 10 s bound (2026-10-16)
 		{AdminOp{Op: "set_policy"}, false},
 		{AdminOp{Op: "fsck"}, false},
 		{AdminOp{Op: "chunk", Chunk: "/f"}, false},

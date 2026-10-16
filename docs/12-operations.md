@@ -716,7 +716,7 @@ The audit log is in the volume under `/.tailraid/audit/`, readable by `audit ls`
 - **I-188** — `tailraid mirror add` marks an empty path (or re-homes a mirror of this
   cluster, or with `--adopt` takes over one of another cluster and imports its
   manifests as catalogue rows) and registers it as a `KindMirror` row of its host; a
-  mirror is online exactly while its host is live and its marker names this cluster and
+  mirror is online exactly while its host is live by its probes (a suspect mark does not take it offline) and its marker names this cluster and
   this mirror; `mirror remove` takes the row and its catalogue rows and leaves the disk, whose manifests are imported again if it is added back;
   `tailraid export` is the metadata export of §9; `snapshot ls|create|restore` (no removal verb) and
   `versions` drive docs/16 through the admin RPC; `status` reports each mirror and the

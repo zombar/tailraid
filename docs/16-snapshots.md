@@ -60,8 +60,11 @@ Every other node learns it from the host's `/health` reply, which lists the host
 mirrors as disks are listed (14 §4): `{id, online, reason, used, free, total, syncing?:
 {id, snapshot, read, total, bytes_new}}`, `read` and `total` the file bytes the sync has
 walked and the snapshot holds. The prober keeps the last reply per mirror row, so a mirror
-is online on every node exactly while its host is live and the host's last reply lists it
-online, within one probe interval of a plug or an unplug; while the host is unreachable
+is online on every node exactly while its host is live by its probes and the host's last
+reply lists it online, within one probe interval of a plug or an unplug; a host marked
+suspect after a shard call timed out (05 §6) is routed around for chunk traffic but keeps
+its mirrors online, since a fixed disk in a busy host is still attached (2026-10-16: a
+mirror on a host running a restore flickered offline on every other node); while the host is unreachable
 its mirrors are offline and keep the used and free of the last reply, with the time it
 was seen. A gateway reads a remote mirror only while it is online by this rule, and the
 dashboard and `status` show every mirror of the cluster from it.
