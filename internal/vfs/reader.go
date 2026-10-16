@@ -31,6 +31,11 @@ type Reader struct {
 	codecs *ec.Pool
 	log    *slog.Logger
 
+	// NoFill makes the reader consult the cache and never fill it: no Put of a chunk it
+	// fetched and no prefetch. The stats and search readers set it: they leave the LRU
+	// alone (I-196) and read the system pin's chunks from the node's disk (I-373).
+	NoFill bool
+
 	// BadSlot, when set, is called for every slot that returned a missing or corrupt
 	// shard so the leader can queue a repair (docs/06 §4 case 5). Must not block.
 	BadSlot func(key chunk.ShardKey, node meta.NodeIdx)
@@ -312,7 +317,7 @@ func (r *Reader) Fetching() int { return int(r.fetching.Load()) }
 // the holders, and a READ of the inode that leaves the sequence cancels the inode's
 // prefetches no READ has joined (I-203).
 func (r *Reader) Prefetch(in meta.Inode, off int64) {
-	if r.cache == nil || off < 0 {
+	if r.cache == nil || r.NoFill || off < 0 {
 		return
 	}
 	cs := r.st.Volume().ChunkSize
@@ -533,7 +538,7 @@ func (r *Reader) fetchChunk(ctx context.Context, h meta.Hash, call *fetchCall) (
 		r.Events.Record(h, meta.EvReadBadChunk, "k shards decoded to the wrong hash") // E-134
 		return nil, fmt.Errorf("%w: chunk %x decoded to wrong hash", ErrIO, h[:8])
 	}
-	if r.cache != nil {
+	if r.cache != nil && !r.NoFill {
 		r.cache.Put(h, data)
 	}
 	return data, nil

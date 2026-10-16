@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/goleak"
 
@@ -358,4 +359,161 @@ func (m *markingReader) ReadChunk(ctx context.Context, h meta.Hash) ([]byte, err
 	}
 	m.mu.Unlock()
 	return m.rd.ReadChunk(ctx, h)
+}
+
+// sysRig is a rig whose volume has the reserved tree's folders, its files written one
+// after another on the fake clock so each is newer than the last.
+type sysRig struct {
+	*rig
+	dirs map[string]meta.Ino
+}
+
+func newSysRig(t *testing.T) *sysRig {
+	t.Helper()
+	r := newRig(t, 1<<30)
+	s := &sysRig{rig: r, dirs: map[string]meta.Ino{}}
+	root := r.mkdir(meta.RootIno, meta.ReservedDir)
+	for _, d := range []string{"thumbs", "index", "stats", "audit"} {
+		s.dirs[d] = r.mkdir(root, d)
+	}
+	return s
+}
+
+// put writes dir/name a second after the previous file, so the newest is the last put.
+func (s *sysRig) put(dir, name string, n int, seed byte) meta.Ino {
+	s.t.Helper()
+	s.f.Clk.Advance(time.Second)
+	ino := s.f.MustApply(meta.Command{Op: meta.OpCreate, Create: &meta.Create{Parent: s.dirs[dir], Name: name, Type: meta.TFile, Mode: 0o644, Now: s.f.Clk.Now().UnixNano()}}).Ino
+	if err := s.f.Ov.Write(ino, 0, 0, testharness.Pattern(n, seed)); err != nil {
+		s.t.Fatal(err)
+	}
+	if err := s.f.Flusher().FlushInode(ctx, ino); err != nil {
+		s.t.Fatal(err)
+	}
+	return ino
+}
+
+// pinned reports whether every chunk of ino is cached and held out of eviction.
+func (s *sysRig) pinned(ino meta.Ino) bool {
+	for _, h := range s.chunks(ino) {
+		if !s.cache.Has(h) || !s.cache.IsPinned(h) {
+			return false
+		}
+	}
+	return true
+}
+
+// The system pin keeps the newest files under /.tailraid/thumbs, index and stats whose
+// bytes fit cache.system, stops at the first file that would pass it (an older, smaller
+// file is not taken in its place), leaves audit and every other file out, and reports
+// itself apart from the user's pins.
+//
+// Invariant: I-373
+func TestPins_System_NewestFirstWithinBudget(t *testing.T) {
+	s := newSysRig(t)
+	cs := int(testharness.ChunkSize)
+	audit := s.put("audit", "a.jsonl.gz", 100, 1)
+	s1 := s.put("stats", "s1.gz", cs, 2)       // the oldest: left out
+	small := s.put("thumbs", "old.jpg", 50, 4) // older than s2, and would fit alone: still left out
+	s2 := s.put("stats", "s2.gz", cs, 3)
+	s3 := s.put("stats", "s3.gz", cs, 5)
+	thumb := s.put("thumbs", "1-1-1.jpg", 100, 6)
+	idx := s.put("index", "1.seg", 100, 7)
+	budget := int64(cs + 250) // idx, thumb and s3 fit (cs + 200); s2 would not; small would, but is older than s2
+	s.p.SetSystem(budget)
+	if err := s.p.Walk(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, ino := range map[string]meta.Ino{"index": idx, "thumb": thumb, "s3": s3} {
+		if !s.pinned(ino) {
+			t.Errorf("%s is not pinned", name)
+		}
+	}
+	// s2 would pass the budget after idx, thumb and s3: the walk stops there, and neither
+	// s2, the older small thumbnail (which alone would fit) nor s1 is kept
+	for name, ino := range map[string]meta.Ino{"s2": s2, "old thumb": small, "s1": s1, "audit": audit} {
+		if s.pinned(ino) {
+			t.Errorf("%s is pinned", name)
+		}
+	}
+	rep := s.p.List()
+	want := s.f.Inode(idx).Size + s.f.Inode(thumb).Size + s.f.Inode(s3).Size
+	if rep.System == nil || rep.System.Path != "/"+meta.ReservedDir || rep.System.Bytes != want || rep.System.CachedBytes != want || rep.System.Budget != budget {
+		t.Fatalf("system entry %+v, want %d bytes, all cached, budget %d", rep.System, want, budget)
+	}
+	if len(rep.Pins) != 0 || rep.Size != 1<<30 {
+		t.Fatalf("user pins %+v, size %d: the system pin is reported apart", rep.Pins, rep.Size)
+	}
+	s.p.SetSystem(0)
+	if err := s.p.Walk(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s.pinned(idx) || s.p.List().System != nil {
+		t.Fatal("cache.system 0 kept the system pin")
+	}
+}
+
+// A file committed under the reserved tree is cached by the next walk, and the oldest
+// kept file that no longer fits returns to the LRU.
+//
+// Invariant: I-373
+func TestPins_System_NewFileCachedNextWalk(t *testing.T) {
+	s := newSysRig(t)
+	cs := int(testharness.ChunkSize)
+	old := s.put("stats", "old.gz", cs, 1)
+	mid := s.put("stats", "mid.gz", cs, 2)
+	s.p.SetSystem(int64(2 * cs))
+	if err := s.p.Walk(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !s.pinned(old) || !s.pinned(mid) {
+		t.Fatal("the first walk did not keep both files")
+	}
+	seg := s.put("index", "2.seg", cs, 3)
+	if err := s.p.Walk(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !s.pinned(seg) || !s.pinned(mid) {
+		t.Fatal("the new segment, or the newer stats file, is not kept after the next walk")
+	}
+	if s.pinned(old) {
+		t.Fatal("the oldest file is still pinned past the budget")
+	}
+}
+
+// With every other host dead, the files the system pin keeps read from this node's cache:
+// a thumbnail through the gateway's reader, the index and the stats through a reader that
+// consults the cache without filling it; a cold reader cannot.
+//
+// Invariant: I-373
+func TestSystemPin_ReadsWithEveryPeerDead(t *testing.T) {
+	s := newSysRig(t)
+	cs := int(testharness.ChunkSize)
+	thumb := s.put("thumbs", "1-1-1.jpg", 3000, 1)
+	idx := s.put("index", "1.seg", cs+10, 2)
+	st := s.put("stats", "n1-2026101612.jsonl.gz", 2*cs, 3)
+	s.p.SetSystem(1 << 30)
+	if err := s.p.Walk(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []meta.NodeIdx{1, 2, 3} {
+		s.f.SetDown(n, true)
+	}
+	nofill := vfs.NewReader(s.f.FSM, s.f, s.f, s.cache, &ec.Pool{})
+	nofill.NoFill = true
+	for name, c := range map[string]struct {
+		ino meta.Ino
+		rd  *vfs.Reader
+	}{"thumbnail": {thumb, s.rd}, "index": {idx, nofill}, "stats": {st, nofill}} {
+		in := s.f.Inode(c.ino)
+		buf := make([]byte, in.Size)
+		if n, err := c.rd.ReadAt(ctx, in, buf, 0); err != nil || uint64(n) != in.Size {
+			t.Fatalf("%s with every peer dead: %d bytes, %v", name, n, err)
+		}
+	}
+	cold := vfs.NewReader(s.f.FSM, s.f, s.f, nil, &ec.Pool{})
+	in := s.f.Inode(idx)
+	if _, err := cold.ReadAt(ctx, in, make([]byte, in.Size), 0); err == nil {
+		t.Fatal("a reader without the cache read the index with every peer dead")
+	}
 }

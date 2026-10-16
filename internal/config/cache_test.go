@@ -34,3 +34,33 @@ func TestConfig_CacheSize(t *testing.T) {
 		}
 	}
 }
+
+// cache.system: 1 GiB unless set, 0 turns the system pin off, any other size in the units
+// ParseBytes reads (docs/12 §10).
+//
+// Invariant: I-373
+func TestConfig_CacheSystem(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want int64
+		bad  bool
+	}{
+		{"", 1 << 30, false},
+		{"0", 0, false},
+		{"1", 1, false},
+		{"256M", 256 << 20, false},
+		{"2GiB", 2 << 30, false},
+		{"-1G", 0, true},
+		{"lots", 0, true},
+	} {
+		cfg := Default()
+		cfg.Cache.System = c.in
+		got, err := cfg.CacheSystem()
+		if (err != nil) != c.bad || got != c.want {
+			t.Errorf("%q: %d %v, want %d (bad %v)", c.in, got, err, c.want, c.bad)
+		}
+		if verr := cfg.Validate(); (verr != nil) != c.bad {
+			t.Errorf("%q: Validate %v, want refused %v", c.in, verr, c.bad)
+		}
+	}
+}

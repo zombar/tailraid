@@ -68,7 +68,9 @@ finds `Agnès Obel` by name, tag and content alike. A CJK run is one word per ch
 There is no manifest. A pass writes one immutable **segment** `/.tailraid/index/<seq>.seg`
 and nothing else; the newest complete segment names, in its header, the sequence numbers
 of the segments it extends (its **chain**), so readers find the current index by listing
-the folder. The rules:
+the folder. Every node keeps the segments in its chunk cache (the system pin, 01 §Local
+chunk cache, I-373) and reads them through a reader that consults the cache without
+filling it, so a search answers from the node's disk when the network is busy. The rules:
 
 - The file is created with `O_CREATE|O_EXCL`: the create is the compare-and-swap. A
   leader demoted mid-pass still has its proposals forwarded (02 §Leader forwarding), so a

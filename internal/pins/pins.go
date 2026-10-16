@@ -47,17 +47,24 @@ type Pin struct {
 // Entry is one pin as status reports it.
 type Entry struct {
 	Path        string `json:"path"`
-	Bytes       uint64 `json:"bytes"`        // file bytes under the folder, each chunk once
-	CachedBytes uint64 `json:"cached_bytes"` // of those, the bytes the cache holds now
+	Bytes       uint64 `json:"bytes"`            // file bytes under the folder, each chunk once
+	CachedBytes uint64 `json:"cached_bytes"`     // of those, the bytes the cache holds now
+	Budget      int64  `json:"budget,omitempty"` // the system pin's cache.system
 }
 
 // Report is the cache block of `status --json` and `/api/pins`.
 type Report struct {
-	Size        int64   `json:"size"`         // cache.size, the budget for unpinned bytes
-	Used        int64   `json:"used"`         // bytes cached, pinned ones included
-	PinnedBytes int64   `json:"pinned_bytes"` // bytes held by pins
-	Pins        []Entry `json:"pins"`
+	Size        int64   `json:"size"`             // cache.size, the budget for unpinned bytes
+	Used        int64   `json:"used"`             // bytes cached, pinned ones included
+	PinnedBytes int64   `json:"pinned_bytes"`     // bytes held by pins, the system pin's included
+	Pins        []Entry `json:"pins"`             // the user's pins
+	System      *Entry  `json:"system,omitempty"` // the system pin, while cache.system is not 0
 }
+
+// SystemDirs are the folders of the reserved tree the system pin keeps (I-373): the
+// thumbnails, the search index and the stats history; the audit log is written far more
+// than it is read and stays out.
+var SystemDirs = []string{"thumbs", "index", "stats"}
 
 // Store is the metadata the worker walks: *meta.FSM.
 type Store interface {
@@ -85,6 +92,7 @@ type Pins struct {
 
 	mu     sync.Mutex
 	pins   []Pin
+	system int64                  // cache.system: the system pin's budget, 0 off (I-373)
 	held   map[meta.Hash]struct{} // what the last walk pinned in the cache
 	cancel context.CancelFunc     // the running walk's, so an unpin stops it
 	kick   chan struct{}
@@ -129,6 +137,101 @@ func (p *Pins) saveLocked() error {
 		return fmt.Errorf("pins: %w", err)
 	}
 	return nil
+}
+
+// SetSystem sets the system pin's budget (cache.system; 0 turns it off) and wakes the
+// worker, whose next walk takes it up.
+func (p *Pins) SetSystem(budget int64) {
+	p.mu.Lock()
+	p.system = max(budget, 0)
+	p.mu.Unlock()
+	p.wake()
+}
+
+// systemFiles is the system pin's files: under SystemDirs, newest first (modification
+// time, then inode), up to the first that would pass budget (I-373).
+func (p *Pins) systemFiles(budget int64) []meta.Inode {
+	if budget <= 0 {
+		return nil
+	}
+	var files []meta.Inode
+	for _, d := range SystemDirs {
+		in, err := p.st.Resolve([]string{meta.ReservedDir, d})
+		if err == nil && in.Type == meta.TDir {
+			p.files(in.Ino, &files)
+		}
+	}
+	slices.SortFunc(files, func(a, b meta.Inode) int {
+		if a.Mtime != b.Mtime {
+			if a.Mtime > b.Mtime {
+				return -1
+			}
+			return 1
+		}
+		if a.Ino > b.Ino {
+			return -1
+		}
+		return 1
+	})
+	var used uint64
+	for i := range files {
+		if used+files[i].Size > uint64(budget) {
+			return files[:i]
+		}
+		used += files[i].Size
+	}
+	return files
+}
+
+// files adds every file under dir to out.
+func (p *Pins) files(dir meta.Ino, out *[]meta.Inode) {
+	ents, err := p.st.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for i := range ents {
+		switch ents[i].Type {
+		case meta.TDir:
+			p.files(ents[i].Ino, out)
+		case meta.TFile:
+			*out = append(*out, ents[i])
+		case meta.TSymlink:
+		}
+	}
+}
+
+// addChunks adds the chunks of files to want, each hash once with its size.
+func (p *Pins) addChunks(files []meta.Inode, want map[meta.Hash]int64) {
+	for i := range files {
+		for _, h := range files[i].Chunks {
+			if h == meta.HashZero {
+				continue
+			}
+			if _, seen := want[h]; seen {
+				continue
+			}
+			if ch, ok := p.st.GetChunk(h); ok {
+				want[h] = int64(ch.Size)
+			}
+		}
+	}
+}
+
+// systemEntry describes the system pin, nil while it is off.
+func (p *Pins) systemEntry(budget int64) *Entry {
+	if budget <= 0 {
+		return nil
+	}
+	want := map[meta.Hash]int64{}
+	p.addChunks(p.systemFiles(budget), want)
+	e := &Entry{Path: "/" + meta.ReservedDir, Budget: budget}
+	for h, size := range want {
+		e.Bytes += uint64(size)
+		if p.cache.Has(h) {
+			e.CachedBytes += uint64(size)
+		}
+	}
+	return e
 }
 
 // Pin keeps the folder at path on this device: it is recorded, the worker is woken to
@@ -196,8 +299,9 @@ func (p *Pins) Unpin(path string) error {
 func (p *Pins) List() Report {
 	p.mu.Lock()
 	pins := slices.Clone(p.pins)
+	budget := p.system
 	p.mu.Unlock()
-	rep := Report{Size: p.cache.Max(), Used: p.cache.Used(), PinnedBytes: p.cache.Pinned(), Pins: []Entry{}}
+	rep := Report{Size: p.cache.Max(), Used: p.cache.Used(), PinnedBytes: p.cache.Pinned(), Pins: []Entry{}, System: p.systemEntry(budget)}
 	for _, pin := range pins {
 		if e, ok := p.entry(pin); ok {
 			rep.Pins = append(rep.Pins, e)
@@ -254,8 +358,7 @@ func (p *Pins) collect(dir meta.Ino, want map[meta.Hash]int64) {
 	}
 }
 
-// wantLocked is every chunk under every pin that still resolves; the lapsed pins are
-// returned so the caller drops them.
+// wantLocked is every chunk under every pin that still resolves, and the system pin's.
 func (p *Pins) wantLocked() map[meta.Hash]int64 {
 	want := map[meta.Hash]int64{}
 	for _, pin := range p.pins {
@@ -263,6 +366,7 @@ func (p *Pins) wantLocked() map[meta.Hash]int64 {
 			p.collect(pin.Ino, want)
 		}
 	}
+	p.addChunks(p.systemFiles(p.system), want)
 	return want
 }
 

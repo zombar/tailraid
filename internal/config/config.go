@@ -72,7 +72,8 @@ type Config struct {
 		Retention string `yaml:"retention,omitempty"` // how long a deleted entry waits before the leader purges it (default 720h; "0" never, docs/12 §10)
 	} `yaml:"trash,omitempty"`
 	Cache struct {
-		Size string `yaml:"size,omitempty"` // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
+		Size   string `yaml:"size,omitempty"`   // the chunk cache's budget for unpinned bytes (default 1GiB, at least 64MiB; docs/12 §10)
+		System string `yaml:"system,omitempty"` // the system pin's budget for /.tailraid (default 1GiB, 0 off; I-373)
 	} `yaml:"cache,omitempty"`
 	// Mirrors is the snapshot schedule of docs/16 §4, run by each mirror's host.
 	Mirrors struct {
@@ -157,6 +158,19 @@ func (c Config) CacheSize() (int64, error) {
 		return 0, fmt.Errorf("config: cache.size %q: want a size of at least 64MiB", c.Cache.Size)
 	}
 	return int64(n), nil
+}
+
+// CacheSystem parses cache.system, the system pin's budget (docs/12 §10, I-373): 1 GiB
+// when empty, 0 turns it off.
+func (c Config) CacheSystem() (int64, error) {
+	if c.Cache.System == "" {
+		return 1 << 30, nil
+	}
+	n, err := ParseBytes(c.Cache.System)
+	if err != nil {
+		return 0, fmt.Errorf("config: cache.system %q: want a size, or 0 to keep nothing", c.Cache.System)
+	}
+	return int64(n), nil //nolint:gosec // ParseBytes bounds it
 }
 
 // Mirror is one disk given to snapshots (docs/16 §1).
@@ -709,6 +723,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, err := c.TrashRetention(); err != nil {
+		return err
+	}
+	if _, err := c.CacheSystem(); err != nil {
 		return err
 	}
 	if _, err := c.CacheSize(); err != nil {
