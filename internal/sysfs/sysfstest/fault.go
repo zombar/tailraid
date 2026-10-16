@@ -270,6 +270,13 @@ func (f *Fault) MkdirAll(name string, perm fs.FileMode) error {
 	return f.inner.MkdirAll(name, perm)
 }
 
+func (f *Fault) Mkdir(name string, perm fs.FileMode) error {
+	if f.isCrashed() {
+		return ErrCrashed
+	}
+	return f.inner.Mkdir(name, perm)
+}
+
 func (f *Fault) Stat(name string) (fs.FileInfo, error) {
 	if f.isCrashed() {
 		return nil, ErrCrashed

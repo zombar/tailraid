@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,5 +88,53 @@ func TestCompose_AddMirrorTwice_SameMirror(t *testing.T) {
 	}
 	if adds() != 0 || len(calls) != 1 || !strings.Contains(calls[0], "mv /mirrors/m1.away /mirrors/m1") {
 		t.Fatalf("second add ran %q, want only the plug back in", calls)
+	}
+}
+
+// The rig's plug and unplug: a move, or nothing when already in that state; both paths
+// present (a write recreated the root while the mirror was away) fails loudly.
+func TestCompose_MirrorMoveScript(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh: the script runs in the rig's Linux containers")
+	}
+	for _, c := range []struct {
+		name       string
+		have       []string // of "m", "m.away"
+		online, ok bool
+		want       []string
+	}{
+		{"unplug", []string{"m"}, false, true, []string{"m.away"}},
+		{"plug in", []string{"m.away"}, true, true, []string{"m"}},
+		{"unplug again", []string{"m.away"}, false, true, []string{"m.away"}},
+		{"plug in again", []string{"m"}, true, true, []string{"m"}},
+		{"plug in a mirror never added", nil, true, true, nil},
+		{"unplug a mirror never added", nil, false, false, nil},
+		{"plug in beside a recreated root", []string{"m", "m.away"}, true, false, []string{"m", "m.away"}},
+		{"unplug beside a recreated root", []string{"m", "m.away"}, false, false, []string{"m", "m.away"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, n := range c.have {
+				if err := os.Mkdir(filepath.Join(dir, n), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			from, to := filepath.Join(dir, "m"), filepath.Join(dir, "m.away")
+			if c.online {
+				from, to = to, from
+			}
+			err := exec.Command("sh", "-c", mirrorMoveScript(from, to, c.online)).Run()
+			if (err == nil) != c.ok {
+				t.Fatalf("exit %v, want ok %v", err, c.ok)
+			}
+			var got []string
+			ents, _ := os.ReadDir(dir)
+			for _, e := range ents {
+				got = append(got, e.Name())
+			}
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("left %v, want %v", got, c.want)
+			}
+		})
 	}
 }

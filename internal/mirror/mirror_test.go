@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -387,6 +388,65 @@ func TestMirror_DetachedRootNotRecreated(t *testing.T) {
 	}
 	if _, err := m.PutObject(h, data); err != nil {
 		t.Fatalf("plugged back: %v", err)
+	}
+}
+
+// unplugMidMake moves the mirror's root away just before the first directory is made
+// below it once armed: the unplug landing between a write's look at the root and its
+// make, the window `make soak` hit on 2026-10-16 (phase 32 found an empty /mirrors/m1).
+type unplugMidMake struct {
+	sysfs.FS
+	root  string
+	armed atomic.Bool
+}
+
+func (u *unplugMidMake) unplug(name string) {
+	if strings.HasPrefix(name, u.root+string(filepath.Separator)) && u.armed.CompareAndSwap(true, false) {
+		_ = os.Rename(u.root, u.root+".away")
+	}
+}
+
+func (u *unplugMidMake) MkdirAll(name string, perm fs.FileMode) error {
+	u.unplug(name)
+	return u.FS.MkdirAll(name, perm)
+}
+
+func (u *unplugMidMake) Mkdir(name string, perm fs.FileMode) error {
+	u.unplug(name)
+	return u.FS.Mkdir(name, perm)
+}
+
+// A mirror unplugged in the middle of a write, after the write looked at its root and
+// before it made a directory below it, is still never recreated: the write fails and the
+// path stays absent, for an object, a fresh fan-out directory and a manifest alike.
+// Invariant: I-180
+func TestMirror_UnplugMidWriteNotRecreated(t *testing.T) {
+	for _, what := range []string{"object", "snapshot"} {
+		t.Run(what, func(t *testing.T) {
+			u := &unplugMidMake{FS: sysfs.OS{}}
+			m, root := newMirror(t, u)
+			u.root = root
+			u.armed.Store(true)
+			var err error
+			switch what {
+			case "object":
+				data := []byte("written as the disk goes")
+				_, err = m.PutObject(meta.Hash(sha256.Sum256(data)), data)
+			case "snapshot":
+				v := newVolume()
+				v.put(1, "f", 10, bytes.Repeat([]byte{5}, testCS))
+				_, err = m.WriteSnapshot(context.Background(), v, 1, Manifest{ID: 1, Name: "s", ChunkSize: testCS})
+			}
+			if u.armed.Load() {
+				t.Fatal("the write made no directory below the root")
+			}
+			if err == nil {
+				t.Error("the write succeeded on an unplugged mirror")
+			}
+			if _, err := os.Stat(root); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("the unplugged mirror's path was recreated: %v", err)
+			}
+		})
 	}
 }
 
