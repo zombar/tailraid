@@ -611,7 +611,7 @@ function shares(nodes, maxSlots = () => Infinity) {
   return out;
 }
 function chunksPerTarget(r) {
-  return Math.max(0, r.volume.chunks - r.volume.tombstoned);
+  return r.volume.chunks;
 }
 function withDisks(nodes) {
   return nodes.filter((n) => n.kind !== "disk" && n.kind !== "mirror" && n.state !== "removed").map((n) => {
