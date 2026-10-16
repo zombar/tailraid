@@ -110,6 +110,7 @@ type Server struct {
 	up       uploads
 	refused  logx.Limiter  // one "refused" line a minute (I-124): a probe loop is not a log flood
 	decoders chan struct{} // thumbnail decodes in flight (ThumbDecoders)
+	thumbs   thumbJobs     // thumbnails being made in the background (I-374)
 	covers   coverCache
 	codes    users.CodeLog // the sign-in codes this node opened (I-354)
 }

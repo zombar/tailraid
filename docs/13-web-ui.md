@@ -158,7 +158,7 @@ admin report without the join token, which belongs to the CLI on a member (I-127
 | `POST /api/restore` `{"ino","to"?,"name"?}` | required | 200 `{"path"}`; `to` and `name` default to the original place; a taken name → 409 `{"error","taken":true}`; an original parent that is itself deleted → 409 `{"error","in_trash":true}` (the page then asks for a destination); not a deleted root → 404 |
 | `POST /api/purge` `{"ino"}` or `{"all":true}` | required | 204; permanent: the entry's references are dropped and GC reclaims its chunks after grace (docs/06); `all` proposes purges until the trash is empty |
 | `POST /api/flags` `{"path","protected"?,"nsfw"?,"library"?}` | required | 200 the entry; directories only (400), never the root (400), never inside the trash (409); `library` is one of `none`, `movies`, `tv`, `music` and needs every member on codec 6 (docs/18 §9, 503 `Retry-After: 30` otherwise) |
-| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}`, for a folder whose art waits for a video's frame with `"grab":{path,ino,version}`, the video to frame, its path below the folder (I-275) |
+| `GET /api/thumb?path=&in=` | – | `image/jpeg`, at most 320 px wide, from `/.tailraid/thumbs/<ino>-<gen>-<version>.jpg`, or `….f2.jpg` for a file that is neither an image nor audio (§5, I-216); an image whose thumbnail is missing is decoded and scaled by the node first (JPEG, PNG, GIF, WebP; two at a time; more than 64 megapixels → 415); audio answers its embedded picture or a `cover.*`/`folder.*` sibling; a folder answers its cover track's picture (§5), resolving which track that is on the first request and remembering it for the folder's version; a video, a folder without a cover or anything else without a stored thumbnail → 404 `{"error":"no thumbnail"}`, for a folder whose art waits for a video's frame with `"grab":{path,ino,version}`, the video to frame, its path below the folder (I-275); one the node must make (an image, an audio file's picture or sibling cover, a folder's cover) is made in the background and waited for at most `ThumbWait` (1.5 s): not ready by then → 202 `{"later":true}` with `Retry-After: 2`, the making going on and its result stored, so the next request answers it (§5, I-374) |
 | `PUT /api/thumb?path=&version=` | required | a JPEG body of at most 256 KiB, the frame the browser chose from a video (§5), stored as `<ino>-<gen>-<version>.f2.jpg`: 201; not a JPEG → 415; `version` not the file's current `Version` → 409 |
 | `GET /api/tags?path=&in=` | – | audio only (400 otherwise): `{title,artist,album,album_artist,track,tracks,disc,year,genre,has_cover}` from the file's ID3v2, ID3v1, MP4, FLAC or Ogg tags (§6); a file without tags, or one whose tags do not parse, answers 200 with empty fields, never an error |
 | `POST /api/pin` `{"path","pinned"}` | required | 200 `{"path","pinned","bytes"}`; directories only (400); local to the node serving the page (§4); an admin's once users exist (403 for anyone else, docs/21 §3) |
@@ -343,6 +343,21 @@ from a video carries the frame recipe that chose it, `<ino>-<gen>-<version>.f2.j
 the recipe changes, every video's stored frame stops counting as its thumbnail, the
 sweep removes it and the page grabs a new one as the tile comes into view (I-216).
 
+- **Made in the background.** A thumbnail the node makes itself (an image, an audio
+  file's picture or a cover beside it, a folder's cover resolved by reading its tracks)
+  reads the volume, which on a busy cluster took 3–9 s a file (2026-10-16), and the
+  browser loads tiles four at a time in order, so a few covers being made held every
+  tile behind them. The node now makes each in the background, one job per key however
+  many tiles ask, at most `ThumbJobs` (16) at once and still at most two decodes, and a
+  request waits for its job at most `ThumbWait` (1.5 s). A job not done by then answers
+  `202` with `Retry-After: 2` while it goes on; the browser frees the tile's place in the
+  fast lane at once and asks again from a slow lane of its own (two at a time, after the
+  `Retry-After`, at most five times, then the generic tile), so a tile whose thumbnail
+  exists is never held behind one being made. A finished job's answer (the picture, or
+  why there is none) is kept for `ThumbKeep` (1 min) for that retry; the picture is
+  stored as before. With 16 jobs running a request starts nothing and answers `202`:
+  the retry finds a free place. A job runs to its end, at most 2 min, whether or not
+  anyone still waits: the stored thumbnail serves the next view.
 - **Images** are made by the node on the first `GET /api/thumb` for the file: decoded
   with Go's own `image/jpeg`, `image/png`, `image/gif` and `golang.org/x/image/webp`,
   scaled with `x/image/draw`, encoded as JPEG at quality 80 and stored. Two decodes run at
@@ -1164,6 +1179,13 @@ placement gives way to legible text: the dashed line keeps the event's true time
   Cancel on an unfinished job for its starter or an admin, whose cancel the job's host
   answers and every other user's is `403`; and the Snapshots table shows at most 20 rows
   a page, newest first, with Newer and Older.
+- **I-374** — `GET /api/thumb` answers a stored thumbnail at once; one the node must make
+  is made by one background job per key, at most `ThumbJobs` at once, and the request
+  waits for it at most `ThumbWait`, answering `202` with `Retry-After` while it runs (or
+  while every job place is taken, starting nothing); a job runs to its end whether the
+  request waits or not and its result answers the next request (the stored picture, or
+  for `ThumbKeep` the reason there is none); the page loads a `202` tile again from a
+  lane of its own, so it holds no place in the lane of thumbnails that exist.
 - **I-187** — The web UI lists every snapshot of every mirror with its state, online or
   not, reads as of a snapshot on an online mirror with `at=` and refuses a mutation given
   `at` with 400, lists a file's distinct contents across the online mirrors with the
@@ -1208,6 +1230,7 @@ placement gives way to legible text: the dashed line keeps the event's true time
 | I-200 | `TestStatic_StatsShellAndTheme`; the cycle, the stored choice and the flash are manual check 17 |
 | I-209 | `TestMarkdown_Table`, `TestMarkdown_LinksAndImages_Policy`, `TestMarkdown_RawHTMLIsText`, `FuzzMarkdown`, `TestWebUI_Render_Table`, `TestSoak_AllPhasesAgainstHarness` (the Rendered/Raw switch is manual check 19) |
 | I-187 | `TestWebUI_Snapshots_ListTake_NoDeleteRoute`, `TestWebUI_LsAt_ReadOnly`, `TestWebUI_OfflineMirror_409`, `TestWebUI_Versions_DistinctContents`, `TestWebUI_Revert_Copy_RestoreTree`, `TestSoak_AllPhasesAgainstHarness` |
+| I-374 | `TestWebUI_Thumb_LaterWhileMade`, `TestWebUI_Thumb_OneJobPerKey`, `TestWebUI_Thumb_FullJobsStartNothing`, `TestWebUI_FolderCover_LaterWhileMade` |
 | I-369 | `TestWebUI_RestoreTree_JobAndCancel`, `TestWebUI_Revert_Copy_RestoreTree`, `TestWebUI_AdminRoutes_ByRole`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |
 | I-279 | `TestWebUI_Media_Roms_Table`, `TestWebUI_Media_NoLaunchRoute`, `TestSoak_AllPhasesAgainstHarness` |
 | I-280 | `TestWebUI_Ls_TitleCardFields`, `TestStatic_ClassesAgreeAcrossCSSLookdevAndTypeScript` |

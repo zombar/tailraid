@@ -2663,7 +2663,9 @@ var Selection = class {
 
 // internal/webui/src/thumbs.ts
 var FAST = 4;
+var SLOW = 2;
 var GRABS = 1;
+var TRIES = 5;
 var WIDTH = 320;
 var RECIPE = 2;
 var POSITIONS = [0.5, 0.25, 0.75, 0.1, 0.9];
@@ -2701,6 +2703,7 @@ var Lane = class {
   }
 };
 var fast = new Lane(FAST);
+var slow = new Lane(SLOW);
 var grabs = new Lane(GRABS);
 var pending2 = /* @__PURE__ */ new Map();
 var observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
@@ -2723,11 +2726,15 @@ function lazy(img, e, path, root, kind2, onMiss) {
   const miss = () => {
     if (img.isConnected) onMiss();
   };
+  const settle = async (f) => {
+    if (!f.src) return miss();
+    if (!img.isConnected) return URL.revokeObjectURL(f.src);
+    return showBlob(img, f.src, onMiss);
+  };
   const show = async (url) => {
-    const src2 = await load(url);
-    if (!src2) return miss();
-    if (!img.isConnected) return URL.revokeObjectURL(src2);
-    return showBlob(img, src2, onMiss);
+    const f = await load(url);
+    if (f.later !== void 0) return later(img, () => load(url), f.later, TRIES, settle);
+    return settle(f);
   };
   const tag = kind2 === "video" ? `${e.version}.f${RECIPE}` : void 0;
   const job = async () => {
@@ -2735,19 +2742,23 @@ function lazy(img, e, path, root, kind2, onMiss) {
     observer?.unobserve(img);
     if (!img.isConnected) return;
     if (kind2 === "dir" && root === void 0) {
+      const done = async (r2) => {
+        if (r2.src) return showBlob(img, r2.src, onMiss);
+        if (!r2.grab) return miss();
+        const g = r2.grab;
+        grabs.push(async () => {
+          if (!img.isConnected) return;
+          if (!near(img)) return wait2();
+          if (!await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return miss();
+          const again = await folder(path);
+          if (again.later !== void 0) return later(img, () => folder(path), again.later, TRIES, settle);
+          if (again.src) await showBlob(img, again.src, onMiss);
+          else miss();
+        });
+      };
       const r = await folder(path);
-      if (r.src) return showBlob(img, r.src, onMiss);
-      if (!r.grab) return miss();
-      const g = r.grab;
-      grabs.push(async () => {
-        if (!img.isConnected) return;
-        if (!near(img)) return wait2();
-        if (!await grab(join(path, g.path), { ino: g.ino, version: g.version, thumb: false })) return miss();
-        const again = await folder(path);
-        if (again.src) await showBlob(img, again.src, onMiss);
-        else miss();
-      });
-      return;
+      if (r.later !== void 0) return later(img, () => folder(path), r.later, TRIES, done);
+      return done(r);
     }
     if (e.thumb || kind2 !== "video" || root !== void 0) return show(thumbURL(path, root, tag));
     grabs.push(async () => {
@@ -2774,13 +2785,31 @@ function near(img) {
   const r = img.getBoundingClientRect();
   return r.bottom >= -200 && r.top <= window.innerHeight + 200;
 }
+function retryAfter(r) {
+  const n = Number(r.headers.get("Retry-After"));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 30) : 2;
+}
+function later(img, ask, wait2, tries, done) {
+  window.setTimeout(() => {
+    slow.push(async () => {
+      if (!img.isConnected) return;
+      const f = await ask();
+      if (f.later !== void 0) {
+        if (tries > 1) return later(img, ask, f.later, tries - 1, done);
+        return done({});
+      }
+      return done(f);
+    });
+  }, wait2 * 1e3);
+}
 async function load(url) {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(LOAD_TIMEOUT) });
-    if (!r.ok) return void 0;
-    return URL.createObjectURL(await r.blob());
+    if (r.status === 202) return { later: retryAfter(r) };
+    if (!r.ok) return {};
+    return { src: URL.createObjectURL(await r.blob()) };
   } catch {
-    return void 0;
+    return {};
   }
 }
 function showBlob(img, src2, onMiss) {
@@ -2800,6 +2829,7 @@ function showBlob(img, src2, onMiss) {
 async function folder(path) {
   const r = await fetch(thumbURL(path), { signal: AbortSignal.timeout(LOAD_TIMEOUT) }).catch(() => void 0);
   if (!r) return {};
+  if (r.status === 202) return { later: retryAfter(r) };
   if (r.ok) return { src: URL.createObjectURL(await r.blob()) };
   if (r.status !== 404) return {};
   const miss = await r.json().catch(() => ({}));

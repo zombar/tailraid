@@ -129,6 +129,15 @@ func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.in.Type == meta.TDir { // a folder's tile is its cover track's picture, resolved here and remembered (I-165)
+		if dir := t.in; !s.coverKnown(dir) { // resolving reads tracks: in the background (I-374)
+			if _, _, ready := s.later(r.Context(), fmt.Sprintf("cover/%d-%d", dir.Ino, dir.Version), func(context.Context) ([]byte, error) {
+				s.coverOf(dir)
+				return nil, nil
+			}); !ready {
+				thumbLater(w)
+				return
+			}
+		}
 		e := s.coverOf(t.in)
 		if e.name == "" {
 			writeJSON(w, http.StatusNotFound, thumbMiss{Error: "no thumbnail", Grab: s.grabOf(t.in, e)})
@@ -149,14 +158,29 @@ func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
 		s.serveThumb(w, r, stored, key)
 		return
 	}
-	var data []byte
-	switch {
-	case isImage(t.in.Name):
-		data, err = s.makeImageThumb(r.Context(), t)
-	case isAudio(t.in.Name):
-		data, err = s.makeAudioThumb(r.Context(), t)
-	default:
-		err = noThumb(t.canonical)
+	if !isImage(t.in.Name) && !isAudio(t.in.Name) {
+		writeErr(w, http.StatusNotFound, "no thumbnail")
+		return
+	}
+	// made in the background, one job per key, waited for at most ThumbWait (I-374)
+	data, err, ready := s.later(r.Context(), key, func(ctx context.Context) ([]byte, error) {
+		var data []byte
+		var err error
+		if isImage(t.in.Name) {
+			data, err = s.makeImageThumb(ctx, t)
+		} else {
+			data, err = s.makeAudioThumb(ctx, t)
+		}
+		if err == nil {
+			if serr := s.storeThumb(key, data); serr != nil {
+				s.o.Logger.Warn("thumbnail not stored", "key", key, "err", serr)
+			}
+		}
+		return data, err
+	})
+	if !ready {
+		thumbLater(w)
+		return
 	}
 	if err != nil {
 		switch {
@@ -171,11 +195,16 @@ func (s *Server) thumbGet(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := s.storeThumb(key, data); err != nil {
-		s.o.Logger.Warn("thumbnail not stored", "key", key, "err", err)
-	}
 	thumbHeaders(w, key)
 	http.ServeContent(w, r, key, time.Time{}, bytes.NewReader(data))
+}
+
+// thumbLater answers a thumbnail still being made: 202, asked again after Retry-After
+// (docs/13 §5, I-374).
+func thumbLater(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "2")
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusAccepted, map[string]bool{"later": true})
 }
 
 func thumbHeaders(w http.ResponseWriter, key string) {

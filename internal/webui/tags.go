@@ -225,6 +225,13 @@ func (s *Server) cached(dir meta.Inode) (coverEntry, bool) {
 	return e, true
 }
 
+// coverKnown reports whether this node holds the folder's cover resolved, so a tile asks
+// no background job for it (I-374).
+func (s *Server) coverKnown(dir meta.Inode) bool {
+	_, ok := s.cached(dir)
+	return ok
+}
+
 // coverCached is the folder's cover and whether it is settled: resolved by this node for
 // the current versions and, for a none, waiting for no video's frame. A listing reports
 // only that and never reads a file to find one (I-165): GET /api/thumb of the folder
