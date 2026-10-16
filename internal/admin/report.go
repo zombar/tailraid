@@ -362,6 +362,7 @@ func Build(n *cluster.Node, p *cluster.Prober, clusterID [16]byte, clk clock.Clo
 	}
 	if rp != nil && n.IsLeader() {
 		st, at := rp.Last()
+		rep.Volume.DiskSkew = st.DiskSkew // the last sweep's: home is per chunk, so only a sweep counts it (I-378)
 		rep.Repair = &RepairStatus{LastScan: at, Stats: st, Reported: rp.Reported()}
 		if p, running := rp.Progress(); running {
 			rep.Repair.InProgress = &p

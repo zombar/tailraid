@@ -79,10 +79,10 @@ func scrubCfg(period time.Duration) repair.Config {
 	return cfg
 }
 
-// Passes ScanInterval apart that span one period scrub every chunk exactly once, however
-// the period divides into passes; a pass at P = 0 scrubs nothing, and `check --scrub`
-// scrubs everything whatever P.
-// Invariant: I-215
+// Sweeps SweepInterval apart that span one period scrub every chunk exactly once, however
+// the period divides into sweeps, and the passes between them scrub nothing; a pass at
+// P = 0 scrubs nothing, and `check --scrub` scrubs everything whatever P.
+// Invariant: I-215, I-379
 func TestRepair_ScrubPeriod_CoversEveryChunkOnce(t *testing.T) {
 	const n = 24
 	f := testharness.NewFabric(t, 3, 2, 1)
@@ -90,7 +90,7 @@ func TestRepair_ScrubPeriod_CoversEveryChunkOnce(t *testing.T) {
 	for _, passes := range []int{1, 3, 10} {
 		t.Run(strconv.Itoa(passes), func(t *testing.T) {
 			cfg := scrubCfg(0)
-			cfg.ScrubPeriod = time.Duration(passes) * cfg.ScanInterval
+			cfg.ScrubPeriod = time.Duration(passes) * cfg.SweepInterval
 			r := repair.New(f.FSM, f, f, f, f.ReaderNoCache(), f.Clk, cfg, nil)
 			total := 0
 			for range passes {
@@ -100,6 +100,11 @@ func TestRepair_ScrubPeriod_CoversEveryChunkOnce(t *testing.T) {
 				}
 				total += st.Scrubbed
 				f.Clk.Advance(cfg.ScanInterval)
+				between, err := r.Scan(ctx) // a pass inside the sweep interval
+				if err != nil || between.Scrubbed != 0 || between.Swept {
+					t.Fatalf("a pass between sweeps scrubbed %d (swept %v), %v", between.Scrubbed, between.Swept, err)
+				}
+				f.Clk.Advance(cfg.SweepInterval - cfg.ScanInterval)
 			}
 			if total != n {
 				t.Fatalf("%d passes over one period scrubbed %d chunks, want %d", passes, total, n)
@@ -115,20 +120,20 @@ func TestRepair_ScrubPeriod_CoversEveryChunkOnce(t *testing.T) {
 	}
 }
 
-// A repairer's first pass, and its first pass after a stretch without leadership, covers
-// the ScanInterval before it, not the time since its last pass: a node that leads again
+// A repairer's first sweep, and its first after a stretch without leadership, covers the
+// SweepInterval before it, not the time since its last sweep: a node that leads again
 // after a day does not scrub a day's share at once.
 // Invariant: I-215
 func TestRepair_ScrubPeriod_FirstPassAsLeader(t *testing.T) {
 	const n = 40
 	f := testharness.NewFabric(t, 3, 2, 1)
 	hashes := writeChunks(t, f, n)
-	cfg := scrubCfg(4 * time.Minute) // a ScanInterval (1 min) is a quarter of the period
+	cfg := scrubCfg(4 * time.Hour) // a SweepInterval (1 h) is a quarter of the period
 	want := func() int {
 		now := f.Clk.Now()
 		due := 0
 		for _, h := range hashes {
-			if repair.ScrubDue(h, now.Add(-cfg.ScanInterval), now, cfg.ScrubPeriod) {
+			if repair.ScrubDue(h, now.Add(-cfg.SweepInterval), now, cfg.ScrubPeriod) {
 				due++
 			}
 		}

@@ -424,9 +424,11 @@ receive and the away slots whose home cannot take them now (dead, suspect, held 
 carries `repair.home` (`away_slots`, `away_bytes`, `movable_bytes`, `open`); `tailraid
 status` prints it as one line when anything is away.
 
-**The report is built off the request path (I-205).** `admin.Build` walks every chunk
-(`ScanHealth`): 0.26 s at 44k chunks on a laptop, seconds at a million, and every open
-browser tab asks every 5 s. The node therefore keeps an `admin.Reporter`: the first
+**The report is built off the request path (I-205).** `admin.Build` walked every chunk
+(`ScanHealth`) until 0.10.4: 0.26 s at 44k chunks on a laptop, seconds at a million, and
+every open browser tab asks every 5 s. It now reads the placement classes (06 §4a,
+I-378), but the report still gathers from many sources (restore jobs over RPC, mirrors,
+search), so it stays off the request path. The node therefore keeps an `admin.Reporter`: the first
 request builds the report on its own goroutine, and from then on a refresher rebuilds it
 every `ReportEvery` (2 s) for as long as a request arrived within `ReportIdle` (30 s),
 stopping otherwise until the next one. While the refresher runs, `/api/status` and
@@ -448,7 +450,9 @@ this node's own index and, for a slot on this host's own disk, building the whol
 walk ran every 2 s while the dashboard was open, and the process's CPU climbed with the
 volume to half a core. `ScanHealth` (behind `status`, `check` and the leader's stats
 sample) now asks about each member once when it starts (`meta.FreezeLiveness`) and
-judges the whole walk by that one view; the prober finds this node's index by checking
+judges the whole walk by that one view, and since 0.10.4 it walks the placement classes
+rather than the chunks (06 §4a, I-378): 1.7 µs at 100k chunks on five targets against
+116 ms for the chunk walk, so `walk_ms` reads 0; the prober finds this node's index by checking
 the index it found last against its row, and reads this host's disk rows alone
 (`Prober.SelfDisks`). The repair pass keeps asking per slot, since a pass runs for
 minutes and a member that dies during it must stop taking shards, and that per-slot

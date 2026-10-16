@@ -344,10 +344,15 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 			Process:  admin.Process,
 			IsLeader: node.IsLeader,
 			Term:     node.Raft.CurrentTerm,
-			Health:   func() admin.VolumeHealth { return admin.ScanHealth(node.FSM, prober, rcfg.FillAfter) },
-			Stats:    node.FSM.Stats,
-			Members:  node.FSM.Nodes,
-			Live:     func(idx meta.NodeIdx) int { return stats.LiveState(prober.IsLive(idx), prober.IsSuspect(idx)) },
+			Health: func() admin.VolumeHealth {
+				h := admin.ScanHealth(node.FSM, prober, rcfg.FillAfter)
+				last, _ := repairer.Last()
+				h.DiskSkew = last.DiskSkew // the leader's last sweep (I-378); the cluster sample is the leader's
+				return h
+			},
+			Stats:   node.FSM.Stats,
+			Members: node.FSM.Nodes,
+			Live:    func(idx meta.NodeIdx) int { return stats.LiveState(prober.IsLive(idx), prober.IsSuspect(idx)) },
 			Moved: func() (int64, bool) {
 				p, ok := repairer.Progress()
 				return p.BytesMoved, ok

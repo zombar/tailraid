@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 
 	"github.com/hashicorp/raft"
@@ -87,7 +88,9 @@ func TestFSM_InodeCopies_OmitChildren(t *testing.T) {
 
 // The volume statistics kept by the applier equal a full walk after every random command
 // (commits with truncates, holes, dedup and re-registration; unlinks; renames over files;
-// placement and policy changes; GC) and after a snapshot/restore round trip.
+// placement and policy changes; GC) and after a snapshot/restore round trip, and so does
+// the placement class table (I-377).
+// Invariant: I-377
 func TestFSM_Stats_IncrementalMatchesRecompute(t *testing.T) {
 	f := NewFSM()
 	gen := &cmdGen{rng: testseed.Seed(t), f: f, now: 5}
@@ -102,12 +105,11 @@ func TestFSM_Stats_IncrementalMatchesRecompute(t *testing.T) {
 	for i := range 3000 {
 		c := gen.next()
 		apply(c)
-		got := f.Stats()
 		f.mu.RLock()
-		want := computeStats(f.st)
+		v := CheckStats(f.st, f.stats) // the totals and the placement classes (I-377)
 		f.mu.RUnlock()
-		if got != want {
-			t.Fatalf("after command %d (op %d): stats %+v, recount %+v", i, c.Op, got, want)
+		if len(v) != 0 {
+			t.Fatalf("after command %d (op %d): %v", i, c.Op, v)
 		}
 	}
 	snap, err := f.Snapshot()
@@ -124,6 +126,9 @@ func TestFSM_Stats_IncrementalMatchesRecompute(t *testing.T) {
 	}
 	if got, want := g.Stats(), f.Stats(); got != want {
 		t.Fatalf("after restore: %+v, want %+v", got, want)
+	}
+	if gc, fc := g.Classes(), f.Classes(); !reflect.DeepEqual(gc, fc) || len(fc) == 0 {
+		t.Fatalf("classes after restore: %d, want %d", len(gc), len(fc))
 	}
 	if got := f.Stats(); got.Chunks == 0 || got.LogicalBytes == 0 {
 		t.Fatalf("workload too thin: %+v", got)
