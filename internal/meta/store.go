@@ -25,6 +25,7 @@ type Stats struct {
 	TrashBytes   uint64 // Σ file sizes in the trash
 
 	cls *classTable // the placement classes, kept with the totals (I-377); never copied out
+	due *dueIndex   // the GC and purge queues (I-381, I-382); never copied out
 }
 
 // copyInode is the read API's view of an inode: every field but the Children map, which
@@ -185,19 +186,13 @@ func (f *FSM) Protected(ino Ino) bool {
 	return f.st.lineage(ino).protected
 }
 
-// TrashDue counts the deleted roots a Purge{Before: before} would take.
-func (f *FSM) TrashDue(before int64) int {
+// TrashDue reports whether a Purge{Before: before} would take a root: the front of the
+// root queue, O(1) (I-382).
+func (f *FSM) TrashDue(before int64) bool {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	n := 0
-	for _, set := range f.st.Trash {
-		for ino := range set {
-			if f.st.Inodes[ino].DeletedAt < before {
-				n++
-			}
-		}
-	}
-	return n
+	e, ok := f.stats.due.roots.front()
+	return ok && e.at < before
 }
 
 // ResolveFrom walks path inside the deleted root; an empty path is the root itself.
@@ -507,14 +502,14 @@ func (f *FSM) Stats() Stats {
 	defer f.mu.RUnlock()
 	s := f.stats
 	s.Inodes = len(f.st.Inodes)
-	s.cls = nil
+	s.cls, s.due = nil, nil
 	return s
 }
 
 // computeStats walks the state (Restore, tests); the applier keeps the same totals
 // incrementally.
 func computeStats(st *State) Stats {
-	s := Stats{cls: buildClasses(st)}
+	s := Stats{cls: buildClasses(st), due: buildDue(st)}
 	s.Inodes = len(st.Inodes)
 	trashed := map[Ino]bool{}
 	for _, set := range st.Trash {

@@ -274,6 +274,15 @@ func checkSnaps(st *State, bad func(string, ...any)) {
 	}
 }
 
+// CheckDerived compares everything this FSM keeps beside its state (the totals, the
+// placement classes and the due queues) against a recount: the model checker's per-step
+// check (I-153, I-377, I-381, I-382).
+func (f *FSM) CheckDerived() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return CheckStats(f.st, f.stats)
+}
+
 // CheckStats compares the stats the applier kept against a recount (I-153, I-156).
 func CheckStats(st *State, kept Stats) []string {
 	want := computeStats(st)
@@ -283,7 +292,12 @@ func CheckStats(st *State, kept Stats) []string {
 			return v
 		}
 	}
-	kept.cls, want.cls = nil, nil
+	if kept.due != nil {
+		if v := dueDrift(want.due, kept.due); v != nil {
+			return v
+		}
+	}
+	kept.cls, want.cls, kept.due, want.due = nil, nil, nil, nil
 	if kept != want {
 		return []string{fmt.Sprintf("stats drifted: kept %+v, recount %+v", kept, want)}
 	}

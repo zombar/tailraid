@@ -60,7 +60,7 @@ func (a *applier) trashEntry(in, p *Inode, now int64) {
 	delete(p.Children, in.Name)
 	in.DeletedAt = now
 	in.Ctime = now
-	st.indexTrash(p.Ino, in.Ino)
+	a.indexTrash(p.Ino, in)
 	if in.Type == TDir {
 		p.Nlink--
 		a.fold(in, now)
@@ -92,7 +92,7 @@ func (a *applier) fold(dir *Inode, now int64) {
 		}
 		dir.Children[r.Name] = ino
 		r.DeletedAt = 0
-		a.st.unindexTrash(dir.Ino, ino)
+		a.unindexTrash(dir.Ino, ino)
 		if r.Type == TDir {
 			dir.Nlink++
 		}
@@ -134,7 +134,7 @@ func (a *applier) trash(c *Trash) error {
 	}
 	if IsEphemeral(in.Name) || st.lineage(ino).reserved {
 		// an ephemeral name is unlinked, never trashed (I-157, L-208)
-		batch := a.collect([]*Inode{in}, math.MaxInt)
+		batch := a.collect(one(in), math.MaxInt)
 		return a.deleteBatch(batch, c.Now)
 	}
 	a.trashEntry(in, p, a.clock(c.Now))
@@ -171,7 +171,7 @@ func (a *applier) restore(c *Restore) error {
 		return ErrExist
 	}
 	now := a.clock(c.Now)
-	st.unindexTrash(in.Parent, in.Ino)
+	a.unindexTrash(in.Parent, in.Ino)
 	np.Children[name] = in.Ino
 	in.Parent, in.Name, in.DeletedAt, in.Ctime = parent, name, 0, now
 	if in.Type == TDir {
@@ -196,7 +196,7 @@ type delItem struct {
 // collect lists, post-order, at most limit inodes under roots: children by name, then
 // the roots deleted from inside a directory (its virtual children), then the directory
 // itself, so a cut leaves every surviving parent valid and the root still due.
-func (a *applier) collect(roots []*Inode, limit int) []delItem {
+func (a *applier) collect(next func() *Inode, limit int) []delItem {
 	var batch []delItem
 	seen := map[Ino]bool{} // a nested root may be due on its own and reached through its ancestor
 	var walk func(in *Inode, trashed bool) bool
@@ -234,12 +234,34 @@ func (a *applier) collect(roots []*Inode, limit int) []delItem {
 		batch = append(batch, delItem{in: in, trashed: trashed})
 		return true
 	}
-	for _, r := range roots {
+	for r := next(); r != nil; r = next() {
 		if !walk(r, false) {
 			break
 		}
 	}
 	return batch
+}
+
+// one is collect's roots for a single root.
+func one(in *Inode) func() *Inode {
+	return func() *Inode {
+		r := in
+		in = nil
+		return r
+	}
+}
+
+// indexTrash records in as a deleted root under parent, in the trash index and the root
+// queue (I-382).
+func (a *applier) indexTrash(parent Ino, in *Inode) {
+	a.st.indexTrash(parent, in.Ino)
+	a.stats.due.roots.add(dueEnt[Ino]{at: in.DeletedAt, id: in.Ino})
+}
+
+// unindexTrash forgets the root ino under parent in both.
+func (a *applier) unindexTrash(parent, ino Ino) {
+	a.st.unindexTrash(parent, ino)
+	a.stats.due.roots.remove(ino)
 }
 
 // deleteBatch drops every reference the batch's files hold (checked first, so a
@@ -261,7 +283,7 @@ func (a *applier) deleteBatch(batch []delItem, cmdNow int64) error {
 		in := it.in
 		switch {
 		case in.DeletedAt != 0:
-			st.unindexTrash(in.Parent, in.Ino)
+			a.unindexTrash(in.Parent, in.Ino)
 		default:
 			p := st.Inodes[in.Parent]
 			delete(p.Children, in.Name)
@@ -294,7 +316,10 @@ func (a *applier) purge(c *Purge) error {
 		return ErrBadCommand
 	}
 	st := a.st
-	var roots []*Inode
+	limit := int(c.Limit)
+	if limit == 0 {
+		limit = math.MaxInt
+	}
 	if c.Ino != 0 {
 		in, ok := st.Inodes[c.Ino]
 		if !ok || in.DeletedAt == 0 {
@@ -303,29 +328,33 @@ func (a *applier) purge(c *Purge) error {
 		if st.lineage(c.Ino).protected {
 			return ErrProtected // a user's "delete now" obeys the flag (docs/02 §Purge)
 		}
-		roots = []*Inode{in}
-	} else {
-		for _, set := range st.Trash {
-			for ino := range set {
-				if in := st.Inodes[ino]; in.DeletedAt < c.Before {
-					roots = append(roots, in)
-				}
-			}
+		return a.deleteAll(a.collect(one(in), limit), c.Now)
+	}
+	// the due roots in (DeletedAt, Ino) order from the front of the root queue, one at a
+	// time as collect asks, never a walk of Trash (I-382); a root taken but not deleted
+	// (the cut, or a refused batch) goes back
+	q := a.stats.due.roots
+	var taken []dueEnt[Ino]
+	next := func() *Inode {
+		e, ok := q.front()
+		if !ok || e.at >= c.Before {
+			return nil
 		}
-		sort.Slice(roots, func(i, j int) bool {
-			if roots[i].DeletedAt != roots[j].DeletedAt {
-				return roots[i].DeletedAt < roots[j].DeletedAt
-			}
-			return roots[i].Ino < roots[j].Ino
-		})
+		taken = append(taken, q.take())
+		return st.Inodes[e.id]
 	}
-	limit := int(c.Limit)
-	if limit == 0 {
-		limit = math.MaxInt
+	err := a.deleteAll(a.collect(next, limit), c.Now)
+	for _, e := range taken {
+		if in := st.Inodes[e.id]; in != nil && in.DeletedAt != 0 {
+			q.add(e)
+		}
 	}
-	batch := a.collect(roots, limit)
+	return err
+}
+
+func (a *applier) deleteAll(batch []delItem, now int64) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	return a.deleteBatch(batch, c.Now)
+	return a.deleteBatch(batch, now)
 }

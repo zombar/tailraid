@@ -1,12 +1,10 @@
 package meta
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,7 +71,7 @@ func (f *FSM) SetSnapshotHook(h SnapshotHook) {
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
 	st := NewState()
-	return &FSM{st: st, stats: Stats{cls: newClassTable(st)}, waitCh: make(chan struct{})}
+	return &FSM{st: st, stats: Stats{cls: newClassTable(st), due: newDueIndex()}, waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
@@ -569,9 +567,11 @@ func (d refDelta) commit(st *State, stats *Stats, now int64) {
 				c.TombstonedAt = now
 			}
 			st.Tombs[h] = struct{}{}
+			stats.due.tomb(h, c.TombstonedAt)
 		} else {
 			c.TombstonedAt = 0
 			delete(st.Tombs, h)
+			stats.due.untomb(h)
 		}
 		if !fresh {
 			stats.chunkOut(c, wasLive)
@@ -1100,20 +1100,15 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 		// may be referenced by it, so it waits until the copy to its mirror ends
 		before = at
 	}
-	var victims []GCVictim
-	for h := range st.Tombs {
+	// the queues give the lowest due hashes without a walk of Tombs (I-381): the same
+	// victims in the same order on every replica, the hash order the rule names (I-103)
+	hashes := a.stats.due.takeTombs(before, int(c.Limit))
+	victims := make([]GCVictim, 0, len(hashes))
+	for _, h := range hashes {
 		ch := st.Chunks[h]
-		if ch.Refs == 0 && ch.TombstonedAt < before {
-			victims = append(victims, GCVictim{Hash: h, K: ch.K, M: ch.M, Placement: append([]NodeIdx(nil), ch.Placement...)})
-		}
-	}
-	sort.Slice(victims, func(i, j int) bool { return bytes.Compare(victims[i].Hash[:], victims[j].Hash[:]) < 0 })
-	if c.Limit != 0 && len(victims) > int(c.Limit) {
-		victims = victims[:c.Limit] // the rest on the next entry (I-103); the order is the hash order, so every replica cuts the same
-	}
-	for _, v := range victims {
-		delete(st.Chunks, v.Hash)
-		delete(st.Tombs, v.Hash)
+		victims = append(victims, GCVictim{Hash: h, K: ch.K, M: ch.M, Placement: append([]NodeIdx(nil), ch.Placement...)})
+		delete(st.Chunks, h)
+		delete(st.Tombs, h)
 	}
 	a.stats.Tombstoned -= len(victims)
 	return Result{Victims: victims}, nil

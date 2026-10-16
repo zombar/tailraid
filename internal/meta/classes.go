@@ -145,14 +145,6 @@ func (c Class) Representative(vol Volume) Chunk {
 	return Chunk{K: c.K, M: c.M, Size: size, Refs: 1, Placement: slices.Clone(c.Placement)}
 }
 
-// CheckClasses compares the class table this FSM kept against a recount of its state
-// (I-377): the model checker's per-step check.
-func (f *FSM) CheckClasses() []string {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	return classesDrift(buildClasses(f.st), f.stats.cls)
-}
-
 func classesDrift(want, kept *classTable) []string {
 	if kept == nil {
 		return []string{"no class table kept"}

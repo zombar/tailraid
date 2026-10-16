@@ -291,6 +291,28 @@ victim list is emitted in hash order. **The sync hold:** while any catalogue row
 so no chunk tombstoned after a snapshot began is collected before its copy to the mirror
 ends (16 §4, I-181); the bound is state, so every replica applies the same one.
 
+**Neither walks.** `GCDelete` and `Purge` with `Before` name a set and an order, and the
+applier finds them without visiting the rest. It keeps two queues with every apply and
+rebuilds them on `Restore`, like the stats and the placement classes (never encoded):
+
+- **Tombstones**, held in `(TombstonedAt, Hash)` order. A `GCDelete` first moves the ones
+  now due (`TombstonedAt < Before`, after the sync hold) into a second queue held in hash
+  order. It then takes up to `Limit` from the front of that queue. A due-queue entry that
+  this `Before` does not reach (the sync hold, or a lower `Before` than an earlier entry's)
+  goes back to the first queue.
+- **Deleted roots**, held in `(DeletedAt, Ino)` order. A `Purge{Before}` takes roots from
+  the front one at a time while they are due, until `Limit` inodes are collected. A root
+  it did not finish stays at the front.
+
+A re-referenced chunk leaves its queue at that apply, and so does a restored, folded or
+deleted root. Each entry costs O(log n) when it enters or leaves a queue. So a GC batch
+costs O(batch + newly due) · log n, and a million-chunk `rm -rf` drains in about a
+thousand entries of 1024 rather than a thousand walks of a million (I-381). The entries
+taken, and their order, are exactly the rules' above. A replica on the previous binary,
+which walks, therefore applies every entry identically, and no codec gate is needed. The
+GC worker asks `TrashDue(before)` (is the oldest root due?) before each `Purge` entry. That
+is a look at the front of the root queue, O(1), not a count of the trash (I-382).
+
 **SnapshotBegin** (16 §3). `Mirror` must be an `Active` `KindMirror` row (`ErrNoSuchNode`);
 `Name` 1 to 64 bytes, no `/`, not `.` or `..` (`ErrBadCommand`) and free on that mirror
 (`ErrExist`); the mirror must have no `Syncing` row (`ErrExist`). Allocates `ID =
@@ -587,6 +609,15 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-103** — A `GCDelete` removes at most `Limit` entries, the lowest hashes first, and
   the GC worker proposes again while a batch comes back full, so a backlog of any size
   drains in bounded applies and every replica removes the same entries per entry.
+- **I-381** — A `GCDelete` finds its victims through the applier's tombstone queues, never
+  by walking `Tombs`. It costs O((victims + chunks newly due) · log n) whatever the
+  backlog. The victims and their order are exactly those of the walk the rule describes,
+  under any `Before`, `Limit` and sync hold. The queues equal a rebuild from the state
+  after every apply and after `Restore`.
+- **I-382** — A `Purge` with `Before` takes its roots from the applier's root queue in
+  `(DeletedAt, Ino)` order, never by walking `Trash`, and deletes exactly what the walk
+  would. `TrashDue` answers from the front of that queue in O(1). The queue equals a
+  rebuild after every apply and after `Restore`.
 - **I-104** — A snapshot is a deep copy of the mutable state taken under the read lock,
   and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
   `Commit` applied after the snapshot never changes it, and a snapshot is written and read
@@ -680,6 +711,8 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
 | I-102 | `TestFSM_SetPlacement_ExpectConflict`, `TestEncodeCommand_Golden` |
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
+| I-381 | `TestFSM_GCDelete_QueueMatchesWalk`, `TestFSM_GCDelete_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
+| I-382 | `TestFSM_Purge_QueueMatchesWalk`, `TestFSM_Purge_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
 | I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |
 | I-105 | `TestFSM_IncompatibleEntryCounted`, `TestCodecCompatible`, `TestMembersBadSlotHealthStatus` |
 | I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |

@@ -120,8 +120,8 @@ func TestFSM_Trash_Table(t *testing.T) {
 	if st.TrashInodes != 5 || st.TrashBytes != 2*testCS || st.LogicalBytes != 0 {
 		t.Fatalf("stats after the directory: %+v", st)
 	}
-	if tf.f.TrashDue(12) != 1 || tf.f.TrashDue(13) != 2 {
-		t.Fatalf("TrashDue %d %d", tf.f.TrashDue(12), tf.f.TrashDue(13))
+	if tf.f.TrashDue(1) || !tf.f.TrashDue(12) || !tf.f.TrashDue(13) {
+		t.Fatalf("TrashDue %v %v %v", tf.f.TrashDue(1), tf.f.TrashDue(12), tf.f.TrashDue(13))
 	}
 	// an ephemeral name is unlinked, never trashed (L-208)
 	tmp := tf.create(RootIno, ".x.tailraid-upload")
@@ -345,7 +345,7 @@ func TestFSM_Purge_Boundary(t *testing.T) {
 			if _, ok := tf.f.GetInodeAny(d); !ok {
 				t.Fatalf("limit %d: the root went before its children", tc.limit)
 			}
-			if tf.f.TrashDue(101) != 1 {
+			if !tf.f.TrashDue(101) {
 				t.Fatalf("limit %d: the cut root is no longer due", tc.limit)
 			}
 			tf.ok(Command{Op: OpPurge, Purge: &Purge{Before: 101, Now: 201}}) // the next entry finishes it
