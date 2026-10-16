@@ -21,7 +21,7 @@ func TestMain(m *testing.M) {
 
 var ctx = context.Background()
 
-func opts(t *testing.T, dir string) Options {
+func opts(t testing.TB, dir string) Options {
 	t.Helper()
 	id, err := LoadOrCreateNodeID(dir)
 	if err != nil {
@@ -31,7 +31,7 @@ func opts(t *testing.T, dir string) Options {
 	return Options{DataDir: dir, NodeID: id, Transport: trans, Timing: &RaftTiming{Heartbeat: time.Second, Election: time.Second, LeaderLease: 500 * time.Millisecond, Commit: 10 * time.Millisecond, SnapshotInterval: 500 * time.Millisecond}}
 }
 
-func bootstrap(t *testing.T, dir string) *Node {
+func bootstrap(t testing.TB, dir string) *Node {
 	t.Helper()
 	n, err := Bootstrap(ctx, opts(t, dir), meta.Node{Name: "solo", Kind: meta.KindDevice, Capacity: 1 << 30},
 		meta.SetVolume{ChunkSize: 1 << 20, K: 1, M: 0, Now: 1}, false, "token")

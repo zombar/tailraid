@@ -33,6 +33,7 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 	for i := range all {
 		nodes[all[i].Idx] = all[i]
 	}
+	live = meta.FreezeLiveness(all, live) // each member asked once per walk, not once per slot (I-375)
 	v := VolumeHealth{DegradedHashes: map[meta.Hash]bool{}, Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}, Bytes: map[meta.NodeIdx]uint64{}}
 	in := meta.HealthInput{Nodes: nodes, Live: live, FillAfter: fillAfter}
 	hv := meta.NewHomeView(all)

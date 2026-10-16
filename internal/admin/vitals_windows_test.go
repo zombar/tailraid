@@ -17,11 +17,11 @@ func TestVitals_IfTableSum(t *testing.T) {
 		{InterfaceIndex: 4, Type: windows.IF_TYPE_ETHERNET_CSMACD, InOctets: 1000, OutOctets: 200},
 		{InterfaceIndex: 12, Type: windows.IF_TYPE_TUNNEL, InOctets: 50, OutOctets: 7},
 	}
-	rx, tx, trx, ttx, ok := sumIfRows(rows, 12)
+	rx, tx, trx, ttx, ok := sumIfs(ifRows(rows, 12))
 	if !ok || rx != 1050 || tx != 207 || trx != 50 || ttx != 7 {
 		t.Fatalf("got %d %d %d %d %v", rx, tx, trx, ttx, ok)
 	}
-	if _, _, _, _, ok := sumIfRows(nil, 0); ok {
+	if _, _, _, _, ok := sumIfs(ifRows(nil, 0)); ok {
 		t.Fatal("an empty table reported counters")
 	}
 }

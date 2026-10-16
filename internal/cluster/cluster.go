@@ -113,6 +113,7 @@ type Node struct {
 	log         *slog.Logger
 	raftAddrFor func(meta.Node) raft.ServerAddress // Options.RaftAddrFor, or the record's host:port
 	closed      atomic.Bool
+	selfIdx     atomic.Uint32 // the last index SelfIdx found; checked against its row on every use
 
 	fwdMu sync.Mutex
 	fwd   Forwarder
@@ -605,11 +606,19 @@ func (n *Node) Close() error {
 
 // --- single-node views used by M1 ---------------------------------------------------
 
-// SelfIdx finds this node's NodeIdx in the FSM by raft ID.
+// SelfIdx finds this node's NodeIdx in the FSM by raft ID. The index found last is checked
+// against its row first, so the common call is one lookup rather than a scan of the
+// member table: a status walk asks once per slot (I-375).
 func (n *Node) SelfIdx() (meta.NodeIdx, bool) {
+	if idx := meta.NodeIdx(n.selfIdx.Load()); idx != 0 { //nolint:gosec // stored from a NodeIdx
+		if nd, ok := n.FSM.Node(idx); ok && nd.ID == n.ID && nd.State != meta.Removed {
+			return idx, true
+		}
+	}
 	nd, ok := n.FSM.NodeByID(n.ID)
 	if !ok {
 		return 0, false
 	}
+	n.selfIdx.Store(uint32(nd.Idx))
 	return nd.Idx, true
 }

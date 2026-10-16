@@ -15,15 +15,17 @@ import (
 // leaves its fields absent (I-85).
 func platformVitals(m *MachineReport, tailnet *net.Interface) {
 	rusageVitals(m)
-	if b, err := os.ReadFile("/proc/net/dev"); err == nil {
+	procNet.apply(m, func() []ifCount {
+		b, err := os.ReadFile("/proc/net/dev")
+		if err != nil {
+			return nil
+		}
 		name := ""
 		if tailnet != nil {
 			name = tailnet.Name
 		}
-		if rx, tx, trx, ttx, ok := parseNetDev(string(b), name); ok {
-			m.NetRx, m.NetTx, m.TailnetRx, m.TailnetTx = rx, tx, trx, ttx
-		}
-	}
+		return parseNetDev(string(b), name)
+	})
 	if f := fields("/proc/self/statm"); len(f) > 1 {
 		if pages, err := strconv.ParseUint(f[1], 10, 64); err == nil {
 			m.RSS = pages * uint64(os.Getpagesize())

@@ -40,6 +40,40 @@ type Liveness interface {
 	DeadFor(idx NodeIdx) time.Duration
 }
 
+// FrozenLiveness is a Liveness read once: every node of the table asked one time when it
+// is made, so a walk that judges every slot of every chunk asks the source about each
+// member once rather than once per slot, and judges the whole walk by one view (I-375).
+// An index not in the table is passed through to the source.
+type FrozenLiveness struct {
+	src  Liveness
+	live map[NodeIdx]bool
+	dead map[NodeIdx]time.Duration
+}
+
+// FreezeLiveness asks live about every node in nodes once.
+func FreezeLiveness(nodes []Node, live Liveness) FrozenLiveness {
+	f := FrozenLiveness{src: live, live: make(map[NodeIdx]bool, len(nodes)), dead: make(map[NodeIdx]time.Duration, len(nodes))}
+	for i := range nodes {
+		idx := nodes[i].Idx
+		f.live[idx], f.dead[idx] = live.IsLive(idx), live.DeadFor(idx)
+	}
+	return f
+}
+
+func (f FrozenLiveness) IsLive(idx NodeIdx) bool {
+	if l, ok := f.live[idx]; ok {
+		return l
+	}
+	return f.src.IsLive(idx)
+}
+
+func (f FrozenLiveness) DeadFor(idx NodeIdx) time.Duration {
+	if d, ok := f.dead[idx]; ok {
+		return d
+	}
+	return f.src.DeadFor(idx)
+}
+
 // SlotIssue is one placement slot that needs re-placing, with the reason of docs/06 §4.
 // Readable marks a slot whose shard is still served by a live node (a draining holder):
 // it counts toward readability and keeps its node until a replacement is placed (I-65).
