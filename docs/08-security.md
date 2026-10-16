@@ -63,6 +63,7 @@ Endpoints and who may call them:
 | `POST /v1/join` | any tailnet identity with the token | step 2 skipped, step 3 against the claimed StableID |
 | `GET /v1/status` | members | |
 | `GET /v1/members` | members | the device rows, for a restarting node's seed (I-282) |
+| `GET /v1/restores`, `POST /v1/restores`, `POST /v1/restores/{id}/cancel` | members | this host's restore jobs, a job's start and its cancel, the last two forwarded to the mirror's host by the node a user asked, which checked the user's role first (docs/16 §6); the body names the actor, as a member's commands do (docs/21 §4), and the host checks the role again before the job runs and the FSM on every proposal; `/health` carries only the count of jobs, since a job names paths and a user |
 | `GET /v1/stats?since=` | members | this node's unsealed stats rows newer than `since`, at most 720, never another member's (docs/17 §3, I-199) |
 | `/dev/*` | members, only with `dev.enabled` | |
 | web UI (`<tsIP>:20482`): `GET /`, `/assets/*`, `/api/*`, `GET`/`HEAD /files/*` | members, or any tailnet device logged in as this node's user | docs/13 §2; no cluster header |
@@ -71,7 +72,7 @@ Endpoints and who may call them:
 Authorization is checked before any request body is consumed (`http.MaxBytesReader` is
 installed after the check). A rejected PUT therefore costs the attacker's bandwidth, not
 the node's disk. Every body is bounded (I-116): a shard PUT by the chunk size, `/v1/apply`
-at 4 MiB, the JSON of `/v1/join`, `/v1/members`, `/v1/admin` and `/dev/fault` at 64 KiB,
+at 4 MiB, the JSON of `/v1/join`, `/v1/members`, `/v1/admin`, `/v1/restores` and `/dev/fault` at 64 KiB,
 `/v1/bad-slot` and the web UI's single-entry routes (`mkdir`, `rename`, `restore`,
 `purge`, `flags`, `pin`) at 4 KiB, its batch routes (`move`, `delete`) and a thumbnail
 `PUT` at 256 KiB (docs/13 §3); a body past its bound is a `400` before anything is

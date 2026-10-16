@@ -505,6 +505,53 @@
         <div class="bar-row"><span class="bar-label">disk</span><div class="bar warn"><i style="width:96%"></i></div><span class="bar-val">1.9 TiB used of 2.0 TiB</span></div>
       </div>
     </div>
+    <h3>Restores <span class="small dim">one card per job; the states</span></h3>
+    <div class="cards">
+      <div class="card restore">
+        <div class="name-row"><span class="dot ok"></span><span class="name">/music</span><span class="badges"><span class="badge">on honker</span><span class="badge">counting</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar"></div><span class="bar-val">counting what to restore · 2,104 files so far</span></div>
+        <div class="meta"><span>from honker-m1 · 2026-10-13-2342Z</span><span>by gurgeh</span><span>started 19:40</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore">
+        <div class="name-row"><span class="dot ok"></span><span class="name">/music</span><span class="badges"><span class="badge">on honker</span><span class="badge">running</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar"><i style="width:31%"></i></div><span class="bar-val">280.1 GiB of 895.0 GiB · 31 % · 41.0 MiB/s · 4 h 16 m left</span></div>
+        <div class="bar-row"><span class="bar-label">files</span><div class="bar"><i style="width:30%"></i></div><span class="bar-val">3,480 of 11,577 · 96 already there</span></div>
+        <div class="meta"><span>from honker-m1 · 2026-10-13-2342Z</span><span>by gurgeh</span><span>started 19:40</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore warn">
+        <div class="name-row"><span class="dot warn"></span><span class="name">/music</span><span class="badges"><span class="badge">on honker</span><span class="badge warn">retrying</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar warn"><i style="width:31%"></i></div><span class="bar-val">280.1 GiB of 895.0 GiB · 31 % · again in 4 m: no leader</span></div>
+        <div class="meta"><span>from honker-m1 · 2026-10-13-2342Z</span><span>by gurgeh</span><span>started 19:40 · 3 tries since 20:02</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore warn">
+        <div class="name-row"><span class="dot warn"></span><span class="name">/photos/2019</span><span class="badges"><span class="badge">on atlas</span><span class="badge warn">waiting</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar warn"><i style="width:12%"></i></div><span class="bar-val">14.0 GiB of 118.6 GiB · 12 % · atlas-m1 is offline: attach it and the restore goes on</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore warn">
+        <div class="name-row"><span class="dot warn"></span><span class="name">/films</span><span class="badges"><span class="badge">on honker</span><span class="badge warn">queued</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar"></div><span class="bar-val">after the restore of /music on honker</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore bad">
+        <div class="name-row"><span class="dot bad"></span><span class="name">/shared/lee</span><span class="badges"><span class="badge">on pike</span><span class="badge bad">failed</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar bad"><i style="width:8%"></i></div><span class="bar-val">2.0 GiB of 24.9 GiB · lee no longer holds admin on /shared: a rerun goes on from here</span></div>
+        <div class="meta"><span>from pike-m1 · 2026-10-11-0000Z</span><span>by lee</span><span>failed 2026-10-12 08:30</span></div>
+      </div>
+      <div class="card restore done">
+        <div class="name-row"><span class="dot off"></span><span class="name">/films/Arrival (2016)</span><span class="badges"><span class="badge">on pike</span><span class="badge">cancelled</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar off"><i style="width:40%"></i></div><span class="bar-val">3.1 GiB of 7.8 GiB · what was restored stays</span></div>
+        <div class="meta"><span>from pike-m1 · 2026-10-12-0900Z</span><span>by kim</span><span>cancelled 10:02</span></div>
+      </div>
+      <div class="card restore done">
+        <div class="name-row"><span class="dot ok"></span><span class="name">/docs/taxes</span><span class="badges"><span class="badge">on pike</span><span class="badge">done</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar"><i style="width:100%"></i></div><span class="bar-val">1.2 GiB · 214 files · 3 already there · 41 chunks copied back from pike-m1</span></div>
+        <div class="meta"><span>from pike-m1 · 2026-10-11-0000Z</span><span>by kim</span><span>finished yesterday 22:04 · took 1 m 12 s</span></div>
+      </div>
+    </div>
     <div class="snap-head"><button type="button">Take a snapshot</button><span class="small dim">every online mirror · 41 snapshots</span></div>
     <table class="snapshots">
       <thead><tr><th>name</th><th class="mirror">mirror</th><th class="taken">taken</th><th class="holds">added</th><th class="acts"></th></tr></thead>
@@ -513,6 +560,7 @@
         <tr class="offline"><td class="name">2026-10-09-0000Z</td><td class="mirror">atlas-m1</td><td class="taken">2026-10-09 00:00 · daily</td><td class="holds">312.0 MiB</td><td class="acts"><button type="button" disabled title="atlas-m1 is offline: attach it to browse">Browse</button></td></tr>
       </tbody>
     </table>
+    <div class="pager"><button type="button">Newer</button><span class="small dim">21–40 of 57</span><button type="button">Older</button></div>
   </section>
 
 

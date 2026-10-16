@@ -518,14 +518,19 @@ tailraid mirror ls|cat|export <path> … # read a mirror disk with no cluster (d
 
 tailraid snapshot ls [--mirror <name>]                  # name, mirror, taken, state, size, what it added
 tailraid snapshot create [name] [--mirror <name>]       # a manual snapshot: permanent; every online mirror unless named
-tailraid snapshot restore <mirror>/<name> <path> [--to <dir>] [--as <name>]   # a file or a folder, into the live volume
+tailraid snapshot restore <mirror>/<name> <path> [--to <dir>] [--as <name>]   # a file or a folder, into the live volume: a job on the mirror's host
+tailraid snapshot restore --cancel <job>                # stop a restore job; what it restored stays
 tailraid versions <path>                                # the file's versions on the online mirrors
 tailraid versions <path> --revert <mirror>/<name> | --copy <mirror>/<name> --as <name>
 ```
 
 Every verb but the standalone readers goes through the admin RPC to the leader (`mirror`,
-`snapshot` and `versions` ops); a restore runs on the node asked, as the gateways' writes
-do (docs/16 §6). The config:
+`snapshot` and `versions` ops); a revert and a copy run on the node asked, as the gateways'
+writes do (docs/16 §6). `snapshot restore` starts a restore job on the mirror's host and
+returns once the host has recorded it, printing the job and where it runs ("restore 3-7
+started on honker: /music from honker-m1 · 2026-10-13-2342Z"); the job goes on whatever
+happens to the terminal, and `tailraid status` lists it while it runs, the dashboard's
+Restores block with its progress (docs/13 §7). The config:
 
 ```yaml
 node:
@@ -547,7 +552,11 @@ last_seen, newest, syncing{id, snapshot, read, total, bytes_new}}]` for every mi
 cluster, from the probes (docs/16 §1; `path` only on the mirror's own host), and
 `volume.snapshots`; `tailraid status` prints one line per
 mirror (`mirror  pike/m1  online · 1.2 TiB used, 2.4 TiB free · newest 12 min ago ·
-syncing 41 %`). `check` warns when a mirror has been offline longer than
+syncing 41 %`). It also carries `restores[{id, host, mirror, snapshot, src, dst, user,
+state, error, files_total, bytes_total, files_done, bytes_done, existing, rate, started,
+ended, next_try}]`, every restore job of every live host and those finished in the last 7
+days (docs/16 §6), and `tailraid status` prints one line per unfinished job (`restore
+3-7  /music on honker · running · 280.1 GiB of 895.0 GiB · 41.0 MiB/s · 4 h 16 m left`). `check` warns when a mirror has been offline longer than
 `mirrors.stale_after`, when an online mirror's newest snapshot is older than `2 × every`,
 when a snapshot is incomplete, and when a mirror is under its free-space reserve.
 

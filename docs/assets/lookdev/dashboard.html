@@ -308,6 +308,29 @@
         <div class="meta"><span>newest 1 h ago</span><span>1 incomplete: 3 chunks unreadable</span></div>
       </div>
     </div>
+    <!-- restores (docs/16 §6, I-369): every restore job of the last 7 days from status.restores, newest first; absent when there is none -->
+    <h3 id="restores">Restores</h3>
+    <div class="cards">
+      <div class="card restore">
+        <div class="name-row"><span class="dot ok"></span><span class="name">/media/Concerts 2024</span><span class="badges"><span class="badge">on pike</span><span class="badge">running</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar"><i style="width:46%"></i></div><span class="bar-val">412.3 GiB of 895.0 GiB · 46 % · 38.2 MiB/s · 3 h 35 m left</span></div>
+        <div class="bar-row"><span class="bar-label">files</span><div class="bar"><i style="width:45%"></i></div><span class="bar-val">5,312 of 11,577 · 1,204 already there</span></div>
+        <div class="meta"><span>from pike-m1 · 2026-10-12-0900Z</span><span>by kim</span><span>started 18:40 · resumed after a restart at 19:12</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore warn">
+        <div class="name-row"><span class="dot warn"></span><span class="name">/photos/2019</span><span class="badges"><span class="badge">on atlas</span><span class="badge warn">waiting</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar warn"><i style="width:12%"></i></div><span class="bar-val">14.0 GiB of 118.6 GiB · 12 % · atlas-m1 is offline: attach it and the restore goes on</span></div>
+        <div class="bar-row"><span class="bar-label">files</span><div class="bar warn"><i style="width:10%"></i></div><span class="bar-val">402 of 3,980</span></div>
+        <div class="meta"><span>from atlas-m1 · before reinstall</span><span>by lee</span><span>started 2026-10-12 09:14</span></div>
+        <div class="card-acts"><button type="button">Cancel restore</button></div>
+      </div>
+      <div class="card restore done">
+        <div class="name-row"><span class="dot ok"></span><span class="name">/docs/taxes</span><span class="badges"><span class="badge">on pike</span><span class="badge">done</span></span></div>
+        <div class="bar-row"><span class="bar-label">bytes</span><div class="bar"><i style="width:100%"></i></div><span class="bar-val">1.2 GiB · 214 files · 3 already there · 41 chunks copied back from pike-m1</span></div>
+        <div class="meta"><span>from pike-m1 · 2026-10-11-0000Z</span><span>by kim</span><span>finished yesterday 22:04 · took 1 m 12 s</span></div>
+      </div>
+    </div>
     <div class="snap-head"><button type="button">Take a snapshot</button><span class="small dim">every online mirror · 41 snapshots · 2 manual</span></div>
     <table class="snapshots">
       <thead><tr><th>name</th><th class="mirror">mirror</th><th class="taken">taken</th><th class="holds">added</th><th class="acts"></th></tr></thead>
@@ -320,6 +343,8 @@
         <tr><td class="name">2026-09-14-1400Z</td><td class="mirror">pike-m1</td><td class="taken">2026-09-14 14:00 · first</td><td class="holds">1.0 TiB</td><td class="acts"><button type="button">Browse</button></td></tr>
       </tbody>
     </table>
+    <!-- 20 rows a page, newest first (I-369); the pager shows only past 20 snapshots -->
+    <div class="pager"><button type="button" disabled>Newer</button><span class="small dim">1–20 of 41</span><button type="button">Older</button></div>
     <div class="small dim">a snapshot copies only what changed since the last one on its mirror; "added" is what it wrote</div>
   </section>
 
