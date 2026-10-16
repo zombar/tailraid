@@ -2,7 +2,21 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
-## v0.10.1 (2026-10-15)
+## v0.10.2 (2026-10-16)
+
+### Changes
+
+- soak: phase 32 restore jobs, its report section, and the runner in internal/restore so the harness runs it (I-363..I-368) ([025d71b](https://github.com/zombar/tailraid/commit/025d71b))
+- webui: a folder restore is a job, the dashboard's Restores block, the Snapshots pager (I-369) ([bffeb73](https://github.com/zombar/tailraid/commit/bffeb73))
+- node, rpc, cli: a tree restore is a job on the mirror's host, resumed, queued, cancellable, in status (I-363..I-368) ([f0d3b0d](https://github.com/zombar/tailraid/commit/f0d3b0d))
+- webui: a target's expected share caps at the live chunks, not live minus tombstoned ([e600fe1](https://github.com/zombar/tailraid/commit/e600fe1))
+- vfs: gofmt the restore tests' gate ([d1383f9](https://github.com/zombar/tailraid/commit/d1383f9))
+- vfs: the restore tests' gate closes its channels once, however often the reads in flight reach the count ([0d740a6](https://github.com/zombar/tailraid/commit/0d740a6))
+- vfs: a tree restore writes four files and eight chunks at once, reports its progress and counts its totals first (I-365, I-366, I-368) ([5f7ed1e](https://github.com/zombar/tailraid/commit/5f7ed1e))
+- lookdev: a restore card's Cancel sits in its bottom right corner, level across a row ([038d812](https://github.com/zombar/tailraid/commit/038d812))
+- docs, lookdev: restore jobs (docs/16 §6), the dashboard's Restores block and the Snapshots pager, I-363..I-369, stubs ([d2d1549](https://github.com/zombar/tailraid/commit/d2d1549))
+
+## v0.10.1 (2026-10-16)
 
 ### Changes
 
