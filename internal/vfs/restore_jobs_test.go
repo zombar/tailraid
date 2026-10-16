@@ -30,6 +30,7 @@ type gatedSource struct {
 	block   meta.Hash
 	release chan struct{}
 	blocked chan struct{} // closed once a read of block is waiting
+	metOnce, blockedOnce sync.Once
 }
 
 func gateSource(src *testharness.Mirrors, meet int) *gatedSource {
@@ -40,14 +41,14 @@ func (g *gatedSource) Object(ctx context.Context, m meta.NodeIdx, h meta.Hash) (
 	g.mu.Lock()
 	g.in++
 	g.max = max(g.max, g.in)
-	if g.in == g.meet {
-		close(g.met)
+	if g.in >= g.meet {
+		g.metOnce.Do(func() { close(g.met) }) // in falls and climbs back: met once
 	}
 	block := h == g.block && g.block != meta.HashZero
 	g.mu.Unlock()
 	defer func() { g.mu.Lock(); g.in--; g.mu.Unlock() }()
 	if block {
-		close(g.blocked)
+		g.blockedOnce.Do(func() { close(g.blocked) })
 		select {
 		case <-g.release:
 		case <-ctx.Done():
