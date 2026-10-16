@@ -270,17 +270,72 @@ the k data shards, and proposes `SetShardSums`; a chunk that fails its hash is l
 the scrub. `status` reports `sums_recorded` and `sums_pending` in the last pass's stats;
 the backfill is complete when the latter reads 0. A cluster written on an older release is covered at the pass rate: 256 chunks a pass, a pass about every four minutes while the backfill reads 1 GiB per pass at 4 MiB chunks (110k chunks took about 30 hours on the real cluster).
 
+## 4a. Where a pass looks: placement classes and the sweep
+
+Until 0.10.4 every pass, a minute after the last, copied every live chunk, sorted them
+and derived each one's state and home: work in proportion to the volume, all day, on a
+healthy cluster (the leader of the real cluster sat at a core and more), and `status`
+walked the same table every 2 s while anyone watched (12 §8). Neither looks at a chunk
+that needs nothing now.
+
+**Placement classes (I-377).** A chunk's state without shard reports (its bad slots,
+readable count, pending migration and host skew, docs/11 §2) depends only on its policy,
+its slots as a set, whether it is a small `k = 1` chunk, the node table and liveness. The
+FSM therefore keeps the live chunks grouped by **class**, the key `(k, m, small, sorted
+slots)`, each with its chunk count, its shard bytes (what each slot of the class holds)
+and its members. The applier keeps the table in step with every command at the same
+points it keeps the volume totals (a chunk counted live, uncounted, or re-placed), and
+`Restore` rebuilds it; it is never encoded, and a recount gives the same table (the
+model checker compares after every step). The number of classes is the number of slot
+sets in use, which the targets bound (at most `C(targets, k+m)` plus the degraded sets),
+not the volume: 21 on seven targets at `3+2`.
+
+**Status from classes (I-378).** `ScanHealth` judges each class once by a representative
+chunk (its policy, its slots, a size with its small bit) and counts the result for all
+its chunks: degraded, repair-pending, unreadable, policy-stale and host skew, and each
+node's slots, shard bytes and missing slots. `check --files` lists the files of the
+members of the classes in those states and nothing else. The disk skew (away slots whose
+home is another disk of their host) depends on each chunk's hash, so it is the leader's
+last sweep's count (`repair.stats.disk_skew`); a follower's report leaves it at 0.
+
+**Targeted passes and the sweep (I-379).** A pass judges the classes and visits only:
+the members of classes with a bad slot or a pending migration (cases 1–4 and 6 of §4),
+the chunks with a reported slot (case 5), the next `HomeBatch` chunks of the home queue
+while the gate is open (case 7), and the next `SumsBatch` chunks of the sums queue. The
+**sweep** is a pass that visits every chunk as passes did before: the first pass as
+leader, the first after `SweepInterval` (1 h) since the last sweep, a pass whose home
+candidate set changed, `check --scrub`, a pass while the gate is open and its queue is
+empty, and the first pass after repairs re-placed chunks once no class needs work (a
+refill can leave a slot away from home, which only a sweep counts). A sweep scrubs the
+chunks whose turn came since the previous sweep (§5), counts the slots away from home,
+the movable bytes and the disk skew (between sweeps `status` shows these from the last
+one), and queues in hash order the movable chunks it did not move and the chunks still
+without sums, at most `QueueMax` (2^20) each, for the passes after it. On an idle volume
+a pass costs the number of classes; a sweep costs one walk an hour. A test rig sets
+`SweepInterval` to 0 to sweep every pass.
+
+**Stuck classes (I-380).** A class whose chunks a pass visited and could do nothing for,
+with no PUT tried (no live spare outside the kept slots, fewer than k readable slots), is
+**stuck** under the view it was judged in: each member's state, liveness and whether it
+can take a shard now (not held slow, not marked full), and the volume's policy. The
+passes after it skip the class until that view changes (a target joins or comes back, a
+hold ends), `StuckRetry` (10 min) passes, or a sweep visits it. A failed attempt (a PUT
+refused or cut, a read that failed, a migration short of k acks, a commit that lost a
+race) is retried on the next pass as before. Without this, a dead disk with no spare
+would have every pass visit every chunk on it for nothing.
+
 ## 5. Scrub
 
-Every scan pass also verifies the chunks whose turn has come, so that the background
-passes verify the whole volume once per `repair.scrub_period` (default `168h`, a week; `0` turns
+Every sweep (§4a) also verifies the chunks whose turn has come, so that the background
+sweeps verify the whole volume once per `repair.scrub_period` (default `168h`, a week; `0` turns
 the background scrub off; `tailraid check --scrub` runs one 100 % pass through the leader's
 repairer, with the configured `fill_after` and rate limit, serialized with the background
 passes). The turn is a function of time, not of the pass count: chunk `c` has the phase
-`φ(c) = BigEndian(c.Hash[0:8]) mod P` (P the period in nanoseconds), and a pass starting
+`φ(c) = BigEndian(c.Hash[0:8]) mod P` (P the period in nanoseconds), and a sweep starting
 at `t` scrubs the chunks whose phase lies in the arc `(t₀ mod P, t mod P]`, where `t₀` is
-the start of the repairer's previous pass, or `t − ScanInterval` on its first pass as
-leader; an arc of P or more covers every chunk (I-215). The cost is therefore stored bytes
+the start of the repairer's previous sweep, or `t − SweepInterval` on its first sweep as
+leader; an arc of P or more covers every chunk, and the passes between sweeps scrub
+nothing (I-215). The cost is therefore stored bytes
 ÷ P whatever the pass rate and the volume size, and nothing has to survive a leader
 change. (Until 0.5.2 the sample was 1 % of the chunks per pass: a pass starts a minute
 after the last one ends, so a 720 GB volume was re-read every 6–7 hours, ~2.5 TB a day of
@@ -395,11 +450,33 @@ state to patch.
   than `trash.retention` on the FSM clock (`max(leader clock, LastNow)`), in bounded
   batches, never when the retention is zero.
 - **I-215** — The background scrub verifies every chunk with `Refs > 0` at least once in
-  any span of `repair.scrub_period` (P) covered by passes, and a pass scrubs only the
+  any span of `repair.scrub_period` (P) covered by sweeps, and a sweep scrubs only the
   chunks whose phase `BigEndian(hash[0:8]) mod P` lies in the arc from the previous
-  pass's start (or `ScanInterval` before a leader's first pass) to its own start, every
-  chunk when that arc is P or longer, none when P is 0; `check --scrub` verifies every
-  chunk whatever P.
+  sweep's start (or `SweepInterval` before a leader's first sweep) to its own start, every
+  chunk when that arc is P or longer, none when P is 0, and a pass that is not a sweep
+  scrubs none; `check --scrub` verifies every chunk whatever P.
+- **I-377** — The FSM keeps the live chunks grouped by placement class, `(k, m, small,
+  sorted slots)` with each class's chunk count, shard bytes and members, in step with
+  every applied command and rebuilt on `Restore`; it equals a recount of the state after
+  every command, and is never encoded.
+- **I-378** — `status`, `check` and the leader's stats sample derive the degraded,
+  repair-pending, unreadable, policy-stale and host-skew counts and every node's slots,
+  shard bytes and missing slots from the placement classes, each class judged once by a
+  representative that derives the same state as every member; no chunk is visited, except
+  the members of classes in those states for `check --files`; the disk skew is the
+  leader's last sweep's.
+- **I-379** — A repair pass that is not a sweep visits only the members of classes with a
+  bad slot or a pending migration that are not stuck, the chunks with a reported slot,
+  and at most `HomeBatch` chunks of the home queue (while the gate is open) and
+  `SumsBatch` of the sums queue; a sweep visits every live chunk and runs on the first
+  pass as leader, after `SweepInterval`, when the home candidate set changed, for
+  `check --scrub`, while the gate is open with an empty queue, and on the first pass with
+  no class needing work after a pass re-placed chunks.
+- **I-380** — A class whose chunks a pass visited without committing or attempting a new
+  placement for any of them is skipped by the passes after it until its view (each
+  member's state, liveness and fitness to take a shard, and the volume's policy) changes,
+  `StuckRetry` passes or a sweep visits it; a class with a failed attempt is visited
+  again by the next pass.
 - **I-195** — Every path under `/.tailraid/` is ephemeral: a replace or a delete of one
   unlinks it at once and never trashes it, and the web file browser lists nothing under it
   (I-160); on the mounts the tree is plain files and folders.
@@ -431,5 +508,9 @@ state to patch.
 | I-175 | `TestServer_BackgroundShare`, `TestBackgroundSlots_Table`, `TestClient_BackgroundHeader`, `TestPhaseFanOut_ConformingPassPasses`, `TestPins_WalkFetchesBackground` |
 | I-157 | `TestVFS_Remove_EphemeralIsImmediate`, `TestGC_PurgeTrash_RetentionBoundary`, `TestGC_PurgeTrash_DrainsInBatches`, `TestConfig_TrashRetention`, `TestSoak_AllPhasesAgainstHarness` |
 | I-215 | `TestScrubDue_Window`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_ScrubPeriod_FirstPassAsLeader`, `TestConfig_ScrubPeriod` |
+| I-377 | `TestFSM_Stats_IncrementalMatchesRecompute`, `TestClasses_GroupBySlotSet`, `TestModelCheck_Long` |
+| I-378 | `TestClasses_RepresentativeMatchesEveryMember`, `TestScanHealth_FromClassesMatchesEveryChunk` |
+| I-379 | `TestRepair_PassVisitsOnlyWhereWorkIs`, `TestRepair_ScrubPeriod_CoversEveryChunkOnce`, `TestRepair_RefillGoesHome_Table` |
+| I-380 | `TestRepair_StuckClassWaitsForTheView`, `TestRepair_PutFails_Retries` |
 | I-195 | `TestWebUI_Ls_HidesTailraidTree`; `TestStub_I_195` (planned with the trash of docs/02: TestVFS_TailraidTree_IsEphemeral) |
 | I-182 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestSchedule_TakesAndThins_Table`, `TestSchedule_OfflineMirrorNothingHeld_CatchUpOnAttach`, `TestSchedule_ThinThenSweep`, `TestSchedule_LostAndExpiredSyncsEnded`, `TestConfig_Mirrors`, `TestSchedule_AutoNameTaken_NoRetry`, `TestSchedule_SkipsWhileCodecOld` |

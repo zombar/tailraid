@@ -23,6 +23,8 @@ type Stats struct {
 	StoredBytes  uint64 // Σ over live chunks of ShardLen(size,k)·(k+m)
 	TrashInodes  int    // inodes in the trash: the deleted roots and everything under them
 	TrashBytes   uint64 // Σ file sizes in the trash
+
+	cls *classTable // the placement classes, kept with the totals (I-377); never copied out
 }
 
 // copyInode is the read API's view of an inode: every field but the Children map, which
@@ -505,13 +507,14 @@ func (f *FSM) Stats() Stats {
 	defer f.mu.RUnlock()
 	s := f.stats
 	s.Inodes = len(f.st.Inodes)
+	s.cls = nil
 	return s
 }
 
 // computeStats walks the state (Restore, tests); the applier keeps the same totals
 // incrementally.
 func computeStats(st *State) Stats {
-	var s Stats
+	s := Stats{cls: buildClasses(st)}
 	s.Inodes = len(st.Inodes)
 	trashed := map[Ino]bool{}
 	for _, set := range st.Trash {
@@ -557,6 +560,7 @@ func (s *Stats) chunkIn(c *Chunk) {
 		s.Tombstoned++
 		return
 	}
+	s.cls.in(c)
 	s.Chunks++
 	s.StoredBytes += storedBytes(c)
 }
@@ -565,6 +569,13 @@ func (s *Stats) chunkOut(c *Chunk, wasLive bool) {
 	if !wasLive {
 		s.Tombstoned--
 		return
+	}
+	if c.Refs == 0 { // out of the class it was in while live: its slots have not changed
+		live := *c
+		live.Refs = 1
+		s.cls.out(&live)
+	} else {
+		s.cls.out(c)
 	}
 	s.Chunks--
 	s.StoredBytes -= storedBytes(c)

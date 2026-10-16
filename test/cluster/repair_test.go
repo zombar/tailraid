@@ -790,7 +790,9 @@ func repairerWithCfg(c *testharness.Cluster, nd *testharness.ClusterNode, shards
 }
 
 // A repair whose PUT fails leaves the committed placement alone and is retried on the next
-// pass; nothing is proposed for a slot that did not land.
+// pass; nothing is proposed for a slot that did not land, and a failed attempt does not
+// make the chunk's class stuck (I-380).
+// Invariant: I-380
 // Lifecycle: L-90
 func TestRepair_PutFails_Retries(t *testing.T) {
 	c := testharness.NewCluster(t, 4, 2, 1)

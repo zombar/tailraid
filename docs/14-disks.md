@@ -239,13 +239,14 @@ Away slots are of two kinds, and keep the urgency each had before the fold:
   of a host, or on a host that is not its home since a host or disk joined. These move only
   through the **gate** (I-295), so liveness churn never moves data and a small residue of
   ad hoc slots does not keep the pool busy:
-  - the leader's repair pass counts the movable bytes of placement-only slots; when they
-    reach `repair.home_start` (default 5 %) of the stored bytes, the gate opens, and it
-    stays open until a pass finds none left or the home candidate set changes (the gate
-    then re-evaluates against the new homes);
+  - the leader's repair sweep (06 §4a) counts the movable bytes of placement-only slots
+    and queues their chunks; when they reach `repair.home_start` (default 5 %) of the
+    stored bytes, the gate opens, and it stays open until a sweep finds none left or the
+    home candidate set changes (the gate then re-evaluates against the new homes);
   - while open, each pass moves the placement-only slots of at most `HomeBatch` (64)
-    chunks, and none when the pass before found a bad slot or a pending migration, at
-    background priority and under `repair.rate` and `repair.workers` (06 §4);
+    chunks from the queue, and none when the pass before found a bad slot or a pending
+    migration, at background priority and under `repair.rate` and `repair.workers`
+    (06 §4); a pass that finds the queue empty sweeps again;
   - `repair.home_start: 0` closes it for good; `tailraid volume rebalance` opens it once
     whatever the threshold, until the movable bytes reach 0 (`--dry-run` lists the bytes
     each target would send and receive and moves nothing);

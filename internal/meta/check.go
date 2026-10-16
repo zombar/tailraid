@@ -278,6 +278,12 @@ func checkSnaps(st *State, bad func(string, ...any)) {
 func CheckStats(st *State, kept Stats) []string {
 	want := computeStats(st)
 	kept.Inodes = want.Inodes
+	if kept.cls != nil {
+		if v := classesDrift(want.cls, kept.cls); v != nil {
+			return v
+		}
+	}
+	kept.cls, want.cls = nil, nil
 	if kept != want {
 		return []string{fmt.Sprintf("stats drifted: kept %+v, recount %+v", kept, want)}
 	}

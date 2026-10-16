@@ -72,7 +72,8 @@ func (f *FSM) SetSnapshotHook(h SnapshotHook) {
 
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
-	return &FSM{st: NewState(), waitCh: make(chan struct{})}
+	st := NewState()
+	return &FSM{st: st, stats: Stats{cls: newClassTable(st)}, waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
@@ -1050,6 +1051,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	}
 	if ch.Refs > 0 {
 		a.stats.StoredBytes -= storedBytes(ch)
+		a.stats.cls.out(ch)
 	}
 	if ch.K != c.K || ch.M != c.M {
 		ch.Sums = nil // the shards are different bytes now; the backfill records the new sums (I-201)
@@ -1058,6 +1060,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 	ch.Placement = append([]NodeIdx(nil), c.Placement...)
 	if ch.Refs > 0 {
 		a.stats.StoredBytes += storedBytes(ch)
+		a.stats.cls.in(ch)
 	}
 	return nil
 }

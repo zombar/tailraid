@@ -157,8 +157,9 @@ func TestRepair_Home_Gate_Table(t *testing.T) {
 }
 
 // Every refill aims at home: after a drain or a lost shard is repaired with every home
-// target live, no chunk is away.
-// Invariant: I-296
+// target live, no chunk is away: the sweep after the repairs counts what a refill left
+// away, so the gate opens within the passes (I-379).
+// Invariant: I-296, I-379
 // Lifecycle: L-193
 func TestRepair_RefillGoesHome_Table(t *testing.T) {
 	for _, tc := range []struct {

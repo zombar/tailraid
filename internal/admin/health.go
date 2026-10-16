@@ -1,11 +1,9 @@
 package admin
 
 import (
-	"slices"
 	"sort"
 	"time"
 
-	"github.com/zombar/tailraid/internal/ec"
 	"github.com/zombar/tailraid/internal/meta"
 	"github.com/zombar/tailraid/internal/repair"
 )
@@ -13,19 +11,22 @@ import (
 // VolumeHealth is the volume-wide roll-up of meta.ChunkState (docs/11 §2) that `status`
 // and `check` share, so the two never disagree.
 type VolumeHealth struct {
-	Degraded       int                     // chunks with fewer than k+m reachable copies right now
-	RepairPending  int                     // chunks with a slot to re-place (the repairer's view, after fill_after)
-	Unreadable     int                     // chunks with fewer than k readable slots right now
-	StalePolicy    int                     // chunks awaiting migration to the current (k, m)
-	DomainSkew     int                     // chunks above the host cap that repair will move (docs/14 §7)
-	DiskSkew       int                     // slots away from home whose home is another disk of their host (docs/14 §7, I-172)
-	DegradedHashes map[meta.Hash]bool      // degraded, repair-pending or unreadable
-	Slots          map[meta.NodeIdx]int    // placement slots per node
-	Missing        map[meta.NodeIdx]int    // slots per node whose node is not live
-	Bytes          map[meta.NodeIdx]uint64 // shard bytes per node, the sum of its slots' shard lengths (I-178)
+	Degraded      int                     // chunks with fewer than k+m reachable copies right now
+	RepairPending int                     // chunks with a slot to re-place (the repairer's view, after fill_after)
+	Unreadable    int                     // chunks with fewer than k readable slots right now
+	StalePolicy   int                     // chunks awaiting migration to the current (k, m)
+	DomainSkew    int                     // chunks above the host cap that repair will move (docs/14 §7)
+	DiskSkew      int                     // slots away from home whose home is another disk of their host (docs/14 §7, I-172): the leader's last sweep, set by the caller
+	BadClasses    []string                // the placement classes whose chunks are degraded, repair-pending or unreadable
+	Slots         map[meta.NodeIdx]int    // placement slots per node
+	Missing       map[meta.NodeIdx]int    // slots per node whose node is not live
+	Bytes         map[meta.NodeIdx]uint64 // shard bytes per node, the sum of its slots' shard lengths (I-178)
 }
 
-// ScanHealth derives every referenced chunk's state once.
+// ScanHealth derives every referenced chunk's state from the placement classes: each
+// class judged once by its representative and counted for all its chunks, so the cost is
+// the number of classes and never the number of chunks (docs/12 §8, I-378). Each member's
+// liveness is asked once (I-375).
 func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) VolumeHealth {
 	vol := st.Volume()
 	nodes := map[meta.NodeIdx]meta.Node{}
@@ -34,69 +35,44 @@ func ScanHealth(st *meta.Store, live meta.Liveness, fillAfter time.Duration) Vol
 		nodes[all[i].Idx] = all[i]
 	}
 	live = meta.FreezeLiveness(all, live) // each member asked once per walk, not once per slot (I-375)
-	v := VolumeHealth{DegradedHashes: map[meta.Hash]bool{}, Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}, Bytes: map[meta.NodeIdx]uint64{}}
+	v := VolumeHealth{Slots: map[meta.NodeIdx]int{}, Missing: map[meta.NodeIdx]int{}, Bytes: map[meta.NodeIdx]uint64{}}
 	in := meta.HealthInput{Nodes: nodes, Live: live, FillAfter: fillAfter}
-	hv := meta.NewHomeView(all)
-	st.ForEachChunk(func(c meta.Chunk) bool {
-		if c.Refs == 0 {
-			return true
-		}
-		shard := uint64(ec.ShardLen(int(c.Size), int(c.K)))
-		for _, s := range c.Placement {
+	for _, cl := range st.Classes() {
+		n := cl.Chunks
+		for _, s := range cl.Placement {
 			if s != 0 {
-				v.Slots[s]++
-				v.Bytes[s] += shard
+				v.Slots[s] += n
+				v.Bytes[s] += cl.Shard
 				if !live.IsLive(s) {
-					v.Missing[s]++
+					v.Missing[s] += n
 				}
 			}
 		}
-		h := meta.ChunkState(c, vol, in)
-		if h.UnderReplicated(c.K, c.M) {
-			v.Degraded++
-			v.DegradedHashes[c.Hash] = true
+		h := meta.ChunkState(cl.Representative(vol), vol, in)
+		bad := false
+		if h.UnderReplicated(cl.K, cl.M) {
+			v.Degraded += n
+			bad = true
 		}
 		if h.RepairPending() {
-			v.RepairPending++
-			v.DegradedHashes[c.Hash] = true
+			v.RepairPending += n
+			bad = true
 		}
-		if h.Unreadable(c.K) {
-			v.Unreadable++
-			v.DegradedHashes[c.Hash] = true
+		if h.Unreadable(cl.K) {
+			v.Unreadable += n
+			bad = true
 		}
 		if h.PolicyStale {
-			v.StalePolicy++
+			v.StalePolicy += n
 		}
 		if h.Skewed {
-			v.DomainSkew++
+			v.DomainSkew += n
 		}
-		if !h.RepairPending() && !h.PolicyStale {
-			v.DiskSkew += diskSkew(hv, c)
-		}
-		return true
-	})
-	return v
-}
-
-// diskSkew counts c's away slots whose home is a free target on the slot's own host: what
-// home placement moves between the disks of one host (docs/14 §7, I-172).
-func diskSkew(hv *meta.HomeView, c meta.Chunk) int {
-	k := int(c.K)
-	home := hv.Home(c.Hash, k, int(c.M))
-	n := 0
-	for _, i := range hv.Away(c.Placement, k, home) {
-		lo, hi := 0, min(k, len(home))
-		if i >= k {
-			lo, hi = hi, len(home)
-		}
-		for _, t := range home[lo:hi] {
-			if t != 0 && hv.Domain(t) == hv.Domain(c.Placement[i]) && !slices.Contains(c.Placement, t) {
-				n++
-				break
-			}
+		if bad {
+			v.BadClasses = append(v.BadClasses, cl.Key)
 		}
 	}
-	return n
+	return v
 }
 
 // CheckReport is the `check` reply.
@@ -138,8 +114,14 @@ func (r *FsckReport) AddOrphan(key string) {
 func Check(st *meta.Store, live meta.Liveness, fillAfter time.Duration, scan repair.Stats, prog *repair.Progress, files bool) CheckReport {
 	v := ScanHealth(st, live, fillAfter)
 	rep := CheckReport{Scan: scan, InProgress: prog, Degraded: v.Degraded, RepairPending: v.RepairPending, Unreadable: v.Unreadable}
-	if files && len(v.DegradedHashes) > 0 {
-		rep.Files = FilesReferencing(st, v.DegradedHashes)
+	if files && len(v.BadClasses) > 0 {
+		set := map[meta.Hash]bool{}
+		for _, key := range v.BadClasses {
+			for _, h := range st.ClassMembers(key) {
+				set[h] = true
+			}
+		}
+		rep.Files = FilesReferencing(st, set)
 	}
 	rep.OK = rep.Unreadable == 0 && rep.Degraded == 0 && rep.RepairPending == 0 && scan.Unrepairable == 0 && scan.ScrubBad == 0
 	return rep

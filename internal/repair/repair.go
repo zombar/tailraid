@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,6 +68,10 @@ type Config struct {
 	// SumsBatch is how many chunks without recorded data-shard sums a pass fetches,
 	// verifies and records sums for (docs/06 §4, I-201); 0 disables the backfill.
 	SumsBatch int
+	// SweepInterval is how often a pass visits every chunk (docs/06 §4a, I-379): the scrub,
+	// the home and sums queues and the away counts come from sweeps; the passes between
+	// visit only the chunks that need work. 0 sweeps every pass.
+	SweepInterval time.Duration
 }
 
 // DefaultScrubPeriod is how long the background scrub takes to verify the whole volume
@@ -91,12 +96,15 @@ const fullHold = 10 * time.Minute
 // MaxWorkers bounds Config.Workers (`repair.workers`).
 const MaxWorkers = 64
 
+// DefaultSweepInterval is how often the leader's pass visits every chunk (I-379).
+const DefaultSweepInterval = time.Hour
+
 // DefaultConfig returns the documented defaults.
 func DefaultConfig() Config {
 	return Config{
 		FillAfter: 10 * time.Minute, ScrubPeriod: DefaultScrubPeriod, S3ScrubBytes: 1 << 30, RateBytes: 50 << 20, Grace: 10 * time.Minute,
 		GCInterval: 10 * time.Minute, ScanInterval: time.Minute, ReportTTL: 10 * time.Minute, Retention: DefaultRetention,
-		HomeStart: DefaultHomeStart, HomeBatch: 64, Workers: 4, SumsBatch: 256,
+		HomeStart: DefaultHomeStart, HomeBatch: 64, Workers: 4, SumsBatch: 256, SweepInterval: DefaultSweepInterval,
 	}
 }
 
@@ -138,8 +146,12 @@ type Stats struct {
 	AwayBytes    int64 `json:"away_bytes"`
 	MovableBytes int64 `json:"movable_bytes"`
 	HomeOpen     bool  `json:"home_open"` // the gate after this pass: the next one moves placement-only slots
+	DiskSkew     int   `json:"disk_skew"` // away slots whose home is another disk of their host (docs/14 §7): the last sweep's
+	Swept        bool  `json:"swept"`     // this pass visited every chunk (I-379)
 	badChunks    int   // chunks with a bad slot or a pending migration: home moves wait for a pass without
 	homeFailed   int   // home moves this pass tried that committed nothing (I-311)
+	homeWaiting  bool  // a movable chunk this pass did not move: the sweep queues it
+	retry        int   // chunks whose repair tried and failed: their class is retried, not stuck (I-380)
 }
 
 // HomeStatus is the home gate as `status` reports it (`repair.home`, docs/12): the last
@@ -170,6 +182,8 @@ func (s *Stats) add(o Stats) {
 	s.AwaySlots += o.AwaySlots
 	s.AwayBytes += o.AwayBytes
 	s.MovableBytes += o.MovableBytes
+	s.DiskSkew += o.DiskSkew
+	s.retry += o.retry
 	s.badChunks += o.badChunks
 	s.homeFailed += o.homeFailed
 	s.BytesMoved += o.BytesMoved
@@ -203,15 +217,22 @@ type Repairer struct {
 	s3scrub             *budget         // bucket bytes the scrub may fetch (docs/06 §5, I-151)
 	Events              *meta.EventRing // chunk history (nil unless dev.enabled)
 
-	scanMu   sync.Mutex // one pass at a time: `check --scrub` never overlaps the background loop
-	mu       sync.Mutex
-	reported map[chunk.ShardKey]time.Time // reader bad-slot reports
-	last     Stats
-	lastAt   time.Time
-	prevScan time.Time // the start of the previous pass while leading (zero: none, I-215)
-	pass     int
-	progress Progress // the pass under way, while running
-	running  bool
+	scanMu    sync.Mutex // one pass at a time: `check --scrub` never overlaps the background loop
+	mu        sync.Mutex
+	reported  map[chunk.ShardKey]time.Time // reader bad-slot reports
+	last      Stats
+	lastAt    time.Time
+	prevSweep time.Time // the start of the previous sweep while leading (zero: none, I-215, I-379)
+	// what passes between sweeps work from (I-379, I-380)
+	stuck       map[string]stuckClass // classes a pass could do nothing for, by key
+	homeQueue   []meta.Hash           // the last sweep's movable chunks not yet moved
+	sumsQueue   []meta.Hash           // the last sweep's chunks without sums not yet recorded
+	sumsPending int                   // chunks without sums: the last sweep's count less what passes recorded since
+	swept       Stats                 // the last sweep's statistics: away, movable and disk skew between sweeps
+	replaced    bool                  // a pass since the last sweep re-placed chunks: their home is uncounted
+	pass        int
+	progress    Progress // the pass under way, while running
+	running     bool
 	// the home gate (docs/14 §7, I-295)
 	home       *meta.HomeView             // the previous pass's view: a change re-evaluates the gate
 	homeOpen   bool                       // placement-only moves run
@@ -470,7 +491,8 @@ func (r *Repairer) Scrub(ctx context.Context) (Stats, error) { return r.scan(ctx
 // ScanInterval before it rather than everything since this node last led (I-215).
 func (r *Repairer) LostLeadership() {
 	r.mu.Lock()
-	r.prevScan = time.Time{}
+	r.prevSweep = time.Time{}
+	r.homeQueue, r.sumsQueue, r.stuck = nil, nil, nil
 	r.homeOpen, r.homeForced, r.home = false, false, nil // a new leader judges the gate afresh
 	r.mu.Unlock()
 }
@@ -510,16 +532,41 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	for i := range all {
 		nodes[all[i].Idx] = all[i]
 	}
+	hv := meta.NewHomeView(all)
+	batch := r.cfg.SumsBatch
+	if r.MinCodec != nil && r.MinCodec() < meta.CodecShardSums {
+		batch = 0 // a member could not read SetShardSums: the leader would refuse it (I-219)
+	}
+	now := r.clk.Now()
+	// the classes that need work now, judged once each (I-378); a stuck one waits for its
+	// view to change (I-380)
+	view := r.view(all, vol)
+	badClasses, badChunks := r.badClasses(vol, nodes, view, now)
 	r.mu.Lock()
 	r.pass++
 	pass := r.pass
-	now := r.clk.Now()
-	from := r.prevScan // the scrub's arc: since the previous pass, or one interval on the first (I-215)
-	if from.IsZero() {
-		from = now.Add(-r.cfg.ScanInterval)
+	homesMoved := r.home != nil && !r.home.Same(hv)
+	if homesMoved && !r.homeForced {
+		r.homeOpen = false // the homes changed: the end of this pass re-evaluates the gate (I-295)
 	}
-	r.prevScan = now
-	scrub := func(h meta.Hash) bool { return scrubAll || ScrubDue(h, from, now, r.cfg.ScrubPeriod) }
+	r.home = hv
+	// The sweep visits every chunk (I-379): the first pass as leader, every SweepInterval,
+	// whenever the homes moved, `check --scrub`, while the gate is open with nothing left
+	// in its queue, and once repairs re-placed chunks and no class needs work any more (a
+	// refill can leave a slot away from home, which only a sweep counts). Any other pass
+	// visits only where work is.
+	sweep := scrubAll || r.prevSweep.IsZero() || now.Sub(r.prevSweep) >= r.cfg.SweepInterval || homesMoved ||
+		(r.homeOpen && len(r.homeQueue) == 0) || (r.replaced && len(badClasses) == 0)
+	from := r.prevSweep // the scrub's arc: since the previous sweep, or one SweepInterval on the first (I-215)
+	if from.IsZero() {
+		from = now.Add(-max(r.cfg.SweepInterval, r.cfg.ScanInterval))
+	}
+	if sweep {
+		r.prevSweep = now
+	}
+	scrub := func(h meta.Hash) bool {
+		return scrubAll || (sweep && ScrubDue(h, from, now, r.cfg.ScrubPeriod))
+	}
 	reportedKeys := map[meta.Hash]map[int]bool{}
 	for k, at := range r.reported {
 		if now.Sub(at) > r.cfg.ReportTTL {
@@ -533,38 +580,27 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 			reportedKeys[h][idx] = true
 		}
 	}
-	r.mu.Unlock()
-
-	// policy migration order: fewest effective parity first
-	var work []meta.Chunk
-	noSums := 0 // live chunks without recorded data-shard sums (the backfill's queue, I-201)
-	r.st.ForEachChunk(func(c meta.Chunk) bool {
-		if c.Refs > 0 {
-			work = append(work, c)
-			if c.Sums == nil {
-				noSums++
-			}
-		}
-		return true
-	})
-	batch := r.cfg.SumsBatch
-	if r.MinCodec != nil && r.MinCodec() < meta.CodecShardSums {
-		batch = 0 // a member could not read SetShardSums: the leader would refuse it (I-219)
-	}
-	r.sumsLeft.Store(int64(batch))
-	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
-	hv := meta.NewHomeView(all)
-	r.mu.Lock()
-	if r.home != nil && !r.home.Same(hv) && !r.homeForced {
-		r.homeOpen = false // the homes changed: the end of this pass re-evaluates the gate (I-295)
-	}
-	r.home = hv
 	homeBatch := 0
 	if r.homeOpen && r.homeIdle {
 		homeBatch = r.cfg.HomeBatch
 	}
 	r.mu.Unlock()
 	r.homeLeft.Store(int64(homeBatch))
+	r.sumsLeft.Store(int64(batch))
+
+	// policy migration order: fewest effective parity first
+	var work []meta.Chunk
+	if sweep {
+		r.st.ForEachChunk(func(c meta.Chunk) bool {
+			if c.Refs > 0 {
+				work = append(work, c)
+			}
+			return true
+		})
+	} else {
+		work = r.targeted(badClasses, reportedKeys, homeBatch, batch)
+	}
+	sort.SliceStable(work, func(i, j int) bool { return work[i].M < work[j].M })
 
 	workers := max(1, r.cfg.Workers)
 	r.mu.Lock()
@@ -583,9 +619,14 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	// once the ones in flight end.
 	ctx = chunk.Background(ctx)
 	var (
-		wg  sync.WaitGroup
-		smu sync.Mutex
-		sem = make(chan struct{}, workers)
+		wg       sync.WaitGroup
+		smu      sync.Mutex
+		sem      = make(chan struct{}, workers)
+		progress = map[string]int{} // class → chunks of it this pass changed, or tried to and failed
+		visited  = map[string]bool{}
+		homeQ    []meta.Hash // a sweep's movable chunks left for later passes
+		sumsQ    []meta.Hash // a sweep's chunks without sums left for later passes
+		noSums   int
 	)
 	for _, c := range work {
 		select {
@@ -608,8 +649,22 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 			r.progress.Scanned++
 			r.progress.BytesMoved += one.BytesMoved
 			r.mu.Unlock()
+			key := meta.ClassKey(&c, vol.ChunkSize)
 			smu.Lock()
 			st.add(one)
+			visited[key] = true
+			// a failed attempt (a PUT, a read, a migration short of k acks) is retried next
+			// pass; only a class nothing could be tried for is stuck (I-380)
+			progress[key] += one.Repaired + one.Partial + one.Migrated + one.Homed + one.Errors + one.Deferred + one.retry
+			if sweep && one.homeWaiting {
+				homeQ = append(homeQ, c.Hash)
+			}
+			if sweep && c.Sums == nil {
+				noSums++
+				if one.SumsRecorded == 0 {
+					sumsQ = append(sumsQ, c.Hash)
+				}
+			}
 			smu.Unlock()
 		}(c)
 	}
@@ -617,10 +672,39 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	if ctx.Err() != nil {
 		return st, ctx.Err()
 	}
-	st.SumsPending = max(noSums-st.SumsRecorded, 0)
+	st.Swept = sweep
+	st.StoredBytes = int64(r.st.Stats().StoredBytes) //nolint:gosec // bytes of a volume
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key := range badClasses {
+		if !visited[key] {
+			continue
+		}
+		if progress[key] == 0 {
+			r.stuck[key] = stuckClass{view: view, at: now} // nothing it could do: wait for the view to change (I-380)
+		} else {
+			delete(r.stuck, key)
+		}
+	}
+	if sweep {
+		sortHashes(homeQ)
+		sortHashes(sumsQ)
+		r.homeQueue, r.sumsQueue = capQueue(homeQ), capQueue(sumsQ)
+		r.sumsPending = max(noSums-st.SumsRecorded, 0)
+		r.swept = st // what only a sweep counts: away, movable, disk skew
+		for key := range r.stuck {
+			if !badClasses[key] {
+				delete(r.stuck, key) // healthy again
+			}
+		}
+	} else {
+		r.sumsPending = max(r.sumsPending-st.SumsRecorded, 0)
+		st.AwaySlots, st.AwayBytes, st.MovableBytes, st.DiskSkew = r.swept.AwaySlots, r.swept.AwayBytes, r.swept.MovableBytes, r.swept.DiskSkew
+	}
+	st.SumsPending = r.sumsPending
+	r.replaced = st.Repaired+st.Partial+st.Migrated > 0 || (r.replaced && !sweep)
 	r.last, r.lastAt = st, r.clk.Now()
-	r.homeIdle = st.badChunks == 0
+	r.homeIdle = st.badChunks == 0 && badChunks == 0
 	switch {
 	case st.MovableBytes == 0:
 		r.homeOpen, r.homeForced = false, false
@@ -634,8 +718,123 @@ func (r *Repairer) scan(ctx context.Context, scrubAll bool) (Stats, error) {
 	}
 	st.HomeOpen = r.homeOpen
 	r.last.HomeOpen = r.homeOpen
-	r.mu.Unlock()
 	return st, nil
+}
+
+// stuckClass is a class whose chunks a pass visited without changing or trying to change
+// any of them (no live spare to place on, fewer than k readable slots), and the view it
+// was judged under (I-380).
+type stuckClass struct {
+	view string
+	at   time.Time
+}
+
+// StuckRetry is how long a stuck class waits before a pass visits it again under an
+// unchanged view (I-380).
+const StuckRetry = 10 * time.Minute
+
+// QueueMax bounds the home and sums queues a sweep leaves for later passes; what does not
+// fit waits for the next sweep.
+const QueueMax = 1 << 20
+
+func capQueue(q []meta.Hash) []meta.Hash {
+	if len(q) > QueueMax {
+		q = q[:QueueMax]
+	}
+	return q
+}
+
+func sortHashes(q []meta.Hash) {
+	slices.SortFunc(q, func(a, b meta.Hash) int { return bytes.Compare(a[:], b[:]) })
+}
+
+// view is everything a class's judgement and its repair's destinations read besides the
+// class: each member's liveness, state, hold and full mark, and the volume's policy. A
+// stuck class is visited again once it changes (I-380).
+func (r *Repairer) view(all []meta.Node, vol meta.Volume) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d+%d;", vol.K, vol.M)
+	for i := range all {
+		n := all[i].Idx
+		fmt.Fprintf(&b, "%d:%d:%t:%t;", n, all[i].State, r.live.IsLive(n), r.dest(n))
+	}
+	return b.String()
+}
+
+// badClasses judges every placement class once (I-378) and returns those with a bad slot
+// or a pending migration that are not stuck under this view, and how many chunks are in
+// a class with a bad slot or a pending migration at all.
+func (r *Repairer) badClasses(vol meta.Volume, nodes map[meta.NodeIdx]meta.Node, view string, now time.Time) (map[string]bool, int) {
+	out := map[string]bool{}
+	bad := 0
+	in := meta.HealthInput{Nodes: nodes, Live: r.live, FillAfter: r.cfg.FillAfter}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stuck == nil {
+		r.stuck = map[string]stuckClass{}
+	}
+	for _, cl := range r.st.Classes() {
+		h := meta.ChunkState(cl.Representative(vol), vol, in)
+		if !h.RepairPending() && !h.PolicyStale {
+			continue
+		}
+		bad += cl.Chunks
+		if s, ok := r.stuck[cl.Key]; ok && s.view == view && now.Sub(s.at) < StuckRetry {
+			continue
+		}
+		out[cl.Key] = true
+	}
+	return out, bad
+}
+
+// targeted is a pass's work outside a sweep (I-379): the chunks of the classes that need
+// work, the chunks with a reported slot, and the next chunks of the home queue (while the
+// gate is open) and of the sums queue.
+func (r *Repairer) targeted(classes map[string]bool, reported map[meta.Hash]map[int]bool, homeBatch, sumsBatch int) []meta.Chunk {
+	seen := map[meta.Hash]bool{}
+	var work []meta.Chunk
+	add := func(h meta.Hash) {
+		if seen[h] {
+			return
+		}
+		seen[h] = true
+		if c, ok := r.st.GetChunk(h); ok && c.Refs > 0 {
+			work = append(work, c)
+		}
+	}
+	keys := make([]string, 0, len(classes))
+	for key := range classes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		for _, h := range r.st.ClassMembers(key) {
+			add(h)
+		}
+	}
+	hashes := make([]meta.Hash, 0, len(reported))
+	for h := range reported {
+		hashes = append(hashes, h)
+	}
+	sortHashes(hashes)
+	for _, h := range hashes {
+		add(h)
+	}
+	r.mu.Lock()
+	n := min(homeBatch, len(r.homeQueue))
+	home := r.homeQueue[:n]
+	r.homeQueue = r.homeQueue[n:]
+	m := min(sumsBatch, len(r.sumsQueue))
+	sums := r.sumsQueue[:m]
+	r.sumsQueue = r.sumsQueue[m:]
+	r.mu.Unlock()
+	for _, h := range home {
+		add(h)
+	}
+	for _, h := range sums {
+		add(h)
+	}
+	return work
 }
 
 // scanOne classifies one chunk and repairs, migrates or scrubs it (docs/06 §4 cases
@@ -714,6 +913,9 @@ func (r *Repairer) scanOne(ctx context.Context, c meta.Chunk, vol meta.Volume, n
 		return st
 	}
 	st.BytesMoved += outcome.bytes
+	if outcome.tried && !outcome.changed {
+		st.retry++
+	}
 	switch {
 	case !outcome.changed && migrate:
 		st.Deferred++ // fewer than k acks: the old encoding stays committed, retried next pass
@@ -775,9 +977,14 @@ func (r *Repairer) homeOne(ctx context.Context, c meta.Chunk, vol meta.Volume, h
 	}
 	st.AwaySlots += len(away)
 	st.AwayBytes += int64(len(away)) * shard
+	st.DiskSkew += diskSkew(hv, c, home, away)
 	movable := hv.Movable(c, r.dest)
 	st.MovableBytes += int64(len(movable)) * shard
-	if len(movable) == 0 || r.homeLeft.Add(-1) < 0 {
+	if len(movable) == 0 {
+		return false
+	}
+	if r.homeLeft.Add(-1) < 0 {
+		st.homeWaiting = true
 		return false
 	}
 	issues := make([]meta.SlotIssue, 0, len(away))
@@ -803,8 +1010,29 @@ func (r *Repairer) homeOne(ctx context.Context, c meta.Chunk, vol meta.Volume, h
 	return true
 }
 
+// diskSkew counts c's away slots whose home is a free target on the slot's own host: what
+// home placement moves between the disks of one host (docs/14 §7, I-172).
+func diskSkew(hv *meta.HomeView, c meta.Chunk, home []meta.NodeIdx, away []int) int {
+	k := int(c.K)
+	n := 0
+	for _, i := range away {
+		lo, hi := 0, min(k, len(home))
+		if i >= k {
+			lo, hi = hi, len(home)
+		}
+		for _, t := range home[lo:hi] {
+			if t != 0 && hv.Domain(t) == hv.Domain(c.Placement[i]) && !slices.Contains(c.Placement, t) {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 type outcome struct {
 	changed bool // a new placement was committed
+	tried   bool // a PUT was attempted or the commit lost a race: the next pass retries (I-380)
 	full    bool
 	bytes   int64
 }
@@ -837,6 +1065,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	}
 	var moved int64
 	acked := 0
+	tried := false
 	var revert []int // still-served slots whose PUT failed
 	for i, n := range newPlace {
 		if n == 0 {
@@ -847,6 +1076,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			continue
 		}
 		r.limit.Wait(ctx, int64(len(shards[i])))
+		tried = true
 		if err := r.shards.Put(ctx, n, chunk.Key(c.Hash, k, m, i), shards[i]); err != nil {
 			r.warnPut.Warn(r.log, "repair put failed", "node", n, "slot", i, "err", err)
 			if errors.Is(err, chunk.ErrFull) {
@@ -863,7 +1093,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	}
 	acked += keepServed(c.Placement, newPlace, unchanged, revert)
 	if migrate && acked < int(k) {
-		return outcome{bytes: moved}, nil // keep the old encoding committed; try again next pass
+		return outcome{bytes: moved, tried: tried}, nil // keep the old encoding committed; try again next pass
 	}
 	if !migrate {
 		stayed := 0
@@ -873,7 +1103,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 			}
 		}
 		if acked == stayed {
-			return outcome{bytes: moved}, nil // nothing placeable improved; nothing to commit (L-185)
+			return outcome{bytes: moved, tried: tried}, nil // nothing placeable improved; nothing to commit (L-185)
 		}
 	}
 	res, index, err := r.prop.Propose(ctx, meta.Command{Op: meta.OpSetPlacement, SetPlacement: &meta.SetPlacement{Hash: c.Hash, K: k, M: m, Placement: newPlace, Expect: c.Placement}})
@@ -884,7 +1114,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 		// re-placed by a flush or a drain since this pass read it (I-102): the next pass
 		// plans from the new placement; the shards just put are orphans the sweep clears
 		r.log.Info("placement changed under repair, skipping this pass", "chunk", fmt.Sprintf("%x", c.Hash[:8]))
-		return outcome{bytes: moved}, nil
+		return outcome{bytes: moved, tried: true}, nil
 	}
 	if err != nil {
 		return outcome{bytes: moved}, fmt.Errorf("set placement: %w", err)
