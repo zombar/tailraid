@@ -217,8 +217,8 @@ func (f *Flusher) FlushInode(ctx context.Context, ino meta.Ino) error
    I-83). Once k acks are in, the wait for the rest is capped by a **straggler grace** of
    `clamp(4 × p95 of recent PUT durations, StragglerMin 2 s, PutDeadline)` measured from
    the k-th ack: a PUT still pending at the grace is treated exactly as one pending at the
-   deadline, and its node is marked *suspect* (docs/05 §6) so the next chunk places
-   around it instead of waiting on it again (I-169, L-209). The floor keeps a 256 KiB/s
+   deadline, and its host is *held slow* (docs/05 §6) so the chunks that follow place
+   around it for the hold instead of waiting on it again (I-169, I-371, L-209). The floor keeps a 256 KiB/s
    DERP peer (1.4 s for a 350 KiB shard) in the stripe; the multiplier follows a slow
    cluster. Slots still missing are recorded as `0` (degraded). If acks < k → return an
    error; the plan stays dirty and is retried with backoff (1 s doubling to 60 s); when
@@ -577,7 +577,7 @@ the WAL cap.
 - **I-169** — After a chunk's k-th ack the flusher waits for its remaining PUTs at most
   the straggler grace, `clamp(4 × p95 of recent PUT durations, StragglerMin, PutDeadline)`,
   and a PUT still pending then is cancelled, awaited and its slot re-placed or recorded 0
-  exactly as at the deadline, its node marked suspect; the wait for the first k acks is
+  exactly as at the deadline, its host held slow (I-371); the wait for the first k acks is
   unchanged.
 - **I-171** — A shard GET's deadline for the reply body is `callTimeout(Content-Length)`
   from the reply's own headers, never the `MaxPayload` allowance; a reply announcing more

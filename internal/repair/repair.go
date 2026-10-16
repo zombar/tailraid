@@ -183,6 +183,9 @@ type Repairer struct {
 	// sums are backfilled while it is below codec 5, so a pass fetches no chunk only to
 	// have its SetShardSums refused (I-219). nil backfills.
 	MinCodec func() uint8
+	// Held, when set, reports a node whose host is held slow (docs/05 §6, I-371): no refill
+	// or home move goes to it, while its slots stay good. nil holds nothing.
+	Held func(meta.NodeIdx) bool
 	// warnRepair and warnPut keep a fault at one line a minute per site (I-124)
 	warnRepair, warnPut logx.Limiter
 	sumsLeft            atomic.Int64 // the pass's remaining sums backfills (SumsBatch, I-201)
@@ -327,10 +330,23 @@ func (r *Repairer) PlanHome() HomePlan {
 	return p
 }
 
-// dest reports whether n can take a shard moved or refilled home: live (not suspect)
-// and not holding back an ErrFull answer.
+// writable is the live set a refill may place on: live, and not held slow (I-371).
+func (r *Repairer) writable() map[meta.NodeIdx]bool {
+	live := meta.LiveSet(r.live.Live())
+	if r.Held != nil {
+		for n := range live {
+			if r.Held(n) {
+				delete(live, n)
+			}
+		}
+	}
+	return live
+}
+
+// dest reports whether n can take a shard moved or refilled home: live (not suspect),
+// not held slow (I-371) and not holding back an ErrFull answer.
 func (r *Repairer) dest(n meta.NodeIdx) bool {
-	if !r.live.IsLive(n) {
+	if !r.live.IsLive(n) || (r.Held != nil && r.Held(n)) {
 		return false
 	}
 	r.mu.Lock()
@@ -812,7 +828,7 @@ func (r *Repairer) repairOne(ctx context.Context, c meta.Chunk, bad []meta.SlotI
 	if err != nil {
 		return outcome{}, err
 	}
-	plan := planSlots(c, bad, kept, migrate, k, m, hv, r.st.Nodes(), meta.LiveSet(r.live.Live()), r.dest)
+	plan := planSlots(c, bad, kept, migrate, k, m, hv, r.st.Nodes(), r.writable(), r.dest)
 	newPlace, unchanged, readableBad := plan.place, plan.unchanged, plan.readableBad
 	if !meta.ValidPlacement(k, m, newPlace) {
 		// a planner bug, never a state the FSM accepts: refuse it here, before any PUT

@@ -269,6 +269,12 @@ func printNodes(w io.Writer, nodes []admin.NodeReport, all bool) {
 		if n.Diskless {
 			flags = append(flags, "no disks") // a gateway-only host (docs/14 §9)
 		}
+		if n.Suspect {
+			flags = append(flags, "suspect") // routed around until its next good probe (docs/05 §6)
+		}
+		if n.Slow != "" {
+			flags = append(flags, "slow "+n.Slow+" left") // no new shards to it (I-371)
+		}
 		if len(n.SharedWith) > 0 {
 			flags = append(flags, "shares disk with "+strings.Join(n.SharedWith, ", "))
 		}

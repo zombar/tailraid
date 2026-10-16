@@ -412,7 +412,7 @@ op `rebalance`) to open the home gate once (14 §7, I-295): the following repair
 move every placement-only away slot whose home can take it, at most `HomeBatch` chunks a
 pass, until none is movable, whatever `repair.home_start` says. `--dry-run` moves nothing
 and prints, from the leader's last pass, the movable bytes each target would send and
-receive and the away slots whose home cannot take them now (dead, suspect or full). Status
+receive and the away slots whose home cannot take them now (dead, suspect, held slow or full). Status
 carries `repair.home` (`away_slots`, `away_bytes`, `movable_bytes`, `open`); `tailraid
 status` prints it as one line when anything is away.
 

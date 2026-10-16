@@ -258,7 +258,8 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	fl := vfs.NewFlusher(ov, node.FSM, node, prober, client, rd, clk, flcfg, log)
 	fl.Events = ring
-	fl.Suspect = prober.Suspect // a PUT that outlasts the straggler grace (I-169)
+	fl.Slow = func(n meta.NodeIdx) { prober.Slow(n) } // a PUT cut at the straggler grace holds its host slow (I-169, I-371)
+	fl.Held = prober.Held
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
 	if runtime.GOOS == "windows" {
 		uid, gid = 0, 0
@@ -310,6 +311,7 @@ func Serve(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	repairer := repair.New(node.FSM, node, prober, client, rd, clk, rcfg, log)
 	repairer.Events = ring
 	repairer.MinCodec = prober.MinCodec // no sums backfill while a member reads codec 4 (I-219)
+	repairer.Held = prober.Held         // no refill or home move onto a host held slow (I-371)
 	gc := repair.NewGC(node.FSM, node, client, prober, clk, rcfg.Grace, log)
 	gc.Events = ring
 	gc.Retention = rcfg.Retention
