@@ -719,7 +719,12 @@ table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
 .hero .tcard.hero-poster { align-self: start; width: 160px; height: auto; aspect-ratio: 3 / 4; border-radius: var(--radius); border: 1px solid var(--line); border-top: 3px solid var(--accent); }
 section.lib.roms .posters:not(.games) .poster .art { aspect-ratio: 4 / 3; }
 section.lib.roms .posters:not(.games) .poster .art .tcard .ct { font-size: 20px; }
-.posters.games .poster .art { aspect-ratio: 3 / 4; }
+/* a platform's tiles take the shape of its box art, measured as it loads (--box, set by
+   boxShape); a box of another shape sits whole inside its tile rather than cropped */
+.posters.games { --box: 0.75; }
+.posters.games .poster .art { aspect-ratio: var(--box); }
+.posters.games .poster .art img { object-fit: contain; }
+.hero.game img.hero-poster { aspect-ratio: auto; height: auto; object-fit: contain; }
 .chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .chips .badge { font-size: 11px; line-height: 18px; }
 @media (max-width: 599px) { .hero .tcard.hero-poster { width: 96px; } .tcard .ct { font-size: 13px; } }
