@@ -46,6 +46,11 @@ type composeEnv struct {
 	file  string // compose file in dir: docker-compose.yml (4 hosts with disks + a diskless one) or docker-compose.single.yml
 	nodes []composeNode
 	http  *http.Client
+	// run runs docker compose with args (e.compose; a test records the calls)
+	run func(ctx context.Context, args ...string) error
+
+	mirrorMu sync.Mutex
+	mirror   string // the scratch mirror's name once AddMirror registered it
 }
 
 func newComposeEnv(dir, file string, n int) *composeEnv {
@@ -59,6 +64,7 @@ func newComposeEnv(dir, file string, n int) *composeEnv {
 		e.Seeds = append(e.Seeds, e.nodes[i-1].ref.RPC)
 	}
 	e.Caller = e
+	e.run = e.compose
 	return e
 }
 
@@ -211,20 +217,34 @@ func (e *composeEnv) AddMirror(ctx context.Context) (string, soak.NodeRef, error
 		return "", soak.NodeRef{}, nil
 	}
 	host := e.node(soak.NodeRef{Name: mirrorHost}).ref
-	if err := e.compose(ctx, "exec", "-T", mirrorHost, "tailraid", "mirror", "add", mirrorPath); err != nil {
+	e.mirrorMu.Lock()
+	defer e.mirrorMu.Unlock()
+	// plugged back in first: a phase before this one may have left it unplugged, and
+	// `mirror add` on the missing path registers a second, empty mirror (2026-10-16:
+	// phase 32 after 19 found n2/m2 online and its own n2/m1 "not attached")
+	if err := e.SetMirrorOnline(ctx, e.mirror, true); err != nil {
 		return "", soak.NodeRef{}, err
 	}
-	return mirrorHost + "/m1", host, nil
+	if e.mirror != "" {
+		return e.mirror, host, nil
+	}
+	if err := e.run(ctx, "exec", "-T", mirrorHost, "tailraid", "mirror", "add", mirrorPath); err != nil {
+		return "", soak.NodeRef{}, err
+	}
+	e.mirror = mirrorHost + "/m1"
+	return e.mirror, host, nil
 }
 
 // SetMirrorOnline moves the mirror's directory away and back, as an unplugged disk
-// looks to its host's next tick (docs/16 §1); no restart.
+// looks to its host's next tick (docs/16 §1); no restart. Asking for the state it is
+// already in changes nothing, and plugging in a mirror never added is nothing to do.
 func (e *composeEnv) SetMirrorOnline(ctx context.Context, _ string, online bool) error {
 	from, to := mirrorPath, mirrorPath+".away"
 	if online {
 		from, to = to, from
 	}
-	return e.compose(ctx, "exec", "-T", mirrorHost, "mv", from, to)
+	script := fmt.Sprintf("if [ -e %[1]s ] && [ ! -e %[2]s ]; then mv %[1]s %[2]s; elif [ -e %[2]s ] || [ %[3]t = true ]; then :; else echo 'no mirror at %[1]s' >&2; exit 1; fi", from, to, online)
+	return e.run(ctx, "exec", "-T", mirrorHost, "sh", "-c", script)
 }
 
 func (e *composeEnv) moveMarker(ctx context.Context, disk soak.NodeRef, from, to string) error {
