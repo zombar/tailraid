@@ -52,9 +52,12 @@ export function shares(nodes: NodeReport[], maxSlots: (n: NodeReport) => number 
   return out;
 }
 
-/** chunksPerTarget is the most slots one target can hold: one per live chunk (I-9). */
+/**
+ * chunksPerTarget is the most slots one target can hold: one per live chunk (I-9). The
+ * report's `chunks` already leaves the tombstoned ones out, as the slot counts do.
+ */
 export function chunksPerTarget(r: Report): number {
-  return Math.max(0, r.volume.chunks - r.volume.tombstoned);
+  return r.volume.chunks;
 }
 
 /**
