@@ -2,7 +2,6 @@ package search
 
 import (
 	"bytes"
-	"context"
 	"encoding/xml"
 	"path"
 	"regexp"
@@ -467,22 +466,33 @@ func applyNFO(e *Entry, n NFO) {
 	e.Aired = firstOf(n.Aired, e.Aired)
 }
 
-// buildCatalog derives every library's entries, the libraries in kind-then-path order
-// and each folder's children in name order, so every node derives the same list.
-func buildCatalog(_ context.Context, src Source, nfo func(meta.Inode) (NFO, bool), tags func(meta.Ino) (Doc, bool), games func(meta.Inode) (map[string]GameInfo, bool)) []Entry {
-	c := &catalogue{src: src, nfo: nfo, tags: tags, games: games, seen: map[meta.Ino]bool{}}
-	c.walk()
-	return c.out
-}
-
 // walk derives every library's entries into c.out.
 func (c *catalogue) walk() {
-	libs := c.src.Libraries()
+	c.walkLibs(c.src.Libraries(), nil, nil)
+}
+
+// walkLibs derives the entries of libs in order: a library rebuild names (every one when
+// rebuild is nil) from its folders, every other one by keeping its entries in prev, as
+// the pass does for the libraries no change lies under (docs/18 §5, I-387).
+func (c *catalogue) walkLibs(libs []meta.Library, rebuild map[meta.Ino]bool, prev []Entry) {
 	// a nested library is its own section: claim every library folder first
 	for _, l := range libs {
 		c.seen[l.Ino] = true
 	}
+	kept := map[meta.Ino][]int{}
+	for i := range prev {
+		kept[prev[i].Lib] = append(kept[prev[i].Lib], i)
+	}
 	for _, l := range libs {
+		if rebuild != nil && !rebuild[l.Ino] {
+			for _, i := range kept[l.Ino] {
+				if !c.seen[prev[i].Ino] {
+					c.seen[prev[i].Ino] = true
+					c.out = append(c.out, prev[i])
+				}
+			}
+			continue
+		}
 		switch l.Kind {
 		case meta.LibraryMovies:
 			c.movies(l.Ino)

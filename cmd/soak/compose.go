@@ -243,8 +243,16 @@ func (e *composeEnv) SetMirrorOnline(ctx context.Context, _ string, online bool)
 	if online {
 		from, to = to, from
 	}
-	script := fmt.Sprintf("if [ -e %[1]s ] && [ ! -e %[2]s ]; then mv %[1]s %[2]s; elif [ -e %[2]s ] || [ %[3]t = true ]; then :; else echo 'no mirror at %[1]s' >&2; exit 1; fi", from, to, online)
-	return e.run(ctx, "exec", "-T", mirrorHost, "sh", "-c", script)
+	return e.run(ctx, "exec", "-T", mirrorHost, "sh", "-c", mirrorMoveScript(from, to, online))
+}
+
+// mirrorMoveScript moves from to to. Both present is an error, not a state already
+// reached: an empty directory at the plugged-in path beside the moved-away mirror is
+// what a write that recreated the root leaves (2026-10-16, I-180), and quietly keeping
+// it would show the phase a mirror with no marker.
+func mirrorMoveScript(from, to string, online bool) string {
+	return fmt.Sprintf("if [ -e %[1]s ] && [ -e %[2]s ]; then echo 'both %[1]s and %[2]s exist' >&2; exit 1; "+
+		"elif [ -e %[1]s ]; then mv %[1]s %[2]s; elif [ -e %[2]s ] || [ %[3]t = true ]; then :; else echo 'no mirror at %[1]s' >&2; exit 1; fi", from, to, online)
 }
 
 func (e *composeEnv) moveMarker(ctx context.Context, disk soak.NodeRef, from, to string) error {

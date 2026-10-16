@@ -257,10 +257,7 @@ func (m *Mirror) mkdir(dir string) error {
 	if done {
 		return nil
 	}
-	if _, err := m.fsys.Stat(m.root); err != nil { // unplugged: never recreate the root (writeDurable)
-		return err
-	}
-	if err := m.fsys.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirBelow(m.fsys, m.root, dir); err != nil { // unplugged: never recreate the root
 		return err
 	}
 	m.mu.Lock()

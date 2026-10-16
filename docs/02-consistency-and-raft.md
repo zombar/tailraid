@@ -271,6 +271,18 @@ only `Restore` and `Purge` take anything out.
    writer's in-place WRITE merges into the current rewrite at chunk granularity, as any
    two writers did before codec 9.
 
+`newChunks` is a new list because readers, clones and snapshots share `inode.Chunks`
+without a lock, so no element they can see may change (I-104). A Commit that only appends
+(no truncate, every `Writes[i].Idx >= len(old)`) changes no element anyone can see. It
+therefore extends the old list in place, into spare capacity that no earlier list covers,
+and the list grows by doubling when that runs out. Holders of the old list keep its
+length, so they never see the new tail; a list handed out by the read API or a clone is
+capped at its length, so a caller's own `append` reallocates rather than writing where the
+list grows. Each appending Commit then costs O(its writes)
+amortized instead of O(file length). The commits of a streamed file of n chunks copy O(n)
+hashes in all, not O(n²) (I-385: a million-chunk file, the I-64 cap, is 32 MiB of list,
+and with per-chunk commits the copies had summed to 16 TiB).
+
 **SetPlacement.** Chunk must exist (`ErrUnknownChunk`). Replaces `Placement`, `K`, `M`
 (length must equal the new `K+M`; non-zero entries distinct existing nodes). Used by repair
 to fill slots, re-place slots off draining/removed nodes, and migrate to a new policy.
@@ -290,6 +302,28 @@ victim list is emitted in hash order. **The sync hold:** while any catalogue row
 `Syncing`, the FSM uses `min(Before, the oldest syncing row's At)` in place of `Before`,
 so no chunk tombstoned after a snapshot began is collected before its copy to the mirror
 ends (16 §4, I-181); the bound is state, so every replica applies the same one.
+
+**Neither walks.** `GCDelete` and `Purge` with `Before` name a set and an order, and the
+applier finds them without visiting the rest. It keeps two queues with every apply and
+rebuilds them on `Restore`, like the stats and the placement classes (never encoded):
+
+- **Tombstones**, held in `(TombstonedAt, Hash)` order. A `GCDelete` first moves the ones
+  now due (`TombstonedAt < Before`, after the sync hold) into a second queue held in hash
+  order. It then takes up to `Limit` from the front of that queue. A due-queue entry that
+  this `Before` does not reach (the sync hold, or a lower `Before` than an earlier entry's)
+  goes back to the first queue.
+- **Deleted roots**, held in `(DeletedAt, Ino)` order. A `Purge{Before}` takes roots from
+  the front one at a time while they are due, until `Limit` inodes are collected. A root
+  it did not finish stays at the front.
+
+A re-referenced chunk leaves its queue at that apply, and so does a restored, folded or
+deleted root. Each entry costs O(log n) when it enters or leaves a queue. So a GC batch
+costs O(batch + newly due) · log n, and a million-chunk `rm -rf` drains in about a
+thousand entries of 1024 rather than a thousand walks of a million (I-381). The entries
+taken, and their order, are exactly the rules' above. A replica on the previous binary,
+which walks, therefore applies every entry identically, and no codec gate is needed. The
+GC worker asks `TrashDue(before)` (is the oldest root due?) before each `Purge` entry. That
+is a look at the front of the root queue, O(1), not a count of the trash (I-382).
 
 **SnapshotBegin** (16 §3). `Mirror` must be an `Active` `KindMirror` row (`ErrNoSuchNode`);
 `Name` 1 to 64 bytes, no `/`, not `.` or `..` (`ErrBadCommand`) and free on that mirror
@@ -398,9 +432,16 @@ func (f *FSM) WaitApplied(ctx context.Context, index uint64) error
 ```
 
 `hashicorp/raft` guarantees `Apply` never runs concurrently with `Snapshot()` but *does* run
-concurrently with `Persist`. Hence `Snapshot()` clones under the read lock (Children maps
-deep-copied; `Chunks` slices shared because they are immutable) and `Persist` works on the
-clone with no lock. Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
+concurrently with `Persist`. Hence `Snapshot()` clones under the read lock (inodes and
+their Children maps deep-copied; file chunk lists shared because they are immutable) and
+`Persist` works on the clone with no lock. Applies wait for the clone, so it must be
+cheap. A chunk entry is never changed in place: every apply that changes one (references,
+the tombstone, placement, shard sums) installs a fresh copy under the hash
+(`State.mutChunk`). The clone therefore shares the chunk entries, and copying the chunk
+table is one pointer map copy, not a copy of every chunk and its slot list (I-383: 0.25 s
+at a million chunks on an M-series Mac before, for each Raft snapshot every 2 minutes on
+every node and for each mirror sync's begin on its host). The same clone serves the
+mirror's snapshot hook (16 §3). Snapshots are written to `raft.FileSnapshotStore` (retain 2) and fsync
 on close. These Raft snapshots (log compaction) are not the volume snapshots of 16,
 which are catalogue rows here and trees and chunks on a mirror disk. Log and stable store are `raft-boltdb/v2` in `<data_dir>/raft/raft.db` with
 `NoSync = false`.
@@ -412,6 +453,34 @@ successor; a follower gateway's `WaitApplied` bounds on it), `SnapshotInterval 2
 10 ms and Raft's in-memory stores through `Options.Stores`, which is how tests get speed
 without any switch that skips an fsync).
 Tests use `raft.NewInmemTransport`/`NewInmemStore` with 20 ms timeouts.
+
+### The change feed
+
+Some work on a node depends on which inodes changed, never on the whole tree: the search
+name list and the leader's index pass (18 §5, §6) and the pin worker (01 §Pins). Each one
+once noticed that `Applied` had moved and walked every inode, or every pinned subtree, to
+find out what. The FSM now keeps a **change feed** alongside the state, never replicated
+or encoded:
+
+- **What it records:** every apply adds `(index, ino)` for each inode it created,
+  changed or deleted. That includes a parent whose name table changed: a create, a delete,
+  a rename (both parents), a trash, a fold, a restore or a purge.
+- **What a consumer asks:** `Changes(after)` returns the distinct inodes changed by
+  entries in `(after, upto]` and `upto`, the applied index the answer runs to. The cost is
+  O(changes since `after`). It reports `complete = false` when the feed no longer reaches
+  back to `after`.
+- **Its floor:** the feed is complete for indexes after its floor. `Restore` moves the
+  floor to the restored index and empties the feed, since a node started from a snapshot
+  never saw the changes before it. Past `FeedMax` (2¹⁹ records, 8 MiB) the oldest half is
+  dropped and the floor rises.
+- **Falling back:** a consumer that gets `complete = false` walks once, as it did before,
+  and continues from `upto`.
+- **Descendants:** a changed directory stands for itself. A consumer that cares about its
+  descendants (a renamed, trashed or restored folder) visits that subtree. That cost
+  scales with what changed, not with the volume.
+
+A deleted inode is still reported (its parent too). A consumer asking `GetInode` finds it
+gone and drops what it held for it (I-386).
 
 ## Reads
 
@@ -587,10 +656,30 @@ no divergent state to merge because it never applied uncommitted entries.
 - **I-103** — A `GCDelete` removes at most `Limit` entries, the lowest hashes first, and
   the GC worker proposes again while a batch comes back full, so a backlog of any size
   drains in bounded applies and every replica removes the same entries per entry.
+- **I-381** — A `GCDelete` finds its victims through the applier's tombstone queues, never
+  by walking `Tombs`. It costs O((victims + chunks newly due) · log n) whatever the
+  backlog. The victims and their order are exactly those of the walk the rule describes,
+  under any `Before`, `Limit` and sync hold. The queues equal a rebuild from the state
+  after every apply and after `Restore`.
+- **I-382** — A `Purge` with `Before` takes its roots from the applier's root queue in
+  `(DeletedAt, Ino)` order, never by walking `Trash`, and deletes exactly what the walk
+  would. `TrashDue` answers from the front of that queue in O(1). The queue equals a
+  rebuild after every apply and after `Restore`.
 - **I-104** — A snapshot is a deep copy of the mutable state taken under the read lock,
   and chunk lists are immutable (a `Commit` installs a new list, never rewrites one): a
   `Commit` applied after the snapshot never changes it, and a snapshot is written and read
   as a stream, never held whole in memory a second time.
+- **I-386** — The change feed lists every inode an apply created, changed or deleted
+  (a parent whose name table changed among them) for every index after its floor.
+  `Changes(after)` costs O(changes since `after`) and says `complete = false` when `after`
+  lies below the floor. `Restore` and overflow past `FeedMax` raise the floor, and nothing
+  in it is replicated or encoded.
+- **I-385** — A `Commit` that only appends extends the chunk list in capacity no earlier
+  list covers and copies O(appended) hashes amortized. Every other `Commit` installs a new
+  list. Either way, no element of a list a reader, clone or snapshot holds ever changes.
+- **I-383** — A state clone allocates nothing per chunk: a chunk entry is replaced, never
+  changed in place, so the clone shares the entries and an apply after the clone never
+  changes what the clone holds.
 - **I-105** — A log entry this binary cannot decode is counted (`status` shows
   `incompatible_entries` and a warning) and logged, while the applied index advances as on
   every replica; `/health` reports `meta.CodecVersion`, and `join` refuses a cluster whose
@@ -680,6 +769,11 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-96 | `TestLoadOrCreateNodeID_ReadErrorIsNotANewIdentity` |
 | I-102 | `TestFSM_SetPlacement_ExpectConflict`, `TestEncodeCommand_Golden` |
 | I-103 | `TestFSM_GCDelete_LimitBoundary`, `TestGC_DrainsBacklogInBatches` |
+| I-381 | `TestFSM_GCDelete_QueueMatchesWalk`, `TestFSM_GCDelete_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
+| I-382 | `TestFSM_Purge_QueueMatchesWalk`, `TestFSM_Purge_CostIndependentOfBacklog`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestModelCheck_Long` |
+| I-386 | `TestFSM_Changes_ListEveryChangedInode`, `TestFSM_Changes_FoldRestorePurge`, `TestFSM_Changes_FloorAndOverflow` |
+| I-385 | `TestFSM_Commit_AppendCostIndependentOfLength`, `TestFSM_Commit_AppendLeavesHeldListsAlone`, `TestFSM_Commit_ReaderAppendReallocates`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
+| I-383 | `TestState_Clone_SharesChunkEntries`, `TestFSM_SnapshotUnaffectedByLaterCommands` |
 | I-104 | `TestFSM_SnapshotUnaffectedByLaterCommit`, `TestDecodeState_StreamsFromAnyReader` |
 | I-105 | `TestFSM_IncompatibleEntryCounted`, `TestCodecCompatible`, `TestMembersBadSlotHealthStatus` |
 | I-99 | `TestOpenFresh_StartFailureFreesPortAndStores` |

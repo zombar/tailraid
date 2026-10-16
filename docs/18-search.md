@@ -30,8 +30,10 @@ are stubs in `test/invariants/` until each PR lands its tests: `library-flag` (I
 
 ## 2. What is indexed (I-207)
 
-Files only, keyed by inode (`Ino` is never reused, 00 §Glossary, I-3), so a rename or a
-move needs no re-index and a file is re-indexed only when its content changed: the doc
+Files only, keyed by inode (`Ino` is never reused, 00 §Glossary, I-3), so a rename, a
+move, a delete to the trash or a restore needs no re-index (a file in the trash is indexed
+like any other and only the query's live filter hides it, so the pass follows the change
+feed file by file, §5), and a file is re-indexed only when its content changed: the doc
 table records `sha256(Chunks)`, the hash of the chunk list, and a candidate is one whose
 hash is absent or different. `Version` alone would not do: it bumps on `chmod` and
 `utimes` too, which rsync and Finder issue constantly.
@@ -106,13 +108,23 @@ filling it, so a search answers from the node's disk when the network is busy. T
 ## 5. The leader's pass
 
 On the maintenance tick (`node.go` `maintenance`, next to GC) every `search.interval`
-(10 min, `"0"` off) when `Applied` advanced since the last pass: load the chain, walk
-every inode once (`Store.ForEachInode`, the `ForEachChunk` pattern: keys sorted, copies
-taken in batches of 1000 under the read lock, so a million inodes never starve Apply),
-collect the candidates in inode order, take at most `search.batch` of them or
+(10 min, `"0"` off) when `Applied` advanced since the last pass: load the chain and
+collect the candidates from the FSM's change feed (02 §The change feed). The pass keeps a
+pending set: every inode the feed reported since the last pass, with the files under a
+changed folder (a restored or renamed tree). It checks each against the chain, and one the
+chain already holds at its chunk list and generation leaves the set. The pass walks every
+inode (`Store.ForEachInode`: keys sorted, copies taken in batches of 1000 under the read
+lock) only when the feed cannot answer (a new leader, a node started from a snapshot, a
+feed overflow) and once every `SweepEvery` (an hour), which also catches what no change
+reports (a lifted size cap). From the candidates in inode order it takes at most `search.batch` of them or
 `search.batch_bytes` of text, read them `search.workers` (2) at a time under
 `chunk.Background` (06 §4, I-175), tokenize, derive
-the catalogue entries (§8), write the segment (§4). While candidates are pending the
+the catalogue entries (§8), write the segment (§4). A file it did not take or could not
+read stays pending. The catalogue is rebuilt only for the libraries a change lies under
+(every library on a changed inode's ancestor chain, so nested libraries rebuild together);
+the others keep their entries from the chain's newest catalogue, and a change to the set of
+libraries rebuilds every one. A pass with no candidate and no library touched reads
+nothing and writes nothing (I-387). While candidates are pending the
 next pass runs after `Backlog` (30 s) instead of the interval, so a large import is
 indexed pass after pass rather than one batch per interval. The leader remembers each
 `.nfo` it parsed by its chunk list, so a pass re-reads only changed sidecars; a new
@@ -131,10 +143,12 @@ A hit is `{path, type, size, mtime, ino, match, title?, artist?, album?, terms:
 [{term, off}]}` with `match` one of `name`, `tags`, `content`:
 
 - **Names** are matched live against the FSM, so a file written a second ago is found by
-  its name at once. The node keeps a folded name list (every live inode's words) rebuilt
-  when `Applied` moved and at least `NameRefresh` (1 s) has passed since the last
-  build, and reused otherwise: never a full walk per keystroke, even while a copy keeps
-  the FSM moving.
+  its name at once. The node keeps a folded name list (every inode's words) that a query
+  first brings up to date from the change feed: an inode changed since the last update is
+  read again, and a deleted one is dropped. It is built by a walk only when the feed cannot
+  answer, never on every keystroke, even while a copy keeps the FSM moving (I-388). A query
+  then scans the list, one pass over a byte slice. The trash, `/.tailraid` and ephemeral
+  names are filtered per hit, as below.
 - **Tags** and **content** come from the segments. Every candidate inode is filtered
   through the live `GetInode` (nothing in the trash or under `/.tailraid` is a hit) and
   `PathOf` names it.
@@ -274,7 +288,11 @@ FSM identical. The effective kind of a folder is the nearest flagged ancestor's 
 first); a library inside a library is its own section. `ls` and `stat` carry `library`
 next to `protected` and `nsfw`, `POST /api/flags` accepts `library` with one of the four
 words, and the folder menu offers it (13 §4). `Store.Libraries()` lists every flagged
-folder in kind-then-path order for the Media tab; no new CLI command is needed.
+folder in kind-then-path order for the Media tab; no new CLI command is needed. It asks
+for each request and each catalogue pass, so it reads a set of flagged directories that
+the applier keeps (the one `SetAttr` that sets flags adds or drops a directory; a delete
+drops it; `Restore` rebuilds it, never encoded) instead of walking every inode: O(libraries
+× depth), whatever the volume holds (I-384).
 
 ## 10. Non-goals
 
@@ -414,8 +432,9 @@ the Cover Art Archive data are CC0 and need none.
   once it is an hour old and never touches one inside it.
 - **I-207** — A pass indexes files only, keyed by inode, by content: the first
   `search.max_file` bytes of a text file by extension, the first chunk's tags of an audio
-  file, nothing of anything else; it skips `/.tailraid`, deleted roots and ephemeral
-  names; it re-indexes a file only when `sha256(Chunks)` changed, so a rename, a move or a
+  file, nothing of anything else; it skips `/.tailraid` and ephemeral names, and indexes a
+  file in the trash like any other (a query never shows one, I-208; a merge drops its doc
+  once the file is purged), so a restore needs no pass; it re-indexes a file only when `sha256(Chunks)` changed, so a rename, a move or a
   `SetAttr` costs nothing; it reads at most `search.batch` candidates or `search.batch_bytes`
   of text a pass, `search.workers` at a time at background priority; and above
   `search.max_bytes` of segments it indexes tags, names and the catalogue only and
@@ -433,6 +452,18 @@ the Cover Art Archive data are CC0 and need none.
   other bit; the effective kind is the nearest flagged ancestor's; `ls` and `stat` carry
   `library`, `POST /api/flags` sets it, and `Store.Libraries()` lists flagged folders in
   kind-then-path order, the same on every node.
+- **I-384** — `Store.Libraries()` reads an applier-kept set of the directories whose flags
+  carry a library kind, never a walk of the inodes: its cost is the libraries' number times
+  their depth, and the set equals a recount after every apply and after `Restore`.
+- **I-387** — The leader's pass finds its candidates in the change feed and the pending
+  set: it walks every inode only when the feed cannot answer and once every `SweepEvery`.
+  It rebuilds the catalogue only for the libraries a change lies under. A pass with
+  nothing changed under a candidate or a library reads and writes nothing. Over any
+  sequence of changes, the chain and catalogue it writes equal those a pass walking
+  everything would write.
+- **I-388** — A query's name list is brought up to date from the change feed, O(changes
+  since the last query), and built by a walk only when the feed cannot answer. Its hits
+  equal those of a list built from scratch.
 - **I-211** — The catalogue is a pure function of the tree, the sidecars and the tags
   under each library folder: a film from a folder or a loose video file, a show from a
   folder with seasons and episodes parsed from `SnnEnn`, `nnxnn` or `Episode nn`, an album
@@ -469,6 +500,9 @@ the Cover Art Archive data are CC0 and need none.
 | I-206 | `TestSegment_RoundTrip_TrailerRejectsTruncation`, `TestSegment_SizeBoundaries_Table`, `FuzzSegmentDecode`, `TestIndexer_LoserOfCreateRaceAborts`, `TestIndexer_NoChangeWritesNothing`, `TestIndexer_RebuildWhenChainExceedsEight`, `TestSweep_RemovesOrphansOlderThanHour`, `TestSearch_ReloadsOnNewSegment`, `TestCluster_SearchDeterministicAcrossNodes`, `TestIndexer_LeaderChange_ContinuesFromChain`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-207 | `TestTokenize_Table`, `FuzzTokenize`, `TestIndexer_SortedWalk_SegmentBytesDeterministic`, `TestIndexer_ReindexOnlyWhenChunksChange`, `TestIndexer_SkipsTrashReservedEphemeral`, `TestIndexer_MaxFile_Table`, `TestIndexer_AudioFirstChunkOnly`, `TestIndexer_MaxBytes_TagsOnly`, `TestConfig_SearchKeys_Table`, `TestReport_SearchChart`, `TestSoak_AllPhasesAgainstHarness` |
 | I-208 | `TestSearch_AndPrefix_RankNameTagsContent`, `TestSearch_FiltersDeletedAndUnder`, `TestSearch_LimitBoundaries`, `TestSearch_NameListFollowsApplied`, `TestCluster_SearchDeterministicAcrossNodes`, `TestCLI_Search`, `TestWebUI_Search_Table`, `TestSoak_AllPhasesAgainstHarness` |
+| I-387 | `TestPass_FromFeed_MatchesFullWalk`, `TestPass_NothingChanged_WalksNothing`, `TestPass_CatalogueRebuildsTouchedLibraryOnly`, `TestPass_LateTrackRebuildsItsAlbum` |
+| I-388 | `TestSearch_Names_FromFeed_MatchesRebuild`, `TestSearch_Names_UpdateCostIsTheChanges` |
+| I-384 | `TestStore_Libraries_CostIndependentOfInodes`, `TestStore_Libraries`, `TestFSM_ApplySnapshotRestoreEquivalence` |
 | I-210 | `TestFSM_SetAttr_LibraryKind_Table`, `TestFSM_LibraryEffective_NearestAncestor`, `TestStore_Libraries`, `TestEncodeCommand_V6Gating`, `TestEncodeCommand_Golden`, `TestCluster_Codec6RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table` |
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |

@@ -21,6 +21,9 @@ type FS interface {
 	Remove(name string) error
 	ReadDir(name string) ([]fs.DirEntry, error)
 	MkdirAll(name string, perm fs.FileMode) error
+	// Mkdir is os.Mkdir: one level, its parent must exist. A mirror makes the directories
+	// below its root with it, so an unplugged root fails the make (I-180).
+	Mkdir(name string, perm fs.FileMode) error
 	Stat(name string) (fs.FileInfo, error)
 	// Chmod is os.Chmod; the store and the cache tighten their directories with it (I-340).
 	Chmod(name string, mode fs.FileMode) error
@@ -59,6 +62,7 @@ func (OS) Rename(oldpath, newpath string) error         { return os.Rename(oldpa
 func (OS) Remove(name string) error                     { return os.Remove(name) }
 func (OS) ReadDir(name string) ([]fs.DirEntry, error)   { return os.ReadDir(name) }
 func (OS) MkdirAll(name string, perm fs.FileMode) error { return os.MkdirAll(name, perm) }
+func (OS) Mkdir(name string, perm fs.FileMode) error    { return os.Mkdir(name, perm) }
 func (OS) Stat(name string) (fs.FileInfo, error)        { return os.Stat(name) }
 func (OS) Chmod(name string, mode fs.FileMode) error    { return os.Chmod(name, mode) }
 func (OS) Chtimes(name string, atime, mtime time.Time) error {

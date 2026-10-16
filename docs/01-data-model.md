@@ -249,8 +249,11 @@ fetches and waits for them, and a closed reader starts no more (found as a race 
 this device" in the browser UI, 13 §4) is recorded in `<data_dir>/pins.json` as
 `{ino, gen, path}`; the path is a label and the inode the identity, so a rename keeps the
 pin and a delete makes it lapse. A pin worker on that node walks every pinned subtree when
-a pin is added, at start, and whenever the FSM's applied index has moved since its last
-walk (checked every 30 s), reads every chunk the cache lacks through the ordinary reader
+a pin is added and at start. After that, every 30 s it asks the FSM's change feed (02 §The
+change feed) what changed since its last walk. It walks again only when a change lies
+under a pinned folder or a system folder below, and then it collects only the roots
+touched; the others keep what they collected. When the feed cannot answer, it collects
+everything again (I-389). The worker reads every chunk the cache lacks through the ordinary reader
 (two in flight, cancelled on unpin or shutdown, every shard request marked background so
 a prefetch of a large folder yields a node's shard slots to client reads, 06 §4, I-175)
 and marks the hashes pinned; the LRU never
@@ -441,6 +444,10 @@ defined in `04-write-path-and-durability.md`.
   within one pin walk of its commit; and with every other holder dead, a stored
   thumbnail, the index and the stats segments it keeps read from the cache, the search
   and stats readers consulting the cache without filling it.
+- **I-389** — After its first walk, the pin worker collects a pinned folder or a system
+  folder again only when the change feed shows a change under it, or cannot answer. A
+  change elsewhere in the volume costs it O(the changes) and no subtree walk. What it
+  pins equals what a walk of every pin would pin.
 - **I-204** — A chunk is in the cache's memory tier and its accounting when `Put`
   returns and its file is written behind it: at most `CacheWriters` writes run at once
   and at most `CacheQueue` are outstanding, past which a `Put` writes synchronously; a
@@ -481,5 +488,6 @@ defined in `04-write-path-and-durability.md`.
 | I-156 | `TestCodec_ReadsVersion3Snapshot`, `TestCodec_StateRoundTrip`, `TestEncodeCommand_Golden`, `TestEncodeCommand_V4Gating`, `FuzzDecodeCommand`, `TestFSM_TrashStats_MatchComputed`, `TestFSM_ApplySnapshotRestoreEquivalence`, `TestVFS_Remove_FallsBackWhileCodecOld`, `TestCluster_V4OpsRefusedUntilAllMembersUpgraded`, `TestProber_MinCodec`, `TestCluster_TrashSurvivesSnapshotInstall` |
 | I-115 | `TestFSM_PathLengthBoundaries`, `TestVFS_DeepPath_ThousandLevelsAndLimit` |
 | I-184 | `TestEncodeCommand_V7Gating`, `TestEncodeCommand_Golden`, `TestCodec_CatalogueRoundTrip`, `TestCodec_ReadsVersion5Snapshot`, `TestCodec_StateRoundTrip`, `TestFSM_MirrorRow_Table`, `TestCandidates_MirrorNeverATarget`, `TestResult_SnapIDRoundTrip`, `FuzzDecodeCommand`, `FuzzDecodeState`, `TestCluster_CatalogueSurvivesSnapshotInstall` |
+| I-389 | `TestPins_ChangeElsewhere_WalksNothing`, `TestPins_FromFeed_MatchesFullWalk` |
 | I-373 | `TestPins_System_NewestFirstWithinBudget`, `TestPins_System_NewFileCachedNextWalk`, `TestReader_NoFill_ConsultsCacheNeverFills`, `TestSystemPin_ReadsWithEveryPeerDead` |
 | I-204 | `TestCache_PutMemoryFirst_DiskLater`, `TestCache_Get_PendingNotInMemory_WaitsForWrite`, `TestCache_PendingEntryEvictedBeforeWrite_NoFile`, `TestCache_FullQueueWritesSynchronously`, `TestReader_Close_CancelsDetachedFetches` |

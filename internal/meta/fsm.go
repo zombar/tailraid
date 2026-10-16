@@ -1,12 +1,10 @@
 package meta
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,7 +30,8 @@ type FSM struct {
 
 	mu      sync.RWMutex
 	st      *State
-	stats   Stats // volume totals, kept in step with every apply (Inodes filled on read)
+	stats   Stats      // volume totals, kept in step with every apply (Inodes filled on read)
+	feed    changeFeed // which inodes each entry changed, for the consumers that follow it (I-386)
 	applied atomic.Uint64
 
 	waitMu sync.Mutex
@@ -73,7 +72,7 @@ func (f *FSM) SetSnapshotHook(h SnapshotHook) {
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
 	st := NewState()
-	return &FSM{st: st, stats: Stats{cls: newClassTable(st)}, waitCh: make(chan struct{})}
+	return &FSM{st: st, feed: changeFeed{max: FeedMax}, stats: Stats{cls: newClassTable(st), due: newDueIndex(), lib: newLibraries()}, waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
@@ -140,7 +139,7 @@ func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
 		}
 		return Result{Err: ErrBadCommand}
 	}
-	a := &applier{st: f.st, stats: &f.stats, index: index}
+	a := &applier{st: f.st, stats: &f.stats, feed: &f.feed, index: index}
 	res, err := a.apply(cmd)
 	if err != nil {
 		return Result{Err: err}
@@ -155,6 +154,7 @@ func (f *FSM) applyLocked(cmd Command, decodeErr error, index uint64) Result {
 type applier struct {
 	st    *State
 	stats *Stats
+	feed  *changeFeed
 	index uint64
 	now   int64 // clamped command clock; 0 when the op carries no Now
 }
@@ -471,6 +471,7 @@ func (a *applier) newInode(typ FileType, parent *Inode, name string, mode, uid, 
 	parent.Children[name] = in.Ino
 	parent.Mtime, parent.Ctime = now, now
 	parent.Version++ // the name table changed (docs/01)
+	a.touch(in.Ino, parent.Ino)
 	return in
 }
 
@@ -560,7 +561,7 @@ func (d refDelta) check(st *State) error {
 // Call only after check.
 func (d refDelta) commit(st *State, stats *Stats, now int64) {
 	for h, n := range d {
-		c := st.Chunks[h]
+		c := st.mutChunk(h)
 		fresh := c.Refs == 0 && c.TombstonedAt == 0 // registered by this command, not counted yet
 		wasLive := c.Refs > 0
 		c.Refs = uint32(int(c.Refs) + n)
@@ -569,9 +570,11 @@ func (d refDelta) commit(st *State, stats *Stats, now int64) {
 				c.TombstonedAt = now
 			}
 			st.Tombs[h] = struct{}{}
+			stats.due.tomb(h, c.TombstonedAt)
 		} else {
 			c.TombstonedAt = 0
 			delete(st.Tombs, h)
+			stats.due.untomb(h)
 		}
 		if !fresh {
 			stats.chunkOut(c, wasLive)
@@ -616,6 +619,8 @@ func (a *applier) unlink(c *Unlink) error {
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
+	a.stats.lib.drop(ino)
+	a.touch(ino, p.Ino)
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
 	return nil
@@ -658,6 +663,8 @@ func (a *applier) rmdir(c *Rmdir) error {
 	delete(p.Children, c.Name)
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
+	a.stats.lib.drop(ino)
+	a.touch(ino, p.Ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -757,6 +764,7 @@ func (a *applier) rename(c *Rename) error {
 		}
 		delete(st.Inodes, dst.Ino)
 		st.dropGrants(dst.Ino)
+		a.stats.lib.drop(dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
 		}
@@ -774,6 +782,10 @@ func (a *applier) rename(c *Rename) error {
 	op.Version++ // the name table changed (docs/01)
 	np.Mtime, np.Ctime = now, now
 	np.Version++ // the name table changed (docs/01)
+	a.touch(srcIno, op.Ino, np.Ino)
+	if dst != nil {
+		a.touch(dst.Ino)
+	}
 	return nil
 }
 
@@ -800,8 +812,10 @@ func (a *applier) setAttr(c *SetAttr) error {
 		}
 	}
 	now := a.clock(c.Now)
+	a.touch(in.Ino)
 	if c.Mask&AttrFlags != 0 {
 		in.Flags = c.Flags
+		a.stats.lib.set(in)
 	}
 	if c.Mask&AttrMode != 0 {
 		in.Mode = c.Mode
@@ -985,7 +999,7 @@ func (a *applier) commit(c *Commit) error {
 		st.Chunks[d.Hash] = ch
 	}
 	for _, d := range fill {
-		st.Chunks[d.Hash].Sums = append([]Hash(nil), d.Sums...)
+		st.mutChunk(d.Hash).Sums = append([]Hash(nil), d.Sums...)
 	}
 	// Only the indices that change carry a delta: written ones (old entry out, new in),
 	// and the entries a truncate drops; everything below keep that was not written is
@@ -1013,10 +1027,23 @@ func (a *applier) commit(c *Commit) error {
 	now := a.clock(c.Now)
 	delta.commit(st, a.stats, now)
 	// Chunk lists are immutable (copy-on-write): readers, snapshots and the clone share
-	// the slice without a lock, so a Commit allocates a new list (O(file length) in copy,
-	// though O(writes) in reference accounting) rather than rewriting it in place (I-104).
-	newList := make([]Hash, n)
-	copy(newList, oldList[:keep])
+	// the slice without a lock, so no element they can see changes (I-104). A Commit that
+	// only appends extends the list in place, into capacity no earlier list covers (this
+	// list is the longest on its array: every other Commit makes a new one), growing by
+	// doubling: O(writes) amortized, so a streamed file's commits are O(n) in all, not
+	// O(n²) (I-385). Any other Commit allocates a new list.
+	appendOnly := !c.HasTruncate
+	for _, w := range c.Writes {
+		appendOnly = appendOnly && int(w.Idx) >= len(oldList)
+	}
+	var newList []Hash
+	if appendOnly && keep == len(oldList) {
+		newList = slices.Grow(oldList, n-len(oldList))[:n]
+		clear(newList[len(oldList):])
+	} else {
+		newList = make([]Hash, n)
+		copy(newList, oldList[:keep])
+	}
 	for _, w := range c.Writes {
 		newList[w.Idx] = w.Hash
 	}
@@ -1026,6 +1053,7 @@ func (a *applier) commit(c *Commit) error {
 	} else {
 		a.stats.LogicalBytes += c.NewSize - in.Size
 	}
+	a.touch(in.Ino)
 	in.Size = c.NewSize
 	in.Version++
 	if c.RewriteStart {
@@ -1053,6 +1081,7 @@ func (a *applier) setPlacement(c *SetPlacement) error {
 		a.stats.StoredBytes -= storedBytes(ch)
 		a.stats.cls.out(ch)
 	}
+	ch = a.st.mutChunk(c.Hash)
 	if ch.K != c.K || ch.M != c.M {
 		ch.Sums = nil // the shards are different bytes now; the backfill records the new sums (I-201)
 	}
@@ -1085,7 +1114,7 @@ func (a *applier) setShardSums(c *SetShardSums) error {
 		}
 		return ErrConflict
 	}
-	ch.Sums = append([]Hash(nil), c.Sums...)
+	a.st.mutChunk(c.Hash).Sums = append([]Hash(nil), c.Sums...)
 	return nil
 }
 
@@ -1100,20 +1129,15 @@ func (a *applier) gcDelete(c *GCDelete) (Result, error) {
 		// may be referenced by it, so it waits until the copy to its mirror ends
 		before = at
 	}
-	var victims []GCVictim
-	for h := range st.Tombs {
+	// the queues give the lowest due hashes without a walk of Tombs (I-381): the same
+	// victims in the same order on every replica, the hash order the rule names (I-103)
+	hashes := a.stats.due.takeTombs(before, int(c.Limit))
+	victims := make([]GCVictim, 0, len(hashes))
+	for _, h := range hashes {
 		ch := st.Chunks[h]
-		if ch.Refs == 0 && ch.TombstonedAt < before {
-			victims = append(victims, GCVictim{Hash: h, K: ch.K, M: ch.M, Placement: append([]NodeIdx(nil), ch.Placement...)})
-		}
-	}
-	sort.Slice(victims, func(i, j int) bool { return bytes.Compare(victims[i].Hash[:], victims[j].Hash[:]) < 0 })
-	if c.Limit != 0 && len(victims) > int(c.Limit) {
-		victims = victims[:c.Limit] // the rest on the next entry (I-103); the order is the hash order, so every replica cuts the same
-	}
-	for _, v := range victims {
-		delete(st.Chunks, v.Hash)
-		delete(st.Tombs, v.Hash)
+		victims = append(victims, GCVictim{Hash: h, K: ch.K, M: ch.M, Placement: append([]NodeIdx(nil), ch.Placement...)})
+		delete(st.Chunks, h)
+		delete(st.Tombs, h)
 	}
 	a.stats.Tombstoned -= len(victims)
 	return Result{Victims: victims}, nil
@@ -1155,6 +1179,7 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	f.mu.Lock()
 	f.st = st
 	f.stats = computeStats(st)
+	f.feed.reset(st.Applied) // nothing before the snapshot is known (I-386)
 	f.mu.Unlock()
 	f.setApplied(st.Applied)
 	return nil

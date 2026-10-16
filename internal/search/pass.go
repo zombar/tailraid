@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,12 +36,13 @@ func DefaultConfig() Config {
 // (docs/18 §4, I-206).
 const SweepAge = time.Hour
 
+// SweepEvery is how often the pass walks every inode though the change feed answers: it
+// finds what no change reports, a text file the size cap once left out (docs/18 §5).
+const SweepEvery = time.Hour
+
 // Backlog is how soon the leader's next pass runs while candidates are pending
 // (docs/18 §5): a large import is indexed pass after pass, not one per interval.
 const Backlog = 30 * time.Second
-
-// NameRefresh is how stale the folded name list may be while the FSM moves (docs/18 §6).
-const NameRefresh = time.Second
 
 // ErrLost is a pass that lost the create of its segment to another leader (I-206).
 var ErrLost = errors.New("search: another pass wrote this segment")
@@ -76,12 +79,18 @@ type Service struct {
 
 	pass sync.Mutex // one pass at a time
 
-	mu       sync.Mutex
-	x        *Index
-	xErr     error
-	names    *nameList
-	namesAt  time.Time
-	nfo      map[meta.Ino]nfoMemo // the leader's sidecar reads, by content
+	mu    sync.Mutex
+	x     *Index
+	xErr  error
+	names *nameList
+	nfo   map[meta.Ino]nfoMemo // the leader's sidecar reads, by content
+	// the leader's pass (I-387): the files to check, the feed index they run to, the last
+	// walk of every inode, and the catalogue it last wrote with the libraries it came from
+	pending  map[meta.Ino]struct{}
+	fedTo    uint64
+	walked   time.Time
+	cat      []Entry
+	catLibs  []meta.Library
 	games    map[meta.Ino]gamesMemo
 	status   Status
 	inFlight bool
@@ -164,9 +173,7 @@ func (s *Service) Catalog(ctx context.Context) ([]Entry, error) {
 func (s *Service) Search(ctx context.Context, q, under string, limit int) Result {
 	x, err := s.index(ctx)
 	s.mu.Lock()
-	if s.names == nil || (s.names.applied != s.Src.Applied() && s.Clk.Now().Sub(s.namesAt) >= NameRefresh) {
-		s.names, s.namesAt = buildNames(s.Src), s.Clk.Now()
-	}
+	s.names = freshNames(s.Src, s.names)
 	names := s.names
 	s.mu.Unlock()
 	if err != nil {
@@ -218,35 +225,41 @@ func (s *Service) runPass(ctx context.Context) (PassResult, error) {
 		cfg.MaxFile = cs
 	}
 	res.Capped = cfg.MaxBytes > 0 && x.Bytes >= cfg.MaxBytes
-	reserved := reservedSet(s.Src)
-	var cands []candidate
-	s.Src.ForEachInode(func(in meta.Inode) bool {
-		if in.Type != meta.TFile || reserved[in.Parent] || meta.IsEphemeral(in.Name) {
-			return true
-		}
-		kind := uint8(0)
-		switch {
-		case IsAudio(in.Name):
-			kind = KindAudio
-		case IsText(in.Name) && !res.Capped:
-			kind = KindText
-		default:
-			return true
-		}
-		if _, live := s.Src.GetInode(in.Ino); !live {
-			return true
-		}
-		h := ChunksHash(in)
-		if si, di, ok := x.FindDoc(in.Ino); ok {
-			if d := x.Segs[si].Doc(di); d.Chunks == h && d.Gen == in.Gen {
-				return true
+	// the candidates: what the change feed reported since the last pass (and the files
+	// under a changed folder), kept pending until indexed; every inode only when the
+	// feed cannot answer, on a service's first pass and every SweepEvery (I-387)
+	if s.pending == nil {
+		s.pending = map[meta.Ino]struct{}{}
+	}
+	now := s.Clk.Now()
+	changed, upto, fed := s.Src.Changes(s.fedTo)
+	full := !fed || s.walked.IsZero() || now.Sub(s.walked) >= SweepEvery
+	if full {
+		changed = nil
+		s.Src.ForEachInode(func(in meta.Inode) bool {
+			if in.Type == meta.TFile {
+				s.pending[in.Ino] = struct{}{}
 			}
+			return ctx.Err() == nil
+		})
+		s.walked = now
+	} else {
+		for _, ino := range changed {
+			s.addPending(ino)
 		}
-		cands = append(cands, candidate{in: in, hash: h, kind: kind})
-		return ctx.Err() == nil
-	})
+	}
 	if err := ctx.Err(); err != nil {
 		return res, err
+	}
+	s.fedTo = upto
+	var cands []candidate
+	for _, ino := range slices.Sorted(maps.Keys(s.pending)) {
+		c, ok := s.candidate(ino, x, res.Capped)
+		if !ok {
+			delete(s.pending, ino)
+			continue
+		}
+		cands = append(cands, c)
 	}
 	take, held := 0, int64(0)
 	for take < len(cands) && take < max(cfg.Batch, 1) {
@@ -279,13 +292,39 @@ func (s *Service) runPass(ctx context.Context) (PassResult, error) {
 		}
 		return Doc{}, false
 	}
-	cat := buildCatalog(ctx, s.Src, func(in meta.Inode) (NFO, bool) { return s.readNFO(ctx, in, cfg) }, tags,
-		func(in meta.Inode) (map[string]GameInfo, bool) { return s.readGamelist(ctx, in, cfg) })
+	// the catalogue: only the libraries a change or a newly indexed track lies under are
+	// derived again; the others keep their entries, and a change to the set of libraries
+	// derives every one (I-387)
+	libs := s.Src.Libraries()
+	var rebuild map[meta.Ino]bool // nil: every library
+	if !full && s.cat != nil && slices.Equal(libs, s.catLibs) {
+		rebuild = s.librariesOver(libs, changed, batch.docs)
+	}
+	cat := s.cat
+	if rebuild == nil || len(rebuild) > 0 {
+		c := &catalogue{
+			src: s.Src, nfo: func(in meta.Inode) (NFO, bool) { return s.readNFO(ctx, in, cfg) }, tags: tags,
+			games: func(in meta.Inode) (map[string]GameInfo, bool) { return s.readGamelist(ctx, in, cfg) }, seen: map[meta.Ino]bool{},
+		}
+		c.walkLibs(libs, rebuild, s.cat)
+		cat = c.out
+	}
+	// what this pass derived is kept once it is in the chain; a pass that fails before
+	// derives every library next time, since the changes it consumed are gone
+	s.cat = nil
+	written := func() {
+		s.cat, s.catLibs = cat, libs
+		for _, d := range batch.docs {
+			delete(s.pending, d.Ino)
+		}
+	}
 	catBytes := encodeCatalog(cat)
 	if len(batch.docs) == 0 && len(x.Segs) > 0 && bytes.Equal(catBytes, x.Segs[0].catalogBytes()) {
+		written()
 		return res, nil // nothing changed: nothing is written (I-206)
 	}
 	if len(batch.docs) == 0 && len(x.Segs) == 0 && len(cat) == 0 {
+		written()
 		return res, nil
 	}
 	applied := s.Src.Applied()
@@ -311,8 +350,75 @@ func (s *Service) runPass(ctx context.Context) (PassResult, error) {
 	if err := s.Vol.WriteFile(ctx, name, data); err != nil {
 		return res, err
 	}
+	written()
 	res.Seq = seq
 	return res, nil
+}
+
+// addPending puts a changed file among the candidates. A folder needs nothing: a move or
+// a restore changes no file's content, and a file in the trash is indexed too.
+func (s *Service) addPending(ino meta.Ino) {
+	if in, ok := s.Src.GetInodeAny(ino); ok && in.Type == meta.TFile {
+		s.pending[ino] = struct{}{}
+	}
+}
+
+// candidate is ino when the pass should read it: an audio or text file (text only while
+// the index is under its cap) outside /.tailraid whose chain doc is older. A file in the
+// trash is indexed too, so a restore needs no pass; a query filters it per hit.
+func (s *Service) candidate(ino meta.Ino, x *Index, capped bool) (candidate, bool) {
+	in, ok := s.Src.GetInodeAny(ino)
+	if !ok || in.Type != meta.TFile || meta.IsEphemeral(in.Name) {
+		return candidate{}, false
+	}
+	kind := uint8(0)
+	switch {
+	case IsAudio(in.Name):
+		kind = KindAudio
+	case IsText(in.Name) && !capped:
+		kind = KindText
+	default:
+		return candidate{}, false
+	}
+	if underReserved(s.Src, ino) {
+		return candidate{}, false
+	}
+	h := ChunksHash(in)
+	if si, di, ok := x.FindDoc(ino); ok {
+		if d := x.Segs[si].Doc(di); d.Chunks == h && d.Gen == in.Gen {
+			return candidate{}, false
+		}
+	}
+	return candidate{in: in, hash: h, kind: kind}, true
+}
+
+// librariesOver is the libraries on the ancestor chain of a changed inode or a file this
+// pass indexed (its tags feed an album), the nested ones together.
+func (s *Service) librariesOver(libs []meta.Library, changed []meta.Ino, docs []Doc) map[meta.Ino]bool {
+	isLib := map[meta.Ino]bool{}
+	for _, l := range libs {
+		isLib[l.Ino] = true
+	}
+	out := map[meta.Ino]bool{}
+	up := func(ino meta.Ino) {
+		for cur := ino; cur != 0; {
+			if isLib[cur] {
+				out[cur] = true
+			}
+			in, ok := s.Src.GetInodeAny(cur)
+			if !ok || cur == meta.RootIno {
+				return
+			}
+			cur = in.Parent
+		}
+	}
+	for _, ino := range changed {
+		up(ino)
+	}
+	for _, d := range docs {
+		up(d.Ino)
+	}
+	return out
 }
 
 type batch struct {
@@ -458,7 +564,7 @@ func merge(segs []*Reader, src Source, applied uint64, cat []Entry) []byte {
 				continue
 			}
 			have[d.Ino] = true
-			if _, live := src.GetInode(d.Ino); !live {
+			if _, ok := src.GetInodeAny(d.Ino); !ok { // a purged file; one in the trash stays (I-387)
 				continue
 			}
 			docs = append(docs, d)

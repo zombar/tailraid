@@ -1215,7 +1215,7 @@ func (g *cmdGen) next() Command {
 		if d.Ino == RootIno {
 			break // a protected root would stop every delete for the rest of the run
 		}
-		flags := uint8(g.rng.Intn(4))
+		flags := WithLibrary(uint8(g.rng.Intn(4)), LibraryKind(g.rng.Intn(4))) // library kinds too: the applier keeps their set (I-384)
 		if d.Flags&FlagProtected != 0 && g.rng.Intn(4) != 0 {
 			// protection is short-lived: a protected folder near the root otherwise
 			// refuses every trash under it for the rest of the run
@@ -1247,7 +1247,7 @@ func (g *cmdGen) next() Command {
 			NoReplace: g.rng.Intn(3) == 0,
 		}} // codec 9 (I-224)
 	case 5:
-		return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now - int64(g.rng.Intn(20))}}
+		return Command{Op: OpGCDelete, GCDelete: &GCDelete{Before: g.now - int64(g.rng.Intn(20)), Limit: uint32(g.rng.Intn(4))}}
 	case 6:
 		if len(g.hashes) == 0 {
 			break
@@ -1328,7 +1328,7 @@ func applyAll(t *testing.T, f *FSM, logs []*raft.Log) {
 	}
 }
 
-// Invariant: I-4, I-5, I-153, I-156
+// Invariant: I-4, I-5, I-153, I-156, I-381, I-382, I-384
 // Lifecycle: L-60, L-159
 func TestFSM_ApplySnapshotRestoreEquivalence(t *testing.T) {
 	const n = 5000

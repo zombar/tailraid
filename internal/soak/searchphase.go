@@ -193,7 +193,7 @@ func phaseSearch(ctx context.Context, r *Run) error {
 		r.check("I-208", "rename through the mount", false, err.Error())
 		return nil
 	}
-	if err := r.Env.Wait(ctx, 2*search.NameRefresh); err != nil {
+	if err := r.Env.Wait(ctx, time.Second); err != nil { // replication to the answering node: its names follow the feed at once (I-388)
 		return err
 	}
 	after, _ := query(w, word+" renamed")
@@ -201,7 +201,7 @@ func phaseSearch(ctx context.Context, r *Run) error {
 	if _, code, _ := w.del(ctx, renamed); code != 200 {
 		r.check("I-208", "delete through the web", false, fmt.Sprint(code))
 	}
-	if err := r.Env.Wait(ctx, 2*search.NameRefresh); err != nil {
+	if err := r.Env.Wait(ctx, time.Second); err != nil { // replication to the answering node: its names follow the feed at once (I-388)
 		return err
 	}
 	gone, _ := query(w, word)

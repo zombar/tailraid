@@ -54,7 +54,10 @@ can tell whether its disk is attached, so the host drives its mirrors (§4); not
 waits for a mirror, and an offline mirror costs the cluster nothing. A write to a mirror
 whose directory is gone fails rather than recreate the path: a disk unplugged mid-sync
 leaves its mount point behind, and a recreated path would put the mirror on the host's
-own disk, hidden under the mount point once the disk is back.
+own disk, hidden under the mount point once the disk is back. The directories below the
+root are made one level at a time, never the root, so an unplug that lands in the middle
+of a write fails it too (a look at the root followed by a `MkdirAll` recreated the root in
+that window: `make soak` on 2026-10-16 found an empty `/mirrors/m1` without a marker).
 
 Every other node learns it from the host's `/health` reply, which lists the host's
 mirrors as disks are listed (14 §4): `{id, online, reason, used, free, total, syncing?:
@@ -501,7 +504,7 @@ stub in `test/invariants/` meanwhile.
 | Invariant | Tests |
 |---|---|
 | I-179 | `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestFSM_SnapshotBegin_Table`, `TestFSM_SnapshotName_Boundaries`, `TestMirror_SyncCapturesIndex`, `TestMirror_SyncExcludesReservedEphemeralTrash`, `TestCluster_SnapshotReadsAsOfIndexOnEveryGateway`, `TestModelCheck_Long` (its snapshot steps) |
-| I-180 | `TestMirror_DetachedRootNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
+| I-180 | `TestMirror_DetachedRootNotRecreated`, `TestMirror_UnplugMidWriteNotRecreated`, `TestReport_SnapshotFigures`, `TestSoak_AllPhasesAgainstHarness` (phase 19), `TestMirror_TreeEncoding_Canonical`, `TestMirror_SecondSyncWritesOnlyChanges`, `TestMirror_CrashAtEveryWrite_ManifestImpliesComplete`, `TestMirror_ObjectVerifiedOnRead`, `TestMirror_OpenSweepsTemps`, `TestMirror_ExportAndCat_NoCluster`, `TestCLI_MirrorStandalone_LsCatExport` |
 | I-363 | `TestRestoreJob_OutlivesRequest`, `TestAdminOps_RestoreAndVersions`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-364 | `TestRestoreJob_ResumesAfterRestartAndOfflineMirror`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-365 | `TestRestoreJob_ProgressAddsUpToTotals`, `TestRestoreJob_ProgressMonotone_SameOnEveryNode`, `TestStatus_RestoreLine`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |

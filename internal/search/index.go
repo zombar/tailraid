@@ -18,7 +18,11 @@ const Dir = "/" + meta.ReservedDir + "/index"
 // Source is what the index and the pass read from the FSM: meta.Store.
 type Source interface {
 	ForEachInode(fn func(meta.Inode) bool)
+	// Changes is the FSM's change feed (docs/02 §The change feed): the names and the
+	// pass follow it instead of walking every inode (I-387, I-388).
+	Changes(after uint64) (inos []meta.Ino, upto uint64, complete bool)
 	GetInode(meta.Ino) (meta.Inode, bool)
+	GetInodeAny(meta.Ino) (meta.Inode, bool)
 	PathOf(meta.Ino) ([]string, error)
 	Resolve([]string) (meta.Inode, error)
 	ReadDir(meta.Ino) ([]meta.Inode, error)

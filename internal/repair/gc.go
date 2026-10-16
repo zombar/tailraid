@@ -67,7 +67,7 @@ func (g *GC) PurgeTrash(ctx context.Context, before int64, actor meta.UserIdx) (
 	if g.st.Enforcing() {
 		cmd.Actor, cmd.System = actor, actor == 0
 	}
-	for g.st.TrashDue(before) > 0 {
+	for g.st.TrashDue(before) {
 		was := g.st.Stats().TrashInodes
 		cmd.Purge = &meta.Purge{Before: before, Limit: uint32(batch), Now: g.clk.Now().UnixNano()}
 		r, index, err := g.prop.Propose(ctx, cmd)

@@ -70,7 +70,7 @@ const maxWorlds = 8
 // rename, restore and purge carries its actor through the WAL and the FSM under every
 // fault; a step grants or revokes lee's Write on /d and, while lee lacks it, has lee try
 // a write there, which is refused and changes nothing (I-349, I-353).
-// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155, I-179, I-181, I-185, I-349, I-353, I-377
+// Invariant: I-4, I-9, I-12, I-13, I-15, I-29, I-152, I-153, I-155, I-179, I-181, I-185, I-349, I-353, I-377, I-381, I-382
 // Lifecycle: L-162, L-163, L-173, L-199, L-200, L-201, L-203, L-204, L-205
 func TestModelCheck_Long(t *testing.T) {
 	n := *steps
@@ -828,8 +828,8 @@ func checkInvariants(t *testing.T, c *testharness.Cluster, worlds []world, names
 		if v := meta.CheckInvariants(st); len(v) != 0 {
 			t.Fatalf("step %d: n%d FSM invariants: %v", step, i, v)
 		}
-		if v := c.Nodes[i].Node.FSM.CheckClasses(); len(v) != 0 {
-			t.Fatalf("step %d: n%d placement classes: %v", step, i, v)
+		if v := c.Nodes[i].Node.FSM.CheckDerived(); len(v) != 0 {
+			t.Fatalf("step %d: n%d stats, placement classes or due queues: %v", step, i, v)
 		}
 		enc := buf.Bytes()[13:] // skip magic/version/applied
 		if ref == nil {
