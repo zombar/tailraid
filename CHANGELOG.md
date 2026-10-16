@@ -2,6 +2,24 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.10.1 (2026-10-15)
+
+### Changes
+
+- soak: the users-first harness run takes the writing phases under -short (I-362) ([b4833d4](https://github.com/zombar/tailraid/commit/b4833d4))
+- soak: users first, so every phase runs with the FSM checking actors (I-362) ([76b19d2](https://github.com/zombar/tailraid/commit/76b19d2))
+- webui, smbgw, vfs, cmd: the writers that broke once users existed act as their user (I-81, I-229, I-299, I-352) ([c7995fc](https://github.com/zombar/tailraid/commit/c7995fc))
+- node, repair: restores write as the signer, no stamp before the first user, every admin op run as an admin under users (I-348, I-349) ([d606f8e](https://github.com/zombar/tailraid/commit/d606f8e))
+- mount: the macOS mount sets timeo=600,retrans=2, so a WRITE waiting at a cap is never timed out by the client (I-361) ([021ab84](https://github.com/zombar/tailraid/commit/021ab84))
+- node, repair: trash restore and purge propose as the signer, the retention sweep as System (I-349) ([48aec08](https://github.com/zombar/tailraid/commit/48aec08))
+- users: several identities per OS account, user use and --identity (I-360) ([cbe33f6](https://github.com/zombar/tailraid/commit/cbe33f6))
+- vfs: a restored file lands under a temporary name and is renamed into place, so a rerun finishes an interrupted restore (I-186) ([deddd97](https://github.com/zombar/tailraid/commit/deddd97))
+
+### Documentation
+
+- docs: a users guide, linked from the README; system secrets need --system ([cf51ebf](https://github.com/zombar/tailraid/commit/cf51ebf))
+- docs: the move to 0.10 needs 0.10.0, which carries the restore fix ([f7ff891](https://github.com/zombar/tailraid/commit/f7ff891))
+
 ## v0.10.0 (2026-10-15)
 
 ### Changes
