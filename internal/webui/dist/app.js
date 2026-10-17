@@ -4346,6 +4346,7 @@ function episodeNo(e) {
 function platformPage(root, it) {
   const grid = h("div", { class: "posters games" });
   for (const g of it.games ?? []) grid.append(posterTile(g));
+  boxShape(grid);
   const n = it.games?.length ?? 0;
   root.append(
     h(
@@ -4356,8 +4357,23 @@ function platformPage(root, it) {
     )
   );
 }
+function boxShape(grid) {
+  const ratios = [];
+  grid.addEventListener(
+    "load",
+    (ev) => {
+      const img = ev.target;
+      if (!(img instanceof HTMLImageElement) || !img.naturalWidth || !img.naturalHeight) return;
+      ratios.push(img.naturalWidth / img.naturalHeight);
+      const sorted = [...ratios].sort((a, b) => a - b);
+      grid.style.setProperty("--box", String(sorted[sorted.length >> 1]));
+    },
+    true
+    // load does not bubble: catch it on the way down
+  );
+}
 function gamePage(root, it) {
-  const section2 = h("section", { class: it.poster ? "hero poster-only" : "hero no-art" });
+  const section2 = h("section", { class: it.poster ? "hero poster-only game" : "hero no-art" });
   let poster = titleCard(it.title, it.platform);
   poster.classList.add("hero-poster");
   if (it.poster) {

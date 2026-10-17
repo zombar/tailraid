@@ -220,6 +220,7 @@ function episodeNo(e: MediaItem): string {
 function platformPage(root: HTMLElement, it: MediaItem): void {
   const grid = h("div", { class: "posters games" });
   for (const g of it.games ?? []) grid.append(posterTile(g));
+  boxShape(grid);
   const n = it.games?.length ?? 0;
   root.append(
     h(
@@ -231,9 +232,30 @@ function platformPage(root: HTMLElement, it: MediaItem): void {
   );
 }
 
+/**
+ * boxShape sizes a platform's game tiles to its box art: a platform's boxes share a shape
+ * (SNES and N64 wide, NES and Mega Drive tall, Game Boy and PlayStation square) that no
+ * one ratio fits, so the tiles take the median of the art loaded so far (docs/13 §10),
+ * and the odd box out sits whole inside its tile instead of cropped.
+ */
+function boxShape(grid: HTMLElement): void {
+  const ratios: number[] = [];
+  grid.addEventListener(
+    "load",
+    (ev) => {
+      const img = ev.target as HTMLImageElement;
+      if (!(img instanceof HTMLImageElement) || !img.naturalWidth || !img.naturalHeight) return;
+      ratios.push(img.naturalWidth / img.naturalHeight);
+      const sorted = [...ratios].sort((a, b) => a - b);
+      grid.style.setProperty("--box", String(sorted[sorted.length >> 1]));
+    },
+    true, // load does not bubble: catch it on the way down
+  );
+}
+
 /** gamePage is a game: its art or a title card, its facts and chips, its files to download; it has no Play (I-279). */
 function gamePage(root: HTMLElement, it: MediaItem): void {
-  const section = h("section", { class: it.poster ? "hero poster-only" : "hero no-art" });
+  const section = h("section", { class: it.poster ? "hero poster-only game" : "hero no-art" });
   let poster: HTMLElement = titleCard(it.title, it.platform);
   poster.classList.add("hero-poster");
   if (it.poster) {

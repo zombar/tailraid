@@ -556,7 +556,12 @@ A **ROMs** library (docs/18 §8b, I-279) lists its platforms as cards (4:3, the 
 display name and its folder name, the game count), and `#/media/item/<platform>` its
 games by title, three to four abreast: one card per title, its region, revision and flags
 (`proto`, `hack`, `beta`, `dlc`, in the warn colour) as chips under the name, `+n` for
-the other variants. A game's page shows its box art or a title card, its facts (platform,
+the other variants. The tiles take the shape of the platform's box art, since no one ratio
+fits every platform (SNES and N64 boxes are wide, NES and Mega Drive tall, Game Boy and
+PlayStation square): the median width-to-height ratio of the art loaded so far sets the
+grid's `--box` (3:4 until the first one loads), and a box of another shape sits whole
+inside its tile, never cropped. A game's page shows its box art at its own shape, or a
+title card, its facts (platform,
 year, developer, publisher, players), its region and language chips, the description of
 its `gamelist.xml` when there is one, and its files (one row per disc or variant, the
 size, the file route as the download). It has no Play and no launch route: launching is
