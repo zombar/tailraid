@@ -19,11 +19,23 @@ type lazyCatalog struct{ svc *search.Service }
 
 func (l *lazyCatalog) Catalog(ctx context.Context) ([]search.Entry, error) { return l.svc.Catalog(ctx) }
 
+func (l *lazyCatalog) Search(ctx context.Context, q, under string, limit int) search.Result {
+	return l.svc.Search(ctx, q, under, limit)
+}
+
+func (l *lazyCatalog) Media(ctx context.Context, q string, limit int) ([]search.Entry, error) {
+	return l.svc.Media(ctx, q, limit)
+}
+
+func (l *lazyCatalog) Suggest(ctx context.Context, q string, limit int, allow func(*search.Entry) bool) ([]search.SuggestGroup, error) {
+	return l.svc.Suggest(ctx, q, limit, allow)
+}
+
 // mediaUI is a UI with a real index over its fabric; pass runs the leader's pass.
 func mediaUI(t *testing.T) (*ui, func()) {
 	t.Helper()
 	lc := &lazyCatalog{}
-	u := newUI(t, func(o *webui.Options) { o.Catalog = lc })
+	u := newUI(t, func(o *webui.Options) { o.Catalog, o.Search = lc, lc })
 	u.fs.SetFlusher(u.f.Flusher())
 	lc.svc = &search.Service{Src: u.f.FSM, Clk: u.f.Clk, Cfg: search.DefaultConfig(), Vol: search.VFS{FS: u.fs, St: u.f.FSM, Rd: u.f.ReaderNoCache()}}
 	lc.svc.Cfg.MaxFile = 64 << 10

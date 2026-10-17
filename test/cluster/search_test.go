@@ -44,15 +44,15 @@ func flagLibrary(t *testing.T, c *testharness.Cluster, path string, k meta.Libra
 
 // The leader's segment is flushed before its name appears: a follower that sees the
 // name reads a complete segment, and every node answers a query and lists the
-// catalogue with identical bytes.
-// Invariant: I-206, I-208, I-211
+// catalogue with identical bytes, and the same field query and suggestions.
+// Invariant: I-206, I-208, I-211, I-412, I-413
 func TestCluster_SearchDeterministicAcrossNodes(t *testing.T) {
 	c := testharness.NewCluster(t, 3, 2, 1)
 	defer c.Close()
 	c.WriteFile(0, "/docs/readme.md", []byte("tailraid keeps every shard twice"))
 	c.WriteFile(0, "/docs/shard notes.txt", []byte("notes about shards"))
 	c.WriteFile(1, "/films/Arrival (2016)/arrival.mkv", testharness.Pattern(300, 1))
-	c.WriteFile(1, "/films/Arrival (2016)/movie.nfo", []byte(`<movie><title>Arrival</title><plot>Heptapods.</plot></movie>`))
+	c.WriteFile(1, "/films/Arrival (2016)/movie.nfo", []byte(`<movie><title>Arrival</title><plot>Heptapods.</plot><director>Denis Villeneuve</director><actor><name>Amy Adams</name></actor></movie>`))
 	c.Settle()
 	flagLibrary(t, c, "/films", meta.LibraryMovies)
 	li := leaderIndex(c)
@@ -67,16 +67,25 @@ func TestCluster_SearchDeterministicAcrossNodes(t *testing.T) {
 		r := svc.Search(ctx, "shard", "", 0)
 		cat, err := svc.Catalog(ctx)
 		must(t, err)
+		items, err := svc.Media(ctx, `director:"denis villeneuve" hept`, 0)
+		must(t, err)
+		sug, err := svc.Suggest(ctx, "am", 0, nil)
+		must(t, err)
+		files := svc.Search(ctx, `actor:"amy adams"`, "", 0)
 		if st := svc.Status(); st.Docs != 2 || st.Segments != 1 || st.Index != "" || st.Catalog != 1 {
 			t.Fatalf("n%d status %+v", i, st)
 		}
 		got, _ := json.Marshal(struct {
 			R search.Result
 			C []search.Entry
-		}{r, cat})
+			M []search.Entry
+			S []search.SuggestGroup
+			F search.Result
+		}{r, cat, items, sug, files})
 		if i == 0 {
 			want = got
-			if len(r.Hits) != 2 || r.Hits[0].Match != "name" || r.Hits[1].Match != "content" || len(cat) != 1 || cat[0].Plot != "Heptapods." {
+			if len(r.Hits) != 2 || r.Hits[0].Match != "name" || r.Hits[1].Match != "content" || len(cat) != 1 || cat[0].Plot != "Heptapods." ||
+				len(items) != 1 || len(sug) != 1 || len(files.Hits) != 1 {
 				t.Fatalf("n0: %s", got)
 			}
 			continue

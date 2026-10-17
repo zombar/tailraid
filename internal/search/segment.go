@@ -19,7 +19,7 @@ import (
 // keeps the bytes and decodes what a query touches.
 const (
 	segMagic   = "TRSI"
-	segVersion = 3 // 2: the name analyser's fields (docs/18 §8a), 3: a game's (§8b); older versions are still read
+	segVersion = 4 // 2: the name analyser's fields (docs/18 §8a), 3: a game's (§8b), 4: an entry's directors (§8); older versions are still read
 	dictBlock  = 32
 	trailerLen = 4 + 8 + sha256.Size
 	// RebuildAt is the chain length past which a pass merges the chain and its batch

@@ -1147,7 +1147,11 @@ func (a *adminOps) dispatch(ctx context.Context, op rpc.AdminOp) (any, error) {
 	case "scrape_skip": // an item answered "no match", remembered in the volume (docs/18 §11, I-394)
 		return a.scrapeSkip(ctx, op)
 	case "search": // this node's index (docs/18 §6): never forwarded
-		return a.search.Search(ctx, op.Query, op.Path, op.Limit), nil
+		res := a.search.Search(ctx, op.Query, op.Path, op.Limit)
+		if res.Err != nil {
+			return nil, res.Err // a malformed query (docs/18 §6a)
+		}
+		return res, nil
 	case "stats_seal": // this node's partial stats hour and any rollup still missing (docs/17 §7)
 		if a.stats == nil {
 			return nil, errors.New("stats: no sampler")

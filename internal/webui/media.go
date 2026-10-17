@@ -58,6 +58,7 @@ type MediaItem struct {
 	Children     int       `json:"children,omitempty"` // a show's seasons, an album's tracks
 	Plot         string    `json:"plot,omitempty"`
 	People       []string  `json:"people,omitempty"`
+	Directors    int       `json:"directors,omitempty"` // how many of people are directors (docs/18 §8)
 	Season       int       `json:"season,omitempty"`
 	Episode      int       `json:"episode,omitempty"`
 	EpisodeTo    int       `json:"episode_to,omitempty"`
@@ -174,6 +175,7 @@ func (v mediaView) item(in meta.Inode, p, kind string) MediaItem {
 		it.Catalogued = true
 		it.Title, it.SortTitle, it.Year, it.Genres, it.Rating, it.Runtime = e.Title, e.SortTitle, e.Year, e.Genres, e.Rating, e.Runtime
 		it.MPAA, it.Plot, it.People, it.Aired, it.Artist = e.MPAA, e.Plot, e.People, e.Aired, e.Artist
+		it.Directors = max(e.Directors, 0)
 		it.Season, it.Episode, it.EpisodeTo = max(e.Season, 0), e.Episode, e.EpisodeTo
 		it.Date, it.Absolute, it.Edition, it.Quality, it.Languages, it.Discs = e.Date, e.Absolute, e.Edition, e.Quality, e.Languages, e.Discs
 		it.Poster, it.Fanart, it.Thumb = art(dir, e.Poster), art(dir, e.Fanart), art(dir, e.Thumb)

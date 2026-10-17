@@ -214,6 +214,14 @@ func (f *fakeSearcher) Search(_ context.Context, q, under string, limit int) sea
 	return search.Result{Query: q, Hits: append([]search.Hit{}, f.hits...)}
 }
 
+func (f *fakeSearcher) Media(context.Context, string, int) ([]search.Entry, error) {
+	return nil, nil
+}
+
+func (f *fakeSearcher) Suggest(context.Context, string, int, func(*search.Entry) bool) ([]search.SuggestGroup, error) {
+	return nil, nil
+}
+
 // GET /api/search passes the query and folder through, limit 50 by default and 400
 // outside 1..200; without an index the route is 503.
 // Invariant: I-208
