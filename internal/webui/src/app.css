@@ -656,6 +656,7 @@ a.poster:hover .ptitle { color: var(--accent); }
 section.lib.music .poster .art { aspect-ratio: 1; }
 .poster .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .poster .art .icon { width: 32px; height: 32px; }
+.poster .art .ov .icon { width: 16px; height: 16px; }
 .poster.missing .art { border: 1px dashed var(--line); }
 .poster.nsfw .art img { filter: blur(14px) scale(1.1); }
 .poster .ptitle { font: 500 14px/20px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -672,6 +673,7 @@ section.hero { position: relative; gap: 0; border: 1px solid var(--line); border
 .hero .facts { font: 13px var(--mono); color: var(--dim); display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-top: var(--sp-2); }
 .hero .plot { font: 15px/1.55 var(--sans); max-width: 65ch; margin: var(--sp-2) 0 0; }
 .hero .actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-3); }
+.hero .prog { max-width: 320px; margin-top: var(--sp-2); }
 .hero .people { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
 .person { font: 12px/1 var(--mono); color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: var(--sp-1) var(--sp-3); }
 /* on a phone the poster keeps a narrow column beside the title and the facts, and everything
@@ -735,6 +737,172 @@ section.lib.roms .posters:not(.games) .poster .art .tcard .ct { font-size: 20px;
 .menu-row.library { grid-template-columns: 1fr; gap: var(--sp-2); }
 .menu-row.library > * { grid-column: 1; }
 .menu-row.library select { padding: 0 var(--sp-2); font-size: 14px; width: 100%; }
+
+/* ---- watching and listening (docs/13 §10a–§10d) --------------------------------------- */
+/* progress: a 4 px track filled to --p; on a poster or a frame it lies along the bottom edge */
+.prog { --p: 0%; display: block; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--dim) 35%, transparent); overflow: hidden; }
+.prog::before { content: ""; display: block; height: 100%; width: var(--p); background: var(--accent); }
+.poster .art .prog, .cart .prog, .mscreen > .prog { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 0; background: var(--overlay); }
+table.episodes td.title .prog, table.tracks td.title .prog { margin-top: var(--sp-1); max-width: 240px; }
+/* the watched tick: a chip in the top right corner of a poster or a frame, a tick before an
+   episode's title */
+.ov.tr { top: var(--sp-2); right: var(--sp-2); bottom: auto; }
+table.episodes td.title > .icon { color: var(--accent); margin-right: var(--sp-1); }
+table.episodes tr.watched td.title { color: var(--dim); }
+
+/* the Continue watching row: frames, not posters, one row that scrolls sideways */
+section.continue h2 { display: flex; align-items: center; gap: var(--sp-2); }
+section.continue h2 .count { color: var(--dim); font-weight: 400; font-size: 13px; margin-left: auto; }
+.crow { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(240px, 280px); gap: var(--sp-4); overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: var(--sp-2); }
+.ctile { position: relative; scroll-snap-align: start; }
+.ctile > a { display: grid; gap: 2px; align-content: start; color: var(--text); }
+.ctile > a:hover { text-decoration: none; }
+.ctile:hover .ctitle { color: var(--accent); }
+.cart { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: var(--radius-media); overflow: hidden; background: var(--surface); margin-bottom: var(--sp-1); }
+.cart img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ctile:hover .cart { box-shadow: var(--shadow); }
+.ctile .ctitle { font: 500 14px/20px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 48px; }
+.ctile .csub { font: 12px/18px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 48px; }
+.ctile details.menu { position: absolute; right: 0; bottom: 0; }
+.ctile details.menu > summary { border: 0; background: transparent; padding: 0; width: 48px; justify-content: center; }
+.ctile details.menu > summary::after { display: none; }
+.ctile .menu-body { left: auto; right: 0; top: auto; bottom: 100%; }
+@media (pointer: fine) { .ctile details.menu > summary { width: 40px; } }
+@media (max-width: 599px) { .crow { grid-auto-columns: 72%; gap: var(--sp-3); } }
+
+/* the viewer (docs/13 §10a, §10b): a modal over the page, always on the media ground; the dark
+   tokens (theme-dark on the same element) dress the buttons, folds and tables inside it. It
+   shares the header's layer and comes after it in the page, so it covers it; it stops above the
+   now-playing bar, which stays in reach under an album */
+.mviewer { --mv-bottom: 0px; position: fixed; inset: 0 0 var(--mv-bottom); z-index: 5; overflow-y: auto; background: var(--media-bg); color: var(--text); display: grid; align-content: start; }
+body:has(aside.nowbar:not([hidden])) .mviewer { --mv-bottom: calc(var(--nowbar-h) + env(safe-area-inset-bottom, 0px)); }
+.mviewer > img.mbackdrop { position: fixed; top: 0; left: 0; width: 100%; height: calc(100% - var(--mv-bottom)); object-fit: cover; filter: blur(32px) brightness(.35); transform: scale(1.1); pointer-events: none; }
+.mbar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--gutter); background: linear-gradient(var(--overlay), transparent); }
+.mbar a.back { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 48px; padding: 0 var(--sp-3) 0 var(--sp-2); border-radius: var(--radius); color: var(--text); font: 600 15px var(--mono); }
+.mbar a.back:hover { background: var(--overlay); text-decoration: none; }
+.mbar .mtitle { flex: 1; text-align: center; font: 13px var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mbar .icon-btn { background: transparent; border-color: transparent; }
+.mbar .icon-btn:hover { background: var(--overlay); }
+@media (pointer: fine) { .mbar a.back { min-height: 40px; } }
+.mbody { position: relative; width: 100%; max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter) var(--sp-8); display: grid; gap: var(--sp-4); }
+/* the screen: the video at 16:9 inside the window's height, its overlays laid over it */
+.mscreen { position: relative; aspect-ratio: 16 / 9; max-height: 72vh; width: 100%; margin: 0 auto; background: var(--media-bg); border-radius: var(--radius-media); overflow: hidden; display: grid; place-items: center; }
+.mscreen > video, .mscreen > img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.mscreen > .fs-btn { position: absolute; top: var(--sp-2); right: var(--sp-2); background: var(--overlay); border-color: transparent; color: var(--on-status); }
+/* fullscreen: the screen fills the display with no corners, a title and a way out on top */
+.mscreen.fs { max-height: none; border-radius: 0; }
+.fs-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4) var(--sp-8); background: linear-gradient(var(--overlay), transparent); color: var(--on-status); }
+.fs-top .icon-btn { background: transparent; border-color: transparent; color: var(--on-status); }
+.fs-top .fs-name { display: grid; font: 600 15px var(--mono); }
+.fs-top .fs-name .small { font-weight: 400; opacity: .8; }
+/* the up-next card in the screen's bottom right, its countdown ring drawn by --p */
+.upnext { position: absolute; right: var(--sp-4); bottom: 72px; width: min(400px, 60%); display: grid; grid-template-columns: 120px 1fr; gap: var(--sp-1) var(--sp-3); padding: var(--sp-3); border-radius: var(--radius); background: var(--overlay); color: var(--on-status); box-shadow: var(--shadow); }
+.upnext img { grid-row: 1 / span 3; width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; }
+.upnext .ulabel { font: 12px var(--mono); opacity: .8; }
+.upnext .uname { font: 600 14px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upnext .uacts { display: flex; gap: var(--sp-2); white-space: nowrap; }
+.upnext .uacts button { padding: 0 var(--sp-3); }
+/* a question over the screen: resume or start over, the end of an item, a codec it cannot play */
+.mprompt { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--sp-3); padding: var(--sp-4); text-align: center; background: color-mix(in srgb, var(--media-bg) 70%, transparent); color: var(--on-status); }
+.mprompt .mq { font: 600 17px var(--mono); }
+.mprompt .acts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2); }
+.mprompt .prog { width: 240px; }
+.mprompt > .icon { width: 48px; height: 48px; }
+/* the one action a screen leads with (Resume, Play, Next): the accent, its ink the page's ground */
+button.primary, .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+button.primary:hover, .btn.primary:hover { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
+/* the facts, folded to one line under the screen; open, the plot, the genres and the people */
+details.mfacts { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+details.mfacts > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); min-height: 48px; padding: var(--sp-2) 0; font: 13px var(--mono); color: var(--dim); }
+details.mfacts > summary::-webkit-details-marker { display: none; }
+details.mfacts > summary::after { content: ""; width: 20px; height: 20px; margin-left: auto; background: var(--dim); mask: var(--i-drop) center / contain no-repeat; }
+details.mfacts[open] > summary::after { transform: rotate(180deg); }
+details.mfacts > summary h1 { font-size: 17px; color: var(--text); }
+details.mfacts > .mmore { display: grid; gap: var(--sp-3); padding-bottom: var(--sp-4); }
+details.mfacts .plot { font: 15px/1.55 var(--sans); max-width: 65ch; margin: 0; }
+/* a person or a genre is a link into the Media tab's search (§10d) */
+a.person, a.genre { display: inline-flex; align-items: center; min-height: 32px; padding: 0 var(--sp-3); border: 1px solid var(--line); border-radius: 16px; color: var(--text); font-size: 13px; }
+a.person:hover, a.genre:hover { border-color: var(--dim); text-decoration: none; }
+a.person .small { margin-left: var(--sp-1); }
+.mlinks { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+/* an episode's way on: previous and next, the next one's frame beside its name */
+.mnext { display: grid; grid-template-columns: auto 1fr auto; gap: var(--sp-3); align-items: center; padding: var(--sp-2); border: 1px solid var(--line); border-radius: var(--radius); }
+.mnext img { width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; display: block; }
+.mnext .nname { display: grid; font: 14px var(--mono); min-width: 0; }
+.mnext .nname > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mnext .nname .small { color: var(--dim); }
+.mnext .nacts { display: flex; gap: var(--sp-2); }
+details.mfold > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: var(--sp-2); min-height: 48px; font: 600 14px var(--mono); }
+details.mfold > summary::-webkit-details-marker { display: none; }
+details.mfold > summary::before { content: ""; width: 20px; height: 20px; background: var(--dim); mask: var(--i-chevron) center / contain no-repeat; }
+details.mfold[open] > summary::before { transform: rotate(90deg); }
+details.mfold > summary .small { color: var(--dim); font-weight: 400; margin-left: auto; }
+@media (max-width: 599px) {
+  .mbar .mtitle { display: none; }
+  .mbar { justify-content: space-between; }
+  .mbody { padding: 0 0 var(--sp-8); }
+  .mbody > :not(.mscreen) { margin: 0 var(--gutter); }
+  .mscreen { border-radius: 0; }
+  .mnext { grid-template-columns: 1fr auto; }
+  .mnext img { display: none; }
+  .upnext { grid-template-columns: 1fr; right: var(--sp-2); bottom: 56px; width: auto; left: var(--sp-2); }
+  .upnext img { display: none; }
+}
+/* the album: a large cover beside its title, the tracks below; no folder, no breadcrumbs */
+.malbum { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: var(--sp-6); align-items: end; padding-top: var(--sp-4); }
+.malbum img.cover { width: 280px; aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-media); box-shadow: var(--shadow); background: var(--surface); display: block; }
+.malbum h1 { font-size: 22px; }
+.malbum .artist { font: 17px var(--sans); color: var(--text); }
+.malbum .meta { font: 13px var(--mono); color: var(--dim); display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-top: var(--sp-2); }
+.malbum .actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-4); }
+table.tracks td.plays { width: 72px; font: 12px var(--mono); color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+.mviewer table.tracks td { border-bottom-color: var(--line); }
+.mviewer table.tracks tr.playing td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.mviewer table.tracks tr:hover td { background: var(--overlay); }
+@media (max-width: 839px) { .malbum { grid-template-columns: 200px minmax(0, 1fr); } .malbum img.cover { width: 200px; } }
+@media (max-width: 599px) {
+  .malbum { grid-template-columns: 1fr; justify-items: center; text-align: center; gap: var(--sp-3); }
+  .malbum img.cover { width: min(280px, 72vw); }
+  .malbum .meta, .malbum .actions { justify-content: center; }
+  table.tracks td.plays { display: none; }
+}
+/* the expanded now-playing view: the cover as large as the window allows, the transport under it */
+.mnow { display: grid; justify-items: center; gap: var(--sp-4); padding-top: var(--sp-4); text-align: center; }
+.mnow img.cover { width: min(400px, 80vw, 48vh); aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-media); box-shadow: var(--shadow); display: block; }
+.mnow .ntitle { font: 600 22px var(--mono); }
+.mnow .nsub { font-size: 15px; color: var(--dim); }
+.mnow .seek { width: min(560px, 100%); display: grid; grid-template-columns: auto 1fr auto; gap: var(--sp-3); align-items: center; }
+.mnow .seek input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); }
+.mnow .time { font: 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.mnow .transport { display: flex; align-items: center; gap: var(--sp-4); }
+.mnow .transport button { border-radius: 50%; width: 56px; min-height: 56px; padding: 0; background: transparent; border-color: transparent; }
+.mnow .transport button.big { width: 72px; min-height: 72px; background: var(--text); color: var(--media-bg); }
+.mnow .transport button.big svg.icon { width: 36px; height: 36px; }
+.mnow .transport button svg.icon { width: 28px; height: 28px; }
+.mnow .modes { display: flex; gap: var(--sp-2); }
+.mnow .modes button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
+.mnow details.mfold { width: min(560px, 100%); text-align: left; }
+
+/* the Media tab's own search (docs/13 §10d): words and chips in one field, suggestions under it */
+.msearch { position: relative; display: grid; gap: var(--sp-2); }
+.mfield { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-2); min-height: 48px; padding: 0 var(--sp-2) 0 var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+.mfield:focus-within { border-color: var(--accent); }
+.mfield > svg.icon { color: var(--dim); }
+.mfield input[type=search] { flex: 1 1 160px; border: 0; padding: 0; background: transparent; outline: none; }
+/* a chip is one button: a tap removes it (Backspace in the empty field removes the last) */
+button.qchip { gap: var(--sp-1); padding: 0 var(--sp-2) 0 var(--sp-3); border: 0; border-radius: 16px; background: color-mix(in srgb, var(--accent) 14%, var(--bg)); font: 13px var(--mono); white-space: nowrap; }
+button.qchip:hover { background: color-mix(in srgb, var(--accent) 24%, var(--bg)); }
+.qchip b { font-weight: 400; color: var(--dim); }
+.qchip svg.icon { width: 16px; height: 16px; }
+.msuggest { position: absolute; top: 100%; left: 0; right: 0; z-index: 4; margin: var(--sp-1) 0 0; padding: var(--sp-1); list-style: none; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); max-height: 60vh; overflow: auto; }
+.msuggest li.mgroup { padding: var(--sp-2) var(--sp-3) 2px; font: 600 12px var(--mono); color: var(--dim); }
+.msuggest li.mopt { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: var(--sp-3); align-items: center; min-height: 48px; padding: 0 var(--sp-3); border-radius: 4px; cursor: pointer; font-size: 14px; }
+.msuggest li.mopt[aria-selected=true], .msuggest li.mopt:hover { background: var(--surface); }
+.msuggest .mkind { font: 12px var(--mono); color: var(--dim); }
+.msuggest .mcount { font: 12px var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.msuggest mark { background: transparent; color: var(--accent); font-weight: 600; }
+@media (pointer: fine) { .msuggest li.mopt { min-height: 40px; } button.qchip { min-height: 32px; } .upnext .uacts button { min-height: 32px; } }
+.mhits { font: 13px var(--mono); color: var(--dim); }
 
 /* ---- snapshots on mirrors (docs/13 §4, §7, docs/16) ------------------------------------- */
 /* the as-of menu: the summary names the snapshot ("Now" for the live volume) after a dim "as of" */

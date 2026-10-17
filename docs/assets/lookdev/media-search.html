@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>tailraid media search</title>
+<link rel="stylesheet" href="../../../internal/webui/src/app.css">
+<style>
+  .variant { font: 12px var(--mono); color: var(--dim); padding-top: 24px; border-top: 1px dashed var(--line); }
+  iframe.phone { border: 1px dashed var(--line); border-radius: 12px; display: block; }
+  /* a stage is the window a modal fills: its transform makes it the containing block of the
+     viewer's fixed layers, so each variant shows the real rules in a box of its own */
+  .stage { position: relative; transform: translateZ(0); height: 720px; overflow: hidden; border: 1px dashed var(--line); border-radius: 12px; }
+  .stage.short { height: 560px; }
+  .stage.fsd { height: auto; aspect-ratio: 16 / 9; }
+  /* 72vh would be the whole lookdev page's height: a stage stands in for a 900 px window */
+  .stage .mscreen:not(.fs) { max-height: 480px; }
+  /* the browser's own video controls, drawn only to show where they sit */
+  .native { position: absolute; left: 0; right: 0; bottom: 0; height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: linear-gradient(transparent, var(--overlay)); color: var(--on-status); font: 12px var(--mono); }
+  .native .bar { flex: 1; height: 4px; border-radius: 2px; background: var(--overlay); }
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/"><svg class="mark" viewBox="-50 -50 100 100" aria-hidden="true"><g transform="rotate(32)"><rect x="-34" y="-40" width="16" height="80" rx="1" fill="currentColor"/><path class="parity" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="miter" fill="none" d="M -9 -20 V -40 H 9 V -20 M -9 -10 V 10 M 9 -10 V 10 M -9 20 V 40 H 9 V 20"/><rect x="18" y="-40" width="16" height="80" rx="1" fill="currentColor"/></g></svg><span>tail<b>raid</b></span></a>
+  <nav class="tabs"><a href="#/">Dashboard</a><a href="#/browse/">Files</a><a class="active" href="#/media">Media</a><a href="#/stats">Stats</a></nav>
+  <form class="search" role="search"><input type="search" value="" aria-label="search the volume"><button type="submit" aria-label="search"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg></button></form>
+  <span class="pill ok">healthy</span>
+  <span class="who">pike · leader atlas · 3/3 voters live</span>
+</header>
+<div id="warnings"></div>
+<main>
+
+  <section>
+    <div class="variant">variant: the Media tab's own search, above the libraries and apart from the header's (which keeps searching files): words typed are matched as you type against titles, people, genres and artists of the catalogue, grouped by field with counts; Enter or a tap turns the pick into a chip; arrows move, Esc closes</div>
+    <div class="msearch"><label class="mfield"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg><input type="search" value="tom" placeholder="title, actor, director, genre, year…" aria-label="search the media"></label><ul class="msuggest" role="listbox">
+        <li class="mgroup">Actors</li>
+        <li class="mopt" role="option" aria-selected="true"><span class="mkind">actor</span><span><mark>Tom</mark> Hanks</span><span class="mcount">5 films · 1 show</span></li>
+        <li class="mopt" role="option"><span class="mkind">actor</span><span><mark>Tom</mark> Hardy</span><span class="mcount">2 films</span></li>
+        <li class="mopt" role="option"><span class="mkind">actor</span><span><mark>Tom</mark>my Lee Jones</span><span class="mcount">1 film</span></li>
+        <li class="mgroup">Directors</li>
+        <li class="mopt" role="option"><span class="mkind">director</span><span><mark>Tom</mark> Tykwer</span><span class="mcount">1 film</span></li>
+        <li class="mgroup">Titles</li>
+        <li class="mopt" role="option"><span class="mkind">film</span><span><mark>Tom</mark>boy (2011)</span><span class="mcount"></span></li>
+        <li class="mgroup">Music</li>
+        <li class="mopt" role="option"><span class="mkind">artist</span><span><mark>Tom</mark> Waits</span><span class="mcount">6 albums</span></li>
+      </ul></div>
+    <div style="height: 400px"></div>
+  </section>
+
+  <section>
+    <div class="variant">variant: chips combine (AND): actor Tom Hanks with genre drama; the hits are the catalogue's films, shows and albums, grouped by library in the libraries' order and sorted like the library; a show matches when the show's own sidecar names the actor; the URL carries the query (#/media?q=actor:%22Tom%20Hanks%22%20genre:drama), so Back and a shared link land here</div>
+    <div class="msearch"><label class="mfield"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg><button type="button" class="qchip" aria-label="remove actor Tom Hanks"><b>actor</b>Tom Hanks<svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button><button type="button" class="qchip" aria-label="remove genre drama"><b>genre</b>drama<svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button><input type="search" value="" placeholder="title, actor, director, genre, year…" aria-label="search the media"></label></div>
+    <div class="mhits">4 matches · 3 films · 1 show</div>
+    <section class="lib movies">
+      <h2>films <span class="badge lib">movies</span><span class="count">3</span></h2>
+      <div class="posters">
+        <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%230e7490'/%3E%3Ccircle cx='1' cy='1' r='.4' fill='%23fde68a'/%3E%3C/svg%3E"><span class="ov br">2 h 23</span></span><span class="ptitle">Cast Away</span><span class="pyear"><span>2000</span></span></a>
+        <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%233f3f46'/%3E%3Crect x='.6' y='.6' width='.8' height='1.6' fill='%23a1a1aa'/%3E%3C/svg%3E"><span class="ov tr"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z"/></svg></span></span><span class="ptitle">Philadelphia</span><span class="pyear"><span>1993</span></span></a>
+        <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%230f172a'/%3E%3Ccircle cx='1' cy='1.2' r='.5' fill='%23e2e8f0'/%3E%3C/svg%3E"><span class="prog" style="--p: 64%"></span></span><span class="ptitle">Apollo 13</span><span class="pyear"><span>1995</span></span></a>
+      </div>
+    </section>
+    <section class="lib tv">
+      <h2>shows <span class="badge lib">tv</span><span class="count">1</span></h2>
+      <div class="posters">
+        <a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%233f6212'/%3E%3Crect y='2' width='2' height='1' fill='%231a2e05'/%3E%3C/svg%3E"><span class="ov br">10 episodes</span></span><span class="ptitle">Band of Brothers</span><span class="pyear"><span>2001</span></span></a>
+      </div>
+    </section>
+  </section>
+
+  <section>
+    <div class="variant">variant: a free word beside chips matches any field (title, plot, people, genres); the year takes a decade (year:199x) or a range (year:1990-1999); from a viewer's facts a person or a genre opens the tab with that one chip</div>
+    <div class="msearch"><label class="mfield"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg><button type="button" class="qchip" aria-label="remove genre thriller"><b>genre</b>thriller<svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button><button type="button" class="qchip" aria-label="remove year 199x"><b>year</b>199x<svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button><input type="search" value="heist" placeholder="title, actor, director, genre, year…" aria-label="search the media"></label></div>
+    <div class="mhits">1 match · 1 film</div>
+    <section class="lib movies">
+      <h2>films <span class="badge lib">movies</span><span class="count">1</span></h2>
+      <div class="posters"><a class="poster" href="#"><span class="art"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'%3E%3Crect width='2' height='3' fill='%231e40af'/%3E%3Crect x='.2' y='1.2' width='1.6' height='.2' fill='%23fbbf24'/%3E%3C/svg%3E"><span class="ov br">2 h 50</span></span><span class="ptitle">Heat</span><span class="pyear"><span>1995</span></span></a></div>
+    </section>
+  </section>
+
+  <section>
+    <div class="variant">variant: nothing matches: say what was asked, offer to drop the last chip; no header-search fallback, the two never mix</div>
+    <div class="msearch"><label class="mfield"><svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="M784-120 532-372q-30 24-69 38t-83 14q-109 0-184.5-75.5T120-580q0-109 75.5-184.5T380-840q109 0 184.5 75.5T640-580q0 44-14 83t-38 69l252 252-56 56ZM380-400q75 0 127.5-52.5T560-580q0-75-52.5-127.5T380-760q-75 0-127.5 52.5T200-580q0 75 52.5 127.5T380-400Z"/></svg><button type="button" class="qchip" aria-label="remove director Joel Coen"><b>director</b>Joel Coen<svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button><button type="button" class="qchip" aria-label="remove year 2020-2024"><b>year</b>2020-2024<svg class="icon" viewBox="0 -960 960 960" aria-hidden="true"><path d="m256-200-56-56 224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z"/></svg></button><input type="search" value="" placeholder="title, actor, director, genre, year…" aria-label="search the media"></label></div>
+    <div class="empty">No films, shows or albums match <b>director: Joel Coen</b> and <b>year: 2020-2024</b>. <a href="#/media?q=director%3A%22Joel%20Coen%22">Drop year</a></div>
+  </section>
+
+  <section>
+    <div class="variant">variant: the phone at 360 px: the field across the width above Continue watching, chips wrapping inside it</div>
+    <iframe class="phone" src="media-phone.html" width="360" height="900" title="phone frame"></iframe>
+  </section>
+</main>
+</body>
+</html>
