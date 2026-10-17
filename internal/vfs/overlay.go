@@ -638,7 +638,7 @@ again:
 		// the WAL is opened (and its directory fsynced) outside the global lock: every
 		// lookup on every inode would otherwise wait on this fsync; a racing opener's
 		// handle to the same file is simply closed again
-		w, err := openWAL(o.fs, o.walPath(ino))
+		w, err := newWAL(o.fs, o.walPath(ino))
 		if err != nil {
 			return nil, err
 		}

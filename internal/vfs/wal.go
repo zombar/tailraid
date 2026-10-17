@@ -136,14 +136,29 @@ func segmentsOf(fsys sysfs.FS, path string) ([]int, error) {
 }
 
 // openWAL opens the log whose segment 0 is path: every segment present, the newest as
-// the head; with none, a new segment 0.
+// the head; with none, a new segment 0. It lists the directory, so it is for replay.
 func openWAL(fsys sysfs.FS, path string) (*WAL, error) {
-	w := &WAL{fs: fsys, path: path, rn: -1}
-	w.cond = sync.NewCond(&w.mu)
 	ns, err := segmentsOf(fsys, path)
 	if err != nil {
 		return nil, fmt.Errorf("vfs: open wal: %w", err)
 	}
+	return openSegments(fsys, path, ns)
+}
+
+// newWAL opens the log of an inode the overlay holds no log for: segment 0 alone, created
+// if absent. A WRITE's first touch of an inode lists no directory.
+func newWAL(fsys sysfs.FS, path string) (*WAL, error) {
+	var ns []int
+	if _, err := fsys.Stat(path); err == nil {
+		ns = []int{0}
+	}
+	return openSegments(fsys, path, ns)
+}
+
+// openSegments opens the log of path's segments ns (ascending), the newest as the head.
+func openSegments(fsys sysfs.FS, path string, ns []int) (*WAL, error) {
+	w := &WAL{fs: fsys, path: path, rn: -1}
+	w.cond = sync.NewCond(&w.mu)
 	for _, n := range ns {
 		st, err := fsys.Stat(w.segPath(n))
 		if err != nil {
