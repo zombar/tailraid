@@ -149,3 +149,27 @@ func TestWebUI_Ls_TitleCardFields(t *testing.T) {
 		t.Fatalf("a folder outside a library has a card: %+v", c)
 	}
 }
+
+// A platform's card shows its first game's box art when its folder has none, as a volume
+// path, and a catalogue made before the art was written does not hide it (docs/13 §10).
+// Invariant: I-400
+func TestWebUI_Media_PlatformArt(t *testing.T) {
+	u, pass := romsUI(t)
+	pass() // the catalogue first: it holds no art for SNES yet
+	u.write("/roms/SNES/USA/Batman - Revenge of the Joker (USA) (Proto).png", 3, []byte("png"))
+	u.flush()
+	var lib mediaLib
+	if code := u.mediaJSON("lib=/roms", &lib); code != 200 {
+		t.Fatalf("lib: %d", code)
+	}
+	posters := map[string]string{}
+	for _, it := range lib.Items {
+		posters[it.Title] = it.Poster
+	}
+	if want := "/roms/SNES/USA/Batman - Revenge of the Joker (USA) (Proto).png"; posters["Super Nintendo"] != want {
+		t.Fatalf("SNES poster %q, want %q", posters["Super Nintendo"], want)
+	}
+	if posters["GameCube"] != "" {
+		t.Fatalf("GameCube has no art, yet poster %q", posters["GameCube"])
+	}
+}

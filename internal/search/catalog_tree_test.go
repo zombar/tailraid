@@ -387,3 +387,41 @@ func FuzzGamelist(f *testing.F) {
 		}
 	})
 }
+
+// A platform's poster is its folder's own art, else the box art of its first game by sort
+// title that has one, as a path below the platform folder; a platform none of whose games
+// has art has none.
+// Invariant: I-400
+func TestCatalog_Roms_PlatformArt(t *testing.T) {
+	e := newEnv(t)
+	e.library("/roms", meta.LibraryRoms)
+	b := []byte("x")
+	for _, f := range []string{
+		"/roms/N64/Banjo-Kazooie.zip", "/roms/N64/Banjo-Kazooie.png",
+		"/roms/N64/Aero Fighters Assault.zip", // first by title, but no art
+		"/roms/N64/Wave Race 64.zip", "/roms/N64/Wave Race 64.png",
+		"/roms/SNES/logo.png", "/roms/SNES/Axelay.zip", "/roms/SNES/Axelay.png", // the folder's own art wins
+		"/roms/PS1/Alien Trilogy.pbp",                                       // no art anywhere
+		"/roms/Gamecube/Zelda/Zelda.cue", "/roms/Gamecube/Zelda/boxart.png", // a disc set's art, in its folder
+		"/roms/Gamecube/Hacks/Mario Party.iso", "/roms/Gamecube/Hacks/Mario Party.png", // art below a category folder
+	} {
+		e.write(f, b)
+	}
+	e.pass()
+	cat := e.catalog()
+	for p, want := range map[string]string{
+		"/roms/N64":      "Banjo-Kazooie.png",
+		"/roms/SNES":     "logo.png",
+		"/roms/PS1":      "",
+		"/roms/Gamecube": "Hacks/Mario Party.png",
+	} {
+		got, ok := cat[p]
+		if !ok {
+			t.Errorf("%s: missing", p)
+			continue
+		}
+		if got.Poster != want {
+			t.Errorf("%s: poster %q, want %q", p, got.Poster, want)
+		}
+	}
+}

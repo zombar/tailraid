@@ -2,6 +2,7 @@ package search
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/xml"
 	"path"
 	"regexp"
@@ -895,7 +896,7 @@ func (c *catalogue) roms(lib meta.Ino) {
 		g.walk(pd, k.Ino, "", nil, 3)
 		g.flush()
 		e := Entry{Ino: k.Ino, Lib: lib, Kind: EntPlatform, Title: p.title, Platform: p.title, Tracks: g.count, Season: -1}
-		e.Poster = pd.art("platform", "poster", "folder", "logo")
+		e.Poster = cmp.Or(pd.art("platform", "poster", "folder", "logo"), g.cover)
 		c.add(e)
 	}
 }
@@ -910,6 +911,9 @@ type gameWalk struct {
 	games    map[string]GameInfo
 	cands    []gameCand
 	count    int
+	// cover is the box art of the first game by sort title that has one, below the
+	// platform folder: the platform's poster when its folder has none (I-400)
+	cover, coverKey string
 }
 
 type gameCand struct {
@@ -1020,6 +1024,9 @@ func (g *gameWalk) flush() {
 		}
 		if e.Poster == "" {
 			e.Poster = g.boxArt(*cd)
+		}
+		if k := SortTitle(e.Title); e.Poster != "" && (g.cover == "" || k < g.coverKey) {
+			g.cover, g.coverKey = path.Join(dir, e.Poster), k
 		}
 		key := cd.in.Name // a disc set: its folder's name; a file: its stem
 		if cd.in.Type != meta.TDir {

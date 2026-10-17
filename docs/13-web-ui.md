@@ -557,7 +557,8 @@ every node. An item is listed only while its structure says so: a film folder wi
 now-playing bar (§6); "Open folder" goes to the file browser.
 
 A **ROMs** library (docs/18 §8b, I-279) lists its platforms as cards (4:3, the platform's
-display name and its folder name, the game count), and `#/media/item/<platform>` its
+display name and its folder name, the game count; the art is the folder's logo or poster, else
+its first game's box art, whole inside the card, I-400), and `#/media/item/<platform>` its
 games by title, three to four abreast: one card per title, its region, revision and flags
 (`proto`, `hack`, `beta`, `dlc`, in the warn colour) as chips under the name, `+n` for
 the other variants. The tiles take the shape of the platform's box art, since no one ratio
@@ -573,7 +574,7 @@ its `gamelist.xml` when there is one, and its files (one row per disc or variant
 size, the file route as the download). It has no Play and no launch route: launching is
 not built, and the server has no route that runs anything.
 
-**Title cards** (I-280). Where art cannot exist (a platform, a game without box art, a
+**Title cards** (I-280). Where art cannot exist (a platform with no art and no game with box art, a game without box art, a
 film or show folder whose video no browser has framed and no sidecar names a poster),
 the page draws a title card instead of the generic icon: the analysed title (docs/18 §8a)
 on the surface colour, the year or the platform under it in mono, an accent rule on top.

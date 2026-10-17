@@ -719,6 +719,7 @@ table.episodes td.no, table.episodes td.dur { white-space: nowrap; }
 .tcard .cy { font: 12px var(--mono); color: var(--dim); }
 .hero .tcard.hero-poster { align-self: start; width: 160px; height: auto; aspect-ratio: 3 / 4; border-radius: var(--radius); border: 1px solid var(--line); border-top: 3px solid var(--accent); }
 section.lib.roms .posters:not(.games) .poster .art { aspect-ratio: 4 / 3; }
+section.lib.roms .posters:not(.games) .poster .art img { object-fit: contain; } /* a game's box stands in for the platform's art, whole (I-400) */
 section.lib.roms .posters:not(.games) .poster .art .tcard .ct { font-size: 20px; }
 /* a platform's tiles take the shape of its box art, measured as it loads (--box, set by
    boxShape); a box of another shape sits whole inside its tile rather than cropped */
