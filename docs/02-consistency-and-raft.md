@@ -89,6 +89,7 @@ var (
     ErrConflict, ErrUnknownChunk, ErrNeedTailRewrite, ErrBadCommand,
     ErrNoSuchNode, ErrNodeNotEmpty, ErrPolicy,
     ErrProtected, ErrInTrash, ErrCodec, ErrSuperseded error   // appended: wire codes are never renumbered
+    // … the secrets' and users' errors, then ErrPlaybackFull (op 34)
 )
 ```
 
@@ -380,9 +381,10 @@ is zero; nothing else changes, and no hold begins or ends.
 - `Hide` (one inode): `Hidden = true`; no row → `ErrNotExist`.
 A viewer holds at most `PlaybackRows` (5000) rows: a new row past the bound drops the
 viewer's row with the oldest `(At, Ino)` in the same apply. At most `PlaybackViewers`
-(256) viewers: a command for a new viewer past it is `ErrFull`. A `Purge` that deletes a
-file removes its rows from every viewer in the same apply, and a viewer with no rows left
-is removed (rows of a file in the trash stay, so a restore keeps them). The rows are kept
+(256) viewers: a command for a new viewer past it is `ErrPlaybackFull`. Any apply that deletes a
+file for good (a `Purge`, an `Unlink`, a `Rename` over it) removes its rows from every
+viewer in the same apply, and a viewer with no rows left is removed (rows of a file in the
+trash stay, so a restore keeps them; a file in the trash takes no new report). The rows are kept
 per viewer in a map and per inode in an index rebuilt on `Restore` and never encoded, so
 the purge cascade walks only the inode's viewers.
 
@@ -778,8 +780,8 @@ no divergent state to merge because it never applied uncommitted entries.
   live file checked before anything changes, the position clamped to the duration,
   watched derived in integer milliseconds and kept until `Unwatched`, plays counted
   saturating, hidden cleared by the next position; at most `PlaybackRows` rows per viewer
-  (the oldest `(At, Ino)` dropped) and `PlaybackViewers` viewers (`ErrFull`); a `Purge`
-  removes the purged files' rows and the viewers left with none; the per-inode index equals
+  (the oldest `(At, Ino)` dropped) and `PlaybackViewers` viewers (`ErrPlaybackFull`); an
+  apply that deletes a file for good removes its rows and the viewers left with none; the per-inode index equals
   a recount after every apply and after `Restore`.
 - **I-406** — `Playback` is codec 17: encoded and decoded at 17 only, refused with
   `ErrCodec` while a live member reads an older codec; snapshot frame 16 round-trips the
@@ -846,6 +848,6 @@ no divergent state to merge because it never applied uncommitted entries.
 | I-220 | `TestFSM_Protected_OwnCleanup_Table`, `TestEncodeCommand_OwnTrashIsCodec8`, `TestSMB_FailedCopyCleanup_UnderProtected`, `TestSMB_DeleteExistingUnderProtected_StillRefused`, `TestDeleteOnClose_OwnCreationIsOwnCleanup`, `TestSMB_OwnCleanup_WriteRoleOnly` |
 | I-154 | `TestFSM_Protected_Table`, `TestFSM_SetAttr_Flags`, `TestVFS_Protected_EPERM`, `TestNFS_Protected_IsACCES`, `TestSMB_Protected_AccessDenied`, `TestDeleteOnClose_AsksTheBackend` |
 | I-155 | `TestStore_TrashReadAPI`, `TestFSM_Trash_Table`, `TestNFS_TrashedIsGoneFromShare`, `TestNFS_TrashedHandleStale_RestoredValid`, `TestSMB_DeletedIsGoneFromShare`, `TestVFS_Remove_TrashKeepsWAL_FlushCommits`, `TestCluster_TrashRestoreAcrossNodes`, `TestModelCheck_Long` |
-| I-405 | stub until `playback-meta`: the apply table, the watched rule in integer milliseconds, the row and viewer bounds, the purge cascade, the snapshot and restore equivalence |
-| I-406 | stub until `playback-meta`: the codec 17 golden and gating, the refusal while a member reads 16, the frame 16 round trip |
+| I-405 | `TestFSM_Playback_Table`, `TestFSM_Playback_WatchedRule_Table`, `TestFSM_Playback_Bounds`, `TestFSM_Playback_PurgeCascade`, `TestState_Frame16_RoundTrip`, `TestFSM_ApplySnapshotRestoreEquivalence` |
+| I-406 | `TestEncodeCommand_V17Playback`, `TestEncodeCommand_Golden`, `TestCluster_Codec17RefusedWhileMemberOld`, `TestState_Frame16_RoundTrip` |
 | I-222 | `TestVFS_ExclCreate_LostRace_EEXIST`, `TestVFS_ExclCreate_UnknownOutcome_OwnFileOpens`, `TestCluster_ExclCreate_TwoGateways_OneWins`, `TestSMB_FileCreate_RacingBackend_Collision`, `TestNFS_CreateGuarded_RacingBackend_Exist`, `TestSoak_MultiUserAgainstHarness` |

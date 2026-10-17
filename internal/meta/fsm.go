@@ -72,7 +72,7 @@ func (f *FSM) SetSnapshotHook(h SnapshotHook) {
 // NewFSM returns an empty FSM holding only the root directory.
 func NewFSM() *FSM {
 	st := NewState()
-	return &FSM{st: st, feed: changeFeed{max: FeedMax}, stats: Stats{cls: newClassTable(st), due: newDueIndex(), lib: newLibraries()}, waitCh: make(chan struct{})}
+	return &FSM{st: st, feed: changeFeed{max: FeedMax}, stats: Stats{cls: newClassTable(st), due: newDueIndex(), lib: newLibraries(), play: newPlayIndex()}, waitCh: make(chan struct{})}
 }
 
 // state returns the live state; callers hold f.mu. Only the package's tests use it.
@@ -225,6 +225,8 @@ func (a *applier) apply(c Command) (Result, error) {
 		return a.snapshotImport(c.SnapshotImport)
 	case OpSnapshotHeal:
 		return Result{}, a.snapshotHeal(c.SnapshotHeal)
+	case OpPlayback:
+		return Result{}, a.playback(c.Playback)
 	case OpSecretKeyInit:
 		return Result{}, a.secretKeyInit(c.SecretKeyInit)
 	case OpSecretPut:
@@ -622,6 +624,7 @@ func (a *applier) unlink(c *Unlink) error {
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
 	a.stats.lib.drop(ino)
+	a.stats.play.drop(st, ino)
 	a.touch(ino, p.Ino)
 	p.Mtime, p.Ctime = now, now
 	p.Version++ // the name table changed (docs/01)
@@ -666,6 +669,7 @@ func (a *applier) rmdir(c *Rmdir) error {
 	delete(st.Inodes, ino)
 	st.dropGrants(ino)
 	a.stats.lib.drop(ino)
+	a.stats.play.drop(st, ino)
 	a.touch(ino, p.Ino)
 	p.Nlink--
 	p.Mtime, p.Ctime = now, now
@@ -767,6 +771,7 @@ func (a *applier) rename(c *Rename) error {
 		delete(st.Inodes, dst.Ino)
 		st.dropGrants(dst.Ino)
 		a.stats.lib.drop(dst.Ino)
+		a.stats.play.drop(st, dst.Ino)
 		if dst.Type == TDir {
 			np.Nlink--
 		}
