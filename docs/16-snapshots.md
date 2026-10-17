@@ -382,7 +382,10 @@ one after the other, about 2–3 MB/s.
   count is not zero, with the rate over the last minute, so every node's `status` carries
   `restores`, every job of every live host, and every node's dashboard shows them all
   within a refresh. A job stays listed 7 days after it ends, at most 20 finished jobs per
-  host.
+  host, and the host drops the older ones whenever it lists them, not only when a job
+  changes state. The dashboard shows a done or cancelled job for `RestoreShown` (1 h)
+  after it ends, then leaves it to `status` and the CLI; a failed job stays on the
+  dashboard as long as its host lists it, so a failure is not missed (I-390).
 
 ## 7. Disaster recovery
 
@@ -401,7 +404,7 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
 ## 8. Bounds and gaps
 
 - One restore job running per host, `RestoreFiles` (4) files and `RestoreInFlight` (8)
-  chunks of it at once, one file and `RestoreYield` (2) chunks while clients are busy; finished jobs listed 7 days, at most 20 per host.
+  chunks of it at once, one file and `RestoreYield` (2) chunks while clients are busy; finished jobs listed 7 days, at most 20 per host; done and cancelled ones on the dashboard for 1 h.
 - One sync per mirror at a time, reading `SyncWorkers` (8) chunks at once; any number of
   mirrors sync at once, each at `mirrors.rate` (50 MiB/s by default, `0` unmetered).
 - A snapshot name is 1 to 64 bytes, no `/`, not `.` or `..`, unique per mirror; an
@@ -483,6 +486,10 @@ at rest is out of scope, 08): whoever holds the USB disk holds the files.
 - **I-368** — The job's starter or an admin may cancel it, nobody else; a cancelled job
   writes no chunk after the one in flight, removes the temporary file of the file it was
   writing, and leaves every file it had renamed into place.
+- **I-390** — A host lists no finished job that ended more than 7 days ago and no more
+  than 20 finished jobs, whenever it lists them; the browser's status carries a done or
+  cancelled job only within `RestoreShown` of its end, and every failed or unfinished job
+  the host lists.
 - **I-239** — A sync reads and writes up to `SyncWorkers` chunks at once, each distinct
   chunk once, and writes the same snapshot as one chunk at a time would: every object
   durable before any tree naming it, every tree before its parent, the manifest last,
@@ -509,6 +516,7 @@ stub in `test/invariants/` meanwhile.
 | I-364 | `TestRestoreJob_ResumesAfterRestartAndOfflineMirror`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-365 | `TestRestoreJob_ProgressAddsUpToTotals`, `TestRestoreJob_ProgressMonotone_SameOnEveryNode`, `TestStatus_RestoreLine`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
 | I-366 | `TestRestoreJob_ParallelEqualsSerial`, `TestRestoreJob_OneJobPerHost_Queued`, `TestSoak_AllPhasesAgainstHarness` (phase 32) |
+| I-390 | `TestRestoreJob_FinishedPrunedWhenListed`, `TestStatus_FinishedRestoresLeaveTheDashboard` |
 | I-372 | `TestRestoreJob_YieldsToClients`, `TestClients_BusyWindow`, `TestRestoreJob_YieldingInStatus` |
 | I-367 | `TestRestoreJob_RunsAsStarter_RecheckedOnResume`, `TestAdminOps_RestoreUnderUsers` |
 | I-368 | `TestRestoreJob_Cancel_NoTempLeft`, `TestRestoreJob_CancelByStarterOrAdmin`, `TestSoak_AllPhasesAgainstHarness` (phase 32), `TestSoak_AllPhasesUnderUsersAgainstHarness` (phase 32, another user's cancel) |
