@@ -491,7 +491,10 @@ func TestJoin_TokenAndIdentity(t *testing.T) {
 func TestMembersBadSlotHealthStatus(t *testing.T) {
 	e := newEnv(t)
 	c := e.client()
-	must(t, c.Members(ctx, e.addr, MemberOp{Op: "set_capacity", NodeIdx: 1, Capacity: 7}))
+	self, _ := e.app.fsm.NodeByID("n1")
+	e.app.apply(meta.Command{Op: meta.OpNodeUpsert, NodeUpsert: &meta.NodeUpsert{Node: meta.Node{ID: "d1", Name: "one/1", Kind: meta.KindDisk, Host: self.Idx}}})
+	disk, _ := e.app.fsm.NodeByID("d1")
+	must(t, c.Members(ctx, e.addr, MemberOp{Op: "set_capacity", NodeIdx: disk.Idx, Capacity: 7}))
 	if len(e.joiner.ops) != 1 || e.joiner.ops[0].Capacity != 7 {
 		t.Fatalf("ops %+v", e.joiner.ops)
 	}

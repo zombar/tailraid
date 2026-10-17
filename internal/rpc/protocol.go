@@ -357,8 +357,9 @@ func AdminOpNames() []string {
 }
 
 // Needs is what a member op asks of its caller (docs/21 §2): the ops a member runs on
-// its own row (its new tailnet address, the version it serves; the server admits them
-// for the caller's row alone) need nothing beyond membership, every other needs admins.
+// its own rows (its new tailnet address, the version it serves, the budget of a disk it
+// hosts; the server admits them for those rows alone, I-415) need nothing beyond
+// membership, every other needs admins.
 func (op MemberOp) Needs() Need {
 	if op.SelfOnly() {
 		return NeedNone
@@ -366,11 +367,12 @@ func (op MemberOp) Needs() Need {
 	return NeedAdmins
 }
 
-// SelfOnly reports a member op that names the caller's own row and no other (I-322,
-// I-93): the server refuses it for any other row.
+// SelfOnly reports a member op that names the caller's own row, or for set_capacity a
+// disk the caller hosts, and no other (I-93, I-415): the server refuses it for any other
+// row.
 func (op MemberOp) SelfOnly() bool {
 	switch op.Op {
-	case "update_addr", "set_version":
+	case "update_addr", "set_version", "set_capacity":
 		return true
 	}
 	return false

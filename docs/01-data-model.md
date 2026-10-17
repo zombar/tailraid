@@ -405,7 +405,8 @@ of the filesystem holding the disk's store, with `reserve = max(10 % of the file
 before the disk row is written; `serve` re-derives it on every maintenance tick (one
 minute), sets the store's cap at once, and proposes `set_capacity` for the disk through
 the leader only when the value moved by more than `max(5 %, 1 GiB)`, so placement weights
-stay still while a disk breathes. `Capacity == 0` (a full disk) takes the disk out of the
+stay still while a disk breathes; the host sends it unsigned once users exist, admitted
+for its own disks alone (21, I-415). `Capacity == 0` (a full disk) takes the disk out of the
 candidate set without touching what it already holds. A pinned budget changes only when
 the pin does: raise the disk's `capacity` (`volume grow`), restart the service, and
 `serve` registers the new value with the cluster as its maintenance loop starts, before

@@ -583,6 +583,14 @@ per-user S3 gateway keys (the gateway is deferred, docs/10); a verifier-issued c
   held; `--identity <name>` signs one command as a held identity and changes neither the
   active identity nor a binding.
 
+- **I-415** — A member op a node runs on its own rows needs no signature once users
+  exist, and the receiving node admits it for those rows alone, answering `403` for any
+  other: `update_addr` and `set_version` name the caller's device row, `set_capacity` a
+  disk row the caller hosts (the maintenance tick registers each derived budget with no
+  user to sign for, 01 §Node budget). Before this rule the leader refused every
+  follower's `set_capacity` once the first user existed, so a disk's free space changed
+  on its host and never in the node table.
+
 ## Tests
 
 Planned names are written without backticks until the tests exist; each ID is cited by a
@@ -609,4 +617,5 @@ stub in `test/invariants/` meanwhile.
 | I-358 | `TestAudit_ChainHash`, `TestAudit_Retention_Table`, `TestAudit_Ls_Filters`, `TestStatus_Users`, `TestCheck_DormantWarning` |
 | I-359 | `TestConfig_Validate_Table` |
 | I-333 | `TestAudit_RecordNeverWaitsForTheVolume` |
+| I-415 | `TestRPC_SetCapacityOwnDiskUnsigned`, `TestAdminOp_Needs_Refinements` |
 | I-360 | `TestIdentity_SeveralHeld`, `TestIdentity_LegacySingleEntry`, `TestCLI_UserUse` |
