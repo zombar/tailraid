@@ -2,6 +2,21 @@
 
 Generated from the commit log by `scripts/changelog.sh`; do not edit by hand.
 
+## v0.10.6 (2026-10-17)
+
+### Changes
+
+- meta, vfs, admin, node, soak: a copy's SETATTRs ride its flush instead of Raft (I-401..I-403) ([cda6fc6](https://github.com/zombar/tailraid/commit/cda6fc6))
+- webui: a folder dropped onto a listing uploads its whole tree (I-404) ([14928e5](https://github.com/zombar/tailraid/commit/14928e5))
+- search, webui: a platform with no art of its own shows its first game's box art (I-400) ([58c2aa9](https://github.com/zombar/tailraid/commit/58c2aa9))
+- vfs: a WRITE's first touch of an inode lists no directory ([2c6443f](https://github.com/zombar/tailraid/commit/2c6443f))
+- vfs, admin, config, node, webui, soak: a copy stages at local speed, and the WAL sheds segments (I-396..I-399) ([ac83588](https://github.com/zombar/tailraid/commit/ac83588))
+
+### Documentation
+
+- docs: a file being written lands whole (I-401..I-403) ([9a0cfec](https://github.com/zombar/tailraid/commit/9a0cfec))
+- docs: the stage and the segmented WAL (I-396..I-399) ([ea7865e](https://github.com/zombar/tailraid/commit/ea7865e))
+
 ## v0.10.5 (2026-10-17)
 
 ### Changes
