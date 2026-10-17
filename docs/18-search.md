@@ -271,7 +271,9 @@ revision, flags, disc) and, when the platform folder holds one, an EmulationStat
 first `search.max_file` bytes, `encoding/xml`, nothing when it does not parse). Box art is
 `gamelist.xml`'s image, else `<stem>.png|jpg` beside the game, `images/<stem>*`,
 `media/boxart/<stem>.*`, then `boxart.*` or `cover.*` in a game folder; else the Media tab
-draws a title card (13 §5). The ROM file is never read: no header parse, no hash, no
+draws a title card (13 §5). A platform's art is its folder's own `platform.*`, `poster.*`,
+`folder.*` or `logo.*`, else the box art of its first game by sort title that has one
+(I-400), so a platform scraped with `media scrape --only games` shows a box, not a card. The ROM file is never read: no header parse, no hash, no
 DAT match. The catalogue section of segment version 3 carries a game's platform, regions, revision, flags, developer, publisher and players; a platform's entry carries its game count.
 
 ## 9. Libraries (I-210)
@@ -508,6 +510,10 @@ the Cover Art Archive data are CC0 and need none.
   nothing for any other file; `gamelist.xml` fields override name-derived ones and one that
   does not parse contributes nothing; no ROM file is read; every node derives the same
   entries.
+- **I-400** — A platform's poster is its folder's own art (`platform`, `poster`, `folder`,
+  `logo`), else the box art of the first of its games by sort title that has box art, as a
+  path below the platform folder; a platform none of whose games has box art has none; every
+  node derives the same.
 
 ## Tests
 
@@ -530,6 +536,7 @@ the Cover Art Archive data are CC0 and need none.
 | I-276 | `TestNames_Table`, `FuzzAnalyze`, `TestNames_Corpus`, `TestNames_FolderRoles`, `TestCatalog_MusicRoles_Table`, `TestCatalog_ExtrasNotItems`, `TestCatalog_SectionVersions` |
 | I-277 | `TestFSM_SetAttr_LibraryRoms_Table`, `TestEncodeCommand_V10Gating`, `TestCluster_Codec10RefusedWhileMemberOld`, `TestWebUI_Flags_Library_Table`, `TestFS_SetFlags_RomsWaitsForCodec10` |
 | I-278 | `TestCatalog_Roms_Table`, `TestCatalog_Gamelist_Table`, `FuzzGamelist`, `TestCatalog_SectionVersions` |
+| I-400 | `TestCatalog_Roms_PlatformArt`, `TestWebUI_Media_PlatformArt` |
 | I-211 | `TestCatalog_CleanName_Table`, `TestCatalog_Episode_Table`, `TestCatalog_NFO_Table`, `FuzzNFODecode`, `TestCatalog_ArtResolutionOrder`, `TestCatalog_LibraryKinds_Structure`, `TestCluster_SearchDeterministicAcrossNodes`, `TestSoak_AllPhasesAgainstHarness` |
 
 Soak phase 21 joins these rows with the PR that lands it (09 §2). The web side's invariants (I-209 markdown,

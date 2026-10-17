@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"cmp"
 	"path"
 	"sort"
 
@@ -83,7 +84,10 @@ func (v mediaView) romFromEntry(in meta.Inode, p, kind string, e search.Entry) M
 	it := v.item(in, p, kind)
 	if c, ok := v.cat[in.Ino]; ok {
 		e.Title, e.Plot, e.Year, e.Genres, e.Rating = c.Title, c.Plot, c.Year, c.Genres, c.Rating
-		e.Developer, e.Publisher, e.Players, e.Poster, e.Banner = c.Developer, c.Publisher, c.Players, c.Poster, c.Banner
+		e.Developer, e.Publisher, e.Players = c.Developer, c.Publisher, c.Players
+		// art the catalogue found wins; one it has none for keeps the tree's, so a
+		// catalogue from before a platform's fallback (I-400) or the art does not hide it
+		e.Poster, e.Banner = cmp.Or(c.Poster, e.Poster), cmp.Or(c.Banner, e.Banner)
 	}
 	dir := p
 	if in.Type == meta.TFile {
